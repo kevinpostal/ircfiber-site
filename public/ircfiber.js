@@ -94,6 +94,7 @@ function connectWebSocket() {
             if (data.type === 'sync') {
                 state.buffers = data.networks || [];
                 state.buffers.forEach(function(net) {
+                    if (net.id && !net.networkId) net.networkId = net.id;
                     if (!net.buffers) net.buffers = [];
                     if (net.buffers.length === 0 || net.buffers[0].type !== 'server') {
                         net.buffers.unshift({ name: '_server', type: 'server', isJoined: true, unreadCount: 0, highlight: false, topic: '', users: [] });
@@ -139,7 +140,7 @@ function renderSidebar() {
                 var isActive = (net.networkId === activeBuffer.networkId && buf.name === activeBuffer.bufferName);
                 var activeClass = isActive ? 'active' : '';
                 var label = buf.name === '_server' ? 'Server' : escapeHtml(buf.name);
-                html += '<div class="buffer-item ' + activeClass + ' ' + (buf.highlight ? 'highlight' : '') + '" onclick="switchBuffer(\'' + net.networkId + '\', ' + JSON.stringify(buf.name) + ')">';
+                html += '<div class="buffer-item ' + activeClass + ' ' + (buf.highlight ? 'highlight' : '') + '" onclick="switchBuffer(\'' + net.networkId + '\', \'' + escapeHtml(buf.name).replace(/\\'/g, "\\\\'").replace(/'/g, "\\'") + '\')">';
                 html += '<span class="buffer-name">' + label + '</span>';
                 if (buf.unreadCount > 0) {
                     html += '<span class="unread buffer-unread">' + buf.unreadCount + '</span>';
@@ -362,6 +363,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }).then(function(r) {
                 if (r.ok) {
                     return r.json().then(function(net) {
+                        net.networkId = net.id;
                         net.connected = false;
                         net.status = 'disconnected';
                         net.currentNick = net.nick;
