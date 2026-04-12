@@ -446,6 +446,75 @@ function formatNumericText(cmd, params, text) {
     }
 }
 
+function formatTime12Hour(d) {
+    var h = d.getHours();
+    var ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12;
+    h = h ? h : 12;
+    var m = String(d.getMinutes()).padStart(2, '0');
+    var s = String(d.getSeconds()).padStart(2, '0');
+    return h + ':' + m + ':' + s + ' ' + ampm;
+}
+
+function formatDateTimeTitle(d) {
+    var days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    return days[d.getDay()] + ', ' + months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear() + ' ' + formatTime12Hour(d);
+}
+
+function getIrcCloudTypeClass(cmd, msg) {
+    if (!cmd) return '';
+    var p = (msg && (msg.params || msg.p)) || [];
+    switch (cmd) {
+        case '001': return 'type_server_welcome';
+        case '002': return 'type_server_yourhost';
+        case '003': return 'type_server_created';
+        case '004': return 'type_myinfo';
+        case '005': return 'type_server_supports';
+        case '251': return 'type_server_luserclient';
+        case '252': return 'type_server_luserop';
+        case '253': return 'type_server_luserunknown';
+        case '254': return 'type_server_luserchannels';
+        case '255': return 'type_server_luserme';
+        case '265': return 'type_server_n_local';
+        case '266': return 'type_server_n_global';
+        case '396': return 'type_hidden_host_set';
+        case '372': return 'type_motd_response';
+        case '375': return 'type_motd_start';
+        case '376': return 'type_motd_end';
+        case '422': return 'type_motd_missing';
+        case '221': return 'type_user_mode';
+        case 'MODE':
+            if (p.length >= 1 && p[0].length > 0 && p[0][0] !== '#') return 'type_user_mode';
+            return 'type_channel_mode';
+        case 'CAP':
+            if (p[0] === 'LS' || p[0] === 'LIST') return 'type_cap_ls';
+            if (p[0] === 'REQ') return 'type_cap_req';
+            if (p[0] === 'ACK') return 'type_cap_ack';
+            if (p[0] === 'NEW') return 'type_cap_new';
+            if (p[0] === 'DEL') return 'type_cap_del';
+            if (p[0] === 'NAK') return 'type_cap_nak';
+            return 'type_cap';
+        case 'NOTICE': return 'type_notice';
+        case 'PRIVMSG':
+            if (msg && (msg.type === 'action' || msg.y === 'a')) return 'type_action';
+            return 'type_privmsg';
+        case 'JOIN': return 'type_join';
+        case 'PART': return 'type_part';
+        case 'QUIT': return 'type_quit';
+        case 'NICK': return 'type_nick';
+        case 'TOPIC': return 'type_topic';
+        case 'DISCONNECT': return 'type_quit_server';
+        case 'ERROR': return 'type_error';
+        case 'CONNECT': return 'type_connecting';
+        case 'INVITE': return 'type_channel_invite';
+        case 'KICK': return 'type_kick';
+        default:
+            if (/^\d{3}$/.test(cmd)) return 'type_numeric_' + cmd;
+            return '';
+    }
+}
+
 function parseIrcFormatting(text) {
     if (!text) return '';
     var i = 0;
