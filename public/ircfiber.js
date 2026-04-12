@@ -57,6 +57,12 @@ function findBufferIndex(networkId, bufferName) {
     return -1;
 }
 
+function findBuffer(networkId, bufferName) {
+    var net = state.buffers.find(function(n) { return n.networkId === networkId; });
+    if (!net) return null;
+    return net.buffers.find(function(b) { return b.name === bufferName; }) || null;
+}
+
 function findNextBuffer(direction, unreadOnly) {
     var flat = computeFlatBuffers();
     if (flat.length === 0) return null;
@@ -109,6 +115,7 @@ function connectWebSocket() {
                         existing.connected = net.connected;
                         existing.status = net.status;
                         existing.currentNick = net.currentNick;
+                        existing.disconnectReason = net.disconnectReason || existing.disconnectReason;
                         newBuffers.push(existing);
                     } else {
                         if (!net.buffers) net.buffers = [];
@@ -116,6 +123,7 @@ function connectWebSocket() {
                             net.buffers.unshift({ name: '_server', type: 'server', isJoined: true, unreadCount: 0, highlight: false, topic: '', users: [] });
                         }
                         if (typeof net.collapsed === 'undefined') net.collapsed = false;
+                        if (!net.disconnectReason) net.disconnectReason = '';
                         newBuffers.push(net);
                     }
                 });
@@ -142,17 +150,18 @@ function renderSidebar() {
         var netHighlight = net.buffers.some(function(b) { return b.highlight; });
         var collapsed = net.collapsed;
         var chevron = collapsed ? '▶' : '▼';
+        var isActiveNet = activeBuffer.networkId === net.networkId && activeBuffer.bufferName === '_server';
+        var netActiveClass = isActiveNet ? 'active' : '';
+        var safeNetId = net.networkId.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
         html += '<div class="network">';
-        html += '<div class="network-header">';
-        html += '<span class="network-chevron" onclick="event.stopPropagation(); toggleNetwork(\'' + net.networkId + '\')">' + chevron + '</span>';
-        html += '<span class="network-name-area" onclick="switchBuffer(\'' + net.networkId + '\', \'_server\')">';
+        html += '<div class="network-header ' + netActiveClass + '" onclick="switchBuffer(\'' + safeNetId + '\', \'_server\')">';
+        html += '<span class="network-chevron" onclick="event.stopPropagation(); toggleNetwork(\'' + safeNetId + '\')">' + chevron + '</span>';
         html += '<span class="network-status ' + (net.connected ? '' : 'disconnected') + '"></span>';
         html += '<span class="network-name-text">' + escapeHtml(net.name) + '</span>';
         if (netUnread > 0) {
             html += '<span class="unread network-unread ' + (netHighlight ? 'highlight' : '') + '">' + netUnread + '</span>';
         }
-        html += '</span>';
         html += '</div>';
 
         if (!collapsed) {
@@ -161,8 +170,11 @@ function renderSidebar() {
                 if (buf.name === '_server') return;
                 var isActive = (net.networkId === activeBuffer.networkId && buf.name === activeBuffer.bufferName);
                 var activeClass = isActive ? 'active' : '';
-                var label = escapeHtml(buf.name);
-                html += '<div class="buffer-item ' + activeClass + ' ' + (buf.highlight ? 'highlight' : '') + '" onclick="switchBuffer(\'' + net.networkId + '\', \'' + escapeHtml(buf.name).replace(/\\'/g, "\\\\'").replace(/'/g, "\\'") + '\')">';
+                var displayName = stripHash(buf.name);
+                var label = escapeHtml(displayName);
+                var jsSafeName = displayName.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                html += '<div class="buffer-item ' + activeClass + ' ' + (buf.highlight ? 'highlight' : '') + '" onclick="switchBuffer(\'' + safeNetId + '\', \'' + jsSafeName + '\')">';
+                html += '<span class="buffer-prefix">' + (buf.type === 'query' ? '' : '#') + '</span>';
                 html += '<span class="buffer-name">' + label + '</span>';
                 if (buf.unreadCount > 0) {
                     html += '<span class="unread buffer-unread">' + buf.unreadCount + '</span>';
@@ -184,43 +196,148 @@ function toggleNetwork(networkId) {
     }
 }
 
+function getUserModePrefix(nick) {
+    if (nick.startsWith('~')) return { prefix: '~', cls: 'owner', category: 'ops' };
+    if (nick.startsWith('&')) return { prefix: '&', cls: 'owner', category: 'ops' };
+    if (nick.startsWith('@')) return { prefix: '@', cls: 'op', category: 'ops' };
+    if (nick.startsWith('%')) return { prefix: '%', cls: 'halfop', category: 'halfops' };
+    if (nick.startsWith('+')) return { prefix: '+', cls: 'voice', category: 'voiced' };
+    return { prefix: '', cls: '', category: 'members' };
+}
+
+function stripPrefix(nick) {
+    return nick.replace(/^[~&@%+]/, '');
+}
+
+function getAvatarColor(nick) {
+    var colors = ['#e67e22', '#1abc9c', '#3498db', '#9b59b6', '#e74c3c', '#f1c40f',
+                  '#2ecc71', '#e91e63', '#00bcd4', '#ff5722', '#795548', '#607d8b'];
+    var h = stringHash(nick);
+    return colors[h % colors.length];
+}
+
 function renderUsers() {
-    var ul = document.getElementById('users');
-    if (!ul) return;
+    var flatList = document.getElementById('flat-members');
+    var pinnedList = document.getElementById('pinned-channels');
+    var networkChans = document.getElementById('network-channels');
+    if (!flatList) return;
+
     var net = getActiveNetwork();
     if (!net || !activeBuffer.bufferName || activeBuffer.bufferName === '_server') {
-        ul.innerHTML = '';
+        flatList.innerHTML = '';
+        pinnedList.innerHTML = '';
+        networkChans.innerHTML = '';
         return;
     }
+
     var ch = net.buffers.find(function(c) { return c.name === activeBuffer.bufferName; });
     if (!ch || !ch.users) {
-        ul.innerHTML = '';
+        flatList.innerHTML = '';
+        pinnedList.innerHTML = '';
+        networkChans.innerHTML = '';
         return;
     }
-    var html = '';
-    ch.users.forEach(function(u) {
-        var cls = '';
-        if (u.startsWith('~')) cls = 'owner';
-        else if (u.startsWith('@')) cls = 'op';
-        else if (u.startsWith('+')) cls = 'voice';
-        html += '<li class="' + cls + '">' + escapeHtml(u) + '</li>';
+
+    pinnedList.innerHTML = '';
+    var pillHtml = '<div class="network-pill">' + escapeHtml(net.name) + '</div>';
+    var chanHtml = '';
+    net.buffers.forEach(function(buf) {
+        if (buf.name === '_server') return;
+        var isActive = buf.name === activeBuffer.bufferName;
+        var cls = isActive ? 'sidebar-channel active' : 'sidebar-channel';
+        var jsSafeName = buf.name.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        var chanDisplayName = stripHash(buf.name);
+        chanHtml += '<div class="' + cls + '" onclick="switchBuffer(\'' + net.networkId.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;') + '\', \'' + chanDisplayName.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;') + '\')">';
+        chanHtml += '<span class="sidebar-channel-prefix">' + (buf.type === 'query' ? '' : '#') + '</span>';
+        chanHtml += '<span>' + escapeHtml(chanDisplayName) + '</span>';
+        chanHtml += '</div>';
     });
-    ul.innerHTML = html;
+    networkChans.innerHTML = pillHtml + chanHtml;
+
+    var ranks = { '~': 0, '&': 1, '@': 2, '%': 3, '+': 4, '': 5 };
+    var sorted = ch.users.slice().sort(function(a, b) {
+        var ra = ranks[a.charAt(0)] !== undefined ? ranks[a.charAt(0)] : 5;
+        var rb = ranks[b.charAt(0)] !== undefined ? ranks[b.charAt(0)] : 5;
+        if (ra !== rb) return ra - rb;
+        return stripPrefix(a).toLowerCase().localeCompare(stripPrefix(b).toLowerCase());
+    });
+
+    var html = '';
+    sorted.forEach(function(u) {
+        var name = stripPrefix(u);
+        var color = getAvatarColor(name);
+        var initial = name.charAt(0).toUpperCase();
+        html += '<div class="member-item">';
+        html += '<div class="member-avatar" style="background-color:' + color + '">' + escapeHtml(initial) + '</div>';
+        html += '<span>' + escapeHtml(name) + '</span>';
+        html += '</div>';
+    });
+    flatList.innerHTML = html;
+}
+
+function updateInputNick() {
+    var net = getActiveNetwork();
+    var nickEl = document.getElementById('input-nick');
+    var avatarEl = document.getElementById('input-avatar');
+    var nick = net ? (net.currentNick || net.nick || '') : '';
+    if (nickEl) nickEl.textContent = nick;
+    if (avatarEl) {
+        avatarEl.textContent = nick ? nick.charAt(0).toUpperCase() : '?';
+        avatarEl.style.backgroundColor = getAvatarColor(nick || 'Unknown');
+    }
+}
+
+function updateInputTimestamp() {
+    var el = document.getElementById('input-timestamp');
+    if (el) {
+        var now = new Date();
+        var h = now.getHours();
+        var ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12;
+        h = h ? h : 12;
+        var m = String(now.getMinutes()).padStart(2, '0');
+        var s = String(now.getSeconds()).padStart(2, '0');
+        el.textContent = h + ':' + m + ':' + s + ' ' + ampm;
+    }
 }
 
 function switchBuffer(networkId, bufferName) {
     setActiveBuffer(networkId, bufferName);
+    var serverCtxMenu = document.getElementById('server-context-menu');
+    var serverOptionsBtn = document.getElementById('server-options-btn');
+    if (serverCtxMenu) serverCtxMenu.style.display = 'none';
+    if (serverOptionsBtn) serverOptionsBtn.setAttribute('aria-expanded', 'false');
+    var headerName = document.getElementById('header-network-name');
+    var headerHost = document.getElementById('header-network-host');
     var net = getActiveNetwork();
+    if (net) {
+        if (headerName) headerName.textContent = net.name;
+        if (headerHost) headerHost.textContent = net.host + ':' + net.port;
+    } else {
+        if (headerName) headerName.textContent = '';
+        if (headerHost) headerHost.textContent = '';
+    }
     var bufObj = getActiveBufferObj();
     var isServer = bufferName === '_server';
 
-    var channelName = document.getElementById('channel-name');
+    var channelNameEl = document.getElementById('channel-name');
+    var channelTopicEl = document.getElementById('channel-topic');
+    bufObj = findBuffer(networkId, bufferName);
+    var isQuery = bufObj && bufObj.type === 'query';
+    if (channelNameEl) channelNameEl.textContent = bufferName === '_server' ? (net ? net.name : 'Server') : (isQuery ? '' : '#') + stripHash(bufferName);
+    if (channelTopicEl) channelTopicEl.textContent = (bufObj && bufObj.topic) ? bufObj.topic : '';
+
+    var channelName = document.getElementById('header-channel-name');
     var channelHost = document.getElementById('channel-host');
     var networkNick = document.getElementById('network-nick');
     var networkRealname = document.getElementById('network-realname');
     var editBtn = document.getElementById('edit-network-btn');
     var reconnectBtn = document.getElementById('reconnect-network-btn');
     var disconnectBtn = document.getElementById('disconnect-network-btn');
+    var memberCountBtn = document.getElementById('member-count-btn');
+
+    var connStatusCell = document.getElementById('connection-status-cell');
+    var connStatusText = document.getElementById('connection-status-text');
 
     if (isServer && net) {
         var tlsIcon = (net.tls && net.tls !== 'disabled') ? '🔒 ' : '';
@@ -231,31 +348,52 @@ function switchBuffer(networkId, bufferName) {
         if (editBtn) editBtn.style.display = 'inline-block';
         if (reconnectBtn) reconnectBtn.style.display = 'inline-block';
         if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
+        if (memberCountBtn) memberCountBtn.style.display = 'none';
+        if (connStatusCell && connStatusText) {
+            if (!net.connected && net.disconnectReason) {
+                connStatusText.textContent = net.disconnectReason + '; ';
+                connStatusCell.classList.add('show');
+                connStatusCell.style.display = 'block';
+            } else {
+                connStatusCell.classList.remove('show');
+                connStatusCell.style.display = 'none';
+            }
+        }
     } else {
-        channelName.textContent = bufferName;
+        channelName.textContent = stripHash(bufferName);
         channelHost.textContent = (bufObj && bufObj.topic) ? bufObj.topic : (net ? net.host + ':' + net.port : '');
         networkNick.textContent = '';
         networkRealname.textContent = '';
         if (editBtn) editBtn.style.display = 'none';
         if (reconnectBtn) reconnectBtn.style.display = 'none';
         if (disconnectBtn) disconnectBtn.style.display = 'none';
+        if (memberCountBtn) memberCountBtn.style.display = 'inline-flex';
+        if (connStatusCell) {
+            connStatusCell.classList.remove('show');
+            connStatusCell.style.display = 'none';
+        }
     }
 
-    document.querySelector('#compose input[name="network"]').value = networkId;
-    document.querySelector('#compose input[name="target"]').value = isServer ? '' : bufferName;
+    var compose = document.getElementById('compose');
+    if (compose) {
+        compose.querySelector('input[name="network"]').value = networkId;
+        compose.querySelector('input[name="target"]').value = isServer ? '' : bufferName;
+    }
     document.getElementById('messages').innerHTML = '';
     window.lastMessageDate = null;
 
     var userList = document.getElementById('user-list-panel');
-    var compose = document.getElementById('compose');
+    var bufferInput = document.querySelector('.message-input');
     if (isServer || (bufObj && bufObj.type === 'query')) {
         if (userList) userList.style.display = 'none';
-        if (compose) compose.style.display = isServer ? 'none' : 'flex';
+        if (bufferInput) bufferInput.style.display = isServer ? 'none' : 'flex';
     } else {
         if (userList) userList.style.display = 'flex';
-        if (compose) compose.style.display = 'flex';
+        if (bufferInput) bufferInput.style.display = 'flex';
     }
 
+    updateInputNick();
+    updateInputTimestamp();
     renderSidebar();
     renderUsers();
     loadHistory(networkId, bufferName);
@@ -264,71 +402,23 @@ function switchBuffer(networkId, bufferName) {
     }
 }
 
-function loadOlderHistory(networkId, bufferName) {
-    var container = document.getElementById('messages');
-    var firstMsg = container.querySelector('.row.messageRow[data-time]');
-    var beforeTime = firstMsg ? firstMsg.getAttribute('data-time') : '';
-    var url = '/api/channels/' + encodeURIComponent(networkId) + '/' + encodeURIComponent(bufferName) + '/messages?count=500';
-    if (beforeTime) url += '&before=' + encodeURIComponent(beforeTime);
-    fetch(url)
+function loadHistory(networkId, bufferName) {
+    fetch('/api/channels/' + encodeURIComponent(networkId) + '/' + encodeURIComponent(bufferName) + '/messages?count=500')
         .then(function(r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
+            if (!r.ok) {
+                return r.json().then(function(err) {
+                    throw new Error(err.error || ('HTTP ' + r.status));
+                });
+            }
             return r.json();
         })
         .then(function(msgs) {
-            if (!Array.isArray(msgs) || msgs.length === 0) {
-                var existing = container.querySelector('.row.loadMore');
-                if (existing) existing.innerHTML = '<span class="loadMore__end">No more messages</span>';
-                return;
+            if (!Array.isArray(msgs)) {
+                throw new Error('Invalid response from server');
             }
-            prependHistoryMessages(msgs.reverse());
-        })
-        .catch(function(err) {
-            console.error('Failed to load older history', err);
-        });
-}
-
-function prependHistoryMessages(msgs) {
-    var container = document.getElementById('messages');
-    var grouped = groupMOTDLines(msgs);
-    var frag = document.createDocumentFragment();
-    var firstDate = null;
-    var lastDate = window.firstMessageDate || null;
-    grouped.forEach(function(msg) {
-        var ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
-        var d = ts ? ts.split('T')[0] : '';
-        if (d && d !== firstDate) {
-            var dayDiv = document.createElement('div');
-            dayDiv.className = 'row dateChange';
-            dayDiv.innerHTML = '<h3>' + formatDate(d) + '</h3>';
-            frag.appendChild(dayDiv);
-            firstDate = d;
-        }
-        var el = buildMessageElement(msg, msg.highlight);
-        if (el) frag.appendChild(el);
-    });
-    // Remove existing loadMore button if present
-    var existingLoadMore = container.querySelector('.row.loadMore');
-    if (existingLoadMore) existingLoadMore.remove();
-    container.insertBefore(frag, container.firstChild);
-    window.firstMessageDate = firstDate || lastDate;
-}
-
-function loadHistory(networkId, bufferName) {
-    fetch('/api/channels/' + encodeURIComponent(networkId) + '/' + encodeURIComponent(bufferName) + '/messages?count=500')
-        .then(function(r) { return r.json(); })
-        .then(function(msgs) {
             var container = document.getElementById('messages');
             container.innerHTML = '';
             window.lastMessageDate = null;
-            window.firstMessageDate = null;
-            var loadMoreBtn = document.createElement('div');
-            loadMoreBtn.className = 'row loadMore';
-            loadMoreBtn.innerHTML = '<button class="loadMore__button" tabindex="-1"><span>Load more backlog…</span></button>';
-            loadMoreBtn.querySelector('button').addEventListener('click', function() {
-                loadOlderHistory(networkId, bufferName);
-            });
-            container.appendChild(loadMoreBtn);
             var lastDate = null;
             var frag = document.createDocumentFragment();
             var grouped = groupMOTDLines(msgs);
@@ -348,7 +438,9 @@ function loadHistory(networkId, bufferName) {
             container.appendChild(frag);
             window.lastMessageDate = lastDate;
             container.scrollTop = container.scrollHeight;
-        }).catch(function(err) {
+        })
+        .catch(function(err) {
+            var container = document.getElementById('messages');
             container.innerHTML = '<div class="row messageRow status monospace type_error userParent"><span class="date"><span class="timestamp">--:--:--</span></span><span class="g">&nbsp;</span><span class="message"><span class="content">Failed to load history: ' + escapeHtml(err.message) + '</span></span></div>';
         });
 }
@@ -356,20 +448,25 @@ function loadHistory(networkId, bufferName) {
 function handleIRCEvent(data) {
     var result = processIRCEvent(data);
     if (result.needsRender) renderSidebar();
+    var container = document.getElementById('messages');
+    container.scrollTop = container.scrollHeight;
 }
 
 function handleIRCEvents(events) {
+    var grouped = groupDisconnects(events);
     var needsRender = false;
-    var frag = document.createDocumentFragment();
-    events.forEach(function(data) {
-        var r = processIRCEvent(data, frag);
-        if (r.needsRender) needsRender = true;
+    var container = document.getElementById('messages');
+    grouped.forEach(function(item) {
+        if (item.type === 'discoGroup') {
+            var el = buildDiscoGroupElement(item.group.head, item.group.items);
+            if (el) container.appendChild(el);
+            needsRender = true;
+        } else {
+            var r = processIRCEvent(item.msg, null);
+            if (r.needsRender) needsRender = true;
+        }
     });
-    if (frag.childNodes.length > 0) {
-        var container = document.getElementById('messages');
-        container.appendChild(frag);
-        container.scrollTop = container.scrollHeight;
-    }
+    container.scrollTop = container.scrollHeight;
     if (needsRender) renderSidebar();
 }
 
@@ -397,10 +494,26 @@ function processIRCEvent(data, batchFrag) {
         if (cmd === '001' || cmd === 'CONNECT') {
             net.connected = true;
             net.wasDisconnected = false;
+            net.disconnectReason = '';
         }
         if (cmd === 'DISCONNECT') {
             net.connected = false;
             net.wasDisconnected = true;
+            net.disconnectReason = text || 'Disconnected';
+        }
+        if ((cmd === '001' || cmd === 'CONNECT' || cmd === 'DISCONNECT') && bufferName === '_server') {
+            var connStatusCell = document.getElementById('connection-status-cell');
+            var connStatusText = document.getElementById('connection-status-text');
+            if (connStatusCell && connStatusText) {
+                if (!net.connected && net.disconnectReason) {
+                    connStatusText.textContent = net.disconnectReason + '; ';
+                    connStatusCell.classList.add('show');
+                    connStatusCell.style.display = 'block';
+                } else {
+                    connStatusCell.classList.remove('show');
+                    connStatusCell.style.display = 'none';
+                }
+            }
         }
         var container = document.getElementById('messages');
         var target = batchFrag || container;
@@ -409,22 +522,32 @@ function processIRCEvent(data, batchFrag) {
         var el = buildMessageElement(msg, isHighlight);
         if (el) {
             if (batchFrag) batchFrag.appendChild(el);
-            else {
-                container.appendChild(el);
-                container.scrollTop = container.scrollHeight;
-            }
+            else container.appendChild(el);
         }
     } else {
         if (cmd === '001' || cmd === 'CONNECT') {
             net.connected = true;
             net.wasDisconnected = false;
+            net.disconnectReason = '';
         }
         if (cmd === 'DISCONNECT') {
             net.connected = false;
             net.wasDisconnected = true;
+            net.disconnectReason = text || 'Disconnected';
         }
     }
     return { needsRender: true };
+}
+
+function ensureQueryBuffer(networkId, nick) {
+    var net = state.buffers.find(function(n) { return n.networkId === networkId; });
+    if (!net) return null;
+    var buf = net.buffers.find(function(b) { return b.name === nick; });
+    if (!buf) {
+        buf = { name: nick, type: 'query', isJoined: true, unreadCount: 0, highlight: false, topic: '', users: [] };
+        net.buffers.push(buf);
+    }
+    return buf;
 }
 
 function incrementUnread(networkId, bufferName, isHighlight) {
@@ -709,17 +832,32 @@ function parseIrcFormatting(text) {
     if (openStack > 0) {
         for (var k = 0; k < openStack; k++) out += '</span>';
     }
-    // Auto-link #channels and URLs like IRC Cloud
-    out = out.replace(/#([a-zA-Z0-9_\-\.]+)/g, '<a class="buffer bufferLink channelInviteLink channel" title="#$1" data-name="#$1">#$1</a>');
-    out = out.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="link" rel="noreferrer" target="_blank">$1</a>');
-    out = out.replace(/(mailto:[^\s<]+)/g, '<a href="$1" class="email" rel="noreferrer" target="_blank">$1</a>');
     return out;
 }
 
-function isBotNick(nick, msg) {
-    if (msg && msg.bot) return true;
-    var knownBots = ['NickServ','ChanServ','MemoServ','HostServ','OperServ'];
-    return knownBots.indexOf(nick) >= 0;
+function isDisconnectLike(cmd, text) {
+    return cmd === 'DISCONNECT' || cmd === 'ERROR' || (text && text.toLowerCase().indexOf('failed to connect') >= 0);
+}
+
+function groupDisconnects(msgs) {
+    var result = [];
+    var group = null;
+    msgs.forEach(function(msg) {
+        var cmd = msg.command || msg.c || '';
+        var text = msg.text || msg.x || '';
+        if (isDisconnectLike(cmd, text)) {
+            if (!group) group = { head: msg, items: [] };
+            else group.items.push(msg);
+        } else {
+            if (group) {
+                result.push({ type: 'discoGroup', group: group });
+                group = null;
+            }
+            result.push({ type: 'msg', msg: msg });
+        }
+    });
+    if (group) result.push({ type: 'discoGroup', group: group });
+    return result;
 }
 
 function buildMessageElement(msg, isHighlight) {
@@ -747,7 +885,6 @@ function buildMessageElement(msg, isHighlight) {
         timeStr = formatTime12Hour(d);
         fullTitle = formatDateTimeTitle(d);
     }
-    if (ts) row.setAttribute('data-time', ts);
 
     var nick = msg.nick || msg.n || '';
     var text = msg.text || msg.x || '';
@@ -756,9 +893,7 @@ function buildMessageElement(msg, isHighlight) {
     if (cmd === 'DISCONNECT') {
         row.className = 'row messageRow status type_quit_server userParent';
         var display = '<span class="prefix">&#x21D0;</span> You disconnected';
-        if (text && text !== 'You disconnected') {
-            display += ': ' + escapeHtml(text);
-        }
+        if (text && text !== 'You disconnected') display += ': ' + escapeHtml(text);
         row.innerHTML =
             '<span class="date"><span class="timestamp" title="' + escapeHtml(fullTitle) + '">' + timeStr + '</span></span>' +
             '<span class="g">&nbsp;</span>' +
@@ -790,22 +925,73 @@ function buildMessageElement(msg, isHighlight) {
     if (!isSystem && nick) {
         var avatarColor = getAvatarColor(nick);
         var initial = nick.charAt(0).toUpperCase();
-        var isBot = isBotNick(nick, msg);
         html += '<span class="authorWrap">' +
                 '<span class="avatar letterAvatar" style="background-color:' + avatarColor + '"><span role="presentation">' + escapeHtml(initial) + '</span></span>' +
                 '<span class="g" aria-hidden="true">&lt;</span>' +
                 '<span class="author" style="color:' + avatarColor + '">' + escapeHtml(nick) + '</span>' +
-                '<span class="g" aria-hidden="true">&gt;</span>&nbsp;';
-        if (isBot) {
-            html += '<span class="author-bot"><span title="">BOT</span>&nbsp;</span>';
-        }
-        html += '</span>';
+                '<span class="g" aria-hidden="true">&gt;</span>&nbsp;' +
+                '</span>';
     }
 
     html += '<span class="content">' + parseIrcFormatting(displayText) + '</span>';
     html += '</span>';
     row.innerHTML = html;
     return row;
+}
+
+function buildDiscoGroupElement(groupHead, items) {
+    var ts = groupHead.timestamp || (groupHead.t ? new Date(groupHead.t).toISOString() : null);
+    var timeStr = '--:--:--';
+    var fullTitle = '';
+    if (ts) {
+        var d = new Date(ts);
+        timeStr = formatTime12Hour(d);
+        fullTitle = formatDateTimeTitle(d);
+    }
+    var text = groupHead.text || groupHead.x || '';
+    var count = items.length + 1;
+    var suffix = count > 1 ? ' (x' + count + ')' : '';
+    var sentence = escapeHtml(text) + suffix;
+
+    var container = document.createElement('div');
+    var head = document.createElement('div');
+    head.className = 'row messageRow groupedDisco collapsedHead';
+    head.innerHTML =
+        '<span class="date"><span class="timestamp" title="' + escapeHtml(fullTitle) + '">' + timeStr + '</span></span>' +
+        '<span class="g">&nbsp;</span>' +
+        '<span class="message"><span class="collapseWidget" aria-label="Disconnections">' +
+        '<i class="fa fa-minus-square-o collapseIcon"></i>' +
+        '<i class="fa fa-plus-square-o expandIcon"></i>' +
+        '<i class="fa fa-angle-right collapsedIcon"></i>' +
+        '</span><span class="sentence">' + sentence + '</span></span>';
+    container.appendChild(head);
+
+    var groupDiv = document.createElement('div');
+    groupDiv.className = 'collapseGroup discoGroup';
+    items.forEach(function(it) {
+        var el = buildMessageElement(it, false);
+        if (el) groupDiv.appendChild(el);
+    });
+    container.appendChild(groupDiv);
+
+    var part = document.createElement('div');
+    part.className = 'row part groupedDiscoPart';
+    part.innerHTML = '<hr>';
+    container.appendChild(part);
+
+    head.addEventListener('click', function() {
+        var expanded = head.classList.contains('collapsedHead');
+        if (expanded) {
+            head.classList.remove('collapsedHead');
+            groupDiv.style.display = 'block';
+        } else {
+            head.classList.add('collapsedHead');
+            groupDiv.style.display = 'none';
+        }
+    });
+    groupDiv.style.display = 'none';
+
+    return container;
 }
 
 function appendMessage(msg, autoScroll, isHighlight) {
@@ -832,6 +1018,10 @@ function escapeHtml(text) {
 
 function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripHash(name) {
+    return (name && name.charAt(0) === '#') ? name.substring(1) : name;
 }
 
 function formatDate(isoDate) {
@@ -865,20 +1055,68 @@ function insertDayDividerIfNeeded(date, target) {
     }
 }
 
+function autoResizeTextarea(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     if (document.getElementById('messages')) {
         connectWebSocket();
     }
+
+    updateInputTimestamp();
+    setInterval(updateInputTimestamp, 60000);
+
     var compose = document.getElementById('compose');
-    if (compose) {
+    var textarea = document.getElementById('compose-input');
+    if (compose && textarea) {
+        textarea.addEventListener('input', function() {
+            autoResizeTextarea(textarea);
+        });
+        textarea.addEventListener('keydown', function(evt) {
+            if (evt.key === 'Enter' && !evt.shiftKey) {
+                evt.preventDefault();
+                compose.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            }
+        });
         compose.addEventListener('submit', function(evt) {
             evt.preventDefault();
-            var textInput = document.getElementById('compose-input');
-            var networkInput = evt.target.querySelector('input[name="network"]');
-            var targetInput = evt.target.querySelector('input[name="target"]');
-            if (socket.readyState === WebSocket.OPEN && textInput.value && networkInput.value && targetInput.value) {
-                socket.send(JSON.stringify({ cmd: 'msg', network: networkInput.value, target: targetInput.value, text: textInput.value }));
-                textInput.value = '';
+            var networkInput = compose.querySelector('input[name="network"]');
+            var targetInput = compose.querySelector('input[name="target"]');
+            var text = textarea.value;
+            if (!text || !networkInput.value) return;
+
+            var msgMatch = text.match(/^\/msg\s+(\S+)\s+([\s\S]+)$/);
+            if (msgMatch) {
+                var nick = msgMatch[1];
+                var msgText = msgMatch[2];
+                var buf = ensureQueryBuffer(networkInput.value, nick);
+                if (buf) {
+                    renderSidebar();
+                    switchBuffer(networkInput.value, nick);
+                    var net = getActiveNetwork();
+                    if (net) {
+                        appendMessage({
+                            timestamp: new Date().toISOString(),
+                            nick: net.currentNick || net.nick || '',
+                            text: msgText,
+                            command: 'PRIVMSG'
+                        }, true, false);
+                    }
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({ cmd: 'msg', network: networkInput.value, target: nick, text: msgText }));
+                    }
+                    textarea.value = '';
+                    textarea.style.height = 'auto';
+                }
+                return;
+            }
+
+            if (socket.readyState === WebSocket.OPEN && targetInput.value) {
+                socket.send(JSON.stringify({ cmd: 'msg', network: networkInput.value, target: targetInput.value, text: text }));
+                textarea.value = '';
+                textarea.style.height = 'auto';
             }
         });
     }
@@ -897,6 +1135,26 @@ document.addEventListener('DOMContentLoaded', function() {
     var editBtn = document.getElementById('edit-network-btn');
     if (editBtn && modal) {
         editBtn.addEventListener('click', function() {
+            var net = getActiveNetwork();
+            if (!net) return;
+            var form = document.getElementById('network-form');
+            if (!form) return;
+            form.dataset.mode = 'edit';
+            form.networkId.value = net.networkId;
+            form.name.value = net.name || '';
+            form.host.value = net.host || '';
+            form.port.value = net.port || 6697;
+            form.nick.value = net.nick || '';
+            form.realName.value = net.realName || '';
+            form.tls.value = net.tls || 'enabled';
+            form.autoJoinChannels.value = (net.autoJoinChannels || []).join(', ');
+            if (modalTitle) modalTitle.textContent = 'Edit Network';
+            modal.style.display = 'flex';
+        });
+    }
+    var headerEditBtn = document.getElementById('header-edit-btn');
+    if (headerEditBtn && modal) {
+        headerEditBtn.addEventListener('click', function() {
             var net = getActiveNetwork();
             if (!net) return;
             var form = document.getElementById('network-form');
@@ -979,6 +1237,30 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    var connStatusEdit = document.getElementById('connection-status-edit');
+    if (connStatusEdit) {
+        connStatusEdit.addEventListener('click', function(evt) {
+            evt.preventDefault();
+            var net = getActiveNetwork();
+            if (!net) return;
+            var form = document.getElementById('network-form');
+            if (!form) return;
+            var modal = document.getElementById('network-modal');
+            var modalTitle = document.getElementById('network-modal-title');
+            form.dataset.mode = 'edit';
+            form.networkId.value = net.networkId;
+            form.name.value = net.name || '';
+            form.host.value = net.host || '';
+            form.port.value = net.port || 6697;
+            form.nick.value = net.nick || '';
+            form.realName.value = net.realName || '';
+            form.tls.value = net.tls || 'enabled';
+            form.autoJoinChannels.value = (net.autoJoinChannels || []).join(', ');
+            if (modalTitle) modalTitle.textContent = 'Edit Network';
+            if (modal) modal.style.display = 'flex';
+        });
+    }
+
     var disconnectBtn = document.getElementById('disconnect-network-btn');
     if (disconnectBtn) {
         disconnectBtn.addEventListener('click', function() {
@@ -989,6 +1271,26 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (r.ok) {
                         net.connected = false;
                         net.wasDisconnected = true;
+                        net.disconnectReason = 'You disconnected';
+                        renderSidebar();
+                        switchBuffer(net.networkId, '_server');
+                    } else {
+                        alert('Failed to disconnect');
+                    }
+                });
+        });
+    }
+    var headerDisconnectBtn = document.getElementById('header-disconnect-btn');
+    if (headerDisconnectBtn) {
+        headerDisconnectBtn.addEventListener('click', function() {
+            var net = getActiveNetwork();
+            if (!net) return;
+            fetch('/api/networks/' + encodeURIComponent(net.networkId) + '/disconnect', { method: 'POST' })
+                .then(function(r) {
+                    if (r.ok) {
+                        net.connected = false;
+                        net.wasDisconnected = true;
+                        net.disconnectReason = 'You disconnected';
                         renderSidebar();
                         switchBuffer(net.networkId, '_server');
                     } else {
@@ -1007,6 +1309,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(function(r) {
                     if (r.ok) {
                         net.connected = true;
+                        net.disconnectReason = '';
+                        renderSidebar();
+                    } else {
+                        alert('Failed to reconnect');
+                    }
+                });
+        });
+    }
+    var headerReconnectBtn = document.getElementById('header-reconnect-btn');
+    if (headerReconnectBtn) {
+        headerReconnectBtn.addEventListener('click', function() {
+            var net = getActiveNetwork();
+            if (!net) return;
+            fetch('/api/networks/' + encodeURIComponent(net.networkId) + '/reconnect', { method: 'POST' })
+                .then(function(r) {
+                    if (r.ok) {
+                        net.connected = true;
+                        net.disconnectReason = '';
                         renderSidebar();
                     } else {
                         alert('Failed to reconnect');
@@ -1019,6 +1339,7 @@ document.addEventListener('DOMContentLoaded', function() {
     var serverOptionsBtn = document.getElementById('server-options-btn');
     function hideContextMenu() {
         if (serverCtxMenu) serverCtxMenu.style.display = 'none';
+        if (serverOptionsBtn) serverOptionsBtn.setAttribute('aria-expanded', 'false');
     }
     if (serverOptionsBtn && serverCtxMenu) {
         serverOptionsBtn.addEventListener('click', function(evt) {
@@ -1028,6 +1349,7 @@ document.addEventListener('DOMContentLoaded', function() {
             serverCtxMenu.style.left = rect.left + 'px';
             serverCtxMenu.style.display = 'block';
             updateContextMenuState();
+            serverOptionsBtn.setAttribute('aria-expanded', 'true');
         });
     }
     document.addEventListener('click', function(evt) {
@@ -1042,6 +1364,18 @@ document.addEventListener('DOMContentLoaded', function() {
         var expandLi = document.getElementById('ctx-expand');
         if (collapseLi) collapseLi.parentElement.style.display = (net && !net.collapsed && !isServer) ? 'list-item' : 'none';
         if (expandLi) expandLi.parentElement.style.display = (net && net.collapsed && !isServer) ? 'list-item' : 'none';
+
+        var reconnectLi = document.getElementById('ctx-reconnect');
+        var editLi = document.getElementById('ctx-edit');
+        var disconnectLi = document.getElementById('ctx-disconnect');
+        var joinLi = document.getElementById('ctx-join');
+        var deleteLi = document.getElementById('ctx-delete');
+
+        if (reconnectLi) reconnectLi.parentElement.style.display = isServer ? 'list-item' : 'none';
+        if (editLi) editLi.parentElement.style.display = isServer ? 'list-item' : 'none';
+        if (disconnectLi) disconnectLi.parentElement.style.display = isServer ? 'list-item' : 'none';
+        if (joinLi) joinLi.parentElement.style.display = 'list-item';
+        if (deleteLi) deleteLi.parentElement.style.display = isServer ? 'list-item' : 'none';
     }
 
     var ctxReconnect = document.getElementById('ctx-reconnect');
@@ -1051,7 +1385,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var net = getActiveNetwork();
             if (!net) return;
             fetch('/api/networks/' + encodeURIComponent(net.networkId) + '/reconnect', { method: 'POST' })
-                .then(function(r) { if (r.ok) { net.connected = true; renderSidebar(); } else { alert('Failed to reconnect'); } });
+                .then(function(r) { if (r.ok) { net.connected = true; net.disconnectReason = ''; renderSidebar(); } else { alert('Failed to reconnect'); } });
         });
     }
     var ctxJoin = document.getElementById('ctx-join');
@@ -1092,7 +1426,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var net = getActiveNetwork();
             if (!net) return;
             fetch('/api/networks/' + encodeURIComponent(net.networkId) + '/disconnect', { method: 'POST' })
-                .then(function(r) { if (r.ok) { net.connected = false; net.wasDisconnected = true; renderSidebar(); switchBuffer(net.networkId, '_server'); } else { alert('Failed to disconnect'); } });
+                .then(function(r) { if (r.ok) { net.connected = false; net.wasDisconnected = true; net.disconnectReason = 'You disconnected'; renderSidebar(); switchBuffer(net.networkId, '_server'); } else { alert('Failed to disconnect'); } });
         });
     }
     var ctxClear = document.getElementById('ctx-clear');
