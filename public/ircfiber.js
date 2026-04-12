@@ -515,6 +515,38 @@ function getIrcCloudTypeClass(cmd, msg) {
     }
 }
 
+function groupMOTDLines(msgs) {
+    var result = [];
+    var motdGroup = null;
+    msgs.forEach(function(msg) {
+        var cmd = msg.command || msg.c || '';
+        if (cmd === '372' || cmd === '375') {
+            if (!motdGroup) {
+                motdGroup = {
+                    command: 'MOTD_GROUP',
+                    timestamp: msg.timestamp || msg.t,
+                    lines: []
+                };
+            }
+            var text = formatNumericText(cmd, msg.params || msg.p, msg.text || msg.x);
+            if (text) motdGroup.lines.push(text);
+        } else if (cmd === '376' || cmd === '422') {
+            if (motdGroup) {
+                result.push(motdGroup);
+                motdGroup = null;
+            }
+        } else {
+            if (motdGroup) {
+                result.push(motdGroup);
+                motdGroup = null;
+            }
+            result.push(msg);
+        }
+    });
+    if (motdGroup) result.push(motdGroup);
+    return result;
+}
+
 function parseIrcFormatting(text) {
     if (!text) return '';
     var i = 0;
