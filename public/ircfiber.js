@@ -1,6 +1,17 @@
 var socket;
 var state = { buffers: [] };
 var activeBuffer = { networkId: null, bufferName: null };
+var lastSeenMsgTime = null;
+var focusLost = false;
+
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+        focusLost = true;
+    } else {
+        insertFocusSeenDivider();
+        focusLost = false;
+    }
+});
 
 function getActiveNetwork() {
     return state.buffers.find(function(n) { return n.networkId === activeBuffer.networkId; });
@@ -397,6 +408,13 @@ function switchBuffer(networkId, bufferName) {
     renderSidebar();
     renderUsers();
     loadHistory(networkId, bufferName);
+    // Remove old seen dividers when switching buffers
+    var container = document.getElementById('messages');
+    if (container) {
+        container.querySelectorAll('.seenDivider').forEach(function(el) { el.remove(); });
+    }
+    lastSeenMsgTime = Date.now();
+    focusLost = false;
     if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({ cmd: 'buffer', network: networkId, channel: bufferName }));
     }
@@ -466,6 +484,10 @@ function handleIRCEvents(events) {
             if (r.needsRender) needsRender = true;
         }
     });
+    var isScrolledNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+    if (!isScrolledNearBottom && events.length > 0) {
+        insertSeenDivider('lastSeen');
+    }
     container.scrollTop = container.scrollHeight;
     if (needsRender) renderSidebar();
 }
@@ -858,6 +880,23 @@ function groupDisconnects(msgs) {
     });
     if (group) result.push({ type: 'discoGroup', group: group });
     return result;
+}
+
+function insertSeenDivider(type) {
+    var container = document.getElementById('messages');
+    if (!container) return;
+    var existing = container.querySelector('.seenDivider.' + type);
+    if (existing) existing.remove();
+    var div = document.createElement('div');
+    div.className = 'row seenDivider ' + type;
+    var text = type === 'focusSeen' ? 'New messages since you tabbed out' : 'New messages';
+    div.innerHTML = '<hr><h4 class="divider-text-wrapper"><span class="divider-text">' + text + '</span></h4>';
+    container.appendChild(div);
+}
+
+function insertFocusSeenDivider() {
+    if (!focusLost) return;
+    insertSeenDivider('focusSeen');
 }
 
 function buildMessageElement(msg, isHighlight) {
