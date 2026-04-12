@@ -394,7 +394,7 @@ function switchBuffer(networkId, bufferName) {
     window.lastMessageDate = null;
 
     var userList = document.getElementById('user-list-panel');
-    var bufferInput = document.querySelector('.message-input');
+    var bufferInput = document.querySelector('.bufferinputcell');
     if (isServer || (bufObj && bufObj.type === 'query')) {
         if (userList) userList.style.display = 'none';
         if (bufferInput) bufferInput.style.display = isServer ? 'none' : 'flex';
