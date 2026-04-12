@@ -21,10 +21,9 @@ a:hover { text-decoration: underline; }
 .auth-container input { width: 100%; padding: 0.75rem; margin-bottom: 0.75rem; background: #0d1117; border: 1px solid #2c2f35; border-radius: 6px; color: #d1d5db; }
 .auth-container button { width: 100%; padding: 0.75rem; background: #238636; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
 .auth-container p { text-align: center; margin-top: 1rem; font-size: 0.875rem; color: #8b949e; }
-.container { display: flex; height: 100vh; }
-.sidebar { width: 220px; background: #1a1d21; border-right: 1px solid #2c2f35; display: flex; flex-direction: column; }
+#wrap { display: flex; flex-direction: row; height: 100vh; overflow: hidden; }
+#sidebar { width: 220px; background: #1a1d21; border-left: 1px solid #2c2f35; display: flex; flex-direction: column; flex-shrink: 0; }
 .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; border-bottom: 1px solid #2c2f35; }
-.sidebar-header h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; }
 #add-network-btn { background: #2c2f35; color: #d1d5db; border: none; width: 24px; height: 24px; border-radius: 4px; cursor: pointer; font-weight: 600; }
 .network-list { flex: 1; overflow-y: auto; padding: 0.5rem 0; }
 .network { margin-bottom: 0.5rem; }
