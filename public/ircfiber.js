@@ -264,6 +264,56 @@ function switchBuffer(networkId, bufferName) {
     }
 }
 
+function loadOlderHistory(networkId, bufferName) {
+    var container = document.getElementById('messages');
+    var firstMsg = container.querySelector('.row.messageRow[data-time]');
+    var beforeTime = firstMsg ? firstMsg.getAttribute('data-time') : '';
+    var url = '/api/channels/' + encodeURIComponent(networkId) + '/' + encodeURIComponent(bufferName) + '/messages?count=500';
+    if (beforeTime) url += '&before=' + encodeURIComponent(beforeTime);
+    fetch(url)
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function(msgs) {
+            if (!Array.isArray(msgs) || msgs.length === 0) {
+                var existing = container.querySelector('.row.loadMore');
+                if (existing) existing.innerHTML = '<span class="loadMore__end">No more messages</span>';
+                return;
+            }
+            prependHistoryMessages(msgs.reverse());
+        })
+        .catch(function(err) {
+            console.error('Failed to load older history', err);
+        });
+}
+
+function prependHistoryMessages(msgs) {
+    var container = document.getElementById('messages');
+    var grouped = groupMOTDLines(msgs);
+    var frag = document.createDocumentFragment();
+    var firstDate = null;
+    var lastDate = window.firstMessageDate || null;
+    grouped.forEach(function(msg) {
+        var ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
+        var d = ts ? ts.split('T')[0] : '';
+        if (d && d !== firstDate) {
+            var dayDiv = document.createElement('div');
+            dayDiv.className = 'row dateChange';
+            dayDiv.innerHTML = '<h3>' + formatDate(d) + '</h3>';
+            frag.appendChild(dayDiv);
+            firstDate = d;
+        }
+        var el = buildMessageElement(msg, msg.highlight);
+        if (el) frag.appendChild(el);
+    });
+    // Remove existing loadMore button if present
+    var existingLoadMore = container.querySelector('.row.loadMore');
+    if (existingLoadMore) existingLoadMore.remove();
+    container.insertBefore(frag, container.firstChild);
+    window.firstMessageDate = firstDate || lastDate;
+}
+
 function loadHistory(networkId, bufferName) {
     fetch('/api/channels/' + encodeURIComponent(networkId) + '/' + encodeURIComponent(bufferName) + '/messages?count=500')
         .then(function(r) { return r.json(); })
@@ -271,6 +321,14 @@ function loadHistory(networkId, bufferName) {
             var container = document.getElementById('messages');
             container.innerHTML = '';
             window.lastMessageDate = null;
+            window.firstMessageDate = null;
+            var loadMoreBtn = document.createElement('div');
+            loadMoreBtn.className = 'row loadMore';
+            loadMoreBtn.innerHTML = '<button class="loadMore__button" tabindex="-1"><span>Load more backlog…</span></button>';
+            loadMoreBtn.querySelector('button').addEventListener('click', function() {
+                loadOlderHistory(networkId, bufferName);
+            });
+            container.appendChild(loadMoreBtn);
             var lastDate = null;
             var frag = document.createDocumentFragment();
             var grouped = groupMOTDLines(msgs);
