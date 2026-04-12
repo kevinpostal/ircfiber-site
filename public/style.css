@@ -157,19 +157,11 @@ a:hover { text-decoration: underline; }
   gap: 0.25rem;
 }
 
-.member-sidebar {
-  width: 180px;
-  background: #1a1d21;
-  border-left: 1px solid #2c2f35;
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  overflow-y: auto;
-}
-
-.member-sidebar-content {
-  padding: 0.5rem 0;
-}
+#user-list-panel { display: none; flex-direction: column; overflow-y: auto; flex: 1; border-top: 1px solid #2c2f35; }
+.sidebar-footer { padding: 0.5rem 0.75rem; border-top: 1px solid #2c2f35; display: flex; align-items: center; justify-content: space-between; font-size: 0.8125rem; flex-shrink: 0; }
+.ws-status { color: #3fb950; font-size: 0.75rem; }
+.sidebar-footer a { color: #8b949e; }
+.sidebar-footer a:hover { color: #d1d5db; }
 
 .channel-banner {
   padding: 0.5rem 1rem;
