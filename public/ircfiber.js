@@ -273,13 +273,14 @@ function loadHistory(networkId, bufferName) {
             window.lastMessageDate = null;
             var lastDate = null;
             var frag = document.createDocumentFragment();
-            msgs.reverse().forEach(function(msg) {
+            var grouped = groupMOTDLines(msgs);
+            grouped.forEach(function(msg) {
                 var ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
                 var d = ts ? ts.split('T')[0] : '';
                 if (d && d !== lastDate) {
                     var dayDiv = document.createElement('div');
-                    dayDiv.className = 'day-divider';
-                    dayDiv.innerHTML = '<span>' + formatDate(d) + '</span>';
+                    dayDiv.className = 'row dateChange';
+                    dayDiv.innerHTML = '<h3>' + formatDate(d) + '</h3>';
                     frag.appendChild(dayDiv);
                     lastDate = d;
                 }
@@ -289,6 +290,8 @@ function loadHistory(networkId, bufferName) {
             container.appendChild(frag);
             window.lastMessageDate = lastDate;
             container.scrollTop = container.scrollHeight;
+        }).catch(function(err) {
+            container.innerHTML = '<div class="row messageRow status monospace type_error userParent"><span class="date"><span class="timestamp">--:--:--</span></span><span class="g">&nbsp;</span><span class="message"><span class="content">Failed to load history: ' + escapeHtml(err.message) + '</span></span></div>';
         });
 }
 
@@ -797,8 +800,8 @@ function insertDayDividerIfNeeded(date, target) {
     if (!date) return;
     if (!window.lastMessageDate || window.lastMessageDate !== date) {
         var div = document.createElement('div');
-        div.className = 'day-divider';
-        div.innerHTML = '<span>' + formatDate(date) + '</span>';
+        div.className = 'row dateChange';
+        div.innerHTML = '<h3>' + formatDate(date) + '</h3>';
         target.appendChild(div);
         window.lastMessageDate = date;
     }
