@@ -648,51 +648,103 @@ function parseIrcFormatting(text) {
     if (openStack > 0) {
         for (var k = 0; k < openStack; k++) out += '</span>';
     }
+    // Auto-link #channels and URLs like IRC Cloud
+    out = out.replace(/#([a-zA-Z0-9_\-\.]+)/g, '<a class="buffer bufferLink channelInviteLink channel" title="#$1" data-name="#$1">#$1</a>');
+    out = out.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" class="link" rel="noreferrer" target="_blank">$1</a>');
+    out = out.replace(/(mailto:[^\s<]+)/g, '<a href="$1" class="email" rel="noreferrer" target="_blank">$1</a>');
     return out;
 }
 
-function buildMessageElement(msg, isHighlight) {
-    var div = document.createElement('div');
-    var cmd = msg.command || msg.c || '';
-    var typeClass = 'message';
-    if (cmd === 'JOIN' || cmd === 'PART' || cmd === 'QUIT' || cmd === 'NICK' || cmd === 'TOPIC' || cmd === 'CONNECT' || cmd === 'DISCONNECT' || cmd === 'ERROR' || cmd === 'MODE') typeClass += ' system';
-    else if (msg.type === 'action' || msg.y === 'a') typeClass += ' action';
-    if (isHighlight || msg.highlight) typeClass += ' highlight';
-    div.className = typeClass;
+function isBotNick(nick, msg) {
+    if (msg && msg.bot) return true;
+    var knownBots = ['NickServ','ChanServ','MemoServ','HostServ','OperServ'];
+    return knownBots.indexOf(nick) >= 0;
+}
 
-    var time;
-    if (msg.timestamp) {
-        time = msg.timestamp.substring(11, 19);
-    } else if (msg.t) {
-        time = new Date(msg.t).toISOString().substring(11, 19);
-    } else {
-        time = '--:--:--';
+function buildMessageElement(msg, isHighlight) {
+    var row = document.createElement('div');
+    var cmd = msg.command || msg.c || '';
+    var typeClass = 'row messageRow';
+    var isSystem = (cmd === 'JOIN' || cmd === 'PART' || cmd === 'QUIT' || cmd === 'NICK' ||
+                   cmd === 'TOPIC' || cmd === 'CONNECT' || cmd === 'DISCONNECT' ||
+                   cmd === 'ERROR' || cmd === 'MODE' || /^\d{3}$/.test(cmd) || cmd === 'CAP' ||
+                   cmd === 'MOTD_GROUP');
+    if (isSystem) typeClass += ' status monospace';
+    else if (msg.type === 'action' || msg.y === 'a') typeClass += ' action';
+
+    var ircCloudType = getIrcCloudTypeClass(cmd, msg);
+    if (ircCloudType) typeClass += ' ' + ircCloudType;
+    typeClass += ' userParent';
+    if (isHighlight || msg.highlight) typeClass += ' highlight';
+    row.className = typeClass;
+
+    var ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
+    var timeStr = '--:--:--';
+    var fullTitle = '';
+    if (ts) {
+        var d = new Date(ts);
+        timeStr = formatTime12Hour(d);
+        fullTitle = formatDateTimeTitle(d);
     }
+    if (ts) row.setAttribute('data-time', ts);
+
     var nick = msg.nick || msg.n || '';
     var text = msg.text || msg.x || '';
     var params = msg.params || msg.p || [];
 
     if (cmd === 'DISCONNECT') {
-        div.className = 'message system disconnect-msg';
-        var display = '&#x21D0; You disconnected';
+        row.className = 'row messageRow status type_quit_server userParent';
+        var display = '<span class="prefix">&#x21D0;</span> You disconnected';
         if (text && text !== 'You disconnected') {
             display += ': ' + escapeHtml(text);
         }
-        div.innerHTML = '<span class="timestamp">' + time + '</span>' +
-            '<span class="nick"></span>' +
-            '<span class="text">' + display + '</span>';
-        return div;
+        row.innerHTML =
+            '<span class="date"><span class="timestamp" title="' + escapeHtml(fullTitle) + '">' + timeStr + '</span></span>' +
+            '<span class="g">&nbsp;</span>' +
+            '<span class="message"><span class="content">' + display + '</span></span>';
+        return row;
+    }
+
+    if (cmd === 'MOTD_GROUP') {
+        row.className = 'row messageRow type_motd_response userParent';
+        var linesHtml = msg.lines.map(function(line) {
+            return '<div class="groupedLines__line">' + parseIrcFormatting(line) + '</div>';
+        }).join('');
+        row.innerHTML =
+            '<span class="date"><span class="timestamp" title="' + escapeHtml(fullTitle) + '">' + timeStr + '</span></span>' +
+            '<span class="g">&nbsp;</span>' +
+            '<span class="message"><div class="groupedLines">' + linesHtml + '</div></span>';
+        return row;
     }
 
     var displayText = formatNumericText(cmd, params, text);
     if (displayText === null) return null;
     if (!displayText && cmd) displayText = cmd;
 
-    var nickColor = 'nick-color-' + (stringHash(nick) % 16);
-    div.innerHTML = '<span class="timestamp">' + time + '</span>' +
-        '<span class="nick ' + nickColor + '">' + escapeHtml(nick) + '</span>' +
-        '<span class="text">' + parseIrcFormatting(displayText) + '</span>';
-    return div;
+    var html =
+        '<span class="date"><span class="timestamp" title="' + escapeHtml(fullTitle) + '">' + timeStr + '</span></span>' +
+        '<span class="g">&nbsp;</span>' +
+        '<span class="message">';
+
+    if (!isSystem && nick) {
+        var avatarColor = getAvatarColor(nick);
+        var initial = nick.charAt(0).toUpperCase();
+        var isBot = isBotNick(nick, msg);
+        html += '<span class="authorWrap">' +
+                '<span class="avatar letterAvatar" style="background-color:' + avatarColor + '"><span role="presentation">' + escapeHtml(initial) + '</span></span>' +
+                '<span class="g" aria-hidden="true">&lt;</span>' +
+                '<span class="author" style="color:' + avatarColor + '">' + escapeHtml(nick) + '</span>' +
+                '<span class="g" aria-hidden="true">&gt;</span>&nbsp;';
+        if (isBot) {
+            html += '<span class="author-bot"><span title="">BOT</span>&nbsp;</span>';
+        }
+        html += '</span>';
+    }
+
+    html += '<span class="content">' + parseIrcFormatting(displayText) + '</span>';
+    html += '</span>';
+    row.innerHTML = html;
+    return row;
 }
 
 function appendMessage(msg, autoScroll, isHighlight) {
