@@ -46,20 +46,11 @@ a:hover { text-decoration: underline; }
 .network-status.disconnected { background: #f85149; }
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .channel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.bufferstatus { background: #1e2126; border-bottom: 1px solid #2c2f35; }
-.bufferstatus .bufferHead { padding: 0.75rem 1rem; }
-.bufferstatus .buttons { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
-.bufferstatus .buttons button { padding: 0.375rem 0.75rem; border: none; border-radius: 4px; font-size: 0.8125rem; cursor: pointer; background: #2c2f35; color: #d1d5db; }
-.bufferstatus .buttons button:hover { background: #3a3f47; }
-.bufferstatus .bufferHeading { display: flex; align-items: baseline; gap: 0.5rem; font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.25rem; }
-.bufferstatus .bufferHeading .host { font-size: 0.8125rem; color: #8b949e; font-weight: 400; }
-.bufferstatus .identity { font-size: 0.8125rem; color: #8b949e; }
-.bufferstatus .identity .nick { font-weight: 600; color: #d1d5db; }
-.bufferstatus .identity .realname { color: #8b949e; }
-.bufferstatus .identity .realname::before { content: " "; }
-.bufferstatus .identity .realname:empty { display: none; }
-.bufferstatus .buttons { position: relative; }
-.server-options-btn { opacity: 0; transition: opacity 0.15s ease; margin-left: auto; }
+.bufferstatus { background: #1e2126; border-bottom: 1px solid #2c2f35; flex-shrink: 0; }
+.bufferHead { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; min-height: 48px; gap: 1rem; }
+.serverHeading { flex: 1; min-width: 0; }
+.bufferControls { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.server-options-btn { opacity: 0; transition: opacity 0.15s ease; }
 .bufferstatus:hover .server-options-btn { opacity: 1; }
 
 /* New IRC Cloud layout structure */
@@ -90,28 +81,6 @@ a:hover { text-decoration: underline; }
   overflow: hidden;
 }
 
-.channel-header {
-  background: #1e2126;
-  border-bottom: 1px solid #2c2f35;
-  padding: 0.5rem 1rem;
-  flex-shrink: 0;
-}
-
-.channel-info {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.channel-details {
-  display: flex;
-  flex-direction: row;
-  align-items: baseline;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  min-width: 0;
-}
 
 .channel-name {
   font-size: 1.125rem;
@@ -153,12 +122,6 @@ a:hover { text-decoration: underline; }
   font-weight: 500;
 }
 
-.channel-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-shrink: 0;
-}
 
 .btn-primary {
   padding: 0.25rem 0.625rem;
