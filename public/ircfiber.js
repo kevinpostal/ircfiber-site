@@ -572,7 +572,7 @@ function buildMessageElement(msg, isHighlight) {
     var params = msg.params || msg.p || [];
 
     if (cmd === 'DISCONNECT') {
-        div.className = 'message disconnect-msg';
+        div.className = 'message system disconnect-msg';
         var display = '&#x21D0; You disconnected';
         if (text && text !== 'You disconnected') {
             display += ': ' + escapeHtml(text);
