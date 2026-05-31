@@ -353,7 +353,12 @@ function pollHealth() {
                 var failed = [];
                 if (!data.services.mongo || !data.services.mongo.ok) failed.push('MongoDB');
                 if (!data.services.redis || !data.services.redis.ok) failed.push('Redis');
-                text.textContent = '⚠ ' + failed.join(' + ') + ' is unavailable. Run `docker compose up -d mongo redis` to start services.';
+                if (!data.services.connectionServers || !data.services.connectionServers.ok) failed.push('IRC Engine');
+                if (failed.length > 0) {
+                    text.textContent = '⚠ ' + failed.join(' + ') + ' is unavailable. Run `docker compose up -d mongo redis ircd` to start services.';
+                } else {
+                    text.textContent = '⚠ Service degraded. Check server logs for details.';
+                }
                 bar.style.display = 'block';
             } else {
                 bar.style.display = 'none';
@@ -639,6 +644,9 @@ function updateConnectionActionButton(net) {
 
 function switchBuffer(networkId, bufferName) {
     bufferName = normalizeChannelName(bufferName);
+    if (activeBuffer.networkId === networkId && activeBuffer.bufferName === bufferName) {
+        return;
+    }
     setActiveBuffer(networkId, bufferName);
     var serverCtxMenu = document.getElementById('server-context-menu');
     var serverOptionsBtn = document.getElementById('server-options-btn');
