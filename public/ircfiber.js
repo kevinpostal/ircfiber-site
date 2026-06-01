@@ -6,6 +6,14 @@ var lastSeenMsgTime = null;
 var focusLost = false;
 var _diagSeenIds = new Set();
 var _diagWsMsgCount = 0;
+var _optimisticMessages = {};
+
+function generateLabel() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
 
 function getClearedAtMap() {
     try { return JSON.parse(localStorage.getItem('ircfiber:clearedAt') || '{}'); }
@@ -294,15 +302,23 @@ function cmdMe(args, networkId, target, net) {
     if (!args.length) { alert('Usage: /me <message>'); return; }
     if (!target) { alert('No target'); return; }
     var text = '\x01ACTION ' + args.join(' ') + '\x01';
+    var label = generateLabel();
     if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ cmd: 'msg', network: networkId, target: target, text: text }));
+        socket.send(JSON.stringify({ cmd: 'msg', network: networkId, target: target, text: text, label: label }));
     }
     if (net) {
-        appendMessage({
+        var msg = {
             timestamp: new Date().toISOString(), t: Date.now(),
             nick: net.currentNick || net.nick || '', text: args.join(' '),
-            command: 'PRIVMSG', type: 'action'
-        }, true, false);
+            command: 'PRIVMSG', type: 'action', label: label
+        };
+        var el = buildMessageElement(msg, false, false);
+        if (el) {
+            el.setAttribute('data-label', label);
+            _optimisticMessages[label] = el;
+            var container = document.getElementById('messages');
+            if (container) container.appendChild(el);
+        }
     }
 }
 function cmdCycle(args, networkId, target, net) {
@@ -1509,6 +1525,25 @@ function handleIRCEvent(data) {
     } else {
         _diagSeenIds.add(mid);
     }
+    var label = data.label || data.l || '';
+    if (label && _optimisticMessages[label]) {
+        var optEl = _optimisticMessages[label];
+        delete _optimisticMessages[label];
+        var cmd = data.command || data.c || '';
+        var msg = {
+            timestamp: data.timestamp || (data.t ? new Date(data.t).toISOString() : null),
+            nick: data.nick || data.n || '',
+            text: data.text || data.x || '',
+            command: cmd,
+            params: data.params || data.p,
+            label: label,
+            msgid: data.msgid || data.m || ''
+        };
+        var newEl = buildMessageElement(msg, false, false);
+        if (newEl && optEl && optEl.parentNode) {
+            optEl.parentNode.replaceChild(newEl, optEl);
+        }
+    }
     var result = processIRCEvent(data);
     if (result.needsRender) renderSidebar();
     var container = document.getElementById('messages');
@@ -2119,6 +2154,10 @@ function buildMessageElement(msg, isHighlight, isSameAuthor) {
     if (msg.t) row.setAttribute('data-time', msg.t);
     var msgNick = msg.nick || msg.n || '';
     if (msgNick) row.setAttribute('data-name', msgNick);
+    var msgLabel = msg.label || data && data.label || '';
+    if (msgLabel) row.setAttribute('data-label', msgLabel);
+    var msgid = msg.msgid || msg.m || '';
+    if (msgid) row.setAttribute('data-msgid', msgid);
 
     /* /clear support */
     var clearedAt = getBufferClearedAt(activeBuffer.networkId, activeBuffer.bufferName);
@@ -2836,14 +2875,22 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (buf) {
                     renderSidebar();
                     switchBuffer(networkId, nick);
+                    var label = generateLabel();
                     if (net) {
-                        appendMessage({
+                        var msg = {
                             timestamp: new Date().toISOString(), t: Date.now(),
-                            nick: net.currentNick || net.nick || '', text: msgText, command: 'PRIVMSG'
-                        }, true, false);
+                            nick: net.currentNick || net.nick || '', text: msgText, command: 'PRIVMSG', label: label
+                        };
+                        var el = buildMessageElement(msg, false, false);
+                        if (el) {
+                            el.setAttribute('data-label', label);
+                            _optimisticMessages[label] = el;
+                            var container = document.getElementById('messages');
+                            if (container) container.appendChild(el);
+                        }
                     }
                     if (socket && socket.readyState === WebSocket.OPEN) {
-                        socket.send(JSON.stringify({ cmd: 'msg', network: networkId, target: nick, text: msgText }));
+                        socket.send(JSON.stringify({ cmd: 'msg', network: networkId, target: nick, text: msgText, label: label }));
                     }
                     textarea.value = ''; textarea.style.height = 'auto';
                 }
@@ -2895,14 +2942,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
             /* ── Plain text message ── */
             if (!target) { return; } /* server buffer, ignore plain text */
+            var label = generateLabel();
             if (net) {
-                appendMessage({
+                var msg = {
                     timestamp: new Date().toISOString(), t: Date.now(),
-                    nick: net.currentNick || net.nick || '', text: text, command: 'PRIVMSG'
-                }, true, false);
+                    nick: net.currentNick || net.nick || '', text: text, command: 'PRIVMSG', label: label
+                };
+                var el = buildMessageElement(msg, false, false);
+                if (el) {
+                    el.setAttribute('data-label', label);
+                    _optimisticMessages[label] = el;
+                    var container = document.getElementById('messages');
+                    if (container) container.appendChild(el);
+                }
             }
             if (socket && socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ cmd: 'msg', network: networkId, target: target, text: text }));
+                socket.send(JSON.stringify({ cmd: 'msg', network: networkId, target: target, text: text, label: label }));
                 textarea.value = ''; textarea.style.height = 'auto';
             }
         });
