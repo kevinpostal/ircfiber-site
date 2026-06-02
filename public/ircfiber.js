@@ -2154,7 +2154,7 @@ function buildMessageElement(msg, isHighlight, isSameAuthor) {
     if (msg.t) row.setAttribute('data-time', msg.t);
     var msgNick = msg.nick || msg.n || '';
     if (msgNick) row.setAttribute('data-name', msgNick);
-    var msgLabel = msg.label || data && data.label || '';
+    var msgLabel = msg.label || '';
     if (msgLabel) row.setAttribute('data-label', msgLabel);
     var msgid = msg.msgid || msg.m || '';
     if (msgid) row.setAttribute('data-msgid', msgid);
@@ -2182,7 +2182,7 @@ function buildMessageElement(msg, isHighlight, isSameAuthor) {
     var params = msg.params || msg.p || [];
 
     if (cmd === 'DISCONNECT') {
-        row.className = 'row messageRow status type_quit_server userParent';
+        row.className = 'row messageRow status monospace type_quit_server userParent';
         var display = '<span class="prefix">&#x21D0;</span> You disconnected';
         if (text && text !== 'You disconnected') display += ': ' + escapeHtml(text);
         row.innerHTML =
@@ -2193,7 +2193,7 @@ function buildMessageElement(msg, isHighlight, isSameAuthor) {
     }
 
     if (cmd === 'JOIN' || cmd === 'PART' || cmd === 'QUIT' || cmd === 'NICK' || cmd === 'CHGHOST' || cmd === 'AWAY' || cmd === 'ACCOUNT') {
-        row.className = 'row messageRow status ' + ircCloudType + ' userParent';
+        row.className = 'row messageRow status monospace ' + ircCloudType + ' userParent';
         var prefixStr = msg.prefix || msg.px || '';
         var usermask = '';
         if (prefixStr.indexOf('!') > 0) {
@@ -2287,7 +2287,7 @@ function buildMessageElement(msg, isHighlight, isSameAuthor) {
     }
 
     if (cmd === 'MOTD_GROUP') {
-        row.className = 'row messageRow type_motd_response userParent';
+        row.className = 'row messageRow status monospace type_motd_response userParent';
         var linesHtml = msg.lines.map(function(line) {
             return '<div class="groupedLines__line">' + parseIrcFormatting(line) + '</div>';
         }).join('');
@@ -2320,24 +2320,30 @@ function buildMessageElement(msg, isHighlight, isSameAuthor) {
 
     if (!isSystem && nick && !isSameAuthor) {
         var avatarColor = getAvatarColor(nick);
+        var colorIndex = stringHash(nick) % 27;
+        var colorCls = 'c' + colorIndex;
         var initial = nick.charAt(0).toUpperCase();
         var modePrefix = getModeForNickInActiveBuffer(nick);
         var prefixStr = msg.prefix || msg.px || '';
-        var realname = '';
+        var usermask = '';
         if (prefixStr && prefixStr.indexOf('!') > 0) {
-            var usermask = prefixStr.split('!')[1] || '';
-            if (usermask && usermask.indexOf('@') > 0) {
-                realname = usermask.split('@')[0] || '';
-                if (realname.startsWith('~')) realname = realname.slice(1);
-            }
+            usermask = prefixStr.split('!')[1] || '';
         }
+        var realname = '';
+        if (usermask && usermask.indexOf('@') > 0) {
+            realname = usermask.split('@')[0] || '';
+            if (realname.startsWith('~')) realname = realname.slice(1);
+        }
+        var authorTitle = usermask ? escapeHtml(nick) + ' (' + escapeHtml(usermask) + ')' : escapeHtml(nick);
         html += '<span class="authorWrap">' +
-                '<span class="avatar letterAvatar" style="background-color:' + avatarColor + '"><span role="presentation">' + escapeHtml(initial) + '</span></span>';
+                '<span class="avatar letterAvatar hasUserParent ' + colorCls + '" style="background-color:' + avatarColor + '"><span role="presentation">' + escapeHtml(initial) + '</span></span>' +
+                '<span class="g" aria-hidden="true">&lt;</span>';
         if (modePrefix) {
             var modeInfo = getUserModePrefix(modePrefix + nick);
             html += '<span class="mode_prefix mode_symbol ' + escapeHtml(modeInfo.cls) + '">' + escapeHtml(modePrefix) + '</span>';
         }
-        html += '<span class="author" style="color:' + avatarColor + '">' + escapeHtml(nick) + '</span>&nbsp;';
+        html += '<span role="button" class="buffer bufferLink author ' + colorCls + ' user hasUserParent link" title="' + authorTitle + '">' + escapeHtml(nick) + '</span>' +
+                '<span class="g" aria-hidden="true">&gt;</span>&nbsp;';
         if (realname) {
             html += '<span class="author-realname">' + escapeHtml(realname) + '&nbsp;</span>';
         }

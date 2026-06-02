@@ -85,6 +85,7 @@ main.chat-container {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  overflow-x: hidden;
 }
 #member-sidebar {
   grid-column: 2;
@@ -231,7 +232,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   border: none;
   border-radius: 4px;
   font-size: 0.75rem;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
   box-shadow: 0 1px 0 rgba(0,0,0,0.3);
   text-shadow: 0 1px rgba(0,0,0,0.3);
@@ -319,17 +320,19 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .contextMenu__item:hover { background: #21252b; color: #fff; }
 .contextMenu__item--disabled { opacity: 0.5; cursor: not-allowed; }
 .contextMenu hr { border: none; border-top: 1px solid #2c2f35; margin: 0.25rem 0; }
-.messages { flex: 1; overflow-y: auto; padding: 0.5rem 0; min-width: 0; }
+.messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0.5rem 0; min-width: 0; }
 .row.messageRow {
   display: block;
   position: relative;
-  padding: 0 90px 4px 51px;
+  padding: 0 100px 4px 52px;
   font-size: 14px;
-  font-family: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   letter-spacing: normal;
   line-height: 1.5;
   min-height: 0;
   background: transparent;
+  overflow-x: hidden;
+  word-break: break-word;
 }
 
 .row.messageRow:nth-child(odd) {
@@ -348,14 +351,16 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .row.messageRow.groupedJoinPart .content {
   color: inherit;
   display: inline;
-  white-space: nowrap;
+  white-space: pre-wrap;
 }
 
 /* Reset .buffer from sidebar flex to inline inside message content */
 .row.messageRow .content .buffer,
 .row.messageRow .content .bufferLink,
 .row.messageRow .sentence .buffer,
-.row.messageRow .sentence .bufferLink {
+.row.messageRow .sentence .bufferLink,
+.row.messageRow .authorWrap .buffer,
+.row.messageRow .authorWrap .bufferLink {
   display: inline !important;
   width: auto !important;
 }
@@ -537,11 +542,12 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   font-family: var(--font-mono);
   user-select: none;
   white-space: nowrap;
+  z-index: 1;
 }
 
-/* Timestamp aligned with content line, not author line */
+/* Timestamp aligned with author line */
 .row.messageRow.firstAuthor .date {
-  top: 22px;
+  top: 3px;
 }
 
 .row.messageRow.sameAuthor {
@@ -556,9 +562,16 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   display: none;
 }
 
+.row.messageRow .authorWrap .g {
+  display: none;
+}
+
 .row.messageRow .message {
-  display: inline;
-  vertical-align: top;
+  display: block;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  word-break: break-word;
 }
 
 .row.messageRow .timestamp {
@@ -570,11 +583,15 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 
 .row.messageRow .content {
   display: block;
+  width: auto;
+  max-width: 100%;
   color: var(--text-primary);
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-wrap: break-word;
+  overflow-x: hidden;
   line-height: 16px;
+  box-sizing: border-box;
 }
 
 .row.messageRow .content a {
@@ -599,12 +616,12 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .row.messageRow .letterAvatar {
   position: absolute;
   left: 12px;
-  top: 4px;
-  width: 28px;
-  height: 28px;
+  top: 3px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   text-align: center;
-  line-height: 28px;
+  line-height: 30px;
   font-size: 14px;
   font-weight: 700;
   color: #fff;
