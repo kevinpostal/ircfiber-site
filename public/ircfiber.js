@@ -2060,6 +2060,10 @@ function parseIrcFormatting(text) {
             hexBg = hb.length === 6 ? hb : null;
             fg = null; bg = null;
             stateChanged = true;
+        } else if (ch < 0x20 && ch !== 0x09 && ch !== 0x0A && ch !== 0x0D) {
+            i++;
+        } else if (ch === 0x7F) {
+            i++;
         } else {
             out += escapeHtml(text[i]);
             i++;
