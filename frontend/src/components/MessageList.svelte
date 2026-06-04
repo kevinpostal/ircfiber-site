@@ -186,33 +186,35 @@
   <ChatterBar position="above" count={aboveUnseenCount} onClick={scrollToTop} />
 {/if}
 
-<div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
+<div class="messages-viewport">
   <DateWrapper date={dateWrapperDate} visible={dateWrapperVisible} />
-  <LoadMore {onLoadMore} />
+  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
+    <LoadMore {onLoadMore} />
 
-  {#each messagesWithDates as item, i (item.msg.id || item.msg.msgid || item.msg.t || i)}
-    {@const msg = item.msg}
-    {@const msgDate = item.msgDate}
-    {@const prevDate = item.prevDate}
-    {@const prevMsg = item.prevMsg}
+    {#each messagesWithDates as item, i (item.msg.id || item.msg.msgid || item.msg.t || i)}
+      {@const msg = item.msg}
+      {@const msgDate = item.msgDate}
+      {@const prevDate = item.prevDate}
+      {@const prevMsg = item.prevMsg}
 
-    {#if item.showDate}
-      <DateChange date={msgDate} />
-    {/if}
+      {#if item.showDate}
+        <DateChange date={msgDate} />
+      {/if}
 
-    {#if shouldShowSeenDivider(msg, i)}
-      <SeenDivider />
-    {/if}
+      {#if shouldShowSeenDivider(msg, i)}
+        <SeenDivider />
+      {/if}
 
-    {#if !isSkippedCommand(msg.command)}
-      <MessageRow
-        {msg}
-        isHighlight={msg.highlight ?? false}
-        isSameAuthor={checkSameAuthor(msg, prevMsg)}
-        {onNickClick}
-      />
-    {/if}
-  {/each}
+      {#if !isSkippedCommand(msg.command)}
+        <MessageRow
+          {msg}
+          isHighlight={msg.highlight ?? false}
+          isSameAuthor={checkSameAuthor(msg, prevMsg)}
+          {onNickClick}
+        />
+      {/if}
+    {/each}
+  </div>
 </div>
 
 {#if belowUnseenCount > 0}
