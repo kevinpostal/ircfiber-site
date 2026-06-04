@@ -47,22 +47,10 @@
 
 <div class="bufferstatus">
   <div class="bufferHead">
-    <div class="serverHeading">
-      <h2 class="channel-name" id="current-channel">{channelName}</h2>
-      <p class="channel-host" id="channel-host">
-        {#if activeNetwork}{activeNetwork.host}:{activeNetwork.port}{/if}
-      </p>
-      <div class="channel-identity">
-        <span class="identity-item">
-          <span class="identity-label">Nick:</span>
-          <span class="identity-value" id="network-nick">{activeNetwork?.currentNick || activeNetwork?.nick || ''}</span>
-        </span>
-        <span class="identity-item">
-          <span class="identity-label">Server:</span>
-          <span class="identity-value" id="network-realname">{activeNetwork?.name || ''}</span>
-        </span>
-      </div>
-    </div>
+    <h2 class="channel-name" id="current-channel">{channelName}</h2>
+    {#if topic}
+      <span class="topic" id="channel-topic">{@html parseIrcFormatting(topic)}</span>
+    {/if}
     <nav class="bufferControls" aria-label="Channel controls">
       <span class="ws-status" id="ws-status"></span>
       <button class="btn-primary" type="button" onclick={onEditNetwork}>Edit</button>
@@ -70,19 +58,11 @@
         {connected ? 'Disconnect' : (activeNetwork?.disconnectReason ? 'Reconnect' : 'Connect')}
       </button>
       {#if isChannel}
-        <button class="btn-secondary btn-icon-only" type="button"
-                id="member-count-btn" aria-label="Toggle member list"
-                onclick={onToggleMembers}>
-          <span class="count" id="member-count">{memberCount}</span>
-          <span>members</span>
-        </button>
+        <button class="totalMemberCount" id="member-count" onclick={onToggleMembers} aria-label="Members list">{memberCount}</button>
       {/if}
       <button class="bufferOptions fa fa-cog" type="button"
               title="Options" aria-label="Options"
               onclick={(e) => onJoinChannel(e)}></button>
     </nav>
   </div>
-  {#if topic}
-    <div class="channel-topic" id="channel-topic">{@html parseIrcFormatting(topic)}</div>
-  {/if}
 </div>

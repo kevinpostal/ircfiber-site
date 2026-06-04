@@ -157,11 +157,12 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-status.disconnected { background: #f85149; }
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .channel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.bufferHead { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; min-height: 48px; gap: 1rem; }
-.serverHeading { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
-.bufferControls { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
-.server-options-btn { opacity: 0; transition: opacity 0.15s ease; }
-.bufferstatus:hover .server-options-btn { opacity: 1; }
+.bufferHead { display: flex; align-items: center; gap: 0; padding: 0 10px; height: 45px; }
+.bufferHead .channel-name { display: inline; margin: 0; padding: 0; font-size: 18px; font-weight: 400; color: #d9d9d9; line-height: 45px; white-space: nowrap; }
+.bufferHead .topic { display: inline; margin: 0; padding: 0 0 0 6px; font-size: 14px; color: #d9d9d9; line-height: 45px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40vw; flex-shrink: 1; }
+.bufferControls { display: flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; height: 45px; }
+.totalMemberCount { display: inline-flex; align-items: center; cursor: pointer; font-size: 14px; color: #d9d9d9; padding: 0 8px; line-height: 22px; height: 22px; border-radius: 4px; background: transparent; }
+.totalMemberCount:hover { background: rgba(255,255,255,0.08); }
 
 
 .chat-body {
@@ -2319,9 +2320,8 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   font-family: var(--font-mono);
 }
 
-#app.font-mono .bufferstatus .channel-identity,
-#app.font-mono .bufferstatus .channel-host {
-  font-size: 14px;
+#app.font-mono .bufferstatus .topic {
+  font-size: 13px;
   font-family: var(--font-mono);
 }
 
