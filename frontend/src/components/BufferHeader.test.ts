@@ -130,7 +130,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers },
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers, memberPanelOpen: true },
 		});
 
 		const btn = page.getByRole('button', { name: /members list/i });

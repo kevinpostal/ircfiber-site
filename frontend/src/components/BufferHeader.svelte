@@ -8,8 +8,9 @@
     onEditNetwork: () => void;
     onJoinChannel: (e?: MouseEvent) => void;
     onToggleMembers: () => void;
+    memberPanelOpen: boolean;
   }
-  let { onEditNetwork, onJoinChannel, onToggleMembers }: Props = $props();
+  let { onEditNetwork, onJoinChannel, onToggleMembers, memberPanelOpen }: Props = $props();
 
   const activeNetwork = $derived(getActiveNetwork());
   const activeBufferObj = $derived(getActiveBufferObj());
@@ -58,7 +59,7 @@
         {connected ? 'Disconnect' : (activeNetwork?.disconnectReason ? 'Reconnect' : 'Connect')}
       </button>
       {#if isChannel}
-        <button class="totalMemberCount" id="member-count" onclick={onToggleMembers} aria-label="Members list">{memberCount}</button>
+        <span class="totalMemberCount memberToggle" id="member-count" role="button" tabindex="0" title="Members list" aria-label="Members list" aria-expanded={memberPanelOpen} onclick={onToggleMembers} onkeydown={(e) => e.key === 'Enter' && onToggleMembers()}><i class="fa fa-list-ul"></i><i class="fa fa-twitch"></i><span>{memberCount}</span></span>
       {/if}
       <button class="bufferOptions fa fa-cog" type="button"
               title="Options" aria-label="Options"
