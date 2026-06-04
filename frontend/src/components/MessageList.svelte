@@ -4,10 +4,11 @@
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
+  import DateWrapper from './DateWrapper.svelte';
   import SeenDivider from './SeenDivider.svelte';
   import LoadMore from './LoadMore.svelte';
   import ChatterBar from './ChatterBar.svelte';
-  import { isSkippedCommand, getMsgDate } from '../lib/utils';
+  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle } from '../lib/utils';
   import type { IRCMessage } from '../types';
 
   interface Props {
@@ -18,6 +19,8 @@
 
   let container: HTMLDivElement;
   let shouldAutoScroll = $state(true);
+  let dateWrapperVisible = $state(false);
+  let dateWrapperDate = $state('');
   let aboveUnseenCount = $state(0);
   let belowUnseenCount = $state(0);
 
@@ -126,7 +129,34 @@
     if (!container) return;
     const { scrollTop, scrollHeight, clientHeight } = container;
     shouldAutoScroll = scrollHeight - scrollTop - clientHeight < 50;
+    updateDateWrapper();
     updateChatterCounts();
+  }
+
+  function updateDateWrapper(): void {
+    if (!container) return;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    const isAtTop = scrollTop < 50;
+    if (isAtBottom || isAtTop) {
+      dateWrapperVisible = false;
+      return;
+    }
+    const containerRect = container.getBoundingClientRect();
+    const rows = container.querySelectorAll('.row.messageRow');
+    for (const row of Array.from(rows)) {
+      const rect = (row as HTMLElement).getBoundingClientRect();
+      if (rect.top >= containerRect.top) {
+        const time = (row as HTMLElement).dataset.time;
+        if (time) {
+          const d = new Date(parseInt(time));
+          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          dateWrapperDate = dateStr;
+          dateWrapperVisible = true;
+        }
+        break;
+      }
+    }
   }
 
   function updateChatterCounts(): void {
@@ -157,6 +187,7 @@
 {/if}
 
 <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
+  <DateWrapper date={dateWrapperDate} visible={dateWrapperVisible} />
   <LoadMore {onLoadMore} />
 
   {#each messagesWithDates as item, i (item.msg.id || item.msg.msgid || item.msg.t || i)}
