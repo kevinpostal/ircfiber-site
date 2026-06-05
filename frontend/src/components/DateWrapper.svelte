@@ -11,3 +11,11 @@
 <div class="dateWrapper" style:display={visible ? 'block' : 'none'}>
   <DateChange {date} />
 </div>
+
+<style>
+  .dateWrapper {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+</style>

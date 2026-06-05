@@ -10,7 +10,9 @@
 
 <style>
   .dateChange {
-    padding: 1px 0 0;
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
   .dateChange h3 {
     margin: 0;
@@ -23,9 +25,6 @@
     color: #e6e6e6;
     background: #333;
     box-shadow: inset 0 -3px 0 #4d4d4d, inset 0 -4px 0 #262626, inset 0 -1px 0 #262626;
-  }
-  .dateChange:first-child h3 {
-    margin-top: -3px;
   }
   .relTime {
     font-family: Hack, monospace;

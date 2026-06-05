@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { ircState } from '../stores/ircStore.svelte';
-  import { getClearedAt } from '../stores/preferences.svelte';
+  import { ircState, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen } from '../stores/ircStore.svelte';
+  import { getClearedAt, setLastSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
-  import DateWrapper from './DateWrapper.svelte';
+
   import SeenDivider from './SeenDivider.svelte';
   import LoadMore from './LoadMore.svelte';
   import ChatterBar from './ChatterBar.svelte';
-  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle } from '../lib/utils';
+  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime } from '../lib/utils';
   import type { IRCMessage } from '../types';
 
   interface Props {
@@ -19,10 +19,12 @@
 
   let container: HTMLDivElement;
   let shouldAutoScroll = $state(true);
-  let dateWrapperVisible = $state(false);
-  let dateWrapperDate = $state('');
   let aboveUnseenCount = $state(0);
   let belowUnseenCount = $state(0);
+  let aboveUnseenTimestamp = $state<number | null>(null);
+  let belowUnseenTimestamp = $state<number | null>(null);
+  let aboveUnseenHighlights = $state(0);
+  let belowUnseenHighlights = $state(0);
 
   const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
 
@@ -129,48 +131,108 @@
     if (!container) return;
     const { scrollTop, scrollHeight, clientHeight } = container;
     shouldAutoScroll = scrollHeight - scrollTop - clientHeight < 50;
-    updateDateWrapper();
     updateChatterCounts();
-  }
-
-  function updateDateWrapper(): void {
-    if (!container) return;
-    const { scrollTop, scrollHeight, clientHeight } = container;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-    const isAtTop = scrollTop < 50;
-    if (isAtBottom || isAtTop) {
-      dateWrapperVisible = false;
-      return;
-    }
-    const containerRect = container.getBoundingClientRect();
-    const rows = container.querySelectorAll('.row.messageRow');
-    for (const row of Array.from(rows)) {
-      const rect = (row as HTMLElement).getBoundingClientRect();
-      if (rect.top >= containerRect.top) {
-        const time = (row as HTMLElement).dataset.time;
-        if (time) {
-          const d = new Date(parseInt(time));
-          const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-          dateWrapperDate = dateStr;
-          dateWrapperVisible = true;
-        }
-        break;
-      }
-    }
+    updateReadTracking();
   }
 
   function updateChatterCounts(): void {
     if (!container) return;
     const containerRect = container.getBoundingClientRect();
     const rows = container.querySelectorAll('.row.messageRow');
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (!networkId || !bufferName) return;
+
     let above = 0, below = 0;
+    let aboveTs: number | null = null;
+    let belowTs: number | null = null;
+    let firstAboveMsg: IRCMessage | null = null;
+    let firstBelowMsg: IRCMessage | null = null;
+
     for (const row of Array.from(rows)) {
       const rect = (row as HTMLElement).getBoundingClientRect();
-      if (rect.bottom < containerRect.top) above++;
-      else if (rect.top > containerRect.bottom) below++;
+      const time = (row as HTMLElement).dataset.time;
+      const msgid = (row as HTMLElement).dataset.msgid;
+      if (rect.bottom < containerRect.top) {
+        above++;
+        if (time && aboveTs === null) aboveTs = parseInt(time);
+        if (!firstAboveMsg && msgid) {
+          firstAboveMsg = findMessageByMsgid(networkId, bufferName, msgid);
+        }
+      } else if (rect.top > containerRect.bottom) {
+        below++;
+        if (time && belowTs === null) belowTs = parseInt(time);
+        if (!firstBelowMsg && msgid) {
+          firstBelowMsg = findMessageByMsgid(networkId, bufferName, msgid);
+        }
+      }
     }
-    aboveUnseenCount = above;
-    belowUnseenCount = below;
+
+    // IRCCloud-style: upper bar only shows if the first message above is actually unseen
+    const lastSeenMsg = getLastSeenMessage(networkId, bufferName);
+    if (firstAboveMsg && isMessageUnseen(firstAboveMsg, networkId, bufferName) && lastSeenMsg) {
+      const totalBetween = countMessagesBetween(networkId, bufferName, lastSeenMsg, firstAboveMsg);
+      if (totalBetween > 100) {
+        aboveUnseenCount = totalBetween;
+        aboveUnseenTimestamp = lastSeenMsg.t || null;
+      } else {
+        const important = countImportantMessagesBetween(networkId, bufferName, lastSeenMsg, firstAboveMsg);
+        aboveUnseenCount = important > 0 ? important : totalBetween;
+        aboveUnseenTimestamp = lastSeenMsg.t || null;
+      }
+      aboveUnseenHighlights = clearUnseenHighlightsAfter(networkId, bufferName, firstAboveMsg);
+    } else {
+      aboveUnseenCount = 0;
+      aboveUnseenTimestamp = null;
+      aboveUnseenHighlights = 0;
+    }
+
+    // Lower bar: track bottomSeen and count messages after it
+    const bottomSeenMsg = firstBelowMsg || (below > 0 ? null : null);
+    if (bottomSeenMsg) {
+      updateBottomSeen(networkId, bufferName, bottomSeenMsg);
+      const totalBelow = countMessagesBetween(networkId, bufferName, bottomSeenMsg);
+      if (totalBelow > 100) {
+        belowUnseenCount = totalBelow;
+        belowUnseenTimestamp = bottomSeenMsg.t || null;
+      } else {
+        const important = countImportantMessagesBetween(networkId, bufferName, bottomSeenMsg);
+        belowUnseenCount = important > 0 ? important : totalBelow;
+        belowUnseenTimestamp = bottomSeenMsg.t || null;
+      }
+      belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, bottomSeenMsg);
+    } else {
+      belowUnseenCount = below;
+      belowUnseenTimestamp = belowTs;
+      belowUnseenHighlights = 0;
+    }
+  }
+
+  function findMessageByMsgid(networkId: string, bufferName: string, msgid: string): IRCMessage | null {
+    const key = `${networkId}:${bufferName}`;
+    const list = ircState.messages[key] ?? [];
+    return list.find(m => m.msgid === msgid) ?? null;
+  }
+
+  function updateReadTracking(): void {
+    if (!container) return;
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (!networkId || !bufferName) return;
+    const containerRect = container.getBoundingClientRect();
+    const rows = container.querySelectorAll('.row.messageRow');
+    let lastVisibleMsg: IRCMessage | null = null;
+    for (const row of Array.from(rows)) {
+      const rect = (row as HTMLElement).getBoundingClientRect();
+      const msgid = (row as HTMLElement).dataset.msgid;
+      if (rect.top >= containerRect.top && rect.bottom <= containerRect.bottom) {
+        if (msgid) {
+          const msg = findMessageByMsgid(networkId, bufferName, msgid);
+          if (msg) lastVisibleMsg = msg;
+        }
+      }
+    }
+    if (lastVisibleMsg && lastVisibleMsg.t) {
+      setLastSeen(networkId, bufferName, lastVisibleMsg.t);
+    }
   }
 
   function scrollToTop(): void {
@@ -183,11 +245,10 @@
 </script>
 
 {#if aboveUnseenCount > 0}
-  <ChatterBar position="above" count={aboveUnseenCount} onClick={scrollToTop} />
+  <ChatterBar position="above" count={aboveUnseenCount} timestamp={aboveUnseenTimestamp} mentions={aboveUnseenHighlights} onClick={scrollToTop} />
 {/if}
 
 <div class="messages-viewport">
-  <DateWrapper date={dateWrapperDate} visible={dateWrapperVisible} />
   <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
     <LoadMore {onLoadMore} />
 
@@ -218,5 +279,16 @@
 </div>
 
 {#if belowUnseenCount > 0}
-  <ChatterBar position="below" count={belowUnseenCount} onClick={scrollToBottom} />
+  <ChatterBar position="below" count={belowUnseenCount} timestamp={belowUnseenTimestamp} mentions={belowUnseenHighlights} onClick={scrollToBottom} />
 {/if}
+
+<style>
+  .messages-viewport {
+    position: relative;
+  }
+  .messages {
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1;
+  }
+</style>
