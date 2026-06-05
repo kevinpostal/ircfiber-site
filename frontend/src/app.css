@@ -1,0 +1,4 @@
+/* Svelte mount point */
+#app {
+  display: contents;
+}

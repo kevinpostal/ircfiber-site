@@ -1,0 +1,314 @@
+<script lang="ts">
+  import type { IRCMessage } from '../types';
+  import { formatTime12Hour, formatDateTimeTitle, stringHash, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml } from '../lib/utils';
+  import { parseIrcFormatting } from '../lib/ircFormatting';
+  import { autolinkHtml } from '../lib/autolinker';
+  import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
+
+  interface Props {
+    msg: IRCMessage;
+    isHighlight?: boolean;
+    isSameAuthor?: boolean;
+    onNickClick?: (nick: string, event: MouseEvent) => void;
+  }
+
+  let { msg, isHighlight = false, isSameAuthor = false, onNickClick }: Props = $props();
+
+  const cmd = msg.command;
+  const isJoinPart = ['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd);
+  // Lifecycle events (server/client connect or disconnect) render like
+  // join/part rows in IRCCloud: no `status monospace`, just the type class.
+  const isLifecycle = ['CONNECT', 'DISCONNECT'].includes(cmd);
+  const isSystem = ['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick);
+  const isAction = msg.type === 'action';
+  const isJoinPartGroup = cmd === 'JOINPART_GROUP';
+  const isGrouped = isJoinPartGroup;
+  const typeClass = getIrcCloudTypeClass(cmd, msg.params);
+
+  let expanded = $state(false);
+
+  const ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
+  const timeStr = ts ? formatTime12Hour(new Date(ts)) : '--:--:--';
+  const fullTitle = ts ? formatDateTimeTitle(new Date(ts)) : '';
+  const nick = msg.nick ?? '';
+
+  function getModeForNick(n: string): string {
+    const network = getActiveNetwork();
+    const bufObj = getActiveBufferObj();
+    if (!network || !bufObj?.users) return '';
+    for (const u of bufObj.users) {
+      if (stripPrefix(u.nick) === n) return u.prefix;
+    }
+    return '';
+  }
+
+  function getUsermask(prefix: string): string {
+    if (!prefix || !prefix.includes('!')) return '';
+    return prefix.split('!')[1] ?? '';
+  }
+
+  function handleNickClick(e: MouseEvent): void {
+    if (nick && onNickClick) onNickClick(nick, e);
+  }
+
+  function renderText(text: string): string {
+    return autolinkHtml(parseIrcFormatting(text));
+  }
+
+  function getDisplayText(): string {
+    if (/^\d{3}$/.test(cmd)) {
+      return formatNumericText(cmd, msg.params || [], msg.text || '', nick);
+    }
+    return msg.text || '';
+  }
+
+  interface BanModeInfo {
+    action: string;
+    target: string;
+    diff: string;
+    mode: string;
+  }
+
+  function parseBanMode(params: string[]): BanModeInfo | null {
+    if (params.length < 3) return null;
+    const modeStr = params[1];
+    const m = /^[+\-]b$/.exec(modeStr);
+    if (!m) return null;
+    const diff = modeStr[0];
+    const mode = modeStr[1];
+    const target = params[2];
+    const action = diff === '+' ? 'banned' : 'un-banned';
+    return { action, target, diff, mode };
+  }
+
+  function toggleExpand(): void {
+    expanded = !expanded;
+  }
+
+  function onKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleExpand();
+    }
+  }
+
+  function formatModeText(evt: IRCMessage): string {
+    const params = evt.params || [];
+    const modeStr = params[1] || evt.text || '';
+    if (params.length > 2) {
+      return `${modeStr} ${params.slice(2).join(' ')}`;
+    }
+    return modeStr;
+  }
+
+  function renderEvent(evt: IRCMessage): { timeStr: string; fullTitle: string; html: string; typeClass: string } {
+    const eTs = evt.timestamp || (evt.t ? new Date(evt.t).toISOString() : null);
+    const eTimeStr = eTs ? formatTime12Hour(new Date(eTs)) : '--:--:--';
+    const eFullTitle = eTs ? formatDateTimeTitle(new Date(eTs)) : '';
+    const eCmd = evt.command;
+    const eNick = evt.nick || '';
+    const eUsermask = getUsermask(evt.prefix || '');
+    const eTypeClass = getIrcCloudTypeClass(eCmd, evt.params);
+
+    let html = '';
+    if (eCmd === 'JOIN') {
+      html = `<span class="prefix">&#x2192;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> joined${eUsermask ? ` (${escapeHtml(eUsermask)})` : ''}`;
+    } else if (eCmd === 'PART') {
+      html = `<span class="prefix">&#x2190;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> left${evt.text ? ` (${escapeHtml(evt.text)})` : ''}`;
+    } else if (eCmd === 'QUIT') {
+      html = `<span class="prefix">&#x21D0;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> quit${eUsermask ? ` (${escapeHtml(eUsermask)})` : ''}${evt.text ? ` ${escapeHtml(evt.text)}` : ''}`;
+    } else if (eCmd === 'NICK') {
+      const newNick = evt.params?.[evt.params.length - 1] || '';
+      html = `<span class="prefix">&#x2194;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> is now known as <span class="bufferLink user link">${escapeHtml(newNick)}</span>`;
+    } else if (eCmd === 'CHGHOST') {
+      html = `<span class="prefix">&#x2194;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> changed host to ${escapeHtml((evt.params || []).join('@') || evt.text || '')}`;
+    } else if (eCmd === 'MODE') {
+      const ep = evt.params || [];
+      if (ep.length >= 3 && /^[+\-]b$/.test(ep[1])) {
+        const diff = ep[1][0];
+        const mode = ep[1][1];
+        const target = ep[2];
+        const action = diff === '+' ? 'banned' : 'un-banned';
+        html = `<span class="buffer bufferLink user link">${escapeHtml(eNick)}</span> ${action} <b>${escapeHtml(target)}</b> (<span class="mono rawMode">${diff}${escapeHtml(mode)}</span>)`;
+      } else {
+        html = `<span class="prefix">&#x2699;</span> Channel mode is <b>${escapeHtml(formatModeText(evt))}</b>`;
+      }
+    } else {
+      html = escapeHtml(evt.text || '');
+    }
+
+    return { timeStr: eTimeStr, fullTitle: eFullTitle, html, typeClass: eTypeClass };
+  }
+</script>
+
+{#if isGrouped && msg.events && msg.events.length > 0}
+  {@const events = (msg.events as { msg: IRCMessage }[]).map(e => e.msg)}
+  {@const head = events[0]}
+  <div
+    role="button"
+    aria-expanded={expanded}
+    tabindex="0"
+    class="row messageRow joinPart groupedJoinPart {expanded ? '' : 'collapsedHead'} {expanded ? 'expanded' : ''}"
+    data-time={head.t || msg.t}
+    data-name={head.nick || undefined}
+    data-msgid={head.msgid || undefined}
+    onclick={toggleExpand}
+    onkeydown={onKeyDown}
+  >
+    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
+    <span class="g">&nbsp;</span>
+    <span class="message">
+      <span class="content">
+        <span class="collapseWidget" aria-label="User activity">
+          <i class="fa-regular fa-square-minus collapseIcon"></i>
+          <i class="fa-regular fa-square-plus expandIcon"></i>
+          <i class="fa-solid fa-angle-right collapsedIcon"></i>
+        </span>
+        <span class="sentence">
+          {@html msg.sentences || ''}
+        </span>
+      </span>
+    </span>
+  </div>
+  {#if expanded}
+    {#each events.slice(1) as evt, i (evt.id || evt.msgid || evt.t || i)}
+      {@const r = renderEvent(evt)}
+      <div
+        class="row messageRow status part groupedJoinPartPart {r.typeClass}"
+        data-time={evt.t}
+        data-name={evt.nick || undefined}
+        data-msgid={evt.msgid || undefined}
+      >
+        <span class="date"><span class="timestamp" title={r.fullTitle}>{r.timeStr}</span></span>
+        <span class="g">&nbsp;</span>
+        <span class="message">
+          <span class="content">{@html r.html}</span>
+        </span>
+      </div>
+    {/each}
+  {/if}
+{:else}
+  {@const usermaskAttr = getUsermask(msg.prefix || '')}
+  {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
+  <div
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'}"
+    data-time={msg.t}
+    data-name={nick || undefined}
+    data-usermask={usermaskAttr || undefined}
+    data-msgid={msg.msgid || undefined}
+  >
+    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
+    <span class="g">&nbsp;</span>
+    <span class="message">
+      {#if !isSystem && !isJoinPart && !isAction && nick}
+        {@const colorIndex = stringHash(nick) % 27}
+        {@const colorCls = `c${colorIndex}`}
+        {@const initial = nick.charAt(0).toUpperCase()}
+        {@const modePrefix = getModeForNick(nick)}
+        {@const usermask = getUsermask(msg.prefix || '')}
+        {@const authorTitle = usermask ? `${nick} (${usermask})` : nick}
+        <span class="authorWrap">
+          <span class="avatar letterAvatar hasUserParent {colorCls}">
+            <span role="presentation">{initial}</span>
+          </span>
+          {#if modePrefix}
+            {@const modeInfo = getUserModePrefix(modePrefix + 'x')}
+            <span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>
+          {/if}
+          <span class="g" aria-hidden="true">&lt;</span>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <span role="button" class="buffer bufferLink author {colorCls} user hasUserParent link"
+                title={authorTitle} onclick={handleNickClick}>
+            {nick}
+          </span>
+          <span class="g" aria-hidden="true">&gt;</span>&nbsp;
+        </span>
+      {/if}
+
+      {#if isAction && nick}
+        {@const colorIndex = stringHash(nick) % 27}
+        {@const colorCls = `c${colorIndex}`}
+        {@const initial = nick.charAt(0).toUpperCase()}
+        <span class="authorWrap">
+          <span class="avatar letterAvatar hasUserParent {colorCls}">
+            <span role="presentation">{initial}</span>
+          </span>
+          <span class="g">&mdash;</span>&nbsp;
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <span role="button" class="buffer bufferLink author {colorCls} user link" onclick={handleNickClick}>{nick}</span>&nbsp;
+        </span>
+      {/if}
+
+      <span class="content">
+        {#if hasCollapseWidget}
+          <span class="collapseWidget" aria-label="User activity">
+            <i class="fa-regular fa-square-minus collapseIcon"></i>
+            <i class="fa-regular fa-square-plus expandIcon"></i>
+            <i class="fa-solid fa-angle-right collapsedIcon"></i>
+          </span>
+        {/if}
+        {#if cmd === 'MOTD_GROUP' && msg.lines}
+          <div class="groupedLines">
+            {#each msg.lines as line}
+              <div class="groupedLines__line">{@html parseIrcFormatting(line)}</div>
+            {/each}
+          </div>
+        {:else if cmd === 'JOINPART_GROUP'}
+          {@html msg.sentences || ''}
+        {:else if cmd === 'DISCO_GROUP'}
+          {@html msg.sentences || ''}
+        {:else if cmd === 'DISCONNECT'}
+          <span class="prefix">&#x21D0;</span> You disconnected{#if msg.text && msg.text !== 'You disconnected'}: {msg.text}{/if}
+        {:else if cmd === 'CONNECT' || cmd === '001'}
+          <span class="prefix">&#x2192;</span> {@html renderText(getDisplayText())}
+        {:else if cmd === 'JOIN'}
+          {@const usermask = getUsermask(msg.prefix || '')}
+          <span class="prefix">&#x2192;</span>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span> joined{#if usermask}{' '}({usermask}){/if}
+        {:else if cmd === 'PART'}
+          <span class="prefix">&#x2190;</span>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span> left{#if msg.text}{' '}({msg.text}){/if}
+        {:else if cmd === 'QUIT'}
+          {@const usermask = getUsermask(msg.prefix || '')}
+          <span class="prefix">&#x21D0;</span>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span> quit{#if usermask}{' '}({usermask}){/if}{#if msg.text}{' '}{msg.text}{/if}
+        {:else if cmd === 'NICK'}
+          {@const newNick = msg.params?.[msg.params.length - 1] || ''}
+          <span class="prefix">&#x2194;</span> <span class="buffer bufferLink user link">{nick}</span> is now known as <span class="buffer bufferLink user link">{newNick}</span>
+        {:else if cmd === 'TOPIC'}
+          <span class="prefix">&#x2699;</span> {nick} changed the topic to: {@html renderText(msg.text || '')}
+        {:else if cmd === 'MODE'}
+          {@const modeInfo = parseBanMode(msg.params || [])}
+          {#if modeInfo}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span>
+            {modeInfo.action} <b>{modeInfo.target}</b> (<span class="mono rawMode">{modeInfo.diff}{modeInfo.mode}</span>)
+          {:else}
+            <span class="prefix">&#x2699;</span> {nick} sets mode: {msg.params?.join(' ') || msg.text || ''}
+          {/if}
+        {:else if cmd === 'KICK'}
+          {@const kicked = msg.params?.[1] || ''}
+          <span class="prefix">&#x2190;</span>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <span class="buffer bufferLink user link" onclick={handleNickClick}>{kicked}</span>
+          was kicked by {nick}{#if msg.text} ({@html renderText(msg.text || '')}){/if}
+        {:else if cmd === 'INVITE'}
+          <span class="prefix">&#x2192;</span> {nick} invited {msg.params?.[0] || ''} to {msg.params?.[1] || ''}
+        {:else if cmd === 'AWAY'}
+          <span class="prefix">&#x2026;</span> {nick} is {msg.text ? 'away: ' + msg.text : 'back'}
+        {:else if cmd === 'ACCOUNT'}
+          {nick} {msg.text === '*' ? 'logged out' : msg.text ? `logged in as ${msg.text}` : 'logged in'}
+        {:else if cmd === 'CHGHOST'}
+          {nick} changed host to {msg.params?.join('@') || msg.text || ''}
+        {:else if /^\d{3}$/.test(cmd)}
+          {@html renderText(getDisplayText())}
+        {:else}
+          {@html renderText(msg.text || '')}
+        {/if}
+      </span>
+    </span>
+  </div>
+{/if}

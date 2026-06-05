@@ -1,0 +1,280 @@
+import type { IRCMessage, ModeCategory } from '../types';
+import { MODE_PREFIX_MAP } from '../types';
+
+export function escapeHtml(text: string): string {
+  if (!text) return '';
+  return text.replace(/[&<>"']/g, (m) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m]!)
+  );
+}
+
+export function stringHash(str: string): number {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
+  return Math.abs(h);
+}
+
+export function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function stripHash(name: string): string {
+  return name?.startsWith('#') ? name.substring(1) : name;
+}
+
+export function normalizeChannelName(name: string): string {
+  if (!name || name === '_server') return name;
+  return name.startsWith('#') ? '#' + name.substring(1).toLowerCase() : name;
+}
+
+export function formatTime12Hour(d: Date): string {
+  let h = d.getHours();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  h = h || 12;
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  return `${h}:${m}:${s} ${ampm}`;
+}
+
+export function formatDateTimeTitle(d: Date): string {
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${days[d.getDay()]}, ${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} ${formatTime12Hour(d)}`;
+}
+
+export function formatDate(isoDate: string): string {
+  const d = new Date(isoDate + 'T00:00:00');
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const dayNum = d.getDate();
+  let suffix = 'th';
+  if (dayNum % 10 === 1 && dayNum !== 11) suffix = 'st';
+  else if (dayNum % 10 === 2 && dayNum !== 12) suffix = 'nd';
+  else if (dayNum % 10 === 3 && dayNum !== 13) suffix = 'rd';
+  return `${days[d.getDay()]}, ${months[d.getMonth()]} ${dayNum}${suffix}, ${d.getFullYear()}`;
+}
+
+export function formatRelativeTime(isoDate: string): string {
+  const d = new Date(isoDate + 'T00:00:00');
+  const diff = Date.now() - d.getTime();
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days >= 365) {
+    const years = Math.floor(days / 365);
+    return years === 1 ? 'about a year ago' : `${years} years ago`;
+  }
+  if (days >= 30) {
+    const months = Math.floor(days / 30);
+    return months === 1 ? 'about a month ago' : `${months} months ago`;
+  }
+  if (days >= 7) {
+    const weeks = Math.floor(days / 7);
+    return weeks === 1 ? 'about a week ago' : `${weeks} weeks ago`;
+  }
+  if (days >= 2) return `${days} days ago`;
+  if (days === 1) return 'yesterday';
+  if (hours >= 2) return `${hours} hours ago`;
+  if (hours === 1 || minutes >= 45) return 'about an hour ago';
+  if (minutes >= 2) return `${minutes} minutes ago`;
+  if (minutes === 1) return 'about a minute ago';
+  return 'just now';
+}
+
+export function getMsgDate(msg: IRCMessage): string {
+  const ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
+  return ts ? ts.split('T')[0] : '';
+}
+
+/** Short relative time span used in chatter bars (e.g. "a day", "an hour", "just now").
+ *  Omits "ago" so it reads naturally as "a day of unread messages". */
+export function formatShortRelativeTime(ts: number): string {
+  const diff = Date.now() - ts;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days >= 365) {
+    const years = Math.floor(days / 365);
+    return years === 1 ? 'about a year' : `${years} years`;
+  }
+  if (days >= 30) {
+    const months = Math.floor(days / 30);
+    return months === 1 ? 'about a month' : `${months} months`;
+  }
+  if (days >= 7) {
+    const weeks = Math.floor(days / 7);
+    return weeks === 1 ? 'about a week' : `${weeks} weeks`;
+  }
+  if (days >= 2) return `${days} days`;
+  if (days === 1) return 'a day';
+  if (hours >= 2) return `${hours} hours`;
+  if (hours === 1 || minutes >= 45) return 'about an hour';
+  if (minutes >= 2) return `${minutes} minutes`;
+  if (minutes === 1) return 'about a minute';
+  return 'just now';
+}
+
+export function isJoinPartLike(cmd: string): boolean {
+  return ['JOIN', 'PART', 'QUIT', 'NICK', 'CHGHOST', 'MODE'].includes(cmd);
+}
+
+export function isSkippedCommand(cmd: string): boolean {
+  return ['353', '366', '376', '422', 'PONG'].includes(cmd);
+}
+
+export function isDisconnectLike(cmd: string, text?: string): boolean {
+  return cmd === 'DISCONNECT' || cmd === 'ERROR' || (!!text && text.toLowerCase().includes('failed to connect'));
+}
+
+export function isChatMessage(msg: IRCMessage): boolean {
+  return msg.command === 'PRIVMSG' || msg.type === 'action';
+}
+
+export function getUserModePrefix(nick: string): { prefix: string; cls: string; category: ModeCategory; mode: string } {
+  const first = nick.charAt(0);
+  if (first in MODE_PREFIX_MAP) return MODE_PREFIX_MAP[first];
+  return { prefix: '', cls: '', category: 'MEMBER', mode: '' };
+}
+
+export function stripPrefix(nick: string): string {
+  let n = nick.replace(/^[!~&@%+]+/, '');
+  const bang = n.indexOf('!');
+  if (bang > 0) n = n.slice(0, bang);
+  return n;
+}
+
+export function getAvatarColor(nick: string): string {
+  return NICK_COLORS[stringHash(nick) % NICK_COLORS.length];
+}
+
+// IRCCloud dark-theme nick palette: $nickColors with $darkNickColors overrides applied.
+// Source: app/styles/app/styles/_nick-colors.scss
+export const NICK_COLORS: readonly string[] = [
+  '#deb887', // 0  burlywood       (dark override for firebrick)
+  '#ffd700', // 1  gold            (dark override for chocolate)
+  '#ff9166', // 2  darken(lightsalmon, 4%)
+  '#fa8072', // 3  salmon
+  '#ff8c00', // 4  darkorange
+  '#00ff00', // 5  lime            (dark override for forestgreen)
+  '#ffff00', // 6  yellow          (dark override for olive)
+  '#bdb76b', // 7  darkkhaki       (dark override)
+  '#9acd32', // 8  yellowgreen     (dark override)
+  '#32cd32', // 9  limegreen       (dark override)
+  '#8fbc8f', // 10 darkseagreen    (dark override)
+  '#3cb371', // 11 mediumseagreen  (dark override)
+  '#66cdaa', // 12 mediumaquamarine(dark override)
+  '#20b2aa', // 13 lightseagreen   (dark override)
+  '#40e0d0', // 14 turquoise       (dark override for cadetblue)
+  '#00ffff', // 15 cyan            (dark override for darkcyan)
+  '#00bfff', // 16 deepskyblue
+  '#87ceeb', // 17 skyblue         (dark override for steelblue)
+  '#339cff', // 18 hsl(209,100%,60%)
+  '#6495ed', // 19 cornflowerblue  (dark override for royalblue)
+  '#b2a9e5', // 20 hsl(249,54%,78%)
+  '#ff69b4', // 21 hotpink         (dark override for mediumslateblue)
+  '#da70d6', // 22 orchid          (dark override for darkviolet)
+  '#ee82ee', // 23 violet          (dark override for darkmagenta)
+  '#d68fff', // 24 hsl(278,100%,78%)
+  '#ff00ff', // 25 magenta
+  '#ffb6c1', // 26 lightpink       (dark override for deeppink)
+];
+
+export function generateLabel(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+/** Natural comparison for nick sorting (case-insensitive, number-aware) */
+export function naturalCompare(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+export function getIrcCloudTypeClass(cmd: string, params?: string[]): string {
+  switch (cmd) {
+    case '001': return 'type_server_welcome';
+    case '002': return 'type_server_yourhost';
+    case '003': return 'type_server_created';
+    case '004': return 'type_myinfo';
+    case '005': return 'type_server_supports';
+    case '251': return 'type_server_luserclient';
+    case '252': return 'type_server_luserop';
+    case '253': return 'type_server_luserunknown';
+    case '254': return 'type_server_luserchannels';
+    case '255': return 'type_server_luserme';
+    case '265': return 'type_server_n_local';
+    case '266': return 'type_server_n_global';
+    case '396': return 'type_hidden_host_set';
+    case '372': return 'type_motd_response';
+    case '375': return 'type_motd_start';
+    case '376': return 'type_motd_end';
+    case '422': return 'type_motd_missing';
+    case 'MOTD_GROUP': return 'type_motd_response';
+    case '221': return 'type_user_mode';
+    case 'JOIN': return 'type_joined_channel';
+    case 'PART': return 'type_parted_channel';
+    case 'QUIT': return 'type_quit';
+    case 'NICK': return 'type_nickchange';
+    case 'CHGHOST': return 'type_chghost';
+    case 'AWAY': return 'type_away';
+    case 'TOPIC': return 'type_topic_change';
+    case 'KICK': return 'type_kick';
+    case 'INVITE': return 'type_invite';
+    case 'DISCONNECT': return 'type_quit_server';
+    case 'ERROR': return 'type_error';
+    case 'CONNECT': return 'type_connecting_finished';
+    case 'MODE':
+      return params && params[0]?.[0] !== '#' ? 'type_user_mode' : 'type_channel_mode';
+    case 'CAP':
+      if (params?.[0] === 'LS' || params?.[0] === 'LIST') return 'type_cap_ls';
+      if (params?.[0] === 'REQ') return 'type_cap_req';
+      if (params?.[0] === 'ACK') return 'type_cap_ack';
+      if (params?.[0] === 'NEW') return 'type_cap_new';
+      if (params?.[0] === 'DEL') return 'type_cap_del';
+      if (params?.[0] === 'NAK') return 'type_cap_nak';
+      return 'type_cap';
+    default: return '';
+  }
+}
+
+/** Format numeric reply text for display */
+export function formatNumericText(cmd: string, params: string[], text: string, nick?: string): string {
+  switch (cmd) {
+    case '001': return text || `Welcome to the network, ${nick}`;
+    case '002': return text || 'Your host is...';
+    case '003': return text || 'This server was created...';
+    case '004': return params ? params.join(' ') : text;
+    case '005': return params ? params.slice(0, -1).join(' ') : text;
+    case '251': case '252': case '253': case '254': case '255':
+    case '265': case '266':
+      return text;
+    case '311':
+      return params ? `${params[0]} is ${params[1]}@${params[2]} * ${text}` : text;
+    case '312':
+      return params ? `${params[0]} using ${params[1]} (${text})` : text;
+    case '313': return params ? `${params[0]} ${text}` : text;
+    case '317':
+      return params ? `${params[0]} has been idle ${params[1]} seconds` : text;
+    case '318': return params ? `${params[0]} :End of /WHOIS` : text;
+    case '319': return params ? `${params[0]} : ${text}` : text;
+    case '330': return params ? `${params[0]} is logged in as ${params[1]}` : text;
+    case '332': return text;
+    case '333': return params ? `Topic set by ${params[1]} at ${new Date(parseInt(params[2]) * 1000).toLocaleString()}` : text;
+    case '352': return params ? `${params[4]} ${params[1]}@${params[2]} (${text})` : text;
+    case '353': return text;
+    case '366': return '';
+    case '372': return text;
+    case '375': return text || '--- Message of the Day ---';
+    case '376': return '';
+    case '396': return text ? `Your host is now ${text}` : text;
+    case '433': return text || 'Nickname already in use';
+    default: return text;
+  }
+}
