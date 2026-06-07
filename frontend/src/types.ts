@@ -48,6 +48,8 @@ export interface Network {
   isupport: Record<string, string>;
   // Channel prefix chars from ISUPPORT (default '#')
   chanTypes: string;
+  // Last active buffer (server-persisted, restored on reconnect)
+  lastActiveBuffer?: string;
 }
 
 export interface Buffer {
@@ -160,7 +162,7 @@ export interface TabCompletionCandidate {
 }
 
 // ── Overlay types ──
-export type OverlayType = 'whois' | 'banlist' | 'channellist' | 'invite' | 'channel_delete_confirm';
+export type OverlayType = 'whois' | 'banlist' | 'channellist' | 'invite' | 'channel_delete_confirm' | 'set_topic' | 'ignore_list';
 
 export interface WhoisData {
   nick: string;
@@ -183,6 +185,12 @@ export interface BanEntry {
   setAt: number;
 }
 
+export interface BanListData {
+  networkId: string;
+  channel: string;
+  bans: BanEntry[];
+}
+
 export interface ChannelDeleteConfirmData {
   networkId: string;
   networkName: string;
@@ -190,9 +198,31 @@ export interface ChannelDeleteConfirmData {
   bufferName: string;
 }
 
+export interface SetTopicData {
+  networkId: string;
+  networkName: string;
+  networkHost: string;
+  bufferName: string;
+  currentTopic: string;
+}
+
+export interface InviteData {
+  networkId: string;
+  networkName: string;
+  networkHost: string;
+  networkPort: number;
+  networkTls: string;  // 'enabled' | 'disabled' | 'required'
+  bufferName: string;
+}
+
+export interface IgnoreListData {
+  networkId: string;
+  networkName: string;
+}
+
 export interface OverlayState {
   type: OverlayType | null;
-  data: WhoisData | BanEntry[] | string[] | ChannelDeleteConfirmData | null;
+  data: WhoisData | BanListData | string[] | ChannelDeleteConfirmData | SetTopicData | InviteData | IgnoreListData | null;
 }
 
 // ── Notification types ──

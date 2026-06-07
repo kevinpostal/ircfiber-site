@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection';
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel } from './utils';
 import { updateRoute } from './routing';
 
@@ -58,10 +58,14 @@ registerSlash(['whois', 'wi'], (args, networkId) => {
   sendRaw(networkId, 'WHOIS ' + args[0]);
 });
 
-registerSlash(['ignore'], (args) => {
+registerSlash(['ignore'], (args, networkId) => {
   if (!args[0]) {
-    const list = [...ignoreList];
-    throw new Error(list.length ? 'Ignored: ' + list.join(', ') : 'No ignores set');
+    const net = ircState.networks.find(n => n.networkId === networkId);
+    ircState.overlay = {
+      type: 'ignore_list',
+      data: { networkId, networkName: net?.name || '' },
+    };
+    return;
   }
   if (!ignoreList.includes(args[0])) ignoreList.push(args[0]);
 });
@@ -123,6 +127,12 @@ registerSlash(['kickban', 'kb'], (args, networkId, target) => {
   sendRaw(networkId, 'KICK ' + target + ' ' + args[0] + (reason ? ' :' + reason : ''));
 });
 
+registerSlash(['banlist', 'bans'], (args, networkId, target) => {
+  const chan = args[0] ? normalizeChannelName(args[0]) : target;
+  if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
+  sendRaw(networkId, 'MODE ' + chan + ' +b');
+});
+
 registerSlash(['raw', 'quote'], (args, networkId) => {
   if (!args.length) throw new Error('Usage: /raw <command>');
   sendRaw(networkId, args.join(' '));
@@ -140,10 +150,16 @@ registerSlash(['quit', 'disconnect'], (args, networkId) => {
 });
 
 registerSlash(['part', 'leave', 'pa', 'p', 'l'], (args, networkId, target) => {
-  const chan = args[0] && args[0].startsWith('#') ? normalizeChannelName(args[0]) : target;
-  const reason = args[0] && args[0].startsWith('#') ? args.slice(1).join(' ') : args.join(' ');
+  const chan = args[0] ? normalizeChannelName(args[0]) : target;
+  const reason = args[0] ? args.slice(1).join(' ') : args.join(' ');
   if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
   sendRaw(networkId, 'PART ' + chan + (reason ? ' :' + reason : ''));
+  // Optimistically mark as parted — the server echo will confirm it
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (net) {
+    const buf = net.buffers.find(b => b.name === chan);
+    if (buf) buf.isJoined = false;
+  }
 });
 
 registerSlash(['me'], (args, networkId, target, _net) => {
@@ -155,8 +171,8 @@ registerSlash(['me'], (args, networkId, target, _net) => {
 });
 
 registerSlash(['cycle', 'hop', 'rejoin'], (args, networkId, target) => {
-  const chan = args[0] && args[0].startsWith('#') ? normalizeChannelName(args[0]) : target;
-  const key = args[0] && args[0].startsWith('#') ? (args[1] || '') : '';
+  const chan = args[0] ? normalizeChannelName(args[0]) : target;
+  const key = args[0] ? (args[1] || '') : '';
   if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
   sendRaw(networkId, 'PART ' + chan);
   sendRaw(networkId, 'JOIN ' + chan + (key ? ' ' + key : ''));
@@ -168,7 +184,7 @@ registerSlash(['clear'], (_args, networkId, target) => {
 
 registerSlash(['archive', 'close', 'wc', 'a'], (_args, networkId, target) => {
   if (!target || target === '_server') throw new Error('Cannot archive server buffer');
-  archivedMap[`${networkId}:${target}`] = true;
+  archiveBuffer(networkId, target);
 });
 
 registerSlash(['unarchive'], (args, networkId) => {

@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection';
-  import { archivedMap, pinnedMap } from '../stores/preferences.svelte';
-  import type { Buffer } from '../types';
+  import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref } from '../stores/preferences.svelte';
+  import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { updateRoute } from '../lib/routing';
 
@@ -87,24 +87,44 @@
   }
   function setTopic(): void {
     if (!networkId || !buf.name) return;
-    const topic = prompt('Set topic for ' + buf.name);
-    if (topic !== null) sendRaw(networkId, 'TOPIC ' + buf.name + ' :' + topic);
+    const net = ircState.networks.find(n => n.networkId === networkId);
+    ircState.overlay = {
+      type: 'set_topic',
+      data: {
+        networkId,
+        networkName: net?.name || '',
+        networkHost: net ? `${net.host}:${net.port}` : '',
+        bufferName: buf.name,
+        currentTopic: buf.topic || '',
+      },
+    };
     onClose();
   }
   function invite(): void {
     if (!networkId || !buf.name) return;
-    const nick = prompt('Invite which nickname to ' + buf.name + '?');
-    if (nick) sendRaw(networkId, 'INVITE ' + nick + ' ' + buf.name);
+    const net = ircState.networks.find(n => n.networkId === networkId);
+    ircState.overlay = {
+      type: 'invite',
+      data: {
+        networkId,
+        networkName: net?.name || '',
+        networkHost: net?.host || '',
+        networkPort: net?.port || 6697,
+        networkTls: net?.tls || 'enabled',
+        bufferName: buf.name,
+      },
+    };
     onClose();
   }
   function leave(): void {
     if (!networkId || !buf.name) return;
     sendRaw(networkId, 'PART ' + buf.name);
+    buf.isJoined = false;
     onClose();
   }
   function archive(): void {
     if (!networkId || !buf.name) return;
-    archivedMap[`${networkId}:${buf.name}`] = true;
+    archiveBuffer(networkId, buf.name);
     onClose();
   }
   function unarchive(): void {
@@ -132,27 +152,40 @@
     };
     onClose();
   }
-  function noop(): void { onClose(); }
+  function requestBanList(): void {
+    if (!networkId || !buf.name) return;
+    sendRaw(networkId, 'MODE ' + buf.name + ' +b');
+    onClose();
+  }
 
+  function clickIgnores(): void {
+    if (!network) return;
+    const data: IgnoreListData = {
+      networkId: network.networkId,
+      networkName: network.name,
+    };
+    ircState.overlay = { type: 'ignore_list', data };
+    onClose();
+  }
+
+  const prefs = getBufferPrefs(networkId, buf.name);
   const toggles = $state({
     showMembers: memberPanelOpen,
-    showUnread: true,
-    markAsRead: true,
-    notifyAll: false,
-    mute: false,
-    showJoinPart: true,
+    showUnread: prefs.showUnread ?? true,
+    markAsRead: prefs.markAsRead ?? true,
+    notifyAll: prefs.notifyAll ?? false,
+    mute: prefs.mute ?? false,
+    showJoinPart: prefs.showJoinPart ?? true,
     collapsed: false,
-    replyCollapse: false,
-    replyQuote: false,
-    typing: true,
-    inlineFiles: true,
-    inlineImages: true,
-    inlinePastes: true,
-    inlineSocial: true,
-    inlineMastodon: false,
-    inlineBsky: false,
-    inlineReddit: false,
-    formatColor: true,
+    replyCollapse: prefs.replyCollapse ?? false,
+    replyQuote: prefs.replyQuote ?? false,
+    typing: prefs.typing ?? true,
+    inlineFiles: prefs.inlineFiles ?? true,
+    inlineImages: prefs.inlineImages ?? true,
+    inlinePastes: prefs.inlinePastes ?? true,
+    inlineSocial: prefs.inlineSocial ?? true,
+    inlineReddit: prefs.inlineReddit ?? false,
+    formatColor: prefs.formatColor ?? true,
     pinned: isPinned,
   });
   function toggle(key: keyof typeof toggles): void {
@@ -167,6 +200,9 @@
         delete pinnedMap[pinnedKey];
         buf.isPinned = false;
       }
+    } else {
+      // Persist all other toggles per-buffer so they survive a refresh
+      setBufferPref(networkId, buf.name, key, toggles[key]);
     }
   }
 
@@ -186,7 +222,7 @@
   <div class="contextMenu__wrap" style:max-height="none">
     <ul class="actions" style="">
       <li class="rejoin" class:inactive={isActive} aria-disabled={isActive} style:display={isActive ? 'none' : ''}>
-        <button class="contextMenu__item rejoin contextMenu__item--disabled" disabled={isActive} onclick={rejoin}>Rejoin</button>
+        <button class="contextMenu__item rejoin" class:contextMenu__item--disabled={isActive} disabled={isActive} onclick={rejoin}>Rejoin</button>
       </li>
       <li class="show" class:inactive={!isArchived} aria-disabled={!isArchived} style:display={isArchived ? '' : 'none'}>
         <button class="contextMenu__item show" onclick={unarchive}>Unarchive</button>
@@ -197,20 +233,20 @@
       <li class="invite" aria-disabled="false">
         <button class="contextMenu__item invite" onclick={invite}>Invite…</button>
       </li>
-      <li class="leave" aria-disabled="false">
-        <button class="contextMenu__item leave" onclick={leave}>Leave</button>
+      <li class="leave" class:inactive={!isActive} aria-disabled={!isActive} style:display={isActive ? '' : 'none'}>
+        <button class="contextMenu__item leave" class:contextMenu__item--disabled={!isActive} disabled={!isActive} onclick={leave}>Leave</button>
       </li>
       <li class="hide" aria-disabled="false">
         <button class="contextMenu__item hide" onclick={archive}>Archive</button>
       </li>
       <li class="modAction" aria-disabled="false">
-        <button class="contextMenu__item bans" onclick={noop}>Ban list…</button>
+        <button class="contextMenu__item bans" onclick={requestBanList}>Ban list…</button>
       </li>
       <li aria-disabled="false">
-        <button class="contextMenu__item ignores" onclick={noop}>Ignore list…</button>
+        <button class="contextMenu__item ignores" onclick={clickIgnores}>Ignore list…</button>
       </li>
       <li class="logExport" aria-disabled="false">
-        <button class="contextMenu__item export" onclick={noop}>Download logs…</button>
+        <button class="contextMenu__item export" onclick={onClose}>Download logs…</button>
       </li>
       <li class="clear" aria-disabled="false">
         <button class="contextMenu__item clear" onclick={clearBacklog}>Clear backlog</button>
@@ -289,16 +325,6 @@
       <li class="inlineSocialMedia" class:enabled={toggles.inlineSocial}>
         <button class="contextMenu__item socialMedia" aria-pressed={toggles.inlineSocial} onclick={() => toggle('inlineSocial')}>
           {#if toggles.inlineSocial}<i class="fa fa-check"></i>{/if}Embed Twitter links
-        </button>
-      </li>
-      <li class="inlineMastodon" class:enabled={toggles.inlineMastodon}>
-        <button class="contextMenu__item mastodon" aria-pressed={toggles.inlineMastodon} onclick={() => toggle('inlineMastodon')}>
-          {#if toggles.inlineMastodon}<i class="fa fa-check"></i>{/if}Embed Mastodon links
-        </button>
-      </li>
-      <li class="inlineBsky" class:enabled={toggles.inlineBsky}>
-        <button class="contextMenu__item bsky" aria-pressed={toggles.inlineBsky} onclick={() => toggle('inlineBsky')}>
-          {#if toggles.inlineBsky}<i class="fa fa-check"></i>{/if}Embed Bluesky links
         </button>
       </li>
       <li class="inlineReddit" class:enabled={toggles.inlineReddit}>
