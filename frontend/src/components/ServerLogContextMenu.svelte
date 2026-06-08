@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, getActiveNetwork } from '../stores/ircStore.svelte';
-  import { sendRaw } from '../stores/wsConnection';
+  import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { getBufferPrefs, setBufferPref } from '../stores/preferences.svelte';
   import type { Buffer, IgnoreListData } from '../types';
@@ -23,7 +23,7 @@
   const isConnected = $derived(network?.connected ?? false);
   const isCollapsed = $derived(network?.collapsed ?? false);
   const isInactive = $derived(!isConnected);
-  const canDelete = $derived(!isConnected);
+  const canDelete = $derived(true);
 
   let menuEl: HTMLDivElement;
 
@@ -159,7 +159,7 @@
   <div class="contextMenu__wrap" style:max-height="none">
     <ul class="actions" style="">
       <li class="reconnect" class:inactive={!isInactive} aria-disabled={!isInactive} style:display={isInactive ? '' : 'none'}>
-        <button class="contextMenu__item reconnect contextMenu__item--disabled" disabled={!isInactive} onclick={clickReconnect}>Reconnect</button>
+        <button class="contextMenu__item reconnect" class:contextMenu__item--disabled={!isInactive} disabled={!isInactive} onclick={clickReconnect}>Reconnect</button>
       </li>
       <li class="join">
         <button class="contextMenu__item join" onclick={clickJoin}>Join a channel…</button>
@@ -168,10 +168,10 @@
         <button class="contextMenu__item edit" onclick={clickEdit}>Edit…</button>
       </li>
       <li class="nickserv" class:inactive={!isConnected} aria-disabled={!isConnected} style:display={isConnected ? '' : 'none'}>
-        <button class="contextMenu__item nickserv contextMenu__item--disabled" disabled={!isConnected} onclick={clickIdentify}>Identify Nickname…</button>
+        <button class="contextMenu__item nickserv" class:contextMenu__item--disabled={!isConnected} disabled={!isConnected} onclick={clickIdentify}>Identify Nickname…</button>
       </li>
       <li class="disconnect" class:inactive={isInactive} aria-disabled={isInactive} style:display={isInactive ? 'none' : ''}>
-        <button class="contextMenu__item disconnect contextMenu__item--disabled" disabled={isInactive} onclick={clickDisconnect}>Disconnect</button>
+        <button class="contextMenu__item disconnect" class:contextMenu__item--disabled={isInactive} disabled={isInactive} onclick={clickDisconnect}>Disconnect</button>
       </li>
       <li>
         <button class="contextMenu__item ignores" onclick={clickIgnores}>Ignore list…</button>
@@ -183,16 +183,16 @@
         <button class="contextMenu__item reorder" onclick={clickReorder}>Reorder…</button>
       </li>
       <li class="collapse" class:inactive={isCollapsed} aria-disabled={isCollapsed} style:display={isCollapsed ? 'none' : ''}>
-        <button class="contextMenu__item collapse contextMenu__item--disabled" disabled={isCollapsed} onclick={clickToggleCollapse}>Collapse</button>
+        <button class="contextMenu__item collapse" class:contextMenu__item--disabled={isCollapsed} disabled={isCollapsed} onclick={clickToggleCollapse}>Collapse</button>
       </li>
       <li class="expand" class:inactive={!isCollapsed} aria-disabled={!isCollapsed} style:display={isCollapsed ? '' : 'none'}>
-        <button class="contextMenu__item expand contextMenu__item--disabled" disabled={!isCollapsed} onclick={clickToggleCollapse}>Expand</button>
+        <button class="contextMenu__item expand" class:contextMenu__item--disabled={!isCollapsed} disabled={!isCollapsed} onclick={clickToggleCollapse}>Expand</button>
       </li>
       <li class="deleteConversations">
         <button class="contextMenu__item deleteConversations" onclick={clickDeleteConversations}>Delete active private messages…</button>
       </li>
       <li class="delete" class:inactive={!canDelete} aria-disabled={!canDelete} style:display={canDelete ? '' : 'none'}>
-        <button class="contextMenu__item delete contextMenu__item--disabled" disabled={!canDelete} onclick={clickDelete}>Delete…</button>
+        <button class="contextMenu__item delete" class:contextMenu__item--disabled={!canDelete} disabled={!canDelete} onclick={clickDelete}>Delete…</button>
       </li>
     </ul>
     <hr>

@@ -50,7 +50,7 @@ describe('MemberList', () => {
     render(MemberList);
     await expect.element(page.getByRole('heading', { name: /Owners/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /Admins/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /^Ops \(/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Ops @/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /Half-Ops/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /Voiced/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /Members/ })).toBeInTheDocument();
@@ -71,8 +71,8 @@ describe('MemberList', () => {
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#chan';
     render(MemberList);
-    await expect.element(page.getByText('(2)')).toBeInTheDocument();
-    await expect.element(page.getByText('(1)')).toBeInTheDocument();
+    await expect.element(page.getByText('@ 2')).toBeInTheDocument();
+    await expect.element(page.getByText('• 1')).toBeInTheDocument();
   });
 
   it('calls onNickClick when member nick clicked', async () => {
@@ -90,7 +90,8 @@ describe('MemberList', () => {
     const nickButton = page.getByText('alice');
     await userEvent.click(nickButton);
     expect(onNickClick).toHaveBeenCalledTimes(1);
-    expect(onNickClick).toHaveBeenCalledWith('alice', expect.anything());
+    expect(onNickClick).toHaveBeenCalledTimes(1);
+    expect(onNickClick.mock.calls[0][0]).toBe('alice');
   });
 
   it('renders empty state when no members', async () => {

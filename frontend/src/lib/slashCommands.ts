@@ -1,5 +1,5 @@
 import type { Network } from '../types';
-import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection';
+import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords } from '../stores/preferences.svelte';
 import { ircState, setActiveBuffer, archiveBuffer } from '../stores/ircStore.svelte';

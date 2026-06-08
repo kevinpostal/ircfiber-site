@@ -65,6 +65,23 @@ export interface Buffer {
   topicSetAt: number;
   users: Member[];
   lastSeenMsgTime: number | null;
+  /** Per-buffer last-seen timestamp (IRCCloud-style lastSeen). */
+  lastSeen: number | null;
+  /** Per-buffer bottom-seen timestamp (IRCCloud-style bottomSeen). */
+  bottomSeen: number | null;
+  /** When this buffer's messages were last cleared (clear/cache invalidation). */
+  clearedAt: number | null;
+  /** IRC channel modes (mirrors IRCCloud ChannelView CSS classes). */
+  modeFlags: {
+    secret?: boolean;
+    private?: boolean;
+    moderated?: boolean;
+    inviteOnly?: boolean;
+    password?: boolean;
+    topicControl?: boolean;
+    noExternal?: boolean;
+    limited?: boolean;
+  };
   // For chatter bars
   firstUnseenMsgIndex: number | null;
 }

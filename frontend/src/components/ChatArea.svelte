@@ -4,9 +4,10 @@
   import ConnectionStatus from './ConnectionStatus.svelte';
   import { ircState, prependMessages } from '../stores/ircStore.svelte';
   import { loadHistory } from '../stores/api';
+  import type { Member } from '../types';
 
   interface Props {
-    onNickClick?: (nick: string, event: MouseEvent) => void;
+    onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
   }
   let { onNickClick }: Props = $props();
 

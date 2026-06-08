@@ -3,6 +3,71 @@
 
 import { normalizeChannelName } from '../lib/utils';
 
+// ── Global settings (IRCCloud-style) ──
+export interface GlobalPrefs {
+  theme: 'auto' | 'dark' | 'midnight';
+  fontSize: number;
+  compactMode: boolean;
+  monospaceFont: boolean;
+  showUserIcons: boolean;
+  modeIndicator: 'dots' | 'symbols' | 'hidden';
+  enlargeEmoji: boolean;
+  sidebarLeft: boolean;
+  coloriseMentions: boolean;
+  formatColors: boolean;
+  notificationSound: boolean;
+  desktopNotifications: boolean;
+  autoDismissNotifs: boolean;
+  muteAll: boolean;
+  typingIndicator: boolean;
+  removeTrackers: boolean;
+  customCSS: string;
+  timestampFormat: '12h' | '24h' | 'relative';
+  messageLayout: 'compact' | 'comfortable' | 'separate';
+  inlineImages: boolean;
+  inlineVideos: boolean;
+  inlineTweets: boolean;
+  inlinePastes: boolean;
+  inlineReddit: boolean;
+  inlineSocial: boolean;
+}
+
+export const DEFAULT_PREFS: GlobalPrefs = {
+  theme: 'dark',
+  fontSize: 14,
+  compactMode: false,
+  monospaceFont: true,
+  showUserIcons: true,
+  modeIndicator: 'dots',
+  enlargeEmoji: true,
+  sidebarLeft: false,
+  coloriseMentions: true,
+  formatColors: true,
+  notificationSound: true,
+  desktopNotifications: true,
+  autoDismissNotifs: true,
+  muteAll: false,
+  typingIndicator: true,
+  removeTrackers: false,
+  customCSS: '',
+  timestampFormat: 'relative',
+  messageLayout: 'comfortable',
+  inlineImages: true,
+  inlineVideos: true,
+  inlineTweets: true,
+  inlinePastes: true,
+  inlineReddit: true,
+  inlineSocial: true,
+};
+
+export const globalPrefs = $state<GlobalPrefs>(
+  mergeDefaults(getStorageItem('ircfiber:globalPrefs', {}), DEFAULT_PREFS)
+);
+
+function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): GlobalPrefs {
+  return { ...defaults, ...saved } as GlobalPrefs;
+}
+
 function getStorageItem<T>(key: string, defaultValue: T): T {
   try {
     const raw = localStorage.getItem(key);
@@ -33,6 +98,10 @@ export const unreadMap = $state<Record<string, number>>(getStorageItem('ircfiber
 export const highlightMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:highlight', {}));
 export const archivedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:archived', {}));
 export const pinnedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:pinned', {}));
+// Channels the user has explicitly deleted from the UI. Persists across
+// refreshes so the next sync (which re-includes parted/auto-join channels)
+// doesn't bring the buffer back.
+export const hiddenChannelsMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:hiddenChannels', {}));
 export const ignoreList = $state<string[]>(getStorageItem('ircfiber:ignores', []));
 export const highlightWords = $state<string[]>(getStorageItem('ircfiber:highlightWords', []));
 export const membersCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:membersCollapsed', {}));
@@ -41,18 +110,89 @@ export const lastSeenMap = $state<Record<string, number>>(getStorageItem('ircfib
 // Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen)
 export const bottomSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:bottomSeen', {}));
 
+// Per-buffer channel preferences (showUnread, mute, formatColor, etc.)
+// Key: `${networkId}:${bufferName}`. Value: partial record of toggles.
+export interface BufferPrefs {
+  showUnread?: boolean;
+  markAsRead?: boolean;
+  mute?: boolean;
+  formatColor?: boolean;
+  showJoinPart?: boolean;
+  collapseDisconnects?: boolean;
+  replyCollapse?: boolean;
+  replyQuote?: boolean;
+  typing?: boolean;
+  inlineFiles?: boolean;
+  inlineImages?: boolean;
+  inlinePastes?: boolean;
+  inlineSocial?: boolean;
+  inlineReddit?: boolean;
+}
+export const bufferPrefsMap = $state<Record<string, BufferPrefs>>(
+  getStorageItem('ircfiber:bufferPrefs', {})
+);
+
+export function getBufferPrefs(networkId: string, bufferName: string): BufferPrefs {
+  return bufferPrefsMap[`${networkId}:${normalizeChannelName(bufferName)}`] ?? {};
+}
+
+export function setBufferPref<K extends keyof BufferPrefs>(
+  networkId: string,
+  bufferName: string,
+  key: K,
+  value: BufferPrefs[K]
+): void {
+  const mapKey = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const current = bufferPrefsMap[mapKey] ?? {};
+  bufferPrefsMap[mapKey] = { ...current, [key]: value };
+}
+
+// Throttle localStorage writes so high-frequency changes (unread, highlight,
+// lastSeen, bottomSeen) don't block the main thread on every single message.
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+const PERSIST_DEBOUNCE_MS = 500; // flush at most twice a second
+const persistedMaps = new Map<string, unknown>();
+
+function schedulePersist(keyPrefix: string, map: unknown): void {
+  persistedMaps.set(keyPrefix, map);
+  if (persistTimer) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    for (const [key, data] of persistedMaps) {
+      setStorageItem(key, data);
+    }
+    persistedMaps.clear();
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+/** Flush any pending persistence writes immediately. Useful in tests. */
+export function flushPersist(): void {
+  if (!persistTimer) return;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  for (const [key, data] of persistedMaps) {
+    setStorageItem(key, data);
+  }
+  persistedMaps.clear();
+}
+
 // Persist on change — $effect.root allows effects outside components
 $effect.root(() => {
-  $effect(() => { setStorageItem('ircfiber:clearedAt', clearedAtMap); });
-  $effect(() => { setStorageItem('ircfiber:unread', unreadMap); });
-  $effect(() => { setStorageItem('ircfiber:highlight', highlightMap); });
-  $effect(() => { setStorageItem('ircfiber:archived', archivedMap); });
-  $effect(() => { setStorageItem('ircfiber:pinned', pinnedMap); });
+  $effect(() => schedulePersist('ircfiber:clearedAt', clearedAtMap));
+  $effect(() => schedulePersist('ircfiber:unread', unreadMap));
+  $effect(() => schedulePersist('ircfiber:highlight', highlightMap));
+  $effect(() => schedulePersist('ircfiber:archived', archivedMap));
+  $effect(() => schedulePersist('ircfiber:pinned', pinnedMap));
+  $effect(() => {
+    schedulePersist('ircfiber:hiddenChannels', hiddenChannelsMap);
+  });
   $effect(() => { setStorageItem('ircfiber:ignores', ignoreList); });
   $effect(() => { setStorageItem('ircfiber:highlightWords', highlightWords); });
-  $effect(() => { setStorageItem('ircfiber:membersCollapsed', membersCollapsedMap); });
-  $effect(() => { setStorageItem('ircfiber:lastSeen', lastSeenMap); });
-  $effect(() => { setStorageItem('ircfiber:bottomSeen', bottomSeenMap); });
+  $effect(() => schedulePersist('ircfiber:membersCollapsed', membersCollapsedMap));
+  $effect(() => schedulePersist('ircfiber:lastSeen', lastSeenMap));
+  $effect(() => schedulePersist('ircfiber:bottomSeen', bottomSeenMap));
+  $effect(() => schedulePersist('ircfiber:bufferPrefs', bufferPrefsMap));
+  $effect(() => { setStorageItem('ircfiber:globalPrefs', globalPrefs); });
 });
 
 // ── Helpers ──
@@ -86,5 +226,114 @@ export function isIgnored(nick: string): boolean {
       return regex.test(nick);
     }
     return pattern.toLowerCase() === nick.toLowerCase();
+  });
+}
+
+// ── Hidden channels (user-deleted) ──
+// Distinct from archivedMap: archived channels reappear in the "Archived"
+// sidebar section so the user can re-join them. Hidden channels are gone
+// entirely from the UI; the user must /join them to bring them back.
+export function hideChannel(networkId: string, bufferName: string): void {
+  hiddenChannelsMap[`${networkId}:${normalizeChannelName(bufferName)}`] = true;
+  schedulePersist('ircfiber:hiddenChannels', hiddenChannelsMap);
+}
+export function unhideChannel(networkId: string, bufferName: string): void {
+  delete hiddenChannelsMap[`${networkId}:${normalizeChannelName(bufferName)}`];
+  schedulePersist('ircfiber:hiddenChannels', hiddenChannelsMap);
+}
+export function isChannelHidden(networkId: string, bufferName: string): boolean {
+  return !!hiddenChannelsMap[`${networkId}:${normalizeChannelName(bufferName)}`];
+}
+
+// ── Cross-tab sync ──
+// The `storage` event fires in OTHER tabs/windows when localStorage is
+// modified. We listen for it and update the corresponding reactive maps so
+// the UI in all open tabs stays in sync (e.g. toggling "Show unread
+// message indicator" in one tab updates the Sidebar/context-menu state in
+// every other tab in real time).
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (!e.key) return;
+    const applyObject = <T>(map: Record<string, T>) => {
+      try {
+        if (e.newValue === null) {
+          for (const k of Object.keys(map)) delete map[k];
+          return;
+        }
+        const v = JSON.parse(e.newValue);
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return;
+        // Surgically update: remove keys no longer present, then merge in
+        // the new keys. This preserves Svelte 5's fine-grained reactivity
+        // for each key (the previous "delete all + Object.assign" approach
+        // would replace the whole map in a way that broke $derived tracking).
+        for (const k of Object.keys(map)) {
+          if (!(k in v)) delete map[k];
+        }
+        Object.assign(map, v);
+      } catch {}
+    };
+    const applyArray = (arr: unknown[]) => {
+      try {
+        arr.length = 0;
+        if (e.newValue === null) return;
+        const v = JSON.parse(e.newValue);
+        if (Array.isArray(v)) arr.push(...v);
+      } catch {}
+    };
+
+    switch (e.key) {
+      case 'ircfiber:clearedAt':        applyObject(clearedAtMap); break;
+      case 'ircfiber:unread':           applyObject(unreadMap); break;
+      case 'ircfiber:highlight':        applyObject(highlightMap); break;
+      case 'ircfiber:archived':         applyObject(archivedMap); break;
+      case 'ircfiber:pinned':           applyObject(pinnedMap); break;
+      case 'ircfiber:hiddenChannels':   applyObject(hiddenChannelsMap); break;
+      case 'ircfiber:membersCollapsed': {
+        // Briefly suppress layout animations (e.g. member panel slide) so
+        // the other tab snaps to the final state without re-playing the
+        // animation that the originating tab already showed. Without this,
+        // every open tab would re-animate every time a setting changes
+        // somewhere else.
+        suppressAnimations();
+        applyObject(membersCollapsedMap);
+        break;
+      }
+      case 'ircfiber:lastSeen':          applyObject(lastSeenMap); break;
+      case 'ircfiber:bottomSeen':        applyObject(bottomSeenMap); break;
+      case 'ircfiber:bufferPrefs':       applyObject(bufferPrefsMap as Record<string, BufferPrefs>); break;
+      case 'ircfiber:ignores':           applyArray(ignoreList); break;
+      case 'ircfiber:highlightWords':    applyArray(highlightWords); break;
+      case 'ircfiber:globalPrefs': {
+        try {
+          if (e.newValue) {
+            const v = JSON.parse(e.newValue);
+            if (v && typeof v === 'object') Object.assign(globalPrefs, v);
+          }
+        } catch {}
+        break;
+      }
+    }
+  });
+}
+
+// Add the `no-anim` class to the main wrap (and any inner elements with
+// their own transitions like #member-sidebar.show) for one frame, so
+// layout transitions triggered by cross-tab state syncs (member panel,
+// sidebar width, etc.) don't replay their slide animation in every
+// other tab. The originating tab already showed the animation; the
+// remaining tabs should just snap to the final layout.
+export function suppressAnimations(): void {
+  if (typeof document === 'undefined') return;
+  const targets = document.querySelectorAll<HTMLElement>(
+    '#wrap, #wrap #member-sidebar.show, .sidebar, .message-container, .bufferstatus'
+  );
+  targets.forEach((el) => el.classList.add('no-anim'));
+  // Remove on the next two animation frames so the new layout commits
+  // without animation, and any *subsequent* local interaction still
+  // animates normally.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      targets.forEach((el) => el.classList.remove('no-anim'));
+    });
   });
 }

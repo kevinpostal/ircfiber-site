@@ -24,7 +24,25 @@ export function stripHash(name: string): string {
 
 export function normalizeChannelName(name: string): string {
   if (!name || name === '_server') return name;
-  return name.startsWith('#') ? '#' + name.substring(1).toLowerCase() : name;
+  const ch = name.startsWith('#') ? name : '#' + name;
+  return '#' + ch.substring(1).toLowerCase();
+}
+
+/**
+ * Deduplicate and normalize a list of channel names.
+ * IRC channel names are case-insensitive, so "#Zod" and "#ZOD" are duplicates.
+ */
+export function dedupChannelNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const n of names) {
+    const norm = normalizeChannelName(n);
+    if (norm && !seen.has(norm)) {
+      seen.add(norm);
+      out.push(norm);
+    }
+  }
+  return out;
 }
 
 export function formatTime12Hour(d: Date): string {

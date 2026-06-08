@@ -78,11 +78,31 @@ describe('BufferHeader', () => {
 		await expect.element(page.getByText('Welcome to #general')).toBeInTheDocument();
 	});
 
-	it('shows edit network button', async () => {
-		const net = createNetwork({ networkId: 'net1' });
+	it('does not show edit/connect/disconnect for channels (IRCCloud style)', async () => {
+		const net = createNetwork({ networkId: 'net1', connected: true });
+		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		// IRCCloud: channels only show member count + options gear
+		expect(page.getByRole('button', { name: /edit/i })).not.toBeInTheDocument();
+		expect(page.getByRole('button', { name: /disconnect/i })).not.toBeInTheDocument();
+		expect(document.querySelector('#member-count')).toBeInTheDocument();
+		expect(document.querySelector('.bufferOptions')).toBeInTheDocument();
+	});
+
+	it('shows edit/connect/disconnect for server buffer', async () => {
+		const net = createNetwork({ networkId: 'net1', connected: true });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '_server';
 		flushSync();
 
 		render(BufferHeader, {
@@ -90,27 +110,14 @@ describe('BufferHeader', () => {
 		});
 
 		await expect.element(page.getByRole('button', { name: /edit/i })).toBeInTheDocument();
-	});
-
-	it('shows disconnect button when connected', async () => {
-		const net = createNetwork({ networkId: 'net1', connected: true });
-		ircState.networks.push(net);
-		ircState.activeBuffer.networkId = 'net1';
-		ircState.activeBuffer.bufferName = '#general';
-		flushSync();
-
-		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
-		});
-
 		await expect.element(page.getByRole('button', { name: /disconnect/i })).toBeInTheDocument();
 	});
 
-	it('shows connect button when disconnected', async () => {
+	it('shows connect button for server buffer when disconnected', async () => {
 		const net = createNetwork({ networkId: 'net1', connected: false });
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
-		ircState.activeBuffer.bufferName = '#general';
+		ircState.activeBuffer.bufferName = '_server';
 		flushSync();
 
 		render(BufferHeader, {
@@ -139,13 +146,12 @@ describe('BufferHeader', () => {
 		expect(onToggleMembers).toHaveBeenCalled();
 	});
 
-	it('switches to server buffer when Connect is clicked', async () => {
+	it('switches to server buffer when Connect is clicked on server buffer', async () => {
 		const net = createNetwork({ networkId: 'net1', connected: false, connectionState: 'disconnected' });
 		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
-		net.buffers.push(createBuffer({ name: '#channel', type: 'channel' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
-		ircState.activeBuffer.bufferName = '#channel';
+		ircState.activeBuffer.bufferName = '_server';
 		flushSync();
 
 		render(BufferHeader, {

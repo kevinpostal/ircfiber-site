@@ -1,7 +1,8 @@
 <script lang="ts">
   import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer } from '../stores/ircStore.svelte';
-  import { sendRaw } from '../stores/wsConnection';
+  import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref } from '../stores/preferences.svelte';
+  import { pinChannel, unpinChannel } from '../stores/api';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { updateRoute } from '../lib/routing';
@@ -186,23 +187,35 @@
     inlineSocial: prefs.inlineSocial ?? true,
     inlineReddit: prefs.inlineReddit ?? false,
     formatColor: prefs.formatColor ?? true,
-    pinned: isPinned,
   });
-  function toggle(key: keyof typeof toggles): void {
-    (toggles as Record<string, boolean>)[key] = !toggles[key];
-    if (key === 'showMembers') onToggleMembers();
+  function toggle(key: keyof typeof toggles | 'pinned'): void {
     if (key === 'pinned') {
       const pinnedKey = `${networkId}:${buf.name}`;
-      if (toggles.pinned) {
+      if (!isPinned) {
         pinnedMap[pinnedKey] = true;
         buf.isPinned = true;
+        pinChannel(networkId, buf.name).catch((err) => {
+          console.error('Pin failed:', err);
+          pinnedMap[pinnedKey] = false;
+          buf.isPinned = false;
+        });
       } else {
-        delete pinnedMap[pinnedKey];
+        pinnedMap[pinnedKey] = false;
         buf.isPinned = false;
+        unpinChannel(networkId, buf.name).catch((err) => {
+          console.error('Unpin failed:', err);
+          pinnedMap[pinnedKey] = true;
+          buf.isPinned = true;
+        });
       }
     } else {
-      // Persist all other toggles per-buffer so they survive a refresh
-      setBufferPref(networkId, buf.name, key, toggles[key]);
+      (toggles as Record<string, boolean>)[key] = !toggles[key];
+      if (key === 'showMembers') {
+        onToggleMembers();
+      } else {
+        // Persist all other toggles per-buffer so they survive a refresh
+        setBufferPref(networkId, buf.name, key, toggles[key]);
+      }
     }
   }
 
@@ -236,8 +249,8 @@
       <li class="leave" class:inactive={!isActive} aria-disabled={!isActive} style:display={isActive ? '' : 'none'}>
         <button class="contextMenu__item leave" class:contextMenu__item--disabled={!isActive} disabled={!isActive} onclick={leave}>Leave</button>
       </li>
-      <li class="hide" aria-disabled="false">
-        <button class="contextMenu__item hide" onclick={archive}>Archive</button>
+      <li class="hide" class:inactive={isArchived} aria-disabled={isArchived} style:display={isArchived ? 'none' : ''}>
+        <button class="contextMenu__item hide" class:contextMenu__item--disabled={isArchived} disabled={isArchived} onclick={archive}>Archive</button>
       </li>
       <li class="modAction" aria-disabled="false">
         <button class="contextMenu__item bans" onclick={requestBanList}>Ban list…</button>
@@ -337,9 +350,9 @@
           {#if toggles.formatColor}<i class="fa fa-check"></i>{/if}Format colours
         </button>
       </li>
-      <li class="pinned" aria-disabled="false" class:enabled={toggles.pinned}>
-        <button class="contextMenu__item pinned" aria-pressed={toggles.pinned} onclick={() => toggle('pinned')}>
-          {#if toggles.pinned}<i class="fa fa-check"></i>{/if}Pin
+      <li class="pinned" aria-disabled="false" class:enabled={isPinned}>
+        <button class="contextMenu__item pinned" aria-pressed={isPinned} onclick={() => toggle('pinned')}>
+          {#if isPinned}<i class="fa fa-check"></i>{/if}{isPinned ? 'Unpin' : 'Pin'}
         </button>
       </li>
     </ul>

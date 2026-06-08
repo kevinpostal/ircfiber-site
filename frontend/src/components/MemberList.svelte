@@ -1,10 +1,10 @@
 <script lang="ts">
   import { getActiveBufferObj, getSortedMembers } from '../stores/ircStore.svelte';
   import { stripPrefix } from '../lib/utils';
-  import type { ModeCategory } from '../types';
+  import type { ModeCategory, Member } from '../types';
 
   interface Props {
-    onNickClick?: (nick: string, event: MouseEvent) => void;
+    onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
   }
   let { onNickClick }: Props = $props();
 
@@ -16,6 +16,16 @@
     HALFOP: 'Half-Ops',
     VOICED: 'Voiced',
     MEMBER: 'Members',
+  };
+
+  const CATEGORY_SYMBOLS: Record<ModeCategory, string> = {
+    OPER: '!',
+    OWNER: '~',
+    ADMIN: '&',
+    OP: '@',
+    HALFOP: '%',
+    VOICED: '+',
+    MEMBER: '•',
   };
 
   /** Map 7 categories down to 4 CSS classes used by existing theme */
@@ -37,7 +47,7 @@
         <h2>
           {CATEGORY_LABELS[category]}
           <span class="memberExtras">
-            <span class="memberCount">({members.length})</span>
+            <span class="memberCount">{CATEGORY_SYMBOLS[category]}{CATEGORY_SYMBOLS[category] ? ' ' : ''}{members.length}</span>
           </span>
         </h2>
         <ul class="categoryMemberList">
@@ -47,7 +57,7 @@
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <button type="button" class="bufferLink"
                       class:away={member.isAway}
-                      onclick={(e) => onNickClick?.(nick, e)}>
+                      onclick={(e) => onNickClick?.(nick, e, member)}>
                 <span class="member-nick">{nick}</span>
               </button>
             </li>

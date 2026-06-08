@@ -24,7 +24,7 @@ import {
 	countMessagesBetween,
 	countImportantMessagesBetween,
 } from './ircStore.svelte';
-import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen } from './preferences.svelte';
+import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
 
 beforeEach(() => {
@@ -39,6 +39,7 @@ beforeEach(() => {
 	Object.keys(highlightMap).forEach((k) => delete (highlightMap as Record<string, unknown>)[k]);
 	Object.keys(lastSeenMap).forEach((k) => delete (lastSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
+	Object.keys(hiddenChannelsMap).forEach((k) => delete (hiddenChannelsMap as Record<string, unknown>)[k]);
 	highlightWords.length = 0;
 });
 
@@ -140,7 +141,10 @@ describe('appendMessage', () => {
 		expect(untrack(() => ircState.messages['net1:#chan'])).toHaveLength(1);
 	});
 
-	it('does not increment unread for active buffer when message is before lastSeen', () => {
+	it('does not increment unread for active buffer when tab has focus, even if message is after lastSeen', () => {
+		// Regression test for the multi-tab bug: when the user has multiple tabs
+		// open and sends a message, the echoed message must not be flagged as
+		// unread on the tab that is actively viewing the buffer.
 		const net = createNetwork({ networkId: 'net1' });
 		const buf = createBuffer({ name: '#chan', unreadCount: 0 });
 		net.buffers.push(buf);
@@ -148,9 +152,10 @@ describe('appendMessage', () => {
 
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#chan';
+		ircState.focusLost = false;
 		setLastSeen('net1', '#chan', 5000);
 
-		const msg = createMessage({ t: 4000 });
+		const msg = createMessage({ t: 6000 });
 		appendMessage('net1', '#chan', msg);
 		flushSync();
 
@@ -158,7 +163,9 @@ describe('appendMessage', () => {
 		expect(buf.unreadCount).toBe(0);
 	});
 
-	it('increments unread for active buffer when message is after lastSeen', () => {
+	it('increments unread for active buffer when tab has lost focus (backgrounded)', () => {
+		// If the user is on the buffer in tab A but has switched to another
+		// browser tab/window, new messages should still count as unread.
 		const net = createNetwork({ networkId: 'net1' });
 		const buf = createBuffer({ name: '#chan', unreadCount: 0 });
 		net.buffers.push(buf);
@@ -166,13 +173,12 @@ describe('appendMessage', () => {
 
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#chan';
-		setLastSeen('net1', '#chan', 5000);
+		ircState.focusLost = true;
 
-		const msg = createMessage({ t: 6000 });
+		const msg = createMessage({ t: Date.now() });
 		appendMessage('net1', '#chan', msg);
 		flushSync();
 
-		// Access buffer through the reactive store (Svelte 5 proxies plain objects)
 		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
 		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
 		expect(unreadMap['net1:#chan']).toBe(1);
@@ -245,6 +251,92 @@ describe('updateNetworkFromSync', () => {
 		const updated = ircState.networks.find((n) => n.networkId === 'net1');
 		expect(updated?.name).toBe('new');
 		expect(updated?.host).toBe('new.host');
+	});
+
+	it('preserves local unreadCount when backend sync has 0', () => {
+		// Regression: the backend periodically syncs its buffer state which
+		// always has unreadCount: 0 for buffers the user is viewing. The
+		// sync used to clobber the local count, making the unread indicator
+		// disappear every few seconds even though the user hadn't read the
+		// messages.
+		const existing = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: '#chan', unreadCount: 5, highlight: true });
+		existing.buffers.push(buf);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		const incomingBuf = createBuffer({ name: '#chan', unreadCount: 0, highlight: false });
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const updated = ircState.networks.find((n) => n.networkId === 'net1');
+		const updatedBuf = updated?.buffers.find((b) => b.name === '#chan');
+		expect(updatedBuf?.unreadCount).toBe(5);
+		expect(updatedBuf?.highlight).toBe(true);
+	});
+
+	it('adopts higher unreadCount from backend when local is lower', () => {
+		// If the backend reports more unread messages than we knew about
+		// (e.g. messages received on another device while we were offline),
+		// we should adopt the higher count.
+		const existing = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: '#chan', unreadCount: 1, highlight: false });
+		existing.buffers.push(buf);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		const incomingBuf = createBuffer({ name: '#chan', unreadCount: 7, highlight: true });
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const updated = ircState.networks.find((n) => n.networkId === 'net1');
+		const updatedBuf = updated?.buffers.find((b) => b.name === '#chan');
+		expect(updatedBuf?.unreadCount).toBe(7);
+		expect(updatedBuf?.highlight).toBe(true);
+	});
+
+	it('does not re-add a channel that the user previously deleted', () => {
+		// Regression: deleting a channel used to be in-memory only, so the
+		// next sync (which re-includes parted/auto-join channels) would bring
+		// the buffer back. The deletion must persist in hiddenChannelsMap and
+		// the sync filter must drop the buffer.
+		hideChannel('net1', '#chan');
+
+		const incoming = createNetwork({ networkId: 'net1', buffers: [] });
+		incoming.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: false }));
+		incoming.buffers.push(createBuffer({ name: '#other', isJoined: true }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === 'net1');
+		const bufNames = net?.buffers.map((b) => b.name) ?? [];
+		expect(bufNames).toContain('_server');
+		expect(bufNames).toContain('#other');
+		expect(bufNames).not.toContain('#chan');
+	});
+
+	it('removes a previously-existing buffer when the user hides it before sync', () => {
+		// If the channel was in the local buffer list and the user hides it,
+		// the next sync should drop it from the list (defense in depth).
+		const existing = createNetwork({ networkId: 'net1' });
+		existing.buffers.push(createBuffer({ name: '#chan', isJoined: false }));
+		ircState.networks.push(existing);
+
+		hideChannel('net1', '#chan');
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: false }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === 'net1');
+		const bufNames = net?.buffers.map((b) => b.name) ?? [];
+		expect(bufNames).toContain('_server');
+		expect(bufNames).not.toContain('#chan');
 	});
 });
 
@@ -411,5 +503,107 @@ describe('read tracking helpers', () => {
 		const end = ircState.messages['net1:#chan'][3];
 		// Between a and d: only c is important (b=JOIN, d=PART are skipped)
 		expect(countImportantMessagesBetween('net1', '#chan', start, end)).toBe(1);
+	});
+});
+
+describe('PART/KICK/JOIN isJoined lifecycle', () => {
+	it('PART for self sets isJoined to false', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan', isJoined: true });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'PART', 'me');
+		flushSync();
+
+		const found = ircState.networks.find((n) => n.networkId === 'net1');
+		const foundBuf = found?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.isJoined).toBe(false);
+	});
+
+	it('KICK for self sets isJoined to false', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan', isJoined: true });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'KICK', 'op', ['#chan', 'me']);
+		flushSync();
+
+		const found = ircState.networks.find((n) => n.networkId === 'net1');
+		const foundBuf = found?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.isJoined).toBe(false);
+	});
+
+	it('JOIN for self sets isJoined to true', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan', isJoined: false });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'JOIN', 'me');
+		flushSync();
+
+		const found = ircState.networks.find((n) => n.networkId === 'net1');
+		const foundBuf = found?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.isJoined).toBe(true);
+	});
+
+	it('sync does not flip isJoined from false back to true', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan', isJoined: false });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		// Verify setup
+		const before = ircState.networks.find((n) => n.networkId === 'net1');
+		const beforeBuf = before?.buffers.find((b) => b.name === '#chan');
+		expect(beforeBuf?.isJoined).toBe(false);
+
+		// Simulate sync with stale isJoined: true
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.isJoined).toBe(false);
+	});
+
+	it('sync does not flip isJoined from true back to false', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan', isJoined: true });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		// Verify setup
+		const before = ircState.networks.find((n) => n.networkId === 'net1');
+		const beforeBuf = before?.buffers.find((b) => b.name === '#chan');
+		expect(beforeBuf?.isJoined).toBe(true);
+
+		// Simulate sync with stale isJoined: false
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: false }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.isJoined).toBe(true);
+	});
+
+	it('new buffer from sync with isJoined:false is created correctly', () => {
+		// Simulate hard refresh: no existing state, sync arrives
+		const incoming = createNetwork({ networkId: 'net1', buffers: [] });
+		incoming.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		incoming.buffers.push(createBuffer({ name: '#active', isJoined: true }));
+		incoming.buffers.push(createBuffer({ name: '#parted', isJoined: false }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === 'net1');
+		const active = net?.buffers.find((b) => b.name === '#active');
+		const parted = net?.buffers.find((b) => b.name === '#parted');
+		expect(active?.isJoined).toBe(true);
+		expect(parted?.isJoined).toBe(false);
 	});
 });

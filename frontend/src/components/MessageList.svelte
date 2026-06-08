@@ -8,11 +8,11 @@
   import SeenDivider from './SeenDivider.svelte';
   import LoadMore from './LoadMore.svelte';
   import ChatterBar from './ChatterBar.svelte';
-  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime } from '../lib/utils';
-  import type { IRCMessage } from '../types';
+  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix } from '../lib/utils';
+  import type { IRCMessage, Member } from '../types';
 
   interface Props {
-    onNickClick?: (nick: string, event: MouseEvent) => void;
+    onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
     onLoadMore?: () => Promise<boolean>;
   }
   let { onNickClick, onLoadMore }: Props = $props();
@@ -25,6 +25,12 @@
   let belowUnseenTimestamp = $state<number | null>(null);
   let aboveUnseenHighlights = $state(0);
   let belowUnseenHighlights = $state(0);
+
+  // IRCCloud-style sticky avatar: shows the author of the topmost visible
+  // message row as a floating avatar bar.
+  let stickyNick = $state('');
+  let stickyColor = $state('');
+  let stickyMode = $state('');
 
   const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
 
@@ -44,12 +50,11 @@
   function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean {
     if (!prev) return false;
     if (msg.command !== 'PRIVMSG' && msg.type !== 'action') return false;
-    const nick = msg.nick || '';
-    const prevNick = prev.nick || '';
+    if (prev.command !== 'PRIVMSG' && prev.type !== 'action') return false;
+    const nick = stripPrefix(msg.nick || '');
+    const prevNick = stripPrefix(prev.nick || '');
     if (!nick || !prevNick || nick !== prevNick) return false;
-    const msgTime = msg.t || 0;
-    const prevTime = prev.t || 0;
-    return msgTime > 0 && prevTime > 0 && (msgTime - prevTime) <= 300000;
+    return true;
   }
 
   function shouldShowSeenDivider(msg: IRCMessage, index: number): boolean {
@@ -133,6 +138,7 @@
     shouldAutoScroll = scrollHeight - scrollTop - clientHeight < 50;
     updateChatterCounts();
     updateReadTracking();
+    updateStickyAvatar();
   }
 
   function updateChatterCounts(): void {
@@ -235,6 +241,28 @@
     }
   }
 
+  /** IRCCloud-style sticky avatar: shows the author of the topmost visible
+   *  message row as a floating avatar bar pinned to the top. */
+  function updateStickyAvatar(): void {
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const rows = container.querySelectorAll('.row.messageRow');
+    for (const row of Array.from(rows)) {
+      const rect = (row as HTMLElement).getBoundingClientRect();
+      if (rect.bottom > containerRect.top) {
+        const nick = (row as HTMLElement).dataset.name || '';
+        if (nick) {
+          stickyNick = nick;
+          stickyColor = `c${stringHash(nick) % 27}`;
+          const d = row as HTMLElement;
+          stickyMode = '';
+        }
+        break;
+      }
+    }
+    if (container.scrollTop < 10) stickyNick = '';
+  }
+
   function scrollToTop(): void {
     container?.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -276,6 +304,15 @@
       {/if}
     {/each}
   </div>
+
+  {#if stickyNick}
+    <div class="stickyAvatar" role="presentation" aria-hidden="true">
+      <span class="avatar letterAvatar {stickyColor}">
+        <span>{stickyNick.charAt(0).toUpperCase()}</span>
+      </span>
+      <span class="sticky-name">{stickyNick}</span>
+    </div>
+  {/if}
 </div>
 
 {#if belowUnseenCount > 0}
@@ -290,5 +327,37 @@
     overflow-y: auto;
     overflow-x: hidden;
     flex: 1;
+  }
+  .stickyAvatar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    background: var(--bg-secondary, #16181d);
+    border-bottom: 1px solid var(--border-color, #2c2f35);
+    z-index: 5;
+    font-size: 13px;
+  }
+  .stickyAvatar .avatar {
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .sticky-name {
+    color: var(--text-primary, #e0e0e0);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

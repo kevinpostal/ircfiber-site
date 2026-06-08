@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer } from '../stores/ircStore.svelte';
-  import { sendMessage, sendRaw } from '../stores/wsConnection';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers } from '../stores/ircStore.svelte';
+  import { sendMessage, sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine } from '../lib/tabCompletion';
@@ -25,6 +25,29 @@
   const myNick = $derived(activeNetwork?.currentNick || activeNetwork?.nick || '');
   const avatarColor = $derived(getAvatarColor(myNick));
   const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
+
+  // IRCCloud-style per-buffer input history: save current text when
+  // switching away, restore it when switching back.
+  let lastBufferKey = '';
+  const currentBufferKey = $derived(
+    ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
+      ? `${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`
+      : ''
+  );
+  $effect(() => {
+    const newKey = currentBufferKey;
+    // Save old buffer's text before switching
+    if (lastBufferKey && lastBufferKey !== newKey) {
+      const [nid, bname] = lastBufferKey.split(/:(.+)/);
+      setBufferInputText(nid, bname, inputValue);
+    }
+    // Restore new buffer's text
+    if (newKey && newKey !== lastBufferKey) {
+      const [nid, bname] = newKey.split(/:(.+)/);
+      inputValue = getBufferInputText(nid, bname);
+    }
+    lastBufferKey = newKey || lastBufferKey;
+  });
 
   function handleKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Tab') {
@@ -138,8 +161,9 @@
               topic: '', topicSetBy: '', topicSetAt: 0, users: [],
               lastSeenMsgTime: Date.now(), firstUnseenMsgIndex: null,
             });
+            sortBuffers(net);
           }
-          onSendRaw(networkId, 'JOIN ' + channel + (key ? ' ' + key : ''));
+          onSendRaw(networkId, 'JOIN ' + chan + (key ? ' ' + key : ''));
           setActiveBuffer(networkId, chan);
           updateRoute(networkId, chan);
         }
@@ -205,13 +229,21 @@
   function handleInput(): void {
     autoResize();
   }
+
+  function handleNickClick(): void {
+    if (!activeNetwork) return;
+    const newNick = prompt('Change nickname:', myNick);
+    if (newNick && newNick !== myNick) {
+      onSendRaw(activeNetwork.networkId, 'NICK ' + newNick);
+    }
+  }
 </script>
 
 <div class="bufferinputcell">
   <div class="nickinputcell">
     <div class="nickinput">
       <div class="nickcell">
-        <span class="buffernick">
+        <span class="buffernick" onclick={handleNickClick} title="Click to change nick">
           <span class="avatar letterAvatar letterAvatar--self" id="input-avatar"
                 style="background-color: {avatarColor}">{initial}</span>
           <span class="nick" id="input-nick">{myNick}</span>

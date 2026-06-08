@@ -83,12 +83,26 @@ function findAllMatches(text: string): TextMatch[] {
 
   EMAIL_REGEX.lastIndex = 0;
   while ((m = EMAIL_REGEX.exec(text)) !== null) {
-    const overlaps = matches.some(existing =>
-      m!.index >= existing.index && m!.index < existing.index + existing.value.length
+    const emailStart = m.index;
+    const emailEnd = m.index + m[0].length;
+
+    // Skip if this email is fully contained within an existing match
+    const containedInExisting = matches.some(existing =>
+      emailStart >= existing.index && emailEnd <= existing.index + existing.value.length
     );
-    if (!overlaps) {
-      matches.push({ value: m[0], index: m.index, type: 'email' });
+    if (containedInExisting) continue;
+
+    // Remove any existing URLs that are fully contained within this email
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const existing = matches[i];
+      if (existing.type === 'url' &&
+          existing.index >= emailStart &&
+          existing.index + existing.value.length <= emailEnd) {
+        matches.splice(i, 1);
+      }
     }
+
+    matches.push({ value: m[0], index: m.index, type: 'email' });
   }
 
   matches.sort((a, b) => a.index - b.index);

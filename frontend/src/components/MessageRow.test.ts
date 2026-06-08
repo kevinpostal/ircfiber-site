@@ -104,7 +104,8 @@ describe('MessageRow', () => {
 		const nick = page.getByRole('button', { name: 'alice' });
 		await expect.element(nick).toBeInTheDocument();
 		await userEvent.click(nick);
-		expect(onNickClick).toHaveBeenCalledWith('alice', expect.anything());
+		expect(onNickClick).toHaveBeenCalledTimes(1);
+		expect(onNickClick.mock.calls[0][0]).toBe('alice');
 	});
 
 	it('applies highlight class for highlighted messages', async () => {

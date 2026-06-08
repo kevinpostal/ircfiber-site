@@ -19,10 +19,42 @@ function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
   };
 }
 
-export async function fetchMe(): Promise<{ username: string; email: string }> {
+export interface MeResponse {
+  username: string;
+  email: string;
+  pinnedChannels?: string[];
+  membersCollapsed?: Record<string, boolean>;
+}
+
+export async function fetchMe(): Promise<MeResponse> {
   const r = await fetch(`${API_BASE}/me`);
   if (!r.ok) throw new Error('Failed to fetch user');
   return r.json();
+}
+
+export async function pinChannel(networkId: string, channel: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/pins`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ network: networkId, channel })
+  });
+  if (!r.ok) throw new Error('Pin failed');
+}
+
+export async function unpinChannel(networkId: string, channel: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/pins/${encodeURIComponent(networkId)}/${encodeURIComponent(channel)}`, {
+    method: 'DELETE'
+  });
+  if (!r.ok) throw new Error('Unpin failed');
+}
+
+export async function updateMembersCollapsed(networkId: string, channel: string, collapsed: boolean): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/members-collapsed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ network: networkId, channel, collapsed })
+  });
+  if (!r.ok) throw new Error('Update members collapsed failed');
 }
 
 export async function fetchHealth(): Promise<{
@@ -113,7 +145,7 @@ export async function addNetwork(data: {
   name: string; host: string; port: number; tls: string; verifyTls: boolean;
   nick: string; realName: string; autoJoinChannels: string; nspass?: string;
   commands?: string;
-}): Promise<void> {
+}): Promise<Record<string, unknown>> {
   const payload = {
     ...data,
     autoJoinChannels: data.autoJoinChannels
@@ -127,6 +159,7 @@ export async function addNetwork(data: {
     body: JSON.stringify(payload)
   });
   if (!r.ok) throw new Error('Add network failed');
+  return r.json();
 }
 
 export async function updateNetwork(networkId: string, data: Record<string, unknown>): Promise<void> {
@@ -141,4 +174,34 @@ export async function updateNetwork(networkId: string, data: Record<string, unkn
 export async function deleteNetwork(networkId: string): Promise<void> {
   const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}`, { method: 'DELETE' });
   if (!r.ok) throw new Error('Delete network failed');
+}
+
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldPassword, newPassword })
+  });
+  if (!r.ok) throw new Error('Change password failed');
+}
+
+export async function deleteAccount(): Promise<void> {
+  const r = await fetch(`${API_BASE}/me`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('Delete account failed');
+}
+
+export async function uploadAvatar(file: File): Promise<{ url: string }> {
+  const formData = new FormData();
+  formData.append('avatar', file);
+  const r = await fetch(`${API_BASE}/me/avatar`, {
+    method: 'POST',
+    body: formData
+  });
+  if (!r.ok) throw new Error('Upload avatar failed');
+  return r.json();
+}
+
+export async function removeAvatar(): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/avatar`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('Remove avatar failed');
 }

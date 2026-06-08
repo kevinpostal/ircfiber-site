@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import UserPopup from './UserPopup.svelte';
 import { ircState } from '../stores/ircStore.svelte';
-import { createNetwork, createBuffer } from '../test/factories';
+import { createNetwork, createBuffer, createMember } from '../test/factories';
 
 describe('UserPopup', () => {
   let mockSendRaw: ReturnType<typeof vi.fn>;
@@ -38,19 +38,39 @@ describe('UserPopup', () => {
     await expect.element(page.getByRole('button', { name: 'WHOIS' })).toBeInTheDocument();
   });
 
-  it('renders Message action', async () => {
+  it('renders message form', async () => {
     setupChannelBuffer();
     render(UserPopup, { props: { nick: 'Alice', x: 0, y: 0, onClose: vi.fn(), onSwitchBuffer: vi.fn(), onSendRaw: mockSendRaw } });
-    await expect.element(page.getByRole('button', { name: 'Message' })).toBeInTheDocument();
+    await expect.element(page.getByText('Send a message:')).toBeInTheDocument();
   });
 
-  it('renders Op/Deop/Voice/Devoice actions in channel', async () => {
+  it('renders Op/Voice actions when user has no special prefix', async () => {
     setupChannelBuffer();
     render(UserPopup, { props: { nick: 'Alice', x: 0, y: 0, onClose: vi.fn(), onSwitchBuffer: vi.fn(), onSendRaw: mockSendRaw } });
-    await expect.element(page.getByRole('button', { name: 'Op', exact: true })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Deop' })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Voice', exact: true })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Devoice' })).toBeInTheDocument();
+    const menu = document.querySelector('#memberContextMenu');
+    const buttons = Array.from(menu?.querySelectorAll('button') || []).map(b => b.textContent?.trim());
+    expect(buttons).toContain('Op');
+    expect(buttons).toContain('Voice');
+    expect(buttons).not.toContain('Deop');
+    expect(buttons).not.toContain('Devoice');
+  });
+
+  it('renders Deop/Devoice actions when user has op/voice', async () => {
+    setupChannelBuffer();
+    render(UserPopup, {
+      props: {
+        nick: 'Alice',
+        member: createMember({ nick: 'Alice', prefix: '@', category: 'OP' }),
+        x: 0, y: 0,
+        onClose: vi.fn(),
+        onSwitchBuffer: vi.fn(),
+        onSendRaw: mockSendRaw,
+      },
+    });
+    const menu = document.querySelector('#memberContextMenu');
+    const buttons = Array.from(menu?.querySelectorAll('button') || []).map(b => b.textContent?.trim());
+    expect(buttons).toContain('Deop');
+    expect(buttons).not.toContain('Op');
   });
 
   it('renders Kick/Ban actions in channel', async () => {
@@ -68,7 +88,7 @@ describe('UserPopup', () => {
     ircState.activeBuffer.networkId = network.networkId;
     ircState.activeBuffer.bufferName = 'Alice';
     render(UserPopup, { props: { nick: 'Alice', x: 0, y: 0, onClose: vi.fn(), onSwitchBuffer: vi.fn(), onSendRaw: mockSendRaw } });
-    await expect.element(page.getByRole('button', { name: 'Op' })).not.toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'Op', exact: true })).not.toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Kick' })).not.toBeInTheDocument();
   });
 
@@ -82,12 +102,12 @@ describe('UserPopup', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('calls onSwitchBuffer for Message', async () => {
+  it('calls onSwitchBuffer when clicking Open', async () => {
     const network = setupChannelBuffer();
     const onClose = vi.fn();
     const onSwitchBuffer = vi.fn();
     render(UserPopup, { props: { nick: 'Alice', x: 0, y: 0, onClose, onSwitchBuffer, onSendRaw: mockSendRaw } });
-    await userEvent.click(page.getByRole('button', { name: 'Message' }));
+    await userEvent.click(page.getByRole('button', { name: 'Open' }));
     expect(onSwitchBuffer).toHaveBeenCalledOnce();
     expect(onSwitchBuffer).toHaveBeenCalledWith(network.networkId, 'Alice');
     expect(onClose).toHaveBeenCalledOnce();

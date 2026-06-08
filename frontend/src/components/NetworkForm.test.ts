@@ -62,7 +62,7 @@ describe('NetworkForm', () => {
     render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
     await userEvent.clear(page.getByLabelText('Network name'));
     await userEvent.type(page.getByLabelText('Network name'), 'UpdatedNet');
-    await userEvent.click(page.getByRole('button', { name: 'Save changes' }));
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
     expect(mockUpdateNetwork).toHaveBeenCalledOnce();
     expect(mockUpdateNetwork).toHaveBeenCalledWith(
       network.networkId,
@@ -71,10 +71,10 @@ describe('NetworkForm', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('calls onClose when close clicked', async () => {
+  it('calls onClose when Cancel clicked', async () => {
     const onClose = vi.fn();
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
-    await userEvent.click(page.getByRole('button', { name: '×' }));
+    await userEvent.click(page.getByRole('button', { name: 'Cancel' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
@@ -84,5 +84,148 @@ describe('NetworkForm', () => {
     expect(form.checkValidity()).toBe(false);
     const nameInput = page.getByLabelText('Network name');
     expect((nameInput.element() as HTMLInputElement).required).toBe(true);
+  });
+
+  it('Advanced section starts collapsed', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    // NickServ field is inside Advanced; should not be visible
+    expect(document.querySelector('#add-network-nspass')).toBeNull();
+  });
+
+  it('Advanced section expands when toggled', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const toggle = page.getByRole('button', { name: /Advanced options/ });
+    await userEvent.click(toggle);
+    await expect.element(page.getByLabelText(/NickServ password/)).toBeInTheDocument();
+    await expect.element(page.getByLabelText(/Server password/)).toBeInTheDocument();
+    await expect.element(page.getByLabelText(/Commands to run on connect/)).toBeInTheDocument();
+  });
+
+  it('Channels to join textarea appears in add mode', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const channels = page.getByLabelText(/Channels to join/).element() as HTMLTextAreaElement;
+    expect(channels).toBeTruthy();
+    expect(channels.tagName).toBe('TEXTAREA');
+  });
+
+  it('Channels to join textarea hidden in edit mode', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    expect(document.querySelector('#add-network-channels')).toBeNull();
+  });
+
+  it('Update mode does not include add-only fields in payload', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    const onClose = vi.fn();
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    const call = mockUpdateNetwork.mock.calls[0];
+    expect(call[1]).not.toHaveProperty('autoJoinChannels');
+    expect(call[1]).not.toHaveProperty('commands');
+    expect(call[1]).not.toHaveProperty('nspass');
+  });
+
+  it('Reveal toggle shows/hides NickServ password', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
+    const input = page.getByLabelText(/NickServ password/).element() as HTMLInputElement;
+    expect(input.type).toBe('password');
+    const reveals = document.querySelectorAll('.passwordRow .reveal input');
+    await userEvent.click(reveals[0] as HTMLElement);
+    expect(input.type).toBe('text');
+  });
+
+  it('Reveal toggle shows/hides Server password independently', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
+    const nickservInput = page.getByLabelText(/NickServ password/).element() as HTMLInputElement;
+    const serverInput = page.getByLabelText(/Server password/).element() as HTMLInputElement;
+    expect(nickservInput.type).toBe('password');
+    expect(serverInput.type).toBe('password');
+    const reveals = document.querySelectorAll('.passwordRow .reveal input');
+    expect(reveals.length).toBe(2);
+    await userEvent.click(reveals[1] as HTMLElement);
+    expect(nickservInput.type).toBe('password');
+    expect(serverInput.type).toBe('text');
+  });
+
+  it('Escape key closes the form', async () => {
+    const onClose = vi.fn();
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('shows error message when save fails', async () => {
+    const failingUpdate = vi.fn(async () => {
+      throw new Error('Server rejected the request');
+    });
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: failingUpdate } });
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    await expect.element(page.getByText('Server rejected the request')).toBeInTheDocument();
+  });
+
+  it('disables buttons while submitting', async () => {
+    let resolveSave: ((v?: unknown) => void) | undefined;
+    const slowAdd = vi.fn(() => new Promise<unknown>((res) => { resolveSave = res; }));
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: slowAdd, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.type(page.getByLabelText('Network name'), 'NewNet');
+    await userEvent.type(page.getByLabelText('Hostname'), 'irc.new.net');
+    await userEvent.type(page.getByLabelText('Nickname'), 'MyNick');
+    const submitBtn = page.getByRole('button', { name: 'Join network' }).element() as HTMLButtonElement;
+    const cancelBtn = page.getByRole('button', { name: 'Cancel' }).element() as HTMLButtonElement;
+    await userEvent.click(submitBtn);
+    expect(submitBtn.disabled).toBe(true);
+    expect(cancelBtn.disabled).toBe(true);
+    resolveSave?.(undefined);
+  });
+
+  it('renders IRCCloud-style section headings with icons', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const identityHeading = document.querySelector('.networkEditorHeading__Identity');
+    expect(identityHeading).toBeTruthy();
+    expect(identityHeading?.textContent).toContain('Your identity');
+    expect(identityHeading?.querySelector('i.fa-user')).toBeTruthy();
+
+    await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
+    const advancedHeading = document.querySelector('.addNetworkAdvancedHeading');
+    expect(advancedHeading?.querySelector('i.fa-cog')).toBeTruthy();
+  });
+
+  it('Save button uses primary class and Cancel uses secondary class', async () => {
+    render(NetworkForm, { props: { mode: 'edit', networkId: 'nonexistent', onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const saveBtn = document.querySelector('.formButtons .action.primary') as HTMLButtonElement;
+    const cancelBtn = document.querySelector('.formButtons .action.secondary') as HTMLButtonElement;
+    expect(saveBtn).toBeTruthy();
+    expect(cancelBtn).toBeTruthy();
+    expect(saveBtn.classList.contains('primary')).toBe(true);
+    expect(cancelBtn.classList.contains('secondary')).toBe(true);
+    expect(saveBtn.textContent?.trim()).toBe('Save');
+    expect(cancelBtn.textContent?.trim()).toBe('Cancel');
+  });
+
+  it('shows reconnect note in edit mode', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByText(/Changing your real name or any of the host settings requires a reconnect/)).toBeInTheDocument();
+  });
+
+  it('does not show reconnect note in add mode', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    expect(document.querySelector('.reconnectNote')).toBeNull();
+  });
+
+  it('secure port checkbox toggles TLS state', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const checkbox = document.querySelector('#add-network-tls-secure') as HTMLInputElement;
+    expect(checkbox).toBeTruthy();
+    expect(checkbox.checked).toBe(true);
+    await userEvent.click(checkbox);
+    expect(checkbox.checked).toBe(false);
   });
 });

@@ -47,6 +47,9 @@ export default defineConfig({
           name: 'client',
           // Default 5s timeout is too long for browser tests; cap at 2s
           testTimeout: 2000,
+          // Browser tests share module-level state; run sequentially to avoid
+          // cross-test interference (e.g. $state maps, debounced timers).
+          fileParallelism: false,
           browser: {
             enabled: true,
             provider: playwright(),

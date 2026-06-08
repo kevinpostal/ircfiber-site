@@ -1,8 +1,9 @@
 <script lang="ts">
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
-  import { sendRaw } from '../stores/wsConnection';
-  import { ignoreList } from '../stores/preferences.svelte';
+  import { sendRaw } from '../stores/wsConnection.svelte.ts';
+  import { ignoreList, hideChannel } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
+  import { deleteNetwork } from '../stores/api';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import type { WhoisData, BanListData, ChannelDeleteConfirmData, SetTopicData, InviteData, IgnoreListData } from '../types';
 
@@ -96,12 +97,25 @@
   function confirmDelete(data: ChannelDeleteConfirmData): void {
     const { networkId, bufferName } = data;
     const net = ircState.networks.find(n => n.networkId === networkId);
-    if (net) {
+    if (!net) { close(); return; }
+    if (bufferName === '_server') {
+      deleteNetwork(networkId);
+      const netIdx = ircState.networks.indexOf(net);
+      if (netIdx >= 0) ircState.networks.splice(netIdx, 1);
+      const remaining = ircState.networks[0];
+      if (remaining) {
+        setActiveBuffer(remaining.networkId, '_server');
+        updateRoute(remaining.networkId, '_server');
+      }
+    } else {
       sendRaw(networkId, 'PART ' + bufferName);
       const channels = net.buffers.filter(b => b.name !== '_server' && b.isJoined !== false);
       const delIdx = channels.findIndex(b => b.name === bufferName);
       const idx = net.buffers.findIndex(b => b.name === bufferName);
       if (idx >= 0) net.buffers.splice(idx, 1);
+      // Persist the deletion so the next sync (which re-includes parted
+      // and auto-join channels) doesn't bring the buffer back.
+      hideChannel(networkId, bufferName);
       if (delIdx > 0) {
         setActiveBuffer(networkId, channels[delIdx - 1].name);
         updateRoute(networkId, channels[delIdx - 1].name);
@@ -219,20 +233,62 @@
 
     {#if ircState.overlay.type === 'whois' && ircState.overlay.data}
       {@const w = ircState.overlay.data as WhoisData}
-      <h2>WHOIS: {w.nick}</h2>
-      <dl class="whois-info">
-        <dt>User</dt><dd>{w.user}@{w.host}</dd>
-        <dt>Real name</dt><dd>{w.realname}</dd>
-        <dt>Server</dt><dd>{w.server} ({w.serverInfo})</dd>
-        {#if w.account}<dt>Account</dt><dd>{w.account}</dd>{/if}
-        {#if w.channels && w.channels.length > 0}<dt>Channels</dt><dd>{w.channels.join(' ')}</dd>{/if}
-        {#if w.idle > 0}<dt>Idle</dt><dd>{w.idle} seconds</dd>{/if}
-        {#if w.secure}<dt>Secure</dt><dd>Yes (TLS)</dd>{/if}
-        {#if w.away}<dt>Away</dt><dd>{w.away}</dd>{/if}
-        {#if w.signon > 0}
-          <dt>Signed on</dt><dd>{new Date(w.signon * 1000).toLocaleString()}</dd>
-        {/if}
-      </dl>
+      <div class="overlay-header">
+        <h2>WHOIS: {w.nick}</h2>
+        <button class="overlay-done" onclick={close} style="margin-right: 32px;">Done</button>
+      </div>
+      <table cellspacing="0" class="overlayTable whois-table">
+        <tbody>
+          <tr class="odd">
+            <td class="whois-label">User</td>
+            <td class="whois-value">{w.user}@{w.host}</td>
+          </tr>
+          <tr class="even">
+            <td class="whois-label">Real name</td>
+            <td class="whois-value">{w.realname}</td>
+          </tr>
+          <tr class="odd">
+            <td class="whois-label">Server</td>
+            <td class="whois-value">{w.server}{#if w.serverInfo} ({w.serverInfo}){/if}</td>
+          </tr>
+          {#if w.account}
+            <tr class="even">
+              <td class="whois-label">Account</td>
+              <td class="whois-value">{w.account}</td>
+            </tr>
+          {/if}
+          {#if w.away}
+            <tr class:odd={!w.account} class:even={!!w.account}>
+              <td class="whois-label">Away</td>
+              <td class="whois-value">{w.away}</td>
+            </tr>
+          {/if}
+          {#if w.secure}
+            <tr class="odd">
+              <td class="whois-label">Secure</td>
+              <td class="whois-value">Yes (TLS)</td>
+            </tr>
+          {/if}
+          {#if w.idle > 0}
+            <tr class:odd={!w.secure} class:even={!!w.secure}>
+              <td class="whois-label">Idle</td>
+              <td class="whois-value">{w.idle} seconds</td>
+            </tr>
+          {/if}
+          {#if w.signon > 0}
+            <tr class="odd">
+              <td class="whois-label">Signed on</td>
+              <td class="whois-value">{new Date(w.signon * 1000).toLocaleString()}</td>
+            </tr>
+          {/if}
+          {#if w.channels && w.channels.length > 0}
+            <tr class="even">
+              <td class="whois-label">Channels</td>
+              <td class="whois-value whois-channels">{w.channels.join(' ')}</td>
+            </tr>
+          {/if}
+        </tbody>
+      </table>
     {:else if ircState.overlay.type === 'banlist' && ircState.overlay.data}
       {@const data = ircState.overlay.data as BanListData}
       <div class="overlay-header">
@@ -305,7 +361,7 @@
           <span class="buffer bufferLink">{d.networkName} ({d.networkHost})</span>
         </div>
         <div class="overlay">
-          <p class="content">Are you sure you want to delete your history for {d.bufferName}</p>
+          <p class="content">Are you sure you want to delete your history for {d.bufferName === '_server' ? d.networkName : d.bufferName}</p>
           <p class="buttons">
             <button class="confirm delete" onclick={() => confirmDelete(d)}><span>OK</span></button>
             <button type="button" class="close" onclick={close}><span>Cancel</span></button>

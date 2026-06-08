@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getActiveNetwork, setActiveBuffer } from '../stores/ircStore.svelte';
-  import { sendRaw, requestSync } from '../stores/wsConnection';
+  import { sendRaw, requestSync } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
 
   interface Props {
@@ -13,7 +13,8 @@
   const isAway = $derived(activeNetwork?.isAway ?? false);
   const isDisconnected = $derived(activeNetwork ? !activeNetwork.connected : false);
   const isConnecting = $derived(activeNetwork?.connectionState === 'connecting');
-  const disconnectReason = $derived(activeNetwork?.disconnectReason || 'Disconnected');
+  const disconnectReason = $derived(activeNetwork?.disconnectReason || '');
+  const isReconnecting = $derived(isConnecting && disconnectReason.length > 0);
   const showStatus = $derived(isAway || isConnecting || (isDisconnected && !isConnecting));
 
   function handleBack(e: MouseEvent): void {
@@ -34,10 +35,6 @@
   }
 </script>
 
-{#if isDisconnected}
-  <hr />
-{/if}
-
 <div class="connectionstatuscell" class:show={showStatus}>
   {#if isAway}
     <div class="connectionStatus connectionStatus--show away">
@@ -51,7 +48,13 @@
 
   {#if isConnecting}
     <div class="connectionStatus connectionStatus--show connecting">
-      <span class="reconnect">Connecting&hellip;</span>
+      <span class="connecting-msg">
+        {#if isReconnecting}
+          Reconnecting to {activeNetwork?.host || 'server'}&hellip;
+        {:else}
+          Connecting to {activeNetwork?.host || 'server'}&hellip;
+        {/if}
+      </span>
     </div>
   {/if}
 
@@ -59,7 +62,10 @@
     <div class="connectionStatus connectionStatus--show reconnect">
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <a class="reconnect" href="/" role="button" onclick={handleReconnect}>
-        <span class="reconnect">Click to reconnect (or type /reconnect)</span> {disconnectReason}
+        <span class="reconnect">Click to reconnect (or type /reconnect)</span>
+        {#if disconnectReason}
+          <span class="disconnect-reason">{disconnectReason}</span>
+        {/if}
       </a>
     </div>
   {/if}

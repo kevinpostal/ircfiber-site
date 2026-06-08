@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { IRCMessage } from '../types';
+  import type { IRCMessage, Member } from '../types';
   import { formatTime12Hour, formatDateTimeTitle, stringHash, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml } from '../lib/autolinker';
@@ -9,13 +9,17 @@
     msg: IRCMessage;
     isHighlight?: boolean;
     isSameAuthor?: boolean;
-    onNickClick?: (nick: string, event: MouseEvent) => void;
+    onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
   }
 
   let { msg, isHighlight = false, isSameAuthor = false, onNickClick }: Props = $props();
 
   const cmd = msg.command;
   const isJoinPart = ['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd);
+
+  const activeNetwork = $derived(getActiveNetwork());
+  const myNick = $derived(activeNetwork?.currentNick || '');
+  const isOwn = $derived(!!nick && !!myNick && stripPrefix(nick).toLowerCase() === myNick.toLowerCase());
   // Lifecycle events (server/client connect or disconnect) render like
   // join/part rows in IRCCloud: no `status monospace`, just the type class.
   const isLifecycle = ['CONNECT', 'DISCONNECT'].includes(cmd);
@@ -42,13 +46,25 @@
     return '';
   }
 
+  function findMemberForNick(n: string): Member | null {
+    const bufObj = getActiveBufferObj();
+    if (!bufObj?.users) return null;
+    for (const u of bufObj.users) {
+      if (stripPrefix(u.nick) === n) return u;
+    }
+    return null;
+  }
+
   function getUsermask(prefix: string): string {
     if (!prefix || !prefix.includes('!')) return '';
     return prefix.split('!')[1] ?? '';
   }
 
   function handleNickClick(e: MouseEvent): void {
-    if (nick && onNickClick) onNickClick(nick, e);
+    if (nick && onNickClick) {
+      const member = findMemberForNick(nick);
+      onNickClick(nick, e, member);
+    }
   }
 
   function renderText(text: string): string {
@@ -191,7 +207,7 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
@@ -199,6 +215,9 @@
   >
     <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
     <span class="g">&nbsp;</span>
+    {#if cmd === 'DISCONNECT' || cmd === 'CONNECT'}
+      <hr class="reconnect-hr" />
+    {/if}
     <span class="message">
       {#if !isSystem && !isJoinPart && !isAction && nick}
         {@const colorIndex = stringHash(nick) % 27}
@@ -211,17 +230,10 @@
           <span class="avatar letterAvatar hasUserParent {colorCls}">
             <span role="presentation">{initial}</span>
           </span>
-          {#if modePrefix}
-            {@const modeInfo = getUserModePrefix(modePrefix + 'x')}
-            <span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>
-          {/if}
-          <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <span role="button" class="buffer bufferLink author {colorCls} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>
-            {nick}
-          </span>
-          <span class="g" aria-hidden="true">&gt;</span>&nbsp;
+                title={authorTitle} onclick={handleNickClick}>{#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}{nick}</span>
+          <span class="g">&nbsp;</span>
         </span>
       {/if}
 
@@ -239,14 +251,11 @@
         </span>
       {/if}
 
-      <span class="content">
-        {#if hasCollapseWidget}
-          <span class="collapseWidget" aria-label="User activity">
+      <span class="content">{#if hasCollapseWidget}<span class="collapseWidget" aria-label="User activity">
             <i class="fa-regular fa-square-minus collapseIcon"></i>
             <i class="fa-regular fa-square-plus expandIcon"></i>
             <i class="fa-solid fa-angle-right collapsedIcon"></i>
-          </span>
-        {/if}
+          </span>{/if}
         {#if cmd === 'MOTD_GROUP' && msg.lines}
           <div class="groupedLines">
             {#each msg.lines as line}
@@ -259,7 +268,9 @@
           {@html msg.sentences || ''}
         {:else if cmd === 'DISCONNECT'}
           <span class="prefix">&#x21D0;</span> You disconnected{#if msg.text && msg.text !== 'You disconnected'}: {msg.text}{/if}
-        {:else if cmd === 'CONNECT' || cmd === '001'}
+        {:else if cmd === 'CONNECT'}
+          <span class="prefix">&#x2192;</span> {@html renderText(getDisplayText())}
+        {:else if cmd === '001'}
           <span class="prefix">&#x2192;</span> {@html renderText(getDisplayText())}
         {:else if cmd === 'JOIN'}
           {@const usermask = getUsermask(msg.prefix || '')}

@@ -1,9 +1,11 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
-import { unreadMap, highlightMap, archivedMap, pinnedMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen } from './preferences.svelte';
+import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen } from './preferences.svelte';
 
 // ── Single reactive state object ──
+export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat';
+
 export const ircState = $state({
   networks: [] as Network[],
   activeBuffer: { networkId: null, bufferName: null } as ActiveBuffer,
@@ -15,9 +17,32 @@ export const ircState = $state({
   optimisticMessages: new Map<string, IRCMessage>(),
   overlay: { type: null, data: null } as OverlayState,
   contextMenu: { visible: false, x: 0, y: 0, actions: [] } as ContextMenuState,
+  showSettings: false,
+  settingsTab: 'design' as SettingsTab,
 });
 
-// ── Derived state (read-only computed) ──
+// IRCCloud-style previous-buffer tracking: the buffer that was active before
+// the current one. Used by archiveBuffer to select where focus goes.
+let previousBuffer: { networkId: string | null; bufferName: string | null } = { networkId: null, bufferName: null };
+
+// ── Per-buffer input history (IRCCloud-style) ──
+// Preserves unsent text across buffer switches. Not reactive — InputArea
+// reads it on activeBuffer change.
+export const bufferInputText = new Map<string, string>();
+
+function inputKey(networkId: string, bufferName: string): string {
+  return `${networkId}:${normalizeChannelName(bufferName)}`;
+}
+
+export function setBufferInputText(networkId: string, bufferName: string, text: string): void {
+  const key = inputKey(networkId, bufferName);
+  if (text) bufferInputText.set(key, text);
+  else bufferInputText.delete(key);
+}
+
+export function getBufferInputText(networkId: string, bufferName: string): string {
+  return bufferInputText.get(inputKey(networkId, bufferName)) || '';
+}
 // Note: $derived cannot be exported directly. Export as functions for reactive reads.
 export function getActiveNetwork(): Network | null {
   return ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId) ?? null;
@@ -42,6 +67,14 @@ export function getHasHighlight(): boolean {
 // ── Actions ──
 export function setActiveBuffer(networkId: string, bufferName: string): void {
   bufferName = normalizeChannelName(bufferName);
+
+  // Track previous buffer (IRCCloud-style) for archive focus selection
+  const prevNetworkId = ircState.activeBuffer.networkId;
+  const prevBufferName = ircState.activeBuffer.bufferName;
+  if (prevNetworkId && prevBufferName && (prevNetworkId !== networkId || prevBufferName !== bufferName)) {
+    previousBuffer = { networkId: prevNetworkId, bufferName: prevBufferName };
+  }
+
   ircState.activeBuffer.networkId = networkId;
   ircState.activeBuffer.bufferName = bufferName;
   const key = `${networkId}:${bufferName}`;
@@ -61,7 +94,69 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
     if (lastMsg.t) {
       setLastSeen(networkId, bufferName, lastMsg.t);
       setBottomSeen(networkId, bufferName, lastMsg.t);
+      // Also set per-buffer state on the Buffer object
+      const buf = net?.buffers.find(b => b.name === bufferName);
+      if (buf) {
+        buf.lastSeen = lastMsg.t;
+        buf.bottomSeen = lastMsg.t;
+      }
     }
+  }
+}
+
+// Archive a buffer and switch focus to the channel above (IRCCloud-compatible).
+// Only changes focus if the archived buffer is the currently active buffer.
+// Priority: previousBuffer > channel above > channel below > server buffer > other networks.
+export function archiveBuffer(networkId: string, bufferName: string): void {
+  bufferName = normalizeChannelName(bufferName);
+  if (bufferName === '_server') return;
+
+  const key = `${networkId}:${bufferName}`;
+  if (archivedMap[key]) return;
+
+  archivedMap[key] = true;
+
+  const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === bufferName;
+  if (!isActive) return;
+
+  // Priority 1: IRCCloud-style previousBuffer
+  if (previousBuffer.networkId && previousBuffer.bufferName) {
+    const prevKey = `${previousBuffer.networkId}:${previousBuffer.bufferName}`;
+    if (!archivedMap[prevKey]) {
+      const prevNet = ircState.networks.find(n => n.networkId === previousBuffer.networkId);
+      if (prevNet) {
+        const prevBuf = prevNet.buffers.find(b => b.name === previousBuffer.bufferName);
+        if (prevBuf && prevBuf.isJoined !== false) {
+          setActiveBuffer(previousBuffer.networkId, previousBuffer.bufferName);
+          return;
+        }
+      }
+    }
+  }
+
+  // Priority 2: channel above in the same network's visible list (IRCCloud's getPreviousBufferFromConnection)
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (net) {
+    const visibleBuffers = net.buffers.filter(b =>
+      b.name !== '_server' &&
+      b.isJoined !== false &&
+      !archivedMap[`${networkId}:${b.name}`]
+    );
+
+    const currentIdx = visibleBuffers.findIndex(b => b.name === bufferName);
+
+    if (currentIdx > 0) {
+      setActiveBuffer(networkId, visibleBuffers[currentIdx - 1].name);
+      return;
+    }
+
+    if (currentIdx < visibleBuffers.length - 1) {
+      setActiveBuffer(networkId, visibleBuffers[currentIdx + 1].name);
+      return;
+    }
+
+    setActiveBuffer(networkId, '_server');
+    return;
   }
 }
 
@@ -86,11 +181,14 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
 
   const normBuf = normalizeChannelName(bufferName);
   const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-  const lastSeen = getLastSeen(networkId, bufferName);
   // Only count as unread if:
   // 1. Buffer is not active, OR
-  // 2. Buffer is active but message is after lastSeen (tab was in background)
-  const isUnread = !isActive || (lastSeen !== null && (msg.t || 0) > lastSeen);
+  // 2. Buffer is active but the tab/window has lost focus (user is not looking at it)
+  // Note: we deliberately do NOT use lastSeen here — that timestamp is set when the
+  // user *switches* to a buffer and never updated while they read, so any later
+  // message would be mis-flagged as unread even while the user is actively viewing
+  // the buffer (the original multi-tab bug).
+  const isUnread = !isActive || ircState.focusLost;
   if (isUnread) {
     incrementUnread(networkId, bufferName, msg);
   }
@@ -128,9 +226,35 @@ export function checkHighlight(msg: IRCMessage, net: Network): boolean {
   return false;
 }
 
+// ── SessionStorage message cache ──
+// Keeps a copy of the last-seen messages per buffer so that revisiting a
+// channel URL (e.g. after a refresh) shows history instantly while the
+// REST API call fetches fresh data in the background.
+
+const CACHE_PREFIX = 'ircfiber:msgcache:';
+
+function saveMessageCache(key: string, msgs: IRCMessage[]): void {
+  if (msgs.length === 0) return;
+  try {
+    const trimmed = msgs.slice(-100);
+    sessionStorage.setItem(CACHE_PREFIX + key, JSON.stringify(trimmed));
+  } catch { /* storage full or unavailable */ }
+}
+
+export function loadCachedMessages(networkId: string, bufferName: string): IRCMessage[] | null {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  try {
+    const raw = sessionStorage.getItem(CACHE_PREFIX + key);
+    if (!raw) return null;
+    const msgs = JSON.parse(raw) as IRCMessage[];
+    return Array.isArray(msgs) ? msgs : null;
+  } catch { return null; }
+}
+
 export function setMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   ircState.messages[key] = msgs;
+  saveMessageCache(key, msgs);
 }
 
 export function prependMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
@@ -262,6 +386,14 @@ function normalizeUser(user: string | Member): Member {
   return user;
 }
 
+export function sortBuffers(net: Network): void {
+  net.buffers.sort((a, b) => {
+    if (a.name === '_server') return -1;
+    if (b.name === '_server') return 1;
+    return naturalCompare(a.name, b.name);
+  });
+}
+
 export function updateNetworkFromSync(incoming: Network[]): void {
   for (const rawNet of incoming as (Network & { id?: string })[]) {
     // Map backend `id` field to frontend `networkId`
@@ -280,25 +412,66 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       });
       for (const incomingBuf of net.buffers) {
         incomingBuf.name = normalizeChannelName(incomingBuf.name);
+        // Skip channels the user has explicitly deleted — the server still
+        // re-includes them in sync (they're in partedChannels), but the UI
+        // should keep them hidden.
+        if (hiddenChannelsMap[`${existing.networkId}:${incomingBuf.name}`]) continue;
         // Convert string users to Member objects from backend sync
         if (incomingBuf.users && incomingBuf.users.length > 0 && typeof incomingBuf.users[0] === 'string') {
           incomingBuf.users = (incomingBuf.users as unknown as string[]).map(normalizeUser);
         }
         const existingBuf = existing.buffers.find(b => b.name === incomingBuf.name);
         if (existingBuf) {
-          Object.assign(existingBuf, incomingBuf);
+          // Preserve local unread/highlight state across syncs.
+          // The backend doesn't know the client-side "active buffer" or scroll
+          // position, so its unreadCount is stale and would clobber the
+          // local indicator every few seconds. Only adopt the backend's count
+          // if it's higher (the user truly has more unread messages than we
+          // knew about) or if we have no local state yet.
+          const localUnread = existingBuf.unreadCount ?? 0;
+          const localHighlight = existingBuf.highlight ?? false;
+          const localIsJoined = existingBuf.isJoined;
+          const remoteUnread = incomingBuf.unreadCount ?? 0;
+          const remoteHighlight = incomingBuf.highlight ?? false;
+          // Copy incoming buffer properties except isJoined (IRC events are authoritative)
+          existingBuf.name = incomingBuf.name;
+          existingBuf.type = incomingBuf.type;
+          existingBuf.topic = incomingBuf.topic;
+          existingBuf.topicSetBy = incomingBuf.topicSetBy;
+          existingBuf.topicSetAt = incomingBuf.topicSetAt;
+          existingBuf.users = incomingBuf.users;
+          existingBuf.isPinned = incomingBuf.isPinned;
+          existingBuf.isArchived = incomingBuf.isArchived;
+          existingBuf.lastSeenMsgTime = incomingBuf.lastSeenMsgTime;
+          existingBuf.firstUnseenMsgIndex = incomingBuf.firstUnseenMsgIndex;
+          existingBuf.unreadCount = Math.max(localUnread, remoteUnread);
+          existingBuf.highlight = localHighlight || remoteHighlight;
+
+          // Keep the preferences-map (used by getTotalUnread / getHasHighlight
+          // for the title bar and favicon) in sync with the resolved value.
+          const mapKey = `${existing.networkId}:${incomingBuf.name}`;
+          unreadMap[mapKey] = existingBuf.unreadCount;
+          if (existingBuf.highlight) highlightMap[mapKey] = true;
+          else delete highlightMap[mapKey];
         } else {
           existing.buffers.push(incomingBuf);
         }
       }
+      // Drop any locally-tracked buffers the user has since hidden so the
+      // buffer list stays in sync with hiddenChannelsMap across refreshes.
+      existing.buffers = existing.buffers.filter(
+        b => b.name === '_server' || !hiddenChannelsMap[`${existing.networkId}:${b.name}`]
+      );
     } else {
-      net.buffers = net.buffers.map(b => {
-        const buf = { ...b, name: normalizeChannelName(b.name) } as Buffer;
-        if (buf.users && buf.users.length > 0 && typeof buf.users[0] === 'string') {
-          buf.users = (buf.users as unknown as string[]).map(normalizeUser);
-        }
-        return buf;
-      });
+      net.buffers = net.buffers
+        .filter(b => !hiddenChannelsMap[`${net.networkId}:${normalizeChannelName(b.name)}`])
+        .map(b => {
+          const buf = { ...b, name: normalizeChannelName(b.name) } as Buffer;
+          if (buf.users && buf.users.length > 0 && typeof buf.users[0] === 'string') {
+            buf.users = (buf.users as unknown as string[]).map(normalizeUser);
+          }
+          return buf;
+        });
       if (!net.buffers.some(b => b.name === '_server')) {
         net.buffers.unshift({
           name: '_server', type: 'server', isJoined: true,
@@ -323,6 +496,11 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       buf.isPinned = pinnedMap[key] === true;
     }
   }
+
+  // IRCCloud-style: maintain alphabetical order for all buffer lists
+  for (const net of ircState.networks) {
+    sortBuffers(net);
+  }
 }
 
 export function handleConnect(cmd: string, networkId: string, text?: string): void {
@@ -342,7 +520,22 @@ export function handleConnect(cmd: string, networkId: string, text?: string): vo
 export function updateChannelUsers(networkId: string, bufferName: string, cmd: string, nick: string, params?: string[]): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
-  const buf = net.buffers.find(b => b.name === normalizeChannelName(bufferName));
+  const normalized = normalizeChannelName(bufferName);
+  let buf = net.buffers.find(b => b.name === normalized);
+
+  // Auto-create buffer when the current user joins a channel.
+  // Handles joins from external clients, rejoin after mode changes, etc.
+  if (!buf && cmd === 'JOIN' && nick === net.currentNick) {
+    buf = {
+      name: normalized, type: 'channel', isJoined: true,
+      unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+      topic: '', topicSetBy: '', topicSetAt: 0, users: [],
+      lastSeenMsgTime: Date.now(), firstUnseenMsgIndex: null,
+    };
+    net.buffers.push(buf);
+    sortBuffers(net);
+  }
+
   if (!buf) return;
   if (!buf.users) buf.users = [];
 
@@ -386,6 +579,9 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
         break;
       }
     }
+    if (nick === net.currentNick) {
+      net.currentNick = newNick;
+    }
   } else if (cmd === 'MODE' && params && params.length >= 2) {
     const modeStr = params[0];
     const targets = params.slice(1);
@@ -417,6 +613,20 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
           member.category = 'MEMBER';
           member.nick = stripPrefix(member.nick);
         }
+      }
+    }
+    // Channel mode flags (IRCCloud-style CSS classes)
+    if (!buf.modeFlags) buf.modeFlags = {};
+    const channelModeMap: Record<string, keyof typeof buf.modeFlags> = {
+      's': 'secret', 'p': 'private', 'm': 'moderated',
+      'i': 'inviteOnly', 'k': 'password', 't': 'topicControl',
+      'n': 'noExternal', 'l': 'limited',
+    };
+    for (const ch of modeStr) {
+      if (ch === '+' || ch === '-') continue;
+      const flag = channelModeMap[ch];
+      if (flag && !'oOaAhvq'.includes(ch)) {
+        buf.modeFlags[flag] = adding;
       }
     }
   }

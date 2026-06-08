@@ -145,7 +145,10 @@ export function parseIrcFormatting(text: string): string {
       closeAll();
       const openTag = makeOpen();
       if (openTag) {
-        out += openTag;
+        // <wbr> gives the browser a line-wrap opportunity between colored
+        // block-character spans. Default <wbr> rendering is zero-width,
+        // matching IRCCloud exactly.
+        out += '<wbr>' + openTag;
         openStack = 1;
       }
     }
