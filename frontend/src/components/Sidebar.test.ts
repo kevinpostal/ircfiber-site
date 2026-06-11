@@ -123,7 +123,7 @@ describe('Sidebar', () => {
 	});
 
   it('filters archived buffers', async () => {
-    const net = createNetwork({ networkId: 'net1' });
+    const net = createNetwork({ networkId: 'net1', archivesCollapsed: false });
     net.buffers.push(createBuffer({ name: '#general' }));
     net.buffers.push(createBuffer({ name: '#old' }));
     ircState.networks.push(net);

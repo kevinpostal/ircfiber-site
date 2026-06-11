@@ -31,9 +31,6 @@ const EXTENDED_COLORS: Record<number, string> = {
 export function parseIrcFormatting(text: string): string {
   if (!text) return '';
 
-  // Pre-process markdown-style formatting before IRC control codes
-  text = processBlockFormatting(text);
-
   let i = 0;
   let out = '';
   let bold = false, italic = false, underline = false, reverse = false;
@@ -155,23 +152,6 @@ export function parseIrcFormatting(text: string): string {
   }
   closeAll();
   return out;
-}
-
-/**
- * Process markdown-style block formatting before IRC control codes.
- * Handles: triple-backtick code blocks, single-backtick inline code, blockquotes.
- */
-function processBlockFormatting(text: string): string {
-  // Triple backtick code blocks
-  text = text.replace(/```([^`]+)```/g, '<pre class="codeBlock">$1</pre>');
-
-  // Single backtick inline code
-  text = text.replace(/`([^`\n]+)`/g, '<code class="inlineCode">$1</code>');
-
-  // Blockquotes: lines starting with > (but not emoticons like :> or =>)
-  text = text.replace(/(?:^|(?<=\n))>(?![;:>])(.*)$/gm, '<span class="blockquote">&gt;$1</span>');
-
-  return text;
 }
 
 /**

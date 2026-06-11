@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref } from '../stores/preferences.svelte';
   import { pinChannel, unpinChannel } from '../stores/api';
@@ -130,7 +130,7 @@
   }
   function unarchive(): void {
     if (!networkId || !buf.name) return;
-    delete archivedMap[`${networkId}:${buf.name}`];
+    unarchiveBuffer(networkId, buf.name);
     onClose();
   }
   function clearBacklog(): void {

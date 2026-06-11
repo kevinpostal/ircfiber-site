@@ -5,7 +5,7 @@ import {
   groupDisconnectEvents,
   preprocessMessages,
 } from './messageBuilder';
-import type { IRCMessage } from '../types';
+import type { IRCMessage, JoinPartGroupMessage } from '../types';
 
 describe('groupMOTDLines', () => {
   it('leaves single MOTD line as-is', () => {
@@ -83,6 +83,20 @@ describe('groupJoinPartEvents', () => {
     expect(result[0].command).toBe('JOIN');
   });
 
+  it('leaves a single NICK as-is (no grouped widget to avoid scroll-capture)', () => {
+    // A lone NICK must stay as a regular row, not wrapped in
+    // JOINPART_GROUP with role="button" + tabindex="0", because that
+    // makes the scroll container lose focus and prevents scrolling up
+    // to trigger LoadMore.
+    const messages: IRCMessage[] = [
+      { command: 'NICK', nick: 'alice', prefix: 'alice!user@host', params: ['newalice'] },
+      { command: 'PRIVMSG', text: 'hello' },
+    ];
+    const result = groupJoinPartEvents(messages);
+    expect(result).toHaveLength(2);
+    expect(result[0].command).toBe('NICK');
+  });
+
   it('groups multiple consecutive join/part events', () => {
     const messages: IRCMessage[] = [
       { command: 'JOIN', nick: 'alice', prefix: 'alice!user@host' },
@@ -108,6 +122,51 @@ describe('groupJoinPartEvents', () => {
     expect(result).toHaveLength(2);
     expect(result[0].command).toBe('JOINPART_GROUP');
     expect(result[0].events).toHaveLength(5);
+  });
+
+  it('groups AWAY events together', () => {
+    const messages: IRCMessage[] = [
+      { command: 'AWAY', nick: 'acidvegas', prefix: 'acidvegas!user@host', text: 'I am away' },
+      { command: 'AWAY', nick: 'frodo', prefix: 'frodo!user@host', text: 'Auto-away' },
+      { command: 'AWAY', nick: 'acidvegas', prefix: 'acidvegas!user@host', text: 'I am away' },
+      { command: 'AWAY', nick: 'Anarcee', prefix: 'Anarcee!user@host', text: 'Auto-away' },
+      { command: 'PRIVMSG', text: 'hello' },
+    ];
+    const result = groupJoinPartEvents(messages);
+    expect(result).toHaveLength(2);
+    expect(result[0].command).toBe('JOINPART_GROUP');
+    expect(result[0].events).toHaveLength(4);
+    const grouped = result[0] as any;
+    // Should list all unique nicks once, not repeat
+    expect(grouped.sentences).toContain('acidvegas');
+    expect(grouped.sentences).toContain('frodo');
+    expect(grouped.sentences).toContain('Anarcee');
+    expect(grouped.sentences).toContain('are away');
+  });
+
+  it('groups AWAY back events (empty text) as is back', () => {
+    const messages: IRCMessage[] = [
+      { command: 'AWAY', nick: 'alice', prefix: 'alice!user@host', text: 'AFK' },
+      { command: 'AWAY', nick: 'alice', prefix: 'alice!user@host', text: '' },
+    ];
+    const result = groupJoinPartEvents(messages);
+    expect(result).toHaveLength(1);
+    const grouped = result[0] as any;
+    // The final state for alice is "is back"
+    expect(grouped.sentences).toContain('back');
+  });
+
+  it('groups AWAY with same reason into one phrase', () => {
+    const messages: IRCMessage[] = [
+      { command: 'AWAY', nick: 'alice', prefix: 'alice!user@host', text: 'AFK' },
+      { command: 'AWAY', nick: 'bob', prefix: 'bob!user@host', text: 'AFK' },
+    ];
+    const result = groupJoinPartEvents(messages);
+    const grouped = result[0] as any;
+    expect(grouped.sentences).toContain('alice');
+    expect(grouped.sentences).toContain('bob');
+    expect(grouped.sentences).toContain('are away: ');
+    expect(grouped.sentences).toContain('AFK');
   });
 
   it('detects nipped out (join then part)', () => {

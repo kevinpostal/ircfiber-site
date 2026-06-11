@@ -13,6 +13,8 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
 vi.mock('/src/stores/api.ts', () => ({
   pinChannel: vi.fn(async () => undefined),
   unpinChannel: vi.fn(async () => undefined),
+  archiveChannel: vi.fn(async () => undefined),
+  unarchiveChannel: vi.fn(async () => undefined),
 }));
 
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';

@@ -16,13 +16,19 @@
     ircState, getActiveNetwork, getActiveBufferObj,
     updateNetworkFromSync, handleConnect,
     updateChannelUsers, setMessages, prependMessages,
-    setActiveBuffer, updateChannelTopic, trimMessagesIfNeeded,
-    appendMessage
+    setActiveBuffer, updateChannelTopic,
+    appendMessage, batchAppendMessages
   } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, fetchMe, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix } from './lib/utils';
+  import DropTarget from './components/DropTarget.svelte';
+  import UploadDialog from './components/UploadDialog.svelte';
+  import UploadsPanel from './components/UploadsPanel.svelte';
+  import SnippetsPanel from './components/SnippetsPanel.svelte';
+  import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
+  import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
   import { membersCollapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, suppressAnimations, globalPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
@@ -69,7 +75,38 @@
     !membersCollapsedMap[`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`]
   );
 
+  // Narrow-screen (mobile) drawer state, IRCCloud-style: the buffer
+  // sidebar and member list become slide-over drawers. Ephemeral and
+  // never persisted, unlike membersCollapsedMap — a phone toggling the
+  // member overlay must not collapse the panel on a desktop session.
+  let isNarrow = $state(false);
+  let sidebarDrawerOpen = $state(false);
+  let mobileMembersOpen = $state(false);
+
+  $effect(() => {
+    const mq = window.matchMedia('(max-width: 800px)');
+    const apply = () => {
+      isNarrow = mq.matches;
+      if (!mq.matches) {
+        sidebarDrawerOpen = false;
+        mobileMembersOpen = false;
+      }
+    };
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  });
+
+  function closeDrawers(): void {
+    sidebarDrawerOpen = false;
+    mobileMembersOpen = false;
+  }
+
   function toggleMemberPanel(): void {
+    if (isNarrow) {
+      mobileMembersOpen = !mobileMembersOpen;
+      return;
+    }
     const key = `${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`;
     const next = !membersCollapsedMap[key];
     membersCollapsedMap[key] = next;
@@ -140,10 +177,10 @@
   onMount(async () => {
     // Set up IRCCloud-style message batcher (200ms flush)
     setFlushFn((networkId, bufferName, msgs) => {
-      for (const msg of msgs) {
-        appendMessage(networkId, bufferName, msg);
-        trimMessagesIfNeeded(networkId, bufferName);
-      }
+      // IRCCloud batchAppend: push all messages into the state in a single
+      // reactive update so Svelte only triggers one render pass per flush
+      // instead of one per message.
+      batchAppendMessages(networkId, bufferName, msgs);
     });
     try {
       const user = await fetchMe();
@@ -161,6 +198,18 @@
         for (const key of user.pinnedChannels) {
           if (pinnedMap[key] !== false) {
             pinnedMap[key] = true;
+          }
+        }
+      }
+      if (user.archivedChannels) {
+        for (const key of Object.keys(archivedMap)) {
+          if (archivedMap[key] === true && !user.archivedChannels.includes(key)) {
+            delete archivedMap[key];
+          }
+        }
+        for (const key of user.archivedChannels) {
+          if (archivedMap[key] !== false) {
+            archivedMap[key] = true;
           }
         }
       }
@@ -242,6 +291,9 @@
       if (ircState.contextMenu.visible) { ircState.contextMenu.visible = false; }
       if (showNetworkForm) { showNetworkForm = false; }
       if (showJoinModal) { showJoinModal = false; }
+      if (uploadState.dialog) { cancelDialog(); }
+      if (uploadState.panelOpen) { uploadState.panelOpen = false; }
+      if (uploadState.pastebinPanelOpen) { uploadState.pastebinPanelOpen = false; }
       if (userPopup) { userPopup = null; }
     }
   }
@@ -300,7 +352,9 @@
       // in the local buffer at the time of read; a few hundred ms later
       // a subsequent load will see the freshly-persisted batch messages.
       const msgs = await loadHistory(networkId, bufferName, {
-        count: 100,
+        // IRCCloud renders the last batchSize=200 messages on buffer open
+        // (BufferLogView.render → messages.last(this.scroll.batchSize)).
+        count: 200,
         fetchFromUpstream: true,
         fetchCommand: 'LATEST',
       });
@@ -345,6 +399,19 @@
       for (const k of channels) {
         if (pinnedMap[k] !== false) {
           pinnedMap[k] = true;
+        }
+      }
+    } else if (key === 'archived') {
+      const channels = (data.value as string[]) ?? [];
+      // Same real-time sync pattern as pinned channels.
+      for (const k of Object.keys(archivedMap)) {
+        if (archivedMap[k] === true && !channels.includes(k)) {
+          delete archivedMap[k];
+        }
+      }
+      for (const k of channels) {
+        if (archivedMap[k] !== false) {
+          archivedMap[k] = true;
         }
       }
     } else if (key === 'membersCollapsed') {
@@ -421,17 +488,20 @@
         if (bufExists) {
           setActiveBuffer(net.networkId, lastBuf);
           requestSwitchBuffer(net.networkId, lastBuf);
+          void loadBufferHistory(net.networkId, lastBuf);
           return;
         }
       }
       setActiveBuffer(net.networkId, '_server');
       requestSwitchBuffer(net.networkId, '_server');
+      void loadBufferHistory(net.networkId, '_server');
       return;
     }
   }
 
   function navigateToBuffer(networkId: string, bufferName: string): void {
     switchToBuffer(networkId, bufferName);
+    closeDrawers();
   }
 
   function handleNickClick(nick: string, event: MouseEvent, member?: Member | null): void {
@@ -471,6 +541,8 @@
 
 <NotificationBadge />
 
+<DropTarget onFilesDropped={(result, opts) => startUploads(result.accepted, { networkId: ircState.activeBuffer.networkId ?? '', buffer: ircState.activeBuffer.bufferName ?? '', immediate: opts.immediate })} />
+
 {#if ircState.contextMenu.visible}
   <ContextMenu />
 {/if}
@@ -501,6 +573,12 @@
   </div>
 {/if}
 
+{#if uploadState.dialog}
+  <UploadDialog
+    onConfirm={(data) => confirmDialog(data)}
+    onCancel={() => cancelDialog()} />
+{/if}
+
 {#if channelMenu}
   {@const activeBuf = getActiveBufferObj()}
   {#if activeBuf}
@@ -528,7 +606,7 @@
   {/if}
 {/if}
 
-<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings}>
+<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen}>
   <div class="main-area">
     {#if ircState.showSettings}
       <SettingsPage />
@@ -540,7 +618,8 @@
         onEditNetwork={() => { networkFormMode = 'edit'; editNetworkId = ircState.activeBuffer.networkId; showNetworkForm = true; }}
         onJoinChannel={openChannelMenu}
         onToggleMembers={toggleMemberPanel}
-        {memberPanelOpen}
+        onToggleSidebar={() => sidebarDrawerOpen = !sidebarDrawerOpen}
+        memberPanelOpen={isNarrow ? mobileMembersOpen : memberPanelOpen}
       />
       <div class="content-row">
         <main class="chat-container" role="main">
@@ -553,7 +632,16 @@
         {/if}
       </div>
     {/if}
+    {#if uploadState.panelOpen && !ircState.showSettings && ircState.networks.length > 0}
+      <UploadsPanel onClose={() => uploadState.panelOpen = false} />
+    {/if}
+    {#if uploadState.pastebinPanelOpen && !ircState.showSettings && ircState.networks.length > 0}
+      <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
+    {/if}
   </div>
+  {#if isNarrow && (sidebarDrawerOpen || mobileMembersOpen)}
+    <div class="drawer-backdrop" onclick={closeDrawers} role="presentation"></div>
+  {/if}
   <aside id="sidebar">
     <Sidebar onSwitchBuffer={navigateToBuffer}
              onAddNetwork={() => { networkFormMode = 'add'; showNetworkForm = true; }}

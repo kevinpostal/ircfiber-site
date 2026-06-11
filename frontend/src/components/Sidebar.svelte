@@ -21,7 +21,7 @@
   const pinned = $derived(
     ircState.networks.flatMap(net =>
       net.buffers
-        .filter(b => b.name !== '_server' && pinnedMap[`${net.networkId}:${b.name}`] === true && b.isJoined !== false && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])
+        .filter(b => b.name !== '_server' && pinnedMap[`${net.networkId}:${b.name}`] === true && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])
         .map(b => ({ networkId: net.networkId, buffer: b, network: net }))
     )
   );
@@ -50,9 +50,14 @@
               class:highlight={p.buffer.highlight}
               onclick={() => onSwitchBuffer(p.networkId, p.buffer.name)}>
             <span class="buffer" role="tab" tabindex="0">
+              {#if (p.buffer.unreadCount > 0 || p.buffer.highlight)}
+                <span class="unread__label">unread </span>
+              {/if}
               <span class="label buffer-name">{(p.buffer.type === 'query' ? '' : '#') + stripHash(p.buffer.name)}</span>
               {#if p.buffer.unreadCount > 0}
                 <span class="unread buffer-unread">{p.buffer.unreadCount}</span>
+              {:else if (p.buffer.highlightCount ?? 0) > 0}
+                <span class="unread buffer-unread">{p.buffer.highlightCount}</span>
               {/if}
             </span>
           </li>
@@ -64,25 +69,28 @@
   {#each ircState.networks as net (net.networkId)}
     {@const isActiveNet = ircState.activeBuffer.networkId === net.networkId && ircState.activeBuffer.bufferName === '_server'}
     {@const totalNetUnread = net.buffers.reduce((sum, b) => sum + (b.unreadCount || 0), 0)}
+    {@const totalNetHighlights = net.buffers.reduce((sum, b) => sum + (b.highlightCount || 0), 0)}
     <div class="network connection" class:connected={net.connected} class:disconnected={!net.connected}>
       <div class="network-header buffer"
           class:active={isActiveNet}
+          class:unread={totalNetUnread > 0}
           role="button"
           tabindex="0"
           onclick={() => onSwitchBuffer(net.networkId, '_server')}
+          ondblclick={() => { if (net.collapsed) net.collapsed = false; }}
           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSwitchBuffer(net.networkId, '_server'); } }}>
         <span class="buffer" role="tab">
           {#if net.connected}
-            <svg class="network-shield" viewBox="0 0 14 16" width="14" height="14" fill="currentColor" aria-hidden="true">
-              <path d="M7 1.5L12 3.5v4.5c0 2.5-2 5-5 6.5-3-1.5-5-4-5-6.5V3.5l5-2z"/>
-              <path d="M7 1.5v12.5" stroke="rgba(0,0,0,0.22)" stroke-width="0.9" fill="none"/>
-            </svg>
+            <i class="fa fa-shield network-shield" title="Secure connection" aria-hidden="true"></i>
           {:else}
             <i class="fa fa-globe network-shield" aria-hidden="true" style="opacity:0.5"></i>
           {/if}
-          <span class="label">{net.name}</span>
           {#if totalNetUnread > 0}
-            <span class="unread buffer-unread">{totalNetUnread}</span>
+            <span class="unread__label">unread </span>
+          {/if}
+          <span class="label">{net.name}</span>
+          {#if totalNetHighlights > 0}
+            <span class="unread buffer-unread">{totalNetHighlights}</span>
           {/if}
         </span>
         <span class="collapseToggle">
@@ -112,20 +120,19 @@
                 onclick={() => onSwitchBuffer(net.networkId, buf.name)}
                 role="presentation">
               <span class="buffer" role="tab" tabindex="0">
+                {#if (buf.unreadCount > 0 || buf.highlight)}
+                  <span class="unread__label">unread </span>
+                {/if}
                 <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
                 {#if buf.unreadCount > 0}
                   <span class="unread buffer-unread">{buf.unreadCount}</span>
+                {:else if (buf.highlightCount ?? 0) > 0}
+                  <span class="unread buffer-unread">{buf.highlightCount}</span>
                 {/if}
               </span>
             </li>
           {/each}
         </ul>
-        <p class="join">
-          <button type="button" class="join-channel-btn" onclick={(e) => { e.stopPropagation(); onJoinChannel(net.networkId); }}>
-            <i class="fa fa-plus-circle" aria-hidden="true"></i>
-            Join a channel…
-          </button>
-        </p>
         {@const inactive = net.buffers.filter(b => b.name !== '_server' && b.isJoined === false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])}
         {#if inactive.length > 0}
           <div class="sidebar-section-header inactive-header">Inactive</div>
@@ -143,22 +150,32 @@
             {/each}
           </ul>
         {/if}
-        {@const archived = net.buffers.filter(b => b.name !== '_server' && archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])}
+        {@const archived = Object.keys(archivedMap)
+          .filter(key => key.startsWith(`${net.networkId}:`) && archivedMap[key] && !hiddenChannelsMap[key])
+          .map(key => key.slice(net.networkId.length + 1))}
         {#if archived.length > 0}
-          <div class="sidebar-section-header archived-header">Archived</div>
-          <ul class="buffers archived-channels">
-            {#each archived as buf (net.networkId + ':' + buf.name)}
-              {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
-              <li class="buffer channel buffer-item"
-                  class:active={isActive}
-                  onclick={() => onSwitchBuffer(net.networkId, buf.name)}
-                  role="presentation">
-                <span class="buffer" role="tab" tabindex="0">
-                  <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
-                </span>
-              </li>
-            {/each}
-          </ul>
+          <p class="archiveToggle">
+            <button type="button"
+                    aria-expanded={!(net.archivesCollapsed ?? true)}
+                    onclick={() => { net.archivesCollapsed = !(net.archivesCollapsed ?? true); }}>
+              Archives
+            </button>
+          </p>
+          {#if !(net.archivesCollapsed ?? true)}
+            <ul class="buffers archived-channels">
+              {#each archived as bufName (net.networkId + ':' + bufName)}
+                {@const isActive = net.networkId === ircState.activeBuffer.networkId && bufName === ircState.activeBuffer.bufferName}
+                <li class="buffer channel buffer-item"
+                    class:active={isActive}
+                    onclick={() => onSwitchBuffer(net.networkId, bufName)}
+                    role="presentation">
+                  <span class="buffer" role="tab" tabindex="0">
+                    <span class="label buffer-name">{(bufName.startsWith('#') || bufName.startsWith('&') ? '#' : '') + stripHash(bufName)}</span>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         {/if}
       {/if}
     </div>

@@ -81,23 +81,23 @@ describe('parseIrcFormatting', () => {
     expect(result).toBe('<wbr><span style="color:#FF0000;background-color:#00FF00;">hex colored</span>');
   });
 
-  it('handles markdown code blocks', () => {
-    const input = '```some code```';
-    const result = parseIrcFormatting(input);
-    // HTML tags from block formatting get escaped by escapeHtml
-    expect(result).toBe('&lt;pre class=&quot;codeBlock&quot;&gt;some code&lt;/pre&gt;');
-  });
-
-  it('handles inline code', () => {
+  it('leaves backticks as literal characters (no markdown code interpretation)', () => {
     const input = '`inline code`';
     const result = parseIrcFormatting(input);
-    expect(result).toBe('&lt;code class=&quot;inlineCode&quot;&gt;inline code&lt;/code&gt;');
+    // IRCCloud doesn't interpret backticks as code — they're literal characters
+    expect(result).toBe('`inline code`');
   });
 
-  it('handles blockquotes', () => {
+  it('leaves triple backticks as literal characters', () => {
+    const input = '```some code```';
+    const result = parseIrcFormatting(input);
+    expect(result).toBe('```some code```');
+  });
+
+  it('leaves blockquote markers as literal characters', () => {
     const input = '> this is a quote';
     const result = parseIrcFormatting(input);
-    expect(result).toBe('&lt;span class=&quot;blockquote&quot;&gt;&amp;gt; this is a quote&lt;/span&gt;');
+    expect(result).toBe('&gt; this is a quote');
   });
 
   it('escapes HTML entities in plain text', () => {

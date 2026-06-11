@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import LoadMore from './LoadMore.svelte';
@@ -13,7 +13,7 @@ describe('LoadMore', () => {
     Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
   });
 
-  it('shows button only when clearedAt is set', async () => {
+  it('shows button when clearedAt is set', async () => {
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#chan';
     clearedAtMap['net1:#chan'] = Date.now();
@@ -21,7 +21,7 @@ describe('LoadMore', () => {
     await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
   });
 
-  it('hides button when clearedAt is cleared by click', async () => {
+  it('keeps showing the loadMore button after clearedAt is cleared by click', async () => {
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#chan';
     clearedAtMap['net1:#chan'] = Date.now();
@@ -29,16 +29,19 @@ describe('LoadMore', () => {
     await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
     const button = page.getByRole('button');
     await userEvent.click(button);
-    await expect.element(page.getByText('Load more backlog…')).not.toBeInTheDocument();
+    // clearedAt is removed; the row becomes IRCCloud's regular
+    // "Load more backlog…" button at the top of the log.
+    expect(clearedAtMap['net1:#chan']).toBeUndefined();
+    await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
   });
 
-  it('hides button when clearedAt is not set, even with messages', async () => {
+  it('shows the loadMore button without clearedAt (IRCCloud renderLoadMore)', async () => {
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#chan';
     ircState.messages['net1:#chan'] = [
       { command: 'PRIVMSG', nick: 'alice', text: 'hello', t: Date.now() },
     ];
     render(LoadMore);
-    await expect.element(page.getByText('Load more backlog…')).not.toBeInTheDocument();
+    await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
   });
 });

@@ -11,9 +11,10 @@
     onEditNetwork: () => void;
     onJoinChannel: (e?: MouseEvent) => void;
     onToggleMembers: () => void;
+    onToggleSidebar?: () => void;
     memberPanelOpen: boolean;
   }
-  let { onEditNetwork, onJoinChannel, onToggleMembers, memberPanelOpen }: Props = $props();
+  let { onEditNetwork, onJoinChannel, onToggleMembers, onToggleSidebar, memberPanelOpen }: Props = $props();
 
   const activeNetwork = $derived(getActiveNetwork());
   const activeBufferObj = $derived(getActiveBufferObj());
@@ -113,5 +114,8 @@
                 onclick={(e) => onJoinChannel(e)}></button>
       </p>
     {/if}
+    <button class="sidebarToggle fa fa-bars" type="button"
+            title="Channel list" aria-label="Toggle channel list"
+            onclick={() => onToggleSidebar?.()}></button>
   </div>
 </div>

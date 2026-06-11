@@ -13,7 +13,6 @@ import {
 	checkHighlight,
 	setMessages,
 	prependMessages,
-	trimMessagesIfNeeded,
 	updateNetworkFromSync,
 	handleConnect,
 	updateChannelUsers,
@@ -183,20 +182,6 @@ describe('appendMessage', () => {
 		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
 		expect(unreadMap['net1:#chan']).toBe(1);
 		expect(foundBuf?.unreadCount).toBe(1);
-	});
-});
-
-describe('trimMessagesIfNeeded', () => {
-	it('caps at 350 and trims to 200', () => {
-		const msgs = Array.from({ length: 360 }, (_, i) => createMessage({ text: `msg-${i}` }));
-		ircState.messages['net1:#chan'] = msgs;
-
-		trimMessagesIfNeeded('net1', '#chan');
-		flushSync();
-
-		const list = untrack(() => ircState.messages['net1:#chan']);
-		expect(list).toHaveLength(200);
-		expect(list[0].text).toBe('msg-160');
 	});
 });
 
@@ -414,6 +399,121 @@ describe('updateChannelUsers', () => {
 		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
 		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
 		expect(foundBuf?.users[0].nick).toBe('newalice');
+	});
+
+	it('updates currentNick on NICK when the changing user is ourself', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'alice' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: 'alice' })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'NICK', 'alice', ['alice', 'newalice']);
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		expect(foundNet?.currentNick).toBe('newalice');
+	});
+
+	it('does not update currentNick on NICK when a different user changes nick', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: 'otherguy' })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'NICK', 'otherguy', ['otherguy', 'newguy']);
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		expect(foundNet?.currentNick).toBe('me');
+	});
+
+	it('does not overwrite currentNick from sync snapshot after optimistic /nick', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'oldnick' });
+		ircState.networks.push(net);
+
+		// User types /nick newnick — optimistic update fires
+		net.currentNick = 'newnick';
+
+		// Backend sync snapshot arrives with the OLD nick (server hasn't
+		// confirmed yet). This must not clobber the optimistic UI value.
+		const syncPayload = [
+			createNetwork({ networkId: 'net1', nick: 'oldnick', currentNick: 'oldnick' }),
+		];
+		updateNetworkFromSync(syncPayload);
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		expect(foundNet?.currentNick).toBe('newnick');
+	});
+
+	it('adopts currentNick from sync on initial load when local value is empty', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: '' });
+		ircState.networks.push(net);
+
+		const syncPayload = [
+			createNetwork({ networkId: 'net1', nick: 'freshuser', currentNick: 'freshuser' }),
+		];
+		updateNetworkFromSync(syncPayload);
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		expect(foundNet?.currentNick).toBe('freshuser');
+	});
+
+	it('prependMessages dedupes against the boundary msgid', () => {
+		// When the server paginates with beforeid=<lastmsgid>, the new
+		// batch's LAST entry can share that msgid with the buffer's
+		// oldest entry. Without dedup, Svelte's keyed each block in
+		// MessageList crashes with each_key_duplicate.
+		const key = 'net1:#chan';
+		ircState.messages[key] = [
+			{ command: 'PRIVMSG', text: 'old1', msgid: 'M1', t: 100 },
+			{ command: 'PRIVMSG', text: 'old2', msgid: 'M2', t: 200 },
+		];
+
+		// New batch: M2 is the boundary (last in existing buffer)
+		prependMessages('net1', '#chan', [
+			{ command: 'PRIVMSG', text: 'older1', msgid: 'M0', t: 50 },
+			{ command: 'PRIVMSG', text: 'boundary', msgid: 'M2', t: 200 },
+		]);
+
+		expect(ircState.messages[key].map((m) => m.msgid)).toEqual(['M0', 'M1', 'M2']);
+	});
+
+	it('prependMessages keeps older entries that are not duplicates', () => {
+		const key = 'net1:#chan';
+		ircState.messages[key] = [
+			{ command: 'PRIVMSG', text: 'a', msgid: 'A', t: 100 },
+		];
+
+		prependMessages('net1', '#chan', [
+			{ command: 'PRIVMSG', text: 'b', msgid: 'B', t: 90 },
+			{ command: 'PRIVMSG', text: 'c', msgid: 'C', t: 80 },
+		]);
+
+		expect(ircState.messages[key].map((m) => m.msgid)).toEqual(['C', 'B', 'A']);
+	});
+
+	it('prependMessages preserves older entries without msgid (optimistic messages)', () => {
+		// User-sent optimistic messages have no msgid. They must survive
+		// pagination so the user can still see their own unsent messages.
+		const key = 'net1:#chan';
+		ircState.messages[key] = [
+			{ command: 'PRIVMSG', text: 'optimistic', t: 100 }, // no msgid
+			{ command: 'PRIVMSG', text: 'old', msgid: 'A', t: 200 },
+		];
+
+		prependMessages('net1', '#chan', [
+			{ command: 'PRIVMSG', text: 'older', msgid: 'Z', t: 50 },
+		]);
+
+		expect(ircState.messages[key].map((m) => m.text)).toEqual(['older', 'optimistic', 'old']);
 	});
 
 	it('updates mode on MODE', () => {

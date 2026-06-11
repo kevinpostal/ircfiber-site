@@ -16,6 +16,8 @@ vi.mock('/src/stores/api', () => ({
     addNetwork: vi.fn(async () => undefined),
     updateNetwork: vi.fn(async () => undefined),
     deleteNetwork: vi.fn(async () => undefined),
+    archiveChannel: vi.fn(async () => undefined),
+    unarchiveChannel: vi.fn(async () => undefined),
 }));
 
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';

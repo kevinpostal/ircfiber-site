@@ -6,8 +6,16 @@
   import { TabCompletionEngine } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
   import { generateLabel, getAvatarColor, normalizeChannelName } from '../lib/utils';
+  import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
+  import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
+  import { dataURIToBlob } from '../lib/upload';
+  import UploadMenu from './UploadMenu.svelte';
   import { updateRoute } from '../lib/routing';
   import type { IRCMessage } from '../types';
+
+  // Side-effect import: registers the <emoji-picker> custom element.
+  // The picker + its data are lazy-loaded only when first opened (see toggleEmoji).
+  import 'emoji-picker-element';
 
   interface Props {
     onSendMessage?: (...args: any[]) => any;
@@ -17,14 +25,33 @@
 
   let textarea: HTMLTextAreaElement;
   let inputValue = $state('');
+  let uploadMenuOpen = $state(false);
   const tabEngine = new TabCompletionEngine();
+
+  let now = $state(new Date());
+  $effect(() => {
+    const interval = setInterval(() => { now = new Date(); }, 1000);
+    return () => clearInterval(interval);
+  });
+  const timeStr = $derived(now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }));
+  const timeTitle = $derived(now.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }));
   const history = new InputHistory();
   let isTabbing = $state(false);
 
   const activeNetwork = $derived(getActiveNetwork());
-  const myNick = $derived(activeNetwork?.currentNick || activeNetwork?.nick || '');
+  const myNick = $derived.by(() => {
+    const net = ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId);
+    return net?.currentNick || net?.nick || '';
+  });
   const avatarColor = $derived(getAvatarColor(myNick));
   const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
+
+  $effect(() => {
+    setDeps({
+      getInputText: () => inputValue,
+      clearInput: () => { inputValue = ''; autoResize(); },
+    });
+  });
 
   // IRCCloud-style per-buffer input history: save current text when
   // switching away, restore it when switching back.
@@ -234,9 +261,96 @@
     if (!activeNetwork) return;
     const newNick = prompt('Change nickname:', myNick);
     if (newNick && newNick !== myNick) {
+      // Optimistic: update the displayed nick immediately
+      activeNetwork.currentNick = newNick;
       onSendRaw(activeNetwork.networkId, 'NICK ' + newNick);
     }
   }
+
+  // Emoji picker state — the <emoji-picker> web component is registered
+  // by the side-effect import above. We just toggle visibility.
+  let emojiOpen = $state(false);
+  let emojiPicker: HTMLElement | null = $state(null);
+  let emojiButton: HTMLDivElement | null = $state(null);
+
+  async function toggleEmoji(): Promise<void> {
+    emojiOpen = !emojiOpen;
+    if (emojiOpen) {
+      // Wait for the {#if} block to render the element, then wire the event.
+      await Promise.resolve();
+      const el = document.querySelector('#emoji-popover emoji-picker') as HTMLElement | null;
+      if (el && el !== emojiPicker) {
+        emojiPicker = el;
+        el.addEventListener('emoji-click', onEmojiClick as EventListener);
+      }
+    }
+  }
+
+  function onEmojiClick(ev: Event): void {
+    const detail = (ev as CustomEvent).detail;
+    const unicode: string | undefined = detail?.unicode;
+    if (unicode) {
+      insertAtCursor(unicode);
+      textarea?.focus();
+    }
+    // Close the picker after the user picks an emoji
+    emojiOpen = false;
+  }
+
+  function insertAtCursor(text: string): void {
+    if (!textarea) return;
+    const start = textarea.selectionStart ?? inputValue.length;
+    const end = textarea.selectionEnd ?? inputValue.length;
+    inputValue = inputValue.slice(0, start) + text + inputValue.slice(end);
+    // Move caret to after the inserted text on next tick
+    queueMicrotask(() => {
+      const pos = start + text.length;
+      textarea!.setSelectionRange(pos, pos);
+      autoResize();
+    });
+  }
+
+  function handlePaste(e: ClipboardEvent): void {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (const item of items) {
+      if (item.kind === 'file') {
+        const f = item.getAsFile();
+        if (f) files.push(f);
+      } else if (item.kind === 'string' && item.type === 'text/plain') {
+        item.getAsString((value) => {
+          const blob = dataURIToBlob(value);
+          if (blob) {
+            startUploads([blob], { networkId: ircState.activeBuffer.networkId ?? '', buffer: ircState.activeBuffer.bufferName ?? '' });
+          }
+        });
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      startUploads(files, { networkId: ircState.activeBuffer.networkId ?? '', buffer: ircState.activeBuffer.bufferName ?? '' });
+    }
+  }
+
+  function handleDocumentClick(ev: MouseEvent): void {
+    if (!emojiOpen) return;
+    const target = ev.target as Node;
+    // Click on the emoji button itself → let the button's onclick toggle it
+    if (emojiButton?.contains(target)) return;
+    // Clicks inside the picker (including its shadow DOM) should not close it
+    if (emojiPicker) {
+      const path = ev.composedPath();
+      if (path.includes(emojiPicker) || emojiPicker.contains(target)) return;
+    }
+    emojiOpen = false;
+  }
+
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    document.addEventListener('mousedown', handleDocumentClick);
+    return () => document.removeEventListener('mousedown', handleDocumentClick);
+  });
 </script>
 
 <div class="bufferinputcell">
@@ -264,9 +378,39 @@
             spellcheck="true"
             onkeydown={handleKeyDown}
             oninput={handleInput}
+            onpaste={handlePaste}
           ></textarea>
         </form>
       </div>
+      <div class="lockcell"><i class="fa-solid fa-lock" title="Password protected" aria-hidden="true"></i></div>
+      <div class="emojicell" bind:this={emojiButton} role="button" tabindex="0"
+           aria-label="Pick an emoji" aria-expanded={emojiOpen} aria-haspopup="dialog"
+           title="Pick an emoji"
+           onclick={toggleEmoji}
+           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void toggleEmoji(); } }}>
+        <i class="fa-regular fa-face-smile" aria-hidden="true"></i>
+      </div>
+      <div class="uploadcell {ringState()}" class:engaged={uploadState.active.length > 0}
+           role="button" tabindex="0" aria-label="Uploads" title="Uploads"
+           onclick={() => { uploadMenuOpen = !uploadMenuOpen; }}
+           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); uploadMenuOpen = !uploadMenuOpen; } }}>
+        {#if uploadState.active.length > 0}
+          <span class="radialProgress" style="--pct: {aggregateProgress()}"></span>
+        {:else}
+          <i class="fa-regular fa-copy" aria-hidden="true"></i>
+        {/if}
+      </div>
+      {#if uploadMenuOpen}
+        <div class="uploadMenuAnchor">
+          <UploadMenu onClose={() => { uploadMenuOpen = false; }} />
+        </div>
+      {/if}
     </div>
   </div>
+  <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>
+  {#if emojiOpen}
+    <div id="emoji-popover" class="emoji-popover" role="dialog" aria-label="Emoji picker">
+      <emoji-picker class="dark"></emoji-picker>
+    </div>
+  {/if}
 </div>

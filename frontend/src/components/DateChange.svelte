@@ -9,11 +9,9 @@
 </div>
 
 <style>
-  .dateChange {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-  }
+  /* IRCCloud date rows scroll with the log — the floating date pinned to
+     the top of the viewport is the ScrollClock overlay, not a sticky row.
+     (Sticky here caused a doubled date bar while scrolled up.) */
   .dateChange h3 {
     margin: 0;
     padding: 3px 5px 8px;

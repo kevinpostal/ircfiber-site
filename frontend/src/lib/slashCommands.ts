@@ -20,8 +20,11 @@ export function getSlashHandler(name: string): SlashHandler | undefined {
 
 // ── All commands ──
 
-registerSlash(['nick'], (args, networkId) => {
+registerSlash(['nick'], (args, networkId, _target, net) => {
   if (!args[0]) throw new Error('Usage: /nick <nickname>');
+  // Optimistic: update currentNick immediately so the UI reflects the change
+  // before the server echoes back the NICK response.
+  if (net) net.currentNick = args[0];
   sendRaw(networkId, 'NICK ' + args[0]);
 });
 

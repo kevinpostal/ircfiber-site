@@ -7,6 +7,15 @@ export type StreamState =
   | 'connected'
   | 'reconnecting';
 
+// IRCCloud-style maxEid: tracks the highest eid seen across all events.
+// On reconnect, this is sent as `since` so the server only streams events
+// with eid > maxEid — guarantees no gaps and no duplicates after resume.
+export const maxEidTracker = $state<{ value: number }>({ value: 0 });
+
+export function setMaxEid(eid: number): void {
+  if (eid > maxEidTracker.value) maxEidTracker.value = eid;
+}
+
 let socket: WebSocket | null = null;
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 3000;
@@ -88,7 +97,10 @@ export function connectWebSocket(
 
   setStreamState('connecting');
   const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
-  socket = new WebSocket(wsUrl);
+  // IRCCloud-style stream resume: send maxEid so the server only
+  // streams events with eid > since — no gaps, no duplicates.
+  const url = maxEidTracker.value > 0 ? `${wsUrl}?since=${maxEidTracker.value}` : wsUrl;
+  socket = new WebSocket(url);
 
   messageCallback = onMessage;
   if (onOpen) openCallback = onOpen;

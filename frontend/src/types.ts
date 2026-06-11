@@ -40,6 +40,7 @@ export interface Network {
   isAway: boolean;
   awayMessage: string;
   collapsed: boolean;
+  archivesCollapsed?: boolean;
   buffers: Buffer[];
   awayNicks: Set<string>;
   // Server capabilities (from CAP)
@@ -58,6 +59,8 @@ export interface Buffer {
   isJoined: boolean;
   unreadCount: number;
   highlight: boolean;
+  /** Number of unseen mentions; drives the red sidebar badge (IRCCloud-style). */
+  highlightCount?: number;
   isPinned: boolean;
   isArchived: boolean;
   topic: string;
@@ -97,6 +100,7 @@ export interface Member {
   lastSpoke: number;         // timestamp, 0 if ignored
   lastHighlighted: number;   // timestamp, 0 if ignored
   account: string;           // ACCOUNT tag value
+  isBot: boolean;            // IRCCloud-style BOT badge (detected from account/host/mode)
 }
 
 export interface IRCMessage {
@@ -109,6 +113,10 @@ export interface IRCMessage {
   params?: string[];
   prefix?: string;
   msgid?: string;
+  /** Global sequential event ID (IRCCloud-style). Always present on
+   *  new events; may be absent on legacy stored messages. Serves as the
+   *  primary key for deduplication and pagination cursors. */
+  eid?: number;
   label?: string;
   type?: string;       // 'action' for /me messages
   highlight?: boolean;

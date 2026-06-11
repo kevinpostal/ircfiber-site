@@ -138,7 +138,7 @@ export function formatShortRelativeTime(ts: number): string {
 }
 
 export function isJoinPartLike(cmd: string): boolean {
-  return ['JOIN', 'PART', 'QUIT', 'NICK', 'CHGHOST', 'MODE'].includes(cmd);
+  return ['JOIN', 'PART', 'QUIT', 'NICK', 'CHGHOST', 'MODE', 'AWAY'].includes(cmd);
 }
 
 export function isSkippedCommand(cmd: string): boolean {

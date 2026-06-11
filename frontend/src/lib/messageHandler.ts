@@ -1,17 +1,21 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData } from '../types';
 import { ircState, handleConnect, updateChannelUsers,
-         updateChannelTopic, appendMessage, trimMessagesIfNeeded } from '../stores/ircStore.svelte';
+         updateChannelTopic, appendMessage, prependMessage } from '../stores/ircStore.svelte';
 import { isIgnored } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
 import { enqueueMessage } from './messageBatcher';
+import { setMaxEid } from '../stores/wsConnection.svelte';
 
 /** Message append strategy: immediate or batched (IRCCloud-style). */
-export type AppendFn = (networkId: string, bufferName: string, msg: IRCMessage) => void;
+export type AppendFn = (networkId: string, bufferName: string, msg: IRCMessage, isBackfill?: boolean) => void;
 
-const defaultAppend: AppendFn = (networkId, bufferName, msg) => {
-  appendMessage(networkId, bufferName, msg);
-  trimMessagesIfNeeded(networkId, bufferName);
+const defaultAppend: AppendFn = (networkId, bufferName, msg, isBackfill) => {
+  if (isBackfill) {
+    prependMessage(networkId, bufferName, msg);
+  } else {
+    appendMessage(networkId, bufferName, msg);
+  }
 };
 
 // ── Message handler registry ──
@@ -26,18 +30,39 @@ export function unpackEvent(
   localMsgIdCounter: { value: number },
 ): IRCMessage {
   const cmd = (data.command || data.c || '') as string;
+  let text = ((data.text as string) || (data.x as string) || '') as string;
+  let type = data.type as string | undefined;
+
+  // Detect CTCP ACTION: PRIVMSG containing "\x01ACTION ...\x01"
+  // The D backend intentionally leaves the \x01 markers in place and
+  // expects the JS frontend to render them as /me actions.
+  if (cmd === 'PRIVMSG' && text.startsWith('\x01') && text.includes(' ')) {
+    const end = text.indexOf('\x01', 1);
+    if (end > 1) {
+      const inner = text.slice(1, end);
+      const spaceIdx = inner.indexOf(' ');
+      const ctcpCmd = spaceIdx === -1 ? inner : inner.slice(0, spaceIdx);
+      const ctcpParam = spaceIdx === -1 ? '' : inner.slice(spaceIdx + 1);
+      if (ctcpCmd === 'ACTION') {
+        type = 'action';
+        text = ctcpParam;
+      }
+    }
+  }
+
   return {
     id: ((data.id as string) || (data.i as string) || `w${++localMsgIdCounter.value}`) as string,
     timestamp: ((data.timestamp as string) || (data.t ? new Date(data.t as number).toISOString() : null)) as string,
     nick: ((data.nick as string) || (data.n as string) || '') as string,
-    text: ((data.text as string) || (data.x as string) || '') as string,
+    text,
     command: cmd,
     params: ((data.params as string[]) || (data.p as string[]) || []) as string[],
     prefix: ((data.prefix as string) || (data.px as string) || '') as string,
-    msgid: ((data.msgid as string) || (data.m as string) || '') as string,
+    msgid: ((data.msgid as string) || (data.m as string) || (data.i as string) || '') as string,
     label: ((data.label as string) || (data.l as string) || '') as string,
     t: data.t as number,
-    type: data.type as string | undefined,
+    eid: (data.eid as number) || undefined,
+    type,
   };
 }
 
@@ -75,6 +100,9 @@ export function processIrcEvent(
 } {
   const msg = unpackEvent(data, localMsgIdCounter);
   const cmd = msg.command;
+
+  // IRCCloud-style: track maxEid for stream resume
+  setMaxEid(msg.eid ?? 0);
   const networkName = (data.network || '') as string;
   const channel = normalizeChannelName((data.channel || data.ch || '_server') as string);
 
@@ -138,9 +166,14 @@ export function processIrcEvent(
     }
   }
 
+  // Detect CHATHISTORY backfill: messages tagged with batch=chathistory
+  // arrive out-of-order and must be prepended so they appear at the top.
+  const isBackfill = (data.tags as Record<string, string> | undefined)?.batch === 'chathistory'
+    || (data.batch as string | undefined) === 'chathistory';
+
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {
-    append(networkId, channel, msg);
+    append(networkId, channel, msg, isBackfill);
 
     if (msg.highlight && (ircState.activeBuffer.networkId !== networkId || ircState.activeBuffer.bufferName !== channel)) {
       notify({

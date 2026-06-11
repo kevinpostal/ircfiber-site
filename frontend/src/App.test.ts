@@ -14,12 +14,15 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   requestSync: vi.fn(),
   requestSwitchBuffer: vi.fn(),
   wsState: { value: 'disconnected' },
+  maxEidTracker: { value: 0 },
+  setMaxEid: vi.fn(),
 }));
 
 vi.mock('/src/stores/api', () => ({
   fetchMe: vi.fn(async () => ({ username: 'tester', email: 'tester@test.local' })),
   fetchHealth: vi.fn(async () => ({ status: 'healthy', services: {} })),
   loadHistory: vi.fn(async () => []),
+  loadHistoryWithMeta: vi.fn(async () => ({ messages: [], backlog_size: 0, earliest_msgid: '', earliest_ts: 0, earliest_eid: 0, cache_size: 0 })),
   reconnectNetwork: vi.fn(async () => undefined),
   disconnectNetwork: vi.fn(async () => undefined),
   joinChannel: vi.fn(async () => undefined),
@@ -28,7 +31,19 @@ vi.mock('/src/stores/api', () => ({
   deleteNetwork: vi.fn(async () => undefined),
   pinChannel: vi.fn(async () => undefined),
   unpinChannel: vi.fn(async () => undefined),
+  archiveChannel: vi.fn(async () => undefined),
+  unarchiveChannel: vi.fn(async () => undefined),
+  deletePastebin: vi.fn(async () => undefined),
+  fetchPastebinsOffset: vi.fn(async () => ({ entries: [], total: 0 })),
+  updatePastebin: vi.fn(async () => undefined),
+  pastebinRawUrl: vi.fn((id: string) => `/pastebin/${id}/raw`),
   updateMembersCollapsed: vi.fn(async () => undefined),
+  changePassword: vi.fn(async () => undefined),
+  deleteAccount: vi.fn(async () => undefined),
+  uploadAvatar: vi.fn(async () => undefined),
+  removeAvatar: vi.fn(async () => undefined),
+  deleteUpload: vi.fn(async () => undefined),
+  fetchUploadsOffset: vi.fn(async () => ({ uploads: [], total: 0 })),
 }));
 
 import { connectWebSocket, disconnectWebSocket, sendRaw, sendMessage, requestSync, requestSwitchBuffer } from '/src/stores/wsConnection.svelte.ts';

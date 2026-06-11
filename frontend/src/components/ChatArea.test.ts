@@ -8,6 +8,7 @@ import { createNetwork, createBuffer, createMessage } from '../test/factories';
 
 vi.mock('/src/stores/api', () => ({
   loadHistory: vi.fn(async () => []),
+  loadHistoryWithMeta: vi.fn(async () => ({ messages: [], backlog_size: 0, earliest_msgid: '', earliest_ts: 0, earliest_eid: 0, cache_size: 0 })),
   reconnectNetwork: vi.fn(async () => undefined),
   disconnectNetwork: vi.fn(async () => undefined),
   joinChannel: vi.fn(async () => undefined),
@@ -16,6 +17,8 @@ vi.mock('/src/stores/api', () => ({
   deleteNetwork: vi.fn(async () => undefined),
   fetchMe: vi.fn(async () => ({ username: 'tester', email: 'tester@test.local' })),
   fetchHealth: vi.fn(async () => ({ status: 'healthy', services: {} })),
+  archiveChannel: vi.fn(async () => undefined),
+  unarchiveChannel: vi.fn(async () => undefined),
 }));
 
 beforeEach(() => {
@@ -71,26 +74,25 @@ describe('ChatArea', () => {
     await expect.element(page.getByRole('log', { name: 'Chat messages' })).toBeInTheDocument();
   });
 
-  it('handleLoadMore returns false when loadHistory returns empty', async () => {
+  it('renders the loadMore button at the top of the log', async () => {
     const network = setupActiveBuffer();
     const msg = createMessage({ t: Date.now() });
     ircState.messages[`${network.networkId}:#chan`] = [msg];
-    vi.mocked(loadHistory).mockResolvedValue([]);
     render(ChatArea);
-    // The LoadMore auto-check calls handleLoadMore on mount.
-    // Since loadHistory returns [], handleLoadMore returns false,
-    // hasMore becomes false, and the "Load more" button should be hidden.
-    await expect.element(page.getByText('Load more backlog…')).not.toBeInTheDocument();
+    // IRCCloud renders the "Load more backlog…" button at the top of
+    // the log; infiniscroll fires when the user scrolls to the very
+    // top, and the viewport-fill loop fetches until the log overflows.
+    await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
   });
 
-  it('handleLoadMore returns false when loadHistory throws', async () => {
+  it('keeps the loadMore button when loadHistory would fail', async () => {
     const network = setupActiveBuffer();
     const msg = createMessage({ t: Date.now() });
     ircState.messages[`${network.networkId}:#chan`] = [msg];
     vi.mocked(loadHistory).mockRejectedValue(new Error('Network error'));
     render(ChatArea);
-    // The auto-check calls handleLoadMore which catches the error
-    // and returns false, hiding the "Load more" button.
-    await expect.element(page.getByText('Load more backlog…')).not.toBeInTheDocument();
+    // No fetch happens on mount, so the failure never triggers; the
+    // loadMore button stays rendered.
+    await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
   });
 });

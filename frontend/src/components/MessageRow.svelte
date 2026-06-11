@@ -55,6 +55,20 @@
     return null;
   }
 
+  function isBotNick(n: string, member: Member | null): boolean {
+    if (member?.isBot) return true;
+    // Common bot heuristics: known services bots, bots with "bot" in their
+    // ident/host, or accounts literally named "BOT".
+    const lower = n.toLowerCase();
+    if (lower === 'bots' || lower === 'bot' || lower.endsWith('bot')) {
+      // Be a little strict — match known services patterns
+      if (lower === 'bots' || lower.endsWith('serv') || lower.endsWith('bot')) return true;
+    }
+    if (member?.account?.toUpperCase() === 'BOT') return true;
+    if (member?.ident && /(^|\.)bot(\.|$)/i.test(member.ident)) return true;
+    return false;
+  }
+
   function getUsermask(prefix: string): string {
     if (!prefix || !prefix.includes('!')) return '';
     return prefix.split('!')[1] ?? '';
@@ -138,6 +152,13 @@
       html = `<span class="prefix">&#x2194;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> is now known as <span class="bufferLink user link">${escapeHtml(newNick)}</span>`;
     } else if (eCmd === 'CHGHOST') {
       html = `<span class="prefix">&#x2194;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> changed host to ${escapeHtml((evt.params || []).join('@') || evt.text || '')}`;
+    } else if (eCmd === 'AWAY') {
+      const reason = evt.text || '';
+      if (reason) {
+        html = `<span class="prefix">&#x2691;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> is away: <span class="awayReason">${escapeHtml(reason)}</span>`;
+      } else {
+        html = `<span class="prefix">&#x2691;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> is back`;
+      }
     } else if (eCmd === 'MODE') {
       const ep = evt.params || [];
       if (ep.length >= 3 && /^[+\-]b$/.test(ep[1])) {
@@ -187,7 +208,7 @@
     </span>
   </div>
   {#if expanded}
-    {#each events.slice(1) as evt, i (evt.id || evt.msgid || evt.t || i)}
+    {#each events.slice(1) as evt, i (evt.msgid || evt.id || evt.t + ':' + i || i)}
       {@const r = renderEvent(evt)}
       <div
         class="row messageRow status part groupedJoinPartPart {r.typeClass}"
@@ -241,13 +262,19 @@
         {@const colorIndex = stringHash(nick) % 27}
         {@const colorCls = `c${colorIndex}`}
         {@const initial = nick.charAt(0).toUpperCase()}
+        {@const member = findMemberForNick(nick)}
+        {@const modePrefix = getModeForNick(nick)}
+        {@const botFlag = isBotNick(nick, member)}
         <span class="authorWrap">
           <span class="avatar letterAvatar hasUserParent {colorCls}">
             <span role="presentation">{initial}</span>
           </span>
-          <span class="g">&mdash;</span>&nbsp;
+          <span class="me_prefix">&mdash;</span>&nbsp;
+          {#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span role="button" class="buffer bufferLink author {colorCls} user link" onclick={handleNickClick}>{nick}</span>&nbsp;
+          <span role="button" class="buffer bufferLink author {colorCls} user hasUserParent link"
+                title={nick} onclick={handleNickClick}>{nick}</span>&nbsp;
+          {#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}
         </span>
       {/if}
 
@@ -288,7 +315,7 @@
           <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span> quit{#if usermask}{' '}({usermask}){/if}{#if msg.text}{' '}{msg.text}{/if}
         {:else if cmd === 'NICK'}
           {@const newNick = msg.params?.[msg.params.length - 1] || ''}
-          <span class="prefix">&#x2194;</span> <span class="buffer bufferLink user link">{nick}</span> is now known as <span class="buffer bufferLink user link">{newNick}</span>
+          {nick} <span class="prefix">&rarr;</span> <span class="buffer bufferLink user link">{newNick}</span>
         {:else if cmd === 'TOPIC'}
           <span class="prefix">&#x2699;</span> {nick} changed the topic to: {@html renderText(msg.text || '')}
         {:else if cmd === 'MODE'}

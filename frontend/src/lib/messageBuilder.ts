@@ -42,6 +42,13 @@ export function groupMOTDLines(messages: IRCMessage[]): IRCMessage[] {
 /**
  * Group consecutive join/part/quit/nick/chghost events into collapsible groups.
  * Implements nipped-out / popped-in detection.
+ *
+ * A single event is left as-is (no grouped widget).  NICK events are an
+ * exception — we also leave them as-is because wrapping a single row in a
+ * `<div role="button" tabindex="0">` (from JOINPART_GROUP) makes the
+ * scroll container unfocusable via scroll-by-space and can capture touch
+ * events, preventing the user from scrolling up to trigger LoadMore.
+ * Multiple consecutive NICK events ARE grouped (they become 2+ events).
  */
 export function groupJoinPartEvents(messages: IRCMessage[]): IRCMessage[] {
   const result: IRCMessage[] = [];
@@ -52,7 +59,14 @@ export function groupJoinPartEvents(messages: IRCMessage[]): IRCMessage[] {
     if (jpBuffer.length === 1) {
       result.push(jpBuffer[0]);
     } else {
-      result.push(buildJoinPartGroup(jpBuffer));
+      // Sort events by timestamp so the oldest event is first. This
+      // ensures the grouped message's `t` (from events[0]) is the
+      // oldest in the group, and that the group is placed at the
+      // position of the oldest event in chronological order — not at
+      // the bottom of the list if messages happened to be received
+      // out of order.
+      const sorted = [...jpBuffer].sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+      result.push(buildJoinPartGroup(sorted));
     }
     jpBuffer = [];
   }
@@ -91,10 +105,19 @@ function formatModeText(evt: IRCMessage): string {
 function buildJoinPartGroup(events: IRCMessage[]): JoinPartGroupMessage {
   const nickStates = new Map<string, NickState>();
   const modeEvents: IRCMessage[] = [];
+  const awayEvents: { nick: string; reason: string; isBack: boolean }[] = [];
 
   for (const evt of events) {
     if (evt.command === 'MODE') {
       modeEvents.push(evt);
+      continue;
+    }
+
+    if (evt.command === 'AWAY') {
+      const nick = stripPrefix(evt.nick || '');
+      if (!nick) continue;
+      const reason = evt.text || '';
+      awayEvents.push({ nick, reason, isBack: !reason });
       continue;
     }
 
@@ -148,7 +171,9 @@ function buildJoinPartGroup(events: IRCMessage[]): JoinPartGroupMessage {
 
   for (const [nick, state] of nickStates) {
     if (state.lastAction === 'NICK' && state.oldNick) {
-      nickchanged.push(`${state.oldNick} &rarr; <span class="bufferLink user link">${escapeHtml(nick)}</span>`);
+      // IRCCloud-style: "oldNick → newNick" with only the new nick as a
+      // clickable bufferLink. The old nick is plain text.
+      nickchanged.push(`${escapeHtml(state.oldNick)} <span class="prefix">&rarr;</span> <span class="bufferLink user link" data-name="${escapeHtml(nick)}">${escapeHtml(nick)}</span>`);
     } else if (state.hasJoined && state.hasParted) {
       if (state.counter > 0) {
         poppedIn.push(`<span class="bufferLink user link">${escapeHtml(nick)}</span>`);
@@ -176,15 +201,56 @@ function buildJoinPartGroup(events: IRCMessage[]): JoinPartGroupMessage {
   if (quit.length) sentences.push(`<span class="prefix">&#x21D0;</span> ${quit.join(', ')} quit`);
   if (poppedIn.length) sentences.push(`<span class="prefix">&#x2194;</span> ${poppedIn.join(', ')} popped in`);
   if (nippedOut.length) sentences.push(`<span class="prefix">&#x2194;</span> ${nippedOut.join(', ')} nipped out`);
-  if (nickchanged.length) sentences.push(`<span class="prefix">&#x2194;</span> ${nickchanged.join(', ')}`);
+  if (nickchanged.length) sentences.push(nickchanged.join(', '));
   for (const me of modeEvents) {
     sentences.push(`<span class="prefix">&#x2699;</span> Channel mode: <b>${escapeHtml(formatModeText(me))}</b>`);
   }
+  // Group AWAY events: list all unique nicks going away / coming back
+  if (awayEvents.length) {
+    const awayNicksSet = new Set<string>();
+    const backNicksSet = new Set<string>();
+    let commonReason = '';
+    let allSameReason = true;
+    for (const a of awayEvents) {
+      if (a.isBack) {
+        backNicksSet.add(a.nick);
+      } else {
+        awayNicksSet.add(a.nick);
+        if (!commonReason) {
+          commonReason = a.reason;
+        } else if (commonReason !== a.reason) {
+          allSameReason = false;
+        }
+      }
+    }
+    if (awayNicksSet.size) {
+      const nicksHtml = [...awayNicksSet]
+        .map(n => `<span class="bufferLink user link">${escapeHtml(n)}</span>`)
+        .join(', ');
+      const verb = awayNicksSet.size === 1 ? 'is away' : 'are away';
+      if (allSameReason && commonReason) {
+        const title = escapeHtml(commonReason);
+        sentences.push(
+          `<span class="prefix">&#x2691;</span> ${nicksHtml} ${verb}: <span class="awayReason" title="${title}">${title}</span>`
+        );
+      } else {
+        sentences.push(`<span class="prefix">&#x2691;</span> ${nicksHtml} ${verb}`);
+      }
+    }
+    if (backNicksSet.size) {
+      const nicksHtml = [...backNicksSet]
+        .map(n => `<span class="bufferLink user link">${escapeHtml(n)}</span>`)
+        .join(', ');
+      const verb = backNicksSet.size === 1 ? 'is back' : 'are back';
+      sentences.push(`<span class="prefix">&#x2691;</span> ${nicksHtml} ${verb}`);
+    }
+  }
 
-  // IRCCloud uses &nbsp;&nbsp; between sentences and &nbsp;&nbsp;•&nbsp;&nbsp; for the bullet
-  const sentenceHtml = sentences.length === 1
-    ? sentences[0] + '&nbsp;&nbsp;'
-    : sentences.map((s, i) => i === 0 ? s + '&nbsp;&nbsp;' : '<span class="bullet">&nbsp;&nbsp;&#x2022;&nbsp;&nbsp;</span>' + s + '&nbsp;&nbsp;').join('');
+  // Join sentences with a thin bullet separator (spacing handled by CSS)
+  const sentenceHtml = sentences.map((s, i) => {
+    if (i === 0) return s + '\u00A0';
+    return '<span class="bullet">\u2022</span>' + s;
+  }).join('') + '\u00A0';
 
   return {
     ...events[0],

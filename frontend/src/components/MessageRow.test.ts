@@ -58,12 +58,17 @@ describe('MessageRow', () => {
 		await expect.element(page.getByText(/quit/i)).toBeInTheDocument();
 	});
 
-	it('renders NICK change message', async () => {
+	it('renders NICK change as single row with IRCCloud-style "oldNick → newNick" format', async () => {
+		// Single NICK events are NOT wrapped in a JOINPART_GROUP (to avoid
+		// the role="button" scroll-capture issue). They render as a regular
+		// message row with the simplified "oldNick → newNick" format.
 		const msg = createMessage({ command: 'NICK', nick: 'alice', params: ['alice', 'newalice'] });
 		render(MessageRow, { props: { msg } });
 
-		await expect.element(page.getByText(/is now known as/i)).toBeInTheDocument();
 		await expect.element(page.getByText('newalice')).toBeInTheDocument();
+		await expect.element(page.getByText('alice')).toBeInTheDocument();
+		await expect.element(page.getByText('→')).toBeInTheDocument();
+		expect(document.querySelector('.collapseWidget')).toBeInTheDocument();
 	});
 
 	it('renders TOPIC change', async () => {
