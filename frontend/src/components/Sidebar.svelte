@@ -50,9 +50,6 @@
               class:highlight={p.buffer.highlight}
               onclick={() => onSwitchBuffer(p.networkId, p.buffer.name)}>
             <span class="buffer" role="tab" tabindex="0">
-              {#if (p.buffer.unreadCount > 0 || p.buffer.highlight)}
-                <span class="unread__label">unread </span>
-              {/if}
               <span class="label buffer-name">{(p.buffer.type === 'query' ? '' : '#') + stripHash(p.buffer.name)}</span>
               {#if p.buffer.unreadCount > 0}
                 <span class="unread buffer-unread">{p.buffer.unreadCount}</span>
@@ -84,9 +81,6 @@
             <i class="fa fa-shield network-shield" title="Secure connection" aria-hidden="true"></i>
           {:else}
             <i class="fa fa-globe network-shield" aria-hidden="true" style="opacity:0.5"></i>
-          {/if}
-          {#if totalNetUnread > 0}
-            <span class="unread__label">unread </span>
           {/if}
           <span class="label">{net.name}</span>
           {#if totalNetHighlights > 0}
@@ -120,9 +114,6 @@
                 onclick={() => onSwitchBuffer(net.networkId, buf.name)}
                 role="presentation">
               <span class="buffer" role="tab" tabindex="0">
-                {#if (buf.unreadCount > 0 || buf.highlight)}
-                  <span class="unread__label">unread </span>
-                {/if}
                 <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
                 {#if buf.unreadCount > 0}
                   <span class="unread buffer-unread">{buf.unreadCount}</span>

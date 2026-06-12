@@ -125,6 +125,21 @@
     return msg.msgid || `t:${msg.t}`;
   }
 
+  // Backstop against duplicate keys reaching the {#each}. The store is
+  // supposed to dedup by eid/msgid before messages land here, but if a
+  // message slips through with no eid AND no msgid AND the same `t` as
+  // another message, the bare `t:${t}` key would collide. The tiebreaker
+  // suffix below is unique within a single render, which is all Svelte's
+  // keyed each needs.
+  function stableKey(msg: IRCMessage, positionInRender: number): string {
+    const base = itemKeyOf(msg);
+    // Always suffix the position so identical base keys within one
+    // render are impossible. Stable across renders because position
+    // within the rendered window is what Svelte uses for ordering
+    // anyway, and the eid/msgid prefix still lets it detect moves.
+    return `${base}#${positionInRender}`;
+  }
+
   const processedIndexByKey = $derived.by(() => {
     const m = new Map<string, number>();
     processedMessages.forEach((msg, i) => {
@@ -204,7 +219,6 @@
     const msgs = start > 0 || end < all.length ? all.slice(start, end) : all;
     const dividerMark = backlogDividerKey;
     let lastDate = '';
-    let itemId = 0;
     // IRCCloud only ever renders ONE backlogDivider (removeBacklogDivider
     // runs before each new render). The timestamp fallback can match
     // several messages that share the boundary's `t`, so place the
@@ -219,8 +233,7 @@
       const showBacklogDivider = !dividerPlaced && dividerMark !== '' && i > 0 &&
         (msg.msgid ? msg.msgid === dividerMark : `t:${msg.t}` === dividerMark);
       if (showBacklogDivider) dividerPlaced = true;
-      const key = itemKeyOf(msg);
-      return { msg, showDate, msgDate, prevDate, prevMsg, showBacklogDivider, _key: key !== `t:${msg.t}` ? key : `${key}:${itemId++}` };
+      return { msg, showDate, msgDate, prevDate, prevMsg, showBacklogDivider, _key: stableKey(msg, i) };
     });
   });
 
@@ -241,6 +254,21 @@
       const k = itemKeyOf(msg);
       if (!m.has(k)) m.set(k, msg);
     }
+    return m;
+  });
+
+  // Member-by-nick Map for O(1) lookup in MessageRow.  Rebuilt when the
+  // buffer user list changes (which is much less frequent than messages).
+  const memberByNick = $derived.by(() => {
+    const m = new Map<string, Member>();
+    try {
+      const buf = getActiveBufferObj();
+      if (buf?.users) {
+        for (const u of buf.users) {
+          m.set(stripPrefix(u.nick), u);
+        }
+      }
+    } catch {}
     return m;
   });
 
@@ -343,16 +371,20 @@
       // isScrolledToBottom(true) inside scrollToBottom — checking the live
       // position, not the cached value, so we never scroll unnecessarily
       // when the content grew but the user is already at the end.
-      const scrollPos = Math.ceil(container.scrollTop);
       const scrollHeight = container.scrollHeight;
       const offsetHeight = container.clientHeight;
+      const scrollPos = Math.ceil(container.scrollTop);
       const bottom = (scrollHeight - offsetHeight) + 1;
       const atBottom = (bottom - scrollPos) <= 1;
       if (!atBottom) {
-        requestAnimationFrame(() => {
-          if (container) container.scrollTop = container.scrollHeight;
-          cachedAtTop = false;
-        });
+        // Snap to bottom. We're inside a $effect, so the DOM has already
+        // been updated by Svelte — no need to wait for an rAF. The browser
+        // applies the scroll on the next paint, which is what we want
+        // (we want a single paint, not a 16ms gap). For huge batches
+        // (50+ new messages) the rAF was adding a frame of latency that
+        // made the chat feel like it "wasn't keeping up" with rapid input.
+        container.scrollTop = scrollHeight;
+        cachedAtTop = false;
       }
     } else if (newDivider && cachedAtTop) {
       // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
@@ -795,6 +827,7 @@
           isHighlight={msg.highlight ?? false}
           isSameAuthor={checkSameAuthor(msg, prevMsg)}
           {onNickClick}
+          {memberByNick}
         />
       {/if}
     {/each}

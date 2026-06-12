@@ -13,6 +13,7 @@ import {
 	checkHighlight,
 	setMessages,
 	prependMessages,
+	batchAppendMessages,
 	updateNetworkFromSync,
 	handleConnect,
 	updateChannelUsers,
@@ -498,6 +499,45 @@ describe('updateChannelUsers', () => {
 		]);
 
 		expect(ircState.messages[key].map((m) => m.msgid)).toEqual(['C', 'B', 'A']);
+	});
+
+	it('prependMessages dedupes duplicates WITHIN the new batch (server replay collision)', () => {
+		// Bug: the server can return the same eid twice in one batch
+		// (e.g. when a backlog fetch overlaps with a WS replay). Without
+		// within-batch dedup the same eid reaches the {#each} twice and
+		// Svelte throws each_key_duplicate.
+		const key = 'net1:#chan';
+		ircState.messages[key] = [
+			{ command: 'PRIVMSG', text: 'a', eid: 100, t: 100 },
+		];
+
+		prependMessages('net1', '#chan', [
+			{ command: 'PRIVMSG', text: 'b', eid: 50, t: 50 },
+			{ command: 'PRIVMSG', text: 'b-dup', eid: 50, t: 50 },
+			{ command: 'PRIVMSG', text: 'c', eid: 60, t: 60 },
+			{ command: 'PRIVMSG', text: 'c-dup', eid: 60, t: 60 },
+		]);
+
+		const eids = ircState.messages[key].map((m) => m.eid);
+		expect(eids).toEqual([50, 60, 100]);
+	});
+
+	it('batchAppendMessages dedupes duplicates WITHIN the batch (O(1) per-message)', () => {
+		// Same scenario as above, but for the WS hot path. The set-based
+		// dedup keeps the per-message cost O(1) instead of O(n).
+		const key = 'net1:#chan';
+		ircState.messages[key] = [
+			{ command: 'PRIVMSG', text: 'a', eid: 100, t: 100 },
+		];
+
+		batchAppendMessages('net1', '#chan', [
+			{ command: 'PRIVMSG', text: 'b', eid: 50, t: 50 },
+			{ command: 'PRIVMSG', text: 'b-dup', eid: 50, t: 50 },
+			{ command: 'PRIVMSG', text: 'c', eid: 60, t: 60 },
+		]);
+
+		const eids = ircState.messages[key].map((m) => m.eid);
+		expect(eids).toEqual([100, 50, 60]);
 	});
 
 	it('prependMessages preserves older entries without msgid (optimistic messages)', () => {

@@ -10,7 +10,11 @@
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
   import { dataURIToBlob } from '../lib/upload';
   import UploadMenu from './UploadMenu.svelte';
+  import PastebinDialog from './PastebinDialog.svelte';
+  import { MESSAGE_LENGTH_TRIGGER } from '../lib/messageSplitter';
+  import { getPastebinDisablePrompt } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
+  import { tick } from 'svelte';
   import type { IRCMessage } from '../types';
 
   // Side-effect import: registers the <emoji-picker> custom element.
@@ -49,7 +53,7 @@
   $effect(() => {
     setDeps({
       getInputText: () => inputValue,
-      clearInput: () => { inputValue = ''; autoResize(); },
+      clearInput: () => { inputValue = ''; void autoResizeAfterClear(); },
     });
   });
 
@@ -195,7 +199,7 @@
           updateRoute(networkId, chan);
         }
         inputValue = '';
-        autoResize();
+        void autoResizeAfterClear();
         return;
       }
 
@@ -207,7 +211,7 @@
           onSendMessage(networkId, msgTarget, msgText);
         }
         inputValue = '';
-        autoResize();
+        void autoResizeAfterClear();
         return;
       }
 
@@ -225,6 +229,22 @@
       }
     } else {
       ensureConnected();
+
+      // IRCCloud-style: large/multi-line messages pop a confirmation dialog
+      // offering to post a snippet to a pastebin or send as multiple
+      // messages.  Triggered when the message has a newline or exceeds
+      // MESSAGE_LENGTH_TRIGGER (1080 chars, ~3 lines of text).
+      if (!getPastebinDisablePrompt() && shouldPromptPastebin(text)) {
+        pastebinOpen = true;
+        pastebinText = text;
+        pastebinNetworkId = networkId;
+        pastebinTarget = target;
+        // Don't clear the input yet — if the user cancels from the dialog
+        // we want their text preserved.  clear() happens after the dialog
+        // dismisses (via the 'close'/'sent' events).
+        return;
+      }
+
       const label = generateLabel();
       onSendMessage(networkId, target, text, label);
 
@@ -244,13 +264,50 @@
     }
 
     inputValue = '';
-    autoResize();
+    void autoResizeAfterClear();
+  }
+
+  // IRCCloud parity: shouldPaste — newline OR >1080 chars.
+  function shouldPromptPastebin(text: string): boolean {
+    return text.indexOf('\n') !== -1 || text.length > MESSAGE_LENGTH_TRIGGER;
+  }
+
+  let pastebinOpen = $state(false);
+  let pastebinText = $state('');
+  let pastebinNetworkId = $state('');
+  let pastebinTarget = $state('');
+
+  function onPastebinClose() {
+    pastebinOpen = false;
+    // User cancelled from the dialog: restore the text to the input.
+    inputValue = pastebinText;
+    void autoResizeAfterClear();
+  }
+
+  function onPastebinSent() {
+    pastebinOpen = false;
+    inputValue = '';
+    void autoResizeAfterClear();
   }
 
   function autoResize(): void {
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = textarea.scrollHeight + 'px';
+    // Clamp to the CSS max-height (200px) so the inline style never holds
+    // a value the browser immediately discards — that's the "messes with
+    // the CSS" the user reported.
+    const cs = getComputedStyle(textarea);
+    const max = parseInt(cs.maxHeight, 10) || Infinity;
+    const target = Math.min(textarea.scrollHeight, max);
+    textarea.style.height = target + 'px';
+  }
+
+  // After clearing the input we have to wait for Svelte to flush the
+  // bind:value update to the DOM, otherwise scrollHeight is computed from
+  // the OLD value and the textarea stays expanded.
+  async function autoResizeAfterClear(): Promise<void> {
+    await tick();
+    autoResize();
   }
 
   function handleInput(): void {
@@ -407,6 +464,14 @@
       {/if}
     </div>
   </div>
+  <PastebinDialog
+    open={pastebinOpen}
+    text={pastebinText}
+    networkId={pastebinNetworkId}
+    target={pastebinTarget}
+    onclose={onPastebinClose}
+    onsent={onPastebinSent}
+  />
   <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>
   {#if emojiOpen}
     <div id="emoji-popover" class="emoji-popover" role="dialog" aria-label="Emoji picker">

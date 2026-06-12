@@ -109,6 +109,22 @@ export const membersCollapsedMap = $state<Record<string, boolean>>(getStorageIte
 export const lastSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:lastSeen', {}));
 // Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen)
 export const bottomSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:bottomSeen', {}));
+// IRCCloud-style: when true, the user has disabled the "post a snippet?"
+// prompt that appears when sending multi-line or very long messages. The
+// prompt itself still works on each send; this flag is a per-user
+// preference, persisted in localStorage (key: pastebin-disableprompt).
+// Exported as a getter so callers can read the value in templates, and
+// mutated via setPastebinDisablePrompt() to keep Svelte's $state
+// export-reassignment rules happy.
+let _pastebinDisablePrompt = $state<boolean>(getStorageItem('ircfiber:pastebinDisablePrompt', false));
+export function getPastebinDisablePrompt(): boolean { return _pastebinDisablePrompt; }
+
+// IRCCloud parity: setPastebinPrompts(false) disables the prompt, true
+// re-enables it.  Used by the "Offer to post a snippet" checkbox in the
+// PastebinDialog.
+export function setPastebinDisablePrompt(value: boolean): void {
+  _pastebinDisablePrompt = value;
+}
 
 // Per-buffer channel preferences (showUnread, mute, formatColor, etc.)
 // Key: `${networkId}:${bufferName}`. Value: partial record of toggles.
@@ -191,6 +207,7 @@ $effect.root(() => {
   $effect(() => schedulePersist('ircfiber:membersCollapsed', membersCollapsedMap));
   $effect(() => schedulePersist('ircfiber:lastSeen', lastSeenMap));
   $effect(() => schedulePersist('ircfiber:bottomSeen', bottomSeenMap));
+  $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
   $effect(() => schedulePersist('ircfiber:bufferPrefs', bufferPrefsMap));
   $effect(() => { setStorageItem('ircfiber:globalPrefs', globalPrefs); });
 });

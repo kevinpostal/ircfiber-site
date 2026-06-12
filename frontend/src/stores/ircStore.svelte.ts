@@ -266,7 +266,19 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
 
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const list = ircState.messages[key] ?? [];
+  // Build a Set of eids/msgids already in the buffer so dedup is O(1)
+  // per new message instead of O(n) with list.some().  Without this, a
+  // burst of 200 messages appended to a 200-message list is 40,000 ops.
+  const seenEids = new Set<number>();
+  const seenMsgids = new Set<string>();
+  for (const m of list) {
+    if (m.eid != null) seenEids.add(m.eid);
+    else if (m.msgid) seenMsgids.add(m.msgid);
+  }
   const pending: IRCMessage[] = [];
+  let addedUnread = 0;
+  let hasHighlight = false;
+  let hasChat = false;
 
   for (const msg of msgs) {
     if (msg.label && ircState.optimisticMessages.has(msg.label)) {
@@ -277,25 +289,66 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         continue;
       }
     }
-    if (msg.eid && list.some((m: IRCMessage) => m.eid === msg.eid)) continue;
-    if (msg.msgid && list.some((m: IRCMessage) => m.msgid === msg.msgid)) continue;
+    // Dedup against the existing list AND against earlier messages in
+    // the same batch (eid/msgid could collide within a burst if the
+    // server replays the same event). Without the within-batch check
+    // the same eid can reach the {#each} twice and Svelte throws
+    // each_key_duplicate.
+    if (msg.eid != null) {
+      if (seenEids.has(msg.eid)) continue;
+      seenEids.add(msg.eid);
+    } else if (msg.msgid) {
+      if (seenMsgids.has(msg.msgid)) continue;
+      seenMsgids.add(msg.msgid);
+    }
     list.push(msg);
     pending.push(msg);
+    // Aggregate unread + highlight for the batch instead of per-message
+    // mutation. Without this, 50 incoming messages trigger 50 separate
+    // Svelte reactive ticks on the Sidebar's buffer items, which is
+    // most of the perceived "line by line trickle" delay.
+    const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
+    if (isChatMessage) {
+      hasChat = true;
+      const normBuf = normalizeChannelName(bufferName);
+      const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
+      if (!isActive || ircState.focusLost) addedUnread++;
+      if (msg.highlight) hasHighlight = true;
+    }
   }
 
   // Single state assignment triggers one reactive update for the batch
   ircState.messages[key] = list;
 
-  // Update unread counts per message (these are independent state writes
-  // but don't affect the message list reactivity)
-  if (pending.length > 0) {
-    const normBuf = normalizeChannelName(bufferName);
-    const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-    for (const msg of pending) {
-      const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
-      const isUnread = isChatMessage && (!isActive || ircState.focusLost);
-      if (isUnread) {
-        incrementUnread(networkId, bufferName, msg);
+  // Batch the unread-count updates: write unreadMap once and buf.unreadCount
+  // once instead of per-message. This is the single biggest win for
+  // perceived speed when 50+ messages arrive at once.
+  if (addedUnread > 0 || hasHighlight) {
+    const net = ircState.networks.find(n => n.networkId === networkId);
+    const buf = net?.buffers.find(b => b.name === normalizeChannelName(bufferName));
+    if (addedUnread > 0) {
+      unreadMap[key] = (unreadMap[key] ?? 0) + addedUnread;
+      if (buf) buf.unreadCount = (buf.unreadCount ?? 0) + addedUnread;
+    }
+    if (hasHighlight) {
+      highlightMap[key] = true;
+      if (buf) {
+        buf.highlight = true;
+        buf.highlightCount = (buf.highlightCount ?? 0) + 1;
+      }
+    }
+  }
+
+  // Per-message processing for things that can't be batched (highlight
+  // tag check uses regex on message text + nick).
+  if (pending.length > 0 && hasChat) {
+    const net = ircState.networks.find(n => n.networkId === networkId);
+    if (net) {
+      for (const msg of pending) {
+        const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
+        if (isChatMessage && checkHighlight(msg, net)) {
+          msg.highlight = true;
+        }
       }
     }
   }
@@ -371,26 +424,35 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const existing = ircState.messages[key] ?? [];
 
-  // Dedupe against existing messages. eid is the primary key (IRCCloud-
-  // style: every event gets a global sequential eid). msgid and timestamp
-  // fallbacks handle legacy messages stored without eid.
+  // Dedupe against existing messages AND within the new batch. eid is the
+  // primary key (IRCCloud-style: every event gets a global sequential
+  // eid). msgid and timestamp fallbacks handle legacy messages stored
+  // without eid. The within-batch dedup matters because the server can
+  // return the same message twice (eid collision) when a backlog fetch
+  // overlaps with already-replayed events — without it, duplicate keys
+  // reach the {#each} and Svelte throws each_key_duplicate.
   const eidSet = new Set<number>();
   const dedupKeys = new Set<string>();
   for (const m of existing) {
+    if (m.eid != null) eidSet.add(m.eid);
+    else if (m.msgid) dedupKeys.add(m.msgid);
+    else if (m.t) dedupKeys.add(`!${m.t}:${(m.text || '').slice(0, 80)}`);
+  }
+  const filtered: IRCMessage[] = [];
+  for (const m of msgs) {
     if (m.eid != null) {
+      if (eidSet.has(m.eid)) continue;
       eidSet.add(m.eid);
     } else if (m.msgid) {
+      if (dedupKeys.has(m.msgid)) continue;
       dedupKeys.add(m.msgid);
     } else if (m.t) {
-      dedupKeys.add(`!${m.t}:${(m.text || '').slice(0, 80)}`);
+      const k = `!${m.t}:${(m.text || '').slice(0, 80)}`;
+      if (dedupKeys.has(k)) continue;
+      dedupKeys.add(k);
     }
+    filtered.push(m);
   }
-  const filtered = msgs.filter(m => {
-    if (m.eid != null) return !eidSet.has(m.eid);
-    if (m.msgid) return !dedupKeys.has(m.msgid);
-    if (m.t) return !dedupKeys.has(`!${m.t}:${(m.text || '').slice(0, 80)}`);
-    return true;
-  });
 
   if (filtered.length > 0) {
     const boundary = existing.find(m => m.eid != null || m.msgid || m.t);
