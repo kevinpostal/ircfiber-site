@@ -10,9 +10,10 @@
     isHighlight?: boolean;
     isSameAuthor?: boolean;
     onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
+    memberByNick?: Map<string, Member>;
   }
 
-  let { msg, isHighlight = false, isSameAuthor = false, onNickClick }: Props = $props();
+  let { msg, isHighlight = false, isSameAuthor = false, onNickClick, memberByNick = new Map() }: Props = $props();
 
   const cmd = msg.command;
   const isJoinPart = ['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd);
@@ -20,6 +21,8 @@
   const activeNetwork = $derived(getActiveNetwork());
   const myNick = $derived(activeNetwork?.currentNick || '');
   const isOwn = $derived(!!nick && !!myNick && stripPrefix(nick).toLowerCase() === myNick.toLowerCase());
+  const isBot = $derived(isBotNick(nick, findMemberForNick(nick)));
+  const isBlockArt = $derived(containsBlockArt(msg.text || ''));
   // Lifecycle events (server/client connect or disconnect) render like
   // join/part rows in IRCCloud: no `status monospace`, just the type class.
   const isLifecycle = ['CONNECT', 'DISCONNECT'].includes(cmd);
@@ -37,22 +40,40 @@
   const nick = msg.nick ?? '';
 
   function getModeForNick(n: string): string {
-    const network = getActiveNetwork();
+    const cleaned = stripPrefix(n);
+    const member = memberByNick.get(cleaned);
+    if (member) return member.prefix;
+    // Fallback when MessageRow is rendered standalone (tests, etc.)
     const bufObj = getActiveBufferObj();
-    if (!network || !bufObj?.users) return '';
+    if (!bufObj?.users) return '';
     for (const u of bufObj.users) {
-      if (stripPrefix(u.nick) === n) return u.prefix;
+      if (stripPrefix(u.nick) === cleaned) return u.prefix;
     }
     return '';
   }
 
   function findMemberForNick(n: string): Member | null {
+    const cleaned = stripPrefix(n);
+    const hit = memberByNick.get(cleaned);
+    if (hit) return hit;
+    // Fallback when MessageRow is rendered standalone (tests, etc.)
     const bufObj = getActiveBufferObj();
     if (!bufObj?.users) return null;
     for (const u of bufObj.users) {
-      if (stripPrefix(u.nick) === n) return u;
+      if (stripPrefix(u.nick) === cleaned) return u;
     }
     return null;
+  }
+
+  // IRCCloud BufferFormatter/LineMessageRenderer: getSensibleRealname
+  // returns the realname, but filters out the literal strings "realname"
+  // and "unknown" (case-insensitive) which some servers send as a default.
+  function getSensibleRealname(raw: string | null | undefined): string {
+    const r = (raw ?? '').trim();
+    if (!r) return '';
+    const lower = r.toLowerCase();
+    if (lower === 'realname' || lower === 'unknown') return '';
+    return r;
   }
 
   function isBotNick(n: string, member: Member | null): boolean {
@@ -67,6 +88,15 @@
     if (member?.account?.toUpperCase() === 'BOT') return true;
     if (member?.ident && /(^|\.)bot(\.|$)/i.test(member.ident)) return true;
     return false;
+  }
+
+  // Detect ANSI / block-character art (e.g. messages full of █, ▀, ▄, etc.).
+  // These are often posted by regular users, not bots, and need the same
+  // tight line-height/padding treatment as bot rows so the image grid lines
+  // up without dark slivers between consecutive lines.
+  function containsBlockArt(text: string): boolean {
+    if (!text) return false;
+    return /[\u2580-\u259F]/.test(text);
   }
 
   function getUsermask(prefix: string): string {
@@ -228,7 +258,7 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
@@ -247,14 +277,21 @@
         {@const modePrefix = getModeForNick(nick)}
         {@const usermask = getUsermask(msg.prefix || '')}
         {@const authorTitle = usermask ? `${nick} (${usermask})` : nick}
+        {@const member = findMemberForNick(nick)}
+        {@const sensibleRealname = getSensibleRealname(member?.realname)}
         <span class="authorWrap">
           <span class="avatar letterAvatar hasUserParent {colorCls}">
             <span role="presentation">{initial}</span>
           </span>
+          <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <span role="button" class="buffer bufferLink author {colorCls} user hasUserParent link"
                 title={authorTitle} onclick={handleNickClick}>{#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}{nick}</span>
-          <span class="g">&nbsp;</span>
+          <span class="g" aria-hidden="true">&gt;</span>
+          &nbsp;
+          {#if sensibleRealname && sensibleRealname !== nick}
+            <span class="author-realname">{sensibleRealname}&nbsp;</span>
+          {/if}
         </span>
       {/if}
 

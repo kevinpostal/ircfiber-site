@@ -101,6 +101,31 @@ describe('MessageRow', () => {
 		await expect.element(page.getByText('Welcome to the network')).toBeInTheDocument();
 	});
 
+	it('applies bot class to messages from bot members so ANSI art renders without gaps', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: 'scroll', isBot: true })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		flushSync();
+
+		const msg = createMessage({ nick: 'scroll', text: '\x0304,08 test ' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.messageRow.bot')).toBeInTheDocument();
+	});
+
+	it('applies blockArt class to messages containing block characters from regular users', async () => {
+		const msg = createMessage({ nick: 'Carlos', text: '\x0304,08 ███▀▀▄ ' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.messageRow.blockArt')).toBeInTheDocument();
+	});
+
 	it('calls onNickClick when nick is clicked', async () => {
 		const onNickClick = vi.fn();
 		const msg = createMessage({ nick: 'alice', text: 'hello' });

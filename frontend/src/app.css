@@ -2,3 +2,136 @@
 #app {
   display: contents;
 }
+
+/* IRCCloud-compatible message row layout */
+body {
+  /* monospace fallback that supports block-element glyphs (▀▄█▌▐▒░▓) */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  margin: 0;
+  background: #0e0e0e;
+  color: #d6d6d6;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* `font-mono` body class — set by App.svelte when monospaceFont pref is on.
+   Toggles the entire app to a monospace stack (IRCCloud does the same). */
+body.font-mono,
+body.font-mono * {
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* `compact` body class — IRCCloud's compact mode. Tighter line-height. */
+body.compact,
+body.compact .row.messageRow {
+  line-height: 1.15;
+}
+
+/* `ascii-compact` body class — IRCCloud's art mode. Tightest line-height so
+   block-element art aligns on a fixed grid. */
+body.ascii-compact,
+body.ascii-compact .row.messageRow {
+  line-height: 1.0;
+}
+
+/* `monospace` inline class used by parseIrcFormatting's 0x11 code */
+.monospace {
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* Per-row base. IRCCloud-style gutters: 68px on the left for the avatar
+   + timestamp, 21px on the right for the timestamp. Without these, the
+   absolutely-positioned avatar (at left:25px) ends up overlapping the
+   nick text in normal flow. */
+.row.messageRow {
+  line-height: 1.5;
+  font-size: 14px;
+  padding: 1px 21px 1px 68px;
+}
+
+/* Bot chat rows (e.g. ANSI art from scroll, znc, etc.) render monospace so
+   the block-element grid lines up character-by-character. They also need
+   line-height:1 — at 1.5 the descender gap between wrapped bg-color lines
+   of art shows up as a visible black sliver ("weird black lines between
+   each message line"), because the painted background occupies less than
+   the full line box. Keep the IRCCloud gutters so the avatar stays in
+   place. */
+.row.messageRow.bot,
+.row.messageRow.type_buffer_msg,
+.row.messageRow.blockArt {
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* IRCCloud renders channel messages at 14px/16px line-height. Using 16px
+     for bot/block-art rows makes each character cell taller, so ANSI art
+     images match IRCCloud's more-square aspect ratio instead of looking
+     horizontally stretched. */
+  line-height: 16px;
+  padding: 0 21px 0 68px;
+}
+/* Consecutive bot/block-art rows share an author, so hide the repeated
+   avatar/nick. With line-height: 16px the content boxes stack edge-to-edge,
+   keeping colored background fills continuous; no negative margin needed. */
+.row.messageRow.bot.sameAuthor .authorWrap,
+.row.messageRow.blockArt.sameAuthor .authorWrap {
+  display: none;
+}
+.row.messageRow.status {
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* `.content` is the inner span that holds the formatted message body. The
+   trick: we need newlines (which are explicit \n in the IRC stream) to
+   render as newlines, but long unbroken runs of art characters also need to
+   wrap when the viewport is narrower than the art. pre-wrap + break-all
+   gives us that — and `<wbr>` at every color boundary still inserts
+   SOFT breakpoints the browser can choose to use or ignore, so it only
+   wraps when the line truly doesn't fit. */
+.row.messageRow .content {
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+/* IRC mIRC color palette (0-15). Foreground colors. */
+.irccolor.color-0,  .irccolor.color-white  { color: #ffffff; }
+.irccolor.color-1,  .irccolor.color-black  { color: #000000; }
+.irccolor.color-2,  .irccolor.color-navy   { color: #0e1b7e; }
+.irccolor.color-3,  .irccolor.color-green  { color: #1b7e1b; }
+.irccolor.color-4,  .irccolor.color-red    { color: #b22d2d; }
+.irccolor.color-5,  .irccolor.color-maroon { color: #7e1b1b; }
+.irccolor.color-6,  .irccolor.color-purple { color: #5e1b7e; }
+.irccolor.color-7,  .irccolor.color-orange { color: #ff7e1b; }
+.irccolor.color-8,  .irccolor.color-yellow { color: #ffff1b; }
+.irccolor.color-9,  .irccolor.color-lime   { color: #1bff1b; }
+.irccolor.color-10, .irccolor.color-teal   { color: #1b7e7e; }
+.irccolor.color-11, .irccolor.color-cyan   { color: #1bffff; }
+.irccolor.color-12, .irccolor.color-blue   { color: #1b1bff; }
+.irccolor.color-13, .irccolor.color-magenta{ color: #ff1bff; }
+.irccolor.color-14, .irccolor.color-grey   { color: #5e5e5e; }
+.irccolor.color-15, .irccolor.color-silver { color: #b2b2b2; }
+.irccolor.inverse   { filter: invert(1); }
+
+/* Background colors. `box-decoration-break: clone` makes the bg paint
+   behind EACH line segment of a wrapping span, instead of being cut off
+   at the first wrap — this is what makes the teal/green/etc. backgrounds
+   fill the full visible line of the ASCII art instead of only the text
+   glyphs. */
+.irccolor-bg {
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.irccolor-bg.bg-0,  .irccolor-bg.bg-white  { background-color: #ffffff; color: #000; }
+.irccolor-bg.bg-1,  .irccolor-bg.bg-black  { background-color: #000000; }
+.irccolor-bg.bg-2,  .irccolor-bg.bg-navy   { background-color: #0e1b7e; }
+.irccolor-bg.bg-3,  .irccolor-bg.bg-green  { background-color: #1b7e1b; }
+.irccolor-bg.bg-4,  .irccolor-bg.bg-red    { background-color: #b22d2d; }
+.irccolor-bg.bg-5,  .irccolor-bg.bg-maroon { background-color: #7e1b1b; }
+.irccolor-bg.bg-6,  .irccolor-bg.bg-purple { background-color: #5e1b7e; }
+.irccolor-bg.bg-7,  .irccolor-bg.bg-orange { background-color: #ff7e1b; }
+.irccolor-bg.bg-8,  .irccolor-bg.bg-yellow { background-color: #ffff1b; color: #000; }
+.irccolor-bg.bg-9,  .irccolor-bg.bg-lime   { background-color: #1bff1b; color: #000; }
+.irccolor-bg.bg-10, .irccolor-bg.bg-teal   { background-color: #1b7e7e; }
+.irccolor-bg.bg-11, .irccolor-bg.bg-cyan   { background-color: #1bffff; color: #000; }
+.irccolor-bg.bg-12, .irccolor-bg.bg-blue   { background-color: #1b1bff; }
+.irccolor-bg.bg-13, .irccolor-bg.bg-magenta{ background-color: #ff1bff; }
+.irccolor-bg.bg-14, .irccolor-bg.bg-grey   { background-color: #5e5e5e; }
+.irccolor-bg.bg-15, .irccolor-bg.bg-silver { background-color: #b2b2b2; color: #000; }
