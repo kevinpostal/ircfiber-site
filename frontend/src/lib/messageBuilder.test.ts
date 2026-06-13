@@ -4,6 +4,9 @@ import {
   groupJoinPartEvents,
   groupDisconnectEvents,
   preprocessMessages,
+  appendToProcessed,
+  prependReprocess,
+  buildProcessedBuffer,
 } from './messageBuilder';
 import type { IRCMessage, JoinPartGroupMessage } from '../types';
 
@@ -293,5 +296,121 @@ describe('preprocessMessages', () => {
     expect(result).toHaveLength(2);
     expect(result[0].command).toBe('PRIVMSG');
     expect(result[1].command).toBe('NOTICE');
+  });
+});
+
+describe('appendToProcessed', () => {
+  function privmsg(text: string, nick = 'alice'): IRCMessage {
+    return { command: 'PRIVMSG', nick, text, t: text.length };
+  }
+
+  it('returns the same array when no new messages are appended', () => {
+    const prev = buildProcessedBuffer([privmsg('hi')]);
+    const next = appendToProcessed(prev, []);
+    expect(next).toBe(prev);
+  });
+
+  it('appends PRIVMSGs to PRIVMSGs without regrouping (no group tail)', () => {
+    const prev = buildProcessedBuffer([privmsg('a'), privmsg('b')]);
+    const next = appendToProcessed(prev, [privmsg('c')]);
+    expect(next).toHaveLength(3);
+    expect(next[2].command).toBe('PRIVMSG');
+    expect((next[2] as any).text).toBe('c');
+  });
+
+  it('matches the full preprocess output for a 10k PRIVMSG buffer + 100 appends', () => {
+    const initial: IRCMessage[] = [];
+    for (let i = 0; i < 10000; i++) initial.push(privmsg(`msg ${i}`));
+    const built = buildProcessedBuffer(initial);
+    // Append a small batch incrementally and confirm it matches a full
+    // re-preprocess of the merged array.
+    const append: IRCMessage[] = [];
+    for (let i = 0; i < 100; i++) append.push(privmsg(`msg ${10000 + i}`));
+    const incremental = appendToProcessed(built, append);
+    const full = buildProcessedBuffer(initial.concat(append));
+    expect(incremental).toHaveLength(full.length);
+    for (let i = 0; i < full.length; i++) {
+      expect(incremental[i].command).toBe(full[i].command);
+    }
+  });
+
+  it('merges a new JOIN into a trailing JOINPART_GROUP', () => {
+    const prev = buildProcessedBuffer([
+      { command: 'JOIN', nick: 'alice', prefix: 'a!u@h' },
+      { command: 'JOIN', nick: 'bob', prefix: 'b!u@h' },
+    ]);
+    // prev tail is a JOINPART_GROUP.  Appending another JOIN should
+    // re-merge into the same group.
+    const next = appendToProcessed(prev, [
+      { command: 'JOIN', nick: 'carol', prefix: 'c!u@h' },
+    ]);
+    expect(next).toHaveLength(1);
+    expect(next[0].command).toBe('JOINPART_GROUP');
+    expect((next[0] as any).events).toHaveLength(3);
+  });
+
+  it('splits a trailing JOINPART_GROUP when a non-join event arrives', () => {
+    const prev = buildProcessedBuffer([
+      { command: 'JOIN', nick: 'alice', prefix: 'a!u@h' },
+      { command: 'JOIN', nick: 'bob', prefix: 'b!u@h' },
+    ]);
+    // prev tail is a JOINPART_GROUP.  Appending a PRIVMSG should
+    // re-emit the group and then add the PRIVMSG.
+    const next = appendToProcessed(prev, [privmsg('hello')]);
+    expect(next).toHaveLength(2);
+    expect(next[0].command).toBe('JOINPART_GROUP');
+    expect(next[1].command).toBe('PRIVMSG');
+  });
+
+  it('groups consecutive MOTD lines that follow another MOTD_GROUP', () => {
+    const prev = buildProcessedBuffer([
+      { command: '375', text: 'Start of MOTD' },
+      { command: '372', text: 'Line 1' },
+    ]);
+    const next = appendToProcessed(prev, [
+      { command: '372', text: 'Line 2' },
+      { command: '372', text: 'Line 3' },
+    ]);
+    expect(next).toHaveLength(1);
+    expect(next[0].command).toBe('MOTD_GROUP');
+    expect((next[0] as any).lines).toEqual(['Start of MOTD', 'Line 1', 'Line 2', 'Line 3']);
+  });
+
+  it('appending an empty array to a large buffer is O(1)', () => {
+    const initial: IRCMessage[] = [];
+    for (let i = 0; i < 10000; i++) initial.push(privmsg(`m${i}`));
+    const built = buildProcessedBuffer(initial);
+    const t0 = performance.now();
+    const next = appendToProcessed(built, []);
+    const dt = performance.now() - t0;
+    expect(next).toBe(built);
+    // Should be essentially instant.
+    expect(dt).toBeLessThan(5);
+  });
+});
+
+describe('prependReprocess', () => {
+  it('merges prepended messages with existing and re-preprocesses', () => {
+    const existing: IRCMessage[] = [
+      { command: 'PRIVMSG', nick: 'alice', text: 'old', t: 2 },
+    ];
+    const prepended: IRCMessage[] = [
+      { command: 'PRIVMSG', nick: 'bob', text: 'newer', t: 1 },
+    ];
+    const result = prependReprocess(existing, prepended);
+    expect(result).toHaveLength(2);
+    expect((result[0] as any).text).toBe('newer');
+    expect((result[1] as any).text).toBe('old');
+  });
+
+  it('dedupes by eid across the merged array', () => {
+    const existing: IRCMessage[] = [
+      { command: 'PRIVMSG', nick: 'alice', text: 'dup', t: 1, eid: 42 },
+    ];
+    const prepended: IRCMessage[] = [
+      { command: 'PRIVMSG', nick: 'alice', text: 'dup', t: 1, eid: 42 },
+    ];
+    const result = prependReprocess(existing, prepended);
+    expect(result).toHaveLength(1);
   });
 });

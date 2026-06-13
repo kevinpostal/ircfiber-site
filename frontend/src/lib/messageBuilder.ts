@@ -320,3 +320,111 @@ export function preprocessMessages(messages: IRCMessage[]): IRCMessage[] {
   result = groupDisconnectEvents(result);
   return result;
 }
+
+// ── Incremental preprocessing (IRCCloud-style) ──
+//
+// Running preprocessMessages over the full buffer on every append becomes
+// O(n) per message once a buffer has 10k+ rows.  IRCCloud keeps a processed
+// collection and only re-groups the new tail (and the boundary group, in
+// case it spans the append).  We mirror that with appendToProcessed /
+// prependReprocess.
+
+function lastGroupCmd(msg: IRCMessage | undefined): string | null {
+  if (!msg) return null;
+  if (msg.command === 'MOTD_GROUP' || msg.command === 'JOINPART_GROUP' || msg.command === 'DISCO_GROUP') {
+    return msg.command;
+  }
+  return null;
+}
+
+// Reconstruct the raw messages of a peeled group from its stored fields.
+// The group already carries the original events / lines, so we can recover
+// the equivalent raw input without needing the original raw array.
+function peelGroup(last: IRCMessage): IRCMessage[] {
+  if (last.command === 'JOINPART_GROUP' && (last as any).events) {
+    return (last as any).events.map((e: { msg: IRCMessage }) => e.msg);
+  }
+  if (last.command === 'DISCO_GROUP' && (last as any).events) {
+    return (last as any).events as IRCMessage[];
+  }
+  if (last.command === 'MOTD_GROUP' && (last as any).lines) {
+    // MOTD grouping preserves the original text.  The first line may have
+    // been 375 (start) or 372 (response); we don't track which, so default
+    // to 372 for the first line.  This is fine because groupMOTDLines
+    // only uses the `text` field for re-grouping, and the
+    // {command: '372', text} shape groups identically.
+    const lines = (last as any).lines as string[];
+    return lines.map((text, i) => ({
+      command: i === 0 && /^- /.test(text) ? '375' : '372',
+      text,
+    }));
+  }
+  return [last];
+}
+
+/**
+ * Incrementally extend an existing processed buffer with newly appended
+ * messages.  Only the tail of the existing processed array and the new
+ * messages are re-grouped, so appending to a 10k-message buffer is
+ * O(size of new batch + group boundary) instead of O(10k).
+ *
+ * If the previous tail ends in a group (MOTD_GROUP, JOINPART_GROUP,
+ * DISCO_GROUP), it may merge with the first new message.  We peel off that
+ * tail so grouping can re-merge correctly.
+ */
+export function appendToProcessed(
+  prevProcessed: IRCMessage[],
+  newRaw: IRCMessage[],
+): IRCMessage[] {
+  if (newRaw.length === 0) return prevProcessed;
+
+  let keep: IRCMessage[] = prevProcessed;
+  let prefix: IRCMessage[] = [];
+  const last = keep[keep.length - 1];
+  if (lastGroupCmd(last)) {
+    keep = keep.slice(0, -1);
+    prefix = peelGroup(last!);
+  }
+
+  const toProcess = prefix.concat(newRaw);
+  const regrouped = preprocessMessages(toProcess);
+
+  return keep.concat(regrouped);
+}
+
+/**
+ * Recompute the processed array from scratch after a backlog prepend.
+ * Prepending changes the head boundary in ways that can't be incrementally
+ * fixed (the previous boundary between raw and the prepended head may
+ * itself now be a group), so we fall back to a full pass.  Backlog fetches
+ * are much less frequent than live traffic, so this is acceptable.
+ */
+export function prependReprocess(
+  existingRaw: IRCMessage[],
+  newRaw: IRCMessage[],
+): IRCMessage[] {
+  const merged = newRaw.concat(existingRaw);
+  // Dedup by eid/msgid before reprocessing.
+  const seenEids = new Set<number>();
+  const seenMsgids = new Set<string>();
+  const deduped: IRCMessage[] = [];
+  for (const m of merged) {
+    if (m.eid != null) {
+      if (seenEids.has(m.eid)) continue;
+      seenEids.add(m.eid);
+    } else if (m.msgid) {
+      if (seenMsgids.has(m.msgid)) continue;
+      seenMsgids.add(m.msgid);
+    }
+    deduped.push(m);
+  }
+  deduped.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  return preprocessMessages(deduped);
+}
+
+/**
+ * Build a processed array from scratch (initial load or full reset).
+ */
+export function buildProcessedBuffer(raw: IRCMessage[]): IRCMessage[] {
+  return preprocessMessages(raw);
+}

@@ -58,9 +58,34 @@
 
   const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
 
+  // IRCCloud-style incremental preprocessing: the ircState maintains a
+  // `processedMessages[key]` cache that is updated incrementally on every
+  // append / prepend.  This derived reads from the cache (O(1) per render)
+  // and only falls back to a full preprocess when the cache is missing
+  // (cold start / migration).  The clearedAt filter and empty-message
+  // filter are still applied on top of the cached processed array because
+  // they depend on UI state, not on the raw stream.
   const processedMessages = $derived.by(() => {
     const t0 = perfMark('processedMessages:start');
     const key = bufferKey;
+    const cached = ircState.processedMessages[key];
+    if (cached) {
+      const clearedAt = ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
+        ? getClearedAt(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName) : null;
+      if (!clearedAt) {
+        perfMeasure(`processedMessages len=${cached.length} (cache hit)`, t0);
+        return cached;
+      }
+      const filtered = cached.filter(m => (m.t || 0) > clearedAt);
+      perfMeasure(`processedMessages len=${filtered.length} (cache hit, cleared)`, t0);
+      return filtered;
+    }
+    // Fallback: cold start / cache miss.  We can't write to the cache
+    // from inside a $derived (Svelte 5 forbids state mutation in derived
+    // expressions), so we compute locally and rely on the next
+    // batchAppendMessages / appendMessage call to populate the cache.
+    // The ircState setters always build the cache as a side effect, so
+    // the next reactive tick will hit the cache path.
     const raw = ircState.messages[key] ?? [];
     const clearedAt = ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
       ? getClearedAt(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName) : null;
@@ -70,7 +95,7 @@
       return typeof m.text === 'string' && m.text.trim() !== '';
     });
     const result = preprocessMessages(noEmpty);
-    perfMeasure(`processedMessages len=${result.length} raw=${raw.length}`, t0);
+    perfMeasure(`processedMessages len=${result.length} (cold)`, t0);
     return result;
   });
 

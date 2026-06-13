@@ -3,6 +3,7 @@ import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
 import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel } from './api';
+import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 
 // ── Single reactive state object ──
 export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat';
@@ -11,6 +12,11 @@ export const ircState = $state({
   networks: [] as Network[],
   activeBuffer: { networkId: null, bufferName: null } as ActiveBuffer,
   messages: {} as Record<string, IRCMessage[]>,
+  // Incremental preprocessing cache (IRCCloud-style). Keyed by buffer
+  // key (`networkId:bufferName`). Each entry holds the raw messages and
+  // their already-grouped form so appending a single new PRIVMSG doesn't
+  // re-group the full 10k-message buffer.
+  processedMessages: {} as Record<string, IRCMessage[]>,
   me: null as { username: string; email: string } | null,
   wsConnected: false,
   focusLost: false,
@@ -225,6 +231,9 @@ export function prependMessage(networkId: string, bufferName: string, msg: IRCMe
 
   list.unshift(msg);
   ircState.messages[key] = list;
+  // Prepending shifts the head boundary; rebuild the processed buffer
+  // from the prepended tail to keep the head group valid.
+  ircState.processedMessages[key] = buildProcessedBuffer(list);
 }
 
 export function appendMessage(networkId: string, bufferName: string, msg: IRCMessage): void {
@@ -246,6 +255,15 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
 
   list.push(msg);
   ircState.messages[key] = list;
+
+  // Incremental preprocessing: only regroup the new tail (and the
+  // previous tail group, if any, in case it merges with the new message).
+  if (ircState.processedMessages[key]) {
+    ircState.processedMessages[key] = appendToProcessed(
+      ircState.processedMessages[key],
+      [msg],
+    );
+  }
 
   const normBuf = normalizeChannelName(bufferName);
   const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
@@ -276,6 +294,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     else if (m.msgid) seenMsgids.add(m.msgid);
   }
   const pending: IRCMessage[] = [];
+  const newForProcessed: IRCMessage[] = [];
   let addedUnread = 0;
   let hasHighlight = false;
   let hasChat = false;
@@ -303,6 +322,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     }
     list.push(msg);
     pending.push(msg);
+    newForProcessed.push(msg);
     // Aggregate unread + highlight for the batch instead of per-message
     // mutation. Without this, 50 incoming messages trigger 50 separate
     // Svelte reactive ticks on the Sidebar's buffer items, which is
@@ -319,6 +339,24 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
 
   // Single state assignment triggers one reactive update for the batch
   ircState.messages[key] = list;
+
+  // Incremental preprocessing: only regroup the new tail (and the
+  // previous tail group, if any, in case it merges with the new
+  // messages).  This is the per-message append equivalent of IRCCloud's
+  // BufferFormatter incremental update — O(new batch + boundary) instead
+  // of O(buffer size).
+  if (newForProcessed.length > 0) {
+    if (ircState.processedMessages[key]) {
+      ircState.processedMessages[key] = appendToProcessed(
+        ircState.processedMessages[key],
+        newForProcessed,
+      );
+    } else {
+      // Cold start: build the cache from the current raw list.  This
+      // is the only place we pay O(buffer size) once.
+      ircState.processedMessages[key] = buildProcessedBuffer(list);
+    }
+  }
 
   // Batch the unread-count updates: write unreadMap once and buf.unreadCount
   // once instead of per-message. This is the single biggest win for
@@ -417,6 +455,7 @@ export function loadCachedMessages(networkId: string, bufferName: string): IRCMe
 export function setMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   ircState.messages[key] = msgs;
+  ircState.processedMessages[key] = buildProcessedBuffer(msgs);
   saveMessageCache(key, msgs);
 }
 
@@ -461,7 +500,11 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     }
   }
 
-  ircState.messages[key] = [...filtered, ...existing].sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  const merged = [...filtered, ...existing].sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  ircState.messages[key] = merged;
+  // Prepending changes the head boundary in ways that can't be fixed
+  // incrementally — fall back to a full pass on the merged raw array.
+  ircState.processedMessages[key] = prependReprocess(existing, filtered);
 }
 
 // Marks are sequence-prefixed (`<seq>|<msgid or t:ts>`) so every fetch or
