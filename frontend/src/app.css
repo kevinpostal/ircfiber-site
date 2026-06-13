@@ -39,14 +39,16 @@ body.ascii-compact .row.messageRow {
   font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
-/* Per-row base. IRCCloud-style gutters: 68px on the left for the avatar
-   + timestamp, 21px on the right for the timestamp. Without these, the
-   absolutely-positioned avatar (at left:25px) ends up overlapping the
-   nick text in normal flow. */
+/* Per-row base. IRCCloud uses 118px right padding for layout balance,
+   68px left for avatar, 0 vertical padding. line-height:1.15 gives 16px
+   at 14px font, matching IRCCloud's compact message density. The
+   padding shorthand is deliberately NOT set here — it must come from
+   public/style.css so that .firstAuthor { padding-top: 6px } (also
+   defined there) isn't overridden by a shorthand's reset of all four
+   sides. */
 .row.messageRow {
-  line-height: 1.5;
+  line-height: 1.15;
   font-size: 14px;
-  padding: 1px 21px 1px 68px;
 }
 
 /* Bot chat rows (e.g. ANSI art from scroll, znc, etc.) render monospace so
@@ -84,11 +86,36 @@ body.ascii-compact .row.messageRow {
    wrap when the viewport is narrower than the art. pre-wrap + break-all
    gives us that — and `<wbr>` at every color boundary still inserts
    SOFT breakpoints the browser can choose to use or ignore, so it only
-   wraps when the line truly doesn't fit. */
+   wraps when the line truly doesn't fit.
+   `contain: content` scopes layout invalidation to a single message row,
+   so a long-paste row that scrolled past the viewport doesn't cause the
+   browser to relayout nearby rows when an adjacent row updates. */
 .row.messageRow .content {
   white-space: pre-wrap;
   word-break: break-all;
   overflow-wrap: anywhere;
+  contain: content;
+}
+
+/* LongMessageContent: per-message "Show more" truncation. `inline` keeps
+   the wrapper on the same baseline as the rest of the message body so the
+   button shows up immediately after the truncated text without a line
+   break. */
+.longMessageContent {
+  display: inline;
+}
+.messageTruncated {
+  display: inline-block;
+  margin-left: 6px;
+  color: #1e72ff;
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+}
+.messageTruncated:hover {
+  text-decoration: underline;
 }
 
 /* IRC mIRC color palette (0-15). Foreground colors. */

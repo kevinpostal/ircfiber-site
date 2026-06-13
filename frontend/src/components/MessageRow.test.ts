@@ -162,4 +162,55 @@ describe('MessageRow', () => {
 
 		expect(document.querySelector('.mode_prefix')).toBeInTheDocument();
 	});
+
+	it('truncates long PRIVMSG bodies to 20 lines with a "Show more" button', async () => {
+		const lines: string[] = [];
+		for (let i = 0; i < 25; i++) lines.push(`line ${i}`);
+		const text = lines.join('\n');
+		const msg = createMessage({ nick: 'alice', text });
+		render(MessageRow, { props: { msg } });
+
+		// The first 20 lines render, the 21st and beyond are hidden
+		// behind the "Show more" button.
+		expect(document.querySelector('.longMessageContent')).toBeInTheDocument();
+		const content = document.querySelector('.longMessageContent');
+		expect(content).toBeTruthy();
+		const visible = content!.textContent || '';
+		expect(visible).toContain('line 0');
+		expect(visible).toContain('line 19');
+		expect(visible).not.toContain('line 20');
+		expect(visible).not.toContain('line 24');
+
+		// "Show more" button shows the line count beyond the cap
+		const button = document.querySelector('.messageTruncated');
+		expect(button).toBeInTheDocument();
+		expect(button?.textContent).toMatch(/Show more \(5 lines\)/);
+	});
+
+	it('expands a truncated PRIVMSG when "Show more" is clicked', async () => {
+		const lines: string[] = [];
+		for (let i = 0; i < 25; i++) lines.push(`line ${i}`);
+		const text = lines.join('\n');
+		const msg = createMessage({ nick: 'alice', text });
+		render(MessageRow, { props: { msg } });
+
+		const button = document.querySelector<HTMLButtonElement>('.messageTruncated');
+		expect(button).toBeTruthy();
+		await userEvent.click(button!);
+
+		// After clicking, the full body renders
+		const content = document.querySelector('.longMessageContent');
+		const visible = content!.textContent || '';
+		expect(visible).toContain('line 24');
+		expect(document.querySelector('.messageTruncated')?.textContent).toContain('Show less');
+	});
+
+	it('does not truncate short PRIVMSG bodies', async () => {
+		const text = 'a short message';
+		const msg = createMessage({ nick: 'alice', text });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.longMessageContent')).toBeInTheDocument();
+		expect(document.querySelector('.messageTruncated')).not.toBeInTheDocument();
+	});
 });

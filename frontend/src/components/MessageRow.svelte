@@ -2,8 +2,9 @@
   import type { IRCMessage, Member } from '../types';
   import { formatTime12Hour, formatDateTimeTitle, stringHash, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { autolinkHtml } from '../lib/autolinker';
+  import { autolinkHtml, mentionNicks } from '../lib/autolinker';
   import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
+  import LongMessageContent from './LongMessageContent.svelte';
 
   interface Props {
     msg: IRCMessage;
@@ -112,7 +113,16 @@
   }
 
   function renderText(text: string): string {
-    return autolinkHtml(parseIrcFormatting(text));
+    let html = autolinkHtml(parseIrcFormatting(text));
+    const isChat = cmd === 'PRIVMSG' || (cmd === 'NOTICE' && !!nick);
+    if (isChat && memberByNick && memberByNick.size > 0) {
+      const nicks = new Set<string>();
+      for (const nick of memberByNick.keys()) {
+        nicks.add(nick.toLowerCase());
+      }
+      html = mentionNicks(html, nicks);
+    }
+    return html;
   }
 
   function getDisplayText(): string {
@@ -120,6 +130,109 @@
       return formatNumericText(cmd, msg.params || [], msg.text || '', nick);
     }
     return msg.text || '';
+  }
+
+  // Long-message truncation: chat content (PRIVMSG, NOTICE, CONNECT, 001,
+  // numeric replies, action) renders through LongMessageContent so a single
+  // message body never creates thousands of line boxes. The non-chat system
+  // messages (JOIN/PART/QUIT/NICK/MODE/TOPIC/KICK/INVITE/AWAY/ACCOUNT/CHGHOST
+  // and the grouped variants) keep their existing rendering because their
+  // text is always a short human-readable phrase.
+  const chatContent = $derived.by(() => {
+    if (cmd === 'CONNECT' || cmd === '001') {
+      return { prefix: '<span class="prefix">&#x2192;</span> ', text: getDisplayText() };
+    }
+    if (cmd === 'PRIVMSG' || cmd === 'NOTICE' || msg.type === 'action') {
+      return { prefix: '', text: getDisplayText() };
+    }
+    if (/^\d{3}$/.test(cmd)) {
+      return { prefix: '', text: getDisplayText() };
+    }
+    return null;
+  });
+
+  // Returns the full <span class="content">…</span> HTML for the message
+  // body.  Building the string in JavaScript and using {@html} avoids the
+  // whitespace text node that Svelte inserts between block tags when the
+  // same span wraps a long {#if}/{:else if}/{:else} chain — that space
+  // used to render as a visible character before every message.
+  //
+  // Chat-content commands (PRIVMSG / NOTICE / CONNECT / 001 / numeric /
+  // TOPIC / KICK / action) render through LongMessageContent in the
+  // template instead, so the body is capped at MAX_PREVIEW_LINES with a
+  // "Show more" button. For those commands this function returns an empty
+  // content span; the template branch renders the Svelte component.
+  function getContentHTML(): string {
+    const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd);
+    let inner = '';
+    if (hasCollapseWidget) {
+      inner += '<span class="collapseWidget" aria-label="User activity">'
+        + '<i class="fa-regular fa-square-minus collapseIcon"></i>'
+        + '<i class="fa-regular fa-square-plus expandIcon"></i>'
+        + '<i class="fa-solid fa-angle-right collapsedIcon"></i>'
+        + '</span>';
+    }
+    if (cmd === 'MOTD_GROUP' && (msg as any).lines) {
+      inner += '<div class="groupedLines">';
+      for (const line of (msg as any).lines as string[]) {
+        inner += `<div class="groupedLines__line">${parseIrcFormatting(line)}</div>`;
+      }
+      inner += '</div>';
+    } else if (cmd === 'JOINPART_GROUP') {
+      inner += (msg as any).sentences || '';
+    } else if (cmd === 'DISCO_GROUP') {
+      inner += (msg as any).sentences || '';
+    } else if (cmd === 'DISCONNECT') {
+      inner += '<span class="prefix">&#x21D1;</span> You disconnected'
+        + ((msg.text && msg.text !== 'You disconnected') ? `: ${msg.text}` : '');
+    } else if (chatContent) {
+      // Content rendered by <LongMessageContent> in the template.
+      return '';
+    } else if (cmd === 'JOIN') {
+      const usermask = getUsermask(msg.prefix || '');
+      inner += '<span class="prefix">&#x2192;</span>'
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + ' joined' + (usermask ? ` (${usermask})` : '');
+    } else if (cmd === 'PART') {
+      inner += '<span class="prefix">&#x2190;</span>'
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + ' left' + (msg.text ? ` (${escapeHtml(msg.text)})` : '');
+    } else if (cmd === 'QUIT') {
+      const usermask = getUsermask(msg.prefix || '');
+      inner += '<span class="prefix">&#x21D1;</span>'
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + ' quit' + (usermask ? ` (${usermask})` : '') + (msg.text ? ` ${escapeHtml(msg.text)}` : '');
+    } else if (cmd === 'NICK') {
+      const newNick = msg.params?.[msg.params.length - 1] || '';
+      inner += `${escapeHtml(nick)} <span class="prefix">&rarr;</span> <span class="buffer bufferLink user link">${escapeHtml(newNick)}</span>`;
+    } else if (cmd === 'TOPIC') {
+      inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' changed the topic to: ' + renderText(msg.text || '');
+    } else if (cmd === 'MODE') {
+      const modeInfo = parseBanMode(msg.params || []);
+      if (modeInfo) {
+        inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> `
+          + `${escapeHtml(modeInfo.action)} <b>${escapeHtml(modeInfo.target)}</b> `
+          + `(<span class="mono rawMode">${escapeHtml(modeInfo.diff)}${escapeHtml(modeInfo.mode)}</span>)`;
+      } else {
+        inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' sets mode: ' + escapeHtml(msg.params?.join(' ') || msg.text || '');
+      }
+    } else if (cmd === 'KICK') {
+      const kicked = msg.params?.[1] || '';
+      inner += '<span class="prefix">&#x2190;</span>'
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(kicked)}</span>`
+        + ` was kicked by ${escapeHtml(nick)}` + (msg.text ? ` (${renderText(msg.text)})` : '');
+    } else if (cmd === 'INVITE') {
+      inner += '<span class="prefix">&#x2192;</span> ' + escapeHtml(nick) + ' invited ' + escapeHtml(msg.params?.[0] || '') + ' to ' + escapeHtml(msg.params?.[1] || '');
+    } else if (cmd === 'AWAY') {
+      inner += '<span class="prefix">&#x2026;</span> ' + escapeHtml(nick) + ' is ' + (msg.text ? 'away: ' + msg.text : 'back');
+    } else if (cmd === 'ACCOUNT') {
+      inner += escapeHtml(nick) + ' ' + (msg.text === '*' ? 'logged out' : msg.text ? `logged in as ${msg.text}` : 'logged in');
+    } else if (cmd === 'CHGHOST') {
+      inner += escapeHtml(nick) + ' changed host to ' + escapeHtml(msg.params?.join('@') || msg.text || '');
+    } else {
+      inner += renderText(msg.text || '');
+    }
+    return `<span class="content">${inner}</span>`;
   }
 
   interface BanModeInfo {
@@ -225,16 +338,13 @@
     <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
     <span class="g">&nbsp;</span>
     <span class="message">
-      <span class="content">
-        <span class="collapseWidget" aria-label="User activity">
+      <span class="content"><span class="collapseWidget" aria-label="User activity">
           <i class="fa-regular fa-square-minus collapseIcon"></i>
           <i class="fa-regular fa-square-plus expandIcon"></i>
           <i class="fa-solid fa-angle-right collapsedIcon"></i>
-        </span>
-        <span class="sentence">
+        </span><span class="sentence">
           {@html msg.sentences || ''}
-        </span>
-      </span>
+        </span></span>
     </span>
   </div>
   {#if expanded}
@@ -315,75 +425,11 @@
         </span>
       {/if}
 
-      <span class="content">{#if hasCollapseWidget}<span class="collapseWidget" aria-label="User activity">
-            <i class="fa-regular fa-square-minus collapseIcon"></i>
-            <i class="fa-regular fa-square-plus expandIcon"></i>
-            <i class="fa-solid fa-angle-right collapsedIcon"></i>
-          </span>{/if}
-        {#if cmd === 'MOTD_GROUP' && msg.lines}
-          <div class="groupedLines">
-            {#each msg.lines as line}
-              <div class="groupedLines__line">{@html parseIrcFormatting(line)}</div>
-            {/each}
-          </div>
-        {:else if cmd === 'JOINPART_GROUP'}
-          {@html msg.sentences || ''}
-        {:else if cmd === 'DISCO_GROUP'}
-          {@html msg.sentences || ''}
-        {:else if cmd === 'DISCONNECT'}
-          <span class="prefix">&#x21D0;</span> You disconnected{#if msg.text && msg.text !== 'You disconnected'}: {msg.text}{/if}
-        {:else if cmd === 'CONNECT'}
-          <span class="prefix">&#x2192;</span> {@html renderText(getDisplayText())}
-        {:else if cmd === '001'}
-          <span class="prefix">&#x2192;</span> {@html renderText(getDisplayText())}
-        {:else if cmd === 'JOIN'}
-          {@const usermask = getUsermask(msg.prefix || '')}
-          <span class="prefix">&#x2192;</span>
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span> joined{#if usermask}{' '}({usermask}){/if}
-        {:else if cmd === 'PART'}
-          <span class="prefix">&#x2190;</span>
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span> left{#if msg.text}{' '}({msg.text}){/if}
-        {:else if cmd === 'QUIT'}
-          {@const usermask = getUsermask(msg.prefix || '')}
-          <span class="prefix">&#x21D0;</span>
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span> quit{#if usermask}{' '}({usermask}){/if}{#if msg.text}{' '}{msg.text}{/if}
-        {:else if cmd === 'NICK'}
-          {@const newNick = msg.params?.[msg.params.length - 1] || ''}
-          {nick} <span class="prefix">&rarr;</span> <span class="buffer bufferLink user link">{newNick}</span>
-        {:else if cmd === 'TOPIC'}
-          <span class="prefix">&#x2699;</span> {nick} changed the topic to: {@html renderText(msg.text || '')}
-        {:else if cmd === 'MODE'}
-          {@const modeInfo = parseBanMode(msg.params || [])}
-          {#if modeInfo}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <span class="buffer bufferLink user link" onclick={handleNickClick}>{nick}</span>
-            {modeInfo.action} <b>{modeInfo.target}</b> (<span class="mono rawMode">{modeInfo.diff}{modeInfo.mode}</span>)
-          {:else}
-            <span class="prefix">&#x2699;</span> {nick} sets mode: {msg.params?.join(' ') || msg.text || ''}
-          {/if}
-        {:else if cmd === 'KICK'}
-          {@const kicked = msg.params?.[1] || ''}
-          <span class="prefix">&#x2190;</span>
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span class="buffer bufferLink user link" onclick={handleNickClick}>{kicked}</span>
-          was kicked by {nick}{#if msg.text} ({@html renderText(msg.text || '')}){/if}
-        {:else if cmd === 'INVITE'}
-          <span class="prefix">&#x2192;</span> {nick} invited {msg.params?.[0] || ''} to {msg.params?.[1] || ''}
-        {:else if cmd === 'AWAY'}
-          <span class="prefix">&#x2026;</span> {nick} is {msg.text ? 'away: ' + msg.text : 'back'}
-        {:else if cmd === 'ACCOUNT'}
-          {nick} {msg.text === '*' ? 'logged out' : msg.text ? `logged in as ${msg.text}` : 'logged in'}
-        {:else if cmd === 'CHGHOST'}
-          {nick} changed host to {msg.params?.join('@') || msg.text || ''}
-        {:else if /^\d{3}$/.test(cmd)}
-          {@html renderText(getDisplayText())}
-        {:else}
-          {@html renderText(msg.text || '')}
-        {/if}
-      </span>
+      {#if chatContent}
+        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} /></span>
+      {:else}
+        {@html getContentHTML()}
+      {/if}
     </span>
   </div>
 {/if}

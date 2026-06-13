@@ -153,6 +153,38 @@ export function isChatMessage(msg: IRCMessage): boolean {
   return msg.command === 'PRIVMSG' || msg.type === 'action';
 }
 
+// Per-message height cap for very long message bodies (pastebin snippets, large
+// chat dumps, etc.). Matches IRCCloud's "Show more" affordance so a single
+// message body never creates thousands of line boxes in the DOM.
+export const MAX_PREVIEW_LINES = 20;
+export const MAX_PREVIEW_CHARS = 2000;
+
+export function countLines(text: string): number {
+  if (!text) return 0;
+  let count = 1;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\n') count++;
+  }
+  return count;
+}
+
+export function firstLines(text: string, n: number): string {
+  if (n <= 0 || !text) return '';
+  let idx = -1;
+  for (let i = 0; i < n; i++) {
+    idx = text.indexOf('\n', idx + 1);
+    if (idx === -1) return text;
+  }
+  return text.slice(0, idx);
+}
+
+export function previewText(text: string, expanded: boolean): string {
+  if (expanded || !text) return text;
+  const byLines = firstLines(text, MAX_PREVIEW_LINES);
+  if (byLines.length <= MAX_PREVIEW_CHARS) return byLines;
+  return byLines.slice(0, MAX_PREVIEW_CHARS);
+}
+
 export function getUserModePrefix(nick: string): { prefix: string; cls: string; category: ModeCategory; mode: string } {
   const first = nick.charAt(0);
   if (first in MODE_PREFIX_MAP) return MODE_PREFIX_MAP[first];
