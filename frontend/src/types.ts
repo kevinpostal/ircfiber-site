@@ -4,13 +4,13 @@ export type ModeCategory = 'OPER' | 'OWNER' | 'ADMIN' | 'OP' | 'HALFOP' | 'VOICE
 export const MODE_HIERARCHY: ModeCategory[] = ['OPER', 'OWNER', 'ADMIN', 'OP', 'HALFOP', 'VOICED', 'MEMBER'];
 
 // Maps mode prefix chars to categories
-export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; category: ModeCategory; mode: string }> = {
-  '!': { prefix: '!', cls: 'mode_OPER', category: 'OPER', mode: 'Y' },
-  '~': { prefix: '~', cls: 'mode_OWNER', category: 'OWNER', mode: 'q' },
-  '&': { prefix: '&', cls: 'mode_ADMIN', category: 'ADMIN', mode: 'a' },
-  '@': { prefix: '@', cls: 'mode_OP', category: 'OP', mode: 'o' },
-  '%': { prefix: '%', cls: 'mode_HALFOP', category: 'HALFOP', mode: 'h' },
-  '+': { prefix: '+', cls: 'mode_VOICED', category: 'VOICED', mode: 'v' },
+export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; category: ModeCategory; mode: string; title: string }> = {
+  '!': { prefix: '!', cls: 'mode_OPER',   category: 'OPER',   mode: 'Y', title: 'IRC Operator' },
+  '~': { prefix: '~', cls: 'mode_OWNER',  category: 'OWNER',  mode: 'q', title: 'Channel owner' },
+  '&': { prefix: '&', cls: 'mode_ADMIN',  category: 'ADMIN',  mode: 'a', title: 'Channel admin' },
+  '@': { prefix: '@', cls: 'mode_OP',     category: 'OP',     mode: 'o', title: 'Channel operator' },
+  '%': { prefix: '%', cls: 'mode_HALFOP', category: 'HALFOP', mode: 'h', title: 'Half ops' },
+  '+': { prefix: '+', cls: 'mode_VOICED', category: 'VOICED', mode: 'v', title: 'Voiced' },
 };
 
 // ── Connection state machine ──

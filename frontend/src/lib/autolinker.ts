@@ -205,15 +205,34 @@ export function detectEmbed(url: string): EmbedType {
  * @param text  HTML text (output of autolinkHtml, already containing links etc.)
  * @param nicks  Set of lowercase nicks that exist in the current buffer
  */
-export function mentionNicks(text: string, nicks: Set<string>): string {
-  if (!text || !nicks || nicks.size === 0) return text;
-  const TAG_RE = /<[^>]+>/g;
-  const sorted = [...nicks].sort((a, b) => b.length - a.length);
-  const nickPattern = new RegExp(
+let _cachedNickSerial = '';
+let _cachedNickPattern: RegExp | null = null;
+
+function buildNickPattern(sorted: string[]): RegExp {
+  return new RegExp(
     `(?<=^|[^a-zA-Z0-9_\\\\[\\]\\\\{}])(${sorted.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?=$|[^a-zA-Z0-9_\\\\[\\]\\\\{}])`,
     'gi'
   );
+}
 
+export function mentionNicks(text: string, nicks: Set<string>): string {
+  if (!text || !nicks || nicks.size === 0) return text;
+  const sorted = [...nicks].sort((a, b) => b.length - a.length);
+  const serial = sorted.join('\x00');
+  if (serial !== _cachedNickSerial || !_cachedNickPattern) {
+    _cachedNickSerial = serial;
+    _cachedNickPattern = buildNickPattern(sorted);
+  }
+  return _mentionNicksImpl(text, _cachedNickPattern);
+}
+
+export function mentionNicksWithPattern(text: string, pattern: RegExp): string {
+  if (!text) return text;
+  return _mentionNicksImpl(text, pattern);
+}
+
+function _mentionNicksImpl(text: string, nickPattern: RegExp): string {
+  const TAG_RE = /<[^>]+>/g;
   let result = '';
   let lastIdx = 0;
   let insideAnchor = 0;

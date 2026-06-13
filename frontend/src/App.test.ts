@@ -56,6 +56,9 @@ beforeEach(() => {
   ircState.messages = {};
   ircState.overlay = { type: null, data: null };
   ircState.contextMenu = { visible: false, x: 0, y: 0, actions: [] };
+  ircState.showSettings = false;
+  ircState.showShortcuts = false;
+  history.replaceState({}, '', '/');
   vi.clearAllMocks();
 });
 
@@ -297,5 +300,13 @@ describe('App', () => {
       expect(document.querySelector('#member-sidebar')).not.toBeInTheDocument();
       expect(document.querySelector('#wrap')?.classList.contains('has-members')).toBe(false);
     });
+  });
+
+  it('shows keyboard shortcuts page at /?/shortcuts route', async () => {
+    history.replaceState({}, '', '/?/shortcuts');
+    render(App);
+    await expect.element(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+    await expect.element(page.getByText('Switch to previous buffer')).toBeInTheDocument();
+    await expect.element(page.getByText('Selected IRC commands')).toBeInTheDocument();
   });
 });

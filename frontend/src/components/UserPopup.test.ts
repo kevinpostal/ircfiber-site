@@ -92,14 +92,19 @@ describe('UserPopup', () => {
     await expect.element(page.getByRole('button', { name: 'Kick' })).not.toBeInTheDocument();
   });
 
-  it('calls sendRaw for WHOIS', async () => {
+  it('calls sendRaw for WHOIS and registers pending intent', async () => {
     const network = setupChannelBuffer();
     const onClose = vi.fn();
+    ircState.pendingWhois.clear();
     render(UserPopup, { props: { nick: 'Alice', x: 0, y: 0, onClose, onSwitchBuffer: vi.fn(), onSendRaw: mockSendRaw } });
     await userEvent.click(page.getByRole('button', { name: 'WHOIS' }));
     expect(mockSendRaw).toHaveBeenCalledOnce();
     expect(mockSendRaw).toHaveBeenCalledWith(network.networkId, 'WHOIS Alice');
     expect(onClose).toHaveBeenCalledOnce();
+    // The frontend gates the WHOIS overlay on pendingWhois so the server's
+    // automatic join-time WHOISes don't pop up unprompted. Registering
+    // "alice" here is what allows the next 318 response to be shown.
+    expect(ircState.pendingWhois.has('alice')).toBe(true);
   });
 
   it('calls onSwitchBuffer when clicking Open', async () => {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, type SettingsTab } from '../stores/ircStore.svelte';
-  import { navigateSettings } from '../lib/routing';
+  import { navigateSettings, navigateShortcuts } from '../lib/routing';
 
   interface Props {
     onAddNetwork: () => void;
@@ -24,6 +24,12 @@
     navigateSettings(tab);
     open = false;
   }
+
+  function openShortcuts(): void {
+    ircState.showShortcuts = true;
+    navigateShortcuts();
+    open = false;
+  }
 </script>
 
 {#if open}
@@ -36,7 +42,7 @@
     <div class="accountMenu__items">
       <ul class="accountMenu__items-list">
         <li><button onclick={() => openSettings('design')}>Settings</button></li>
-        <li><a href="/?/shortcuts">Shortcuts</a></li>
+        <li><button onclick={openShortcuts}>Shortcuts</button></li>
         <li><a href="/?/feedback">Help &amp; Feedback</a></li>
       </ul>
     </div>

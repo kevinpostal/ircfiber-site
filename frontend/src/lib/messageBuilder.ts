@@ -315,6 +315,10 @@ function buildDiscoGroup(events: IRCMessage[]): DiscoGroupMessage {
  * Full message preprocessing pipeline.
  */
 export function preprocessMessages(messages: IRCMessage[]): IRCMessage[] {
+  // Strip TAGMSG events (typing indicators, reactions) — they are
+  // handled by the live event handler and must never appear in the
+  // processed buffer (empty rows break grouping).
+  messages = messages.filter(m => m.command !== 'TAGMSG');
   let result = groupMOTDLines(messages);
   result = groupJoinPartEvents(result);
   result = groupDisconnectEvents(result);

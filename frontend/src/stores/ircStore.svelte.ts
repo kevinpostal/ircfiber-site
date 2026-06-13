@@ -26,12 +26,22 @@ export const ircState = $state({
   contextMenu: { visible: false, x: 0, y: 0, actions: [] } as ContextMenuState,
   showSettings: false,
   settingsTab: 'design' as SettingsTab,
+  showShortcuts: false,
+  // Nicks the user has explicitly requested WHOIS for (via /whois or the
+  // user-popup "Whois" action). The server also sends automatic WHOIS
+  // queries on JOIN to discover realnames (see ircfiber/irc/connection.d),
+  // but those should NOT pop up the WHOIS overlay. App.svelte consumes
+  // this set to gate the overlay. Entries are removed when the matching
+  // WHOIS completes (318) or fails (401).
+  pendingWhois: new Set<string>(),
   // IRCCloud backlogDivider: per-buffer marker identifying the message that
   // was the earliest rendered message before the last backlog fetch. The
   // divider row renders immediately above it (BufferLogView.renderBacklogDivider).
   // Only one divider exists per buffer at a time; cleared on buffer switch
   // (IRCCloud re-renders the log fresh on select).
   backlogDivider: {} as Record<string, string>,
+  // Per-buffer typing state: bufferKey -> (nick -> timestamp of last TAGMSG)
+  typing: {} as Record<string, Record<string, number>>,
 });
 
 // IRCCloud-style previous-buffer tracking: the buffer that was active before
@@ -425,6 +435,37 @@ export function checkHighlight(msg: IRCMessage, net: Network): boolean {
   }
 
   return false;
+}
+
+// ── Typing indicators (IRCCloud-style TAGMSG) ──
+// Each TAGMSG from a nick resets a 6.5s heartbeat. The UI reads the
+// timestamp and hides the indicator when the window expires. Entries
+// are lazily cleaned up on read.
+
+export function setTyping(networkId: string, channel: string, nick: string): void {
+  const key = `${networkId}:${normalizeChannelName(channel)}`;
+  if (!ircState.typing[key]) ircState.typing[key] = {};
+  ircState.typing[key][nick] = Date.now();
+}
+
+export function clearTyping(networkId: string, channel: string, nick: string): void {
+  const key = `${networkId}:${normalizeChannelName(channel)}`;
+  if (ircState.typing[key]) {
+    delete ircState.typing[key][nick];
+    ircState.typing = { ...ircState.typing };
+  }
+}
+
+export function getTypersForBuffer(networkId: string, channel: string): string[] {
+  const key = `${networkId}:${normalizeChannelName(channel)}`;
+  const typing = ircState.typing[key];
+  if (!typing) return [];
+  const now = Date.now();
+  const result: string[] = [];
+  for (const [nick, ts] of Object.entries(typing)) {
+    if (now - ts < 6500) result.push(nick);
+  }
+  return result;
 }
 
 // ── SessionStorage message cache ──
@@ -849,10 +890,20 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
   } else if (cmd === 'JOIN' && nick && nick !== net.currentNick) {
     const stripped = stripPrefix(nick);
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
+      // Capture the userhost from the prefix so we can populate `ident`
+      // and the IRCCloud-style `isBot` flag from the host suffix without
+      // waiting for a separate WHO/WHOIS. Members added later via NAMES
+      // get filled in by the same heuristic (see PRIVMSG handler / the
+      // `isBotNick` helper in MessageRow.svelte).
+      const ident = msg.prefix && msg.prefix.includes('!')
+        ? msg.prefix.slice(msg.prefix.indexOf('!') + 1)
+        : '';
+      const host = ident.includes('@') ? ident.slice(ident.lastIndexOf('@') + 1) : '';
+      const isBot = !!host && /(^|\.)bot(\.|$)/i.test(host);
       buf.users.push({
         nick, prefix: '', category: 'MEMBER',
-        ident: '', realname: '', isAway: false, awayMessage: '',
-        lastSpoke: 0, lastHighlighted: 0, account: ''
+        ident, realname: '', isAway: false, awayMessage: '',
+        lastSpoke: 0, lastHighlighted: 0, account: '', isBot
       });
     }
   } else if (cmd === 'PART' && nick === net.currentNick) {

@@ -118,23 +118,28 @@ body.ascii-compact .row.messageRow {
   text-decoration: underline;
 }
 
-/* IRC mIRC color palette (0-15). Foreground colors. */
-.irccolor.color-0,  .irccolor.color-white  { color: #ffffff; }
-.irccolor.color-1,  .irccolor.color-black  { color: #000000; }
-.irccolor.color-2,  .irccolor.color-navy   { color: #0e1b7e; }
-.irccolor.color-3,  .irccolor.color-green  { color: #1b7e1b; }
-.irccolor.color-4,  .irccolor.color-red    { color: #b22d2d; }
-.irccolor.color-5,  .irccolor.color-maroon { color: #7e1b1b; }
-.irccolor.color-6,  .irccolor.color-purple { color: #5e1b7e; }
-.irccolor.color-7,  .irccolor.color-orange { color: #ff7e1b; }
-.irccolor.color-8,  .irccolor.color-yellow { color: #ffff1b; }
-.irccolor.color-9,  .irccolor.color-lime   { color: #1bff1b; }
-.irccolor.color-10, .irccolor.color-teal   { color: #1b7e7e; }
-.irccolor.color-11, .irccolor.color-cyan   { color: #1bffff; }
-.irccolor.color-12, .irccolor.color-blue   { color: #1b1bff; }
-.irccolor.color-13, .irccolor.color-magenta{ color: #ff1bff; }
-.irccolor.color-14, .irccolor.color-grey   { color: #5e5e5e; }
-.irccolor.color-15, .irccolor.color-silver { color: #b2b2b2; }
+/* IRC mIRC color palette (0-15). Foreground colors.
+   Hex values match IRCCloud's `dusk` theme palette so a span like
+   `<span class="irccolor teal">food/donut</span>` renders identically
+   in IRC Fiber and IRCCloud side-by-side. Each rule lists every form of
+   the selector we may emit (numeric `color-10`, IRCCloud bare `teal`,
+   and the legacy `color-teal`) so older snapshots keep working. */
+.irccolor.color-0,  .irccolor.white,   .irccolor.color-white  { color: #ffffff; }
+.irccolor.color-1,  .irccolor.black,   .irccolor.color-black  { color: #000000; }
+.irccolor.color-2,  .irccolor.navy,    .irccolor.color-navy   { color: rgb(70, 130, 180); }
+.irccolor.color-3,  .irccolor.green,   .irccolor.color-green  { color: rgb(50, 205, 50); }
+.irccolor.color-4,  .irccolor.red,     .irccolor.color-red    { color: rgb(255, 99, 71); }
+.irccolor.color-5,  .irccolor.maroon,  .irccolor.color-maroon { color: salmon; }
+.irccolor.color-6,  .irccolor.purple,  .irccolor.color-purple { color: orchid; }
+.irccolor.color-7,  .irccolor.orange,  .irccolor.color-orange { color: rgb(255, 140, 0); }
+.irccolor.color-8,  .irccolor.yellow,  .irccolor.color-yellow { color: rgb(255, 255, 0); }
+.irccolor.color-9,  .irccolor.lime,    .irccolor.color-lime   { color: lime; }
+.irccolor.color-10, .irccolor.teal,    .irccolor.color-teal   { color: rgb(32, 178, 170); }
+.irccolor.color-11, .irccolor.cyan,    .irccolor.color-cyan   { color: cyan; }
+.irccolor.color-12, .irccolor.blue,    .irccolor.color-blue   { color: rgb(0, 191, 255); }
+.irccolor.color-13, .irccolor.magenta, .irccolor.color-magenta{ color: rgb(255, 0, 255); }
+.irccolor.color-14, .irccolor.grey,    .irccolor.color-grey   { color: grey; }
+.irccolor.color-15, .irccolor.silver,  .irccolor.color-silver { color: silver; }
 .irccolor.inverse   { filter: invert(1); }
 
 /* Background colors. `box-decoration-break: clone` makes the bg paint
@@ -148,17 +153,124 @@ body.ascii-compact .row.messageRow {
 }
 .irccolor-bg.bg-0,  .irccolor-bg.bg-white  { background-color: #ffffff; color: #000; }
 .irccolor-bg.bg-1,  .irccolor-bg.bg-black  { background-color: #000000; }
-.irccolor-bg.bg-2,  .irccolor-bg.bg-navy   { background-color: #0e1b7e; }
-.irccolor-bg.bg-3,  .irccolor-bg.bg-green  { background-color: #1b7e1b; }
-.irccolor-bg.bg-4,  .irccolor-bg.bg-red    { background-color: #b22d2d; }
-.irccolor-bg.bg-5,  .irccolor-bg.bg-maroon { background-color: #7e1b1b; }
-.irccolor-bg.bg-6,  .irccolor-bg.bg-purple { background-color: #5e1b7e; }
-.irccolor-bg.bg-7,  .irccolor-bg.bg-orange { background-color: #ff7e1b; }
-.irccolor-bg.bg-8,  .irccolor-bg.bg-yellow { background-color: #ffff1b; color: #000; }
-.irccolor-bg.bg-9,  .irccolor-bg.bg-lime   { background-color: #1bff1b; color: #000; }
-.irccolor-bg.bg-10, .irccolor-bg.bg-teal   { background-color: #1b7e7e; }
-.irccolor-bg.bg-11, .irccolor-bg.bg-cyan   { background-color: #1bffff; color: #000; }
-.irccolor-bg.bg-12, .irccolor-bg.bg-blue   { background-color: #1b1bff; }
-.irccolor-bg.bg-13, .irccolor-bg.bg-magenta{ background-color: #ff1bff; }
-.irccolor-bg.bg-14, .irccolor-bg.bg-grey   { background-color: #5e5e5e; }
-.irccolor-bg.bg-15, .irccolor-bg.bg-silver { background-color: #b2b2b2; color: #000; }
+.irccolor-bg.bg-2,  .irccolor-bg.bg-navy   { background-color: rgb(70, 130, 180); }
+.irccolor-bg.bg-3,  .irccolor-bg.bg-green  { background-color: rgb(50, 205, 50); }
+.irccolor-bg.bg-4,  .irccolor-bg.bg-red    { background-color: rgb(255, 99, 71); }
+.irccolor-bg.bg-5,  .irccolor-bg.bg-maroon { background-color: salmon; }
+.irccolor-bg.bg-6,  .irccolor-bg.bg-purple { background-color: orchid; }
+.irccolor-bg.bg-7,  .irccolor-bg.bg-orange { background-color: rgb(255, 140, 0); }
+.irccolor-bg.bg-8,  .irccolor-bg.bg-yellow { background-color: rgb(255, 255, 0); color: #000; }
+.irccolor-bg.bg-9,  .irccolor-bg.bg-lime   { background-color: lime; color: #000; }
+.irccolor-bg.bg-10, .irccolor-bg.bg-teal   { background-color: rgb(32, 178, 170); }
+.irccolor-bg.bg-11, .irccolor-bg.bg-cyan   { background-color: cyan; color: #000; }
+.irccolor-bg.bg-12, .irccolor-bg.bg-blue   { background-color: rgb(0, 191, 255); }
+.irccolor-bg.bg-13, .irccolor-bg.bg-magenta{ background-color: rgb(255, 0, 255); }
+.irccolor-bg.bg-14, .irccolor-bg.bg-grey   { background-color: grey; }
+.irccolor-bg.bg-15, .irccolor-bg.bg-silver { background-color: silver; color: #000; }
+
+/* ─── ACTION (/me) message — IRCCloud parity ───────────────────────────
+   IRCCloud renders an ACTION as a `.row.messageRow.me` with everything
+   (avatar, me-dash, mode prefix, author, BOT badge, message body) packed
+   inline inside a single `<span class="content">`. The rules below match
+   IRCCloud's computed styles for this layout (see captures in
+   irccloud_action_computed.json) so /me lines from the same channel
+   render identically here and in IRCCloud. */
+
+/* The em-dash separator between the author and the action body. */
+.row.messageRow.me .me_prefix,
+.row.messageRow.action .me_prefix {
+  color: #bbb;
+  font-style: italic;
+}
+
+/* /me messages pack the avatar inline alongside the author and the
+   action body, so the legacy absolutely-positioned 32×32 avatar from
+   style.css (driven by `.row.messageRow .letterAvatar`) is wrong here.
+   Reset position + size to the IRCCloud 16×16 inline-block puck and
+   re-centre the inner letter inside the smaller circle. */
+.row.messageRow.me .letterAvatar,
+.row.messageRow.action .letterAvatar {
+  position: relative;
+  top: auto;
+  left: auto;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  margin: 0 6px -3px 0;
+  box-shadow: none;
+}
+.row.messageRow.me .letterAvatar > span,
+.row.messageRow.action .letterAvatar > span {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  margin: 2px 0;
+  font-family: "Source Sans Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 12px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+/* The action body inherits the row's normal foreground colour — no
+   italic, no extra weight — so it reads as a flowing inline sentence
+   after the em-dash. (Matches the IRCCloud computed values captured in
+   irccloud_action_computed.json.) */
+.row.messageRow.me .content,
+.row.messageRow.action .content {
+  font-style: normal;
+}
+
+/* Channel-mode prefixes shown next to nicks. IRCCloud emits BOTH a
+   "symbol" variant (the raw IRC char `@`/`%`/`+`) and a "pill" variant
+   (the • bullet) — the active site preference toggles which is visible
+   via `body.mode-hidesymbol`. We default to the symbol form. */
+.mode_prefix.mode_symbol,
+.mode_prefix.mode_pill {
+  display: inline;
+  margin-right: 3px;
+  font-family: Hack, monospace;
+  font-size: 14px;
+}
+.mode_prefix.mode_pill { font-weight: 600; display: none; }
+body.mode-hidesymbol .mode_prefix.mode_symbol { display: none; }
+body.mode-hidesymbol .mode_prefix.mode_pill   { display: inline; }
+
+/* Mode-prefix colors. Picked from IRCCloud's dusk theme so the
+   half-op/op/voiced markers match the colors users already recognise. */
+.mode_prefix.mode_OPER   { color: rgb(255, 99, 71); }
+.mode_prefix.mode_OWNER  { color: rgb(255, 99, 71); }
+.mode_prefix.mode_ADMIN  { color: rgb(181, 145, 0); }
+.mode_prefix.mode_OP     { color: rgb(50, 205, 50); }
+.mode_prefix.mode_HALFOP { color: rgb(181, 89, 0); }
+.mode_prefix.mode_VOICED { color: rgb(0, 191, 255); }
+
+/* When the author span carries a `.moded` modifier (e.g. `moded
+   mode_HALFOP`) IRCCloud bumps the nick to font-weight 600 — same
+   semantics as the unmoded author link, but emphasising the moded
+   status so it reads as a single styled token. */
+.row.messageRow .author.moded { font-weight: 600; }
+
+/* The "BOT" badge that IRCCloud paints after the nick on accounts
+   flagged with the bot mode. Inner <span> styled to match IRCCloud's
+   ash/dusk theme pill (dark grey bg, light grey text, 11px, 3px
+   border-radius, nudged up 1px to optically centre on the baseline). */
+.row.messageRow .author-bot,
+.row.messageRow .channel-context { display: inline; }
+.row.messageRow .author-bot > span,
+.row.messageRow .channel-context > span {
+  display: inline-block;
+  position: relative;
+  top: -1px;
+  margin-right: 5px;
+  padding: 1px 3px;
+  background-color: rgb(64, 64, 64);
+  color: rgb(179, 179, 179);
+  border-radius: 3px;
+  line-height: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}

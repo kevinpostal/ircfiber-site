@@ -1,6 +1,6 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData } from '../types';
 import { ircState, handleConnect, updateChannelUsers,
-         updateChannelTopic, appendMessage, prependMessage } from '../stores/ircStore.svelte';
+         updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping } from '../stores/ircStore.svelte';
 import { isIgnored } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
@@ -23,6 +23,33 @@ const defaultAppend: AppendFn = (networkId, bufferName, msg, isBackfill) => {
 // from the component tree. Pattern mirrors IRCCloud's messageHandlers map.
 
 /**
+ * Detect CTCP ACTION (\x01ACTION ...\x01) in a PRIVMSG payload and return
+ * the action body + a synthesized `type='action'` marker. Returns null
+ * when the message isn't a CTCP ACTION so callers can leave their fields
+ * untouched.
+ *
+ * The D backend intentionally leaves the \x01 markers in place — this
+ * one helper is the single source of truth for unwrapping them, used by
+ * both the realtime WebSocket path (`unpackEvent`) and the REST history
+ * loader (`normalizeMessage` in stores/api.ts). Keeping the logic in one
+ * place avoids the "history-loaded actions render with literal \x01"
+ * bug we hit before.
+ */
+export function detectCtcpAction(cmd: string, text: string): { text: string; type: 'action' } | null {
+  if (cmd !== 'PRIVMSG') return null;
+  if (!text || text.charCodeAt(0) !== 0x01) return null;
+  if (!text.includes(' ')) return null;
+  const end = text.indexOf('\x01', 1);
+  if (end <= 1) return null;
+  const inner = text.slice(1, end);
+  const spaceIdx = inner.indexOf(' ');
+  if (spaceIdx < 0) return null;
+  const ctcpCmd = inner.slice(0, spaceIdx);
+  if (ctcpCmd !== 'ACTION') return null;
+  return { text: inner.slice(spaceIdx + 1), type: 'action' };
+}
+
+/**
  * Unpack a compact WebSocket message into a typed IRCMessage.
  */
 export function unpackEvent(
@@ -33,21 +60,10 @@ export function unpackEvent(
   let text = ((data.text as string) || (data.x as string) || '') as string;
   let type = data.type as string | undefined;
 
-  // Detect CTCP ACTION: PRIVMSG containing "\x01ACTION ...\x01"
-  // The D backend intentionally leaves the \x01 markers in place and
-  // expects the JS frontend to render them as /me actions.
-  if (cmd === 'PRIVMSG' && text.startsWith('\x01') && text.includes(' ')) {
-    const end = text.indexOf('\x01', 1);
-    if (end > 1) {
-      const inner = text.slice(1, end);
-      const spaceIdx = inner.indexOf(' ');
-      const ctcpCmd = spaceIdx === -1 ? inner : inner.slice(0, spaceIdx);
-      const ctcpParam = spaceIdx === -1 ? '' : inner.slice(spaceIdx + 1);
-      if (ctcpCmd === 'ACTION') {
-        type = 'action';
-        text = ctcpParam;
-      }
-    }
+  const action = detectCtcpAction(cmd, text);
+  if (action) {
+    type = action.type;
+    text = action.text;
   }
 
   return {
@@ -113,7 +129,7 @@ export function processIrcEvent(
   // Ignore check
   if (msg.nick && isIgnored(msg.nick)) return {};
 
-  const result: { whoisData?: WhoisData; banListData?: BanListData } = {};
+  const result: { whoisData?: WhoisData; whoisFailedNick?: string; banListData?: BanListData } = {};
 
   // ── Whois accumulation ──
   if (/^3(11|312|313|317|319|330)$/.test(cmd)) {
@@ -123,6 +139,11 @@ export function processIrcEvent(
     accumulateWhois(accum, cmd, msg.params || [], msg.text || '');
   } else if (cmd === '318' && accum.whoisAcc) {
     result.whoisData = { ...accum.whoisAcc } as WhoisData;
+    accum.whoisAcc = null;
+  } else if (cmd === '401' && accum.whoisAcc && msg.params?.[0] === accum.whoisAcc.nick) {
+    // ERR_NOSUCHNICK mid-whois: server rejected the nick. Drop the partial
+    // accumulator and let App.svelte clear pendingWhois.
+    result.whoisFailedNick = accum.whoisAcc.nick;
     accum.whoisAcc = null;
   }
 
@@ -162,7 +183,23 @@ export function processIrcEvent(
     const bufObj = net.buffers.find(b => b.name === channel);
     if (bufObj?.users) {
       const u = bufObj.users.find(x => stripPrefix(x.nick) === msg.nick);
-      if (u) u.lastSpoke = msg.t ?? Date.now();
+      if (u) {
+        u.lastSpoke = msg.t ?? Date.now();
+        // Backfill ident + isBot from the message prefix the first time
+        // we see a member speak, so members originally added via NAMES
+        // (which doesn't carry the userhost) still get a BOT badge and
+        // the realname popover once a single message has arrived.
+        if (msg.prefix && msg.prefix.includes('!')) {
+          const ident = msg.prefix.slice(msg.prefix.indexOf('!') + 1);
+          if (!u.ident) u.ident = ident;
+          if (!u.isBot) {
+            const host = ident.includes('@')
+              ? ident.slice(ident.lastIndexOf('@') + 1)
+              : '';
+            if (host && /(^|\.)bot(\.|$)/i.test(host)) u.isBot = true;
+          }
+        }
+      }
     }
   }
 
@@ -170,6 +207,17 @@ export function processIrcEvent(
   // arrive out-of-order and must be prepended so they appear at the top.
   const isBackfill = (data.tags as Record<string, string> | undefined)?.batch === 'chathistory'
     || (data.batch as string | undefined) === 'chathistory';
+
+  // ── Typing indicators (IRCCloud-style TAGMSG) ──
+  if (cmd === 'TAGMSG' && msg.nick && channel !== '_server') {
+    setTyping(networkId, channel, msg.nick);
+    return {};
+  }
+
+  // ── Clear typing when the user actually sends a message ──
+  if (cmd === 'PRIVMSG' && msg.nick) {
+    clearTyping(networkId, channel, msg.nick);
+  }
 
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {

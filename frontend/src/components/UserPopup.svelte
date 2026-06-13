@@ -88,7 +88,10 @@
   });
 
   function doWhois(): void {
-    if (networkId) onSendRaw(networkId, 'WHOIS ' + displayNick);
+    if (networkId) {
+      ircState.pendingWhois.add(displayNick.toLowerCase());
+      onSendRaw(networkId, 'WHOIS ' + displayNick);
+    }
     close();
   }
 

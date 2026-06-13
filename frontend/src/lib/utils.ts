@@ -142,7 +142,7 @@ export function isJoinPartLike(cmd: string): boolean {
 }
 
 export function isSkippedCommand(cmd: string): boolean {
-  return ['353', '366', '376', '422', 'PONG'].includes(cmd);
+  return ['353', '366', '376', '422', 'PONG', 'TAGMSG'].includes(cmd);
 }
 
 export function isDisconnectLike(cmd: string, text?: string): boolean {
@@ -185,10 +185,10 @@ export function previewText(text: string, expanded: boolean): string {
   return byLines.slice(0, MAX_PREVIEW_CHARS);
 }
 
-export function getUserModePrefix(nick: string): { prefix: string; cls: string; category: ModeCategory; mode: string } {
+export function getUserModePrefix(nick: string): { prefix: string; cls: string; category: ModeCategory; mode: string; title: string } {
   const first = nick.charAt(0);
   if (first in MODE_PREFIX_MAP) return MODE_PREFIX_MAP[first];
-  return { prefix: '', cls: '', category: 'MEMBER', mode: '' };
+  return { prefix: '', cls: '', category: 'MEMBER', mode: '', title: '' };
 }
 
 export function stripPrefix(nick: string): string {
@@ -196,6 +196,48 @@ export function stripPrefix(nick: string): string {
   const bang = n.indexOf('!');
   if (bang > 0) n = n.slice(0, bang);
   return n;
+}
+
+/**
+ * Canonical nick for color/identity comparison — byte-for-byte parity
+ * with IRCCloud's `normaliseIdentifier`. Lowercases, strips an
+ * away-suffix (`alice|away` → `alice`), strips the host part of a
+ * `user@host` mask, and strips ornamental leading/trailing characters
+ * commonly added by IRC clients (`_`, `` ` ``, `[`, `]`, etc.). Empty
+ * input falls back to a single space, matching IRCCloud's behaviour so
+ * tests stay deterministic across the empty case.
+ *
+ * Source: extracted live from IRCCloud's `common-*.js`
+ * (`normaliseIdentifier:function(e){return e=f.strip(c.stringify(e))||" ",
+ *  e.toLowerCase().replace(/[@|].*$/,"").replace(/^[\\\\[\\]^_\`{|}]+/,"")
+ *  .replace(/[\`_]+$/,"")||e}`).
+ */
+export function normaliseIdentifier(nick: string | null | undefined): string {
+  const raw = nick == null ? '' : String(nick);
+  const base = raw || ' ';
+  const cleaned = base
+    .toLowerCase()
+    .replace(/[@|].*$/, '')
+    // eslint-disable-next-line no-useless-escape
+    .replace(/^[\\[\]^_`{|}]+/, '')
+    .replace(/[`_]+$/, '');
+  return cleaned || base;
+}
+
+/**
+ * Avatar / author color index in the IRCCloud 27-slot palette. SDBM
+ * hash over the normalised nick, taken modulo 27 (the value of
+ * `window.IRCConfig.nickColors` on IRCCloud). Matches IRCCloud's
+ * `getNickColorIndex()` exactly so two users see the same nick painted
+ * in the same colour across both clients.
+ */
+export function nickColorIndex(nick: string): number {
+  const id = normaliseIdentifier(nick);
+  let n = 0;
+  for (let i = 0; i < id.length; i++) {
+    n = id.charCodeAt(i) + (n << 6) + (n << 16) - n;
+  }
+  return Math.abs(n % 27);
 }
 
 export function getAvatarColor(nick: string): string {
@@ -247,8 +289,14 @@ export function naturalCompare(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 }
 
-export function getIrcCloudTypeClass(cmd: string, params?: string[]): string {
+export function getIrcCloudTypeClass(cmd: string, params?: string[], type?: string): string {
+  // Actions take precedence over PRIVMSG so /me messages get the
+  // type_buffer_me_msg class IRCCloud emits.
+  if (type === 'action') return 'type_buffer_me_msg';
+
   switch (cmd) {
+    case 'PRIVMSG': return 'type_buffer_msg';
+    case 'NOTICE': return 'type_notice';
     case '001': return 'type_server_welcome';
     case '002': return 'type_server_yourhost';
     case '003': return 'type_server_created';

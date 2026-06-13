@@ -1,23 +1,37 @@
 import type { IRCMessage } from '../types';
+import { detectCtcpAction } from '../lib/messageHandler';
 
 const API_BASE = '/api';
 
 function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
   const t = raw.t as number | undefined;
   const eid = raw.eid as number | undefined;
+  const command = (raw.command as string) || (raw.c as string) || '';
+  let text = (raw.text as string) || (raw.x as string) || undefined;
+  let type = raw.type as string | undefined;
+  // History-loaded PRIVMSGs still carry the raw \x01ACTION ...\x01 CTCP
+  // markers from the engine. Unwrap them here so /me messages render as
+  // actions instead of literal control characters.
+  if (text) {
+    const action = detectCtcpAction(command, text);
+    if (action) {
+      text = action.text;
+      type = action.type;
+    }
+  }
   return {
     id: (raw.id as string) || (raw.i as string) || undefined,
     timestamp: (raw.timestamp as string) || (t ? new Date(t).toISOString() : undefined),
     t,
     eid: (eid != null && eid > 0) ? eid : undefined,
     nick: (raw.nick as string) || (raw.n as string) || undefined,
-    text: (raw.text as string) || (raw.x as string) || undefined,
-    command: (raw.command as string) || (raw.c as string) || '',
+    text,
+    command,
     params: (raw.params as string[]) || (raw.p as string[]) || [],
     prefix: (raw.prefix as string) || (raw.px as string) || undefined,
     msgid: (raw.msgid as string) || (raw.m as string) || (raw.i as string) || undefined,
     label: (raw.label as string) || (raw.l as string) || undefined,
-    type: raw.type as string | undefined,
+    type,
   };
 }
 

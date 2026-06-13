@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer } from '../stores/ircStore.svelte';
   import { sendMessage, sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
@@ -50,6 +50,86 @@
   });
   const avatarColor = $derived(getAvatarColor(myNick));
   const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
+
+  // ── Typing indicators (IRCCloud-style) ──
+  const typingKey = $derived(
+    ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
+      ? `${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`
+      : ''
+  );
+  const typingNicks = $derived.by(() => {
+    const netId = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!netId || !buf) return [];
+    const typers = getTypersForBuffer(netId, buf);
+    // Filter out the current user's own typing echo
+    return typers.filter(n => n !== myNick);
+  });
+  const typingText = $derived.by(() => {
+    const nicks = typingNicks;
+    if (nicks.length === 0) return '';
+    if (nicks.length > 5) return `${nicks.length} people are typing`;
+    let s = nicks[0];
+    for (let i = 1; i < nicks.length; i++) {
+      s += i === nicks.length - 1 ? ' and ' : ', ';
+      s += nicks[i];
+    }
+    return s + (nicks.length === 1 ? ' is typing' : ' are typing');
+  });
+
+  // ── Send typing notifications ──
+  let typingTimer: ReturnType<typeof setInterval> | null = null;
+  let wasTyping = $state(false);
+
+  function sendTypingActive(): void {
+    const netId = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!netId || !buf || buf.startsWith('_')) return;
+    // TAGMSG with +typing=active — IRCCloud sends this every ~3s while typing
+    sendRaw(netId, `@+typing=active TAGMSG ${buf}`);
+  }
+
+  function sendTypingDone(): void {
+    const netId = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!netId || !buf || buf.startsWith('_')) return;
+    sendRaw(netId, `@+typing=done TAGMSG ${buf}`);
+  }
+
+  function startTypingTimer(): void {
+    if (typingTimer) return;
+    sendTypingActive();
+    typingTimer = setInterval(sendTypingActive, 3000);
+  }
+
+  function stopTypingTimer(): void {
+    if (typingTimer) {
+      clearInterval(typingTimer);
+      typingTimer = null;
+    }
+  }
+
+  $effect(() => {
+    const val = inputValue;
+    const isTyping = val.length > 0 && !val.startsWith('/');
+    if (isTyping && !wasTyping) {
+      startTypingTimer();
+    } else if (!isTyping && wasTyping) {
+      sendTypingDone();
+      stopTypingTimer();
+    }
+    wasTyping = isTyping;
+  });
+
+  // Cleanup typing timer on destroy
+  $effect(() => {
+    return () => {
+      if (typingTimer) {
+        clearInterval(typingTimer);
+        typingTimer = null;
+      }
+    };
+  });
 
   $effect(() => {
     setDeps({
@@ -480,9 +560,27 @@
     onsent={onPastebinSent}
   />
   <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>
+  <div class="inputstatuscell">
+    {#if typingText}
+      <span class="inputstatus_typers">{typingText}</span>
+    {/if}
+  </div>
   {#if emojiOpen}
     <div id="emoji-popover" class="emoji-popover" role="dialog" aria-label="Emoji picker">
       <emoji-picker class="dark"></emoji-picker>
     </div>
   {/if}
 </div>
+
+<style>
+  :global(.inputstatuscell) {
+    flex: 0 0 auto;
+    font-size: 13px;
+    padding: 5px 25px;
+    margin-top: -2px;
+    height: 16px;
+    line-height: 18px;
+    overflow: hidden;
+    color: rgb(136, 136, 136);
+  }
+</style>

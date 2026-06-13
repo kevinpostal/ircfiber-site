@@ -1,5 +1,3 @@
-import { escapeHtml } from './utils';
-
 // Extended mIRC color palette: codes 16-98 map to hex RGB
 const EXTENDED_COLORS: Record<number, string> = {
   16: '#470000', 17: '#472100', 18: '#474700', 19: '#324700', 20: '#004700',
@@ -19,6 +17,17 @@ const EXTENDED_COLORS: Record<number, string> = {
   86: '#ff9cff', 87: '#ff94d3', 88: '#000000', 89: '#131313', 90: '#282828',
   91: '#363636', 92: '#4d4d4d', 93: '#656565', 94: '#818181', 95: '#9f9f9f',
   96: '#bcbcbc', 97: '#e2e2e2', 98: '#ffffff',
+};
+
+// Named-color classes for the standard mIRC palette (0-15). IRCCloud
+// uses these names — emitting them lets our markup match theirs
+// byte-for-byte (e.g. `<span class="irccolor teal">`) and lets the
+// IRCCloud color CSS we ship work without per-numeric overrides.
+const COLOR_NAMES: Record<number, string> = {
+  0: 'white',   1: 'black',  2: 'navy',   3: 'green',
+  4: 'red',     5: 'maroon', 6: 'purple', 7: 'orange',
+  8: 'yellow',  9: 'lime',  10: 'teal',  11: 'cyan',
+  12: 'blue',  13: 'magenta',14: 'grey', 15: 'silver',
 };
 
 /**
@@ -52,8 +61,19 @@ export function parseIrcFormatting(text: string): string {
     if (reverse) classes.push('reverse');
     if (monospace) classes.push('monospace');
     if (strikethrough) classes.push('strikethrough');
-    if (fg !== null && fg <= 15) classes.push(`irccolor color-${fg}`);
-    if (bg !== null && bg <= 15) classes.push(`irccolor-bg bg-${bg}`);
+    if (fg !== null && fg <= 15) {
+      // IRCCloud-parity: emit both the numeric class (color-N) for our
+      // legacy CSS *and* the named class (e.g. "teal") that matches
+      // IRCCloud's markup exactly. Either selector will style the span.
+      classes.push('irccolor');
+      classes.push(COLOR_NAMES[fg]);
+      classes.push(`color-${fg}`);
+    }
+    if (bg !== null && bg <= 15) {
+      classes.push('irccolor-bg');
+      classes.push(`bg-${COLOR_NAMES[bg]}`);
+      classes.push(`bg-${bg}`);
+    }
     let style = '';
     if (fg !== null && fg >= 16 && fg <= 98 && EXTENDED_COLORS[fg]) {
       style += `color:${EXTENDED_COLORS[fg]};`;
@@ -69,6 +89,15 @@ export function parseIrcFormatting(text: string): string {
     const cls = classes.length ? ` class="${classes.join(' ')}"` : '';
     const sty = style ? ` style="${style}"` : '';
     return `<span${cls}${sty}>`;
+  }
+
+  function emitChar(c: string): void {
+    if (c === '&') out += '&amp;';
+    else if (c === '<') out += '&lt;';
+    else if (c === '>') out += '&gt;';
+    else if (c === '"') out += '&quot;';
+    else if (c === "'") out += '&#039;';
+    else out += c;
   }
 
   while (i < text.length) {
@@ -134,7 +163,7 @@ export function parseIrcFormatting(text: string): string {
       stateChanged = true;
     }
     else {
-      out += escapeHtml(text[i]);
+      emitChar(text[i]);
       i++;
     }
 

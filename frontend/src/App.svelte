@@ -32,11 +32,12 @@
   import { notify } from './lib/notifications';
   import { membersCollapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, suppressAnimations, globalPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
-  import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings } from './lib/routing';
+  import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
   import { enqueueMessage, setFlushFn } from './lib/messageBatcher';
   import WelcomePage from './components/WelcomePage.svelte';
   import SettingsPage from './components/SettingsPage.svelte';
+import ShortcutsPage from './components/ShortcutsPage.svelte';
   import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member } from './types';
 
   let showNetworkForm: boolean = $state(false);
@@ -116,14 +117,14 @@
   }
 
   $effect(() => {
-    if (ircState.showSettings) return;
+    if (ircState.showSettings || ircState.showShortcuts) return;
     const { networkId, bufferName } = ircState.activeBuffer;
     if (networkId && bufferName) updateRoute(networkId, bufferName);
   });
 
   // Auto-select first network's server buffer when networks exist but none is active
   $effect(() => {
-    if (ircState.showSettings) return;
+    if (ircState.showSettings || ircState.showShortcuts) return;
     if (!ircState.activeBuffer.networkId && !ircState.activeBuffer.bufferName && ircState.networks.length > 0) {
       const firstNet = ircState.networks[0];
       if (firstNet) {
@@ -281,10 +282,23 @@
       e.preventDefault();
       switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
     }
+    if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const target = e.target as HTMLElement | null;
+      if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.isContentEditable !== true)) {
+        e.preventDefault();
+        ircState.showShortcuts = true;
+        history.pushState({ shortcuts: true }, '', '/?/shortcuts');
+      }
+    }
     if (e.key === 'Escape') {
       if (ircState.showSettings) {
         ircState.showSettings = false;
         navigateBackFromSettings();
+        return;
+      }
+      if (ircState.showShortcuts) {
+        ircState.showShortcuts = false;
+        navigateBackFromShortcuts();
         return;
       }
       if (ircState.overlay.type) { ircState.overlay.type = null; ircState.overlay.data = null; }
@@ -434,8 +448,19 @@
     const result = processIrcEvent(data, counter, accum, { switchToBuffer }, enqueueMessage);
     localMsgIdCounter = counter.value;
     if (result.whoisData) {
-      ircState.overlay.type = 'whois';
-      ircState.overlay.data = result.whoisData as WhoisData;
+      // Only pop the WHOIS overlay when the user explicitly requested it.
+      // The server also issues automatic WHOIS queries on JOIN to populate
+      // realnames (see ircfiber/irc/connection.d); those responses must not
+      // interrupt the user with a modal.
+      const nickKey = (result.whoisData.nick || '').toLowerCase();
+      if (nickKey && ircState.pendingWhois.has(nickKey)) {
+        ircState.pendingWhois.delete(nickKey);
+        ircState.overlay.type = 'whois';
+        ircState.overlay.data = result.whoisData as WhoisData;
+      }
+    }
+    if (result.whoisFailedNick) {
+      ircState.pendingWhois.delete(result.whoisFailedNick.toLowerCase());
     }
     if (result.banListData) {
       ircState.overlay.type = 'banlist';
@@ -449,9 +474,16 @@
     if (settingsTab) {
       ircState.showSettings = true;
       ircState.settingsTab = settingsTab;
+      ircState.showShortcuts = false;
+      return;
+    }
+    if (isShortcutsUrl()) {
+      ircState.showShortcuts = true;
+      ircState.showSettings = false;
       return;
     }
     ircState.showSettings = false;
+    ircState.showShortcuts = false;
     const m = path.match(/^\/irc\/([^\/]+)(?:\/(channel|messages)\/([^\/]+))?\/?$/);
     if (!m) return;
     const netName = decodeURIComponent(m[1]);
@@ -477,7 +509,7 @@
   }
 
   function selectLastActiveBuffer(syncNetworks: Network[]): void {
-    if (ircState.showSettings) return;
+    if (ircState.showSettings || ircState.showShortcuts) return;
     if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) return;
     for (const net of syncNetworks) {
       if (!net.connected) continue;
@@ -610,6 +642,8 @@
   <div class="main-area">
     {#if ircState.showSettings}
       <SettingsPage />
+    {:else if ircState.showShortcuts}
+      <ShortcutsPage />
     {:else if ircState.networks.length === 0}
       <WelcomePage />
     {:else}

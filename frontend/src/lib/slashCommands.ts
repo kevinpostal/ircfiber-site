@@ -58,6 +58,7 @@ registerSlash(['invite'], (args, networkId, target) => {
 
 registerSlash(['whois', 'wi'], (args, networkId) => {
   if (!args[0]) throw new Error('Usage: /whois <nickname>');
+  ircState.pendingWhois.add(args[0].toLowerCase());
   sendRaw(networkId, 'WHOIS ' + args[0]);
 });
 

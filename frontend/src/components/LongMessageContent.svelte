@@ -15,14 +15,9 @@
   const displayText = $derived(expanded ? text : previewText(text, false));
 </script>
 
-<span class="longMessageContent">
-  {@html render(displayText)}
-  {#if needsTruncation}
-    <button
-      type="button"
-      class="messageTruncated"
-      aria-expanded={expanded}
-      onclick={() => expanded = !expanded}
-    >{expanded ? 'Show less' : `Show more${lineCount > MAX_PREVIEW_LINES ? ` (${lineCount - MAX_PREVIEW_LINES} lines)` : ' (truncated)'}`}</button>
-  {/if}
-</span>
+<span class="longMessageContent">{@html render(displayText)}{#if needsTruncation}<button
+  type="button"
+  class="messageTruncated"
+  aria-expanded={expanded}
+  onclick={() => expanded = !expanded}
+>{expanded ? 'Show less' : `Show more${lineCount > MAX_PREVIEW_LINES ? ` (${lineCount - MAX_PREVIEW_LINES} lines)` : ' (truncated)'}`}</button>{/if}</span>

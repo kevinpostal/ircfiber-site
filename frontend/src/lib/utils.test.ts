@@ -11,6 +11,8 @@ import {
   naturalCompare,
   getIrcCloudTypeClass,
   formatNumericText,
+  normaliseIdentifier,
+  nickColorIndex,
 } from './utils';
 
 describe('escapeHtml', () => {
@@ -299,5 +301,69 @@ describe('formatNumericText', () => {
 
   it('returns text for unhandled numeric', () => {
     expect(formatNumericText('999', [], 'Unknown')).toBe('Unknown');
+  });
+});
+
+describe('normaliseIdentifier', () => {
+  it('lowercases the nick', () => {
+    expect(normaliseIdentifier('AShapiro')).toBe('ashapiro');
+  });
+
+  it('strips an away-suffix after | or @', () => {
+    expect(normaliseIdentifier('alice|away')).toBe('alice');
+    expect(normaliseIdentifier('alice@host')).toBe('alice');
+  });
+
+  it('strips ornamental leading characters', () => {
+    expect(normaliseIdentifier('_alice')).toBe('alice');
+    expect(normaliseIdentifier('`alice')).toBe('alice');
+    expect(normaliseIdentifier('[alice]')).toBe('alice]');
+  });
+
+  it('strips trailing _ and backticks', () => {
+    expect(normaliseIdentifier('sq_')).toBe('sq');
+    expect(normaliseIdentifier('alice___')).toBe('alice');
+    expect(normaliseIdentifier('alice`')).toBe('alice');
+  });
+
+  it('falls back to a space for empty input', () => {
+    expect(normaliseIdentifier('')).toBe(' ');
+    expect(normaliseIdentifier(null)).toBe(' ');
+    expect(normaliseIdentifier(undefined)).toBe(' ');
+  });
+});
+
+describe('nickColorIndex (IRCCloud parity)', () => {
+  // Ground-truth pairs harvested from a live IRCCloud session via
+  // Playwright (see irccloud_nicks_colors.json). If any of these break
+  // it means our hash has drifted from IRCCloud's and avatars/nicks will
+  // start rendering in different colours between the two clients.
+  const pairs: Array<[string, number]> = [
+    ['amita', 19], ['don', 14], ['charlie', 20], ['AShapiro', 22],
+    ['RAPEEPORN_SINGH', 18], ['roarie', 11], ['sq_', 9], ['Carlos', 9],
+    ['chud', 19], ['scroll', 14], ['bombuzal', 3],
+  ];
+  for (const [nick, expected] of pairs) {
+    it(`maps "${nick}" to c${expected}`, () => {
+      expect(nickColorIndex(nick)).toBe(expected);
+    });
+  }
+
+  it('treats trailing-underscore aliases as the same colour', () => {
+    expect(nickColorIndex('alice')).toBe(nickColorIndex('alice_'));
+    expect(nickColorIndex('alice')).toBe(nickColorIndex('alice__'));
+  });
+
+  it('is case-insensitive', () => {
+    expect(nickColorIndex('Alice')).toBe(nickColorIndex('alice'));
+    expect(nickColorIndex('ALICE')).toBe(nickColorIndex('alice'));
+  });
+
+  it('always returns a non-negative index < 27', () => {
+    for (const n of ['', 'a', 'long-nick-name', 'WAY|TOO|MANY|PIPES']) {
+      const idx = nickColorIndex(n);
+      expect(idx).toBeGreaterThanOrEqual(0);
+      expect(idx).toBeLessThan(27);
+    }
   });
 });

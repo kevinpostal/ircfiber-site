@@ -23,20 +23,20 @@ describe('parseIrcFormatting', () => {
   it('parses mIRC color with foreground only', () => {
     const input = '\x0304red text';
     const result = parseIrcFormatting(input);
-    expect(result).toBe('<wbr><span class="irccolor color-4">red text</span>');
+    expect(result).toBe('<wbr><span class="irccolor red color-4">red text</span>');
   });
 
   it('parses mIRC color with foreground and background', () => {
     const input = '\x0304,08red on yellow';
     const result = parseIrcFormatting(input);
-    expect(result).toBe('<wbr><span class="irccolor color-4 irccolor-bg bg-8">red on yellow</span>');
+    expect(result).toBe('<wbr><span class="irccolor red color-4 irccolor-bg bg-yellow bg-8">red on yellow</span>');
   });
 
   it('handles nested formatting (bold + color)', () => {
     const input = '\x02\x0304bold and red';
     const result = parseIrcFormatting(input);
     // Bold toggle creates an empty tag first, then color opens combined
-    expect(result).toBe('<wbr><span class="bold"></span><wbr><span class="bold irccolor color-4">bold and red</span>');
+    expect(result).toBe('<wbr><span class="bold"></span><wbr><span class="bold irccolor red color-4">bold and red</span>');
   });
 
   it('handles reset code (\x0F)', () => {

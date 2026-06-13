@@ -42,3 +42,22 @@ export function navigateBackFromSettings(): void {
     window.location.href = '/';
   }
 }
+
+export function navigateShortcuts(): void {
+  history.pushState({ shortcuts: true }, '', '/?/shortcuts');
+}
+
+export function isShortcutsUrl(): boolean {
+  return /^\?\/shortcuts$/.test(window.location.search);
+}
+
+export function navigateBackFromShortcuts(): void {
+  const net = ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId);
+  if (net && ircState.activeBuffer.bufferName) {
+    updateRoute(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName);
+  } else if (ircState.networks.length > 0) {
+    updateRoute(ircState.networks[0].networkId, '_server');
+  } else {
+    window.location.href = '/';
+  }
+}

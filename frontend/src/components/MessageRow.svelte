@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { IRCMessage, Member } from '../types';
-  import { formatTime12Hour, formatDateTimeTitle, stringHash, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml } from '../lib/utils';
+  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { autolinkHtml, mentionNicks } from '../lib/autolinker';
+  import { autolinkHtml, mentionNicksWithPattern } from '../lib/autolinker';
   import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
@@ -23,8 +23,20 @@
   const activeNetwork = $derived(getActiveNetwork());
   const myNick = $derived(activeNetwork?.currentNick || '');
   const isOwn = $derived(!!nick && !!myNick && stripPrefix(nick).toLowerCase() === myNick.toLowerCase());
-  const isBot = $derived(isBotNick(nick, findMemberForNick(nick)));
+  const isBot = $derived(isBotNick(nick, findMemberForNick(nick), msg.prefix));
   const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));
+
+  const nickPattern = $derived.by(() => {
+    if (!memberByNick || memberByNick.size === 0) return null;
+    const sorted = [...memberByNick.keys()]
+      .map(n => n.toLowerCase())
+      .sort((a, b) => b.length - a.length);
+    const escaped = sorted.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    return new RegExp(
+      `(?<=^|[^a-zA-Z0-9_\\\\[\\]\\\\{}])(${escaped.join('|')})(?=$|[^a-zA-Z0-9_\\\\[\\]\\\\{}])`,
+      'gi'
+    );
+  });
   // Lifecycle events (server/client connect or disconnect) render like
   // join/part rows in IRCCloud: no `status monospace`, just the type class.
   const isLifecycle = ['CONNECT', 'DISCONNECT'].includes(cmd);
@@ -32,7 +44,7 @@
   const isAction = msg.type === 'action';
   const isJoinPartGroup = cmd === 'JOINPART_GROUP';
   const isGrouped = isJoinPartGroup;
-  const typeClass = getIrcCloudTypeClass(cmd, msg.params);
+  const typeClass = getIrcCloudTypeClass(cmd, msg.params, msg.type);
 
   let expanded = $state(false);
 
@@ -78,17 +90,30 @@
     return r;
   }
 
-  function isBotNick(n: string, member: Member | null): boolean {
+  function isBotNick(n: string, member: Member | null, prefix?: string | null): boolean {
     if (member?.isBot) return true;
-    // Common bot heuristics: known services bots, bots with "bot" in their
-    // ident/host, or accounts literally named "BOT".
     const lower = n.toLowerCase();
-    if (lower === 'bots' || lower === 'bot' || lower.endsWith('bot')) {
-      // Be a little strict — match known services patterns
-      if (lower === 'bots' || lower.endsWith('serv') || lower.endsWith('bot')) return true;
+    // Common bot heuristics: known services bots, accounts named BOT, or
+    // identities with a "bot" segment in the ident or host portion of
+    // the userhost mask.
+    if (lower === 'bots' || lower.endsWith('serv') || lower.endsWith('bot')) {
+      return true;
     }
     if (member?.account?.toUpperCase() === 'BOT') return true;
     if (member?.ident && /(^|\.)bot(\.|$)/i.test(member.ident)) return true;
+    // Host suffix `.bot` (e.g. scroll@super.nets.bot) is the strongest
+    // public IRC signal short of `+B` user mode. We look in both the
+    // message prefix (`nick!user@host`) and any cached `member.ident`
+    // since either may carry the userhost depending on how the member
+    // entry was populated (NAMES vs WHO vs PRIVMSG).
+    const hostFromPrefix = prefix && prefix.includes('@')
+      ? prefix.slice(prefix.lastIndexOf('@') + 1)
+      : '';
+    const hostFromIdent = member?.ident && member.ident.includes('@')
+      ? member.ident.slice(member.ident.lastIndexOf('@') + 1)
+      : '';
+    const host = hostFromPrefix || hostFromIdent;
+    if (host && /(^|\.)bot(\.|$)/i.test(host)) return true;
     return false;
   }
 
@@ -123,12 +148,8 @@
   function formatTextUncached(text: string): string {
     let html = autolinkHtml(parseIrcFormatting(text));
     const isChat = cmd === 'PRIVMSG' || (cmd === 'NOTICE' && !!nick);
-    if (isChat && memberByNick && memberByNick.size > 0) {
-      const nicks = new Set<string>();
-      for (const nick of memberByNick.keys()) {
-        nicks.add(nick.toLowerCase());
-      }
-      html = mentionNicks(html, nicks);
+    if (isChat && nickPattern) {
+      html = mentionNicksWithPattern(html, nickPattern);
     }
     return html;
   }
@@ -289,7 +310,7 @@
     const eCmd = evt.command;
     const eNick = evt.nick || '';
     const eUsermask = getUsermask(evt.prefix || '');
-    const eTypeClass = getIrcCloudTypeClass(eCmd, evt.params);
+    const eTypeClass = getIrcCloudTypeClass(eCmd, evt.params, evt.type);
 
     let html = '';
     if (eCmd === 'JOIN') {
@@ -376,7 +397,7 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
@@ -389,7 +410,7 @@
     {/if}
     <span class="message">
       {#if !isSystem && !isJoinPart && !isAction && nick}
-        {@const colorIndex = stringHash(nick) % 27}
+        {@const colorIndex = nickColorIndex(nick)}
         {@const colorCls = `c${colorIndex}`}
         {@const initial = nick.charAt(0).toUpperCase()}
         {@const modePrefix = getModeForNick(nick)}
@@ -414,26 +435,31 @@
       {/if}
 
       {#if isAction && nick}
-        {@const colorIndex = stringHash(nick) % 27}
+        {@const colorIndex = nickColorIndex(nick)}
         {@const colorCls = `c${colorIndex}`}
         {@const initial = nick.charAt(0).toUpperCase()}
         {@const member = findMemberForNick(nick)}
         {@const modePrefix = getModeForNick(nick)}
-        {@const botFlag = isBotNick(nick, member)}
-        <span class="authorWrap">
+        {@const modeInfo = modePrefix ? getUserModePrefix(modePrefix + 'x') : null}
+        {@const usermask = getUsermask(msg.prefix || '')}
+        {@const authorTitle = usermask ? `${nick} (${usermask})` : nick}
+        {@const botFlag = isBotNick(nick, member, msg.prefix)}
+        {@const actionText = msg.text || ''}
+        <!--
+          IRCCloud puts the avatar, me-dash, mode prefixes, author and BOT
+          badge *inside* `.content` rather than in a sibling `.authorWrap`
+          — keeps the inline run with the action body so a single
+          `white-space: pre-wrap` line wraps correctly and matches the
+          existing IRCCloud CSS selectors (e.g. `div.messageRow .content`).
+        -->
+        <span class="content">
           <span class="avatar letterAvatar hasUserParent {colorCls}">
             <span role="presentation">{initial}</span>
-          </span>
-          <span class="me_prefix">&mdash;</span>&nbsp;
-          {#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span role="button" class="buffer bufferLink author {colorCls} user hasUserParent link"
-                title={nick} onclick={handleNickClick}>{nick}</span>&nbsp;
-          {#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}
+          </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
+          --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
+                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} />
         </span>
-      {/if}
-
-      {#if chatContent}
+      {:else if chatContent}
         <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} /></span>
       {:else}
         {@html getContentHTML()}
