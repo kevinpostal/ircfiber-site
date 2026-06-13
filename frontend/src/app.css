@@ -87,14 +87,14 @@ body.ascii-compact .row.messageRow {
    gives us that — and `<wbr>` at every color boundary still inserts
    SOFT breakpoints the browser can choose to use or ignore, so it only
    wraps when the line truly doesn't fit.
-   `contain: content` scopes layout invalidation to a single message row,
-   so a long-paste row that scrolled past the viewport doesn't cause the
-   browser to relayout nearby rows when an adjacent row updates. */
+   `display: inline` keeps it as an inline-level element so it doesn't
+   create its own line box or add unexpected padding within the message
+   span's flex layout. */
 .row.messageRow .content {
+  display: inline;
   white-space: pre-wrap;
   word-break: break-all;
   overflow-wrap: anywhere;
-  contain: content;
 }
 
 /* LongMessageContent: per-message "Show more" truncation. `inline` keeps
