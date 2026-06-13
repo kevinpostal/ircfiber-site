@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { countLines, previewText, MAX_PREVIEW_LINES } from '../lib/utils';
+  import { countLines, previewText, MAX_PREVIEW_LINES, MAX_PREVIEW_CHARS } from '../lib/utils';
 
   interface Props {
     text: string;
@@ -11,8 +11,8 @@
   let expanded = $state(false);
 
   const lineCount = $derived(countLines(text));
-  const needsTruncation = $derived(lineCount > MAX_PREVIEW_LINES);
-  const displayText = $derived(previewText(text, expanded || !needsTruncation));
+  const needsTruncation = $derived(lineCount > MAX_PREVIEW_LINES || text.length > MAX_PREVIEW_CHARS);
+  const displayText = $derived(expanded ? text : previewText(text, false));
 </script>
 
 <span class="longMessageContent">
@@ -23,6 +23,6 @@
       class="messageTruncated"
       aria-expanded={expanded}
       onclick={() => expanded = !expanded}
-    >{expanded ? 'Show less' : `Show more (${lineCount - MAX_PREVIEW_LINES} lines)`}</button>
+    >{expanded ? 'Show less' : `Show more${lineCount > MAX_PREVIEW_LINES ? ` (${lineCount - MAX_PREVIEW_LINES} lines)` : ' (truncated)'}`}</button>
   {/if}
 </span>

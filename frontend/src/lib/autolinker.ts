@@ -197,6 +197,85 @@ export function detectEmbed(url: string): EmbedType {
 }
 
 /**
+ * Wrap nicknames found in message text with mention spans, with IRCCloud-style
+ * nick color classes (c0..c26). Runs after autolinkHtml so it operates on the
+ * same split-by-tag-bounds principle — existing <a> and <span> tags are
+ * preserved.
+ *
+ * @param text  HTML text (output of autolinkHtml, already containing links etc.)
+ * @param nicks  Set of lowercase nicks that exist in the current buffer
+ */
+export function mentionNicks(text: string, nicks: Set<string>): string {
+  if (!text || !nicks || nicks.size === 0) return text;
+  const TAG_RE = /<[^>]+>/g;
+  const sorted = [...nicks].sort((a, b) => b.length - a.length);
+  const nickPattern = new RegExp(
+    `(?<=^|[^a-zA-Z0-9_\\\\[\\]\\\\{}])(${sorted.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?=$|[^a-zA-Z0-9_\\\\[\\]\\\\{}])`,
+    'gi'
+  );
+
+  let result = '';
+  let lastIdx = 0;
+  let insideAnchor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TAG_RE.exec(text)) !== null) {
+    if (m.index > lastIdx) {
+      const segment = text.slice(lastIdx, m.index);
+      if (insideAnchor === 0) {
+        result += mentionTextSegment(segment, nickPattern);
+      } else {
+        result += segment;
+      }
+    }
+    const tag = m[0].toLowerCase();
+    if (tag.startsWith('</a')) {
+      insideAnchor--;
+    } else if (tag.startsWith('<a ') || tag === '<a>') {
+      insideAnchor++;
+    }
+    result += m[0];
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) {
+    const segment = text.slice(lastIdx);
+    if (insideAnchor === 0) {
+      result += mentionTextSegment(segment, nickPattern);
+    } else {
+      result += segment;
+    }
+  }
+  return result;
+}
+
+function mentionTextSegment(segment: string, pattern: RegExp): string {
+  pattern.lastIndex = 0;
+  let result = '';
+  let lastIdx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(segment)) !== null) {
+    if (m.index > lastIdx) {
+      result += segment.slice(lastIdx, m.index);
+    }
+    const nick = m[1];
+    const colorIndex = hashStr(nick) % 27;
+    result += `<span class="buffer bufferLink mention c${colorIndex} user link">${nick}</span>`;
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < segment.length) {
+    result += segment.slice(lastIdx);
+  }
+  return result || segment;
+}
+
+function hashStr(s: string): number {
+  let hash = 0;
+  for (let i = 0; i < s.length; i++) {
+    hash = s.charCodeAt(i) + ((hash << 6) + (hash << 16) - hash);
+  }
+  return Math.abs(hash);
+}
+
+/**
  * Render text with auto-linked URLs, channels, and emails as HTML.
  *
  * The input may already contain HTML (e.g. produced by parseIrcFormatting,
