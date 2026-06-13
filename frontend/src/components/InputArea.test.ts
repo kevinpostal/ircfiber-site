@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import InputArea from './InputArea.svelte';
-import { createNetwork, createBuffer, createMember } from '../test/factories';
+import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
 import { ircState, updateChannelUsers } from '../stores/ircStore.svelte';
 
 vi.mock('/src/stores/api', () => ({
@@ -231,5 +231,31 @@ describe('InputArea', () => {
 		emojiBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 		await Promise.resolve();
 		expect(document.getElementById('emoji-popover')).toBeNull();
+	});
+
+	it('adds optimistic message to processedMessages so it renders immediately', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		// Simulate existing messages loaded from cache/history with a warm processed cache.
+		ircState.messages['net1:#general'] = [createMessage({ text: 'existing', t: Date.now() - 1000 })];
+		ircState.processedMessages['net1:#general'] = [createMessage({ text: 'existing', t: Date.now() - 1000 })];
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		await userEvent.type(textarea, 'hello world');
+		await userEvent.keyboard('{Enter}');
+
+		expect(mockSendMessage).toHaveBeenCalledWith('net1', '#general', 'hello world', expect.any(String));
+
+		const processed = ircState.processedMessages['net1:#general'];
+		expect(processed).toHaveLength(2);
+		expect(processed![1].text).toBe('hello world');
+		expect(processed![1].nick).toBe('tester');
+		expect(processed![1].label).toBeDefined();
 	});
 });

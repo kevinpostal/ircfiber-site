@@ -12,6 +12,7 @@
   import UploadMenu from './UploadMenu.svelte';
   import PastebinDialog from './PastebinDialog.svelte';
   import { MESSAGE_LENGTH_TRIGGER } from '../lib/messageSplitter';
+  import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
   import { getPastebinDisablePrompt } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { tick } from 'svelte';
@@ -261,6 +262,12 @@
       const list = ircState.messages[key] ?? [];
       list.push(optimistic);
       ircState.messages[key] = list;
+      // Keep the processed cache in sync so MessageList renders the optimistic row immediately.
+      if (ircState.processedMessages[key]) {
+        ircState.processedMessages[key] = appendToProcessed(ircState.processedMessages[key], [optimistic]);
+      } else {
+        ircState.processedMessages[key] = buildProcessedBuffer(list);
+      }
     }
 
     inputValue = '';
