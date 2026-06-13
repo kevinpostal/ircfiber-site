@@ -4,6 +4,7 @@
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, mentionNicks } from '../lib/autolinker';
   import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
+  import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
 
   interface Props {
@@ -23,7 +24,7 @@
   const myNick = $derived(activeNetwork?.currentNick || '');
   const isOwn = $derived(!!nick && !!myNick && stripPrefix(nick).toLowerCase() === myNick.toLowerCase());
   const isBot = $derived(isBotNick(nick, findMemberForNick(nick)));
-  const isBlockArt = $derived(containsBlockArt(msg.text || ''));
+  const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));
   // Lifecycle events (server/client connect or disconnect) render like
   // join/part rows in IRCCloud: no `status monospace`, just the type class.
   const isLifecycle = ['CONNECT', 'DISCONNECT'].includes(cmd);
@@ -113,6 +114,13 @@
   }
 
   function renderText(text: string): string {
+    return memoRenderText(formatTextUncached, text);
+  }
+
+  // The actual work — autolink + IRC formatting + nick mentions. Pulled
+  // out of renderText so we can hand it to memoRenderText as a thunk and
+  // skip all this work on cache hits.
+  function formatTextUncached(text: string): string {
     let html = autolinkHtml(parseIrcFormatting(text));
     const isChat = cmd === 'PRIVMSG' || (cmd === 'NOTICE' && !!nick);
     if (isChat && memberByNick && memberByNick.size > 0) {
