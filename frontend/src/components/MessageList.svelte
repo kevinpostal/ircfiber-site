@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack, flushSync } from 'svelte';
-  import { ircState, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
+  import { ircState, getActiveBufferObj, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
   import { getClearedAt, setLastSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
@@ -11,6 +11,7 @@
   import ChatterBar from './ChatterBar.svelte';
   import ScrollClock from './ScrollClock.svelte';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix } from '../lib/utils';
+  import { perfMark, perfMeasure } from '../lib/perf';
   import type { IRCMessage } from '../types';
 
   interface Props {
@@ -58,6 +59,7 @@
   const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
 
   const processedMessages = $derived.by(() => {
+    const t0 = perfMark('processedMessages:start');
     const key = bufferKey;
     const raw = ircState.messages[key] ?? [];
     const clearedAt = ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
@@ -67,7 +69,9 @@
       if (m.lines || m.sentences || m.events) return true;
       return typeof m.text === 'string' && m.text.trim() !== '';
     });
-    return preprocessMessages(noEmpty);
+    const result = preprocessMessages(noEmpty);
+    perfMeasure(`processedMessages len=${result.length} raw=${raw.length}`, t0);
+    return result;
   });
 
   function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean {
