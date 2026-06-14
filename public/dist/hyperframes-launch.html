@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>IRC Fiber — Cloud Reel</title>
+
+  <!--
+    HyperFrames composition. Loaded into <hyperframes-player> via src=.
+    - data-composition-id identifies the timeline to seek.
+    - data-width / data-height set the frame size (1920x1080).
+    - Each clip carries data-start / data-duration / data-track-index.
+    - The GSAP timeline is registered on window.__timelines[compositionId].
+    - HyperFrames seeks the timeline to render MP4 frame-by-frame.
+  -->
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg:     #0d1117;
+      --bg-2:   #161b22;
+      --bg-3:   #1c2128;
+      --fg:     #e6edf3;
+      --fg-d:   #8b949e;
+      --fg-f:   #6e7681;
+      --border: #30363d;
+      --acc:    #58a6ff;
+      --acc-h:  #79b8ff;
+      --ok:     #3fb950;
+      --warn:   #d29922;
+      --err:    #f85149;
+      --prefix-owner: rgb(255, 99, 71);
+      --prefix-op:    rgb(50, 205, 50);
+      --prefix-voice: rgb(0, 191, 255);
+      --font: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font);
+      overflow: hidden;
+    }
+    #stage {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse at 30% 20%, rgba(88, 166, 255, 0.08), transparent 60%),
+        radial-gradient(ellipse at 80% 80%, rgba(63, 185, 80, 0.05), transparent 60%),
+        var(--bg);
+    }
+    #stage::before {
+      content: "";
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(88, 166, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(88, 166, 255, 0.03) 1px, transparent 1px);
+      background-size: 48px 48px;
+      pointer-events: none;
+    }
+
+    /* Scene container — three acts that fade in/out */
+    .scene {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      opacity: 0;
+    }
+
+    /* Top + bottom bars stay visible throughout */
+    .topbar {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 18px 32px;
+      display: flex; align-items: center; gap: 16px;
+      font-size: 18px; color: var(--fg-d);
+      background: rgba(13, 17, 23, 0.85);
+      border-bottom: 1px solid var(--border);
+      z-index: 10;
+    }
+    .topbar .brand { color: var(--fg); font-weight: 700; font-size: 20px; }
+    .topbar .brand .acc { color: var(--acc); }
+    .topbar .pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 4px 12px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 16px;
+    }
+    .topbar .led { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 12px var(--ok); }
+
+    .botbar {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      padding: 18px 32px;
+      display: flex; align-items: center; gap: 18px;
+      font-size: 16px;
+      color: var(--fg-f);
+      background: rgba(13, 17, 23, 0.85);
+      border-top: 1px solid var(--border);
+      z-index: 10;
+    }
+    .botbar .acc { color: var(--acc); }
+
+    /* Act labels — act 1/2/3 marker */
+    .act-tag {
+      position: absolute; top: 80px; left: 80px;
+      font-size: 14px; color: var(--fg-f); text-transform: uppercase; letter-spacing: 0.16em;
+    }
+    .act-tag .acc { color: var(--acc); font-weight: 700; }
+
+    /* ===========================================================
+       ACT 1 — sign up (0–10s)
+       =========================================================== */
+    .signup-card {
+      width: 760px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px 48px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+    }
+    .signup-card h2 {
+      font-size: 32px; color: var(--fg); font-weight: 700; margin: 0 0 8px;
+      letter-spacing: -0.01em;
+    }
+    .signup-card .sub { color: var(--fg-d); font-size: 18px; margin: 0 0 32px; }
+    .signup-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 14px 16px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 12px;
+      font-size: 20px;
+    }
+    .signup-row .label { color: var(--acc); min-width: 100px; font-weight: 600; }
+    .signup-row .val { color: var(--fg); }
+    .signup-row .caret { display: inline-block; width: 2px; height: 22px; background: var(--acc); animation: blink 1s steps(2) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .signup-row .placeholder { color: var(--fg-f); }
+    .signup-row .filled { color: var(--ok); }
+    .signup-btn {
+      display: block; width: 100%;
+      margin-top: 24px;
+      padding: 18px;
+      background: var(--acc);
+      color: #06121f;
+      font-size: 20px; font-weight: 700;
+      text-align: center;
+      border-radius: 6px;
+    }
+    .signup-btn .prompt { opacity: 0.6; margin-right: 8px; }
+
+    .signup-log {
+      margin-top: 28px;
+      padding: 18px 22px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 16px;
+      line-height: 1.7;
+      color: var(--fg-d);
+      min-height: 140px;
+    }
+    .signup-log .line { opacity: 0; }
+    .signup-log .acc { color: var(--acc); }
+    .signup-log .ok { color: var(--ok); }
+    .signup-log .dim { color: var(--fg-f); }
+
+    /* ===========================================================
+       ACT 2 — connect (10–20s)
+       =========================================================== */
+    .net-picker {
+      width: 1100px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+    }
+    .net-card {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      text-align: left;
+    }
+    .net-card .net-name { font-size: 22px; color: var(--fg); font-weight: 700; }
+    .net-card .net-meta { font-size: 14px; color: var(--fg-d); margin-top: 4px; }
+    .net-card.selected {
+      border-color: var(--acc);
+      box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+    }
+    .net-card.selected::after {
+      content: "✓";
+      position: absolute;
+      top: 12px; right: 16px;
+      color: var(--acc); font-weight: 700; font-size: 22px;
+    }
+    .net-card { position: relative; }
+    .irc-shell {
+      width: 1100px; height: 540px;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
+    }
+    .irc-shell .side {
+      background: var(--bg);
+      border-right: 1px solid var(--border);
+      padding: 18px 14px;
+    }
+    .irc-shell .side .net {
+      color: var(--fg-f); font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600; padding: 6px 8px;
+    }
+    .irc-shell .side .buf {
+      padding: 6px 12px; border-radius: 4px; color: var(--fg); font-size: 16px;
+    }
+    .irc-shell .side .buf.active { background: var(--bg-3); border-left: 3px solid var(--acc); }
+    .irc-shell .chat {
+      padding: 20px 24px; display: flex; flex-direction: column; gap: 8px; font-size: 18px;
+    }
+    .irc-shell .msg { display: flex; gap: 12px; opacity: 0; }
+    .irc-shell .time { color: var(--fg-f); font-size: 14px; padding-top: 4px; min-width: 56px; }
+    .irc-shell .author { font-weight: 700; min-width: 110px; }
+    .irc-shell .author .prefix { margin-right: 4px; }
+    .irc-shell .content { color: var(--fg); flex: 1; }
+    .irc-shell .content .mention { color: var(--acc); }
+    .irc-shell .content .link { color: var(--acc-h); }
+    .irc-shell .input {
+      margin-top: auto;
+      padding: 12px 16px;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--fg);
+      font-size: 16px;
+    }
+    .irc-shell .input .prompt { color: var(--acc); margin-right: 8px; }
+
+    /* ===========================================================
+       ACT 3 — cross-device (20–30s)
+       =========================================================== */
+    .devices {
+      position: relative;
+      width: 1600px;
+      height: 760px;
+    }
+    .device {
+      position: absolute;
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+      opacity: 0;
+    }
+    .device .dev-bar {
+      padding: 10px 16px;
+      background: var(--bg-3);
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+      color: var(--fg-d);
+      display: flex; align-items: center; gap: 10px;
+      border-radius: 12px 12px 0 0;
+    }
+    .device .dev-bar .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .device .dev-bar .dot.r { background: #ff5f57; }
+    .device .dev-bar .dot.y { background: #febc2e; }
+    .device .dev-bar .dot.g { background: #28c840; }
+
+    .laptop { width: 900px; height: 540px; left: 60px; top: 30px; }
+    .laptop .body { padding: 20px 26px; display: flex; flex-direction: column; gap: 8px; height: calc(100% - 38px); font-size: 17px; }
+    .laptop .msg { display: flex; gap: 10px; }
+    .laptop .time { color: var(--fg-f); font-size: 13px; padding-top: 4px; min-width: 50px; }
+    .laptop .author { font-weight: 700; min-width: 100px; }
+    .laptop .content { color: var(--fg); flex: 1; }
+    .laptop .content .mention { color: var(--acc); }
+    .laptop .msg-new {
+      background: var(--accent-dim, rgba(88,166,255,0.12));
+      border-left: 3px solid var(--acc);
+      padding: 4px 0 4px 8px;
+      margin: 0 -8px;
+    }
+
+    .phone {
+      width: 260px; height: 540px;
+      right: 60px; top: 60px;
+      border-radius: 28px;
+      padding: 0;
+    }
+    .phone .dev-bar { border-radius: 28px 28px 0 0; padding: 12px 18px; }
+    .phone .screen {
+      padding: 18px 18px;
+      display: flex; flex-direction: column; gap: 10px;
+      height: calc(100% - 42px);
+      font-size: 13px;
+      border-radius: 0 0 28px 28px;
+    }
+    .phone .msg { display: flex; gap: 6px; }
+    .phone .time { color: var(--fg-f); font-size: 10px; padding-top: 3px; min-width: 32px; }
+    .phone .author { font-weight: 700; min-width: 60px; font-size: 12px; }
+    .phone .content { color: var(--fg); flex: 1; font-size: 12px; }
+    .phone .input-row {
+      margin-top: auto;
+      padding: 8px 10px;
+      background: var(--bg-3);
+      border-radius: 4px;
+      font-size: 11px;
+    }
+    .phone .input-row .prompt { color: var(--acc); margin-right: 4px; }
+
+    .tablet {
+      width: 360px; height: 460px;
+      right: 360px; top: 200px;
+      border-radius: 14px;
+    }
+    .tablet .dev-bar { border-radius: 14px 14px 0 0; }
+    .tablet .screen {
+      padding: 14px;
+      height: calc(100% - 38px);
+      display: flex; flex-direction: column; gap: 8px;
+      font-size: 13px;
+      border-radius: 0 0 14px 14px;
+    }
+    .tablet .msg { display: flex; gap: 6px; }
+    .tablet .time { color: var(--fg-f); font-size: 10px; padding-top: 3px; min-width: 30px; }
+    .tablet .author { font-weight: 700; min-width: 60px; font-size: 12px; }
+    .tablet .content { color: var(--fg); flex: 1; font-size: 12px; }
+
+    /* Sync pulse — the line between devices */
+    .sync-line {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 1px;
+      height: 0;
+      background: var(--acc);
+      box-shadow: 0 0 20px var(--acc);
+    }
+    .sync-label {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 10px 18px;
+      background: var(--acc);
+      color: #06121f;
+      border-radius: 999px;
+      font-size: 16px;
+      font-weight: 700;
+      opacity: 0;
+    }
+
+    /* Final CTA */
+    .final-cta {
+      text-align: center;
+      opacity: 0;
+    }
+    .final-cta .cmd {
+      display: inline-block;
+      padding: 22px 40px;
+      background: var(--acc);
+      color: #06121f;
+      border-radius: 10px;
+      font-size: 28px;
+      font-weight: 700;
+      box-shadow: 0 10px 40px rgba(88, 166, 255, 0.3);
+    }
+    .final-cta .cmd .price {
+      color: #06121f;
+      text-decoration: underline;
+      text-decoration-thickness: 2px;
+      text-underline-offset: 4px;
+    }
+    .final-cta .url {
+      display: block;
+      margin-top: 24px;
+      color: var(--fg-d);
+      font-size: 22px;
+    }
+    .final-cta .url .acc { color: var(--acc); }
+
+    /* Headlines for each act */
+    .act-headline {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .act-headline .label {
+      display: inline-block;
+      font-size: 16px; color: var(--acc); text-transform: uppercase; letter-spacing: 0.16em;
+      padding: 6px 14px;
+      border: 1px solid var(--acc-dim, rgba(88,166,255,0.3));
+      border-radius: 999px;
+      margin-bottom: 16px;
+    }
+    .act-headline h1 {
+      font-size: 56px;
+      color: var(--fg);
+      letter-spacing: -0.02em;
+      font-weight: 700;
+      margin: 0;
+    }
+    .act-headline h1 .acc { color: var(--acc); }
+  </style>
+</head>
+<body>
+
+  <div id="stage" data-composition-id="launch" data-start="0" data-width="1920" data-height="1080">
+
+    <!-- Top bar — visible throughout -->
+    <div class="topbar clip" data-start="0" data-duration="30" data-track-index="0">
+      <span class="brand"><span class="acc">irc</span>fiber</span>
+      <span class="pill"><span class="led"></span> hosted · us-east-1a · 3 nets</span>
+    </div>
+
+    <!-- Bottom bar -->
+    <div class="botbar clip" data-start="0" data-duration="30" data-track-index="1">
+      <span>ircfiber.com</span>
+      <span>·</span>
+      <span>gsap + hyperframes</span>
+      <span>·</span>
+      <span>pro $0.99/mo</span>
+    </div>
+
+    <!-- ===========================================================
+         ACT 1 — sign up (0–10s)
+         =========================================================== -->
+    <div class="scene" data-start="0" data-duration="10" data-track-index="2" id="act1">
+      <div class="act-headline">
+        <span class="label">Act 1 · Sign up</span>
+        <h1>Thirty seconds, <span class="acc">no card</span>.</h1>
+      </div>
+
+      <div class="signup-card">
+        <h2>Create your account</h2>
+        <p class="sub">Pick a nick. We'll provision an edge bouncer for you in seconds.</p>
+
+        <div class="signup-row">
+          <span class="label">email:</span>
+          <span class="val" id="signup-email">zodiac@<span class="caret"></span></span>
+        </div>
+        <div class="signup-row">
+          <span class="label">nick:</span>
+          <span class="val" id="signup-nick"><span class="placeholder">type your nick</span></span>
+        </div>
+        <div class="signup-row">
+          <span class="label">pass:</span>
+          <span class="val" id="signup-pass"><span class="placeholder">min 12 chars</span></span>
+        </div>
+
+        <div class="signup-btn" id="signup-btn">
+          <span id="signup-btn-label">Create account</span>
+        </div>
+
+        <div class="signup-log" id="signup-log">
+          <div class="line" data-start="5.5" data-duration="3.5" data-track-index="3">
+<span class="ok">✓</span> Validating input
+          </div>
+          <div class="line" data-start="6.0" data-duration="3" data-track-index="4">
+<span class="ok">✓</span> Hashing password <span class="dim">· PBKDF2 · 600k rounds</span>
+          </div>
+          <div class="line" data-start="6.5" data-duration="2.5" data-track-index="5">
+<span class="ok">✓</span> Provisioning edge bouncer <span class="dim">· us-east-1a</span>
+          </div>
+          <div class="line" data-start="7.0" data-duration="2" data-track-index="6">
+<span class="ok">✓</span> IRCv3 caps negotiated <span class="dim">· sasl · server-time · account-notify</span>
+          </div>
+          <div class="line" data-start="7.5" data-duration="1.5" data-track-index="7">
+<span class="ok">✓</span> Backlog ready <span class="dim">· 500 msgs per buffer</span>
+          </div>
+          <div class="line" data-start="8.0" data-duration="1" data-track-index="8">
+<span class="ok">✓</span> Account created <span class="dim">· welcome, zodiac</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===========================================================
+         ACT 2 — connect (10–20s)
+         =========================================================== -->
+    <div class="scene" data-start="10" data-duration="10" data-track-index="9" id="act2">
+      <div class="act-headline">
+        <span class="label">Act 2 · Connect</span>
+        <h1>Pick a network. <span class="acc">We stay signed on</span>.</h1>
+      </div>
+
+      <!-- Network picker — first 5s of act 2 -->
+      <div class="net-picker" id="net-picker" style="opacity: 0;">
+        <div class="net-card" id="net1">
+          <div class="net-name">Libera.Chat</div>
+          <div class="net-meta">irc.libera.chat · 200+ chans</div>
+        </div>
+        <div class="net-card" id="net2">
+          <div class="net-name">OFTC</div>
+          <div class="net-meta">irc.oftc.net · debian · opensource</div>
+        </div>
+        <div class="net-card" id="net3">
+          <div class="net-name">hackint</div>
+          <div class="net-meta">irc.hackint.org · ccc · hackerspaces</div>
+        </div>
+        <div class="net-card" id="net4">
+          <div class="net-name">EFNet</div>
+          <div class="net-meta">irc.efnet.org · 100k+ users</div>
+        </div>
+        <div class="net-card" id="net5">
+          <div class="net-name">QuakeNet</div>
+          <div class="net-meta">irc.quakenet.org · gaming · open</div>
+        </div>
+        <div class="net-card" id="net6">
+          <div class="net-name">+ your own</div>
+          <div class="net-meta">add network · tls · sasl</div>
+        </div>
+      </div>
+
+      <!-- IRC chat shell — appears after network is selected -->
+      <div class="irc-shell" id="irc-shell" style="opacity: 0;">
+        <div class="side">
+          <div class="net">Libera</div>
+          <div class="buf">#general</div>
+          <div class="buf active">#design <span style="float:right; background:var(--err); color:#06121f; padding: 0 6px; border-radius: 8px; font-size: 12px; font-weight: 700;">3</span></div>
+          <div class="buf">#dev</div>
+          <div class="net">OFTC</div>
+          <div class="buf">#ircfiber</div>
+        </div>
+        <div class="chat">
+          <div class="msg" data-start="16.0" data-duration="3" data-track-index="10">
+            <span class="time">10:24</span>
+            <span class="author"><span class="prefix" style="color: var(--prefix-op);">@</span>amita</span>
+            <span class="content">has anyone stress-tested the new backlog sync?</span>
+          </div>
+          <div class="msg" data-start="16.5" data-duration="2.5" data-track-index="11">
+            <span class="time">10:25</span>
+            <span class="author"><span class="prefix" style="color: var(--prefix-voice);">+</span>mike</span>
+            <span class="content">sasl <span class="link">EXTERNAL</span> is now live too.</span>
+          </div>
+          <div class="msg" data-start="17.0" data-duration="2" data-track-index="12">
+            <span class="time">10:26</span>
+            <span class="author"><span class="prefix" style="color: var(--prefix-op);">@</span>zodiac</span>
+            <span class="content">yep — held <span class="mention">500</span> messages per buffer.</span>
+          </div>
+          <div class="msg" data-start="17.5" data-duration="1.5" data-track-index="13">
+            <span class="time">10:27</span>
+            <span class="author"><span class="prefix" style="color: var(--prefix-op);">@</span>amita</span>
+            <span class="content">chef's kiss. shipping it.</span>
+          </div>
+          <div class="input"><span class="prompt">&gt;</span> Message #design</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===========================================================
+         ACT 3 — cross-device (20–30s)
+         =========================================================== -->
+    <div class="scene" data-start="20" data-duration="10" data-track-index="14" id="act3">
+      <div class="act-headline">
+        <span class="label">Act 3 · Cross-device</span>
+        <h1>Same buffers. <span class="acc">Every device</span>.</h1>
+      </div>
+
+      <div class="devices">
+        <div class="device laptop" id="dev-laptop">
+          <div class="dev-bar">
+            <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+            <span style="margin-left: 8px;">ircfiber — laptop</span>
+          </div>
+          <div class="body">
+            <div class="msg">
+              <span class="time">10:24</span>
+              <span class="author"><span style="color:var(--prefix-op);">@</span>amita</span>
+              <span class="content">has anyone stress-tested the new backlog sync?</span>
+            </div>
+            <div class="msg">
+              <span class="time">10:25</span>
+              <span class="author"><span style="color:var(--prefix-voice);">+</span>mike</span>
+              <span class="content">sasl <span style="color:var(--acc-h);">EXTERNAL</span> is now live too.</span>
+            </div>
+            <div class="msg">
+              <span class="time">10:26</span>
+              <span class="author"><span style="color:var(--prefix-op);">@</span>zodiac</span>
+              <span class="content">yep — held <span style="color:var(--acc);">500</span> messages per buffer.</span>
+            </div>
+            <div class="msg msg-new" id="laptop-new">
+              <span class="time">10:31</span>
+              <span class="author"><span style="color:var(--prefix-voice);">+</span>leo</span>
+              <span class="content">sent from my phone — same buffer, same instant.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="device tablet" id="dev-tablet">
+          <div class="dev-bar">
+            <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+            <span style="margin-left: 6px; font-size: 12px;">tablet</span>
+          </div>
+          <div class="screen">
+            <div class="msg">
+              <span class="time">10:24</span>
+              <span class="author"><span style="color:var(--prefix-op);">@</span>amita</span>
+              <span class="content">stress-test the new sync?</span>
+            </div>
+            <div class="msg">
+              <span class="time">10:25</span>
+              <span class="author"><span style="color:var(--prefix-voice);">+</span>mike</span>
+              <span class="content">sasl EXTERNAL is live.</span>
+            </div>
+            <div class="msg">
+              <span class="time">10:26</span>
+              <span class="author"><span style="color:var(--prefix-op);">@</span>zodiac</span>
+              <span class="content">500 msgs/buffer.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="device phone" id="dev-phone">
+          <div class="dev-bar">
+            <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+            <span style="margin-left: 6px; font-size: 11px;">phone</span>
+          </div>
+          <div class="screen">
+            <div class="msg">
+              <span class="time">10:24</span>
+              <span class="author"><span style="color:var(--prefix-op);">@</span>amita</span>
+              <span class="content">stress-test?</span>
+            </div>
+            <div class="msg">
+              <span class="time">10:25</span>
+              <span class="author"><span style="color:var(--prefix-voice);">+</span>mike</span>
+              <span class="content">sasl EXTERNAL live.</span>
+            </div>
+            <div class="msg">
+              <span class="time">10:26</span>
+              <span class="author"><span style="color:var(--prefix-op);">@</span>zodiac</span>
+              <span class="content">500 msgs/buffer.</span>
+            </div>
+            <div class="input-row"><span class="prompt">&gt;</span> sent from my phone — same buffer, same instant.</div>
+          </div>
+        </div>
+
+        <div class="sync-label" id="sync-label">synced · &lt;200ms</div>
+      </div>
+
+      <div class="final-cta" id="final-cta">
+        <span class="cmd">Start chatting — <span class="price">$0.99</span>/mo or free</span>
+        <span class="url">ircfiber<span class="acc">.</span>com  ·  live at 127.0.0.1:8090</span>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js"></script>
+  <script>
+    (function () {
+      // HyperFrames will look up window.__timelines[compositionId] and
+      // call .seek(t) on it to render each frame.
+      window.__timelines = window.__timelines || {};
+
+      // Helper: type text into a DOM element over a duration.
+      function typeInto(el, finalText, duration, start) {
+        if (!el || !window.gsap) return;
+        el._finalText = finalText;
+        el._typed = '';
+        var obj = { i: 0 };
+        var proxy = { set: function(target, prop, value) { target[prop] = value; if (prop === 'i') { el.textContent = finalText.slice(0, Math.floor(value)); } return true; } };
+        window.gsap.to(obj, {
+          i: finalText.length,
+          duration: duration,
+          ease: 'none',
+          onUpdate: function () { el.textContent = finalText.slice(0, Math.floor(obj.i)); }
+        }).seek(start);
+        return obj;
+      }
+
+      var tl = window.gsap.timeline({ paused: true });
+
+      // Top + bottom bars fade in immediately
+      tl.to('.topbar', { opacity: 1, duration: 0.4 }, 0);
+      tl.to('.botbar', { opacity: 1, duration: 0.4 }, 0);
+
+      // ============== ACT 1 — sign up (0–10s) ==============
+      // Scene fade in
+      tl.to('#act1', { opacity: 1, duration: 0.6, ease: 'power2.out' }, 0);
+      // Type email
+      typeInto(document.getElementById('signup-email'), 'zodiac@ircfiber.com', 1.2, 1.5);
+      // Type nick
+      tl.call(function () {
+        var nick = document.getElementById('signup-nick');
+        if (nick) nick.innerHTML = 'zodiac <span class="filled" style="color: var(--ok);">✓</span>';
+      }, null, 2.8);
+      // Type pass (show dots)
+      tl.call(function () {
+        var pass = document.getElementById('signup-pass');
+        if (pass) pass.innerHTML = '•••••••••••• <span class="filled" style="color: var(--ok);">✓</span>';
+      }, null, 3.6);
+      // Button hover/click — change label
+      tl.call(function () {
+        var btn = document.getElementById('signup-btn-label');
+        if (btn) btn.textContent = 'creating account…';
+      }, null, 4.5);
+      tl.call(function () {
+        var btn = document.getElementById('signup-btn-label');
+        if (btn) { btn.textContent = 'created ✓'; btn.style.color = '#06121f'; }
+      }, null, 5.5);
+      // Log lines fade in
+      tl.to('.signup-log .line:nth-child(1)', { opacity: 1, duration: 0.3 }, 5.5);
+      tl.to('.signup-log .line:nth-child(2)', { opacity: 1, duration: 0.3 }, 6.0);
+      tl.to('.signup-log .line:nth-child(3)', { opacity: 1, duration: 0.3 }, 6.5);
+      tl.to('.signup-log .line:nth-child(4)', { opacity: 1, duration: 0.3 }, 7.0);
+      tl.to('.signup-log .line:nth-child(5)', { opacity: 1, duration: 0.3 }, 7.5);
+      tl.to('.signup-log .line:nth-child(6)', { opacity: 1, duration: 0.3 }, 8.0);
+      // Fade out act 1
+      tl.to('#act1', { opacity: 0, duration: 0.6, ease: 'power2.in' }, 9.4);
+
+      // ============== ACT 2 — connect (10–20s) ==============
+      tl.to('#act2', { opacity: 1, duration: 0.6, ease: 'power2.out' }, 10.0);
+      // Network picker fades in
+      tl.to('#net-picker', { opacity: 1, duration: 0.5 }, 10.6);
+      // Cards stagger
+      tl.to('#net1', { opacity: 1, y: 0, duration: 0.3 }, 10.8);
+      tl.from('#net1', { y: 12 }, 10.8);
+      tl.to('#net2', { opacity: 1, y: 0, duration: 0.3 }, 10.95);
+      tl.from('#net2', { y: 12 }, 10.95);
+      tl.to('#net3', { opacity: 1, y: 0, duration: 0.3 }, 11.1);
+      tl.from('#net3', { y: 12 }, 11.1);
+      tl.to('#net4', { opacity: 1, y: 0, duration: 0.3 }, 11.25);
+      tl.from('#net4', { y: 12 }, 11.25);
+      tl.to('#net5', { opacity: 1, y: 0, duration: 0.3 }, 11.4);
+      tl.from('#net5', { y: 12 }, 11.4);
+      tl.to('#net6', { opacity: 1, y: 0, duration: 0.3 }, 11.55);
+      tl.from('#net6', { y: 12 }, 11.55);
+      // Select Libera
+      tl.add(function () {
+        var n1 = document.getElementById('net1');
+        if (n1) n1.classList.add('selected');
+      }, 12.0);
+      // Fade picker, show IRC
+      tl.to('#net-picker', { opacity: 0, y: -10, duration: 0.4 }, 13.5);
+      tl.to('#irc-shell', { opacity: 1, duration: 0.6, ease: 'power2.out' }, 14.0);
+      tl.from('#irc-shell', { y: 30, scale: 0.96 }, 14.0);
+      // IRC messages stagger
+      tl.to('#irc-shell .msg:nth-child(1)', { opacity: 1, x: 0, duration: 0.3 }, 16.0);
+      tl.from('#irc-shell .msg:nth-child(1)', { x: 16 }, 16.0);
+      tl.to('#irc-shell .msg:nth-child(2)', { opacity: 1, x: 0, duration: 0.3 }, 16.5);
+      tl.from('#irc-shell .msg:nth-child(2)', { x: 16 }, 16.5);
+      tl.to('#irc-shell .msg:nth-child(3)', { opacity: 1, x: 0, duration: 0.3 }, 17.0);
+      tl.from('#irc-shell .msg:nth-child(3)', { x: 16 }, 17.0);
+      tl.to('#irc-shell .msg:nth-child(4)', { opacity: 1, x: 0, duration: 0.3 }, 17.5);
+      tl.from('#irc-shell .msg:nth-child(4)', { x: 16 }, 17.5);
+      // Fade out act 2
+      tl.to('#act2', { opacity: 0, duration: 0.6, ease: 'power2.in' }, 19.4);
+
+      // ============== ACT 3 — cross-device (20–30s) ==============
+      tl.to('#act3', { opacity: 1, duration: 0.6, ease: 'power2.out' }, 20.0);
+      // Devices appear staggered
+      tl.to('#dev-laptop', { opacity: 1, y: 0, duration: 0.5, ease: 'power2.out' }, 20.6);
+      tl.from('#dev-laptop', { y: 40 }, 20.6);
+      tl.to('#dev-tablet', { opacity: 1, y: 0, duration: 0.5, ease: 'power2.out' }, 20.9);
+      tl.from('#dev-tablet', { y: 40 }, 20.9);
+      tl.to('#dev-phone', { opacity: 1, y: 0, duration: 0.5, ease: 'power2.out' }, 21.2);
+      tl.from('#dev-phone', { y: 40 }, 21.2);
+      // Sync label pulse
+      tl.to('#sync-label', { opacity: 1, scale: 1, duration: 0.4, ease: 'power2.out' }, 22.5);
+      tl.from('#sync-label', { scale: 0.8 }, 22.5);
+      // New message appears on laptop
+      tl.to('#laptop-new', { opacity: 1, duration: 0.4, ease: 'power2.out' }, 24.0);
+      // Final CTA
+      tl.to('#final-cta', { opacity: 1, y: 0, duration: 0.6, ease: 'power2.out' }, 26.0);
+      tl.from('#final-cta', { y: 20 }, 26.0);
+
+      // Total length: 30s
+      window.__timelines.launch = tl;
+    })();
+  </script>
+</body>
+</html>
