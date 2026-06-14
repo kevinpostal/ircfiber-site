@@ -11,6 +11,7 @@
   <meta property="og:description" content="A cloud bouncer that keeps you connected and your history searchable. Access your IRC conversations from any device, anytime." />
   <meta property="og:site_name" content="IRC Fiber" />
   <meta name="twitter:card" content="summary_large_image" />
+  <script src="https://unpkg.com/@hyperframes/player@0.6.97/dist/hyperframes-player.global.js" crossorigin="anonymous"></script>
   <style>
     :root {
       --bg:           #0d1117;
@@ -30,6 +31,11 @@
       --ok:           #3fb950;
       --warn:         #d29922;
       --err:          #f85149;
+      --prefix-owner: rgb(255, 99, 71);
+      --prefix-admin: rgb(181, 145, 0);
+      --prefix-op:    rgb(50, 205, 50);
+      --prefix-hop:   rgb(181, 89, 0);
+      --prefix-voice: rgb(0, 191, 255);
       --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       --font-mono: "Hack", "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
       --font-ui:   var(--font-sans);
@@ -55,6 +61,22 @@
     a:hover { color: var(--accent-hi); text-decoration: underline; text-underline-offset: 2px; }
     ::selection { background: var(--accent-dim); color: var(--fg); }
     img, svg { max-width: 100%; display: block; }
+    code { font-family: var(--font-mono); font-size: 0.92em; }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background-image:
+        linear-gradient(rgba(88, 166, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(88, 166, 255, 0.025) 1px, transparent 1px);
+      background-size: 40px 40px;
+      mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 80%);
+      -webkit-mask-image: radial-gradient(ellipse at 50% 0%, #000 30%, transparent 80%);
+    }
+
     .container { width: 100%; max-width: var(--max-w); margin: 0 auto; padding: 0 var(--s-5); position: relative; z-index: 1; }
     .narrow   { max-width: 820px; margin-left: auto; margin-right: auto; }
     .kicker { display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.16em; margin-bottom: var(--s-3); }
@@ -73,11 +95,35 @@
     .brand-mark svg { display: block; overflow: visible; filter: drop-shadow(0 0 5px rgba(88, 166, 255, 0.35)); }
     .brand-mark .fiber-pulse { transform-origin: 12px 12px; animation: brand-fiber 3.2s cubic-bezier(.55, .08, .25, 1) infinite; }
     @keyframes brand-fiber { 0% { transform: translateX(-3px); opacity: 0; } 18% { opacity: 0.95; } 82% { opacity: 0.95; } 100% { transform: translateX(20px); opacity: 0; } }
+
+    .status-pill {
+      display: inline-flex; align-items: center; gap: var(--s-2);
+      padding: 5px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--fg-dim);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .status-pill .meta { color: var(--fg-faint); }
+    .status-pill .val  { color: var(--fg); font-weight: 500; }
+    .led {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 8px var(--ok);
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.55; transform: scale(0.85); } }
+
     .topbar-nav { display: flex; align-items: center; gap: var(--s-5); margin-left: auto; }
     .topbar-nav a { color: var(--fg-dim); transition: color var(--t-fast); font-weight: 500; }
     .topbar-nav a:hover { color: var(--fg); text-decoration: none; }
-    .topbar-cta { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--accent); color: #06121f; border: 1px solid var(--accent); border-radius: var(--radius-sm); font: 600 13px/1 var(--font-sans); cursor: pointer; transition: background var(--t-fast), transform var(--t-fast); }
+    .topbar-cta { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--accent); color: #06121f; border: 1px solid var(--accent); border-radius: var(--radius-sm); font: 600 13px/1 var(--font-sans); cursor: pointer; transition: background var(--t-fast), transform var(--t-fast); white-space: nowrap; }
     .topbar-cta:hover { background: var(--accent-hi); color: #06121f; text-decoration: none; transform: translateY(-1px); }
+    .topbar-cta .arrow { transition: transform var(--t-fast); }
+    .topbar-cta:hover .arrow { transform: translateX(2px); }
+
     .topbar-form { display: flex; align-items: center; gap: var(--s-2); margin-left: auto; }
     .topbar-form input { padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg); font: 500 13px/1 var(--font-sans); width: 130px; }
     .topbar-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
@@ -86,14 +132,22 @@
     .topbar-form button:hover { background: var(--surface-2); border-color: var(--accent); }
     .topbar-form .forgot { color: var(--fg-faint); font-size: 11px; margin-left: 6px; }
     .topbar-form .forgot:hover { color: var(--accent); text-decoration: none; }
+
     @media (max-width: 1100px) {
       .topbar-form input { width: 110px; }
+      .topbar-inner { gap: var(--s-4); }
     }
     @media (max-width: 980px) {
       .topbar-inner { flex-wrap: wrap; gap: var(--s-3); min-height: auto; padding-top: var(--s-3); padding-bottom: var(--s-3); }
-      .topbar-nav { margin-left: 0; gap: var(--s-4); }
-      .topbar-form { width: 100%; margin-left: 0; justify-content: flex-start; }
-      .topbar-form input { flex: 1; max-width: 180px; }
+      .topbar-nav { margin-left: 0; gap: var(--s-4); width: 100%; order: 3; padding-top: var(--s-3); border-top: 1px solid var(--border); }
+      .topbar-form { margin-left: auto; order: 2; }
+      .topbar-cta { order: 2; }
+    }
+    @media (max-width: 900px) {
+      .status-pill { display: none; }
+    }
+    @media (max-width: 720px) {
+      .topbar-form { width: 100%; margin-left: 0; justify-content: flex-start; order: 4; padding-top: var(--s-3); border-top: 1px solid var(--border); }
       .topbar-cta { margin-left: auto; }
     }
     @media (max-width: 520px) {
@@ -105,6 +159,70 @@
     @media (max-width: 360px) {
       .topbar-form input { width: 100%; }
       .topbar-form button { width: calc(100% - 36px); }
+      .topbar-cta { width: 100%; justify-content: center; margin-top: var(--s-2); }
+    }
+
+    .networks-strip {
+      background: var(--bg);
+      border-top: 1px solid var(--border-soft);
+      border-bottom: 1px solid var(--border-soft);
+      padding: var(--s-4) 0;
+      position: relative;
+      z-index: 1;
+    }
+    .networks-strip-inner {
+      display: flex;
+      align-items: center;
+      gap: var(--s-4);
+      flex-wrap: wrap;
+    }
+    .networks-strip .strip-label {
+      font-size: 10px;
+      color: var(--fg-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-weight: 600;
+      flex-shrink: 0;
+      margin: 0;
+      font-family: var(--font-mono);
+    }
+    .networks-strip .strip-label .acc {
+      color: var(--accent);
+      font-weight: 700;
+      margin-right: 2px;
+    }
+    .networks-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+    }
+    .networks-list li {
+      color: var(--fg-dim);
+      font-weight: 500;
+      padding: 0 var(--s-3);
+      position: relative;
+      transition: color var(--t-fast);
+    }
+    .networks-list li:hover { color: var(--fg); }
+    .networks-list li:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 2px; height: 2px;
+      border-radius: 50%;
+      background: var(--fg-faint);
+      opacity: 0.6;
+    }
+    @media (max-width: 720px) {
+      .networks-strip-inner { flex-direction: column; align-items: flex-start; gap: var(--s-2); }
     }
 
     .hero { padding: var(--s-5) 0 var(--s-7); position: relative; }
@@ -116,39 +234,34 @@
     .fibers { position: absolute; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
     .fiber {
       position: absolute; left: -10%; right: -10%; height: 1px;
-      background: linear-gradient(90deg, transparent 0%, rgba(88, 166, 255, 0.025) 30%, rgba(88, 166, 255, 0.07) 50%, rgba(88, 166, 255, 0.025) 70%, transparent 100%);
+      background: linear-gradient(90deg, transparent 0%, rgba(88, 166, 255, 0.04) 20%, rgba(88, 166, 255, 0.10) 50%, rgba(88, 166, 255, 0.04) 80%, transparent 100%);
     }
     .fiber .pulse {
-      position: absolute; top: 0; left: 0; height: 1px; border-radius: 999px;
-      background: linear-gradient(90deg, transparent 0%, rgba(88, 166, 255, 0.18) 35%, rgba(88, 166, 255, 0.6) 50%, rgba(88, 166, 255, 0.18) 65%, transparent 100%);
-      box-shadow: 0 0 10px rgba(88, 166, 255, 0.5);
-      filter: blur(0.2px);
-      will-change: transform, opacity;
+      position: absolute; top: -2px; left: 0;
+      width: 80px; height: 5px;
+      background: linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%);
+      filter: blur(0.5px);
+      box-shadow: 0 0 16px var(--accent), 0 0 32px rgba(88, 166, 255, 0.4);
+      border-radius: 999px;
     }
-    .fiber:nth-child(1) { top: 16%; opacity: 0.75; }
-    .fiber:nth-child(2) { top: 32%; opacity: 0.50; }
-    .fiber:nth-child(3) { top: 48%; opacity: 0.65; }
-    .fiber:nth-child(4) { top: 64%; opacity: 0.40; }
-    .fiber:nth-child(5) { top: 80%; opacity: 0.55; }
-    .fiber:nth-child(1) .pulse { width: 100px; animation: fiber-move 14s cubic-bezier(0.45, 0, 0.55, 1) infinite; }
-    .fiber:nth-child(2) .pulse { width: 70px;  animation: fiber-move 18s cubic-bezier(0.45, 0, 0.55, 1) infinite; animation-delay: -4.5s; }
-    .fiber:nth-child(3) .pulse { width: 120px; animation: fiber-move 16s cubic-bezier(0.45, 0, 0.55, 1) infinite; animation-delay: -9.0s; }
-    .fiber:nth-child(4) .pulse { width: 60px;  animation: fiber-move 22s cubic-bezier(0.45, 0, 0.55, 1) infinite; animation-delay: -2.5s; }
-    .fiber:nth-child(5) .pulse { width: 90px;  animation: fiber-move 17s cubic-bezier(0.45, 0, 0.55, 1) infinite; animation-delay: -12s; }
+    .fiber:nth-child(1) { top: 18%; }
+    .fiber:nth-child(2) { top: 50%; opacity: 0.7; }
+    .fiber:nth-child(3) { top: 78%; }
+    .fiber:nth-child(1) .pulse { animation: fiber-move 7.5s linear infinite; }
+    .fiber:nth-child(2) .pulse { animation: fiber-move 9.5s linear infinite; animation-delay: -2.5s; }
+    .fiber:nth-child(3) .pulse { animation: fiber-move 8.2s linear infinite; animation-delay: -5s; }
     @keyframes fiber-move {
-      0%   { transform: translateX(-120px); opacity: 0; }
-      10%  { opacity: 0.6; }
-      25%  { opacity: 1; }
-      75%  { opacity: 1; }
-      90%  { opacity: 0.55; }
-      100% { transform: translateX(calc(100vw + 120px)); opacity: 0; }
+      0%   { transform: translateX(-80px); opacity: 0; }
+      8%   { opacity: 1; }
+      92%  { opacity: 1; }
+      100% { transform: translateX(calc(100vw + 0px)); opacity: 0; }
     }
 
     .hero-eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; font-size: 12px; color: var(--fg-dim); font-weight: 500; }
     .hero-eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
     .hero-eyebrow .label { color: var(--fg); } .hero-eyebrow .sep { color: var(--fg-faint); }
-    .hero-eyebrow { margin-top: var(--s-2); }
     .hero-headline { margin: var(--s-3) 0 var(--s-3); }
+    .hero-headline .accent { color: var(--accent); }
     .hero-sub { font-size: 18px; line-height: 1.6; color: var(--fg-dim); max-width: 56ch; margin: 0 0 var(--s-3); }
 
     .signup-box { margin-top: var(--s-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s-4); }
@@ -164,6 +277,19 @@
     .hero-trust { display: flex; flex-wrap: wrap; gap: var(--s-4); margin-top: var(--s-3); font-size: 12px; color: var(--fg-faint); }
     .hero-trust .item { display: inline-flex; align-items: center; gap: 6px; } .hero-trust .check { color: var(--ok); }
 
+    .facts {
+      display: flex; flex-wrap: wrap;
+      gap: var(--s-3) var(--s-5);
+      margin-top: var(--s-5);
+      padding-top: var(--s-5);
+      border-top: 1px solid var(--border-soft);
+      font-size: 13px;
+    }
+    .facts .item { display: inline-flex; align-items: center; gap: 8px; }
+    .facts .key { color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; font-weight: 500; }
+    .facts .val { color: var(--fg); font-weight: 500; }
+    .facts .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-faint); }
+
     .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: var(--radius-sm); font: 600 14px/1.2 var(--font-sans); cursor: pointer; transition: background var(--t-fast), border-color var(--t-fast), transform var(--t-fast), color var(--t-fast); white-space: nowrap; border: 1px solid transparent; }
     .btn-primary { background: var(--accent); color: #06121f; border-color: var(--accent); }
     .btn-primary:hover { background: var(--accent-hi); border-color: var(--accent-hi); text-decoration: none; transform: translateY(-1px); }
@@ -176,6 +302,8 @@
     .hero-video-frame .video-badge { position: absolute; top: 12px; left: 12px; z-index: 10; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; background: rgba(13, 17, 23, 0.85); border: 1px solid var(--border); border-radius: 999px; font-size: 11px; font-weight: 500; color: var(--fg-dim); backdrop-filter: blur(4px); }
     .hero-video-frame .video-badge .led { width: 6px; height: 6px; border-radius: 50%; background: var(--err); box-shadow: 0 0 8px var(--err); animation: rec-pulse 1.5s ease-in-out infinite; }
     @keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .hero-video-frame::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); box-shadow: 0 0 40px rgba(88, 166, 255, 0.08); animation: frame-glow 6s ease-in-out infinite; pointer-events: none; }
+    @keyframes frame-glow { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 
     section { position: relative; z-index: 1; }
     .sec { padding: var(--s-8) 0; }
@@ -186,18 +314,169 @@
     .section-head h2 { margin: 0 0 var(--s-3); } .section-head p { margin: 0; font-size: 16px; line-height: 1.6; }
     @media (max-width: 640px) { .sec { padding: var(--s-7) 0; } .section-head { margin-bottom: var(--s-4); } }
 
+    .irc-preview {
+      display: grid;
+      grid-template-columns: 220px 1fr 200px;
+      grid-template-rows: 40px 1fr 52px;
+      height: 480px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      font-size: 13px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.4);
+    }
+    .irc-bar {
+      grid-column: 1 / -1;
+      display: flex; align-items: center; gap: var(--s-3);
+      padding: 0 14px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px; color: var(--fg-dim);
+    }
+    .irc-bar .name { color: var(--fg); font-weight: 600; }
+    .irc-bar .topic { color: var(--fg-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .irc-bar .led { width: 7px; height: 7px; }
+    .irc-side {
+      grid-row: 2 / 4;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 10px 8px;
+      overflow: hidden;
+    }
+    .irc-net { color: var(--fg-faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600; padding: 8px 8px 4px; }
+    .irc-buf {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 8px;
+      border-radius: 4px;
+      color: var(--fg);
+      font-size: 13px;
+      border-left: 2px solid transparent;
+      cursor: pointer;
+    }
+    .irc-buf .badge { margin-left: auto; font-size: 10px; padding: 1px 5px; border-radius: 8px; background: var(--accent); color: #06121f; font-weight: 700; }
+    .irc-buf.active { background: var(--surface-2); border-left-color: var(--accent); color: var(--fg); }
+    .irc-buf.mention { color: var(--err); }
+    .irc-buf.mention .badge { background: var(--err); }
+    .irc-chat {
+      grid-column: 2 / 3; grid-row: 2 / 3;
+      padding: 14px 18px;
+      overflow: hidden;
+      background: var(--bg);
+      display: flex; flex-direction: column; gap: 3px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+    .irc-msg { display: flex; gap: 12px; align-items: flex-start; min-height: 22px; }
+    .irc-time { color: var(--fg-faint); font-size: 11px; flex-shrink: 0; padding-top: 4px; min-width: 44px; font-variant-numeric: tabular-nums; }
+    .irc-author { font-weight: 600; flex-shrink: 0; }
+    .irc-author .prefix { margin-right: 2px; }
+    .irc-content { color: var(--fg); word-break: break-word; }
+    .irc-content .mention { color: var(--accent); background: var(--accent-dim); padding: 0 4px; border-radius: 3px; }
+    .irc-content .link { color: var(--accent-hi); text-decoration: underline; text-decoration-color: rgba(121, 184, 255, 0.4); }
+    .irc-content .em { font-style: italic; color: var(--warn); }
+    .irc-day { color: var(--fg-faint); text-align: center; font-size: 11px; padding: 10px 0 6px; border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); margin: 6px 0; }
+    .irc-day span { background: var(--bg); padding: 0 12px; }
+    .irc-meta { color: var(--fg-faint); font-size: 12px; padding-left: 56px; }
+    .irc-meta .join { color: var(--ok); }
+    .irc-meta .quit { color: var(--err); }
+    .irc-members {
+      grid-row: 2 / 4;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      padding: 10px 8px;
+      overflow: hidden;
+    }
+    .irc-member-cat { color: var(--fg-faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; padding: 8px 6px 2px; font-weight: 600; }
+    .irc-member { font-size: 12px; padding: 3px 6px; color: var(--fg); display: flex; align-items: center; gap: 4px; }
+    .irc-member .prefix { font-weight: 700; }
+    .irc-member.away { color: var(--fg-faint); font-style: italic; }
+    .irc-input {
+      grid-column: 2 / 3; grid-row: 3 / 4;
+      display: flex; align-items: center; gap: 10px;
+      padding: 0 14px;
+      background: var(--surface-2);
+      border-top: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--fg-dim);
+    }
+    .irc-input .prompt { color: var(--accent); font-weight: 600; }
+    .irc-input .placeholder::after { content: "▌"; color: var(--accent); animation: blink 1.05s steps(2, end) infinite; margin-left: 2px; }
+    .irc-input .send {
+      margin-left: auto;
+      padding: 4px 10px;
+      background: var(--accent); color: #06121f;
+      border-radius: 4px; font-weight: 700; font-size: 11px; letter-spacing: 0.05em;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    @media (max-width: 900px) {
+      .irc-preview { grid-template-columns: 180px 1fr 0; height: 400px; }
+      .irc-members { display: none; }
+    }
+    @media (max-width: 640px) {
+      .irc-preview { grid-template-columns: 0 1fr 0; height: 340px; font-size: 12px; }
+      .irc-side { display: none; }
+      .irc-chat { padding: 10px; }
+      .irc-time { display: none; }
+      .irc-meta { padding-left: 0; }
+    }
+
     .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-4); }
     @media (max-width: 900px) { .features-grid { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 580px) { .features-grid { grid-template-columns: 1fr; } }
     .feat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s-5); transition: border-color var(--t-med), transform var(--t-med); }
     .feat-card:hover { border-color: var(--accent-dim); transform: translateY(-2px); }
-    .feat-card .icon { width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin-bottom: var(--s-3); }
+    .feat-card .icon { width: 32px; height: 32px; border-radius: 8px; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; margin-bottom: var(--s-3); transition: transform var(--t-med), background var(--t-med); }
+    .feat-card:hover .icon { transform: scale(1.08) rotate(3deg); background: var(--accent-dim); }
     .feat-card h3 { color: var(--fg); margin: 0 0 var(--s-2); font-size: 16px; font-weight: 600; }
+    .feat-card h3 .hash { color: var(--accent); margin-right: 2px; }
     .feat-card p { margin: 0; font-size: 14px; line-height: 1.55; }
     .feat-card .meta { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--border-soft); font-size: 11px; color: var(--fg-faint); letter-spacing: 0.04em; text-transform: uppercase; font-weight: 500; }
     .feat-card .meta span { color: var(--fg-dim); }
 
-    
+    .how-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: var(--s-4); align-items: stretch; }
+    @media (max-width: 860px) { .how-grid { grid-template-columns: 1fr; } }
+    .how-step { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s-5); display: flex; flex-direction: column; }
+    .how-step .step-num { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: var(--s-3); }
+    .how-step .step-num .n { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 700; letter-spacing: 0; }
+    .how-step h3 { color: var(--fg); font-size: 18px; margin: 0 0 var(--s-2); }
+    .how-step p { margin: 0; font-size: 14px; line-height: 1.55; }
+    .how-step .form-mock {
+      margin-top: var(--s-4);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .form-mock .field { display: flex; flex-direction: column; gap: 4px; }
+    .form-mock .field-label { font-size: 11px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; }
+    .form-mock .field-input {
+      padding: 8px 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--fg);
+      display: flex; align-items: center;
+      min-height: 16px;
+    }
+    .form-mock .field-input .val { color: var(--fg); }
+    .form-mock .field-input .dots { letter-spacing: 2px; color: var(--fg-dim); }
+    .form-mock .field-input .cursor::after { content: "▌"; color: var(--accent); animation: blink 1.05s steps(2, end) infinite; margin-left: 2px; }
+    .form-mock .submit {
+      margin-top: 4px;
+      padding: 8px 12px;
+      background: var(--accent); color: #06121f;
+      border-radius: 4px;
+      font: 600 12px/1 var(--font-sans);
+      text-align: center;
+      letter-spacing: 0.02em;
+    }
+    .form-mock .row { display: flex; align-items: center; gap: 10px; }
+    .form-mock .row .field-input { flex: 1; }
 
     .pricing-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); align-items: stretch; max-width: 820px; margin: 0 auto; }
     @media (max-width: 640px) { .pricing-grid { grid-template-columns: 1fr; } }
@@ -215,8 +494,44 @@
     .tier li svg { flex-shrink: 0; margin-top: 3px; }
     .tier li.muted { color: var(--fg-faint); }
     .tier .btn { justify-content: center; }
+    .pricing-foot {
+      max-width: 820px;
+      margin: var(--s-5) auto 0;
+      padding: var(--s-3) var(--s-4);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 13px;
+      color: var(--fg-dim);
+      display: flex; align-items: center; gap: var(--s-3);
+    }
+    .pricing-foot .acc { color: var(--accent); font-weight: 600; }
 
-    .final-cta { max-width: 720px; margin: 0 auto; text-align: center; }
+    .faq-list { display: grid; gap: var(--s-3); max-width: 820px; margin: 0 auto; }
+    details.faq { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0; transition: border-color var(--t-med); }
+    details.faq[open] { border-color: var(--accent-dim); }
+    details.faq summary { cursor: pointer; padding: var(--s-4) var(--s-5); font-size: 15px; font-weight: 600; color: var(--fg); list-style: none; display: flex; align-items: center; gap: var(--s-3); }
+    details.faq summary::-webkit-details-marker { display: none; }
+    details.faq summary::before { content: "+"; color: var(--accent); font-weight: 700; font-family: var(--font-mono); width: 16px; display: inline-block; transition: transform var(--t-fast); }
+    details.faq[open] summary::before { content: "−"; }
+    details.faq .ans { padding: 0 var(--s-5) var(--s-5); color: var(--fg-dim); font-size: 14px; line-height: 1.65; }
+    details.faq .ans code { color: var(--accent); background: var(--bg); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+    #cta { position: relative; }
+    #cta::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      background-image:
+        linear-gradient(rgba(88, 166, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(88, 166, 255, 0.03) 1px, transparent 1px);
+      background-size: 32px 32px;
+      mask-image: radial-gradient(ellipse at 50% 50%, #000 20%, transparent 70%);
+      -webkit-mask-image: radial-gradient(ellipse at 50% 50%, #000 20%, transparent 70%);
+    }
+    .final-cta { max-width: 720px; margin: 0 auto; text-align: center; position: relative; z-index: 1; }
     .final-cta .cta-row { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; margin-top: var(--s-5); }
     .final-cta .cta-row .btn { padding: 12px 20px; font-size: 15px; }
     .final-cta .cta-meta { color: var(--fg-faint); font-size: 13px; margin-top: var(--s-4); }
@@ -233,35 +548,30 @@
     .foot-meta a { color: var(--fg-dim); } .foot-meta a:hover { color: var(--accent); text-decoration: none; }
     .foot-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--fg-faint); }
 
-    .reveal { opacity: 0; transform: translateY(18px); }
-    @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; } }
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity 500ms ease, transform 500ms ease; }
+    .reveal.in { opacity: 1; transform: translateY(0); }
+    .reveal-stagger > * { opacity: 0; transform: translateY(10px); }
+    .reveal-stagger.in > * { opacity: 1; transform: translateY(0); transition: opacity 400ms ease, transform 400ms ease; }
+    .reveal-stagger.in > *:nth-child(1) { transition-delay: 0ms; }
+    .reveal-stagger.in > *:nth-child(2) { transition-delay: 60ms; }
+    .reveal-stagger.in > *:nth-child(3) { transition-delay: 120ms; }
+    .reveal-stagger.in > *:nth-child(4) { transition-delay: 180ms; }
+    .reveal-stagger.in > *:nth-child(5) { transition-delay: 240ms; }
+    .reveal-stagger.in > *:nth-child(6) { transition-delay: 300ms; }
 
-    .hero-video-frame::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); box-shadow: 0 0 40px rgba(88, 166, 255, 0.08); animation: frame-glow 6s ease-in-out infinite; pointer-events: none; }
-    @keyframes frame-glow { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
-    .hero-headline span { display: inline-block; }
     .signup-box { animation: box-subtle 7s ease-in-out infinite; }
     @keyframes box-subtle { 0%, 100% { box-shadow: 0 0 0 rgba(88, 166, 255, 0); } 50% { box-shadow: 0 0 30px rgba(88, 166, 255, 0.04); } }
     .topbar-cta { animation: cta-pulse 3s ease-in-out infinite; }
     @keyframes cta-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0); } 50% { box-shadow: 0 0 12px 2px rgba(88, 166, 255, 0.15); } }
-    .feat-card .icon { transition: transform var(--t-med), background var(--t-med); }
-    .feat-card:hover .icon { transform: scale(1.08) rotate(3deg); background: var(--accent-dim); }
-    .hero-trust .item { opacity: 0; animation: trust-in 0.5s ease forwards; }
-    .hero-trust .item:nth-child(1) { animation-delay: 0.6s; }
-    .hero-trust .item:nth-child(2) { animation-delay: 0.75s; }
-    .hero-trust .item:nth-child(3) { animation-delay: 0.9s; }
-    @keyframes trust-in { to { opacity: 1; } }
     .social-btn { transition: transform var(--t-fast), background var(--t-fast), border-color var(--t-fast); }
     .social-btn:hover { transform: translateY(-2px); }
 
     @media (prefers-reduced-motion: reduce) {
-      .fiber .pulse,
-      .hero-video-frame::after,
-      .signup-box,
-      .topbar-cta,
-      .hero-trust .item {
-        animation: none !important;
-      }
+      html { scroll-behavior: auto; }
+      .reveal, .reveal-stagger > * { opacity: 1 !important; transform: none !important; transition: none !important; }
+      .led, .fiber .pulse, .hero-video-frame::after, .signup-box, .topbar-cta, .placeholder::after, .field-input .cursor::after, .cursor::after { animation: none !important; }
       .hero-trust .item { opacity: 1; }
+      body::before { opacity: 0.5; }
     }
   </style>
 </head>
@@ -284,19 +594,45 @@
         </span>
         <span>IRC<span style="color: var(--accent);">Fiber</span></span>
       </a>
+
+      <span class="status-pill" title="Cloud bouncer edge status">
+        <span class="led" aria-hidden="true"></span>
+        <span class="val">All systems operational</span>
+        <span class="meta">· us-east · eu-west · ap-south</span>
+      </span>
+
       <nav class="topbar-nav" aria-label="Primary">
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
+        <a href="#preview">Preview</a>
+        <a href="#how">How it works</a>
+        <a href="#faq">FAQ</a>
       </nav>
+
       <form class="topbar-form" action="/login" method="post" aria-label="Sign in">
         <input type="text" name="username" placeholder="Username" required autocomplete="username" />
         <input type="password" name="password" placeholder="Password" required autocomplete="current-password" />
         <button type="submit">Sign in</button>
         <a class="forgot" href="/login">?</a>
       </form>
+
       <a class="topbar-cta" href="#cta">Start free <span class="arrow">→</span></a>
     </div>
   </header>
+
+  <div class="networks-strip" aria-label="Supported IRC networks">
+    <div class="container networks-strip-inner">
+      <p class="strip-label"><span class="acc">&gt;</span>Networks:</p>
+      <ul class="networks-list">
+        <li>Libera</li>
+        <li>OFTC</li>
+        <li>hackint</li>
+        <li>EFnet</li>
+        <li>QuakeNet</li>
+        <li>100+</li>
+      </ul>
+    </div>
+  </div>
 
   <main>
     <section class="hero">
@@ -304,19 +640,17 @@
         <div class="fiber"><span class="pulse"></span></div>
         <div class="fiber"><span class="pulse"></span></div>
         <div class="fiber"><span class="pulse"></span></div>
-        <div class="fiber"><span class="pulse"></span></div>
-        <div class="fiber"><span class="pulse"></span></div>
       </div>
       <div class="container">
         <div class="hero-grid">
           <div>
-            <span class="hero-eyebrow">
+            <span class="hero-eyebrow reveal">
               <span class="dot" aria-hidden="true"></span>
               <span class="label">Now in public beta</span>
               <span class="sep">·</span>
               <span>Free tier — no credit card</span>
             </span>
-            <h1 class="hero-headline reveal">IRC that remembers<br><span style="color: var(--accent);">everything.</span></h1>
+            <h1 class="hero-headline reveal">IRC that remembers<br><span class="accent">everything.</span></h1>
             <p class="hero-sub reveal">A cloud-hosted bouncer that keeps you connected and your history searchable. Open IRC in any browser, on any device, pick up exactly where you left off — even after a week offline.</p>
 
             <div class="signup-box reveal">
@@ -336,6 +670,16 @@
                   GitHub
                 </a>
               </div>
+            </div>
+
+            <div class="facts reveal">
+              <span class="item"><span class="key">License</span> <span class="val">Apache 2.0</span></span>
+              <span class="dot" aria-hidden="true"></span>
+              <span class="item"><span class="key">Stack</span> <span class="val">Svelte 5 · Vite 6 · D / vibe-d</span></span>
+              <span class="dot" aria-hidden="true"></span>
+              <span class="item"><span class="key">Networks</span> <span class="val">100+</span></span>
+              <span class="dot" aria-hidden="true"></span>
+              <span class="item"><span class="key">Built with</span> <span class="val">GSAP · HyperFrames</span></span>
             </div>
 
             <div class="hero-trust reveal">
@@ -364,6 +708,55 @@
       </div>
     </section>
 
+    <section class="sec" id="preview">
+      <div class="container">
+        <div class="section-head reveal">
+          <span class="kicker">Preview</span>
+          <h2>The same IRC client you already know.</h2>
+          <p>Network tree on the left, message stream in the middle, member roster on the right. Tab complete, slash commands, mIRC formatting — all in your browser, all in sync across every device you sign in from.</p>
+        </div>
+
+        <div class="irc-preview reveal" id="ircPreview" style="margin-top: var(--s-5);">
+          <div class="irc-bar">
+            <span class="name">#design</span>
+            <span class="topic">— color tokens, type scale, midnight theme review</span>
+            <span class="led" aria-hidden="true"></span>
+          </div>
+
+          <div class="irc-side">
+            <div class="irc-net">Libera</div>
+            <div class="irc-buf">#general</div>
+            <div class="irc-buf active">#design <span class="badge">3</span></div>
+            <div class="irc-buf">#dev</div>
+            <div class="irc-net">OFTC</div>
+            <div class="irc-buf">#ircfiber</div>
+            <div class="irc-buf mention">@zodiac <span class="badge">!</span></div>
+          </div>
+
+          <div class="irc-chat" id="ircChat" aria-live="polite"></div>
+
+          <div class="irc-members">
+            <div class="irc-member-cat">Owner</div>
+            <div class="irc-member"><span class="prefix" style="color: var(--prefix-owner);">~</span>sarah</div>
+            <div class="irc-member-cat">Op</div>
+            <div class="irc-member"><span class="prefix" style="color: var(--prefix-op);">@</span>amita</div>
+            <div class="irc-member"><span class="prefix" style="color: var(--prefix-op);">@</span>zodiac</div>
+            <div class="irc-member-cat">Half-op</div>
+            <div class="irc-member"><span class="prefix" style="color: var(--prefix-hop);">%</span>ryan</div>
+            <div class="irc-member-cat">Voiced</div>
+            <div class="irc-member"><span class="prefix" style="color: var(--prefix-voice);">+</span>mike</div>
+            <div class="irc-member away"><span class="prefix" style="color: var(--prefix-voice);">+</span>leo (away)</div>
+          </div>
+
+          <div class="irc-input">
+            <span class="prompt">›</span>
+            <span class="placeholder" id="ircInput">Message #design</span>
+            <span class="send">↵</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="sec deep" id="features">
       <div class="container">
         <div class="section-head center reveal">
@@ -374,39 +767,112 @@
         <div class="features-grid reveal-stagger">
           <div class="feat-card">
             <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-9 4 18 3-9 6 0"/></svg></div>
-            <h3>Always connected</h3>
+            <h3><span class="hash">#</span>always-connected</h3>
             <p>Our edge fleet of bouncers stays in the channel 24/7. Power off your laptop, take a flight, lose wifi — when you sign back in, every message is waiting.</p>
             <div class="meta"><span>24/7 bouncer</span><span>auto-reconnect</span></div>
           </div>
           <div class="feat-card">
             <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
-            <h3>Full history</h3>
+            <h3><span class="hash">#</span>full-history</h3>
             <p>Every message, in every buffer, stored in our cloud. Scroll back through a week of conversation or a year — same scrollback, same slash commands.</p>
             <div class="meta"><span>infinite</span><span>searchable</span></div>
           </div>
           <div class="feat-card">
             <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="13" height="11" rx="2"/><rect x="13" y="9" width="9" height="11" rx="2"/></svg></div>
-            <h3>Any device</h3>
+            <h3><span class="hash">#</span>any-device</h3>
             <p>Modern web app that works in every browser, on every device. Open it on your phone, switch to a desktop, jump to a tablet — the same buffers follow you.</p>
             <div class="meta"><span>responsive</span><span>pwa-ready</span></div>
           </div>
           <div class="feat-card">
             <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></div>
-            <h3>Multi-network</h3>
+            <h3><span class="hash">#</span>multi-network</h3>
             <p>100+ IRC networks preconfigured — Libera, OFTC, hackint, EFnet, QuakeNet, and more. Add your own private network with one form.</p>
             <div class="meta"><span>libera</span><span>byo</span></div>
           </div>
           <div class="feat-card">
             <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
-            <h3>Fast search</h3>
+            <h3><span class="hash">#</span>fast-search</h3>
             <p>Instant full-text search across every buffer, every network, every device. Find a link someone shared years ago or every mention of your nick in the last 30 days.</p>
             <div class="meta"><span>full-text</span><span>cross-buffer</span></div>
           </div>
           <div class="feat-card">
             <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></div>
-            <h3>Beautiful UI</h3>
+            <h3><span class="hash">#</span>beautiful-ui</h3>
             <p>Themes: dark, midnight, compact, monospace, custom CSS. mIRC formatting with 16 base colors and hex RGB. Emoji picker, file uploads, pastebin.</p>
             <div class="meta"><span>themes</span><span>mirc</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="how">
+      <div class="container">
+        <div class="section-head center reveal">
+          <span class="kicker">How it works</span>
+          <h2>Three steps. Thirty seconds.</h2>
+          <p>No servers to provision. No Docker to learn. No config to write. Sign up, add a network, start chatting — the same buffers follow you across every device.</p>
+        </div>
+
+        <div class="how-grid reveal-stagger">
+          <div class="how-step">
+            <div class="step-num"><span class="n">1</span> Sign up</div>
+            <h3>Create your account</h3>
+            <p>Email + password (or your Google/GitHub account), and you're in. No credit card on the free tier, no trial countdown.</p>
+            <div class="form-mock">
+              <div class="field">
+                <span class="field-label">Email</span>
+                <div class="field-input"><span class="val">you@host.tld</span></div>
+              </div>
+              <div class="field">
+                <span class="field-label">Password</span>
+                <div class="field-input"><span class="dots">•••••••••</span></div>
+              </div>
+              <div class="submit">Create account</div>
+            </div>
+          </div>
+
+          <div class="how-step">
+            <div class="step-num"><span class="n">2</span> Connect</div>
+            <h3>Add an IRC network</h3>
+            <p>100+ public networks preconfigured, or paste a custom server. SASL PLAIN, EXTERNAL, or SCRAM-SHA-256. We keep the connection alive.</p>
+            <div class="form-mock">
+              <div class="field">
+                <span class="field-label">Network</span>
+                <div class="field-input"><span class="val">Libera.Chat</span></div>
+              </div>
+              <div class="row">
+                <div class="field" style="flex:1;">
+                  <span class="field-label">Nick</span>
+                  <div class="field-input"><span class="val">zodiac</span></div>
+                </div>
+                <div class="field" style="flex:1;">
+                  <span class="field-label">SASL</span>
+                  <div class="field-input"><span class="val">PLAIN</span></div>
+                </div>
+              </div>
+              <div class="submit">Connect</div>
+            </div>
+          </div>
+
+          <div class="how-step">
+            <div class="step-num"><span class="n">3</span> Use anywhere</div>
+            <h3>Pick up on any device</h3>
+            <p>Open the web app, join a channel, start typing. Close the tab, switch devices, come back tomorrow — the same buffers and scrollback, in sync.</p>
+            <div class="form-mock">
+              <div class="field">
+                <span class="field-label">Buffer</span>
+                <div class="field-input"><span class="val">#design @ Libera.Chat</span></div>
+              </div>
+              <div class="field">
+                <span class="field-label">Message</span>
+                <div class="field-input"><span class="val">/join #design</span><span class="cursor"></span></div>
+              </div>
+              <div class="field">
+                <span class="field-label">Devices synced</span>
+                <div class="field-input"><span class="val">3 devices · 1 buffer state</span></div>
+              </div>
+              <div class="submit">Open in web app →</div>
+            </div>
           </div>
         </div>
       </div>
@@ -448,6 +914,54 @@
             <a class="btn btn-primary block" href="#cta">Go pro</a>
           </div>
         </div>
+
+        <div class="pricing-foot reveal">
+          <span>→</span>
+          <span>Pro is billed monthly. You can cancel any time and <span class="acc">export your scrollback</span> before your account closes.</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="sec" id="faq">
+      <div class="container">
+        <div class="section-head center reveal">
+          <span class="kicker">FAQ</span>
+          <h2>Common questions, honest answers.</h2>
+          <p style="margin-left:auto;margin-right:auto;">If yours isn't here, ask in <a href="ircs://irc.libera.chat/ircfiber">#ircfiber @ libera</a> or email <a href="mailto:team@ircfiber.com">team@ircfiber.com</a>.</p>
+        </div>
+
+        <div class="faq-list reveal-stagger">
+          <details class="faq">
+            <summary>Where are my messages stored?</summary>
+            <div class="ans">
+              On our infrastructure. We run a multi-region edge fleet (US-East, EU-West, AP-South) backed by encrypted-at-rest storage. You pick the region at signup; we don't move your data between regions without telling you. We never sell, share, or mine your messages — they're yours, full stop.
+            </div>
+          </details>
+          <details class="faq">
+            <summary>Do I need to install anything?</summary>
+            <div class="ans">
+              No. The web app runs in any modern browser. No native client, no Electron wrapper, no <code>npm install</code>. You can install it as a PWA to your home screen for a more app-like feel, but that's optional.
+            </div>
+          </details>
+          <details class="faq">
+            <summary>What if I already use a desktop client like WeeChat or HexChat?</summary>
+            <div class="ans">
+              Keep using it. IRC Fiber's gateway exposes a standard bouncer protocol, so you can point WeeChat, HexChat, irssi, mIRC, or anything else at it and get the same always-on buffer state. The web app is the convenience layer; you're not locked into it.
+            </div>
+          </details>
+          <details class="faq">
+            <summary>Can I add my own private IRC network?</summary>
+            <div class="ans">
+              Yes. The network form takes hostname, port, password, and SASL credentials. The bouncer maintains the connection just like the public networks. 100+ public networks are preconfigured (Libera, OFTC, hackint, EFnet, QuakeNet, and more).
+            </div>
+          </details>
+          <details class="faq">
+            <summary>What happens if I cancel?</summary>
+            <div class="ans">
+              You get a 30-day grace period to come back, then we delete your account and message history. We also offer a one-click export of every buffer as plain text or JSON, so you can take your scrollback with you if you decide to self-host something else.
+            </div>
+          </details>
+        </div>
       </div>
     </section>
 
@@ -456,7 +970,7 @@
         <div class="section-head center reveal" style="margin-bottom: var(--s-4);">
           <span class="kicker">Get started</span>
           <h2>Stop missing messages.</h2>
-          <p>Sign up in 30 seconds. No credit card for the free tier. Your history is searchable from every device the moment you join your first channel.</p>
+          <p style="margin-left:auto;margin-right:auto;">Sign up in 30 seconds. No credit card for the free tier. Your history is searchable from every device the moment you join your first channel.</p>
         </div>
         <form class="signup-inline reveal" action="/register" method="post" style="max-width:540px;margin:0 auto">
           <input type="email" name="email" placeholder="Email" required />
@@ -465,8 +979,14 @@
         </form>
         <div class="signup-divider reveal" style="max-width:540px;margin:var(--s-4) auto">or continue with</div>
         <div class="social-row reveal" style="max-width:540px;margin:0 auto">
-          <a class="social-btn" href="/auth/google">Google</a>
-          <a class="social-btn" href="/auth/github">GitHub</a>
+          <a class="social-btn" href="/auth/google">
+            <svg viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+            Google
+          </a>
+          <a class="social-btn" href="/auth/github">
+            <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.73.083-.73 1.205.085 1.84 1.237 1.84 1.237 1.07 1.835 2.807 1.305 3.492.998.108-.776.42-1.305.763-1.605-2.665-.305-5.467-1.334-5.467-5.93 0-1.31.468-2.382 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.838 1.23 1.91 1.23 3.22 0 4.61-2.807 5.625-5.48 5.92.43.372.81 1.102.81 2.222 0 1.606-.015 2.898-.015 3.293 0 .32.21.694.825.577C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+            GitHub
+          </a>
         </div>
         <p class="cta-meta reveal">No credit card · No trial countdown · Cancel any time, take your scrollback with you</p>
       </div>
@@ -493,45 +1013,144 @@
             </span>
             <span>IRC<span style="color: var(--accent);">Fiber</span></span>
           </a>
-          <p>A cloud-hosted IRC bouncer and web app. We run the bouncer, you run the conversation.</p>
+          <p>A cloud-hosted IRC bouncer and web app. We run the bouncer, you run the conversation. Multi-region edge fleet, infinite scrollback, every device in sync.</p>
         </div>
-        <div class="foot-col"><h4>Product</h4><ul><li><a href="#features">Features</a></li><li><a href="#pricing">Pricing</a></li><li><a href="#status">Status</a></li></ul></div>
+        <div class="foot-col"><h4>Product</h4><ul><li><a href="#features">Features</a></li><li><a href="#pricing">Pricing</a></li><li><a href="#preview">Preview</a></li><li><a href="#how">How it works</a></li><li><a href="#faq">FAQ</a></li></ul></div>
         <div class="foot-col"><h4>Company</h4><ul><li><a href="#about">About</a></li><li><a href="mailto:team@ircfiber.com">Contact</a></li></ul></div>
         <div class="foot-col"><h4>Resources</h4><ul><li><a href="#docs">Docs</a></li><li><a href="#privacy">Privacy &amp; terms</a></li></ul></div>
       </div>
       <div class="foot-meta">
         <span>Cloud-hosted IRC client + bouncer</span>
         <span class="dot" aria-hidden="true"></span>
+        <span>Built with <a href="https://gsap.com/ui/" target="_blank" rel="noreferrer">GSAP /ui/</a> &amp; <a href="https://github.com/heygen-com/hyperframes" target="_blank" rel="noreferrer">HyperFrames</a></span>
+        <span class="dot" aria-hidden="true"></span>
         <span>© 2026 IRC Fiber</span>
       </div>
     </div>
   </footer>
 
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/ScrollTrigger.min.js" crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/@hyperframes/player@0.6.97/dist/hyperframes-player.global.js" crossorigin="anonymous"></script>
   <script>
     (function () {
       'use strict';
-      if (window.gsap && window.gsap.ScrollTrigger) {
-        gsap.registerPlugin(window.gsap.ScrollTrigger);
+
+      var reveals = document.querySelectorAll('.reveal, .reveal-stagger');
+      if ('IntersectionObserver' in window) {
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('in');
+              io.unobserve(entry.target);
+            }
+          });
+        }, { threshold: 0.08, rootMargin: '0px 0px -40px 0px' });
+        reveals.forEach(function (el) { io.observe(el); });
+      } else {
+        reveals.forEach(function (el) { el.classList.add('in'); });
       }
 
-      if (window.gsap && window.gsap.ScrollTrigger) {
-        gsap.utils.toArray('.reveal').forEach(function (el) {
-          gsap.fromTo(el, { opacity: 0, y: 18 }, {
-            opacity: 1, y: 0, duration: 0.6, ease: 'power2.out',
-            scrollTrigger: { trigger: el, start: 'top 85%', once: true }
-          });
+      var chatMessages = [
+        { day: 'Today' },
+        { time: '10:24', prefix: '@', prefixColor: 'var(--prefix-op)',     author: 'amita',   text: 'has anyone stress-tested the new backlog sync?' },
+        { time: '10:24', meta: true, text: '<span class="join">→</span> mike has joined #design' },
+        { time: '10:25', prefix: '%', prefixColor: 'var(--prefix-hop)',     author: 'ryan',    text: 'sasl <span class="link">EXTERNAL</span> is now live too.' },
+        { time: '10:25', prefix: '~', prefixColor: 'var(--prefix-owner)',   author: 'sarah',   text: 'cool. let\'s roll it out to the staging fleet.' },
+        { time: '10:26', meta: true, text: '<span class="join">→</span> zodiac has joined #design' },
+        { time: '10:26', prefix: '+', prefixColor: 'var(--prefix-voice)',   author: 'mike',    text: 'btw the <span class="mention">@zodiac</span> mention buzz is dialed in nicely' },
+        { time: '10:27', prefix: '@', prefixColor: 'var(--prefix-op)',     author: 'amita',   text: 'agreed. the midnight + monospace combo is <span class="em">chef\'s kiss</span>' }
+      ];
+
+      function buildIRCChat() {
+        var chat = document.getElementById('ircChat');
+        if (!chat) return;
+        chat.innerHTML = '';
+        var frag = document.createDocumentFragment();
+        chatMessages.forEach(function (m) {
+          var row = document.createElement('div');
+          if (m.day) {
+            row.className = 'irc-day';
+            row.innerHTML = '<span>' + m.day + '</span>';
+          } else if (m.meta) {
+            row.className = 'irc-meta';
+            row.innerHTML = m.text;
+          } else {
+            row.className = 'irc-msg';
+            row.innerHTML =
+              '<span class="irc-time">' + m.time + '</span>' +
+              '<span class="irc-author">' +
+                '<span class="prefix" style="color:' + m.prefixColor + '">' + m.prefix + '</span>' +
+                m.author +
+              '</span>' +
+              '<span class="irc-content">' + m.text + '</span>';
+          }
+          row.style.opacity = '0';
+          row.style.transform = 'translateY(6px)';
+          frag.appendChild(row);
         });
-        gsap.utils.toArray('.reveal-stagger').forEach(function (el) {
-          gsap.fromTo(el.children, { opacity: 0, y: 14 }, {
-            opacity: 1, y: 0, duration: 0.5, ease: 'power2.out', stagger: 0.08,
-            scrollTrigger: { trigger: el, start: 'top 85%', once: true }
-          });
+        chat.appendChild(frag);
+
+        var rows = chat.querySelectorAll('.irc-msg, .irc-meta, .irc-day');
+        rows.forEach(function (r, i) {
+          setTimeout(function () {
+            r.style.transition = 'opacity 300ms ease, transform 300ms ease';
+            r.style.opacity = '1';
+            r.style.transform = 'translateY(0)';
+          }, 200 + i * 80);
         });
+
+        var extra = [
+          { time: '10:31', prefix: '+', prefixColor: 'var(--prefix-voice)', author: 'leo',  text: 'deploy went green across the cluster.' },
+          { time: '10:32', prefix: '@', prefixColor: 'var(--prefix-op)',    author: 'amita', text: 'pnuts. rolling it to prod next.' },
+          { time: '10:33', prefix: '~', prefixColor: 'var(--prefix-owner)',  author: 'sarah', text: 'topic updated. thanks all.' }
+        ];
+        var cycleIdx = 0;
+        setInterval(function () {
+          if (cycleIdx >= extra.length) cycleIdx = 0;
+          var m = extra[cycleIdx++];
+          var row = document.createElement('div');
+          row.className = 'irc-msg';
+          row.style.opacity = '0';
+          row.style.transform = 'translateY(6px)';
+          row.innerHTML =
+            '<span class="irc-time">' + m.time + '</span>' +
+            '<span class="irc-author">' +
+              '<span class="prefix" style="color:' + m.prefixColor + '">' + m.prefix + '</span>' +
+              m.author +
+            '</span>' +
+            '<span class="irc-content">' + m.text + '</span>';
+          var existing = chat.querySelectorAll('.irc-msg');
+          if (existing.length > 9) existing[0].remove();
+          chat.appendChild(row);
+          row.style.transition = 'opacity 300ms ease, transform 300ms ease';
+          setTimeout(function () { row.style.opacity = '1'; row.style.transform = 'translateY(0)'; }, 10);
+        }, 6000);
+      }
+
+      function rotateComposerHint() {
+        var el = document.getElementById('ircInput');
+        if (!el) return;
+        var hints = [
+          'Message #design',
+          '/join #dev',
+          '/msg amita hey, you around?',
+          '/topic IRC Fiber launch — tonight 21:00 UTC',
+          '/whois zodiac'
+        ];
+        var i = 0;
+        setInterval(function () {
+          i = (i + 1) % hints.length;
+          if (el.isConnected) el.textContent = hints[i];
+        }, 4200);
+      }
+
+      function boot() {
+        buildIRCChat();
+        rotateComposerHint();
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', boot);
       } else {
-        document.querySelectorAll('.reveal, .reveal-stagger > *').forEach(function (el) { el.style.opacity = '1'; el.style.transform = 'none'; });
+        boot();
       }
     })();
   </script>
