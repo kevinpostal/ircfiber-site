@@ -132,6 +132,8 @@ main.chat-container {
   border-left: 1px solid #2c2f35;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
   position: relative;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -194,20 +196,21 @@ main.chat-container {
   color: #d1d5db;
   background: rgba(255,255,255,0.06);
 }
-.network-list { flex: 1; overflow-y: auto; }
+.network-list { flex: none; overflow: visible; }
 .network { position: relative; margin-bottom: 10px; list-style: none; }
 .network:last-child { margin-bottom: 0; }
 ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header { display: block; position: relative; font-size: 14px; font-weight: 400; color: #d1d5db; user-select: none; margin: 0 0 1px 0; padding: 0; background: #333; line-height: 18px; border-radius: 4px; }
-.network-header .buffer { display: flex; align-items: center; gap: 0; padding: 7px 0 7px 4px; cursor: pointer; background: transparent; color: #999; border-left: 5px solid #262626; border-radius: 4px; line-height: 18px; }
+.network-header::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: #1a1a1a; border-radius: 4px 0 0 4px; z-index: 1; }
+.network-header .buffer { display: flex; align-items: center; gap: 0; padding: 7px 0 7px 4px; cursor: pointer; background: transparent; color: #999; border-radius: 4px; line-height: 18px; }
 .network.connected .network-header .buffer { color: #d9d9d9; }
 .network-header:hover { background: #3a3a3a; }
 .network-header.selected .buffer { color: #333; }
-.network-header .bufferOptions { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; font-size: 15px; padding: 0; opacity: 0; transition: opacity 0.15s; }
+.network-header .bufferOptions { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; font-size: 15px; padding: 0; opacity: 0; transition: opacity 0.15s; z-index: 2; }
 .network-header:hover .bufferOptions, .network-header .bufferOptions:focus { opacity: 1; }
 .network-header.selected .bufferOptions { color: #333; opacity: 1; }
 .network-header.selected { background: #fff; }
-.network-header.selected .buffer { border-left-color: #6e7681; }
+.network-header.selected::before { background: #6e7681; }
 
 .network-shield { position: static; font-size: 13px; margin-right: 5px; flex-shrink: 0; }
 .fa-globe.network-shield { font-size: 13px; }
@@ -215,17 +218,22 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-unread { margin-left: auto; }
 .network-buffers { padding-bottom: 0; }
 .buffer { display: flex; align-items: center; width: 100%; }
-.buffer-item { display: block; font-size: 15px; color: #999; cursor: pointer; border-radius: 4px; }
+.buffer-item { display: block; position: relative; font-size: 15px; color: #999; cursor: pointer; border-radius: 4px; }
+.buffer-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: #333; border-radius: 4px 0 0 4px; z-index: 1; }
 .buffer-item .buffer { display: block; padding: 3px 0 2px 27px; border-radius: 0 4px 4px 0; line-height: 18px; }
 .buffer-item:hover .buffer { background: #1a1a1a; color: #d9d9d9; }
-.buffer-item.active .buffer { background: #fff; color: #333; border-left: 5px solid #d9d9d9; margin-left: -5px; }
+.buffer-item.active .buffer { background: #fff; color: #333; }
+.buffer-item.active::before { background: var(--accent); }
 /* Unread buffers: bold white name, no count badge (IRCCloud behavior).
    The red numeric badge below is reserved for mentions and PM unreads. */
-.buffer-item.unread .buffer { color: #f2f2f2; font-weight: 600; border-left: 5px solid var(--accent); margin-left: -5px; }
+.buffer-item.unread .buffer { color: #f2f2f2; font-weight: 600; }
+.buffer-item.unread::before { background: var(--accent); }
 .buffer-item.unread:hover .buffer { background: #1a1a1a; color: #f2f2f2; }
-.buffer-item.unread.active .buffer { background: #fff; color: #333; border-left: 5px solid #d9d9d9; margin-left: -5px; }
-.buffer-item.highlight .buffer { color: #f2f2f2; font-weight: 600; border-left: 5px solid var(--accent); margin-left: -5px; }
-.buffer-item.highlight.active .buffer { background: #fff; color: #333; border-left: 5px solid #ff7b72; margin-left: -5px; }
+.buffer-item.unread.active .buffer { background: #fff; color: #333; }
+.buffer-item.highlight .buffer { color: #f2f2f2; font-weight: 600; }
+.buffer-item.highlight::before { background: var(--accent); }
+.buffer-item.highlight.active .buffer { background: #fff; color: #333; }
+.buffer-item.highlight.active::before { background: #ff7b72; }
 .buffer-item.highlight.active .buffer .unread__label { color: #333; }
 .network-header.unread .buffer,
 .network.connected .network-header.unread .buffer { color: #f2f2f2; font-weight: 600; }
@@ -559,7 +567,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .row.messageRow {
   display: block;
   position: relative;
-  padding: 0 21px 0 68px;
+  padding: 0 118px 0 68px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   letter-spacing: normal;
   line-height: 1.15;
@@ -2291,7 +2299,10 @@ wbr { display: none; }
   cursor: pointer;
   user-select: none;
   border: none;
-  background: transparent;
+  background: #000;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
 }
 .accountMenu__button:hover {
   color: #d1d5db;
@@ -2311,6 +2322,9 @@ wbr { display: none; }
 .accountMenu {
   border-top: 1px solid #333;
   margin-top: 4px;
+  position: sticky;
+  bottom: 0;
+  background: #000;
 }
 .accountMenu__info {
   padding: 10px 12px 4px 12px;
@@ -2434,9 +2448,8 @@ wbr { display: none; }
 .memberwrapper { flex: 1; overflow-y: auto; padding: 0 0 0.5rem 0; min-width: 0; background-color: hsl(220, 14%, 10%); }
 .memberList { list-style: none; margin: 0; padding: 0; }
 .memberList .category {
-  margin-bottom: 0.25rem;
-  padding-top: 4px;
-  padding-bottom: 0.25rem;
+  margin-bottom: 0;
+  padding: 0 0 0 5px;
 }
 
 /* Category backgrounds and borders - IRCCloud dark theme */
@@ -2465,23 +2478,24 @@ wbr { display: none; }
 
 .memberList .category h2 {
   display: flex; align-items: center; justify-content: space-between;
-  font-size: 13px; font-weight: 600;
+  font-size: 14px; font-weight: 400;
+  line-height: 18px;
   text-transform: capitalize;
-  padding: 4px 12px 8px;
+  padding: 8px 8px 1px;
 }
 
-/* Category header colors */
+/* Category header colors — match IRCCloud dark theme */
 .memberList .category.ops h2 {
-  color: #ff7b72;
+  color: #f4a9aa;
 }
 .memberList .category.halfops h2 {
-  color: #ffa657;
+  color: #ffbf82;
 }
 .memberList .category.voiced h2 {
-  color: #56d364;
+  color: #99ff7e;
 }
 .memberList .category.members h2 {
-  color: #79c0ff;
+  color: #b3b3b3;
 }
 
 .memberExtras { display: inline-flex; align-items: center; gap: 4px; }
@@ -2490,29 +2504,31 @@ wbr { display: none; }
 .mode_pill { font-size: 10px; line-height: 1; }
 .memberCount { font-size: 0.75rem; font-weight: 500; }
 
-/* Mode prefix colors per category */
+/* Mode prefix colors per category — match IRCCloud dark theme */
 .memberList .category.ops .memberExtras {
-  color: #ff7b72;
+  color: #f4a9aa;
 }
 .memberList .category.halfops .memberExtras {
-  color: #ffa657;
+  color: #ffbf82;
 }
 .memberList .category.voiced .memberExtras {
-  color: #56d364;
+  color: #99ff7e;
 }
 .memberList .category.members .memberExtras {
-  color: #79c0ff;
+  color: #b3b3b3;
 }
 
-.categoryMemberList { list-style: none; margin: 0; padding: 0; }
+.categoryMemberList { list-style: none; margin: 5px 0; padding: 0; }
 .categoryMemberList li.user {
-  padding: 0;
+  padding: 1px 8px;
+  line-height: 18px;
+  font-size: 14px;
 }
 .categoryMemberList li.user button.bufferLink {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 2px 12px;
+  padding: 0;
   font-size: 14px;
   line-height: 18px;
   background: none;
@@ -2520,7 +2536,7 @@ wbr { display: none; }
   border-radius: 0;
   font: inherit;
   cursor: pointer;
-  color: #fff;
+  color: #ccc;
   text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
@@ -2643,6 +2659,10 @@ wbr { display: none; }
   padding: 4px 8px;
   width: 100%;
   box-sizing: border-box;
+  position: sticky;
+  bottom: 36px;
+  background: #000;
+  z-index: 2;
 }
 
 .addNetworkButton {
@@ -3416,7 +3436,25 @@ wbr { display: none; }
 
 /* First message from an author: full author info shown */
 .row.messageRow.firstAuthor {
-  padding-top: 4px;
+  padding-top: 6px;
+}
+
+/* Restore firstAuthor top padding for bot / type_buffer_msg / blockArt
+   rows. Their combined-class shorthand in public/dist/index.css (specificity
+   0,3,1) comes after this rule and resets padding-top to 0; this matches
+   its specificity and comes later in source order to win. */
+.row.messageRow.firstAuthor.type_buffer_msg,
+.row.messageRow.firstAuthor.bot,
+.row.messageRow.firstAuthor.blockArt {
+  padding-top: 6px;
+}
+
+/* Rows that render the 32×32 avatar need enough height for the puck.
+   The avatar is absolutely positioned at top: 8px, so min-height: 40px
+   keeps the full circle inside the row and prevents the next row's
+   background from clipping the bottom. */
+.row.messageRow.hasAvatar.firstAuthor {
+  min-height: 40px;
 }
 
 /* Subsequent messages from same author: no author wrap. Zero vertical
@@ -3428,6 +3466,13 @@ wbr { display: none; }
 }
 
 .row.messageRow.sameAuthor .authorWrap {
+  display: none;
+}
+
+/* The avatar is now a sibling of .authorWrap so it isn't clipped by
+   authorWrap's 24px overflow:hidden box; hide it for same-author rows
+   just like the author wrap. */
+.row.messageRow.sameAuthor .messageAvatar {
   display: none;
 }
 
