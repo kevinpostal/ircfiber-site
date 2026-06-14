@@ -106,8 +106,8 @@
     {:else}
       <p class="buttons">
         <button class="rejoin" type="button" onclick={onEditNetwork}>Edit</button>
-        <button class="archive" type="button" onclick={handleConnectionAction} disabled={busy}>
-          {connected || isConnecting ? 'Disconnect' : (activeNetwork?.disconnectReason ? 'Reconnect' : 'Connect')}
+        <button class="archive" type="button" onclick={handleConnectionAction} disabled={busy || isConnecting}>
+          {connected ? 'Disconnect' : isConnecting ? 'Connecting\u2026' : (activeNetwork?.disconnectReason ? 'Reconnect' : 'Connect')}
         </button>
         <button class="bufferOptions fa fa-cog" type="button"
                 title="Options" aria-label="Options"

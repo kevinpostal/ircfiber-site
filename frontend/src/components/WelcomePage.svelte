@@ -42,7 +42,6 @@
   let host = $state('');
   let port = $state(6697);
   let tls = $state<'enabled' | 'disabled' | 'required'>('enabled');
-  let verifyTls = $state(true);
   let nick = $state('');
   let realName = $state('');
   let autoJoinChannels = $state('');
@@ -77,7 +76,7 @@
     try {
       const result = await addNetwork({
         name: host,
-        host, port, tls, verifyTls, nick, realName,
+        host, port, tls, nick, realName,
         autoJoinChannels, nspass, serverPass, commands,
       });
       if (result && result.id) {
@@ -87,7 +86,6 @@
           host: result.host as string,
           port: result.port as number,
           tls: (result.tls as string) || 'enabled',
-          verifyTls: result.verifyTls as boolean ?? true,
           nick: result.nick as string,
           realName: (result.realName as string) || (result.nick as string),
           currentNick: result.nick as string,
@@ -277,15 +275,7 @@
                   </span>
                 </td>
               </tr>
-              <tr>
-                <th scope="col" class="verifytls optional">
-                  <label for="addNetworkVerifyTls">
-                    <input id="addNetworkVerifyTls" type="checkbox" bind:checked={verifyTls} />
-                    Verify TLS certificate
-                    <small class="explanation">— uncheck for self-signed certs</small>
-                  </label>
-                </th>
-              </tr>
+
               </tbody>
             </table>
           {/if}

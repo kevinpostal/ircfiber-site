@@ -21,7 +21,6 @@ export function createNetwork(overrides: Partial<Network> = {}): Network {
     host: 'irc.libera.chat',
     port: 6697,
     tls: 'required',
-    verifyTls: true,
     nick: 'tester',
     realName: 'tester',
     currentNick: 'tester',

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ircState } from '../stores/ircStore.svelte';
   import { archivedMap, pinnedMap, hiddenChannelsMap } from '../stores/preferences.svelte';
-  import { stripHash } from '../lib/utils';
+  import { stripHash, normalizeChannelName } from '../lib/utils';
   import type { Buffer } from '../types';
   import AccountMenu from './AccountMenu.svelte';
 
@@ -25,23 +25,41 @@
         .map(b => ({ networkId: net.networkId, buffer: b, network: net }))
     )
   );
-</script>
 
-{#if ircState.networks.length === 0}
-<div class="addNetworkButtonContainer">
-  <button class="addNetworkButton addNetworkButton--selected" id="add-network-btn" type="button" onclick={onAddNetwork}>
-    <i class="fa fa-plus-circle"></i>
-    Add a network
-  </button>
-</div>
-{/if}
+  // Defensive: duplicate networkIds in the store would crash Svelte's keyed
+  // each block. Filter to the first occurrence so the UI stays up.
+  const uniqueNetworks = $derived(
+    ircState.networks.filter((net, i, arr) =>
+      arr.findIndex(n => n.networkId === net.networkId) === i
+    )
+  );
+
+  function uniqueBuffersByName<T extends { name: string }>(buffers: T[]): T[] {
+    // Compare via normalizeChannelName so "#autism" and "autism" collapse
+    // to the same buffer entry instead of appearing in both Active and
+    // Inactive sections.
+    return buffers.filter((b, i, arr) =>
+      arr.findIndex(x => normalizeChannelName(x.name) === normalizeChannelName(b.name)) === i
+    );
+  }
+
+  function uniquePinned(pinned: Array<{ networkId: string; buffer: Buffer; network: Network }>): Array<{ networkId: string; buffer: Buffer; network: Network }> {
+    const seen = new Set<string>();
+    return pinned.filter(p => {
+      const key = p.networkId + ':' + p.buffer.name;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+</script>
 
 <div class="network-list" id="networks">
   {#if pinned.length > 0}
     <ul class="bufferList pinnedBuffers">
       <h2><i class="fa fa-thumb-tack"></i>Pinned</h2>
       <ul class="pinnedBufferList">
-        {#each pinned as p (p.networkId + ':' + p.buffer.name)}
+        {#each uniquePinned(pinned) as p (p.networkId + ':' + p.buffer.name)}
           {@const isActive = p.networkId === ircState.activeBuffer.networkId && p.buffer.name === ircState.activeBuffer.bufferName}
           <li role="presentation"
               class="buffer channel buffer-item"
@@ -63,7 +81,7 @@
     </ul>
   {/if}
 
-  {#each ircState.networks as net (net.networkId)}
+  {#each uniqueNetworks as net (net.networkId)}
     {@const isActiveNet = ircState.activeBuffer.networkId === net.networkId && ircState.activeBuffer.bufferName === '_server'}
     {@const totalNetUnread = net.buffers.reduce((sum, b) => sum + (b.unreadCount || 0), 0)}
     {@const totalNetHighlights = net.buffers.reduce((sum, b) => sum + (b.highlightCount || 0), 0)}
@@ -100,7 +118,7 @@
       </div>
       {#if !net.collapsed}
         <ul class="buffers channels network-buffers">
-          {#each net.buffers.filter(b => b.name !== '_server' && b.isJoined !== false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`]) as buf (net.networkId + ':' + buf.name)}
+          {#each uniqueBuffersByName(net.buffers.filter(b => b.name !== '_server' && b.isJoined !== false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])) as buf (net.networkId + ':' + buf.name)}
             {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
             <li class="buffer channel buffer-item"
                 class:active={isActive}
@@ -128,7 +146,7 @@
         {#if inactive.length > 0}
           <div class="sidebar-section-header inactive-header">Inactive</div>
           <ul class="buffers inactive-channels">
-            {#each inactive as buf (net.networkId + ':' + buf.name)}
+            {#each uniqueBuffersByName(inactive) as buf (net.networkId + ':' + buf.name)}
               {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
               <li class="buffer channel buffer-item inactive"
                   class:active={isActive}
@@ -172,12 +190,10 @@
     </div>
   {/each}
 </div>
-{#if ircState.networks.length > 0}
 <div class="addNetworkButtonContainer">
-  <button class="addNetworkButton" id="add-network-btn" type="button" onclick={onAddNetwork}>
+  <button class="addNetworkButton" class:addNetworkButton--selected={ircState.networks.length === 0} id="add-network-btn" type="button" onclick={onAddNetwork}>
     <i class="fa fa-plus-circle"></i>
     Add a network
   </button>
 </div>
-{/if}
 <AccountMenu {onAddNetwork} />

@@ -252,6 +252,10 @@ export function isIgnored(nick: string): boolean {
 // entirely from the UI; the user must /join them to bring them back.
 export function hideChannel(networkId: string, bufferName: string): void {
   hiddenChannelsMap[`${networkId}:${normalizeChannelName(bufferName)}`] = true;
+  // Write to localStorage immediately so a fast page refresh (<500ms debounce)
+  // doesn't lose the hidden state. The debounced schedulePersist still runs
+  // to handle cross-tab sync via the `storage` event listener below.
+  setStorageItem('ircfiber:hiddenChannels', hiddenChannelsMap);
   schedulePersist('ircfiber:hiddenChannels', hiddenChannelsMap);
 }
 export function unhideChannel(networkId: string, bufferName: string): void {

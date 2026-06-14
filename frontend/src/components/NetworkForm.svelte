@@ -22,7 +22,6 @@
   let host = $state('');
   let port = $state(6697);
   let tls = $state<'enabled' | 'disabled' | 'required'>('enabled');
-  let verifyTls = $state(false);
   let nick = $state('');
   let realName = $state('');
   let autoJoinChannels = $state('');
@@ -42,7 +41,6 @@
       host = existing.host;
       port = existing.port;
       tls = existing.tls;
-      verifyTls = existing.verifyTls;
       nick = existing.nick;
       realName = existing.realName;
       autoJoinChannels = '';
@@ -54,7 +52,6 @@
       host = '';
       port = 6697;
       tls = 'enabled';
-      verifyTls = true;
       nick = '';
       realName = '';
       autoJoinChannels = '';
@@ -76,7 +73,7 @@
     try {
       if (mode === 'add') {
         const result = await onAddNetwork({
-          name, host, port, tls, verifyTls, nick, realName,
+          name, host, port, tls, nick, realName,
           autoJoinChannels, nspass, serverPass, commands,
         });
         // Immediately add the network to the UI so it shows up even if the
@@ -89,7 +86,6 @@
             host: result.host as string,
             port: result.port as number,
             tls: (result.tls as string) || 'enabled',
-            verifyTls: result.verifyTls as boolean ?? true,
             nick: result.nick as string,
             realName: (result.realName as string) || (result.nick as string),
             currentNick: result.nick as string,
@@ -120,7 +116,7 @@
         onClose();
       } else if (networkId) {
         await onUpdateNetwork(networkId, {
-          name, host, port, tls, verifyTls, nick, realName,
+          name, host, port, tls, nick, realName,
         });
         onClose();
       }
@@ -192,20 +188,6 @@
                 <option value="disabled">TLS Disabled</option>
                 <option value="required">TLS Required</option>
               </select>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-
-      <table class="form networkEditorCells" cellpadding="0" cellspacing="0">
-        <tbody>
-          <tr>
-            <td class="verifytls" colspan="3">
-              <label for="add-network-verifytls">
-                <input id="add-network-verifytls" type="checkbox" bind:checked={verifyTls} />
-                Verify TLS certificate
-                <small class="explanation">— uncheck for self-signed certs or servers with invalid certificates</small>
-              </label>
             </td>
           </tr>
         </tbody>

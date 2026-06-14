@@ -132,8 +132,7 @@ main.chat-container {
   border-left: 1px solid #2c2f35;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: hidden;
   position: relative;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -196,7 +195,7 @@ main.chat-container {
   color: #d1d5db;
   background: rgba(255,255,255,0.06);
 }
-.network-list { flex: none; overflow: visible; }
+.network-list { flex: 1; min-height: 0; overflow-y: auto; }
 .network { position: relative; margin-bottom: 10px; list-style: none; }
 .network:last-child { margin-bottom: 0; }
 ul.buffers { list-style: none; padding: 0; margin: 0; }
@@ -2300,9 +2299,6 @@ wbr { display: none; }
   user-select: none;
   border: none;
   background: #000;
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
 }
 .accountMenu__button:hover {
   color: #d1d5db;
@@ -2322,8 +2318,6 @@ wbr { display: none; }
 .accountMenu {
   border-top: 1px solid #333;
   margin-top: 4px;
-  position: sticky;
-  bottom: 0;
   background: #000;
 }
 .accountMenu__info {
@@ -2659,10 +2653,7 @@ wbr { display: none; }
   padding: 4px 8px;
   width: 100%;
   box-sizing: border-box;
-  position: sticky;
-  bottom: 36px;
   background: #000;
-  z-index: 2;
 }
 
 .addNetworkButton {

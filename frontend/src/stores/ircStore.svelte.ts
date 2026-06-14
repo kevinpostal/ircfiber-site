@@ -1,7 +1,7 @@
-import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState } from '../types';
+import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
-import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel } from './preferences.svelte';
+import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel } from './api';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 
@@ -728,11 +728,26 @@ export function updateNetworkFromSync(incoming: Network[]): void {
 
     const existing = ircState.networks.find(n => n.networkId === net.networkId);
     if (existing) {
+      // Map backend status to frontend ConnectionState so the UI reflects
+      // the actual engine state (e.g. "connecting" right after restart).
+      const connectionState: ConnectionState =
+        net.status === 'connecting' ? 'connecting' :
+        net.connected             ? 'connected'   :
+                                     'disconnected';
+
+      // Clear any stale disconnect reason from a previous session/event.
+      // The sync is the authoritative snapshot from the server — if the
+      // engine says it's trying to connect (status=connecting), the old
+      // "Connection closed unexpectedly" no longer applies.
+      if (connectionState !== 'disconnected') {
+        existing.disconnectReason = '';
+      }
+
       Object.assign(existing, {
         name: net.name, host: net.host, port: net.port,
-        tls: net.tls, verifyTls: net.verifyTls, nick: net.nick,
+        tls: net.tls, nick: net.nick,
         realName: net.realName, connected: net.connected,
-        status: net.status
+        status: net.status, connectionState
       });
       // Don't blindly overwrite currentNick from sync — the IRC NICK event
       // handler is the authoritative source for nick changes. Sync snapshots
@@ -875,9 +890,32 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       net.capabilities = net.capabilities ?? new Set();
       net.isupport = net.isupport ?? {};
       net.chanTypes = net.chanTypes ?? '#';
-      net.connectionState = net.connected ? 'connected' : 'disconnected';
+      net.connectionState =
+        net.status === 'connecting' ? 'connecting' :
+        net.connected               ? 'connected'   :
+                                      'disconnected';
       ircState.networks.push(net);
     }
+  }
+
+  // Defensive dedup: if two networks ended up with the same networkId
+  // (e.g. a sync race with a locally-created network before the backend
+  // assigned an id), merge them. Duplicate ids crash Svelte's keyed each
+  // block in the Sidebar.
+  {
+    const seen = new Map<string, Network>();
+    for (const net of ircState.networks) {
+      const id = net.networkId;
+      const prev = seen.get(id);
+      if (!prev) {
+        seen.set(id, net);
+        continue;
+      }
+      const merged: Network = { ...prev, ...net };
+      Object.assign(prev, merged);
+      seen.set(id, prev);
+    }
+    ircState.networks.splice(0, ircState.networks.length, ...Array.from(seen.values()));
   }
 
   // Sync persisted pin state to buffer objects
@@ -917,6 +955,13 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
   // Auto-create buffer when the current user joins a channel.
   // Handles joins from external clients, rejoin after mode changes, etc.
   if (!buf && cmd === 'JOIN' && nick === net.currentNick) {
+    // If this channel was previously hidden (deleted from sidebar), unhide it
+    // so it shows up again automatically. Without this, the user would have to
+    // manually /join to bring it back even after re-joining from another client.
+    const hiddenKey = `${networkId}:${normalized}`;
+    if (hiddenChannelsMap[hiddenKey]) {
+      unhideChannel(networkId, normalized);
+    }
     buf = {
       name: normalized, type: 'channel', isJoined: true,
       unreadCount: 0, highlight: false, isPinned: false, isArchived: false,

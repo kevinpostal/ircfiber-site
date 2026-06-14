@@ -158,15 +158,12 @@
   // supposed to dedup by eid/msgid before messages land here, but if a
   // message slips through with no eid AND no msgid AND the same `t` as
   // another message, the bare `t:${t}` key would collide. The tiebreaker
-  // suffix below is unique within a single render, which is all Svelte's
-  // keyed each needs.
-  function stableKey(msg: IRCMessage, positionInRender: number): string {
+  // suffix is the message's absolute index in processedMessages so the key
+  // stays stable when the render window shifts (trim/reveal), letting Svelte
+  // reuse the DOM instead of recreating rows and flashing ANSI art.
+  function stableKey(msg: IRCMessage, absoluteIndex: number): string {
     const base = itemKeyOf(msg);
-    // Always suffix the position so identical base keys within one
-    // render are impossible. Stable across renders because position
-    // within the rendered window is what Svelte uses for ordering
-    // anyway, and the eid/msgid prefix still lets it detect moves.
-    return `${base}#${positionInRender}`;
+    return `${base}#${absoluteIndex}`;
   }
 
   const processedIndexByKey = $derived.by(() => {
@@ -262,7 +259,11 @@
       const showBacklogDivider = !dividerPlaced && dividerMark !== '' && i > 0 &&
         (msg.msgid ? msg.msgid === dividerMark : `t:${msg.t}` === dividerMark);
       if (showBacklogDivider) dividerPlaced = true;
-      return { msg, showDate, msgDate, prevDate, prevMsg, showBacklogDivider, _key: stableKey(msg, i) };
+      // Use the absolute index in processedMessages as the tiebreaker so the
+      // key stays stable when the render window shifts (trim/reveal). Without
+      // this, every visible message gets a new key on trim and Svelte recreates
+      // the DOM rows, causing ANSI art and color backgrounds to flicker.
+      return { msg, showDate, msgDate, prevDate, prevMsg, showBacklogDivider, _key: stableKey(msg, start + i) };
     });
   });
 

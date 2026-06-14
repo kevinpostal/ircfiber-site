@@ -28,7 +28,6 @@ export interface Network {
   host: string;
   port: number;
   tls: string;
-  verifyTls: boolean;
   nick: string;
   realName: string;
   currentNick: string;

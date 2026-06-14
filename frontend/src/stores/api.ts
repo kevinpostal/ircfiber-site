@@ -233,7 +233,7 @@ export async function joinChannel(networkId: string, channel: string, key?: stri
 }
 
 export async function addNetwork(data: {
-  name: string; host: string; port: number; tls: string; verifyTls: boolean;
+  name: string; host: string; port: number; tls: string;
   nick: string; realName: string; autoJoinChannels: string; nspass?: string;
   commands?: string;
 }): Promise<Record<string, unknown>> {

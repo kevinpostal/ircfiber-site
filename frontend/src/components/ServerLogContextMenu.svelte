@@ -37,19 +37,24 @@
 
     menuEl.classList.remove('contextMenu__top', 'contextMenu__bottom', 'contextMenu__left', 'contextMenu__right');
 
-    const maxY = windowHeight - height - bottomPad;
-    if (anchorBottom === true || (anchorBottom !== false && y > maxY)) {
-      menuEl.classList.add('contextMenu__bottom');
-      menuEl.style.top = 'auto';
-      menuEl.style.bottom = (windowHeight - y) + 'px';
-    } else {
+    // Vertical: open below the anchor by default; flip above if it would
+    // extend past the bottom of the viewport.
+    if (y + height + bottomPad < windowHeight) {
       menuEl.classList.add('contextMenu__top');
       menuEl.style.top = y + 'px';
       menuEl.style.bottom = 'auto';
+    } else {
+      menuEl.classList.add('contextMenu__bottom');
+      menuEl.style.top = 'auto';
+      menuEl.style.bottom = (windowHeight - y) + 'px';
     }
 
-    const maxX = windowWidth - width;
-    if (anchorRight === true || (anchorRight !== false && x > maxX)) {
+    // Horizontal: extend to the right from the anchor point (left edge at x)
+    // by default. If that would overflow the right viewport edge AND the
+    // anchor is far enough from the left edge, flip to extending left
+    // (right edge at x) instead.
+    const rightOverflow = x + width > windowWidth;
+    if (rightOverflow && x >= width) {
       menuEl.classList.add('contextMenu__right');
       menuEl.style.left = 'auto';
       menuEl.style.right = (windowWidth - x) + 'px';
@@ -117,6 +122,12 @@
   function clickExport(): void {
     onClose();
   }
+  function clearBacklog(): void {
+    import('../stores/preferences.svelte').then(m => {
+      if (networkId) m.setClearedAt(networkId, '_server');
+      onClose();
+    });
+  }
   function clickDeleteConversations(): void {
     onClose();
   }
@@ -178,6 +189,9 @@
       </li>
       <li class="logExport">
         <button class="contextMenu__item export" onclick={clickExport}>Download logs…</button>
+      </li>
+      <li class="clear">
+        <button class="contextMenu__item clear" onclick={clearBacklog}>Clear backlog</button>
       </li>
       <li class="reorder">
         <button class="contextMenu__item reorder" onclick={clickReorder}>Reorder…</button>
