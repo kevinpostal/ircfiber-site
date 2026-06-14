@@ -78,10 +78,33 @@
     .topbar-nav a:hover { color: var(--fg); text-decoration: none; }
     .topbar-cta { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--accent); color: #06121f; border: 1px solid var(--accent); border-radius: var(--radius-sm); font: 600 13px/1 var(--font-sans); cursor: pointer; transition: background var(--t-fast), transform var(--t-fast); }
     .topbar-cta:hover { background: var(--accent-hi); color: #06121f; text-decoration: none; transform: translateY(-1px); }
-    @media (max-width: 520px) {
+    .topbar-form { display: flex; align-items: center; gap: var(--s-2); margin-left: auto; }
+    .topbar-form input { padding: 7px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg); font: 500 13px/1 var(--font-sans); width: 130px; }
+    .topbar-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+    .topbar-form input::placeholder { color: var(--fg-faint); }
+    .topbar-form button { padding: 7px 12px; background: var(--surface); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius-sm); font: 600 12px/1 var(--font-sans); cursor: pointer; transition: background var(--t-fast), border-color var(--t-fast); white-space: nowrap; }
+    .topbar-form button:hover { background: var(--surface-2); border-color: var(--accent); }
+    .topbar-form .forgot { color: var(--fg-faint); font-size: 11px; margin-left: 6px; }
+    .topbar-form .forgot:hover { color: var(--accent); text-decoration: none; }
+    @media (max-width: 1100px) {
+      .topbar-form input { width: 110px; }
+    }
+    @media (max-width: 980px) {
       .topbar-inner { flex-wrap: wrap; gap: var(--s-3); min-height: auto; padding-top: var(--s-3); padding-bottom: var(--s-3); }
       .topbar-nav { margin-left: 0; gap: var(--s-4); }
+      .topbar-form { width: 100%; margin-left: 0; justify-content: flex-start; }
+      .topbar-form input { flex: 1; max-width: 180px; }
       .topbar-cta { margin-left: auto; }
+    }
+    @media (max-width: 520px) {
+      .topbar-form { flex-wrap: wrap; gap: var(--s-2); }
+      .topbar-form input { width: calc(50% - 4px); max-width: none; }
+      .topbar-form button { flex: 1; }
+      .topbar-form .forgot { margin-left: 0; padding: 7px 10px; }
+    }
+    @media (max-width: 360px) {
+      .topbar-form input { width: 100%; }
+      .topbar-form button { width: calc(100% - 36px); }
     }
 
     .hero { padding: var(--s-9) 0 var(--s-8); position: relative; }
@@ -270,8 +293,13 @@
       <nav class="topbar-nav" aria-label="Primary">
         <a href="#features">Features</a>
         <a href="#pricing">Pricing</a>
-        <a href="/login">Sign in</a>
       </nav>
+      <form class="topbar-form" action="/login" method="post" aria-label="Sign in">
+        <input type="text" name="username" placeholder="Username" required autocomplete="username" />
+        <input type="password" name="password" placeholder="Password" required autocomplete="current-password" />
+        <button type="submit">Sign in</button>
+        <a class="forgot" href="/login">?</a>
+      </form>
       <a class="topbar-cta" href="#cta">Start free <span class="arrow">→</span></a>
     </div>
   </header>
