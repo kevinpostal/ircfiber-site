@@ -1,7 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
-import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen } from './preferences.svelte';
+import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel } from './api';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 
@@ -118,12 +118,16 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
       // Auto-create buffer when navigating to a channel or query that doesn't
       // exist yet (e.g. joining a +R channel that rejected the JOIN, or
       // clicking a nick to open a query). This ensures the buffer shows in
-      // the sidebar so the user can see error/reply messages.
+      // the sidebar so the user can see error/reply messages. Channels are
+      // marked isPhantom so the engine sync can adopt the real isJoined
+      // value (instead of locking in our false guess) and we don't end up
+      // with a channel sitting in the "Inactive" section forever.
       const isChannel = bufferName.startsWith('#');
       buf = {
         name: bufferName,
         type: isChannel ? 'channel' : 'query',
         isJoined: isChannel ? false : true,
+        isPhantom: isChannel,
         unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
         topic: '', topicSetBy: '', topicSetAt: 0, users: [],
         lastSeenMsgTime: null, firstUnseenMsgIndex: null,
@@ -132,6 +136,10 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
       sortBuffers(net);
     } else {
       buf.unreadCount = 0; buf.highlight = false; buf.highlightCount = 0;
+      // If we found the buffer it's no longer a placeholder — the user
+      // is actively looking at it, so future JOIN/PART events should
+      // drive isJoined from here on.
+      if (buf.isPhantom) buf.isPhantom = false;
     }
   }
   ircState.lastSeenMsgTime = null;
@@ -151,6 +159,48 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
       }
     }
   }
+}
+
+// Select the next buffer to focus after the current one is closed/deleted.
+// Mirrors IRCCloud: previousBuffer first, then the channel above, then below,
+// then the server buffer.
+function selectNextBufferAfterClose(networkId: string, bufferName: string): { networkId: string; bufferName: string } {
+  // Priority 1: IRCCloud-style previousBuffer (may be on another network).
+  if (previousBuffer.networkId && previousBuffer.bufferName) {
+    const prevKey = `${previousBuffer.networkId}:${previousBuffer.bufferName}`;
+    if (!archivedMap[prevKey] && !hiddenChannelsMap[prevKey]) {
+      const prevNet = ircState.networks.find(n => n.networkId === previousBuffer.networkId);
+      if (prevNet) {
+        const prevBuf = prevNet.buffers.find(b => b.name === previousBuffer.bufferName);
+        if (prevBuf && prevBuf.isJoined !== false) {
+          return { networkId: previousBuffer.networkId, bufferName: previousBuffer.bufferName };
+        }
+      }
+    }
+  }
+
+  // Priority 2: channel above in the same network's visible list (IRCCloud's getPreviousBufferFromConnection).
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (net) {
+    const visibleBuffers = net.buffers.filter(b =>
+      b.name !== '_server' &&
+      b.isJoined !== false &&
+      !archivedMap[`${networkId}:${b.name}`] &&
+      !hiddenChannelsMap[`${networkId}:${b.name}`]
+    );
+
+    const currentIdx = visibleBuffers.findIndex(b => b.name === bufferName);
+
+    if (currentIdx > 0) {
+      return { networkId, bufferName: visibleBuffers[currentIdx - 1].name };
+    }
+
+    if (currentIdx >= 0 && currentIdx < visibleBuffers.length - 1) {
+      return { networkId, bufferName: visibleBuffers[currentIdx + 1].name };
+    }
+  }
+
+  return { networkId, bufferName: '_server' };
 }
 
 // Archive a buffer and switch focus to the channel above (IRCCloud-compatible).
@@ -175,45 +225,8 @@ export function archiveBuffer(networkId: string, bufferName: string): void {
   const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === bufferName;
   if (!isActive) return;
 
-  // Priority 1: IRCCloud-style previousBuffer
-  if (previousBuffer.networkId && previousBuffer.bufferName) {
-    const prevKey = `${previousBuffer.networkId}:${previousBuffer.bufferName}`;
-    if (!archivedMap[prevKey]) {
-      const prevNet = ircState.networks.find(n => n.networkId === previousBuffer.networkId);
-      if (prevNet) {
-        const prevBuf = prevNet.buffers.find(b => b.name === previousBuffer.bufferName);
-        if (prevBuf && prevBuf.isJoined !== false) {
-          setActiveBuffer(previousBuffer.networkId, previousBuffer.bufferName);
-          return;
-        }
-      }
-    }
-  }
-
-  // Priority 2: channel above in the same network's visible list (IRCCloud's getPreviousBufferFromConnection)
-  const net = ircState.networks.find(n => n.networkId === networkId);
-  if (net) {
-    const visibleBuffers = net.buffers.filter(b =>
-      b.name !== '_server' &&
-      b.isJoined !== false &&
-      !archivedMap[`${networkId}:${b.name}`]
-    );
-
-    const currentIdx = visibleBuffers.findIndex(b => b.name === bufferName);
-
-    if (currentIdx > 0) {
-      setActiveBuffer(networkId, visibleBuffers[currentIdx - 1].name);
-      return;
-    }
-
-    if (currentIdx < visibleBuffers.length - 1) {
-      setActiveBuffer(networkId, visibleBuffers[currentIdx + 1].name);
-      return;
-    }
-
-    setActiveBuffer(networkId, '_server');
-    return;
-  }
+  const next = selectNextBufferAfterClose(networkId, bufferName);
+  setActiveBuffer(next.networkId, next.bufferName);
 }
 
 // Restores an archived buffer. Removes it from the archive list and
@@ -230,6 +243,31 @@ export function unarchiveBuffer(networkId: string, bufferName: string): void {
     console.error('Unarchive failed:', err);
     archivedMap[key] = true;
   });
+}
+
+// Delete a buffer permanently and move focus to the last active buffer
+// (IRCCloud-compatible). Persistently hides the channel so it does not
+// reappear on the next sync.
+export function deleteBuffer(networkId: string, bufferName: string): void {
+  bufferName = normalizeChannelName(bufferName);
+  if (bufferName === '_server') return;
+
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+
+  // Decide where focus goes *before* removing the buffer, because the
+  // visible-list fallback needs the deleted buffer's position to pick the
+  // channel above/below it.
+  const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === bufferName;
+  const next = isActive ? selectNextBufferAfterClose(networkId, bufferName) : null;
+
+  const idx = net.buffers.findIndex(b => b.name === bufferName);
+  if (idx >= 0) net.buffers.splice(idx, 1);
+
+  hideChannel(networkId, bufferName);
+
+  if (!next) return;
+  setActiveBuffer(next.networkId, next.bufferName);
 }
 
 export function prependMessage(networkId: string, bufferName: string, msg: IRCMessage): void {
@@ -745,10 +783,15 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           // knew about) or if we have no local state yet.
           const localUnread = existingBuf.unreadCount ?? 0;
           const localHighlight = existingBuf.highlight ?? false;
-          const localIsJoined = existingBuf.isJoined;
           const remoteUnread = incomingBuf.unreadCount ?? 0;
           const remoteHighlight = incomingBuf.highlight ?? false;
-          // Copy incoming buffer properties except isJoined (IRC events are authoritative)
+          // Copy incoming buffer properties except isJoined (IRC events are
+          // authoritative). EXCEPTION: if the existing buffer is a phantom
+          // (auto-created by setActiveBuffer() when the user navigated to a
+          // channel that didn't exist locally), the sync is the first
+          // authoritative signal we have — adopt its isJoined and clear the
+          // phantom flag. Without this, a user who navigates to a channel
+          // they ARE in would see it locked in "Inactive" forever.
           existingBuf.name = incomingBuf.name;
           existingBuf.type = incomingBuf.type;
           existingBuf.topic = incomingBuf.topic;
@@ -761,6 +804,10 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existingBuf.firstUnseenMsgIndex = incomingBuf.firstUnseenMsgIndex;
           existingBuf.unreadCount = Math.max(localUnread, remoteUnread);
           existingBuf.highlight = localHighlight || remoteHighlight;
+          if (existingBuf.isPhantom) {
+            existingBuf.isJoined = incomingBuf.isJoined;
+            existingBuf.isPhantom = false;
+          }
 
           // Keep the preferences-map (used by getTotalUnread / getHasHighlight
           // for the title bar and favicon) in sync with the resolved value.
@@ -777,6 +824,35 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       existing.buffers = existing.buffers.filter(
         b => b.name === '_server' || !hiddenChannelsMap[`${existing.networkId}:${b.name}`]
       );
+      // Defensive dedup: if the same channel ended up in `existing.buffers`
+      // twice (e.g. an old phantom from setActiveBuffer() + a real buffer
+      // created by a JOIN event arriving in the same tick, before the
+      // engine's snapshot caught up), merge them. Prefer the buffer that
+      // reports isJoined: true; otherwise prefer the phantom (it has the
+      // user's local unread/highlight state we just preserved). Without
+      // this, a single channel can render in both the active and
+      // "Inactive" sidebar sections simultaneously.
+      {
+        const seen = new Map<string, Buffer>();
+        for (const buf of existing.buffers) {
+          const prev = seen.get(buf.name);
+          if (!prev) {
+            buf.isPhantom = false;
+            seen.set(buf.name, buf);
+            continue;
+          }
+          const joined = buf.isJoined !== false ? buf : prev;
+          const other = joined === buf ? prev : buf;
+          const merged: Buffer = { ...other, ...joined };
+          merged.unreadCount = Math.max(other.unreadCount ?? 0, joined.unreadCount ?? 0);
+          merged.highlight = (other.highlight ?? false) || (joined.highlight ?? false);
+          merged.isPhantom = false;
+          Object.assign(other, merged);
+          joined.isPhantom = false;
+          seen.set(buf.name, joined);
+        }
+        existing.buffers = Array.from(seen.values());
+      }
     } else {
       net.buffers = net.buffers
         .filter(b => !hiddenChannelsMap[`${net.networkId}:${normalizeChannelName(b.name)}`])
@@ -887,6 +963,10 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     }
   } else if (cmd === 'JOIN' && nick === net.currentNick) {
     buf.isJoined = true;
+    // JOIN for self is authoritative — the buffer is no longer a phantom
+    // even if it was auto-created by setActiveBuffer before the JOIN
+    // event reached us.
+    if (buf.isPhantom) buf.isPhantom = false;
   } else if (cmd === 'JOIN' && nick && nick !== net.currentNick) {
     const stripped = stripPrefix(nick);
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {

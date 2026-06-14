@@ -57,6 +57,19 @@ export interface Buffer {
   name: string;
   type: 'channel' | 'query' | 'server';
   isJoined: boolean;
+  /**
+   * True for buffers auto-created by setActiveBuffer() when the user
+   * navigates to a channel that doesn't exist locally yet. These are
+   * placeholders so the sidebar shows the channel and the user can see
+   * error/reply messages. The sync from the engine is authoritative for
+   * the actual join state — see updateNetworkFromSync which adopts the
+   * incoming isJoined (and clears this flag) for phantoms. Without this
+   * the channel would stay in the "Inactive" section even when the user
+   * is actually joined, because the existing tests intentionally preserve
+   * local isJoined:false across syncs (to avoid clobbering a recent
+   * PART for self).
+   */
+  isPhantom?: boolean;
   unreadCount: number;
   highlight: boolean;
   /** Number of unseen mentions; drives the red sidebar badge (IRCCloud-style). */

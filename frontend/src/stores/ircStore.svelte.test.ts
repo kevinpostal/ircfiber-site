@@ -8,6 +8,7 @@ import {
 	getTotalUnread,
 	getHasHighlight,
 	setActiveBuffer,
+	deleteBuffer,
 	appendMessage,
 	incrementUnread,
 	checkHighlight,
@@ -82,6 +83,87 @@ describe('setActiveBuffer', () => {
 
 		expect(lastSeenMap['net1:#chan']).toBe(2000);
 		expect(bottomSeenMap['net1:#chan']).toBe(2000);
+	});
+});
+
+describe('deleteBuffer', () => {
+	it('switches to the previous active buffer when deleting the active channel', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		net.buffers.push(createBuffer({ name: '#zod' }));
+		net.buffers.push(createBuffer({ name: '#random' }));
+		ircState.networks.push(net);
+
+		setActiveBuffer('net1', '#zod');
+		setActiveBuffer('net1', '#random');
+		flushSync();
+
+		deleteBuffer('net1', '#random');
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		expect(ircState.activeBuffer.bufferName).toBe('#zod');
+		expect(ircState.activeBuffer.networkId).toBe('net1');
+		expect(foundNet?.buffers.some((b) => b.name === '#random')).toBe(false);
+		expect(hiddenChannelsMap['net1:#random']).toBe(true);
+	});
+
+	it('falls back to the channel above when the previous buffer is no longer available', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		net.buffers.push(createBuffer({ name: '#alpha' }));
+		net.buffers.push(createBuffer({ name: '#beta' }));
+		net.buffers.push(createBuffer({ name: '#gamma' }));
+		ircState.networks.push(net);
+
+		setActiveBuffer('net1', '#alpha');
+		setActiveBuffer('net1', '#beta');
+		// Make the previous buffer unavailable so it cannot be reselected.
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		const alpha = foundNet?.buffers.find((b) => b.name === '#alpha')!;
+		alpha.isJoined = false;
+		flushSync();
+
+		deleteBuffer('net1', '#beta');
+		flushSync();
+
+		expect(ircState.activeBuffer.bufferName).toBe('#gamma');
+		expect(foundNet?.buffers.some((b) => b.name === '#beta')).toBe(false);
+	});
+
+	it('falls back to the server buffer when no other joined channels remain', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		net.buffers.push(createBuffer({ name: '#only' }));
+		ircState.networks.push(net);
+
+		setActiveBuffer('net1', '#only');
+		flushSync();
+
+		deleteBuffer('net1', '#only');
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		expect(ircState.activeBuffer.bufferName).toBe('_server');
+		expect(foundNet?.buffers.some((b) => b.name === '#only')).toBe(false);
+	});
+
+	it('does not change the active buffer when deleting an inactive channel', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		net.buffers.push(createBuffer({ name: '#zod' }));
+		net.buffers.push(createBuffer({ name: '#random' }));
+		ircState.networks.push(net);
+
+		setActiveBuffer('net1', '#zod');
+		flushSync();
+
+		deleteBuffer('net1', '#random');
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		expect(ircState.activeBuffer.bufferName).toBe('#zod');
+		expect(foundNet?.buffers.some((b) => b.name === '#random')).toBe(false);
 	});
 });
 
@@ -745,5 +827,126 @@ describe('PART/KICK/JOIN isJoined lifecycle', () => {
 		const parted = net?.buffers.find((b) => b.name === '#parted');
 		expect(active?.isJoined).toBe(true);
 		expect(parted?.isJoined).toBe(false);
+	});
+});
+
+describe('phantom buffers (URL nav auto-create)', () => {
+	it('setActiveBuffer auto-create marks channel buffers as isPhantom', () => {
+		const net = createNetwork();
+		ircState.networks.push(net);
+
+		setActiveBuffer(net.networkId, '#autism');
+		flushSync();
+
+		const buf = ircState.networks.find((n) => n.networkId === net.networkId)?.buffers.find((b) => b.name === '#autism');
+		expect(buf).toBeDefined();
+		expect(buf?.isPhantom).toBe(true);
+		expect(buf?.isJoined).toBe(false);
+	});
+
+	it('navigating to a real buffer clears the phantom flag', () => {
+		const net = createNetwork();
+		const buf = createBuffer({ name: '#autism', isPhantom: true, isJoined: false });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		setActiveBuffer(net.networkId, '#autism');
+		flushSync();
+
+		const found = ircState.networks.find((n) => n.networkId === net.networkId)?.buffers.find((b) => b.name === '#autism');
+		expect(found?.isPhantom).toBe(false);
+		// isJoined itself is NOT changed by setActiveBuffer — that's the
+		// sync / JOIN event's job.
+		expect(found?.isJoined).toBe(false);
+	});
+
+	it('sync adopts the engine isJoined for phantom buffers', () => {
+		// Regression: user navigates to /channel/autism, the local phantom
+		// is created with isJoined:false, then the next sync arrives from
+		// the engine reporting the user is actually in the channel. Before
+		// the phantom flag, the local isJoined:false won and the channel
+		// was stuck in the "Inactive" section forever.
+		const existing = createNetwork({ currentNick: 'me' });
+		const phantom = createBuffer({
+			name: '#autism',
+			isJoined: false,
+			isPhantom: true,
+			unreadCount: 2,
+			highlight: true,
+		});
+		existing.buffers.push(phantom);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: existing.networkId });
+		incoming.buffers.push(createBuffer({ name: '#autism', isJoined: true }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const buf = ircState.networks.find((n) => n.networkId === existing.networkId)?.buffers.find((b) => b.name === '#autism');
+		expect(buf?.isJoined).toBe(true);
+		expect(buf?.isPhantom).toBe(false);
+		// Local unread/highlight must be preserved across the sync.
+		expect(buf?.unreadCount).toBe(2);
+		expect(buf?.highlight).toBe(true);
+	});
+
+	it('sync still preserves local isJoined:false for real (non-phantom) buffers', () => {
+		// Regression guard: the existing behavior of NOT clobbering a
+		// recent PART for self must still work. Phantom semantics apply
+		// only to placeholders, not to real buffers.
+		const existing = createNetwork({ currentNick: 'me' });
+		const real = createBuffer({ name: '#chan', isJoined: false });
+		existing.buffers.push(real);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: existing.networkId });
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const buf = ircState.networks.find((n) => n.networkId === existing.networkId)?.buffers.find((b) => b.name === '#chan');
+		expect(buf?.isJoined).toBe(false);
+	});
+
+	it('JOIN for self clears the phantom flag', () => {
+		// Race: URL nav creates a phantom, the JOIN event for self arrives
+		// before the engine's snapshot syncs. The JOIN is authoritative and
+		// must promote the phantom to a real buffer.
+		const net = createNetwork({ currentNick: 'me' });
+		const phantom = createBuffer({ name: '#autism', isJoined: false, isPhantom: true });
+		net.buffers.push(phantom);
+		ircState.networks.push(net);
+
+		updateChannelUsers(net.networkId, '#autism', 'JOIN', 'me');
+		flushSync();
+
+		const found = ircState.networks.find((n) => n.networkId === net.networkId)?.buffers.find((b) => b.name === '#autism');
+		expect(found?.isJoined).toBe(true);
+		expect(found?.isPhantom).toBe(false);
+	});
+
+	it('sync merges two buffers with the same name (active + Inactive dup)', () => {
+		// Regression: a real user hit this state where #autism appeared in
+		// BOTH the active channel list and the "Inactive" section. Without
+		// dedup, the Sidebar renders two entries for the same channel.
+		const existing = createNetwork();
+		const phantom = createBuffer({ name: '#autism', isJoined: false, isPhantom: true, unreadCount: 0 });
+		const real = createBuffer({ name: '#autism', isJoined: true, unreadCount: 5, highlight: true });
+		existing.buffers.push(phantom, real);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: existing.networkId });
+		incoming.buffers.push(createBuffer({ name: '#autism', isJoined: true }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === existing.networkId)!;
+		const dups = net.buffers.filter((b) => b.name === '#autism');
+		expect(dups).toHaveLength(1);
+		// Should prefer the joined entry and keep the local unread/highlight.
+		expect(dups[0].isJoined).toBe(true);
+		expect(dups[0].isPhantom).toBe(false);
+		expect(dups[0].unreadCount).toBe(5);
+		expect(dups[0].highlight).toBe(true);
 	});
 });

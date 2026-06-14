@@ -397,12 +397,20 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
     data-msgid={msg.msgid || undefined}
   >
+    {#if !isSystem && !isJoinPart && !isAction && nick}
+      {@const colorIndex = nickColorIndex(nick)}
+      {@const colorCls = `c${colorIndex}`}
+      {@const initial = nick.charAt(0).toUpperCase()}
+      <span class="avatar letterAvatar messageAvatar hasUserParent {colorCls}">
+        <span role="presentation">{initial}</span>
+      </span>
+    {/if}
     <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
     <span class="g">&nbsp;</span>
     {#if cmd === 'DISCONNECT' || cmd === 'CONNECT'}
@@ -419,9 +427,6 @@
         {@const member = findMemberForNick(nick)}
         {@const sensibleRealname = getSensibleRealname(member?.realname)}
         <span class="authorWrap">
-          <span class="avatar letterAvatar hasUserParent {colorCls}">
-            <span role="presentation">{initial}</span>
-          </span>
           <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <span role="button" class="buffer bufferLink author {colorCls} user hasUserParent link"

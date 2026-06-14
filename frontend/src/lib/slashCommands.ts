@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel } from './utils';
 import { updateRoute } from './routing';
 
@@ -206,16 +206,8 @@ registerSlash(['delete', 'wd', 'rm'], (args, networkId, target, net) => {
   if (buf.isJoined !== false) {
     sendRaw(networkId, 'PART ' + bufName);
   }
-  const channels = net.buffers.filter(b => b.name !== '_server' && b.isJoined !== false);
-  const delIdx = channels.findIndex(b => b.name === bufName);
-  net.buffers.splice(net.buffers.indexOf(buf), 1);
-  if (delIdx > 0) {
-    setActiveBuffer(networkId, channels[delIdx - 1].name);
-    updateRoute(networkId, channels[delIdx - 1].name);
-  } else {
-    setActiveBuffer(networkId, '_server');
-    updateRoute(networkId, '_server');
-  }
+  deleteBuffer(networkId, bufName);
+  updateRoute(networkId, ircState.activeBuffer.bufferName ?? '_server');
 });
 
 registerSlash(['reconnect'], (_args, networkId) => {

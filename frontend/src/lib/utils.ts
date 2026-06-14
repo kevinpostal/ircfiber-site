@@ -364,7 +364,13 @@ export function formatNumericText(cmd: string, params: string[], text: string, n
     case '319': return params ? `${params[0]} : ${text}` : text;
     case '330': return params ? `${params[0]} is logged in as ${params[1]}` : text;
     case '332': return text;
-    case '333': return params ? `Topic set by ${params[1]} at ${new Date(parseInt(params[2]) * 1000).toLocaleString()}` : text;
+    case '333': {
+      if (!params || params.length < 3) return text;
+      const setter = params[2];
+      const ts = params[3] ? parseInt(params[3], 10) : NaN;
+      if (!Number.isFinite(ts)) return `Topic set by ${setter}`;
+      return `Topic set by ${setter} at ${new Date(ts * 1000).toLocaleString()}`;
+    }
     case '352': return params ? `${params[4]} ${params[1]}@${params[2]} (${text})` : text;
     case '353': return text;
     case '366': return '';

@@ -67,7 +67,17 @@ body.ascii-compact .row.messageRow {
      images match IRCCloud's more-square aspect ratio instead of looking
      horizontally stretched. */
   line-height: 16px;
-  padding: 0 21px 0 68px;
+  padding: 0 118px 0 68px;
+}
+/* The .type_buffer_msg / .bot / .blockArt shorthand above (specificity
+   0,3,0) comes after the generic .row.messageRow.firstAuthor { padding-top:
+   6px } rule in the legacy public/style.css, so its `padding` shorthand
+   resets padding-top to 0 for firstAuthor bot rows. Add a matching
+   longhand with equal-or-greater specificity to restore the 6px top. */
+.row.messageRow.firstAuthor.type_buffer_msg,
+.row.messageRow.firstAuthor.bot,
+.row.messageRow.firstAuthor.blockArt {
+  padding-top: 6px;
 }
 /* Consecutive bot/block-art rows share an author, so hide the repeated
    avatar/nick. With line-height: 16px the content boxes stack edge-to-edge,

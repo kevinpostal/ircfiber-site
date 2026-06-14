@@ -26,6 +26,25 @@ describe('MessageRow', () => {
 		await expect.element(page.getByText('hello world')).toBeInTheDocument();
 	});
 
+	it('renders the avatar outside authorWrap so it is not clipped', async () => {
+		const msg = createMessage({ nick: 'alice', text: 'hello world' });
+		render(MessageRow, { props: { msg } });
+
+		const row = document.querySelector('.messageRow');
+		const avatar = row?.querySelector('.messageAvatar');
+		expect(avatar).toBeInTheDocument();
+		expect(avatar?.closest('.authorWrap')).toBeNull();
+	});
+
+	it('hides the avatar for sameAuthor rows', async () => {
+		const msg = createMessage({ nick: 'alice', text: 'hello world' });
+		render(MessageRow, { props: { msg, isSameAuthor: true } });
+
+		const row = document.querySelector('.messageRow.sameAuthor');
+		expect(row).toBeInTheDocument();
+		expect(row?.querySelector('.messageAvatar')).toBeInTheDocument();
+	});
+
 	it('renders action (/me) message', async () => {
 		const msg = createMessage({ nick: 'alice', text: 'dances', type: 'action' });
 		render(MessageRow, { props: { msg } });

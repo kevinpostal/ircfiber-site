@@ -302,6 +302,21 @@ describe('formatNumericText', () => {
   it('returns text for unhandled numeric', () => {
     expect(formatNumericText('999', [], 'Unknown')).toBe('Unknown');
   });
+
+  it('formats 333 (topic who/time) with correct params layout', () => {
+    const out = formatNumericText('333', ['me', '#autism', 'roarie', '1718692000'], '');
+    expect(out).toMatch(/^Topic set by roarie at /);
+    expect(out).not.toContain('Invalid Date');
+    expect(out).not.toContain('#autism');
+  });
+
+  it('333 omits the date gracefully when timestamp is missing', () => {
+    expect(formatNumericText('333', ['me', '#autism', 'roarie'], '')).toBe('Topic set by roarie');
+  });
+
+  it('333 falls back to text when params are missing', () => {
+    expect(formatNumericText('333', [], 'fallback')).toBe('fallback');
+  });
 });
 
 describe('normaliseIdentifier', () => {

@@ -71,7 +71,7 @@
 <style>
   .member-nick {
     vertical-align: middle;
-    color: #fff;
+    color: #ccc;
   }
   button.bufferLink {
     display: inline-flex !important;

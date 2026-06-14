@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
+  import { ircState, setActiveBuffer, deleteBuffer } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { ignoreList, hideChannel } from '../stores/preferences.svelte';
+  import { ignoreList } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { deleteNetwork } from '../stores/api';
   import { parseIrcFormatting } from '../lib/ircFormatting';
@@ -109,20 +109,8 @@
       }
     } else {
       sendRaw(networkId, 'PART ' + bufferName);
-      const channels = net.buffers.filter(b => b.name !== '_server' && b.isJoined !== false);
-      const delIdx = channels.findIndex(b => b.name === bufferName);
-      const idx = net.buffers.findIndex(b => b.name === bufferName);
-      if (idx >= 0) net.buffers.splice(idx, 1);
-      // Persist the deletion so the next sync (which re-includes parted
-      // and auto-join channels) doesn't bring the buffer back.
-      hideChannel(networkId, bufferName);
-      if (delIdx > 0) {
-        setActiveBuffer(networkId, channels[delIdx - 1].name);
-        updateRoute(networkId, channels[delIdx - 1].name);
-      } else {
-        setActiveBuffer(networkId, '_server');
-        updateRoute(networkId, '_server');
-      }
+      deleteBuffer(networkId, bufferName);
+      updateRoute(networkId, ircState.activeBuffer.bufferName ?? '_server');
     }
     close();
   }

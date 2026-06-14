@@ -6,6 +6,7 @@ import { ircState } from '../stores/ircStore.svelte';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   sendRaw: vi.fn(),
+  setMaxEid: vi.fn(),
 }));
 
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
