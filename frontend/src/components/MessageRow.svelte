@@ -202,7 +202,15 @@
         + '</span>';
     }
     if (cmd === 'MOTD_GROUP' && (msg as any).lines?.length > 0) {
-      inner += '<pre class="motdBlock">' + (msg as any).lines.map((line: string) => parseIrcFormatting(line)).join('\n') + '</pre>';
+      const lines = (msg as any).lines as string[];
+      inner += '<div class="groupedLines">';
+      lines.forEach((line, i) => {
+        const content = parseIrcFormatting(line);
+        inner += i === 0
+          ? `<h2 class="groupedLines__line">${content}</h2>`
+          : `<div class="groupedLines__line">${content}</div>`;
+      });
+      inner += '</div>';
     } else if (cmd === 'JOINPART_GROUP') {
       inner += (msg as any).sentences || '';
     } else if (cmd === 'DISCO_GROUP') {

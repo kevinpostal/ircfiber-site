@@ -2,18 +2,9 @@ import type { IRCMessage, JoinPartGroupMessage, DiscoGroupMessage } from '../typ
 import { isJoinPartLike, isDisconnectLike, escapeHtml, stripPrefix } from './utils';
 
 /**
- * Strip the IRC MOTD line prefix ("- " or "-") that servers prepend to
- * every 372/375 response. IRCCloud drops this prefix so the rendered
- * block reads like a single document.
- */
-function stripMotdPrefix(text: string): string {
-  if (text.startsWith('- ')) return text.slice(2);
-  if (text.startsWith('-')) return text.slice(1);
-  return text;
-}
-
-/**
  * Group consecutive MOTD lines (372) into a single MOTD_GROUP message.
+ * Preserve the raw line text (including the leading "- " prefix and empty
+ * lines) so the renderer can emit IRCCloud-compatible groupedLines.
  */
 export function groupMOTDLines(messages: IRCMessage[]): IRCMessage[] {
   const result: IRCMessage[] = [];
@@ -364,9 +355,7 @@ function peelGroup(last: IRCMessage): IRCMessage[] {
     return (last as any).events as IRCMessage[];
   }
   if (last.command === 'MOTD_GROUP' && (last as any).lines) {
-    // MOTD grouping preserves the original text.  The leading "- " prefix
-    // has already been stripped, so reconstruct every line as a 372; the
-    // grouping logic treats 372 and 375 identically anyway.
+    // MOTD grouping preserves the raw text (including leading "- ").
     const lines = (last as any).lines as string[];
     return lines.map((text) => ({
       command: '372',
