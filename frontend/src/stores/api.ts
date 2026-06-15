@@ -41,6 +41,7 @@ export interface MeResponse {
   pinnedChannels?: string[];
   archivedChannels?: string[];
   membersCollapsed?: Record<string, boolean>;
+  collapsed?: Record<string, boolean>;
 }
 
 export async function fetchMe(): Promise<MeResponse> {
@@ -79,6 +80,15 @@ export async function unarchiveChannel(networkId: string, channel: string): Prom
     method: 'DELETE'
   });
   if (!r.ok) throw new Error('Unarchive failed');
+}
+
+export async function updateCollapsed(networkId: string, collapsed: boolean): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/collapsed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ network: networkId, collapsed })
+  });
+  if (!r.ok) throw new Error('Update collapsed failed');
 }
 
 export async function updateMembersCollapsed(networkId: string, channel: string, collapsed: boolean): Promise<void> {

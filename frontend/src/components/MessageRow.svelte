@@ -40,7 +40,7 @@
   // Lifecycle events (server/client connect or disconnect) render like
   // join/part rows in IRCCloud: no `status monospace`, just the type class.
   const isLifecycle = ['CONNECT', 'DISCONNECT'].includes(cmd);
-  const isSystem = ['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick);
+  const isSystem = ['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick);
   const isAction = msg.type === 'action';
   const isJoinPartGroup = cmd === 'JOINPART_GROUP';
   const isGrouped = isJoinPartGroup;
@@ -201,12 +201,8 @@
         + '<i class="fa-solid fa-angle-right collapsedIcon"></i>'
         + '</span>';
     }
-    if (cmd === 'MOTD_GROUP' && (msg as any).lines) {
-      inner += '<div class="groupedLines">';
-      for (const line of (msg as any).lines as string[]) {
-        inner += `<div class="groupedLines__line">${parseIrcFormatting(line)}</div>`;
-      }
-      inner += '</div>';
+    if (cmd === 'MOTD_GROUP' && (msg as any).lines?.length > 0) {
+      inner += '<pre class="motdBlock">' + (msg as any).lines.map((line: string) => parseIrcFormatting(line)).join('\n') + '</pre>';
     } else if (cmd === 'JOINPART_GROUP') {
       inner += (msg as any).sentences || '';
     } else if (cmd === 'DISCO_GROUP') {
@@ -242,8 +238,10 @@
         inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> `
           + `${escapeHtml(modeInfo.action)} <b>${escapeHtml(modeInfo.target)}</b> `
           + `(<span class="mono rawMode">${escapeHtml(modeInfo.diff)}${escapeHtml(modeInfo.mode)}</span>)`;
+      } else if (msg.params && !msg.params[0]?.startsWith('#') && !msg.params[0]?.startsWith('&')) {
+        inner += '<span class="prefix">&#x2699;</span> user mode: ' + escapeHtml(msg.params.slice(1).join(' ') || msg.text || '');
       } else {
-        inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' sets mode: ' + escapeHtml(msg.params?.join(' ') || msg.text || '');
+        inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' sets mode: ' + escapeHtml(msg.params?.slice(1).join(' ') || msg.text || '');
       }
     } else if (cmd === 'KICK') {
       const kicked = msg.params?.[1] || '';

@@ -3,6 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import ServerLogContextMenu from './ServerLogContextMenu.svelte';
 import { ircState } from '../stores/ircStore.svelte';
+import { collapsedMap } from '../stores/preferences.svelte';
 import { createNetwork, createBuffer } from '../test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -14,6 +15,7 @@ vi.mock('/src/stores/api', () => ({
   disconnectNetwork: vi.fn(async () => undefined),
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
+  updateCollapsed: vi.fn(async () => undefined),
 }));
 
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
@@ -101,7 +103,7 @@ describe('ServerLogContextMenu', () => {
 
   it('Collapse button calls onClose (handler ran)', async () => {
     const network = createNetwork({ networkId: 'net1', name: 'SuperNETs', connected: true });
-    network.collapsed = false;
+    collapsedMap['net1'] = false;
     const buf = createBuffer({ name: '_server' });
     network.buffers.push(buf);
     ircState.networks.push(network);
@@ -118,7 +120,7 @@ describe('ServerLogContextMenu', () => {
 
   it('shows Expand and hides Collapse when already collapsed', async () => {
     const network = createNetwork({ networkId: 'net1', name: 'SuperNETs', connected: true });
-    network.collapsed = true;
+    collapsedMap['net1'] = true;
     const buf = createBuffer({ name: '_server' });
     network.buffers.push(buf);
     ircState.networks.push(network);

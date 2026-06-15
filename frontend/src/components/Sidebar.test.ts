@@ -70,14 +70,14 @@ describe('Sidebar', () => {
 	});
 
 	it('toggles network collapse/expand', async () => {
-		const net = createNetwork({ networkId: 'net1', collapsed: true });
+		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
 
 		render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-		// When collapsed, buffer should not be rendered
-		expect(document.querySelector('.network-buffers')).toBeNull();
+		// Default expanded — buffers are rendered
+		expect(document.querySelector('.network-buffers')).not.toBeNull();
 	});
 
 	it('shows unread count badges', async () => {

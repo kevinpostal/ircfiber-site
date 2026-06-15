@@ -1,8 +1,8 @@
 <script lang="ts">
   import { ircState, getActiveNetwork } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { reconnectNetwork, disconnectNetwork } from '../stores/api';
-  import { getBufferPrefs, setBufferPref } from '../stores/preferences.svelte';
+  import { reconnectNetwork, disconnectNetwork, updateCollapsed } from '../stores/api';
+  import { getBufferPrefs, setBufferPref, collapsedMap } from '../stores/preferences.svelte';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
 
@@ -21,7 +21,7 @@
   const network = $derived(getActiveNetwork());
   const networkId = $derived(network?.networkId ?? '');
   const isConnected = $derived(network?.connected ?? false);
-  const isCollapsed = $derived(network?.collapsed ?? false);
+  const isCollapsed = $derived(network ? (collapsedMap[network.networkId] ?? false) : false);
   const isInactive = $derived(!isConnected);
   const canDelete = $derived(true);
 
@@ -107,7 +107,11 @@
     onClose();
   }
   function clickToggleCollapse(): void {
-    if (network) network.collapsed = !network.collapsed;
+    if (network) {
+      const newValue = !collapsedMap[network.networkId];
+      collapsedMap[network.networkId] = newValue;
+      updateCollapsed(network.networkId, newValue);
+    }
     onClose();
   }
   function clickIgnores(): void {

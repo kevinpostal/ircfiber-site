@@ -105,6 +105,7 @@ export const hiddenChannelsMap = $state<Record<string, boolean>>(getStorageItem(
 export const ignoreList = $state<string[]>(getStorageItem('ircfiber:ignores', []));
 export const highlightWords = $state<string[]>(getStorageItem('ircfiber:highlightWords', []));
 export const membersCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:membersCollapsed', {}));
+export const collapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:collapsed', {}));
 // Per-buffer last-read message timestamp (IRCCloud-style lastSeen)
 export const lastSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:lastSeen', {}));
 // Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen)
@@ -205,6 +206,7 @@ $effect.root(() => {
   $effect(() => { setStorageItem('ircfiber:ignores', ignoreList); });
   $effect(() => { setStorageItem('ircfiber:highlightWords', highlightWords); });
   $effect(() => schedulePersist('ircfiber:membersCollapsed', membersCollapsedMap));
+  $effect(() => schedulePersist('ircfiber:collapsed', collapsedMap));
   $effect(() => schedulePersist('ircfiber:lastSeen', lastSeenMap));
   $effect(() => schedulePersist('ircfiber:bottomSeen', bottomSeenMap));
   $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
@@ -319,6 +321,7 @@ if (typeof window !== 'undefined') {
         applyObject(membersCollapsedMap);
         break;
       }
+      case 'ircfiber:collapsed':         applyObject(collapsedMap); break;
       case 'ircfiber:lastSeen':          applyObject(lastSeenMap); break;
       case 'ircfiber:bottomSeen':        applyObject(bottomSeenMap); break;
       case 'ircfiber:bufferPrefs':       applyObject(bufferPrefsMap as Record<string, BufferPrefs>); break;

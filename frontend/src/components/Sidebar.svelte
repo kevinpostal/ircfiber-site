@@ -1,7 +1,8 @@
 <script lang="ts">
   import { ircState } from '../stores/ircStore.svelte';
-  import { archivedMap, pinnedMap, hiddenChannelsMap } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
+  import { updateCollapsed } from '../stores/api';
   import type { Buffer } from '../types';
   import AccountMenu from './AccountMenu.svelte';
 
@@ -14,8 +15,9 @@
   let { onSwitchBuffer, onAddNetwork, onNetworkOptions, onJoinChannel }: Props = $props();
 
   function toggleNetwork(networkId: string): void {
-    const net = ircState.networks.find(n => n.networkId === networkId);
-    if (net) net.collapsed = !net.collapsed;
+    const newValue = !collapsedMap[networkId];
+    collapsedMap[networkId] = newValue;
+    updateCollapsed(networkId, newValue);
   }
 
   const pinned = $derived(
@@ -104,11 +106,11 @@
           role="button"
           tabindex="0"
           onclick={() => onSwitchBuffer(net.networkId, '_server')}
-          ondblclick={() => { if (net.collapsed) net.collapsed = false; }}
+          ondblclick={() => { if (collapsedMap[net.networkId]) { collapsedMap[net.networkId] = false; updateCollapsed(net.networkId, false); } }}
           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSwitchBuffer(net.networkId, '_server'); } }}>
         <span class="buffer" role="tab">
           {#if net.connected}
-            <i class="fa fa-shield network-shield" title="Secure connection" aria-hidden="true"></i>
+            <i class="fa fa-lock network-shield" title="Secure connection" aria-hidden="true"></i>
           {:else}
             <i class="fa fa-globe network-shield" aria-hidden="true" style="opacity:0.5"></i>
           {/if}
@@ -122,13 +124,13 @@
                   onclick={(e) => { e.stopPropagation(); onNetworkOptions(net.networkId, e); }}></button>
         </span>
         <span class="collapseToggle">
-          <button type="button" aria-expanded={!net.collapsed}
-                  onclick={(e) => { e.stopPropagation(); net.collapsed = !net.collapsed; }}>
-            <i class="fa fa-{net.collapsed ? 'plus-square-o' : 'minus-square-o'}" aria-hidden="true"></i>
+          <button type="button" aria-expanded={!collapsedMap[net.networkId]}
+                  onclick={(e) => { e.stopPropagation(); toggleNetwork(net.networkId); }}>
+            <i class="fa fa-chevron-{collapsedMap[net.networkId] ? 'right' : 'down'}" aria-hidden="true"></i>
           </button>
         </span>
       </div>
-      {#if !net.collapsed}
+      {#if !collapsedMap[net.networkId]}
         <ul class="buffers channels network-buffers">
           {#each uniqueBuffersByName(net.buffers.filter(b => b.name !== '_server' && b.isJoined !== false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])) as buf (net.networkId + ':' + buf.name)}
             {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}

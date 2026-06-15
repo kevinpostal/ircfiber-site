@@ -142,7 +142,7 @@ export function isJoinPartLike(cmd: string): boolean {
 }
 
 export function isSkippedCommand(cmd: string): boolean {
-  return ['353', '366', '376', '422', 'PONG', 'TAGMSG'].includes(cmd);
+  return ['353', '366', '376', '422', 'PONG', 'TAGMSG', 'QUIT', '311', '312', '313', '317', '318', '319', '330', '401'].includes(cmd);
 }
 
 export function isDisconnectLike(cmd: string, text?: string): boolean {
@@ -377,7 +377,7 @@ export function formatNumericText(cmd: string, params: string[], text: string, n
     case '372': return text;
     case '375': return text || '--- Message of the Day ---';
     case '376': return '';
-    case '396': return text ? `Your host is now ${text}` : text;
+    case '396': return params ? `${params[1]} ${text}` : text;
     case '433': return text || 'Nickname already in use';
     default: return text;
   }

@@ -168,8 +168,12 @@ main.chat-container {
   align-items: center;
   justify-content: center;
   border-radius: 3px;
+  visibility: hidden;
   transition: color 0.15s, background 0.15s;
 }
+.network-list .connection:hover .collapseToggle button,
+.network-list .connection:focus .collapseToggle button,
+.network-list .connection:focus-within .collapseToggle button { visibility: visible; }
 .network-header .collapseToggle button:hover {
   color: #d1d5db;
   background: rgba(255,255,255,0.08);
@@ -209,12 +213,16 @@ main.chat-container {
 .network:last-child { margin-bottom: 0; }
 ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header { display: block; position: relative; font-size: 15px; font-weight: 400; color: #d9d9d9; user-select: none; margin: 0; padding: 0; background: transparent; line-height: 18px; border-radius: 0; }
-.network-header .buffer { display: flex; align-items: center; padding: 3px 0 2px 17px; margin-left: -5px; cursor: pointer; background: #333; color: #999; border-radius: 0 4px 4px 0; line-height: 18px; border-left: 5px solid #262626; }
+.network-header.buffer { background: #333; border-radius: 0 4px 4px 0; margin-left: -5px; width: calc(100% + 5px); box-sizing: border-box; padding: 3px 0 2px 0; }
+.network-header .buffer { display: flex; align-items: center; padding: 3px 0 2px 12px; cursor: pointer; color: #999; line-height: 18px; border-left: 5px solid #262626; flex: 1; min-width: 0; }
 .network-header .buffer .label { padding: 0 7px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .network.connected .network-header .buffer { color: #d9d9d9; }
+.network-header.buffer:hover,
 .network-header:hover .buffer { background: #404040; border-left-color: #262626; }
+.network-header.selected.buffer,
+.network-header.active.buffer,
 .network-header.selected .buffer,
-.network-header.active .buffer { color: #333 !important; background: #fff; border-radius: 0 4px 4px 0; border-left-color: #d9d9d9; }
+.network-header.active .buffer { color: #333 !important; background: #fff; border-left-color: #d9d9d9; }
 .network-header.unread .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
 .network-header.highlight .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
 .network-header.selected .buffer .fa-globe,
@@ -246,7 +254,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header.selected,
 .network-header.active { background: transparent; }
 
-.network-shield { position: absolute; left: 7px; top: 50%; transform: translateY(-50%); font-size: 11px; color: #d9d9d9; pointer-events: none; }
+.network-shield { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; color: #d9d9d9; pointer-events: none; }
 .fa-globe.network-shield { font-size: 11px; }
 
 .network-unread { margin-left: auto; }
@@ -266,6 +274,8 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header.unread .buffer,
 .network.connected .network-header.unread .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
 .network-header.unread .buffer .label { color: #d9d9d9; font-weight: 400; }
+.network-header.unread.selected .buffer .label,
+.network-header.unread.active .buffer .label { color: #333; }
 
 /* IRCCloud-style unread label */
 .unread__label { display: inline; font-size: 15px; }
@@ -675,15 +685,42 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 
 /* Full-width MOTD/info rows matching IRCCloud */
 .row.messageRow.type_motd_response {
-  padding: 0 10px 8px 10px;
+  padding: 10px;
+  border-radius: 3px;
+  background: #404040;
+}
+.row.messageRow.type_info_response {
+  padding: 10px;
 }
 .row.messageRow.type_motd_response .date {
   display: none;
 }
-.row.messageRow.type_motd_response .groupedLines {
-  border-left: 3px solid #6e7681;
-  border-radius: 4px;
+.row.messageRow.type_motd_response .message,
+.row.messageRow.type_motd_response .content {
+  padding-right: 0;
 }
+
+.motdBlock {
+  display: block;
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  line-height: 1;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.motdBlock .irccolor,
+.motdBlock .irccolor-bg {
+  line-height: 1;
+  padding: 0;
+  white-space: pre-wrap;
+}
+
+
 
 /* Prefix symbols for join/part/quit/nick (→ ← ↔) */
 .row.messageRow.status .prefix,
@@ -887,7 +924,6 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   box-sizing: border-box;
   overflow: hidden;
   word-break: break-word;
-  padding-right: 50px;
 }
 
 .row.messageRow .timestamp {
@@ -3354,6 +3390,10 @@ wbr { display: none; }
   padding-bottom: 0.125rem;
 }
 
+#app.compact .network-header.buffer {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
 #app.compact .network-header .buffer {
   padding-top: 0.375rem;
   padding-bottom: 0.375rem;

@@ -31,7 +31,6 @@ export function createNetwork(overrides: Partial<Network> = {}): Network {
     disconnectReason: '',
     isAway: false,
     awayMessage: '',
-    collapsed: false,
     buffers: [],
     awayNicks: new Set(),
     capabilities: new Set(),

@@ -38,7 +38,6 @@ export interface Network {
   disconnectReason: string;
   isAway: boolean;
   awayMessage: string;
-  collapsed: boolean;
   archivesCollapsed?: boolean;
   inactiveCollapsed?: boolean;
   buffers: Buffer[];

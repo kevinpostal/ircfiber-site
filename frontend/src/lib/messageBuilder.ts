@@ -2,6 +2,17 @@ import type { IRCMessage, JoinPartGroupMessage, DiscoGroupMessage } from '../typ
 import { isJoinPartLike, isDisconnectLike, escapeHtml, stripPrefix } from './utils';
 
 /**
+ * Strip the IRC MOTD line prefix ("- " or "-") that servers prepend to
+ * every 372/375 response. IRCCloud drops this prefix so the rendered
+ * block reads like a single document.
+ */
+function stripMotdPrefix(text: string): string {
+  if (text.startsWith('- ')) return text.slice(2);
+  if (text.startsWith('-')) return text.slice(1);
+  return text;
+}
+
+/**
  * Group consecutive MOTD lines (372) into a single MOTD_GROUP message.
  */
 export function groupMOTDLines(messages: IRCMessage[]): IRCMessage[] {
@@ -318,7 +329,8 @@ export function preprocessMessages(messages: IRCMessage[]): IRCMessage[] {
   // Strip TAGMSG events (typing indicators, reactions) — they are
   // handled by the live event handler and must never appear in the
   // processed buffer (empty rows break grouping).
-  messages = messages.filter(m => m.command !== 'TAGMSG');
+  // Also drop malformed/ghost events with no command and no text.
+  messages = messages.filter(m => m.command !== 'TAGMSG' && (m.command || m.text));
   let result = groupMOTDLines(messages);
   result = groupJoinPartEvents(result);
   result = groupDisconnectEvents(result);
@@ -352,14 +364,12 @@ function peelGroup(last: IRCMessage): IRCMessage[] {
     return (last as any).events as IRCMessage[];
   }
   if (last.command === 'MOTD_GROUP' && (last as any).lines) {
-    // MOTD grouping preserves the original text.  The first line may have
-    // been 375 (start) or 372 (response); we don't track which, so default
-    // to 372 for the first line.  This is fine because groupMOTDLines
-    // only uses the `text` field for re-grouping, and the
-    // {command: '372', text} shape groups identically.
+    // MOTD grouping preserves the original text.  The leading "- " prefix
+    // has already been stripped, so reconstruct every line as a 372; the
+    // grouping logic treats 372 and 375 identically anyway.
     const lines = (last as any).lines as string[];
-    return lines.map((text, i) => ({
-      command: i === 0 && /^- /.test(text) ? '375' : '372',
+    return lines.map((text) => ({
+      command: '372',
       text,
     }));
   }

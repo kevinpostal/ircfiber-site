@@ -96,7 +96,6 @@
           disconnectReason: '',
           isAway: false,
           awayMessage: '',
-          collapsed: false,
           buffers: [{
             name: '_server', type: 'server' as const, isJoined: true,
             unreadCount: 0, highlight: false, isPinned: false, isArchived: false,

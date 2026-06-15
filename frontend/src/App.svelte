@@ -30,7 +30,7 @@
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
-  import { membersCollapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, suppressAnimations, globalPrefs } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, suppressAnimations, globalPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -220,6 +220,14 @@ import ShortcutsPage from './components/ShortcutsPage.svelte';
         }
         for (const [key, value] of Object.entries(user.membersCollapsed)) {
           if (value === true) membersCollapsedMap[key] = true;
+        }
+      }
+      if (user.collapsed) {
+        for (const key of Object.keys(collapsedMap)) {
+          if (!(key in user.collapsed)) delete collapsedMap[key];
+        }
+        for (const [key, value] of Object.entries(user.collapsed)) {
+          if (value === true) collapsedMap[key] = true;
         }
       }
     } catch (e) {
@@ -439,6 +447,14 @@ import ShortcutsPage from './components/ShortcutsPage.svelte';
       }
       for (const [k, v] of Object.entries(collapsed)) {
         if (v === true) membersCollapsedMap[k] = true;
+      }
+    } else if (key === 'collapsed') {
+      const col = (data.value as Record<string, boolean>) ?? {};
+      for (const k of Object.keys(collapsedMap)) {
+        if (!(k in col)) delete collapsedMap[k];
+      }
+      for (const [k, v] of Object.entries(col)) {
+        if (v === true) collapsedMap[k] = true;
       }
     }
   }
