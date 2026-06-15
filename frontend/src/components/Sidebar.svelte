@@ -55,6 +55,17 @@
 </script>
 
 <div class="network-list" id="networks">
+  <div class="sidebar-brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke-linecap="round">
+        <g class="fiber-strand" stroke="#67e8f9" stroke-width="2.2">
+          <line x1="9.5" y1="3" x2="9.5" y2="21"/>
+          <line x1="14.5" y1="3" x2="14.5" y2="21"/>
+        </g>
+      </svg>
+    </span>
+    <span class="brand-text">IRC<span class="brand-fiber">Fiber</span></span>
+  </div>
   {#if pinned.length > 0}
     <ul class="bufferList pinnedBuffers">
       <h2><i class="fa fa-thumb-tack"></i>Pinned</h2>
@@ -89,6 +100,7 @@
       <div class="network-header buffer"
           class:active={isActiveNet}
           class:unread={totalNetUnread > 0}
+          class:highlight={totalNetHighlights > 0}
           role="button"
           tabindex="0"
           onclick={() => onSwitchBuffer(net.networkId, '_server')}
@@ -104,6 +116,10 @@
           {#if totalNetHighlights > 0}
             <span class="unread buffer-unread">{totalNetHighlights}</span>
           {/if}
+          <button class="bufferOptions fa fa-cog" type="button"
+                  title="Options" aria-label="Options"
+                  aria-expanded="false" aria-haspopup="true"
+                  onclick={(e) => { e.stopPropagation(); onNetworkOptions(net.networkId, e); }}></button>
         </span>
         <span class="collapseToggle">
           <button type="button" aria-expanded={!net.collapsed}
@@ -111,10 +127,6 @@
             <i class="fa fa-{net.collapsed ? 'plus-square-o' : 'minus-square-o'}" aria-hidden="true"></i>
           </button>
         </span>
-        <button class="bufferOptions fa fa-cog" type="button"
-                title="Options" aria-label="Options"
-                aria-expanded="false" aria-haspopup="true"
-                onclick={(e) => { e.stopPropagation(); onNetworkOptions(net.networkId, e); }}></button>
       </div>
       {#if !net.collapsed}
         <ul class="buffers channels network-buffers">
@@ -144,20 +156,31 @@
         </ul>
         {@const inactive = net.buffers.filter(b => b.name !== '_server' && b.isJoined === false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])}
         {#if inactive.length > 0}
-          <div class="sidebar-section-header inactive-header">Inactive</div>
-          <ul class="buffers inactive-channels">
-            {#each uniqueBuffersByName(inactive) as buf (net.networkId + ':' + buf.name)}
-              {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
-              <li class="buffer channel buffer-item inactive"
-                  class:active={isActive}
-                  onclick={() => onSwitchBuffer(net.networkId, buf.name)}
-                  role="presentation">
-                <span class="buffer" role="tab" tabindex="0">
-                  <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
-                </span>
-              </li>
-            {/each}
-          </ul>
+          <div class="sidebar-section-header inactive-header"
+               role="button" tabindex="0"
+               onclick={() => { net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); }}
+               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); } }}>
+            <span class="inactive-header-label">Inactive</span>
+            <button type="button" class="inactive-header-toggle" aria-expanded={!(net.inactiveCollapsed ?? false)}
+                    onclick={(e) => { e.stopPropagation(); net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); }}>
+              <i class="fa fa-{net.inactiveCollapsed ? 'plus-square-o' : 'minus-square-o'}" aria-hidden="true"></i>
+            </button>
+          </div>
+          {#if !(net.inactiveCollapsed ?? false)}
+            <ul class="buffers inactive-channels">
+              {#each uniqueBuffersByName(inactive) as buf (net.networkId + ':' + buf.name)}
+                {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
+                <li class="buffer channel buffer-item inactive"
+                    class:active={isActive}
+                    onclick={() => onSwitchBuffer(net.networkId, buf.name)}
+                    role="presentation">
+                  <span class="buffer" role="tab" tabindex="0">
+                    <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+          {/if}
         {/if}
         {@const archived = Object.keys(archivedMap)
           .filter(key => key.startsWith(`${net.networkId}:`) && archivedMap[key] && !hiddenChannelsMap[key])

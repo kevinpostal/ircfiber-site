@@ -40,6 +40,7 @@ export interface Network {
   awayMessage: string;
   collapsed: boolean;
   archivesCollapsed?: boolean;
+  inactiveCollapsed?: boolean;
   buffers: Buffer[];
   awayNicks: Set<string>;
   // Server capabilities (from CAP)

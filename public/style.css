@@ -129,14 +129,23 @@ main.chat-container {
   grid-column: 2;
   grid-row: 1;
   background: #000;
-  border-left: 1px solid #2c2f35;
+  border-width: 0 0 0 1px;
+  border-style: solid;
+  border-color: #000;
+  box-shadow: inset 5px 0 0 0 #333;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   position: relative;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Source Sans Pro", sans-serif;
 }
+#sidebar, #sidebar *:not(.fa) { font-family: "Source Sans Pro", sans-serif; }
 .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; border-bottom: 1px solid #2c2f35; }
+.sidebar-brand { display: flex; align-items: center; gap: 8px; padding: 12px 0 12px 9px; }
+.sidebar-brand .brand-mark { width: 20px; height: 20px; display: inline-grid; place-items: center; }
+.sidebar-brand .brand-mark svg { display: block; }
+.sidebar-brand .brand-text { font-size: 16px; font-weight: 600; color: #ecf2f8; letter-spacing: -0.01em; }
+.sidebar-brand .brand-fiber { color: #67e8f9; }
 
 /* Collapse toggle per network */
 .network-header .collapseToggle {
@@ -195,48 +204,68 @@ main.chat-container {
   color: #d1d5db;
   background: rgba(255,255,255,0.06);
 }
-.network-list { flex: 1; min-height: 0; overflow-y: auto; }
+.network-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background: transparent; padding: 0 0 0 5px; }
 .network { position: relative; margin-bottom: 10px; list-style: none; }
 .network:last-child { margin-bottom: 0; }
 ul.buffers { list-style: none; padding: 0; margin: 0; }
-.network-header { display: block; position: relative; font-size: 14px; font-weight: 400; color: #d1d5db; user-select: none; margin: 0 0 1px 0; padding: 0; background: #333; line-height: 18px; border-radius: 4px; }
-.network-header::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: #1a1a1a; border-radius: 4px 0 0 4px; z-index: 1; }
-.network-header .buffer { display: flex; align-items: center; gap: 0; padding: 7px 0 7px 4px; cursor: pointer; background: transparent; color: #999; border-radius: 4px; line-height: 18px; }
+.network-header { display: block; position: relative; font-size: 15px; font-weight: 400; color: #d9d9d9; user-select: none; margin: 0; padding: 0; background: transparent; line-height: 18px; border-radius: 0; }
+.network-header .buffer { display: flex; align-items: center; padding: 3px 0 2px 17px; margin-left: -5px; cursor: pointer; background: #333; color: #999; border-radius: 0 4px 4px 0; line-height: 18px; border-left: 5px solid #262626; }
+.network-header .buffer .label { padding: 0 7px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .network.connected .network-header .buffer { color: #d9d9d9; }
-.network-header:hover { background: #3a3a3a; }
-.network-header.selected .buffer { color: #333; }
-.network-header .bufferOptions { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; font-size: 15px; padding: 0; opacity: 0; transition: opacity 0.15s; z-index: 2; }
-.network-header:hover .bufferOptions, .network-header .bufferOptions:focus { opacity: 1; }
-.network-header.selected .bufferOptions { color: #333; opacity: 1; }
-.network-header.selected { background: #fff; }
-.network-header.selected::before { background: #6e7681; }
+.network-header:hover .buffer { background: #404040; border-left-color: #262626; }
+.network-header.selected .buffer,
+.network-header.active .buffer { color: #333 !important; background: #fff; border-radius: 0 4px 4px 0; border-left-color: #d9d9d9; }
+.network-header.unread .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
+.network-header.highlight .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
+.network-header.selected .buffer .fa-globe,
+.network-header.active .buffer .fa-globe,
+.network-header.selected .buffer .network-shield,
+.network-header.active .buffer .network-shield { color: #333; }
+.network-header .buffer .bufferOptions { visibility: hidden; font-size: 18px; padding: 2px; margin: 0 8px 0 auto; color: #a6a6a6; background: none; border: none; cursor: pointer; flex-shrink: 0; }
+.network-list .connection:hover .bufferOptions,
+.network-list .connection:focus .bufferOptions,
+.network-list .connection:focus-within .bufferOptions { visibility: visible; }
+.network-list .buffer .bufferOptions { color: #a6a6a6; }
+.network-list .buffer:hover .bufferOptions,
+.network-list .buffer:focus .bufferOptions,
+.network-list .buffer:focus-within .bufferOptions { color: #d9d9d9; }
+.network-list .buffer .bufferOptions:hover,
+.network-list .buffer .bufferOptions:focus { color: #f2f2f2; }
+.network-header.selected .buffer .bufferOptions,
+.network-header.active .buffer .bufferOptions { color: #333; }
+.network-header.selected .buffer:hover .bufferOptions,
+.network-header.active .buffer:hover .bufferOptions,
+.network-header.selected .buffer:focus .bufferOptions,
+.network-header.active .buffer:focus .bufferOptions,
+.network-header.selected .buffer:focus-within .bufferOptions,
+.network-header.active .buffer:focus-within .bufferOptions { color: #333; }
+.network-header.selected .buffer .bufferOptions:hover,
+.network-header.active .buffer .bufferOptions:hover,
+.network-header.selected .buffer .bufferOptions:focus,
+.network-header.active .buffer .bufferOptions:focus { color: #333; }
+.network-header.selected,
+.network-header.active { background: transparent; }
 
-.network-shield { position: static; font-size: 13px; margin-right: 5px; flex-shrink: 0; }
-.fa-globe.network-shield { font-size: 13px; }
+.network-shield { position: absolute; left: 7px; top: 50%; transform: translateY(-50%); font-size: 11px; color: #d9d9d9; pointer-events: none; }
+.fa-globe.network-shield { font-size: 11px; }
 
 .network-unread { margin-left: auto; }
 .network-buffers { padding-bottom: 0; }
 .buffer { display: flex; align-items: center; width: 100%; }
-.buffer-item { display: block; position: relative; font-size: 15px; color: #999; cursor: pointer; border-radius: 4px; }
-.buffer-item::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: #333; border-radius: 4px 0 0 4px; z-index: 1; }
-.buffer-item .buffer { display: block; padding: 3px 0 2px 27px; border-radius: 0 4px 4px 0; line-height: 18px; }
+.buffer-item { display: block !important; position: relative; font-size: 15px; color: #999; cursor: pointer; border-radius: 0; margin: 0; flex: 0 0 auto !important; flex-direction: initial !important; }
+.buffer-item .buffer { display: block; padding: 3px 0 2px 17px; margin-left: -5px; border-radius: 0 4px 4px 0; line-height: 18px; }
+.buffer-item .buffer .label { padding: 0 7px; }
 .buffer-item:hover .buffer { background: #1a1a1a; color: #d9d9d9; }
-.buffer-item.active .buffer { background: #fff; color: #333; }
-.buffer-item.active::before { background: var(--accent); }
-/* Unread buffers: bold white name, no count badge (IRCCloud behavior).
-   The red numeric badge below is reserved for mentions and PM unreads. */
-.buffer-item.unread .buffer { color: #f2f2f2; font-weight: 600; }
-.buffer-item.unread::before { background: var(--accent); }
+.buffer-item.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #d9d9d9; }
+.buffer-item.unread .buffer { color: #f2f2f2; font-weight: 600; border-left: 5px solid #1e72ff; }
 .buffer-item.unread:hover .buffer { background: #1a1a1a; color: #f2f2f2; }
-.buffer-item.unread.active .buffer { background: #fff; color: #333; }
-.buffer-item.highlight .buffer { color: #f2f2f2; font-weight: 600; }
-.buffer-item.highlight::before { background: var(--accent); }
-.buffer-item.highlight.active .buffer { background: #fff; color: #333; }
-.buffer-item.highlight.active::before { background: #ff7b72; }
+.buffer-item.unread.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #d9d9d9; }
+.buffer-item.highlight .buffer { color: #f2f2f2; font-weight: 600; border-left: 5px solid #1e72ff; }
+.buffer-item.highlight.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #ff7b72; }
 .buffer-item.highlight.active .buffer .unread__label { color: #333; }
 .network-header.unread .buffer,
-.network.connected .network-header.unread .buffer { color: #f2f2f2; font-weight: 600; }
-.network-header.unread .buffer .label { color: #f2f2f2; font-weight: 600; }
+.network.connected .network-header.unread .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
+.network-header.unread .buffer .label { color: #d9d9d9; font-weight: 400; }
 
 /* IRCCloud-style unread label */
 .unread__label { display: inline; font-size: 15px; }
@@ -858,6 +887,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   box-sizing: border-box;
   overflow: hidden;
   word-break: break-word;
+  padding-right: 50px;
 }
 
 .row.messageRow .timestamp {
@@ -2253,21 +2283,23 @@ wbr { display: none; }
 
 /* Sidebar pinned channels - IRCCloud style */
 .bufferList.pinnedBuffers {
-  margin: 0;
+  margin: 0 0 10px 0;
   padding: 0;
   list-style: none;
-  border-bottom: 1px solid #333;
-}
-.bufferList.pinnedBuffers {
-  padding: 10px 0 0 0;
+  border-bottom: none;
 }
 .bufferList.pinnedBuffers h2 {
-  margin: 0 0 1px 0;
-  padding: 0 0 5px 9px;
+  position: relative;
+  margin: 0;
+  padding: 7px 0 7px 12px;
   font-size: 15px;
   color: #d9d9d9;
   font-weight: 400;
   font-family: inherit;
+  border-left: 5px solid #262626;
+  background: #333;
+  border-radius: 0 4px 4px 0;
+  line-height: 18px;
 }
 .bufferList.pinnedBuffers h2 .fa-thumb-tack {
   margin-right: 5px;
@@ -2402,15 +2434,15 @@ wbr { display: none; }
   border: none;
   cursor: pointer;
   color: #d9d9d9;
-  font-size: 18px;
-  padding: 6px;
-  width: 34px;
-  height: 34px;
-  border-radius: 4px;
+  font-size: 14px;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
   transition: background 0.15s;
 }
 .bufferOptions:hover {
-  background: rgba(255,255,255,0.08);
+  background: transparent;
 }
 
 /* Keep old account classes for backwards compat */
@@ -2454,7 +2486,7 @@ wbr { display: none; }
 .memberList .category.ops {
   box-shadow: inset 3px 0 0 0 hsl(10, 71%, 25%);
   border-bottom: 1px solid hsl(0, 36%, 38%);
-  background-color: hsl(0, 42%, 19%);
+  background-color: #451c1c;
 }
 .memberList .category.halfops {
   box-shadow: inset 3px 0 0 0 hsl(40, 71%, 25%);
@@ -3519,34 +3551,56 @@ wbr { display: none; }
   font-weight: 400;
   font-family: inherit;
   line-height: 18px;
-  padding: 6px 7px 5px 24px;
+  padding: 6px 0 5px 12px;
   cursor: pointer;
+  position: relative;
+  margin-left: -5px;
 }
-.archiveToggle button:hover {
-  color: #fff;
+.archiveToggle button::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #333;
+  z-index: 1;
 }
-.archived-channels {
-  margin: 0 0 1px 0;
-}
-.archived-channels .buffer-item {
-  opacity: 1;
-}
-.archived-channels .buffer-item:hover {
-  opacity: 1;
-}
-
-/* ── Inactive (parted) channels in sidebar ── */
 .sidebar-section-header.inactive-header {
-  padding: 6px 7px 5px 17px;
+  position: relative;
+  padding: 6px 0 5px 12px;
   font-size: 15px;
   color: #bfbfbf;
+  margin-left: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
-.inactive-channels .buffer-item {
-  opacity: 1;
+.sidebar-section-header.inactive-header::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #333;
+  z-index: 1;
 }
-.inactive-channels .buffer-item:hover {
-  opacity: 1;
+.sidebar-section-header.inactive-header .inactive-header-toggle {
+  background: none;
+  border: none;
+  color: #a6a6a6;
+  font-size: 14px;
+  padding: 2px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  visibility: hidden;
 }
+.sidebar-section-header.inactive-header:hover .inactive-header-toggle,
+.sidebar-section-header.inactive-header:focus-within .inactive-header-toggle { visibility: visible; }
+.sidebar-section-header.inactive-header .inactive-header-toggle:hover,
+.sidebar-section-header.inactive-header .inactive-header-toggle:focus { color: #d9d9d9; }
+
 
 /* ── IRC channel mode classes (IRCCloud-style) ── */
 /* Applied to sidebar channel items based on channel mode state. */
@@ -4659,7 +4713,7 @@ wbr { display: none; }
   .bufferHead { padding-left: 12px; }
   #sidebar .buffer-item .buffer { padding-top: 7px; padding-bottom: 7px; }
   /* gear is hover-revealed on desktop; there is no hover on touch */
-  .network-header .bufferOptions { opacity: 1; }
+  .network-header .bufferOptions { visibility: visible; }
   /* 16px stops iOS Safari from zooming the page on input focus */
   .bufferinputcell textarea { font-size: 16px; }
 }
