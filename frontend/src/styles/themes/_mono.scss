@@ -1,0 +1,88 @@
+/* ============================================================
+   Mono Font Mode — IRCCloud font-mono style
+   Toggle by adding .font-mono class to #app
+   ============================================================ */
+
+#app.font-mono .messages,
+#app.font-mono .bufferinputcell textarea,
+#app.font-mono .row.messageRow,
+#app.font-mono .row.messageRow .content,
+#app.font-mono .groupedLines,
+#app.font-mono .groupedLines__line {
+  font-family: var(--font-mono);
+  letter-spacing: normal;
+}
+
+#app.font-mono .bufferinputcell textarea {
+  font-size: 15px;
+}
+
+#app.font-mono .row.messageRow.status.monospace,
+#app.font-mono .row.messageRow.status .content,
+#app.font-mono .row.messageRow.status .prefix {
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .row.messageRow .date,
+#app.font-mono .row.messageRow .timestamp {
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .row.messageRow.status .prefix,
+#app.font-mono .row.messageRow .letterAvatar {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#app.font-mono .bufferstatus .channel-name {
+  font-size: 15px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .bufferstatus .topic {
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .row.dateDivider h3 {
+  font-size: 14px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .row.seenDivider .divider-text {
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .connectionstatuscell {
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .chattercell {
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono .extrasBar,
+#app.font-mono .extrasDismiss {
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+#app.font-mono blockquote.quote {
+  padding-left: 7px;
+}
+
+/* ── Reconnect HR divider (IRCCloud-style) ── */
+.reconnect-hr {
+  display: block;
+  height: 1px;
+  border: none;
+  border-top: 3px double #595959;
+  margin: 5px -21px 5px -68px;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  color: #808080;
+}

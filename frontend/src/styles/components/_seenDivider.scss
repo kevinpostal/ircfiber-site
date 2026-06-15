@@ -1,0 +1,33 @@
+/* Seen dividers */
+.row.seenDivider {
+  text-align: center;
+  margin: 12px 0;
+  position: relative;
+}
+
+.row.seenDivider hr {
+  border: none;
+  border-top: 1px solid var(--accent);
+  margin: 0;
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 50%;
+}
+
+.divider-text-wrapper {
+  margin: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.divider-text {
+  display: inline-block;
+  background: var(--chat-bg);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}

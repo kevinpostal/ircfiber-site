@@ -1,0 +1,51 @@
+/* Disconnect groups */
+.row.groupedDisco {
+  cursor: pointer;
+}
+
+.row.groupedDisco .collapseWidget {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  color: var(--text-tertiary);
+}
+
+.row.groupedDisco.collapsedHead .collapseIcon,
+.row.groupedDisco .expandIcon {
+  display: none;
+}
+
+.row.groupedDisco.collapsedHead .expandIcon {
+  display: inline;
+}
+
+.row.groupedDisco.collapsedHead .collapseIcon {
+  display: none;
+}
+
+.row.groupedDisco:not(.collapsedHead) .collapseIcon {
+  display: inline;
+}
+
+.row.groupedDisco:not(.collapsedHead) .expandIcon {
+  display: none;
+}
+
+.row.groupedDisco .sentence {
+  color: var(--text-secondary);
+}
+
+.collapseGroup.discoGroup {
+  padding-left: 88px;
+}
+
+.row.part.groupedDiscoPart {
+  padding: 4px 16px;
+}
+
+.row.part.groupedDiscoPart hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}

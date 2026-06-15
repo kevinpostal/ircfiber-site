@@ -1,0 +1,194 @@
+/* ============================================================
+   Message Grouping — IRCCloud-style firstAuthor / sameAuthor
+   ============================================================ */
+
+/* First message from an author: full author info shown */
+.row.messageRow.firstAuthor {
+  padding-top: 6px;
+}
+
+/* Restore firstAuthor top padding for bot / type_buffer_msg / blockArt
+   rows. Their combined-class shorthand in public/dist/index.css (specificity
+   0,3,1) comes after this rule and resets padding-top to 0; this matches
+   its specificity and comes later in source order to win. */
+.row.messageRow.firstAuthor.type_buffer_msg,
+.row.messageRow.firstAuthor.bot,
+.row.messageRow.firstAuthor.blockArt {
+  padding-top: 6px;
+}
+
+/* Rows that render the 32×32 avatar need enough height for the puck.
+   The avatar is absolutely positioned at top: 8px, so min-height: 40px
+   keeps the full circle inside the row and prevents the next row's
+   background from clipping the bottom. */
+.row.messageRow.hasAvatar.firstAuthor {
+  min-height: 40px;
+}
+
+/* Subsequent messages from same author: no author wrap. Zero vertical
+   padding so consecutive full-width color backgrounds (ASCII art) butt
+   together seamlessly, as IRCCloud renders them. */
+.row.messageRow.sameAuthor {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.row.messageRow.sameAuthor .authorWrap {
+  display: none;
+}
+
+/* The avatar is now a sibling of .authorWrap so it isn't clipped by
+   authorWrap's 24px overflow:hidden box; hide it for same-author rows
+   just like the author wrap. */
+.row.messageRow.sameAuthor .messageAvatar {
+  display: none;
+}
+
+/* sameAuthor content aligns with gutter edge (nick position) */
+.row.messageRow.sameAuthor .message {
+  padding-left: 0;
+}
+
+/* In compact mode, tighten sameAuthor further */
+#app.compact .row.messageRow.firstAuthor {
+  padding-top: 6px;
+}
+
+#app.compact .row.messageRow.sameAuthor {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+
+/* ── /clear support ── */
+.row.messageRow.cleared {
+  display: none;
+}
+.restore-cleared {
+  display: block;
+  margin: 8px auto;
+  padding: 6px 14px;
+  background: #2c2f35;
+  color: #8b949e;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.restore-cleared:hover {
+  background: #3a3f47;
+  color: #d1d5db;
+}
+
+/* ── Archived section in sidebar (IRCCloud style) ── */
+.archiveToggle {
+  margin: 0;
+  padding: 0;
+}
+.archiveToggle button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: #bfbfbf;
+  font-size: 15px;
+  font-weight: 400;
+  font-family: inherit;
+  line-height: 18px;
+  padding: 6px 0 5px 12px;
+  cursor: pointer;
+  position: relative;
+  margin-left: -5px;
+}
+.archiveToggle button::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #333;
+  z-index: 1;
+}
+.sidebar-section-header.inactive-header {
+  position: relative;
+  padding: 6px 0 5px 12px;
+  font-size: 15px;
+  color: #bfbfbf;
+  margin-left: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+.sidebar-section-header.inactive-header::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #333;
+  z-index: 1;
+}
+.sidebar-section-header.inactive-header .inactive-header-toggle {
+  background: none;
+  border: none;
+  color: #a6a6a6;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  visibility: hidden;
+}
+.sidebar-section-header.inactive-header:hover .inactive-header-toggle,
+.sidebar-section-header.inactive-header:focus-within .inactive-header-toggle { visibility: visible; }
+.sidebar-section-header.inactive-header .inactive-header-toggle:hover,
+.sidebar-section-header.inactive-header .inactive-header-toggle:focus { color: #d9d9d9; }
+
+.sidebar-section-header.archive-header {
+  position: relative;
+  padding: 6px 0 5px 12px;
+  font-size: 15px;
+  color: #bfbfbf;
+  margin-left: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+.sidebar-section-header.archive-header::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #333;
+  z-index: 1;
+}
+.sidebar-section-header.archive-header .archive-header-label {
+  position: relative;
+  z-index: 2;
+}
+.sidebar-section-header.archive-header .archive-header-toggle {
+  background: none;
+  border: none;
+  color: #a6a6a6;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  visibility: hidden;
+  position: relative;
+  z-index: 2;
+}
+.sidebar-section-header.archive-header:hover .archive-header-toggle,
+.sidebar-section-header.archive-header:focus-within .archive-header-toggle { visibility: visible; }
+.sidebar-section-header.archive-header .archive-header-toggle:hover,
+.sidebar-section-header.archive-header .archive-header-toggle:focus { color: #d9d9d9; }
+
+
+/* ── IRC channel mode classes (IRCCloud-style) ── */
+/* Applied to sidebar channel items based on channel mode state. */

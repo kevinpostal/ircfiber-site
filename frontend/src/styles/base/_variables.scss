@@ -1,0 +1,149 @@
+:root {
+  --text-primary: #d1d5db;
+  --text-secondary: #8b949e;
+  --text-tertiary: #6e7681;
+  --chat-bg: #000;
+  --border: #2c2f35;
+  --link: #58a6ff;
+  --accent: #1E72FF;
+  --input-bg: #1e2126;
+  --font-mono: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  --status-disconnected: #f85149;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  scrollbar-width: thin;
+  scrollbar-color: #4a5568 transparent;
+}
+
+html, body { font-family: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 14px; letter-spacing: normal; background: #333333; color: #d1d5db; height: 100vh; overflow: hidden; }
+#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* Scrollbars — IRCCloud-style thin scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-track-piece {
+  background: #000;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #999;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #b3b3b3;
+}
+::-webkit-scrollbar-thumb:active {
+  background-color: #ccc;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { color: #79c0ff; text-decoration: underline; }
+.auth-container { max-width: 360px; margin: 10vh auto; padding: 2rem; background: #1a1d21; border: 1px solid #2c2f35; border-radius: 8px; }
+.auth-container h1 { text-align: center; margin-bottom: 1.5rem; color: #58a6ff; }
+.auth-container input { width: 100%; padding: 0.75rem; margin-bottom: 0.75rem; background: #0d1117; border: 1px solid #2c2f35; border-radius: 6px; color: #d1d5db; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2); }
+.auth-container input:focus { outline: none; border-color: #1E72FF; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2), 0 0 0 2px rgba(30,114,255,0.15); }
+.auth-container button { width: 100%; padding: 0.75rem; background: #238636; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; box-shadow: 0 1px 0 rgba(0,0,0,0.3); text-shadow: 0 1px rgba(0,0,0,0.3); }
+.auth-container p { text-align: center; margin-top: 1rem; font-size: 0.875rem; color: #8b949e; }
+#wrap {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  grid-template-rows: 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+.main-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+.content-row {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Suppress layout/visual animations when the state change comes from a
+   cross-tab sync (storage event) rather than a user click. The `no-anim`
+   class is added briefly while the new state is being applied, so the
+   other tab shows the final layout instantly without any sliding or
+   fade — only the originating tab plays the animation. */
+#wrap.has-members.no-anim #member-sidebar.show {
+  transition: none !important;
+}
+.bufferstatus {
+  background: #262626;
+  border-bottom: 1px solid #2c2f35;
+  flex-shrink: 0;
+}
+main.chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  overflow-x: hidden;
+}
+#member-sidebar {
+  background: #1b2432;
+  border-left: 1px solid #2c2f35;
+  display: flex;
+  flex-direction: column;
+  width: 0;
+  min-width: 0;
+  transition: width 0.2s ease-in;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+#member-sidebar.show {
+  width: 155px;
+  transition: width 0.3s ease-out;
+}
+#wrap.members-collapsed #member-sidebar.show {
+  width: 0;
+  transition: width 0.2s ease-in;
+}
+#flat-members {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-shadow: inset 3px 0 0 0 hsl(221, 32%, 25%);
+}
+#sidebar {
+  grid-column: 2;
+  grid-row: 1;
+  background: #000;
+  border-width: 0 0 0 1px;
+  border-style: solid;
+  border-color: #000;
+  box-shadow: inset 5px 0 0 0 #333;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  font-family: "Source Sans Pro", sans-serif;
+}
+#sidebar, #sidebar *:not(.fa) { font-family: "Source Sans Pro", sans-serif; }
+.sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 1rem; border-bottom: 1px solid #2c2f35; }
+.sidebar-brand { display: flex; align-items: center; gap: 8px; padding: 12px 0 12px 9px; }
+.sidebar-brand .brand-mark { width: 20px; height: 20px; display: inline-grid; place-items: center; }
+.sidebar-brand .brand-mark svg { display: block; }
+.sidebar-brand .brand-text { font-size: 16px; font-weight: 600; color: #ecf2f8; letter-spacing: -0.01em; }
+.sidebar-brand .brand-fiber { color: #67e8f9; }

@@ -1,0 +1,122 @@
+/* Grouped lines (MOTD, etc.) */
+.groupedLines {
+  display: block;
+  background: transparent;
+  padding: 0;
+}
+
+.groupedLines__line {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  margin: 0;
+  padding: 0;
+  line-height: 1;
+}
+
+.groupedLines__line h2 {
+  font-size: inherit;
+  font-weight: 600;
+  margin: 0;
+  line-height: inherit;
+}
+
+/* Legacy message structure overrides */
+.message-avatar,
+.timestamp-right {
+  display: none !important;
+}
+
+.day-divider {
+  display: none !important;
+}
+.user-list { width: 160px; background: #1a1d21; border-left: 1px solid #2c2f35; display: flex; flex-direction: column; }
+.user-list h4 { font-size: 12px; text-transform: uppercase; color: #8b949e; padding: 0.75rem 1rem; border-bottom: 1px solid #2c2f35; }
+.user-list ul { list-style: none; overflow-y: auto; padding: 0.5rem 0; }
+.user-list li { padding: 0.25rem 1rem; font-size: 14px; color: #d1d5db; }
+.user-list li.owner { color: #ffd700; }
+.user-list li.op { color: #3fb950; }
+.user-list li.voice { color: #58a6ff; }
+.compose { display: flex; padding: 0.75rem 1rem; background: #1e2126; border-top: 1px solid #2c2f35; gap: 0.5rem; }
+.compose input { flex: 1; padding: 0.625rem 0.875rem; background: #000; border: 1px solid #2c2f35; border-radius: 6px; color: #d1d5db; font-size: 0.9375rem; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2); }
+.compose input:focus { outline: none; border-color: #1E72FF; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2), 0 0 0 2px rgba(30,114,255,0.15); }
+.compose button { padding: 0.625rem 1.25rem; background: #238636; color: #fff; border: none; border-radius: 6px; font-size: 0.9375rem; font-weight: 600; cursor: pointer; box-shadow: 0 1px 0 rgba(0,0,0,0.3); text-shadow: 0 1px rgba(0,0,0,0.3); }
+.compose button:hover { background: #2ea043; }
+.nick-color-0 { color: #b22222; }
+.nick-color-1 { color: #d2691e; }
+.nick-color-2 { color: #f59870; }
+.nick-color-3 { color: #fa8072; }
+.nick-color-4 { color: #ff8c00; }
+.nick-color-5 { color: #228b22; }
+.nick-color-6 { color: #808000; }
+.nick-color-7 { color: #b5ae65; }
+.nick-color-8 { color: #93c430; }
+.nick-color-9 { color: #30c430; }
+.nick-color-10 { color: #89b589; }
+.nick-color-11 { color: #3aab6c; }
+.nick-color-12 { color: #62c4a3; }
+.nick-color-13 { color: #1faba3; }
+.nick-color-14 { color: #5b989a; }
+.nick-color-15 { color: #008b8b; }
+
+.bold { font-weight: 700; }
+.italic { font-style: italic; }
+.underline { text-decoration: underline; }
+
+/* IRCCloud uses display:none for wbr to prevent any layout gaps */
+wbr { display: none; }
+
+.irccolor, .irccolor-bg {
+  display: inline;
+}
+.irccolor.color-0 { color: #ffffff; }
+.irccolor.color-1 { color: #000000; }
+.irccolor.color-2 { color: navy; }
+.irccolor.color-3 { color: #008000; }
+.irccolor.color-4 { color: #ff0000; }
+.irccolor.color-5 { color: #800000; }
+.irccolor.color-6 { color: #800080; }
+.irccolor.color-7 { color: #ffa500; }
+.irccolor.color-8 { color: #ffff00; }
+.irccolor.color-9 { color: #00ff00; }
+.irccolor.color-10 { color: #008080; }
+.irccolor.color-11 { color: #00ffff; }
+.irccolor.color-12 { color: #0000ff; }
+.irccolor.color-13 { color: #ff00ff; }
+.irccolor.color-14 { color: #808080; }
+.irccolor.color-15 { color: #c0c0c0; }
+
+.irccolor-bg.bg-0 { background-color: #ffffff; }
+.irccolor-bg.bg-1 { background-color: #000000; }
+.irccolor-bg.bg-2 { background-color: navy; }
+.irccolor-bg.bg-3 { background-color: #008000; }
+.irccolor-bg.bg-4 { background-color: #ff0000; }
+.irccolor-bg.bg-5 { background-color: #800000; }
+.irccolor-bg.bg-6 { background-color: #800080; }
+.irccolor-bg.bg-7 { background-color: #ffa500; }
+.irccolor-bg.bg-8 { background-color: #ffff00; }
+.irccolor-bg.bg-9 { background-color: #00ff00; }
+.irccolor-bg.bg-10 { background-color: #008080; }
+.irccolor-bg.bg-11 { background-color: #00ffff; }
+.irccolor-bg.bg-12 { background-color: #0000ff; }
+.irccolor-bg.bg-13 { background-color: #ff00ff; }
+.irccolor-bg.bg-14 { background-color: #808080; }
+.irccolor-bg.bg-15 { background-color: #c0c0c0; }
+
+/* Links inside colored IRC spans should inherit the span's text color
+   (matches IRCCloud's .irccolors behavior for white text on dark bg etc.) */
+.row.messageRow .content span.irccolor a,
+.row.messageRow .content span.irccolor a:hover {
+  color: inherit;
+}
+
+.modal { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal-content { background: #1a1d21; border: 1px solid #2c2f35; border-radius: 8px; padding: 1.5rem; width: 90%; max-width: 420px; }
+.modal-content h2 { margin-bottom: 1rem; font-size: 1.125rem; }
+.modal-content input, .modal-content select { width: 100%; padding: 0.625rem; margin-bottom: 0.75rem; background: #000; border: 1px solid #2c2f35; border-radius: 6px; color: #d1d5db; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2); }
+.modal-content input:focus, .modal-content select:focus { outline: none; border-color: #1E72FF; box-shadow: inset 0 1px 2px rgba(0,0,0,0.2), 0 0 0 2px rgba(30,114,255,0.15); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
+.modal-actions button { padding: 0.5rem 1rem; border: none; border-radius: 6px; cursor: pointer; }
+.modal-actions button[type="submit"] { background: #238636; color: #fff; font-weight: 600; box-shadow: 0 1px 0 rgba(0,0,0,0.3); text-shadow: 0 1px rgba(0,0,0,0.3); }
+.modal-actions button[type="button"] { background: #2c2f35; color: #d1d5db; font-weight: 600; box-shadow: 0 1px 0 rgba(0,0,0,0.2); }

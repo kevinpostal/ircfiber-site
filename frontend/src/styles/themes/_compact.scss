@@ -1,0 +1,108 @@
+/* ============================================================
+   Compact Mode — IRCCloud ascii-compact style
+   Toggle by adding .compact class to #app
+   ============================================================ */
+
+#app.compact .row.messageRow,
+#app.compact .row.loadMore {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+#app.compact .row.messageRow.action {
+  padding-top: 2px;
+}
+
+#app.compact .row.seenDivider {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+#app.compact .row.dateDivider {
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+#app.compact .row.messageRow.status {
+  line-height: 16px;
+}
+
+#app.compact .groupedLines__line {
+  line-height: 16px;
+  min-height: 16px;
+}
+
+#app.compact .row.loadMore hr {
+  margin: 0 0 -1px 0;
+}
+
+#app.compact .bufferinputcell .nickinputcell {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+#app.compact .bufferinputcell .input {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+#app.compact .bufferinputcell .emojicell,
+#app.compact .bufferinputcell .uploadcell {
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+
+#app.compact .bufferinputcell textarea {
+  min-height: 20px;
+}
+
+#app.compact .chattercell {
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+#app.compact .connectionstatuscell {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+#app.compact .bufferstatus {
+  min-height: 40px;
+}
+
+#app.compact .bufferHead {
+  min-height: 40px;
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+
+#app.compact .channel-banner {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem;
+}
+
+#app.compact .member-item {
+  padding-top: 1px;
+  padding-bottom: 1px;
+}
+
+#app.compact .member-section-header {
+  padding-top: 0.375rem;
+  padding-bottom: 0.125rem;
+}
+
+#app.compact .sidebar-section-header {
+  padding-top: 0.375rem;
+  padding-bottom: 0.125rem;
+}
+
+
+#app.compact .network-header .buffer {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}
+
+#app.compact .buffer-item .buffer {
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+}

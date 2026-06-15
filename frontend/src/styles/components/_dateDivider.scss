@@ -1,0 +1,54 @@
+/* Date change divider */
+.row.dateDivider {
+  display: block;
+  color: #737373;
+  font-family: 'Hack', monospace;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 18px;
+  padding: 1px 0 0 0;
+  height: 29px;
+  position: relative;
+  text-align: center;
+  margin: 0;
+}
+
+.row.dateDivider .dateChange {
+  color: inherit;
+  font: inherit;
+}
+
+.row.dateDivider h3 {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0;
+  padding: 0 12px;
+  background: var(--chat-bg);
+  position: relative;
+  z-index: 1;
+}
+
+.row.dateDivider h3 .relTime {
+  margin-left: 6px;
+}
+
+.row.dateDivider::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
+  z-index: 0;
+}
+
+.dateWrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 2;
+}

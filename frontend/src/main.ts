@@ -1,6 +1,7 @@
 import { mount } from 'svelte';
 import App from './App.svelte';
 import './app.css';
+import './styles/main.scss';
 import './stores/slashCommandsInit';
 
 const el = document.getElementById('app');

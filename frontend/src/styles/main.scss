@@ -1,0 +1,34 @@
+// IRC Fiber global stylesheet
+// Split from the legacy public/style.css into SCSS partials.
+// Order matters: base → components → themes → layout utilities.
+
+@use 'base/variables';
+
+@use 'components/sidebar';
+@use 'components/contextMenus';
+@use 'components/userPopup';
+@use 'components/joinPartRows';
+@use 'components/floatingDate';
+@use 'components/dateDivider';
+@use 'components/groupedLines';
+@use 'components/overlays';
+@use 'components/discoGroups';
+@use 'components/seenDivider';
+@use 'components/statusCells';
+@use 'components/chatInput';
+@use 'components/memberList';
+@use 'components/pinnedChannels';
+@use 'components/accountMenu';
+@use 'components/nickColors';
+@use 'components/loadMore';
+@use 'components/addNetworkButton';
+@use 'components/addNetwork';
+@use 'components/messageGrouping';
+@use 'components/settings';
+
+@use 'themes/compact';
+@use 'themes/mono';
+@use 'themes/midnight';
+
+@use 'layout/sidebarLeft';
+@use 'layout/responsive';

@@ -1,0 +1,206 @@
+/* Buffer input cell */
+.bufferinputcell {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 12px;
+  background: #2a2d33;
+  border-top: 1px solid #1a1c20;
+  flex-shrink: 0;
+}
+
+.bufferinputcell .timecell {
+  display: none;
+}
+
+.bufferinputcell .nickinputcell {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  background: #1e2126;
+  border-radius: 4px;
+  padding: 6px 8px;
+  min-height: 32px;
+}
+.bufferinputcell .nickcell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.bufferinputcell .inputcell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.bufferinputcell .nickinput {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  margin-left: 3px;
+}
+
+.bufferinputcell .buffernick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  cursor: pointer;
+}
+.bufferinputcell .buffernick:hover .nick {
+  color: #58a6ff;
+}
+
+.bufferinputcell .buffernick .avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.bufferinputcell .buffernick .letterAvatar {
+  font-size: 13px;
+  line-height: 22px;
+  text-transform: uppercase;
+}
+
+.bufferinputcell .mode_prefix {
+  color: #3fb950;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.bufferinputcell .input {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.bufferinputcell .g {
+  display: none;
+}
+
+.bufferinputcell textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #d1d5db;
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  letter-spacing: normal;
+  resize: none;
+  outline: none;
+  min-height: 20px;
+  max-height: 200px;
+  padding: 2px 0 2px 8px;
+  line-height: 1.4;
+}
+
+.bufferinputcell textarea:focus {
+  outline: none;
+}
+
+.bufferinputcell textarea::placeholder {
+  color: #6e7681;
+}
+
+.bufferinputcell .lockcell {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6e7681;
+  font-size: 13px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin: 0 1px;
+}
+
+.bufferinputcell .lockcell .fa-lock {
+  font-size: 13px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.bufferinputcell .emojicell,
+.bufferinputcell .uploadcell {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: #8b949e;
+  font-size: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin: 0 1px;
+}
+
+.bufferinputcell .emojicell:hover,
+.bufferinputcell .uploadcell:hover {
+  background: rgba(255,255,255,0.06);
+  color: #d1d5db;
+}
+
+.bufferinputcell .timestampcell {
+  display: flex;
+  align-items: center;
+  color: #6e7681;
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-left: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Emoji picker popover */
+.emoji-popover {
+  position: absolute;
+  right: 12px;
+  bottom: 100%;
+  margin-bottom: 8px;
+  z-index: 1000;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  border: 1px solid #333;
+}
+.emoji-popover emoji-picker {
+  --background: #1e2126;
+  --border-color: #2c2f35;
+  --indicator-color: #1e72ff;
+  --input-border-color: #3a3a3a;
+  --button-hover-background: #2a2d33;
+  --button-active-background: #333;
+  --input-font-color: #d1d5db;
+  --input-placeholder-color: #6e7681;
+  --category-font-color: #b6b6b6;
+  --outline-color: #1e72ff;
+  width: 320px;
+  height: 360px;
+}
+.bufferinputcell {
+  position: relative;
+}
+
+/* Hide old message-input since we replaced it with bufferinputcell */
+.message-input {
+  display: none !important;
+}

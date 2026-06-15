@@ -1,0 +1,42 @@
+/* Floating scroll date header */
+.scroll-date-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: none;
+  padding: 6px 16px;
+  background: var(--chat-bg);
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  pointer-events: none;
+  line-height: 18px;
+  height: 29px;
+}
+
+.scroll-date-header.visible {
+  display: block;
+}
+
+.scroll-date-header h3 {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0;
+  padding: 0 12px;
+  background: var(--chat-bg);
+  position: relative;
+  z-index: 1;
+}
+
+.scroll-date-header::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
+  z-index: 0;
+}

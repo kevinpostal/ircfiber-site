@@ -1,0 +1,36 @@
+/* Sidebar pinned channels - IRCCloud style */
+.bufferList.pinnedBuffers {
+  margin: 0 0 10px 0;
+  padding: 0;
+  list-style: none;
+  border-bottom: none;
+}
+.bufferList.pinnedBuffers h2 {
+  position: relative;
+  margin: 0;
+  padding: 7px 0 7px 12px;
+  font-size: 15px;
+  color: #d9d9d9;
+  font-weight: 400;
+  font-family: inherit;
+  border-left: 5px solid #262626;
+  background: #333;
+  border-radius: 0 4px 4px 0;
+  line-height: 18px;
+}
+.bufferList.pinnedBuffers h2 .fa-thumb-tack {
+  margin-right: 5px;
+  font-size: 13px;
+}
+.pinnedBufferList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pinnedBufferList .buffer-item {
+  margin: 0;
+  padding-left: 0;
+}
+/* Keep old pinned classes for backwards compat if needed elsewhere */
+.pinned-channels { margin-bottom: 0.25rem; }
+.pin-icon { font-size: 0.75rem; }

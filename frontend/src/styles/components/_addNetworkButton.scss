@@ -1,0 +1,35 @@
+/* Add Network Button — IRCCloud style */
+.addNetworkButtonContainer {
+  padding: 3px 0 4px 17px;
+  width: 100%;
+  box-sizing: border-box;
+  background: #000;
+  display: flex;
+  justify-content: flex-start;
+  box-shadow: inset 5px 0 #333;
+}
+
+.addNetworkButton {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  color: #d9d9d9;
+  font-size: 14px;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 1px 10px 4px 10px;
+}
+
+.addNetworkButton:hover {
+  color: #fff;
+}
+
+

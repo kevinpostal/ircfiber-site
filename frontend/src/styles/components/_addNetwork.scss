@@ -1,0 +1,544 @@
+/* Add Network Page Container */
+#add-network-container {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: #333333;
+  padding: 1.5rem 2rem;
+  overflow-y: auto;
+  position: relative;
+}
+
+#add-network-container.show {
+  display: flex;
+}
+
+#add-network-container .bufferHead {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+#add-network-contents {
+  max-width: 640px;
+}
+
+.addNetworkForm .form {
+  margin-bottom: 1rem;
+}
+
+.addNetworkForm label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.addNetworkForm label small.explanation {
+  font-weight: 400;
+  color: var(--text-secondary);
+  margin-left: 0.25rem;
+}
+
+.addNetworkForm .input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: #21252b;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+}
+
+.addNetworkForm .input:focus {
+  outline: none;
+  border-color: #1E72FF;
+  box-shadow: 0 0 0 2px rgba(30,114,255,0.15);
+}
+
+.addNetworkForm select.input {
+  appearance: auto;
+  cursor: pointer;
+}
+
+.addNetworkSubmit {
+  margin-top: 1.5rem;
+}
+
+.addNetworkSubmit .action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.625rem 1.25rem;
+  background: var(--accent);
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 1px 0 rgba(0,0,0,0.3);
+  text-shadow: 0 1px rgba(0,0,0,0.3);
+}
+
+.addNetworkSubmit .action:hover {
+  opacity: 0.9;
+}
+
+#add-network-container .close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.25rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#add-network-container .close:hover {
+  color: var(--text-primary);
+}
+
+#add-network-container .close span::before {
+  content: "×";
+}
+
+.userError {
+  color: #f85149;
+  font-size: 0.875rem;
+  margin: 0.25rem 0 0.75rem;
+}
+
+/* Hide chat when add-network page is shown */
+#app.add-network-active main.chat-container {
+  display: none;
+}
+
+#app.add-network-active #add-network-container {
+  display: flex;
+}
+
+/* IRCCloud-style Add Network form tables */
+.addNetworkCells {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.addNetworkCells th {
+  text-align: left;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  padding: 0 0.5rem 0.25rem 0;
+}
+
+.addNetworkCells td {
+  padding: 0 0.5rem 0.5rem 0;
+  vertical-align: top;
+}
+
+.addNetworkCells td:last-child,
+.addNetworkCells th:last-child {
+  padding-right: 0;
+}
+
+.networkEditorCells__network .hostname {
+  width: 60%;
+}
+
+.networkEditorCells__network .port {
+  width: 90px;
+}
+
+.networkEditorCells__network .ssl {
+  width: auto;
+  white-space: nowrap;
+}
+
+.networkEditorCells .nickname,
+.networkEditorCells .realname {
+  width: 50%;
+}
+
+.addNetworkHeading {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 1.25rem 0 0.5rem;
+}
+
+.networkEditorHeading__Identity {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.addNetworkAdvancedContainer {
+  margin: 0.5rem 0 1rem;
+}
+
+.addNetworkAdvancedHeading a {
+  color: var(--text-primary);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.9375rem;
+}
+
+.addNetworkAdvancedHeading a:hover {
+  color: var(--link);
+}
+
+.networkEditor__container--collapsed .addNetworkCells,
+.networkEditor__container--collapsed .networkEditorCells {
+  display: none;
+}
+
+.networkEditor__container--collapsed .addNetworkAdvancedHeading a::before {
+  content: "▸ ";
+}
+
+.networkEditor__container:not(.networkEditor__container--collapsed) .addNetworkAdvancedHeading a::before {
+  content: "▾ ";
+}
+
+/* ── Network form modal (overlaid version) ── */
+.overlay-panel.network-form-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+  width: 780px;
+  max-width: 96vw;
+  max-height: 92vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+  margin: 0;
+}
+.overlay-panel.network-form-panel .overlay-close {
+  display: block;
+  z-index: 2;
+}
+.add-network-prompt {
+  padding: 28px 36px 22px;
+  font-size: 0.9375rem;
+}
+.add-network-prompt .mainHeading {
+  margin: 0 0 22px 0;
+  padding: 0 0 16px 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: #d1d5db;
+  border-bottom: 1px solid #2c2f35;
+}
+.add-network-prompt .addNetworkForm { margin: 0; }
+.add-network-prompt .addNetworkForm .addNetworkCells,
+.add-network-prompt .addNetworkForm .networkEditorCells {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+.add-network-prompt .addNetworkForm > table.addNetworkCells:first-of-type,
+.add-network-prompt .addNetworkForm > table.networkEditorCells:nth-of-type(1) {
+  margin-top: 0.5rem;
+}
+.add-network-prompt .addNetworkForm th {
+  text-align: left;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: #b6b6b6;
+  padding: 0 0 0.5rem 0;
+  text-transform: none;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.add-network-prompt .addNetworkForm th label {
+  display: block;
+  width: 100%;
+}
+.add-network-prompt .addNetworkForm th.networkEditorHeading {
+  padding: 1rem 0 1.25rem 0;
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: #d1d5db;
+  text-transform: none;
+  border-top: 1px solid #2c2f35;
+  border-bottom: 1px solid #2c2f35;
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.add-network-prompt .addNetworkForm th.networkEditorHeading i {
+  color: #8b949e;
+  font-size: 1.125rem;
+}
+.add-network-prompt .addNetworkForm td {
+  padding: 0 0 0.875rem 0;
+  vertical-align: top;
+}
+.add-network-prompt .addNetworkForm th.optional {
+  font-weight: 400;
+  color: #6e7681;
+  font-size: 0.875rem;
+}
+.add-network-prompt .addNetworkForm th.optional small.explanation {
+  font-weight: 400;
+  color: #6e7681;
+  font-size: 0.8125rem;
+  display: block;
+  margin-top: 0.25rem;
+  margin-left: 0;
+  line-height: 1.45;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  white-space: normal;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.add-network-prompt .addNetworkForm .networkEditorCells__identity th {
+  padding-top: 1.25rem;
+  padding-bottom: 0.5rem;
+  font-size: 0.9375rem;
+  color: #b6b6b6;
+  font-weight: 500;
+}
+.add-network-prompt .addNetworkForm .networkEditorCells__identity td {
+  padding-bottom: 1.25rem;
+}
+.add-network-prompt .addNetworkForm .input {
+  width: 100%;
+  padding: 0.625rem 0.875rem;
+  background: #0d0f12;
+  border: 1px solid #2c2f35;
+  border-radius: 4px;
+  color: #d1d5db;
+  font-size: 0.9375rem;
+  box-sizing: border-box;
+  font-family: inherit;
+  line-height: 1.3;
+  height: 42px;
+}
+.add-network-prompt .addNetworkForm .input:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25);
+}
+.add-network-prompt .addNetworkForm select.input {
+  appearance: auto;
+  cursor: pointer;
+}
+.add-network-prompt .addNetworkForm textarea.input {
+  resize: vertical;
+  min-height: 80px;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  height: auto;
+  line-height: 1.5;
+}
+.add-network-prompt .addNetworkForm label small.explanation {
+  font-weight: 400;
+  color: #6e7681;
+  margin-left: 0.25rem;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+.add-network-prompt .addNetworkForm label small.explanation code {
+  background: #21252b;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  color: #d1d5db;
+}
+.add-network-prompt .addNetworkCells .hostname { width: 50%; }
+.add-network-prompt .addNetworkCells .port { width: 110px; }
+.add-network-prompt .addNetworkCells .ssl { width: auto; white-space: nowrap; }
+.add-network-prompt .networkEditorCells__network .hostname { width: 60%; }
+.add-network-prompt .networkEditorCells__network .port { width: 110px; }
+.add-network-prompt .networkEditorCells__network .ssl {
+  width: auto;
+  white-space: nowrap;
+  padding-left: 1rem;
+  vertical-align: bottom;
+}
+.add-network-prompt .networkEditorCells__identity .nickname,
+.add-network-prompt .networkEditorCells__identity .realname { width: 50%; }
+.add-network-prompt .addNetworkAdvancedContainer { margin: 0.5rem 0 0.5rem; }
+.add-network-prompt .addNetworkAdvancedHeading {
+  margin: 0;
+  padding: 0.75rem 0;
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: #d1d5db;
+  border-top: 1px solid #2c2f35;
+  border-bottom: 1px solid #2c2f35;
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+.add-network-prompt .addNetworkAdvancedHeading button {
+  background: transparent;
+  border: none;
+  color: #d1d5db;
+  font: inherit;
+  font-weight: 500;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  outline: none;
+}
+.add-network-prompt .addNetworkAdvancedHeading button:focus,
+.add-network-prompt .addNetworkAdvancedHeading button:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.add-network-prompt .addNetworkAdvancedHeading button:hover { color: #58a6ff; }
+.add-network-prompt .addNetworkAdvancedHeading button i {
+  color: #8b949e;
+  font-size: 1rem;
+}
+.add-network-prompt .addNetworkAdvancedHeading .caret { font-size: 0.75rem; color: #6e7681; }
+.add-network-prompt .advanced-section { margin-top: 0.5rem; }
+.add-network-prompt .passwordRow {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  width: 100%;
+}
+.add-network-prompt .passwordRow .input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+.add-network-prompt .passwordRow .reveal {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #d1d5db;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  height: 42px;
+  line-height: 42px;
+}
+.add-network-prompt .passwordRow .reveal input {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.add-network-prompt .securePortRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #d1d5db;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  height: 42px;
+  line-height: 42px;
+}
+.add-network-prompt .securePortRow input {
+  margin: 0;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+.add-network-prompt .securePortRow i { color: #58a6ff; font-size: 1rem; }
+.add-network-prompt .reconnectNote {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.5rem;
+  color: #6e7681;
+  font-size: 0.875rem;
+  margin-right: auto;
+}
+.add-network-prompt .formButtons {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid #2c2f35;
+}
+.add-network-prompt .formButtons .action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.625rem 1.5rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  min-width: 90px;
+}
+.add-network-prompt .formButtons .action.secondary {
+  background: #1e72ff;
+  color: #fff;
+  border-color: #1e72ff;
+}
+.add-network-prompt .formButtons .action.secondary:hover { background: #155fcc; border-color: #155fcc; }
+.add-network-prompt .formButtons .action.primary {
+  background: #2ea043;
+  color: #fff;
+  border-color: #2ea043;
+}
+.add-network-prompt .formButtons .action.primary:hover { background: #3fb950; border-color: #3fb950; }
+.add-network-prompt .formButtons .action:disabled { opacity: 0.5; cursor: not-allowed; }
+.add-network-prompt .userError {
+  color: #f85149;
+  font-size: 0.875rem;
+  margin: 0.5rem 0 0 0;
+  padding: 0.5rem 0.75rem;
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 4px;
+}
+
+#add-network-container .overlaycontainer {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+#add-network-container .overlaycontainer .close {
+  position: static;
+}
+
+#service-status-bar {
+  background: #da3633;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  text-align: center;
+  flex-shrink: 0;
+  border-bottom: 1px solid #b62318;
+  font-weight: 600;
+  text-shadow: 0 1px rgba(0,0,0,0.3);
+}

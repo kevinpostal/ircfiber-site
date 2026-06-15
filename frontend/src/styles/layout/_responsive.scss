@@ -1,0 +1,87 @@
+/* ==========================================================================
+   Mobile / responsive layout (IRCCloud-style)
+   On narrow screens the buffer sidebar and the member list become
+   right-side slide-over drawers, toggled from the buffer header.
+   ========================================================================== */
+
+/* Mobile browsers' URL bar makes 100vh taller than the visible area;
+   dvh tracks the real visible viewport. */
+@supports (height: 100dvh) {
+  html, body, #app, #wrap { height: 100dvh; }
+}
+
+/* Hidden on desktop; the media query below reveals them. */
+.bufferHead .sidebarToggle { display: none; }
+.drawer-backdrop { display: none; }
+
+.content-row { position: relative; }
+
+@media (max-width: 800px) {
+  #wrap { grid-template-columns: 1fr; }
+
+  /* Buffer/network sidebar -> fixed right-side drawer */
+  #sidebar {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(85vw, 300px);
+    transform: translateX(102%);
+    transition: transform 0.25s ease;
+    z-index: 210;
+    box-shadow: -6px 0 24px rgba(0, 0, 0, 0.6);
+  }
+  #wrap.sidebar-open #sidebar { transform: none; }
+
+  .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 200;
+  }
+
+  /* Hamburger in the buffer header */
+  .bufferHead .sidebarToggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin: -6px 0 -6px 4px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: #ccc;
+    font-size: 17px;
+    cursor: pointer;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .bufferHead .sidebarToggle:active { background: rgba(255, 255, 255, 0.1); }
+
+  /* Member list -> slide-over inside the chat area. Overrides both the
+     default width-based show/collapse rules so the chat never shrinks. */
+  #member-sidebar,
+  #member-sidebar.show,
+  #wrap.members-collapsed #member-sidebar.show {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(75vw, 220px);
+    transform: translateX(102%);
+    transition: transform 0.25s ease;
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.5);
+    z-index: 205;
+  }
+  #wrap.mobile-members-open #member-sidebar.show { transform: none; }
+
+  /* Touch-friendly sizing */
+  .bufferHead { padding-left: 12px; }
+  #sidebar .buffer-item .buffer { padding-top: 7px; padding-bottom: 7px; }
+  /* gear is hover-revealed on desktop; there is no hover on touch */
+  .network-header .bufferOptions { visibility: visible; }
+  /* 16px stops iOS Safari from zooming the page on input focus */
+  .bufferinputcell textarea { font-size: 16px; }
+}

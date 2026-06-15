@@ -1,0 +1,411 @@
+/* joinPart rows (JOIN/PART/QUIT/NICK/CHGHOST) — timestamp on right like all messages */
+.row.messageRow.joinPart {
+  color: #8b949e;
+  font-size: 13px;
+  background: transparent;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.row.messageRow.joinPart.firstAuthor {
+  padding-top: 6px;
+}
+.row.messageRow.joinPart .date {
+  top: 2px;
+}
+.row.messageRow.joinPart.firstAuthor .date {
+  top: 2px;
+}
+.row.messageRow.joinPart .content {
+  color: inherit;
+  display: inline;
+}
+.row.messageRow.joinPart .prefix {
+  color: #6e7681;
+  user-select: none;
+}
+
+/* Reset .buffer from sidebar flex to inline inside message content */
+.row.messageRow .content .buffer,
+.row.messageRow .content .bufferLink,
+.row.messageRow .sentence .buffer,
+.row.messageRow .sentence .bufferLink,
+.row.messageRow .authorWrap .buffer,
+.row.messageRow .authorWrap .bufferLink {
+  display: inline !important;
+  width: auto !important;
+}
+
+.row.messageRow.status.monospace {
+  font-family: var(--font-mono);
+  padding-bottom: 0;
+  line-height: 1.3;
+}
+.row.messageRow.status.monospace .content {
+  line-height: inherit;
+}
+
+/* Full-width MOTD/info rows matching IRCCloud */
+.row.messageRow.type_motd_response {
+  padding: 10px;
+  border-radius: 3px;
+  background: #404040;
+}
+.row.messageRow.type_info_response {
+  padding: 10px;
+}
+.row.messageRow.type_motd_response .date {
+  display: none;
+}
+.row.messageRow.type_motd_response .message,
+.row.messageRow.type_motd_response .content {
+  padding-right: 0;
+}
+
+/* Prefix symbols for join/part/quit/nick (→ ← ↔) */
+.row.messageRow.status .prefix,
+.row.groupedJoinPart .prefix {
+  color: #6e7681;
+  user-select: none;
+}
+
+/* Clickable nicks in status rows */
+.row.messageRow.status .bufferLink.user {
+  color: #d1d5db;
+  cursor: pointer;
+}
+.row.messageRow.status .bufferLink.user:hover {
+  color: #fff;
+  text-decoration: underline;
+}
+
+/* Collapse widget on individual join/part/quit/nick rows */
+.row.messageRow.status .collapseWidget {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  color: #6e7681;
+  cursor: pointer;
+}
+
+.row.messageRow.type_joined_channel .collapseWidget,
+.row.messageRow.type_parted_channel .collapseWidget,
+.row.messageRow.type_quit .collapseWidget,
+.row.messageRow.type_nickchange .collapseWidget,
+.row.messageRow.type_chghost .collapseWidget,
+.row.messageRow.type_away .collapseWidget {
+    display: none;
+}
+
+.row.messageRow.status .collapseWidget i {
+  font-size: 12px;
+}
+
+.row.messageRow.status .collapseWidget .expandIcon,
+.row.messageRow.status .collapseWidget .collapsedIcon {
+  display: none;
+}
+
+/* Show > inside expanded joinPart group */
+.collapseGroup.joinPartGroup .collapseWidget {
+  display: inline-flex !important;
+}
+
+.collapseGroup.joinPartGroup .collapseWidget .collapseIcon,
+.collapseGroup.joinPartGroup .collapseWidget .expandIcon {
+  display: none;
+}
+
+.collapseGroup.joinPartGroup .collapseWidget .collapsedIcon {
+  display: inline;
+}
+
+/* IRCCloud-style type classes */
+.row.messageRow.type_joined_channel,
+.row.messageRow.type_parted_channel,
+.row.messageRow.type_quit,
+.row.messageRow.type_nickchange,
+.row.messageRow.type_chghost,
+.row.messageRow.type_kick,
+.row.messageRow.type_away {
+  color: #8b949e;
+  font-size: 13px;
+}
+
+.row.messageRow.type_kick .bufferLink.user {
+  color: #a6a6a6;
+}
+
+/* Grouped join/part rows */
+.row.groupedJoinPart {
+  cursor: pointer;
+  white-space: normal;
+  padding-right: 118px;
+}
+
+.row.groupedJoinPart .collapseWidget {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  color: #6e7681;
+}
+
+.row.groupedJoinPart.collapsedHead .collapseIcon,
+.row.groupedJoinPart .expandIcon {
+  display: none;
+}
+
+.row.groupedJoinPart.collapsedHead .expandIcon {
+  display: inline;
+}
+
+.row.groupedJoinPart.collapsedHead .collapseIcon {
+  display: none;
+}
+
+.row.groupedJoinPart:not(.collapsedHead) .collapseIcon {
+  display: inline;
+}
+
+.row.groupedJoinPart:not(.collapsedHead) .expandIcon {
+  display: none;
+}
+
+.row.groupedJoinPart .message {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  box-sizing: border-box;
+}
+
+.row.groupedJoinPart .sentence {
+  color: #8b949e;
+  display: inline;
+  white-space: normal;
+}
+
+.row.groupedJoinPart .sentence .bullet {
+  color: #555;
+  margin: 0 6px;
+}
+
+.collapseGroup.joinPartGroup {
+  padding-left: 0;
+}
+
+.row.part.groupedJoinPartPart {
+  padding: 2px 80px 2px 68px;
+  color: #8b949e;
+  font-size: 13px;
+  background: transparent;
+}
+.row.part.groupedJoinPartPart .date {
+  top: 2px;
+}
+
+.row.part.groupedJoinPartPart hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
+.row.messageRow.highlight {
+  box-shadow: inset 5px 0 0 0 #1e72ff;
+}
+
+.row.messageRow.action {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+.row.messageRow.action .author::before {
+  content: '* ';
+  color: var(--text-tertiary);
+}
+
+.row.messageRow.type_notice {
+  color: #8b949e;
+}
+
+.row.messageRow .date {
+  position: absolute;
+  right: 0;
+  bottom: 3px;
+  text-align: right;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  user-select: none;
+  white-space: nowrap;
+  z-index: 1;
+  padding-right: 10px;
+}
+
+/* Timestamps align at top: 3px for all row types */
+
+.row.messageRow.firstAuthor {
+  padding-top: 6px;
+}
+
+.row.messageRow > .g {
+  display: none;
+}
+
+.row.messageRow .authorWrap .g {
+  display: none;
+}
+
+.row.messageRow .message {
+  display: block;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.row.messageRow .timestamp {
+  cursor: default;
+  white-space: nowrap;
+}
+
+.row.messageRow .content {
+  display: block;
+  width: 100%;
+  color: var(--text-primary);
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  overflow: hidden;
+  box-sizing: border-box;
+  padding-right: 118px;
+}
+
+/* Monospace / pre-wrap only for colored/formatted spans so tables
+   and box-drawing line up, while normal messages collapse whitespace.
+   line-height:1 + padding:0 so wrapped bg-color spans (ANSI art) touch
+   edge-to-edge with no descender gap — at the row's 1.15 line-height
+   the gap shows up as a thin black sliver between teal/green/etc. lines. */
+.row.messageRow .content span.irccolor,
+.row.messageRow .content span.monospace,
+.row.messageRow .content .groupedLines {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  line-height: 1;
+  padding: 0;
+}
+
+.row.messageRow .content a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.row.messageRow .content a:hover {
+  text-decoration: underline;
+}
+
+.row.messageRow .authorWrap {
+  display: inline-block;
+  width: 100%;
+  height: 24px;
+  overflow: hidden;
+  margin-bottom: -7px;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.row.messageRow .author {
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.row.messageRow .letterAvatar,
+.stickyAvatar .letterAvatar {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  user-select: none;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.3);
+  background-color: #142b43;
+  color: #000;
+}
+.row.messageRow .letterAvatar {
+  top: 8px;
+  left: 25px;
+}
+.stickyAvatar .letterAvatar {
+  top: 0;
+  left: 25px;
+}
+
+.row.messageRow .letterAvatar span,
+.stickyAvatar .letterAvatar span {
+  position: absolute;
+  display: block;
+  width: 100%;
+  text-align: center;
+  text-transform: uppercase;
+  font-size: 14px;
+  line-height: 20px;
+  margin: 6px 0;
+  font-family: "Source Sans Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-weight: 500;
+}
+
+.row.messageRow .author-bot {
+  display: inline-block;
+  background: rgba(255,255,255,0.1);
+  color: var(--text-tertiary);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 3px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+.row.messageRow .mode_prefix {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  margin-right: 3px;
+  user-select: none;
+}
+
+.row.messageRow .mode_prefix.mode_symbol {
+  display: inline;
+}
+
+.row.messageRow .mode_prefix.mode_pill {
+  display: none;
+}
+.row.messageRow .mode_prefix.mode_OPER {
+  color: #e02305;
+}
+.row.messageRow .mode_prefix.mode_OWNER {
+  color: #e7aa00;
+}
+.row.messageRow .mode_prefix.mode_ADMIN {
+  color: #6500a5;
+}
+.row.messageRow .mode_prefix.mode_OP {
+  color: #ba1719;
+}
+.row.messageRow .mode_prefix.mode_HALFOP {
+  color: #b55900;
+}
+.row.messageRow .mode_prefix.mode_VOICED {
+  color: #25b100;
+}
+.row.messageRow .mode_prefix.mode_MEMBER {
+  color: #777;
+}
+
+.row.messageRow .author-realname {
+  color: #737373;
+  font-size: 14px;
+  font-weight: 400;
+  margin-left: 4px;
+}

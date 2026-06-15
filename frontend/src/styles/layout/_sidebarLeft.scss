@@ -1,0 +1,17 @@
+/* ============================================================
+   Sidebar-left mode — swap the grid columns
+   ============================================================ */
+
+#app.sidebar-left #wrap {
+  grid-template-columns: 200px 1fr;
+}
+
+#app.sidebar-left #wrap .main-area {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+#app.sidebar-left #wrap #sidebar {
+  grid-column: 1;
+  grid-row: 1;
+}

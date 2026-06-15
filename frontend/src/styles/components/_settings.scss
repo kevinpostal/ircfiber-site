@@ -1,0 +1,586 @@
+/* ============================================================
+   Settings Page — IRCCloud-style settings panel
+   ============================================================ */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #2c2f35;
+  background: #1a1d21;
+  flex-shrink: 0;
+  padding: 0 16px;
+  min-height: 44px;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 0;
+  height: 100%;
+}
+
+.settings-tab {
+  background: transparent;
+  border: none;
+  color: #8b949e;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 12px 16px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.settings-tab:hover {
+  color: #d1d5db;
+}
+
+.settings-tab.active {
+  color: #d1d5db;
+  border-bottom-color: #1e72ff;
+}
+
+.settings-done {
+  background: #238636;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  transition: background 0.15s;
+}
+
+.settings-done:hover {
+  background: #2ea043;
+}
+
+.settings-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+  background: #000;
+}
+
+.settings-section {
+  border-bottom: 1px solid #2c2f35;
+}
+
+.settings-section:last-child {
+  border-bottom: none;
+}
+
+.settings-section--danger {
+  border-left: 3px solid #f85149;
+  margin: 0 0 0 0;
+  background: rgba(248,81,73,0.03);
+}
+
+.settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d1d5db;
+  padding: 16px 20px 12px 20px;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.settings-section-title i {
+  color: #8b949e;
+  font-size: 14px;
+  width: 18px;
+  text-align: center;
+}
+
+.settings-rows {
+  padding: 0 20px 8px 20px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 8px 0;
+  gap: 24px;
+}
+
+.settings-label {
+  flex: 1;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.settings-label-text {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #d1d5db;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.4;
+}
+
+.settings-label-desc {
+  display: block;
+  font-size: 11px;
+  color: #6e7681;
+  margin-top: 2px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.4;
+}
+
+.settings-control {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  min-width: 120px;
+  justify-content: flex-end;
+}
+
+/* ── Toggle switch (iOS-style) ── */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #555;
+  transition: background-color 0.2s;
+  border-radius: 20px;
+}
+
+.toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #fff;
+  transition: transform 0.2s;
+  border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #1e72ff;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(16px);
+}
+
+/* ── Select dropdown ── */
+.settings-select {
+  background: #0d1117;
+  border: 1px solid #2c2f35;
+  border-radius: 4px;
+  color: #d1d5db;
+  padding: 6px 28px 6px 10px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b949e'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  min-width: 140px;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25);
+}
+
+/* ── Range slider (font size) ── */
+.settings-range-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100px;
+  height: 4px;
+  background: #2c2f35;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #58a6ff;
+  cursor: pointer;
+  border: none;
+}
+
+.settings-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #58a6ff;
+  cursor: pointer;
+  border: none;
+}
+
+.settings-range-value {
+  font-size: 12px;
+  color: #8b949e;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-width: 30px;
+}
+
+/* ── Text input ── */
+.settings-input {
+  background: #0d1117;
+  border: 1px solid #2c2f35;
+  border-radius: 4px;
+  color: #d1d5db;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.settings-input:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25);
+}
+
+.settings-input::placeholder {
+  color: #6e7681;
+}
+
+/* ── Textarea ── */
+.settings-textarea {
+  background: #0d1117;
+  border: 1px solid #2c2f35;
+  border-radius: 4px;
+  color: #d1d5db;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: 'Hack', 'SFMono-Regular', Consolas, monospace;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
+}
+
+.settings-textarea:focus {
+  outline: none;
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.25);
+}
+
+.settings-textarea::placeholder {
+  color: #6e7681;
+}
+
+/* ── Buttons ── */
+.settings-btn {
+  background: #2c2f35;
+  color: #d1d5db;
+  border: 1px solid #3a3f47;
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.settings-btn:hover {
+  background: #3a3f47;
+  border-color: #4a4f57;
+}
+
+.settings-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.settings-btn--secondary {
+  background: transparent;
+  border-color: #2c2f35;
+  color: #8b949e;
+}
+
+.settings-btn--secondary:hover {
+  color: #d1d5db;
+  border-color: #3a3f47;
+  background: #1a1d21;
+}
+
+.settings-btn--danger {
+  background: transparent;
+  border-color: #f85149;
+  color: #f85149;
+}
+
+.settings-btn--danger:hover {
+  background: rgba(248,81,73,0.1);
+}
+
+.settings-btn--small {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+/* ── Read-only value ── */
+.settings-value {
+  font-size: 12px;
+  color: #8b949e;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ── Highlight chips ── */
+.settings-highlight-area {
+  width: 100%;
+}
+
+.settings-highlight-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.settings-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #1a1d21;
+  border: 1px solid #2c2f35;
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #d1d5db;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.settings-chip-remove {
+  background: transparent;
+  border: none;
+  color: #6e7681;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-chip-remove:hover {
+  color: #f85149;
+}
+
+.settings-highlight-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.settings-highlight-input-row .settings-input {
+  flex: 1;
+}
+
+.settings-empty {
+  font-size: 12px;
+  color: #6e7681;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  padding: 4px 0;
+}
+
+/* ── Error / Success / Warning messages ── */
+.settings-error {
+  font-size: 12px;
+  color: #f85149;
+  margin: 4px 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.settings-success {
+  font-size: 12px;
+  color: #3fb950;
+  padding: 8px 20px;
+  background: rgba(63,185,80,0.08);
+  border-bottom: 1px solid rgba(63,185,80,0.15);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.settings-warning {
+  font-size: 12px;
+  color: #d1d5db;
+  margin: 0 0 8px 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+}
+
+/* ── Password form ── */
+.settings-password-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 200px;
+}
+
+.settings-password-form .settings-input {
+  width: 100%;
+}
+
+.settings-password-form .settings-btn {
+  align-self: flex-start;
+}
+
+/* ── Avatar area ── */
+.settings-avatar-area {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #1a1d21;
+  border: 2px solid #2c2f35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.settings-avatar-placeholder {
+  font-size: 20px;
+  font-weight: 600;
+  color: #8b949e;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.settings-avatar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-file-input {
+  display: none;
+}
+
+/* ── Delete confirm ── */
+.settings-delete-confirm {
+  max-width: 320px;
+}
+
+.settings-delete-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* ── Theme selector ── */
+.theme-selector {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.theme-option.active {
+  border-color: #58a6ff;
+}
+
+.theme-option input[type="radio"] {
+  display: none;
+}
+
+.theme-preview {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid #2c2f35;
+  display: block;
+}
+
+.theme-preview--auto {
+  background: linear-gradient(135deg, #1a1d21 50%, #f0f0f0 50%);
+}
+
+.theme-preview--dark {
+  background: #1a1d21;
+}
+
+.theme-preview--midnight {
+  background: #000;
+}
+
+.theme-label {
+  font-size: 10px;
+  color: #8b949e;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ── Custom CSS area ── */
+.settings-css-area {
+  min-width: 240px;
+}
+
+.settings-css-actions {
+  margin-top: 6px;
+  display: flex;
+  justify-content: flex-end;
+}
