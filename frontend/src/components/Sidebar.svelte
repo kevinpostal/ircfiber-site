@@ -161,11 +161,14 @@
           <div class="sidebar-section-header inactive-header"
                role="button" tabindex="0"
                onclick={() => { net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); }}
-               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); } }}>
+               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); } }}
+               aria-expanded={!(net.inactiveCollapsed ?? false)}>
             <span class="inactive-header-label">Inactive</span>
-            <button type="button" class="inactive-header-toggle" aria-expanded={!(net.inactiveCollapsed ?? false)}
+            <button type="button" class="inactive-header-toggle"
+                    title={net.inactiveCollapsed ? 'Expand' : 'Collapse'}
+                    aria-label={net.inactiveCollapsed ? 'Expand Inactive' : 'Collapse Inactive'}
                     onclick={(e) => { e.stopPropagation(); net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); }}>
-              <i class="fa fa-{net.inactiveCollapsed ? 'plus-square-o' : 'minus-square-o'}" aria-hidden="true"></i>
+              <i class="fa fa-chevron-{net.inactiveCollapsed ? 'right' : 'down'}" aria-hidden="true"></i>
             </button>
           </div>
           {#if !(net.inactiveCollapsed ?? false)}
@@ -188,13 +191,19 @@
           .filter(key => key.startsWith(`${net.networkId}:`) && archivedMap[key] && !hiddenChannelsMap[key])
           .map(key => key.slice(net.networkId.length + 1))}
         {#if archived.length > 0}
-          <p class="archiveToggle">
-            <button type="button"
-                    aria-expanded={!(net.archivesCollapsed ?? true)}
-                    onclick={() => { net.archivesCollapsed = !(net.archivesCollapsed ?? true); }}>
-              Archives
+          <div class="sidebar-section-header archive-header"
+               role="button" tabindex="0"
+               onclick={() => { net.archivesCollapsed = !(net.archivesCollapsed ?? true); }}
+               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); net.archivesCollapsed = !(net.archivesCollapsed ?? true); } }}
+               aria-expanded={!(net.archivesCollapsed ?? true)}>
+            <span class="archive-header-label">Archives</span>
+            <button type="button" class="archive-header-toggle"
+                    title={net.archivesCollapsed ? 'Expand' : 'Collapse'}
+                    aria-label={net.archivesCollapsed ? 'Expand Archives' : 'Collapse Archives'}
+                    onclick={(e) => { e.stopPropagation(); net.archivesCollapsed = !(net.archivesCollapsed ?? true); }}>
+              <i class="fa fa-chevron-{net.archivesCollapsed ? 'right' : 'down'}" aria-hidden="true"></i>
             </button>
-          </p>
+          </div>
           {#if !(net.archivesCollapsed ?? true)}
             <ul class="buffers archived-channels">
               {#each archived as bufName (net.networkId + ':' + bufName)}
