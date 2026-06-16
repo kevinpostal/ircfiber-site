@@ -81,9 +81,9 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header.selected .buffer .network-shield,
 .network-header.active .buffer .network-shield { color: #333; }
 .network-header .buffer .bufferOptions { visibility: hidden; font-size: 18px; padding: 2px; margin: 0 8px 0 auto; color: #a6a6a6; background: none; border: none; cursor: pointer; flex-shrink: 0; }
-.network-list .connection:hover .bufferOptions,
-.network-list .connection:focus .bufferOptions,
-.network-list .connection:focus-within .bufferOptions { visibility: visible; }
+.network-list .network-header:hover .bufferOptions,
+.network-list .network-header:focus-within .bufferOptions,
+.network-list .bufferOptions:focus-visible { visibility: visible; }
 .network-list .buffer .bufferOptions { color: #a6a6a6; }
 .network-list .buffer:hover .bufferOptions,
 .network-list .buffer:focus .bufferOptions,
