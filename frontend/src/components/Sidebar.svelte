@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState } from '../stores/ircStore.svelte';
-  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
   import { updateCollapsed } from '../stores/api';
   import type { Buffer } from '../types';
@@ -157,21 +157,22 @@
           {/each}
         </ul>
         {@const inactive = net.buffers.filter(b => b.name !== '_server' && b.isJoined === false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])}
+        {@const inactiveIsCollapsed = inactiveCollapsedMap[net.networkId] ?? false}
         {#if inactive.length > 0}
           <div class="sidebar-section-header inactive-header"
                role="button" tabindex="0"
-               onclick={() => { net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); }}
-               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); } }}
-               aria-expanded={!(net.inactiveCollapsed ?? false)}>
+               onclick={() => { inactiveCollapsedMap[net.networkId] = !inactiveIsCollapsed; }}
+               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inactiveCollapsedMap[net.networkId] = !inactiveIsCollapsed; } }}
+               aria-expanded={!inactiveIsCollapsed}>
             <span class="inactive-header-label">Inactive</span>
             <button type="button" class="inactive-header-toggle"
-                    title={net.inactiveCollapsed ? 'Expand' : 'Collapse'}
-                    aria-label={net.inactiveCollapsed ? 'Expand Inactive' : 'Collapse Inactive'}
-                    onclick={(e) => { e.stopPropagation(); net.inactiveCollapsed = !(net.inactiveCollapsed ?? false); }}>
-              <i class="fa fa-chevron-{net.inactiveCollapsed ? 'right' : 'down'}" aria-hidden="true"></i>
+                    title={inactiveIsCollapsed ? 'Expand' : 'Collapse'}
+                    aria-label={inactiveIsCollapsed ? 'Expand Inactive' : 'Collapse Inactive'}
+                    onclick={(e) => { e.stopPropagation(); inactiveCollapsedMap[net.networkId] = !inactiveIsCollapsed; }}>
+              <i class="fa fa-chevron-{inactiveIsCollapsed ? 'right' : 'down'}" aria-hidden="true"></i>
             </button>
           </div>
-          {#if !(net.inactiveCollapsed ?? false)}
+          {#if !inactiveIsCollapsed}
             <ul class="buffers inactive-channels">
               {#each uniqueBuffersByName(inactive) as buf (net.networkId + ':' + buf.name)}
                 {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
