@@ -1,0 +1,153 @@
+/* IRC Fiber — themed auth pages (login, register)
+   Matches the landing page's dark theme so users see a consistent
+   brand instead of unstyled raw HTML. */
+
+:root {
+  --bg:            #0d1117;
+  --bg-deep:       #010409;
+  --surface:       #161b22;
+  --surface-2:     #1c2128;
+  --surface-3:     #2d333b;
+  --fg:            #e6edf3;
+  --fg-dim:        #8b949e;
+  --fg-faint:      #6e7681;
+  --border:        #30363d;
+  --border-soft:   rgba(255, 255, 255, 0.06);
+  --accent:        #58a6ff;
+  --accent-hi:     #79b8ff;
+  --accent-dim:    rgba(88, 166, 255, 0.18);
+  --ok:            #3fb950;
+  --ok-hi:         #2ea043;
+  --danger:        #f85149;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(88, 166, 255, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(88, 166, 255, 0.08) 0%, transparent 50%),
+    var(--bg);
+  padding: 2rem 1rem;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+a:hover { color: var(--accent-hi); text-decoration: underline; }
+
+.auth-container {
+  width: 100%;
+  max-width: 380px;
+  padding: 2.5rem 2rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 48px -12px rgba(0, 0, 0, 0.5);
+}
+
+.auth-container h1 {
+  text-align: center;
+  margin-bottom: 0.5rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--fg);
+  letter-spacing: -0.02em;
+}
+
+.auth-container h1::after {
+  content: '';
+  display: block;
+  width: 32px;
+  height: 3px;
+  margin: 0.75rem auto 0;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.auth-container form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.auth-container input {
+  width: 100%;
+  padding: 0.75rem 0.875rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 0.9375rem;
+  font-family: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.auth-container input::placeholder {
+  color: var(--fg-faint);
+}
+
+.auth-container input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.auth-container button {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  margin-top: 0.5rem;
+  background: var(--ok);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.05s ease;
+}
+
+.auth-container button:hover {
+  background: var(--ok-hi);
+}
+
+.auth-container button:active {
+  transform: scale(0.99);
+}
+
+.auth-container p {
+  text-align: center;
+  margin-top: 1.25rem;
+  font-size: 0.875rem;
+  color: var(--fg-dim);
+}
+
+.error {
+  padding: 0.625rem 0.875rem;
+  margin-bottom: 1rem;
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 0.875rem;
+  text-align: center;
+}
