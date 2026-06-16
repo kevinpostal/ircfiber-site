@@ -157,6 +157,10 @@
     if (newKey && newKey !== lastBufferKey) {
       const [nid, bname] = newKey.split(/:(.+)/);
       inputValue = getBufferInputText(nid, bname);
+      // Pull focus into the compose input so the user can type immediately
+      // after switching buffers (sidebar click, alt+arrow, /join, etc.).
+      // Guarded by lastBufferKey so we don't steal focus on initial mount.
+      tick().then(() => textarea?.focus());
     }
     lastBufferKey = newKey || lastBufferKey;
   });
