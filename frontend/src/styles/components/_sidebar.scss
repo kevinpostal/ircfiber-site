@@ -19,7 +19,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 3px;
-  visibility: hidden;
+  visibility: visible;
   transition: color 0.15s, background 0.15s;
 }
 .network-list .connection:hover .collapseToggle button,
