@@ -134,6 +134,7 @@ export interface BufferPrefs {
   showUnread?: boolean;
   markAsRead?: boolean;
   mute?: boolean;
+  notifyAll?: boolean;
   formatColor?: boolean;
   showJoinPart?: boolean;
   collapseDisconnects?: boolean;

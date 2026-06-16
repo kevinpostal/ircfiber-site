@@ -267,6 +267,8 @@ export interface NotificationOptions {
   title: string;
   body: string;
   icon?: string;
+  silent?: boolean;
+  autoDismiss?: boolean;
   onClick?: () => void;
 }
 

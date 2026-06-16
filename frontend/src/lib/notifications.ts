@@ -31,8 +31,6 @@ export function resetNotificationState(): void {
 }
 
 export function notify(options: NotificationOptions): void {
-  if (typeof document !== 'undefined' && !document.hidden) return;
-
   if (shouldRequest()) {
     requestPermission().then(granted => {
       if (granted) notify(options);
@@ -42,12 +40,15 @@ export function notify(options: NotificationOptions): void {
 
   if (!isAllowed()) return;
 
+  const autoDismiss = options.autoDismiss ?? true;
+  const silent = options.silent ?? false;
+
   try {
     const notification = new Notification(options.title, {
       body: options.body,
       icon: options.icon || '/favicon.ico',
       tag: 'ircfiber:' + options.tag,
-      silent: false,
+      silent,
     });
 
     if (options.onClick) {
@@ -59,7 +60,9 @@ export function notify(options: NotificationOptions): void {
       };
     }
 
-    setTimeout(() => notification.close(), NOTIFICATION_TIMEOUT);
+    if (autoDismiss) {
+      setTimeout(() => notification.close(), NOTIFICATION_TIMEOUT);
+    }
   } catch (e) {
     console.warn('Notification failed:', e);
   }

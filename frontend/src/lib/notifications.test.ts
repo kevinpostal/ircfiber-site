@@ -10,7 +10,6 @@ import {
 
 describe('notifications', () => {
   let mock_permission: NotificationPermission = 'default';
-  let document_hidden = false;
   let notification_instances: Array<{
     title: string;
     options?: NotificationOptions;
@@ -22,7 +21,6 @@ describe('notifications', () => {
   beforeEach(() => {
     resetNotificationState();
     mock_permission = 'default';
-    document_hidden = false;
     notification_instances = [];
 
     mock_request_permission = vi.fn().mockImplementation(() => {
@@ -55,11 +53,6 @@ describe('notifications', () => {
     vi.stubGlobal('window', {
       Notification: MockNotificationClass,
       focus: vi.fn(),
-    });
-    vi.stubGlobal('document', {
-      get hidden() {
-        return document_hidden;
-      },
     });
   });
 
@@ -146,15 +139,7 @@ describe('notifications', () => {
   });
 
   describe('notify', () => {
-    it('does nothing when document is visible', () => {
-      document_hidden = false;
-      mock_permission = 'granted';
-      notify({ title: 'Test', body: 'Hello', tag: 'test' });
-      expect(notification_instances).toHaveLength(0);
-    });
-
-    it('creates Notification when allowed and document hidden', () => {
-      document_hidden = true;
+    it('creates Notification when allowed', () => {
       mock_permission = 'granted';
       notify({ title: 'Test', body: 'Hello', tag: 'test' });
       expect(notification_instances).toHaveLength(1);
@@ -168,7 +153,6 @@ describe('notifications', () => {
     });
 
     it('requests permission when shouldRequest is true', async () => {
-      document_hidden = true;
       mock_permission = 'default';
       notify({ title: 'Test', body: 'Hello', tag: 'test' });
       await new Promise(r => setTimeout(r, 0));
@@ -176,7 +160,6 @@ describe('notifications', () => {
     });
 
     it('calls onClick handler when notification is clicked', () => {
-      document_hidden = true;
       mock_permission = 'granted';
       const on_click = vi.fn();
       notify({ title: 'Test', body: 'Hello', tag: 'test', onClick: on_click });
@@ -187,8 +170,7 @@ describe('notifications', () => {
       expect(on_click).toHaveBeenCalled();
     });
 
-    it('closes notification after timeout', () => {
-      document_hidden = true;
+    it('closes notification after timeout by default', () => {
       mock_permission = 'granted';
       vi.useFakeTimers();
       notify({ title: 'Test', body: 'Hello', tag: 'test' });
@@ -196,6 +178,24 @@ describe('notifications', () => {
       vi.advanceTimersByTime(5000);
       expect(notification_instances[0].close).toHaveBeenCalled();
       vi.useRealTimers();
+    });
+
+    it('does not close notification when autoDismiss is false', () => {
+      mock_permission = 'granted';
+      vi.useFakeTimers();
+      notify({ title: 'Test', body: 'Hello', tag: 'test', autoDismiss: false });
+      expect(notification_instances).toHaveLength(1);
+      vi.advanceTimersByTime(5000);
+      expect(notification_instances[0].close).not.toHaveBeenCalled();
+      vi.useRealTimers();
+    });
+
+    it('sets silent option', () => {
+      mock_permission = 'granted';
+      notify({ title: 'Test', body: 'Hello', tag: 'test', silent: true });
+      expect(notification_instances[0].options).toMatchObject({
+        silent: true,
+      });
     });
   });
 });

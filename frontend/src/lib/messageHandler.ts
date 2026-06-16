@@ -1,9 +1,10 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData } from '../types';
 import { ircState, handleConnect, updateChannelUsers,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping } from '../stores/ircStore.svelte';
-import { isIgnored } from '../stores/preferences.svelte';
+import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
+import { shouldNotifyForMessage, getNotificationTitle } from './notificationPolicy';
 import { enqueueMessage } from './messageBatcher';
 import { setMaxEid } from '../stores/wsConnection.svelte';
 
@@ -223,11 +224,28 @@ export function processIrcEvent(
   if (!isSkippedCommand(cmd)) {
     append(networkId, channel, msg, isBackfill);
 
-    if (msg.highlight && (ircState.activeBuffer.networkId !== networkId || ircState.activeBuffer.bufferName !== channel)) {
+    const isActiveBuffer = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === channel;
+    const documentHidden = typeof document !== 'undefined' && document.hidden;
+    const buf = net.buffers.find(b => b.name === channel);
+
+    if (!isBackfill && shouldNotifyForMessage({
+      networkId,
+      bufferName: channel,
+      bufferType: buf?.type,
+      msg,
+      currentNick: net.currentNick || net.nick,
+      bufferPrefs: getBufferPrefs(networkId, channel),
+      desktopNotificationsEnabled: globalPrefs.desktopNotifications,
+      muteAll: globalPrefs.muteAll,
+      isActiveBuffer,
+      documentHidden,
+    })) {
       notify({
         tag: `${networkId}:${channel}:${msg.msgid || msg.t}`,
-        title: `${msg.nick} in ${channel}`,
+        title: getNotificationTitle(msg, buf?.type, channel),
         body: msg.text || '',
+        silent: !globalPrefs.notificationSound,
+        autoDismiss: globalPrefs.autoDismissNotifs,
         onClick: () => cb.switchToBuffer(networkId, channel),
       });
     }
