@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
   import { addNetwork, updateNetwork } from '../stores/api';
+  import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { updateRoute } from '../lib/routing';
 
   interface Props {
@@ -9,8 +10,9 @@
     onClose: () => void;
     onAddNetwork?: (...args: any[]) => any;
     onUpdateNetwork?: (...args: any[]) => any;
+    onSendRaw?: (networkId: string, line: string) => void;
   }
-  let { mode, networkId, onClose, onAddNetwork = addNetwork, onUpdateNetwork = updateNetwork }: Props = $props();
+  let { mode, networkId, onClose, onAddNetwork = addNetwork, onUpdateNetwork = updateNetwork, onSendRaw = sendRaw }: Props = $props();
 
   const existing = $derived(
     mode === 'edit' && networkId
@@ -114,9 +116,46 @@
         }
         onClose();
       } else if (networkId) {
+        // Capture the nick BEFORE the API call so we can detect a change
+        // and emit NICK + optimistically reflect it locally (mirrors what
+        // /nick does — see slashCommands.ts).
+        const priorNick = existing?.nick ?? '';
+        const nickChanged = existing != null && nick !== priorNick;
+        const priorRealName = existing?.realName ?? '';
+
         await onUpdateNetwork(networkId, {
           name, host, port, tls, nick, realName,
         });
+
+        // Mirror the saved fields into local state so the form pre-fills
+        // correctly on next open and the sidebar/settings reflect the
+        // edits immediately (the engine sync will eventually catch up).
+        if (existing) {
+          existing.name = name;
+          existing.host = host;
+          existing.port = port;
+          existing.tls = tls;
+          if (realName) existing.realName = realName;
+          // nick is handled separately below because it also needs NICK raw
+          if (nickChanged) {
+            existing.nick = nick;
+            // Optimistic: reflect the new nick in the UI before the server
+            // echoes back. The NICK event handler in updateChannelUsers
+            // (ircStore.svelte.ts) will overwrite this with the authoritative
+            // server-acknowledged value when the echo arrives.
+            existing.currentNick = nick;
+            // Send NICK to the live IRC connection so the change happens
+            // immediately (same wire path as /nick). The next sync/realname
+            // may apply user mode changes (like +r) the way IRCCloud does.
+            onSendRaw(existing.networkId, 'NICK ' + nick);
+          }
+          // realName changes don't take effect on a live connection without
+          // a reconnect — mirror to local state so the form pre-fills
+          // correctly, but the network-form footer already notes that.
+          if (realName && realName !== priorRealName) {
+            existing.realName = realName;
+          }
+        }
         onClose();
       }
     } catch (e: unknown) {
@@ -320,7 +359,7 @@
 
       <div class="formButtons">
         {#if mode === 'edit'}
-          <span class="reconnectNote">Changing your real name or any of the host settings requires a reconnect</span>
+          <span class="reconnectNote">Nickname changes take effect immediately on the live connection. Changing your real name or any of the host settings requires a reconnect.</span>
         {/if}
         <button type="button" class="action secondary" onclick={onClose} disabled={busy}>
           <span>Cancel</span>

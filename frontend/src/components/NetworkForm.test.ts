@@ -212,7 +212,7 @@ describe('NetworkForm', () => {
     const network = createNetwork();
     ircState.networks.push(network);
     render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
-    await expect.element(page.getByText(/Changing your real name or any of the host settings requires a reconnect/)).toBeInTheDocument();
+    await expect.element(page.getByText(/Nickname changes take effect immediately on the live connection/)).toBeInTheDocument();
   });
 
   it('does not show reconnect note in add mode', async () => {
@@ -227,5 +227,92 @@ describe('NetworkForm', () => {
     expect(checkbox.checked).toBe(true);
     await userEvent.click(checkbox);
     expect(checkbox.checked).toBe(false);
+  });
+
+  describe('nick change on save (realtime)', () => {
+    it('sends NICK raw and optimistically updates currentNick when nick changes', async () => {
+      const mockSendRaw = vi.fn();
+      const network = createNetwork({ networkId: 'net1', name: 'TestNet', nick: 'OldNick', currentNick: 'OldNick' });
+      ircState.networks.push(network);
+      render(NetworkForm, {
+        props: {
+          mode: 'edit',
+          networkId: 'net1',
+          onClose: vi.fn(),
+          onAddNetwork: mockAddNetwork,
+          onUpdateNetwork: mockUpdateNetwork,
+          onSendRaw: mockSendRaw,
+        },
+      });
+      // Change the nick in the form
+      const nickInput = page.getByLabelText('Nickname');
+      await userEvent.clear(nickInput);
+      await userEvent.type(nickInput, 'NewNick');
+      await userEvent.click(page.getByRole('button', { name: 'Save' }));
+
+      // The API was called with the new nick
+      expect(mockUpdateNetwork).toHaveBeenCalledWith(
+        'net1',
+        expect.objectContaining({ nick: 'NewNick' }),
+      );
+      // NICK was sent on the live WebSocket connection
+      expect(mockSendRaw).toHaveBeenCalledWith('net1', 'NICK NewNick');
+      // currentNick was optimistically updated so the UI reflects the change
+      // before the server echo arrives (same pattern as /nick)
+      const liveNet = ircState.networks.find(n => n.networkId === 'net1');
+      expect(liveNet?.currentNick).toBe('NewNick');
+      // The persisted nick field is also updated so re-opening the form
+      // shows the new value
+      expect(liveNet?.nick).toBe('NewNick');
+    });
+
+    it('does not send NICK when nick is unchanged on save', async () => {
+      const mockSendRaw = vi.fn();
+      const network = createNetwork({ networkId: 'net1', name: 'TestNet', nick: 'SameNick', currentNick: 'SameNick' });
+      ircState.networks.push(network);
+      render(NetworkForm, {
+        props: {
+          mode: 'edit',
+          networkId: 'net1',
+          onClose: vi.fn(),
+          onAddNetwork: mockAddNetwork,
+          onUpdateNetwork: mockUpdateNetwork,
+          onSendRaw: mockSendRaw,
+        },
+      });
+      // Don't change the nick — just change something else (e.g. name)
+      const nameInput = page.getByLabelText('Network name');
+      await userEvent.clear(nameInput);
+      await userEvent.type(nameInput, 'NewName');
+      await userEvent.click(page.getByRole('button', { name: 'Save' }));
+
+      expect(mockUpdateNetwork).toHaveBeenCalledWith(
+        'net1',
+        expect.objectContaining({ name: 'NewName' }),
+      );
+      // No NICK should be emitted because the nick didn't change
+      expect(mockSendRaw).not.toHaveBeenCalled();
+    });
+
+    it('updates realName in local state on save (persisted across re-opens)', async () => {
+      const network = createNetwork({ networkId: 'net1', name: 'TestNet', nick: 'MyNick', realName: 'Old Real Name' });
+      ircState.networks.push(network);
+      render(NetworkForm, {
+        props: {
+          mode: 'edit',
+          networkId: 'net1',
+          onClose: vi.fn(),
+          onAddNetwork: mockAddNetwork,
+          onUpdateNetwork: mockUpdateNetwork,
+        },
+      });
+      const realNameInput = page.getByLabelText('Full name');
+      await userEvent.clear(realNameInput);
+      await userEvent.type(realNameInput, 'New Real Name');
+      await userEvent.click(page.getByRole('button', { name: 'Save' }));
+
+      const liveNet = ircState.networks.find(n => n.networkId === 'net1');
+      expect(liveNet?.realName).toBe('New Real Name');
+    });
   });
 });
