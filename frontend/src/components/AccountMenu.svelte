@@ -55,5 +55,5 @@
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div class="accountMenu__button {open ? '' : 'accountMenu__button--closed'}" role="button" tabindex="0" aria-expanded={open} aria-haspopup="true" aria-controls="accountMenu" onclick={toggle} onkeydown={(e) => { if (e.key === 'Enter') toggle(); }}>
   <i class="accountMenu__caret fa fa-{open ? 'caret-down' : 'cog'}"></i>
-  <span class="accountMenu__title">Account settings &amp; info</span>
+  <span class="accountMenu__title">Account Settings</span>
 </div>
