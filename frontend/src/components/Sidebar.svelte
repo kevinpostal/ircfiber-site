@@ -2,7 +2,7 @@
   import { ircState } from '../stores/ircStore.svelte';
   import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
-  import { updateCollapsed } from '../stores/api';
+  import { updateCollapsed, updateInactiveCollapsed } from '../stores/api';
   import type { Buffer } from '../types';
   import AccountMenu from './AccountMenu.svelte';
 
@@ -161,14 +161,14 @@
         {#if inactive.length > 0}
           <div class="sidebar-section-header inactive-header"
                role="button" tabindex="0"
-               onclick={() => { inactiveCollapsedMap[net.networkId] = !inactiveIsCollapsed; }}
-               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inactiveCollapsedMap[net.networkId] = !inactiveIsCollapsed; } }}
+               onclick={() => { const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; updateInactiveCollapsed(net.networkId, next); }}
+               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; updateInactiveCollapsed(net.networkId, next); } }}
                aria-expanded={!inactiveIsCollapsed}>
             <span class="inactive-header-label">Inactive</span>
             <button type="button" class="inactive-header-toggle"
                     title={inactiveIsCollapsed ? 'Expand' : 'Collapse'}
                     aria-label={inactiveIsCollapsed ? 'Expand Inactive' : 'Collapse Inactive'}
-                    onclick={(e) => { e.stopPropagation(); inactiveCollapsedMap[net.networkId] = !inactiveIsCollapsed; }}>
+                    onclick={(e) => { e.stopPropagation(); const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; updateInactiveCollapsed(net.networkId, next); }}>
               <i class="fa fa-chevron-{inactiveIsCollapsed ? 'right' : 'down'}" aria-hidden="true"></i>
             </button>
           </div>

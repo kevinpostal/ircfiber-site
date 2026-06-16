@@ -183,6 +183,14 @@ function schedulePersist(keyPrefix: string, map: unknown): void {
   }, PERSIST_DEBOUNCE_MS);
 }
 
+/** Schedules a persist after reading the map's keys so Svelte 5 tracks mutations. */
+function schedulePersistMap<T>(keyPrefix: string, map: Record<string, T>): void {
+  // Reading keys subscribes the effect to additions/removals on the $state proxy.
+  // Without this read, passing the proxy reference alone won't re-trigger the effect.
+  Object.keys(map);
+  schedulePersist(keyPrefix, map);
+}
+
 /** Flush any pending persistence writes immediately. Useful in tests. */
 export function flushPersist(): void {
   if (!persistTimer) return;
@@ -196,23 +204,23 @@ export function flushPersist(): void {
 
 // Persist on change — $effect.root allows effects outside components
 $effect.root(() => {
-  $effect(() => schedulePersist('ircfiber:clearedAt', clearedAtMap));
-  $effect(() => schedulePersist('ircfiber:unread', unreadMap));
-  $effect(() => schedulePersist('ircfiber:highlight', highlightMap));
-  $effect(() => schedulePersist('ircfiber:archived', archivedMap));
-  $effect(() => schedulePersist('ircfiber:pinned', pinnedMap));
+  $effect(() => schedulePersistMap('ircfiber:clearedAt', clearedAtMap));
+  $effect(() => schedulePersistMap('ircfiber:unread', unreadMap));
+  $effect(() => schedulePersistMap('ircfiber:highlight', highlightMap));
+  $effect(() => schedulePersistMap('ircfiber:archived', archivedMap));
+  $effect(() => schedulePersistMap('ircfiber:pinned', pinnedMap));
   $effect(() => {
-    schedulePersist('ircfiber:hiddenChannels', hiddenChannelsMap);
+    schedulePersistMap('ircfiber:hiddenChannels', hiddenChannelsMap);
   });
   $effect(() => { setStorageItem('ircfiber:ignores', ignoreList); });
   $effect(() => { setStorageItem('ircfiber:highlightWords', highlightWords); });
-  $effect(() => schedulePersist('ircfiber:membersCollapsed', membersCollapsedMap));
-  $effect(() => schedulePersist('ircfiber:collapsed', collapsedMap));
-  $effect(() => schedulePersist('ircfiber:inactiveCollapsed', inactiveCollapsedMap));
-  $effect(() => schedulePersist('ircfiber:lastSeen', lastSeenMap));
-  $effect(() => schedulePersist('ircfiber:bottomSeen', bottomSeenMap));
+  $effect(() => schedulePersistMap('ircfiber:membersCollapsed', membersCollapsedMap));
+  $effect(() => schedulePersistMap('ircfiber:collapsed', collapsedMap));
+  $effect(() => schedulePersistMap('ircfiber:inactiveCollapsed', inactiveCollapsedMap));
+  $effect(() => schedulePersistMap('ircfiber:lastSeen', lastSeenMap));
+  $effect(() => schedulePersistMap('ircfiber:bottomSeen', bottomSeenMap));
   $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
-  $effect(() => schedulePersist('ircfiber:bufferPrefs', bufferPrefsMap));
+  $effect(() => schedulePersistMap('ircfiber:bufferPrefs', bufferPrefsMap));
   $effect(() => { setStorageItem('ircfiber:globalPrefs', globalPrefs); });
 });
 
