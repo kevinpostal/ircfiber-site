@@ -1,6 +1,7 @@
 /* Grouped lines (MOTD, etc.) */
 .groupedLines {
-  display: block;
+  display: flex;
+  flex-direction: column;
   background: transparent;
   padding: 0;
 }
@@ -10,16 +11,16 @@
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-mono);
+  font-size: inherit;
+  font-weight: inherit;
   margin: 0;
   padding: 0;
   line-height: 1;
 }
 
-.groupedLines__line h2 {
+h2.groupedLines__line {
   font-size: inherit;
   font-weight: 600;
-  margin: 0;
-  line-height: inherit;
 }
 
 /* Legacy message structure overrides */
