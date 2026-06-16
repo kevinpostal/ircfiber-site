@@ -44,6 +44,10 @@ vi.mock('/src/stores/api', () => ({
   removeAvatar: vi.fn(async () => undefined),
   deleteUpload: vi.fn(async () => undefined),
   fetchUploadsOffset: vi.fn(async () => ({ uploads: [], total: 0 })),
+  updateCollapsed: vi.fn(async () => undefined),
+  updateInactiveCollapsed: vi.fn(async () => undefined),
+  hideChannel: vi.fn(async () => undefined),
+  unhideChannel: vi.fn(async () => undefined),
 }));
 
 import { connectWebSocket, disconnectWebSocket, sendRaw, sendMessage, requestSync, requestSwitchBuffer } from '/src/stores/wsConnection.svelte.ts';

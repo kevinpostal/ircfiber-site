@@ -151,12 +151,12 @@
 .sidebar-section-header.inactive-header .inactive-header-toggle:focus { color: #d9d9d9; }
 
 ul.inactive-channels {
-  padding-left: 24px;
+  padding-left: 12px;
 }
 
 .inactive-channels .buffer-item .buffer {
-  margin-left: calc(-5px - 24px);
-  padding-left: calc(17px + 24px);
+  margin-left: calc(-5px - 12px);
+  padding-left: calc(17px + 12px);
 }
 
 .sidebar-section-header.archive-header {

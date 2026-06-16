@@ -170,7 +170,7 @@ export function processIrcEvent(
   handleConnect(cmd, networkId, msg.text);
 
   // ── Channel users ──
-  updateChannelUsers(networkId, channel, cmd, msg.nick || '', msg.params);
+  updateChannelUsers(networkId, channel, cmd, msg.nick || '', msg.params, msg.prefix || '');
 
   // ── Topic ──
   if (cmd === '332' && msg.text) {

@@ -877,7 +877,12 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             buf.users = (buf.users as unknown as string[]).map(normalizeUser);
           }
           return buf;
-        });
+        })
+        // Defensive dedup: the sync payload may contain the same channel
+        // with different casings (e.g. "#foo" and "#FOO"), which normalize
+        // to identical names. Without dedup, duplicate buffer names reach
+        // the sidebar's keyed {#each} and Svelte throws each_key_duplicate.
+        .filter((buf, i, arr) => arr.findIndex(b => b.name === buf.name) === i);
       if (!net.buffers.some(b => b.name === '_server')) {
         net.buffers.unshift({
           name: '_server', type: 'server', isJoined: true,
@@ -946,7 +951,7 @@ export function handleConnect(cmd: string, networkId: string, text?: string): vo
   }
 }
 
-export function updateChannelUsers(networkId: string, bufferName: string, cmd: string, nick: string, params?: string[]): void {
+export function updateChannelUsers(networkId: string, bufferName: string, cmd: string, nick: string, params?: string[], prefix?: string): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
   const normalized = normalizeChannelName(bufferName);
@@ -1020,8 +1025,8 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       // waiting for a separate WHO/WHOIS. Members added later via NAMES
       // get filled in by the same heuristic (see PRIVMSG handler / the
       // `isBotNick` helper in MessageRow.svelte).
-      const ident = msg.prefix && msg.prefix.includes('!')
-        ? msg.prefix.slice(msg.prefix.indexOf('!') + 1)
+      const ident = prefix && prefix.includes('!')
+        ? prefix.slice(prefix.indexOf('!') + 1)
         : '';
       const host = ident.includes('@') ? ident.slice(ident.lastIndexOf('@') + 1) : '';
       const isBot = !!host && /(^|\.)bot(\.|$)/i.test(host);
