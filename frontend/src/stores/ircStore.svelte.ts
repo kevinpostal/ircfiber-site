@@ -838,17 +838,18 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // objects (sourced from Redis scrollback on the server).  Pull it
       // out and feed setMessages so the chat area renders without waiting
       // for a separate REST API round-trip.
-      for (const buf of existing.buffers) {
+      // NOTE: we iterate net.buffers (the incoming sync data), NOT
+      // existing.buffers.  The individual property assignments above
+      // copy topic/users/status etc. but do NOT copy 'messages' since
+      // the Buffer interface doesn't declare that transient field.
+      // The incoming objects from the JSON deserialization still carry it.
+      for (const buf of net.buffers) {
         const msgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
         if (msgs && msgs.length > 0) {
           const key = `${existing.networkId}:${buf.name}`;
-          // Only overwrite if we don't have messages yet — user may have
-          // scrolled, paginated, or received live messages already.
           if (!ircState.messages[key] || ircState.messages[key].length === 0) {
             setMessages(existing.networkId, buf.name, msgs);
           }
-          // Strip the messages from the buffer object — we keep it in
-          // ircState.messages, no need to duplicate in the buffer model.
           delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
         }
       }
