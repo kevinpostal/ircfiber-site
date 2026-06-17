@@ -21,7 +21,7 @@
   } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, wsState } from './stores/wsConnection.svelte.ts';
-  import { loadHistory, fetchMe, updateMembersCollapsed } from './stores/api';
+  import { loadHistory, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
   import UploadDialog from './components/UploadDialog.svelte';
@@ -35,12 +35,45 @@
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
   import { enqueueMessage, setFlushFn } from './lib/messageBatcher';
-  import WelcomePage from './components/WelcomePage.svelte';
-  import SettingsPage from './components/SettingsPage.svelte';
+import WelcomePage from './components/WelcomePage.svelte';
+import SettingsPage from './components/SettingsPage.svelte';
 import ShortcutsPage from './components/ShortcutsPage.svelte';
-  import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member } from './types';
+import LoadingSkeleton from './components/LoadingSkeleton.svelte';
+import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member, ConnectionState } from './types';
 
-  let showNetworkForm: boolean = $state(false);
+// IRCCloud-style: cache the network list between sessions so the SPA
+// can skip the "Join a network" welcome page on repeat visits.  On boot
+// we render a skeleton sidebar with the cached network names while the
+// WebSocket sync fills in the live state in the background.  The cache
+// is updated after every successful sync.
+const NETWORK_NAMES_KEY = 'ircfiber:networkNames';
+function readCachedNetworkNames(): string[] {
+  try {
+    const raw = localStorage.getItem(NETWORK_NAMES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+function writeCachedNetworkNames(networks: { name: string }[]): boolean {
+  const names = networks.map(n => n.name);
+  try {
+    localStorage.setItem(NETWORK_NAMES_KEY, JSON.stringify(names));
+    return true;
+  } catch { return false; }
+}
+
+// Read once at module load so the skeleton condition is set before the
+// component mounts.  localStorage reads are synchronous & fast (< 0.1 ms).
+const cachedNetworkNames: string[] = readCachedNetworkNames();
+const hasCachedNetworks: boolean = cachedNetworkNames.length > 0;
+
+// Tracks whether the first sync has been received.  Used to fall back to
+// WelcomePage when the cache says "yes networks" but the server says
+// "no networks" (networks deleted on another device, account reset, etc.).
+let syncReceived: boolean = $state(false);
+
+let showNetworkForm: boolean = $state(false);
   let showJoinModal: boolean = $state(false);
   let networkFormMode: 'add' | 'edit' = $state('add');
   let localMsgIdCounter = 0;
@@ -173,75 +206,36 @@ import ShortcutsPage from './components/ShortcutsPage.svelte';
     }
   });
 
+  // IRCCloud-style body CSS class transitions — mirror the classes IRCCloud
+  // uses to control visibility of the loading spinner and status bar.
+  // - 'connecting' : WebSocket has not yet opened
+  // - 'loading'    : WS open but no networks data received yet
+  // - 'init'       : networks loaded, UI is interactive
+  $effect(() => {
+    const body = document.body;
+    body.classList.remove('connecting', 'loading', 'init');
+    if (!ircState.wsConnected) {
+      body.classList.add('connecting');
+    } else if (ircState.networks.length === 0) {
+      body.classList.add('loading');
+    } else {
+      body.classList.add('init');
+    }
+  });
+
   let syncInterval: ReturnType<typeof setInterval>;
 
-  onMount(async () => {
+  onMount(() => {
     // Set up IRCCloud-style message batcher (200ms flush)
     setFlushFn((networkId, bufferName, msgs) => {
-      // IRCCloud batchAppend: push all messages into the state in a single
-      // reactive update so Svelte only triggers one render pass per flush
-      // instead of one per message.
       batchAppendMessages(networkId, bufferName, msgs);
     });
-    try {
-      const user = await fetchMe();
-      ircState.me = user;
-      // Merge server-side pins into local pinnedMap so cross-device
-      // pin state is picked up on page load. Keys explicitly unpinned
-      // (set to false) are not overridden. Stale true values that are
-      // no longer on the server are removed so unpinning persists.
-      if (user.pinnedChannels) {
-        for (const key of Object.keys(pinnedMap)) {
-          if (pinnedMap[key] === true && !user.pinnedChannels.includes(key)) {
-            delete pinnedMap[key];
-          }
-        }
-        for (const key of user.pinnedChannels) {
-          if (pinnedMap[key] !== false) {
-            pinnedMap[key] = true;
-          }
-        }
-      }
-      if (user.archivedChannels) {
-        for (const key of Object.keys(archivedMap)) {
-          if (archivedMap[key] === true && !user.archivedChannels.includes(key)) {
-            delete archivedMap[key];
-          }
-        }
-        for (const key of user.archivedChannels) {
-          if (archivedMap[key] !== false) {
-            archivedMap[key] = true;
-          }
-        }
-      }
-      if (user.membersCollapsed) {
-        for (const key of Object.keys(membersCollapsedMap)) {
-          if (!(key in user.membersCollapsed)) delete membersCollapsedMap[key];
-        }
-        for (const [key, value] of Object.entries(user.membersCollapsed)) {
-          if (value === true) membersCollapsedMap[key] = true;
-        }
-      }
-      if (user.collapsed) {
-        for (const key of Object.keys(collapsedMap)) {
-          if (!(key in user.collapsed)) delete collapsedMap[key];
-        }
-        for (const [key, value] of Object.entries(user.collapsed)) {
-          if (value === true) collapsedMap[key] = true;
-        }
-      }
-      if (user.inactiveCollapsed) {
-        for (const key of Object.keys(inactiveCollapsedMap)) {
-          if (!(key in user.inactiveCollapsed)) delete inactiveCollapsedMap[key];
-        }
-        for (const [key, value] of Object.entries(user.inactiveCollapsed)) {
-          if (value === true) inactiveCollapsedMap[key] = true;
-        }
-      }
-    } catch (e) {
-      console.error('Failed to fetch user:', e);
-    }
 
+    // IRCCloud-style boot: single WebSocket is the sole data channel.
+    // No REST /api/me call — user data (stat_user), network list, and
+    // full state all stream through the WS.  This eliminates one full
+    // round-trip to the server and matches IRCCloud's architecture
+    // exactly.
     connectWebSocket(
       handleWsMessage,
       () => {
@@ -402,14 +396,138 @@ import ShortcutsPage from './components/ShortcutsPage.svelte';
       for (const item of data) processEvent(item as Record<string, unknown>);
     } else {
       const obj = data as Record<string, unknown>;
-      if (obj.type === 'sync') {
+      if (obj.type === 'stat_user') {
+        // IRCCloud-style: user data arrives via WebSocket, no REST /api/me needed
+        handleStatUser(obj);
+      } else if (obj.type === 'networks') {
+        // IRCCloud-style: lightweight network list (names + IDs) sent before
+        // the full state dump — populates sidebar instantly with real names
+        handleNetworks(obj);
+      } else if (obj.type === 'sync') {
         updateNetworkFromSync((obj.networks || []) as Network[]);
+        // IRCCloud-style: persist the network names so the next page load
+        // skips the WelcomePage and renders a loading skeleton with real
+        // network names while the WebSocket sync fills in fresh state.
+        writeCachedNetworkNames(ircState.networks);
+        // Mark sync as received so the LoadingSkeleton yields to
+        // WelcomePage when the user has genuinely zero networks
+        // (e.g. deleted all networks on another device).
+        syncReceived = true;
         checkRoute();
         selectLastActiveBuffer((obj.networks || []) as Network[]);
       } else if (obj.type === 'irc_event' || obj.y === 'irc_event') {
         processEvent(obj);
       } else if (obj.type === 'pref_update') {
         handlePrefUpdate(obj);
+      }
+    }
+  }
+
+  // IRCCloud-style: handle stat_user message — sets user identity + preferences
+  // Equivalent to IRCCloud's Session.messageHandlers.stat_user
+  function handleStatUser(obj: Record<string, unknown>): void {
+    ircState.me = {
+      username: (obj.username as string) || '',
+      email: (obj.email as string) || '',
+    };
+    mergePreferences(obj);
+  }
+
+  // IRCCloud-style: handle networks message — populates the sidebar immediately
+  // with real network names before the full state dump arrives
+  function handleNetworks(obj: Record<string, unknown>): void {
+    const items = (obj.items || []) as Array<{ networkId: string; name: string }>;
+    if (items.length === 0) return;
+
+    // Pre-populate ircState.networks with skeleton Network objects so the
+    // sidebar renders network names immediately.  The subsequent sync
+    // message fills in buffers, users, topics, and connection status via
+    // Object.assign (matching on networkId).
+    ircState.networks = items.map(item => ({
+      networkId: item.networkId,
+      name: item.name,
+      host: '',
+      port: 0,
+      tls: 'enabled' as string,
+      nick: '',
+      realName: '',
+      currentNick: '',
+      connected: false,
+      connectionState: 'connecting' as ConnectionState,
+      status: 'connecting' as string,
+      disconnectReason: '',
+      isAway: false,
+      awayMessage: '',
+      buffers: [{
+        name: '_server', type: 'server' as const, isJoined: true,
+        unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+        topic: '', topicSetBy: '', topicSetAt: 0, users: [],
+        lastSeenMsgTime: null, firstUnseenMsgIndex: null,
+      }],
+      awayNicks: new Set(),
+      capabilities: new Set(),
+      isupport: {},
+      chanTypes: '#',
+    }) as Network[]);
+
+    // Cache the network names for the next page load
+    writeCachedNetworkNames(ircState.networks);
+
+    // Route to the correct buffer based on the URL (e.g. /irc/irc.supernets.org)
+    // or auto-select the first network's server buffer
+    checkRoute();
+    if (!ircState.activeBuffer.networkId && ircState.networks.length > 0) {
+      setActiveBuffer(ircState.networks[0].networkId, '_server');
+    }
+  }
+
+  // Merge server-side preferences into local reactive maps.
+  // Called from both handleStatUser (WS boot) and handlePrefUpdate (real-time sync).
+  function mergePreferences(obj: Record<string, unknown>): void {
+    const user = obj;
+    if (user.pinnedChannels) {
+      const list = user.pinnedChannels as string[];
+      for (const key of Object.keys(pinnedMap)) {
+        if (pinnedMap[key] === true && !list.includes(key)) delete pinnedMap[key];
+      }
+      for (const key of list) {
+        if (pinnedMap[key] !== false) pinnedMap[key] = true;
+      }
+    }
+    if (user.archivedChannels) {
+      const list = user.archivedChannels as string[];
+      for (const key of Object.keys(archivedMap)) {
+        if (archivedMap[key] === true && !list.includes(key)) delete archivedMap[key];
+      }
+      for (const key of list) {
+        if (archivedMap[key] !== false) archivedMap[key] = true;
+      }
+    }
+    if (user.membersCollapsed) {
+      const collapsed = user.membersCollapsed as Record<string, boolean>;
+      for (const key of Object.keys(membersCollapsedMap)) {
+        if (!(key in collapsed)) delete membersCollapsedMap[key];
+      }
+      for (const [key, value] of Object.entries(collapsed)) {
+        if (value === true) membersCollapsedMap[key] = true;
+      }
+    }
+    if (user.collapsed) {
+      const col = user.collapsed as Record<string, boolean>;
+      for (const key of Object.keys(collapsedMap)) {
+        if (!(key in col)) delete collapsedMap[key];
+      }
+      for (const [key, value] of Object.entries(col)) {
+        if (value === true) collapsedMap[key] = true;
+      }
+    }
+    if (user.inactiveCollapsed) {
+      const ic = user.inactiveCollapsed as Record<string, boolean>;
+      for (const key of Object.keys(inactiveCollapsedMap)) {
+        if (!(key in ic)) delete inactiveCollapsedMap[key];
+      }
+      for (const [key, value] of Object.entries(ic)) {
+        if (value === true) inactiveCollapsedMap[key] = true;
       }
     }
   }
@@ -670,12 +788,14 @@ import ShortcutsPage from './components/ShortcutsPage.svelte';
   {/if}
 {/if}
 
-<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen}>
+<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.networks.length > 0 || !(hasCachedNetworks && !syncReceived)}>
   <div class="main-area">
     {#if ircState.showSettings}
       <SettingsPage />
     {:else if ircState.showShortcuts}
       <ShortcutsPage />
+    {:else if ircState.networks.length === 0 && hasCachedNetworks && !syncReceived}
+      <LoadingSkeleton networkNames={cachedNetworkNames} />
     {:else if ircState.networks.length === 0}
       <WelcomePage />
     {:else}
@@ -708,10 +828,12 @@ import ShortcutsPage from './components/ShortcutsPage.svelte';
   {#if isNarrow && (sidebarDrawerOpen || mobileMembersOpen)}
     <div class="drawer-backdrop" onclick={closeDrawers} role="presentation"></div>
   {/if}
+  {#if ircState.networks.length > 0 || !hasCachedNetworks || syncReceived}
   <aside id="sidebar">
     <Sidebar onSwitchBuffer={navigateToBuffer}
              onAddNetwork={() => { networkFormMode = 'add'; showNetworkForm = true; }}
              onNetworkOptions={openNetworkOptions}
              onJoinChannel={(networkId) => { showJoinModal = true; }} />
   </aside>
+  {/if}
 </div>

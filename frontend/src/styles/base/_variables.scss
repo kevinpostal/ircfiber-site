@@ -62,6 +62,11 @@ a:hover { color: #79c0ff; text-decoration: underline; }
   height: 100vh;
   overflow: hidden;
 }
+/* IRCCloud .mainSpin pattern: hide the sidebar grid column during the
+   loading phase so the centered spinner fills the full viewport */
+#wrap:not(.has-sidebar) {
+  grid-template-columns: 1fr;
+}
 .main-area {
   display: flex;
   flex-direction: column;
