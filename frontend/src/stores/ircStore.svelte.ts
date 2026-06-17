@@ -834,6 +834,24 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existing.buffers.push(incomingBuf);
         }
       }
+      // IRCCloud-style: sync now includes message history in the buffer
+      // objects (sourced from Redis scrollback on the server).  Pull it
+      // out and feed setMessages so the chat area renders without waiting
+      // for a separate REST API round-trip.
+      for (const buf of existing.buffers) {
+        const msgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
+        if (msgs && msgs.length > 0) {
+          const key = `${existing.networkId}:${buf.name}`;
+          // Only overwrite if we don't have messages yet — user may have
+          // scrolled, paginated, or received live messages already.
+          if (!ircState.messages[key] || ircState.messages[key].length === 0) {
+            setMessages(existing.networkId, buf.name, msgs);
+          }
+          // Strip the messages from the buffer object — we keep it in
+          // ircState.messages, no need to duplicate in the buffer model.
+          delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
+        }
+      }
       // Drop any locally-tracked buffers the user has since hidden so the
       // buffer list stays in sync with hiddenChannelsMap across refreshes.
       existing.buffers = existing.buffers.filter(
@@ -899,6 +917,21 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         net.status === 'connecting' ? 'connecting' :
         net.connected               ? 'connected'   :
                                       'disconnected';
+
+      // IRCCloud-style: pull message history out of the buffer objects
+      // and into ircState.messages (avoids duplicating + eliminates the
+      // REST API round-trip for boot).
+      for (const buf of net.buffers) {
+        const msgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
+        if (msgs && msgs.length > 0) {
+          const key = `${net.networkId}:${buf.name}`;
+          if (!ircState.messages[key] || ircState.messages[key].length === 0) {
+            setMessages(net.networkId, buf.name, msgs);
+          }
+          delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
+        }
+      }
+
       ircState.networks.push(net);
     }
   }

@@ -64,10 +64,14 @@ const cachedNetworks: CachedNetwork[] = readCachedNetworks();
 const cachedNetworkNames: string[] = cachedNetworks.map(n => n.name);
 const hasCachedNetworks: boolean = cachedNetworks.length > 0;
 
-// IRCCloud OOB equivalent: figure out which network + buffer the URL
-// targets so we can fire the message-history REST call at module init
-// (before the WebSocket opens).  Matches IRCCloud's pattern where the
-// backlog AJAX GET starts parallel to the WS connect.
+// Since the sync WS message now includes message history in the buffer
+// objects (server reads from Redis scrollback), we no longer need a
+// separate REST API call at module init.  backlogReady flips to true when
+// sync arrives (which includes the history), eliminating the 3.5s REST
+// round-trip that previously gated the spinner.
+//
+// We still track which networkId the URL targets so we can pre-route
+// immediately when networks/sync arrive (avoiding the brief UI flicker).
 let preloadNetId: string | null = null;
 let preloadBufName: string | null = null;
 if (hasCachedNetworks) {
@@ -80,25 +84,6 @@ if (hasCachedNetworks) {
       preloadBufName = m[2] || '_server';
     }
   }
-}
-
-// Fire the history REST call immediately at module init.  It runs in
-// parallel with the WebSocket connect so that by the time the sync
-// arrives, the REST response has often already resolved — matching
-// IRCCloud's OOB pattern where backlog arrives alongside state.
-if (preloadNetId && preloadBufName) {
-  void (async () => {
-    try {
-      performance.mark('history-api-start');
-      const msgs = await loadHistory(preloadNetId!, preloadBufName!, {
-        count: 200, fetchFromUpstream: true, fetchCommand: 'LATEST',
-      });
-      performance.mark('history-api-end');
-      setMessages(preloadNetId!, preloadBufName!, msgs);
-      backlogReady = true;
-      performance.mark('backlog-ready');
-    } catch { /* REST call failed — loadBufferHistory will retry after sync */ }
-  })();
 }
 
 // Tracks whether the first sync has been received.  Used to fall back to
@@ -406,7 +391,13 @@ let showNetworkForm: boolean = $state(false);
     requestSwitchBuffer(networkId, bufferName);
     updateRoute(networkId, bufferName);
     if (!isSameBuffer) {
-      void loadBufferHistory(networkId, bufferName);
+      // IRCCloud-style: skip the REST round-trip during boot — the sync
+      // message will deliver messages via WebSocket.  After sync arrives
+      // (or for explicit user-initiated switches), loadBufferHistory
+      // will only fetch if messages are missing.
+      if (syncReceived) {
+        void loadBufferHistory(networkId, bufferName);
+      }
     }
   }
 
@@ -414,19 +405,22 @@ let showNetworkForm: boolean = $state(false);
     try {
       const key = `${networkId}:${normalizeChannelName(bufferName)}`;
       const existing = ircState.messages[key] ?? [];
+      // IRCCloud-style: if sync already delivered messages for this buffer,
+      // skip the REST round-trip entirely.  The sync (now includes scrollback
+      // from Redis) is the authoritative source for the initial 50 messages.
+      if (existing.length > 0) {
+        // Messages already loaded from sync — nothing more to fetch.
+        return;
+      }
       // Show cached messages immediately while we fetch fresh data
       let cached: IRCMessage[] | null = null;
-      if (existing.length === 0) {
-        cached = loadCachedMessages(networkId, bufferName);
-        if (cached && cached.length > 0) {
-          setMessages(networkId, bufferName, cached);
-        }
+      cached = loadCachedMessages(networkId, bufferName);
+      if (cached && cached.length > 0) {
+        setMessages(networkId, bufferName, cached);
       }
-      // On first load for a buffer, ask the gateway to push a
-      // CHATHISTORY LATEST to the engine so the local buffer gets
-      // backfilled from upstream. The response is whatever's already
-      // in the local buffer at the time of read; a few hundred ms later
-      // a subsequent load will see the freshly-persisted batch messages.
+      // Cold start: fetch from REST.  This shouldn't normally happen since
+      // sync includes scrollback, but covers the case where the user opens
+      // a channel that wasn't in the sync (e.g. mid-session join).
       performance.mark('history-api-start');
       const msgs = await loadHistory(networkId, bufferName, {
         // IRCCloud renders the last batchSize=200 messages on buffer open
@@ -467,6 +461,13 @@ let showNetworkForm: boolean = $state(false);
         const isBootSync = (obj.cmd === undefined);
         performance.mark(isBootSync ? 'sync-boot' : 'sync-poll');
         updateNetworkFromSync((obj.networks || []) as Network[]);
+        // IRCCloud-style: sync now includes message history.  Set
+        // backlogReady immediately so the spinner yields to the real UI
+        // as soon as the sync arrives (no separate REST round-trip).
+        if (isBootSync) {
+          backlogReady = true;
+          performance.mark('backlog-ready');
+        }
         // IRCCloud-style: persist the network names so the next page load
         // skips the WelcomePage and renders a loading skeleton with real
         // network names while the WebSocket sync fills in fresh state.
