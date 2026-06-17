@@ -89,11 +89,14 @@ if (hasCachedNetworks) {
 if (preloadNetId && preloadBufName) {
   void (async () => {
     try {
+      performance.mark('history-api-start');
       const msgs = await loadHistory(preloadNetId!, preloadBufName!, {
         count: 200, fetchFromUpstream: true, fetchCommand: 'LATEST',
       });
+      performance.mark('history-api-end');
       setMessages(preloadNetId!, preloadBufName!, msgs);
       backlogReady = true;
+      performance.mark('backlog-ready');
     } catch { /* REST call failed — loadBufferHistory will retry after sync */ }
   })();
 }
@@ -266,6 +269,7 @@ let showNetworkForm: boolean = $state(false);
       body.classList.add('loading');
     } else {
       body.classList.add('init');
+      performance.mark('ui-visible');
     }
   });
 
@@ -282,10 +286,12 @@ let showNetworkForm: boolean = $state(false);
     // full state all stream through the WS.  This eliminates one full
     // round-trip to the server and matches IRCCloud's architecture
     // exactly.
+    performance.mark('ws-connect-start');
     connectWebSocket(
       handleWsMessage,
       () => {
         ircState.wsConnected = true;
+        performance.mark('ws-open');
         if (syncInterval) clearInterval(syncInterval);
         syncInterval = setInterval(requestSync, 10000);
       },
@@ -421,6 +427,7 @@ let showNetworkForm: boolean = $state(false);
       // backfilled from upstream. The response is whatever's already
       // in the local buffer at the time of read; a few hundred ms later
       // a subsequent load will see the freshly-persisted batch messages.
+      performance.mark('history-api-start');
       const msgs = await loadHistory(networkId, bufferName, {
         // IRCCloud renders the last batchSize=200 messages on buffer open
         // (BufferLogView.render → messages.last(this.scroll.batchSize)).
@@ -428,11 +435,13 @@ let showNetworkForm: boolean = $state(false);
         fetchFromUpstream: true,
         fetchCommand: 'LATEST',
       });
+      performance.mark('history-api-end');
       // Overwrite only if the buffer was empty or still pointing at cache
       if (existing.length === 0 || ircState.messages[key] === cached) {
         setMessages(networkId, bufferName, msgs);
       }
       backlogReady = true;  // IRCCloud backlog_complete equivalent
+      performance.mark('backlog-ready');
     } catch (e) {
       console.error('Failed to load history:', e);
     }
@@ -451,6 +460,12 @@ let showNetworkForm: boolean = $state(false);
         // the full state dump — populates sidebar instantly with real names
         handleNetworks(obj);
       } else if (obj.type === 'sync') {
+        // Use unique mark names so periodic requestSync responses don't
+        // overwrite the boot sync mark — we want to measure boot timing
+        // accurately.  Boot sync has 'type:'sync' with no cmd echo; the
+        // periodic sync echoes 'cmd:sync'.  Distinguish by cmd-eid.
+        const isBootSync = (obj.cmd === undefined);
+        performance.mark(isBootSync ? 'sync-boot' : 'sync-poll');
         updateNetworkFromSync((obj.networks || []) as Network[]);
         // IRCCloud-style: persist the network names so the next page load
         // skips the WelcomePage and renders a loading skeleton with real
@@ -473,6 +488,7 @@ let showNetworkForm: boolean = $state(false);
   // IRCCloud-style: handle stat_user message — sets user identity + preferences
   // Equivalent to IRCCloud's Session.messageHandlers.stat_user
   function handleStatUser(obj: Record<string, unknown>): void {
+    performance.mark('stat_user');
     ircState.me = {
       username: (obj.username as string) || '',
       email: (obj.email as string) || '',
@@ -483,6 +499,7 @@ let showNetworkForm: boolean = $state(false);
   // IRCCloud-style: handle networks message — populates the sidebar immediately
   // with real network names before the full state dump arrives
   function handleNetworks(obj: Record<string, unknown>): void {
+    performance.mark('networks');
     const items = (obj.items || []) as Array<{ networkId: string; name: string }>;
     if (items.length === 0) return;
 
