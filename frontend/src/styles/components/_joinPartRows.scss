@@ -42,6 +42,7 @@
 }
 .row.messageRow.status.monospace .content {
   line-height: inherit;
+  padding-right: 118px;
 }
 
 /* Full-width MOTD/info rows matching IRCCloud */
@@ -279,7 +280,6 @@
   overflow-wrap: break-word;
   overflow: hidden;
   box-sizing: border-box;
-  padding-right: 118px;
 }
 
 /* Monospace / pre-wrap only for colored/formatted spans so tables

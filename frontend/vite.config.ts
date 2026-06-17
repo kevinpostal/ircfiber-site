@@ -23,15 +23,7 @@ export default defineConfig({
   build: {
     outDir: '../public/dist',
     emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        entryFileNames: 'index.js',
-        assetFileNames: (assetInfo) => {
-          if (assetInfo.name === 'style.css') return 'index.css';
-          return assetInfo.name ?? 'asset';
-        }
-      }
-    }
+    manifest: true,
   },
   server: {
     port: 5173,
