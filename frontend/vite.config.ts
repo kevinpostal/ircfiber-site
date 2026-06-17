@@ -2,6 +2,21 @@ import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { playwright } from '@vitest/browser-playwright';
 
+// Backend URL for the dev server's API + WS proxy. Override via env vars
+// to point at a non-local backend (e.g. the tailnet gateway):
+//
+//   npm run dev:local    # → http://127.0.0.1:8090 (local docker-compose)
+//   npm run dev:tailnet  # → https://ircfiber-prod-1.tail544547.ts.net
+//                        #   (tailnet gateway; real cert via Tailscale ACME)
+//   VITE_BACKEND_URL=http://192.168.1.50:8090 npm run dev
+//                        # → arbitrary HTTP backend
+const BACKEND_URL =
+  process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8090';
+// WS target defaults to the same host with the ws/wss scheme.
+const BACKEND_WS_URL =
+  process.env.VITE_BACKEND_WS_URL || BACKEND_URL.replace(/^http/, 'ws');
+const BACKEND_IS_TLS = BACKEND_URL.startsWith('https://');
+
 export default defineConfig({
   plugins: [svelte()],
   publicDir: '../public',
@@ -21,10 +36,18 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:8090',
+      '/api': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        // Verify the backend's TLS cert. The Tailscale cert on the
+        // tailnet backend is real and trusted, so leave this true.
+        secure: BACKEND_IS_TLS,
+      },
       '/ws': {
-        target: 'ws://127.0.0.1:8090',
-        ws: true
+        target: BACKEND_WS_URL,
+        ws: true,
+        changeOrigin: true,
+        secure: BACKEND_IS_TLS,
       }
     }
   },
