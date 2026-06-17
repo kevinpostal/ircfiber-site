@@ -41,37 +41,83 @@ import ShortcutsPage from './components/ShortcutsPage.svelte';
 import LoadingSkeleton from './components/LoadingSkeleton.svelte';
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member, ConnectionState } from './types';
 
-// IRCCloud-style: cache the network list between sessions so the SPA
-// can skip the "Join a network" welcome page on repeat visits.  On boot
-// we render a skeleton sidebar with the cached network names while the
-// WebSocket sync fills in the live state in the background.  The cache
-// is updated after every successful sync.
-const NETWORK_NAMES_KEY = 'ircfiber:networkNames';
-function readCachedNetworkNames(): string[] {
+// IRCCloud-style: cache network IDs + names so we can eager-load message
+// history from the URL before the WebSocket opens.  Stored as an array of
+// { networkId, name } pairs — updated after every successful sync.
+interface CachedNetwork { networkId: string; name: string; }
+const NETWORK_CACHE_KEY = 'ircfiber:networkcache';
+function readCachedNetworks(): CachedNetwork[] {
   try {
-    const raw = localStorage.getItem(NETWORK_NAMES_KEY);
+    const raw = localStorage.getItem(NETWORK_CACHE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch { return []; }
 }
-function writeCachedNetworkNames(networks: { name: string }[]): boolean {
-  const names = networks.map(n => n.name);
-  try {
-    localStorage.setItem(NETWORK_NAMES_KEY, JSON.stringify(names));
-    return true;
-  } catch { return false; }
+function writeCachedNetworks(networks: { networkId: string; name: string }[]): void {
+  const data = networks.map(n => ({ networkId: n.networkId, name: n.name }));
+  try { localStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(data)); } catch {}
 }
 
-// Read once at module load so the skeleton condition is set before the
-// component mounts.  localStorage reads are synchronous & fast (< 0.1 ms).
-const cachedNetworkNames: string[] = readCachedNetworkNames();
-const hasCachedNetworks: boolean = cachedNetworkNames.length > 0;
+// Read once at module load — synchronous localStorage, < 0.1 ms.
+const cachedNetworks: CachedNetwork[] = readCachedNetworks();
+const cachedNetworkNames: string[] = cachedNetworks.map(n => n.name);
+const hasCachedNetworks: boolean = cachedNetworks.length > 0;
+
+// IRCCloud OOB equivalent: figure out which network + buffer the URL
+// targets so we can fire the message-history REST call at module init
+// (before the WebSocket opens).  Matches IRCCloud's pattern where the
+// backlog AJAX GET starts parallel to the WS connect.
+let preloadNetId: string | null = null;
+let preloadBufName: string | null = null;
+if (hasCachedNetworks) {
+  const path = window.location.pathname;
+  const m = path.match(/^\/irc\/([^\/]+)(?:\/(?:channel|messages)\/([^\/]+))?\/?$/);
+  if (m) {
+    const cached = cachedNetworks.find(n => n.name === m[1]);
+    if (cached) {
+      preloadNetId = cached.networkId;
+      preloadBufName = m[2] || '_server';
+    }
+  }
+}
+
+// Fire the history REST call immediately at module init.  It runs in
+// parallel with the WebSocket connect so that by the time the sync
+// arrives, the REST response has often already resolved — matching
+// IRCCloud's OOB pattern where backlog arrives alongside state.
+if (preloadNetId && preloadBufName) {
+  void (async () => {
+    try {
+      const msgs = await loadHistory(preloadNetId!, preloadBufName!, {
+        count: 200, fetchFromUpstream: true, fetchCommand: 'LATEST',
+      });
+      setMessages(preloadNetId!, preloadBufName!, msgs);
+      backlogReady = true;
+    } catch { /* REST call failed — loadBufferHistory will retry after sync */ }
+  })();
+}
 
 // Tracks whether the first sync has been received.  Used to fall back to
 // WelcomePage when the cache says "yes networks" but the server says
 // "no networks" (networks deleted on another device, account reset, etc.).
 let syncReceived: boolean = $state(false);
+
+// IRCCloud backlog_complete equivalent: set to true when the message
+// history REST call resolves (either from the eager preload above or
+// from loadBufferHistory during boot).  The .mainSpin spinner stays
+// visible until BOTH syncReceived AND backlogReady are true, matching
+// IRCCloud's pattern where doneLoading() fires only after all backlog
+// is processed.
+let backlogReady: boolean = $state(!preloadNetId);  // false if preload pending
+
+// IRCCloud loading guard: true while the boot spinner should be visible.
+// Matches IRCCloud's doneLoading() — the spinner stays until the state
+// sync (syncReceived) AND message backlog (backlogReady) are both done.
+const isBootLoading: boolean = $derived(
+  (ircState.networks.length === 0 && hasCachedNetworks && !syncReceived) ||
+  (ircState.networks.length > 0 && (!syncReceived || !backlogReady))
+);
 
 let showNetworkForm: boolean = $state(false);
   let showJoinModal: boolean = $state(false);
@@ -386,6 +432,7 @@ let showNetworkForm: boolean = $state(false);
       if (existing.length === 0 || ircState.messages[key] === cached) {
         setMessages(networkId, bufferName, msgs);
       }
+      backlogReady = true;  // IRCCloud backlog_complete equivalent
     } catch (e) {
       console.error('Failed to load history:', e);
     }
@@ -408,7 +455,7 @@ let showNetworkForm: boolean = $state(false);
         // IRCCloud-style: persist the network names so the next page load
         // skips the WelcomePage and renders a loading skeleton with real
         // network names while the WebSocket sync fills in fresh state.
-        writeCachedNetworkNames(ircState.networks);
+        writeCachedNetworks(ircState.networks);
         // Mark sync as received so the LoadingSkeleton yields to
         // WelcomePage when the user has genuinely zero networks
         // (e.g. deleted all networks on another device).
@@ -471,7 +518,7 @@ let showNetworkForm: boolean = $state(false);
     }) as Network[]);
 
     // Cache the network names for the next page load
-    writeCachedNetworkNames(ircState.networks);
+    writeCachedNetworks(ircState.networks);
 
     // Route to the correct buffer based on the URL (e.g. /irc/irc.supernets.org)
     // or auto-select the first network's server buffer
@@ -788,13 +835,13 @@ let showNetworkForm: boolean = $state(false);
   {/if}
 {/if}
 
-<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.networks.length > 0 || !(hasCachedNetworks && !syncReceived)}>
+<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading}>
   <div class="main-area">
     {#if ircState.showSettings}
       <SettingsPage />
     {:else if ircState.showShortcuts}
       <ShortcutsPage />
-    {:else if ircState.networks.length === 0 && hasCachedNetworks && !syncReceived}
+    {:else if isBootLoading}
       <LoadingSkeleton networkNames={cachedNetworkNames} />
     {:else if ircState.networks.length === 0}
       <WelcomePage />
@@ -828,7 +875,7 @@ let showNetworkForm: boolean = $state(false);
   {#if isNarrow && (sidebarDrawerOpen || mobileMembersOpen)}
     <div class="drawer-backdrop" onclick={closeDrawers} role="presentation"></div>
   {/if}
-  {#if ircState.networks.length > 0 || !hasCachedNetworks || syncReceived}
+  {#if !isBootLoading}
   <aside id="sidebar">
     <Sidebar onSwitchBuffer={navigateToBuffer}
              onAddNetwork={() => { networkFormMode = 'add'; showNetworkForm = true; }}
