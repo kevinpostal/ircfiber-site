@@ -44,7 +44,12 @@
         net.connectionState = 'disconnected';
         net.disconnectReason = 'You disconnected';
       } else {
-        net.connected = true;
+        // Don't set connected=true optimistically — that makes the button
+        // say "Disconnect" while the engine is still connecting. Instead
+        // set only connectionState so the button shows "Connecting…" with
+        // a disabled state. When the engine sends 001 (RPL_WELCOME),
+        // handleConnect() will set connected=true and the button flips to
+        // "Disconnect" (enabled).
         net.connectionState = 'connecting';
         setActiveBuffer(net.networkId, '_server');
         await reconnectNetwork(net.networkId);

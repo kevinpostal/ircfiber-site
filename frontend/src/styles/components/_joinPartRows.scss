@@ -198,7 +198,10 @@
 }
 
 .row.part.groupedJoinPartPart {
-  padding: 2px 80px 2px 68px;
+  /* Match the IRCCloud right gutter (118px) used by .row.messageRow.status
+     in app.css. The 80px here was a leftover from an earlier layout
+     that left status lines wrapping into the timestamp/hover area. */
+  padding: 0 118px 0 68px;
   color: #8b949e;
   font-size: 13px;
   background: transparent;

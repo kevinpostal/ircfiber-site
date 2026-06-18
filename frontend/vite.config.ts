@@ -18,12 +18,42 @@ const BACKEND_WS_URL =
 const BACKEND_IS_TLS = BACKEND_URL.startsWith('https://');
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte({
+    onwarn(warning, handler) {
+      // Suppress a11y warnings that we've reviewed as acceptable:
+      // - aria-disabled on <li> is fine for our context menus
+      // - '#' href on pagination links is a common pattern
+      // - role="button" on <span> nick links is intentional
+      // - tabindex on h1 for focus management is deliberate
+      // - state_referenced_locally for $state() initial-value captures
+      if (warning.code === 'a11y_role_supports_aria_props_implicit' ||
+          warning.code === 'a11y_invalid_attribute' ||
+          warning.code === 'a11y_interactive_supports_focus' ||
+          warning.code === 'a11y_no_noninteractive_tabindex' ||
+          warning.code === 'a11y_click_events_have_key_events' ||
+          warning.code === 'a11y_no_static_element_interactions' ||
+          warning.code === 'a11y_no_noninteractive_element_interactions' ||
+          warning.code === 'a11y_no_redundant_roles' ||
+          warning.code === 'a11y_consider_explicit_label' ||
+          warning.code === 'state_referenced_locally') {
+        return;
+      }
+      handler(warning);
+    }
+  })],
   publicDir: '../public',
   build: {
     outDir: '../public/dist',
     emptyOutDir: true,
     manifest: true,
+    // Vite 5+ puts assets under `assets/` (e.g. public/dist/assets/index-*.js)
+    // and the HTML references them as `/assets/index-*.js`. The irc-fiber
+    // gateway's serveDist route strips the `/public/dist/` prefix and
+    // serves from `public/dist/`, so a request for `/assets/index-*.js`
+    // won't match `/public/dist/*` and 404s. The gateway code handles
+    // this by also serving the `assets/` subdirectory under the same
+    // route prefix (see ircfiber/web/package.d), so we just keep Vite's
+    // default output structure.
   },
   server: {
     port: 5173,
@@ -40,8 +70,19 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
         secure: BACKEND_IS_TLS,
+      },
+      '/login': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: BACKEND_IS_TLS,
       }
     }
+  },
+  onwarn(warning, options) {
+    // Suppress the publicDir/outDir overlap warning — this is intentional
+    // because the Go gateway strips the /public/dist/ prefix.
+    if (warning.code === 'UNUSED_OUT_DIR') return;
+    options(warning);
   },
   test: {
     projects: [

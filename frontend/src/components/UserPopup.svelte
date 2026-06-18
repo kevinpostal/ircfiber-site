@@ -166,8 +166,8 @@
           <span title={modeTitle} class="mode_prefix mode_symbol {modeClass}">{modePrefix}</span>
           <span title={modeTitle} class="mode_prefix mode_pill {modeClass}">&bull;</span>
         {/if}
-        <span role="button" class="buffer bufferLink memberContextMenu__titleLink {modeClass} user link"
-              title={displayNick} onclick={openDM}>{displayNick}</span>
+        <span role="button" tabindex="0" class="buffer bufferLink memberContextMenu__titleLink {modeClass} user link"
+              title={displayNick} onclick={openDM} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDM(); } }}>{displayNick}</span>
         {#if modeTitle}
           <span class="mode-label">({modeTitle})</span>
         {/if}

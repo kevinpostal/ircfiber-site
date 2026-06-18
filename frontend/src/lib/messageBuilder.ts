@@ -2,9 +2,15 @@ import type { IRCMessage, JoinPartGroupMessage, DiscoGroupMessage } from '../typ
 import { isJoinPartLike, isDisconnectLike, escapeHtml, stripPrefix } from './utils';
 
 /**
- * Group consecutive MOTD lines (372) into a single MOTD_GROUP message.
- * Preserve the raw line text (including the leading "- " prefix and empty
+ * Group consecutive MOTD lines (372, 375) into a single MOTD_GROUP message.
+ * Pre-v re the raw line text (including the leading "- " prefix and empty
  * lines) so the renderer can emit IRCCloud-compatible groupedLines.
+ *
+ * Also absorbs 376 (End of MOTD / ERROR) into the group without adding a
+ * line — some servers send 376 with an error message between MOTD lines or
+ * immediately after, which would otherwise split the MOTD into two groups.
+ * The 376 is already filtered from display by isSkippedCommand, so there's
+ * no value in preserving it as a separate message.
  */
 export function groupMOTDLines(messages: IRCMessage[]): IRCMessage[] {
   const result: IRCMessage[] = [];
@@ -15,6 +21,15 @@ export function groupMOTDLines(messages: IRCMessage[]): IRCMessage[] {
     if (msg.command === '372' || msg.command === '375') {
       if (!motdHead) motdHead = msg;
       motdLines.push(msg.text || '');
+    } else if (msg.command === '376') {
+      // Absorb into current MOTD group if one is active, so 376 doesn't
+      // break consecutive 372/375 grouping. 376 is a terminal MOTD marker
+      // (End of MOTD or ERROR) that should never split the group.
+      if (motdLines.length === 0) {
+        // Standalone 376 with no preceding MOTD — drop it entirely.
+        // It's filtered by isSkippedCommand later anyway.
+        continue;
+      }
     } else {
       if (motdLines.length > 0 && motdHead) {
         result.push({
@@ -365,6 +380,17 @@ function peelGroup(last: IRCMessage): IRCMessage[] {
   return [last];
 }
 
+// Find the most recent MOTD_GROUP in the tail of a processed buffer.
+// Used by appendToProcessed to merge MOTD groups across interleaving
+// non-MOTD messages (e.g. 376 End of MOTD or server notices arriving
+// between batches of 372 lines).
+function findLastMotdGroupIndex(msgs: IRCMessage[]): number {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].command === 'MOTD_GROUP') return i;
+  }
+  return -1;
+}
+
 /**
  * Incrementally extend an existing processed buffer with newly appended
  * messages.  Only the tail of the existing processed array and the new
@@ -374,6 +400,13 @@ function peelGroup(last: IRCMessage): IRCMessage[] {
  * If the previous tail ends in a group (MOTD_GROUP, JOINPART_GROUP,
  * DISCO_GROUP), it may merge with the first new message.  We peel off that
  * tail so grouping can re-merge correctly.
+ *
+ * When the new messages contain MOTD lines (372/375) and the last item
+ * isn't a group, we also scan further back for a MOTD_GROUP buried behind
+ * an interleaving message (e.g. a 376 End of MOTD or server notice that
+ * arrived between MOTD batches).  If found, we peel from that position and
+ * re-process everything together so MOTD lines re-merge into a single group
+ * instead of splitting into two.
  */
 export function appendToProcessed(
   prevProcessed: IRCMessage[],
@@ -387,6 +420,20 @@ export function appendToProcessed(
   if (lastGroupCmd(last)) {
     keep = keep.slice(0, -1);
     prefix = peelGroup(last!);
+  } else if (newRaw.some(m => m.command === '372' || m.command === '375')) {
+    // New MOTD lines arrived but the last item isn't a group — a
+    // non-MOTD message may have landed between MOTD batches, burying
+    // the previous MOTD_GROUP in the tail.  Scan back for it so we
+    // can merge instead of creating a second group.
+    const motdIdx = findLastMotdGroupIndex(keep);
+    if (motdIdx >= 0) {
+      const tail = keep.splice(motdIdx);
+      prefix = peelGroup(tail[0]);
+      // Include any intervening messages (notices, numerics, etc.) in
+      // the re-processing — they pass through preprocessMessages as-is
+      // but the MOTD lines from both sides merge into one group.
+      prefix = prefix.concat(tail.slice(1));
+    }
   }
 
   const toProcess = prefix.concat(newRaw);

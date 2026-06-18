@@ -88,6 +88,10 @@ body.ascii-compact .row.messageRow {
 }
 .row.messageRow.status {
   font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* Same IRCCloud right gutter (118px for the timestamp/hover-tools
+     column) and left avatar gutter (68px) as the base .row. Without
+     this, status lines were wrapping into the timestamp area. */
+  padding: 0 118px 0 68px;
 }
 
 /* `.content` is the inner span that holds the formatted message body. The
@@ -99,12 +103,22 @@ body.ascii-compact .row.messageRow {
    wraps when the line truly doesn't fit.
    `display: inline` keeps it as an inline-level element so it doesn't
    create its own line box or add unexpected padding within the message
-   span's flex layout. */
+   span's flex layout.
+   Status rows (CAP, MOTD, numerics) override to break-word so identifiers
+   like "extended-join" wrap at hyphens instead of arbitrary characters. */
 .row.messageRow .content {
   display: inline;
   white-space: pre-wrap;
   word-break: break-all;
   overflow-wrap: anywhere;
+}
+
+/* Status rows: wrap at word boundaries so capability names, URLs, and
+   monospace identifiers don't get cut mid-character. The general rule
+   above uses break-all for bot/ANSI-art rows that need character-level
+   grid alignment. */
+.row.messageRow.status .content {
+  word-break: break-word;
 }
 
 /* LongMessageContent: per-message "Show more" truncation. `inline` keeps

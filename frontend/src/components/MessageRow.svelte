@@ -17,8 +17,19 @@
 
   let { msg, isHighlight = false, isSameAuthor = false, onNickClick, memberByNick = new Map() }: Props = $props();
 
-  const cmd = msg.command;
-  const isJoinPart = ['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd);
+  const cmd = $derived(msg.command);
+  const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
+  const isLifecycle = $derived(['CONNECT', 'DISCONNECT'].includes(cmd));
+  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
+  const isAction = $derived(msg.type === 'action');
+  const isJoinPartGroup = $derived(cmd === 'JOINPART_GROUP');
+  const isGrouped = $derived(isJoinPartGroup);
+  const typeClass = $derived(getIrcCloudTypeClass(cmd, msg.params, msg.type));
+
+  const ts = $derived(msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null));
+  const timeStr = $derived(ts ? formatTime12Hour(new Date(ts)) : '--:--:--');
+  const fullTitle = $derived(ts ? formatDateTimeTitle(new Date(ts)) : '');
+  const nick = $derived(msg.nick ?? '');
 
   const activeNetwork = $derived(getActiveNetwork());
   const myNick = $derived(activeNetwork?.currentNick || '');
@@ -37,21 +48,8 @@
       'gi'
     );
   });
-  // Lifecycle events (server/client connect or disconnect) render like
-  // join/part rows in IRCCloud: no `status monospace`, just the type class.
-  const isLifecycle = ['CONNECT', 'DISCONNECT'].includes(cmd);
-  const isSystem = ['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick);
-  const isAction = msg.type === 'action';
-  const isJoinPartGroup = cmd === 'JOINPART_GROUP';
-  const isGrouped = isJoinPartGroup;
-  const typeClass = getIrcCloudTypeClass(cmd, msg.params, msg.type);
 
   let expanded = $state(false);
-
-  const ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
-  const timeStr = ts ? formatTime12Hour(new Date(ts)) : '--:--:--';
-  const fullTitle = ts ? formatDateTimeTitle(new Date(ts)) : '';
-  const nick = msg.nick ?? '';
 
   function getModeForNick(n: string): string {
     const cleaned = stripPrefix(n);
@@ -435,8 +433,8 @@
         <span class="authorWrap">
           <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span role="button" class="buffer bufferLink author {colorCls} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}{nick}</span>
+          <span role="button" tabindex="0" class="buffer bufferLink author {colorCls} user hasUserParent link"
+                title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}{nick}</span>
           <span class="g" aria-hidden="true">&gt;</span>
           &nbsp;
           {#if sensibleRealname && sensibleRealname !== nick}

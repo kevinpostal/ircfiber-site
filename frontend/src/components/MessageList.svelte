@@ -45,7 +45,7 @@
   // no framework reactivity). We mirror that with a direct style write
   // here so the `top` updates on every scroll event feel just as snappy
   // and aren't queued behind a Svelte microtask.
-  let stickyAvatarEl: HTMLDivElement | null = null;
+  let stickyAvatarEl = $state<HTMLDivElement | null>(null);
   let batchRendering = false;
   // IRCCloud-style: capture pinBottom BEFORE each reactive flush runs.
   // Without this, cachedAtBottom can be stale by the time the $effect
@@ -813,6 +813,7 @@
     // synchronous DOM write.  Mirrors that exactly so the avatar feels
     // pinned to the scroll and the update lands in the same frame as
     // the scroll event, not on a later Svelte microtask.
+    // svelte-ignore non_reactive_update
     if (stickyAvatarEl) stickyAvatarEl.style.top = `${top}px`;
   }
 

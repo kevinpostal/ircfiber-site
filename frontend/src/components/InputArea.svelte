@@ -512,7 +512,7 @@
         </span>
       </div>
       <div class="inputcell">
-        <form class="input" id="compose" role="form" aria-label="Send message"
+        <form class="input" id="compose" aria-label="Send message"
               onsubmit={(e) => { e.preventDefault(); void handleSend(); }}>
           <textarea
             bind:this={textarea}

@@ -301,7 +301,7 @@
                 <td class="data_ban_list">{ban.mask}</td>
                 <td class="data_ban_list">{ban.setBy}</td>
                 <td class="data_ban_list"><span title={fullDate(ban.setAt)}>{relativeTime(ban.setAt)}</span></td>
-                <td class="data_ban_list"><a href="" class="unban" title="Unban {ban.mask}" data-mask={ban.mask} onclick={(e) => { e.preventDefault(); unban(ban.mask); }}>x</a></td>
+                <td class="data_ban_list"><a href="#" class="unban" title="Unban {ban.mask}" data-mask={ban.mask} onclick={(e) => { e.preventDefault(); unban(ban.mask); }}>x</a></td>
               </tr>
             {/each}
           </tbody>
@@ -327,7 +327,7 @@
               {@const unignored = !!pendingUnignores[mask]}
               <tr class={(i % 2 === 0 ? 'odd' : 'even') + (unignored ? ' unignored' : '')} data-mask={mask}>
                 <td class="data_ignore_list">
-                  <a href="" class={unignored ? 'undounignore' : 'unignore'} title={unignored ? 'Re-ignore ' + mask : 'Unignore ' + mask} data-mask={mask} onclick={(e) => {
+                  <a href="#" class={unignored ? 'undounignore' : 'unignore'} title={unignored ? 'Re-ignore ' + mask : 'Unignore ' + mask} data-mask={mask} onclick={(e) => {
                     e.preventDefault();
                     if (pendingUnignores[mask]) {
                       delete pendingUnignores[mask];

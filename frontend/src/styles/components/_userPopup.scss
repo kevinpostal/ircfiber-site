@@ -48,7 +48,10 @@
   color: #ccc;
   font-size: 13px;
   background: transparent;
-  padding: 2px 80px 2px 68px;
+  /* Match the IRCCloud right gutter (118px) set in app.css. Without
+     this, the same-selector rule later in this file was overriding
+     app.css with `padding: 2px 80px 2px 68px`, hiding the fix. */
+  padding: 0 118px 0 68px;
 }
 .row.messageRow.status .date {
   top: 2px;

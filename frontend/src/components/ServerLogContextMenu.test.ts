@@ -55,7 +55,6 @@ describe('ServerLogContextMenu', () => {
     await expect.element(page.getByRole('button', { name: 'Edit…' })).toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Ignore list…' })).toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Download logs…' })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Reorder…' })).toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Delete active private messages…' })).toBeInTheDocument();
     await expect.element(page.getByText('Show unread message indicator')).toBeInTheDocument();
     await expect.element(page.getByText('Mark as read automatically')).toBeInTheDocument();

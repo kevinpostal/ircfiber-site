@@ -103,9 +103,6 @@
     sendRaw(networkId, 'PRIVMSG NickServ :IDENTIFY');
     onClose();
   }
-  function clickReorder(): void {
-    onClose();
-  }
   function clickToggleCollapse(): void {
     if (network) {
       const newValue = !collapsedMap[network.networkId];
@@ -150,7 +147,7 @@
     onClose();
   }
 
-  const prefs = getBufferPrefs(networkId, '_server');
+  const prefs = $derived(getBufferPrefs(networkId, '_server'));
   const toggles = $state({
     showUnread: prefs.showUnread ?? true,
     markAsRead: prefs.markAsRead ?? true,
@@ -196,9 +193,6 @@
       </li>
       <li class="clear">
         <button class="contextMenu__item clear" onclick={clearBacklog}>Clear backlog</button>
-      </li>
-      <li class="reorder">
-        <button class="contextMenu__item reorder" onclick={clickReorder}>Reorder…</button>
       </li>
       <li class="collapse" class:inactive={isCollapsed} aria-disabled={isCollapsed} style:display={isCollapsed ? 'none' : ''}>
         <button class="contextMenu__item collapse" class:contextMenu__item--disabled={isCollapsed} disabled={isCollapsed} onclick={clickToggleCollapse}>Collapse</button>

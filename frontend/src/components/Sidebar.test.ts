@@ -6,13 +6,20 @@ import { flushSync } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 import { ircState, setActiveBuffer, appendMessage, updateChannelUsers, updateNetworkFromSync } from '../stores/ircStore.svelte';
-import { archivedMap, pinnedMap } from '../stores/preferences.svelte';
+import { archivedMap, pinnedMap, networkOrder, collapsedMap } from '../stores/preferences.svelte';
 
 function resetState(): void {
 	ircState.networks.length = 0;
 	ircState.activeBuffer.networkId = null;
 	ircState.activeBuffer.bufferName = null;
+  ircState.reorderMode = false;
 	Object.keys(archivedMap).forEach((k) => delete (archivedMap as Record<string, unknown>)[k]);
+	Object.keys(collapsedMap).forEach((k) => delete (collapsedMap as Record<string, unknown>)[k]);
+  networkOrder.length = 0;
+  // Clear any leftover DOM from a previous render — otherwise `dragging`
+  // and other state left on stale `.network-list-items` containers
+  // bleeds into the next test.
+  document.body.innerHTML = '';
 }
 
 beforeEach(() => {
@@ -567,6 +574,313 @@ describe('Sidebar', () => {
 
       // Should stay unpinned because local state said false
       expect(pinnedMap['net1:#general']).toBe(false);
+    });
+  });
+
+  describe('drag-to-reorder', () => {
+    function setupTwoNetworks(): void {
+      const lib = createNetwork({ networkId: 'lib', name: 'Libera' });
+      lib.buffers.push(createBuffer({ name: '#general' }));
+      ircState.networks.push(lib);
+      const snoo = createNetwork({ networkId: 'snoo', name: 'SuperNETs' });
+      snoo.buffers.push(createBuffer({ name: '#chat' }));
+      ircState.networks.push(snoo);
+    }
+
+    it('shows chevron buttons on each network header (drag handle replaces it during drag)', async () => {
+      setupTwoNetworks();
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+      const chevronButtons = document.querySelectorAll('.collapseToggle button');
+      expect(chevronButtons.length).toBeGreaterThanOrEqual(2);
+      // Drag handles are in the DOM only during active drag (dragActive=true)
+      // The collapseToggle always contains either a chevron button or a
+      // drag-handle icon, swapped via {#if dragActive}
+      const toggles = document.querySelectorAll('.collapseToggle');
+      expect(toggles.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('network header click switches buffers', async () => {
+      setupTwoNetworks();
+      const onSwitchBuffer = vi.fn();
+      render(Sidebar, { props: { onSwitchBuffer, onAddNetwork: vi.fn() } });
+      await userEvent.click(page.getByText('Libera'));
+      expect(onSwitchBuffer).toHaveBeenCalledWith('lib', '_server');
+    });
+
+    it('adds dragging class on drag start', async () => {
+      setupTwoNetworks();
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+      const container = document.querySelector('.network-list-items')!;
+      expect(container.classList.contains('dragging')).toBe(false);
+      // Simulate dndzone 'consider' event so handleConsider fires
+      const consider = new CustomEvent('consider', {
+        detail: {
+          items: [],
+          info: { trigger: 'dragStarted' as const, id: 'lib', source: 'POINTER' as const }
+        }
+      });
+      container.dispatchEvent(consider);
+      expect(container.classList.contains('dragging')).toBe(true);
+    });
+
+    it('auto-collapses the dragged network on drag start (persists via updateCollapsed)', async () => {
+      setupTwoNetworks();
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({ ok: true } as Response));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+      try {
+        render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+        const container = document.querySelector('.network-list-items')!;
+
+        // Pre-condition: 'snoo' is expanded (no entry in collapsedMap)
+        expect(collapsedMap['snoo']).toBeFalsy();
+        // Before the drag, both networks are rendered in ircState.networks
+        // order [lib, snoo], so snoo is at index 1.
+        const snooBefore = container.querySelectorAll('.network')[1];
+        expect(snooBefore.querySelector('.label')?.textContent).toBe('SuperNETs');
+        expect(!!snooBefore.querySelector('.network-buffers')).toBe(true);
+
+        // Start a drag on 'snoo' — svelte-dnd-action's first consider event
+        // includes info.id = the networkId of the dragged item.
+        container.dispatchEvent(new CustomEvent('consider', {
+          detail: {
+            items: [
+              { id: 'snoo', net: ircState.networks.find(n => n.networkId === 'snoo')!, isDndShadowItem: true },
+              { id: 'lib', net: ircState.networks.find(n => n.networkId === 'lib')! },
+            ],
+            info: { trigger: 'dragStarted' as const, id: 'snoo', source: 'POINTER' as const }
+          }
+        }));
+        flushSync();
+
+        // The dragged network must be collapsed as if the user clicked the
+        // chevron, and the change must be persisted to the server.
+        expect(collapsedMap['snoo']).toBe(true);
+        // During the drag, svelte-dnd-action puts a shadow placeholder at
+        // the drop position. The shadow carries the snoo Network, so snoo
+        // renders at index 0 in the each block. Find it by its label.
+        const snooAfter = Array.from(container.querySelectorAll('.network'))
+          .find(n => n.querySelector('.label')?.textContent === 'SuperNETs')!;
+        expect(!!snooAfter.querySelector('.network-buffers')).toBe(false);
+        // The persistence POST went out and carried the right payload.
+        const collapsedCalls = fetchMock.mock.calls.filter(c =>
+          typeof c[0] === 'string' && c[0].includes('/api/me/collapsed')
+        );
+        expect(collapsedCalls.length).toBe(1);
+        const body = JSON.parse(collapsedCalls[0][1].body as string);
+        expect(body).toEqual({ network: 'snoo', collapsed: true });
+
+        // A second drag-start (e.g. after a drop, user grabs again) must
+        // NOT redundantly POST (it's already collapsed).
+        fetchMock.mockClear();
+        container.dispatchEvent(new CustomEvent('consider', {
+          detail: {
+            items: [
+              { id: 'snoo', net: ircState.networks.find(n => n.networkId === 'snoo')!, isDndShadowItem: true },
+              { id: 'lib', net: ircState.networks.find(n => n.networkId === 'lib')! },
+            ],
+            info: { trigger: 'dragStarted' as const, id: 'snoo', source: 'POINTER' as const }
+          }
+        }));
+        flushSync();
+        const collapsedCalls2 = fetchMock.mock.calls.filter(c =>
+          typeof c[0] === 'string' && c[0].includes('/api/me/collapsed')
+        );
+        expect(collapsedCalls2.length).toBe(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('swaps chevron for drag handle while a drag is active', async () => {
+      setupTwoNetworks();
+      const { container: renderedContainer } = render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+      const container = renderedContainer.querySelector('.network-list-items')!;
+      // Before drag: every network header shows the collapse chevron button
+      expect(container.querySelectorAll('.collapseToggle button').length).toBeGreaterThanOrEqual(2);
+      expect(container.querySelector('.collapseToggle .drag-handle')).toBeNull();
+
+      // Start a drag — svelte-dnd-action's first consider event flips
+      // dragActive=true, which should swap every chevron for a drag
+      // handle (the user-facing "server name collapsing" affordance).
+      // We must pass non-empty items (with the shadow marker) so the
+      // keyed each block keeps the networks in the DOM.
+      const libNet = ircState.networks.find(n => n.networkId === 'lib')!;
+      const snooNet = ircState.networks.find(n => n.networkId === 'snoo')!;
+      const consider = new CustomEvent('consider', {
+        detail: {
+          items: [
+            { id: 'lib', net: libNet, isDndShadowItem: true },
+            { id: 'snoo', net: snooNet },
+          ],
+          info: { trigger: 'dragStarted' as const, id: 'lib', source: 'POINTER' as const }
+        }
+      });
+      container.dispatchEvent(consider);
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(container.querySelectorAll('.collapseToggle button').length).toBe(0);
+      expect(container.querySelectorAll('.collapseToggle .drag-handle').length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('collapse toggle is not disabled (drag is always active)', async () => {
+      setupTwoNetworks();
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+      const collapseButton = document.querySelector('.collapseToggle button') as HTMLButtonElement | null;
+      expect(collapseButton).not.toBeNull();
+      expect(collapseButton?.disabled).toBe(false);
+    });
+
+    it('drop persists new order via updateNetworkOrder and updates ircState.networks', async () => {
+      setupTwoNetworks();
+      // Stub fetch so the POST during finalize doesn't hit the network
+      // and pollute test output. The Sidebar's updateNetworkOrder catches
+      // the rejection and just logs it — we only care that local state
+      // is updated.
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async () => ({ ok: true } as Response)) as typeof fetch;
+      try {
+        render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+        // Simulate the dndzone 'finalize' event by calling the same
+        // handler the library would invoke. We do this by reordering
+        // ircState.networks directly + setting networkOrder, then
+        // dispatching a CustomEvent that the Sidebar's onfinalize handler
+        // can pick up (the handler reads e.detail.items).
+        const snooNet = ircState.networks.find(n => n.networkId === 'snoo')!;
+        const libNet = ircState.networks.find(n => n.networkId === 'lib')!;
+        const finalize = new CustomEvent('finalize', {
+          detail: { items: [{ id: 'snoo', net: snooNet }, { id: 'lib', net: libNet }] }
+        });
+        const itemsContainer = document.querySelector('.network-list-items');
+        expect(itemsContainer).not.toBeNull();
+        itemsContainer?.dispatchEvent(finalize);
+        await new Promise(r => setTimeout(r, 0));
+
+        expect(ircState.networks[0].networkId).toBe('snoo');
+        expect(ircState.networks[1].networkId).toBe('lib');
+        expect(networkOrder).toEqual(['snoo', 'lib']);
+        expect(globalThis.fetch).toHaveBeenCalled();
+        const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+        const callArg = (fetchMock.mock.calls[0]?.[0] as string) ?? '';
+        expect(callArg).toContain('/api/me/network-order');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('networkOrder is applied to ircState.networks on boot via updateNetworkFromSync', () => {
+      // Simulate boot order arriving from the server
+      networkOrder.push('snoo', 'lib');
+      const lib = createNetwork({ networkId: 'lib', name: 'Libera' });
+      const snoo = createNetwork({ networkId: 'snoo', name: 'SuperNETs' });
+      // Engine emits in declaration order, but we push them in reverse
+      updateNetworkFromSync([
+        { ...snoo, networkId: 'snoo', id: 'snoo' } as any,
+        { ...lib, networkId: 'lib', id: 'lib' } as any,
+      ]);
+      expect(ircState.networks[0].networkId).toBe('snoo');
+      expect(ircState.networks[1].networkId).toBe('lib');
+    });
+
+    it('a network added after reorder goes to the end', () => {
+      networkOrder.push('lib', 'snoo');
+      const lib = createNetwork({ networkId: 'lib', name: 'Libera' });
+      const snoo = createNetwork({ networkId: 'snoo', name: 'SuperNETs' });
+      updateNetworkFromSync([
+        { ...lib, networkId: 'lib', id: 'lib' } as any,
+        { ...snoo, networkId: 'snoo', id: 'snoo' } as any,
+      ]);
+      expect(ircState.networks[0].networkId).toBe('lib');
+      expect(ircState.networks[1].networkId).toBe('snoo');
+
+      // Now a new network arrives — not in the order list
+      const oftc = createNetwork({ networkId: 'oftc', name: 'OFTC' });
+      updateNetworkFromSync([
+        { ...lib, networkId: 'lib', id: 'lib' } as any,
+        { ...snoo, networkId: 'snoo', id: 'snoo' } as any,
+        { ...oftc, networkId: 'oftc', id: 'oftc' } as any,
+      ]);
+      expect(ircState.networks[0].networkId).toBe('lib');
+      expect(ircState.networks[1].networkId).toBe('snoo');
+      expect(ircState.networks[2].networkId).toBe('oftc');
+    });
+
+    it('chevron still collapses a network AFTER a real drag flow (consider + finalize)', async () => {
+      // Reproduces the user-reported bug: after dragging a network to
+      // reorder, clicking the chevron on any network header must still
+      // hide its channel list. Previously the splice-in-place with the
+      // same Network references failed to invalidate Svelte 5's $state
+      // proxy, leaving dragList stale and the keyed each block re-rendering
+      // wrappers whose on-click closure no longer flipped collapsedMap.
+      setupTwoNetworks();
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = vi.fn(async () => ({ ok: true } as Response)) as typeof fetch;
+      try {
+        render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+        const container = document.querySelector('.network-list-items')!;
+
+        // Pre-condition: both networks expanded (channels visible).
+        expect(container.querySelectorAll('.network-buffers').length).toBe(2);
+
+        // Simulate the real drag flow: a consider event mid-drag (with
+        // a shadow placeholder) followed by the finalize event on drop.
+        const libNet = ircState.networks.find(n => n.networkId === 'lib')!;
+        const snooNet = ircState.networks.find(n => n.networkId === 'snoo')!;
+
+        // Drag started on 'snoo', dropping it above 'lib' → new order
+        // [snoo, lib] with snoo as the shadow placeholder.
+        container.dispatchEvent(new CustomEvent('consider', {
+          detail: {
+            items: [
+              { id: 'snoo', net: snooNet, isDndShadowItem: true },
+              { id: 'lib', net: libNet },
+            ],
+            info: { trigger: 'dragStarted' as const, id: 'snoo', source: 'POINTER' as const }
+          }
+        }));
+        flushSync();
+        container.dispatchEvent(new CustomEvent('finalize', {
+          detail: {
+            items: [
+              { id: 'snoo', net: snooNet, isDndShadowItem: true },
+              { id: 'lib', net: libNet },
+            ],
+            info: { trigger: 'droppedIntoZone' as const, id: 'snoo', source: 'POINTER' as const }
+          }
+        }));
+        flushSync();
+
+        expect(ircState.networks[0].networkId).toBe('snoo');
+        expect(ircState.networks[1].networkId).toBe('lib');
+
+        // After the drag, 'snoo' is auto-collapsed (the dragged network
+        // collapses on drag-start so only the header moves during reorder).
+        // Click the chevron to expand it back, then click again to collapse,
+        // proving the toggle still works after the reorder.
+        expect(collapsedMap['snoo']).toBe(true);
+        const snooHeader = document.querySelectorAll('.network-header')[0]!;
+        const snooChevron = snooHeader.querySelector('.collapseToggle button') as HTMLButtonElement;
+        expect(snooChevron).not.toBeNull();
+        snooChevron.click();
+        flushSync();
+        expect(collapsedMap['snoo']).toBe(false);
+        snooChevron.click();
+        flushSync();
+        expect(collapsedMap['snoo']).toBe(true);
+        const snooBuffers = document.querySelectorAll('.network')[0]!.querySelector('.network-buffers');
+        expect(snooBuffers).toBeNull();
+
+        // And the second network's chevron must still work too. 'lib' was
+        // NOT the dragged network so it wasn't auto-collapsed.
+        const libChevron = document.querySelectorAll('.network-header')[1]!.querySelector('.collapseToggle button') as HTMLButtonElement;
+        libChevron.click();
+        flushSync();
+        expect(collapsedMap['lib']).toBe(true);
+        const libBuffers = document.querySelectorAll('.network')[1]!.querySelector('.network-buffers');
+        expect(libBuffers).toBeNull();
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     });
   });
 });

@@ -43,6 +43,7 @@ export interface MeResponse {
   membersCollapsed?: Record<string, boolean>;
   collapsed?: Record<string, boolean>;
   inactiveCollapsed?: Record<string, boolean>;
+  networkOrder?: string[];
 }
 
 export async function fetchMe(): Promise<MeResponse> {
@@ -99,6 +100,15 @@ export async function updateInactiveCollapsed(networkId: string, collapsed: bool
     body: JSON.stringify({ network: networkId, collapsed })
   });
   if (!r.ok) throw new Error('Update inactive collapsed failed');
+}
+
+export async function updateNetworkOrder(order: string[]): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/network-order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order })
+  });
+  if (!r.ok) throw new Error('Update network order failed');
 }
 
 export async function updateMembersCollapsed(networkId: string, channel: string, collapsed: boolean): Promise<void> {

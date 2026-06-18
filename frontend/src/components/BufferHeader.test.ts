@@ -168,10 +168,11 @@ describe('BufferHeader', () => {
 		expect(ircState.activeBuffer.networkId).toBe('net1');
 		expect(ircState.activeBuffer.bufferName).toBe('_server');
 
-		// Verify connected state changed instantly (not waiting for server)
+		// Verify connection state changed to connecting (not waiting for server)
 		const updatedNet = ircState.networks.find(n => n.networkId === 'net1');
-		expect(updatedNet?.connected).toBe(true);
 		expect(updatedNet?.connectionState).toBe('connecting');
+		// connected stays false until the engine sends 001 (RPL_WELCOME)
+		expect(updatedNet?.connected).toBe(false);
 
 		// Verify the reconnect API was called
 		expect(reconnectNetwork).toHaveBeenCalledWith('net1');

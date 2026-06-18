@@ -1,7 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
-import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel } from './preferences.svelte';
+import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel } from './api';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 
@@ -42,6 +42,10 @@ export const ircState = $state({
   backlogDivider: {} as Record<string, string>,
   // Per-buffer typing state: bufferKey -> (nick -> timestamp of last TAGMSG)
   typing: {} as Record<string, Record<string, number>>,
+  // IRCCloud-style "reorder mode": when true, the Sidebar enters drag-and-drop
+  // reorder for the network list and suppresses normal click/collapse on
+  // network headers. Toggled by the "Reorder Networks" / "Done" buttons.
+  reorderMode: false,
 });
 
 // IRCCloud-style previous-buffer tracking: the buffer that was active before
@@ -94,6 +98,10 @@ export function getHasHighlight(): boolean {
 }
 
 // ── Actions ──
+export function setReorderMode(value: boolean): void {
+  ircState.reorderMode = value;
+}
+
 export function setActiveBuffer(networkId: string, bufferName: string): void {
   bufferName = normalizeChannelName(bufferName);
 
@@ -743,12 +751,52 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         existing.disconnectReason = '';
       }
 
-      Object.assign(existing, {
-        name: net.name, host: net.host, port: net.port,
-        tls: net.tls, nick: net.nick,
-        realName: net.realName, connected: net.connected,
-        status: net.status, connectionState
-      });
+      // Don't overwrite connected/connectionState from the sync when the
+      // live event-driven state already says connected.  The engine's sync
+      // snapshot lags behind real-time IRC events: 001 (RPL_WELCOME) fires
+      // immediately and sets connected=true, but the engine doesn't report
+      // connected=true in its snapshot until AFTER performRegistration()
+      // returns (post-MOTD).  During this window the sync would downgrade
+      // the live state back to disconnected, causing the red "Click to
+      // reconnect" banner to appear while MOTD lines are still arriving.
+      //
+      // Only adopt the sync's connection values if they're genuinely new
+      // (not just slower) — i.e. the sync says disconnected but the live
+      // state is still in a connecting/connected handshake window.
+      const liveState = existing.connectionState;
+      const isLiveConnected = existing.connected;
+      const syncIsNew =
+        connectionState === 'disconnected'
+          ? isLiveConnected
+            // Live says connected but sync says disconnected - this could
+            // be the race window.  Only downgrade if the sync has come
+            // back multiple times (the engine gives up), or if the live
+            // state has had time to settle.  For now, trust the live event-
+            // driven state over the periodic snapshot during handshake.
+            ? false
+            : liveState !== connectionState
+          : liveState !== connectionState;
+
+      // Always sync metadata fields — these don't race with live events.
+      existing.name = net.name;
+      existing.host = net.host;
+      existing.port = net.port;
+      existing.tls = net.tls;
+      existing.nick = net.nick;
+      existing.realName = net.realName;
+      existing.status = net.status;
+
+      // Connection state: only overwrite from sync when it represents
+      // genuinely new info, not when the sync is just slower than live
+      // IRC events (the race window described above).
+      if (syncIsNew) {
+        existing.connected = net.connected;
+        existing.connectionState = connectionState;
+      } else if (connectionState === 'connecting') {
+        // The sync confirms connection is in progress — this is new info
+        // that live events haven't provided yet (001 hasn't fired).
+        existing.connectionState = connectionState;
+      }
       // Don't blindly overwrite currentNick from sync — the IRC NICK event
       // handler is the authoritative source for nick changes. Sync snapshots
       // are taken on a timer and may contain the old nick for a few seconds
@@ -955,6 +1003,23 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       seen.set(id, prev);
     }
     ircState.networks.splice(0, ircState.networks.length, ...Array.from(seen.values()));
+  }
+
+  // Apply user-defined sidebar order. Items in `networkOrder` come first in
+  // that order; items not in the list (e.g. a freshly-added network) are
+  // appended at the end in their current (engine-emitted) order. Uses a
+  // stable sort so the relative order of unknown networks is preserved.
+  if (networkOrder.length > 0) {
+    const orderIndex = new Map<string, number>();
+    networkOrder.forEach((id, i) => orderIndex.set(id, i));
+    ircState.networks.sort((a, b) => {
+      const ai = orderIndex.get(a.networkId);
+      const bi = orderIndex.get(b.networkId);
+      if (ai != null && bi != null) return ai - bi;
+      if (ai != null) return -1;
+      if (bi != null) return 1;
+      return 0;
+    });
   }
 
   // Sync persisted pin state to buffer objects

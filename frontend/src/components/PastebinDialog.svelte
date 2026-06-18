@@ -65,6 +65,7 @@
     }
   });
 
+  // svelte-ignore non_reactive_update — bind:this target, not user state
   let editorEl: HTMLTextAreaElement | undefined;
 
   function onKeyDown(e: KeyboardEvent) {
@@ -168,7 +169,6 @@
               autocorrect="off"
               autocapitalize="off"
               spellcheck="false"
-              role="textbox"
               aria-label="Snippet contents"
             ></textarea>
           </div>

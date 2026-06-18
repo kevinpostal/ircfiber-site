@@ -7,7 +7,17 @@ import { ircState, updateChannelUsers } from './stores/ircStore.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
-  connectWebSocket: vi.fn(),
+  // The real connectWebSocket opens a WebSocket and fires onopen/onmessage
+  // asynchronously. Tests need the boot sequence to complete synchronously
+  // so isBootLoading (which gates the sidebar/chat behind
+  // syncReceived && backlogReady) flips to false right after render().
+  // Simulate the minimal boot: open → stat_user → boot sync. The sync
+  // message is what sets syncReceived=true and backlogReady=true in App.
+  connectWebSocket: vi.fn((onMessage, onOpen) => {
+    onOpen?.();
+    onMessage?.({ type: 'stat_user', username: 'tester', email: 'tester@test.local' });
+    onMessage?.({ type: 'sync', networks: [] });
+  }),
   disconnectWebSocket: vi.fn(),
   sendRaw: vi.fn(),
   sendMessage: vi.fn(),
@@ -46,6 +56,7 @@ vi.mock('/src/stores/api', () => ({
   fetchUploadsOffset: vi.fn(async () => ({ uploads: [], total: 0 })),
   updateCollapsed: vi.fn(async () => undefined),
   updateInactiveCollapsed: vi.fn(async () => undefined),
+  updateNetworkOrder: vi.fn(async () => undefined),
   hideChannel: vi.fn(async () => undefined),
   unhideChannel: vi.fn(async () => undefined),
 }));

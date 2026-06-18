@@ -174,7 +174,7 @@
     onClose();
   }
 
-  const prefs = getBufferPrefs(networkId, buf.name);
+  const prefs = $derived(getBufferPrefs(networkId, buf.name));
   const toggles = $state({
     showMembers: memberPanelOpen,
     showUnread: prefs.showUnread ?? true,

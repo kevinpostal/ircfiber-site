@@ -64,7 +64,9 @@
 .network:last-child { margin-bottom: 0; }
 ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header { display: block; position: relative; font-size: 15px; font-weight: 400; color: #d9d9d9; user-select: none; margin: 0; padding: 0; background: transparent; line-height: 18px; border-radius: 0; }
-.network-header.buffer { background: #333; border-radius: 0 4px 4px 0; margin-left: -5px; width: calc(100% + 5px); box-sizing: border-box; }
+.network-header.buffer { background: #333; border-radius: 0 4px 4px 0; margin-left: -5px; width: calc(100% + 5px); box-sizing: border-box; cursor: grab; outline: none; }
+.network-header.buffer:active { cursor: grabbing; }
+.network-header.buffer:focus { outline: none; }
 .network-header .buffer { display: flex; align-items: center; padding: 3px 0 2px 12px; cursor: pointer; color: #999; line-height: 18px; border-left: 5px solid #262626; flex: 1; min-width: 0; }
 .network-header .buffer .label { padding: 3px 7px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .network.connected .network-header .buffer { color: #d9d9d9; }
@@ -81,6 +83,10 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header.selected .buffer .network-shield,
 .network-header.active .buffer .network-shield { color: #333; }
 .network-header .buffer .bufferOptions { visibility: hidden; font-size: 18px; padding: 2px; margin: 0 8px 0 auto; color: #a6a6a6; background: none; border: none; cursor: pointer; flex-shrink: 0; }
+
+/* During drag, hide all channel lists so the user sees only server
+   headers — makes reordering much easier. Applied via dragActive state. */
+.network-list-items.dragging .network-buffers { display: none; }
 .network-list .network-header:hover .bufferOptions,
 .network-list .network-header:focus-within .bufferOptions,
 .network-list .bufferOptions:focus-visible { visibility: visible; }
@@ -98,6 +104,8 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header.active .buffer:focus .bufferOptions,
 .network-header.selected .buffer:focus-within .bufferOptions,
 .network-header.active .buffer:focus-within .bufferOptions { color: #333; }
+
+
 .network-header.selected .buffer .bufferOptions:hover,
 .network-header.active .buffer .bufferOptions:hover,
 .network-header.selected .buffer .bufferOptions:focus,

@@ -30,7 +30,7 @@
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, suppressAnimations, globalPrefs } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -595,6 +595,22 @@ let showNetworkForm: boolean = $state(false);
         if (value === true) inactiveCollapsedMap[key] = true;
       }
     }
+    if (user.networkOrder) {
+      const order = user.networkOrder as string[];
+      networkOrder.length = 0;
+      networkOrder.push(...order);
+      // Re-sort the network list to reflect the boot-time order. Without
+      // this, the sidebar would render in engine-emitted order on first
+      // paint and snap to the user's order on the next sync.
+      ircState.networks.sort((a, b) => {
+        const ai = order.indexOf(a.networkId);
+        const bi = order.indexOf(b.networkId);
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        if (ai !== -1) return -1;
+        if (bi !== -1) return 1;
+        return 0;
+      });
+    }
   }
 
   function handlePrefUpdate(data: Record<string, unknown>): void {
@@ -655,6 +671,21 @@ let showNetworkForm: boolean = $state(false);
       for (const [k, v] of Object.entries(ic)) {
         if (v === true) inactiveCollapsedMap[k] = true;
       }
+    } else if (key === 'networkOrder') {
+      // Real-time sync from another tab/device: apply the new order to
+      // ircState.networks so the sidebar updates immediately, mirroring
+      // how the boot payload does it.
+      const order = ((data.value as string[]) ?? []).slice();
+      networkOrder.length = 0;
+      networkOrder.push(...order);
+      ircState.networks.sort((a, b) => {
+        const ai = order.indexOf(a.networkId);
+        const bi = order.indexOf(b.networkId);
+        if (ai !== -1 && bi !== -1) return ai - bi;
+        if (ai !== -1) return -1;
+        if (bi !== -1) return 1;
+        return 0;
+      });
     }
   }
 
@@ -873,7 +904,7 @@ let showNetworkForm: boolean = $state(false);
         memberPanelOpen={isNarrow ? mobileMembersOpen : memberPanelOpen}
       />
       <div class="content-row">
-        <main class="chat-container" role="main">
+        <main class="chat-container">
           <ChatArea onNickClick={handleNickClick} />
         </main>
         {#if hasMembers}
