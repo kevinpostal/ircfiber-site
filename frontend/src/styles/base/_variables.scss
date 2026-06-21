@@ -80,6 +80,14 @@ a:hover { color: #79c0ff; text-decoration: underline; }
   min-height: 0;
   overflow: hidden;
 }
+.chat-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 /* Suppress layout/visual animations when the state change comes from a
    cross-tab sync (storage event) rather than a user click. The `no-anim`
    class is added briefly while the new state is being applied, so the

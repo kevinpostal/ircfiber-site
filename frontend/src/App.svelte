@@ -895,18 +895,20 @@ let showNetworkForm: boolean = $state(false);
     {:else if ircState.networks.length === 0}
       <WelcomePage />
     {:else}
-      <BufferHeader
-        onAddNetwork={() => { networkFormMode = 'add'; editNetworkId = null; showNetworkForm = true; }}
-        onEditNetwork={() => { networkFormMode = 'edit'; editNetworkId = ircState.activeBuffer.networkId; showNetworkForm = true; }}
-        onJoinChannel={openChannelMenu}
-        onToggleMembers={toggleMemberPanel}
-        onToggleSidebar={() => sidebarDrawerOpen = !sidebarDrawerOpen}
-        memberPanelOpen={isNarrow ? mobileMembersOpen : memberPanelOpen}
-      />
       <div class="content-row">
-        <main class="chat-container">
-          <ChatArea onNickClick={handleNickClick} />
-        </main>
+        <div class="chat-column">
+          <BufferHeader
+            onAddNetwork={() => { networkFormMode = 'add'; editNetworkId = null; showNetworkForm = true; }}
+            onEditNetwork={() => { networkFormMode = 'edit'; editNetworkId = ircState.activeBuffer.networkId; showNetworkForm = true; }}
+            onJoinChannel={openChannelMenu}
+            onToggleMembers={toggleMemberPanel}
+            onToggleSidebar={() => sidebarDrawerOpen = !sidebarDrawerOpen}
+            memberPanelOpen={isNarrow ? mobileMembersOpen : memberPanelOpen}
+          />
+          <main class="chat-container">
+            <ChatArea onNickClick={handleNickClick} />
+          </main>
+        </div>
         {#if hasMembers}
           <aside id="member-sidebar" class="show">
             <MemberList onNickClick={handleNickClick} />
