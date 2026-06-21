@@ -6,7 +6,7 @@ import { playwright } from '@vitest/browser-playwright';
 // to point at a non-local backend (e.g. the tailnet gateway):
 //
 //   npm run dev:local    # → http://127.0.0.1:8090 (local docker-compose)
-//   npm run dev:tailnet  # → https://ircfiber-prod-1.tail544547.ts.net
+//   npm run dev:tailnet  # → https://ircfiber-ovh.tail544547.ts.net
 //                        #   (tailnet gateway; real cert via Tailscale ACME)
 //   VITE_BACKEND_URL=http://192.168.1.50:8090 npm run dev
 //                        # → arbitrary HTTP backend
