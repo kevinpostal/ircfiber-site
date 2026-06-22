@@ -315,6 +315,32 @@ describe('App', () => {
       expect(document.querySelector('#member-sidebar')).not.toBeInTheDocument();
       expect(document.querySelector('#wrap')?.classList.contains('has-members')).toBe(false);
     });
+
+    it('hides member sidebar after join is rejected and redirected', async () => {
+      // Simulates: user types /join #superbowl, server rejects and
+      // redirects to #blackhole (ERR_LINKCHANNEL / 470).
+      // The member sidebar must NOT show because the active buffer
+      // (#superbowl) has isJoined: false after the redirect.
+      //
+      // Set everything up before render() to match the pattern used
+      // by the other passing tests in this file.
+      const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+      // /join #superbowl creates buffer with isJoined: false (our fix)
+      net.buffers.push(createBuffer({ name: '#superbowl', isJoined: false }));
+      // Server redirects, creates #blackhole with isJoined: true
+      net.buffers.push(createBuffer({ name: '#blackhole', isJoined: true, users: [createMember({ nick: 'alice' })] }));
+      ircState.networks.push(net);
+      ircState.activeBuffer.networkId = 'net1';
+      ircState.activeBuffer.bufferName = '#superbowl';
+      flushSync();
+
+      render(App);
+
+      // Member sidebar must NOT show — active buffer is #superbowl
+      // with isJoined: false (join was rejected)
+      expect(document.querySelector('#member-sidebar')).not.toBeInTheDocument();
+      expect(document.querySelector('#wrap')?.classList.contains('has-members')).toBe(false);
+    });
   });
 
   it('shows keyboard shortcuts page at /?/shortcuts route', async () => {

@@ -64,7 +64,6 @@
   function rejoin(): void {
     if (!activeNetwork || !activeBufferObj?.name) return;
     sendRaw(activeNetwork.networkId, 'JOIN ' + activeBufferObj.name);
-    activeBufferObj.isJoined = true;
   }
 
   function archive(): void {
