@@ -873,85 +873,26 @@
        ───────────────────────────────────────────────────────────── */
     .pricing {
       display: grid;
-      grid-template-columns: 1fr 1fr;
       gap: 0;
-      max-width: 920px;
       margin: 0 auto;
       border: 1px solid var(--fiber-line);
       border-radius: 12px;
       overflow: hidden;
       background: var(--fiber-ink);
     }
-    .tier { padding: var(--s-7); display: flex; flex-direction: column; position: relative; }
-    .tier + .tier { border-left: 1px solid var(--fiber-line); }
-    .tier.featured { background: var(--fiber-paper); }
-    .tier.featured::before {
-      content: "";
-      position: absolute; top: 0; left: 0; right: 0; height: 1px;
-      background: linear-gradient(90deg, transparent, var(--fiber-blue), transparent);
-      box-shadow: 0 0 12px var(--fiber-blue-glow);
+    .tier {
+      display: flex;
+      flex-direction: column;
+      position: relative;
     }
-    .tier .tier-label {
-      display: flex; align-items: center; justify-content: space-between;
-      margin-bottom: var(--s-5);
-    }
-    .tier h3 {
-      font-family: var(--font-mono);
-      font-size: 12px;
-      color: var(--fiber-mist);
-      text-transform: uppercase;
-      letter-spacing: 0.16em;
-      font-weight: 600;
-      margin: 0;
-    }
-    .tier.featured h3 { color: var(--fiber-blue); }
-    .tier .tier-tag {
-      font-family: var(--font-mono);
-      font-size: 10px;
-      color: var(--fiber-amber);
-      background: var(--fiber-amber-dim);
-      padding: 3px 8px;
-      border-radius: 999px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-    }
-    .tier .price { display: flex; align-items: baseline; gap: 6px; margin: 0 0 var(--s-3); }
+    .tier .price { display: flex; gap: 6px; margin: 0 0 var(--s-3); }
     .tier .price .num {
       font-family: var(--font-display);
-      font-size: 64px;
-      font-weight: 700;
-      color: var(--fiber-snow);
       letter-spacing: -0.04em;
       line-height: 1;
     }
-    .tier .price .num .cents { font-size: 32px; color: var(--fiber-fog); }
     .tier .price .num.free { color: var(--fiber-blue); }
-    .tier .price .unit { font-family: var(--font-mono); color: var(--fiber-mist); font-size: 13px; }
-    .tier .tag { font-size: 14px; color: var(--fiber-fog); margin: 0 0 var(--s-6); }
-    .tier ul { list-style: none; padding: 0; margin: 0 0 var(--s-6); display: grid; gap: 10px; font-size: 14px; color: var(--fiber-snow); flex: 1; }
-    .tier li { display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; }
-    .tier li .check { color: var(--fiber-signal); flex-shrink: 0; margin-top: 3px; }
-    .tier li.muted { color: var(--fiber-mist); }
-    .tier li.muted .check { color: var(--fiber-mist); }
-    .tier .btn { justify-content: center; width: 100%; }
-    @media (max-width: 720px) {
-      .pricing { grid-template-columns: 1fr; }
-      .tier + .tier { border-left: none; border-top: 1px solid var(--fiber-line); }
-      .tier { padding: var(--s-6) var(--s-5); }
-      .tier .price .num { font-size: 48px; }
-    }
-
-    .pricing-foot {
-      max-width: 920px; margin: var(--s-5) auto 0;
-      padding: var(--s-3) var(--s-4);
-      background: var(--fiber-paper);
-      border: 1px solid var(--fiber-line);
-      border-radius: 8px;
-      font-size: 13.5px;
-      color: var(--fiber-fog);
-      display: flex; align-items: center; gap: var(--s-3);
-    }
-    .pricing-foot .acc { color: var(--fiber-blue); }
+    .tier .tag { font-size: 14px; color: var(--fiber-fog); }
 
     /* ─────────────────────────────────────────────────────────────
        faq
@@ -1136,7 +1077,6 @@
         <a href="#preview">Preview</a>
         <a href="#features">Features</a>
         <a href="#how">How it works</a>
-        <a href="#pricing">Pricing</a>
         <a href="#faq">FAQ</a>
       </nav>
 
@@ -1146,7 +1086,7 @@
         <button type="submit">Sign in</button>
       </form>
 
-      <a class="topbar-cta" href="#cta">Start free <span class="arrow">→</span></a>
+      <a class="topbar-cta" href="#cta">Create account <span class="arrow">→</span></a>
     </div>
   </header>
 
@@ -1190,7 +1130,7 @@
             <span class="led" aria-hidden="true"></span>
             <span class="label">Now in public beta</span>
             <span class="sep">·</span>
-            <span>free tier — no credit card</span>
+            <span>completely free — no limits, no billing</span>
           </span>
 
           <h1 class="hero-headline reveal">
@@ -1357,7 +1297,7 @@
             <div class="step-dot"></div>
             <div class="step-num">01 / sign up</div>
             <h3>Create your account</h3>
-            <p>Email + password (or your Google/GitHub account), and you're in. No credit card on the free tier, no trial countdown.</p>
+            <p>Email + password (or your Google/GitHub account), and you're in. No limits, no billing — the whole product is yours.</p>
             <div class="form-mock">
               <div class="field">
                 <span class="field-label">Email</span>
@@ -1425,52 +1365,43 @@
     <section class="sec deep" id="pricing">
       <div class="container">
         <div class="sec-head center reveal">
-          <span class="kicker">Pricing</span>
-          <h2>One fair price.</h2>
-          <p style="margin-left:auto;margin-right:auto;">IRC for the price of a coffee. Free tier is a real product — Pro is the price of a vending machine latte.</p>
+          <span class="kicker">Free</span>
+          <h2>Completely free. <span class="amber">Every feature.</span></h2>
+          <p style="margin-left:auto;margin-right:auto;">No tiers, no trials, no billing. The whole product is yours — unlimited networks, unlimited devices, indefinite history, custom themes, everything.</p>
         </div>
 
-        <div class="pricing reveal-stagger">
-          <div class="tier">
-            <div class="tier-label">
-              <h3>Free</h3>
+        <div class="pricing reveal-stagger" style="grid-template-columns:1fr; max-width:720px;">
+          <div class="tier" style="padding:var(--s-8); text-align:center;">
+            <div class="price" style="justify-content:center;"><span class="num free">$0</span></div>
+            <p class="tag" style="max-width:40ch;margin:0 auto var(--s-6);">All features included. No account limits. No credit card. No expiry.</p>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:var(--s-3) var(--s-5); text-align:left; max-width:500px; margin:0 auto var(--s-7);">
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Unlimited networks</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Unlimited devices</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Indefinite history</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Themes + custom CSS</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Full-text search</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Export your data</span>
+              </div>
             </div>
-            <div class="price"><span class="num free">$0</span><span class="unit">forever</span></div>
-            <p class="tag">For the casual channel lurker.</p>
-            <ul>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>1 IRC network</li>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>1 signed-in device</li>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>100-message backlog per buffer</li>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>7-day history</li>
-              <li class="muted"><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>Custom themes</li>
-            </ul>
-            <a class="btn btn-ghost" href="#cta">Start free</a>
+            <a class="btn btn-primary" href="#cta" style="margin:0 auto;">Create account <span class="arrow">→</span></a>
           </div>
-
-          <div class="tier featured">
-            <div class="tier-label">
-              <h3>Pro</h3>
-              <span class="tier-tag">most popular</span>
-            </div>
-            <div class="price">
-              <span class="num">$0<span class="cents">.99</span></span>
-              <span class="unit">/ month</span>
-            </div>
-            <p class="tag">For people who live in IRC. The price of a coffee.</p>
-            <ul>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Unlimited networks</li>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>5 signed-in devices</li>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>500-message backlog per buffer</li>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Unlimited history</li>
-              <li><svg class="check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Themes + custom CSS</li>
-            </ul>
-            <a class="btn btn-primary" href="#cta">Go pro <span class="arrow">→</span></a>
-          </div>
-        </div>
-
-        <div class="pricing-foot reveal">
-          <span>→</span>
-          <span>Pro is billed monthly. Cancel any time and <span class="acc">export your scrollback</span> before your account closes.</span>
         </div>
       </div>
     </section>
@@ -1503,8 +1434,8 @@
             <div class="ans">Yes. The network form takes hostname, port, password, and SASL credentials. The bouncer maintains the connection just like the public networks. 100+ public networks are preconfigured (Libera, OFTC, hackint, EFnet, QuakeNet, and more).</div>
           </details>
           <details class="faq-item">
-            <summary><span class="num">05</span>What happens if I cancel?<span class="marker">+</span></summary>
-            <div class="ans">You get a 30-day grace period to come back, then we delete your account and message history. We also offer a one-click export of every buffer as plain text or JSON, so you can take your scrollback with you if you decide to self-host something else.</div>
+            <summary><span class="num">05</span>Can I export my data?<span class="marker">+</span></summary>
+            <div class="ans">Yes. We offer a one-click export of every buffer as plain text or JSON, so you can take your scrollback with you if you ever decide to stop using the service.</div>
           </details>
         </div>
       </div>
@@ -1517,12 +1448,12 @@
         <div class="final-cta reveal">
           <span class="kicker">Get started</span>
           <h2>Stop missing messages.</h2>
-          <p class="lead" style="margin-left:auto;margin-right:auto;">Sign up in 30 seconds. No credit card for the free tier. Your history is searchable from every device the moment you join your first channel.</p>
+          <p class="lead" style="margin-left:auto;margin-right:auto;">Sign up in 30 seconds. Your history is searchable from every device the moment you join your first channel. All features, no limits, zero cost.</p>
           <div class="cta-row">
             <a class="btn btn-primary lg" href="/register">Create account <span class="arrow">→</span></a>
             <a class="btn btn-ghost lg" href="#preview">Watch a tour</a>
           </div>
-          <p class="cta-meta">no credit card <span class="accent">·</span> no trial countdown <span class="accent">·</span> cancel any time, take your scrollback with you</p>
+          <p class="cta-meta">no billing <span class="accent">·</span> all features <span class="accent">·</span> export your scrollback anytime</p>
         </div>
       </div>
     </section>
@@ -1552,7 +1483,6 @@
           <h4>Product</h4>
           <ul>
             <li><a href="#features">Features</a></li>
-            <li><a href="#pricing">Pricing</a></li>
             <li><a href="#preview">Preview</a></li>
             <li><a href="#how">How it works</a></li>
             <li><a href="#faq">FAQ</a></li>

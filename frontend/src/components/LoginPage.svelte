@@ -120,7 +120,7 @@
         <p class="noauth-sub">Welcome back — pick up where you left off.</p>
       {:else}
         <h1 class="noauth-heading">Create your account</h1>
-        <p class="noauth-sub">Free tier. No credit card. Always connected.</p>
+        <p class="noauth-sub">Always connected from any device.</p>
       {/if}
 
       {#if error}
