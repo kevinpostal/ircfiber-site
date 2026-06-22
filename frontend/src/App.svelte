@@ -134,7 +134,7 @@ let showNetworkForm: boolean = $state(false);
     ircState.activeBuffer.bufferName !== null &&
     ircState.activeBuffer.bufferName !== '_server' &&
     getActiveBufferObj()?.type === 'channel' &&
-    getActiveBufferObj()?.isJoined !== false
+    getActiveBufferObj()?.isJoined === true
   );
 
   // $derived (not local $state) so it reactively tracks both the active
