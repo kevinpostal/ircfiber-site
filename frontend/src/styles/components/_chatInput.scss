@@ -1,12 +1,13 @@
 /* Buffer input cell */
 .bufferinputcell {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 0;
-  padding: 12px;
+  padding: 8px 118px 8px 68px;
   background: #2a2d33;
   border-top: 1px solid #1a1c20;
   flex-shrink: 0;
+  position: relative;
 }
 
 .bufferinputcell .timecell {
@@ -21,8 +22,8 @@
   min-width: 0;
   background: #1e2126;
   border-radius: 4px;
-  padding: 6px 8px;
-  min-height: 32px;
+  padding: 8px 10px;
+  min-height: 36px;
 }
 .bufferinputcell .nickcell {
   display: flex;
@@ -161,12 +162,15 @@
 }
 
 .bufferinputcell .timestampcell {
-  display: flex;
-  align-items: center;
+  position: absolute;
+  right: 10px;
+  bottom: 3px;
   color: #6e7681;
   font-size: 12px;
-  flex-shrink: 0;
-  margin-left: 12px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  user-select: none;
+  z-index: 1;
   font-variant-numeric: tabular-nums;
 }
 
