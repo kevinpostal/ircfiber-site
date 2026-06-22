@@ -24,4 +24,11 @@
 #app.sidebar-left #wrap #sidebar {
   grid-column: 1;
   grid-row: 1;
+  border-width: 0 1px 0 0;
+  box-shadow: inset -5px 0 0 0 #333;
+}
+
+#app.sidebar-left #wrap #sidebar::before {
+  left: auto;
+  right: 0;
 }
