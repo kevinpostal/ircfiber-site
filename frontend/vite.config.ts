@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { playwright } from '@vitest/browser-playwright';
+import tailwindcss from '@tailwindcss/vite';
 
 // Backend URL for the dev server's API + WS proxy. Override via env vars
 // to point at a non-local backend (e.g. the tailnet gateway):
@@ -15,10 +16,9 @@ const BACKEND_URL =
 // WS target defaults to the same host with the ws/wss scheme.
 const BACKEND_WS_URL =
   process.env.VITE_BACKEND_WS_URL || BACKEND_URL.replace(/^http/, 'ws');
-const BACKEND_IS_TLS = BACKEND_URL.startsWith('https://');
 
 export default defineConfig({
-  plugins: [svelte({
+  plugins: [tailwindcss(), svelte({
     onwarn(warning, handler) {
       // Suppress a11y warnings that we've reviewed as acceptable:
       // - aria-disabled on <li> is fine for our context menus
@@ -54,6 +54,14 @@ export default defineConfig({
     // this by also serving the `assets/` subdirectory under the same
     // route prefix (see ircfiber/web/package.d), so we just keep Vite's
     // default output structure.
+    rollupOptions: {
+      input: {
+        // Chat SPA — unchanged
+        main: 'index.html',
+        // Admin SPA — enterprise admin dashboard
+        admin: 'admin.html',
+      },
+    },
   },
   server: {
     port: 5173,
@@ -61,20 +69,21 @@ export default defineConfig({
       '/api': {
         target: BACKEND_URL,
         changeOrigin: true,
-        // Verify the backend's TLS cert. The Tailscale cert on the
-        // tailnet backend is real and trusted, so leave this true.
-        secure: BACKEND_IS_TLS,
+        // Dev proxy: skip TLS verification. Tailscale certs are trusted
+        // by the OS but Node.js's built-in CA bundle may not include the
+        // intermediate. In production the gateway handles TLS directly.
+        secure: false,
       },
       '/ws': {
         target: BACKEND_WS_URL,
         ws: true,
         changeOrigin: true,
-        secure: BACKEND_IS_TLS,
+        secure: false,
       },
       '/login': {
         target: BACKEND_URL,
         changeOrigin: true,
-        secure: BACKEND_IS_TLS,
+        secure: false,
       }
     }
   },

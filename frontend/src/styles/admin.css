@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────
+   IRC Fiber — Theme tokens
+   Dark + light themes. Dark is default; toggling adds/removes
+   the `dark` class on <html>. Token names follow the same
+   convention as SvelteForge so the visual language matches.
+   ───────────────────────────────────────────────────────────── */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --border: #e2e8f0;
+  --muted: #64748b;
+  --text: #1e293b;
+  --heading: #0f172a;
+  --primary: #0891b2;
+  --primary-fg: #ffffff;
+  --success: #16a34a;
+  --warn: #ca8a04;
+  --danger: #dc2626;
+  --info: #2563eb;
+  --sidebar-bg: #f1f5f9;
+  --sidebar-fg: #475569;
+  --sidebar-active: #0891b2;
+}
+
+.dark {
+  --bg: #0a0e14;
+  --surface: #11161d;
+  --surface-2: #131820;
+  --border: #1c2430;
+  --muted: #545d6e;
+  --text: #c8d2dd;
+  --heading: #ecf2f8;
+  --primary: #67e8f9;
+  --primary-fg: #0a0e14;
+  --success: #4ade80;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --info: #60a5fa;
+  --sidebar-bg: #0d1117;
+  --sidebar-fg: #c8d2dd;
+  --sidebar-active: #67e8f9;
+}
+
+@theme {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-muted: var(--muted);
+  --color-text: var(--text);
+  --color-heading: var(--heading);
+  --color-primary: var(--primary);
+  --color-success: var(--success);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-sidebar-bg: var(--sidebar-bg);
+  --color-sidebar-fg: var(--sidebar-fg);
+  --color-sidebar-active: var(--sidebar-active);
+  --font-sans: Inter, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Selection */
+::selection { background: var(--primary); color: var(--primary-fg); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
