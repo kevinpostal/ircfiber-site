@@ -124,12 +124,12 @@
     list-style: none;
     margin: 0;
     padding: 5px 12px;
-    border-bottom: 1px solid #555;
+    border-bottom: 1px solid #2c2f35;
   }
   :global(.uploadMenu #uploadProgressBars li) {
-    padding: 3px 0;
+    padding: 4px 0;
     font-size: 12px;
-    color: #fff;
+    color: #d1d5db;
   }
   :global(.uploadMenu .uploadName) {
     display: inline-block;
@@ -142,18 +142,20 @@
   :global(.uploadMenu .uploadStatus) {
     float: right;
     font-size: 11px;
-    color: #ccc;
+    color: #8b949e;
   }
   :global(.uploadMenu .uploadProgressTrack) {
     height: 4px;
-    background: #555;
+    background: #2c2f35;
     margin-top: 3px;
     overflow: hidden;
+    border-radius: 2px;
   }
   :global(.uploadMenu .uploadProgressFill) {
     height: 100%;
     background: #58a6ff;
     transition: width 0.2s;
+    border-radius: 2px;
   }
   :global(.uploadMenu .actions) {
     list-style: none;
