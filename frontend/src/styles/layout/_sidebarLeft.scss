@@ -1,14 +1,11 @@
 /* ============================================================
-   Sidebar-left mode — swap the grid columns
+   Sidebar-left mode — sidebar on the left, border on the right
    ============================================================ */
 
 #app.sidebar-left #wrap {
   grid-template-columns: 200px 1fr;
 }
 
-/* IRCCloud .mainSpin pattern: hide the sidebar grid column during loading
-   AND reset .main-area's grid-column from 2 back to auto so the spinner
-   properly fills the single visible column instead of a ghost column 2 */
 #app.sidebar-left #wrap:not(.has-sidebar) {
   grid-template-columns: 1fr;
 }
@@ -24,4 +21,11 @@
 #app.sidebar-left #wrap #sidebar {
   grid-column: 1;
   grid-row: 1;
+  border-width: 0 1px 0 0;
+  box-shadow: inset -5px 0 0 0 #333;
+}
+
+#app.sidebar-left #wrap #sidebar::before {
+  left: auto;
+  right: 0;
 }

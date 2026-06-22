@@ -68,6 +68,8 @@ a:hover { color: #79c0ff; text-decoration: underline; }
   grid-template-columns: 1fr;
 }
 .main-area {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -140,13 +142,13 @@ main.chat-container {
   box-shadow: inset 3px 0 0 0 hsl(221, 32%, 25%);
 }
 #sidebar {
-  grid-column: 1;
+  grid-column: 2;
   grid-row: 1;
   background: #000;
-  border-width: 0 1px 0 0;
+  border-width: 0 0 0 1px;
   border-style: solid;
   border-color: #000;
-  box-shadow: inset -5px 0 0 0 #333;
+  box-shadow: inset 5px 0 0 0 #333;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -157,7 +159,7 @@ main.chat-container {
   content: '';
   position: absolute;
   top: 0;
-  right: 0;
+  left: 0;
   bottom: 0;
   width: 5px;
   background: #333;
