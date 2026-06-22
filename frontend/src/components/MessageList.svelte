@@ -353,6 +353,31 @@
 
   let lastFirstProcessedKey = '';
 
+  // IRCCloud-style: when the scroll container shrinks (e.g. a typing
+  // indicator appears below, stealing flex space), snap back to bottom
+  // if the user was pinned there — otherwise they see the viewport drift
+  // up with no scroll event to correct it.
+  $effect(() => {
+    const el = container;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (cachedAtBottom && container) {
+        // IRCCloud isScrolledToBottom(true) check: only snap if we've
+        // drifted away from the bottom (don't write scrollTop on every
+        // resize frame when nothing moved).
+        const scrollHeight = container.scrollHeight;
+        const offsetHeight = container.clientHeight;
+        const scrollPos = Math.ceil(container.scrollTop);
+        const bottom = (scrollHeight - offsetHeight) + 1;
+        if ((bottom - scrollPos) > 1) {
+          container.scrollTop = scrollHeight;
+        }
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+
   $effect(() => {
     const key = bufferKey;
     const msgs = processedMessages;
