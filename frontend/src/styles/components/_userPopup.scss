@@ -31,7 +31,7 @@
 .row.messageRow {
   display: block;
   position: relative;
-  padding: 0 var(--s-89) 0 var(--s-55);
+  padding: 0 118px 0 68px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   letter-spacing: normal;
   line-height: 1.15;
@@ -48,13 +48,16 @@
   color: #ccc;
   font-size: 13px;
   background: transparent;
-  padding: 0 var(--s-89) 0 var(--s-55);
+  /* Match the IRCCloud right gutter (118px) set in app.css. Without
+     this, the same-selector rule later in this file was overriding
+     app.css with `padding: 2px 80px 2px 68px`, hiding the fix. */
+  padding: 0 118px 0 68px;
 }
 .row.messageRow.status .date {
-  top: var(--s-3);
+  top: 2px;
 }
 .row.messageRow.status.firstAuthor .date {
-  top: var(--s-3);
+  top: 2px;
 }
 .row.messageRow.status .content,
 .row.groupedJoinPart .content {

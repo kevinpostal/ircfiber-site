@@ -236,7 +236,7 @@
 .row.messageRow .date {
   position: absolute;
   right: 0;
-  bottom: var(--s-3);
+  bottom: 3px;
   text-align: right;
   color: var(--text-tertiary);
   font-size: 12px;
@@ -244,7 +244,7 @@
   user-select: none;
   white-space: nowrap;
   z-index: 1;
-  padding-right: var(--s-8);
+  padding-right: 10px;
 }
 
 /* Timestamps align at top: 3px for all row types */
@@ -335,16 +335,12 @@
   color: #000;
 }
 .row.messageRow .letterAvatar {
-  top: var(--s-8);
-  left: var(--s-21);
-  width: var(--s-34);
-  height: var(--s-34);
+  top: 8px;
+  left: 25px;
 }
 .stickyAvatar .letterAvatar {
   top: 0;
-  left: var(--s-21);
-  width: var(--s-34);
-  height: var(--s-34);
+  left: 25px;
 }
 
 .row.messageRow .letterAvatar span,
