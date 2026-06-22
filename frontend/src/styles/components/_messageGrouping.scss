@@ -4,7 +4,7 @@
 
 /* First message from an author: full author info shown */
 .row.messageRow.firstAuthor {
-  padding-top: 6px;
+  padding-top: var(--s-8);
 }
 
 /* Restore firstAuthor top padding for bot / type_buffer_msg / blockArt
@@ -22,7 +22,7 @@
    keeps the full circle inside the row and prevents the next row's
    background from clipping the bottom. */
 .row.messageRow.hasAvatar.firstAuthor {
-  min-height: 40px;
+  min-height: calc(var(--s-34) + var(--s-8) + var(--s-8));
 }
 
 /* Subsequent messages from same author: no author wrap. Zero vertical

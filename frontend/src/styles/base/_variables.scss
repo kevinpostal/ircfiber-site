@@ -9,6 +9,16 @@
   --input-bg: #1e2126;
   --font-mono: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
   --status-disconnected: #f85149;
+  /* Fibonacci spacing scale */
+  --s-3: 3px;
+  --s-5: 5px;
+  --s-8: 8px;
+  --s-13: 13px;
+  --s-21: 21px;
+  --s-34: 34px;
+  --s-55: 55px;
+  --s-89: 89px;
+  --s-144: 144px;
 }
 
 * {

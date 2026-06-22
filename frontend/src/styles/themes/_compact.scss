@@ -37,19 +37,19 @@
 }
 
 #app.compact .bufferinputcell .nickinputcell {
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-top: var(--s-5);
+  padding-bottom: var(--s-5);
 }
 
 #app.compact .bufferinputcell .input {
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-top: var(--s-5);
+  padding-bottom: var(--s-5);
 }
 
 #app.compact .bufferinputcell .emojicell,
 #app.compact .bufferinputcell .uploadcell {
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-top: var(--s-5);
+  padding-bottom: var(--s-5);
 }
 
 #app.compact .bufferinputcell textarea {

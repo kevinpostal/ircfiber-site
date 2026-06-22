@@ -3,8 +3,7 @@
   display: flex;
   align-items: center;
   gap: 0;
-  padding: 12px;
-  padding-right: 118px;
+  padding: var(--s-13) var(--s-89) var(--s-13) var(--s-55);
   background: #2a2d33;
   border-top: 1px solid #1a1c20;
   flex-shrink: 0;
@@ -22,9 +21,9 @@
   flex: 1;
   min-width: 0;
   background: #1e2126;
-  border-radius: 4px;
-  padding: 8px 12px;
-  min-height: 40px;
+  border-radius: var(--s-3);
+  padding: var(--s-8) var(--s-13);
+  min-height: calc(var(--s-34) + var(--s-5));
 }
 .bufferinputcell .nickcell {
   display: flex;
@@ -164,9 +163,8 @@
 
 .bufferinputcell .timestampcell {
   position: absolute;
-  right: 10px;
-  top: 50%;
-  transform: translateY(-50%);
+  right: var(--s-8);
+  bottom: var(--s-3);
   color: #6e7681;
   font-size: 12px;
   white-space: nowrap;
