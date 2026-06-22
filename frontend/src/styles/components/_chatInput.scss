@@ -4,6 +4,7 @@
   align-items: center;
   gap: 0;
   padding: 12px;
+  padding-right: 118px;
   background: #2a2d33;
   border-top: 1px solid #1a1c20;
   flex-shrink: 0;
@@ -23,7 +24,7 @@
   background: #1e2126;
   border-radius: 4px;
   padding: 8px 12px;
-  min-height: 36px;
+  min-height: 40px;
 }
 .bufferinputcell .nickcell {
   display: flex;
@@ -162,13 +163,13 @@
 }
 
 .bufferinputcell .timestampcell {
-  display: flex;
-  align-items: center;
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   color: #6e7681;
   font-size: 12px;
-  flex-shrink: 0;
-  margin-left: auto;
-  padding-right: 0;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
