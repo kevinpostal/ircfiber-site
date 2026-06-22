@@ -40,7 +40,7 @@
     }
     if (net && !net.buffers.some(b => b.name === chan)) {
       net.buffers.push({
-        name: chan, type: 'channel', isJoined: true,
+        name: chan, type: 'channel', isJoined: false,
         unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
         topic: '', topicSetBy: '', topicSetAt: 0, users: [],
         lastSeenMsgTime: Date.now(), firstUnseenMsgIndex: null,
