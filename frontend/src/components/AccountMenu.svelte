@@ -13,7 +13,12 @@
     open = !open;
   }
 
-  function handleSignOut(): void {
+  async function handleSignOut(): Promise<void> {
+    // Call the server-side logout endpoint to destroy the session
+    // (including any admin impersonation state). Then navigate to
+    // the login page. A hard reload ensures the session cookie is
+    // gone and the server renders a fresh login page.
+    try { await fetch('/logout', { method: 'GET' }); } catch {}
     localStorage.removeItem('token');
     window.location.href = '/login';
   }

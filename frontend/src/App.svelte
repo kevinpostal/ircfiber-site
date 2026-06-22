@@ -39,6 +39,7 @@ import WelcomePage from './components/WelcomePage.svelte';
 import SettingsPage from './components/SettingsPage.svelte';
 import ShortcutsPage from './components/ShortcutsPage.svelte';
 import LoadingSkeleton from './components/LoadingSkeleton.svelte';
+import LoginPage from './components/LoginPage.svelte';
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member, ConnectionState } from './types';
 
 // IRCCloud-style: cache network IDs + names so we can eager-load message
@@ -260,17 +261,20 @@ let showNetworkForm: boolean = $state(false);
 
   let syncInterval: ReturnType<typeof setInterval>;
 
-  onMount(() => {
-    // Set up IRCCloud-style message batcher (200ms flush)
-    setFlushFn((networkId, bufferName, msgs) => {
-      batchAppendMessages(networkId, bufferName, msgs);
-    });
+  // ── Authentication gate ────────────────────────────────────────
+  // IRCCloud boots the SPA unconditionally and overlays a centered
+  // login modal (#noAuth) on top of the chat shell whenever the
+  // session is missing. We mirror that here: probe /api/me at boot,
+  // and if it returns 401 we render the chat UI behind the LoginPage
+  // overlay and defer the WebSocket connection until sign-in succeeds.
+  //
+  // Tri-state:
+  //   null  → still probing (initial bootstrap)
+  //   true  → authenticated, normal flow
+  //   false → not authenticated, LoginPage overlay shown
+  let isAuthenticated: boolean | null = $state(null);
 
-    // IRCCloud-style boot: single WebSocket is the sole data channel.
-    // No REST /api/me call — user data (stat_user), network list, and
-    // full state all stream through the WS.  This eliminates one full
-    // round-trip to the server and matches IRCCloud's architecture
-    // exactly.
+  function startWebSocket(): void {
     performance.mark('ws-connect-start');
     connectWebSocket(
       handleWsMessage,
@@ -284,11 +288,54 @@ let showNetworkForm: boolean = $state(false);
         ircState.wsConnected = false;
       }
     );
+  }
+
+  async function probeAuth(): Promise<boolean> {
+    try {
+      const r = await fetch('/api/me', { credentials: 'same-origin' });
+      return r.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function checkAuth(): Promise<void> {
+    const ok = await probeAuth();
+    isAuthenticated = ok;
+    if (ok) {
+      startWebSocket();
+    } else {
+      // Don't open a WebSocket for an unauthenticated visitor — the
+      // server would reject with 1008 anyway, but skipping avoids an
+      // immediate reconnect storm and console noise.
+      ircState.wsConnected = false;
+    }
+  }
+
+  function handleAuthenticated(): void {
+    // LoginPage just completed a successful sign-in / sign-up. Flip
+    // the gate, kick off the WebSocket, and let the existing boot
+    // path take over (handleWsMessage → handleStatUser / networks /
+    // sync → selectLastActiveBuffer → first paint).
+    isAuthenticated = true;
+    startWebSocket();
+  }
+
+  onMount(() => {
+    // Set up IRCCloud-style message batcher (200ms flush)
+    setFlushFn((networkId, bufferName, msgs) => {
+      batchAppendMessages(networkId, bufferName, msgs);
+    });
 
     window.addEventListener('popstate', checkRoute);
     document.addEventListener('visibilitychange', handleVisibility);
     document.addEventListener('keydown', handleGlobalKeyboard);
     document.addEventListener('click', handleDocumentClick);
+
+    // Defer the WS connection until we know whether the visitor has a
+    // valid session. /api/me is a single HTTP round-trip and runs in
+    // parallel with the rest of the SPA boot.
+    void checkAuth();
 
     checkRoute();
   });
@@ -884,7 +931,7 @@ let showNetworkForm: boolean = $state(false);
   {/if}
 {/if}
 
-<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading}>
+<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
   <div class="main-area">
     {#if ircState.showSettings}
       <SettingsPage />
@@ -935,3 +982,10 @@ let showNetworkForm: boolean = $state(false);
   </aside>
   {/if}
 </div>
+
+<!-- IRCCloud-style #noAuth overlay: rendered last so it paints on top
+     of the chat shell. Visible only while isAuthenticated === false
+     (i.e. /api/me returned 401 at boot or LoginPage just kicked off). -->
+{#if isAuthenticated === false}
+  <LoginPage onAuthenticated={handleAuthenticated} />
+{/if}

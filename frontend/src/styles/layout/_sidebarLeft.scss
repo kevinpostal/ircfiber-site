@@ -6,9 +6,14 @@
   grid-template-columns: 200px 1fr;
 }
 
-/* IRCCloud .mainSpin pattern: hide the sidebar grid column during loading */
+/* IRCCloud .mainSpin pattern: hide the sidebar grid column during loading
+   AND reset .main-area's grid-column from 2 back to auto so the spinner
+   properly fills the single visible column instead of a ghost column 2 */
 #app.sidebar-left #wrap:not(.has-sidebar) {
   grid-template-columns: 1fr;
+}
+#app.sidebar-left #wrap:not(.has-sidebar) .main-area {
+  grid-column: auto;
 }
 
 #app.sidebar-left #wrap .main-area {
