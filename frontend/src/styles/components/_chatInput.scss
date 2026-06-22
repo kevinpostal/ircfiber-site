@@ -7,6 +7,49 @@
   background: #2a2d33;
   border-top: 1px solid #1a1c20;
   flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* Typing indicator — full-width bar above the input row */
+.bufferinputcell .typingcell {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 6px 4px;
+  font-size: 13px;
+  color: #8b949e;
+  line-height: 1;
+}
+
+.bufferinputcell .typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.bufferinputcell .typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #8b949e;
+  display: inline-block;
+  animation: typing-bounce 1.2s ease-in-out infinite;
+}
+
+.bufferinputcell .typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.bufferinputcell .typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+.bufferinputcell .typing-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .bufferinputcell .timecell {

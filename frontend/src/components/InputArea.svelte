@@ -52,17 +52,11 @@
   const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
 
   // ── Typing indicators (IRCCloud-style) ──
-  const typingKey = $derived(
-    ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
-      ? `${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`
-      : ''
-  );
   const typingNicks = $derived.by(() => {
     const netId = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
     if (!netId || !buf) return [];
     const typers = getTypersForBuffer(netId, buf);
-    // Filter out the current user's own typing echo
     return typers.filter(n => n !== myNick);
   });
   const typingText = $derived.by(() => {
@@ -502,6 +496,12 @@
 </script>
 
 <div class="bufferinputcell">
+  {#if typingText}
+    <div class="typingcell">
+      <span class="typing-dots"><i></i><i></i><i></i></span>
+      <span class="typing-label">{typingText}</span>
+    </div>
+  {/if}
   <div class="nickinputcell">
     <div class="nickinput">
       <div class="nickcell">
@@ -564,11 +564,6 @@
     onsent={onPastebinSent}
   />
   <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>
-  <div class="inputstatuscell">
-    {#if typingText}
-      <span class="inputstatus_typers">{typingText}</span>
-    {/if}
-  </div>
   {#if emojiOpen}
     <div id="emoji-popover" class="emoji-popover" role="dialog" aria-label="Emoji picker">
       <emoji-picker class="dark"></emoji-picker>
@@ -576,15 +571,4 @@
   {/if}
 </div>
 
-<style>
-  :global(.inputstatuscell) {
-    flex: 0 0 auto;
-    font-size: 13px;
-    padding: 5px 25px;
-    margin-top: -2px;
-    height: 16px;
-    line-height: 18px;
-    overflow: hidden;
-    color: rgb(136, 136, 136);
-  }
-</style>
+
