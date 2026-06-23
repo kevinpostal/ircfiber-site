@@ -302,6 +302,8 @@
         const msgText = args.slice(1).join(' ');
         if (msgTarget && msgText) {
           onSendMessage(networkId, msgTarget, msgText);
+          setActiveBuffer(networkId, msgTarget);
+          updateRoute(networkId, msgTarget);
         }
         inputValue = '';
         void autoResizeAfterClear();
