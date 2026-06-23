@@ -32,6 +32,8 @@
   let inputValue = $state('');
   let uploadMenuOpen = $state(false);
   const tabEngine = new TabCompletionEngine();
+  // Per-buffer input history map (IRCCloud-style)
+  const historyMap = new Map<string, InputHistory>();
 
   let now = $state(new Date());
   $effect(() => {
@@ -40,7 +42,19 @@
   });
   const timeStr = $derived(now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' }));
   const timeTitle = $derived(now.toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }));
-  const history = new InputHistory();
+  let history = $state(new InputHistory('global'));
+  // Per-buffer input history (IRCCloud-style): each buffer has its own
+  // Up/Down navigation history saved to localStorage.
+  $effect(() => {
+    const netId = ircState.activeBuffer.networkId;
+    const bufName = ircState.activeBuffer.bufferName;
+    if (netId && bufName) {
+      const key = `${netId}:${bufName}`;
+      const existing = historyMap.get(key) ?? new InputHistory(key);
+      historyMap.set(key, existing);
+      history = existing;
+    }
+  });
   let isTabbing = $state(false);
 
   const activeNetwork = $derived(getActiveNetwork());

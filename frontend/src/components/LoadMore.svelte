@@ -122,17 +122,16 @@
           consecutiveEmptyLoads = 0;
           return;
         }
-        // Backend-specific: our CHATHISTORY fetch is async, so an empty
-        // response may mean upstream messages are still in flight. Retry
-        // with backoff before concluding the backlog is fully loaded.
-        // (IRCCloud's backend answers synchronously and needs no retry.)
+        // Empty response — backlog is fully loaded. No retries needed
+        // for DMs or channels with no history; the cursor is correct.
         consecutiveEmptyLoads++;
-        if (consecutiveEmptyLoads >= MAX_EMPTY_RETRIES) {
+        if (consecutiveEmptyLoads >= 2) {
           // IRCCloud: fully rendered → the loadMore row is removed.
           noMoreHistory = true;
           return;
         }
-        await sleep(consecutiveEmptyLoads * 2000);
+        // One retry in case CHATHISTORY was still in flight.
+        await sleep(2000);
       }
     } catch (e) {
       console.error('[LoadMore] backlog fetch failed:', e);

@@ -84,6 +84,11 @@ export default defineConfig({
         target: BACKEND_URL,
         changeOrigin: true,
         secure: false,
+      },
+      '/register': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: false,
       }
     }
   },

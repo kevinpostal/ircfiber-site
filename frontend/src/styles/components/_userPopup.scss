@@ -65,3 +65,78 @@
   display: inline;
   white-space: pre-wrap;
 }
+
+/* ── Server-log progress entries ────────────────────────────────────────
+ * Each line in the `_server` buffer that the engine emits while
+ * connecting (Connecting to …, TLS handshake complete, etc.) renders
+ * with a small phase chip on the left and a body that mirrors the
+ * timeline. The chip + body share a single row so the user can
+ * visually scan the connect sequence without losing context.
+ *
+ * Phase taxonomy (kept in sync with IRCRawEvent.makeServerLog in D):
+ *   queued | resolving | connecting | tcp_open
+ *   tls | tls_done | registering | caps | sasl
+ *   welcome | info | warn | error
+ */
+.row.messageRow.serverLog {
+  color: #b5bcc4;
+  font-size: 12.5px;
+  line-height: 1.45;
+  font-family: var(--font-mono);
+}
+.row.messageRow.serverLog .content {
+  color: inherit;
+  display: inline;
+  white-space: pre-wrap;
+}
+/* Pull the .timestamp in close so the chip → time → text reads as a
+ * single horizontal timeline entry instead of three separate cells. */
+.row.messageRow.serverLog .date { left: 50px; right: auto; bottom: 2px; padding-right: 0; }
+
+/* Phase chip — small pill rendered just before the message body.
+ * Color signals severity (info / ok / warn / error) so users can
+ * scan the timeline at a glance without reading every word. */
+.serverLogChip {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  border: 1px solid #3b4148;
+  background: #1f2429;
+  color: #b5bcc4;
+  user-select: none;
+  vertical-align: 1px;
+  min-width: 48px;
+  text-align: center;
+}
+/* Default neutral tint */
+.serverLogChip { background: #1f2429; color: #b5bcc4; border-color: #3b4148; }
+.row.messageRow.serverLog.phase-connecting .serverLogChip,
+.row.messageRow.serverLog.phase-resolving  .serverLogChip,
+.row.messageRow.serverLog.phase-tcp_open   .serverLogChip,
+.row.messageRow.serverLog.phase-registering .serverLogChip,
+.row.messageRow.serverLog.phase-caps       .serverLogChip,
+.row.messageRow.serverLog.phase-sasl       .serverLogChip,
+.row.messageRow.serverLog.phase-info       .serverLogChip {
+  background: #1c2a36; color: #6fb3e0; border-color: #2a4761;
+}
+.row.messageRow.serverLog.phase-tls .serverLogChip {
+  background: #2b1f3a; color: #b48ce6; border-color: #4a3669;
+}
+.row.messageRow.serverLog.phase-tls_done .serverLogChip,
+.row.messageRow.serverLog.phase-welcome  .serverLogChip {
+  background: #163626; color: #5cd29f; border-color: #1f5b41;
+}
+.row.messageRow.serverLog.phase-warn .serverLogChip {
+  background: #3a2a16; color: #e0a85a; border-color: #5b3f1f;
+}
+.row.messageRow.serverLog.phase-error .serverLogChip {
+  background: #3a1818; color: #e0726f; border-color: #5b2222;
+}
+.row.messageRow.serverLog.phase-queued .serverLogChip {
+  background: #1f2429; color: #8a92a0; border-color: #3b4148;
+}

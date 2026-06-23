@@ -107,6 +107,7 @@ export const highlightWords = $state<string[]>(getStorageItem('ircfiber:highligh
 export const membersCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:membersCollapsed', {}));
 export const collapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:collapsed', {}));
 export const inactiveCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:inactiveCollapsed', {}));
+export const conversationsCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:conversationsCollapsed', {}));
 // User-defined sidebar order for networks (top-to-bottom). Mirrors IRCCloud's
 // `reorder-connections` stream message: a full ordered list of networkIds is
 // sent on every change. Networks not in the list are appended at the end in
@@ -117,6 +118,7 @@ export const networkOrder = $state<string[]>(getStorageItem('ircfiber:networkOrd
 export const lastSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:lastSeen', {}));
 // Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen)
 export const bottomSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:bottomSeen', {}));
+export const focusSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:focusSeen', {}));
 // IRCCloud-style: when true, the user has disabled the "post a snippet?"
 // prompt that appears when sending multi-line or very long messages. The
 // prompt itself still works on each send; this flag is a per-user
@@ -224,9 +226,11 @@ $effect.root(() => {
   $effect(() => schedulePersistMap('ircfiber:membersCollapsed', membersCollapsedMap));
   $effect(() => schedulePersistMap('ircfiber:collapsed', collapsedMap));
   $effect(() => schedulePersistMap('ircfiber:inactiveCollapsed', inactiveCollapsedMap));
+  $effect(() => schedulePersistMap('ircfiber:conversationsCollapsed', conversationsCollapsedMap));
   $effect(() => { setStorageItem('ircfiber:networkOrder', networkOrder); });
   $effect(() => schedulePersistMap('ircfiber:lastSeen', lastSeenMap));
   $effect(() => schedulePersistMap('ircfiber:bottomSeen', bottomSeenMap));
+  $effect(() => schedulePersistMap('ircfiber:focusSeen', focusSeenMap));
   $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
   $effect(() => schedulePersistMap('ircfiber:bufferPrefs', bufferPrefsMap));
   $effect(() => { setStorageItem('ircfiber:globalPrefs', globalPrefs); });
@@ -253,6 +257,13 @@ export function getBottomSeen(networkId: string, bufferName: string): number | n
 }
 export function setBottomSeen(networkId: string, bufferName: string, ts: number): void {
   bottomSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] = ts;
+}
+
+export function getFocusSeen(networkId: string, bufferName: string): number | null {
+  return focusSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] ?? null;
+}
+export function setFocusSeen(networkId: string, bufferName: string, ts: number): void {
+  focusSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] = ts;
 }
 
 export function isIgnored(nick: string): boolean {
@@ -341,9 +352,11 @@ if (typeof window !== 'undefined') {
       }
       case 'ircfiber:collapsed':         applyObject(collapsedMap); break;
       case 'ircfiber:inactiveCollapsed': applyObject(inactiveCollapsedMap); break;
+      case 'ircfiber:conversationsCollapsed': applyObject(conversationsCollapsedMap); break;
       case 'ircfiber:networkOrder':      applyArray(networkOrder); break;
       case 'ircfiber:lastSeen':          applyObject(lastSeenMap); break;
       case 'ircfiber:bottomSeen':        applyObject(bottomSeenMap); break;
+      case 'ircfiber:focusSeen':         applyObject(focusSeenMap); break;
       case 'ircfiber:bufferPrefs':       applyObject(bufferPrefsMap as Record<string, BufferPrefs>); break;
       case 'ircfiber:ignores':           applyArray(ignoreList); break;
       case 'ircfiber:highlightWords':    applyArray(highlightWords); break;

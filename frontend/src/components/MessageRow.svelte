@@ -22,6 +22,12 @@
   const isLifecycle = $derived(['CONNECT', 'DISCONNECT'].includes(cmd));
   const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
   const isAction = $derived(msg.type === 'action');
+  // Server-log progress entries from the engine carry a `phase` tag. We
+  // expose both a boolean (for styling) and the raw phase (for the
+  // visual chip + screen-reader label).
+  const phase = $derived(msg.phase ?? '');
+  const isServerLog = $derived(!!phase && cmd === 'NOTICE' && !msg.nick);
+  const phaseLabel = $derived(isServerLog ? phaseToLabel(phase) : '');
   const isJoinPartGroup = $derived(cmd === 'JOINPART_GROUP');
   const isGrouped = $derived(isJoinPartGroup);
   const typeClass = $derived(getIrcCloudTypeClass(cmd, msg.params, msg.type));
@@ -291,6 +297,28 @@
     expanded = !expanded;
   }
 
+  // Map the engine's phase taxonomy to human-readable labels for the
+  // visual chip rendered next to each server-log entry. Keep the keys
+  // in sync with `IRCRawEvent.makeServerLog` in the D engine.
+  function phaseToLabel(p: string): string {
+    switch (p) {
+      case 'queued':       return 'queued';
+      case 'resolving':    return 'dns';
+      case 'connecting':   return 'connect';
+      case 'tcp_open':     return 'tcp';
+      case 'tls':          return 'tls';
+      case 'tls_done':     return 'tls ✓';
+      case 'registering':  return 'register';
+      case 'caps':         return 'caps';
+      case 'sasl':         return 'sasl';
+      case 'welcome':      return 'ready';
+      case 'info':         return 'info';
+      case 'warn':         return 'warn';
+      case 'error':        return 'error';
+      default:             return p;
+    }
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -401,11 +429,12 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
     data-msgid={msg.msgid || undefined}
+    data-phase={isServerLog ? phase : undefined}
   >
     {#if !isSystem && !isJoinPart && !isAction && nick}
       {@const colorIndex = nickColorIndex(nick)}
@@ -421,6 +450,9 @@
       <hr class="reconnect-hr" />
     {/if}
     <span class="message">
+      {#if isServerLog}
+        <span class="serverLogChip" data-phase={phase} aria-label="Phase: {phaseLabel}">{phaseLabel}</span>
+      {/if}
       {#if !isSystem && !isJoinPart && !isAction && nick}
         {@const colorIndex = nickColorIndex(nick)}
         {@const colorCls = `c${colorIndex}`}

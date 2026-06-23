@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
   import { addNetwork } from '../stores/api';
+  import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
 
   interface NetworkPreset {
@@ -108,6 +109,8 @@
           chanTypes: '#',
         };
         ircState.networks.push(net);
+        // Ensure the new server starts expanded in the sidebar
+        collapsedMap[net.networkId] = false;
         // Navigate to the new network's server buffer
         setActiveBuffer(net.networkId, '_server');
         updateRoute(net.networkId, '_server');

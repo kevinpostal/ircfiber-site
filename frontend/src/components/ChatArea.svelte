@@ -43,6 +43,12 @@
       return !!m?.msgid?.match?.(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     }
 
+    // Detect optimistic outgoing messages (have a label but no eid).
+    // These are user-created messages that haven't been acknowledged by
+    // the server yet. When ALL messages in the buffer are optimistic,
+    // there's no real backlog to load — skip the API call.
+    const allOptimistic = existing.every(m => !m.eid && m.label);
+
     // UUID msgids (from legacy 'i' field) don't exist as msgid in
     // MongoDB — the backend cursor lookup fails and falls back to
     // the same timestamp forever. We detect them and advance the
@@ -60,6 +66,16 @@
 
     console.log('[handleLoadMore v2] Phantom check:', { isPhantom, eid: !!first?.eid, text: first?.text != null, nick: first?.nick != null, isUuid: isUuidMsgid(first), cursorTs: oldestTs });
 
+    // No cursor and all messages are optimistic (not yet confirmed by the
+    // server) — there's no real backlog to load.  Skip the API call.
+    if (allOptimistic && !oldestEid) {
+      console.log('[handleLoadMore] All messages optimistic — no backlog');
+      return false;
+    }
+
+    // When the first message has no eid and no real msgid (no cursor at all),
+    // there's nothing to page against — the backend would return 0 and the
+    // LoadMore component would retry 5 times for nothing.
     if (!oldestEid && !oldestMsgid && !oldestTs) return false;
 
     if (!oldestEid && !oldestMsgid && !oldestTs) return false;

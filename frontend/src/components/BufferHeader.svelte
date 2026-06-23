@@ -80,7 +80,12 @@
 <div class="bufferstatus">
   <div class="status bufferHead">
     <h2 class="bufferHeading{!isJoined ? ' bufferHeadingCollapsed' : ''}">
-      <span class="bufferlabel label" id="current-channel">{channelName}</span>
+      {#if ircState.activeBuffer.bufferName && !ircState.activeBuffer.bufferName.startsWith('#') && ircState.activeBuffer.bufferName !== '_server'}
+        <span class="bufferlabel label" id="current-channel">Conversation with {channelName}</span>
+        <span class="realname" id="conversation-realname">{activeBufferObj?.name}</span>
+      {:else}
+        <span class="bufferlabel label" id="current-channel">{channelName}</span>
+      {/if}
       {#if topic}
         <span class="topic" id="channel-topic">{@html autolinkHtml(parseIrcFormatting(topic))}</span>
       {/if}
@@ -107,6 +112,21 @@
                 title="Options" aria-label="Options"
                 onclick={(e) => onJoinChannel(e)}></button>
       </nav>
+    {:else if ircState.activeBuffer.bufferName && !ircState.activeBuffer.bufferName.startsWith('#') && ircState.activeBuffer.bufferName !== '_server'}
+      <p class="buttons">
+        {#if isArchived}
+          <button class="unarchive" onclick={unarchive}><span>Unarchive</span></button>
+        {:else}
+          <button class="archive" onclick={archive}><span>Archive</span></button>
+        {/if}
+        <button class="whois" type="button"
+                onclick={() => { if (activeNetwork) sendRaw(activeNetwork.networkId, 'WHOIS ' + ircState.activeBuffer.bufferName); }}>
+          <span>Whois</span>
+        </button>
+        <button class="bufferOptions fa fa-cog" type="button"
+                title="Options" aria-label="Options"
+                onclick={(e) => onJoinChannel(e)}></button>
+      </p>
     {:else}
       <p class="buttons">
         <button class="rejoin" type="button" onclick={onEditNetwork}>Edit</button>

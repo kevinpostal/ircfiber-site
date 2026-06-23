@@ -6,6 +6,12 @@ export class InputHistory {
   private index = 0;
   private currentValue = '';
   private maxSize = 100;
+  private key: string;
+
+  constructor(key: string = 'global') {
+    this.key = key;
+    this.load();
+  }
 
   /** Add a sent message to history */
   push(text: string): void {
@@ -14,7 +20,33 @@ export class InputHistory {
     if (this.history.length > this.maxSize) {
       this.history.shift();
     }
+    this.save();
     this.resetIndex();
+  }
+
+  private storageKey(): string {
+    return `ircfiber:inputHistory:${this.key}`;
+  }
+
+  private save(): void {
+    try {
+      const data = this.history.slice(-this.maxSize);
+      localStorage.setItem(this.storageKey(), JSON.stringify(data));
+    } catch {
+      // localStorage full or unavailable
+    }
+  }
+
+  private load(): void {
+    try {
+      const raw = localStorage.getItem(this.storageKey());
+      if (raw) {
+        this.history = JSON.parse(raw);
+        if (!Array.isArray(this.history)) this.history = [];
+      }
+    } catch {
+      this.history = [];
+    }
   }
 
   /**

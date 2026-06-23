@@ -125,4 +125,25 @@ describe('UserPopup', () => {
     await userEvent.click(page.getByRole('button', { name: 'WHOIS' }));
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it('sends a message via the "Send a message" form', async () => {
+    const network = setupChannelBuffer();
+    const onClose = vi.fn();
+    const onSwitchBuffer = vi.fn();
+    const mockSendMessage = vi.fn();
+    render(UserPopup, { props: { nick: 'Alice', x: 0, y: 0, onClose, onSwitchBuffer, onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+    const textbox = page.getByRole('textbox');
+    await expect.element(textbox).toBeInTheDocument();
+
+    await userEvent.fill(textbox, 'Hello from the popup!');
+    await userEvent.keyboard('{Enter}');
+
+    expect(mockSendMessage).toHaveBeenCalledOnce();
+    expect(mockSendMessage).toHaveBeenCalledWith(network.networkId, 'Alice', 'Hello from the popup!');
+    expect(mockSendRaw).not.toHaveBeenCalled();
+    expect(onSwitchBuffer).toHaveBeenCalledOnce();
+    expect(onSwitchBuffer).toHaveBeenCalledWith(network.networkId, 'Alice');
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });

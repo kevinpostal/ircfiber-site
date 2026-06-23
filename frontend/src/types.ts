@@ -136,6 +136,11 @@ export interface IRCMessage {
   sentences?: string;  // JOINPART_GROUP / DISCO_GROUP pre-rendered HTML
   events?: JoinPartEvent[] | IRCMessage[];
   expanded?: boolean;
+  /** Server-log progress phase tag, set by the engine for connection
+   *  lifecycle entries that should be rendered as part of the timeline
+   *  in the `_server` buffer. See IRCRawEvent.makeServerLog in D for
+   *  the canonical taxonomy. */
+  phase?: string;
 }
 
 export interface MOTDGroupMessage extends IRCMessage {

@@ -30,7 +30,7 @@
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -359,6 +359,16 @@ let showNetworkForm: boolean = $state(false);
       }
     } else {
       ircState.focusLost = false;
+      // IRCCloud-style: track the last visible message when the tab
+      // regains focus so unread counts can be computed from this point.
+      const nid = ircState.activeBuffer.networkId;
+      const buf = ircState.activeBuffer.bufferName;
+      if (nid && buf) {
+        const list = ircState.messages[`${nid}:${buf}`] ?? [];
+        if (list.length > 0) {
+          setFocusSeen(nid, buf, list[list.length - 1].t ?? Date.now());
+        }
+      }
     }
   }
 
@@ -434,6 +444,7 @@ let showNetworkForm: boolean = $state(false);
     const isSameBuffer =
       ircState.activeBuffer.networkId === networkId &&
       ircState.activeBuffer.bufferName === normalizeChannelName(bufferName);
+    console.log('[fix] switchToBuffer', networkId, bufferName, 'sameBuf:', isSameBuffer, 'syncReceived:', syncReceived);
     setActiveBuffer(networkId, bufferName);
     requestSwitchBuffer(networkId, bufferName);
     updateRoute(networkId, bufferName);
@@ -525,6 +536,25 @@ let showNetworkForm: boolean = $state(false);
         syncReceived = true;
         checkRoute();
         selectLastActiveBuffer((obj.networks || []) as Network[]);
+        // IRCCloud-style: if checkRoute (called via handleNetworks) already
+        // set the active buffer from the URL before syncReceived was true,
+        // loadBufferHistory was skipped.  SelectLastActiveBuffer also bails
+        // if the buffer is already set.  So we fire loadBufferHistory here
+        // for any buffer that still has zero messages — this is the boot
+        // synchronization point where syncReceived flips from false to true.
+        if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
+          const ab = ircState.activeBuffer;
+          const key = `${ab.networkId}:${normalizeChannelName(ab.bufferName)}`;
+          console.log('[fix] sync: active buffer', ab.networkId, ab.bufferName, 'msgs:', ircState.messages[key]?.length ?? 0);
+          if (!ircState.messages[key] || ircState.messages[key].length === 0) {
+            console.log('[fix] calling loadBufferHistory');
+            void loadBufferHistory(ab.networkId, ab.bufferName);
+          } else {
+            console.log('[fix] messages already present, skipping loadBufferHistory');
+          }
+        } else {
+          console.log('[fix] sync: no active buffer set');
+        }
       } else if (obj.type === 'irc_event' || obj.y === 'irc_event') {
         processEvent(obj);
       } else if (obj.type === 'pref_update') {
@@ -547,6 +577,7 @@ let showNetworkForm: boolean = $state(false);
   // IRCCloud-style: handle networks message — populates the sidebar immediately
   // with real network names before the full state dump arrives
   function handleNetworks(obj: Record<string, unknown>): void {
+    console.log('[fix] handleNetworks called, items:', (obj.items || []).length);
     performance.mark('networks');
     const items = (obj.items || []) as Array<{ networkId: string; name: string }>;
     if (items.length === 0) return;
@@ -763,6 +794,7 @@ let showNetworkForm: boolean = $state(false);
 
   function checkRoute(): void {
     const path = window.location.pathname;
+    console.log('[fix] checkRoute called, path:', path, 'syncReceived:', syncReceived, 'networks:', ircState.networks.length);
     const settingsTab = getSettingsTabFromUrl();
     if (settingsTab) {
       ircState.showSettings = true;

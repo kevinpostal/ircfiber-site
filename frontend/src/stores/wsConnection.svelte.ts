@@ -17,6 +17,11 @@ export function setMaxEid(eid: number): void {
 }
 
 let socket: WebSocket | null = null;
+
+// IRCCloud-style message queue: messages sent before the WebSocket is
+// ready are queued and flushed on open. Prevents losing messages during
+// reconnection (e.g. a DM sent right after clicking a user).
+let messageQueue: string[] = [];
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 3000;
 let messageCallback: ((data: unknown) => void) | null = null;
@@ -110,6 +115,8 @@ export function connectWebSocket(
     reconnectDelay = 3000;
     setStreamState('connected');
     if (openCallback) openCallback();
+    // Flush any messages queued while the WebSocket was closed
+    flushQueue();
   });
 
   socket.addEventListener('message', (event) => {
@@ -164,16 +171,29 @@ export function isConnected(): boolean {
 
 // ── Fire-and-forget sends ──
 
-export function sendRaw(networkId: string, line: string): void {
+function doSend(payload: string): void {
   if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ cmd: 'raw', network: networkId, text: line }));
+    socket.send(payload);
+  } else {
+    // Queue for flush on next WebSocket open (IRCCloud-style)
+    if (messageQueue.length < 500) messageQueue.push(payload);
   }
 }
 
-export function sendMessage(networkId: string, target: string, text: string, label?: string): void {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ cmd: 'msg', network: networkId, target, text, label }));
+function flushQueue(): void {
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  for (const msg of messageQueue) {
+    socket.send(msg);
   }
+  messageQueue = [];
+}
+
+export function sendRaw(networkId: string, line: string): void {
+  doSend(JSON.stringify({ cmd: 'raw', network: networkId, text: line }));
+}
+
+export function sendMessage(networkId: string, target: string, text: string, label?: string): void {
+  doSend(JSON.stringify({ cmd: 'msg', network: networkId, target, text, label }));
 }
 
 export function requestSync(): void {

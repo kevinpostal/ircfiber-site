@@ -202,6 +202,57 @@ ul.inactive-channels {
 .sidebar-section-header.archive-header .archive-header-toggle:hover,
 .sidebar-section-header.archive-header .archive-header-toggle:focus { color: #d9d9d9; }
 
+.sidebar-section-header.conversations-header {
+  position: relative;
+  padding: 3px 0 2px 17px;
+  font-size: 15px;
+  color: #bfbfbf;
+  margin-left: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+}
+.sidebar-section-header.conversations-header::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  background: #333;
+  z-index: 1;
+}
+.sidebar-section-header.conversations-header .conversations-header-label {
+  position: relative;
+  z-index: 2;
+  padding: 0 7px;
+}
+.sidebar-section-header.conversations-header .conversations-header-toggle {
+  background: none;
+  border: none;
+  color: #a6a6a6;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  visibility: hidden;
+  position: relative;
+  z-index: 2;
+}
+.sidebar-section-header.conversations-header:hover .conversations-header-toggle,
+.sidebar-section-header.conversations-header:focus-within .conversations-header-toggle { visibility: visible; }
+.sidebar-section-header.conversations-header .conversations-header-toggle:hover,
+.sidebar-section-header.conversations-header .conversations-header-toggle:focus { color: #d9d9d9; }
+
+ul.buffers.conversations {
+  padding-left: 12px;
+}
+.conversations .buffer-item .buffer {
+  margin-left: calc(-5px - 12px);
+  padding-left: calc(17px + 12px);
+}
+
 
 
 /* ── IRC channel mode classes (IRCCloud-style) ── */

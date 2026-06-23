@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, getActiveNetwork, getActiveBufferObj } from '../stores/ircStore.svelte';
-  import { sendRaw } from '../stores/wsConnection.svelte.ts';
+  import { sendRaw, sendMessage } from '../stores/wsConnection.svelte.ts';
   import { ignoreList } from '../stores/preferences.svelte';
   import { getAvatarColor, stripPrefix } from '../lib/utils';
   import type { Member, ModeCategory } from '../types';
@@ -13,8 +13,9 @@
     onClose: () => void;
     onSwitchBuffer: (networkId: string, bufferName: string) => void;
     onSendRaw?: (...args: any[]) => any;
+    onSendMessage?: (...args: any[]) => any;
   }
-  let { nick, member = null, x, y, onClose, onSwitchBuffer, onSendRaw = sendRaw }: Props = $props();
+  let { nick, member = null, x, y, onClose, onSwitchBuffer, onSendRaw = sendRaw, onSendMessage = sendMessage }: Props = $props();
 
   const isChannel = $derived(ircState.activeBuffer.bufferName?.startsWith('#') ?? false);
   const networkId = $derived(ircState.activeBuffer.networkId || '');
@@ -52,6 +53,16 @@
   let messageInput: HTMLInputElement | null = $state(null);
 
   function close(): void { onClose(); }
+
+  // Auto-focus the message input when the popup opens so the user
+  // can type immediately without clicking into the tiny input field.
+  // Without this, the Enter key goes to the main compose textarea and
+  // the message gets sent to the channel instead of the user.
+  $effect(() => {
+    if (messageInput) {
+      messageInput.focus();
+    }
+  });
 
   // Smart edge-detection positioning
   $effect(() => {
@@ -146,7 +157,16 @@
     e.preventDefault();
     const text = messageValue.trim();
     if (text && networkId) {
-      onSendRaw(networkId, `PRIVMSG ${displayNick} :${text}`);
+      // Open a DM/query buffer so the user sees the conversation in the
+      // sidebar and message list — like IRCCloud does. The buffer is
+      // created automatically by switchToBuffer when the target is a
+      // nick (not a channel).
+      onSwitchBuffer(networkId, displayNick);
+      // Send the private message using sendMessage (cmd: 'msg') so the
+      // engine persists it in MongoDB and it survives page reloads.
+      // Using sendRaw (cmd: 'raw') would send the PRIVMSG to the IRC
+      // server without storing it — the message would disappear on reload.
+      onSendMessage(networkId, displayNick, text);
     }
     messageValue = '';
     close();

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState } from '../stores/ircStore.svelte';
-  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, networkOrder } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
   import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder } from '../stores/api';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
@@ -231,8 +231,11 @@
           </span>
         </div>
         {#if !collapsedMap[net.networkId]}
+          {@const activeFilter = (b: Buffer) => b.name !== '_server' && b.isJoined !== false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`]}
+          {@const currentChannels = uniqueBuffersByName(net.buffers.filter(b => activeFilter(b) && b.name.startsWith('#')))}
+          {@const currentConversations = uniqueBuffersByName(net.buffers.filter(b => activeFilter(b) && b.type === 'query' && !b.name.startsWith('#')))}
           <ul class="buffers channels network-buffers">
-            {#each uniqueBuffersByName(net.buffers.filter(b => b.name !== '_server' && b.isJoined !== false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])) as buf (net.networkId + ':' + buf.name)}
+            {#each currentChannels as buf (net.networkId + ':' + buf.name)}
               {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
               <li class="buffer channel buffer-item"
                   class:active={isActive}
@@ -246,7 +249,7 @@
                   onclick={() => onSwitchBuffer(net.networkId, buf.name)}
                   role="presentation">
                 <span class="buffer" role="tab" tabindex="0">
-                  <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
+                  <span class="label buffer-name">{'#' + stripHash(buf.name)}</span>
                   {#if buf.unreadCount > 0}
                     <span class="unread buffer-unread">{buf.unreadCount}</span>
                   {:else if (buf.highlightCount ?? 0) > 0}
@@ -282,6 +285,44 @@
                       role="presentation">
                     <span class="buffer" role="tab" tabindex="0">
                       <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
+                    </span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          {/if}
+          {#if currentConversations.length > 0}
+            {@const convCollapsed = conversationsCollapsedMap[net.networkId] ?? false}
+            <div class="sidebar-section-header conversations-header"
+                 role="button" tabindex="0"
+                 onclick={() => { const next = !convCollapsed; conversationsCollapsedMap[net.networkId] = next; }}
+                 onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const next = !convCollapsed; conversationsCollapsedMap[net.networkId] = next; } }}
+                 aria-expanded={!convCollapsed}>
+              <span class="conversations-header-label">Conversations</span>
+              <button type="button" class="conversations-header-toggle"
+                      title={convCollapsed ? 'Expand' : 'Collapse'}
+                      aria-label={convCollapsed ? 'Expand Conversations' : 'Collapse Conversations'}
+                      onclick={(e) => { e.stopPropagation(); const next = !convCollapsed; conversationsCollapsedMap[net.networkId] = next; }}>
+                <i class="fa fa-chevron-{convCollapsed ? 'right' : 'down'}" aria-hidden="true"></i>
+              </button>
+            </div>
+            {#if !convCollapsed}
+              <ul class="buffers conversations">
+                {#each currentConversations as buf (net.networkId + ':' + buf.name)}
+                  {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
+                  <li class="buffer conversation buffer-item"
+                      class:active={isActive}
+                      class:unread={buf.unreadCount > 0}
+                      class:highlight={buf.highlight}
+                      onclick={() => onSwitchBuffer(net.networkId, buf.name)}
+                      role="presentation">
+                    <span class="buffer" role="tab" tabindex="0">
+                      <span class="label buffer-name">{buf.name}</span>
+                      {#if buf.unreadCount > 0}
+                        <span class="unread buffer-unread">{buf.unreadCount}</span>
+                      {:else if (buf.highlightCount ?? 0) > 0}
+                        <span class="unread buffer-unread">{buf.highlightCount}</span>
+                      {/if}
                     </span>
                   </li>
                 {/each}

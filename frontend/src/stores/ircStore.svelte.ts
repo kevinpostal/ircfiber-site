@@ -1,7 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
-import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder } from './preferences.svelte';
+import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel } from './api';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 
@@ -40,6 +40,12 @@ export const ircState = $state({
   // Only one divider exists per buffer at a time; cleared on buffer switch
   // (IRCCloud re-renders the log fresh on select).
   backlogDivider: {} as Record<string, string>,
+  // IRCCloud-style backlog discontinuity tracking: per-buffer record of the
+  // earliest known eid and a timer. When prependMessages detects a gap
+  // between the new batch's earliest eid and our cached earliest, we flag a
+  // discontinuity so the UI can show "Load more backlog" even if the API
+  // says there's nothing more.
+  backlogDiscontinuity: {} as Record<string, { earliestEid: number; timer: ReturnType<typeof setTimeout> }>,
   // Per-buffer typing state: bufferKey -> (nick -> timestamp of last TAGMSG)
   typing: {} as Record<string, Record<string, number>>,
   // IRCCloud-style "reorder mode": when true, the Sidebar enters drag-and-drop
@@ -103,7 +109,13 @@ export function setReorderMode(value: boolean): void {
 }
 
 export function setActiveBuffer(networkId: string, bufferName: string): void {
-  bufferName = normalizeChannelName(bufferName);
+  // Only normalize channel names (starting with #). Nick-based query/DM
+  // buffers must keep their original casing and must NOT get a '#' prepended,
+  // otherwise a nick like "Zod" gets normalized to "#zod" and matches the
+  // wrong buffer (e.g. the #Zod channel instead of a DM to user Zod).
+  if (bufferName.startsWith('#')) {
+    bufferName = normalizeChannelName(bufferName);
+  }
 
   // Track previous buffer (IRCCloud-style) for archive focus selection
   const prevNetworkId = ircState.activeBuffer.networkId;
@@ -114,6 +126,11 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
 
   ircState.activeBuffer.networkId = networkId;
   ircState.activeBuffer.bufferName = bufferName;
+  // Auto-expand the Conversations section in the sidebar when switching
+  // to a query/DM buffer — matches IRCCloud behavior.
+  if (bufferName && !bufferName.startsWith('#') && bufferName !== '_server') {
+    conversationsCollapsedMap[networkId] = false;
+  }
   const key = `${networkId}:${bufferName}`;
   delete unreadMap[key];
   delete highlightMap[key];
@@ -806,7 +823,11 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         existing.currentNick = net.currentNick;
       }
       for (const incomingBuf of net.buffers) {
-        incomingBuf.name = normalizeChannelName(incomingBuf.name);
+        // Only normalize channel names (starting with #). Query/DM buffers
+        // use the raw nick as the buffer name and must not get '#' prepended.
+        if (incomingBuf.name.startsWith('#')) {
+          incomingBuf.name = normalizeChannelName(incomingBuf.name);
+        }
         // Skip channels the user has explicitly deleted — the server still
         // re-includes them in sync (they're in partedChannels), but the UI
         // should keep them hidden.

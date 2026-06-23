@@ -11,6 +11,37 @@ import { setMaxEid } from '../stores/wsConnection.svelte';
 /** Message append strategy: immediate or batched (IRCCloud-style). */
 export type AppendFn = (networkId: string, bufferName: string, msg: IRCMessage, isBackfill?: boolean) => void;
 
+/**
+ * Decide whether an event should bypass the 0 ms message batcher.
+ *
+ * The batcher (lib/messageBatcher.ts) coalesces incoming events into a
+ * single Svelte state mutation per macrotask. That's exactly what you
+ * want for chat bursts (paste, MOTD lines) but it adds a 1–4 ms delay
+ * to a single-message stream.
+ *
+ * Server-log progress entries are low-volume but high-value: the user
+ * is staring at the server buffer waiting to see "Connecting to …" and
+ * "TLS handshake complete" appear. Squeezing them through the batcher
+ * makes the connection feel laggy on the first attempt even when the
+ * round-trip is otherwise fast.
+ *
+ * We classify anything that's NOT a chat message and IS in a server
+ * buffer as immediate. The engine tags these events with a `phase`
+ * tag in their raw JSON (see `IRCRawEvent.makeServerLog` in D), but
+ * the unpacked `IRCMessage` doesn't expose tags yet — so we use the
+ * shape (no nick, NOTICE command, server buffer) which exactly
+ * describes every progress entry the engine emits.
+ */
+export function shouldBypassBatcher(msg: IRCMessage, bufferName: string): boolean {
+  if (bufferName !== '_server') return false;
+  if (msg.command !== 'NOTICE') return false;
+  // A NOTICE *with* a nick is a server→user NOTICE (NickServ, etc.) and
+  // is rendered as chat in MessageRow. Progress entries never carry a
+  // nick — they're system notices.
+  if (msg.nick) return false;
+  return true;
+}
+
 const defaultAppend: AppendFn = (networkId, bufferName, msg, isBackfill) => {
   if (isBackfill) {
     prependMessage(networkId, bufferName, msg);
@@ -67,6 +98,16 @@ export function unpackEvent(
     text = action.text;
   }
 
+  // Phase tag (set by IRCRawEvent.makeServerLog in the engine) lives in
+  // the IRCv3 tags object alongside server-time / msgid. The compact
+  // WebSocket wire format inlines it as `data.phase` for low-overhead
+  // access on the hot path; fall back to the tags object when only the
+  // long form is available (e.g. replayed scrollback).
+  const tags = data.tags as Record<string, string> | undefined;
+  const phase = (data.phase as string | undefined)
+    ?? tags?.phase
+    ?? undefined;
+
   return {
     id: ((data.id as string) || (data.i as string) || `w${++localMsgIdCounter.value}`) as string,
     timestamp: ((data.timestamp as string) || (data.t ? new Date(data.t as number).toISOString() : null)) as string,
@@ -80,6 +121,7 @@ export function unpackEvent(
     t: data.t as number,
     eid: (data.eid as number) || undefined,
     type,
+    phase,
   };
 }
 
@@ -222,7 +264,17 @@ export function processIrcEvent(
 
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {
-    append(networkId, channel, msg, isBackfill);
+    // Server-log progress entries (NOTICE-shaped, no nick, in _server)
+    // bypass the message batcher so each phase appears the instant the
+    // engine emits it. Chat messages still flow through the batcher so
+    // paste bursts and MOTD dumps coalesce into one reactive update.
+    // `append` is the batched path (enqueueMessage); `defaultAppend` is
+    // the immediate path (appendMessage / prependMessage directly).
+    const appendFn: AppendFn = shouldBypassBatcher(msg, channel)
+      ? defaultAppend
+      : append;
+
+    appendFn(networkId, channel, msg, isBackfill);
 
     const isActiveBuffer = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === channel;
     const documentHidden = typeof document !== 'undefined' && document.hidden;
