@@ -301,9 +301,29 @@
         const msgTarget = args[0];
         const msgText = args.slice(1).join(' ');
         if (msgTarget && msgText) {
-          onSendMessage(networkId, msgTarget, msgText);
+          const label = generateLabel();
+          onSendMessage(networkId, msgTarget, msgText, label);
           setActiveBuffer(networkId, msgTarget);
           updateRoute(networkId, msgTarget);
+          // Optimistic message — shows immediately before IRC echo arrives
+          const optimistic: IRCMessage = {
+            timestamp: new Date().toISOString(),
+            t: Date.now(),
+            nick: myNick,
+            text: msgText,
+            command: 'PRIVMSG',
+            label,
+          };
+          ircState.optimisticMessages.set(label, optimistic);
+          const key = `${networkId}:${msgTarget}`;
+          const list = ircState.messages[key] ?? [];
+          list.push(optimistic);
+          ircState.messages[key] = list;
+          if (ircState.processedMessages[key]) {
+            ircState.processedMessages[key] = appendToProcessed(ircState.processedMessages[key], [optimistic]);
+          } else {
+            ircState.processedMessages[key] = buildProcessedBuffer(list);
+          }
         }
         inputValue = '';
         void autoResizeAfterClear();
