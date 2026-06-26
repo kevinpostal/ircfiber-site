@@ -801,6 +801,12 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       existing.tls = net.tls;
       existing.nick = net.nick;
       existing.realName = net.realName;
+      existing.sasl = net.sasl;
+      existing.saslUsername = net.saslUsername;
+      // Don't overwrite saslPassword from sync if empty — the API may
+      // mask it for security (returning empty string on edits). Preserve
+      // what the user already set locally.
+      if (net.saslPassword) existing.saslPassword = net.saslPassword;
       existing.status = net.status;
 
       // Connection state: only overwrite from sync when it represents

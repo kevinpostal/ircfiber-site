@@ -31,6 +31,12 @@ export interface Network {
   nick: string;
   realName: string;
   currentNick: string;
+  /** SASL authentication mechanism: 'none' | 'plain' | 'external' | 'scramSha256' */
+  sasl: string;
+  /** SASL username (authentication identity) */
+  saslUsername: string;
+  /** SASL password (populated for PLAIN / SCRAM-SHA-256) */
+  saslPassword: string;
   connected: boolean;
   connecting: boolean;
   connectionState: ConnectionState;

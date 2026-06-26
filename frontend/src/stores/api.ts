@@ -265,7 +265,7 @@ export async function joinChannel(networkId: string, channel: string, key?: stri
 export async function addNetwork(data: {
   name: string; host: string; port: number; tls: string;
   nick: string; realName: string; autoJoinChannels: string; nspass?: string;
-  commands?: string;
+  commands?: string; sasl?: string; saslUsername?: string; saslPassword?: string;
 }): Promise<Record<string, unknown>> {
   const payload = {
     ...data,

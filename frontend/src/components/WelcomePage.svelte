@@ -52,6 +52,10 @@
   let showAdvanced = $state(false);
   let revealNickserv = $state(false);
   let revealServerPass = $state(false);
+  let saslMechanism = $state<'none' | 'plain' | 'external' | 'scramSha256'>('none');
+  let saslUsername = $state('');
+  let saslPassword = $state('');
+  let revealSaslPassword = $state(false);
   let error = $state('');
   let busy = $state(false);
 
@@ -79,6 +83,9 @@
         name: host,
         host, port, tls, nick, realName,
         autoJoinChannels, nspass, serverPass, commands,
+        sasl: saslMechanism,
+        saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
+        saslPassword: saslMechanism !== 'none' ? saslPassword : undefined,
       });
       if (result && result.id) {
         const net: import('../types').Network = {
@@ -90,6 +97,9 @@
           nick: result.nick as string,
           realName: (result.realName as string) || (result.nick as string),
           currentNick: result.nick as string,
+          sasl: (result.sasl as string) || 'none',
+          saslUsername: (result.saslUsername as string) || '',
+          saslPassword: '',
           connected: false,
           connecting: true,
           connectionState: 'connecting',
@@ -278,6 +288,94 @@
                 </td>
               </tr>
 
+              <!-- ── SASL Authentication ──────────────────────────── -->
+              <tr>
+                <th scope="col" class="sasl optional">
+                  <label for="addNetworkSaslMechanism">
+                    SASL authentication
+                    <small class="explanation">— replaceable authentication framework for IRC.
+                      <a href="https://ircv3.net/specs/extensions/sasl-3.1" target="_blank" rel="noopener">Learn more</a>
+                    </small>
+                  </label>
+                </th>
+              </tr>
+              <tr>
+                <td class="sasl optional">
+                  <div class="sasl-mechanism-row">
+                    <select class="input addNetworkSaslMechanism" id="addNetworkSaslMechanism"
+                            bind:value={saslMechanism}>
+                      <option value="none">None (no SASL)</option>
+                      <option value="plain">PLAIN — password-based, sent in the clear (use TLS)</option>
+                      <option value="external">EXTERNAL — TLS client certificate</option>
+                      <option value="scramSha256">SCRAM-SHA-256 — salted challenge-response, mutual auth</option>
+                    </select>
+                    <span class="sasl-security-badge"
+                          class:sasl-security-badge--secure={saslMechanism === 'scramSha256'}
+                          class:sasl-security-badge--warning={saslMechanism === 'plain'}
+                          class:sasl-security-badge--info={saslMechanism === 'external'}>
+                      {#if saslMechanism === 'none'}
+                        <i class="fa fa-minus-circle"></i> Disabled
+                      {:else if saslMechanism === 'plain'}
+                        <i class="fa fa-exclamation-triangle"></i> Use TLS
+                      {:else if saslMechanism === 'external'}
+                        <i class="fa fa-id-card"></i> Certificate
+                      {:else if saslMechanism === 'scramSha256'}
+                        <i class="fa fa-shield"></i> Secure
+                      {/if}
+                    </span>
+                  </div>
+                </td>
+              </tr>
+              {#if saslMechanism !== 'none'}
+                <tr>
+                  <th scope="col" class="sasl-username optional">
+                    <label for="addNetworkSaslUsername">
+                      {#if saslMechanism === 'external'}
+                        SASL username <small class="explanation">— (optional) authz identity for certificate auth</small>
+                      {:else}
+                        SASL username <small class="explanation">— the authentication identity (required)</small>
+                      {/if}
+                    </label>
+                  </th>
+                </tr>
+                <tr>
+                  <td class="sasl-username optional">
+                    <input class="input addNetworkSaslUsername" id="addNetworkSaslUsername"
+                           type="text" bind:value={saslUsername}
+                           placeholder={saslMechanism === 'external' ? 'optional — leave blank for cert-derived identity' : 'e.g. mynick'}
+                           autocomplete="username" />
+                  </td>
+                </tr>
+              {/if}
+              {#if saslMechanism === 'plain' || saslMechanism === 'scramSha256'}
+                <tr>
+                  <th scope="col" class="sasl-password optional">
+                    <label for="addNetworkSaslPassword">
+                      SASL password
+                      <small class="explanation">
+                        {#if saslMechanism === 'scramSha256'}
+                          — SCRAM stores this as a salted hash on the server; your password is never sent in the clear
+                        {:else}
+                          — SASL PLAIN transmits in base64 (use TLS to encrypt the connection)
+                        {/if}
+                      </small>
+                    </label>
+                  </th>
+                </tr>
+                <tr>
+                  <td class="sasl-password optional">
+                    <input class="input addNetworkSaslPassword password" id="addNetworkSaslPassword"
+                           type={revealSaslPassword ? 'text' : 'password'}
+                           bind:value={saslPassword} autocomplete="new-password"
+                           placeholder="Required" />
+                    <span>
+                      <input type="checkbox" class="reveal" id="addNetworkSaslPasswordReveal" bind:checked={revealSaslPassword} />
+                      <label for="addNetworkSaslPasswordReveal">Reveal</label>
+                    </span>
+                  </td>
+                </tr>
+              {/if}
+
               </tbody>
             </table>
           {/if}
@@ -408,5 +506,51 @@
   #addNetworkEditor :global(textarea) {
     resize: vertical;
     min-height: 4em;
+  }
+
+  /* ── SASL Authentication UI ───────────────────────────── */
+  #addNetworkEditor :global(.sasl-mechanism-row) {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  #addNetworkEditor :global(.addNetworkSaslMechanism) {
+    flex: 1;
+    min-width: 20em;
+  }
+  #addNetworkEditor :global(.sasl-security-badge) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+  #addNetworkEditor :global(.sasl-security-badge--secure) {
+    background: #1a3a2a;
+    color: #3fb950;
+    border: 1px solid #238636;
+  }
+  #addNetworkEditor :global(.sasl-security-badge--warning) {
+    background: #3a2a1a;
+    color: #d29922;
+    border: 1px solid #9e6a03;
+  }
+  #addNetworkEditor :global(.sasl-security-badge--info) {
+    background: #1a2a3a;
+    color: #58a6ff;
+    border: 1px solid #1f6feb;
+  }
+  #addNetworkEditor :global(.sasl-learn-more) {
+    color: #58a6ff;
+    text-decoration: none;
+  }
+  #addNetworkEditor :global(.sasl-learn-more:hover) {
+    text-decoration: underline;
   }
 </style>

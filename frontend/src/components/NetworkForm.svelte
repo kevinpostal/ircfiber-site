@@ -31,10 +31,13 @@
   let nspass = $state('');
   let serverPass = $state('');
   let commands = $state('');
-  let showNickserv = $state(false);
   let showAdvanced = $state(false);
   let revealNickserv = $state(false);
   let revealServerPass = $state(false);
+  let saslMechanism = $state<'none' | 'plain' | 'external' | 'scramSha256'>('none');
+  let saslUsername = $state('');
+  let saslPassword = $state('');
+  let revealSaslPassword = $state(false);
   let error = $state('');
   let busy = $state(false);
 
@@ -50,6 +53,9 @@
       nspass = '';
       serverPass = '';
       commands = '';
+      saslMechanism = (existing.sasl as 'none' | 'plain' | 'external' | 'scramSha256') || 'none';
+      saslUsername = existing.saslUsername || '';
+      saslPassword = existing.saslPassword || '';
     } else if (mode === 'add') {
       name = '';
       host = '';
@@ -61,6 +67,9 @@
       nspass = '';
       serverPass = '';
       commands = '';
+      saslMechanism = 'none';
+      saslUsername = '';
+      saslPassword = '';
     }
   });
 
@@ -78,6 +87,9 @@
         const result = await onAddNetwork({
           name, host, port, tls, nick, realName,
           autoJoinChannels, nspass, serverPass, commands,
+          sasl: saslMechanism,
+          saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
+          saslPassword: saslMechanism !== 'none' ? saslPassword : undefined,
         });
         // Immediately add the network to the UI so it shows up even if the
         // IRC engine can't connect (bad address, server down, etc.). The
@@ -92,6 +104,9 @@
             nick: result.nick as string,
             realName: (result.realName as string) || (result.nick as string),
             currentNick: result.nick as string,
+            sasl: (result.sasl as string) || 'none',
+            saslUsername: (result.saslUsername as string) || '',
+            saslPassword: '',
             connected: false,
             connecting: true,
             connectionState: 'connecting',
@@ -128,6 +143,9 @@
 
         await onUpdateNetwork(networkId, {
           name, host, port, tls, nick, realName,
+          sasl: saslMechanism,
+          saslUsername: saslMechanism !== 'none' ? saslUsername : '',
+          saslPassword: saslMechanism !== 'none' && saslPassword ? saslPassword : undefined,
         });
 
         // Mirror the saved fields into local state so the form pre-fills
@@ -138,6 +156,9 @@
           existing.host = host;
           existing.port = port;
           existing.tls = tls;
+          existing.sasl = saslMechanism;
+          existing.saslUsername = saslUsername;
+          if (saslPassword) existing.saslPassword = saslPassword;
           if (realName) existing.realName = realName;
           // nick is handled separately below because it also needs NICK raw
           if (nickChanged) {
@@ -350,6 +371,97 @@
                     </div>
                   </td>
                 </tr>
+
+                {#if mode === 'add' || existing}
+                  <!-- ── SASL Authentication ──────────────────────── -->
+                  <tr>
+                    <th class="sasl optional" colspan="2">
+                      <label for="add-network-sasl-mechanism">
+                        SASL authentication
+                        <small class="explanation">
+                          — replaceable authentication framework for IRC. Choose a mechanism below.
+                          <a href="https://ircv3.net/specs/extensions/sasl-3.1" target="_blank" rel="noopener" class="sasl-learn-more">Learn more</a>
+                        </small>
+                      </label>
+                    </th>
+                  </tr>
+                  <tr>
+                    <td class="sasl optional" colspan="2">
+                      <div class="sasl-mechanism-row">
+                        <select id="add-network-sasl-mechanism" class="input sasl-mechanism-select"
+                                bind:value={saslMechanism}>
+                          <option value="none">None (no SASL)</option>
+                          <option value="plain">PLAIN — password-based, sent in the clear (use TLS)</option>
+                          <option value="external">EXTERNAL — TLS client certificate</option>
+                          <option value="scramSha256">SCRAM-SHA-256 — salted challenge-response, mutual auth</option>
+                        </select>
+                        <div class="sasl-security-badge" class:sasl-security-badge--secure={saslMechanism === 'scramSha256'} class:sasl-security-badge--warning={saslMechanism === 'plain'} class:sasl-security-badge--info={saslMechanism === 'external'}>
+                          {#if saslMechanism === 'none'}
+                            <i class="fa fa-minus-circle"></i> Disabled
+                          {:else if saslMechanism === 'plain'}
+                            <i class="fa fa-exclamation-triangle"></i> Use TLS
+                          {:else if saslMechanism === 'external'}
+                            <i class="fa fa-id-card"></i> Certificate
+                          {:else if saslMechanism === 'scramSha256'}
+                            <i class="fa fa-shield"></i> Secure
+                          {/if}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                  {#if saslMechanism !== 'none'}
+                    <tr>
+                      <th class="sasl-username optional" colspan="2">
+                        <label for="add-network-sasl-username">
+                          {#if saslMechanism === 'external'}
+                            SASL username <small class="explanation">— (optional) authz identity for certificate auth</small>
+                          {:else}
+                            SASL username <small class="explanation">— the authentication identity (required)</small>
+                          {/if}
+                        </label>
+                      </th>
+                    </tr>
+                    <tr>
+                      <td class="sasl-username optional" colspan="2">
+                        <input id="add-network-sasl-username" class="input"
+                               type="text" bind:value={saslUsername}
+                               placeholder={saslMechanism === 'external' ? 'optional — leave blank for cert-derived identity' : 'e.g. mynick'}
+                               autocomplete="username" />
+                      </td>
+                    </tr>
+                  {/if}
+                  {#if saslMechanism === 'plain' || saslMechanism === 'scramSha256'}
+                    <tr>
+                      <th class="sasl-password optional" colspan="2">
+                        <label for="add-network-sasl-password">
+                          SASL password
+                          <small class="explanation">
+                            {#if saslMechanism === 'scramSha256'}
+                              — SCRAM stores this as a salted hash on the server; your password is never sent in the clear
+                            {:else}
+                              — SASL PLAIN transmits in base64 (use TLS to encrypt the connection)
+                            {/if}
+                          </small>
+                        </label>
+                      </th>
+                    </tr>
+                    <tr>
+                      <td class="sasl-password optional" colspan="2">
+                        <div class="passwordRow">
+                          <input id="add-network-sasl-password" class="input"
+                                 type={revealSaslPassword ? 'text' : 'password'}
+                                 bind:value={saslPassword}
+                                 autocomplete="new-password"
+                                 placeholder={mode === 'edit' ? 'Leave blank to keep current' : 'Required'} />
+                          <label class="reveal">
+                            <input type="checkbox" class="reveal" bind:checked={revealSaslPassword} />
+                            <span>Reveal</span>
+                          </label>
+                        </div>
+                      </td>
+                    </tr>
+                  {/if}
+                {/if}
               </tbody>
             </table>
           </div>
@@ -362,7 +474,7 @@
 
       <div class="formButtons">
         {#if mode === 'edit'}
-          <span class="reconnectNote">Nickname changes take effect immediately on the live connection. Changing your real name or any of the host settings requires a reconnect.</span>
+          <span class="reconnectNote">Nickname changes take effect immediately on the live connection. Changing your real name, SASL settings, or any host settings requires a reconnect.</span>
         {/if}
         <button type="button" class="action secondary" onclick={onClose} disabled={busy}>
           <span>Cancel</span>
