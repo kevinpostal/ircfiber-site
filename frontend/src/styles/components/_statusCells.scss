@@ -50,12 +50,13 @@
   text-align: center;
 }
 
-/* Connection status cell — IRCCloud style */
+/* Connection status cell — IRCCloud-style pill */
 .connectionstatuscell {
   display: none;
   font-size: 13px;
   text-align: center;
   flex-shrink: 0;
+  padding: 0 16px;
 }
 
 .connectionstatuscell.show {
@@ -64,19 +65,24 @@
 
 .connectionStatus {
   display: none;
+  margin: 6px 0;
+  padding: 8px 12px;
+  border-radius: 5px;
+  background: #1d4063;
+  color: #c4d9ee;
+  border: 1px solid #224d77;
+  font-size: 13px;
 }
 
 .connectionStatus--show {
   display: block;
 }
 
-/* Connecting / Reconnecting — yellow bar */
+/* Connecting / Reconnecting — pill */
 .connectionStatus.connecting {
-  background: #3b2e00;
-  border-top: 1px solid #5c4a00;
-  border-bottom: 1px solid #5c4a00;
-  color: #e8c547;
-  padding: 8px 16px;
+  background: #142b43;
+  border-color: #1d4063;
+  color: #9cc7ff;
 }
 
 .connectionStatus.connecting .connecting-msg {
@@ -122,16 +128,9 @@
   background: rgba(237, 66, 69, 1);
 }
 
-/* Disconnected — red bar */
-.connectionStatus.reconnect {
-  background: rgba(237, 66, 69, 0.12);
-  border-top: 1px solid rgba(237, 66, 69, 0.25);
-  border-bottom: 1px solid rgba(237, 66, 69, 0.25);
-  padding: 8px 16px;
-}
-
+/* Disconnected — pill (inherits base #1d4063 bg) */
 .connectionStatus a.reconnect {
-  color: var(--status-disconnected, #f85149);
+  color: #c4d9ee;
   text-decoration: none;
   cursor: pointer;
   display: flex;
@@ -141,7 +140,9 @@
 }
 
 .connectionStatus a.reconnect:hover {
-  text-decoration: underline;
+  background: #28598a;
+  color: #fff;
+  border-radius: 5px;
 }
 
 .connectionStatus a.reconnect span.reconnect {
@@ -153,29 +154,38 @@
   font-size: 12px;
 }
 
-/* Away — gray bar */
+/* Away — gray pill */
 .connectionStatus.away {
-  background: #2a2a2a;
-  border-top: 1px solid #444;
-  border-bottom: 1px solid #444;
-  color: #e0e0e0;
+  background: #2c2f35;
+  color: #d1d5db;
+  border-color: #1a1d21;
 }
 
 .connectionStatus.away a.back {
-  color: #e0e0e0;
+  color: #d1d5db;
   text-decoration: none;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 6px 12px;
   cursor: pointer;
   font-size: 13px;
 }
 
 .connectionStatus.away a.back:hover {
-  background: #3a3a3a;
+  color: #fff;
 }
 
 .connectionStatus.away a.back span.back {
   color: #aaa;
+}
+
+/* Midnight theme overrides */
+#app.midnight-theme .connectionstatuscell .connectionStatus {
+  background: #404040;
+  color: #d9d9d9;
+  border-color: #4d4d4d;
+}
+
+#app.midnight-theme .connectionstatuscell .connecting {
+  background: #1a1a1a;
 }
