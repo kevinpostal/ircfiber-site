@@ -1,0 +1,48 @@
+/* ── Per-row hover actions toolbar ───────────────────────────────
+ * Appears on message row hover with Copy / Quote reply / Mark read here.
+ * Positioned in the right gutter, overlapping the timestamp area.
+ * ──────────────────────────────────────────────────────────────── */
+.rowActions {
+  position: absolute;
+  right: 4px;
+  top: -4px;
+  z-index: 4;
+  display: flex;
+  gap: 2px;
+  background: #fff;
+  border: 1px solid #2c2f35;
+  border-radius: 5px;
+  padding: 2px 4px;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity .12s, transform .12s;
+  box-shadow: 0 2px 6px rgba(0,0,0,.5);
+  pointer-events: none;
+}
+.row.messageRow:hover .rowActions {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.rowActions button {
+  background: none;
+  border: 0;
+  padding: 2px 6px;
+  color: #888;
+  cursor: pointer;
+  font-size: 12px;
+}
+.rowActions button:hover {
+  color: #1e72ff;
+}
+
+/* Midnight theme override */
+#app.midnight-theme .rowActions {
+  background: #404040;
+  border-color: #262626;
+}
+
+/* Hide on touch devices (no hover intent) */
+@media (hover: none) {
+  .rowActions { display: none; }
+}

@@ -3,7 +3,8 @@
   import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, mentionNicksWithPattern } from '../lib/autolinker';
-  import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
+  import { getActiveBufferObj, getActiveNetwork, setBufferInputText } from '../stores/ircStore.svelte';
+  import { clearedAtMap } from '../stores/preferences.svelte';
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
 
@@ -56,6 +57,41 @@
   });
 
   let expanded = $state(false);
+  let hover = $state(false);
+
+  async function copyText(): Promise<void> {
+    const text = msg.text || '';
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Fallback for older browsers
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+  }
+
+  function quote(): void {
+    const networkId = activeNetwork?.networkId;
+    const buf = getActiveBufferObj();
+    if (!networkId || !buf?.name) return;
+    const text = msg.text || '';
+    if (!text) return;
+    const quoted = text.split('\n').map(l => `> ${l}`).join('\n');
+    setBufferInputText(networkId, buf.name, quoted);
+  }
+
+  function markReadHere(): void {
+    const networkId = activeNetwork?.networkId;
+    const buf = getActiveBufferObj();
+    if (!networkId || !buf?.name) return;
+    const ts = msg.t ?? Date.now();
+    clearedAtMap[`${networkId}:${buf.name}`] = ts;
+  }
 
   function getModeForNick(n: string): string {
     const cleaned = stripPrefix(n);
@@ -435,6 +471,8 @@
     data-usermask={usermaskAttr || undefined}
     data-msgid={msg.msgid || undefined}
     data-phase={isServerLog ? phase : undefined}
+    onmouseenter={() => hover = true}
+    onmouseleave={() => hover = false}
   >
     {#if !isSystem && !isJoinPart && !isAction && nick}
       {@const colorIndex = nickColorIndex(nick)}
@@ -506,5 +544,12 @@
       {/if}
     </span>
     <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
+    {#if hover && !isJoinPartGroup}
+      <div class="rowActions">
+        <button aria-label="Copy message" onclick={copyText}><i class="fa fa-copy"></i></button>
+        <button aria-label="Quote reply" onclick={quote}><i class="fa fa-reply"></i></button>
+        <button aria-label="Mark read here" onclick={markReadHere}><i class="fa fa-check"></i></button>
+      </div>
+    {/if}
   </div>
 {/if}
