@@ -1,0 +1,23 @@
+// Row state backgrounds — themed per IRCCloud design parity
+// Applied via .self, .notice, .highlight, .warning, .status classes on .row.messageRow
+
+:root {
+  --row-self-bg:      transparent;
+  --row-notice-bg:    #1a3b5b;
+  --row-highlight-bg: #1d4063;
+  --row-warning-bg:   #b2b234;
+  --row-status-bg:    #142b43;
+}
+
+#app.midnight-theme {
+  --row-notice-bg:    #262626;
+  --row-highlight-bg: #2b2b2b;
+  --row-status-bg:    #1a1a1a;
+}
+
+.row.messageRow.self     { background-color: var(--row-self-bg); }
+.row.messageRow.notice   { background-color: var(--row-notice-bg); }
+.row.messageRow.highlight { background-color: var(--row-highlight-bg); }
+.row.messageRow.highlight .date { color: #ffe0e0; }
+.row.messageRow.status   { background-color: var(--row-status-bg); color: #b0cce8; }
+.row.messageRow.warning  { background-color: var(--row-warning-bg); color: #222; }
