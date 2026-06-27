@@ -45,6 +45,9 @@ export interface Network {
   isAway: boolean;
   awayMessage: string;
   archivesCollapsed?: boolean;
+  /** Channels the user has configured to auto-join. Mirrors the backend
+   *  `autoJoinChannels` field; populated by WS sync and by the add flow. */
+  autoJoinChannels?: string[];
   buffers: Buffer[];
   awayNicks: Set<string>;
   // Server capabilities (from CAP)
@@ -55,6 +58,8 @@ export interface Network {
   chanTypes: string;
   // Last active buffer (server-persisted, restored on reconnect)
   lastActiveBuffer?: string;
+  // W1-T08: connection idle detection — set when engine emits "idle" event.
+  connectionIdleSince?: number | null;
 }
 
 export interface Buffer {

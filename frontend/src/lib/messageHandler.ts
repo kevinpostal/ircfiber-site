@@ -1,6 +1,7 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData } from '../types';
 import { ircState, handleConnect, updateChannelUsers,
-         updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping } from '../stores/ircStore.svelte';
+         updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
+         setTempUnavailable, clearTempUnavailable } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
@@ -154,6 +155,8 @@ export function processIrcEvent(
 ): {
   /** Set if a whois just completed (set overlay to 'whois'). */
   whoisData?: WhoisData;
+  /** Set if whois failed (ERR_NOSUCHNICK). */
+  whoisFailedNick?: string;
   /** Set if a ban list just completed. */
   banListData?: BanListData;
 } {
@@ -188,6 +191,21 @@ export function processIrcEvent(
     // accumulator and let App.svelte clear pendingWhois.
     result.whoisFailedNick = accum.whoisAcc.nick;
     accum.whoisAcc = null;
+  }
+
+  // ── W1-T08: temp_unavailable — Server busy, show countdown ──
+  if (cmd === 'temp_unavailable') {
+    const countdownMs = parseInt((data.cd as string) || '30000', 10);
+    const serverTs = parseInt((data.st as string) || '0', 10) || Date.now();
+    setTempUnavailable(networkId, channel, serverTs + countdownMs);
+    return {};
+  }
+
+  // ── W1-T08: idle — Connection idle detection ──
+  if (cmd === 'idle') {
+    const sinceMs = parseInt((data.s as string) || '0', 10);
+    net.connectionIdleSince = sinceMs;
+    return {};
   }
 
   // ── Ban list accumulation ──
@@ -260,6 +278,12 @@ export function processIrcEvent(
   // ── Clear typing when the user actually sends a message ──
   if (cmd === 'PRIVMSG' && msg.nick) {
     clearTyping(networkId, channel, msg.nick);
+  }
+
+  // Clear temp_unavailable state when a new chat message arrives
+  // (IRCCloud: server busy state clears on any server response).
+  if (!isSkippedCommand(cmd) && cmd !== 'temp_unavailable' && cmd !== 'idle') {
+    clearTempUnavailable(networkId, channel);
   }
 
   // ── Message append + notification ──

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, getTempUnavailable } from '../stores/ircStore.svelte';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
@@ -33,6 +33,24 @@
 
   let busy: boolean = $state(false);
 
+  // W1-T08: 1-second tick for temp_unavailable countdown
+  let now: number = $state(Date.now());
+  $effect(() => {
+    const interval = setInterval(() => { now = Date.now(); }, 1000);
+    return () => clearInterval(interval);
+  });
+
+  const tempUnavailableEntry = $derived.by(() => {
+    if (!activeNetwork || !activeBufferObj) return null;
+    return getTempUnavailable(activeNetwork.networkId, activeBufferObj.name) ?? null;
+  });
+
+  const tempUnavailableRemaining = $derived.by(() => {
+    const entry = tempUnavailableEntry;
+    if (!entry) return 0;
+    return Math.max(0, Math.floor((entry.expireAt - now) / 1000));
+  });
+
   async function handleConnectionAction(): Promise<void> {
     if (!activeNetwork || busy) return;
     const net = activeNetwork;
@@ -44,6 +62,24 @@
         net.connected = false;
         net.connectionState = 'disconnected';
         net.disconnectReason = 'You disconnected';
+        // Push a synthetic DISCONNECT event into the _server buffer so the
+        // server log card updates immediately. Goes through `appendMessage`
+        // which dedups consecutive DISCONNECT/DISCONNECTED lifecycle events
+        // so we don't get duplicates when the engine also emits one.
+        import('../stores/ircStore.svelte.ts').then(mod => {
+          mod.appendMessage(net.networkId, '_server', {
+            command: 'DISCONNECT',
+            nick: '',
+            text: 'You disconnected',
+            t: Date.now(),
+            id: `sys-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            params: [],
+            prefix: '',
+            msgid: '',
+            label: '',
+          } as import('../types').IRCMessage);
+        });
       } else {
         net.connectionState = 'connecting';
         setActiveBuffer(net.networkId, '_server');
@@ -85,6 +121,9 @@
         <span class="topic" id="channel-topic">{@html autolinkHtml(parseIrcFormatting(topic))}</span>
       {/if}
     </h2>
+    {#if tempUnavailableRemaining > 0}
+      <div class="temp-unavailable-chip">Server busy — retry in {tempUnavailableRemaining}s</div>
+    {/if}
     {#if isChannel && (!isJoined || isArchived)}
       <p class="buttons">
         {#if !isJoined}

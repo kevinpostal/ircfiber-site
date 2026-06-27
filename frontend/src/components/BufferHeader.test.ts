@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import BufferHeader from './BufferHeader.svelte';
 import { createNetwork, createBuffer, createMember } from '../test/factories';
-import { ircState } from '../stores/ircStore.svelte';
+import { ircState, clearTempUnavailable } from '../stores/ircStore.svelte';
 
 vi.mock('/src/stores/api', () => ({
     fetchMe: vi.fn(async () => ({ username: 'tester', email: 'tester@test.local' })),
@@ -313,5 +313,26 @@ describe('BufferHeader', () => {
 		});
 
 		await expect(page.getByRole('button', { name: /^rejoin$/i })).not.toBeInTheDocument();
+	});
+
+	it('shows temp_unavailable countdown chip when buffer has tempUnavailable state', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		// Set a tempUnavailable entry with expiry 30s in the future
+		ircState.tempUnavailable['net1:#general'] = { expireAt: Date.now() + 30000 };
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		await expect.element(page.getByText(/Server busy/i)).toBeInTheDocument();
+		await expect.element(page.getByText(/retry in/i)).toBeInTheDocument();
+
+		// Cleanup
+		clearTempUnavailable('net1', '#general');
 	});
 });

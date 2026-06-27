@@ -60,11 +60,31 @@ export const ircState = $state({
   // reorder for the network list and suppresses normal click/collapse on
   // network headers. Toggled by the "Reorder Networks" / "Done" buttons.
   reorderMode: false,
+  // W1-T08: temp_unavailable state per buffer. Keyed by `${networkId}:${bufferName}`.
+  // expireAt = serverTs + countdownMs (unix ms). The UI computes remaining
+  // = max(0, expireAt - Date.now()).
+  tempUnavailable: {} as Record<string, { expireAt: number }>,
 });
 
 // IRCCloud-style previous-buffer tracking: the buffer that was active before
 // the current one. Used by archiveBuffer to select where focus goes.
 let previousBuffer: { networkId: string | null; bufferName: string | null } = { networkId: null, bufferName: null };
+
+// ── W1-T08: tempUnavailable helpers ──
+export function setTempUnavailable(networkId: string, bufferName: string, expireAt: number): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  ircState.tempUnavailable[key] = { expireAt };
+}
+
+export function clearTempUnavailable(networkId: string, bufferName: string): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  delete ircState.tempUnavailable[key];
+}
+
+export function getTempUnavailable(networkId: string, bufferName: string): { expireAt: number } | undefined {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  return ircState.tempUnavailable[key];
+}
 
 // ── Per-buffer input history (IRCCloud-style) ──
 // Preserves unsent text across buffer switches. Not reactive — InputArea
@@ -134,6 +154,8 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
 
   ircState.activeBuffer.networkId = networkId;
   ircState.activeBuffer.bufferName = bufferName;
+  // Clear temp_unavailable on buffer switch (W1-T08)
+  clearTempUnavailable(networkId, bufferName);
   // Auto-expand the Conversations section in the sidebar when switching
   // to a query/DM buffer — matches IRCCloud behavior.
   if (bufferName && !bufferName.startsWith('#') && bufferName !== '_server') {
