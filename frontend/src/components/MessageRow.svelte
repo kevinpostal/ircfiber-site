@@ -396,7 +396,6 @@
     onclick={toggleExpand}
     onkeydown={onKeyDown}
   >
-    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
     <span class="g">&nbsp;</span>
     <span class="message">
       <span class="content"><span class="collapseWidget" aria-label="User activity">
@@ -407,6 +406,7 @@
           {@html msg.sentences || ''}
         </span></span>
     </span>
+    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
   </div>
   {#if expanded}
     {#each events.slice(1) as evt, i (evt.msgid || evt.id || evt.t + ':' + i || i)}
@@ -417,11 +417,11 @@
         data-name={evt.nick || undefined}
         data-msgid={evt.msgid || undefined}
       >
-        <span class="date"><span class="timestamp" title={r.fullTitle}>{r.timeStr}</span></span>
         <span class="g">&nbsp;</span>
         <span class="message">
           <span class="content">{@html r.html}</span>
         </span>
+        <span class="date"><span class="timestamp" title={r.fullTitle}>{r.timeStr}</span></span>
       </div>
     {/each}
   {/if}
@@ -444,7 +444,6 @@
         <span role="presentation">{initial}</span>
       </span>
     {/if}
-    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
     <span class="g">&nbsp;</span>
     {#if cmd === 'DISCONNECT' || cmd === 'CONNECT'}
       <hr class="reconnect-hr" />
@@ -506,5 +505,6 @@
         {@html getContentHTML()}
       {/if}
     </span>
+    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
   </div>
 {/if}

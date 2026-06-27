@@ -8,6 +8,14 @@ import { appendToProcessed, buildProcessedBuffer, prependReprocess, type Process
 // ── Single reactive state object ──
 export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat';
 
+/** Tracks user-initiated disconnect timestamps per network so the sync
+ * handler doesn't immediately overwrite the local 'disconnected' state
+ * back to 'connecting' when the stale engine snapshot arrives. */
+const userDisconnectedAt: Map<string, number> = new Map();
+export function markUserDisconnected(networkId: string): void {
+  userDisconnectedAt.set(networkId, Date.now());
+}
+
 export const ircState = $state({
   networks: [] as Network[],
   activeBuffer: { networkId: null, bufferName: null } as ActiveBuffer,
@@ -813,11 +821,25 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // genuinely new info, not when the sync is just slower than live
       // IRC events (the race window described above).
       if (syncIsNew) {
-        existing.connected = net.connected;
-        existing.connectionState = connectionState;
+        // If the user just clicked Disconnect (< 10s ago), suppress sync
+        // overwrites to 'connected' — the engine snapshot is stale and
+        // hasn't caught up with the control message yet, and we don't want
+        // to flash the UI back to "connected" while the user is trying to
+        // disconnect. 'connecting' is NOT suppressed: if the engine reports
+        // it (e.g. during an exponential-backoff reconnect window) the user
+        // needs to see "Disconnect" so they can cancel the pending attempt.
+        const disconnectedAt = userDisconnectedAt.get(existing.networkId) ?? 0;
+        const recentlyDisconnected = connectionState === 'connected'
+          && Date.now() - disconnectedAt < 10_000;
+        if (!recentlyDisconnected) {
+          existing.connected = net.connected;
+          existing.connectionState = connectionState;
+        }
       } else if (connectionState === 'connecting') {
         // The sync confirms connection is in progress — this is new info
-        // that live events haven't provided yet (001 hasn't fired).
+        // that live events haven't provided yet (001 hasn't fired, or the
+        // engine is between attempts in its backoff loop). Show it so the
+        // user gets a "Disconnect" button to cancel the pending reconnect.
         existing.connectionState = connectionState;
       }
       // Don't blindly overwrite currentNick from sync — the IRC NICK event

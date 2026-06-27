@@ -89,9 +89,8 @@
   display: inline;
   white-space: pre-wrap;
 }
-/* Position the timestamp in the left gutter so it doesn't overlap the
- * serverLogChip and message text (which live in the center content area). */
-.row.messageRow.serverLog .date { left: 6px; right: auto; bottom: 2px; padding-right: 0; }
+/* ServerLog timestamps use the default `.row.messageRow .date` positioning
+ * (right edge, 3px from bottom) — no override needed. */
 
 /* Phase chip — small pill rendered just before the message body.
  * Color signals severity (info / ok / warn / error) so users can

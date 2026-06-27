@@ -177,4 +177,77 @@ describe('BufferHeader', () => {
 		// Verify the reconnect API was called
 		expect(reconnectNetwork).toHaveBeenCalledWith('net1');
 	});
+
+	it('shows Disconnect button when connectionState is connecting', async () => {
+		const net = createNetwork({ networkId: 'net1', connected: false, connectionState: 'connecting' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '_server';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		const btn = page.getByRole('button', { name: /disconnect/i });
+		await expect.element(btn).toBeInTheDocument();
+	});
+
+	it('calls disconnectNetwork when Disconnect is clicked while connecting', async () => {
+		const net = createNetwork({ networkId: 'net1', connected: false, connectionState: 'connecting' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '_server';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		const btn = page.getByRole('button', { name: /disconnect/i });
+		await expect.element(btn).toBeInTheDocument();
+		await userEvent.click(btn);
+
+		expect(disconnectNetwork).toHaveBeenCalledWith('net1');
+
+		const updatedNet = ircState.networks.find(n => n.networkId === 'net1');
+		expect(updatedNet?.connectionState).toBe('disconnected');
+		expect(updatedNet?.connected).toBe(false);
+	});
+
+	it('calls disconnectNetwork when Disconnect is clicked while fully connected', async () => {
+		const net = createNetwork({ networkId: 'net1', connected: true, connectionState: 'connected' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '_server';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		const btn = page.getByRole('button', { name: /disconnect/i });
+		await expect.element(btn).toBeInTheDocument();
+		await userEvent.click(btn);
+
+		expect(disconnectNetwork).toHaveBeenCalledWith('net1');
+	});
+
+	it('does not show Disconnect button when disconnected', async () => {
+		const net = createNetwork({ networkId: 'net1', connected: false, connectionState: 'disconnected' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '_server';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		await expect(page.getByRole('button', { name: /disconnect/i })).not.toBeInTheDocument();
+	});
 });

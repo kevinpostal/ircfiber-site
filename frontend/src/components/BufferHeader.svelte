@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected } from '../stores/ircStore.svelte';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
@@ -38,18 +38,13 @@
     const net = activeNetwork;
     busy = true;
     try {
-      if (connected) {
+      if (connected || isConnecting) {
+        markUserDisconnected(net.networkId);
         await disconnectNetwork(net.networkId);
         net.connected = false;
         net.connectionState = 'disconnected';
         net.disconnectReason = 'You disconnected';
       } else {
-        // Don't set connected=true optimistically — that makes the button
-        // say "Disconnect" while the engine is still connecting. Instead
-        // set only connectionState so the button shows "Connecting…" with
-        // a disabled state. When the engine sends 001 (RPL_WELCOME),
-        // handleConnect() will set connected=true and the button flips to
-        // "Disconnect" (enabled).
         net.connectionState = 'connecting';
         setActiveBuffer(net.networkId, '_server');
         await reconnectNetwork(net.networkId);
@@ -130,8 +125,8 @@
     {:else}
       <p class="buttons">
         <button class="rejoin" type="button" onclick={onEditNetwork}>Edit</button>
-        <button class="archive" type="button" onclick={handleConnectionAction} disabled={busy || isConnecting}>
-          {connected ? 'Disconnect' : isConnecting ? 'Connecting\u2026' : (activeNetwork?.disconnectReason ? 'Reconnect' : 'Connect')}
+        <button class="archive" type="button" onclick={handleConnectionAction} disabled={busy}>
+          {connected || isConnecting ? 'Disconnect' : (activeNetwork?.disconnectReason ? 'Reconnect' : 'Connect')}
         </button>
         <button class="bufferOptions fa fa-cog" type="button"
                 title="Options" aria-label="Options"
