@@ -3,6 +3,46 @@
   import SettingsSection from './SettingsSection.svelte';
 
   let fontPreview = $derived(globalPrefs.fontSize + 'px');
+
+  // ── Custom CSS ──
+  let customCSS = $state(globalPrefs.customCSS || '');
+  let cssError = $state<string | null>(null);
+  let cssApplied = $state(false);
+
+  function validateCSS(css: string): string | null {
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(css);
+      // CSSStyleSheet silently drops invalid syntax instead of throwing.
+      // If input is non-empty but no rules were produced, it's invalid.
+      if (css.trim().length > 0 && sheet.cssRules.length === 0) {
+        return 'Invalid CSS syntax (no valid rules found)';
+      }
+      return null; // valid
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }
+
+  $effect(() => {
+    if (customCSS.length === 0) {
+      cssError = null;
+      cssApplied = false;
+      globalPrefs.customCSS = '';
+      return;
+    }
+    const error = validateCSS(customCSS);
+    cssError = error;
+    cssApplied = error === null;
+    if (error === null) {
+      globalPrefs.customCSS = customCSS;
+    }
+  });
+
+  function resetCSS(): void {
+    customCSS = '';
+    globalPrefs.customCSS = '';
+  }
 </script>
 
 <SettingsSection heading="Interface">
@@ -160,6 +200,37 @@
           <option value="sand">Sand</option>
           <option value="orchid">Orchid</option>
         </select>
+      </div>
+    </div>
+  </div>
+</SettingsSection>
+
+<SettingsSection heading="Custom CSS">
+  <div class="settings-rows">
+    <div class="settings-row">
+      <div class="settings-label">
+        <span class="settings-label-text">Custom styles</span>
+        <span class="settings-label-desc">Override the appearance with your own CSS</span>
+      </div>
+      <div class="settings-control">
+        <div class="settings-css-area">
+          <label for="custom-css">Custom CSS</label>
+          <textarea
+            id="custom-css"
+            class="settings-textarea custom-css-input"
+            rows="10"
+            bind:value={customCSS}
+            placeholder={'/* e.g. */ .row.messageRow .content { color: #fff; }'}
+          ></textarea>
+          <p class="custom-css-status" class:error={cssError !== null} class:success={cssApplied}>
+            {cssError !== null ? cssError : `Applied. Reload to undo.`}
+          </p>
+          {#if cssError === null && customCSS.length > 0}
+            <div class="settings-css-actions">
+              <button class="settings-btn settings-btn--secondary" onclick={resetCSS}>Reset to default</button>
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
   </div>
