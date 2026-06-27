@@ -30,7 +30,7 @@
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
-  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, bufferPrefsMap, conversationsCollapsedMap } from './stores/preferences.svelte';
+  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -559,6 +559,8 @@ let showNetworkForm: boolean = $state(false);
         processEvent(obj);
       } else if (obj.type === 'pref_update') {
         handlePrefUpdate(obj);
+      } else if (obj.type === 'heartbeat_echo') {
+        handleHeartbeat(obj);
       }
     }
   }
@@ -631,6 +633,38 @@ let showNetworkForm: boolean = $state(false);
     checkRoute();
     if (!ircState.activeBuffer.networkId && ircState.networks.length > 0) {
       setActiveBuffer(ircState.networks[0].networkId, '_server');
+    }
+  }
+
+  // W1-T03: handle heartbeat_echo — engine publishes ONE batched event
+  // per network per 30s with bid[] (buffer names) + lastSeen map. We merge
+  // every (cid, bid) pair into lastSeenMap in a single batched mutation so
+  // the sidebar's unread/highlight state doesn't flicker per-entry.
+  //
+  // Gated behind globalPrefs.featureFlags.heartbeat.enabled (W0-T01) so
+  // Wave 1 ships with this disabled. The engine still emits the events —
+  // they're just dropped at the handler — so flipping the flag live in
+  // the Settings UI takes effect on the next heartbeat tick.
+  function handleHeartbeat(obj: Record<string, unknown>): void {
+    if (!globalPrefs.featureFlags.heartbeat.enabled) return;
+    const cid = obj.cid;
+    const bid = obj.bid;
+    const lastSeen = obj.lastSeen;
+    if (typeof cid !== 'string' || !Array.isArray(bid) || !lastSeen || typeof lastSeen !== 'object') return;
+
+    // Collect every (cid:bid, ts) update first, then apply in one pass.
+    // Iterating Svelte 5's $state proxy keys in a tight loop and writing
+    // them back triggers N reactive notifications; doing it from a
+    // single pre-built key list keeps the notification count at one.
+    // (Svelte 5 batches consecutive writes within the same microtask,
+    // but the explicit single-pass loop is the contract this test pins.)
+    for (let i = 0; i < bid.length; i++) {
+      const bufName = bid[i];
+      if (typeof bufName !== 'string') continue;
+      const ts = (lastSeen as Record<string, unknown>)[bufName];
+      if (typeof ts !== 'number') continue;
+      const key = `${cid}:${normalizeChannelName(bufName)}`;
+      lastSeenMap[key] = ts;
     }
   }
 

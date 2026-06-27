@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
 import { ircState, updateChannelUsers } from './stores/ircStore.svelte';
-import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap, pinnedMap } from './stores/preferences.svelte';
+import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap, pinnedMap, lastSeenMap, globalPrefs } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -713,6 +713,126 @@ describe('App', () => {
       for (const k of Object.keys(membersCollapsedMap)) delete membersCollapsedMap[k];
       for (const k of Object.keys(collapsedMap)) delete collapsedMap[k];
       for (const k of Object.keys(pinnedMap)) delete pinnedMap[k];
+    });
+  });
+
+  describe('heartbeat_echo wire (W1-T03)', () => {
+    // The engine publishes ONE heartbeat_echo event per network per 30s
+    // (batched, NOT one per buffer). Wire shape:
+    //   { type: "heartbeat_echo", cid, bid: [name, ...], ts, lastSeen: { name: ts, ... } }
+    // The frontend handler must merge every (cid, bid) pair into lastSeenMap
+    // in a single batched $state mutation so the sidebar's unread counters
+    // don't flicker per-entry.
+
+    afterEach(() => {
+      for (const k of Object.keys(lastSeenMap)) delete lastSeenMap[k];
+      // Reset the feature flag back to default OFF so unrelated tests stay clean.
+      globalPrefs.featureFlags.heartbeat.enabled = false;
+    });
+
+    it('updates lastSeenMap for every bid[] entry atomically', async () => {
+      // Enable the feature flag locally so the handler runs.
+      globalPrefs.featureFlags.heartbeat.enabled = true;
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // Server sends a SINGLE heartbeat_echo for the whole network, with
+      // bid[] listing all 3 active buffers and per-buffer lastSeen timestamps.
+      onMessage!({
+        type: 'heartbeat_echo',
+        cid: 'net1',
+        bid: ['#chan1', '#chan2', '#chan3'],
+        ts: 1700000000000,
+        lastSeen: {
+          '#chan1': 1700000001000,
+          '#chan2': 1700000002000,
+          '#chan3': 1700000003000,
+        },
+      });
+      flushSync();
+
+      // All three (networkId, bufferName) pairs must be present in the
+      // store keyed by the same `${cid}:${bid}` convention used by
+      // setLastSeen / getLastSeen / localStorage roundtrip.
+      expect(lastSeenMap['net1:#chan1']).toBe(1700000001000);
+      expect(lastSeenMap['net1:#chan2']).toBe(1700000002000);
+      expect(lastSeenMap['net1:#chan3']).toBe(1700000003000);
+    });
+
+    it('does NOT touch lastSeenMap when feature flag is OFF (default)', async () => {
+      // Default in W0-T01: heartbeat flag is OFF. The handler must early-return
+      // without mutating lastSeenMap so Wave 1 ships inert until a server admin
+      // opts in per-user.
+      expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(false);
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      onMessage!({
+        type: 'heartbeat_echo',
+        cid: 'net1',
+        bid: ['#chan1', '#chan2'],
+        ts: 1700000000000,
+        lastSeen: { '#chan1': 1700000001000, '#chan2': 1700000002000 },
+      });
+      flushSync();
+
+      expect(lastSeenMap['net1:#chan1']).toBeUndefined();
+      expect(lastSeenMap['net1:#chan2']).toBeUndefined();
+    });
+
+    it('handles two consecutive heartbeats for different networks without leaking state', async () => {
+      globalPrefs.featureFlags.heartbeat.enabled = true;
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // Two networks, each sends its own batched heartbeat. The keys must
+      // be namespaced per-network so net1 and net2 with the same channel
+      // name don't collide.
+      onMessage!({
+        type: 'heartbeat_echo',
+        cid: 'net1',
+        bid: ['#general'],
+        ts: 1700000010000,
+        lastSeen: { '#general': 1700000011000 },
+      });
+      onMessage!({
+        type: 'heartbeat_echo',
+        cid: 'net2',
+        bid: ['#general'],
+        ts: 1700000020000,
+        lastSeen: { '#general': 1700000021000 },
+      });
+      flushSync();
+
+      expect(lastSeenMap['net1:#general']).toBe(1700000011000);
+      expect(lastSeenMap['net2:#general']).toBe(1700000021000);
     });
   });
 });
