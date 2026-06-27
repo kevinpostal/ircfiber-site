@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
 import { ircState, updateChannelUsers } from './stores/ircStore.svelte';
-import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap } from './stores/preferences.svelte';
+import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap, pinnedMap } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -542,6 +542,177 @@ describe('App', () => {
 
     afterEach(() => {
       for (const k of Object.keys(conversationsCollapsedMap)) delete conversationsCollapsedMap[k];
+    });
+  });
+
+  describe('prefVersion last-write-wins gate (W1-T02)', () => {
+    // The engine's prefsRepo.save() bumps prefVersion atomically on
+    // every persistence. The stat_user boot payload (and every
+    // pref_update broadcast) carries that counter so mergePreferences
+    // can decide whether to trust the payload or skip it as stale.
+    // See docs/PREF_VERSION.md.
+
+    it('stat_user with higher prefVersion applies membersCollapsed changes', async () => {
+      // Seed local collapse from a previous session so we can detect
+      // whether the merge actually runs.
+      collapsedMap['net1'] = true;
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // First stat_user: prefVersion=5 (initial seed). Must apply.
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 5,
+        membersCollapsed: { 'net1:#chan': true },
+      });
+      flushSync();
+      expect(membersCollapsedMap['net1:#chan']).toBe(true);
+
+      // Second stat_user: prefVersion=6 (newer). Must also apply —
+      // here it adds a new key that wasn't in the first payload.
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 6,
+        membersCollapsed: { 'net1:#chan': true, 'net1:#other': true },
+      });
+      flushSync();
+      expect(membersCollapsedMap['net1:#chan']).toBe(true);
+      expect(membersCollapsedMap['net1:#other']).toBe(true);
+    });
+
+    it('stat_user with lower prefVersion is skipped (last-write-wins)', async () => {
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // First stat_user at prefVersion=10. Establishes the local floor.
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 10,
+        membersCollapsed: { 'net1:#original': true },
+      });
+      flushSync();
+      expect(membersCollapsedMap['net1:#original']).toBe(true);
+
+      // A stale stat_user arrives with prefVersion=5 (e.g. an out-of-
+      // order replay from another tab). The merge MUST be skipped
+      // because local is strictly greater. The stale payload's
+      // membersCollapsed must NOT pollute the local cache.
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 5,
+        membersCollapsed: { 'net1:#stale': true },
+      });
+      flushSync();
+      expect(membersCollapsedMap['net1:#stale']).toBeUndefined();
+
+      // Original entry from prefVersion=10 must still be intact.
+      expect(membersCollapsedMap['net1:#original']).toBe(true);
+    });
+
+    it('stat_user with same prefVersion is skipped (no echo re-merge)', async () => {
+      // Strict-greater (not >=) prevents the same counter from
+      // re-applying an already-merged update. This guards against
+      // gateway-cached stat_user replays.
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 7,
+        membersCollapsed: { 'net1:#first': true },
+      });
+      flushSync();
+      expect(membersCollapsedMap['net1:#first']).toBe(true);
+
+      // Same prefVersion, different payload — must NOT overwrite.
+      // (If the gate were `>=` instead of `>`, this would re-run the
+      // merge and potentially wipe local-only additions.)
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 7,
+        membersCollapsed: { 'net1:#echo': true },
+      });
+      flushSync();
+      expect(membersCollapsedMap['net1:#echo']).toBeUndefined();
+    });
+
+    it('pref_update advances the prefVersion floor', async () => {
+      // After a real-time pref_update bumps prefVersion, a subsequent
+      // stat_user with a lower counter must be skipped — preventing a
+      // cached stat_user from undoing a cross-tab sync.
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // pref_update bumps prefVersion to 20.
+      onMessage!({
+        type: 'pref_update',
+        key: 'pinned',
+        value: ['net1:#a'],
+        prefVersion: 20,
+      });
+      flushSync();
+
+      // Now a stale stat_user with prefVersion=15 arrives — must skip.
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 15,
+        pinnedChannels: ['net1:#should-not-apply'],
+      });
+      flushSync();
+      expect(pinnedMap['net1:#should-not-apply']).toBeUndefined();
+    });
+
+    afterEach(() => {
+      for (const k of Object.keys(membersCollapsedMap)) delete membersCollapsedMap[k];
+      for (const k of Object.keys(collapsedMap)) delete collapsedMap[k];
+      for (const k of Object.keys(pinnedMap)) delete pinnedMap[k];
     });
   });
 });

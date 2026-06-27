@@ -574,6 +574,15 @@ let showNetworkForm: boolean = $state(false);
     mergePreferences(obj);
   }
 
+  // Monotonic counter returned by the engine's prefsRepo.save() and
+  // surfaced in the stat_user boot payload (and every pref_update
+  // broadcast). The frontend's mergePreferences() uses it as a
+  // last-write-wins tiebreaker: a stale stat_user with a lower counter
+  // must not clobber a newer local cache. Module-local instead of on
+  // ircState because ircStore.svelte.ts is owned by another task —
+  // see docs/PREF_VERSION.md for the full design.
+  let lastServerPrefVersion = $state(0);
+
   // IRCCloud-style: handle networks message — populates the sidebar immediately
   // with real network names before the full state dump arrives
   function handleNetworks(obj: Record<string, unknown>): void {
@@ -628,6 +637,20 @@ let showNetworkForm: boolean = $state(false);
   // Merge server-side preferences into local reactive maps.
   // Called from both handleStatUser (WS boot) and handlePrefUpdate (real-time sync).
   function mergePreferences(obj: Record<string, unknown>): void {
+    // Last-write-wins: skip the merge when our local cache is newer
+    // than the incoming stat_user payload. The server bumps prefVersion
+    // on every prefsRepo.save(), so a strictly-greater server value is
+    // the only safe signal that this payload supersedes local state.
+    // Strict-greater (not >=) prevents an echo of the same counter
+    // from re-applying an already-merged update. localPrefVersion=0
+    // on first boot, so the initial seed always passes through.
+    const serverPrefVersion = typeof obj.prefVersion === 'number' ? obj.prefVersion : 0;
+    if (lastServerPrefVersion > 0 && serverPrefVersion <= lastServerPrefVersion) {
+      console.debug('[mergePreferences] skipping stale payload: local=' + lastServerPrefVersion + ', server=' + serverPrefVersion);
+      return;
+    }
+    lastServerPrefVersion = serverPrefVersion;
+
     const user = obj;
     if (user.pinnedChannels) {
       const list = user.pinnedChannels as string[];
@@ -748,6 +771,15 @@ let showNetworkForm: boolean = $state(false);
   }
 
   function handlePrefUpdate(data: Record<string, unknown>): void {
+    // Track the latest server prefVersion we have observed. Without
+    // this, a later stale stat_user with a lower counter could
+    // overwrite a pref_update we just applied. Mirrors the gate at
+    // the top of mergePreferences above.
+    const updatePrefVersion = typeof data.prefVersion === 'number' ? data.prefVersion : 0;
+    if (updatePrefVersion > lastServerPrefVersion) {
+      lastServerPrefVersion = updatePrefVersion;
+    }
+
     const key = data.key as string;
     if (key === 'pinned') {
       const channels = (data.value as string[]) ?? [];
