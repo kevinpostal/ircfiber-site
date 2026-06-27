@@ -31,6 +31,7 @@ import {
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
+  import { startOnlineChecker } from './lib/onlineChecker';
   import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
@@ -370,6 +371,7 @@ let showNetworkForm: boolean = $state(false);
       batchAppendMessages(networkId, bufferName, msgs);
     });
 
+    startOnlineChecker();
     window.addEventListener('popstate', checkRoute);
     document.addEventListener('visibilitychange', handleVisibility);
     document.addEventListener('keydown', handleGlobalKeyboard);
