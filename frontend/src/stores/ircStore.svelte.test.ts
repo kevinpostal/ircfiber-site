@@ -1008,6 +1008,45 @@ describe('phantom buffers (URL nav auto-create)', () => {
 		expect(dups[0].unreadCount).toBe(5);
 		expect(dups[0].highlight).toBe(true);
 	});
+
+	it('preserves member lastSpoke and lastHighlighted across sync reload', () => {
+		// Regression: after WS reconnect → sync, members' lastSpoke/lastHighlighted
+		// reset to 0 because incoming sync data has those as defaults. The
+		// tab-completion sort (by most recent speaker) breaks as a result.
+		const existing = createNetwork({ networkId: 'net1' });
+		const existingBuf = createBuffer({ name: '#chan', type: 'channel' });
+		existingBuf.users = [
+			createMember({ nick: 'alice', lastSpoke: 5000, lastHighlighted: 3000 }),
+			createMember({ nick: 'bob', lastSpoke: 0, lastHighlighted: 0 }),
+		];
+		existing.buffers.push(existingBuf);
+		ircState.networks.push(existing);
+
+		// Incoming sync has fresh members with all-zero timestamps (as the backend
+		// resets activity on reconnect).
+		const incoming = createNetwork({ networkId: 'net1' });
+		const incomingBuf = createBuffer({ name: '#chan', type: 'channel' });
+		incomingBuf.users = [
+			createMember({ nick: 'alice', lastSpoke: 0, lastHighlighted: 0 }),
+			createMember({ nick: 'bob', lastSpoke: 0, lastHighlighted: 0 }),
+		];
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === 'net1')!;
+		const buf = net.buffers.find((b) => b.name === '#chan')!;
+		const alice = buf.users.find((u) => u.nick === 'alice')!;
+		const bob = buf.users.find((u) => u.nick === 'bob')!;
+
+		// alice had non-zero lastSpoke/lastHighlighted before sync — preserve
+		expect(alice.lastSpoke).toBe(5000);
+		expect(alice.lastHighlighted).toBe(3000);
+
+		// bob had zeros before sync — stays zero (no regression for absent data)
+		expect(bob.lastSpoke).toBe(0);
+		expect(bob.lastHighlighted).toBe(0);
+	});
 });
 
 describe('handleBuffersToDelete / activeJoinList (W1-T06)', () => {

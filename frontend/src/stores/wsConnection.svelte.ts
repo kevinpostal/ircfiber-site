@@ -1,3 +1,5 @@
+import { globalPrefs } from './preferences.svelte';
+
 // ── Stream state machine ──
 // Mirrors IRCCloud's BackendController lifecycle:
 //   disconnected → connecting → connected → [error] → reconnecting → connected
@@ -24,6 +26,54 @@ let socket: WebSocket | null = null;
 let messageQueue: string[] = [];
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 3000;
+
+// ── XHR long-poll fallback (W5-T01) ──
+// Mirrors IRCCloud's XHRStreamHandler: when WebSocket fails, fall back to
+// polling /api/events?since=<maxEid> for uninterrupted event delivery.
+let xhrFallbackController: AbortController | null = null;
+
+export function startXHRFallback(): void {
+  if (!globalPrefs.featureFlags.xhrFallback?.enabled) return;
+  if (xhrFallbackController) return; // already running
+
+  xhrFallbackController = new AbortController();
+
+  const poll = async () => {
+    if (xhrFallbackController?.signal.aborted) return;
+
+    try {
+      const response = await fetch(`/api/events?since=${maxEidTracker.value}`, {
+        signal: xhrFallbackController.signal,
+      });
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          handleResponse(item as Record<string, unknown>);
+        }
+      } else if (data && typeof data === 'object') {
+        handleResponse(data as Record<string, unknown>);
+      }
+      if (!xhrFallbackController?.signal.aborted) poll();
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return; // intentional abort via stopXHRFallback
+      }
+      // Transient error — retry after 3s (IRCCloud-style backoff)
+      if (!xhrFallbackController?.signal.aborted) {
+        setTimeout(poll, 3000);
+      }
+    }
+  };
+  poll();
+}
+
+export function stopXHRFallback(): void {
+  if (xhrFallbackController) {
+    xhrFallbackController.abort();
+    xhrFallbackController = null;
+  }
+}
+
 let messageCallback: ((data: unknown) => void) | null = null;
 let openCallback: (() => void) | null = null;
 let closeCallback: (() => void) | null = null;
@@ -112,6 +162,9 @@ export function connectWebSocket(
   if (onClose) closeCallback = onClose;
 
   socket.addEventListener('open', () => {
+    // PM8 mitigation: stop XHR BEFORE WS handshake completes so there
+    // is no window where both paths could deliver the same event.
+    stopXHRFallback();
     reconnectDelay = 3000;
     setStreamState('connected');
     if (openCallback) openCallback();
@@ -132,6 +185,8 @@ export function connectWebSocket(
     if (closeCallback) closeCallback();
     if (!reconnectTimeout) {
       setStreamState('reconnecting');
+      // Start XHR long-poll fallback to bridge the gap until WS reconnects
+      startXHRFallback();
       reconnectTimeout = setTimeout(() => {
         reconnectTimeout = null;
         reconnectDelay = Math.min(reconnectDelay * 2, 30000);

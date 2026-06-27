@@ -29,6 +29,8 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   wsState: { value: 'disconnected' },
   maxEidTracker: { value: 0 },
   setMaxEid: vi.fn(),
+  startXHRFallback: vi.fn(),
+  stopXHRFallback: vi.fn(),
 }));
 
 vi.mock('/src/stores/api', () => ({

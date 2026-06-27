@@ -993,6 +993,21 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       if (!existing.currentNick && net.currentNick) {
         existing.currentNick = net.currentNick;
       }
+
+      // Snapshot existing member activity before sync overwrites users.
+      // The backend resets lastSpoke/lastHighlighted to 0 on reconnect,
+      // which would break tab-completion sort (most recent speaker).
+      // Keyed by `<networkId>:<bufferName>:<nick>` for per-member lookup.
+      const savedActivity = new Map<string, { lastSpoke: number; lastHighlighted: number }>();
+      for (const buf of existing.buffers) {
+        for (const m of buf.users || []) {
+          savedActivity.set(`${existing.networkId}:${buf.name}:${m.nick}`, {
+            lastSpoke: m.lastSpoke ?? 0,
+            lastHighlighted: m.lastHighlighted ?? 0,
+          });
+        }
+      }
+
       for (const incomingBuf of net.buffers) {
         // Only normalize channel names (starting with #). Query/DM buffers
         // use the raw nick as the buffer name and must not get '#' prepended.
@@ -1055,6 +1070,15 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existingBuf.topicSetBy = incomingBuf.topicSetBy;
           existingBuf.topicSetAt = incomingBuf.topicSetAt;
           existingBuf.users = incomingBuf.users;
+          // Re-apply saved member activity that the incoming sync wiped out.
+          for (const m of existingBuf.users) {
+            const key = `${existing.networkId}:${existingBuf.name}:${m.nick}`;
+            const saved = savedActivity.get(key);
+            if (saved) {
+              if (m.lastSpoke === 0 && saved.lastSpoke > 0) m.lastSpoke = saved.lastSpoke;
+              if (m.lastHighlighted === 0 && saved.lastHighlighted > 0) m.lastHighlighted = saved.lastHighlighted;
+            }
+          }
           existingBuf.isPinned = incomingBuf.isPinned;
           existingBuf.isArchived = incomingBuf.isArchived;
           existingBuf.lastSeenMsgTime = incomingBuf.lastSeenMsgTime;

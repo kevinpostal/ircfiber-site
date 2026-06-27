@@ -16,19 +16,20 @@ describe('SettingsAdvanced (W0-T01)', () => {
 		await expect.element(heading).toBeInTheDocument();
 	});
 
-	it('renders all 5 toggles, each defaulting to off', async () => {
+	it('renders all 6 toggles, each defaulting to off', async () => {
 		render(SettingsAdvanced);
 
-		// Five labeled toggles, one per Wave 1 task
+		// Six labeled toggles — 5 Wave 1 tasks + XHR fallback (W5-T01)
 		await expect.element(page.getByText(/Sync prefs across devices \(prefVersion resolution\)/)).toBeInTheDocument();
 		await expect.element(page.getByText(/Heartbeat \(W1-T03\)/)).toBeInTheDocument();
 		await expect.element(page.getByText(/Edit-message wire \(W1-T04\)/)).toBeInTheDocument();
 		await expect.element(page.getByText(/buffersToDelete wire \(W1-T06\)/)).toBeInTheDocument();
 		await expect.element(page.getByText(/Idle events \(W1-T08\)/)).toBeInTheDocument();
+		await expect.element(page.getByText(/XHR fallback \(W5-T01\)/)).toBeInTheDocument();
 
-		// All 5 switches start unchecked (default OFF)
+		// All 6 switches start unchecked (default OFF)
 		const switches = page.getByRole('switch').all();
-		expect(switches.length).toBe(5);
+		expect(switches.length).toBe(6);
 	});
 
 	it('aria-checked reflects the globalPrefs.featureFlags state', async () => {

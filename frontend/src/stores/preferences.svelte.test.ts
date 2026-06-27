@@ -426,13 +426,14 @@ describe('networkOrder', () => {
 // All Wave 1/2 protocol changes gate behind these booleans. Most still
 // default OFF for safe rollout; usePrefVersion flips ON in Wave 2.
 describe('featureFlags (W0-T01)', () => {
-	it('DEFAULT_PREFS includes all 5 flags with usePrefVersion ON', () => {
+	it('DEFAULT_PREFS includes all 6 flags with usePrefVersion ON', () => {
 		expect(DEFAULT_PREFS.featureFlags).toBeDefined();
 		expect(DEFAULT_PREFS.featureFlags.usePrefVersion).toBe(true);
 		expect(DEFAULT_PREFS.featureFlags.heartbeat.enabled).toBe(false);
 		expect(DEFAULT_PREFS.featureFlags.editMessage.enabled).toBe(false);
 		expect(DEFAULT_PREFS.featureFlags.buffersToDelete.enabled).toBe(false);
 		expect(DEFAULT_PREFS.featureFlags.idleEvents.enabled).toBe(false);
+		expect(DEFAULT_PREFS.featureFlags.xhrFallback.enabled).toBe(false);
 	});
 
 	it('globalPrefs initializes with usePrefVersion=true, others false (fresh state)', () => {
@@ -441,6 +442,7 @@ describe('featureFlags (W0-T01)', () => {
 		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(false);
 		expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(false);
 		expect(globalPrefs.featureFlags.idleEvents.enabled).toBe(false);
+		expect(globalPrefs.featureFlags.xhrFallback.enabled).toBe(false);
 	});
 
 	it('toggling usePrefVersion persists the full featureFlags namespace to localStorage', () => {
@@ -459,6 +461,7 @@ describe('featureFlags (W0-T01)', () => {
 		expect(parsed.featureFlags.editMessage.enabled).toBe(false);
 		expect(parsed.featureFlags.buffersToDelete.enabled).toBe(false);
 		expect(parsed.featureFlags.idleEvents.enabled).toBe(false);
+		expect(parsed.featureFlags.xhrFallback.enabled).toBe(false);
 
 		window.localStorage.removeItem('ircfiber:globalPrefs');
 	});
@@ -493,6 +496,7 @@ describe('featureFlags (W0-T01)', () => {
 					editMessage: { enabled: false },
 					buffersToDelete: { enabled: false },
 					idleEvents: { enabled: true },
+					xhrFallback: { enabled: false },
 				},
 			})
 		);
@@ -527,6 +531,7 @@ describe('featureFlags (W0-T01)', () => {
 				editMessage: { ...DEFAULT_PREFS.featureFlags.editMessage, ...(saved.featureFlags.editMessage ?? {}) },
 				buffersToDelete: { ...DEFAULT_PREFS.featureFlags.buffersToDelete, ...(saved.featureFlags.buffersToDelete ?? {}) },
 				idleEvents: { ...DEFAULT_PREFS.featureFlags.idleEvents, ...(saved.featureFlags.idleEvents ?? {}) },
+				xhrFallback: { ...DEFAULT_PREFS.featureFlags.xhrFallback, ...(saved.featureFlags.xhrFallback ?? {}) },
 			},
 		};
 		expect(merged.featureFlags.usePrefVersion).toBe(true);
@@ -534,5 +539,6 @@ describe('featureFlags (W0-T01)', () => {
 		expect(merged.featureFlags.editMessage.enabled).toBe(false);
 		expect(merged.featureFlags.buffersToDelete.enabled).toBe(false);
 		expect(merged.featureFlags.idleEvents.enabled).toBe(false);
+		expect(merged.featureFlags.xhrFallback.enabled).toBe(false);
 	});
 });

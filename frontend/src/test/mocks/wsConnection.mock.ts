@@ -9,5 +9,7 @@ export function make_mock_ws_connection() {
     disconnectWebSocket: vi.fn(),
     isConnected: vi.fn(() => true),
     connectWebSocket: vi.fn(),
+    startXHRFallback: vi.fn(),
+    stopXHRFallback: vi.fn(),
   };
 }

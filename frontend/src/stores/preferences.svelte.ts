@@ -19,8 +19,10 @@ export interface FeatureFlags {
   editMessage: FeatureFlag;
   // W1-T06: buffersToDelete wire protocol.
   buffersToDelete: FeatureFlag;
-  // W1-T08: temp_unavailable + idle events wire protocol.
-  idleEvents: FeatureFlag;
+	// W1-T08: temp_unavailable + idle events wire protocol.
+	idleEvents: FeatureFlag;
+	// W5-T01: XHR long-poll fallback when WebSocket fails.
+	xhrFallback: FeatureFlag;
 }
 
 export interface GlobalPrefs {
@@ -86,8 +88,9 @@ export const DEFAULT_PREFS: GlobalPrefs = {
     heartbeat: { enabled: false },
     editMessage: { enabled: false },
     buffersToDelete: { enabled: false },
-    idleEvents: { enabled: false },
-  },
+		idleEvents: { enabled: false },
+		xhrFallback: { enabled: false },
+	},
 };
 
 export const globalPrefs = $state<GlobalPrefs>(
@@ -109,7 +112,8 @@ function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): Glob
       heartbeat: { ...defaultsFf.heartbeat, ...(savedFf.heartbeat ?? {}) },
       editMessage: { ...defaultsFf.editMessage, ...(savedFf.editMessage ?? {}) },
       buffersToDelete: { ...defaultsFf.buffersToDelete, ...(savedFf.buffersToDelete ?? {}) },
-      idleEvents: { ...defaultsFf.idleEvents, ...(savedFf.idleEvents ?? {}) },
+		idleEvents: { ...defaultsFf.idleEvents, ...(savedFf.idleEvents ?? {}) },
+		xhrFallback: { ...defaultsFf.xhrFallback, ...(savedFf.xhrFallback ?? {}) },
     };
   }
   return out;

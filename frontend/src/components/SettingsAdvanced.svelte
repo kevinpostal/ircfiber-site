@@ -118,5 +118,27 @@
         </label>
       </div>
     </div>
+
+    <div class="settings-row">
+      <div class="settings-label">
+        <span class="settings-label-text">XHR fallback (W5-T01)</span>
+        <span class="settings-label-desc">
+          When WebSocket fails (corporate proxies, captive portals), fall
+          back to XHR long-poll for uninterrupted event delivery.
+        </span>
+      </div>
+      <div class="settings-control">
+        <label class="toggle-switch">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label="XHR fallback (W5-T01)"
+            aria-checked={globalPrefs.featureFlags.xhrFallback.enabled}
+            bind:checked={globalPrefs.featureFlags.xhrFallback.enabled}
+          />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
   </div>
 </SettingsSection>
