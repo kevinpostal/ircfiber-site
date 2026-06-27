@@ -185,13 +185,16 @@ describe('InputArea', () => {
 		expect(ircState.activeBuffer.networkId).toBe('net1');
 		expect(ircState.activeBuffer.bufferName).toBe('#test');
 
-		// Verify channel buffer was created optimistically in the sidebar
+		// Verify channel buffer was created optimistically in the sidebar.
+		// isJoined starts false (our fix — see App.test.ts 'hides member sidebar
+		// after join is rejected and redirected') and flips to true only when
+		// the IRC server confirms the JOIN with our own JOIN event.
 		const testBuf = ircState.networks
 			.find(n => n.networkId === 'net1')
 			?.buffers.find(b => b.name === '#test');
 		expect(testBuf).toBeDefined();
 		expect(testBuf?.type).toBe('channel');
-		expect(testBuf?.isJoined).toBe(true);
+		expect(testBuf?.isJoined).toBe(false);
 
 		// Verify connection state updated instantly
 		const updatedNet = ircState.networks.find(n => n.networkId === 'net1');

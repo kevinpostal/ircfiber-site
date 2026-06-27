@@ -30,7 +30,7 @@
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, bufferPrefsMap } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -863,22 +863,12 @@ let showNetworkForm: boolean = $state(false);
     else if (type === 'messages') bufferName = target;
 
     // When navigating to a channel via URL, the user is explicitly asking
-    // to see that channel.  Force isJoined=false so the Rejoin button
-    // always appears — a stale isJoined=true (e.g. after a nick change
-    // desync, or a PART/KICK that didn't propagate) would otherwise hide
-    // the Rejoin button and trap the user on a channel they can't interact
-    // with.  The next JOIN event or sync from the engine will correct the
-    // flag if the user is genuinely joined.
-    if (type === 'channel') {
-      // Case-insensitive lookup: the URL uses lowercase but the server
-      // may have preserved the original case (e.g. #SuperBowl). Without
-      // this, a new phantom gets created alongside the real buffer.
-      const existing = net.buffers.find(b => b.name.toLowerCase() === bufferName.toLowerCase());
-      if (existing) {
-        existing.isJoined = false;
-      }
-    }
-
+    // to see that channel.  The engine sync + live IRC events are the only
+    // authorities for isJoined — see the pendingIsJoined guard in
+    // updateNetworkFromSync which prevents stale sync snapshots from
+    // clobbering a recent JOIN.  A phantom buffer (auto-created below by
+    // switchToBuffer when no buffer exists locally) starts with
+    // isJoined=false and is corrected on the next sync.
     switchToBuffer(net.networkId, bufferName);
   }
 

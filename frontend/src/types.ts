@@ -74,6 +74,22 @@ export interface Buffer {
    * PART for self).
    */
   isPhantom?: boolean;
+  /**
+   * Set by JOIN/PART/KICK events for self to track an event-driven isJoined
+   * change that hasn't been confirmed by the periodic engine sync snapshot
+   * yet.  The sync is authoritative for buffer state, but lags behind live
+   * events by up to ~10s.  When this flag is set, updateNetworkFromSync
+   * will only adopt the sync's isJoined if it CONFIRMS the event direction
+   * (same joined/unjoined state); contradicting values are discarded as
+   * stale snapshots taken before the event propagated.  Once the sync
+   * confirms, the flag is cleared.
+   *
+   * Values:
+   *   true   — a JOIN for self fired since the last sync
+   *   false  — a PART/KICK for self fired since the last sync
+   *   undefined — no pending change; sync is trusted unconditionally
+   */
+  pendingIsJoined?: boolean;
   unreadCount: number;
   highlight: boolean;
   /** Number of unseen mentions; drives the red sidebar badge (IRCCloud-style). */

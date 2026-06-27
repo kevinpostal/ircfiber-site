@@ -20,7 +20,20 @@ vi.mock('/src/stores/api', () => ({
     unarchiveChannel: vi.fn(async () => undefined),
 }));
 
+vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
+    sendRaw: vi.fn(),
+    sendMessage: vi.fn(),
+    requestSync: vi.fn(),
+    requestSwitchBuffer: vi.fn(),
+    connectWebSocket: vi.fn(),
+    disconnectWebSocket: vi.fn(),
+    wsState: { value: 'disconnected' },
+    maxEidTracker: { value: 0 },
+    setMaxEid: vi.fn(),
+}));
+
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
+import { sendRaw } from '../stores/wsConnection.svelte.ts';
 
 function resetState(): void {
     ircState.networks.length = 0;
@@ -249,5 +262,56 @@ describe('BufferHeader', () => {
 		});
 
 		await expect(page.getByRole('button', { name: /disconnect/i })).not.toBeInTheDocument();
+	});
+
+	it('shows Rejoin button on a channel buffer that is not joined', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#ircfiber', isJoined: false }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#ircfiber';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		const rejoinBtn = page.getByRole('button', { name: /^rejoin$/i });
+		await expect.element(rejoinBtn).toBeInTheDocument();
+	});
+
+	it('clicking Rejoin sends a JOIN for the active channel buffer (e2e)', async () => {
+		vi.mocked(sendRaw).mockClear();
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#ircfiber', isJoined: false }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#ircfiber';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		const rejoinBtn = page.getByRole('button', { name: /^rejoin$/i });
+		await expect.element(rejoinBtn).toBeInTheDocument();
+		await userEvent.click(rejoinBtn);
+
+		expect(sendRaw).toHaveBeenCalledWith('net1', 'JOIN #ircfiber');
+	});
+
+	it('does not show Rejoin button on a joined channel', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#general', isJoined: true }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		await expect(page.getByRole('button', { name: /^rejoin$/i })).not.toBeInTheDocument();
 	});
 });

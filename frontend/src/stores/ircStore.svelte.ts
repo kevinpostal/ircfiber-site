@@ -897,13 +897,15 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           const localHighlight = existingBuf.highlight ?? false;
           const remoteUnread = incomingBuf.unreadCount ?? 0;
           const remoteHighlight = incomingBuf.highlight ?? false;
-          // Copy incoming buffer properties except isJoined (IRC events are
-          // authoritative). EXCEPTION: if the existing buffer is a phantom
-          // (auto-created by setActiveBuffer() when the user navigated to a
-          // channel that didn't exist locally), the sync is the first
-          // authoritative signal we have — adopt its isJoined and clear the
-          // phantom flag. Without this, a user who navigates to a channel
-          // they ARE in would see it locked in "Inactive" forever.
+          // Copy incoming buffer properties.  For isJoined we use a
+          // pending-change guard: after a live JOIN/PART/KICK event for self,
+          // updateChannelUsers sets pendingIsJoined to the event direction.
+          // The periodic sync snapshot is authoritative but lags behind live
+          // events by up to ~10s.  When a pending change exists we only adopt
+          // the sync's isJoined if it CONFIRMS the event direction — a
+          // contradicting value came from a snapshot taken before the event
+          // propagated to the engine and must not clobber the live state.
+          // Once the sync confirms, the guard is cleared.
           existingBuf.name = incomingBuf.name;
           existingBuf.type = incomingBuf.type;
           existingBuf.topic = incomingBuf.topic;
@@ -916,9 +918,21 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existingBuf.firstUnseenMsgIndex = incomingBuf.firstUnseenMsgIndex;
           existingBuf.unreadCount = Math.max(localUnread, remoteUnread);
           existingBuf.highlight = localHighlight || remoteHighlight;
+          const incomingJoined = incomingBuf.isJoined;
+          const pending = existingBuf.pendingIsJoined;
           if (existingBuf.isPhantom) {
-            existingBuf.isJoined = incomingBuf.isJoined;
+            // Phantom buffers have no event-driven state — adopt blindly
+            existingBuf.isJoined = incomingJoined;
             existingBuf.isPhantom = false;
+          } else if (pending === undefined) {
+            // No pending event-driven change — sync is authoritative
+            existingBuf.isJoined = incomingJoined;
+          } else if (pending !== incomingJoined) {
+            // Pending event contradicts sync — keep the event state (sync
+            // snapshot was taken before the JOIN/PART/KICK propagated)
+          } else {
+            // Sync confirms the pending event direction — clear the guard
+            existingBuf.pendingIsJoined = undefined;
           }
 
           // Keep the preferences-map (used by getTotalUnread / getHasHighlight
@@ -1165,6 +1179,9 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // even if it was auto-created by setActiveBuffer before the JOIN
     // event reached us.
     if (buf.isPhantom) buf.isPhantom = false;
+    // Mark pending so the next sync doesn't overwrite with a stale
+    // snapshot taken before the JOIN propagated to the engine.
+    buf.pendingIsJoined = true;
   } else if (cmd === 'JOIN' && nick && nick !== net.currentNick) {
     const stripped = stripPrefix(nick);
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
@@ -1186,11 +1203,14 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     }
   } else if (cmd === 'PART' && nick === net.currentNick) {
     buf.isJoined = false;
+    buf.pendingIsJoined = false;
   } else if ((cmd === 'PART' || cmd === 'QUIT') && nick) {
     buf.users = buf.users.filter(u => stripPrefix(u.nick) !== nick);
   } else if (cmd === 'KICK' && params && params[1]) {
-    if (params[1] === net.currentNick) buf.isJoined = false;
-    else buf.users = buf.users.filter(u => stripPrefix(u.nick) !== params[1]);
+    if (params[1] === net.currentNick) {
+      buf.isJoined = false;
+      buf.pendingIsJoined = false;
+    } else buf.users = buf.users.filter(u => stripPrefix(u.nick) !== params[1]);
   } else if (cmd === 'NICK' && nick && params && params.length > 0) {
     const newNick = params[params.length - 1];
     for (const u of buf.users) {

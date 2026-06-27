@@ -771,46 +771,41 @@ describe('PART/KICK/JOIN isJoined lifecycle', () => {
 		expect(foundBuf?.isJoined).toBe(true);
 	});
 
-	it('sync does not flip isJoined from false back to true', () => {
+	it('sync flips isJoined from false to true when no pendingIsJoined guard', () => {
+		// Without a pendingIsJoined guard, the sync is authoritative.
+		// A stale local isJoined=false is corrected by the engine snapshot.
 		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
 		const buf = createBuffer({ name: '#chan', isJoined: false });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
 
-		// Verify setup
-		const before = ircState.networks.find((n) => n.networkId === 'net1');
-		const beforeBuf = before?.buffers.find((b) => b.name === '#chan');
-		expect(beforeBuf?.isJoined).toBe(false);
-
-		// Simulate sync with stale isJoined: true
 		const incoming = createNetwork({ networkId: 'net1' });
 		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
 		updateNetworkFromSync([incoming]);
 		flushSync();
 
 		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')?.buffers.find((b) => b.name === '#chan');
-		expect(foundBuf?.isJoined).toBe(false);
+		expect(foundBuf?.isJoined).toBe(true);
 	});
 
-	it('sync does not flip isJoined from true back to false', () => {
+	it('sync flips isJoined from true to false when no pendingIsJoined guard', () => {
+		// Without a pendingIsJoined guard, the sync is authoritative.
+		// This handles the case where the user parted from another client
+		// and the next sync correctly reports isJoined=false without an
+		// intermediate PART event reaching this frontend.
 		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
 		const buf = createBuffer({ name: '#chan', isJoined: true });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
 
-		// Verify setup
-		const before = ircState.networks.find((n) => n.networkId === 'net1');
-		const beforeBuf = before?.buffers.find((b) => b.name === '#chan');
-		expect(beforeBuf?.isJoined).toBe(true);
-
-		// Simulate sync with stale isJoined: false
+		// Sync says the user is no longer in the channel
 		const incoming = createNetwork({ networkId: 'net1' });
 		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: false }));
 		updateNetworkFromSync([incoming]);
 		flushSync();
 
 		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')?.buffers.find((b) => b.name === '#chan');
-		expect(foundBuf?.isJoined).toBe(true);
+		expect(foundBuf?.isJoined).toBe(false);
 	});
 
 	it('new buffer from sync with isJoined:false is created correctly', () => {
@@ -890,10 +885,11 @@ describe('phantom buffers (URL nav auto-create)', () => {
 		expect(buf?.highlight).toBe(true);
 	});
 
-	it('sync still preserves local isJoined:false for real (non-phantom) buffers', () => {
-		// Regression guard: the existing behavior of NOT clobbering a
-		// recent PART for self must still work. Phantom semantics apply
-		// only to placeholders, not to real buffers.
+	it('sync updates isJoined for non-phantom buffers when no pending event change', () => {
+		// Without a pendingIsJoined guard, the engine sync snapshot is
+		// authoritative for the current join state.  If the client has no
+		// reason to distrust it (no recent JOIN/PART/KICK for self), the
+		// sync's isJoined overwrites the local value.
 		const existing = createNetwork({ currentNick: 'me' });
 		const real = createBuffer({ name: '#chan', isJoined: false });
 		existing.buffers.push(real);
@@ -905,7 +901,66 @@ describe('phantom buffers (URL nav auto-create)', () => {
 		flushSync();
 
 		const buf = ircState.networks.find((n) => n.networkId === existing.networkId)?.buffers.find((b) => b.name === '#chan');
+		expect(buf?.isJoined).toBe(true);
+	});
+
+	it('pendingIsJoined guard prevents stale sync from overwriting a recent PART', () => {
+		// User parts a channel — updateChannelUsers sets isJoined=false and
+		// pendingIsJoined=false.  A stale sync snapshot taken BEFORE the PART
+		// propagated must NOT flip isJoined back to true.  Only the next sync
+		// that confirms the parted state clears the guard.
+		const existing = createNetwork({ currentNick: 'me' });
+		const real = createBuffer({ name: '#chan', isJoined: false, pendingIsJoined: false });
+		existing.buffers.push(real);
+		ircState.networks.push(existing);
+
+		// Stale sync: snapshot from before the PART — says joined=true
+		const incoming = createNetwork({ networkId: existing.networkId });
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const buf = ircState.networks.find((n) => n.networkId === existing.networkId)?.buffers.find((b) => b.name === '#chan');
+		// pendingIsJoined=false contradicts sync's isJoined=true — keep event state
 		expect(buf?.isJoined).toBe(false);
+		expect(buf?.pendingIsJoined).toBe(false); // guard still active
+	});
+
+	it('pendingIsJoined guard clears when the confirming sync arrives', () => {
+		// After a PART, the next sync that ALSO reports isJoined=false
+		// confirms the event state and clears the guard.
+		const existing = createNetwork({ currentNick: 'me' });
+		const real = createBuffer({ name: '#chan', isJoined: false, pendingIsJoined: false });
+		existing.buffers.push(real);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: existing.networkId });
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: false }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const buf = ircState.networks.find((n) => n.networkId === existing.networkId)?.buffers.find((b) => b.name === '#chan');
+		expect(buf?.isJoined).toBe(false);
+		expect(buf?.pendingIsJoined).toBeUndefined(); // guard cleared
+	});
+
+	it('pendingIsJoined guard prevents stale sync from overwriting a fresh JOIN', () => {
+		// User joins a channel — updateChannelUsers sets pendingIsJoined=true.
+		// A stale sync snapshot from before the JOIN must not flip isJoined
+		// back to false.
+		const existing = createNetwork({ currentNick: 'me' });
+		const real = createBuffer({ name: '#chan', isJoined: true, pendingIsJoined: true });
+		existing.buffers.push(real);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: existing.networkId });
+		incoming.buffers.push(createBuffer({ name: '#chan', isJoined: false }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const buf = ircState.networks.find((n) => n.networkId === existing.networkId)?.buffers.find((b) => b.name === '#chan');
+		expect(buf?.isJoined).toBe(true);
+		expect(buf?.pendingIsJoined).toBe(true);
 	});
 
 	it('JOIN for self clears the phantom flag', () => {

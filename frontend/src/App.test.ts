@@ -57,6 +57,7 @@ vi.mock('/src/stores/api', () => ({
   updateCollapsed: vi.fn(async () => undefined),
   updateInactiveCollapsed: vi.fn(async () => undefined),
   updateNetworkOrder: vi.fn(async () => undefined),
+  updateBufferPrefs: vi.fn(async () => undefined),
   hideChannel: vi.fn(async () => undefined),
   unhideChannel: vi.fn(async () => undefined),
 }));
@@ -74,6 +75,19 @@ beforeEach(() => {
   ircState.showSettings = false;
   ircState.showShortcuts = false;
   history.replaceState({}, '', '/');
+
+  // App.svelte's checkAuth() calls raw fetch('/api/me') at boot — not the
+  // mocked fetchMe(). Stub global fetch so the auth probe succeeds and the
+  // WebSocket mock fires its sync. Without this, the page is stuck in the
+  // 'connecting' body class and every rendering assertion times out.
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : (input as Request).url;
+    if (url.includes('/api/me')) {
+      return new Response(JSON.stringify({ username: 'tester', email: 'tester@test.local' }), { status: 200 });
+    }
+    return new Response('', { status: 200 });
+  });
+
   vi.clearAllMocks();
 });
 
@@ -248,6 +262,12 @@ describe('App', () => {
       flushSync();
 
       render(App);
+      // checkRoute no longer clobbers isJoined, but the guard is harmless
+      // when the test already set up isJoined=true.
+      const buf = ircState.networks[0]?.buffers.find(b => b.name === '#general');
+      console.log('DEBUG active:', ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName);
+      console.log('DEBUG wrap html:', document.querySelector('#wrap')?.outerHTML?.slice(0, 600));
+      flushSync();
       expect(document.querySelector('#member-sidebar')).toBeInTheDocument();
       expect(document.querySelector('#wrap')?.classList.contains('has-members')).toBe(true);
     });
@@ -274,6 +294,8 @@ describe('App', () => {
       flushSync();
 
       render(App);
+      const buf = ircState.networks[0]?.buffers.find(b => b.name === '#general');
+      flushSync();
       expect(document.querySelector('#member-sidebar')).toBeInTheDocument();
 
       // Simulate PART event

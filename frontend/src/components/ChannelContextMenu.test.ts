@@ -15,6 +15,7 @@ vi.mock('/src/stores/api.ts', () => ({
   unpinChannel: vi.fn(async () => undefined),
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
+  updateBufferPrefs: vi.fn(async () => undefined),
 }));
 
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
