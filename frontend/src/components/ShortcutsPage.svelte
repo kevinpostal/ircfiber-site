@@ -28,7 +28,7 @@
   const mainShortcuts: ShortcutItem[] = [
     { keys: ['Alt', '↑'], description: 'Switch to previous buffer' },
     { keys: ['Alt', '↓'], description: 'Switch to next buffer' },
-    { keys: ['Cmd/Ctrl', 'K'], description: 'Quick switch channel' },
+    { keys: ['Cmd/Ctrl', 'Shift', 'K'], description: 'Quick switch channel' },
     { keys: ['Esc'], description: 'Close dialog' },
   ];
 

@@ -20,6 +20,7 @@ vi.mock('/src/stores/api', () => ({
   deleteNetwork: vi.fn(async () => undefined),
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
+  updateServerlogCollapsed: vi.fn(async () => undefined),
 }));
 
 function resetState(): void {

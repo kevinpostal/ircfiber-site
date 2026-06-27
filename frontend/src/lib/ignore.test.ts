@@ -19,11 +19,13 @@ describe('IgnoreMap', () => {
         expect(map.check('bob', 'user@good.host')).toBe(false);
     });
 
-    it('preserves existing wildcard pattern (C1 fix)', () => {
+    it('matches wildcard pattern in bare nick', () => {
         const map = parseIgnoreList(['evil*']);
-        // evil* has * → treated as literal nick "evil*" (not regex wildcard)
-        expect(map.check('evil*')).toBe(true);      // literal match
-        expect(map.check('eviltwin')).toBe(false);   // NOT a regex wildcard
+        // * in IRC ignore patterns is a wildcard matching any sequence
+        expect(map.check('evil*')).toBe(true);
+        expect(map.check('eviltwin')).toBe(true);
+        expect(map.check('evil')).toBe(true);
+        expect(map.check('good')).toBe(false);
     });
 
     it('matches * wildcard in ignore.js style', () => {

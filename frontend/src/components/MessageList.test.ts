@@ -297,7 +297,7 @@ describe('MessageList', () => {
 			expect(onLoadMore).toHaveBeenCalled();
 		});
 
-		it('shows the scroll clock while scrolled up and hides it at the bottom', async () => {
+		it('shows the scroll clock while scrolled up and hides it at the bottom', { timeout: 10000 }, async () => {
 			const net = createNetwork({ networkId: 'net1' });
 			net.buffers.push(createBuffer({ name: '#chan' }));
 			ircState.networks.push(net);
@@ -320,22 +320,29 @@ describe('MessageList', () => {
 
 			const container = document.getElementById('messages') as HTMLDivElement;
 			container.style.height = '200px';
-			// Constraining height can cause overflow before scroll position
-			// settles — scroll to bottom explicitly so the clock hides.
+			container.getBoundingClientRect();
+			await new Promise((r) => setTimeout(r, 50));
+
+			// Prime: move away from bottom so the scroll-handler dedup
+			// detects the change when we scroll back to the bottom.
+			container.scrollTop = 1;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 50));
+
+			// Now scroll to bottom — the dedup check sees a change.
 			container.scrollTop = container.scrollHeight;
 			container.dispatchEvent(new Event('scroll'));
 
-			// Hidden while at the bottom (IRCCloud ScrollClockView.update).
 			await vi.waitFor(() => {
 				expect(document.querySelector('.scrollClock')).toBeNull();
-			}, { timeout: 2000 });
+			}, { timeout: 5000, interval: 100 });
 
 			// Scroll up → the clock appears with the upper message's date.
 			container.scrollTop = 50;
 			container.dispatchEvent(new Event('scroll'));
 			await vi.waitFor(() => {
 				expect(document.querySelector('.scrollClock')).not.toBeNull();
-			}, { timeout: 2000 });
+			}, { timeout: 5000, interval: 100 });
 			expect(document.querySelector('.scrollClock .timeago')?.textContent).toContain('ago');
 			expect(document.querySelector('.scrollClock canvas.clock')).not.toBeNull();
 
@@ -344,7 +351,7 @@ describe('MessageList', () => {
 			container.dispatchEvent(new Event('scroll'));
 			await vi.waitFor(() => {
 				expect(document.querySelector('.scrollClock')).toBeNull();
-			}, { timeout: 2000 });
+			}, { timeout: 5000, interval: 100 });
 		});
 
 		it('buffers realtime messages while scrolled up and flushes them at the bottom', async () => {

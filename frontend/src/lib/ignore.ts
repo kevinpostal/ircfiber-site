@@ -93,9 +93,14 @@ export class IgnoreMap {
             // Level 2: collect matching user sets
             const nickSets = this.collectMaps(userMap, user);
             for (const nickSet of nickSets) {
-                // Level 3: exact nick match or any-nick wildcard
+                // Level 3: exact nick match, any-nick wildcard, or IRC wildcard pattern
                 if (nickSet.has(target)) return true;
                 if (nickSet.has('*')) return true;
+                for (const pattern of nickSet) {
+                    if (pattern.includes('*') || pattern.includes('?')) {
+                        if (this.checkWildcard(pattern, target)) return true;
+                    }
+                }
             }
         }
         return false;
@@ -129,10 +134,11 @@ export class IgnoreMap {
      * Bare `*` (length <= 1) is excluded — handled via catch-all above.
      */
     private checkWildcard(ptrn: string, token: string): boolean {
-        if (ptrn.length <= 1 || !ptrn.includes('*')) return false;
+        if (ptrn.length <= 1 || (!ptrn.includes('*') && !ptrn.includes('?'))) return false;
         const escaped = ptrn
             .replace(/[-[\]{}()+.,\\^$|#\s]/g, '\\$&')
-            .replace(/\*/g, '.*');
+            .replace(/\*/g, '.*')
+            .replace(/\?/g, '.');
         return new RegExp('^' + escaped + '$', 'i').test(token);
     }
 }

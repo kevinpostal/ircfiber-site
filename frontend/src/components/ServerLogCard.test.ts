@@ -30,12 +30,16 @@ const network = createNetwork({
   port: 6697,
 });
 
-/** Click the card header to expand the body — collapsed by default for
- *  non-pending attempts. */
+/** Click the card header to expand the body — the card now starts expanded by
+ *  default for latest cards, so only toggle if it's currently collapsed. */
 async function expandCard() {
-  const header = page.getByRole('button', { name: /Connected|Failed|Disconnected|Connecting/ });
-  await header.click();
-  await new Promise(r => setTimeout(r, 50));
+  const btn = document.querySelector('.serverLogCard__header');
+  if (!btn) return;
+  if (btn.getAttribute('aria-expanded') === 'false') {
+    const header = page.getByRole('button', { name: /Connected|Failed|Disconnected|Connecting/ });
+    await header.click();
+    await new Promise(r => setTimeout(r, 50));
+  }
 }
 
 describe('ServerLogCard', () => {
@@ -72,7 +76,7 @@ describe('ServerLogCard', () => {
       m({ phase: 'error', text: 'TLS handshake failed' }),
     ]);
     render(ServerLogCard, { props: { attempt, network } });
-    const status = page.getByText('Failed');
+    const status = page.getByText('Failed', { exact: true });
     await expect.element(status).toBeInTheDocument();
   });
 

@@ -431,8 +431,8 @@ let showNetworkForm: boolean = $state(false);
       e.preventDefault();
       switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
     }
-    // Cmd/Ctrl+K — quick-switch channel
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    // Cmd/Ctrl+Shift+K - quick-switch channel
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'k') {
       e.preventDefault();
       channelSwitcherOpen = true;
       return;

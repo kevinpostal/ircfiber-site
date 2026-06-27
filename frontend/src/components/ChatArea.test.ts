@@ -19,6 +19,7 @@ vi.mock('/src/stores/api', () => ({
   fetchHealth: vi.fn(async () => ({ status: 'healthy', services: {} })),
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
+  updateServerlogCollapsed: vi.fn(async () => undefined),
 }));
 
 beforeEach(() => {
