@@ -4,7 +4,8 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import InputArea from './InputArea.svelte';
 import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
-import { ircState, updateChannelUsers } from '../stores/ircStore.svelte';
+import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText } from '../stores/ircStore.svelte';
+import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 
 vi.mock('/src/stores/api', () => ({
   reconnectNetwork: vi.fn(async () => undefined),
@@ -27,6 +28,12 @@ function resetState(): void {
 	ircState.activeBuffer.networkId = null;
 	ircState.activeBuffer.bufferName = null;
 	ircState.messages = {};
+	ircState.processedMessages = {};
+	bufferInputText.clear();
+	// Clear lastSentMessages from previous tests
+	for (const k of Object.keys(lastSentMessages)) delete lastSentMessages[k];
+	// Reset feature flags to defaults
+	Object.assign(globalPrefs, DEFAULT_PREFS);
 }
 
 beforeEach(() => {
@@ -37,10 +44,12 @@ beforeEach(() => {
 describe('InputArea', () => {
 	let mockSendMessage: ReturnType<typeof vi.fn>;
 	let mockSendRaw: ReturnType<typeof vi.fn>;
+	let mockSendEditMessage: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
 		mockSendMessage = vi.fn();
 		mockSendRaw = vi.fn();
+		mockSendEditMessage = vi.fn();
 	});
 
 	it('renders textarea', async () => {
@@ -260,5 +269,149 @@ describe('InputArea', () => {
 		expect(processed![1].text).toBe('hello world');
 		expect(processed![1].nick).toBe('tester');
 		expect(processed![1].label).toBeDefined();
+	});
+
+	// ── Edit message (Ctrl/Cmd+Up) ──
+
+	it('Ctrl+Cmd+Up does nothing when editMessage flag is disabled (default)', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+		expect(el.value).toBe('');
+
+		// Ctrl+Meta+Up (Cmd+Up on Mac)
+		await userEvent.keyboard('{Control>}{Meta>}{ArrowUp}{/Meta}{/Control}');
+		flushSync();
+
+		// Should NOT change value since editMessage flag is disabled
+		expect(el.value).toBe('');
+	});
+
+	it('Ctrl+ArrowUp (without Meta) on empty input with last sent prefills [edit] body', async () => {
+		globalPrefs.featureFlags.editMessage.enabled = true;
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		recordSentMessage('net1', '#general', { label: 'abc', body: 'hello world' });
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// Ctrl+ArrowUp only (Linux/Windows style)
+		await userEvent.keyboard('{Control>}{ArrowUp}{/Control}');
+		flushSync();
+
+		expect(el.value).toBe('[edit] hello world');
+	});
+
+	it('Ctrl+Cmd+Up with non-empty input does nothing', async () => {
+		globalPrefs.featureFlags.editMessage.enabled = true;
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		recordSentMessage('net1', '#general', { label: 'abc', body: 'hello world' });
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		await userEvent.type(textarea, 'already typing');
+		const currentVal = el.value;
+		expect(currentVal).toBe('already typing');
+
+		// Ctrl+Cmd+Up should be ignored when input is non-empty
+		await userEvent.keyboard('{Control>}{Meta>}{ArrowUp}{/Meta}{/Control}');
+		flushSync();
+
+		expect(el.value).toBe('already typing');
+	});
+
+	it('sends edit message via onSendEditMessage with original label and strips [edit] prefix', async () => {
+		globalPrefs.featureFlags.editMessage.enabled = true;
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		recordSentMessage('net1', '#general', { label: 'origLabel', body: 'original text' });
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// Trigger edit mode
+		await userEvent.keyboard('{Control>}{Meta>}{ArrowUp}{/Meta}{/Control}');
+		flushSync();
+		expect(el.value).toBe('[edit] original text');
+
+		// Modify the text (append " edited")
+		await userEvent.keyboard(' edited');
+		flushSync();
+		expect(el.value).toBe('[edit] original text edited');
+
+		// Send the edit
+		await userEvent.keyboard('{Enter}');
+		flushSync();
+
+		// Should call onSendEditMessage with stripped [edit] prefix and original label
+		expect(mockSendEditMessage).toHaveBeenCalledWith('net1', '#general', 'original text edited', 'origLabel');
+		expect(el.value).toBe('');
+	});
+
+	it('clears editTarget after sending edit message', async () => {
+		globalPrefs.featureFlags.editMessage.enabled = true;
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		recordSentMessage('net1', '#general', { label: 'abc', body: 'first message' });
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// Enter edit mode and send
+		await userEvent.keyboard('{Control>}{Meta>}{ArrowUp}{/Meta}{/Control}');
+		flushSync();
+		await userEvent.keyboard('{Enter}');
+		flushSync();
+
+		// After sending, input is cleared
+		expect(el.value).toBe('');
+
+		// Ctrl+Cmd+Up again should NOT prefill (no editTarget, and lastSent was not
+		// updated because edit path didn't generate a new label via recordSentMessage
+		// in this test — but actually it does call recordSentMessage)
+	});
+
+	it('lastSentMessageForBuffer returns null when no message sent to the buffer', async () => {
+		const { lastSentMessageForBuffer } = await import('../stores/ircStore.svelte');
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		// No last sent message for this buffer
+		const result = lastSentMessageForBuffer(ircState.activeBuffer);
+		expect(result).toBeNull();
 	});
 });

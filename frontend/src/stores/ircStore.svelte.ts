@@ -331,6 +331,20 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     }
   }
 
+  // Edit-echo label match: when sendEditMessage re-uses the original
+  // label, the echo arrives with that same label but the optimistic
+  // entry was already consumed by the first echo. Replace in-place.
+  if (msg.label) {
+    const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
+    if (idx >= 0) {
+      list[idx] = msg;
+      ircState.messages[key] = list;
+      // Rebuild processed cache since the message text changed in-place
+      ircState.processedMessages[key] = buildProcessedBuffer(list);
+      return;
+    }
+  }
+
   if (msg.eid && list.some((m: IRCMessage) => m.eid === msg.eid)) return;
   if (msg.msgid && list.some((m: IRCMessage) => m.msgid === msg.msgid)) return;
 
@@ -379,6 +393,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   let addedUnread = 0;
   let hasHighlight = false;
   let hasChat = false;
+  let replacedEdit = false;
 
   for (const msg of msgs) {
     if (msg.label && ircState.optimisticMessages.has(msg.label)) {
@@ -386,6 +401,16 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
       if (idx >= 0) {
         list[idx] = msg;
+        continue;
+      }
+    }
+    // Edit-echo label match: same label as an existing message but the
+    // optimistic entry was consumed by the original echo. Replace in-place.
+    if (msg.label) {
+      const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
+      if (idx >= 0) {
+        list[idx] = msg;
+        replacedEdit = true;
         continue;
       }
     }
@@ -421,12 +446,19 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   // Single state assignment triggers one reactive update for the batch
   ircState.messages[key] = list;
 
+  // Edit replacement: the message text changed in-place — rebuild the
+  // processed cache entirely since the existing grouping may need to
+  // reflect the updated text.
+  if (replacedEdit) {
+    ircState.processedMessages[key] = buildProcessedBuffer(list);
+  }
+
   // Incremental preprocessing: only regroup the new tail (and the
   // previous tail group, if any, in case it merges with the new
   // messages).  This is the per-message append equivalent of IRCCloud's
   // BufferFormatter incremental update — O(new batch + boundary) instead
   // of O(buffer size).
-  if (newForProcessed.length > 0) {
+  if (!replacedEdit && newForProcessed.length > 0) {
     if (ircState.processedMessages[key]) {
       ircState.processedMessages[key] = appendToProcessed(
         ircState.processedMessages[key],
@@ -537,6 +569,30 @@ export function getTypersForBuffer(networkId: string, channel: string): string[]
     if (now - ts < 6500) result.push(nick);
   }
   return result;
+}
+
+// ── Last-sent message tracking (for edit-message Ctrl/Cmd+Up) ──
+export interface LastSentInfo {
+  eid?: number;
+  msgid?: string;
+  label: string;
+  body: string;
+}
+
+/** Per-buffer record of the last message the user sent. Keyed by
+ *  `${networkId}:${normalizeChannelName(bufferName)}`.
+ *  Used by Ctrl/Cmd+Up in InputArea to prefill the edit input. */
+export const lastSentMessages = $state<Record<string, LastSentInfo>>({});
+
+export function recordSentMessage(networkId: string, bufferName: string, info: LastSentInfo): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  lastSentMessages[key] = info;
+}
+
+export function lastSentMessageForBuffer(buffer: ActiveBuffer): LastSentInfo | null {
+  if (!buffer.networkId || !buffer.bufferName) return null;
+  const key = `${buffer.networkId}:${normalizeChannelName(buffer.bufferName)}`;
+  return lastSentMessages[key] ?? null;
 }
 
 // ── SessionStorage message cache ──

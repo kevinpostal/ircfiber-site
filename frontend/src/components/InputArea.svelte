@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer } from '../stores/ircStore.svelte';
-  import { sendMessage, sendRaw } from '../stores/wsConnection.svelte.ts';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage } from '../stores/ircStore.svelte';
+  import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine } from '../lib/tabCompletion';
@@ -13,7 +13,7 @@
   import PastebinDialog from './PastebinDialog.svelte';
   import { MESSAGE_LENGTH_TRIGGER } from '../lib/messageSplitter';
   import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
-  import { getPastebinDisablePrompt } from '../stores/preferences.svelte';
+  import { getPastebinDisablePrompt, globalPrefs } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { tick } from 'svelte';
   import type { IRCMessage } from '../types';
@@ -25,11 +25,13 @@
   interface Props {
     onSendMessage?: (...args: any[]) => any;
     onSendRaw?: (...args: any[]) => any;
+    onSendEditMessage?: (...args: any[]) => any;
   }
-  let { onSendMessage = sendMessage, onSendRaw = sendRaw }: Props = $props();
+  let { onSendMessage = sendMessage, onSendRaw = sendRaw, onSendEditMessage = sendEditMessage }: Props = $props();
 
   let textarea: HTMLTextAreaElement;
   let inputValue = $state('');
+  let editTarget = $state<{ eid?: number; msgid?: string; label: string } | null>(null);
   let uploadMenuOpen = $state(false);
   const tabEngine = new TabCompletionEngine();
   // Per-buffer input history map (IRCCloud-style)
@@ -185,6 +187,21 @@
       isTabbing = false;
     }
 
+    // Ctrl/Cmd+Up: edit last sent message (IRCv3 draft/edit-message).
+    // MUST come before plain ArrowUp so the Ctrl/Cmd check prevents the
+    // history navigation handler from stealing the key.
+    if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (inputValue === '' && globalPrefs.featureFlags.editMessage.enabled) {
+        const last = lastSentMessageForBuffer(ircState.activeBuffer);
+        if (last) {
+          inputValue = '[edit] ' + last.body;
+          editTarget = { eid: last.eid, msgid: last.msgid, label: last.label };
+        }
+      }
+      return;
+    }
+
     if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey) {
       if (InputHistory.isMultiline(inputValue)) return;
       const entry = history.getEarlier(inputValue);
@@ -258,11 +275,36 @@
   }
 
   async function handleSend(): Promise<void> {
-    const text = inputValue.trim();
+    let text = inputValue.trim();
     if (!text || !ircState.activeBuffer.networkId) return;
 
     const networkId = ircState.activeBuffer.networkId;
     const target = ircState.activeBuffer.bufferName || '';
+
+    // Edit message path (Ctrl/Cmd+Up)
+    if (editTarget) {
+      history.push(text);
+      // Strip [edit] prefix added by the Ctrl/Cmd+Up handler
+      const editPrefix = '[edit] ';
+      if (text.startsWith(editPrefix)) {
+        text = text.slice(editPrefix.length).trimStart();
+      }
+      const editLabel = editTarget.label;
+      onSendEditMessage(networkId, target, text, editLabel);
+      recordSentMessage(networkId, target, { label: editLabel, body: text, eid: editTarget.eid, msgid: editTarget.msgid });
+      // Optimistic: update the existing message text in-place
+      const key = `${networkId}:${target}`;
+      const list = ircState.messages[key] ?? [];
+      const idx = list.findIndex(m => m.label === editLabel);
+      if (idx >= 0) {
+        list[idx] = { ...list[idx], text };
+        ircState.messages[key] = list;
+      }
+      editTarget = null;
+      inputValue = '';
+      void autoResizeAfterClear();
+      return;
+    }
 
     history.push(text);
 
@@ -284,6 +326,7 @@
               unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
               topic: '', topicSetBy: '', topicSetAt: 0, users: [],
               lastSeenMsgTime: Date.now(), firstUnseenMsgIndex: null,
+              lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
             });
             sortBuffers(net);
           }
@@ -324,6 +367,7 @@
           } else {
             ircState.processedMessages[key] = buildProcessedBuffer(list);
           }
+          recordSentMessage(networkId, msgTarget, { label, body: msgText });
         }
         inputValue = '';
         void autoResizeAfterClear();
@@ -382,6 +426,7 @@
       } else {
         ircState.processedMessages[key] = buildProcessedBuffer(list);
       }
+      recordSentMessage(networkId, target, { label, body: text });
     }
 
     inputValue = '';

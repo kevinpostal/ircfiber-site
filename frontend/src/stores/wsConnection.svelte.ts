@@ -196,6 +196,10 @@ export function sendMessage(networkId: string, target: string, text: string, lab
   doSend(JSON.stringify({ cmd: 'msg', network: networkId, target, text, label }));
 }
 
+export function sendEditMessage(networkId: string, target: string, text: string, originalLabel: string): void {
+  doSend(JSON.stringify({ cmd: 'editmsg', network: networkId, target, text, label: originalLabel }));
+}
+
 export function requestSync(): void {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ cmd: 'sync' }));
