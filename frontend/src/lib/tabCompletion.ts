@@ -139,3 +139,13 @@ export class TabCompletionEngine {
     this.originalWord = '';
   }
 }
+
+export interface TabCompletionCycle {
+  type: 'recentHighlighter' | 'nick' | 'channel' | 'command';
+  value: string;
+}
+
+/** Per-buffer cache of nicks that recently highlighted the user.
+ *  Keyed by `${networkId}:${bufferName}`, values = array of nicks
+ *  (most recent first, max 10). */
+export const recentHighlightersCache: Map<string, string[]> = new Map();

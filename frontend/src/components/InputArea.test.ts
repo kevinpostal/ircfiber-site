@@ -6,6 +6,7 @@ import InputArea from './InputArea.svelte';
 import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
 import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText } from '../stores/ircStore.svelte';
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
+import { recentHighlightersCache } from '../lib/tabCompletion';
 
 vi.mock('/src/stores/api', () => ({
   reconnectNetwork: vi.fn(async () => undefined),
@@ -34,6 +35,8 @@ function resetState(): void {
 	for (const k of Object.keys(lastSentMessages)) delete lastSentMessages[k];
 	// Reset feature flags to defaults
 	Object.assign(globalPrefs, DEFAULT_PREFS);
+	// Clear recent highlighters cache
+	recentHighlightersCache.clear();
 }
 
 beforeEach(() => {
@@ -171,6 +174,166 @@ describe('InputArea', () => {
 
 		const value = (textarea.element() as HTMLTextAreaElement).value;
 		expect(value).toMatch(/alice|alex/);
+	});
+
+	it('Tabs through recent highlighters on empty input in channel', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general', users: [createMember({ nick: 'alice' }), createMember({ nick: 'bob' })] }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		// Seed recent highlighters (most recent first)
+		recentHighlightersCache.set('net1:#general', ['bob', 'alice']);
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+		expect(el.value).toBe('');
+
+		// First Tab → most recent highlighter (bob)
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('bob: ');
+
+		// Second Tab → second most recent (alice)
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('alice: ');
+
+		// Third Tab → wraps back to bob
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('bob: ');
+	});
+
+	it('Shift+Tab cycles backward through recent highlighters', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		recentHighlightersCache.set('net1:#general', ['alice', 'bob', 'charlie']);
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// Shift+Tab → last entry (charlie)
+		await userEvent.keyboard('{Shift>}{Tab}{/Shift}');
+		expect(el.value).toBe('charlie: ');
+	});
+
+	it('does NOT cycle highlighters with non-empty input — uses existing members', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(
+			createBuffer({ name: '#general', users: [createMember({ nick: 'alice' }), createMember({ nick: 'bob' })] }),
+		);
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		// Seed highlighters — should be ignored for non-empty input
+		recentHighlightersCache.set('net1:#general', ['zorro']);
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// Type 'al' then Tab — should use existing member completion, not highlighters
+		await userEvent.type(textarea, 'al');
+		await userEvent.keyboard('{Tab}');
+
+		expect(el.value).toMatch(/alice/);
+		expect(el.value).not.toBe('zorro: ');
+	});
+
+	it('does NOT cycle highlighters in server buffer', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '_server';
+		flushSync();
+
+		recentHighlightersCache.set('net1:_server', ['alice']);
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// Tab on empty input in server buffer should do nothing
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('');
+	});
+
+	it('resets highlight cycle index when user starts typing', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		recentHighlightersCache.set('net1:#general', ['alice', 'bob', 'charlie']);
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// Tab to first highlighter
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('alice: ');
+
+		// Type something (non-Tab key) → resets cycle
+		await userEvent.keyboard('{Backspace}');
+		await userEvent.keyboard('{Backspace}');
+		// Wait — the input is empty again after backspacing "alice: "
+		await userEvent.clear(el);
+		flushSync();
+
+		// Tab again — should start from alice again (cycle reset)
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('alice: ');
+	});
+
+	it('starting typing then clearing and tabbing resets highlight cycle', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		recentHighlightersCache.set('net1:#general', ['alice', 'bob']);
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		// First Tab → alice
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('alice: ');
+
+		// Second Tab → bob
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('bob: ');
+
+		// Type something then clear
+		await userEvent.type(textarea, 'hello');
+		await userEvent.clear(el);
+		flushSync();
+
+		// Tab should start from alice again (reset)
+		await userEvent.keyboard('{Tab}');
+		expect(el.value).toBe('alice: ');
 	});
 
 	it('auto-connects then joins channel on /join when disconnected', async () => {

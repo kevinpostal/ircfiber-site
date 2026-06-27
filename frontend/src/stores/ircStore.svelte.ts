@@ -4,6 +4,7 @@ import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } 
 import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel } from './api';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
+import { recentHighlightersCache } from '../lib/tabCompletion';
 
 // ── Single reactive state object ──
 export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'advanced';
@@ -571,6 +572,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
         if (isChatMessage && checkHighlight(msg, net)) {
           msg.highlight = true;
+          if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
         }
       }
     }
@@ -595,6 +597,7 @@ export function incrementUnread(networkId: string, bufferName: string, msg: IRCM
       buf.highlightCount = (buf.highlightCount ?? 0) + 1;
     }
     msg.highlight = true;
+    if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
   }
 }
 
@@ -610,6 +613,18 @@ export function checkHighlight(msg: IRCMessage, net: Network): boolean {
   }
 
   return false;
+}
+
+// ── Recent highlighters tracking (Tab completion cycling) ──
+
+export function recordHighlight(networkId: string, bufferName: string, nick: string): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const list = recentHighlightersCache.get(key) ?? [];
+  // De-dupe: remove existing occurrence if present
+  const filtered = list.filter(n => n !== nick);
+  // Prepend (most recent first), max 10
+  filtered.unshift(nick);
+  recentHighlightersCache.set(key, filtered.slice(0, 10));
 }
 
 // ── Typing indicators (IRCCloud-style TAGMSG) ──

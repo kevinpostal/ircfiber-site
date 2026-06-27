@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { TabCompletionEngine } from './tabCompletion';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { TabCompletionEngine, recentHighlightersCache } from './tabCompletion';
 import type { Member, TabCompletionCandidate } from '../types';
 
 describe('TabCompletionEngine', () => {
@@ -187,5 +187,43 @@ describe('TabCompletionEngine', () => {
       engine.reset();
       expect(engine.cycle(1)).toBeNull();
     });
+  });
+});
+
+describe('recentHighlightersCache', () => {
+  beforeEach(() => {
+    recentHighlightersCache.clear();
+  });
+
+  it('stores and retrieves highlighters per buffer key', () => {
+    recentHighlightersCache.set('net1:#general', ['alice', 'bob']);
+    expect(recentHighlightersCache.get('net1:#general')).toEqual(['alice', 'bob']);
+    expect(recentHighlightersCache.get('net1:#other')).toBeUndefined();
+  });
+
+  it('deduplicates when same nick appears again', () => {
+    let list = ['alice', 'bob', 'charlie'];
+    // bob highlights again → remove bob from list, prepend
+    list = list.filter(n => n !== 'bob');
+    list.unshift('bob');
+    recentHighlightersCache.set('net1:#general', list.slice(0, 10));
+    expect(recentHighlightersCache.get('net1:#general')).toEqual(['bob', 'alice', 'charlie']);
+  });
+
+  it('caps at 10 entries', () => {
+    const list = Array.from({ length: 15 }, (_, i) => `user${i}`);
+    const capped = list.slice(0, 10);
+    recentHighlightersCache.set('net1:#general', capped);
+    expect(recentHighlightersCache.get('net1:#general')).toHaveLength(10);
+    expect(recentHighlightersCache.get('net1:#general')![0]).toBe('user0');
+    expect(recentHighlightersCache.get('net1:#general')![9]).toBe('user9');
+  });
+
+  it('prepends new entry as most recent', () => {
+    const list = ['bob', 'charlie'];
+    const filtered = list.filter(n => n !== 'alice');
+    filtered.unshift('alice');
+    recentHighlightersCache.set('net1:#general', filtered.slice(0, 10));
+    expect(recentHighlightersCache.get('net1:#general')).toEqual(['alice', 'bob', 'charlie']);
   });
 });

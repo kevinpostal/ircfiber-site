@@ -3,7 +3,7 @@
   import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
-  import { TabCompletionEngine } from '../lib/tabCompletion';
+  import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
   import { generateLabel, getAvatarColor, normalizeChannelName } from '../lib/utils';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
@@ -58,6 +58,11 @@
     }
   });
   let isTabbing = $state(false);
+  // IRCCloud-style: empty-input Tab cycles recent highlighters.
+  // Tracks whether we're in that mode so subsequent Tabs cycle regardless
+  // of the input value (which is no longer empty after the first press).
+  let isEmptyTabbing = $state(false);
+  let tabCycleIndex = $state(-1);
 
   const activeNetwork = $derived(getActiveNetwork());
   const myNick = $derived.by(() => {
@@ -172,14 +177,35 @@
       // Guarded by lastBufferKey so we don't steal focus on initial mount.
       tick().then(() => textarea?.focus());
     }
+    // Reset highlight cycling state on buffer switch
+    if (lastBufferKey && lastBufferKey !== newKey) {
+      isEmptyTabbing = false;
+      tabCycleIndex = -1;
+    }
     lastBufferKey = newKey || lastBufferKey;
   });
 
   function handleKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Tab') {
       e.preventDefault();
+
+      // Empty-input (or already cycling) in channel → cycle recent highlighters
+      if (inputValue === '' || isEmptyTabbing) {
+        const activeBufObj = getActiveBufferObj();
+        if (activeBufObj?.type === 'channel') {
+          handleEmptyTabCompletion(e.shiftKey ? -1 : 1);
+          return;
+        }
+      }
+
       handleTabCompletion(e.shiftKey ? -1 : 1);
       return;
+    }
+
+    // Reset highlight cycling state on any non-Tab interaction
+    if (isEmptyTabbing && e.key !== 'Tab') {
+      isEmptyTabbing = false;
+      tabCycleIndex = -1;
     }
 
     if (isTabbing && e.key !== 'Tab') {
@@ -263,6 +289,26 @@
         if (textarea) textarea.selectionStart = textarea.selectionEnd = result.cursor;
       });
     }
+  }
+
+  /** Cycle through recent highlighters on empty input (IRCCloud-style). */
+  function handleEmptyTabCompletion(direction: 1 | -1): void {
+    const networkId = ircState.activeBuffer.networkId;
+    const bufferName = ircState.activeBuffer.bufferName;
+    if (!networkId || !bufferName) return;
+
+    const key = `${networkId}:${bufferName}`;
+    const highlighters = recentHighlightersCache.get(key) ?? [];
+    if (highlighters.length === 0) return;
+
+    isEmptyTabbing = true;
+
+    tabCycleIndex += direction;
+    // Wrap around
+    if (tabCycleIndex < 0) tabCycleIndex = highlighters.length - 1;
+    if (tabCycleIndex >= highlighters.length) tabCycleIndex = 0;
+
+    inputValue = highlighters[tabCycleIndex] + ': ';
   }
 
   function ensureConnected(): void {
