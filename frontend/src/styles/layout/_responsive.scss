@@ -215,6 +215,28 @@
   #wrap.members-collapsed #member-sidebar.show {
     width: min(82vw, 240px);
   }
+
+  /* ─────────────────────────────────────────────────────────────
+     Mobile 44×44 touch-target audit (Apple HIG minimum)
+     Bump interactive header chrome to 44px minimum so thumb taps
+     never miss. Some of these were 36px — min-* overrides.
+     ───────────────────────────────────────────────────────────── */
+  .bufferHead .buttons button,
+  .totalMemberCount,
+  .bufferinputcell .emojicell,
+  .bufferinputcell .uploadcell,
+  .bufferinputcell .lockcell,
+  .bufferinputcell .buffernick .avatar,
+  .sidebar-section-header .archive-header-toggle,
+  .sidebar-section-header .inactive-header-toggle,
+  .sidebar-section-header .conversations-header-toggle {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .member-item {
+    padding: 0.5rem 0.75rem;
+    min-height: 44px;
+  }
 }
 
 @media (max-width: 360px) {
