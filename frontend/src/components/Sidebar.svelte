@@ -197,6 +197,7 @@
             class:active={isActiveNet}
             class:unread={totalNetUnread > 0}
             class:highlight={totalNetHighlights > 0}
+            class:collapsed={collapsedMap[net.networkId]}
             role="button"
             tabindex="0"
             onclick={() => onSwitchBuffer(net.networkId, '_server')}

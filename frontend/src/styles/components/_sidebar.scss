@@ -26,9 +26,11 @@
 .network-list .connection:focus .collapseToggle button,
 .network-list .connection:focus-within .collapseToggle button { visibility: visible; }
 .network-header .collapseToggle button:hover {
-  color: #d1d5db;
+  color: #b3cfff;
   background: rgba(255,255,255,0.08);
 }
+.network-header .collapseToggle .fa { transition: transform .15s ease; }
+.network-header.collapsed .collapseToggle .fa { transform: rotate(-90deg); }
 .network-header .collapseToggle .channelCount {
   font-size: 11px;
   color: #6e7681;
