@@ -44,6 +44,7 @@ export interface MeResponse {
   collapsed?: Record<string, boolean>;
   inactiveCollapsed?: Record<string, boolean>;
   networkOrder?: string[];
+  bufferPrefs?: Record<string, Record<string, boolean>>;
 }
 
 export async function fetchMe(): Promise<MeResponse> {
@@ -118,6 +119,19 @@ export async function updateMembersCollapsed(networkId: string, channel: string,
     body: JSON.stringify({ network: networkId, channel, collapsed })
   });
   if (!r.ok) throw new Error('Update members collapsed failed');
+}
+
+export async function updateBufferPrefs(
+  networkId: string,
+  bufferName: string,
+  prefs: Record<string, boolean | undefined>
+): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/buffer-prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ network: networkId, channel: bufferName, prefs })
+  });
+  if (!r.ok) throw new Error('Update buffer prefs failed');
 }
 
 export async function fetchHealth(): Promise<{

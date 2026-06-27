@@ -118,6 +118,11 @@
     if (id.length > 12) return id.slice(0, 12) + '…';
     return id;
   }
+
+  // Helper: detect IPv6 from address string
+  function isIPv6(ip: string): boolean {
+    return ip.includes(':');
+  }
 </script>
 
 <PageHeader
@@ -223,6 +228,9 @@
               </td>
               <td class="py-3 px-2 hidden md:table-cell">
                 <span class="font-mono text-xs">{s.clientIp || '—'}</span>
+                {#if s.clientIp && isIPv6(s.clientIp)}
+                  <span class="ml-1 rounded bg-warn/15 px-1 py-0.5 text-[10px] font-medium text-warn">IPv6</span>
+                {/if}
               </td>
               <td class="py-3 px-2 hidden lg:table-cell max-w-[260px] truncate" title={s.userAgent}>
                 <span class="text-xs text-muted">{s.userAgent || 'unknown'}</span>

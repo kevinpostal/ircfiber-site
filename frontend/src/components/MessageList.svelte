@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack, flushSync } from 'svelte';
   import { ircState, getActiveBufferObj, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
-  import { getClearedAt, setLastSeen } from '../stores/preferences.svelte';
+  import { getClearedAt, setLastSeen, getBufferPrefs } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
@@ -61,7 +61,21 @@
   // IRCCloud-style incremental preprocessing: the ircState maintains a
   // `processedMessages[key]` cache that is updated incrementally on every
   // append / prepend.  This derived reads from the cache (O(1) per render)
-  // and only falls back to a full preprocess when the cache is missing
+  // and only falls back to a full preprocess when the cache is missing.
+  //
+  // IRCCloud-style commands that represent join/part/quit/nick events.
+  // Show/hide for these is controlled by the `showJoinPart` buffer pref.
+  const JOIN_PART_COMMANDS = new Set(['JOIN', 'PART', 'QUIT', 'NICK', 'CHGHOST', 'JOINPART_GROUP', 'DISCO_GROUP']);
+
+  function filterJoinPart(messages: IRCMessage[]): IRCMessage[] {
+    if (messages.length === 0) return messages;
+    const showJp = ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
+      ? getBufferPrefs(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName).showJoinPart
+      : true;
+    if (showJp ?? true) return messages; // shortcut: show everything
+    return messages.filter(m => !JOIN_PART_COMMANDS.has(m.command));
+  }
+
   // (cold start / migration).  The clearedAt filter and empty-message
   // filter are still applied on top of the cached processed array because
   // they depend on UI state, not on the raw stream.
@@ -73,12 +87,14 @@
       const clearedAt = ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
         ? getClearedAt(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName) : null;
       if (!clearedAt) {
-        perfMeasure(`processedMessages len=${cached.length} (cache hit)`, t0);
-        return cached;
+        const jpFiltered = filterJoinPart(cached);
+        perfMeasure(`processedMessages len=${jpFiltered.length} (cache hit)`, t0);
+        return jpFiltered;
       }
       const filtered = cached.filter(m => (m.t || 0) > clearedAt);
-      perfMeasure(`processedMessages len=${filtered.length} (cache hit, cleared)`, t0);
-      return filtered;
+      const jpFiltered = filterJoinPart(filtered);
+      perfMeasure(`processedMessages len=${jpFiltered.length} (cache hit, cleared)`, t0);
+      return jpFiltered;
     }
     // Fallback: cold start / cache miss.  We can't write to the cache
     // from inside a $derived (Svelte 5 forbids state mutation in derived
@@ -95,8 +111,9 @@
       return typeof m.text === 'string' && m.text.trim() !== '';
     });
     const result = preprocessMessages(noEmpty);
-    perfMeasure(`processedMessages len=${result.length} (cold)`, t0);
-    return result;
+    const jpFiltered = filterJoinPart(result);
+    perfMeasure(`processedMessages len=${jpFiltered.length} (cold)`, t0);
+    return jpFiltered;
   });
 
   function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean {

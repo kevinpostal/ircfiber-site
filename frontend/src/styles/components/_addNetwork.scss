@@ -542,3 +542,124 @@
   font-weight: 600;
   text-shadow: 0 1px rgba(0,0,0,0.3);
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Mobile form layout
+   The desktop form uses a 2-column <table> (Hostname | Port | Secure;
+   Nick | Full name) which gets cramped on phones. Stack the columns
+   vertically and reduce padding so the form fits a 375px screen.
+   ───────────────────────────────────────────────────────────── */
+@media (max-width: 800px) {
+  /* Tighten the WelcomePage (in-app add-network container). */
+  #add-network-container {
+    padding: 1rem;
+  }
+  #add-network-container .bufferHead {
+    font-size: 1.125rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+  }
+  /* Tighten the NetworkForm modal padding. */
+  .add-network-prompt {
+    padding: 18px 18px 14px;
+  }
+  .add-network-prompt .mainHeading {
+    font-size: 1.25rem;
+    margin: 0 0 14px 0;
+    padding: 0 0 12px 0;
+  }
+  /* Reset the table cells so each <td> takes the full row instead
+     of fighting for half-width. The thead stays for semantics but
+     is hidden visually — labels live in the <th> of each row. */
+  .addNetworkForm .addNetworkCells,
+  .addNetworkForm .networkEditorCells {
+    display: block;
+  }
+  .addNetworkForm .addNetworkCells thead,
+  .addNetworkForm .networkEditorCells thead,
+  .addNetworkForm .addNetworkCells tbody,
+  .addNetworkForm .networkEditorCells tbody {
+    display: block;
+  }
+  .addNetworkForm .addNetworkCells tr,
+  .addNetworkForm .networkEditorCells tr {
+    display: block;
+    margin-bottom: 0.875rem;
+  }
+  .addNetworkForm .addNetworkCells th,
+  .addNetworkForm .networkEditorCells th {
+    display: block;
+    width: 100% !important;
+    padding: 0 0 0.25rem 0 !important;
+    margin: 0;
+    font-size: 0.8125rem;
+  }
+  .addNetworkForm .addNetworkCells td,
+  .addNetworkForm .networkEditorCells td {
+    display: block;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0;
+  }
+  /* Reset the explicit width: 50%/60% classes inside cells — they
+     collapse to full-width naturally when the parent table is block. */
+  .addNetworkForm .hostname,
+  .addNetworkForm .port,
+  .addNetworkForm .ssl,
+  .addNetworkForm .nickname,
+  .addNetworkForm .realname,
+  .addNetworkForm .channels,
+  .addNetworkForm .nspass,
+  .addNetworkForm .joincommands,
+  .addNetworkForm .server_pass,
+  .addNetworkForm .sasl,
+  .addNetworkForm .sasl-username,
+  .addNetworkForm .sasl-password {
+    width: 100% !important;
+    padding: 0 !important;
+  }
+  /* Stack the "Reveal" checkbox below the password input on phones. */
+  .addNetworkForm .nspass .reveal,
+  .addNetworkForm .server_pass .reveal,
+  .addNetworkForm .sasl-password .reveal {
+    display: inline-flex;
+    margin-top: 0.5rem;
+  }
+  /* SASL mechanism row + security badge — stack the badge below the
+     select so the long description doesn't push the badge off-screen. */
+  .addNetworkForm .sasl-mechanism-row {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 0.5rem !important;
+  }
+  .addNetworkForm .addNetworkSaslMechanism {
+    min-width: 0 !important;
+  }
+  /* Larger tap targets for the input fields — Apple's 44pt minimum. */
+  .addNetworkForm .input {
+    font-size: 16px !important;     /* prevents iOS zoom on focus */
+    padding: 0.625rem 0.875rem !important;
+    min-height: 44px;
+  }
+  /* The "Join network" submit button: full-width on phones so thumbs
+     hit it easily. */
+  .addNetworkSubmit .action {
+    width: 100%;
+    padding: 0.75rem 1.25rem !important;
+    font-size: 1rem !important;
+  }
+  /* Same for the modal form's action row. */
+  .add-network-prompt .formButtons {
+    flex-direction: column-reverse; /* primary on top, cancel below */
+    gap: 0.5rem;
+  }
+  .add-network-prompt .formButtons .action {
+    width: 100%;
+    padding: 0.75rem 1.25rem;
+    font-size: 1rem;
+  }
+  /* Secure port row — stack checkbox below the port field. */
+  .addNetworkForm .securePortRow {
+    margin-top: 0.5rem;
+  }
+}

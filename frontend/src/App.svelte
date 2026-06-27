@@ -689,6 +689,25 @@ let showNetworkForm: boolean = $state(false);
         return 0;
       });
     }
+    if (user.bufferPrefs) {
+      const serverPrefs = user.bufferPrefs as Record<string, Record<string, boolean>>;
+      // Merge server-side buffer prefs into the local bufferPrefsMap.
+      // Local overrides from this session take priority - we only merge
+      // keys not already present locally.
+      for (const [key, prefs] of Object.entries(serverPrefs)) {
+        if (!(key in bufferPrefsMap)) {
+          bufferPrefsMap[key] = prefs;
+        } else {
+          // Merge individual fields that the local doesn't have
+          const existing = bufferPrefsMap[key];
+          for (const [k, v] of Object.entries(prefs)) {
+            if (!(k in existing)) {
+              (existing as Record<string, boolean>)[k] = v as boolean;
+            }
+          }
+        }
+      }
+    }
   }
 
   function handlePrefUpdate(data: Record<string, unknown>): void {
@@ -764,6 +783,18 @@ let showNetworkForm: boolean = $state(false);
         if (bi !== -1) return 1;
         return 0;
       });
+    } else if (key === 'bufferPrefs') {
+      // Real-time sync of per-buffer prefs from another tab/device
+      const serverPrefs = (data.value as Record<string, Record<string, boolean>>) ?? {};
+      for (const [k, v] of Object.entries(serverPrefs)) {
+        bufferPrefsMap[k] = { ...(bufferPrefsMap[k] ?? {}), ...v };
+      }
+      // Remove keys that were deleted (empty object -> removed on server)
+      for (const key of Object.keys(bufferPrefsMap)) {
+        if (!(key in serverPrefs)) {
+          delete bufferPrefsMap[key];
+        }
+      }
     }
   }
 
@@ -830,6 +861,24 @@ let showNetworkForm: boolean = $state(false);
     let bufferName = '_server';
     if (type === 'channel') bufferName = target.startsWith('#') ? target : '#' + target;
     else if (type === 'messages') bufferName = target;
+
+    // When navigating to a channel via URL, the user is explicitly asking
+    // to see that channel.  Force isJoined=false so the Rejoin button
+    // always appears — a stale isJoined=true (e.g. after a nick change
+    // desync, or a PART/KICK that didn't propagate) would otherwise hide
+    // the Rejoin button and trap the user on a channel they can't interact
+    // with.  The next JOIN event or sync from the engine will correct the
+    // flag if the user is genuinely joined.
+    if (type === 'channel') {
+      // Case-insensitive lookup: the URL uses lowercase but the server
+      // may have preserved the original case (e.g. #SuperBowl). Without
+      // this, a new phantom gets created alongside the real buffer.
+      const existing = net.buffers.find(b => b.name.toLowerCase() === bufferName.toLowerCase());
+      if (existing) {
+        existing.isJoined = false;
+      }
+    }
+
     switchToBuffer(net.networkId, bufferName);
   }
 

@@ -89,9 +89,9 @@
   display: inline;
   white-space: pre-wrap;
 }
-/* Pull the .timestamp in close so the chip → time → text reads as a
- * single horizontal timeline entry instead of three separate cells. */
-.row.messageRow.serverLog .date { left: 50px; right: auto; bottom: 2px; padding-right: 0; }
+/* Position the timestamp in the left gutter so it doesn't overlap the
+ * serverLogChip and message text (which live in the center content area). */
+.row.messageRow.serverLog .date { left: 6px; right: auto; bottom: 2px; padding-right: 0; }
 
 /* Phase chip — small pill rendered just before the message body.
  * Color signals severity (info / ok / warn / error) so users can

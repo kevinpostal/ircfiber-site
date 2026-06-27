@@ -84,4 +84,149 @@
   .network-header .bufferOptions { visibility: visible; }
   /* 16px stops iOS Safari from zooming the page on input focus */
   .bufferinputcell textarea { font-size: 16px; }
+
+  /* ─────────────────────────────────────────────────────────────
+     Mobile message-row gutters
+     Desktop IRCCloud parity uses 68px left + 118px right padding so
+     avatars sit in their own column and the timestamp/hover-tools
+     column has a stable gutter. On a 375px phone that eats 50% of
+     the horizontal real estate — collapsed to a thin column with no
+     room for the message body. Trim to 8px/40px on phones so the
+     message body gets the screen.
+     ───────────────────────────────────────────────────────────── */
+  .row.messageRow,
+  .row.messageRow.bot,
+  .row.messageRow.type_buffer_msg,
+  .row.messageRow.blockArt,
+  .row.messageRow.status { padding: 0 40px 0 8px; }
+  /* The first-author rule adds 6px top padding via a longhand in
+     public/style.css; restore that on mobile (the desktop rule's
+     selector doesn't match here at narrower breakpoints). */
+  .row.messageRow.firstAuthor { padding-top: 6px; }
+  .row.messageRow.firstAuthor.bot,
+  .row.messageRow.firstAuthor.type_buffer_msg,
+  .row.messageRow.firstAuthor.blockArt { padding-top: 6px; }
+  /* Hide the 32px avatar gutter on phones — show the inline-puck
+     avatar instead so author and body share the same line. */
+  .row.messageRow .letterAvatar {
+    position: static;
+    width: 16px;
+    height: 16px;
+    margin: 0 6px -3px 0;
+    display: inline-block;
+  }
+  .row.messageRow .letterAvatar > span {
+    position: static;
+    width: 100%;
+    margin: 0;
+    line-height: 16px;
+    font-size: 11px;
+  }
+  /* Status rows: drop the right gutter to zero on mobile — no hover
+     tools, no timestamp column, so 40px of empty space is wasted. */
+  .row.messageRow.status { padding-right: 8px; }
+  /* Join/part rows + whois headers also use the IRCCloud gutters;
+     trim them too. */
+  .joinPartRow,
+  .whoisHeader { padding: 2px 8px 2px 8px; }
+
+  /* Buffer header: tighter padding + smaller member-count button so
+     the channel name fits without truncation on phones. */
+  .bufferHead {
+    padding-top: 6px;
+    padding-bottom: 6px;
+    gap: 4px;
+  }
+  .bufferHead .bufferHeading .bufferlabel { font-size: 14px; }
+  .bufferHead .bufferHeading .topic { font-size: 13px; }
+  /* The member-count button (i + N) — bump its tap target up to
+     Apple's 44pt minimum guideline so thumbs don't miss. */
+  .totalMemberCount {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0 6px;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+  }
+  /* Hide long topics on mobile to keep the header one line. Users
+     can tap the channel name to open buffer options which shows the
+     full topic. */
+  .bufferHead .bufferHeading .topic {
+    display: none;
+  }
+  /* When there's no topic, the heading still has a flex container
+     — make sure the channel name still gets all the room. */
+  .bufferHead .bufferHeading { min-width: 0; }
+  .bufferHead .bufferHeading .bufferlabel {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  /* Chat input — 16px textarea is already set above. Bump the
+     emoji / upload / nick tap targets up to 36px for thumbs. */
+  .bufferinputcell .emojicell,
+  .bufferinputcell .uploadcell,
+  .bufferinputcell .lockcell {
+    width: 36px;
+    height: 36px;
+    margin: 0 2px;
+  }
+  .bufferinputcell .buffernick .avatar {
+    width: 28px;
+    height: 28px;
+  }
+  /* The typing indicator and timestamp cells don't earn space on
+     phones — hide to give the textarea the full width. */
+  .bufferinputcell .typingcell { font-size: 12px; padding-bottom: 4px; }
+  .bufferinputcell .timestampcell { display: none; }
+  .bufferinputcell .timecell { display: none; }
+
+  /* User popups: the avatar/menu card is sized for desktop — shrink
+     it for mobile so it doesn't overflow the viewport. */
+  .userPopup {
+    max-width: calc(100vw - 24px) !important;
+    width: 280px !important;
+  }
+
+  /* Centered overlays (NetworkForm, JoinModal, settings): the
+     fixed-center-with-margin layout works on desktop but on a phone
+     the margins consume all the horizontal space. Make the panel
+     edge-to-edge with safe-area padding. */
+  .overlay-panel.centered,
+  .overlay-panel.network-form-panel,
+  .overlay-panel.topic-prompt,
+  .overlay-panel.invite-prompt {
+    width: calc(100vw - 16px);
+    min-width: 0;
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+  }
+
+  /* Drawer widths — already set to min(85vw, 300px) but on very
+     narrow phones (≤360px) that becomes ~306px which leaves almost
+     no chat column visible. Cap at 88vw so the user still sees a
+     sliver of the chat behind the drawer. */
+  #sidebar { width: min(88vw, 300px); }
+  #member-sidebar,
+  #member-sidebar.show,
+  #wrap.members-collapsed #member-sidebar.show {
+    width: min(82vw, 240px);
+  }
+}
+
+@media (max-width: 360px) {
+  /* Galaxy Fold / very narrow devices — even tighter padding. */
+  .row.messageRow,
+  .row.messageRow.bot,
+  .row.messageRow.type_buffer_msg,
+  .row.messageRow.blockArt,
+  .row.messageRow.status { padding: 0 24px 0 6px; }
+  .bufferinputcell { padding: 8px; }
+  .bufferinputcell .emojicell,
+  .bufferinputcell .uploadcell,
+  .bufferinputcell .lockcell { width: 32px; height: 32px; }
+  #sidebar { width: 92vw; }
 }

@@ -289,12 +289,28 @@
     .topbar-cta .arrow { transition: transform var(--t-fast); }
     .topbar-cta:hover .arrow { transform: translateX(2px); }
 
+    .topbar-signin {
+      display: none;
+      align-items: center;
+      color: var(--fiber-fog);
+      font: 500 13px/1 var(--font-sans);
+      white-space: nowrap;
+      padding: 7px 10px;
+      border-radius: 6px;
+      transition: color var(--t-fast), background var(--t-fast);
+      flex-shrink: 0;
+    }
+    .topbar-signin:hover { color: var(--fiber-snow); background: var(--fiber-line-2); text-decoration: none; }
+
     @media (max-width: 1280px) {
       .status-pill { display: none; }
       .topbar-form input { width: 110px; }
     }
+    /* Sign-in form is hidden at <1080px — but a text-link "Sign in"
+       stays visible so existing users can still reach /login on mobile. */
     @media (max-width: 1080px) {
       .topbar-form { display: none; }
+      .topbar-signin { display: inline-flex; }
     }
     @media (max-width: 900px) {
       .topbar-inner { flex-wrap: wrap; gap: var(--s-3); padding-top: var(--s-3); padding-bottom: var(--s-3); min-height: auto; }
@@ -302,7 +318,15 @@
       .topbar-cta { margin-left: auto; }
     }
     @media (max-width: 640px) {
-      .topbar-cta { width: 100%; justify-content: center; margin-top: var(--s-2); }
+      /* Stack sign-in link + CTA vertically below the brand row for
+         clearer hierarchy on phones. */
+      .topbar-signin { order: 3; margin-left: auto; }
+      .topbar-cta { order: 5; width: 100%; justify-content: center; margin-top: var(--s-2); margin-left: 0; }
+    }
+    @media (max-width: 380px) {
+      /* Very narrow phones — wrap the brand + sign-in row so the
+         brand mark doesn't get pushed against the sign-in link. */
+      .topbar-signin { padding: 7px 8px; font-size: 12.5px; }
     }
 
     /* ─────────────────────────────────────────────────────────────
@@ -363,6 +387,12 @@
        hero
        ───────────────────────────────────────────────────────────── */
     .hero { padding: var(--s-10) 0 var(--s-9); position: relative; }
+    @media (max-width: 640px) {
+      /* Mobile: trim the 128px / 96px desktop hero padding so the
+         headline is visible above the fold on short phones. */
+      .hero { padding: var(--s-7) 0 var(--s-7); }
+      .hero-headline { max-width: 12ch; }
+    }
     .hero-inner { max-width: 920px; margin: 0 auto; text-align: center; position: relative; }
     .hero-eyebrow {
       display: inline-flex; align-items: center; gap: 10px;
@@ -716,11 +746,25 @@
       .irc-members { display: none; }
     }
     @media (max-width: 640px) {
-      .irc-preview { grid-template-columns: 0 1fr 0; height: 360px; font-size: 12px; }
+      /* Phone layout: drop the sidebar AND members columns so the
+         chat fills the preview frame. We bump the height (was 360px)
+         and increase the row gap so wrapped messages don't visually
+         crowd the next row. */
+      .irc-preview { grid-template-columns: 0 1fr 0; height: 440px; font-size: 12px; }
       .irc-side { display: none; }
-      .irc-chat { padding: 12px; }
+      .irc-chat { padding: 12px 14px; gap: 5px; }
       .irc-time { display: none; }
       .irc-meta { padding-left: 0; }
+      .irc-msg { gap: 8px; min-height: 0; }
+      /* Allow the chat to scroll if the cycling messages briefly
+         exceed the frame height, instead of overflowing into the
+         composer. */
+      .irc-preview { overflow: hidden; }
+    }
+    @media (max-width: 380px) {
+      /* Very narrow phones — give the preview a touch more height
+         so the 8 cycling messages don't clip. */
+      .irc-preview { height: 480px; }
     }
 
     /* ─────────────────────────────────────────────────────────────
@@ -1085,6 +1129,8 @@
         <input type="password" name="password" placeholder="Password" required autocomplete="current-password" />
         <button type="submit">Sign in</button>
       </form>
+
+      <a class="topbar-signin" href="/login" aria-label="Sign in to IRC Fiber">Sign in</a>
 
       <a class="topbar-cta" href="#cta">Create account <span class="arrow">→</span></a>
     </div>
