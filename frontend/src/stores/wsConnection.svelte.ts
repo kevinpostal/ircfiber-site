@@ -200,6 +200,11 @@ export function sendEditMessage(networkId: string, target: string, text: string,
   doSend(JSON.stringify({ cmd: 'editmsg', network: networkId, target, text, label: originalLabel }));
 }
 
+/** Fire-and-forget JSON send (no response expected). */
+export function sendJson(data: Record<string, unknown>): void {
+  doSend(JSON.stringify(data));
+}
+
 export function requestSync(): void {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({ cmd: 'sync' }));

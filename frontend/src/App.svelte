@@ -21,7 +21,7 @@ import {
     handleBuffersToDelete
 } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
-  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, wsState } from './stores/wsConnection.svelte.ts';
+  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
@@ -31,7 +31,7 @@ import {
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
-  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap } from './stores/preferences.svelte';
+  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -261,6 +261,17 @@ let showNetworkForm: boolean = $state(false);
   });
 
   let syncInterval: ReturnType<typeof setInterval>;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+  // Heartbeat timer lifecycle: start/stop based on feature flag + WS state.
+  // Runs as a $effect so toggling the flag mid-session restarts the timer.
+  $effect(() => {
+    if (globalPrefs.featureFlags.heartbeat.enabled && ircState.wsConnected) {
+      startHeartbeatTimer();
+    } else {
+      stopHeartbeatTimer();
+    }
+  });
 
   // ── Authentication gate ────────────────────────────────────────
   // IRCCloud boots the SPA unconditionally and overlays a centered
@@ -275,6 +286,29 @@ let showNetworkForm: boolean = $state(false);
   //   false → not authenticated, LoginPage overlay shown
   let isAuthenticated: boolean | null = $state(null);
 
+  function startHeartbeatTimer(): void {
+    if (!globalPrefs.featureFlags.heartbeat.enabled) return;
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+      const seenEids: Record<string, Record<string, number>> = {};
+      for (const [key, ts] of Object.entries(lastSeenMap)) {
+        const [networkId, ...bufParts] = key.split(':');
+        const bufferName = bufParts.join(':');
+        if (!networkId || !bufferName) continue;
+        if (!seenEids[networkId]) seenEids[networkId] = {};
+        seenEids[networkId][bufferName] = ts;
+      }
+      sendJson({ type: 'heartbeat', seenEids });
+    }, 10000);
+  }
+
+  function stopHeartbeatTimer(): void {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+  }
+
   function startWebSocket(): void {
     performance.mark('ws-connect-start');
     connectWebSocket(
@@ -284,9 +318,11 @@ let showNetworkForm: boolean = $state(false);
         performance.mark('ws-open');
         if (syncInterval) clearInterval(syncInterval);
         syncInterval = setInterval(requestSync, 10000);
+        startHeartbeatTimer();
       },
       () => {
         ircState.wsConnected = false;
+        stopHeartbeatTimer();
       }
     );
   }
@@ -449,6 +485,7 @@ let showNetworkForm: boolean = $state(false);
     setActiveBuffer(networkId, bufferName);
     requestSwitchBuffer(networkId, bufferName);
     updateRoute(networkId, bufferName);
+    setLastSeen(networkId, bufferName, Date.now());
     if (!isSameBuffer) {
       // IRCCloud-style: skip the REST round-trip during boot — the sync
       // message will deliver messages via WebSocket.  After sync arrives
