@@ -4,13 +4,10 @@
   // canonical task ID. Defaults are all false; admins opt in per-user
   // for testing before Wave 1 is rolled out broadly.
   import { globalPrefs } from '../stores/preferences.svelte';
+  import SettingsSection from './SettingsSection.svelte';
 </script>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-flag"></i>
-    Feature flags (advanced)
-  </h3>
+<SettingsSection heading="Feature flags (advanced)">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -122,4 +119,4 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>

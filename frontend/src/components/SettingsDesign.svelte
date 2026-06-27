@@ -1,14 +1,11 @@
 <script lang="ts">
   import { globalPrefs } from '../stores/preferences.svelte';
+  import SettingsSection from './SettingsSection.svelte';
 
   let fontPreview = $derived(globalPrefs.fontSize + 'px');
 </script>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-paint-brush"></i>
-    Interface
-  </h3>
+<SettingsSection heading="Interface">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -61,13 +58,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-columns"></i>
-    Sidebar
-  </h3>
+<SettingsSection heading="Sidebar">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -82,13 +75,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-comments"></i>
-    Messages
-  </h3>
+<SettingsSection heading="Messages">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -152,13 +141,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-palette"></i>
-    Theme
-  </h3>
+<SettingsSection heading="Theme">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -186,4 +171,4 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>

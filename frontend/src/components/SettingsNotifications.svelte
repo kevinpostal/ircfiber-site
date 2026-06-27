@@ -1,12 +1,9 @@
 <script lang="ts">
   import { globalPrefs, highlightWords } from '../stores/preferences.svelte';
+  import SettingsSection from './SettingsSection.svelte';
 </script>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-bell"></i>
-    Alerts
-  </h3>
+<SettingsSection heading="Alerts">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -45,13 +42,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-volume-mute"></i>
-    Muting
-  </h3>
+<SettingsSection heading="Muting">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -66,13 +59,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-at"></i>
-    Highlights
-  </h3>
+<SettingsSection heading="Highlights">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -92,13 +81,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-mobile"></i>
-    Mobile
-  </h3>
+<SettingsSection heading="Mobile">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -110,4 +95,4 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>

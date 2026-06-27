@@ -1,5 +1,6 @@
 <script lang="ts">
   import { globalPrefs } from '../stores/preferences.svelte';
+  import SettingsSection from './SettingsSection.svelte';
 
   let customCSSText = $state(globalPrefs.customCSS || '');
   let cssSaved = $state(true);
@@ -14,11 +15,7 @@
   }
 </script>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-image"></i>
-    Inline media
-  </h3>
+<SettingsSection heading="Inline media">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -93,13 +90,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-keyboard"></i>
-    Typing
-  </h3>
+<SettingsSection heading="Typing">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -114,13 +107,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-shield"></i>
-    Privacy
-  </h3>
+<SettingsSection heading="Privacy">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -135,13 +124,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-code"></i>
-    Custom CSS
-  </h3>
+<SettingsSection heading="Custom CSS">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -166,4 +151,4 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>

@@ -2,6 +2,7 @@
   import { ircState } from '../stores/ircStore.svelte';
   import { highlightWords } from '../stores/preferences.svelte';
   import { changePassword, deleteAccount, uploadAvatar, removeAvatar } from '../stores/api';
+  import SettingsSection from './SettingsSection.svelte';
 
   let highlightInput = $state('');
   let showDeleteConfirm = $state(false);
@@ -115,11 +116,7 @@
   <div class="settings-success">{successMsg}</div>
 {/if}
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-user"></i>
-    Account
-  </h3>
+<SettingsSection heading="Account">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -139,13 +136,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-lock"></i>
-    Password
-  </h3>
+<SettingsSection heading="Password">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -166,13 +159,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-camera"></i>
-    Profile picture
-  </h3>
+<SettingsSection heading="Profile picture">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -195,13 +184,9 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
-<section class="settings-section">
-  <h3 class="settings-section-title">
-    <i class="fa fa-bell"></i>
-    Highlight words
-  </h3>
+<SettingsSection heading="Highlight words">
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
@@ -236,7 +221,7 @@
       </div>
     </div>
   </div>
-</section>
+</SettingsSection>
 
 <section class="settings-section settings-section--danger">
   <h3 class="settings-section-title">
