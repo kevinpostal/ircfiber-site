@@ -166,7 +166,6 @@
               bind:value={editor}
               class="ace_text-input"
               wrap="off"
-              autocorrect="off"
               autocapitalize="off"
               spellcheck="false"
               aria-label="Snippet contents"

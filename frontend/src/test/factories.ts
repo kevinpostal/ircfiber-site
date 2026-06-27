@@ -58,6 +58,10 @@ export function createBuffer(overrides: Partial<Buffer> = {}): Buffer {
     users: [],
     lastSeenMsgTime: null,
     firstUnseenMsgIndex: null,
+    lastSeen: null,
+    bottomSeen: null,
+    clearedAt: null,
+    modeFlags: {},
     ...overrides,
   };
 }
@@ -74,6 +78,7 @@ export function createMember(overrides: Partial<Member> = {}): Member {
     lastSpoke: 0,
     lastHighlighted: 0,
     account: '',
+    isBot: false,
     ...overrides,
   };
 }

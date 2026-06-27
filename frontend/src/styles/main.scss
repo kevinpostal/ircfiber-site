@@ -22,10 +22,11 @@
 @use 'components/accountMenu';
 @use 'components/nickColors';
 @use 'components/loadMore';
-@use 'components/addNetworkButton';
-@use 'components/addNetwork';
-@use 'components/messageGrouping';
-@use 'components/settings';
+  @use 'components/addNetworkButton';
+  @use 'components/addNetwork';
+  @use 'components/messageGrouping';
+  @use 'components/serverLog';
+  @use 'components/settings';
 
 @use 'themes/compact';
 @use 'themes/mono';

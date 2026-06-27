@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt } from '../stores/preferences.svelte';
   import { pinChannel, unpinChannel, updateBufferPrefs } from '../stores/api';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
@@ -139,10 +139,8 @@
     onClose();
   }
   function clearBacklog(): void {
-    import('../stores/preferences.svelte').then(m => {
-      if (networkId && buf.name) m.setClearedAt(networkId, buf.name);
-      onClose();
-    });
+    if (networkId && buf.name) setClearedAt(networkId, buf.name);
+    onClose();
   }
   function deleteBuffer(): void {
     if (!networkId || !buf.name) return;
@@ -215,8 +213,8 @@
       }
     } else {
       (toggles as Record<string, boolean>)[key] = !toggles[key];
-      if (key === 'showMembers') {
-        onToggleMembers();
+      if (key === 'showMembers' || key === 'collapsed') {
+        if (key === 'showMembers') onToggleMembers();
       } else {
         // Persist all other toggles per-buffer so they survive a refresh
         setBufferPref(networkId, buf.name, key, toggles[key]);

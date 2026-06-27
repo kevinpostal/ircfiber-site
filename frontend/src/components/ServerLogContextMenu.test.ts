@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import ServerLogContextMenu from './ServerLogContextMenu.svelte';
 import { ircState } from '../stores/ircStore.svelte';
-import { collapsedMap } from '../stores/preferences.svelte';
+import { collapsedMap, clearedAtMap } from '../stores/preferences.svelte';
 import { createNetwork, createBuffer } from '../test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -30,6 +30,7 @@ beforeEach(() => {
   ircState.activeBuffer.networkId = null;
   ircState.activeBuffer.bufferName = null;
   ircState.overlay = { type: null, data: null };
+  Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
   sendRawMock.mockClear();
   reconnectMock.mockClear();
   disconnectMock.mockClear();
@@ -203,5 +204,22 @@ describe('ServerLogContextMenu', () => {
     });
     await userEvent.click(page.getByRole('button', { name: 'Delete…' }));
     expect(ircState.overlay.type).toBe('channel_delete_confirm');
+  });
+
+  it('Clear backlog calls setClearedAt for the _server buffer and closes menu', async () => {
+    setupConnectedNetwork();
+    const buf = ircState.networks[0].buffers[0];
+    const onClose = vi.fn();
+    render(ServerLogContextMenu, {
+      props: { x: 100, y: 100, buf, onClose, onJoinChannel: vi.fn(), onEditNetwork: vi.fn() },
+    });
+    const before = Date.now();
+    await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
+    const after = Date.now();
+    const stored = clearedAtMap['net1:_server'];
+    expect(typeof stored).toBe('number');
+    expect(stored).toBeGreaterThanOrEqual(before);
+    expect(stored).toBeLessThanOrEqual(after);
+    expect(onClose).toHaveBeenCalled();
   });
 });

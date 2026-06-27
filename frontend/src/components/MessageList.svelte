@@ -1,10 +1,11 @@
 <script lang="ts">
   import { untrack, flushSync } from 'svelte';
-  import { ircState, getActiveBufferObj, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
+  import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
   import { getClearedAt, setLastSeen, getBufferPrefs } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
+  import ServerLogTimeline from './ServerLogTimeline.svelte';
 
   import SeenDivider from './SeenDivider.svelte';
   import LoadMore from './LoadMore.svelte';
@@ -12,7 +13,7 @@
   import ScrollClock from './ScrollClock.svelte';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
-  import type { IRCMessage } from '../types';
+  import type { IRCMessage, Member, Network } from '../types';
 
   interface Props {
     onNickClick?: (nick: string, event: MouseEvent, member?: any | null) => void;
@@ -57,6 +58,23 @@
   let clockTs = $state<number | null>(null);
 
   const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
+
+  // Server log view needs raw (un-grouped) messages — preprocessing
+  // merges consecutive 372/375 MOTD lines into MOTD_GROUP blocks that
+  // our classifier doesn't understand, burying them in "Raw IRC traffic".
+  const rawMessages = $derived.by(() => {
+    // Spread guarantees a NEW array reference every time the store mutates,
+    // which triggers `$derived` to re-run (Svelte 5 uses reference identity
+    // for proxy updates even when the same array is reassigned in place).
+    return [...(ircState.messages[bufferKey] ?? [])];
+  });
+
+  // _server buffers use the ServerLogTimeline card view instead of
+  // the flat message-row view — each connection attempt becomes a card
+  // with a header, a phase timeline, MOTD, and collapsed details blocks
+  // for raw IRC traffic. See frontend/src/lib/serverLogGroups.ts.
+  const isServerBuffer = $derived(ircState.activeBuffer.bufferName === '_server');
+  const activeNetwork = $derived(getActiveNetwork());
 
   // IRCCloud-style incremental preprocessing: the ircState maintains a
   // `processedMessages[key]` cache that is updated incrementally on every
@@ -876,34 +894,41 @@
   <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
     <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
 
-    {#each messagesWithDates as item (item._key)}
-      {@const msg = item.msg}
-      {@const msgDate = item.msgDate}
-      {@const prevDate = item.prevDate}
-      {@const prevMsg = item.prevMsg}
+    {#if isServerBuffer}
+      <!-- Server log view: connection attempts as collapsible cards.
+           Same scroll container so the existing scroll-tracking logic
+           (ChatterBar, ScrollClock, bottomSeen) keeps working. -->
+      <ServerLogTimeline messages={rawMessages} network={activeNetwork} />
+    {:else}
+      {#each messagesWithDates as item (item._key)}
+        {@const msg = item.msg}
+        {@const msgDate = item.msgDate}
+        {@const prevDate = item.prevDate}
+        {@const prevMsg = item.prevMsg}
 
-      {#if item.showDate}
-        <DateChange date={msgDate} />
-      {/if}
+        {#if item.showDate}
+          <DateChange date={msgDate} />
+        {/if}
 
-      {#if item.showBacklogDivider}
-        <div class="row backlogDivider"><hr /></div>
-      {/if}
+        {#if item.showBacklogDivider}
+          <div class="row backlogDivider"><hr /></div>
+        {/if}
 
-      {#if shouldShowSeenDivider(msg, prevMsg)}
-        <SeenDivider />
-      {/if}
+        {#if shouldShowSeenDivider(msg, prevMsg)}
+          <SeenDivider />
+        {/if}
 
-      {#if !isSkippedCommand(msg.command)}
-        <MessageRow
-          {msg}
-          isHighlight={msg.highlight ?? false}
-          isSameAuthor={checkSameAuthor(msg, prevMsg)}
-          {onNickClick}
-          {memberByNick}
-        />
-      {/if}
-    {/each}
+        {#if !isSkippedCommand(msg.command)}
+          <MessageRow
+            {msg}
+            isHighlight={msg.highlight ?? false}
+            isSameAuthor={checkSameAuthor(msg, prevMsg)}
+            {onNickClick}
+            {memberByNick}
+          />
+        {/if}
+      {/each}
+    {/if}
   </div>
 
   {#if stickyNick}

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { uploadState } from './uploadStore.svelte';
 import { ircState } from './ircStore.svelte';
 import { startUploads, confirmDialog, cancelDialog, setDeps } from './uploadFlow.svelte';
+import type { UploadResponse } from '../lib/upload';
 
 function makeFile(name: string, type = 'image/png', size = 100): File {
   return new File([new Uint8Array(size)], name, { type });
@@ -9,7 +10,7 @@ function makeFile(name: string, type = 'image/png', size = 100): File {
 
 describe('uploadFlow', () => {
   let sent: { networkId: string; target: string; text: string }[];
-  let resolveUpload: (v: unknown) => void;
+  let resolveUpload: (v: UploadResponse) => void;
 
   beforeEach(() => {
     uploadState.active = [];
@@ -19,8 +20,8 @@ describe('uploadFlow', () => {
     sent = [];
     setDeps({
       uploader: () => ({
-        promise: new Promise((res) => { resolveUpload = res; }),
-        abort: vi.fn(),
+        promise: new Promise<UploadResponse>((res) => { resolveUpload = res; }),
+        abort: () => {},
       }),
       send: (networkId, target, text) => sent.push({ networkId, target, text }),
       getInputText: () => 'check this out',

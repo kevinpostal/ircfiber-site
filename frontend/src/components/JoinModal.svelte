@@ -44,6 +44,7 @@
         unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
         topic: '', topicSetBy: '', topicSetAt: 0, users: [],
         lastSeenMsgTime: Date.now(), firstUnseenMsgIndex: null,
+        lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
       });
       sortBuffers(net);
     }

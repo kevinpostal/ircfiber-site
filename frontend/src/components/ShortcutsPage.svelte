@@ -80,8 +80,8 @@
     { heading: 'Selected IRC commands', items: commandShortcuts, twoCol: true },
   ];
 
-  function renderDescription(desc: string | string[]): string | { tag: 'kbd' | 'text'; text: string; key: number }[] {
-    if (typeof desc === 'string') return desc;
+  function renderDescription(desc: string | string[]): { tag: 'kbd' | 'text'; text: string; key: number }[] {
+    if (typeof desc === 'string') return [{ tag: 'text', text: desc, key: 0 }];
     return desc.map((part, i) =>
       part.startsWith('/') || part === 'yournick'
         ? { tag: 'kbd', text: part, key: i }
@@ -120,17 +120,13 @@
                 {/if}
               </div>
               <div class="shortcut-desc">
-                {#if typeof item.description === 'string'}
-                  {item.description}
-                {:else}
-                  {#each renderDescription(item.description) as part (part.key)}
-                    {#if part.tag === 'kbd'}
-                      <kbd>{part.text}</kbd>
-                    {:else}
-                      {part.text}
-                    {/if}
-                  {/each}
-                {/if}
+                {#each renderDescription(item.description) as part (part.key)}
+                  {#if part.tag === 'kbd'}
+                    <kbd>{part.text}</kbd>
+                  {:else}
+                    {part.text}
+                  {/if}
+                {/each}
               </div>
             </div>
           {/each}

@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import ChannelContextMenu from './ChannelContextMenu.svelte';
 import { ircState } from '../stores/ircStore.svelte';
-import { archivedMap, bufferPrefsMap, pinnedMap } from '../stores/preferences.svelte';
+import { archivedMap, bufferPrefsMap, clearedAtMap, pinnedMap } from '../stores/preferences.svelte';
 import { createNetwork, createBuffer } from '../test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -31,6 +31,7 @@ beforeEach(() => {
   ircState.activeBuffer.bufferName = null;
   Object.keys(archivedMap).forEach((k) => delete (archivedMap as Record<string, unknown>)[k]);
   Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
+  Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
   Object.keys(pinnedMap).forEach((k) => delete (pinnedMap as Record<string, unknown>)[k]);
   sendRawMock.mockClear();
   pinChannelMock.mockClear();
@@ -256,5 +257,27 @@ describe('ChannelContextMenu', () => {
     expect(pinnedMap['net1:#chan']).toBe(false);
     expect(buf.isPinned).toBe(false);
     expect(unpinChannelMock).toHaveBeenCalledWith('net1', '#chan');
+  });
+
+  it('Clear backlog calls setClearedAt for the channel buffer and closes menu', async () => {
+    const network = createNetwork({ networkId: 'net1' });
+    const buf = createBuffer({ name: '#general' });
+    network.buffers.push(createBuffer({ name: '_server', type: 'server' }), buf);
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#general';
+
+    const onClose = vi.fn();
+    render(ChannelContextMenu, {
+      props: { x: 100, y: 100, buf, onClose, onToggleMembers: vi.fn(), memberPanelOpen: false },
+    });
+    const before = Date.now();
+    await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
+    const after = Date.now();
+    const stored = clearedAtMap['net1:#general'];
+    expect(typeof stored).toBe('number');
+    expect(stored).toBeGreaterThanOrEqual(before);
+    expect(stored).toBeLessThanOrEqual(after);
+    expect(onClose).toHaveBeenCalled();
   });
 });

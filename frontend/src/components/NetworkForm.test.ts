@@ -108,23 +108,71 @@ describe('NetworkForm', () => {
     expect(channels.tagName).toBe('TEXTAREA');
   });
 
-  it('Channels to join textarea hidden in edit mode', async () => {
+  it('Channels to join textarea appears in edit mode', async () => {
     const network = createNetwork();
     ircState.networks.push(network);
     render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
-    expect(document.querySelector('#add-network-channels')).toBeNull();
+    const channels = page.getByLabelText(/Channels to join/).element() as HTMLTextAreaElement;
+    expect(channels).toBeTruthy();
+    expect(channels.tagName).toBe('TEXTAREA');
   });
 
-  it('Update mode does not include add-only fields in payload', async () => {
+  it('Update mode includes autoJoinChannels in payload as string array', async () => {
     const network = createNetwork();
     ircState.networks.push(network);
     const onClose = vi.fn();
     render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
     await userEvent.click(page.getByRole('button', { name: 'Save' }));
     const call = mockUpdateNetwork.mock.calls[0];
-    expect(call[1]).not.toHaveProperty('autoJoinChannels');
+    expect(call[1]).toHaveProperty('autoJoinChannels');
+    expect(Array.isArray(call[1].autoJoinChannels)).toBe(true);
+    // commands and nspass remain add-only
     expect(call[1]).not.toHaveProperty('commands');
     expect(call[1]).not.toHaveProperty('nspass');
+  });
+
+  it('Edit mode pre-fills autoJoinChannels from existing network state', async () => {
+    const network = createNetwork({ autoJoinChannels: ['#chat', '#feedback'] });
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const channels = page.getByLabelText(/Channels to join/).element() as HTMLTextAreaElement;
+    expect(channels.value).toBe('#chat, #feedback');
+  });
+
+  it('Editing channels and submitting parses newline separators', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const channels = page.getByLabelText(/Channels to join/).element() as HTMLTextAreaElement;
+    await userEvent.clear(channels);
+    await userEvent.fill(channels, '#superbowl\n#Zod');
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    const call = mockUpdateNetwork.mock.calls[0];
+    expect(call[1].autoJoinChannels).toEqual(['#superbowl', '#Zod']);
+  });
+
+  it('Editing channels and submitting parses space separators', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const channels = page.getByLabelText(/Channels to join/).element() as HTMLTextAreaElement;
+    await userEvent.clear(channels);
+    await userEvent.fill(channels, '#superbowl #zod');
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    const call = mockUpdateNetwork.mock.calls[0];
+    expect(call[1].autoJoinChannels).toEqual(['#superbowl', '#zod']);
+  });
+
+  it('Editing channels and submitting parses comma separators (regression)', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    const channels = page.getByLabelText(/Channels to join/).element() as HTMLTextAreaElement;
+    await userEvent.clear(channels);
+    await userEvent.fill(channels, '#superbowl,#Zod');
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    const call = mockUpdateNetwork.mock.calls[0];
+    expect(call[1].autoJoinChannels).toEqual(['#superbowl', '#Zod']);
   });
 
   it('Reveal toggle shows/hides NickServ password', async () => {

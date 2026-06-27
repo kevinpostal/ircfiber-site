@@ -4,6 +4,7 @@
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
+  import { parseChannelList } from '../lib/utils';
 
   interface Props {
     mode: 'add' | 'edit';
@@ -46,10 +47,10 @@
       name = existing.name;
       host = existing.host;
       port = existing.port;
-      tls = existing.tls;
+      tls = existing.tls as 'enabled' | 'disabled' | 'required';
       nick = existing.nick;
       realName = existing.realName;
-      autoJoinChannels = '';
+      autoJoinChannels = (existing.autoJoinChannels ?? []).join(', ');
       nspass = '';
       serverPass = '';
       commands = '';
@@ -119,6 +120,7 @@
               unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
               topic: '', topicSetBy: '', topicSetAt: 0, users: [],
               lastSeenMsgTime: null, firstUnseenMsgIndex: null,
+              lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
             }],
             awayNicks: new Set(),
             capabilities: new Set(),
@@ -141,11 +143,14 @@
         const nickChanged = existing != null && nick !== priorNick;
         const priorRealName = existing?.realName ?? '';
 
+        const parsedChannels = parseChannelList(autoJoinChannels);
+
         await onUpdateNetwork(networkId, {
           name, host, port, tls, nick, realName,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : '',
           saslPassword: saslMechanism !== 'none' && saslPassword ? saslPassword : undefined,
+          autoJoinChannels: parsedChannels,
         });
 
         // Mirror the saved fields into local state so the form pre-fills
@@ -160,6 +165,7 @@
           existing.saslUsername = saslUsername;
           if (saslPassword) existing.saslPassword = saslPassword;
           if (realName) existing.realName = realName;
+          existing.autoJoinChannels = parsedChannels;
           // nick is handled separately below because it also needs NICK raw
           if (nickChanged) {
             existing.nick = nick;
@@ -281,26 +287,24 @@
         </tbody>
       </table>
 
-      {#if mode === 'add'}
-        <table class="form addNetworkCells" cellpadding="0" cellspacing="0">
-          <tbody>
-            <tr>
-              <th class="channels optional" colspan="2">
-                <label for="add-network-channels">
-                  Channels to join <small class="explanation">— comma or line separated, password after a space</small>
-                </label>
-              </th>
-            </tr>
-            <tr>
-              <td class="channels optional" colspan="2">
-                <textarea id="add-network-channels" class="input" rows="3"
-                          bind:value={autoJoinChannels}
-                          placeholder="e.g. #chat, #feedback, #secretchat password1"></textarea>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      {/if}
+      <table class="form addNetworkCells" cellpadding="0" cellspacing="0">
+        <tbody>
+          <tr>
+            <th class="channels optional" colspan="2">
+              <label for="add-network-channels">
+                Channels to join <small class="explanation">— space, comma, or newline separated</small>
+              </label>
+            </th>
+          </tr>
+          <tr>
+            <td class="channels optional" colspan="2">
+              <textarea id="add-network-channels" class="input" rows="3"
+                        bind:value={autoJoinChannels}
+                        placeholder="e.g. #chat, #feedback&#10;#superbowl&#10;#Zod"></textarea>
+            </td>
+          </tr>
+        </tbody>
+      </table>
 
       <div class="addNetworkAdvancedContainer networkEditor__container"
            class:networkEditor__container--collapsed={!showAdvanced}>

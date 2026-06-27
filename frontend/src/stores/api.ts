@@ -1,5 +1,6 @@
 import type { IRCMessage } from '../types';
 import { detectCtcpAction } from '../lib/messageHandler';
+import { parseChannelList } from '../lib/utils';
 
 const API_BASE = '/api';
 
@@ -110,6 +111,23 @@ export async function updateNetworkOrder(order: string[]): Promise<void> {
     body: JSON.stringify({ order })
   });
   if (!r.ok) throw new Error('Update network order failed');
+}
+
+export async function updateServerlogCollapsed(
+  networkId: string,
+  eid?: number,
+  msgid?: string,
+  collapsed?: boolean,
+): Promise<void> {
+  const body: Record<string, unknown> = { network: networkId, collapsed: !!collapsed };
+  if (eid != null) body.eid = String(eid);
+  else if (msgid) body.msgid = msgid;
+  const r = await fetch(`${API_BASE}/me/serverlog-collapsed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error('Update serverlog collapsed failed');
 }
 
 export async function updateMembersCollapsed(networkId: string, channel: string, collapsed: boolean): Promise<void> {
@@ -283,10 +301,7 @@ export async function addNetwork(data: {
 }): Promise<Record<string, unknown>> {
   const payload = {
     ...data,
-    autoJoinChannels: data.autoJoinChannels
-      .split(',')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0),
+    autoJoinChannels: parseChannelList(data.autoJoinChannels),
   };
   const r = await fetch(`${API_BASE}/networks`, {
     method: 'POST',

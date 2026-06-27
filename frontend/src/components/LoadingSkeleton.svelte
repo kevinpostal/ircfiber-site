@@ -2,6 +2,8 @@
   // IRCCloud .mainSpin equivalent — a simple centered spinner shown until
   // the WebSocket sync delivers the initial state.  No sidebar placeholders,
   // no partial UI — matches IRCCloud's pattern of "spinner or full app."
+
+  let { networkNames }: { networkNames: string[] } = $props();
 </script>
 
 <div class="main-spin">

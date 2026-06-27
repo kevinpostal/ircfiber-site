@@ -6,6 +6,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import type { IRCMessage } from '../types';
 
 function resetState(): void {
 	ircState.networks.length = 0;

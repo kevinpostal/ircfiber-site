@@ -4,7 +4,7 @@
   import ConnectionStatus from './ConnectionStatus.svelte';
   import { ircState, prependMessages } from '../stores/ircStore.svelte';
   import { loadHistoryWithMeta } from '../stores/api';
-  import type { Member } from '../types';
+  import type { IRCMessage, Member } from '../types';
 
   interface Props {
     onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;

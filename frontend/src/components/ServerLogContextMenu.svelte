@@ -2,7 +2,7 @@
   import { ircState, getActiveNetwork } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork, disconnectNetwork, updateCollapsed } from '../stores/api';
-  import { getBufferPrefs, setBufferPref, collapsedMap } from '../stores/preferences.svelte';
+  import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt } from '../stores/preferences.svelte';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
 
@@ -124,10 +124,8 @@
     onClose();
   }
   function clearBacklog(): void {
-    import('../stores/preferences.svelte').then(m => {
-      if (networkId) m.setClearedAt(networkId, '_server');
-      onClose();
-    });
+    if (networkId) setClearedAt(networkId, '_server');
+    onClose();
   }
   function clickDeleteConversations(): void {
     onClose();

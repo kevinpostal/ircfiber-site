@@ -33,7 +33,7 @@ export function startUploads(
   opts: { networkId: string; buffer: string; immediate?: boolean },
 ): void {
   const { accepted, truncated } = flattenFileList(
-    (files as File[]).map(f => (f instanceof File ? f : new File([f], 'pasted-image.png', { type: f.type || 'image/png' })))
+    (files as (File | Blob)[]).map(f => (f instanceof File ? f : new File([f], 'pasted-image.png', { type: f.type || 'image/png' })))
   );
   const valid: File[] = [];
   for (const f of accepted) {

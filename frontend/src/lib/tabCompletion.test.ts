@@ -14,6 +14,7 @@ describe('TabCompletionEngine', () => {
     lastSpoke,
     lastHighlighted,
     account: '',
+    isBot: false,
   });
 
   const make_engine = () => new TabCompletionEngine();

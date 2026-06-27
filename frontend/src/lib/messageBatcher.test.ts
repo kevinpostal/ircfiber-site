@@ -14,7 +14,7 @@ function makeMsg(text: string, t: number): IRCMessage {
 
 describe('messageBatcher — fastest-possible flush', () => {
   let flushes: { networkId: string; bufferName: string; msgs: IRCMessage[] }[];
-  let flush: ReturnType<typeof vi.fn>;
+  let flush: (networkId: string, bufferName: string, msgs: IRCMessage[]) => void;
 
   beforeEach(() => {
     vi.useFakeTimers();
