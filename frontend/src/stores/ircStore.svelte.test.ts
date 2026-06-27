@@ -24,6 +24,10 @@ import {
 	getLastSeenMessage,
 	countMessagesBetween,
 	countImportantMessagesBetween,
+	handleBuffersToDelete,
+	recordJoin,
+	clearActiveJoin,
+	activeJoinList,
 } from './ircStore.svelte';
 import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
@@ -1003,5 +1007,63 @@ describe('phantom buffers (URL nav auto-create)', () => {
 		expect(dups[0].isPhantom).toBe(false);
 		expect(dups[0].unreadCount).toBe(5);
 		expect(dups[0].highlight).toBe(true);
+	});
+});
+
+describe('handleBuffersToDelete / activeJoinList (W1-T06)', () => {
+	const networkId = 'test-net';
+	const bufferName = '#ghost';
+
+	function setup(): void {
+		ircState.networks.length = 0;
+		activeJoinList.clear();
+		const net = createNetwork({ networkId, name: 'TestNet' });
+		net.buffers.push(createBuffer({ name: bufferName, isJoined: false }));
+		net.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		ircState.networks.push(net);
+	}
+
+	beforeEach(() => {
+		setup();
+	});
+
+	it('deletes a buffer not guarded by activeJoinList', () => {
+		handleBuffersToDelete([`${networkId}:${bufferName}`]);
+		const net = ircState.networks.find(n => n.networkId === networkId)!;
+		expect(net.buffers.find(b => b.name === bufferName)).toBeUndefined();
+	});
+
+	it('skips deletion when bid is in activeJoinList', () => {
+		recordJoin(networkId, bufferName);
+		handleBuffersToDelete([`${networkId}:${bufferName}`]);
+		const net = ircState.networks.find(n => n.networkId === networkId)!;
+		expect(net.buffers.find(b => b.name === bufferName)).toBeDefined();
+	});
+
+	it('clearActiveJoin removes from activeJoinList', () => {
+		recordJoin(networkId, bufferName);
+		clearActiveJoin(networkId, bufferName);
+		handleBuffersToDelete([`${networkId}:${bufferName}`]);
+		const net = ircState.networks.find(n => n.networkId === networkId)!;
+		expect(net.buffers.find(b => b.name === bufferName)).toBeUndefined();
+	});
+
+	it('skips deletion for _server buffer', () => {
+		handleBuffersToDelete([`${networkId}:_server`]);
+		const net = ircState.networks.find(n => n.networkId === networkId)!;
+		expect(net.buffers.find(b => b.name === '_server')).toBeDefined();
+	});
+
+	it('skips deletion for activeJoinList channel even when bid looks like ghost', () => {
+		recordJoin(networkId, bufferName);
+		handleBuffersToDelete([`${networkId}:${bufferName}`]);
+		const net = ircState.networks.find(n => n.networkId === networkId)!;
+		expect(net.buffers.find(b => b.name === bufferName)).toBeDefined();
+	});
+
+	it('empty bid list is a no-op', () => {
+		handleBuffersToDelete([]);
+		const net = ircState.networks.find(n => n.networkId === networkId)!;
+		expect(net.buffers.find(b => b.name === bufferName)).toBeDefined();
 	});
 });

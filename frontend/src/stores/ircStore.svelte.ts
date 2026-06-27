@@ -303,6 +303,56 @@ export function deleteBuffer(networkId: string, bufferName: string): void {
   setActiveBuffer(next.networkId, next.bufferName);
 }
 
+// ── W1-T06: buffersToDelete wire + activeJoinList tracking ──
+
+/** Tracks channels the user has actively joined this session.
+ *  Keyed by `${networkId}:${bufferName}`. Cleared on PART/KICK for self.
+ *  Used by `handleBuffersToDelete` to guard against deleting buffers the
+ *  user just re-joined (the JOIN event may arrive after the sync + the
+ *  buffersToDelete message during WS resume). */
+export const activeJoinList: Set<string> = $state(new Set());
+
+export function recordJoin(networkId: string, bufferName: string): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  activeJoinList.add(key);
+}
+
+export function clearActiveJoin(networkId: string, bufferName: string): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  activeJoinList.delete(key);
+}
+
+/** Handle `buffersToDelete` WS message from the engine.
+ *  Gated behind `globalPrefs.featureFlags.buffersToDelete.enabled`.
+ *  For each bid, guards against deleting channels the user recently joined
+ *  (activeJoinList) or intentionally preserved (pinned/archived/hidden). */
+export function handleBuffersToDelete(bidList: string[]): void {
+  if (bidList.length === 0) return;
+
+  const guardKeys = new Set<string>();
+  // Build a lookup of guard-relevant keys
+  for (const key of activeJoinList) guardKeys.add(key);
+  for (const key of Object.keys(archivedMap)) if (archivedMap[key]) guardKeys.add(key);
+  for (const key of Object.keys(pinnedMap)) if (pinnedMap[key]) guardKeys.add(key);
+  for (const key of Object.keys(hiddenChannelsMap)) if (hiddenChannelsMap[key]) guardKeys.add(key);
+
+  for (const bid of bidList) {
+    // Parse `networkId:bufferName` from the bid string.
+    // Format: "<networkId>:<bufferName>" (e.g. "a1b2c3:#foo")
+    const colonIdx = bid.indexOf(':');
+    if (colonIdx < 0) continue;
+    const networkId = bid.slice(0, colonIdx);
+    const bufferName = normalizeChannelName(bid.slice(colonIdx + 1));
+    if (!networkId || !bufferName || bufferName === '_server') continue;
+
+    // Guard: skip if the user just re-joined (JOIN event may be delayed)
+    const key = `${networkId}:${bufferName}`;
+    if (guardKeys.has(key)) continue;
+
+    deleteBuffer(networkId, bufferName);
+  }
+}
+
 export function prependMessage(networkId: string, bufferName: string, msg: IRCMessage): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const list = ircState.messages[key] ?? [];
@@ -1193,6 +1243,8 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     };
     net.buffers.push(buf);
     sortBuffers(net);
+    // W1-T06: track user-initiated JOIN (auto-created buffer path)
+    recordJoin(networkId, normalized);
   }
 
   if (!buf) return;
@@ -1238,6 +1290,8 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // Mark pending so the next sync doesn't overwrite with a stale
     // snapshot taken before the JOIN propagated to the engine.
     buf.pendingIsJoined = true;
+    // W1-T06: track user-initiated JOIN (existing buffer path)
+    recordJoin(networkId, normalized);
   } else if (cmd === 'JOIN' && nick && nick !== net.currentNick) {
     const stripped = stripPrefix(nick);
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
@@ -1260,12 +1314,16 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
   } else if (cmd === 'PART' && nick === net.currentNick) {
     buf.isJoined = false;
     buf.pendingIsJoined = false;
+    // W1-T06: clear activeJoin tracking on self-PART
+    clearActiveJoin(networkId, normalized);
   } else if ((cmd === 'PART' || cmd === 'QUIT') && nick) {
     buf.users = buf.users.filter(u => stripPrefix(u.nick) !== nick);
   } else if (cmd === 'KICK' && params && params[1]) {
     if (params[1] === net.currentNick) {
       buf.isJoined = false;
       buf.pendingIsJoined = false;
+      // W1-T06: clear activeJoin tracking on self-KICK
+      clearActiveJoin(networkId, normalized);
     } else buf.users = buf.users.filter(u => stripPrefix(u.nick) !== params[1]);
   } else if (cmd === 'NICK' && nick && params && params.length > 0) {
     const newNick = params[params.length - 1];

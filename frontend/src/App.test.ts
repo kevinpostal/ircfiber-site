@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
-import { ircState, updateChannelUsers } from './stores/ircStore.svelte';
+import { ircState, updateChannelUsers, activeJoinList } from './stores/ircStore.svelte';
 import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap, pinnedMap, lastSeenMap, globalPrefs } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 
@@ -22,6 +22,7 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   disconnectWebSocket: vi.fn(),
   sendRaw: vi.fn(),
   sendMessage: vi.fn(),
+  sendEditMessage: vi.fn(),
   requestSync: vi.fn(),
   requestSwitchBuffer: vi.fn(),
   wsState: { value: 'disconnected' },
@@ -94,6 +95,9 @@ beforeEach(() => {
 });
 
 describe('App', () => {
+	beforeEach(() => {
+		activeJoinList.clear();
+	});
   it('renders the app layout', async () => {
     render(App);
     expect(document.querySelector('#wrap')).toBeInTheDocument();
@@ -833,6 +837,107 @@ describe('App', () => {
 
       expect(lastSeenMap['net1:#general']).toBe(1700000011000);
       expect(lastSeenMap['net2:#general']).toBe(1700000021000);
+    });
+  });
+
+  describe('buffersToDelete wire (W1-T06)', () => {
+    // The engine emits buffersToDelete once per WS reconnect with bid[]
+    // listing ghost channels. The frontend handler must guard against
+    // activeJoinList to preserve freshly re-joined buffers.
+
+    afterEach(() => {
+      activeJoinList.clear();
+      globalPrefs.featureFlags.buffersToDelete.enabled = false;
+    });
+
+    it('deletes a ghost buffer when feature flag is ON and no guard matches', async () => {
+      globalPrefs.featureFlags.buffersToDelete.enabled = true;
+
+      // Pre-populate a network + buffer
+      const net = createNetwork({ name: 'TestNet' });
+      net.buffers.push(createBuffer({ name: '#ghost', isJoined: false }));
+      ircState.networks.push(net);
+      flushSync();
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      onMessage!({
+        type: 'buffersToDelete',
+        bid: [`${net.networkId}:#ghost`],
+      });
+      flushSync();
+
+      const updated = ircState.networks.find(n => n.networkId === net.networkId);
+      expect(updated?.buffers.find(b => b.name === '#ghost')).toBeUndefined();
+    });
+
+    it('preserves buffer when bid is in activeJoinList', async () => {
+      globalPrefs.featureFlags.buffersToDelete.enabled = true;
+
+      const net = createNetwork({ name: 'TestNet2' });
+      net.buffers.push(createBuffer({ name: '#protected', isJoined: false }));
+      ircState.networks.push(net);
+      // Simulate a fresh JOIN that happened before buffersToDelete arrives
+      activeJoinList.add(`${net.networkId}:#protected`);
+      flushSync();
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      onMessage!({
+        type: 'buffersToDelete',
+        bid: [`${net.networkId}:#protected`],
+      });
+      flushSync();
+
+      const updated = ircState.networks.find(n => n.networkId === net.networkId);
+      expect(updated?.buffers.find(b => b.name === '#protected')).toBeDefined();
+    });
+
+    it('does NOT delete buffers when feature flag is OFF (default)', async () => {
+      expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(false);
+
+      const net = createNetwork({ name: 'TestNet3' });
+      net.buffers.push(createBuffer({ name: '#ghost', isJoined: false }));
+      ircState.networks.push(net);
+      flushSync();
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      onMessage!({
+        type: 'buffersToDelete',
+        bid: [`${net.networkId}:#ghost`],
+      });
+      flushSync();
+
+      const updated = ircState.networks.find(n => n.networkId === net.networkId);
+      expect(updated?.buffers.find(b => b.name === '#ghost')).toBeDefined();
     });
   });
 });

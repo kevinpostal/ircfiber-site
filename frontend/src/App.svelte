@@ -12,13 +12,14 @@
   import Overlay from './components/Overlay.svelte';
   import NotificationBadge from './components/NotificationBadge.svelte';
   import UserPopup from './components/UserPopup.svelte';
-  import {
+import {
     ircState, getActiveNetwork, getActiveBufferObj,
     updateNetworkFromSync, handleConnect,
     updateChannelUsers, setMessages, prependMessages,
     setActiveBuffer, updateChannelTopic,
-    appendMessage, batchAppendMessages
-  } from './stores/ircStore.svelte';
+    appendMessage, batchAppendMessages,
+    handleBuffersToDelete
+} from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
@@ -561,6 +562,10 @@ let showNetworkForm: boolean = $state(false);
         handlePrefUpdate(obj);
       } else if (obj.type === 'heartbeat_echo') {
         handleHeartbeat(obj);
+      } else if (obj.type === 'buffersToDelete') {
+        if (globalPrefs.featureFlags.buffersToDelete.enabled) {
+          handleBuffersToDelete(obj.bid as string[]);
+        }
       }
     }
   }
