@@ -1,9 +1,10 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
 import { ircState, updateChannelUsers } from './stores/ircStore.svelte';
+import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -56,6 +57,7 @@ vi.mock('/src/stores/api', () => ({
   fetchUploadsOffset: vi.fn(async () => ({ uploads: [], total: 0 })),
   updateCollapsed: vi.fn(async () => undefined),
   updateInactiveCollapsed: vi.fn(async () => undefined),
+  updateServerlogCollapsed: vi.fn(async () => undefined),
   updateNetworkOrder: vi.fn(async () => undefined),
   updateBufferPrefs: vi.fn(async () => undefined),
   hideChannel: vi.fn(async () => undefined),
@@ -371,5 +373,175 @@ describe('App', () => {
     await expect.element(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
     await expect.element(page.getByText('Switch to previous buffer')).toBeInTheDocument();
     await expect.element(page.getByText('Selected IRC commands')).toBeInTheDocument();
+  });
+
+  describe('groupings flicker fix (issue 20260627)', () => {
+    // ── mergePreferences (stat_user boot path) ──
+    // The boot path is supposed to be additive-only for the collapse
+    // maps: a stale or empty server payload must NOT wipe the user's
+    // localStorage-backed collapses, otherwise the sidebar flickers
+    // (expanded -> collapsed) on every page refresh. See App.svelte:663-699.
+
+    it('mergePreferences preserves locally-collapsed networks absent from server payload', async () => {
+      // Seed the user's locally-collapsed state (what would be in
+      // localStorage on a real refresh — they collapsed net1 and
+      // net1:#c's member panel before).
+      collapsedMap['net1'] = true;
+      membersCollapsedMap['net1:#c'] = true;
+      inactiveCollapsedMap['net1'] = true;
+
+      render(App);
+
+      // connectWebSocket is called asynchronously from onMount ->
+      // checkAuth() -> probeAuth() (await fetch) -> startWebSocket().
+      // Wait for the mock to actually be invoked before grabbing the
+      // onMessage callback.
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // Now simulate a stat_user WS message with EMPTY pref maps
+      // (server is stale / has no record of these collapses). Pre-fix,
+      // mergePreferences would have wiped the seeded entries here,
+      // causing the flicker on refresh.
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        collapsed: {},
+        membersCollapsed: {},
+        inactiveCollapsed: {},
+        serverlogCollapsed: {},
+      });
+      flushSync();
+
+      // All three seeded entries must still be present after the merge.
+      expect(collapsedMap['net1']).toBe(true);
+      expect(membersCollapsedMap['net1:#c']).toBe(true);
+      expect(inactiveCollapsedMap['net1']).toBe(true);
+    });
+
+    // ── handlePrefUpdate (real-time sync path) ──
+    // serverlogCollapsed keys are keyed by per-attempt event IDs that
+    // change every boot, so cross-device "delete when key missing"
+    // semantics would wipe the user's locally-collapsed entries on
+    // every pref_update. Must be additive-only. See App.svelte:767-780.
+
+    it('handlePrefUpdate additive-only for serverlogCollapsed', async () => {
+      // Seed a locally-collapsed card (keyed by per-attempt eid '5').
+      serverlogCollapsedMap['net1:5'] = true;
+
+      render(App);
+
+      // Wait for the async onMount -> checkAuth -> startWebSocket
+      // chain to call our connectWebSocket mock.
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // Simulate a pref_update from another tab with a DIFFERENT key
+      // ('net1:9' — a new connection attempt on another device).
+      onMessage!({
+        type: 'pref_update',
+        key: 'serverlogCollapsed',
+        value: { 'net1:9': true },
+      });
+      flushSync();
+
+      // Pre-fix: the local 'net1:5' would be deleted because the server
+      // payload doesn't include it. With the additive-only fix, the
+      // local entry survives AND the new key is added.
+      expect(serverlogCollapsedMap['net1:5']).toBe(true);
+      expect(serverlogCollapsedMap['net1:9']).toBe(true);
+    });
+
+    // Clean up the persisted $state maps so we don't leak state to
+    // sibling tests (fileParallelism: false keeps them sequential but
+    // $state + localStorage writes survive across tests in the same file).
+    afterEach(() => {
+      for (const k of Object.keys(collapsedMap)) delete collapsedMap[k];
+      for (const k of Object.keys(membersCollapsedMap)) delete membersCollapsedMap[k];
+      for (const k of Object.keys(inactiveCollapsedMap)) delete inactiveCollapsedMap[k];
+      for (const k of Object.keys(serverlogCollapsedMap)) delete serverlogCollapsedMap[k];
+      for (const k of Object.keys(conversationsCollapsedMap)) delete conversationsCollapsedMap[k];
+    });
+  });
+
+  describe('conversationsCollapsed pref handler (W1-T01)', () => {
+    // The conversationsCollapsed sidebar toggle (per-network conversation
+    // grouping) was missing from BOTH mergePreferences (stat_user boot
+    // path) and handlePrefUpdate (live cross-tab/device sync path).
+    // Without these handlers, the user's collapsed-conversations state
+    // silently reset on every boot and never synced between tabs.
+
+    it('mergePreferences seeds conversationsCollapsed from stat_user payload', async () => {
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // Simulate a stat_user WS message with the server's
+      // conversationsCollapsed map. The boot path must seed both
+      // entries so the sidebar renders with the correct collapsed
+      // groupings on first paint.
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        conversationsCollapsed: {
+          'net1': true,
+          'net2': true,
+        },
+      });
+      flushSync();
+
+      expect(conversationsCollapsedMap['net1']).toBe(true);
+      expect(conversationsCollapsedMap['net2']).toBe(true);
+    });
+
+    it('handlePrefUpdate applies conversationsCollapsed from WS sync', async () => {
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      // Simulate a pref_update from another tab where the user just
+      // collapsed the net1 conversation grouping. The local store
+      // must reflect the update so the sidebar re-renders.
+      onMessage!({
+        type: 'pref_update',
+        key: 'conversationsCollapsed',
+        value: { 'net1': true },
+      });
+      flushSync();
+
+      expect(conversationsCollapsedMap['net1']).toBe(true);
+    });
+
+    afterEach(() => {
+      for (const k of Object.keys(conversationsCollapsedMap)) delete conversationsCollapsedMap[k];
+    });
   });
 });

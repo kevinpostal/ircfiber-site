@@ -30,7 +30,7 @@
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { notify } from './lib/notifications';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, bufferPrefsMap } from './stores/preferences.svelte';
+  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, bufferPrefsMap, conversationsCollapsedMap } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -180,7 +180,7 @@ let showNetworkForm: boolean = $state(false);
     const next = !membersCollapsedMap[key];
     membersCollapsedMap[key] = next;
     locallyInitiated = true;
-    updateMembersCollapsed(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, next)
+    updateMembersCollapsed(ircState.activeBuffer.networkId!, ircState.activeBuffer.bufferName!, next)
       .catch((err) => console.error('Failed to sync members collapsed:', err));
   }
 
@@ -544,11 +544,11 @@ let showNetworkForm: boolean = $state(false);
         // synchronization point where syncReceived flips from false to true.
         if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
           const ab = ircState.activeBuffer;
-          const key = `${ab.networkId}:${normalizeChannelName(ab.bufferName)}`;
+          const key = `${ab.networkId!}:${normalizeChannelName(ab.bufferName!)}`;
           console.log('[fix] sync: active buffer', ab.networkId, ab.bufferName, 'msgs:', ircState.messages[key]?.length ?? 0);
           if (!ircState.messages[key] || ircState.messages[key].length === 0) {
             console.log('[fix] calling loadBufferHistory');
-            void loadBufferHistory(ab.networkId, ab.bufferName);
+            void loadBufferHistory(ab.networkId!, ab.bufferName!);
           } else {
             console.log('[fix] messages already present, skipping loadBufferHistory');
           }
@@ -577,7 +577,7 @@ let showNetworkForm: boolean = $state(false);
   // IRCCloud-style: handle networks message — populates the sidebar immediately
   // with real network names before the full state dump arrives
   function handleNetworks(obj: Record<string, unknown>): void {
-    console.log('[fix] handleNetworks called, items:', (obj.items || []).length);
+    console.log('[fix] handleNetworks called, items:', ((obj.items || []) as unknown[]).length);
     performance.mark('networks');
     const items = (obj.items || []) as Array<{ networkId: string; name: string }>;
     if (items.length === 0) return;
@@ -586,7 +586,7 @@ let showNetworkForm: boolean = $state(false);
     // sidebar renders network names immediately.  The subsequent sync
     // message fills in buffers, users, topics, and connection status via
     // Object.assign (matching on networkId).
-    ircState.networks = items.map(item => ({
+    const skeletons = items.map(item => ({
       networkId: item.networkId,
       name: item.name,
       host: '',
@@ -611,7 +611,8 @@ let showNetworkForm: boolean = $state(false);
       capabilities: new Set(),
       isupport: {},
       chanTypes: '#',
-    }) as Network[]);
+    }));
+    ircState.networks = skeletons as unknown as Network[];
 
     // Cache the network names for the next page load
     writeCachedNetworks(ircState.networks);
@@ -646,31 +647,67 @@ let showNetworkForm: boolean = $state(false);
         if (archivedMap[key] !== false) archivedMap[key] = true;
       }
     }
-    if (user.membersCollapsed) {
-      const collapsed = user.membersCollapsed as Record<string, boolean>;
-      for (const key of Object.keys(membersCollapsedMap)) {
-        if (!(key in collapsed)) delete membersCollapsedMap[key];
+    if (user.serverlogCollapsed) {
+      // Additive-only merge: the server may lag behind (stale stat_user
+      // cached by the gateway) or be out of sync with another device.
+      // Deleting local keys causes a visible flicker — cards that were
+      // collapsed correctly from localStorage snap expanded when the
+      // delete loop runs, then snap collapsed again on the next render.
+      // The pref_update WS handler handles cross-tab/device sync; the
+      // initial stat_user is purely a seed for first-time visitors.
+      const slc = user.serverlogCollapsed as Record<string, boolean>;
+      for (const [key, value] of Object.entries(slc)) {
+        if (value === true) serverlogCollapsedMap[key] = true;
       }
+    }
+    if (user.membersCollapsed) {
+      // Additive-only merge: mirrors the serverlogCollapsed pattern at
+      // App.svelte:650-661. The server may lag behind (stale stat_user
+      // cached by the gateway) or be out of sync with another device.
+      // Deleting local keys that are missing from the server payload
+      // causes a visible flicker — the sidebar would briefly snap to
+      // the server's view, then snap back to the locally-collapsed
+      // view on the next render. The pref_update WS handler is the
+      // authoritative path for cross-tab/device sync; this merge is
+      // only the boot-time seed.
+      const collapsed = user.membersCollapsed as Record<string, boolean>;
       for (const [key, value] of Object.entries(collapsed)) {
         if (value === true) membersCollapsedMap[key] = true;
       }
     }
     if (user.collapsed) {
+      // Additive-only merge: see membersCollapsed comment above and
+      // serverlogCollapsed pattern at App.svelte:650-661. Same reason:
+      // delete-then-add on boot would visibly flicker the sidebar
+      // network groupings (collapsed → expanded → collapsed) because
+      // localStorage-backed collapses are the user's source of truth
+      // until a pref_update explicitly toggles them off.
       const col = user.collapsed as Record<string, boolean>;
-      for (const key of Object.keys(collapsedMap)) {
-        if (!(key in col)) delete collapsedMap[key];
-      }
       for (const [key, value] of Object.entries(col)) {
         if (value === true) collapsedMap[key] = true;
       }
     }
     if (user.inactiveCollapsed) {
+      // Additive-only merge: see membersCollapsed comment above and
+      // serverlogCollapsed pattern at App.svelte:650-661. Same reason:
+      // delete-then-add on boot would visibly flicker the inactive
+      // (disconnected) network groupings on page refresh.
       const ic = user.inactiveCollapsed as Record<string, boolean>;
-      for (const key of Object.keys(inactiveCollapsedMap)) {
-        if (!(key in ic)) delete inactiveCollapsedMap[key];
-      }
       for (const [key, value] of Object.entries(ic)) {
         if (value === true) inactiveCollapsedMap[key] = true;
+      }
+    }
+    if (user.conversationsCollapsed) {
+      // Additive-only merge: see serverlogCollapsed comment at
+      // App.svelte:650-661. Same flicker rationale: a stale or empty
+      // stat_user payload must NOT wipe the user's localStorage-backed
+      // conversation-grouping collapses. The pref_update WS handler is
+      // the authoritative path for cross-tab/device sync; this seed is
+      // only used on first boot. Mirrors the existing
+      // inactiveCollapsed / collapsed / membersCollapsed patterns.
+      const col = user.conversationsCollapsed as Record<string, boolean>;
+      for (const [key, value] of Object.entries(col)) {
+        if (value === true) conversationsCollapsedMap[key] = true;
       }
     }
     if (user.networkOrder) {
@@ -740,6 +777,20 @@ let showNetworkForm: boolean = $state(false);
           archivedMap[k] = true;
         }
       }
+    } else if (key === 'serverlogCollapsed') {
+      // Additive-only merge: keys are keyed by per-attempt event IDs that
+      // change every boot, so cross-device "delete when key missing"
+      // semantics would wipe the user's locally-collapsed entries and
+      // cause a visible flicker (cards snap expanded, then collapsed) on
+      // every refresh. The mergePreferences boot path already adds
+      // server-true values, so this path is only needed for cross-tab
+      // sync where the user just collapsed a card in another tab.
+      // Mirrors the serverlogCollapsed pattern in mergePreferences at
+      // App.svelte:650-661.
+      const slc = (data.value as Record<string, boolean>) ?? {};
+      for (const [k, v] of Object.entries(slc)) {
+        if (v === true) serverlogCollapsedMap[k] = true;
+      }
     } else if (key === 'membersCollapsed') {
       if (!locallyInitiated) {
         suppressAnimations();
@@ -767,6 +818,20 @@ let showNetworkForm: boolean = $state(false);
       }
       for (const [k, v] of Object.entries(ic)) {
         if (v === true) inactiveCollapsedMap[k] = true;
+      }
+    } else if (key === 'conversationsCollapsed') {
+      // Real-time cross-tab/device sync for per-network conversation
+      // grouping collapses (the sidebar Conversations header toggle).
+      // Mirrors the inactiveCollapsed pattern at App.svelte:801-808 —
+      // server is authoritative on pref_update so we delete locally
+      // stale entries to keep tabs consistent. Boot-time seeding is
+      // additive-only in mergePreferences above.
+      const collapsed = (data.value as Record<string, boolean>) ?? {};
+      for (const k of Object.keys(conversationsCollapsedMap)) {
+        if (!(k in collapsed)) delete conversationsCollapsedMap[k];
+      }
+      for (const [k, v] of Object.entries(collapsed)) {
+        if (v === true) conversationsCollapsedMap[k] = true;
       }
     } else if (key === 'networkOrder') {
       // Real-time sync from another tab/device: apply the new order to
