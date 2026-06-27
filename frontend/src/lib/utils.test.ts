@@ -13,6 +13,8 @@ import {
   formatNumericText,
   normaliseIdentifier,
   nickColorIndex,
+  parseChannelList,
+  getDisplayName,
 } from './utils';
 
 describe('escapeHtml', () => {
@@ -380,5 +382,53 @@ describe('nickColorIndex (IRCCloud parity)', () => {
       expect(idx).toBeGreaterThanOrEqual(0);
       expect(idx).toBeLessThan(27);
     }
+  });
+});
+
+describe('getDisplayName', () => {
+  it('strips safeChanPrefix from channel name', () => {
+    expect(getDisplayName('%#secret', { PREFIX: '(qaohv)~&@%+' })).toBe('#secret');
+  });
+  it('returns input unchanged for normal names', () => {
+    expect(getDisplayName('#chat', { PREFIX: '(qaohv)~&@%+' })).toBe('#chat');
+  });
+  it('returns input unchanged when isupport is undefined', () => {
+    expect(getDisplayName('#chat', undefined)).toBe('#chat');
+  });
+  it('returns input unchanged when isupport is null', () => {
+    expect(getDisplayName('#chat', null)).toBe('#chat');
+  });
+  it('returns input unchanged when PREFIX is missing', () => {
+    expect(getDisplayName('#chat', {})).toBe('#chat');
+  });
+  it('returns empty string for empty input', () => {
+    expect(getDisplayName('')).toBe('');
+  });
+});
+
+describe('parseChannelList', () => {
+  it('returns empty array for empty input', () => {
+    expect(parseChannelList('')).toEqual([]);
+  });
+  it('splits on newlines', () => {
+    expect(parseChannelList('#superbowl\n#Zod')).toEqual(['#superbowl', '#Zod']);
+  });
+  it('splits on spaces', () => {
+    expect(parseChannelList('#superbowl #zod')).toEqual(['#superbowl', '#zod']);
+  });
+  it('splits on commas', () => {
+    expect(parseChannelList('#superbowl,#Zod')).toEqual(['#superbowl', '#Zod']);
+  });
+  it('splits on mixed separators', () => {
+    expect(parseChannelList('#a #b\n#c,#d')).toEqual(['#a', '#b', '#c', '#d']);
+  });
+  it('trims whitespace around tokens', () => {
+    expect(parseChannelList('  #a ,  #b  ')).toEqual(['#a', '#b']);
+  });
+  it('drops empty entries', () => {
+    expect(parseChannelList('#a, , #b,')).toEqual(['#a', '#b']);
+  });
+  it('handles tabs and multiple spaces', () => {
+    expect(parseChannelList('#a\t#b   #c')).toEqual(['#a', '#b', '#c']);
   });
 });

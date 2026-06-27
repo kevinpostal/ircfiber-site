@@ -45,6 +45,31 @@ export function dedupChannelNames(names: string[]): string[] {
   return out;
 }
 
+/**
+ * Tokenize a free-form channel list. Splits on any whitespace
+ * (newlines, spaces, tabs) and commas, trims each token, drops empties.
+ * Mirrors what IRCCloud accepts: one channel per line, or space/comma
+ * separated on a single line.
+ *
+ * Note: because whitespace is a separator, the legacy "channel password"
+ * syntax ("#chan key") is no longer supported here. Users needing a keyed
+ * join can issue /join #chan key after connecting.
+ *
+ * Examples:
+ *   "#a\n#b"        -> ["#a", "#b"]
+ *   "#a #b"         -> ["#a", "#b"]
+ *   "#a,#b"         -> ["#a", "#b"]
+ *   "  #a ,  #b  "  -> ["#a", "#b"]
+ *   ""              -> []
+ *   "#a, , #b"      -> ["#a", "#b"]
+ */
+export function parseChannelList(text: string): string[] {
+  return text
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 export function formatTime12Hour(d: Date): string {
   let h = d.getHours();
   const ampm = h >= 12 ? 'PM' : 'AM';
@@ -183,6 +208,36 @@ export function previewText(text: string, expanded: boolean): string {
   const byLines = firstLines(text, MAX_PREVIEW_LINES);
   if (byLines.length <= MAX_PREVIEW_CHARS) return byLines;
   return byLines.slice(0, MAX_PREVIEW_CHARS);
+}
+
+/**
+ * Strip safe-channel prefix characters from a channel name for display.
+ *
+ * Some IRC networks (e.g. freenode) use a `%` prefix on channel names
+ * internally (e.g. `%#secret`) while users see the bare `#secret`. The
+ * ISUPPORT `PREFIX` token lists the symbols used as mode prefixes — any
+ * character from that list at the start of a channel name is stripped.
+ *
+ * Null-safe: returns the input unchanged when isupport is missing or
+ * lacks a PREFIX value.
+ *
+ * Example:
+ *   getDisplayName('%#secret', { PREFIX: '(qaohv)~&@%+' }) -> '#secret'
+ *   getDisplayName('#chat',    { PREFIX: '(qaohv)~&@%+' }) -> '#chat'
+ *   getDisplayName('#chat',    undefined)                  -> '#chat'
+ */
+export function getDisplayName(channelName: string, isupport?: Record<string, string> | null): string {
+  if (!channelName) return channelName;
+  const prefixToken = isupport?.PREFIX;
+  if (!prefixToken) return channelName;
+  const m = prefixToken.match(/^\([^)]+\)(.+)$/);
+  if (!m) return channelName;
+  const prefixes = m[1];
+  const firstChar = channelName[0];
+  if (prefixes.includes(firstChar)) {
+    return channelName.slice(1);
+  }
+  return channelName;
 }
 
 export function getUserModePrefix(nick: string): { prefix: string; cls: string; category: ModeCategory; mode: string; title: string } {
