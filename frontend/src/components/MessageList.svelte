@@ -11,7 +11,7 @@
   import LoadMore from './LoadMore.svelte';
   import ChatterBar from './ChatterBar.svelte';
   import ScrollClock from './ScrollClock.svelte';
-  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix } from '../lib/utils';
+  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
   import type { IRCMessage, Member, Network } from '../types';
 
@@ -894,6 +894,17 @@
   <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
     <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
 
+    {#if messagesWithDates.length === 0 && !isServerBuffer}
+      <div class="empty-channel" role="presentation">
+        {#if ircState.activeBuffer.bufferName?.startsWith('#')}
+          <p class="empty-headline">#{stripHash(ircState.activeBuffer.bufferName || '')}</p>
+          <p class="empty-sub">No messages yet — type below to say something.</p>
+        {:else}
+          <p class="empty-headline">No messages with {ircState.activeBuffer.bufferName || 'this user'} yet</p>
+        {/if}
+      </div>
+    {/if}
+
     {#if isServerBuffer}
       <!-- Server log view: connection attempts as collapsible cards.
            Same scroll container so the existing scroll-tracking logic
@@ -983,5 +994,22 @@
      * smoothness of the original IRCCloud client. */
     transition: top 30ms linear;
     will-change: top;
+  }
+  .empty-channel {
+    margin: auto;
+    padding: 64px 24px;
+    text-align: center;
+    color: #8b949e;
+    pointer-events: none;
+  }
+  .empty-headline {
+    margin: 0 0 6px;
+    font: 600 18px/24px "Source Sans Pro", sans-serif;
+    color: #d1d5db;
+  }
+  .empty-sub { margin: 0; font-size: 14px; line-height: 20px; }
+  @media (max-width: 800px) {
+    .empty-channel { padding: 32px 16px; }
+    .empty-headline { font-size: 16px; }
   }
 </style>

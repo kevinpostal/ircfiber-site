@@ -108,6 +108,67 @@ describe('MessageList', () => {
 		expect(document.querySelector('[data-time]')).toBeInTheDocument();
 	});
 
+	it('shows empty-channel hint for a channel with no messages', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		// No messages — empty state should render
+		flushSync();
+
+		render(MessageList, { props: {} });
+
+		const container = document.querySelector('.empty-channel');
+		expect(container).not.toBeNull();
+		expect(container?.textContent).toContain('#chan');
+		expect(container?.textContent).toContain('No messages yet');
+	});
+
+	it('shows different empty text for a DM with no messages', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: 'Alice' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = 'Alice';
+		flushSync();
+
+		render(MessageList, { props: {} });
+
+		const container = document.querySelector('.empty-channel');
+		expect(container).not.toBeNull();
+		expect(container?.textContent).toContain('No messages with Alice yet');
+	});
+
+	it('hides empty-channel hint when messages exist', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		ircState.messages['net1:#chan'] = [
+			createMessage({ text: 'hello', t: Date.now() }),
+		];
+		flushSync();
+
+		render(MessageList, { props: {} });
+
+		expect(document.querySelector('.empty-channel')).toBeNull();
+	});
+
+	it('hides empty-channel hint for a server buffer (_server) with no messages', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '_server' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '_server';
+		flushSync();
+
+		render(MessageList, { props: {} });
+
+		expect(document.querySelector('.empty-channel')).toBeNull();
+	});
+
 	it('preprocesses join/part groups', async () => {
 		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: '#chan' }));
@@ -259,11 +320,15 @@ describe('MessageList', () => {
 
 			const container = document.getElementById('messages') as HTMLDivElement;
 			container.style.height = '200px';
-			await new Promise((r) => requestAnimationFrame(r));
-			await new Promise((r) => setTimeout(r, 50));
+			// Constraining height can cause overflow before scroll position
+			// settles — scroll to bottom explicitly so the clock hides.
+			container.scrollTop = container.scrollHeight;
+			container.dispatchEvent(new Event('scroll'));
 
 			// Hidden while at the bottom (IRCCloud ScrollClockView.update).
-			expect(document.querySelector('.scrollClock')).toBeNull();
+			await vi.waitFor(() => {
+				expect(document.querySelector('.scrollClock')).toBeNull();
+			}, { timeout: 2000 });
 
 			// Scroll up → the clock appears with the upper message's date.
 			container.scrollTop = 50;
