@@ -1,7 +1,7 @@
 import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
-import { setClearedAt, archivedMap, ignoreList, highlightWords } from '../stores/preferences.svelte';
+import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
 import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel } from './utils';
 import { updateRoute } from './routing';
@@ -71,13 +71,19 @@ registerSlash(['ignore'], (args, networkId) => {
     };
     return;
   }
-  if (!ignoreList.includes(args[0])) ignoreList.push(args[0]);
+  if (!ignoreList.includes(args[0])) {
+    ignoreList.push(args[0]);
+    rebuildIgnoreMap();
+  }
 });
 
 registerSlash(['unignore'], (args) => {
   if (!args[0]) throw new Error('Usage: /unignore <usermask>');
   const idx = ignoreList.indexOf(args[0]);
-  if (idx >= 0) ignoreList.splice(idx, 1);
+  if (idx >= 0) {
+    ignoreList.splice(idx, 1);
+    rebuildIgnoreMap();
+  }
 });
 
 registerSlash(['op'], (args, networkId, target) => {

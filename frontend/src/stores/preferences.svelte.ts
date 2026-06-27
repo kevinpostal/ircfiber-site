@@ -2,6 +2,8 @@
 // All localStorage-backed reactive state
 
 import { normalizeChannelName } from '../lib/utils';
+import { parseIgnoreList } from '../lib/ignore';
+import type { IgnoreMap } from '../lib/ignore';
 
 // ── Global settings (IRCCloud-style) ──
 export interface FeatureFlag {
@@ -316,15 +318,24 @@ export function setFocusSeen(networkId: string, bufferName: string, ts: number):
   focusSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] = ts;
 }
 
+// ── Ignore map (3-level host→user→nick) ──
+let ignoreMap: IgnoreMap = parseIgnoreList(ignoreList);
+
+export function rebuildIgnoreMap(): void {
+  ignoreMap = parseIgnoreList(ignoreList);
+}
+
+$effect.root(() => {
+  $effect(() => {
+    // Rebuild the 3-level map whenever ignoreList changes (automatic via $state).
+    // This covers slash-command mutations, cross-tab sync, and direct edits.
+    ignoreMap = parseIgnoreList(ignoreList);
+  });
+});
+
 export function isIgnored(nick: string): boolean {
   if (!nick) return false;
-  return ignoreList.some(pattern => {
-    if (pattern.includes('*') || pattern.includes('?')) {
-      const regex = new RegExp('^' + pattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
-      return regex.test(nick);
-    }
-    return pattern.toLowerCase() === nick.toLowerCase();
-  });
+  return ignoreMap.check(nick);
 }
 
 // ── Hidden channels (user-deleted) ──
