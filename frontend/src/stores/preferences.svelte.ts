@@ -11,7 +11,7 @@ export interface FeatureFlag {
 }
 
 export interface FeatureFlags {
-  // W1-T02: prefVersion schema. Plain boolean (no nested config).
+  // W2-T03: prefVersion last-write-wins resolution. ON by default for Wave 2.
   usePrefVersion: boolean;
   // W1-T03: heartbeat_echo wire protocol.
   heartbeat: FeatureFlag;
@@ -49,9 +49,9 @@ export interface GlobalPrefs {
   inlinePastes: boolean;
   inlineReddit: boolean;
   inlineSocial: boolean;
-  // W0-T01: feature-flag namespace gating Wave 1 protocol changes.
-  // Defaults are all false so the first Wave 1 deploy ships with
-  // everything disabled — admins enable per-user for testing.
+  // W0-T01: feature-flag namespace gating Wave 1/2 protocol changes.
+  // Most flags still default OFF for safe rollout; usePrefVersion
+  // flips to ON in Wave 2 (prefVersion last-write-wins resolution).
   featureFlags: FeatureFlags;
 }
 
@@ -82,7 +82,7 @@ export const DEFAULT_PREFS: GlobalPrefs = {
   inlineReddit: true,
   inlineSocial: true,
   featureFlags: {
-    usePrefVersion: false,
+    usePrefVersion: true,
     heartbeat: { enabled: false },
     editMessage: { enabled: false },
     buffersToDelete: { enabled: false },

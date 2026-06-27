@@ -423,22 +423,20 @@ describe('networkOrder', () => {
 });
 
 // ── W0-T01: Feature flag scaffolding ──
-// All Wave 1 protocol changes (prefVersion, heartbeat, edit-message,
-// buffersToDelete, idleEvents) gate behind these booleans. Defaults must
-// be false so the first Wave 1 deploy ships with everything disabled —
-// admins opt in per-user for testing.
+// All Wave 1/2 protocol changes gate behind these booleans. Most still
+// default OFF for safe rollout; usePrefVersion flips ON in Wave 2.
 describe('featureFlags (W0-T01)', () => {
-	it('DEFAULT_PREFS includes all 5 flags at false', () => {
+	it('DEFAULT_PREFS includes all 5 flags with usePrefVersion ON', () => {
 		expect(DEFAULT_PREFS.featureFlags).toBeDefined();
-		expect(DEFAULT_PREFS.featureFlags.usePrefVersion).toBe(false);
+		expect(DEFAULT_PREFS.featureFlags.usePrefVersion).toBe(true);
 		expect(DEFAULT_PREFS.featureFlags.heartbeat.enabled).toBe(false);
 		expect(DEFAULT_PREFS.featureFlags.editMessage.enabled).toBe(false);
 		expect(DEFAULT_PREFS.featureFlags.buffersToDelete.enabled).toBe(false);
 		expect(DEFAULT_PREFS.featureFlags.idleEvents.enabled).toBe(false);
 	});
 
-	it('globalPrefs initializes with all feature flags false (fresh state)', () => {
-		expect(globalPrefs.featureFlags.usePrefVersion).toBe(false);
+	it('globalPrefs initializes with usePrefVersion=true, others false (fresh state)', () => {
+		expect(globalPrefs.featureFlags.usePrefVersion).toBe(true);
 		expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(false);
 		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(false);
 		expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(false);
@@ -448,13 +446,14 @@ describe('featureFlags (W0-T01)', () => {
 	it('toggling usePrefVersion persists the full featureFlags namespace to localStorage', () => {
 		window.localStorage.removeItem('ircfiber:globalPrefs');
 
-		globalPrefs.featureFlags.usePrefVersion = true;
+		// Toggle OFF from the ON default to trigger persist
+		globalPrefs.featureFlags.usePrefVersion = false;
 		flushSync();
 
 		const raw = window.localStorage.getItem('ircfiber:globalPrefs');
 		expect(raw).toBeTruthy();
 		const parsed = JSON.parse(raw as string);
-		expect(parsed.featureFlags.usePrefVersion).toBe(true);
+		expect(parsed.featureFlags.usePrefVersion).toBe(false);
 		// Untouched nested flags must still be present at their defaults
 		expect(parsed.featureFlags.heartbeat.enabled).toBe(false);
 		expect(parsed.featureFlags.editMessage.enabled).toBe(false);
@@ -474,7 +473,7 @@ describe('featureFlags (W0-T01)', () => {
 		expect(raw).toBeTruthy();
 		const parsed = JSON.parse(raw as string);
 		expect(parsed.featureFlags.heartbeat.enabled).toBe(true);
-		expect(parsed.featureFlags.usePrefVersion).toBe(false);
+		expect(parsed.featureFlags.usePrefVersion).toBe(true);
 		expect(parsed.featureFlags.editMessage.enabled).toBe(false);
 
 		window.localStorage.removeItem('ircfiber:globalPrefs');

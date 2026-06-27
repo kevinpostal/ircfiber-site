@@ -20,7 +20,7 @@ describe('SettingsAdvanced (W0-T01)', () => {
 		render(SettingsAdvanced);
 
 		// Five labeled toggles, one per Wave 1 task
-		await expect.element(page.getByText(/prefVersion schema \(W1-T02\)/)).toBeInTheDocument();
+		await expect.element(page.getByText(/Sync prefs across devices \(prefVersion resolution\)/)).toBeInTheDocument();
 		await expect.element(page.getByText(/Heartbeat \(W1-T03\)/)).toBeInTheDocument();
 		await expect.element(page.getByText(/Edit-message wire \(W1-T04\)/)).toBeInTheDocument();
 		await expect.element(page.getByText(/buffersToDelete wire \(W1-T06\)/)).toBeInTheDocument();
@@ -40,7 +40,7 @@ describe('SettingsAdvanced (W0-T01)', () => {
 		await expect.element(heartbeatSwitch).toHaveAttribute('aria-checked', 'true');
 
 		const prefVersionSwitch = page.getByRole('switch', { name: /prefVersion/ });
-		await expect.element(prefVersionSwitch).toHaveAttribute('aria-checked', 'false');
+		await expect.element(prefVersionSwitch).toHaveAttribute('aria-checked', 'true');
 	});
 
 	it('toggling a switch updates globalPrefs.featureFlags (round-trip)', async () => {

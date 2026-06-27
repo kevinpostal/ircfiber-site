@@ -14,10 +14,10 @@
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
-        <span class="settings-label-text">prefVersion schema (W1-T02)</span>
+        <span class="settings-label-text">Sync prefs across devices (prefVersion resolution)</span>
         <span class="settings-label-desc">
-          Send and accept the new prefVersion key on pref_update messages.
-          Wire-format change; keep off unless you're testing the new schema.
+          Last-write-wins conflict resolution for cross-device preference
+          sync. ON by default in Wave 2; disable to revert to last-sync-wins.
         </span>
       </div>
       <div class="settings-control">
@@ -25,7 +25,7 @@
           <input
             type="checkbox"
             role="switch"
-            aria-label="prefVersion schema (W1-T02)"
+            aria-label="Sync prefs across devices (prefVersion resolution)"
             aria-checked={globalPrefs.featureFlags.usePrefVersion}
             bind:checked={globalPrefs.featureFlags.usePrefVersion}
           />
