@@ -14,6 +14,8 @@ describe('notifications', () => {
     title: string;
     options?: NotificationOptions;
     onclick: (() => void) | null;
+    onshow: (() => void) | null;
+    onclose: (() => void) | null;
     close: ReturnType<typeof vi.fn>;
   }> = [];
   let mock_request_permission: ReturnType<typeof vi.fn>;
@@ -27,11 +29,13 @@ describe('notifications', () => {
       return Promise.resolve(mock_permission);
     });
 
-    function MockNotification(this: { title: string; options?: NotificationOptions; onclick: (() => void) | null; close: ReturnType<typeof vi.fn> }, title: string, options?: NotificationOptions) {
+    function MockNotification(this: { title: string; options?: NotificationOptions; onclick: (() => void) | null; onshow: (() => void) | null; onclose: (() => void) | null; close: ReturnType<typeof vi.fn> }, title: string, options?: NotificationOptions) {
       const instance = {
         title,
         options,
         onclick: null as (() => void) | null,
+        onshow: null as (() => void) | null,
+        onclose: null as (() => void) | null,
         close: vi.fn(),
       };
       notification_instances.push(instance);
@@ -196,6 +200,57 @@ describe('notifications', () => {
       expect(notification_instances[0].options).toMatchObject({
         silent: true,
       });
+    });
+
+    it('closes existing notification with same tag (dedup)', () => {
+      mock_permission = 'granted';
+      notify({ title: 'First', body: 'Hello', tag: 'net:#chan:Alice' });
+      expect(notification_instances).toHaveLength(1);
+
+      notify({ title: 'Second', body: 'World', tag: 'net:#chan:Alice' });
+      // First notification should be closed for dedup
+      expect(notification_instances[0].close).toHaveBeenCalledTimes(1);
+      // Second notification created
+      expect(notification_instances).toHaveLength(2);
+    });
+
+    it('does not close notification with different tag', () => {
+      mock_permission = 'granted';
+      notify({ title: 'First', body: 'Hello', tag: 'net:#chan:Alice' });
+      notify({ title: 'Second', body: 'World', tag: 'net:#chan:Bob' });
+      // Different tags — first notification NOT closed
+      expect(notification_instances[0].close).not.toHaveBeenCalled();
+      expect(notification_instances).toHaveLength(2);
+    });
+
+    it('escapes HTML body on Linux', () => {
+      mock_permission = 'granted';
+      vi.stubGlobal('navigator', { userAgent: 'Linux x86_64' });
+      notify({ title: 'Test', body: '<script>alert(1)</script>', tag: 'test' });
+      expect(notification_instances[0].options?.body).toBe(
+        '&lt;script&gt;alert(1)&lt;/script&gt;',
+      );
+      // navigator is un-stubbed by afterEach
+    });
+
+    it('does not escape body on non-Linux', () => {
+      mock_permission = 'granted';
+      vi.stubGlobal('navigator', { userAgent: 'MacIntel' });
+      notify({ title: 'Test', body: '<script>alert(1)</script>', tag: 'test' });
+      expect(notification_instances[0].options?.body).toBe(
+        '<script>alert(1)</script>',
+      );
+      // navigator is un-stubbed by afterEach
+    });
+
+    it('stores notification in notStore (GC prevention via onshow/onclose)', () => {
+      mock_permission = 'granted';
+      notify({ title: 'Test', body: 'Hello', tag: 'net:#chan:Alice' });
+      const instance = notification_instances[0];
+      // onshow handler set (GC prevention)
+      expect(instance.onshow).toBeInstanceOf(Function);
+      // onclose handler set
+      expect(instance.onclose).toBeInstanceOf(Function);
     });
   });
 });
