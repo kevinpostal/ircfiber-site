@@ -125,6 +125,17 @@
     }
   }
 
+  async function disconnectAssignment(networkId: string, host: string, label: string) {
+    if (!confirm(`Disconnect ${label} from ${host}? The connection will be closed but the network config is kept.`)) return;
+    try {
+      await api.post(`/api/admin/servers/host/${encodeURIComponent(host)}/disconnect/${networkId}`);
+      toastSuccess(`Disconnected ${label}`);
+      await fetchData();
+    } catch (e) {
+      toastError(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
   async function removeAssignment(networkId: string, label: string) {
     if (!confirm(`Remove assignment for ${label}? The gateway will re-route on the next message.`)) return;
     try {
@@ -349,10 +360,19 @@
               <StatusBadge label={a.serverId} tone="info" size="sm" />
             </td>
             <td class="py-2 text-right whitespace-nowrap">
+              {#if a.networkHost}
+                <button
+                  type="button"
+                  onclick={() => disconnectAssignment(a.networkId, a.networkHost, label)}
+                  class="rounded border border-warn/30 px-2 py-1 text-[11px] font-medium text-warn hover:bg-warn/10"
+                >
+                  Disconnect
+                </button>
+              {/if}
               <button
                 type="button"
                 onclick={() => reassignAssignment(a.networkId, label, a.serverId)}
-                class="rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40"
+                class="ml-1 rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40"
               >
                 Reassign
               </button>
