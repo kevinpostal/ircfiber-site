@@ -39,6 +39,7 @@ import {
 import WelcomePage from './components/WelcomePage.svelte';
 import SettingsPage from './components/SettingsPage.svelte';
 import ShortcutsPage from './components/ShortcutsPage.svelte';
+import ChannelSwitcher from './components/ChannelSwitcher.svelte';
 import LoadingSkeleton from './components/LoadingSkeleton.svelte';
 import LoginPage from './components/LoginPage.svelte';
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member, ConnectionState } from './types';
@@ -111,6 +112,7 @@ const isBootLoading: boolean = $derived(
 
 let showNetworkForm: boolean = $state(false);
   let showJoinModal: boolean = $state(false);
+  let channelSwitcherOpen: boolean = $state(false);
   let networkFormMode: 'add' | 'edit' = $state('add');
   let localMsgIdCounter = 0;
   let editNetworkId: string | null = $state(null);
@@ -423,6 +425,12 @@ let showNetworkForm: boolean = $state(false);
       e.preventDefault();
       switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
     }
+    // Cmd/Ctrl+K — quick-switch channel
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      channelSwitcherOpen = true;
+      return;
+    }
     if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const target = e.target as HTMLElement | null;
       if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.isContentEditable !== true)) {
@@ -432,6 +440,10 @@ let showNetworkForm: boolean = $state(false);
       }
     }
     if (e.key === 'Escape') {
+      if (channelSwitcherOpen) {
+        channelSwitcherOpen = false;
+        return;
+      }
       if (ircState.showSettings) {
         ircState.showSettings = false;
         navigateBackFromSettings();
@@ -1124,6 +1136,10 @@ let showNetworkForm: boolean = $state(false);
 
 {#if ircState.overlay.type}
   <Overlay />
+{/if}
+
+{#if channelSwitcherOpen}
+  <ChannelSwitcher onClose={() => channelSwitcherOpen = false} scope="all" />
 {/if}
 
 {#if showNetworkForm}
