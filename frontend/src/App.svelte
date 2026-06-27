@@ -224,8 +224,12 @@ let showNetworkForm: boolean = $state(false);
     app.classList.toggle('sidebar-left', val.sidebarLeft);
 
     // Theme
-    app.classList.remove('midnight-theme');
-    if (val.theme === 'midnight') app.classList.add('midnight-theme');
+    app.classList.remove('midnight-theme', 'theme-midnight', 'theme-dusk', 'theme-tropic', 'theme-emerald', 'theme-sand', 'theme-orchid');
+    if (val.theme === 'midnight') {
+      app.classList.add('midnight-theme', 'theme-midnight');
+    } else if (val.theme !== 'dark') {
+      app.classList.add('theme-' + val.theme);
+    }
   });
 
   // Inject custom CSS

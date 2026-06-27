@@ -9,12 +9,6 @@
   --row-status-bg:    #142b43;
 }
 
-#app.midnight-theme {
-  --row-notice-bg:    #262626;
-  --row-highlight-bg: #2b2b2b;
-  --row-status-bg:    #1a1a1a;
-}
-
 .row.messageRow.self     { background-color: var(--row-self-bg); }
 .row.messageRow.notice   { background-color: var(--row-notice-bg); }
 .row.messageRow.highlight { background-color: var(--row-highlight-bg); }

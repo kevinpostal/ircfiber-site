@@ -147,27 +147,19 @@
   <div class="settings-rows">
     <div class="settings-row">
       <div class="settings-label">
-        <span class="settings-label-text">Colour scheme</span>
+        <span class="settings-label-text">Colour theme</span>
         <span class="settings-label-desc">Choose your preferred theme</span>
       </div>
       <div class="settings-control">
-        <div class="theme-selector">
-          <label class="theme-option" class:active={globalPrefs.theme === 'auto'}>
-            <input type="radio" name="theme" value="auto" bind:group={globalPrefs.theme} />
-            <span class="theme-preview theme-preview--auto"></span>
-            <span class="theme-label">Auto</span>
-          </label>
-          <label class="theme-option" class:active={globalPrefs.theme === 'dark'}>
-            <input type="radio" name="theme" value="dark" bind:group={globalPrefs.theme} />
-            <span class="theme-preview theme-preview--dark"></span>
-            <span class="theme-label">Dark</span>
-          </label>
-          <label class="theme-option" class:active={globalPrefs.theme === 'midnight'}>
-            <input type="radio" name="theme" value="midnight" bind:group={globalPrefs.theme} />
-            <span class="theme-preview theme-preview--midnight"></span>
-            <span class="theme-label">Midnight</span>
-          </label>
-        </div>
+        <select id="theme-select" class="settings-select" bind:value={globalPrefs.theme}>
+          <option value="dark">Dark</option>
+          <option value="midnight">Midnight</option>
+          <option value="dusk">Dusk</option>
+          <option value="tropic">Tropic</option>
+          <option value="emerald">Emerald</option>
+          <option value="sand">Sand</option>
+          <option value="orchid">Orchid</option>
+        </select>
       </div>
     </div>
   </div>

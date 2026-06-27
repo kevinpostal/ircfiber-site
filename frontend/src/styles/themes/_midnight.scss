@@ -2,10 +2,16 @@
    Midnight theme — even darker background
    ============================================================ */
 
-#app.midnight-theme {
+#app.midnight-theme,
+#app.theme-midnight {
   --chat-bg: #000;
   --text-primary: #d1d5db;
   --text-secondary: #8b949e;
+  --accent: #58a6ff;
+  --link: #58a6ff;
+  --row-highlight-bg: #2b2b2b;
+  --row-notice-bg: #262626;
+  --row-status-bg: #1a1a1a;
 }
 
 /* ---- drag-and-drop upload target ---- */

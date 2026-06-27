@@ -24,7 +24,7 @@ export interface FeatureFlags {
 }
 
 export interface GlobalPrefs {
-  theme: 'auto' | 'dark' | 'midnight';
+  theme: 'dark' | 'midnight' | 'dusk' | 'tropic' | 'emerald' | 'sand' | 'orchid';
   fontSize: number;
   compactMode: boolean;
   monospaceFont: boolean;
