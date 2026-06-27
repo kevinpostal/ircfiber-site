@@ -1,6 +1,6 @@
 import { ircState } from '../stores/ircStore.svelte';
 
-export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat';
+export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'advanced';
 
 export function updateRoute(networkId: string, bufferName: string): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
@@ -23,7 +23,7 @@ export function navigateSettings(tab: SettingsTab): void {
 }
 
 export function getSettingsTabFromUrl(): SettingsTab | null {
-  const m = window.location.search.match(/^\?\/settings(?:=(design|account|notifications|chat))?$/);
+  const m = window.location.search.match(/^\?\/settings(?:=(design|account|notifications|chat|advanced))?$/);
   if (!m) return null;
   return (m[1] as SettingsTab) || 'design';
 }

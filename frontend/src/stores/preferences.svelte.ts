@@ -4,6 +4,23 @@
 import { normalizeChannelName } from '../lib/utils';
 
 // ── Global settings (IRCCloud-style) ──
+export interface FeatureFlag {
+  enabled: boolean;
+}
+
+export interface FeatureFlags {
+  // W1-T02: prefVersion schema. Plain boolean (no nested config).
+  usePrefVersion: boolean;
+  // W1-T03: heartbeat_echo wire protocol.
+  heartbeat: FeatureFlag;
+  // W1-T04: edit-message wire protocol.
+  editMessage: FeatureFlag;
+  // W1-T06: buffersToDelete wire protocol.
+  buffersToDelete: FeatureFlag;
+  // W1-T08: temp_unavailable + idle events wire protocol.
+  idleEvents: FeatureFlag;
+}
+
 export interface GlobalPrefs {
   theme: 'auto' | 'dark' | 'midnight';
   fontSize: number;
@@ -30,6 +47,10 @@ export interface GlobalPrefs {
   inlinePastes: boolean;
   inlineReddit: boolean;
   inlineSocial: boolean;
+  // W0-T01: feature-flag namespace gating Wave 1 protocol changes.
+  // Defaults are all false so the first Wave 1 deploy ships with
+  // everything disabled — admins enable per-user for testing.
+  featureFlags: FeatureFlags;
 }
 
 export const DEFAULT_PREFS: GlobalPrefs = {
@@ -58,6 +79,13 @@ export const DEFAULT_PREFS: GlobalPrefs = {
   inlinePastes: true,
   inlineReddit: true,
   inlineSocial: true,
+  featureFlags: {
+    usePrefVersion: false,
+    heartbeat: { enabled: false },
+    editMessage: { enabled: false },
+    buffersToDelete: { enabled: false },
+    idleEvents: { enabled: false },
+  },
 };
 
 export const globalPrefs = $state<GlobalPrefs>(
@@ -65,7 +93,24 @@ export const globalPrefs = $state<GlobalPrefs>(
 );
 
 function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): GlobalPrefs {
-  return { ...defaults, ...saved } as GlobalPrefs;
+  const out = { ...defaults, ...saved } as GlobalPrefs;
+  // Deep-merge the featureFlags namespace so partial saved data (e.g.
+  // a user who enabled one flag before others were added) does not lose
+  // the nested { enabled: false } defaults. Plain spread would replace
+  // the entire featureFlags object and unset untouched nested flags.
+  if (saved.featureFlags || defaults.featureFlags) {
+    const savedFf = (saved.featureFlags ?? {}) as Partial<FeatureFlags>;
+    const defaultsFf = defaults.featureFlags;
+    out.featureFlags = {
+      ...defaultsFf,
+      ...savedFf,
+      heartbeat: { ...defaultsFf.heartbeat, ...(savedFf.heartbeat ?? {}) },
+      editMessage: { ...defaultsFf.editMessage, ...(savedFf.editMessage ?? {}) },
+      buffersToDelete: { ...defaultsFf.buffersToDelete, ...(savedFf.buffersToDelete ?? {}) },
+      idleEvents: { ...defaultsFf.idleEvents, ...(savedFf.idleEvents ?? {}) },
+    };
+  }
+  return out;
 }
 
 function getStorageItem<T>(key: string, defaultValue: T): T {
@@ -104,6 +149,7 @@ export const pinnedMap = $state<Record<string, boolean>>(getStorageItem('ircfibe
 export const hiddenChannelsMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:hiddenChannels', {}));
 export const ignoreList = $state<string[]>(getStorageItem('ircfiber:ignores', []));
 export const highlightWords = $state<string[]>(getStorageItem('ircfiber:highlightWords', []));
+export const serverlogCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:serverlogCollapsed', {}));
 export const membersCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:membersCollapsed', {}));
 export const collapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:collapsed', {}));
 export const inactiveCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:inactiveCollapsed', {}));
@@ -223,6 +269,7 @@ $effect.root(() => {
   });
   $effect(() => { setStorageItem('ircfiber:ignores', ignoreList); });
   $effect(() => { setStorageItem('ircfiber:highlightWords', highlightWords); });
+  $effect(() => schedulePersistMap('ircfiber:serverlogCollapsed', serverlogCollapsedMap));
   $effect(() => schedulePersistMap('ircfiber:membersCollapsed', membersCollapsedMap));
   $effect(() => schedulePersistMap('ircfiber:collapsed', collapsedMap));
   $effect(() => schedulePersistMap('ircfiber:inactiveCollapsed', inactiveCollapsedMap));
@@ -242,6 +289,9 @@ export function getClearedAt(networkId: string, bufferName: string): number | nu
 }
 export function setClearedAt(networkId: string, bufferName: string): void {
   clearedAtMap[`${networkId}:${bufferName}`] = Date.now();
+  // Write to localStorage synchronously so a fast page refresh (<500ms
+  // debounce) doesn't lose the cleared state — same pattern as hideChannel.
+  setStorageItem('ircfiber:clearedAt', clearedAtMap);
 }
 export function clearClearedAt(networkId: string, bufferName: string): void {
   delete clearedAtMap[`${networkId}:${bufferName}`];
@@ -340,6 +390,7 @@ if (typeof window !== 'undefined') {
       case 'ircfiber:archived':         applyObject(archivedMap); break;
       case 'ircfiber:pinned':           applyObject(pinnedMap); break;
       case 'ircfiber:hiddenChannels':   applyObject(hiddenChannelsMap); break;
+      case 'ircfiber:serverlogCollapsed':   applyObject(serverlogCollapsedMap); break;
       case 'ircfiber:membersCollapsed': {
         // Briefly suppress layout animations (e.g. member panel slide) so
         // the other tab snaps to the final state without re-playing the

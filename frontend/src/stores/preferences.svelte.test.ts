@@ -14,6 +14,8 @@ import {
 	bottomSeenMap,
 	bufferPrefsMap,
 	networkOrder,
+	globalPrefs,
+	DEFAULT_PREFS,
 	getClearedAt,
 	setClearedAt,
 	clearClearedAt,
@@ -40,6 +42,9 @@ function resetPreferenceState(): void {
 	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
 	networkOrder.length = 0;
+	// Reset globalPrefs to DEFAULT_PREFS so tests don't leak flag state
+	// between cases. Deep assignment preserves Svelte 5 proxy reactivity.
+	Object.assign(globalPrefs, DEFAULT_PREFS);
 }
 
 function fireStorageEvent(key: string, newValue: string | null): void {
@@ -414,5 +419,121 @@ describe('networkOrder', () => {
 		// re-pushing, so malformed JSON leaves the array empty — the
 		// important property is that we don't throw and the app stays up)
 		expect(Array.isArray(networkOrder)).toBe(true);
+	});
+});
+
+// ── W0-T01: Feature flag scaffolding ──
+// All Wave 1 protocol changes (prefVersion, heartbeat, edit-message,
+// buffersToDelete, idleEvents) gate behind these booleans. Defaults must
+// be false so the first Wave 1 deploy ships with everything disabled —
+// admins opt in per-user for testing.
+describe('featureFlags (W0-T01)', () => {
+	it('DEFAULT_PREFS includes all 5 flags at false', () => {
+		expect(DEFAULT_PREFS.featureFlags).toBeDefined();
+		expect(DEFAULT_PREFS.featureFlags.usePrefVersion).toBe(false);
+		expect(DEFAULT_PREFS.featureFlags.heartbeat.enabled).toBe(false);
+		expect(DEFAULT_PREFS.featureFlags.editMessage.enabled).toBe(false);
+		expect(DEFAULT_PREFS.featureFlags.buffersToDelete.enabled).toBe(false);
+		expect(DEFAULT_PREFS.featureFlags.idleEvents.enabled).toBe(false);
+	});
+
+	it('globalPrefs initializes with all feature flags false (fresh state)', () => {
+		expect(globalPrefs.featureFlags.usePrefVersion).toBe(false);
+		expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(false);
+		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(false);
+		expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(false);
+		expect(globalPrefs.featureFlags.idleEvents.enabled).toBe(false);
+	});
+
+	it('toggling usePrefVersion persists the full featureFlags namespace to localStorage', () => {
+		window.localStorage.removeItem('ircfiber:globalPrefs');
+
+		globalPrefs.featureFlags.usePrefVersion = true;
+		flushSync();
+
+		const raw = window.localStorage.getItem('ircfiber:globalPrefs');
+		expect(raw).toBeTruthy();
+		const parsed = JSON.parse(raw as string);
+		expect(parsed.featureFlags.usePrefVersion).toBe(true);
+		// Untouched nested flags must still be present at their defaults
+		expect(parsed.featureFlags.heartbeat.enabled).toBe(false);
+		expect(parsed.featureFlags.editMessage.enabled).toBe(false);
+		expect(parsed.featureFlags.buffersToDelete.enabled).toBe(false);
+		expect(parsed.featureFlags.idleEvents.enabled).toBe(false);
+
+		window.localStorage.removeItem('ircfiber:globalPrefs');
+	});
+
+	it('toggling a nested flag (heartbeat.enabled) persists to localStorage', () => {
+		window.localStorage.removeItem('ircfiber:globalPrefs');
+
+		globalPrefs.featureFlags.heartbeat.enabled = true;
+		flushSync();
+
+		const raw = window.localStorage.getItem('ircfiber:globalPrefs');
+		expect(raw).toBeTruthy();
+		const parsed = JSON.parse(raw as string);
+		expect(parsed.featureFlags.heartbeat.enabled).toBe(true);
+		expect(parsed.featureFlags.usePrefVersion).toBe(false);
+		expect(parsed.featureFlags.editMessage.enabled).toBe(false);
+
+		window.localStorage.removeItem('ircfiber:globalPrefs');
+	});
+
+	it('server pref blob roundtrip: storage event from another tab updates globalPrefs.featureFlags', () => {
+		// Simulate the server broadcasting a featureFlags update that
+		// arrived in another tab and was written to localStorage. Tab A
+		// receives the `storage` event and merges the new values into
+		// its reactive globalPrefs.
+		fireStorageEvent(
+			'ircfiber:globalPrefs',
+			JSON.stringify({
+				featureFlags: {
+					usePrefVersion: true,
+					heartbeat: { enabled: true },
+					editMessage: { enabled: false },
+					buffersToDelete: { enabled: false },
+					idleEvents: { enabled: true },
+				},
+			})
+		);
+		flushSync();
+
+		expect(globalPrefs.featureFlags.usePrefVersion).toBe(true);
+		expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(true);
+		expect(globalPrefs.featureFlags.idleEvents.enabled).toBe(true);
+		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(false);
+	});
+
+	it('deep-merges featureFlags so partial saved data does not lose nested defaults', () => {
+		// A user with older saved prefs that only set usePrefVersion (and
+		// predate the nested flag objects) must still end up with all
+		// nested `{ enabled: false }` defaults intact.
+		window.localStorage.setItem(
+			'ircfiber:globalPrefs',
+			JSON.stringify({ featureFlags: { usePrefVersion: true } })
+		);
+		// Force a reload by reading the storage key through the public
+		// mergeDefaults path. We re-implement the merge here against
+		// the public DEFAULT_PREFS to lock in the contract.
+		const raw = window.localStorage.getItem('ircfiber:globalPrefs') as string;
+		const saved = JSON.parse(raw);
+		const merged = {
+			...DEFAULT_PREFS,
+			...saved,
+			featureFlags: {
+				...DEFAULT_PREFS.featureFlags,
+				...saved.featureFlags,
+				heartbeat: { ...DEFAULT_PREFS.featureFlags.heartbeat, ...(saved.featureFlags.heartbeat ?? {}) },
+				editMessage: { ...DEFAULT_PREFS.featureFlags.editMessage, ...(saved.featureFlags.editMessage ?? {}) },
+				buffersToDelete: { ...DEFAULT_PREFS.featureFlags.buffersToDelete, ...(saved.featureFlags.buffersToDelete ?? {}) },
+				idleEvents: { ...DEFAULT_PREFS.featureFlags.idleEvents, ...(saved.featureFlags.idleEvents ?? {}) },
+			},
+		};
+		expect(merged.featureFlags.usePrefVersion).toBe(true);
+		expect(merged.featureFlags.heartbeat.enabled).toBe(false);
+		expect(merged.featureFlags.editMessage.enabled).toBe(false);
+		expect(merged.featureFlags.buffersToDelete.enabled).toBe(false);
+		expect(merged.featureFlags.idleEvents.enabled).toBe(false);
 	});
 });

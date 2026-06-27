@@ -5,6 +5,7 @@
   import SettingsAccount from './SettingsAccount.svelte';
   import SettingsNotifications from './SettingsNotifications.svelte';
   import SettingsChat from './SettingsChat.svelte';
+  import SettingsAdvanced from './SettingsAdvanced.svelte';
 
   let tab = $state<SettingsTab>(ircState.settingsTab);
 
@@ -60,6 +61,13 @@
         class:active={tab === 'chat'}
         onclick={() => switchTab('chat')}
       >Chat &amp; embeds</button>
+      <button
+        role="tab"
+        aria-selected={tab === 'advanced'}
+        class="settings-tab"
+        class:active={tab === 'advanced'}
+        onclick={() => switchTab('advanced')}
+      >Advanced</button>
     </div>
     <button class="settings-done" onclick={close}>Done</button>
   </div>
@@ -72,6 +80,8 @@
       <SettingsNotifications />
     {:else if tab === 'chat'}
       <SettingsChat />
+    {:else if tab === 'advanced'}
+      <SettingsAdvanced />
     {/if}
   </div>
 </div>

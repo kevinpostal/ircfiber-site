@@ -6,7 +6,7 @@ import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveCh
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 
 // ── Single reactive state object ──
-export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat';
+export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'advanced';
 
 /** Tracks user-initiated disconnect timestamps per network so the sync
  * handler doesn't immediately overwrite the local 'disconnected' state
