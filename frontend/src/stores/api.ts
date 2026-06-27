@@ -428,3 +428,15 @@ export async function deletePastebin(id: string): Promise<void> {
 export function pastebinRawUrl(id: string): string {
   return `${API_BASE}/pastebins/${encodeURIComponent(id)}/raw`;
 }
+
+export interface ArchiveNamesResponse {
+  archives: Record<string, string[]>;
+}
+
+/** W3-T01a: Fetch all archived buffer names grouped by networkId.
+ *  Server-side cached with 5-min TTL; caller should also cache client-side. */
+export async function fetchArchiveNames(): Promise<ArchiveNamesResponse> {
+  const r = await fetch(`${API_BASE}/buffers/archive-names`);
+  if (!r.ok) throw new Error('Failed to fetch archive names');
+  return r.json();
+}

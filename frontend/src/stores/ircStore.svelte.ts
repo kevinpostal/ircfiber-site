@@ -1434,4 +1434,19 @@ export function updateChannelTopic(networkId: string, bufferName: string, topic:
   }
 }
 
+// ── W3-T01a: Archive-names client cache ──
+let archiveNamesCache: Record<string, string[]> | null = null;
+let archiveNamesCacheTime = 0;
+
+export async function fetchArchiveNames(): Promise<Record<string, string[]>> {
+  if (archiveNamesCache && (Date.now() - archiveNamesCacheTime) < 300_000) {
+    return archiveNamesCache;  // 5-minute TTL
+  }
+  const { fetchArchiveNames: apiFetch } = await import('./api');
+  const resp = await apiFetch();
+  archiveNamesCache = resp.archives;
+  archiveNamesCacheTime = Date.now();
+  return archiveNamesCache;
+}
+
 export { isIgnored };
