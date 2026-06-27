@@ -26,8 +26,13 @@ export async function loadMe(): Promise<AdminUser | null> {
   } catch (e) {
     if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
       adminUser.set(null);
-      // Redirect to login
-      window.location.href = '/admin/login';
+      // Redirect to login — preserve current hash fragment so the user
+      // is sent back to their intended page after re-authentication.
+      const hash = window.location.hash;
+      const redirectParam = hash && hash !== '#/' && hash !== '#/dashboard'
+        ? '?redirect=' + encodeURIComponent(hash)
+        : '';
+      window.location.href = '/admin/login' + redirectParam;
       return null;
     }
     throw e;
