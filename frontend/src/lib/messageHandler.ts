@@ -121,6 +121,7 @@ export function unpackEvent(
     label: ((data.label as string) || (data.l as string) || '') as string,
     t: data.t as number,
     eid: (data.eid as number) || undefined,
+    selfEcho: !!(data.se as string | undefined),
     type,
     phase,
   };

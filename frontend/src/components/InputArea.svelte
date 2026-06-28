@@ -149,6 +149,7 @@
   $effect(() => {
     setDeps({
       getInputText: () => inputValue,
+      setInputText: (text: string) => { inputValue = text; void autoResizeAfterClear(); },
       clearInput: () => { inputValue = ''; void autoResizeAfterClear(); },
     });
   });

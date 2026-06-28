@@ -9,6 +9,7 @@ export interface UploadFlowDeps {
   uploader: typeof uploadFile;
   send: (networkId: string, target: string, text: string, label?: string) => void;
   getInputText: () => string;
+  setInputText: (text: string) => void;
   clearInput: () => void;
   notifyError: (msg: string) => void;
 }
@@ -17,6 +18,7 @@ let deps: UploadFlowDeps = {
   uploader: uploadFile,
   send: sendMessage,
   getInputText: () => '',
+  setInputText: () => {},
   clearInput: () => {},
   notifyError: (msg) => console.error('[upload]', msg),
 };
@@ -74,12 +76,29 @@ export function confirmDialog(data: { filename?: string; message: string }): voi
   const dialog = uploadState.dialog;
   if (!dialog) return;
   uploadState.dialog = null;
-  deps.clearInput();
+
   if (data.filename && dialog.uploads.length === 1) dialog.uploads[0].filename = data.filename;
-  const { networkId, bufferName } = ircState.activeBuffer;
-  void finalizeAndSend(dialog.uploads, data.message, {
-    networkId: networkId ?? '', buffer: bufferName ?? '',
-  });
+
+  void (async () => {
+    const results = await Promise.allSettled(dialog.uploads.map(u => handles.get(u.id)!.promise));
+    const urls: string[] = [];
+    for (const r of results) if (r.status === 'fulfilled') urls.push(r.value.url);
+
+    // Clean up handles
+    for (const u of dialog.uploads) {
+      handles.delete(u.id);
+      setTimeout(() => removeUpload(u.id), 1500);
+    }
+
+    if (urls.length === 0) {
+      const firstErr = dialog.uploads.find(u => u.error)?.error ?? 'upload failed';
+      deps.notifyError(firstErr);
+      return;
+    }
+
+    const text = joinMessageLink(data.message, urls.join(' '));
+    deps.setInputText(text);
+  })();
 }
 
 export function cancelDialog(): void {

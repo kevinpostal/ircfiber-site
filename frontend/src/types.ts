@@ -177,6 +177,7 @@ export interface IRCMessage {
    *  primary key for deduplication and pagination cursors. */
   eid?: number;
   label?: string;
+  selfEcho?: boolean;
   type?: string;       // 'action' for /me messages
   highlight?: boolean;
   // For grouped messages

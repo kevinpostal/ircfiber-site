@@ -43,13 +43,27 @@ describe('uploadFlow', () => {
     expect(uploadState.dialog?.message).toBe('check this out');
   });
 
-  it('sends "message url" after confirm once the upload finishes', async () => {
+  it('inserts "message url" into input after confirm once the upload finishes', async () => {
+    const setInputText = vi.fn();
+    setDeps({
+      uploader: () => ({
+        promise: new Promise<UploadResponse>((res) => { resolveUpload = res; }),
+        abort: () => {},
+      }),
+      send: (networkId, target, text) => sent.push({ networkId, target, text }),
+      getInputText: () => 'check this out',
+      setInputText,
+      clearInput: vi.fn(),
+      notifyError: vi.fn(),
+    });
+
     startUploads([makeFile('a.png')], { networkId: 'n', buffer: '#c' });
     confirmDialog({ filename: 'a.png', message: 'look' });
     resolveUpload({ id: 'u1', url: 'https://i.postimg.cc/a.png', pageUrl: 'p', name: 'a.png', size: 100 });
-    await vi.waitFor(() => expect(sent.length).toBe(1));
-    expect(sent[0].text).toBe('look https://i.postimg.cc/a.png');
-    expect(sent[0].target).toBe('#c');
+    await vi.waitFor(() => {
+      expect(setInputText).toHaveBeenCalledWith('look https://i.postimg.cc/a.png');
+    });
+    expect(sent.length).toBe(0); // nothing auto-sent
   });
 
   it('cancel aborts and clears state', () => {
