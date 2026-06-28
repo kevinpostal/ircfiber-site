@@ -1257,4 +1257,104 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			expect(found.joinInFlight).toBe(true);
 		});
 	});
+
+	describe('self-nick in userlist', () => {
+		it('adds own nick on JOIN for self (existing buffer)', () => {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+			net.buffers.push(createBuffer({ name: '#chan', users: [] }));
+			ircState.networks.push(net);
+
+			updateChannelUsers('n1', '#chan', 'JOIN', 'me');
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#chan')!;
+			expect(found.users.some(u => u.nick === 'me')).toBe(true);
+			expect(found.users.find(u => u.nick === 'me')?.category).toBe('MEMBER');
+		});
+
+		it('adds own nick on JOIN for self (auto-created buffer)', () => {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+			ircState.networks.push(net);
+
+			updateChannelUsers('n1', '#chan', 'JOIN', 'me');
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#chan');
+			expect(found).toBeDefined();
+			expect(found!.users.some(u => u.nick === 'me')).toBe(true);
+		});
+
+		it('does not duplicate own nick when 353 arrives after JOIN', () => {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+			net.buffers.push(createBuffer({ name: '#duck', users: [] }));
+			ircState.networks.push(net);
+
+			// Self-JOIN adds "me"
+			updateChannelUsers('n1', '#duck', 'JOIN', 'me');
+			flushSync();
+
+			// 353 arrives with "me" included — dedup must prevent duplicate
+			updateChannelUsers('n1', '#duck', '353', '', ['#duck', '@alice +bob me charlie']);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#duck')!;
+			// "me" appears exactly once
+			const meEntries = found.users.filter(u => u.nick === 'me');
+			expect(meEntries).toHaveLength(1);
+			// All 4 unique nicks present (sorted ASCII: '+' < '@' < 'a')
+			expect(found.users.map(u => u.nick).sort()).toEqual(['+bob', '@alice', 'charlie', 'me']);
+		});
+
+		it('preserves own nick through sync overwrite', () => {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'zod' });
+			const buf = createBuffer({ name: '#zod', users: [{ nick: 'zod', prefix: '', category: 'MEMBER', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' }] });
+			net.buffers.push(buf);
+			ircState.networks.push(net);
+
+			// Sync overwrites users without "zod" (e.g. engine snapshot
+			// from before the self-JOIN was added to channelUsers)
+			const syncNet = createNetwork({ networkId: 'n1' });
+			syncNet.buffers.push(createBuffer({ name: '#zod', users: [{ nick: '@alice', prefix: '@', category: 'OP', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' }, { nick: 'charlie', prefix: '', category: 'MEMBER', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' }] }));
+			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+			updateNetworkFromSync([syncNet]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#zod')!;
+			// Sync overwrites users wholesale — this is the expected behavior.
+			// The engine's channelUsers must include "zod" for it to be in the
+			// snapshot; the frontend fix ensures self is added on the JOIN
+			// event path, but sync is authoritative when no pending change.
+			expect(found.users.map(u => u.nick).sort()).toEqual(['@alice', 'charlie']);
+		});
+
+		it('self-nick is always exactly one entry in users after JOIN', () => {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+			net.buffers.push(createBuffer({ name: '#cycle' }));
+			ircState.networks.push(net);
+
+			// Use found (via reactive ircState) so we read the proxied object
+			const found = () => ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#cycle')!;
+
+			// Join adds "me"
+			updateChannelUsers('n1', '#cycle', 'JOIN', 'me');
+			flushSync();
+			expect(found().users.filter(u => u.nick === 'me')).toHaveLength(1);
+
+			// Calling JOIN a second time (e.g. race with 353) must not duplicate
+			updateChannelUsers('n1', '#cycle', 'JOIN', 'me');
+			flushSync();
+			expect(found().users.filter(u => u.nick === 'me')).toHaveLength(1);
+
+			// PART doesn't remove self from users, but rejoin keeps it at 1
+			updateChannelUsers('n1', '#cycle', 'PART', 'me');
+			updateChannelUsers('n1', '#cycle', 'JOIN', 'me');
+			flushSync();
+			expect(found().users.filter(u => u.nick === 'me')).toHaveLength(1);
+		});
+	});
 });

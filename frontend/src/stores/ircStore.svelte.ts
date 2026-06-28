@@ -1449,6 +1449,18 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // even if it was auto-created by setActiveBuffer before the JOIN
     // event reached us.
     if (buf.isPhantom) buf.isPhantom = false;
+    // Add our nick to the userlist so the current user always appears in
+    // the member panel, even if the IRC server omits us from RPL_NAMREPLY
+    // (353).  The 353 handler at line 1437 dedups by stripped nick, so
+    // adding here early is safe.
+    if (!buf.users) buf.users = [];
+    if (!buf.users.some(u => stripPrefix(u.nick) === net.currentNick)) {
+      buf.users.push({
+        nick: net.currentNick, prefix: '', category: 'MEMBER',
+        ident: '', realname: '', isAway: false, awayMessage: '',
+        lastSpoke: 0, lastHighlighted: 0, account: ''
+      });
+    }
     // Mark pending so the next sync doesn't overwrite with a stale
     // snapshot taken before the JOIN propagated to the engine.
     buf.pendingIsJoined = true;
