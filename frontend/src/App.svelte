@@ -566,10 +566,13 @@ let showNetworkForm: boolean = $state(false);
     try {
       const key = `${networkId}:${normalizeChannelName(bufferName)}`;
       const existing = ircState.messages[key] ?? [];
+      const isServerLog = bufferName === '_server';
       // IRCCloud-style: if sync already delivered messages for this buffer,
-      // skip the REST round-trip entirely.  The sync (now includes scrollback
-      // from Redis) is the authoritative source for the initial 50 messages.
-      if (existing.length > 0) {
+      // skip the REST round-trip entirely — EXCEPT for the _server buffer
+      // where the sync only includes the latest 50 messages, which causes
+      // MOTD, welcome, and connection-phase events to disappear on refresh.
+      // The REST API returns up to 200 messages with the full history.
+      if (existing.length > 0 && !isServerLog) {
         // Messages already loaded from sync — nothing more to fetch.
         return;
       }
@@ -591,8 +594,14 @@ let showNetworkForm: boolean = $state(false);
         fetchCommand: 'LATEST',
       });
       performance.mark('history-api-end');
-      // Overwrite only if the buffer was empty or still pointing at cache
-      if (existing.length === 0 || ircState.messages[key] === cached) {
+      if (isServerLog && existing.length > 0) {
+        // Merge REST history with existing sync messages.  The sync provides
+        // the most recent 50 messages; the REST provides up to 200.  Merge
+        // older history before the sync snapshot, deduping by eid so recent
+        // live events (arrived via batchAppendMessages while the REST call
+        // was in flight) are not overwritten.
+        prependMessages(networkId, bufferName, msgs);
+      } else if (existing.length === 0 || ircState.messages[key] === cached) {
         setMessages(networkId, bufferName, msgs);
       }
       backlogReady = true;  // IRCCloud backlog_complete equivalent
