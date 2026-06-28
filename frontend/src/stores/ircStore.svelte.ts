@@ -22,6 +22,9 @@ export function markUserDisconnected(networkId: string): void {
 export function clearUserDisconnected(networkId: string): void {
   userDisconnectedAt.delete(networkId);
 }
+export function isUserDisconnected(networkId: string): boolean {
+  return userDisconnectedAt.has(networkId);
+}
 
 export const ircState = $state({
   networks: [] as Network[],

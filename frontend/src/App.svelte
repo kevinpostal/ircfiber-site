@@ -19,7 +19,8 @@ import {
     setActiveBuffer, updateChannelTopic,
     appendMessage, batchAppendMessages,
     handleBuffersToDelete,
-    isJoinPending, markJoinPending, recordJoin
+    isJoinPending, markJoinPending, recordJoin,
+    isUserDisconnected
 } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState, sendRaw } from './stores/wsConnection.svelte.ts';
@@ -713,9 +714,13 @@ let showNetworkForm: boolean = $state(false);
       realName: '',
       currentNick: '',
       connected: false,
-      connectionState: 'connecting' as ConnectionState,
-      status: 'connecting' as string,
-      disconnectReason: '',
+      // If the user explicitly disconnected this network, show 'disconnected'
+      // instead of 'connecting' — otherwise a WebSocket reconnect (e.g. gateway
+      // restart, deploy) would flash the UI back to "Connecting" for networks
+      // the user intentionally stopped.
+      connectionState: (isUserDisconnected(item.networkId) ? 'disconnected' : 'connecting') as ConnectionState,
+      status: isUserDisconnected(item.networkId) ? 'disconnected' : 'connecting',
+      disconnectReason: isUserDisconnected(item.networkId) ? 'You disconnected' : '',
       isAway: false,
       awayMessage: '',
       buffers: [{

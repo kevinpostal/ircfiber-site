@@ -32,6 +32,9 @@ import {
 	isJoinPending,
 	markJoinPending,
 	clearJoinPending,
+	markUserDisconnected,
+	clearUserDisconnected,
+	isUserDisconnected,
 } from './ircStore.svelte';
 import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
@@ -1355,6 +1358,197 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			updateChannelUsers('n1', '#cycle', 'JOIN', 'me');
 			flushSync();
 			expect(found().users.filter(u => u.nick === 'me')).toHaveLength(1);
+		});
+	});
+
+	describe('disconnect/reconnect guard', () => {
+		beforeEach(() => {
+			// Clear any residual disconnect state from other tests
+			clearUserDisconnected('n1');
+			clearUserDisconnected('n2');
+		});
+
+		it('markUserDisconnected / isUserDisconnected / clearUserDisconnected', () => {
+			expect(isUserDisconnected('n1')).toBe(false);
+			markUserDisconnected('n1');
+			expect(isUserDisconnected('n1')).toBe(true);
+			clearUserDisconnected('n1');
+			expect(isUserDisconnected('n1')).toBe(false);
+		});
+
+		it('sync with connected=true does not overwrite after user disconnected', () => {
+			const net = createNetwork({ networkId: 'n1' });
+			net.connectionState = 'disconnected';
+			net.connected = false;
+			ircState.networks.push(net);
+
+			// User clicked Disconnect
+			markUserDisconnected('n1');
+
+			// Stale sync reports connected=true (periodic snapshotter race)
+			const incoming = createNetwork({ networkId: 'n1' });
+			incoming.connected = true;
+			incoming.status = 'connected';
+			updateNetworkFromSync([incoming]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!;
+			// Guard must prevent overwrite
+			expect(found.connected).toBe(false);
+			expect(found.connectionState).toBe('disconnected');
+		});
+
+		it('sync with connecting=true CAN overwrite after user disconnected', () => {
+			const net = createNetwork({ networkId: 'n1' });
+			net.connectionState = 'disconnected';
+			net.connected = false;
+			ircState.networks.push(net);
+
+			// User clicked Disconnect
+			markUserDisconnected('n1');
+
+			// Engine reports status=connecting (backoff or reconnect attempt)
+			const incoming = createNetwork({ networkId: 'n1' });
+			incoming.connected = false;
+			incoming.status = 'connecting';
+			updateNetworkFromSync([incoming]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!;
+			// 'connecting' is NOT suppressed — user needs to see Disconnect button
+			expect(found.connectionState).toBe('connecting');
+		});
+
+		it('clearUserDisconnected allows sync connected=true to update after reconnect', () => {
+			const net = createNetwork({ networkId: 'n1' });
+			net.connectionState = 'disconnected';
+			net.connected = false;
+			ircState.networks.push(net);
+
+			markUserDisconnected('n1');
+
+			// User clicks Reconnect
+			clearUserDisconnected('n1');
+
+			// Sync reports connected=true now that guard is cleared
+			const incoming = createNetwork({ networkId: 'n1' });
+			incoming.connected = true;
+			incoming.status = 'connected';
+			updateNetworkFromSync([incoming]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!;
+			expect(found.connected).toBe(true);
+			expect(found.connectionState).toBe('connected');
+		});
+
+		it('disconnecting one network does not affect another', () => {
+			const n1 = createNetwork({ networkId: 'n1' });
+			n1.connectionState = 'disconnected';
+			n1.connected = false;
+			const n2 = createNetwork({ networkId: 'n2' });
+			n2.connectionState = 'connected';
+			n2.connected = true;
+			ircState.networks.push(n1, n2);
+
+			markUserDisconnected('n1');
+
+			// Sync for both networks arrives
+			const sync1 = createNetwork({ networkId: 'n1' });
+			sync1.connected = true;
+			sync1.status = 'connected';
+			const sync2 = createNetwork({ networkId: 'n2' });
+			sync2.connected = true;
+			sync2.status = 'connected';
+			updateNetworkFromSync([sync1, sync2]);
+			flushSync();
+
+			const found1 = ircState.networks.find(n => n.networkId === 'n1')!;
+			const found2 = ircState.networks.find(n => n.networkId === 'n2')!;
+			// n1 disconnected — guard blocks connected=true
+			expect(found1.connected).toBe(false);
+			expect(found1.connectionState).toBe('disconnected');
+			// n2 still connected — no guard
+			expect(found2.connected).toBe(true);
+			expect(found2.connectionState).toBe('connected');
+		});
+
+		it('double markUserDisconnected is idempotent', () => {
+			markUserDisconnected('n1');
+			markUserDisconnected('n1');  // second call
+			expect(isUserDisconnected('n1')).toBe(true);
+			clearUserDisconnected('n1');
+			expect(isUserDisconnected('n1')).toBe(false);
+		});
+
+		it('reconnect without prior disconnect has no effect on guard', () => {
+			// No disconnect was issued
+			const net = createNetwork({ networkId: 'n1' });
+			net.connectionState = 'connecting';
+			net.connected = false;
+			ircState.networks.push(net);
+
+			// Sync reports connected=true
+			const incoming = createNetwork({ networkId: 'n1' });
+			incoming.connected = true;
+			incoming.status = 'connected';
+			updateNetworkFromSync([incoming]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!;
+			// No guard — sync updates state
+			expect(found.connected).toBe(true);
+		});
+
+		it('sync with disconnected status keeps state unchanged when user disconnected', () => {
+			const net = createNetwork({ networkId: 'n1' });
+			net.connectionState = 'disconnected';
+			net.connected = false;
+			ircState.networks.push(net);
+
+			markUserDisconnected('n1');
+
+			// Sync confirms disconnected — no conflict
+			const incoming = createNetwork({ networkId: 'n1' });
+			incoming.connected = false;
+			incoming.status = 'disconnected';
+			updateNetworkFromSync([incoming]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!;
+			expect(found.connected).toBe(false);
+			expect(found.connectionState).toBe('disconnected');
+		});
+
+		it('clearUserDisconnected allows sync connecting then connected transition', () => {
+			const net = createNetwork({ networkId: 'n1' });
+			net.connectionState = 'disconnected';
+			net.connected = false;
+			ircState.networks.push(net);
+
+			markUserDisconnected('n1');
+			clearUserDisconnected('n1');
+
+			// Engine starts connecting
+			const sync1 = createNetwork({ networkId: 'n1' });
+			sync1.connected = false;
+			sync1.status = 'connecting';
+			updateNetworkFromSync([sync1]);
+			flushSync();
+
+			const found1 = ircState.networks.find(n => n.networkId === 'n1')!;
+			expect(found1.connectionState).toBe('connecting');
+
+			// Engine connects successfully
+			const sync2 = createNetwork({ networkId: 'n1' });
+			sync2.connected = true;
+			sync2.status = 'connected';
+			updateNetworkFromSync([sync2]);
+			flushSync();
+
+			const found2 = ircState.networks.find(n => n.networkId === 'n1')!;
+			expect(found2.connected).toBe(true);
+			expect(found2.connectionState).toBe('connected');
 		});
 	});
 });
