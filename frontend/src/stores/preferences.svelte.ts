@@ -85,11 +85,11 @@ export const DEFAULT_PREFS: GlobalPrefs = {
   inlineSocial: true,
   featureFlags: {
     usePrefVersion: true,
-    heartbeat: { enabled: false },
-    editMessage: { enabled: false },
-    buffersToDelete: { enabled: false },
-		idleEvents: { enabled: false },
-		xhrFallback: { enabled: false },
+    heartbeat: { enabled: true },
+    editMessage: { enabled: true },
+    buffersToDelete: { enabled: true },
+		idleEvents: { enabled: true },
+		xhrFallback: { enabled: true },
 	},
 };
 

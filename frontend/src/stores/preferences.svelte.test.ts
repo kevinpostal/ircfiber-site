@@ -429,20 +429,20 @@ describe('featureFlags (W0-T01)', () => {
 	it('DEFAULT_PREFS includes all 6 flags with usePrefVersion ON', () => {
 		expect(DEFAULT_PREFS.featureFlags).toBeDefined();
 		expect(DEFAULT_PREFS.featureFlags.usePrefVersion).toBe(true);
-		expect(DEFAULT_PREFS.featureFlags.heartbeat.enabled).toBe(false);
-		expect(DEFAULT_PREFS.featureFlags.editMessage.enabled).toBe(false);
-		expect(DEFAULT_PREFS.featureFlags.buffersToDelete.enabled).toBe(false);
-		expect(DEFAULT_PREFS.featureFlags.idleEvents.enabled).toBe(false);
-		expect(DEFAULT_PREFS.featureFlags.xhrFallback.enabled).toBe(false);
+		expect(DEFAULT_PREFS.featureFlags.heartbeat.enabled).toBe(true);
+		expect(DEFAULT_PREFS.featureFlags.editMessage.enabled).toBe(true);
+		expect(DEFAULT_PREFS.featureFlags.buffersToDelete.enabled).toBe(true);
+		expect(DEFAULT_PREFS.featureFlags.idleEvents.enabled).toBe(true);
+		expect(DEFAULT_PREFS.featureFlags.xhrFallback.enabled).toBe(true);
 	});
 
-	it('globalPrefs initializes with usePrefVersion=true, others false (fresh state)', () => {
+	it('globalPrefs initializes with all flags enabled (fresh state)', () => {
 		expect(globalPrefs.featureFlags.usePrefVersion).toBe(true);
-		expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(false);
-		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(false);
-		expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(false);
-		expect(globalPrefs.featureFlags.idleEvents.enabled).toBe(false);
-		expect(globalPrefs.featureFlags.xhrFallback.enabled).toBe(false);
+		expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(true);
+		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(true);
+		expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(true);
+		expect(globalPrefs.featureFlags.idleEvents.enabled).toBe(true);
+		expect(globalPrefs.featureFlags.xhrFallback.enabled).toBe(true);
 	});
 
 	it('toggling usePrefVersion persists the full featureFlags namespace to localStorage', () => {
@@ -456,28 +456,28 @@ describe('featureFlags (W0-T01)', () => {
 		expect(raw).toBeTruthy();
 		const parsed = JSON.parse(raw as string);
 		expect(parsed.featureFlags.usePrefVersion).toBe(false);
-		// Untouched nested flags must still be present at their defaults
-		expect(parsed.featureFlags.heartbeat.enabled).toBe(false);
-		expect(parsed.featureFlags.editMessage.enabled).toBe(false);
-		expect(parsed.featureFlags.buffersToDelete.enabled).toBe(false);
-		expect(parsed.featureFlags.idleEvents.enabled).toBe(false);
-		expect(parsed.featureFlags.xhrFallback.enabled).toBe(false);
+		// Untouched nested flags are now ON by default
+		expect(parsed.featureFlags.heartbeat.enabled).toBe(true);
+		expect(parsed.featureFlags.editMessage.enabled).toBe(true);
+		expect(parsed.featureFlags.buffersToDelete.enabled).toBe(true);
+		expect(parsed.featureFlags.idleEvents.enabled).toBe(true);
+		expect(parsed.featureFlags.xhrFallback.enabled).toBe(true);
 
 		window.localStorage.removeItem('ircfiber:globalPrefs');
 	});
 
-	it('toggling a nested flag (heartbeat.enabled) persists to localStorage', () => {
+	it('toggling a nested flag (usePrefVersion) persists to localStorage', () => {
 		window.localStorage.removeItem('ircfiber:globalPrefs');
 
-		globalPrefs.featureFlags.heartbeat.enabled = true;
+		globalPrefs.featureFlags.usePrefVersion = false;
 		flushSync();
 
 		const raw = window.localStorage.getItem('ircfiber:globalPrefs');
 		expect(raw).toBeTruthy();
 		const parsed = JSON.parse(raw as string);
+		expect(parsed.featureFlags.usePrefVersion).toBe(false);
 		expect(parsed.featureFlags.heartbeat.enabled).toBe(true);
-		expect(parsed.featureFlags.usePrefVersion).toBe(true);
-		expect(parsed.featureFlags.editMessage.enabled).toBe(false);
+		expect(parsed.featureFlags.editMessage.enabled).toBe(true);
 
 		window.localStorage.removeItem('ircfiber:globalPrefs');
 	});
@@ -511,7 +511,7 @@ describe('featureFlags (W0-T01)', () => {
 	it('deep-merges featureFlags so partial saved data does not lose nested defaults', () => {
 		// A user with older saved prefs that only set usePrefVersion (and
 		// predate the nested flag objects) must still end up with all
-		// nested `{ enabled: false }` defaults intact.
+		// nested `{ enabled: true }` defaults intact.
 		window.localStorage.setItem(
 			'ircfiber:globalPrefs',
 			JSON.stringify({ featureFlags: { usePrefVersion: true } })
@@ -535,10 +535,10 @@ describe('featureFlags (W0-T01)', () => {
 			},
 		};
 		expect(merged.featureFlags.usePrefVersion).toBe(true);
-		expect(merged.featureFlags.heartbeat.enabled).toBe(false);
-		expect(merged.featureFlags.editMessage.enabled).toBe(false);
-		expect(merged.featureFlags.buffersToDelete.enabled).toBe(false);
-		expect(merged.featureFlags.idleEvents.enabled).toBe(false);
-		expect(merged.featureFlags.xhrFallback.enabled).toBe(false);
+		expect(merged.featureFlags.heartbeat.enabled).toBe(true);
+		expect(merged.featureFlags.editMessage.enabled).toBe(true);
+		expect(merged.featureFlags.buffersToDelete.enabled).toBe(true);
+		expect(merged.featureFlags.idleEvents.enabled).toBe(true);
+		expect(merged.featureFlags.xhrFallback.enabled).toBe(true);
 	});
 });

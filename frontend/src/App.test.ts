@@ -796,11 +796,8 @@ describe('App', () => {
       expect(lastSeenMap['net1:#chan3']).toBe(1700000003000);
     });
 
-    it('does NOT touch lastSeenMap when feature flag is OFF (default)', async () => {
-      // Default in W0-T01: heartbeat flag is OFF. The handler must early-return
-      // without mutating lastSeenMap so Wave 1 ships inert until a server admin
-      // opts in per-user.
-      expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(false);
+    it('does NOT touch lastSeenMap when feature flag is OFF', async () => {
+      globalPrefs.featureFlags.heartbeat.enabled = false;
 
       render(App);
 
@@ -1055,8 +1052,8 @@ describe('App', () => {
       expect(updated?.buffers.find(b => b.name === '#protected')).toBeDefined();
     });
 
-    it('does NOT delete buffers when feature flag is OFF (default)', async () => {
-      expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(false);
+    it('does NOT delete buffers when feature flag is OFF', async () => {
+      globalPrefs.featureFlags.buffersToDelete.enabled = false;
 
       const net = createNetwork({ name: 'TestNet3' });
       net.buffers.push(createBuffer({ name: '#ghost', isJoined: false }));
