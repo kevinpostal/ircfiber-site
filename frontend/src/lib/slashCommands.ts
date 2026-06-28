@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel } from './utils';
 import { updateRoute } from './routing';
 
@@ -152,6 +152,23 @@ registerSlash(['umode'], (args, networkId, _target, net) => {
   const nick = net?.currentNick || net?.nick;
   if (!nick) throw new Error('Not connected');
   sendRaw(networkId, 'MODE ' + nick + (args.length ? ' ' + args.join(' ') : ''));
+});
+
+registerSlash(['msg'], (args, networkId, _target, net) => {
+  if (args.length < 2) throw new Error('Usage: /msg <nick> <message>');
+  const target = args[0];
+  const text = args.slice(1).join(' ');
+  const activeNet = net || ircState.networks.find(n => n.networkId === networkId);
+  if (activeNet) {
+    // Switch to or create the query buffer so the user sees the conversation
+    setActiveBuffer(activeNet.networkId, target);
+  }
+  sendRaw(networkId, 'PRIVMSG ' + target + ' :' + text);
+});
+
+registerSlash(['query'], (args, networkId) => {
+  if (!args[0]) throw new Error('Usage: /query <nick>');
+  setActiveBuffer(networkId, args[0]);
 });
 
 registerSlash(['quit', 'disconnect'], (args, networkId) => {
