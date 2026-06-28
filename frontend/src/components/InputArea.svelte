@@ -216,7 +216,10 @@
     // Ctrl/Cmd+Up: edit last sent message (IRCv3 draft/edit-message).
     // MUST come before plain ArrowUp so the Ctrl/Cmd check prevents the
     // history navigation handler from stealing the key.
-    if ((e.ctrlKey || e.metaKey) && e.key === 'ArrowUp') {
+    // Svelte 5 strips parens around `||` inside `&&` chains, so bind
+    // the modifier check to a const first.
+    const ctrlOrCmd = e.ctrlKey || e.metaKey;
+    if (ctrlOrCmd && e.key === 'ArrowUp') {
       e.preventDefault();
       if (inputValue === '' && globalPrefs.featureFlags.editMessage.enabled) {
         const last = lastSentMessageForBuffer(ircState.activeBuffer);

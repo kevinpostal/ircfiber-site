@@ -220,7 +220,7 @@
             class="settings-textarea custom-css-input"
             rows="10"
             bind:value={customCSS}
-            placeholder={'/* e.g. */ .row.messageRow .content { color: #fff; }'}
+            placeholder={`/* e.g. */ .row.messageRow .content { color: #fff; }`}
           ></textarea>
           <p class="custom-css-status" class:error={cssError !== null} class:success={cssApplied}>
             {cssError !== null ? cssError : `Applied. Reload to undo.`}

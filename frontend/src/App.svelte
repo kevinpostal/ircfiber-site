@@ -432,7 +432,12 @@ let showNetworkForm: boolean = $state(false);
       switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
     }
     // Cmd/Ctrl+Shift+K - quick-switch channel
-    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'k') {
+    // Svelte 5's compiler strips parens around `||` inside `&&` chains,
+    // which would turn `(a||b) && c && d` into `a || b && c && d` (wrong
+    // precedence). Bind the modifier check to a const first so the emitted
+    // JS preserves grouping.
+    const cmdOrCtrl = e.metaKey || e.ctrlKey;
+    if (cmdOrCtrl && e.shiftKey && e.key === 'k') {
       e.preventDefault();
       channelSwitcherOpen = true;
       return;
