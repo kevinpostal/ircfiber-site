@@ -38,6 +38,7 @@ import {
 } from './ircStore.svelte';
 import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
+import { buildProcessedBuffer } from '../lib/messageBuilder';
 
 beforeEach(() => {
 	ircState.networks.length = 0;
@@ -1549,6 +1550,144 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			const found2 = ircState.networks.find(n => n.networkId === 'n1')!;
 			expect(found2.connected).toBe(true);
 			expect(found2.connectionState).toBe('connected');
+		});
+	});
+
+	describe('self-echo dedup', () => {
+		const networkId = 'net1';
+		const bufferName = '#echo';
+		const key = `${networkId}:${bufferName}`;
+
+		beforeEach(() => {
+			const net = createNetwork({ networkId });
+			net.buffers.push(createBuffer({ name: bufferName }));
+			ircState.networks.push(net);
+			ircState.messages[key] = [];
+			ircState.processedMessages[key] = buildProcessedBuffer([]);
+			ircState.optimisticMessages.clear();
+		});
+
+		function setCurrentNick(nick: string): void {
+			const net = ircState.networks.find(n => n.networkId === networkId)!;
+			net.currentNick = nick;
+		}
+
+		it('batchAppendMessages replaces optimistic by label and rebuilds cache', () => {
+			setCurrentNick('me');
+			const label = 'label-1';
+			const optimistic = createMessage({ label, nick: 'me', text: 'hello', command: 'PRIVMSG' });
+			ircState.optimisticMessages.set(label, optimistic);
+			ircState.messages[key] = [optimistic];
+			ircState.processedMessages[key] = buildProcessedBuffer([optimistic]);
+
+			// Echo arrives with matching label
+			const echo = createMessage({ label, nick: 'me', text: 'hello', command: 'PRIVMSG', eid: 100 });
+			batchAppendMessages(networkId, bufferName, [echo]);
+			flushSync();
+
+			// Raw array: only 1 message (optimistic replaced)
+			expect(ircState.messages[key]).toHaveLength(1);
+			expect(ircState.messages[key][0].eid).toBe(100);
+
+			// Processed cache: 1 message (rebuilt)
+			expect(ircState.processedMessages[key]).toHaveLength(1);
+			expect(ircState.optimisticMessages.has(label)).toBe(false);
+		});
+
+		it('batchAppendMessages dedups self-echo by text with case-insensitive nick', () => {
+			setCurrentNick('Zod');
+			const label = 'label-2';
+			const optimistic = createMessage({ label, nick: 'Zod', text: 'hi there', command: 'PRIVMSG' });
+			ircState.optimisticMessages.set(label, optimistic);
+			ircState.messages[key] = [optimistic];
+			ircState.processedMessages[key] = buildProcessedBuffer([optimistic]);
+
+			// Echo arrives with NO label (no labeled-response) but with selfEcho
+			// and DIFFERENT nick casing ("zod" vs "Zod")
+			const echo = createMessage({ nick: 'zod', text: 'hi there', command: 'PRIVMSG', eid: 200, selfEcho: true });
+			batchAppendMessages(networkId, bufferName, [echo]);
+			flushSync();
+
+			// Raw array: 1 message (optimistic replaced by echo)
+			expect(ircState.messages[key]).toHaveLength(1);
+			expect(ircState.messages[key][0].eid).toBe(200);
+
+			// Optimistic consumed
+			expect(ircState.optimisticMessages.has(label)).toBe(false);
+		});
+
+		it('batchAppendMessages dedup prevents duplicate when label and selfEcho both present', () => {
+			setCurrentNick('me');
+			const label = 'label-3';
+			const optimistic = createMessage({ label, nick: 'me', text: 'hello', command: 'PRIVMSG' });
+			ircState.optimisticMessages.set(label, optimistic);
+			ircState.messages[key] = [optimistic];
+			ircState.processedMessages[key] = buildProcessedBuffer([optimistic]);
+
+			// Echo has BOTH label AND selfEcho (common case)
+			const echo = createMessage({ label, nick: 'me', text: 'hello', command: 'PRIVMSG', eid: 300, selfEcho: true });
+			batchAppendMessages(networkId, bufferName, [echo]);
+			flushSync();
+
+			// Exactly one message (not two)
+			expect(ircState.messages[key]).toHaveLength(1);
+		});
+
+		it('batchAppendMessages multiple echos in same batch dedup correctly', () => {
+			setCurrentNick('me');
+			const label1 = 'l1';
+			const label2 = 'l2';
+			const opt1 = createMessage({ label: label1, nick: 'me', text: 'first', command: 'PRIVMSG' });
+			const opt2 = createMessage({ label: label2, nick: 'me', text: 'second', command: 'PRIVMSG' });
+			ircState.optimisticMessages.set(label1, opt1);
+			ircState.optimisticMessages.set(label2, opt2);
+			ircState.messages[key] = [opt1, opt2];
+			ircState.processedMessages[key] = buildProcessedBuffer([opt1, opt2]);
+
+			// Both echos in same batch
+			const echo1 = createMessage({ label: label1, nick: 'me', text: 'first', command: 'PRIVMSG', eid: 400 });
+			const echo2 = createMessage({ label: label2, nick: 'me', text: 'second', command: 'PRIVMSG', eid: 401 });
+			batchAppendMessages(networkId, bufferName, [echo1, echo2]);
+			flushSync();
+
+			expect(ircState.messages[key]).toHaveLength(2);
+			expect(ircState.messages[key].every(m => m.eid != null)).toBe(true);
+			expect(ircState.optimisticMessages.size).toBe(0);
+		});
+
+		it('appendMessage replaces optimistic by label and rebuilds cache', () => {
+			setCurrentNick('me');
+			const label = 'label-a';
+			const optimistic = createMessage({ label, nick: 'me', text: 'direct', command: 'PRIVMSG' });
+			ircState.optimisticMessages.set(label, optimistic);
+			ircState.messages[key] = [optimistic];
+			ircState.processedMessages[key] = buildProcessedBuffer([optimistic]);
+
+			// Echo arrives via direct appendMessage
+			const echo = createMessage({ label, nick: 'me', text: 'direct', command: 'PRIVMSG', eid: 500 });
+			appendMessage(networkId, bufferName, echo);
+			flushSync();
+
+			expect(ircState.messages[key]).toHaveLength(1);
+			expect(ircState.messages[key][0].eid).toBe(500);
+			expect(ircState.optimisticMessages.has(label)).toBe(false);
+		});
+
+		it('appendMessage dedups self-echo with case-insensitive nick', () => {
+			setCurrentNick('Alice');
+			const label = 'label-b';
+			const optimistic = createMessage({ label, nick: 'Alice', text: 'hey', command: 'PRIVMSG' });
+			ircState.optimisticMessages.set(label, optimistic);
+			ircState.messages[key] = [optimistic];
+			ircState.processedMessages[key] = buildProcessedBuffer([optimistic]);
+
+			// Self-echo with different casing
+			const echo = createMessage({ nick: 'alice', text: 'hey', command: 'PRIVMSG', eid: 600, selfEcho: true });
+			appendMessage(networkId, bufferName, echo);
+			flushSync();
+
+			expect(ircState.messages[key]).toHaveLength(1);
+			expect(ircState.optimisticMessages.has(label)).toBe(false);
 		});
 	});
 });

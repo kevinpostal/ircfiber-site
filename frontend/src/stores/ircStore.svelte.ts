@@ -434,6 +434,10 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     if (idx >= 0) {
       list[idx] = msg;
       ircState.messages[key] = list;
+      // Rebuild the processed cache so the echo replaces the stale
+      // optimistic entry — otherwise the cache diverges from the raw
+      // array and the optimistic can reappear on re-render.
+      ircState.processedMessages[key] = buildProcessedBuffer(list);
       return;
     }
   }
@@ -456,7 +460,10 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
   // by text content to avoid duplicate when labeled-response is absent.
   if (msg.selfEcho) {
     for (const [optLabel, optMsg] of ircState.optimisticMessages) {
-      if (optMsg.text === msg.text && optMsg.nick === msg.nick && optMsg.command === 'PRIVMSG') {
+      // Compare nicks case-insensitively: the IRC server's echo may use
+      // a different casing (e.g. "Zod") than the local currentNick
+      // ("zod"), causing the strict equality to miss the match.
+      if (optMsg.text === msg.text && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
         ircState.optimisticMessages.delete(optLabel);
         const idx = list.findIndex((m: IRCMessage) => m.label === optLabel);
         if (idx >= 0) {
@@ -525,6 +532,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
       if (idx >= 0) {
         list[idx] = msg;
+        replacedEdit = true;
         continue;
       }
     }
@@ -543,10 +551,12 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     // message has a label but the echo doesn't — match by text content
     // so we don't end up with both the optimistic and the echo.
     if (msg.selfEcho) {
-      // Search optimistic messages for one with matching text content
+      // Search optimistic messages for one with matching text content.
+      // Compare nicks case-insensitively: the IRC server's echo may use
+      // different casing than the local currentNick.
       let foundOptLabel: string | null = null;
       for (const [optLabel, optMsg] of ircState.optimisticMessages) {
-        if (optMsg.text === msg.text && optMsg.nick === msg.nick && optMsg.command === 'PRIVMSG') {
+        if (optMsg.text === msg.text && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
           foundOptLabel = optLabel;
           break;
         }
