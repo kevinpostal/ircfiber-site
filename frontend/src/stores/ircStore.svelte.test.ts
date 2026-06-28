@@ -28,6 +28,10 @@ import {
 	recordJoin,
 	clearActiveJoin,
 	activeJoinList,
+	pendingJoins,
+	isJoinPending,
+	markJoinPending,
+	clearJoinPending,
 } from './ircStore.svelte';
 import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
@@ -1104,5 +1108,153 @@ describe('handleBuffersToDelete / activeJoinList (W1-T06)', () => {
 		handleBuffersToDelete([]);
 		const net = ircState.networks.find(n => n.networkId === networkId)!;
 		expect(net.buffers.find(b => b.name === bufferName)).toBeDefined();
+	});
+});
+
+describe('W7-T01: URL nav auto-join plumbing', () => {
+	// Svelte 5 wraps arrays/objects passed to $state in proxies. The
+	// raw buffer reference held in test scope is NOT the same object as
+	// the one stored in ircState.networks[].buffers[] — so mutations made
+	// by updateChannelUsers are visible only when re-read through the
+	// store. Tests below always read back via findBuf() to stay honest.
+	function findBuf(networkId: string, name: string) {
+		return ircState.networks.find(n => n.networkId === networkId)
+			?.buffers.find(b => b.name === name);
+	}
+
+	beforeEach(() => {
+		ircState.networks.length = 0;
+		activeJoinList.clear();
+		pendingJoins.clear();
+	});
+
+	describe('pendingJoins dedup', () => {
+		it('marks and clears pending joins by normalized key', () => {
+			expect(isJoinPending('n1', '#Foo')).toBe(false);
+			markJoinPending('n1', '#Foo');
+			expect(isJoinPending('n1', '#Foo')).toBe(true);
+			// Case-insensitive lookup matches what updateChannelUsers does
+			expect(isJoinPending('n1', '#foo')).toBe(true);
+			clearJoinPending('n1', '#Foo');
+			expect(isJoinPending('n1', '#foo')).toBe(false);
+		});
+
+		it('does not collide across networks', () => {
+			markJoinPending('n1', '#chan');
+			expect(isJoinPending('n2', '#chan')).toBe(false);
+		});
+	});
+
+	describe('JOIN failure numerics', () => {
+		function setup(): void {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+			const buf = createBuffer({ name: '#private', isJoined: false });
+			buf.joinInFlight = true;
+			buf.pendingIsJoined = true;
+			net.buffers.push(buf);
+			ircState.networks.push(net);
+			markJoinPending('n1', '#private');
+		}
+
+		it('473 (ERR_INVITEONLYCHAN) sets joinError=invite-only and clears joinInFlight', () => {
+			setup();
+			updateChannelUsers('n1', '#private', '473', 'me', ['me', '#private', 'Cannot join channel (+i)']);
+			flushSync();
+			const buf = findBuf('n1', '#private')!;
+			expect(buf.joinInFlight).toBe(false);
+			expect(buf.joinError).toBe('invite-only');
+			expect(buf.pendingIsJoined).toBeUndefined();
+			expect(isJoinPending('n1', '#private')).toBe(false);
+		});
+
+		it('474 (ERR_BANNEDFROMCHAN) sets joinError=banned', () => {
+			setup();
+			updateChannelUsers('n1', '#private', '474', 'me', ['me', '#private', 'You are banned']);
+			flushSync();
+			expect(findBuf('n1', '#private')!.joinError).toBe('banned');
+		});
+
+		it('475 (ERR_BADCHANNELKEY) sets joinError=key-required', () => {
+			setup();
+			updateChannelUsers('n1', '#private', '475', 'me', ['me', '#private', 'Cannot join +k']);
+			flushSync();
+			expect(findBuf('n1', '#private')!.joinError).toBe('key-required');
+		});
+
+		it('471 (ERR_CHANNELISFULL) sets joinError=full', () => {
+			setup();
+			updateChannelUsers('n1', '#private', '471', 'me', ['me', '#private', 'Channel is full']);
+			flushSync();
+			expect(findBuf('n1', '#private')!.joinError).toBe('full');
+		});
+
+		it('clears joinError on the next successful JOIN for self', () => {
+			setup();
+			updateChannelUsers('n1', '#private', '473', 'me', ['me', '#private']);
+			flushSync();
+			expect(findBuf('n1', '#private')!.joinError).toBe('invite-only');
+			updateChannelUsers('n1', '#private', 'JOIN', 'me');
+			flushSync();
+			const buf = findBuf('n1', '#private')!;
+			expect(buf.isJoined).toBe(true);
+			expect(buf.joinError).toBeNull();
+			expect(buf.joinInFlight).toBe(false);
+		});
+
+		it('clears joinInFlight and pendingJoins on PART for self', () => {
+			setup();
+			updateChannelUsers('n1', '#private', 'PART', 'me');
+			flushSync();
+			expect(findBuf('n1', '#private')!.joinInFlight).toBe(false);
+			expect(isJoinPending('n1', '#private')).toBe(false);
+		});
+	});
+
+	describe('sync guard for in-flight JOIN', () => {
+		it('sync snapshot with isJoined=false does not clobber joinInFlight phantom', () => {
+			// Simulates: user navigates to /channel/foo → switchToBuffer sets
+			// joinInFlight=true → sync arrives BEFORE the JOIN event echoes.
+			// Without the guard, the sync would flip the buffer back to
+			// isJoined=false and the BufferHeader would show "Rejoin".
+			const net = createNetwork({ networkId: 'n1' });
+			const phantom = createBuffer({ name: '#foo', isJoined: false, isPhantom: true });
+			phantom.joinInFlight = true;
+			phantom.pendingIsJoined = true;
+			net.buffers.push(phantom);
+			ircState.networks.push(net);
+
+			// Sync reports isJoined=false (engine snapshot taken before JOIN)
+			const syncNet = createNetwork({ networkId: 'n1' });
+			syncNet.buffers.push(createBuffer({ name: '#foo', isJoined: false }));
+			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+			updateNetworkFromSync([syncNet]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#foo')!;
+			// The phantom stays phantom with joinInFlight=true; sync isIgnored
+			expect(found.joinInFlight).toBe(true);
+		});
+
+		it('sync snapshot with isJoined=true clears joinInFlight', () => {
+			const net = createNetwork({ networkId: 'n1' });
+			const phantom = createBuffer({ name: '#foo', isJoined: false, isPhantom: true });
+			phantom.joinInFlight = true;
+			net.buffers.push(phantom);
+			ircState.networks.push(net);
+
+			// Sync reports isJoined=true (the JOIN did propagate)
+			const syncNet = createNetwork({ networkId: 'n1' });
+			syncNet.buffers.push(createBuffer({ name: '#foo', isJoined: true }));
+			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+			updateNetworkFromSync([syncNet]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#foo')!;
+			// joinInFlight must persist until JOIN for self arrives; sync alone
+			// doesn't clear it (the JOIN echo is the authoritative handshake).
+			expect(found.joinInFlight).toBe(true);
+		});
 	});
 });

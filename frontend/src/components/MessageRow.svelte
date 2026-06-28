@@ -544,12 +544,6 @@
       {/if}
     </span>
     <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
-    {#if hover && !isJoinPartGroup}
-      <div class="rowActions">
-        <button aria-label="Copy message" onclick={copyText}><i class="fa fa-copy"></i></button>
-        <button aria-label="Quote reply" onclick={quote}><i class="fa fa-reply"></i></button>
-        <button aria-label="Mark read here" onclick={markReadHere}><i class="fa fa-check"></i></button>
-      </div>
-    {/if}
+
   </div>
 {/if}

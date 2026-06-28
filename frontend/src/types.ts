@@ -95,6 +95,27 @@ export interface Buffer {
    *   undefined — no pending change; sync is trusted unconditionally
    */
   pendingIsJoined?: boolean;
+  /**
+   * Set when the most recent JOIN attempt for this channel was rejected by
+   * the IRC server (numeric 471/473/474/475/477 etc.). Cleared on the next
+   * successful JOIN or when the user explicitly retries. The BufferHeader
+   * surfaces this as an error chip with a Retry button.
+   *
+   * Codes mirror the IRC numerics from RFC 2811 / RFC 2812 / common IRCds:
+   *   invite-only  — ERR_INVITEONLYCHAN (473)
+   *   banned       — ERR_BANNEDFROMCHAN (474)
+   *   key-required — ERR_BADCHANNELKEY (475)
+   *   full         — ERR_CHANNELISFULL (471)
+   *   unknown      — ERR_ILLEGALCHANNELNAME / other failure
+   */
+  joinError?: 'invite-only' | 'banned' | 'key-required' | 'full' | 'unknown' | null;
+  /**
+   * Set when the frontend has issued a JOIN for this buffer but the server
+   * has not yet acknowledged it. The sync handler treats this as the
+   * authoritative state until the JOIN event arrives, preventing stale
+   * snapshots from clobbering the in-flight join with isJoined=false.
+   */
+  joinInFlight?: boolean;
   unreadCount: number;
   highlight: boolean;
   /** Number of unseen mentions; drives the red sidebar badge (IRCCloud-style). */

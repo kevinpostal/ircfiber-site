@@ -345,6 +345,31 @@ export function clearActiveJoin(networkId: string, bufferName: string): void {
   activeJoinList.delete(key);
 }
 
+// ── W7-T01: pendingJoins dedup so URL navigation doesn't spam JOIN ──
+//
+// Tracks channels for which the frontend has issued a JOIN but has not yet
+// seen the server echo. Keyed by `${networkId}:${bufferName}`. Cleared on
+// JOIN for self, on JOIN failure numerics, and on explicit clear. The
+// switchToBuffer helper consults this set before issuing a fresh JOIN.
+
+export const pendingJoins: Set<string> = $state(new Set());
+
+export function pendingJoinKey(networkId: string, bufferName: string): string {
+  return `${networkId}:${normalizeChannelName(bufferName)}`;
+}
+
+export function isJoinPending(networkId: string, bufferName: string): boolean {
+  return pendingJoins.has(pendingJoinKey(networkId, bufferName));
+}
+
+export function markJoinPending(networkId: string, bufferName: string): void {
+  pendingJoins.add(pendingJoinKey(networkId, bufferName));
+}
+
+export function clearJoinPending(networkId: string, bufferName: string): void {
+  pendingJoins.delete(pendingJoinKey(networkId, bufferName));
+}
+
 /** Handle `buffersToDelete` WS message from the engine.
  *  Gated behind `globalPrefs.featureFlags.buffersToDelete.enabled`.
  *  For each bid, guards against deleting channels the user recently joined
@@ -1087,14 +1112,23 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existingBuf.highlight = localHighlight || remoteHighlight;
           const incomingJoined = incomingBuf.isJoined;
           const pending = existingBuf.pendingIsJoined;
+          // W7-T01: if a JOIN is in-flight from URL navigation, treat it as
+          // pending=true. The engine sync snapshot often races the JOIN and
+          // reports isJoined=false before the JOIN event reaches us; without
+          // this guard the snapshot would clobber the user-initiated join.
+          const effectivePending =
+            existingBuf.joinInFlight === true ? true : pending;
           if (existingBuf.isPhantom) {
-            // Phantom buffers have no event-driven state — adopt blindly
-            existingBuf.isJoined = incomingJoined;
-            existingBuf.isPhantom = false;
-          } else if (pending === undefined) {
+            // Phantom buffers have no event-driven state — adopt blindly,
+            // but only if no JOIN is in-flight from URL nav.
+            if (existingBuf.joinInFlight !== true) {
+              existingBuf.isJoined = incomingJoined;
+              existingBuf.isPhantom = false;
+            }
+          } else if (effectivePending === undefined) {
             // No pending event-driven change — sync is authoritative
             existingBuf.isJoined = incomingJoined;
-          } else if (pending !== incomingJoined) {
+          } else if (effectivePending !== incomingJoined) {
             // Pending event contradicts sync — keep the event state (sync
             // snapshot was taken before the JOIN/PART/KICK propagated)
           } else {
@@ -1351,8 +1385,39 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // Mark pending so the next sync doesn't overwrite with a stale
     // snapshot taken before the JOIN propagated to the engine.
     buf.pendingIsJoined = true;
+    buf.joinInFlight = false;
+    buf.joinError = null;
+    // W7-T01: clear the pendingJoins dedup so future URL navigations to
+    // this channel can re-issue JOIN if the user later parts.
+    clearJoinPending(networkId, normalized);
     // W1-T06: track user-initiated JOIN (existing buffer path)
     recordJoin(networkId, normalized);
+  } else if (
+    cmd === '471' || cmd === '473' || cmd === '474' ||
+    cmd === '475' || cmd === '477' || cmd === '405' ||
+    cmd === '471' || cmd === '442' || cmd === '403'
+  ) {
+    // JOIN failure numerics — clear the in-flight flag, surface the error
+    // in the BufferHeader, and keep the buffer in the sidebar so the user
+    // can see the reason + retry. Maps RFC 2812 / common IRCd codes to
+    // human-readable joinError codes the UI understands.
+    const codeMap: Record<string, 'full' | 'invite-only' | 'banned' | 'key-required' | 'unknown'> = {
+      '471': 'full',           // ERR_CHANNELISFULL
+      '473': 'invite-only',    // ERR_INVITEONLYCHAN
+      '474': 'banned',         // ERR_BANNEDFROMCHAN
+      '475': 'key-required',   // ERR_BADCHANNELKEY
+      '477': 'unknown',        // ERR_NEEDREGGEDNICK
+      '405': 'unknown',        // ERR_TOOMANYCHANNELS
+      '442': 'unknown',        // ERR_NOTONCHANNEL
+      '403': 'unknown',        // ERR_NOSUCHCHANNEL
+    };
+    if (buf) {
+      buf.joinInFlight = false;
+      buf.joinError = codeMap[cmd] ?? 'unknown';
+      buf.pendingIsJoined = undefined;
+    }
+    clearJoinPending(networkId, normalized);
+    clearActiveJoin(networkId, normalized);
   } else if (cmd === 'JOIN' && nick && nick !== net.currentNick) {
     const stripped = stripPrefix(nick);
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
@@ -1375,16 +1440,20 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
   } else if (cmd === 'PART' && nick === net.currentNick) {
     buf.isJoined = false;
     buf.pendingIsJoined = false;
+    buf.joinInFlight = false;
     // W1-T06: clear activeJoin tracking on self-PART
     clearActiveJoin(networkId, normalized);
+    clearJoinPending(networkId, normalized);
   } else if ((cmd === 'PART' || cmd === 'QUIT') && nick) {
     buf.users = buf.users.filter(u => stripPrefix(u.nick) !== nick);
   } else if (cmd === 'KICK' && params && params[1]) {
     if (params[1] === net.currentNick) {
       buf.isJoined = false;
       buf.pendingIsJoined = false;
+      buf.joinInFlight = false;
       // W1-T06: clear activeJoin tracking on self-KICK
       clearActiveJoin(networkId, normalized);
+      clearJoinPending(networkId, normalized);
     } else buf.users = buf.users.filter(u => stripPrefix(u.nick) !== params[1]);
   } else if (cmd === 'NICK' && nick && params && params.length > 0) {
     const newNick = params[params.length - 1];

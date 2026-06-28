@@ -30,6 +30,22 @@
   const isConnecting = $derived(activeNetwork?.connectionState === 'connecting');
   const isJoined = $derived(activeBufferObj?.isJoined !== false);
   const isArchived = $derived(!!archivedMap[`${activeNetwork?.networkId}:${activeBufferObj?.name}`]);
+  // W7-T01: distinguish "in the process of joining" from "decidedly not joined".
+  // joinInFlight is set when switchToBuffer issues a JOIN (URL nav, sidebar
+  // click on inactive channel) and is cleared by the JOIN self echo.
+  const isJoining = $derived(!!activeBufferObj?.joinInFlight);
+  // W7-T01: surface the reason a previous JOIN failed (471/473/474/475/etc.)
+  // so the user knows whether to retry, ask for an invite, or move on.
+  const joinErrorCode = $derived(activeBufferObj?.joinError ?? null);
+  const joinErrorText = $derived.by(() => {
+    switch (joinErrorCode) {
+      case 'invite-only':  return 'Invite-only channel';
+      case 'banned':       return 'You are banned from this channel';
+      case 'key-required': return 'Channel key required';
+      case 'full':         return 'Channel is full';
+      default:             return joinErrorCode ? 'Cannot join channel' : '';
+    }
+  });
 
   let busy: boolean = $state(false);
 
@@ -94,6 +110,12 @@
 
   function rejoin(): void {
     if (!activeNetwork || !activeBufferObj?.name) return;
+    // W7-T01: clear stale failure state so the UI doesn't briefly show
+    // "Cannot join" while the new JOIN is in flight.
+    if (activeBufferObj) {
+      activeBufferObj.joinError = null;
+      activeBufferObj.joinInFlight = true;
+    }
     sendRaw(activeNetwork.networkId, 'JOIN ' + activeBufferObj.name);
   }
 
@@ -123,6 +145,17 @@
     </h2>
     {#if tempUnavailableRemaining > 0}
       <div class="temp-unavailable-chip">Server busy — retry in {tempUnavailableRemaining}s</div>
+    {/if}
+    {#if isChannel && isJoining}
+      <div class="join-inflight-chip" role="status" aria-live="polite">
+        <span class="join-spinner" aria-hidden="true"></span>
+        Joining {channelName}…
+      </div>
+    {:else if isChannel && joinErrorCode && !isJoined}
+      <div class="join-error-chip" role="alert">
+        <span class="join-error-text">{joinErrorText}</span>
+        <button class="rejoin" type="button" onclick={rejoin}><span>Retry</span></button>
+      </div>
     {/if}
     {#if isChannel && (!isJoined || isArchived)}
       <p class="buttons">

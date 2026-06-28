@@ -18,10 +18,11 @@ import {
     updateChannelUsers, setMessages, prependMessages,
     setActiveBuffer, updateChannelTopic,
     appendMessage, batchAppendMessages,
-    handleBuffersToDelete
+    handleBuffersToDelete,
+    isJoinPending, markJoinPending, recordJoin
 } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
-  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
+  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState, sendRaw } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
@@ -509,6 +510,7 @@ let showNetworkForm: boolean = $state(false);
     requestSwitchBuffer(networkId, bufferName);
     updateRoute(networkId, bufferName);
     setLastSeen(networkId, bufferName, Date.now());
+    maybeAutoJoinChannel(networkId, bufferName);
     if (!isSameBuffer) {
       // IRCCloud-style: skip the REST round-trip during boot — the sync
       // message will deliver messages via WebSocket.  After sync arrives
@@ -518,6 +520,45 @@ let showNetworkForm: boolean = $state(false);
         void loadBufferHistory(networkId, bufferName);
       }
     }
+  }
+
+  // W7-T01: when the user navigates to a channel URL (or picks an inactive
+  // channel from the sidebar) that they're not currently joined to, issue a
+  // JOIN automatically. Improves on IRCCloud (which never auto-joins from
+  // URL nav — users have to click "Join") by closing the gap between
+  // "I navigated here" and "I'm actually in the room".
+  //
+  // Skip for:
+  //   - non-channel buffers (DMs, server log) — no IRC JOIN concept
+  //   - already-joined channels — no work to do
+  //   - disconnected networks — engine can't join yet; the user will see
+  //     the Rejoin button once reconnect happens
+  //   - already-pending joins — dedup via pendingJoins Set so re-renders
+  //     (selectLastActiveBuffer firing repeatedly, etc.) don't spam JOIN
+  function maybeAutoJoinChannel(networkId: string, bufferName: string): void {
+    if (!bufferName || !bufferName.startsWith('#')) return;
+    const normalized = normalizeChannelName(bufferName);
+    const net = ircState.networks.find(n => n.networkId === networkId);
+    if (!net) return;
+    const buf = net.buffers.find(b => b.name === normalized);
+    // Already joined — nothing to do.
+    if (buf && buf.isJoined === true && buf.joinError == null) return;
+    // Network not connected — JOIN would fail. Leave as-is; the user can
+    // hit Rejoin once the network reconnects.
+    if (!net.connected) return;
+    // Dedup: if a JOIN is already in-flight for this buffer, don't re-send.
+    if (isJoinPending(networkId, normalized)) return;
+
+    // Mark in-flight so the sync handler doesn't clobber us with isJoined:false
+    // and the BufferHeader can render a "Joining…" state.
+    if (buf) {
+      buf.joinInFlight = true;
+      buf.joinError = null;
+      buf.pendingIsJoined = true;
+    }
+    markJoinPending(networkId, normalized);
+    recordJoin(networkId, normalized);
+    sendRaw(networkId, 'JOIN ' + normalized);
   }
 
   async function loadBufferHistory(networkId: string, bufferName: string): Promise<void> {
