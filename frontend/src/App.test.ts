@@ -160,6 +160,9 @@ describe('App', () => {
     await expect.element(page.getByRole('heading', { name: '#chan2' })).toBeInTheDocument();
   });
 
+  // Skip: flaky when run alongside other App tests — App mounts in the same
+  // DOM across tests and the parallel render + MessageList polling can time out
+  // the vi.waitFor (2s default). Enable only for targeted runs.
   it.skip('message isolation between networks', async () => {
     const net1 = createNetwork({ networkId: 'net1', name: 'Net1' });
     net1.buffers.push(createBuffer({ name: '#general' }));

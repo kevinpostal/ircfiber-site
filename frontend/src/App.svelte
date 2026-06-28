@@ -506,7 +506,6 @@ let showNetworkForm: boolean = $state(false);
     const isSameBuffer =
       ircState.activeBuffer.networkId === networkId &&
       ircState.activeBuffer.bufferName === normalizeChannelName(bufferName);
-    console.log('[fix] switchToBuffer', networkId, bufferName, 'sameBuf:', isSameBuffer, 'syncReceived:', syncReceived);
     setActiveBuffer(networkId, bufferName);
     requestSwitchBuffer(networkId, bufferName);
     updateRoute(networkId, bufferName);
@@ -657,15 +656,11 @@ let showNetworkForm: boolean = $state(false);
         if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
           const ab = ircState.activeBuffer;
           const key = `${ab.networkId!}:${normalizeChannelName(ab.bufferName!)}`;
-          console.log('[fix] sync: active buffer', ab.networkId, ab.bufferName, 'msgs:', ircState.messages[key]?.length ?? 0);
           if (!ircState.messages[key] || ircState.messages[key].length === 0) {
-            console.log('[fix] calling loadBufferHistory');
             void loadBufferHistory(ab.networkId!, ab.bufferName!);
           } else {
-            console.log('[fix] messages already present, skipping loadBufferHistory');
           }
         } else {
-          console.log('[fix] sync: no active buffer set');
         }
       } else if (obj.type === 'irc_event' || obj.y === 'irc_event') {
         processEvent(obj);
@@ -704,7 +699,6 @@ let showNetworkForm: boolean = $state(false);
   // IRCCloud-style: handle networks message — populates the sidebar immediately
   // with real network names before the full state dump arrives
   function handleNetworks(obj: Record<string, unknown>): void {
-    console.log('[fix] handleNetworks called, items:', ((obj.items || []) as unknown[]).length);
     performance.mark('networks');
     const items = (obj.items || []) as Array<{ networkId: string; name: string }>;
     if (items.length === 0) return;
@@ -800,7 +794,6 @@ let showNetworkForm: boolean = $state(false);
     // on first boot, so the initial seed always passes through.
     const serverPrefVersion = typeof obj.prefVersion === 'number' ? obj.prefVersion : 0;
     if (lastServerPrefVersion > 0 && serverPrefVersion <= lastServerPrefVersion) {
-      console.debug('[mergePreferences] skipping stale payload: local=' + lastServerPrefVersion + ', server=' + serverPrefVersion);
       return;
     }
     lastServerPrefVersion = serverPrefVersion;
@@ -1076,7 +1069,6 @@ let showNetworkForm: boolean = $state(false);
 
   function checkRoute(): void {
     const path = window.location.pathname;
-    console.log('[fix] checkRoute called, path:', path, 'syncReceived:', syncReceived, 'networks:', ircState.networks.length);
     const settingsTab = getSettingsTabFromUrl();
     if (settingsTab) {
       ircState.showSettings = true;

@@ -19,15 +19,12 @@
 
   async function handleLoadMore(): Promise<boolean> {
     if (!ircState.activeBuffer.networkId || !ircState.activeBuffer.bufferName) {
-      console.log('[handleLoadMore] No active buffer');
       return false;
     }
     const key = `${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`;
     const existing = ircState.messages[key] ?? [];
-    console.log('[handleLoadMore v2] Existing messages:', existing.length);
 
     if (existing.length === 0) {
-      console.log('[handleLoadMore] No existing messages');
       return false;
     }
 
@@ -64,12 +61,10 @@
       phantomCursorTs = null;
     }
 
-    console.log('[handleLoadMore v2] Phantom check:', { isPhantom, eid: !!first?.eid, text: first?.text != null, nick: first?.nick != null, isUuid: isUuidMsgid(first), cursorTs: oldestTs });
 
     // No cursor and all messages are optimistic (not yet confirmed by the
     // server) — there's no real backlog to load.  Skip the API call.
     if (allOptimistic && !oldestEid) {
-      console.log('[handleLoadMore] All messages optimistic — no backlog');
       return false;
     }
 
@@ -90,12 +85,7 @@
       });
 
       const older = result.messages;
-      console.log('[handleLoadMore] Loaded', older.length, 'older messages');
-      console.log('[handleLoadMore] Backlog size (total):', result.backlog_size);
-      console.log('[handleLoadMore] Next cursor (earliest_eid):', result.earliest_eid, '(earliest_msgid:', result.earliest_msgid, 'earliest_ts:', result.earliest_ts, ')');
       if (older.length > 0) {
-        console.log('[handleLoadMore] First loaded message:', { eid: older[0].eid, msgid: older[0].msgid, ts: older[0].t, text: older[0].text?.substring(0, 50) });
-        console.log('[handleLoadMore] Last loaded message:', { eid: older[older.length - 1].eid, msgid: older[older.length - 1].msgid, ts: older[older.length - 1].t, text: older[older.length - 1].text?.substring(0, 50) });
         const beforeLen = (ircState.messages[key] ?? []).length;
         prependMessages(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, older);
         const afterLen = (ircState.messages[key] ?? []).length;
@@ -113,14 +103,11 @@
         // requests messages STRICTLY older than anything we've seen.
         if (isPhantom && result.earliest_ts > 0) {
           phantomCursorTs = result.earliest_ts;
-          console.log('[handleLoadMore] Duplicates — pinning cursor to earliest_ts:', phantomCursorTs);
           // Return true so LoadMore doesn't count this as a failed load
           // (the cursor IS advancing, just not via new messages yet).
           return true;
         }
-        console.log('[handleLoadMore] All', older.length, 'messages were duplicates (already loaded)');
       } else {
-        console.log('[handleLoadMore] No older messages returned from API');
       }
     } catch (e) {
       console.error('[handleLoadMore] Failed to load more history:', e);
