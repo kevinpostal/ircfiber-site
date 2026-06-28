@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, getTempUnavailable } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable } from '../stores/ircStore.svelte';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
@@ -97,6 +97,9 @@
           } as import('../types').IRCMessage);
         });
       } else {
+        // User clicked Reconnect — clear the indefinite disconnect guard
+        // so the sync's 'connected' state can update the UI again.
+        clearUserDisconnected(net.networkId);
         net.connectionState = 'connecting';
         setActiveBuffer(net.networkId, '_server');
         await reconnectNetwork(net.networkId);

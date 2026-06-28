@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, markUserDisconnected } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork, disconnectNetwork, updateCollapsed } from '../stores/api';
   import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt } from '../stores/preferences.svelte';
@@ -88,6 +88,7 @@
   async function clickDisconnect(): Promise<void> {
     if (!networkId || isInactive) return;
     onClose();
+    markUserDisconnected(networkId);
     await disconnectNetwork(networkId);
   }
   function clickJoin(): void {

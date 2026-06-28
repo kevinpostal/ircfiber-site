@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel } from './utils';
 import { updateRoute } from './routing';
 
@@ -156,6 +156,7 @@ registerSlash(['umode'], (args, networkId, _target, net) => {
 
 registerSlash(['quit', 'disconnect'], (args, networkId) => {
   const reason = args.join(' ');
+  markUserDisconnected(networkId);
   void disconnectNetwork(networkId, reason);
 });
 

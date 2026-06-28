@@ -9,12 +9,18 @@ import { recentHighlightersCache } from '../lib/tabCompletion';
 // ── Single reactive state object ──
 export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'advanced';
 
-/** Tracks user-initiated disconnect timestamps per network so the sync
- * handler doesn't immediately overwrite the local 'disconnected' state
- * back to 'connecting' when the stale engine snapshot arrives. */
+/** Tracks user-initiated disconnect per network so the sync handler never
+ * overwrites the local 'disconnected' state back to 'connecting'/'connected'.
+ * Set by markUserDisconnected() when the user clicks Disconnect, cleared by
+ * clearUserDisconnected() when the user explicitly clicks Reconnect.
+ * Unlike the old 10-second window, this guard is INDEFINITE — Disconnect
+ * means "stop all reconnection attempts" until the user says otherwise. */
 const userDisconnectedAt: Map<string, number> = new Map();
 export function markUserDisconnected(networkId: string): void {
   userDisconnectedAt.set(networkId, Date.now());
+}
+export function clearUserDisconnected(networkId: string): void {
+  userDisconnectedAt.delete(networkId);
 }
 
 export const ircState = $state({
@@ -443,6 +449,23 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     }
   }
 
+  // Self-echo fallback: server echo without label — match optimistic
+  // by text content to avoid duplicate when labeled-response is absent.
+  if (msg.selfEcho) {
+    for (const [optLabel, optMsg] of ircState.optimisticMessages) {
+      if (optMsg.text === msg.text && optMsg.nick === msg.nick && optMsg.command === 'PRIVMSG') {
+        ircState.optimisticMessages.delete(optLabel);
+        const idx = list.findIndex((m: IRCMessage) => m.label === optLabel);
+        if (idx >= 0) {
+          list[idx] = msg;
+          ircState.messages[key] = list;
+          ircState.processedMessages[key] = buildProcessedBuffer(list);
+          return;
+        }
+      }
+    }
+  }
+
   if (msg.eid && list.some((m: IRCMessage) => m.eid === msg.eid)) return;
   if (msg.msgid && list.some((m: IRCMessage) => m.msgid === msg.msgid)) return;
 
@@ -510,6 +533,29 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         list[idx] = msg;
         replacedEdit = true;
         continue;
+      }
+    }
+    // Self-echo fallback: when echo-message is active but labeled-response
+    // is not, the server echo arrives without a label. The optimistic
+    // message has a label but the echo doesn't — match by text content
+    // so we don't end up with both the optimistic and the echo.
+    if (msg.selfEcho) {
+      // Search optimistic messages for one with matching text content
+      let foundOptLabel: string | null = null;
+      for (const [optLabel, optMsg] of ircState.optimisticMessages) {
+        if (optMsg.text === msg.text && optMsg.nick === msg.nick && optMsg.command === 'PRIVMSG') {
+          foundOptLabel = optLabel;
+          break;
+        }
+      }
+      if (foundOptLabel) {
+        ircState.optimisticMessages.delete(foundOptLabel);
+        const idx = list.findIndex((m: IRCMessage) => m.label === foundOptLabel);
+        if (idx >= 0) {
+          list[idx] = msg;
+          replacedEdit = true;
+          continue;
+        }
       }
     }
     // Dedup against the existing list AND against earlier messages in
@@ -988,22 +1034,23 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // Connection state: only overwrite from sync when it represents
       // genuinely new info, not when the sync is just slower than live
       // IRC events (the race window described above).
-      if (syncIsNew) {
-        // If the user just clicked Disconnect (< 10s ago), suppress sync
-        // overwrites to 'connected' — the engine snapshot is stale and
-        // hasn't caught up with the control message yet, and we don't want
-        // to flash the UI back to "connected" while the user is trying to
-        // disconnect. 'connecting' is NOT suppressed: if the engine reports
-        // it (e.g. during an exponential-backoff reconnect window) the user
-        // needs to see "Disconnect" so they can cancel the pending attempt.
-        const disconnectedAt = userDisconnectedAt.get(existing.networkId) ?? 0;
-        const recentlyDisconnected = connectionState === 'connected'
-          && Date.now() - disconnectedAt < 10_000;
-        if (!recentlyDisconnected) {
-          existing.connected = net.connected;
-          existing.connectionState = connectionState;
-        }
-      } else if (connectionState === 'connecting') {
+        if (syncIsNew) {
+          // If the user clicked Disconnect, suppress sync overwrites to
+          // 'connected' INDEFINITELY — until the user explicitly clicks
+          // Reconnect (which calls clearUserDisconnected).  The engine
+          // snapshot can race the control message, or the periodic
+          // snapshotter can overwrite the disconnect snapshot before the
+          // consumer processes the control message, and we must not flash
+          // the UI back to "connected" while the user wants to stay
+          // disconnected.  'connecting' is NOT suppressed: if the engine
+          // reports it (e.g. during an exponential-backoff reconnect
+          // window) the user needs to see "Disconnect" so they can cancel
+          // the pending attempt.
+          if (!(connectionState === 'connected' && userDisconnectedAt.has(existing.networkId))) {
+            existing.connected = net.connected;
+            existing.connectionState = connectionState;
+          }
+        } else if (connectionState === 'connecting') {
         // The sync confirms connection is in progress — this is new info
         // that live events haven't provided yet (001 hasn't fired, or the
         // engine is between attempts in its backoff loop). Show it so the
@@ -1033,6 +1080,9 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         }
       }
 
+      // Track which local buffers were touched by this sync, so we can
+      // reconcile orphan channels below.
+      const syncedBufferNames = new Set<string>();
       for (const incomingBuf of net.buffers) {
         // Only normalize channel names (starting with #). Query/DM buffers
         // use the raw nick as the buffer name and must not get '#' prepended.
@@ -1043,6 +1093,7 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         // re-includes them in sync (they're in partedChannels), but the UI
         // should keep them hidden.
         if (hiddenChannelsMap[`${existing.networkId}:${incomingBuf.name}`]) continue;
+        syncedBufferNames.add(incomingBuf.name);
         // Convert string users to Member objects from backend sync,
         // then deduplicate by stripped nick. The D backend may briefly
         // include the same user twice (bare nick from our own handler
@@ -1145,6 +1196,22 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         } else {
           existing.buffers.push(incomingBuf);
         }
+      }
+      // Reconcile orphan channels: buffers that were in existing.buffers but
+      // NOT in the incoming sync.  These are channels the engine no longer
+      // tracks (not in channelState nor partedChannels) — the user is no
+      // longer joined.  Without this, a stale isJoined:true would persist
+      // and block auto-join on URL navigation (maybeAutoJoinChannel's guard
+      // at App.svelte:545 would skip the JOIN).
+      for (const buf of existing.buffers) {
+        if (buf.name === '_server') continue;
+        if (buf.isJoined !== true) continue;
+        if (syncedBufferNames.has(buf.name)) continue;
+        // If a JOIN is in-flight, don't clobber it — the user explicitly
+        // wants to join.
+        if (buf.joinInFlight === true) continue;
+        buf.isJoined = false;
+        buf.pendingIsJoined = undefined;
       }
       // IRCCloud-style: sync now includes message history in the buffer
       // objects (sourced from Redis scrollback on the server).  Pull it
