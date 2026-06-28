@@ -22,6 +22,7 @@
   import Uploads from './pages/Uploads.svelte';
   import MongoMonitor from './pages/MongoMonitor.svelte';
   import RedisMonitor from './pages/RedisMonitor.svelte';
+  import Logs from './pages/Logs.svelte';
   import { current, onChange, navigate, match } from './lib/router';
   import { adminUser, loadMe } from './stores/auth';
 
@@ -45,6 +46,7 @@
     if (hostMatch) return { kind: 'servers-host', host: hostMatch.host } as const;
     if (match('/servers', path)) return { kind: 'servers' } as const;
     if (match('/sessions', path)) return { kind: 'sessions' } as const;
+    if (match('/logs', path)) return { kind: 'logs' } as const;
     if (match('/users/new', path)) return { kind: 'users-new' } as const;
     const usersMatch = match('/users/:id', path);
     if (usersMatch) return { kind: 'users-detail', userId: usersMatch.id } as const;
@@ -73,6 +75,8 @@
         <Servers />
       {:else if page?.kind === 'sessions'}
         <Sessions />
+      {:else if page?.kind === 'logs'}
+        <Logs />
       {:else if page?.kind === 'users-new'}
         <UserNew />
       {:else if page?.kind === 'users-detail'}

@@ -28,6 +28,7 @@
       items: [
         { label: 'Servers', path: '/servers', icon: '🖥️' },
         { label: 'Sessions', path: '/sessions', icon: '🔑' },
+        { label: 'Logs', path: '/logs', icon: '📜' },
       ],
     },
     {
