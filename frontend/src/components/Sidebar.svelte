@@ -6,6 +6,7 @@
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
   import type { Buffer, Network } from '../types';
   import AccountMenu from './AccountMenu.svelte';
+  import StaleIndicator from './StaleIndicator.svelte';
 
   interface Props {
     onSwitchBuffer: (networkId: string, bufferName: string) => void;
@@ -210,6 +211,7 @@
               <i class="fa fa-globe network-shield" aria-hidden="true" style="opacity:0.5"></i>
             {/if}
             <span class="label">{net.name}</span>
+            <StaleIndicator lastSeenAt={net.lastSeenAt} />
             {#if totalNetHighlights > 0}
               <span class="unread buffer-unread">{totalNetHighlights}</span>
             {/if}

@@ -422,6 +422,7 @@ export function prependMessage(networkId: string, bufferName: string, msg: IRCMe
   // Prepending shifts the head boundary; rebuild the processed buffer
   // from the prepended tail to keep the head group valid.
   ircState.processedMessages[key] = buildProcessedBuffer(list);
+  markNetworkSeen(networkId);
 }
 
 export function appendMessage(networkId: string, bufferName: string, msg: IRCMessage): void {
@@ -498,6 +499,7 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
   if (isUnread) {
     incrementUnread(networkId, bufferName, msg);
   }
+  markNetworkSeen(networkId);
 }
 
 // IRCCloud-style batch append: processes multiple messages for the same
@@ -661,6 +663,8 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       }
     }
   }
+
+  markNetworkSeen(networkId);
 }
 
 export function incrementUnread(networkId: string, bufferName: string, msg: IRCMessage): void {
@@ -796,6 +800,7 @@ export function setMessages(networkId: string, bufferName: string, msgs: IRCMess
   ircState.messages[key] = msgs;
   ircState.processedMessages[key] = buildProcessedBuffer(msgs);
   saveMessageCache(key, msgs);
+  markNetworkSeen(networkId);
 }
 
 export function prependMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
@@ -844,6 +849,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   // Prepending changes the head boundary in ways that can't be fixed
   // incrementally — fall back to a full pass on the merged raw array.
   ircState.processedMessages[key] = prependReprocess(existing, filtered);
+  markNetworkSeen(networkId);
 }
 
 // Marks are sequence-prefixed (`<seq>|<msgid or t:ts>`) so every fetch or
@@ -958,12 +964,16 @@ export function updateBottomSeen(networkId: string, bufferName: string, msg: IRC
 
 function normalizeUser(user: string | Member): Member {
   if (typeof user === 'string') {
+    const bareNick = stripPrefix(user);
     const mode = getUserModePrefix(user);
+    // Extract ident from userhost-in-names format (nick!user@host)
+    const bang = user.indexOf('!');
+    const ident = bang > 0 ? user.slice(bang + 1).split('@')[0] : '';
     return {
-      nick: user,
+      nick: bareNick,
       prefix: mode.prefix,
       category: mode.category,
-      ident: '', realname: '', isAway: false, awayMessage: '',
+      ident, realname: '', isAway: false, awayMessage: '',
       lastSpoke: 0, lastHighlighted: 0, account: ''
     };
   }
@@ -987,6 +997,11 @@ export function updateNetworkFromSync(incoming: Network[]): void {
     }
 
     const existing = ircState.networks.find(n => n.networkId === net.networkId);
+    // The sync itself is fresh activity for the network — refresh the
+    // stale marker so a steady-state boot or restart doesn't briefly
+    // flash "stale" on every server before traffic resumes.
+    if (existing) existing.lastSeenAt = Date.now();
+    else net.lastSeenAt = Date.now();
     if (existing) {
       // Map backend status to frontend ConnectionState so the UI reflects
       // the actual engine state (e.g. "connecting" right after restart).
@@ -1159,6 +1174,23 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existingBuf.topicSetBy = incomingBuf.topicSetBy;
           existingBuf.topicSetAt = incomingBuf.topicSetAt;
           existingBuf.users = incomingBuf.users;
+          // Enrich members with extended-join data from network-level
+          // accounts/idents/realnames caches (sync JSON carries these as
+          // extra fields beyond the Buffer/Network interface).
+          const syncAccounts = (rawNet as any).accounts as Record<string, string> | undefined;
+          const syncIdents = (rawNet as any).idents as Record<string, string> | undefined;
+          if (syncAccounts || syncIdents) {
+            for (const m of existingBuf.users) {
+              if (syncAccounts && !m.account) {
+                const acct = syncAccounts[m.nick];
+                if (acct) m.account = acct;
+              }
+              if (syncIdents && !m.ident) {
+                const id = syncIdents[m.nick];
+                if (id) m.ident = id;
+              }
+            }
+          }
           // Re-apply saved member activity that the incoming sync wiped out.
           for (const m of existingBuf.users) {
             const key = `${existing.networkId}:${existingBuf.name}:${m.nick}`;
@@ -1392,17 +1424,24 @@ export function handleConnect(cmd: string, networkId: string, text?: string): vo
     net.connectionState = 'disconnected';
     if (text) net.disconnectReason = text;
   }
+  // Any connect/disconnect event is fresh activity for the network —
+  // update lastSeenAt so the stale indicator clears promptly.
+  markNetworkSeen(networkId);
 }
 
 export function updateChannelUsers(networkId: string, bufferName: string, cmd: string, nick: string, params?: string[], prefix?: string): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
+  // All channel-user mutations (NAMES, JOIN, PART, MODE, etc.) are
+  // evidence the network is still alive — refresh the stale marker.
+  markNetworkSeen(networkId);
   const normalized = normalizeChannelName(bufferName);
   let buf = net.buffers.find(b => b.name === normalized);
 
   // Auto-create buffer when the current user joins a channel.
   // Handles joins from external clients, rejoin after mode changes, etc.
-  if (!buf && cmd === 'JOIN' && nick === net.currentNick) {
+  const joinNick = stripPrefix(nick);
+  if (!buf && cmd === 'JOIN' && joinNick === net.currentNick) {
     // If this channel was previously hidden (deleted from sidebar), unhide it
     // so it shows up again automatically. Without this, the user would have to
     // manually /join to bring it back even after re-joining from another client.
@@ -1449,14 +1488,17 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       const stripped = stripPrefix(n);
       if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
         const mode = getUserModePrefix(n);
+        // userhost-in-names: nick!user@host — extract ident
+        const bang = n.indexOf('!');
+        const identEJ = bang > 0 ? n.slice(bang + 1).split('@')[0] : '';
         buf.users.push({
           nick: n, prefix: mode.prefix, category: mode.category,
-          ident: '', realname: '', isAway: false, awayMessage: '',
+          ident: identEJ, realname: '', isAway: false, awayMessage: '',
           lastSpoke: 0, lastHighlighted: 0, account: ''
         });
       }
     }
-  } else if (cmd === 'JOIN' && nick === net.currentNick) {
+  } else if (cmd === 'JOIN' && joinNick === net.currentNick) {
     buf.isJoined = true;
     // JOIN for self is authoritative — the buffer is no longer a phantom
     // even if it was auto-created by setActiveBuffer before the JOIN
@@ -1523,10 +1565,13 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
         : '';
       const host = ident.includes('@') ? ident.slice(ident.lastIndexOf('@') + 1) : '';
       const isBot = !!host && /(^|\.)bot(\.|$)/i.test(host);
+      // extended-join: params = [channel, account, realname]
+      const acct = params && params.length >= 3 ? params[1] : '';
+      const realnameEJ = params && params.length >= 3 ? params[2] : '';
       buf.users.push({
         nick, prefix: '', category: 'MEMBER',
-        ident, realname: '', isAway: false, awayMessage: '',
-        lastSpoke: 0, lastHighlighted: 0, account: '', isBot
+        ident, realname: realnameEJ || '', isAway: false, awayMessage: '',
+        lastSpoke: 0, lastHighlighted: 0, account: acct, isBot
       });
     }
   } else if (cmd === 'PART' && nick === net.currentNick) {
@@ -1632,6 +1677,7 @@ export function updateChannelTopic(networkId: string, bufferName: string, topic:
     buf.topic = topic;
     buf.topicSetAt = Date.now();
   }
+  markNetworkSeen(networkId);
 }
 
 // ── W3-T01a: Archive-names client cache ──
@@ -1650,3 +1696,34 @@ export async function fetchArchiveNames(): Promise<Record<string, string[]>> {
 }
 
 export { isIgnored };
+
+// ── Stale-network detection ──
+//
+// Marks networks as recently-seen whenever anything happens on them
+// (WS message, buffer update, channel state change, etc.). The UI
+// uses `isNetworkStale` to flag networks whose connection has gone
+// silent past a threshold, so the user knows which networks might
+// have dropped without scrolling through their server log.
+//
+// `markNetworkSeen` is intentionally a no-op when the networkId
+// isn't found (it may have been removed mid-flight, e.g. by a sync
+// race) so callers can fire-and-forget from every handler without
+// worrying about races.
+
+/** Default staleness threshold: 5 minutes. */
+export const DEFAULT_STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+export function markNetworkSeen(networkId: string): void {
+  if (!networkId) return;
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  net.lastSeenAt = Date.now();
+}
+
+export function isNetworkStale(
+  network: { lastSeenAt?: number | null },
+  thresholdMs: number = DEFAULT_STALE_THRESHOLD_MS,
+): boolean {
+  if (!network || !network.lastSeenAt) return false;
+  return Date.now() - network.lastSeenAt > thresholdMs;
+}

@@ -60,6 +60,15 @@ export interface Network {
   lastActiveBuffer?: string;
   // W1-T08: connection idle detection — set when engine emits "idle" event.
   connectionIdleSince?: number | null;
+  /**
+   * Unix-ms timestamp of the most recent activity (WS message, buffer
+   * update, etc.) for this network. Updated by `markNetworkSeen` from
+   * every handler that touches network state. The UI uses this to flag
+   * networks whose connection has gone idle — see `isNetworkStale`.
+   * Defaults to Date.now() at construction so freshly-created networks
+   * don't render as stale before the first event arrives.
+   */
+  lastSeenAt?: number;
 }
 
 export interface Buffer {

@@ -5,6 +5,12 @@ import { normalizeChannelName } from '../lib/utils';
 import { parseIgnoreList } from '../lib/ignore';
 import type { IgnoreMap } from '../lib/ignore';
 
+/** TTL for localStorage-backed caches. Anything older than this on
+ *  read is dropped and the default value is returned. Prevents stale
+ *  unread/highlight/lastSeen maps from years-old sessions from
+ *  haunting the UI after a long absence. */
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
 // ── Global settings (IRCCloud-style) ──
 export interface FeatureFlag {
   enabled: boolean;
@@ -121,6 +127,19 @@ function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): Glob
 
 function getStorageItem<T>(key: string, defaultValue: T): T {
   try {
+    // TTL guard: any persisted value older than CACHE_TTL_MS is dropped
+    // and the default is returned. The sibling `_savedAt` key records
+    // when the value was last written; if it's missing (legacy data
+    // written before the TTL feature shipped) we keep the value as-is
+    // — absence of `_savedAt` means "indefinite", which preserves
+    // backwards compatibility with existing users.
+    const savedAtRaw = localStorage.getItem(key + ':_savedAt');
+    if (savedAtRaw !== null) {
+      const savedAt = parseInt(savedAtRaw, 10);
+      if (Number.isFinite(savedAt) && Date.now() - savedAt > CACHE_TTL_MS) {
+        return defaultValue;
+      }
+    }
     const raw = localStorage.getItem(key);
     if (raw === null) return defaultValue;
     const v = JSON.parse(raw);
@@ -137,6 +156,9 @@ function getStorageItem<T>(key: string, defaultValue: T): T {
 function setStorageItem(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    // Sibling timestamp so getStorageItem can apply TTL. Writes happen
+    // together so the value and its age are always in sync.
+    localStorage.setItem(key + ':_savedAt', String(Date.now()));
   } catch (e) {
     // Storage might be full or unavailable
     console.warn('Failed to persist', key, e);

@@ -1,7 +1,7 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData } from '../types';
 import { ircState, handleConnect, updateChannelUsers,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
-         setTempUnavailable, clearTempUnavailable } from '../stores/ircStore.svelte';
+         setTempUnavailable, clearTempUnavailable, markNetworkSeen } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
@@ -172,6 +172,11 @@ export function processIrcEvent(
   const net = ircState.networks.find(n => n.name === networkName);
   if (!net) return {};
   const networkId = net.networkId;
+  // Every realtime WS event that names a known network is fresh
+  // activity — refresh the stale marker up-front so callers that early-
+  // return (ignore list, TAGMSG, temp_unavailable, etc.) still mark the
+  // network as seen.
+  markNetworkSeen(networkId);
 
   // Ignore check
   if (msg.nick && isIgnored(msg.nick)) return {};

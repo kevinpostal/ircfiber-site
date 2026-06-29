@@ -1,4 +1,5 @@
 import { globalPrefs } from './preferences.svelte';
+import { ircState, markNetworkSeen } from './ircStore.svelte';
 
 // ── Stream state machine ──
 // Mirrors IRCCloud's BackendController lifecycle:
@@ -86,6 +87,18 @@ let streamStateCallbacks: ((state: StreamState) => void)[] = [];
 export const wsState = $state<{ value: StreamState }>({ value: 'disconnected' });
 
 function setStreamState(state: StreamState): void {
+  // IRCCloud-style reconnect handshake: when the stream comes back to
+  // 'connected' after having been 'disconnected'/'reconnecting', the
+  // next message flood will refresh lastSeenAt per-network. Until that
+  // flood arrives the user would see every network flagged as stale,
+  // which is misleading — they're fresh again. Refresh all known
+  // networks here so the stale pill clears promptly after a reconnect.
+  if (state === 'connected' && wsState.value !== 'connected') {
+    const now = Date.now();
+    for (const net of ircState.networks) {
+      net.lastSeenAt = now;
+    }
+  }
   wsState.value = state;
   for (const cb of streamStateCallbacks) cb(state);
 }
