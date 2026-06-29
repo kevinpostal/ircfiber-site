@@ -66,6 +66,10 @@ vi.mock('/src/stores/api', () => ({
   updateBufferPrefs: vi.fn(async () => undefined),
   hideChannel: vi.fn(async () => undefined),
   unhideChannel: vi.fn(async () => undefined),
+  // ircStore imports this for the WebSocket-sync message normalization
+  // path. The tests in this file don't drive the WebSocket sync payload,
+  // so a pass-through stub is fine.
+  normalizeMessage: vi.fn((m: unknown) => m),
 }));
 
 import { connectWebSocket, disconnectWebSocket, sendRaw, sendMessage, sendJson, requestSync, requestSwitchBuffer } from '/src/stores/wsConnection.svelte.ts';

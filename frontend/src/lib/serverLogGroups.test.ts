@@ -219,6 +219,83 @@ describe('groupServerLog', () => {
     expect(attempts[0].phases.map((p) => p.command)).toEqual(['CONNECT', 'DISCONNECT']);
     expect(attempts[0].status).toBe('disconnected');
   });
+
+  it('collapses identical engine+holder phase events into a single attempt', () => {
+    // Both the engine's direct-TCP path and the holder daemon emit a
+    // full phase sequence for the same physical connect. Each event
+    // gets a unique eid so the eid-based dedup never sees them.
+    // Without the phase-text dedup we'd get two "Connected" cards
+    // for what is actually one connection.
+    const baseText = 'TCP connection established to irc.ircfiber.com:6697.';
+    const messages = [
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'tcp_open', text: baseText }),
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'tcp_open', text: baseText }),
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'tls', text: 'Starting TLS handshake...' }),
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'tls', text: 'Starting TLS handshake...' }),
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'welcome', text: 'Connection registered as Zodiac.' }),
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'welcome', text: 'Connection registered as Zodiac.' }),
+    ];
+    const attempts = groupServerLog(messages);
+    // One attempt with one of each phase (not two attempts with three
+    // phases each, which is what we'd see without dedup).
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].phases.map((p) => p.phase)).toEqual(['tcp_open', 'tls', 'welcome']);
+    expect(attempts[0].phases).toHaveLength(3);
+  });
+
+  it('keeps distinct phase events that share a timestamp but differ in text', () => {
+    // The engine and the holder publish overlapping phase events with
+    // different text ("TCP connection via holder..." vs "TCP connection
+    // established..."). Both are real signals and should be preserved —
+    // we collapse duplicates, not coincidental name overlaps.
+    const messages = [
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'tcp_open',
+         text: 'TCP connection via holder to irc.ircfiber.com:6697' }),
+      m({ t: 1782759326000, command: 'NOTICE', phase: 'tcp_open',
+         text: 'TCP connection established to irc.ircfiber.com:6697.' }),
+    ];
+    const attempts = groupServerLog(messages);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].phases).toHaveLength(2);
+  });
+
+  it('dedups duplicate DISCONNECTED events from concurrent engine+holder', () => {
+    // Both the engine and the holder publish a DISCONNECTED for the
+    // same socket death — same timestamp, same text. Keep one.
+    const messages = [
+      m({ t: 1782759200000, command: 'DISCONNECTED',
+         text: 'write failed: TLS stream error 40000001' }),
+      m({ t: 1782759200000, command: 'DISCONNECTED',
+         text: 'write failed: TLS stream error 40000001' }),
+      m({ t: 1782759201000, command: 'NOTICE', phase: 'queued',
+         text: 'Reconnect attempt scheduled in 14s' }),
+      m({ t: 1782759201000, command: 'NOTICE', phase: 'queued',
+         text: 'Reconnect attempt scheduled in 14s' }),
+    ];
+    const attempts = groupServerLog(messages);
+    // Expect one disconnect chain + one queued attempt, not duplicates.
+    const commands = attempts.flatMap((a) => a.phases.map((p) => p.command));
+    expect(commands.filter((c) => c === 'DISCONNECTED')).toHaveLength(1);
+    const phases = attempts.flatMap((a) => a.phases.map((p) => p.phase));
+    expect(phases.filter((p) => p === 'queued')).toHaveLength(1);
+  });
+
+  it('does not dedup chat-shaped messages that share text naturally', () => {
+    // A user can legitimately say "yes" twice. Without a phase tag,
+    // the dedup must pass these through unchanged.
+    const messages = [
+      m({ command: 'PRIVMSG', nick: 'alice', text: 'yes', t: 1000 }),
+      m({ command: 'PRIVMSG', nick: 'alice', text: 'yes', t: 1001 }),
+    ];
+    const result = groupServerLog(messages);
+    // The numeric body / classification pipeline may absorb these into
+    // a synthetic attempt, but they shouldn't be dropped — total event
+    // count across all attempts must remain 2.
+    const total = result.reduce((n, a) => n
+      + a.phases.length + a.motd.length + a.welcome.length
+      + a.cap.length + a.numeric.length + a.notices.length, 0);
+    expect(total).toBe(2);
+  });
 });
 
 describe('phaseToLabel', () => {

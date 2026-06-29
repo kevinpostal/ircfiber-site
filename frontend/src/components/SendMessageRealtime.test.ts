@@ -21,6 +21,10 @@ vi.mock('/src/stores/api', () => ({
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   updateServerlogCollapsed: vi.fn(async () => undefined),
+  // ircStore imports this for the WebSocket-sync message normalization
+  // path. The tests in this file don't exercise that path, so a
+  // pass-through stub is fine.
+  normalizeMessage: vi.fn((m: unknown) => m),
 }));
 
 function resetState(): void {

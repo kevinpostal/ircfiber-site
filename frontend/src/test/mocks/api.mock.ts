@@ -12,5 +12,7 @@ export function make_mock_api() {
     addNetwork: vi.fn(async () => undefined),
     updateNetwork: vi.fn(async () => undefined),
     deleteNetwork: vi.fn(async () => undefined),
+    // See context-helpers.ts for the rationale.
+    normalizeMessage: vi.fn((m: unknown) => m),
   };
 }

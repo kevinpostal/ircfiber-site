@@ -4,7 +4,20 @@ import { parseChannelList } from '../lib/utils';
 
 const API_BASE = '/api';
 
-function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
+/**
+ * Unpack a wire-format event (compact JSON keys `i, c, x, n, m, p, hm, px, l, ch, se, phase, ...`)
+ * OR a long-format REST field (`id, command, text, nick, ...`) into the IRCMessage
+ * shape used everywhere in the frontend. Idempotent: calling it on a value
+ * that's already in the IRCMessage shape returns an equivalent message.
+ *
+ * Exported so sync payloads (which carry the wire-format `messages[]` from
+ * the server's Redis scrollback) can be normalized before reaching
+ * ircState.messages — without this normalization, the frontend's
+ * ServerLogCard sees `msg.text === undefined` for events stored under
+ * `x` and the timeline body renders as `&nbsp;`. See the WebSocket sync
+ * path in ircStore.svelte.ts (updateNetworkFromSync) for the consumer.
+ */
+export function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
   const t = raw.t as number | undefined;
   const eid = raw.eid as number | undefined;
   const command = (raw.command as string) || (raw.c as string) || '';
@@ -20,6 +33,17 @@ function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
       type = action.type;
     }
   }
+  // Phase tag (set by IRCRawEvent.makeServerLog in the engine) lives in
+  // the IRCv3 tags object alongside server-time / msgid. The compact
+  // wire format inlines it as `phase` for low-overhead access on the hot
+  // path; the long-form REST history keeps it under `tags.phase`. Pick
+  // whichever is present so REST-loaded server-log progress entries are
+  // classified as 'phase' (timeline chip) instead of 'notice' (raw IRC).
+  // Mirrors the unpackEvent() path used by the WebSocket live event handler.
+  const tags = raw.tags as Record<string, string> | undefined;
+  const phase = (raw.phase as string | undefined)
+    ?? tags?.phase
+    ?? undefined;
   return {
     id: (raw.id as string) || (raw.i as string) || undefined,
     timestamp: (raw.timestamp as string) || (t ? new Date(t).toISOString() : undefined),
@@ -33,6 +57,8 @@ function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
     msgid: (raw.msgid as string) || (raw.m as string) || (raw.i as string) || undefined,
     label: (raw.label as string) || (raw.l as string) || undefined,
     type,
+    phase,
+    selfEcho: !!(raw.se as string | undefined) || !!(raw.selfEcho as boolean | undefined),
   };
 }
 

@@ -2,7 +2,7 @@ import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, O
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
 import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap } from './preferences.svelte';
-import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel } from './api';
+import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage } from './api';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 
@@ -1267,11 +1267,19 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // copy topic/users/status etc. but do NOT copy 'messages' since
       // the Buffer interface doesn't declare that transient field.
       // The incoming objects from the JSON deserialization still carry it.
+      //
+      // The sync payload uses the engine's wire-format keys (`x` for text,
+      // `c` for command, etc.) because it's a verbatim slice of the Redis
+      // scrollback JSON. Feed each entry through normalizeMessage so the
+      // frontend sees IRCMessage-shaped objects — without this, server-log
+      // phase events render with empty bodies in ServerLogCard (the field
+      // name `text` is never set; only `x` survives the JSON trip).
       for (const buf of net.buffers) {
-        const msgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
-        if (msgs && msgs.length > 0) {
+        const rawMsgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
+        if (rawMsgs && rawMsgs.length > 0) {
           const key = `${existing.networkId}:${buf.name}`;
           if (!ircState.messages[key] || ircState.messages[key].length === 0) {
+            const msgs = rawMsgs.map((m) => normalizeMessage(m as unknown as Record<string, unknown>));
             setMessages(existing.networkId, buf.name, msgs);
           }
           delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
@@ -1346,11 +1354,20 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // IRCCloud-style: pull message history out of the buffer objects
       // and into ircState.messages (avoids duplicating + eliminates the
       // REST API round-trip for boot).
+      //
+      // Sync `messages[]` arrives in the engine's wire-format keys (`x`
+      // for text, `c` for command, etc.) — a verbatim slice of the Redis
+      // scrollback JSON. normalizeMessage() translates it into the
+      // IRCMessage shape used everywhere else in the frontend so phase
+      // events surface their `text` body (without this, ServerLogCard
+      // would render phase chips but `msg.text === undefined` and the
+      // timeline body shows `&nbsp;`).
       for (const buf of net.buffers) {
-        const msgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
-        if (msgs && msgs.length > 0) {
+        const rawMsgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
+        if (rawMsgs && rawMsgs.length > 0) {
           const key = `${net.networkId}:${buf.name}`;
           if (!ircState.messages[key] || ircState.messages[key].length === 0) {
+            const msgs = rawMsgs.map((m) => normalizeMessage(m as unknown as Record<string, unknown>));
             setMessages(net.networkId, buf.name, msgs);
           }
           delete (buf as Buffer & { messages?: IRCMessage[] }).messages;

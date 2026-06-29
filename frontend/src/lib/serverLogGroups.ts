@@ -106,6 +106,18 @@ export interface ServerLogAttempt {
  * attempt so users still see them.
  */
 export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
+  // Drop duplicate phase events before grouping. The engine + holder
+  // daemon can each publish their own `ph=queued|tcp_open|tls|registering`
+  // sequence for the same physical connect — the engine fires phases
+  // from its direct `happyEyeballsConnect()` path while the holder fires
+  // the equivalent `via holder daemon` phases, and the WS handoff
+  // publishes them again. Without this dedup each duplicate sequence
+  // becomes a separate timeline card. We dedup phase-tagged messages
+  // with identical `(t, phase)` AND identical text — cheap and
+  // conservative — so chat-shaped messages (which lack a `phase`)
+  // pass through untouched.
+  const dedupedMessages = dedupPhaseEvents(messages);
+
   const attempts: ServerLogAttempt[] = [];
   let current: ServerLogAttempt | null = null;
   // The most-recently-pushed attempt, used to detect "post-welcome
@@ -130,7 +142,7 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
     }
   }
 
-  for (const msg of messages) {
+  for (const msg of dedupedMessages) {
     const kind = classifyServerLog(msg);
     if (kind === 'skip') continue;
 
@@ -364,4 +376,52 @@ export function formatIsupport(msg: IRCMessage): string {
   // between — those are the actual capability definitions.
   const tokens = params.slice(1, params.length - 1);
   return tokens.join('\n');
+}
+
+/**
+ * Drop duplicate phase + lifecycle events from a `_server` message stream.
+ *
+ * The engine and holder daemon independently publish phase-shaped events
+ * for the same physical connect (the engine emits `ph=queued|tcp_open|tls`
+ * with "TCP connection established to ..." text; the holder emits the
+ * same phases with "TCP connection via holder ..." text). The handoff
+ * code path can also republish the connection on engine restart, and
+ * a control-message burst (e.g. double-clicked reconnect) spawns two
+ * fresh clients that both call `HolderTransport()`'s constructor,
+ * each emitting a full phase sequence.
+ *
+ * Each duplicate gets a unique `eid` from the engine, so the existing
+ * `eid`-based dedup in `prependMessages` / `setMessages` does nothing
+ * here. Without this pass, the timeline produces one card per duplicate
+ * sequence — visually "two connected cards" for a single connect.
+ *
+ * We match any phase-tagged message OR a CONNECT / DISCONNECT / DISCONNECTED
+ * lifecycle event on `(t, command, text-prefix)`. Chat messages
+ * (PRIVMSG / no phase / non-lifecycle commands) pass through untouched
+ * because natural chat can legitimately contain the same text twice.
+ * Only the FIRST occurrence of a tuple is kept; later duplicates are dropped.
+ */
+function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
+  const seen = new Set<string>();
+  const out: IRCMessage[] = [];
+  for (const msg of messages) {
+    const cmd = msg.command ?? '';
+    const isLifecycle = cmd === 'CONNECT' || cmd === 'CONNECTED'
+      || cmd === 'DISCONNECT' || cmd === 'DISCONNECTED';
+    if (!msg.phase && !isLifecycle) {
+      out.push(msg);
+      continue;
+    }
+    // First 80 chars of text is enough to distinguish "TCP connection
+    // via holder to..." from "TCP connection established to..." while
+    // staying well under any reasonable text length. Phase (or
+    // command) + timestamp combined make collisions astronomically
+    // unlikely outside an actual race.
+    const textKey = (msg.text ?? '').slice(0, 80);
+    const dedupKey = `${msg.t ?? 0}|${cmd}|${msg.phase ?? ''}|${textKey}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+    out.push(msg);
+  }
+  return out;
 }

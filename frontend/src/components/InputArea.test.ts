@@ -20,6 +20,11 @@ vi.mock('/src/stores/api', () => ({
   deleteNetwork: vi.fn(async () => undefined),
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
+  // ircStore imports this for the WebSocket-sync message normalization
+  // path (sync payloads carry the engine's wire-format compact JSON keys,
+  // so we have to translate them into the IRCMessage shape). The tests in
+  // this file don't exercise that path, so pass-through is fine.
+  normalizeMessage: vi.fn((m: unknown) => m),
 }));
 
 import { reconnectNetwork } from '../stores/api';
