@@ -82,6 +82,17 @@
     }
   }
 
+  async function clearOne(session: SessionEntry) {
+    if (!confirm(`Clear this device session for ${session.username}?\n\nOther devices for ${session.username} will stay logged in.`)) return;
+    try {
+      await api.post(`/api/admin/sessions/clear-one/${encodeURIComponent(session.sessionId)}`);
+      toastSuccess(`Cleared session for ${session.username}`);
+      await fetchData();
+    } catch (e) {
+      toastError(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
   // Search filter (client-side)
   const filtered = $derived.by(() => {
     if (!data?.sessions) return [];
@@ -251,7 +262,16 @@
                 {#if !s.isCurrent}
                   <button
                     type="button"
+                    onclick={() => clearOne(s)}
+                    title={`Sign out this single device for ${s.username}`}
+                    class="mr-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
                     onclick={() => clearUser(s)}
+                    title={`Sign out ALL devices for ${s.username}`}
                     class="rounded-md border border-danger/30 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
                   >
                     Clear user
