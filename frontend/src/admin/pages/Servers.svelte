@@ -40,6 +40,7 @@
     networkHost: string;
     userId: string;
     username: string;
+    nick: string;
   }
 
   interface ServersResponse {
@@ -327,68 +328,76 @@
 </Card>
 
 <!-- Network Assignments -->
-<Card title="Network Assignments" subtitle="Live routing table — one row per network bound to an engine">
-  {#if data?.assignments?.length}
-    <table class="w-full text-sm">
-      <thead class="text-xs uppercase tracking-wider text-muted">
-        <tr class="border-b border-border">
-          <th class="py-2 text-left font-semibold">Network</th>
-          <th class="py-2 text-left font-semibold">Owner</th>
-          <th class="py-2 text-left font-semibold">Server</th>
-          <th class="py-2 text-right font-semibold">Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each data.assignments as a (a.networkId)}
-          {@const label = a.networkName || a.networkHost || '(unnamed)'}
-          <tr class="border-b border-border/40 hover:bg-surface/40">
-            <td class="py-2">
-              <div class="font-medium text-heading">{label}</div>
-              {#if a.networkHost && a.networkHost !== label}
-                <div class="font-mono text-[11px] text-muted">{a.networkHost}</div>
-              {/if}
-              <div class="font-mono text-[10px] text-muted opacity-70">{a.networkId}</div>
-            </td>
-            <td class="py-2">
-              {#if a.username}
-                <a href="#/users/{a.userId}" class="text-primary hover:underline">{a.username}</a>
-              {:else}
-                <span class="text-muted text-xs">orphan</span>
-              {/if}
-            </td>
-            <td class="py-2">
-              <StatusBadge label={a.serverId} tone="info" size="sm" />
-            </td>
-            <td class="py-2 text-right whitespace-nowrap">
-              {#if a.networkHost}
+  <Card title="Network Assignments" subtitle="Live routing table — one row per network bound to an engine">
+    {#if data?.assignments?.length}
+      <table class="w-full text-sm">
+        <thead class="text-xs uppercase tracking-wider text-muted">
+          <tr class="border-b border-border">
+            <th class="py-2 text-left font-semibold">Network</th>
+            <th class="py-2 text-left font-semibold">IRC Nick</th>
+            <th class="py-2 text-left font-semibold">Owner</th>
+            <th class="py-2 text-left font-semibold">Server</th>
+            <th class="py-2 text-right font-semibold">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each data.assignments as a (a.networkId)}
+            {@const label = a.networkName || a.networkHost || '(unnamed)'}
+            <tr class="border-b border-border/40 hover:bg-surface/40">
+              <td class="py-2">
+                <div class="font-medium text-heading">{label}</div>
+                {#if a.networkHost && a.networkHost !== label}
+                  <div class="font-mono text-[11px] text-muted">{a.networkHost}</div>
+                {/if}
+                <div class="font-mono text-[10px] text-muted opacity-70">{a.networkId}</div>
+              </td>
+              <td class="py-2">
+                {#if a.nick}
+                  <span class="font-mono text-xs text-text">{a.nick}</span>
+                {:else}
+                  <span class="text-[11px] text-muted">offline</span>
+                {/if}
+              </td>
+              <td class="py-2">
+                {#if a.username}
+                  <a href="#/users/{a.userId}" class="text-primary hover:underline">{a.username}</a>
+                {:else}
+                  <span class="text-muted text-xs">orphan</span>
+                {/if}
+              </td>
+              <td class="py-2">
+                <StatusBadge label={a.serverId} tone="info" size="sm" />
+              </td>
+              <td class="py-2 text-right whitespace-nowrap">
+                {#if a.networkHost}
+                  <button
+                    type="button"
+                    onclick={() => disconnectAssignment(a.networkId, a.networkHost, label)}
+                    class="rounded border border-warn/30 px-2 py-1 text-[11px] font-medium text-warn hover:bg-warn/10"
+                  >
+                    Disconnect
+                  </button>
+                {/if}
                 <button
                   type="button"
-                  onclick={() => disconnectAssignment(a.networkId, a.networkHost, label)}
-                  class="rounded border border-warn/30 px-2 py-1 text-[11px] font-medium text-warn hover:bg-warn/10"
+                  onclick={() => reassignAssignment(a.networkId, label, a.serverId)}
+                  class="ml-1 rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40"
                 >
-                  Disconnect
+                  Reassign
                 </button>
-              {/if}
-              <button
-                type="button"
-                onclick={() => reassignAssignment(a.networkId, label, a.serverId)}
-                class="ml-1 rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40"
-              >
-                Reassign
-              </button>
-              <button
-                type="button"
-                onclick={() => removeAssignment(a.networkId, label)}
-                class="ml-1 rounded border border-danger/30 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
-              >
-                Remove
-              </button>
-            </td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  {:else}
-    <EmptyState icon="🌐" title="No networks assigned" description="No networks are currently bound to any engine." />
-  {/if}
-</Card>
+                <button
+                  type="button"
+                  onclick={() => removeAssignment(a.networkId, label)}
+                  class="ml-1 rounded border border-danger/30 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
+                >
+                  Remove
+                </button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {:else}
+      <EmptyState icon="🌐" title="No networks assigned" description="No networks are currently bound to any engine." />
+    {/if}
+  </Card>
