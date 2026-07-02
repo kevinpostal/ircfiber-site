@@ -86,6 +86,13 @@
     e.stopPropagation();
     if (!collapsedKey) return;
     serverlogHiddenMap[collapsedKey] = true;
+    // Sync to localStorage immediately so a fast page refresh doesn't
+    // lose the dismiss (the debounced persist may not have fired yet).
+    try {
+      const data = JSON.parse(localStorage.getItem('ircfiber:serverlogHidden') || '{}');
+      data[collapsedKey] = true;
+      localStorage.setItem('ircfiber:serverlogHidden', JSON.stringify(data));
+    } catch {}
   }
 
   let showRawTraffic = $state(false);
