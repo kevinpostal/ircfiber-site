@@ -1,0 +1,331 @@
+/**
+ * Pure TypeScript wrapper around the SigNoz v0.130 REST endpoints used by
+ * the admin logs panel. No Svelte imports -- eligible for the lib project
+ * test config (node, no DOM).
+ *
+ * Endpoints covered (all paths are relative to the page origin; the host
+ * is whatever Caddy/Vite decides):
+ *   POST /api/v5/query_range        -> queryRange(req)
+ *   GET  /api/v1/services           -> services()
+ *   GET  /api/v1/logs/fields        -> fields()
+ *   GET  /api/v1/values             -> fieldValues(name, q?)
+ *   GET  /api/v1/user               -> currentUser()
+ *
+ * Live-tail WS helper (consumer appends "?filter=...&start=..." as needed):
+ *   wsUrl(orgId)                    -> '/signoz/ws/logs/v5/{orgId}'
+ *
+ * SECURITY (do not change without security review):
+ *   This module NEVER sets a SIGNOZ-API-KEY header. The key is injected
+ *   server-side by Caddy on /api/v1..5/* and /signoz/* reverse_proxy
+ *   rules. If you are tempted to add an Authorization, x-api-key, or any
+ *   other auth header here, stop and read
+ *   deploy/roles/caddy/templates/Caddyfile.j2 instead. Browser-side code
+ *   must never see the SigNoz key. Any change that adds such a header is
+ *   a security regression and must be rejected in code review.
+ *
+ * Local-dev: in `npm run dev`, set VITE_SIGNOZ_URL to the SigNoz instance
+ * with auth disabled, or use the EDITOR service account the deploy already
+ * provisions. The vite dev proxy will forward /api/v1..5/ and /signoz/ to
+ * that URL.
+ */
+
+// ───────────────────────────────────────────────────────────────────────────
+// Error class
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Thrown for every failure path of the SigNoz wrapper:
+ *   - status === 0 means the request never reached the server (network,
+ *     DNS, AbortController timeout, or fetch's own throw).
+ *   - status !== 0 mirrors the HTTP status SigNoz returned. Use the
+ *     `status` field for branches (e.g. toastError on 401/500), not the
+ *     message (which is human-localised text).
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Request plumbing
+// ───────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+export interface RequestOptions {
+  /** Default 15_000 ms. Set to 0 to disable the timeout entirely. */
+  timeoutMs?: number;
+  /** Forwarded to fetch. Aborting this signal also aborts the underlying
+   *  request. Composes with the internal timeout abort. */
+  signal?: AbortSignal;
+  /** Optional query string merged into the path. */
+  query?: Readonly<Record<string, string | number | boolean>>;
+}
+
+function appendQuery(
+  path: string,
+  query: RequestOptions['query'],
+): string {
+  if (!query) return path;
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(query)) {
+    params.set(k, String(v));
+  }
+  const qs = params.toString();
+  if (!qs) return path;
+  return path + (path.includes('?') ? '&' : '?') + qs;
+}
+
+/**
+ * Pull a human-friendly error string out of a SigNoz failure body. SigNoz
+ * returns `{error: "<msg>"}` for most v1/v5 failures; anything else falls
+ * through to the supplied fallback (typically `res.statusText`).
+ */
+function extractErrorMessage(raw: string, fallback: string): string {
+  if (!raw) return fallback;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const err = (parsed as { error?: unknown }).error;
+      if (typeof err === 'string' && err.length > 0) return err;
+    }
+  } catch {
+    // Body wasn't JSON; fall through to the statusText fallback.
+  }
+  return fallback;
+}
+
+async function request<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  opts: RequestOptions & { body?: unknown } = {},
+): Promise<T> {
+  const url = appendQuery(path, opts.query);
+
+  // Headers are deliberately minimal: NO auth. Caddy adds the SIGNOZ-API-KEY
+  // server-side. Accept: application/json so non-JSON error pages fall
+  // through to statusText instead of being parsed as something they aren't.
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+  let payload: string | undefined;
+  if (method === 'POST' && opts.body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    payload = JSON.stringify(opts.body);
+  }
+
+  // Internal abort: bound the request so a hung SigNoz doesn't pin a
+  // browser tab. Composes with caller-supplied `signal`.
+  const ac = new AbortController();
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(
+          () => ac.abort(new DOMException('Timeout', 'TimeoutError')),
+          timeoutMs,
+        )
+      : null;
+  if (opts.signal) {
+    if (opts.signal.aborted) ac.abort(opts.signal.reason);
+    else
+      opts.signal.addEventListener('abort', () =>
+        ac.abort(opts.signal!.reason),
+      );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method,
+      headers,
+      body: payload,
+      signal: ac.signal,
+      credentials: 'omit',
+    });
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    // fetch's own abort path lands here with `name === 'AbortError'` unless
+    // we tagged it as TimeoutError above. We only translate the timeout
+    // case; user-driven aborts propagate as-is with their original message.
+    if (e instanceof Error && e.name === 'TimeoutError') {
+      throw new ApiError('Request timed out', 0);
+    }
+    throw new ApiError((e as Error)?.message || 'Network error', 0);
+  }
+  if (timer) clearTimeout(timer);
+
+  const raw = await res.text();
+  if (!res.ok) {
+    const msg = extractErrorMessage(
+      raw,
+      res.statusText || `HTTP ${res.status}`,
+    );
+    throw new ApiError(msg, res.status);
+  }
+  if (!raw) return undefined as unknown as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new ApiError('Invalid JSON response', res.status);
+  }
+}
+
+async function get<T>(path: string, opts?: RequestOptions): Promise<T> {
+  return request<T>('GET', path, opts);
+}
+
+async function post<T>(
+  path: string,
+  body: unknown,
+  opts?: RequestOptions,
+): Promise<T> {
+  return request<T>('POST', path, { ...(opts ?? {}), body });
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Response shapes (typed for the parts we use; unknown leaves avoid `any`)
+// Documented per SigNoz v0.130 -- increase confidence by snapshotting the
+// live contract if v0.131 changes the envelope.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** GET /api/v1/services -- SigNoz returns `{"data": ["service.name", ...]}`. */
+export interface ServicesResponse {
+  data?: readonly string[];
+}
+
+/** Single entry from GET /api/v1/logs/fields. Extra keys (version-specific)
+ *  pass through `unknown` rather than `any`; narrow them at the call site
+ *  after a runtime check. */
+export interface LogField {
+  name: string;
+  fieldContext?: string;
+  fieldDataType?: string;
+  type?: string;
+  readonly [extra: string]: unknown;
+}
+
+export interface LogFieldsResponse {
+  data?: readonly LogField[];
+}
+
+/** GET /api/v1/values -- cardinality-bounded distinct values for a log
+ *  field. SigNoz historically returns `{values: []}`; newer payloads may
+ *  nest under `data`, so both keys are typed (callers handle the union). */
+export interface FieldValuesResponse {
+  data?: readonly string[];
+  values?: readonly string[];
+}
+
+/** GET /api/v1/user -- only `orgId` is used by the logs panel; additional
+ *  fields (email/name) are typed loosely so we don't have to track every
+ *  field SigNoz adds in a minor release. */
+export interface CurrentUserResponse {
+  data?: { orgId?: string; email?: string; name?: string };
+  /** Some SigNoz versions return the orgId at the top level instead of
+   *  nested under `data`. Surfaced for compatibility. */
+  orgId?: string;
+}
+
+/** Per-query result inside a /api/v5/query_range response. Either `series`
+ *  (time-series queries) or `list` (table/log queries) is populated;
+ *  both are typed `unknown[]` because the per-element shape varies by
+ *  aggregations/columns selected. Narrow at the call site. */
+export interface QueryRangeResult {
+  queryName: string;
+  series?: readonly unknown[];
+  list?: readonly unknown[];
+  /** Free-form query-specific payload (panelType-dependent). */
+  readonly [extra: string]: unknown;
+}
+
+/** POST /api/v5/query_range envelope. `data` is keyed by the query's
+ *  `spec.name` (the "queryName"); each entry is one query's output. */
+export interface QueryRangeResponse {
+  status?: string;
+  data?: Readonly<Record<string, QueryRangeResult>>;
+  /** Future SigNoz envelope keys we don't depend on today. */
+  readonly [extra: string]: unknown;
+}
+
+/** Minimum typed shape for the `compositeQuery` envelope. Per-query specs
+ *  (`queries[]`) are left untyped at this level because `builder_query`,
+ *  `promql`, and `clickhouse_sql` diverge structurally -- maintain a
+ *  parallel type tree at the call site if you need narrow access. */
+export interface CompositeQuery {
+  queryType: 'builder' | 'promql' | 'clickhouse_sql';
+  panelType?: 'graph' | 'list' | 'table' | 'value';
+  queries: readonly object[];
+  unit?: string;
+  formula?: unknown;
+}
+
+export interface QueryRangeRequest {
+  /** Unix milliseconds, inclusive. */
+  start: number;
+  /** Unix milliseconds, exclusive. */
+  end: number;
+  compositeQuery: CompositeQuery;
+  requestType?: 'scalar' | 'time_series' | 'distribution' | 'raw';
+  schemaVersion?: string;
+  stepInterval?: number;
+  unit?: string;
+  variables?: Readonly<Record<string, unknown>>;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Public API
+// ───────────────────────────────────────────────────────────────────────────
+
+/** POST /api/v5/query_range -- runs a SigNoz v5 query builder request. */
+export function queryRange(
+  req: QueryRangeRequest,
+  opts?: RequestOptions,
+): Promise<QueryRangeResponse> {
+  return post<QueryRangeResponse>('/api/v5/query_range', req, opts);
+}
+
+/** GET /api/v1/services -- discovered service names. */
+export function services(opts?: RequestOptions): Promise<ServicesResponse> {
+  return get<ServicesResponse>('/api/v1/services', opts);
+}
+
+/** GET /api/v1/logs/fields -- log-queryable field catalogue. */
+export function fields(opts?: RequestOptions): Promise<LogFieldsResponse> {
+  return get<LogFieldsResponse>('/api/v1/logs/fields', opts);
+}
+
+/** GET /api/v1/values -- distinct values for a log field. The optional
+ *  `q` is the SigNoz v1 prefix-substring filter; omit it to fetch the
+ *  full first page. */
+export function fieldValues(
+  name: string,
+  q?: string,
+  opts?: RequestOptions,
+): Promise<FieldValuesResponse> {
+  const query: Record<string, string> = { param0: name };
+  if (q !== undefined) query.query = q;
+  return get<FieldValuesResponse>('/api/v1/values', {
+    ...(opts ?? {}),
+    query,
+  });
+}
+
+/** GET /api/v1/user -- current SigNoz session, used to discover the
+ *  org id for live-tail WS URL construction. */
+export function currentUser(
+  opts?: RequestOptions,
+): Promise<CurrentUserResponse> {
+  return get<CurrentUserResponse>('/api/v1/user', opts);
+}
+
+/** Browser-relative URL for the live-tail WS endpoint, served through the
+ *  existing /signoz/* Caddy route so the SIGNOZ-API-KEY header is
+ *  injected server-side. The consumer appends `?filter=...&start=...`
+ *  themselves as needed before constructing `new WebSocket(...)`. */
+export function wsUrl(orgId: string): string {
+  return `/signoz/ws/logs/v5/${encodeURIComponent(orgId)}`;
+}

@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { getActiveNetwork, setActiveBuffer } from '../stores/ircStore.svelte';
+  import { getActiveNetwork, setActiveBuffer, ircState } from '../stores/ircStore.svelte';
   import { sendRaw, requestSync } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
+  import { serverlogCollapsedMap } from '../stores/preferences.svelte';
+  import { groupServerLog, getServerLogCollapsedKey } from '../lib/serverLogGroups';
 
   interface Props {
     onSendRaw?: (...args: any[]) => any;
@@ -26,10 +28,20 @@
   async function handleReconnect(e: MouseEvent): Promise<void> {
     e.preventDefault();
     if (!activeNetwork) return;
-    activeNetwork.connectionState = 'connecting';
-    setActiveBuffer(activeNetwork.networkId, '_server');
+    const net = activeNetwork;
+
+    // Collapse all existing server-log cards so only the new connection
+    // attempt (fresh eid) stays expanded.
+    const serverMessages = ircState.messages[`${net.networkId}:_server`] ?? [];
+    for (const attempt of groupServerLog(serverMessages)) {
+      const key = getServerLogCollapsedKey(attempt, net.networkId);
+      if (key) serverlogCollapsedMap[key] = true;
+    }
+
+    net.connectionState = 'connecting';
+    setActiveBuffer(net.networkId, '_server');
     try {
-      await onReconnect(activeNetwork.networkId);
+      await onReconnect(net.networkId);
       requestSync();
     } catch (err) { console.error(err); }
   }

@@ -659,7 +659,11 @@ describe('updateChannelUsers', () => {
 		net.buffers.push(buf);
 		ircState.networks.push(net);
 
-		updateChannelUsers('net1', '#chan', 'MODE', '', ['+o', 'alice']);
+		// Real IRC wire format: MODE <channel> <modes> <target>...
+		// The previous test used ['+o', 'alice'] which masked the bug
+		// where params[0] was being treated as the mode string instead
+		// of params[1].
+		updateChannelUsers('net1', '#chan', 'MODE', '', ['#chan', '+o', 'alice']);
 		flushSync();
 
 		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');

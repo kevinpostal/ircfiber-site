@@ -17,6 +17,17 @@ const BACKEND_URL =
 const BACKEND_WS_URL =
   process.env.VITE_BACKEND_WS_URL || BACKEND_URL.replace(/^http/, 'ws');
 
+// SigNoz URL for the dev server's SigNoz proxy. Override via env var when
+// pointing at a non-local SigNoz instance (e.g. the tailnet gateway). The
+// default (127.0.0.1:8080) is the host port mapped from docker-compose's
+// `signoz` service so the dev SPA can query ClickHouse-backed logs without
+// going through the IRC Fiber gateway. The catch-all `/api` rule below
+// targets BACKEND_URL (the IRC Fiber gateway) — the more-specific `/api/v1/`
+// through `/api/v5/` and `/signoz/` rules MUST come BEFORE it so Vite's
+// first-match-wins picks the SigNoz target for SigNoz paths.
+const SIGNOZ_URL =
+  process.env.VITE_SIGNOZ_URL || 'http://127.0.0.1:8080';
+
 export default defineConfig({
   plugins: [tailwindcss(), svelte({
     onwarn(warning, handler) {
@@ -66,6 +77,17 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // --- SigNoz rules (MUST come before catch-all /api) ---
+      // /signoz/ is the live-tail WS path; ws:true on that rule keeps the
+      // dev server forwarding WebSocket upgrades for w3-t1.
+      '/api/v1/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false },
+      '/api/v2/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false },
+      '/api/v3/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false },
+      '/api/v4/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false },
+      '/api/v5/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false },
+      '/signoz/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false, ws: true },
+
+      // --- Existing rules (unchanged) ---
       '/api': {
         target: BACKEND_URL,
         changeOrigin: true,

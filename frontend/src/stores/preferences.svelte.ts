@@ -153,7 +153,7 @@ function getStorageItem<T>(key: string, defaultValue: T): T {
     return defaultValue;
   }
 }
-function setStorageItem(key: string, value: unknown): void {
+export function setStorageItem(key: string, value: unknown): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
     // Sibling timestamp so getStorageItem can apply TTL. Writes happen

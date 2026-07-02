@@ -379,6 +379,39 @@ export function clearJoinPending(networkId: string, bufferName: string): void {
   pendingJoins.delete(pendingJoinKey(networkId, bufferName));
 }
 
+/**
+ * Reset in-flight JOIN tracking when the WebSocket reconnects.
+ *
+ * When the WS drops between a JOIN command and its echo, two categories
+ * of state can remain stuck:
+ *
+ * 1. `pendingJoins` — blocks `maybeAutoJoinChannel` via `isJoinPending`,
+ *    preventing URL auto-join from ever sending another JOIN.
+ * 2. `joinInFlight` / `pendingIsJoined` — buffer-level flags that
+ *    prevent the sync from correcting `isJoined` (the orphan-reconciliation
+ *    loop at updateNetworkFromSync skips buffers with `joinInFlight === true`).
+ *
+ * On reconnect the engine replays events via `?since=maxEid`, so stale
+ * pending state must be cleared to avoid permanently blocking future joins.
+ *
+ * Does NOT clear `activeJoinList`: that set is a short-term guard against
+ * `buffersToDelete` (sent during WS resume) and must survive the reconnect
+ * window so freshly-joined buffers aren't deleted before the engine's sync
+ * confirms their membership.
+ *
+ * Called from `App.svelte`'s `onOpen` WS callback before the first
+ * sync arrives.
+ */
+export function resetPendingState(): void {
+  pendingJoins.clear();
+  for (const net of ircState.networks) {
+    for (const buf of net.buffers) {
+      buf.joinInFlight = false;
+      buf.pendingIsJoined = undefined;
+    }
+  }
+}
+
 /** Handle `buffersToDelete` WS message from the engine.
  *  Gated behind `globalPrefs.featureFlags.buffersToDelete.enabled`.
  *  For each bid, guards against deleting channels the user recently joined
@@ -964,16 +997,21 @@ export function updateBottomSeen(networkId: string, bufferName: string, msg: IRC
 
 function normalizeUser(user: string | Member): Member {
   if (typeof user === 'string') {
-    const bareNick = stripPrefix(user);
-    const mode = getUserModePrefix(user);
-    // Extract ident from userhost-in-names format (nick!user@host)
+    // Keep the prefix in `nick` so the operator status indicator is
+    // preserved through snapshot round-trips. The 353 (RPL_NAMREPLY)
+    // handler stores nick with prefix too; the prior implementation
+    // stripped it here, which dropped the operator status on hard
+    // refresh and made users appear without their @/+/% prefix in
+    // the member list. The `prefix` field is still set so
+    // sorting/grouping by ModeCategory keeps working.
     const bang = user.indexOf('!');
-    const ident = bang > 0 ? user.slice(bang + 1).split('@')[0] : '';
+    const identEJ = bang > 0 ? user.slice(bang + 1).split('@')[0] : '';
+    const mode = getUserModePrefix(user);
     return {
-      nick: bareNick,
+      nick: user,
       prefix: mode.prefix,
       category: mode.category,
-      ident, realname: '', isAway: false, awayMessage: '',
+      ident: identEJ, realname: '', isAway: false, awayMessage: '',
       lastSpoke: 0, lastHighlighted: 0, account: ''
     };
   }
@@ -1134,13 +1172,30 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             const asStrings = incomingBuf.users as unknown as string[];
             incomingBuf.users = asStrings.map(normalizeUser);
           }
-          const seen = new Set<string>();
+          // Dedup by stripped nick, preferring the entry WITH an IRC
+          // prefix over a bare nick, so that a services-granted op survives
+          // the snapshot round-trip even when the engine's channelUsers
+          // briefly contains both "user" and "@user" (a known race between
+          // the JOIN handler and the 353/WHO dedup).
+          const seen = new Map<string, number>();  // bareNick -> index in deduped
           const deduped: Member[] = [];
           for (const u of incomingBuf.users) {
             const bare = stripPrefix(u.nick);
-            if (bare && !seen.has(bare)) {
-              seen.add(bare);
+            if (!bare) continue;
+            const existing = seen.get(bare);
+            if (existing === undefined) {
+              seen.set(bare, deduped.length);
               deduped.push(u);
+            } else {
+              // Prefer the entry with a prefix if this one has it and
+              // the existing one doesn't, or if the existing one's nick
+              // is shorter (bare), replace it.
+              const existingU = deduped[existing];
+              const existingHasPrefix = existingU.prefix && existingU.prefix.length > 0;
+              const thisHasPrefix = u.prefix && u.prefix.length > 0;
+              if (thisHasPrefix && !existingHasPrefix) {
+                deduped[existing] = u;
+              }
             }
           }
           if (deduped.length !== incomingBuf.users.length) {
@@ -1503,11 +1558,23 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     for (const n of nicks) {
       if (!n) continue;
       const stripped = stripPrefix(n);
-      if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
-        const mode = getUserModePrefix(n);
-        // userhost-in-names: nick!user@host — extract ident
-        const bang = n.indexOf('!');
-        const identEJ = bang > 0 ? n.slice(bang + 1).split('@')[0] : '';
+      const mode = getUserModePrefix(n);
+      // userhost-in-names: nick!user@host — extract ident
+      const bang = n.indexOf('!');
+      const identEJ = bang > 0 ? n.slice(bang + 1).split('@')[0] : '';
+      // Find an existing entry by stripped nick. If found, PROMOTE it to
+      // the prefixed form (in place) so the operator status survives
+      // even when the JOIN handler raced ahead with a bare-nick entry.
+      // Without this in-place promotion, services that auto-op a user
+      // on JOIN leave the bare entry in place and the prefixed form
+      // gets dropped, hiding the op indicator in the member list.
+      const existing = buf.users.find(u => stripPrefix(u.nick) === stripped);
+      if (existing) {
+        if (existing.nick !== n) existing.nick = n;
+        if (!existing.prefix) existing.prefix = mode.prefix;
+        if (existing.category === 'MEMBER' || !existing.category) existing.category = mode.category;
+        if (identEJ && !existing.ident) existing.ident = identEJ;
+      } else {
         buf.users.push({
           nick: n, prefix: mode.prefix, category: mode.category,
           ident: identEJ, realname: '', isAway: false, awayMessage: '',
@@ -1621,50 +1688,66 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       net.currentNick = newNick;
     }
   } else if (cmd === 'MODE' && params && params.length >= 2) {
-    const modeStr = params[0];
-    const targets = params.slice(1);
-    let adding = true;
-    let targetIdx = 0;
-    for (const ch of modeStr) {
-      if (ch === '+') { adding = true; continue; }
-      if (ch === '-') { adding = false; continue; }
-      if ('oOaAhvq'.includes(ch) && targetIdx < targets.length) {
-        const targetNick = targets[targetIdx++];
-        const member = buf.users.find(u => stripPrefix(u.nick) === targetNick);
-        if (member && adding) {
-          const prefixMap: Record<string, { prefix: string; category: ModeCategory }> = {
-            'q': { prefix: '~', category: 'OWNER' },
-            'a': { prefix: '&', category: 'ADMIN' },
-            'o': { prefix: '@', category: 'OP' },
-            'O': { prefix: '@', category: 'OPER' },
-            'h': { prefix: '%', category: 'HALFOP' },
-            'v': { prefix: '+', category: 'VOICED' },
-          };
-          const pm = prefixMap[ch];
-          if (pm) {
-            member.prefix = pm.prefix;
-            member.category = pm.category;
-            member.nick = pm.prefix + stripPrefix(member.nick);
+    // IRC wire format: MODE <target> <modes> [<mode-params>...]
+    //   - Channel mode: MODE #chan +oo alice bob        → params = ['#chan', '+oo', 'alice', 'bob']
+    //   - User mode:    MODE nick :+i                   → params = ['nick', '+i']
+    // params[0] is the target (channel or nick); the mode string is params[1].
+    // The previous implementation incorrectly read params[0] as the mode string,
+    // which produced wrong results on every channel MODE event (and could even
+    // assign a wrong role if the channel name happened to contain 'a' or 'o').
+    const target = params[0];
+    const modeStr = params[1];
+    // Channel MODE events have a target starting with '#' or '&' AND at least
+    // 3 params (mode + ≥1 target). Anything else is a user-mode change that
+    // doesn't affect the channel user list.
+    const isChannelMode =
+      params.length >= 3 &&
+      (target.startsWith('#') || target.startsWith('&'));
+    if (isChannelMode) {
+      const targets = params.slice(2);
+      let adding = true;
+      let targetIdx = 0;
+      for (const ch of modeStr) {
+        if (ch === '+') { adding = true; continue; }
+        if (ch === '-') { adding = false; continue; }
+        if ('oOaAhvq'.includes(ch) && targetIdx < targets.length) {
+          const targetNick = targets[targetIdx++];
+          const member = buf.users.find(u => stripPrefix(u.nick) === targetNick);
+          if (member && adding) {
+            const prefixMap: Record<string, { prefix: string; category: ModeCategory }> = {
+              'q': { prefix: '~', category: 'OWNER' },
+              'a': { prefix: '&', category: 'ADMIN' },
+              'o': { prefix: '@', category: 'OP' },
+              'O': { prefix: '@', category: 'OPER' },
+              'h': { prefix: '%', category: 'HALFOP' },
+              'v': { prefix: '+', category: 'VOICED' },
+            };
+            const pm = prefixMap[ch];
+            if (pm) {
+              member.prefix = pm.prefix;
+              member.category = pm.category;
+              member.nick = pm.prefix + stripPrefix(member.nick);
+            }
+          } else if (member && !adding) {
+            member.prefix = '';
+            member.category = 'MEMBER';
+            member.nick = stripPrefix(member.nick);
           }
-        } else if (member && !adding) {
-          member.prefix = '';
-          member.category = 'MEMBER';
-          member.nick = stripPrefix(member.nick);
         }
       }
-    }
-    // Channel mode flags (IRCCloud-style CSS classes)
-    if (!buf.modeFlags) buf.modeFlags = {};
-    const channelModeMap: Record<string, keyof typeof buf.modeFlags> = {
-      's': 'secret', 'p': 'private', 'm': 'moderated',
-      'i': 'inviteOnly', 'k': 'password', 't': 'topicControl',
-      'n': 'noExternal', 'l': 'limited',
-    };
-    for (const ch of modeStr) {
-      if (ch === '+' || ch === '-') continue;
-      const flag = channelModeMap[ch];
-      if (flag && !'oOaAhvq'.includes(ch)) {
-        buf.modeFlags[flag] = adding;
+      // Channel mode flags (IRCCloud-style CSS classes)
+      if (!buf.modeFlags) buf.modeFlags = {};
+      const channelModeMap: Record<string, keyof typeof buf.modeFlags> = {
+        's': 'secret', 'p': 'private', 'm': 'moderated',
+        'i': 'inviteOnly', 'k': 'password', 't': 'topicControl',
+        'n': 'noExternal', 'l': 'limited',
+      };
+      for (const ch of modeStr) {
+        if (ch === '+' || ch === '-') continue;
+        const flag = channelModeMap[ch];
+        if (flag && !'oOaAhvq'.includes(ch)) {
+          buf.modeFlags[flag] = adding;
+        }
       }
     }
   }

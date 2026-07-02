@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable, markJoinPending, recordJoin } from '../stores/ircStore.svelte';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml } from '../lib/autolinker';
-  import { archivedMap } from '../stores/preferences.svelte';
+  import { normalizeChannelName } from '../lib/utils';
+  import { archivedMap, serverlogCollapsedMap } from '../stores/preferences.svelte';
+  import { groupServerLog, getServerLogCollapsedKey } from '../lib/serverLogGroups';
 
   interface Props {
     onAddNetwork: () => void;
@@ -100,6 +102,15 @@
         // User clicked Reconnect — clear the indefinite disconnect guard
         // so the sync's 'connected' state can update the UI again.
         clearUserDisconnected(net.networkId);
+
+        // Collapse all existing server-log cards so only the new
+        // connection attempt (which will get a fresh eid) stays expanded.
+        const serverMessages = ircState.messages[`${net.networkId}:_server`] ?? [];
+        for (const attempt of groupServerLog(serverMessages)) {
+          const key = getServerLogCollapsedKey(attempt, net.networkId);
+          if (key) serverlogCollapsedMap[key] = true;
+        }
+
         net.connectionState = 'connecting';
         setActiveBuffer(net.networkId, '_server');
         await reconnectNetwork(net.networkId);
@@ -113,12 +124,17 @@
 
   function rejoin(): void {
     if (!activeNetwork || !activeBufferObj?.name) return;
+    const normalized = normalizeChannelName(activeBufferObj.name);
     // W7-T01: clear stale failure state so the UI doesn't briefly show
     // "Cannot join" while the new JOIN is in flight.
-    if (activeBufferObj) {
-      activeBufferObj.joinError = null;
-      activeBufferObj.joinInFlight = true;
-    }
+    activeBufferObj.joinError = null;
+    activeBufferObj.joinInFlight = true;
+    // W7-T01: sync with maybeAutoJoinChannel's tracking so a stuck
+    // pendingJoins entry (from a previous WS disconnect) doesn't block
+    // future URL auto-joins via isJoinPending.  recordJoin ensures the
+    // activeJoinList guard survives buffersToDelete during WS resume.
+    markJoinPending(activeNetwork.networkId, normalized);
+    recordJoin(activeNetwork.networkId, normalized);
     sendRaw(activeNetwork.networkId, 'JOIN ' + activeBufferObj.name);
   }
 

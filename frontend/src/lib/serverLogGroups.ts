@@ -319,6 +319,18 @@ export function phaseToLabel(p: string): string {
 }
 
 /**
+ * Compute the key used for persistable collapsed-state tracking in
+ * `serverlogCollapsedMap`.  Must stay in sync with the key derivation
+ * in `ServerLogCard.svelte`.
+ */
+export function getServerLogCollapsedKey(attempt: ServerLogAttempt, networkId: string): string {
+  const start = attempt.start;
+  if (start?.eid) return `${networkId}:${start.eid}`;
+  if (start?.msgid) return `${networkId}:msgid:${start.msgid}`;
+  return `${networkId}:id:${start?.id || 'synthetic'}`;
+}
+
+/**
  * Duration of an attempt in milliseconds — derived from the timestamps
  * of the first and last events in the attempt. Returns null when the
  * attempt is still in flight or only has one timestamp.

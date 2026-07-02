@@ -2,7 +2,7 @@
   import { ircState, getActiveNetwork, markUserDisconnected } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork, disconnectNetwork, updateCollapsed } from '../stores/api';
-  import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt } from '../stores/preferences.svelte';
+  import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt, setStorageItem } from '../stores/preferences.svelte';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
 
@@ -108,6 +108,7 @@
     if (network) {
       const newValue = !collapsedMap[network.networkId];
       collapsedMap[network.networkId] = newValue;
+      setStorageItem('ircfiber:collapsed', collapsedMap);
       updateCollapsed(network.networkId, newValue);
     }
     onClose();

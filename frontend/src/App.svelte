@@ -20,6 +20,7 @@ import {
     appendMessage, batchAppendMessages,
     handleBuffersToDelete,
     isJoinPending, markJoinPending, recordJoin,
+    resetPendingState,
     isUserDisconnected
 } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
@@ -323,6 +324,12 @@ let showNetworkForm: boolean = $state(false);
     connectWebSocket(
       handleWsMessage,
       () => {
+        // W7-T01: clear stale in-flight JOIN state from the previous
+        // WS session so that (a) pendingJoins doesn't block fresh
+        // auto-joins via maybeAutoJoinChannel, and (b) stuck
+        // joinInFlight/pendingIsJoined flags don't prevent the sync
+        // from correcting isJoined on orphan channels.
+        resetPendingState();
         ircState.wsConnected = true;
         performance.mark('ws-open');
         if (syncInterval) clearInterval(syncInterval);
@@ -1046,6 +1053,48 @@ let showNetworkForm: boolean = $state(false);
     const counter = { value: localMsgIdCounter };
     const result = processIrcEvent(data, counter, accum, { switchToBuffer }, enqueueMessage);
     localMsgIdCounter = counter.value;
+
+    // When a network connects (001 or CONNECT event), retry auto-join for
+    // the currently active channel buffer.  maybeAutoJoinChannel may have
+    // been called earlier when the network was disconnected and returned
+    // at the !net.connected guard — now that the network is up, we need
+    // to attempt the JOIN again.
+    const cmd = data.c as string || data.command as string || '';
+    if (cmd === '001' || cmd === 'CONNECT') {
+      const netId = data.nid as string || data.network as string || '';
+      if (netId) {
+        // Retry auto-join for the active channel buffer (if any)
+        if (ircState.activeBuffer.bufferName) {
+          maybeAutoJoinChannel(netId, ircState.activeBuffer.bufferName);
+        }
+        // Auto-collapse the previous disconnect card in the server log so
+        // the new connection events are immediately visible without having
+        // to scroll past a tall "Disconnected" card.  Walk backwards
+        // from the end of the server buffer (CONNECT is the most recent
+        // entry; the DISCONNECT we want to collapse is just before it).
+        // Tries both eid and msgid key formats (matching ServerLogCard's
+        // collapsedKey derivation).
+        const serverKey = `${netId}:_server`;
+        const serverMsgs = ircState.messages[serverKey] ?? [];
+        for (let i = serverMsgs.length - 1; i >= 0; i--) {
+          const m = serverMsgs[i];
+          const isDisco = m.command === 'DISCONNECT' ||
+                          m.command === 'DISCO_GROUP' ||
+                          m.command === 'ERROR';
+          if (!isDisco) continue;
+          let collapseKey = '';
+          if (m.eid) {
+            collapseKey = `${netId}:${m.eid}`;
+          } else if (m.msgid) {
+            collapseKey = `${netId}:msgid:${m.msgid}`;
+          }
+          if (collapseKey) {
+            serverlogCollapsedMap[collapseKey] = true;
+          }
+          break;
+        }
+      }
+    }
     if (result.whoisData) {
       // Only pop the WHOIS overlay when the user explicitly requested it.
       // The server also issues automatic WHOIS queries on JOIN to populate

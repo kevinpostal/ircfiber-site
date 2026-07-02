@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState } from '../stores/ircStore.svelte';
-  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
   import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder } from '../stores/api';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
@@ -19,6 +19,10 @@
   function toggleNetwork(networkId: string): void {
     const newValue = !collapsedMap[networkId];
     collapsedMap[networkId] = newValue;
+    // Write to localStorage synchronously so a fast page refresh (<500ms
+    // debounce) doesn't lose the collapse state — same pattern as hideChannel
+    // and setClearedAt in preferences.svelte.ts.
+    setStorageItem('ircfiber:collapsed', collapsedMap);
     updateCollapsed(networkId, newValue);
   }
 
@@ -73,6 +77,7 @@
       const draggedId = info?.id;
       if (draggedId && !collapsedMap[draggedId]) {
         collapsedMap[draggedId] = true;
+        setStorageItem('ircfiber:collapsed', collapsedMap);
         updateCollapsed(draggedId, true);
       }
     }
@@ -202,7 +207,7 @@
             role="button"
             tabindex="0"
             onclick={() => onSwitchBuffer(net.networkId, '_server')}
-            ondblclick={() => { if (collapsedMap[net.networkId]) { collapsedMap[net.networkId] = false; updateCollapsed(net.networkId, false); } }}
+            ondblclick={() => { if (collapsedMap[net.networkId]) { collapsedMap[net.networkId] = false; setStorageItem('ircfiber:collapsed', collapsedMap); updateCollapsed(net.networkId, false); } }}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSwitchBuffer(net.networkId, '_server'); } }}>
           <span class="buffer" role="tab">
             {#if net.connected}

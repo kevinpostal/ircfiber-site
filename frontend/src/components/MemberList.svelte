@@ -53,12 +53,19 @@
         <ul class="categoryMemberList">
           {#each members as member (stripPrefix(member.nick))}
             {@const nick = stripPrefix(member.nick)}
+            <!-- Display `member.nick` (which includes the IRC prefix char
+                 for op/voice/halfop etc.) so users who are opped by
+                 services show their operator indicator. The bare nick
+                 is derived via stripPrefix for click handlers and keyed
+                 each blocks. `member.prefix` is kept in sync as the
+                 authoritative prefix char and drives the category
+                 grouping. -->
             <li class="user" class:away={member.isAway}>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <button type="button" class="bufferLink"
                       class:away={member.isAway}
                       onclick={(e) => onNickClick?.(nick, e, member)}>
-                <span class="member-nick">{nick}</span>
+                <span class="member-nick">{member.nick}</span>
               </button>
             </li>
           {/each}

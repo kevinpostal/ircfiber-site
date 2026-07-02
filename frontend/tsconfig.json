@@ -16,7 +16,11 @@
     "declarationMap": false,
     "allowImportingTsExtensions": true,
     "sourceMap": true,
-    "types": ["vitest-browser-svelte"]
+    "types": ["vitest-browser-svelte"],
+    "baseUrl": ".",
+    "paths": {
+      "/src/*": ["src/*"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte"]
 }
