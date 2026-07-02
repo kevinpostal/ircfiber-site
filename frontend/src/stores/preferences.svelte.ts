@@ -178,6 +178,7 @@ export const hiddenChannelsMap = $state<Record<string, boolean>>(getStorageItem(
 export const ignoreList = $state<string[]>(getStorageItem('ircfiber:ignores', []));
 export const highlightWords = $state<string[]>(getStorageItem('ircfiber:highlightWords', []));
 export const serverlogCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:serverlogCollapsed', {}));
+export const serverlogHiddenMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:serverlogHidden', {}));
 export const membersCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:membersCollapsed', {}));
 export const collapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:collapsed', {}));
 export const inactiveCollapsedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:inactiveCollapsed', {}));
@@ -298,6 +299,7 @@ $effect.root(() => {
   $effect(() => { setStorageItem('ircfiber:ignores', ignoreList); });
   $effect(() => { setStorageItem('ircfiber:highlightWords', highlightWords); });
   $effect(() => schedulePersistMap('ircfiber:serverlogCollapsed', serverlogCollapsedMap));
+  $effect(() => schedulePersistMap('ircfiber:serverlogHidden', serverlogHiddenMap));
   $effect(() => schedulePersistMap('ircfiber:membersCollapsed', membersCollapsedMap));
   $effect(() => schedulePersistMap('ircfiber:collapsed', collapsedMap));
   $effect(() => schedulePersistMap('ircfiber:inactiveCollapsed', inactiveCollapsedMap));
@@ -428,6 +430,7 @@ if (typeof window !== 'undefined') {
       case 'ircfiber:pinned':           applyObject(pinnedMap); break;
       case 'ircfiber:hiddenChannels':   applyObject(hiddenChannelsMap); break;
       case 'ircfiber:serverlogCollapsed':   applyObject(serverlogCollapsedMap); break;
+      case 'ircfiber:serverlogHidden':      applyObject(serverlogHiddenMap); break;
       case 'ircfiber:membersCollapsed': {
         // Briefly suppress layout animations (e.g. member panel slide) so
         // the other tab snaps to the final state without re-playing the

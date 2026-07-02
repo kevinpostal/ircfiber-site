@@ -9,7 +9,7 @@
     formatIsupport,
   } from '../lib/serverLogGroups';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { serverlogCollapsedMap } from '../stores/preferences.svelte';
+  import { serverlogCollapsedMap, serverlogHiddenMap } from '../stores/preferences.svelte';
   import { updateServerlogCollapsed } from '../stores/api';
 
   interface Props {
@@ -79,6 +79,13 @@
       localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
     } catch {}
     updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, !next);
+  }
+
+  /** Dismiss (hide) this connection attempt card from the timeline. */
+  function dismiss(e: MouseEvent): void {
+    e.stopPropagation();
+    if (!collapsedKey) return;
+    serverlogHiddenMap[collapsedKey] = true;
   }
 
   let showRawTraffic = $state(false);
@@ -196,6 +203,12 @@
       {#if durationLabel && effectiveStatus !== 'pending'}
         <span class="serverLogCard__duration">· {durationLabel}</span>
       {/if}
+    </span>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <span class="serverLogCard__dismiss" role="button" tabindex="0"
+          title="Dismiss this connection log"
+          onclick={dismiss}>
+      <i class="fa-solid fa-xmark"></i>
     </span>
     <span class="serverLogCard__chevron" aria-hidden="true">
       <i class="fa-solid fa-chevron-{expanded ? 'up' : 'down'}"></i>

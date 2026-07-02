@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { IRCMessage, Network } from '../types';
-  import { groupServerLog } from '../lib/serverLogGroups';
-  import { getClearedAt } from '../stores/preferences.svelte';
+  import { groupServerLog, type ServerLogAttempt } from '../lib/serverLogGroups';
+  import { getClearedAt, serverlogHiddenMap } from '../stores/preferences.svelte';
+  import { getServerLogCollapsedKey } from '../lib/serverLogGroups';
   import { ircState } from '../stores/ircStore.svelte';
   import ServerLogCard from './ServerLogCard.svelte';
 
@@ -27,7 +28,15 @@
 
   // Group the flat message stream into connection attempts.
   // `attempts` is recomputed reactively when `messages` changes.
-  const attempts = $derived(groupServerLog(visibleMessages));
+  const grouped = $derived(groupServerLog(visibleMessages));
+  // Filter out any attempts the user has dismissed via the X button.
+  const attempts = $derived.by(() => {
+    if (!network?.networkId) return grouped;
+    return grouped.filter((a) => {
+      const key = getServerLogCollapsedKey(a, network.networkId);
+      return !serverlogHiddenMap[key];
+    });
+  });
 
   // Map each message index in `messages` to the attempt it belongs to
   // (1-based, used for stable keys when Svelte diffs the each block).

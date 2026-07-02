@@ -144,6 +144,24 @@
     margin-left: 4px;
   }
 
+  &__dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 3px;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+
+    .serverLogCard:hover & { opacity: 0.6; }
+    .serverLogCard:hover &:hover { opacity: 1; color: #e0726f; background: rgba(224, 114, 111, 0.1); }
+    &:focus-visible { opacity: 1; outline: 2px solid var(--accent); }
+  }
+
   &__body {
     padding: 6px 0 8px 0;
     font-family: var(--font-mono);
