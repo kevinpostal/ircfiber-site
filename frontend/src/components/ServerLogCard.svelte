@@ -119,6 +119,10 @@
 
   let showRawTraffic = $state(false);
   let showCap = $state(false);
+  // Phase timeline (TCP/TLS/Register/Ready) starts collapsed — once you've
+  // seen "Connected", the per-step timestamps are low-value noise. Toggle
+  // to re-expand if you're debugging a specific registration step.
+  let showPhases = $state(false);
 
   // Always show MOTD (per product decision) — never collapsed
   const motdLines = $derived(attempt.motd.map((m) => numericBody(m)));
@@ -247,36 +251,50 @@
   {#if expanded}
     <div class="serverLogCard__body">
       {#if attempt.phases.length > 0}
-        <ol class="serverLogTimeline">
-          {#each attempt.phases as msg, i (i)}
-            {@const chipPhase = (() => {
-              // Map engine phase tags directly.
-              if (msg.phase) return msg.phase;
-              // Map lifecycle commands into a phase for consistent chip styling.
-              if (msg.command === 'DISCONNECT' || msg.command === 'DISCONNECTED') return 'disconnected';
-              if (msg.command === 'CONNECT' || msg.command === 'CONNECTED') return 'info';
-              return '';
-            })()}
-            {@const isLast = i === attempt.phases.length - 1}
-            <li class="serverLogTimeline__item phase-{chipPhase} status-{effectiveStatus}" class:isLast>
-              {#if chipPhase}
-                <span class="serverLogTimeline__chip" data-phase={chipPhase}>
-                  {phaseToLabel(chipPhase)}
-                </span>
-              {:else}
-                <span class="serverLogTimeline__chip serverLogTimeline__chip--lifecycle">
-                  {msg.command.toLowerCase()}
-                </span>
-              {/if}
-              <span class="serverLogTimeline__body">
-                {#if msg.text}{@html renderLine(msg.text)}{:else}&nbsp;{/if}
-              </span>
-              <span class="serverLogTimeline__time" title={msg.timestamp ?? ''}>
-                {formatTime(msg.t)}
-              </span>
-            </li>
-          {/each}
-        </ol>
+        <div class="serverLogCard__rawSection">
+          <button
+            type="button"
+            class="serverLogCard__rawToggle"
+            data-toggle="phases"
+            aria-expanded={showPhases}
+            onclick={() => (showPhases = !showPhases)}
+          >
+            <i class="fa-solid fa-chevron-{showPhases ? 'down' : 'right'}"></i>
+            Connection steps <span class="serverLogCard__toggleCount">({attempt.phases.length})</span>
+          </button>
+          {#if showPhases}
+            <ol class="serverLogTimeline">
+              {#each attempt.phases as msg, i (i)}
+                {@const chipPhase = (() => {
+                  // Map engine phase tags directly.
+                  if (msg.phase) return msg.phase;
+                  // Map lifecycle commands into a phase for consistent chip styling.
+                  if (msg.command === 'DISCONNECT' || msg.command === 'DISCONNECTED') return 'disconnected';
+                  if (msg.command === 'CONNECT' || msg.command === 'CONNECTED') return 'info';
+                  return '';
+                })()}
+                {@const isLast = i === attempt.phases.length - 1}
+                <li class="serverLogTimeline__item phase-{chipPhase} status-{effectiveStatus}" class:isLast>
+                  {#if chipPhase}
+                    <span class="serverLogTimeline__chip" data-phase={chipPhase}>
+                      {phaseToLabel(chipPhase)}
+                    </span>
+                  {:else}
+                    <span class="serverLogTimeline__chip serverLogTimeline__chip--lifecycle">
+                      {msg.command.toLowerCase()}
+                    </span>
+                  {/if}
+                  <span class="serverLogTimeline__body">
+                    {#if msg.text}{@html renderLine(msg.text)}{:else}&nbsp;{/if}
+                  </span>
+                  <span class="serverLogTimeline__time" title={msg.timestamp ?? ''}>
+                    {formatTime(msg.t)}
+                  </span>
+                </li>
+              {/each}
+            </ol>
+          {/if}
+        </div>
       {/if}
 
       {#if attempt.numeric.length > 0}
