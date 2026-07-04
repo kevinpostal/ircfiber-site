@@ -63,6 +63,28 @@
     return true;
   });
 
+  // Auto-collapse when the connection ends. Once a user manually
+  // disconnects (or the connection dies), the connection log is no
+  // longer "live" — collapsing it gets it out of the way until they
+  // intentionally re-open it. The collapse state is persisted so it
+  // survives page refresh, just like a manual collapse.
+  $effect(() => {
+    const status = effectiveStatus;
+    if ((status === 'disconnected' || status === 'error')
+        && collapsedKey && network?.networkId
+        && serverlogCollapsedMap[collapsedKey] !== true) {
+      const eid = attempt.start?.eid ? Number(attempt.start.eid) : undefined;
+      const msgid = (!attempt.start?.eid && attempt.start?.msgid) ? attempt.start.msgid : undefined;
+      serverlogCollapsedMap[collapsedKey] = true;
+      try {
+        const data = JSON.parse(localStorage.getItem('ircfiber:serverlogCollapsed') || '{}');
+        data[collapsedKey] = true;
+        localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
+      } catch {}
+      updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, true);
+    }
+  });
+
   function toggleExpanded(): void {
     if (!collapsedKey || !network?.networkId) return;
     const next = !expanded;
