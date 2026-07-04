@@ -19,7 +19,7 @@ const BACKEND_WS_URL =
 
 // SigNoz URL for the dev server's SigNoz proxy. Override via env var when
 // pointing at a non-local SigNoz instance (e.g. the tailnet gateway). The
-// default (127.0.0.1:8080) is the host port mapped from docker-compose's
+// default (127.0.0.1:3301) is the host port mapped from docker-compose's
 // `signoz` service so the dev SPA can query ClickHouse-backed logs without
 // going through the IRC Fiber gateway. The catch-all `/api` rule below
 // targets BACKEND_URL (the IRC Fiber gateway) — the more-specific `/api/v1/`

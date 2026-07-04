@@ -136,6 +136,12 @@
     markJoinPending(activeNetwork.networkId, normalized);
     recordJoin(activeNetwork.networkId, normalized);
     sendRaw(activeNetwork.networkId, 'JOIN ' + activeBufferObj.name);
+    // If the network isn't fully connected (disconnected or stuck in a
+    // reconnection backoff loop), kick a fresh reconnect so the engine
+    // re-establishes the IRC session and flushes the queued JOIN.
+    if (!activeNetwork.connected) {
+      reconnectNetwork(activeNetwork.networkId).catch(() => {});
+    }
   }
 
   function archive(): void {
