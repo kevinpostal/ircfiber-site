@@ -34,13 +34,12 @@ export type AppendFn = (networkId: string, bufferName: string, msg: IRCMessage, 
  * describes every progress entry the engine emits.
  */
 export function shouldBypassBatcher(msg: IRCMessage, bufferName: string): boolean {
-  if (bufferName !== '_server') return false;
-  if (msg.command !== 'NOTICE') return false;
-  // A NOTICE *with* a nick is a server→user NOTICE (NickServ, etc.) and
-  // is rendered as chat in MessageRow. Progress entries never carry a
-  // nick — they're system notices.
-  if (msg.nick) return false;
-  return true;
+  // The _server buffer is low-volume — only connection progress, MOTD, and
+  // service notices. There's no chat-flood risk. Every message there should
+  // render instantly, not wait for the batcher's setTimeout(0).
+  if (bufferName === '_server') return true;
+
+  return false;
 }
 
 const defaultAppend: AppendFn = (networkId, bufferName, msg, isBackfill) => {

@@ -1487,11 +1487,11 @@ export function updateNetworkFromSync(incoming: Network[]): void {
 export function handleConnect(cmd: string, networkId: string, text?: string): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
-  if (cmd === '001' || cmd === 'CONNECT') {
+  if (cmd === '001' || cmd === 'CONNECT' || cmd === 'CONNECTED') {
     net.connected = true;
     net.connectionState = 'connected';
     net.disconnectReason = '';
-  } else if (cmd === 'DISCONNECT') {
+  } else if (cmd === 'DISCONNECT' || cmd === 'DISCONNECTED') {
     net.connected = false;
     net.connectionState = 'disconnected';
     if (text) net.disconnectReason = text;

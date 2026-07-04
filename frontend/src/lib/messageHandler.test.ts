@@ -24,20 +24,20 @@ describe('shouldBypassBatcher', () => {
     expect(shouldBypassBatcher(msg, '_server')).toBe(true);
   });
 
-  it('returns false for chat NOTICE (with nick, in _server)', () => {
-    // NickServ, ChanServ, etc. all send NOTICE with a nick — those are
-    // rendered as chat and must stay on the batched path.
+  it('returns true for chat NOTICE (with nick, in _server)', () => {
+    // The _server buffer is low-volume by nature. Service notices (NickServ,
+    // ChanServ) should render immediately, not wait for the batcher.
     const msg = makeMsg({
       command: 'NOTICE',
       nick: 'NickServ',
       text: 'Password accepted',
     });
-    expect(shouldBypassBatcher(msg, '_server')).toBe(false);
+    expect(shouldBypassBatcher(msg, '_server')).toBe(true);
   });
 
   it('returns false for server-log NOTICE in any other buffer', () => {
-    // A NOTICE without a nick in a channel buffer would be a system
-    // message from the channel — the channel rendering pipeline owns it.
+    // Only the _server buffer bypasses the batcher. Channel buffers use
+    // the normal batched path for chat coalescing.
     const msg = makeMsg({
       command: 'NOTICE',
       nick: '',
@@ -46,14 +46,18 @@ describe('shouldBypassBatcher', () => {
     expect(shouldBypassBatcher(msg, '#general')).toBe(false);
   });
 
-  it('returns false for PRIVMSG even in _server', () => {
+  it('returns true for PRIVMSG in _server — everything in _server bypasses', () => {
     const msg = makeMsg({ command: 'PRIVMSG', text: 'hello' });
-    expect(shouldBypassBatcher(msg, '_server')).toBe(false);
+    expect(shouldBypassBatcher(msg, '_server')).toBe(true);
   });
 
-  it('returns false for CONNECT/DISCONNECT (those use their own templates)', () => {
-    expect(shouldBypassBatcher(makeMsg({ command: 'CONNECT', nick: '' }), '_server')).toBe(false);
-    expect(shouldBypassBatcher(makeMsg({ command: 'DISCONNECT', nick: '' }), '_server')).toBe(false);
+  it('returns true for any command in _server', () => {
+    expect(shouldBypassBatcher(makeMsg({ command: 'CONNECT', nick: '' }), '_server')).toBe(true);
+    expect(shouldBypassBatcher(makeMsg({ command: 'DISCONNECT', nick: '' }), '_server')).toBe(true);
+    expect(shouldBypassBatcher(makeMsg({ command: 'CONNECTED', nick: '' }), '_server')).toBe(true);
+    expect(shouldBypassBatcher(makeMsg({ command: 'DISCONNECTED', nick: '' }), '_server')).toBe(true);
+    expect(shouldBypassBatcher(makeMsg({ command: 'JOIN', nick: '' }), '_server')).toBe(true);
+    expect(shouldBypassBatcher(makeMsg({ command: 'PART', nick: '' }), '_server')).toBe(true);
   });
 });
 
