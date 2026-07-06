@@ -80,6 +80,19 @@ export const ircState = $state({
 // the current one. Used by archiveBuffer to select where focus goes.
 let previousBuffer: { networkId: string | null; bufferName: string | null } = { networkId: null, bufferName: null };
 
+// ── Pending nick changes (real-time NICK events vs. stale sync snapshots) ──
+// The periodic /api/sync snapshot is taken on a timer (see ircStore:1138 comment
+// for the `currentNick` guard that protects our own nick). Sync snapshots can
+// be taken before a fresh /nick propagates to the engine, so overwriting
+// `buf.users` blindly would revert nick changes in the members list even
+// though `currentNick` (typing-area indicator) survives. We track old → new
+// nick pairs here; the sync applies our local nick for any user that has a
+// pending change, then clears the entry once the sync confirms the new nick.
+// Keyed by `${networkId}:${bufferName}:${oldBareNick}`.
+const pendingNickChanges: Map<string, { newNick: string; setAt: number }> = new Map();
+// Auto-clear stale pending entries after 60s in case a sync never confirms.
+const PENDING_NICK_TTL_MS = 60_000;
+
 // ── W1-T08: tempUnavailable helpers ──
 export function setTempUnavailable(networkId: string, bufferName: string, expireAt: number): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
@@ -1065,22 +1078,30 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // the live state back to disconnected, causing the red "Click to
       // reconnect" banner to appear while MOTD lines are still arriving.
       //
+      // Similarly, the periodic snapshotter (10s interval) may still report
+      // status=connecting after the engine has already connected, which
+      // would overwrite the live connected state back to "Connecting...".
+      //
       // Only adopt the sync's connection values if they're genuinely new
-      // (not just slower) — i.e. the sync says disconnected but the live
-      // state is still in a connecting/connected handshake window.
+      // (not just slower) — i.e. the sync says disconnected/connecting
+      // but the live state already confirms connected.
       const liveState = existing.connectionState;
       const isLiveConnected = existing.connected;
       const syncIsNew =
         connectionState === 'disconnected'
           ? isLiveConnected
-            // Live says connected but sync says disconnected - this could
+            // Live says connected but sync says disconnected — this could
             // be the race window.  Only downgrade if the sync has come
             // back multiple times (the engine gives up), or if the live
             // state has had time to settle.  For now, trust the live event-
             // driven state over the periodic snapshot during handshake.
             ? false
             : liveState !== connectionState
-          : liveState !== connectionState;
+          : connectionState === 'connecting' && isLiveConnected
+            // Live says connected but sync says connecting — stale
+            // snapshot from before the engine finished registration.
+            ? false
+            : liveState !== connectionState;
 
       // Always sync metadata fields — these don't race with live events.
       existing.name = net.name;
@@ -1096,6 +1117,10 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // what the user already set locally.
       if (net.saslPassword) existing.saslPassword = net.saslPassword;
       existing.status = net.status;
+      // systemManaged is a server-side flag we don't expect to change
+      // during a session; only adopt it from sync if we don't have a
+      // value yet (initial load). Treat undefined/missing as false.
+      if (net.systemManaged !== undefined) existing.systemManaged = net.systemManaged;
 
       // Connection state: only overwrite from sync when it represents
       // genuinely new info, not when the sync is just slower than live
@@ -1116,7 +1141,7 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             existing.connected = net.connected;
             existing.connectionState = connectionState;
           }
-        } else if (connectionState === 'connecting') {
+          } else if (connectionState === 'connecting' && !isLiveConnected) {
         // The sync confirms connection is in progress — this is new info
         // that live events haven't provided yet (001 hasn't fired, or the
         // engine is between attempts in its backoff loop). Show it so the
@@ -1228,7 +1253,50 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existingBuf.topic = incomingBuf.topic;
           existingBuf.topicSetBy = incomingBuf.topicSetBy;
           existingBuf.topicSetAt = incomingBuf.topicSetAt;
-          existingBuf.users = incomingBuf.users;
+          // Apply any pending nick changes from live NICK events BEFORE
+          // assigning the incoming users array. We rebuild a fresh array
+          // with the pending nick patches applied, so the assignment below
+          // is a single mutation that Svelte's $state proxy will pick up
+          // uniformly. Sync snapshots can be taken before the engine sees
+          // the nick change, which would otherwise revert our members list
+          // to the old nick even though `currentNick` (the typing-area
+          // indicator) is already updated. Mirror the same guard applied
+          // to currentNick above (line 1138). We also clear pending
+          // entries once the sync catches up with the new nick.
+          const now = Date.now();
+          const bufKey = `${existing.networkId}:${incomingBuf.name}`;
+          const patchedUsers: Member[] = [];
+          for (const m of incomingBuf.users) {
+            const bare = stripPrefix(m.nick);
+            const pendingKey = `${bufKey}:${bare}`;
+            const pending = pendingNickChanges.get(pendingKey);
+            if (pending) {
+              if (pending.setAt + PENDING_NICK_TTL_MS < now) {
+                // Stale — drop and accept whatever the sync says.
+                pendingNickChanges.delete(pendingKey);
+                patchedUsers.push(m);
+              } else {
+                // The incoming nick matches our pre-change nick (the sync
+                // hasn't caught up yet). Patch with the live new nick.
+                patchedUsers.push({ ...m, nick: (m.prefix || '') + pending.newNick });
+              }
+            } else {
+              patchedUsers.push(m);
+            }
+          }
+          // Clear any pending entries for this buffer that the sync has
+          // caught up with — i.e. the sync now reports the new nick.
+          for (const [k, v] of pendingNickChanges) {
+            if (!k.startsWith(bufKey + ':')) continue;
+            if (v.setAt + PENDING_NICK_TTL_MS < now) {
+              pendingNickChanges.delete(k);
+              continue;
+            }
+            if (patchedUsers.some(u => stripPrefix(u.nick) === stripPrefix(v.newNick))) {
+              pendingNickChanges.delete(k);
+            }
+          }
+          existingBuf.users = patchedUsers;
           // Enrich members with extended-join data from network-level
           // accounts/idents/realnames caches (sync JSON carries these as
           // extra fields beyond the Buffer/Network interface).
@@ -1680,7 +1748,14 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     const newNick = params[params.length - 1];
     for (const u of buf.users) {
       if (stripPrefix(u.nick) === nick) {
+        // Capture the OLD bare nick before mutating u.nick — the pending
+        // entry must be keyed by the pre-change nick so a stale sync
+        // snapshot (which still reports the old nick) can find and apply
+        // our local change.
+        const oldBare = stripPrefix(u.nick);
         u.nick = u.prefix + newNick;
+        const key = `${networkId}:${normalized}:${oldBare}`;
+        pendingNickChanges.set(key, { newNick, setAt: Date.now() });
         break;
       }
     }

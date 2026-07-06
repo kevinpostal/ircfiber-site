@@ -561,6 +561,87 @@ describe('updateChannelUsers', () => {
 		expect(foundNet?.currentNick).toBe('freshuser');
 	});
 
+	it('does not revert members list nick from sync after optimistic /nick', () => {
+		// Regression: the typing-area `currentNick` was protected from sync
+		// overwrite (see "does not overwrite currentNick from sync snapshot
+		// after optimistic /nick" above), but `buf.users[i].nick` was NOT.
+		// A sync snapshot taken before the engine saw the nick change
+		// would revert the members-list entry to the old nick even though
+		// `currentNick` was already correct. This test guards the
+		// pending-nick-change bookkeeping introduced to fix that.
+		const net = createNetwork({ networkId: 'net1', nick: 'oldnick', currentNick: 'oldnick' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: 'oldnick' })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		// Live NICK event — user typed /nick newnick
+		updateChannelUsers('net1', '#chan', 'NICK', 'oldnick', ['oldnick', 'newnick']);
+		flushSync();
+
+		// Pre-change sync snapshot arrives carrying the old nick (engine
+		// hadn't observed the rename yet). Must NOT revert members list.
+		const syncPayload = [
+			createNetwork({
+				networkId: 'net1',
+				nick: 'oldnick',
+				currentNick: 'oldnick',
+				buffers: [{
+					name: '#chan',
+					users: [createMember({ nick: 'oldnick' })],
+				}],
+			}),
+		];
+		updateNetworkFromSync(syncPayload);
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.users[0].nick).toBe('newnick');
+		expect(foundNet?.currentNick).toBe('newnick');
+	});
+
+	it('clears pending nick change once a sync confirms the new nick', () => {
+		const net = createNetwork({ networkId: 'net1', nick: 'oldnick', currentNick: 'oldnick' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: 'oldnick' })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'NICK', 'oldnick', ['oldnick', 'newnick']);
+		flushSync();
+
+		// First sync: stale oldnick — should be ignored (pending).
+		updateNetworkFromSync([
+			createNetwork({
+				networkId: 'net1',
+				nick: 'oldnick',
+				currentNick: 'oldnick',
+				buffers: [{ name: '#chan', users: [createMember({ nick: 'oldnick' })] }],
+			}),
+		]);
+		flushSync();
+
+		// Second sync: now reflects the new nick — pending should clear.
+		updateNetworkFromSync([
+			createNetwork({
+				networkId: 'net1',
+				nick: 'newnick',
+				currentNick: 'newnick',
+				buffers: [{ name: '#chan', users: [createMember({ nick: 'newnick' })] }],
+			}),
+		]);
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.users[0].nick).toBe('newnick');
+	});
+
 	it('prependMessages dedupes against the boundary msgid', () => {
 		// When the server paginates with beforeid=<lastmsgid>, the new
 		// batch's LAST entry can share that msgid with the buffer's
