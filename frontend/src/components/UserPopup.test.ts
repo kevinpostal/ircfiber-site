@@ -41,7 +41,7 @@ describe('UserPopup', () => {
   it('renders message form', async () => {
     setupChannelBuffer();
     render(UserPopup, { props: { nick: 'Alice', x: 0, y: 0, onClose: vi.fn(), onSwitchBuffer: vi.fn(), onSendRaw: mockSendRaw } });
-    await expect.element(page.getByText('Send a message:')).toBeInTheDocument();
+    await expect.element(page.getByText('Send a message')).toBeInTheDocument();
   });
 
   it('renders Op/Voice actions when user has no special prefix', async () => {

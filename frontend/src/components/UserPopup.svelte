@@ -189,7 +189,7 @@
         <span role="button" tabindex="0" class="buffer bufferLink memberContextMenu__titleLink {modeClass} user link"
               title={displayNick} onclick={openDM} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDM(); } }}>{displayNick}</span>
         {#if modeTitle}
-          <span class="mode-label">({modeTitle})</span>
+          <span class="mode-label">{modeTitle}</span>
         {/if}
       </h3>
       {#if realname}
@@ -199,37 +199,56 @@
         <p class="info hostmask">{ident}</p>
       {/if}
       {#if account}
-        <p class="info account authed">Logged in as: <b>{account}</b></p>
+        <p class="info account authed"><b>{account}</b></p>
       {/if}
       {#if isAway}
-        <p class="info away">Away: {awayMessage || '(no message)'}</p>
+        <p class="info away">{awayMessage || 'Away'}</p>
       {/if}
     </div>
     <ul class="actions" style="display: block;">
-      <li><button class="contextMenu__item whois" type="button" onclick={doWhois}>Whois</button></li>
-      <li><button class="contextMenu__item open" type="button" onclick={openDM}>Open</button></li>
+      <!-- User info / discovery -->
+      <li class="action-group-label">Info</li>
+      <li><button class="contextMenu__item whois highlight" type="button" onclick={doWhois}><i class="fa-solid fa-address-card"></i>Whois</button></li>
+      <li><button class="contextMenu__item open highlight" type="button" onclick={openDM}><i class="fa-solid fa-comment"></i>Open conversation</button></li>
+      <li role="separator" class="action-divider"></li>
+
+      <!-- Moderation -->
       {#if isChannel}
-        <li><button class="contextMenu__item invite" type="button" onclick={doInvite}>Invite to a channel&hellip;</button></li>
-      {/if}
-      <li><button class="contextMenu__item ignore" type="button" onclick={doIgnore}>Ignore&hellip;</button></li>
-      {#if isChannel}
+        <li class="action-group-label">Moderation</li>
         {#if hasOp}
-          <li><button class="contextMenu__item deop" type="button" onclick={doDeop}>Deop</button></li>
+          <li><button class="contextMenu__item deop" type="button" onclick={doDeop}><i class="fa-solid fa-shield"></i>Deop</button></li>
         {:else}
-          <li><button class="contextMenu__item op" type="button" onclick={doOp}>Op</button></li>
+          <li><button class="contextMenu__item op" type="button" onclick={doOp}><i class="fa-solid fa-shield"></i>Op</button></li>
         {/if}
         {#if hasVoice}
-          <li><button class="contextMenu__item devoice" type="button" onclick={doDevoice}>Devoice</button></li>
+          <li><button class="contextMenu__item devoice" type="button" onclick={doDevoice}><i class="fa-solid fa-microphone-slash"></i>Devoice</button></li>
         {:else}
-          <li><button class="contextMenu__item voice" type="button" onclick={doVoice}>Voice</button></li>
+          <li><button class="contextMenu__item voice" type="button" onclick={doVoice}><i class="fa-solid fa-microphone"></i>Voice</button></li>
         {/if}
-        <li><button class="contextMenu__item kick" type="button" onclick={doKick}>Kick&hellip;</button></li>
-        <li class="modAction"><button class="contextMenu__item ban" type="button" onclick={doBan}>Ban&hellip;</button></li>
+        <li><button class="contextMenu__item kick danger" type="button" onclick={doKick}><i class="fa-solid fa-right-from-bracket"></i>Kick&hellip;</button></li>
+        <li><button class="contextMenu__item ban danger" type="button" onclick={doBan}><i class="fa-solid fa-hammer"></i>Ban&hellip;</button></li>
+        <li role="separator" class="action-divider"></li>
       {/if}
+
+      <!-- Actions -->
+      <li class="action-group-label">Actions</li>
+      {#if isChannel}
+        <li><button class="contextMenu__item invite" type="button" onclick={doInvite}><i class="fa-solid fa-user-plus"></i>Invite to a channel&hellip;</button></li>
+      {/if}
+      <li><button class="contextMenu__item ignore" type="button" onclick={doIgnore}><i class="fa-solid fa-ban"></i>Ignore&hellip;</button></li>
+
+      <!-- Quick message -->
+      <li role="separator" class="action-divider"></li>
       <li>
         <form class="form messageForm" onsubmit={submitMessage}>
-          <p><label for="contextMenuMessage">Send a message:</label></p>
-          <input class="input message" id="contextMenuMessage" bind:value={messageValue} bind:this={messageInput} />
+          <div class="form-header">
+            <i class="fa-solid fa-paper-plane"></i>
+            <label for="contextMenuMessage">Send a message</label>
+          </div>
+          <div class="input-wrapper">
+            <input class="input message" id="contextMenuMessage" placeholder="Type a message&hellip;" bind:value={messageValue} bind:this={messageInput} />
+            <button class="send-btn" type="submit" aria-label="Send"><i class="fa-solid fa-arrow-right"></i></button>
+          </div>
         </form>
       </li>
     </ul>

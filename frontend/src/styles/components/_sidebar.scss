@@ -156,6 +156,23 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 }
 .network-status { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; }
 .network-status.disconnected { background: #f85149; }
+/* "system" badge for platform-provisioned networks (e.g. the default
+   irc.ircfiber.com connection). Non-interactive, low-contrast so it
+   doesn't compete with the unread counts next to it. */
+.system-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 8px;
+  background: rgba(103, 232, 249, 0.10);
+  color: rgba(103, 232, 249, 0.65);
+  border: 1px solid rgba(103, 232, 249, 0.18);
+  cursor: help;
+}
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .channel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .bufferHead { display: flex; flex-direction: row; align-items: center; padding: 8px 8px 8px 24px; font-size: 14px; line-height: 18px; color: #d9d9d9; }

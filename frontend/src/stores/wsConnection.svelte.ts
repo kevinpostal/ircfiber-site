@@ -188,7 +188,14 @@ export function connectWebSocket(
   socket.addEventListener('message', (event) => {
     try {
       const data = JSON.parse(event.data);
-      handleResponse(data as Record<string, unknown>);
+      if (Array.isArray((data as any).batch)) {
+        // Batch of events — process each one individually
+        for (const item of (data as any).batch) {
+          handleResponse(item as Record<string, unknown>);
+        }
+      } else {
+        handleResponse(data as Record<string, unknown>);
+      }
     } catch (e) {
       console.error('WS parse error:', e);
     }

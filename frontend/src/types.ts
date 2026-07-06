@@ -69,6 +69,13 @@ export interface Network {
    * don't render as stale before the first event arrives.
    */
   lastSeenAt?: number;
+  /**
+   * True for networks provisioned by the platform (e.g. the default
+   * IRC Fiber connection to irc.ircfiber.com). Such networks cannot be
+   * deleted via the user API; the UI hides delete affordances and the
+   * backend refuses DELETE /api/networks/:id with 403.
+   */
+  systemManaged?: boolean;
 }
 
 export interface Buffer {

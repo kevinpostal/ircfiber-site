@@ -1,32 +1,327 @@
 /* User popup (member context menu) */
-.contextMenu.userPopup { min-width: 280px; max-width: 360px; }
-.contextMenu.userPopup .contextMenu__wrap { max-height: 80vh; overflow-y: auto; }
-.contextMenu .userContext { padding: 12px 16px 8px; border-bottom: 1px solid #2c2f35; }
-.contextMenu .userContext h3.title { margin: 0; font-size: 14px; font-weight: 400; color: #d9d9d9; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.contextMenu .userContext .avatar.letterAvatar { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #fff; flex-shrink: 0; box-shadow: inset 0 -2px 0 rgba(0,0,0,0.3); }
-.contextMenu .userContext .mode_prefix { font-family: var(--font-mono); font-size: 14px; font-weight: 600; user-select: none; }
+.contextMenu.userPopup {
+  min-width: 300px;
+  max-width: 360px;
+  background: #131418;
+  border: 1px solid #2c2f35;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+  overflow: hidden;
+}
+.contextMenu.userPopup .contextMenu__wrap {
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 0;
+}
+
+/* ── Header ─────────────────────────────────────────── */
+.contextMenu .userContext {
+  padding: 16px 16px 12px;
+  background: linear-gradient(135deg, #1a1d25 0%, #131418 100%);
+  border-bottom: 1px solid #2c2f35;
+  position: relative;
+}
+.contextMenu .userContext::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #58a6ff, #8b5cf6);
+  opacity: 0.6;
+}
+.contextMenu .userContext h3.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 400;
+  color: #e1e4e8;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+.contextMenu .userContext .avatar.letterAvatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  transition: transform 0.15s;
+}
+.contextMenu .userContext .avatar.letterAvatar:hover {
+  transform: scale(1.08);
+}
+.contextMenu .userContext .mode_prefix {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  user-select: none;
+  flex-shrink: 0;
+}
 .contextMenu .userContext .mode_prefix.mode_pill { display: none; }
 .contextMenu .userContext .mode_prefix.mode_symbol { display: inline; }
 .contextMenu .userContext .mode_prefix.mode_OPER { color: #e02305; }
-.contextMenu .userContext .mode_prefix.mode_OWNER { color: #e7aa00; }
-.contextMenu .userContext .mode_prefix.mode_ADMIN { color: #6500a5; }
-.contextMenu .userContext .mode_prefix.mode_OP { color: #ba1719; }
-.contextMenu .userContext .mode_prefix.mode_HALFOP { color: #b55900; }
-.contextMenu .userContext .mode_prefix.mode_VOICED { color: #25b100; }
+.contextMenu .userContext .mode_prefix.mode_OWNER { color: #f0c000; }
+.contextMenu .userContext .mode_prefix.mode_ADMIN { color: #8b5cf6; }
+.contextMenu .userContext .mode_prefix.mode_OP { color: #f85149; }
+.contextMenu .userContext .mode_prefix.mode_HALFOP { color: #d29922; }
+.contextMenu .userContext .mode_prefix.mode_VOICED { color: #3fb950; }
 .contextMenu .userContext .mode_prefix.mode_MEMBER { color: #777; }
-.contextMenu .userContext .memberContextMenu__titleLink { color: #58a6ff; cursor: pointer; text-decoration: none; font-weight: 600; }
-.contextMenu .userContext .memberContextMenu__titleLink:hover { text-decoration: underline; }
-.contextMenu .userContext .mode-label { color: #8b949e; font-size: 12px; }
-.contextMenu .userContext .info { margin: 4px 0 2px; font-size: 12px; color: #8b949e; font-family: var(--font-mono); line-height: 1.4; }
-.contextMenu .userContext .info.hostmask { color: #6e7681; }
-.contextMenu .userContext .info.account.authed { color: #8b949e; }
-.contextMenu .userContext .info.account.authed b { color: #d9d9d9; }
-.contextMenu .userContext .info.away { color: #d29922; }
-.contextMenu .form.messageForm { padding: 8px 12px 4px; border-top: 1px solid #2c2f35; margin-top: 4px; }
-.contextMenu .form.messageForm p { margin: 0 0 4px; }
-.contextMenu .form.messageForm label { font-size: 11px; color: #8b949e; }
-.contextMenu .form.messageForm .input.message { width: 100%; padding: 4px 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #d9d9d9; font-size: 13px; outline: none; box-sizing: border-box; }
-.contextMenu .form.messageForm .input.message:focus { border-color: #58a6ff; }
+.contextMenu .userContext .memberContextMenu__titleLink {
+  color: #58a6ff;
+  cursor: pointer;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.contextMenu .userContext .memberContextMenu__titleLink:hover {
+  color: #79b8ff;
+  text-decoration: underline;
+}
+.contextMenu .userContext .mode-label {
+  color: #8b949e;
+  font-size: 11px;
+  font-weight: 500;
+  background: #1c2128;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid #2c2f35;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.contextMenu .userContext .info {
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: #8b949e;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}
+.contextMenu .userContext .info.realname {
+  color: #c9d1d9;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  margin-top: 8px;
+}
+.contextMenu .userContext .info.hostmask {
+  color: #6e7681;
+  font-size: 11px;
+}
+.contextMenu .userContext .info.account.authed {
+  color: #8b949e;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.contextMenu .userContext .info.account.authed::before {
+  content: '\f007';
+  font-family: 'Font Awesome 6 Free';
+  font-weight: 900;
+  font-size: 10px;
+  color: #3fb950;
+}
+.contextMenu .userContext .info.account.authed b { color: #c9d1d9; font-weight: 600; }
+.contextMenu .userContext .info.away {
+  color: #d29922;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.contextMenu .userContext .info.away::before {
+  content: '\f017';
+  font-family: 'Font Awesome 6 Free';
+  font-weight: 400;
+  font-size: 10px;
+}
+
+/* ── Action groups ──────────────────────────────────── */
+.contextMenu .actions {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.contextMenu .actions li {
+  margin: 0;
+}
+.contextMenu .actions .action-group-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #6e7681;
+  padding: 8px 14px 4px;
+  user-select: none;
+}
+.contextMenu .actions .action-group-label:first-child {
+  padding-top: 4px;
+}
+
+/* Action items */
+.contextMenu.userPopup .contextMenu__item {
+  width: 100%;
+  text-align: left;
+  padding: 7px 14px;
+  background: transparent;
+  border: none;
+  color: #c9d1d9;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  transition: background 0.12s, color 0.12s;
+  position: relative;
+}
+.contextMenu.userPopup .contextMenu__item:hover {
+  background: #1c2128;
+  color: #e6edf3;
+}
+.contextMenu.userPopup .contextMenu__item:active {
+  background: #252a33;
+}
+.contextMenu.userPopup .contextMenu__item i,
+.contextMenu.userPopup .contextMenu__item .fa-solid {
+  padding-right: 20px;
+  width: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: #6e7681;
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+.contextMenu.userPopup .contextMenu__item:hover i {
+  color: #8b949e;
+}
+
+/* Destructive actions (kick, ban) */
+.contextMenu.userPopup .contextMenu__item.danger {
+  color: #f85149;
+}
+.contextMenu.userPopup .contextMenu__item.danger i {
+  color: #f85149;
+}
+.contextMenu.userPopup .contextMenu__item.danger:hover {
+  background: #2d1517;
+  color: #ff6b62;
+}
+.contextMenu.userPopup .contextMenu__item.danger:hover i {
+  color: #ff6b62;
+}
+
+/* Highlighted actions (whois, open) */
+.contextMenu.userPopup .contextMenu__item.highlight i {
+  color: #58a6ff;
+}
+.contextMenu.userPopup .contextMenu__item.highlight:hover i {
+  color: #79b8ff;
+}
+
+/* Action meta counts */
+.contextMenu.userPopup .contextMenu__item .action-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: #6e7681;
+  font-family: var(--font-mono);
+}
+
+/* Section divider */
+.contextMenu .actions .action-divider {
+  height: 1px;
+  background: #2c2f35;
+  margin: 4px 14px;
+}
+
+/* ── Message form ───────────────────────────────────── */
+.contextMenu .form.messageForm {
+  padding: 10px 14px 12px;
+  border-top: 1px solid #2c2f35;
+  background: #161a20;
+}
+.contextMenu .form.messageForm .form-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.contextMenu .form.messageForm .form-header i {
+  font-size: 12px;
+  color: #58a6ff;
+}
+.contextMenu .form.messageForm label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.contextMenu .form.messageForm .input-wrapper {
+  display: flex;
+  gap: 6px;
+}
+.contextMenu .form.messageForm .input.message {
+  flex: 1;
+  padding: 7px 10px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.contextMenu .form.messageForm .input.message:focus {
+  border-color: #58a6ff;
+  box-shadow: 0 0 0 2px rgba(88,166,255,0.15);
+}
+.contextMenu .form.messageForm .input.message::placeholder {
+  color: #484f58;
+}
+.contextMenu .form.messageForm .send-btn {
+  padding: 7px 12px;
+  background: #1f6feb;
+  border: none;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, transform 0.1s;
+  flex-shrink: 0;
+}
+.contextMenu .form.messageForm .send-btn:hover {
+  background: #388bfd;
+}
+.contextMenu .form.messageForm .send-btn:active {
+  transform: scale(0.96);
+}
+
+/* ── Scrollbar ──────────────────────────────────────── */
+.contextMenu.userPopup .contextMenu__wrap::-webkit-scrollbar {
+  width: 4px;
+}
+.contextMenu.userPopup .contextMenu__wrap::-webkit-scrollbar-track {
+  background: transparent;
+}
+.contextMenu.userPopup .contextMenu__wrap::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 2px;
+}
+.contextMenu.userPopup .contextMenu__wrap::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
+}
+
+/* ── Other styles (unrelated to user popup but in this file) ── */
 .messages { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 0 0 6px 0; min-width: 0; background: var(--chat-bg); }
 .row.messageRow {
   display: block;
@@ -39,45 +334,21 @@
   background: transparent;
   word-break: break-word;
 }
-
-.row.messageRow.own {
-  background: #1f1f1f;
-}
-
+.row.messageRow.own { background: #1f1f1f; }
 .row.messageRow.status {
   color: #ccc;
   font-size: 13px;
   background: transparent;
-  /* Match the IRCCloud right gutter (118px) set in app.css. Without
-     this, the same-selector rule later in this file was overriding
-     app.css with `padding: 2px 80px 2px 68px`, hiding the fix. */
   padding: 0 118px 0 68px;
 }
-.row.messageRow.status .date {
-  top: 2px;
-}
-.row.messageRow.status.firstAuthor .date {
-  top: 2px;
-}
+.row.messageRow.status .date { top: 2px; }
+.row.messageRow.status.firstAuthor .date { top: 2px; }
 .row.messageRow.status .content,
 .row.groupedJoinPart .content {
   color: inherit;
   display: inline;
   white-space: pre-wrap;
 }
-
-/* ── Server-log progress entries ────────────────────────────────────────
- * Each line in the `_server` buffer that the engine emits while
- * connecting (Connecting to …, TLS handshake complete, etc.) renders
- * with a small phase chip on the left and a body that mirrors the
- * timeline. The chip + body share a single row so the user can
- * visually scan the connect sequence without losing context.
- *
- * Phase taxonomy (kept in sync with IRCRawEvent.makeServerLog in D):
- *   queued | resolving | connecting | tcp_open
- *   tls | tls_done | registering | caps | sasl
- *   welcome | info | warn | error
- */
 .row.messageRow.serverLog {
   color: #b5bcc4;
   font-size: 12.5px;
@@ -89,12 +360,6 @@
   display: inline;
   white-space: pre-wrap;
 }
-/* ServerLog timestamps use the default `.row.messageRow .date` positioning
- * (right edge, 3px from bottom) — no override needed. */
-
-/* Phase chip — small pill rendered just before the message body.
- * Color signals severity (info / ok / warn / error) so users can
- * scan the timeline at a glance without reading every word. */
 .serverLogChip {
   display: inline-block;
   margin-right: 8px;
@@ -112,7 +377,6 @@
   min-width: 48px;
   text-align: center;
 }
-/* Default neutral tint */
 .serverLogChip { background: #1f2429; color: #b5bcc4; border-color: #3b4148; }
 .row.messageRow.serverLog.phase-connecting .serverLogChip,
 .row.messageRow.serverLog.phase-resolving  .serverLogChip,

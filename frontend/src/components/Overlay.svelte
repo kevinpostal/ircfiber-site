@@ -98,6 +98,14 @@
     const { networkId, bufferName } = data;
     const net = ircState.networks.find(n => n.networkId === networkId);
     if (!net) { close(); return; }
+    // Refuse to delete system-managed networks (the default IRC Fiber
+    // connection to irc.ircfiber.com). The backend also refuses with
+    // 403, but we short-circuit here so the UI doesn't even show a
+    // destructive confirm for these.
+    if (bufferName === '_server' && net.systemManaged) {
+      close();
+      return;
+    }
     if (bufferName === '_server') {
       deleteNetwork(networkId);
       const netIdx = ircState.networks.indexOf(net);

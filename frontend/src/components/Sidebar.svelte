@@ -216,6 +216,9 @@
               <i class="fa fa-globe network-shield" aria-hidden="true" style="opacity:0.5"></i>
             {/if}
             <span class="label">{net.name}</span>
+            {#if net.systemManaged}
+              <span class="system-badge" title="Provisioned by IRC Fiber — cannot be removed">system</span>
+            {/if}
             <StaleIndicator lastSeenAt={net.lastSeenAt} />
             {#if totalNetHighlights > 0}
               <span class="unread buffer-unread">{totalNetHighlights}</span>
