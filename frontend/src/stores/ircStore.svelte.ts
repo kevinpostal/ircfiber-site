@@ -2,7 +2,8 @@ import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, O
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
 import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap } from './preferences.svelte';
-import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage } from './api';
+import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
+import { sendRaw } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 
@@ -14,15 +15,45 @@ export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'adv
  * Set by markUserDisconnected() when the user clicks Disconnect, cleared by
  * clearUserDisconnected() when the user explicitly clicks Reconnect.
  * Unlike the old 10-second window, this guard is INDEFINITE — Disconnect
- * means "stop all reconnection attempts" until the user says otherwise. */
+ * means "stop all reconnection attempts" until the user says otherwise.
+ * Persisted to localStorage so it survives page refresh — on reload the
+ * engine will see the network as disconnected and won't auto-reconnect
+ * until the user clicks Connect/Rejoin. */
+const DISCONNECTED_KEY = 'ircfiber:userDisconnected';
+let _userDisconnectedLoaded = false;
+function ensureDisconnectedLoaded(): void {
+  if (_userDisconnectedLoaded) return;
+  _userDisconnectedLoaded = true;
+  try {
+    const raw = localStorage.getItem(DISCONNECTED_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, number>;
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'number') userDisconnectedAt.set(k, v);
+      }
+    }
+  } catch { /* ignore corrupt data */ }
+}
+function saveUserDisconnected(): void {
+  try {
+    const obj: Record<string, number> = {};
+    for (const [k, v] of userDisconnectedAt) obj[k] = v;
+    localStorage.setItem(DISCONNECTED_KEY, JSON.stringify(obj));
+  } catch { /* storage full */ }
+}
 const userDisconnectedAt: Map<string, number> = new Map();
 export function markUserDisconnected(networkId: string): void {
+  ensureDisconnectedLoaded();
   userDisconnectedAt.set(networkId, Date.now());
+  saveUserDisconnected();
 }
 export function clearUserDisconnected(networkId: string): void {
+  ensureDisconnectedLoaded();
   userDisconnectedAt.delete(networkId);
+  saveUserDisconnected();
 }
 export function isUserDisconnected(networkId: string): boolean {
+  ensureDisconnectedLoaded();
   return userDisconnectedAt.has(networkId);
 }
 
@@ -392,6 +423,99 @@ export function clearJoinPending(networkId: string, bufferName: string): void {
   pendingJoins.delete(pendingJoinKey(networkId, bufferName));
 }
 
+// ── W1-T01: initiateRejoin helper ──
+//
+// Single canonical entry point for all user-initiated JOIN attempts.
+// Replaces divergent inline bodies in BufferHeader.rejoin,
+// ChannelContextMenu.rejoin, /cycle|/hop|/rejoin slash, and
+// maybeAutoJoinChannel. The full state-machine quartet (joinError=null,
+// joinInFlight=true, pendingIsJoined=true, pendingConfirmations=2) plus
+// markJoinPending + recordJoin + sendRaw('JOIN <name>') are set here so
+// every rejoin entry point gets identical optimistic UX and identical
+// sync-clobber protection.
+//
+// Idempotency: a JOIN already in flight for this buffer blocks a second
+// issuance (mirrors maybeAutoJoinChannel's pre-helper guard at
+// App.svelte:557). Self-nick pre-population (prePopulateOwnNick) makes
+// the member panel include the user within one tick, even before the
+// engine's JOIN echo and NAMES (353) responses arrive — the 353
+// handler's in-place promotion at line 1696 then upgrades the bare nick
+// to the prefixed form when services grant auto-op on JOIN.
+
+/**
+ * Add the current user's nick to buf.users so the member panel renders
+ * "you" within one tick of click. Uses stripPrefix-safe dedup so the
+ * 353 handler's in-place promotion at line 1696-1701 still works when
+ * the server's NAMES reply arrives with a prefixed form (e.g. `@me`).
+ */
+function prePopulateOwnNick(buf: Buffer, currentNick: string): void {
+  if (!buf.users) buf.users = [];
+  const stripped = stripPrefix(currentNick);
+  if (buf.users.some(u => stripPrefix(u.nick) === stripped)) return;
+  buf.users.push({
+    nick: currentNick, prefix: '', category: 'MEMBER',
+    ident: '', realname: '', isAway: false, awayMessage: '',
+    lastSpoke: 0, lastHighlighted: 0, account: '', isBot: false
+  });
+}
+
+export interface InitiateRejoinOptions {
+  /** When true, kick reconnectNetwork() if !network.connected.
+   *  Defaults to false — only the BufferHeader Rejoin button wants to
+   *  reconnect; context-menu / slash / URL-nav should let the existing
+   *  connection-recovery paths handle that. */
+  allowReconnect?: boolean;
+}
+
+/**
+ * Issue a user-initiated JOIN for `bufferName` on `networkId`.
+ *
+ * Sets the full state-machine quartet (joinInFlight=true, joinError=null,
+ * pendingIsJoined=true, pendingConfirmations=2) on the buffer, marks the
+ * join as pending (dedup via isJoinPending), records it in activeJoinList
+ * (buffersToDelete guard), pre-populates self-nick into buf.users, and
+ * sends JOIN <bufferName>. Optional `opts.allowReconnect` kicks the
+ * engine reconnect when the network is disconnected — only the
+ * BufferHeader Rejoin button wants this; context-menu / slash / URL-nav
+ * let the existing connection-recovery paths handle that.
+ *
+ * No-op when a JOIN is already in flight for this buffer (idempotent).
+ */
+export function initiateRejoin(
+  networkId: string,
+  bufferName: string,
+  opts: InitiateRejoinOptions = {}
+): void {
+  const normalized = normalizeChannelName(bufferName);
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  const buf = net.buffers.find(b => b.name === normalized);
+
+  // Idempotency: if a JOIN is already in flight for this buffer, the
+  // existing pendingJoins entry blocks double-issuance. Mirrors
+  // maybeAutoJoinChannel's guard at App.svelte:557.
+  if (isJoinPending(networkId, normalized)) return;
+
+  // Set the FULL state-machine quartet. This is the single source
+  // of truth — every caller sets all four flags.
+  if (buf) {
+    buf.joinError = null;          // clear stale failure text
+    buf.joinInFlight = true;       // drives BufferHeader chip + sidebar modifier
+    buf.pendingIsJoined = true;    // belt-and-suspenders for WS-round-trip clobber
+    buf.pendingConfirmations = 2;  // require TWO confirming syncs to clear
+    // W1-T06: track user-initiated JOIN so buffersToDelete during WS
+    // resume cannot reap this buffer.
+    prePopulateOwnNick(buf, net.currentNick);
+  }
+  markJoinPending(networkId, normalized);
+  recordJoin(networkId, normalized);
+  sendRaw(networkId, 'JOIN ' + normalized);
+
+  if (opts.allowReconnect && !net.connected) {
+    reconnectNetwork(networkId).catch(() => {});
+  }
+}
+
 /**
  * Reset in-flight JOIN tracking when the WebSocket reconnects.
  *
@@ -421,6 +545,7 @@ export function resetPendingState(): void {
     for (const buf of net.buffers) {
       buf.joinInFlight = false;
       buf.pendingIsJoined = undefined;
+      buf.pendingConfirmations = undefined;
     }
   }
 }
@@ -1297,6 +1422,20 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             }
           }
           existingBuf.users = patchedUsers;
+          // Ensure the self-nick survives the sync even when the engine's
+          // channelUsers snapshot doesn't include it yet (race between JOIN
+          // echo and NAMES/353 response). Without this, the user disappears
+          // from the member list until the next periodic snapshot.
+          if (existingBuf.isJoined && existing.currentNick) {
+            const selfBare = stripPrefix(existing.currentNick);
+            if (!existingBuf.users.some(u => stripPrefix(u.nick) === selfBare)) {
+              existingBuf.users.push({
+                nick: existing.currentNick, prefix: '', category: 'MEMBER',
+                ident: '', realname: '', isAway: false, awayMessage: '',
+                lastSpoke: 0, lastHighlighted: 0, account: '',
+              });
+            }
+          }
           // Enrich members with extended-join data from network-level
           // accounts/idents/realnames caches (sync JSON carries these as
           // extra fields beyond the Buffer/Network interface).
@@ -1351,8 +1490,19 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             // Pending event contradicts sync — keep the event state (sync
             // snapshot was taken before the JOIN/PART/KICK propagated)
           } else {
-            // Sync confirms the pending event direction — clear the guard
-            existingBuf.pendingIsJoined = undefined;
+            // Sync confirms the pending event direction. Require TWO
+            // consecutive confirming syncs before clearing the guard, so a
+            // single stale sync (snapshot taken before JOIN propagated to
+            // channelState) can't clobber isJoined back to false.
+            // Counter starts at 2 (set in updateChannelUsers), decrements
+            // here on each confirm, clears when it hits 0.
+            const c = existingBuf.pendingConfirmations ?? 2;
+            if (c <= 1) {
+              existingBuf.pendingIsJoined = undefined;
+              existingBuf.pendingConfirmations = undefined;
+            } else {
+              existingBuf.pendingConfirmations = c - 1;
+            }
           }
 
           // Keep the preferences-map (used by getTotalUnread / getHasHighlight
@@ -1380,6 +1530,7 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         if (buf.joinInFlight === true) continue;
         buf.isJoined = false;
         buf.pendingIsJoined = undefined;
+        buf.pendingConfirmations = undefined;
       }
       // IRCCloud-style: sync now includes message history in the buffer
       // objects (sourced from Redis scrollback on the server).  Pull it
@@ -1671,6 +1822,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // Mark pending so the next sync doesn't overwrite with a stale
     // snapshot taken before the JOIN propagated to the engine.
     buf.pendingIsJoined = true;
+    buf.pendingConfirmations = 2;
     buf.joinInFlight = false;
     buf.joinError = null;
     // W7-T01: clear the pendingJoins dedup so future URL navigations to
@@ -1681,12 +1833,13 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
   } else if (
     cmd === '471' || cmd === '473' || cmd === '474' ||
     cmd === '475' || cmd === '477' || cmd === '405' ||
-    cmd === '471' || cmd === '442' || cmd === '403'
+    cmd === '437' || cmd === '442' || cmd === '443' ||
+    cmd === '476' || cmd === '484' || cmd === '403'
   ) {
     // JOIN failure numerics — clear the in-flight flag, surface the error
     // in the BufferHeader, and keep the buffer in the sidebar so the user
-    // can see the reason + retry. Maps RFC 2812 / common IRCd codes to
-    // human-readable joinError codes the UI understands.
+    // can see the reason + retry. Maps RFC 2812 §4.2.1 / common IRCd
+    // extensions to human-readable joinError codes the UI understands.
     const codeMap: Record<string, 'full' | 'invite-only' | 'banned' | 'key-required' | 'unknown'> = {
       '471': 'full',           // ERR_CHANNELISFULL
       '473': 'invite-only',    // ERR_INVITEONLYCHAN
@@ -1694,13 +1847,29 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       '475': 'key-required',   // ERR_BADCHANNELKEY
       '477': 'unknown',        // ERR_NEEDREGGEDNICK
       '405': 'unknown',        // ERR_TOOMANYCHANNELS
+      '437': 'unknown',        // ERR_UNAVAILRESOURCE (RFC 2812 §5 / common IRCd extension)
       '442': 'unknown',        // ERR_NOTONCHANNEL
+      '443': 'unknown',        // ERR_USERONCHANNEL — user is already in channel
+      '476': 'unknown',        // ERR_BADCHANMASK (RFC 2812 §5)
+      '484': 'unknown',        // ERR_RESTRICTED (RFC 2812 §5)
       '403': 'unknown',        // ERR_NOSUCHCHANNEL
     };
     if (buf) {
-      buf.joinInFlight = false;
-      buf.joinError = codeMap[cmd] ?? 'unknown';
-      buf.pendingIsJoined = undefined;
+      // 443 (ERR_USERONCHANNEL) means the user IS already in the channel —
+      // treat it as a successful join, not an error. Set the pending guard
+      // so the next sync doesn't clobber isJoined back to false.
+      if (cmd === '443') {
+        buf.isJoined = true;
+        buf.joinError = null;
+        buf.joinInFlight = false;
+        buf.pendingIsJoined = true;
+        buf.pendingConfirmations = 2;
+      } else {
+        buf.joinError = codeMap[cmd] ?? 'unknown';
+        buf.joinInFlight = false;
+        buf.pendingIsJoined = undefined;
+        buf.pendingConfirmations = undefined;
+      }
     }
     clearJoinPending(networkId, normalized);
     clearActiveJoin(networkId, normalized);
@@ -1729,6 +1898,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
   } else if (cmd === 'PART' && nick === net.currentNick) {
     buf.isJoined = false;
     buf.pendingIsJoined = false;
+    buf.pendingConfirmations = undefined;
     buf.joinInFlight = false;
     // W1-T06: clear activeJoin tracking on self-PART
     clearActiveJoin(networkId, normalized);
@@ -1739,6 +1909,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     if (params[1] === net.currentNick) {
       buf.isJoined = false;
       buf.pendingIsJoined = false;
+      buf.pendingConfirmations = undefined;
       buf.joinInFlight = false;
       // W1-T06: clear activeJoin tracking on self-KICK
       clearActiveJoin(networkId, normalized);

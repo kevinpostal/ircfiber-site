@@ -151,6 +151,7 @@
               class:active={isActive}
               class:unread={p.buffer.unreadCount > 0}
               class:highlight={p.buffer.highlight}
+              class:buffer-item--joining={p.buffer.joinInFlight}
               onclick={() => onSwitchBuffer(p.networkId, p.buffer.name)}>
             <span class="buffer" role="tab" tabindex="0">
               <span class="label buffer-name">{(p.buffer.type === 'query' ? '' : '#') + stripHash(p.buffer.name)}</span>
@@ -257,6 +258,7 @@
                   class:moderated={buf.modeFlags?.moderated}
                   class:inviteOnly={buf.modeFlags?.inviteOnly}
                   class:password={buf.modeFlags?.password}
+                  class:buffer-item--joining={buf.joinInFlight}
                   onclick={() => onSwitchBuffer(net.networkId, buf.name)}
                   role="presentation">
                 <span class="buffer" role="tab" tabindex="0">
@@ -292,6 +294,7 @@
                   {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
                   <li class="buffer channel buffer-item inactive"
                       class:active={isActive}
+                      class:buffer-item--joining={buf.joinInFlight}
                       onclick={() => onSwitchBuffer(net.networkId, buf.name)}
                       role="presentation">
                     <span class="buffer" role="tab" tabindex="0">
@@ -361,8 +364,10 @@
               <ul class="buffers archived-channels">
                 {#each archived as bufName (net.networkId + ':' + bufName)}
                   {@const isActive = net.networkId === ircState.activeBuffer.networkId && bufName === ircState.activeBuffer.bufferName}
+                  {@const buf = net.buffers.find(b => b.name === bufName)}
                   <li class="buffer channel buffer-item"
                       class:active={isActive}
+                      class:buffer-item--joining={buf?.joinInFlight}
                       onclick={() => onSwitchBuffer(net.networkId, bufName)}
                       role="presentation">
                     <span class="buffer" role="tab" tabindex="0">

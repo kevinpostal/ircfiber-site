@@ -16,6 +16,12 @@ vi.mock('/src/stores/api.ts', () => ({
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   updateBufferPrefs: vi.fn(async () => undefined),
+  // W1-T01: initiateRejoin (called from the refactored context-menu rejoin
+  // handler) calls reconnectNetwork when allowReconnect=true and the network
+  // is disconnected. The context-menu path passes allowReconnect=false, so
+  // this stub is never actually invoked in these tests — but the mock must
+  // export it because ircStore now imports it.
+  reconnectNetwork: vi.fn(async () => undefined),
   // ircStore imports this for the WebSocket-sync message normalization
   // path. The tests in this file don't exercise that path, so a
   // pass-through stub is fine.
@@ -263,25 +269,53 @@ describe('ChannelContextMenu', () => {
     expect(unpinChannelMock).toHaveBeenCalledWith('net1', '#chan');
   });
 
-  it('Clear backlog calls setClearedAt for the channel buffer and closes menu', async () => {
-    const network = createNetwork({ networkId: 'net1' });
-    const buf = createBuffer({ name: '#general' });
-    network.buffers.push(createBuffer({ name: '_server', type: 'server' }), buf);
-    ircState.networks.push(network);
-    ircState.activeBuffer.networkId = 'net1';
-    ircState.activeBuffer.bufferName = '#general';
+	it('Clear backlog calls setClearedAt for the channel buffer and closes menu', async () => {
+		const network = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: '#general' });
+		network.buffers.push(createBuffer({ name: '_server', type: 'server' }), buf);
+		ircState.networks.push(network);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
 
-    const onClose = vi.fn();
-    render(ChannelContextMenu, {
-      props: { x: 100, y: 100, buf, onClose, onToggleMembers: vi.fn(), memberPanelOpen: false },
-    });
-    const before = Date.now();
-    await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
-    const after = Date.now();
-    const stored = clearedAtMap['net1:#general'];
-    expect(typeof stored).toBe('number');
-    expect(stored).toBeGreaterThanOrEqual(before);
-    expect(stored).toBeLessThanOrEqual(after);
-    expect(onClose).toHaveBeenCalled();
-  });
+		const onClose = vi.fn();
+		render(ChannelContextMenu, {
+			props: { x: 100, y: 100, buf, onClose, onToggleMembers: vi.fn(), memberPanelOpen: false },
+		});
+		const before = Date.now();
+		await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
+		const after = Date.now();
+		const stored = clearedAtMap['net1:#general'];
+		expect(typeof stored).toBe('number');
+		expect(stored).toBeGreaterThanOrEqual(before);
+		expect(stored).toBeLessThanOrEqual(after);
+		expect(onClose).toHaveBeenCalled();
+	});
+
+	// W3-T05: ChannelContextMenu's Rejoin button delegates to initiateRejoin
+	// with allowReconnect=false — the in-flight quartet is set, the JOIN is
+	// sent, and (implicitly via the helper) reconnectNetwork is NOT called
+	// because the context-menu path does not pass allowReconnect=true.
+	it('clicking Rejoin in the context menu triggers JOIN and the in-flight quartet', async () => {
+		sendRawMock.mockClear();
+		const network = createNetwork({ networkId: 'net1', connected: true, currentNick: 'me' });
+		network.buffers.push(createBuffer({ name: '#test', isJoined: false, joinInFlight: false, joinError: null }));
+		ircState.networks.push(network);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#test';
+
+		render(ChannelContextMenu, {
+			props: { x: 100, y: 100, buf: network.buffers[0], onClose: vi.fn(), onToggleMembers: vi.fn(), memberPanelOpen: false },
+		});
+
+		await userEvent.click(page.getByRole('button', { name: 'Rejoin' }));
+
+		// JOIN was sent.
+		expect(sendRawMock).toHaveBeenCalledWith('net1', 'JOIN #test');
+		// State-machine quartet is set on the buffer (proxy re-read).
+		const found = ircState.networks.find(n => n.networkId === 'net1')!
+			.buffers.find(b => b.name === '#test')!;
+		expect(found.joinInFlight).toBe(true);
+		expect(found.pendingIsJoined).toBe(true);
+		expect(found.pendingConfirmations).toBe(2);
+	});
 });

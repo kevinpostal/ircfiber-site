@@ -132,6 +132,12 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .buffer-item.highlight .buffer { color: #f2f2f2; font-weight: 600; border-left: 5px solid #1e72ff; }
 .buffer-item.highlight.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #ff7b72; }
 .buffer-item.highlight.active .buffer .unread__label { color: #333; }
+
+// W2-T01: in-flight JOIN — mirrors the .buffer-item.unread / .buffer-item.highlight
+// modifier vocabulary (opacity + italic). Driven by buf.joinInFlight at all four
+// channel buffer-item sites in Sidebar.svelte (Pinned/Active/Inactive/Archived).
+// Conversations are deliberately excluded — DMs never have joinInFlight.
+.buffer-item--joining { opacity: 0.7; font-style: italic; }
 .network-header.unread .buffer,
 .network.connected .network-header.unread .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
 .network-header.unread .buffer .label { color: #d9d9d9; font-weight: 400; }

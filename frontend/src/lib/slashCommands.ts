@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel } from './utils';
 import { updateRoute } from './routing';
 
@@ -200,10 +200,14 @@ registerSlash(['me'], (args, networkId, target, _net) => {
 
 registerSlash(['cycle', 'hop', 'rejoin'], (args, networkId, target) => {
   const chan = args[0] ? normalizeChannelName(args[0]) : target;
+  // Key extraction is preserved (key variable intentionally unused for now)
+  // so future enhancement can pass the key into a future key-aware helper.
   const key = args[0] ? (args[1] || '') : '';
   if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
-  sendRaw(networkId, 'PART ' + chan);
-  sendRaw(networkId, 'JOIN ' + chan + (key ? ' ' + key : ''));
+  // W1-T01: drop the PART-before-JOIN (was sendRaw(PART) + sendRaw(JOIN));
+  // PART clobbered isJoined mid-flow and broke the optimistic Joining chip.
+  // Match IRCCloud semantics — /cycle is "just rejoin".
+  initiateRejoin(networkId, chan, { allowReconnect: false });
 });
 
 registerSlash(['clear'], (_args, networkId, target) => {

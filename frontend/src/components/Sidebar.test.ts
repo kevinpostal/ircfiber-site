@@ -6,7 +6,7 @@ import { flushSync } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 import { ircState, setActiveBuffer, appendMessage, updateChannelUsers, updateNetworkFromSync } from '../stores/ircStore.svelte';
-import { archivedMap, pinnedMap, networkOrder, collapsedMap } from '../stores/preferences.svelte';
+import { archivedMap, pinnedMap, networkOrder, collapsedMap, conversationsCollapsedMap } from '../stores/preferences.svelte';
 
 function resetState(): void {
 	ircState.networks.length = 0;
@@ -15,6 +15,7 @@ function resetState(): void {
   ircState.reorderMode = false;
 	Object.keys(archivedMap).forEach((k) => delete (archivedMap as Record<string, unknown>)[k]);
 	Object.keys(collapsedMap).forEach((k) => delete (collapsedMap as Record<string, unknown>)[k]);
+	Object.keys(conversationsCollapsedMap).forEach((k) => delete (conversationsCollapsedMap as Record<string, unknown>)[k]);
   networkOrder.length = 0;
   // Clear any leftover DOM from a previous render — otherwise `dragging`
   // and other state left on stale `.network-list-items` containers
@@ -877,10 +878,126 @@ describe('Sidebar', () => {
         flushSync();
         expect(collapsedMap['lib']).toBe(true);
         const libBuffers = document.querySelectorAll('.network')[1]!.querySelector('.network-buffers');
-        expect(libBuffers).toBeNull();
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
+         expect(libBuffers).toBeNull();
+       } finally {
+         globalThis.fetch = originalFetch;
+       }
+     });
+   });
+
+  describe('buffer-item--joining modifier', () => {
+    it('renders buffer-item--joining when buf.joinInFlight=true (active section)', () => {
+      const net = createNetwork({ networkId: 'net1' });
+      const buf = createBuffer({ name: '#gen' });
+      buf.joinInFlight = true;
+      net.buffers.push(buf);
+      ircState.networks.push(net);
+      ircState.activeBuffer.networkId = 'net1';
+      ircState.activeBuffer.bufferName = '_server';
+      flushSync();
+
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+      const item = document.querySelector('.network-buffers .buffer-item--joining');
+      expect(item).toBeInTheDocument();
+      expect(item?.classList.contains('buffer-item')).toBe(true);
+    });
+
+    it('does NOT render buffer-item--joining when buf.joinInFlight=false', () => {
+      const net = createNetwork({ networkId: 'net1' });
+      net.buffers.push(createBuffer({ name: '#gen', joinInFlight: false }));
+      ircState.networks.push(net);
+      ircState.activeBuffer.networkId = 'net1';
+      ircState.activeBuffer.bufferName = '_server';
+      flushSync();
+
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+      expect(document.querySelector('.buffer-item--joining')).toBeNull();
+    });
+
+    it('renders buffer-item--joining in pinned section when buf.joinInFlight=true', () => {
+      const net = createNetwork({ networkId: 'net1', name: 'Libera' });
+      const buf = createBuffer({ name: '#pinned' });
+      buf.joinInFlight = true;
+      net.buffers.push(buf);
+      ircState.networks.push(net);
+      pinnedMap['net1:#pinned'] = true;
+      ircState.activeBuffer.networkId = 'net1';
+      ircState.activeBuffer.bufferName = '_server';
+      flushSync();
+
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+      const item = document.querySelector('.pinnedBuffers .buffer-item--joining');
+      expect(item).toBeInTheDocument();
+    });
+
+    it('renders buffer-item--joining in archived section when buf.joinInFlight=true', () => {
+      const net = createNetwork({ networkId: 'net1', name: 'Libera' });
+      const buf = createBuffer({ name: '#archived', isJoined: true });
+      buf.joinInFlight = true;
+      net.buffers.push(buf);
+      ircState.networks.push(net);
+      archivedMap['net1:#archived'] = true;
+      // Force archives to expand.
+      net.archivesCollapsed = false;
+      ircState.activeBuffer.networkId = 'net1';
+      ircState.activeBuffer.bufferName = '_server';
+      flushSync();
+
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+      const item = document.querySelector('.archived-channels .buffer-item--joining');
+      expect(item).toBeInTheDocument();
+    });
+
+    it('joining modifier coexists with highlight modifier', () => {
+      const net = createNetwork({ networkId: 'net1' });
+      const buf = createBuffer({ name: '#gen' });
+      buf.joinInFlight = true;
+      buf.highlight = true;
+      net.buffers.push(buf);
+      ircState.networks.push(net);
+      ircState.activeBuffer.networkId = 'net1';
+      ircState.activeBuffer.bufferName = '#other'; // inactive so highlight stays visible
+      ircState.focusLost = true;
+      flushSync();
+
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+      const item = document.querySelector('.network-buffers .buffer-item');
+      expect(item).toBeTruthy();
+      expect(item?.classList.contains('buffer-item--joining')).toBe(true);
+      expect(item?.classList.contains('highlight')).toBe(true);
+    });
+
+    it('joined modifier does NOT bleed to conversation section', () => {
+      // Setup a DM conversation (non-channel buffer) alongside a channel
+      // buffer that has joinInFlight=true. The DM li in the conversation
+      // section must NOT carry the joining modifier — only channels do.
+      const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+      const chanBuf = createBuffer({ name: '#gen', type: 'channel', isJoined: true });
+      chanBuf.joinInFlight = true;
+      const dmBuf = createBuffer({ name: 'zod', type: 'query', isJoined: true });
+      net.buffers.push(chanBuf, dmBuf);
+      ircState.networks.push(net);
+      ircState.activeBuffer.networkId = 'net1';
+      ircState.activeBuffer.bufferName = '_server';
+      // Force conversations to expand.
+      conversationsCollapsedMap['net1'] = false;
+      flushSync();
+
+      render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+      // Channel section has the modifier.
+      const channelItem = document.querySelector('.network-buffers .buffer-item');
+      expect(channelItem?.classList.contains('buffer-item--joining')).toBe(true);
+
+      // DM in the conversations section must NOT have the modifier.
+      const dmItem = document.querySelector('.conversations .buffer-item');
+      expect(dmItem).toBeTruthy();
+      expect(dmItem?.classList.contains('buffer-item--joining')).toBe(false);
     });
   });
-});
+ });

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { untrack, flushSync } from 'svelte';
 import {
 	ircState,
@@ -35,7 +35,79 @@ import {
 	markUserDisconnected,
 	clearUserDisconnected,
 	isUserDisconnected,
+	initiateRejoin,
+	resetPendingState,
 } from './ircStore.svelte';
+import { reconnectNetwork } from '/src/stores/api';
+import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
+import { stripPrefix } from '../lib/utils';
+
+// ── W3-T04: mock sendRaw + reconnectNetwork so the helper's side effects
+// are observable. Use a flat factory like the rest of the test files in
+// this repo (BufferHeader.test.ts, ChannelContextMenu.test.ts) —
+// vi.importActual at runtime is not allowed because vi.mock factories
+// are hoisted and any reference to outer-scope variables is a bug. We
+// list every export used by ircStore.svelte.ts as a pass-through stub
+// except the two we want to spy on.
+vi.mock('/src/stores/api', () => ({
+	fetchMe: (() => undefined) as never,
+	fetchHealth: (() => undefined) as never,
+	loadHistory: (() => undefined) as never,
+	loadHistoryWithMeta: (() => undefined) as never,
+	reconnectNetwork: vi.fn(async () => undefined),
+	disconnectNetwork: vi.fn(async () => undefined),
+	joinChannel: vi.fn(async () => undefined),
+	addNetwork: vi.fn(async () => ({} as Record<string, unknown>)),
+	updateNetwork: vi.fn(async () => undefined),
+	deleteNetwork: vi.fn(async () => undefined),
+	archiveChannel: vi.fn(async () => undefined),
+	unarchiveChannel: vi.fn(async () => undefined),
+	pinChannel: vi.fn(async () => undefined),
+	unpinChannel: vi.fn(async () => undefined),
+	updateBufferPrefs: vi.fn(async () => undefined),
+	hideChannelAPI: vi.fn(async () => undefined),
+	unhideChannelAPI: vi.fn(async () => undefined),
+	updateInactiveCollapsed: vi.fn(async () => undefined),
+	updateCollapsed: vi.fn(async () => undefined),
+	normalizeMessage: vi.fn((m: unknown) => m),
+	detectEmbeds: (() => undefined) as never,
+	uploadAvatar: (() => undefined) as never,
+	removeAvatar: (() => undefined) as never,
+	fetchUploads: (() => undefined) as never,
+	deleteUpload: (() => undefined) as never,
+	changePassword: (() => undefined) as never,
+	deleteAccount: (() => undefined) as never,
+	fetchMeAccount: (() => undefined) as never,
+	updateHiddenChannels: (() => undefined) as never,
+	updatePinnedChannels: (() => undefined) as never,
+	updateArchivedChannels: (() => undefined) as never,
+	updateServerlogCollapsed: (() => undefined) as never,
+	updateServerlogHidden: (() => undefined) as never,
+	updateMembersCollapsed: (() => undefined) as never,
+	updateConversationsCollapsed: (() => undefined) as never,
+	getNetworks: (() => undefined) as never,
+	getSessions: (() => undefined) as never,
+	updateNetworkOrder: (() => undefined) as never,
+	uploadSnippet: (() => undefined) as never,
+}));
+vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
+	sendRaw: vi.fn(),
+	sendMessage: vi.fn(),
+	sendEditMessage: vi.fn(),
+	sendJson: vi.fn(),
+	sendRequest: vi.fn(async () => null),
+	requestSync: vi.fn(),
+	requestSwitchBuffer: vi.fn(),
+	connectWebSocket: vi.fn(),
+	disconnectWebSocket: vi.fn(),
+	isConnected: vi.fn(() => false),
+	setMaxEid: vi.fn(),
+	wsState: { value: 'disconnected' },
+	maxEidTracker: { value: 0 },
+	onStreamState: vi.fn(() => () => {}),
+	startXHRFallback: vi.fn(),
+	stopXHRFallback: vi.fn(),
+}));
 import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
 import { buildProcessedBuffer } from '../lib/messageBuilder';
@@ -1344,6 +1416,255 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			// joinInFlight must persist until JOIN for self arrives; sync alone
 			// doesn't clear it (the JOIN echo is the authoritative handshake).
 			expect(found.joinInFlight).toBe(true);
+		});
+	});
+
+	describe('initiateRejoin (W3-T04 canonical rejoin helper)', () => {
+		// The mocked sendRaw + reconnectNetwork (hoisted above) are spies
+		// these tests observe. Each test below re-creates a fresh
+		// network + buffer via setupBuf().
+
+		function setupBuf(opts: {
+			isJoined?: boolean;
+			joinInFlight?: boolean;
+			joinError?: string | null;
+			users?: ReturnType<typeof createMember>[];
+			connected?: boolean;
+		} = {}) {
+			const net = createNetwork({
+				networkId: 'n1',
+				name: 'net',
+				connected: opts.connected ?? true,
+				currentNick: 'me',
+			});
+			const buf = createBuffer({
+				name: '#test',
+				isJoined: opts.isJoined ?? true,
+				users: opts.users as unknown as ReturnType<typeof createMember>[] | undefined,
+			});
+			if (opts.joinInFlight !== undefined) buf.joinInFlight = opts.joinInFlight;
+			if (opts.joinError !== undefined) (buf as { joinError?: string | null }).joinError = opts.joinError;
+			net.buffers.push(buf);
+			ircState.networks.push(net);
+			return buf;
+		}
+
+		beforeEach(() => {
+			vi.mocked(sendRaw).mockClear();
+			vi.mocked(reconnectNetwork).mockClear();
+		});
+
+		// ── T1: state-machine quartet ──────────────────────────────────────────
+		it('T1: sets the four-flag state quartet (joinError, joinInFlight, pendingIsJoined, pendingConfirmations)', () => {
+			setupBuf({ isJoined: false });
+			initiateRejoin('n1', '#test');
+			flushSync();
+			const buf = findBuf('n1', '#test')!;
+			expect(buf.joinError).toBe(null);
+			expect(buf.joinInFlight).toBe(true);
+			expect(buf.pendingIsJoined).toBe(true);
+			expect(buf.pendingConfirmations).toBe(2);
+		});
+
+		// ── T2: markJoinPending + recordJoin + sendRaw called exactly once ──
+		it('T2: calls markJoinPending + recordJoin + sendRaw exactly once', () => {
+			setupBuf();
+			initiateRejoin('n1', '#test');
+			flushSync();
+			// markJoinPending observed via pendingJoins dedup set membership
+			expect(isJoinPending('n1', '#test')).toBe(true);
+			expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'JOIN #test');
+			// recordJoin observed via activeJoinList membership
+			expect(activeJoinList.has('n1:#test')).toBe(true);
+		});
+
+		// ── T3: allowReconnect=false on disconnected network does NOT reconnect ──
+		it('T3: allowReconnect=false on disconnected network does NOT call reconnectNetwork', () => {
+			setupBuf({ connected: false });
+			initiateRejoin('n1', '#test', { allowReconnect: false });
+			flushSync();
+			expect(vi.mocked(reconnectNetwork)).not.toHaveBeenCalled();
+		});
+
+		// ── T4: allowReconnect=true on connected network does NOT reconnect ──
+		it('T4: allowReconnect=true on connected network does NOT call reconnectNetwork', () => {
+			setupBuf({ connected: true });
+			initiateRejoin('n1', '#test', { allowReconnect: true });
+			flushSync();
+			expect(vi.mocked(reconnectNetwork)).not.toHaveBeenCalled();
+		});
+
+		// ── T5: allowReconnect=true on disconnected network DOES reconnect ──
+		it('T5: allowReconnect=true on disconnected network DOES call reconnectNetwork', () => {
+			setupBuf({ connected: false });
+			initiateRejoin('n1', '#test', { allowReconnect: true });
+			flushSync();
+			expect(vi.mocked(reconnectNetwork)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(reconnectNetwork)).toHaveBeenCalledWith('n1');
+		});
+
+		// ── T6: idempotent under isJoinPending ────────────────────────────────
+		it('T6: when isJoinPending is true a second call is a no-op (idempotent)', () => {
+			setupBuf();
+			initiateRejoin('n1', '#test');
+			flushSync();
+			const callsAfterFirst = vi.mocked(sendRaw).mock.calls.length;
+			const reconnectCallsAfterFirst = vi.mocked(reconnectNetwork).mock.calls.length;
+			initiateRejoin('n1', '#test');
+			initiateRejoin('n1', '#test');
+			flushSync();
+			// Second and third calls must be no-ops — sendRaw and reconnectNetwork
+			// were already called at most once and must not increment.
+			expect(vi.mocked(sendRaw).mock.calls.length).toBe(callsAfterFirst);
+			expect(vi.mocked(reconnectNetwork).mock.calls.length).toBe(reconnectCallsAfterFirst);
+		});
+
+		// ── T7: pre-pop self-nick + survives 353 with prefixed form ──────────
+		it('T7: pre-populates self-nick at click time and survives 353 with prefixed form', () => {
+			setupBuf({ users: [] });
+			initiateRejoin('n1', '#test');
+			flushSync();
+			let buf = findBuf('n1', '#test')!;
+			// Exactly one entry for `me`
+			expect(buf.users.filter((u: { nick: string }) => stripPrefix(u.nick) === 'me')).toHaveLength(1);
+
+			// Simulate JOIN-self echo — stripPrefix-safe dedup means users array
+			// does NOT grow with a duplicate `me` entry.
+			updateChannelUsers('n1', '#test', 'JOIN', 'me');
+			flushSync();
+			buf = findBuf('n1', '#test')!;
+			expect(buf.users.filter((u: { nick: string }) => stripPrefix(u.nick) === 'me')).toHaveLength(1);
+
+			// Simulate 353 with `@me` — in-place promotion at ircStore.svelte.ts
+			// ~line 1791 upgrades the bare entry to `@me` with prefix `@`.
+			updateChannelUsers('n1', '#test', '353', 'sender', ['#test', '', '@me']);
+			flushSync();
+			buf = findBuf('n1', '#test')!;
+			const meEntries = buf.users.filter((u: { nick: string }) => stripPrefix(u.nick) === 'me');
+			expect(meEntries).toHaveLength(1);
+			expect(meEntries[0].nick).toBe('@me');
+			expect(meEntries[0].prefix).toBe('@');
+		});
+
+		// ── T8: sync with isJoined:false immediately after click does NOT clobber ──
+		it('T8: sync snapshot with isJoined=false arriving within click→echo window does NOT clobber isJoined', () => {
+			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+			const buf = createBuffer({ name: '#test', isJoined: true, isPhantom: false });
+			net.buffers.push(buf);
+			ircState.networks.push(net);
+
+			// Click → sets the four flags; joinInFlight=true now.
+			initiateRejoin('n1', '#test');
+			flushSync();
+			expect(findBuf('n1', '#test')!.joinInFlight).toBe(true);
+
+			// Engine sync arrives with isJoined=false (snapshot taken BEFORE
+			// the JOIN echo propagated). The sync guard at
+			// ircStore.svelte.ts:1478 must skip adoption while joinInFlight=true.
+			const syncNet = createNetwork({ networkId: 'n1' });
+			syncNet.buffers.push(createBuffer({ name: '#test', isJoined: false }));
+			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+			updateNetworkFromSync([syncNet]);
+			flushSync();
+
+			const found = findBuf('n1', '#test')!;
+			// pendingIsJoined=true contradicts sync's isJoined=false → "keep
+			// event state" branch in updateNetworkFromSync runs (no decrement).
+			expect(found.isJoined).toBe(true);
+			// joinInFlight must persist until JOIN for self arrives; sync alone
+			// doesn't clear it.
+			expect(found.joinInFlight).toBe(true);
+			// Counter is only decremented on the confirming-sync branch. A
+			// contradicting sync leaves pendingConfirmations=2 (still requires
+			// two consecutive confirming syncs to clear).
+			expect(found.pendingConfirmations).toBe(2);
+			expect(found.pendingIsJoined).toBe(true);
+		});
+
+		// ── T9: WS-resume buffersToDelete during in-flight JOIN is guarded ──
+		it('T9: WS-resume + buffersToDelete guard survives across in-flight JOIN', () => {
+			setupBuf({ isJoined: false });
+			initiateRejoin('n1', '#test');
+			flushSync();
+			// act: simulate WS resume carrying a buffersToDelete for `n1:#test`
+			handleBuffersToDelete(['n1:#test']);
+			flushSync();
+
+			// buffersToDelete guard at ircStore.svelte.ts:557 skipped the
+			// deletion because activeJoinList still has the key from recordJoin.
+			const net = ircState.networks.find((n) => n.networkId === 'n1')!;
+			expect(net.buffers.some((b) => b.name === '#test')).toBe(true);
+			expect(activeJoinList.has('n1:#test')).toBe(true);
+		});
+
+		// ── T10: WS-reconnect ordering known-issue (callout) ────────────────
+		it('T10: reconnect ordering — resetPendingState clears pendingJoins but preserves activeJoinList guard', () => {
+			setupBuf({ connected: false });
+			initiateRejoin('n1', '#test', { allowReconnect: true });
+			flushSync();
+
+			// After click: pendingJoins is set, activeJoinList is set,
+			// reconnectNetwork fired for the disconnected network.
+			expect(isJoinPending('n1', '#test')).toBe(true);
+			expect(activeJoinList.has('n1:#test')).toBe(true);
+			expect(vi.mocked(reconnectNetwork)).toHaveBeenCalledWith('n1');
+
+			// WS reconnects → App.svelte's onOpen calls resetPendingState
+			// to clear stuck pendingJoins + joinInFlight.
+			resetPendingState();
+
+			// pendingJoins cleared; activeJoinList SURVIVES (the buffersToDelete
+			// guard must persist across reconnect).
+			expect(isJoinPending('n1', '#test')).toBe(false);
+			expect(activeJoinList.has('n1:#test')).toBe(true);
+
+			// Stale engine sync arrives (snapshot from BEFORE the JOIN echo)
+			// — the guard at ircStore.svelte.ts:1378 doesn't protect here
+			// because pendingIsJoined was cleared by resetPendingState. The
+			// sync IS authoritative and flips isJoined back to false. This
+			// is the known flicker window: subsequent JOIN echo restores
+			// isJoined=true within one WS round-trip.
+			const syncNet = createNetwork({ networkId: 'n1' });
+			syncNet.buffers.push(createBuffer({ name: '#test', isJoined: false }));
+			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+			updateNetworkFromSync([syncNet]);
+			flushSync();
+
+			const found = findBuf('n1', '#test')!;
+			// Known-issue callout — documented as acceptable flicker window.
+			expect(found.isJoined).toBe(false);
+			// But the buffer survives: activeJoinList guard holds against
+			// any concurrent buffersToDelete.
+			handleBuffersToDelete(['n1:#test']);
+			flushSync();
+			const net = ircState.networks.find((n) => n.networkId === 'n1')!;
+			expect(net.buffers.some((b) => b.name === '#test')).toBe(true);
+		});
+
+		// ── T11: offline rejoin path (BufferHeader.expectsReconnect=true) ────
+		it('T11: offline rejoin path — disconnected network + allowReconnect=true fires reconnectNetwork and JOIN', () => {
+			const net = createNetwork({
+				networkId: 'n1',
+				name: 'net',
+				connected: false,
+				currentNick: 'me',
+			});
+			const buf = createBuffer({ name: '#test', isJoined: false, users: [] });
+			net.buffers.push(buf);
+			ircState.networks.push(net);
+
+			initiateRejoin('n1', '#test', { allowReconnect: true });
+			flushSync();
+
+			// State-machine quartet is set on the buffer.
+			expect(findBuf('n1', '#test')!.joinInFlight).toBe(true);
+			expect(findBuf('n1', '#test')!.pendingIsJoined).toBe(true);
+			expect(findBuf('n1', '#test')!.pendingConfirmations).toBe(2);
+			// reconnectNetwork fired (mirrors BufferHeader's reconnect-then-JOIN).
+			expect(vi.mocked(reconnectNetwork)).toHaveBeenCalledWith('n1');
+			// JOIN queued via sendRaw.
+			expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'JOIN #test');
 		});
 	});
 

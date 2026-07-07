@@ -302,6 +302,35 @@ describe('BufferHeader', () => {
 		await userEvent.click(rejoinBtn);
 
 		expect(sendRaw).toHaveBeenCalledWith('net1', 'JOIN #ircfiber');
+
+		// W3-T05: assert the in-flight quartet is set on the active buffer.
+		const foundBuf = ircState.networks.find(n => n.networkId === 'net1')!
+			.buffers.find(b => b.name === '#ircfiber')!;
+		expect(foundBuf.joinInFlight).toBe(true);
+		expect(foundBuf.pendingIsJoined).toBe(true);
+		expect(foundBuf.pendingConfirmations).toBe(2);
+		expect(foundBuf.joinError).toBe(null);
+	});
+
+	it('BufferHeader joining-chip is visible while joinInFlight=true', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: '#testchannel' });
+		// Drive joinInFlight at the buffer level (simulates initiateRejoin click)
+		buf.joinInFlight = true;
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#testchannel';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		// BufferHeader.svelte renders `Joining {channelName}…` (line 164) when
+		// activeBufferObj.joinInFlight is true. The chip is a .join-inflight-chip
+		// and the text uses the ellipsis character "…" (U+2026).
+		await expect.element(page.getByText(/Joining #testchannel…/i)).toBeInTheDocument();
 	});
 
 	it('does not show Rejoin button on a joined channel', async () => {

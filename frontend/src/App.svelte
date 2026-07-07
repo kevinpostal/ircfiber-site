@@ -19,12 +19,12 @@ import {
     setActiveBuffer, updateChannelTopic,
     appendMessage, batchAppendMessages,
     handleBuffersToDelete,
-    isJoinPending, markJoinPending, recordJoin,
+    isJoinPending, initiateRejoin,
     resetPendingState,
     isUserDisconnected
 } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
-  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState, sendRaw } from './stores/wsConnection.svelte.ts';
+  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
@@ -556,16 +556,12 @@ let showNetworkForm: boolean = $state(false);
     // Dedup: if a JOIN is already in-flight for this buffer, don't re-send.
     if (isJoinPending(networkId, normalized)) return;
 
-    // Mark in-flight so the sync handler doesn't clobber us with isJoined:false
-    // and the BufferHeader can render a "Joining…" state.
-    if (buf) {
-      buf.joinInFlight = true;
-      buf.joinError = null;
-      buf.pendingIsJoined = true;
-    }
-    markJoinPending(networkId, normalized);
-    recordJoin(networkId, normalized);
-    sendRaw(networkId, 'JOIN ' + normalized);
+    // W1-T01: delegate to the canonical rejoin helper. allowReconnect=false
+    // — URL nav must NOT kick reconnectNetwork() (would race the engine's
+    // connection-recovery paths). The helper sets the full state-machine
+    // quartet, calls markJoinPending+recordJoin, pre-populates self-nick, and
+    // sends JOIN. The isJoinPending guard above prevents double-issuance.
+    initiateRejoin(networkId, normalized, { allowReconnect: false });
   }
 
   async function loadBufferHistory(networkId: string, bufferName: string): Promise<void> {
@@ -654,20 +650,19 @@ let showNetworkForm: boolean = $state(false);
         syncReceived = true;
         checkRoute();
         selectLastActiveBuffer((obj.networks || []) as Network[]);
-        // IRCCloud-style: if checkRoute (called via handleNetworks) already
-        // set the active buffer from the URL before syncReceived was true,
-        // loadBufferHistory was skipped.  SelectLastActiveBuffer also bails
-        // if the buffer is already set.  So we fire loadBufferHistory here
-        // for any buffer that still has zero messages — this is the boot
-        // synchronization point where syncReceived flips from false to true.
-        if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
+        // Load the full _server history from REST on BOOT sync so MOTD/
+        // welcome events survive page refresh. On periodic syncs (every
+        // 10s) skip to avoid re-fetching and flashing "Fetching more…".
+        // For channel/query buffers we skip — the sync already provided
+        // fresh messages.
+        if (isBootSync && ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
           const ab = ircState.activeBuffer;
+          const isServer = ab.bufferName === '_server';
           const key = `${ab.networkId!}:${normalizeChannelName(ab.bufferName!)}`;
-          if (!ircState.messages[key] || ircState.messages[key].length === 0) {
+          const hasMsgs = ircState.messages[key] && ircState.messages[key].length > 0;
+          if (!hasMsgs || isServer) {
             void loadBufferHistory(ab.networkId!, ab.bufferName!);
-          } else {
           }
-        } else {
         }
       } else if (obj.type === 'irc_event' || obj.y === 'irc_event') {
         processEvent(obj);
@@ -1060,8 +1055,19 @@ let showNetworkForm: boolean = $state(false);
     // at the !net.connected guard — now that the network is up, we need
     // to attempt the JOIN again.
     const cmd = data.c as string || data.command as string || '';
-    if (cmd === '001' || cmd === 'CONNECT') {
-      const netId = data.nid as string || data.network as string || '';
+    if (cmd === '001' || cmd === 'CONNECT' || cmd === 'CONNECTED') {
+      // Use nid (UUID from compact JSON) or network (name) as fallback.
+      // nid is preferred since maybeAutoJoinChannel looks up by networkId.
+      let netId = data.nid as string;
+      if (!netId) {
+        // Fallback: resolve network name → UUID so the retry-join works
+        // even when the engine's compact JSON doesn't include nid.
+        const netName = data.network as string;
+        if (netName) {
+          const found = ircState.networks.find(n => n.name === netName);
+          if (found) netId = found.networkId;
+        }
+      }
       if (netId) {
         // Retry auto-join for the active channel buffer (if any)
         if (ircState.activeBuffer.bufferName) {
@@ -1082,6 +1088,37 @@ let showNetworkForm: boolean = $state(false);
                           m.command === 'DISCO_GROUP' ||
                           m.command === 'ERROR';
           if (!isDisco) continue;
+          let collapseKey = '';
+          if (m.eid) {
+            collapseKey = `${netId}:${m.eid}`;
+          } else if (m.msgid) {
+            collapseKey = `${netId}:msgid:${m.msgid}`;
+          }
+          if (collapseKey) {
+            serverlogCollapsedMap[collapseKey] = true;
+          }
+          break;
+        }
+      }
+    }
+    // When DISCONNECT fires, auto-collapse the most recent CONNECTED card
+    // so the timeline doesn't accumulate expanded cards side by side.
+    if (cmd === 'DISCONNECT' || cmd === 'DISCONNECTED') {
+      let netId = data.nid as string;
+      if (!netId) {
+        const netName = data.network as string;
+        if (netName) {
+          const found = ircState.networks.find(n => n.name === netName);
+          if (found) netId = found.networkId;
+        }
+      }
+      if (netId) {
+        const serverKey = `${netId}:_server`;
+        const serverMsgs = ircState.messages[serverKey] ?? [];
+        for (let i = serverMsgs.length - 1; i >= 0; i--) {
+          const m = serverMsgs[i];
+          const isConnected = m.command === 'CONNECT' || m.command === 'CONNECTED' || m.command === '001';
+          if (!isConnected) continue;
           let collapseKey = '';
           if (m.eid) {
             collapseKey = `${netId}:${m.eid}`;

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
+  import gsap from 'gsap';
   import type { Network, IRCMessage } from '../types';
   import {
     type ServerLogAttempt,
@@ -119,10 +121,20 @@
 
   let showRawTraffic = $state(false);
   let showCap = $state(false);
-  // Phase timeline (TCP/TLS/Register/Ready) starts collapsed — once you've
-  // seen "Connected", the per-step timestamps are low-value noise. Toggle
-  // to re-expand if you're debugging a specific registration step.
+  // Phase timeline auto-expands on the latest connecting card so the user
+  // sees each step appear in real-time. Once connected, it auto-collapses
+  // since the per-step timestamps are low-value noise after the fact.
   let showPhases = $state(false);
+  // Auto-expand phases on the latest pending card
+  $effect(() => {
+    if (isLatest && effectiveStatus === 'pending') {
+      showPhases = true;
+    } else if (showPhases && effectiveStatus === 'success') {
+      // Keep expanded briefly so user sees the last phase land, then collapse
+      const timer = setTimeout(() => { showPhases = false; }, 2000);
+      return () => clearTimeout(timer);
+    }
+  });
 
   // Always show MOTD (per product decision) — never collapsed
   const motdLines = $derived(attempt.motd.map((m) => numericBody(m)));
@@ -138,6 +150,13 @@
 
   const durationMs = $derived(attemptDuration(attempt));
   const durationLabel = $derived(durationMs != null ? formatDuration(durationMs) : '');
+
+  // Live phase indicator: show the most recent phase while connecting
+  const currentPhase = $derived.by(() => {
+    if (effectiveStatus !== 'pending' || attempt.phases.length === 0) return '';
+    const last = attempt.phases[attempt.phases.length - 1];
+    return phaseToLabel(last.phase || last.command);
+  });
 
   function getHostLabel(a: ServerLogAttempt, net: Network | null): string {
     if (net?.host) {
@@ -209,16 +228,95 @@
     }
     return lastIdx >= 0 ? msgs.slice(lastIdx) : msgs;
   }
+
+  // ── GSAP animations ──────────────────────────────────────────────────────
+  let cardRef: HTMLElement | undefined = $state();
+  let iconRef: HTMLElement | undefined = $state();
+  let phaseContainerRef: HTMLElement | undefined = $state();
+
+  // Card entrance: slide in + fade on mount
+  onMount(() => {
+    if (!cardRef) return;
+    gsap.fromTo(cardRef,
+      { opacity: 0, y: -16, scale: 0.98 },
+      { opacity: 1, y: 0, scale: 1, duration: 0.35, ease: 'power2.out' }
+    );
+  });
+
+  // Status icon transition: subtle pulse on status change
+  $effect(() => {
+    const s = effectiveStatus;
+    const el = iconRef;
+    if (!el) return;
+    gsap.fromTo(el,
+      { scale: 1.3, opacity: 0.6 },
+      { scale: 1, opacity: 1, duration: 0.3, ease: 'back.out(2)' }
+    );
+  });
+
+  // Phase stagger: animate each phase item in as it appears (real-time updates)
+  let prevPhaseCount = 0;
+  $effect(() => {
+    const count = attempt.phases.length;
+    const el = phaseContainerRef;
+    if (!el || !showPhases) { prevPhaseCount = count; return; }
+    // Only animate new items that appeared since last render
+    const items = el.querySelectorAll('.serverLogTimeline__item');
+    if (items.length > prevPhaseCount && count > prevPhaseCount) {
+      const newItems: Element[] = [];
+      for (let i = prevPhaseCount; i < items.length; i++) newItems.push(items[i]);
+      if (newItems.length > 0) {
+        gsap.fromTo(newItems,
+          { opacity: 0, x: -12, scale: 0.97, height: 0 },
+          { opacity: 1, x: 0, scale: 1, height: 'auto', duration: 0.35, stagger: 0.06, ease: 'power2.out' }
+        );
+      }
+    }
+    prevPhaseCount = count;
+  });
+
+  // Smooth card height transition when expanding/collapsing phases
+  let cardBodyRef: HTMLElement | undefined = $state();
+  $effect(() => {
+    const el = cardBodyRef;
+    const isExpanded = expanded && attempt.phases.length > 0;
+    if (el) {
+      gsap.to(el, {
+        height: isExpanded ? 'auto' : 0,
+        opacity: isExpanded ? 1 : 0,
+        duration: 0.3,
+        ease: 'power2.inOut',
+        overwrite: 'auto',
+      });
+    }
+  });
+
+  // Connecting pulse: continuous rotation on the spinner icon
+  $effect(() => {
+    const el = iconRef;
+    if (!el || effectiveStatus !== 'pending') return;
+    gsap.to(el, {
+      rotation: 360,
+      duration: 1.2,
+      repeat: -1,
+      ease: 'linear',
+      transformOrigin: '50% 50%',
+    });
+    return () => {
+      gsap.killTweensOf(el, 'rotation');
+      gsap.set(el, { rotation: 0 });
+    };
+  });
 </script>
 
-<div class="serverLogCard status-{effectiveStatus}" class:expanded class:collapsed={!expanded}>
+<div class="serverLogCard status-{effectiveStatus}" class:expanded class:collapsed={!expanded} bind:this={cardRef}>
   <button
     type="button"
     class="serverLogCard__header"
     onclick={toggleExpanded}
     aria-expanded={expanded}
   >
-    <span class="serverLogCard__icon" aria-hidden="true">
+    <span class="serverLogCard__icon" aria-hidden="true" bind:this={iconRef}>
       {#if effectiveStatus === 'success'}
         <i class="fa-solid fa-circle-check"></i>
       {:else if effectiveStatus === 'error'}
@@ -230,6 +328,9 @@
       {/if}
     </span>
     <span class="serverLogCard__status">{statusLabel}</span>
+    {#if currentPhase}
+      <span class="serverLogCard__phase">{currentPhase}</span>
+    {/if}
     <span class="serverLogCard__host">{hostLabel}</span>
     <span class="serverLogCard__meta">
       <span class="serverLogCard__time">{formatTime(attempt.start.t)}</span>
@@ -249,7 +350,7 @@
   </button>
 
   {#if expanded}
-    <div class="serverLogCard__body">
+    <div class="serverLogCard__body" bind:this={cardBodyRef}>
       {#if attempt.phases.length > 0}
         <div class="serverLogCard__rawSection">
           <button
@@ -263,7 +364,7 @@
             Connection steps <span class="serverLogCard__toggleCount">({attempt.phases.length})</span>
           </button>
           {#if showPhases}
-            <ol class="serverLogTimeline">
+            <ol class="serverLogTimeline" bind:this={phaseContainerRef}>
               {#each attempt.phases as msg, i (i)}
                 {@const chipPhase = (() => {
                   // Map engine phase tags directly.

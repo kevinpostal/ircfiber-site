@@ -404,27 +404,26 @@ export function formatIsupport(msg: IRCMessage): string {
  * Drop duplicate phase + lifecycle events from a `_server` message stream.
  *
  * The engine and holder daemon independently publish phase-shaped events
- * for the same physical connect (the engine emits `ph=queued|tcp_open|tls`
+ * for the same physical connect. The engine emits `ph=queued|tcp_open|tls`
  * with "TCP connection established to ..." text; the holder emits the
- * same phases with "TCP connection via holder ..." text). The handoff
- * code path can also republish the connection on engine restart, and
- * a control-message burst (e.g. double-clicked reconnect) spawns two
- * fresh clients that both call `HolderTransport()`'s constructor,
- * each emitting a full phase sequence.
+ * same phases with "TCP connection via holder ..." text. The handoff
+ * code path can also republish on engine restart, and a control-message
+ * burst spawns two clients that both emit a full phase sequence.
  *
- * Each duplicate gets a unique `eid` from the engine, so the existing
- * `eid`-based dedup in `prependMessages` / `setMessages` does nothing
- * here. Without this pass, the timeline produces one card per duplicate
- * sequence — visually "two connected cards" for a single connect.
+ * Each duplicate gets a unique `eid`, so `eid`-based dedup does nothing.
+ * Without this pass the timeline produces one card per duplicate sequence.
  *
- * We match any phase-tagged message OR a CONNECT / DISCONNECT / DISCONNECTED
- * lifecycle event on `(t, command, text-prefix)`. Chat messages
- * (PRIVMSG / no phase / non-lifecycle commands) pass through untouched
- * because natural chat can legitimately contain the same text twice.
- * Only the FIRST occurrence of a tuple is kept; later duplicates are dropped.
+ * We dedup by phase + a canonical text pattern (normalising "via holder"
+ * and "established" differences) within a 60-second window. Chat messages
+ * without a phase tag pass through untouched.
  */
 function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
-  const seen = new Set<string>();
+  // Track last-seen timestamp per (phase, command) pair within a 60s window.
+  // If the same phase fires again within 60s, it's a duplicate (engine +
+  // holder both emit the same logical step). The 60s window is generous —
+  // no real connection handshake takes that long between phases.
+  const DUP_WINDOW_MS = 60_000;
+  const lastSeen = new Map<string, number>();
   const out: IRCMessage[] = [];
   for (const msg of messages) {
     const cmd = msg.command ?? '';
@@ -434,15 +433,19 @@ function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
       out.push(msg);
       continue;
     }
-    // First 80 chars of text is enough to distinguish "TCP connection
-    // via holder to..." from "TCP connection established to..." while
-    // staying well under any reasonable text length. Phase (or
-    // command) + timestamp combined make collisions astronomically
-    // unlikely outside an actual race.
-    const textKey = (msg.text ?? '').slice(0, 80);
-    const dedupKey = `${msg.t ?? 0}|${cmd}|${msg.phase ?? ''}|${textKey}`;
-    if (seen.has(dedupKey)) continue;
-    seen.add(dedupKey);
+    // Normalise text so "via holder" and "established" resolve to the same key
+    const rawText = (msg.text ?? '');
+    const canonText = rawText
+      .replace(/via holder daemon/i, '')
+      .replace(/established/i, '')
+      .replace(/to \S+:\d+/i, '')  // strip host:port so TLS connects to
+      .replace(/for \S+/i, '')      // different hosts don't collide
+      .trim();
+    const key = `${msg.phase ?? ''}|${cmd}|${canonText.slice(0, 60)}`;
+    const last = lastSeen.get(key);
+    const now = msg.t ?? 0;
+    if (last !== undefined && (now - last) < DUP_WINDOW_MS) continue;
+    lastSeen.set(key, now);
     out.push(msg);
   }
   return out;

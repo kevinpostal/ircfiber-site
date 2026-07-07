@@ -112,6 +112,13 @@ export interface Buffer {
    */
   pendingIsJoined?: boolean;
   /**
+   * Confirmation counter for pendingIsJoined. Starts at 2 when the event
+   * fires, decremented on each sync that confirms the pending direction.
+   * Only clears pendingIsJoined when the counter reaches 0, preventing a
+   * single stale sync from clobbering the state.
+   */
+  pendingConfirmations?: number;
+  /**
    * Set when the most recent JOIN attempt for this channel was rejected by
    * the IRC server (numeric 471/473/474/475/477 etc.). Cleared on the next
    * successful JOIN or when the user explicitly retries. The BufferHeader

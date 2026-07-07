@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt } from '../stores/preferences.svelte';
   import { pinChannel, unpinChannel, updateBufferPrefs } from '../stores/api';
@@ -88,7 +88,11 @@
 
   function rejoin(): void {
     if (!networkId || !buf.name) return;
-    sendRaw(networkId, 'JOIN ' + buf.name);
+    // W1-T01: delegate to the canonical rejoin helper. allowReconnect=false
+    // — context-menu Rejoin must NOT kick reconnectNetwork() (would race the
+    // connection-recovery paths); the existing engine reconnection handles
+    // disconnected networks without user intervention.
+    initiateRejoin(networkId, buf.name, { allowReconnect: false });
     onClose();
   }
   function setTopic(): void {

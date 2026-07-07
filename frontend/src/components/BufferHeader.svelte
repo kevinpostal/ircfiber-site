@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable, markJoinPending, recordJoin } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable, initiateRejoin } from '../stores/ircStore.svelte';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
@@ -124,24 +124,11 @@
 
   function rejoin(): void {
     if (!activeNetwork || !activeBufferObj?.name) return;
-    const normalized = normalizeChannelName(activeBufferObj.name);
-    // W7-T01: clear stale failure state so the UI doesn't briefly show
-    // "Cannot join" while the new JOIN is in flight.
-    activeBufferObj.joinError = null;
-    activeBufferObj.joinInFlight = true;
-    // W7-T01: sync with maybeAutoJoinChannel's tracking so a stuck
-    // pendingJoins entry (from a previous WS disconnect) doesn't block
-    // future URL auto-joins via isJoinPending.  recordJoin ensures the
-    // activeJoinList guard survives buffersToDelete during WS resume.
-    markJoinPending(activeNetwork.networkId, normalized);
-    recordJoin(activeNetwork.networkId, normalized);
-    sendRaw(activeNetwork.networkId, 'JOIN ' + activeBufferObj.name);
-    // If the network isn't fully connected (disconnected or stuck in a
-    // reconnection backoff loop), kick a fresh reconnect so the engine
-    // re-establishes the IRC session and flushes the queued JOIN.
-    if (!activeNetwork.connected) {
-      reconnectNetwork(activeNetwork.networkId).catch(() => {});
-    }
+    // W1-T01: delegate to the canonical rejoin helper. allowReconnect=true
+    // preserves the disconnect-then-JOIN behavior: on a disconnected network,
+    // the helper kicks reconnectNetwork() so the engine re-establishes the
+    // IRC session and flushes the queued JOIN once registration completes.
+    initiateRejoin(activeNetwork.networkId, activeBufferObj.name, { allowReconnect: true });
   }
 
   function archive(): void {
