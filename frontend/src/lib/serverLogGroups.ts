@@ -178,6 +178,16 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
     // included in the timeline (the user wants to see "Connecting…"
     // appear in the card, not just in the header).
     if (kind === 'phase' && msg.phase && START_PHASES.has(msg.phase)) {
+      // Enterprise semaphore: if there is an existing pending attempt
+      // (phases emitted but no disconnect yet), close it as 'disconnected'
+      // BEFORE opening the new one.  This prevents multiple "Connecting…"
+      // cards from accumulating in the timeline when the backend emits
+      // queued phases without an intervening DISCONNECT event (e.g.
+      // consumer reconnect path where queued is emitted synchronously
+      // but the old connection's DISCONNECTED fires asynchronously).
+      if (current && current.status === 'pending') {
+        current.status = 'disconnected';
+      }
       // Discard any synthetic (pre-phase) attempt — it has no phases
       // and would stay frozen on "Connecting…" forever after the real
       // connection events start flowing into the new card. Transfer
