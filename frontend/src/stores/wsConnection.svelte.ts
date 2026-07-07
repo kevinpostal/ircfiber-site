@@ -13,13 +13,66 @@ export type StreamState =
 // IRCCloud-style maxEid: tracks the highest eid seen across all events.
 // On reconnect, this is sent as `since` so the server only streams events
 // with eid > maxEid — guarantees no gaps and no duplicates after resume.
+//
+// The 2026-07-07 redesign adds a second role: the client periodically
+// sends `ack {eid: maxEid}` to the server so the live event listener
+// can filter "the client already has this" events without the client
+// ever seeing the same event twice over the WS.
 export const maxEidTracker = $state<{ value: number }>({ value: 0 });
 
 export function setMaxEid(eid: number): void {
-  if (eid > maxEidTracker.value) maxEidTracker.value = eid;
+    if (eid > maxEidTracker.value) maxEidTracker.value = eid;
 }
 
 let socket: WebSocket | null = null;
+
+// ── 2026-07-07 redesign: periodic ack so the server can filter live
+// events by `eid > lastDeliveredEid`. The client sends `ack {eid}`
+// every 5s while connected, plus a final ack on close (best-effort).
+// The server's `ircPoolDispatch` listener uses `lastDeliveredEid` to
+// drop events the client already has — so we never see the same
+// event twice over the WS.
+//
+// A gap (eid jump > 25) triggers /api/oob to recover from MongoDB
+// directly. See wsHoleDetector.ts.
+let ackInterval: ReturnType<typeof setInterval> | null = null;
+let ackSendInFlight = false;
+
+function startAckTimer(): void {
+    stopAckTimer();
+    if (ackInterval) return;
+    ackInterval = setInterval(() => {
+        if (ackSendInFlight) return;
+        if (!isConnected()) return;
+        const eid = maxEidTracker.value;
+        if (eid <= 0) return;
+        ackSendInFlight = true;
+        try {
+            sendJson({ cmd: 'ack', eid });
+        } finally {
+            // The send is fire-and-forget; mark not-in-flight next tick.
+            // Use a microtask via setTimeout(0) so we don't re-arm before
+            // the socket has had a chance to flush.
+            setTimeout(() => { ackSendInFlight = false; }, 0);
+        }
+    }, 5_000);
+}
+
+function stopAckTimer(): void {
+    if (ackInterval) {
+        clearInterval(ackInterval);
+        ackInterval = null;
+    }
+}
+
+function sendFinalAck(): void {
+    const eid = maxEidTracker.value;
+    if (eid > 0 && isConnected()) {
+        try {
+            sendJson({ cmd: 'ack', eid });
+        } catch { /* best-effort */ }
+    }
+}
 
 // IRCCloud-style message queue: messages sent before the WebSocket is
 // ready are queued and flushed on open. Prevents losing messages during
@@ -183,6 +236,11 @@ export function connectWebSocket(
     if (openCallback) openCallback();
     // Flush any messages queued while the WebSocket was closed
     flushQueue();
+    // 2026-07-07: start the ack timer so the server can filter live
+    // events by `lastDeliveredEid`. The first ack fires after 5s;
+    // the gap covers the time the client needs to process the initial
+    // stat_user / networks / sync / state-dump / replay batch.
+    startAckTimer();
   });
 
   socket.addEventListener('message', (event) => {
@@ -202,6 +260,12 @@ export function connectWebSocket(
   });
 
   socket.addEventListener('close', () => {
+    // 2026-07-07: best-effort final ack so the server knows the
+    // exact cursor at disconnect. If the WS is already gone this
+    // throws silently — that's fine, the server will see the
+    // unacked gap in /api/health and the next replay will recover.
+    sendFinalAck();
+    stopAckTimer();
     if (closeCallback) closeCallback();
     if (!reconnectTimeout) {
       setStreamState('reconnecting');
@@ -223,21 +287,22 @@ export function connectWebSocket(
 }
 
 export function disconnectWebSocket(): void {
-  // Reject all pending requests
-  for (const [reqid, pending] of pendingRequests) {
-    clearTimeout(pending.timer);
-    pending.reject(new Error('WebSocket disconnected'));
-    pendingRequests.delete(reqid);
-  }
-  if (reconnectTimeout) {
-    clearTimeout(reconnectTimeout);
-    reconnectTimeout = null;
-  }
-  if (socket) {
-    socket.close();
-    socket = null;
-  }
-  setStreamState('disconnected');
+    // Reject all pending requests
+    for (const [reqid, pending] of pendingRequests) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error('WebSocket disconnected'));
+        pendingRequests.delete(reqid);
+    }
+    if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        reconnectTimeout = null;
+    }
+    stopAckTimer();
+    if (socket) {
+        socket.close();
+        socket = null;
+    }
+    setStreamState('disconnected');
 }
 
 export function isConnected(): boolean {
