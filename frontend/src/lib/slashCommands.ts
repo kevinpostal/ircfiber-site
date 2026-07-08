@@ -1,8 +1,8 @@
 import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
-import { reconnectNetwork, disconnectNetwork } from '../stores/api';
+import { reconnectNetwork, disconnectNetwork, clearBacklog } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel } from './utils';
 import { updateRoute } from './routing';
 
@@ -210,8 +210,16 @@ registerSlash(['cycle', 'hop', 'rejoin'], (args, networkId, target) => {
   initiateRejoin(networkId, chan, { allowReconnect: false });
 });
 
-registerSlash(['clear'], (_args, networkId, target) => {
-  setClearedAt(networkId, target || '_server');
+registerSlash(['clear'], async (_args, networkId, target) => {
+  const buf = target || '_server';
+  setClearedAt(networkId, buf);
+  try {
+    await clearBacklog(networkId, buf);
+    clearMessageCache(networkId, buf);
+    pruneMessagesBefore(networkId, buf, Date.now());
+  } catch (err) {
+    console.error('[slash /clear] API failed (UI filter still applied):', err);
+  }
 });
 
 registerSlash(['archive', 'close', 'wc', 'a'], (_args, networkId, target) => {

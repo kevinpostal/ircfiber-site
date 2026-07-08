@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, markUserDisconnected } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, markUserDisconnected, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { reconnectNetwork, disconnectNetwork, updateCollapsed } from '../stores/api';
+  import { reconnectNetwork, disconnectNetwork, updateCollapsed, clearBacklog as apiClearBacklog } from '../stores/api';
   import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt, setStorageItem } from '../stores/preferences.svelte';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
@@ -125,8 +125,17 @@
   function clickExport(): void {
     onClose();
   }
-  function clearBacklog(): void {
-    if (networkId) setClearedAt(networkId, '_server');
+  async function clearBacklog(): Promise<void> {
+    if (networkId) {
+      setClearedAt(networkId, '_server');
+      try {
+        await apiClearBacklog(networkId, '_server');
+        clearMessageCache(networkId, '_server');
+        pruneMessagesBefore(networkId, '_server', Date.now());
+      } catch (err) {
+        console.error('[ServerLogContextMenu] clearBacklog API failed (UI filter still applied):', err);
+      }
+    }
     onClose();
   }
   function clickDeleteConversations(): void {

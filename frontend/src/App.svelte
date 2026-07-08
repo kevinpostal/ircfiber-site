@@ -626,28 +626,25 @@ let showNetworkForm: boolean = $state(false);
         // the full state dump — populates sidebar instantly with real names
         handleNetworks(obj);
       } else if (obj.type === 'sync') {
-        // Use unique mark names so periodic requestSync responses don't
-        // overwrite the boot sync mark — we want to measure boot timing
-        // accurately.  Boot sync has 'type:'sync' with no cmd echo; the
-        // periodic sync echoes 'cmd:sync'.  Distinguish by cmd-eid.
         const isBootSync = (obj.cmd === undefined);
         performance.mark(isBootSync ? 'sync-boot' : 'sync-poll');
-        updateNetworkFromSync((obj.networks || []) as Network[]);
-        // IRCCloud-style: sync now includes message history.  Set
-        // backlogReady immediately so the spinner yields to the real UI
-        // as soon as the sync arrives (no separate REST round-trip).
+        // Dismiss the spinner immediately — the sync JSON has already
+        // been received and parsed, so `updateNetworkFromSync` runs
+        // synchronously below (typically < 50ms for small users).
+        // Hiding the spinner now makes the connection feel instant;
+        // the sidebar populates from `handleNetworks`'s skeletons in
+        // the same tick. IRCCloud does the same: spinner → UI yields
+        // as soon as the sync payload arrives, before processing.
         if (isBootSync) {
           backlogReady = true;
           performance.mark('backlog-ready');
         }
+        syncReceived = true;
+        updateNetworkFromSync((obj.networks || []) as Network[]);
         // IRCCloud-style: persist the network names so the next page load
         // skips the WelcomePage and renders a loading skeleton with real
         // network names while the WebSocket sync fills in fresh state.
         writeCachedNetworks(ircState.networks);
-        // Mark sync as received so the LoadingSkeleton yields to
-        // WelcomePage when the user has genuinely zero networks
-        // (e.g. deleted all networks on another device).
-        syncReceived = true;
         checkRoute();
         selectLastActiveBuffer((obj.networks || []) as Network[]);
         // Load the full _server history from REST on BOOT sync so MOTD/

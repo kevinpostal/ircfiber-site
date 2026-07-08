@@ -956,6 +956,13 @@ function saveMessageCache(key: string, msgs: IRCMessage[]): void {
   } catch { /* storage full or unavailable */ }
 }
 
+export function clearMessageCache(networkId: string, bufferName: string): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  try {
+    sessionStorage.removeItem(CACHE_PREFIX + key);
+  } catch { /* ignore */ }
+}
+
 export function loadCachedMessages(networkId: string, bufferName: string): IRCMessage[] | null {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   try {
@@ -972,6 +979,15 @@ export function setMessages(networkId: string, bufferName: string, msgs: IRCMess
   ircState.processedMessages[key] = buildProcessedBuffer(msgs);
   saveMessageCache(key, msgs);
   markNetworkSeen(networkId);
+}
+
+export function pruneMessagesBefore(networkId: string, bufferName: string, beforeTs: number): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const existing = ircState.messages[key];
+  if (!existing || existing.length === 0) return;
+  const kept = existing.filter(m => (m.t ?? 0) >= beforeTs);
+  ircState.messages[key] = kept;
+  ircState.processedMessages[key] = buildProcessedBuffer(kept);
 }
 
 export function prependMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {

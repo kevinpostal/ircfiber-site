@@ -16,6 +16,7 @@ vi.mock('/src/stores/api.ts', () => ({
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   updateBufferPrefs: vi.fn(async () => undefined),
+  clearBacklog: vi.fn(async () => undefined),
   // W1-T01: initiateRejoin (called from the refactored context-menu rejoin
   // handler) calls reconnectNetwork when allowReconnect=true and the network
   // is disconnected. The context-menu path passes allowReconnect=false, so
@@ -31,9 +32,10 @@ vi.mock('/src/stores/api.ts', () => ({
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
 const sendRawMock = sendRaw as unknown as ReturnType<typeof vi.fn>;
 
-import { pinChannel, unpinChannel } from '/src/stores/api.ts';
+import { pinChannel, unpinChannel, clearBacklog as apiClearBacklog } from '/src/stores/api.ts';
 const pinChannelMock = pinChannel as unknown as ReturnType<typeof vi.fn>;
 const unpinChannelMock = unpinChannel as unknown as ReturnType<typeof vi.fn>;
+const clearBacklogMock = apiClearBacklog as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   ircState.networks.length = 0;
@@ -43,10 +45,11 @@ beforeEach(() => {
   Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
   Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
   Object.keys(pinnedMap).forEach((k) => delete (pinnedMap as Record<string, unknown>)[k]);
-  sendRawMock.mockClear();
-  pinChannelMock.mockClear();
-  unpinChannelMock.mockClear();
-  vi.clearAllMocks();
+	sendRawMock.mockClear();
+	pinChannelMock.mockClear();
+	unpinChannelMock.mockClear();
+	clearBacklogMock.mockClear();
+	vi.clearAllMocks();
 });
 
 describe('ChannelContextMenu', () => {
@@ -269,7 +272,7 @@ describe('ChannelContextMenu', () => {
     expect(unpinChannelMock).toHaveBeenCalledWith('net1', '#chan');
   });
 
-	it('Clear backlog calls setClearedAt for the channel buffer and closes menu', async () => {
+	it('Clear backlog purges the channel buffer and removes the load-more button', async () => {
 		const network = createNetwork({ networkId: 'net1' });
 		const buf = createBuffer({ name: '#general' });
 		network.buffers.push(createBuffer({ name: '_server', type: 'server' }), buf);
@@ -281,13 +284,11 @@ describe('ChannelContextMenu', () => {
 		render(ChannelContextMenu, {
 			props: { x: 100, y: 100, buf, onClose, onToggleMembers: vi.fn(), memberPanelOpen: false },
 		});
-		const before = Date.now();
 		await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
-		const after = Date.now();
-		const stored = clearedAtMap['net1:#general'];
-		expect(typeof stored).toBe('number');
-		expect(stored).toBeGreaterThanOrEqual(before);
-		expect(stored).toBeLessThanOrEqual(after);
+		// After a successful API delete, the clearedAt entry is removed so
+		// "Load more backlog" does not appear (server has nothing to load).
+		expect(clearedAtMap['net1:#general']).toBeUndefined();
+		expect(clearBacklogMock).toHaveBeenCalledWith('net1', '#general');
 		expect(onClose).toHaveBeenCalled();
 	});
 

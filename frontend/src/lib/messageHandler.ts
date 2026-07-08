@@ -165,12 +165,17 @@ export function processIrcEvent(
 
   // IRCCloud-style: track maxEid for stream resume
   setMaxEid(msg.eid ?? 0);
-  const networkName = (data.network || '') as string;
   const channel = normalizeChannelName((data.channel || data.ch || '_server') as string);
 
-  const net = ircState.networks.find(n => n.name === networkName);
+  // Look up by network UUID (nid) — NOT display name — so events from one
+  // network never leak channels into another network's sidebar. The compact
+  // JSON always includes both fields; use nid when present, fall back to
+  // display name for events still in flight from an older engine.
+  const networkId = ((data.nid || data.network) as string) || '';
+  const net = data.nid
+    ? ircState.networks.find(n => n.networkId === networkId)
+    : ircState.networks.find(n => n.name === (data.network || ''));
   if (!net) return {};
-  const networkId = net.networkId;
   // Every realtime WS event that names a known network is fresh
   // activity — refresh the stale marker up-front so callers that early-
   // return (ignore list, TAGMSG, temp_unavailable, etc.) still mark the

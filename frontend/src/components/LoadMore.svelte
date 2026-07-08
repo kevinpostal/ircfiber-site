@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getClearedAt, clearClearedAt } from '../stores/preferences.svelte';
+  import { getClearedAt } from '../stores/preferences.svelte';
   import { ircState } from '../stores/ircStore.svelte';
 
   interface Props {
@@ -156,10 +156,7 @@
 
   // IRCCloud BufferScrollView.clickLoadMore: scroll to top, then load.
   function handleClick(): void {
-    if (clearedAt) {
-      clearClearedAt(ircState.activeBuffer.networkId!, ircState.activeBuffer.bufferName!);
-      return;
-    }
+    if (clearedAt) return; // backlog was cleared — nothing to load
     scrollEl?.scrollTo({ top: 0 });
     tryAutoLoad().catch((e) => console.error('[LoadMore] tryAutoLoad error:', e));
   }
@@ -177,11 +174,7 @@
 </script>
 
 {#if clearedAt}
-  <div class="row loadMore">
-    <button class="loadMore__button" type="button" tabindex="-1" onclick={handleClick}>
-      <span>Load more backlog…</span>
-    </button>
-  </div>
+  <!-- Backlog cleared — nothing to load -->
 {:else if loading}
   <div class="row fetch">
     <hr />

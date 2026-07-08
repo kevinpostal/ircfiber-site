@@ -11,6 +11,7 @@ vi.mock('/src/stores/api', () => ({
     fetchHealth: vi.fn(async () => ({ status: 'healthy', services: {} })),
     loadHistory: vi.fn(async () => []),
     reconnectNetwork: vi.fn(async () => undefined),
+  clearBacklog: vi.fn(async () => undefined),
     disconnectNetwork: vi.fn(async () => undefined),
     joinChannel: vi.fn(async () => undefined),
     addNetwork: vi.fn(async () => undefined),

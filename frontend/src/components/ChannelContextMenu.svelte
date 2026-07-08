@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt } from '../stores/preferences.svelte';
-  import { pinChannel, unpinChannel, updateBufferPrefs } from '../stores/api';
+  import { pinChannel, unpinChannel, updateBufferPrefs, clearBacklog as apiClearBacklog } from '../stores/api';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { updateRoute } from '../lib/routing';
@@ -142,8 +142,17 @@
     unarchiveBuffer(networkId, buf.name);
     onClose();
   }
-  function clearBacklog(): void {
-    if (networkId && buf.name) setClearedAt(networkId, buf.name);
+  async function clearBacklog(): Promise<void> {
+    if (networkId && buf.name) {
+      setClearedAt(networkId, buf.name);
+      try {
+        await apiClearBacklog(networkId, buf.name);
+        clearMessageCache(networkId, buf.name);
+        pruneMessagesBefore(networkId, buf.name, Date.now());
+      } catch (err) {
+        console.error('[ChannelContextMenu] clearBacklog API failed (UI filter still applied):', err);
+      }
+    }
     onClose();
   }
   function deleteBuffer(): void {

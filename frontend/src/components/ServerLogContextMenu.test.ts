@@ -16,6 +16,7 @@ vi.mock('/src/stores/api', () => ({
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   updateCollapsed: vi.fn(async () => undefined),
+  clearBacklog: vi.fn(async () => undefined),
   // ircStore imports this for the WebSocket-sync message normalization
   // path. The tests in this file don't exercise that path, so a
   // pass-through stub is fine.
@@ -23,11 +24,12 @@ vi.mock('/src/stores/api', () => ({
 }));
 
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
-import { reconnectNetwork, disconnectNetwork } from '/src/stores/api';
+import { reconnectNetwork, disconnectNetwork, clearBacklog as apiClearBacklog } from '/src/stores/api';
 
 const sendRawMock = sendRaw as unknown as ReturnType<typeof vi.fn>;
 const reconnectMock = reconnectNetwork as unknown as ReturnType<typeof vi.fn>;
 const disconnectMock = disconnectNetwork as unknown as ReturnType<typeof vi.fn>;
+const clearBacklogMock = apiClearBacklog as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   ircState.networks.length = 0;
@@ -38,6 +40,7 @@ beforeEach(() => {
   sendRawMock.mockClear();
   reconnectMock.mockClear();
   disconnectMock.mockClear();
+  clearBacklogMock.mockClear();
 });
 
 function setupConnectedNetwork(): void {
@@ -210,20 +213,32 @@ describe('ServerLogContextMenu', () => {
     expect(ircState.overlay.type).toBe('channel_delete_confirm');
   });
 
-  it('Clear backlog calls setClearedAt for the _server buffer and closes menu', async () => {
+  it('Clear backlog purges the _server buffer and removes the load-more button', async () => {
     setupConnectedNetwork();
     const buf = ircState.networks[0].buffers[0];
     const onClose = vi.fn();
     render(ServerLogContextMenu, {
       props: { x: 100, y: 100, buf, onClose, onJoinChannel: vi.fn(), onEditNetwork: vi.fn() },
     });
-    const before = Date.now();
     await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
-    const after = Date.now();
-    const stored = clearedAtMap['net1:_server'];
-    expect(typeof stored).toBe('number');
-    expect(stored).toBeGreaterThanOrEqual(before);
-    expect(stored).toBeLessThanOrEqual(after);
+    // After a successful API delete, the clearedAt entry is removed so
+    // "Load more backlog" does not appear (server has nothing to load).
+    expect(clearedAtMap['net1:_server']).toBeUndefined();
+    expect(clearBacklogMock).toHaveBeenCalledWith('net1', '_server');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('Clear backlog still closes the menu (and applies the local filter) even if the API delete fails', async () => {
+    setupConnectedNetwork();
+    const buf = ircState.networks[0].buffers[0];
+    clearBacklogMock.mockRejectedValueOnce(new Error('boom'));
+    render(ServerLogContextMenu, {
+      props: { x: 100, y: 100, buf, onClose: vi.fn(), onJoinChannel: vi.fn(), onEditNetwork: vi.fn() },
+    });
+    await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
+    // Microtask settle so the rejected promise surfaces.
+    await new Promise(r => setTimeout(r, 0));
+    expect(typeof clearedAtMap['net1:_server']).toBe('number');
+    expect(clearBacklogMock).toHaveBeenCalledWith('net1', '_server');
   });
 });

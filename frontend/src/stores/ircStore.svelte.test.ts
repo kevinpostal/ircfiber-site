@@ -55,6 +55,7 @@ vi.mock('/src/stores/api', () => ({
 	loadHistory: (() => undefined) as never,
 	loadHistoryWithMeta: (() => undefined) as never,
 	reconnectNetwork: vi.fn(async () => undefined),
+  clearBacklog: vi.fn(async () => undefined),
 	disconnectNetwork: vi.fn(async () => undefined),
 	joinChannel: vi.fn(async () => undefined),
 	addNetwork: vi.fn(async () => ({} as Record<string, unknown>)),

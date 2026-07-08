@@ -39,6 +39,7 @@ vi.mock('/src/stores/api', () => ({
   loadHistory: vi.fn(async () => []),
   loadHistoryWithMeta: vi.fn(async () => ({ messages: [], backlog_size: 0, earliest_msgid: '', earliest_ts: 0, earliest_eid: 0, cache_size: 0 })),
   reconnectNetwork: vi.fn(async () => undefined),
+  clearBacklog: vi.fn(async () => undefined),
   disconnectNetwork: vi.fn(async () => undefined),
   joinChannel: vi.fn(async () => undefined),
   addNetwork: vi.fn(async () => undefined),

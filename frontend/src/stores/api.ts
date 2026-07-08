@@ -302,6 +302,15 @@ export async function reconnectNetwork(networkId: string): Promise<void> {
   if (!r.ok) throw new Error('Reconnect failed');
 }
 
+export async function clearBacklog(networkId: string, bufferName: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/buffers/clear`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ buffer: bufferName })
+  });
+  if (!r.ok) throw new Error('Clear backlog failed');
+}
+
 export async function disconnectNetwork(networkId: string, reason: string = ''): Promise<void> {
   const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/disconnect`, {
     method: 'POST',

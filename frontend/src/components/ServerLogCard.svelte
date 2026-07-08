@@ -279,15 +279,16 @@
   let cardBodyRef: HTMLElement | undefined = $state();
   $effect(() => {
     const el = cardBodyRef;
-    const isExpanded = expanded && attempt.phases.length > 0;
     if (el) {
-      gsap.to(el, {
-        height: isExpanded ? 'auto' : 0,
-        opacity: isExpanded ? 1 : 0,
-        duration: 0.3,
-        ease: 'power2.inOut',
-        overwrite: 'auto',
-      });
+      if (expanded) {
+        gsap.set(el, { height: 'auto', opacity: 1 });
+      } else {
+        gsap.to(el, {
+          height: 0, opacity: 0,
+          duration: 0.25, ease: 'power2.in',
+          overwrite: 'auto',
+        });
+      }
     }
   });
 

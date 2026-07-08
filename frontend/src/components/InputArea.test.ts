@@ -10,6 +10,7 @@ import { recentHighlightersCache } from '../lib/tabCompletion';
 
 vi.mock('/src/stores/api', () => ({
   reconnectNetwork: vi.fn(async () => undefined),
+  clearBacklog: vi.fn(async () => undefined),
   disconnectNetwork: vi.fn(async () => undefined),
   fetchMe: vi.fn(async () => ({ username: 'tester', email: 'tester@test.local' })),
   fetchHealth: vi.fn(async () => ({ status: 'healthy', services: {} })),
