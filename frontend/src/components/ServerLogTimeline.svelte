@@ -14,28 +14,35 @@
   let { messages, network }: Props = $props();
 
   // Apply the clearedAt filter so the "Clear backlog" action hides old
-  // connection-attempt cards. Mirrors MessageList.svelte:124-126.
-  // Without this, _server buffers skip the channel-buffer clearedAt filter
-  // path entirely, so the cards stay visible after clear.
+  // connection-attempt cards. We filter at the ATTEMPT level (not message
+  // level) so the latest (current) card keeps its full phase/welcome/MOTD
+  // content even though its messages happened before clearedAt.
   const clearedAt = $derived.by((): number | null => {
     const { networkId, bufferName } = ircState.activeBuffer;
     if (!networkId || !bufferName) return null;
     return getClearedAt(networkId, bufferName);
   });
-  const visibleMessages = $derived(
-    clearedAt != null ? messages.filter((m) => (m.t || 0) > clearedAt) : messages
-  );
 
-  // Group the flat message stream into connection attempts.
-  // `attempts` is recomputed reactively when `messages` changes.
-  const grouped = $derived(groupServerLog(visibleMessages));
-  // Filter out any attempts the user has dismissed via the X button.
+  // Group the flat message stream into connection attempts (ALL messages,
+  // unfiltered — clearedAt filtering happens at the attempt level below).
+  const grouped = $derived(groupServerLog(messages));
+  // Filter: hide old attempts, keep the latest one always.
   const attempts = $derived.by(() => {
     if (!network?.networkId) return grouped;
-    return grouped.filter((a) => {
+    let result = grouped;
+    // If clearedAt is set, filter out attempts whose start time <= clearedAt,
+    // BUT always keep the latest attempt so the current connection card
+    // retains its full phase/welcome/MOTD content (not just heartbeats).
+    if (clearedAt != null && result.length > 0) {
+      const lastIdx = result.length - 1;
+      result = result.filter((a, i) => i === lastIdx || (a.start.t || 0) > clearedAt);
+    }
+    // Filter out any attempts the user has dismissed via the X button.
+    result = result.filter((a) => {
       const key = getServerLogCollapsedKey(a, network.networkId);
       return !serverlogHiddenMap[key];
     });
+    return result;
   });
 
   // Map each message index in `messages` to the attempt it belongs to
