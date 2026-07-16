@@ -199,11 +199,172 @@ describe('ConnectionStatus — banner states (W3-T01)', () => {
   });
 
   it('hides banner entirely when fully connected and not away', async () => {
-    pushNetwork({ connected: true, connectionState: 'connected', isAway: false });
+    // W3-rev1: `connectionState === 'connected'` is now reserved for the
+    // handshake window (per the IRCCloud parity spec), so the engine
+    // signal that means "fully ready, no transient state" is whatever
+    // value the engine emits once JOINs finish. We model that here as
+    // `connected: true` + a connectionState that's NOT one of the
+    // transient values — for the test, we use 'disconnected' as the
+    // most-recent engine state. The combined effect: isDisconnected is
+    // false (since connected=true), so the showStatus gate reduces to
+    // isAway || isTransient → false, and the cell hides.
+    pushNetwork({
+      connected: true,
+      connectionState: 'disconnected',
+      isAway: false,
+    });
     render(ConnectionStatus);
     const cell = document.querySelector('.connectionstatuscell');
-    // Either the cell is hidden (.show not applied) or empty
     expect(cell?.classList.contains('show')).toBeFalsy();
+  });
+});
+
+describe('ConnectionStatus — transient state coverage (W3-rev1)', () => {
+  it('renders "Connection queued; waiting our turn…" when connectionState=queued', async () => {
+    pushNetwork({ connected: false, connectionState: 'queued', host: 'irc.example.com' });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/Connection queued; waiting our turn/)).toBeInTheDocument();
+  });
+
+  it('renders "Connected; handshaking…" when connectionState=connected (handshake window)', async () => {
+    pushNetwork({
+      connected: true,
+      connectionState: 'connected',
+      host: 'irc.example.com',
+      isAway: false,
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/Connected; handshaking/)).toBeInTheDocument();
+  });
+
+  it('renders "Connected; setting up…" when connectionState=connected_joining', async () => {
+    pushNetwork({
+      connected: true,
+      connectionState: 'connected_joining',
+      host: 'irc.example.com',
+      isAway: false,
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/Connected; setting up/)).toBeInTheDocument();
+  });
+
+  it('renders "Quitting…" when connectionState=quitting', async () => {
+    pushNetwork({
+      connected: true,
+      connectionState: 'quitting',
+      isAway: false,
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/Quitting…/)).toBeInTheDocument();
+  });
+
+  it('renders ip_retry banner with ip + error when failInfo.ip present', async () => {
+    pushNetwork({
+      connected: false,
+      connectionState: 'ip_retry',
+      failInfo: { type: 'ip_retry', reason: 'Connection refused', ip: '203.0.113.7' },
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/Connecting to 203\.0\.113\.7 failed \(Connection refused\)/)).toBeInTheDocument();
+    await expect.element(page.getByText(/resolving a new IP/)).toBeInTheDocument();
+  });
+
+  it('renders ip_retry fallback when no ip field is provided', async () => {
+    pushNetwork({
+      connected: false,
+      connectionState: 'ip_retry',
+      failInfo: { type: 'ip_retry', reason: 'Connection refused' },
+    });
+    render(ConnectionStatus);
+    // Brief item 5: render the simpler fallback when no IP field is
+    // present. We still surface the underlying reason (so the user
+    // understands WHY the IP retry is happening), just without the
+    // "to {ip}" anchor.
+    await expect.element(page.getByText(/Connecting failed \(Connection refused\); resolving a new IP/)).toBeInTheDocument();
+  });
+
+  it('renders ip_retry plain fallback when no ip and no reason are present', async () => {
+    pushNetwork({
+      connected: false,
+      connectionState: 'ip_retry',
+    });
+    render(ConnectionStatus);
+    // Last-resort fallback (no IP, no reason): the brief's defensive
+    // copy "Connecting failed; resolving a new IP…".
+    await expect.element(page.getByText(/^Connecting failed; resolving a new IP…$/)).toBeInTheDocument();
+  });
+
+  it('renders "Connected; waiting to join #chan…" when connectionState=connected_ready with focusOnMakeBuffer', async () => {
+    pushNetwork({
+      connected: true,
+      connectionState: 'connected_ready',
+      focusOnMakeBuffer: '#chan',
+      isAway: false,
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/Connected; waiting to join #chan/)).toBeInTheDocument();
+  });
+
+  it('renders generic "Connected; waiting to join…" when focusOnMakeBuffer is empty', async () => {
+    pushNetwork({
+      connected: true,
+      connectionState: 'connected_ready',
+      focusOnMakeBuffer: '',
+      isAway: false,
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/Connected; waiting to join…/)).toBeInTheDocument();
+  });
+
+  it('renders "Reconnecting…" give-up fallback when waiting_to_retry has no retryStatus schedule', async () => {
+    // W3-rev1: the engine's emitZeroRetryStatus clears retryStatus but
+    // keeps connectionState='waiting_to_retry'. The banner must render
+    // a static "Reconnecting…" rather than an empty headline (which is
+    // what renderRetryCountdown(null) returns).
+    pushNetwork({
+      connected: false,
+      connectionState: 'waiting_to_retry',
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/^Reconnecting…$/)).toBeInTheDocument();
+  });
+
+  it('renders "Reconnecting…" give-up fallback when nextRetryAtMs is 0', async () => {
+    pushNetwork({
+      connected: false,
+      connectionState: 'waiting_to_retry',
+      retryStatus: { attemptCount: 1, nextRetryAtMs: 0, delayMs: 1000 },
+    });
+    render(ConnectionStatus);
+    await expect.element(page.getByText(/^Reconnecting…$/)).toBeInTheDocument();
+  });
+
+  it('clears the countdown interval on unmount (no leaked timer)', async () => {
+    // W3-rev1: Critical #2 — pin the $effect cleanup with a real
+    // vi.getTimerCount() assertion. The component runs a setInterval
+    // inside $effect while waiting_to_retry is active. When the
+    // component unmounts, Svelte 5 should run the cleanup closure that
+    // returns clearInterval(id). Without it, fake timers pile up and
+    // leak across tests.
+    vi.useFakeTimers();
+    const base = Date.now();
+    vi.setSystemTime(base);
+    pushNetwork({
+      connected: false,
+      connectionState: 'waiting_to_retry',
+      retryStatus: { attemptCount: 2, nextRetryAtMs: base + 8_000, delayMs: 8_000 },
+    });
+
+    const result = render(ConnectionStatus);
+
+    // Sanity: an interval is running while waiting_to_retry is active.
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    // Unmount — Svelte 5 wires the $effect cleanup closure on detach.
+    await result.unmount();
+
+    // No leaked timers after unmount.
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

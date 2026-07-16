@@ -24,6 +24,14 @@ export interface FailInfo {
   reason?: string;
   killedReason?: string;
   sslVerifyError?: SSLVerifyError;
+  /**
+   * W3-rev1: when `type === 'ip_retry'`, the engine surfaces the IP
+   * that just failed so the banner can show "Connecting to {ip} failed
+   * ({error}); resolving a new IP…". Optional — older builds may not
+   * emit an IP, in which case the banner falls back to the generic
+   * "Connecting failed; resolving a new IP…".
+   */
+  ip?: string;
 }
 
 export interface RetryStatus {

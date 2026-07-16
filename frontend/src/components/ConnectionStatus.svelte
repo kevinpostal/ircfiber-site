@@ -50,30 +50,56 @@
   const isDisconnected = $derived(activeNetwork ? !activeNetwork.connected : false);
   const isConnecting = $derived(activeNetwork?.connectionState === 'connecting');
   const isWaitingToRetry = $derived(activeNetwork?.connectionState === 'waiting_to_retry');
-  const isJoiningOrReady = $derived(
-    activeNetwork?.connectionState === 'connected_joining' ||
-    activeNetwork?.connectionState === 'connected',
-  );
+  const isHandshake = $derived(activeNetwork?.connectionState === 'connected');
+  const isJoining = $derived(activeNetwork?.connectionState === 'connected_joining');
+  const isReadyWaiting = $derived(activeNetwork?.connectionState === 'connected_ready');
+  const isQueued = $derived(activeNetwork?.connectionState === 'queued');
+  const isQuitting = $derived(activeNetwork?.connectionState === 'quitting');
+  const isIpRetry = $derived(activeNetwork?.connectionState === 'ip_retry');
   const disconnectReason = $derived(activeNetwork?.disconnectReason || '');
 
-  // Show banner for any transient state. IRCCloud keeps it up while the
-  // user is in "connecting" / "waiting_to_retry" so the user always
-  // sees a CTA (Cancel-equivalent or Disconnect). Hide once fully
-  // connected and not away.
-  const showStatus = $derived(
-    isAway || isConnecting || isWaitingToRetry ||
+  // Show banner for any transient state. W3-rev1: lifted the showStatus
+  // gate so transient mid-handshake states (`connected`, `connected_joining`,
+  // `connected_ready`, `queued`, `quitting`, `ip_retry`) all keep the
+  // banner visible — previously the `if (connected) hide` logic hid it
+  // during the brief `connected` (handshake) window even when the engine
+  // hadn't yet joined any channels. Mirrors IRCCloud's
+  // `ConnectionStatusView.render` pipeline which always shows during the
+  // transient window. Once the engine emits `connected_ready` and the
+  // focus buffer is resolved (or the user is just `connected` with no
+  // auto-joins), the engine flips connectionState away from these
+  // transient values and the banner hides via the !isTransient fallback.
+  const isTransient = $derived(
+    isQueued ||
+    isHandshake ||
+    isJoining ||
+    isReadyWaiting ||
+    isQuitting ||
+    isIpRetry ||
+    isConnecting ||
+    isWaitingToRetry ||
     (isDisconnected && !isConnecting && !isWaitingToRetry),
   );
+  const showStatus = $derived(isAway || isTransient);
 
   // ── Headline text ────────────────────────────────────────────────
   //
   // Mirrors IRCCloud's `ConnectionStatusView.renderText`. The branches
   // are mutually exclusive — we evaluate the rich fail-info first, then
   // the live state, then fall through to a generic disconnect line.
+  // W3-rev1 extended BannerKind to cover the full 11-state matrix lifted
+  // from irccloud-webpack-study/app/src/view/connectionstatusview.js:64-123.
   type BannerKind =
     | 'away'
     | 'connecting'
+    | 'queued'
+    | 'handshake'
+    | 'connected-joining'
+    | 'connected-ready'
+    | 'quitting'
+    | 'ip-retry'
     | 'retry'
+    | 'retry-giveup'
     | 'fail-killed'
     | 'fail-ssl'
     | 'fail-blocked'
@@ -90,7 +116,16 @@
   const bannerKind: BannerKind = $derived.by(() => {
     if (!activeNetwork) return 'disconnected';
     if (isAway) return 'away';
-    if (isWaitingToRetry) return 'retry';
+    if (isWaitingToRetry) {
+      // W3-rev1: distinguish "will retry" (retryStatus populated with a
+      // future nextRetryAtMs) from "gave up" (retryStatus is null OR
+      // nextRetryAtMs has been cleared to 0 by the engine's
+      // emitZeroRetryStatus). The latter renders the static
+      // "Reconnecting…" fallback instead of an empty headline.
+      const rs = activeNetwork.retryStatus;
+      const hasSchedule = !!rs && (rs.nextRetryAtMs ?? 0) > 0;
+      return hasSchedule ? 'retry' : 'retry-giveup';
+    }
     if (activeNetwork.failInfo) {
       const t = activeNetwork.failInfo.type;
       if (t === FAIL_TYPES.KILLED) return 'fail-killed';
@@ -99,6 +134,12 @@
       if (t === FAIL_TYPES.CONNECTING_FAILED) return 'fail-connecting';
       if (t === FAIL_TYPES.SOCKET_CLOSED) return 'fail-socket';
     }
+    if (isQueued) return 'queued';
+    if (isHandshake) return 'handshake';
+    if (isJoining) return 'connected-joining';
+    if (isReadyWaiting) return 'connected-ready';
+    if (isQuitting) return 'quitting';
+    if (isIpRetry) return 'ip-retry';
     if (isConnecting) return 'connecting';
     return 'disconnected';
   });
@@ -106,15 +147,65 @@
   const headline: string = $derived.by(() => {
     if (!activeNetwork) return '';
     const fail = activeNetwork.failInfo;
+    const host = activeNetwork.host || 'server';
     switch (bannerKind) {
       case 'away':
         return 'Away';
+      case 'queued':
+        // W3-rev1: IRCCloud branch "queued" — engine emits this when
+        // another connection is still in flight and our attempt is
+        // waiting for a free worker slot. Pure status copy; no IP /
+        // host substituted.
+        return 'Connection queued; waiting our turn…';
       case 'connecting':
         return isReconnectingLabel()
-          ? `Reconnecting to ${activeNetwork.host || 'server'}…`
-          : `Connecting to ${activeNetwork.host || 'server'}…`;
+          ? `Reconnecting to ${host}…`
+          : `Connecting to ${host}…`;
+      case 'handshake':
+        // W3-rev1: shown during the `connected` window between the
+        // engine emitting 001 (RPL_WELCOME) and the first JOIN echo.
+        // IRCCloud lifts this verbatim from connectionstatusview.js:73.
+        return 'Connected; handshaking…';
+      case 'connected-joining':
+        // W3-rev1: handshake done, JOINs in flight.
+        return 'Connected; setting up…';
+      case 'connected-ready': {
+        // W3-rev1: engine has a focus buffer it intends to make-active
+        // but hasn't joined yet. IRCCloud lifts the channel name from
+        // `focusOnMakeBuffer`; an empty / '*' value falls back to the
+        // generic "waiting to join…".
+        const focus = (activeNetwork.focusOnMakeBuffer || '').trim();
+        if (focus && focus !== '*') {
+          return `Connected; waiting to join ${focus}…`;
+        }
+        return 'Connected; waiting to join…';
+      }
+      case 'quitting':
+        // W3-rev1: user-initiated /disconnect. The engine flips to this
+        // state while it flushes a QUIT line; the banner is informational
+        // only (no button) — the user has already decided to leave.
+        return 'Quitting…';
+      case 'ip-retry': {
+        // W3-rev1: per IRCCloud's `ip_retry` branch
+        // (`connectionstatusview.js:78`). If the engine emitted an IP
+        // via `failInfo.ip` (or a top-level `network.ip`), surface it
+        // — otherwise fall back to a copy that omits the IP, and TODO
+        // a future engine patch to ship the field.
+        const ip = (fail?.ip || activeNetwork.ip || '').trim();
+        const err = renderReason(fail?.reason || disconnectReason);
+        if (ip && err) return `Connecting to ${ip} failed (${err}); resolving a new IP…`;
+        if (ip)        return `Connecting to ${ip} failed; resolving a new IP…`;
+        if (err)       return `Connecting failed (${err}); resolving a new IP…`;
+        return 'Connecting failed; resolving a new IP…';
+      }
       case 'retry':
         return renderRetryCountdown(activeNetwork.retryStatus);
+      case 'retry-giveup':
+        // W3-rev1: static fallback when the engine has cleared the
+        // retryStatus payload (e.g. emitZeroRetryStatus) but kept
+        // connectionState='waiting_to_retry'. Without this, the
+        // banner would render an empty headline.
+        return 'Reconnecting…';
       case 'fail-killed':
         return `Disconnected - Killed: ${renderReason(fail?.killedReason || fail?.reason)}`;
       case 'fail-ssl':
@@ -271,7 +362,26 @@
       case 'connecting':
         classes.push('connecting', 'connectionStatus--connecting');
         break;
+      case 'queued':
+        classes.push('queued', 'connectionStatus--queued');
+        break;
+      case 'handshake':
+        classes.push('handshake', 'connectionStatus--handshake');
+        break;
+      case 'connected-joining':
+        classes.push('connecting', 'connectionStatus--connected-joining');
+        break;
+      case 'connected-ready':
+        classes.push('waiting', 'connectionStatus--connected-ready');
+        break;
+      case 'quitting':
+        classes.push('quitting', 'connectionStatus--quitting');
+        break;
+      case 'ip-retry':
+        classes.push('fail', 'connectionStatus--ip-retry');
+        break;
       case 'retry':
+      case 'retry-giveup':
         classes.push('waiting', 'connectionStatus--waiting');
         break;
       case 'fail-killed':
@@ -294,7 +404,14 @@
     switch (bannerKind) {
       case 'away':           return 'fa fa-check-circle';
       case 'connecting':     return 'fa fa-spinner';
-      case 'retry':          return 'fa fa-clock-o';
+      case 'queued':         return 'fa fa-hourglass-half';
+      case 'handshake':      return 'fa fa-spinner';
+      case 'connected-joining': return 'fa fa-spinner';
+      case 'connected-ready':return 'fa fa-clock-o';
+      case 'quitting':       return 'fa fa-sign-out';
+      case 'ip-retry':       return 'fa fa-warning';
+      case 'retry':
+      case 'retry-giveup':   return 'fa fa-clock-o';
       case 'fail-killed':
       case 'fail-ssl':
       case 'fail-blocked':

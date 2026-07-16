@@ -14,13 +14,23 @@ export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; cate
 };
 
 // ── Connection state machine ──
+//
+// Covers the 11 IRCCloud-style transient states surfaced in the
+// `ConnectionStatus.svelte` banner (see plan.yaml:966-981). W3-rev1
+// added `connected_ready` (post-handshake, waiting for a focus buffer),
+// `quitting` (user-initiated QUIT), and `ip_retry` (DNS / IP-resolve
+// retry after a connection failure). The engine emits these values
+// directly; the frontend renders them through ConnectionStatusBannerKind.
 export type ConnectionState =
   | 'disconnected'
   | 'waiting_to_retry'   // countdown timer before reconnect
   | 'queued'             // waiting for other connections to finish
   | 'connecting'
-  | 'connected'
-  | 'connected_joining'; // connected, auto-joining channels
+  | 'connected'          // TCP+TLS up, IRC handshake in progress
+  | 'connected_joining'  // handshake done, JOINs in progress
+  | 'connected_ready'    // ready but waiting for focusOnMakeBuffer
+  | 'quitting'           // user-initiated QUIT (handleDisconnect)
+  | 'ip_retry';          // resolving a new IP after connect failure
 
 export interface Network {
   networkId: string;
@@ -133,6 +143,14 @@ export interface Network {
     reason?: string;
     killedReason?: string;
     sslVerifyError?: { type: string; error: string };
+    /**
+     * W3-rev1: when `type === 'ip_retry'`, the engine surfaces the IP
+     * that just failed so the banner can show
+     * `"Connecting to {ip} failed (…)"`. Optional — older builds may not
+     * emit an IP, in which case the banner falls back to the generic
+     * `"Connecting failed; resolving a new IP…"`.
+     */
+    ip?: string;
   };
   /**
    * W3-T01: when true, the banner shows a "Click to disconnect" button
@@ -141,6 +159,25 @@ export interface Network {
    * because not every engine build emits this flag yet.
    */
   badRetry?: boolean;
+  /**
+   * W3-rev1: when `connectionState === 'connected_ready'`, the engine
+   * sets this to the channel name it intends to auto-join (e.g.
+   * `'#ircfiber'`). The banner renders `"Connected; waiting to join
+   * {channel}…"`. Empty / `'*'` falls back to the generic
+   * `"Connected; waiting to join…"`. Optional because the engine only
+   * populates it for networks that have at least one auto-join channel
+   * configured and the WS sync happens to land during the brief
+   * ready-but-not-joined window.
+   */
+  focusOnMakeBuffer?: string;
+  /**
+   * W3-rev1: when `connectionState === 'ip_retry'`, the engine sets
+   * this to the IP that just failed so the banner can show
+   * `"Connecting to {ip} failed (…)"`. Optional — older engine builds
+   * may not surface an IP field, in which case the banner falls back to
+   * `"Connecting failed; resolving a new IP…"`.
+   */
+  ip?: string;
 }
 
 export interface Buffer {
