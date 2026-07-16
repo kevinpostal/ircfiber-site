@@ -14,13 +14,23 @@ export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; cate
 };
 
 // ── Connection state machine ──
+//
+// Covers the 11 IRCCloud-style transient states surfaced in the
+// `ConnectionStatus.svelte` banner (see plan.yaml:966-981). W3-rev1
+// added `connected_ready` (post-handshake, waiting for a focus buffer),
+// `quitting` (user-initiated QUIT), and `ip_retry` (DNS / IP-resolve
+// retry after a connection failure). The engine emits these values
+// directly; the frontend renders them through ConnectionStatusBannerKind.
 export type ConnectionState =
   | 'disconnected'
   | 'waiting_to_retry'   // countdown timer before reconnect
   | 'queued'             // waiting for other connections to finish
   | 'connecting'
-  | 'connected'
-  | 'connected_joining'; // connected, auto-joining channels
+  | 'connected'          // TCP+TLS up, IRC handshake in progress
+  | 'connected_joining'  // handshake done, JOINs in progress
+  | 'connected_ready'    // ready but waiting for focusOnMakeBuffer
+  | 'quitting'           // user-initiated QUIT (handleDisconnect)
+  | 'ip_retry';          // resolving a new IP after connect failure
 
 // ── W2-T02: structured retry + fail info from the D engine ──
 //
@@ -53,17 +63,29 @@ export interface RetryStatus {
  *  `FailInfo` struct (ircfiber.models.irc_event.d). `sslVerifyError`
  *  is a NESTED object (per plan B2) rather than a flat pair — the
  *  shape matches the wire format byte-for-byte so messageHandler.ts
- *  does no conversion. */
+ *  does no conversion.
+ *
+ *  `reason` is the raw engine reason key (matches IRCCloud's
+ *  RENDER_REASONS table); optional because some fail types
+ *  (`ip_retry`, `socket_closed`) don't carry one — the banner falls
+ *  back to the type string when absent.
+ *
+ *  `ip` (W3-rev1) is populated when `type === 'ip_retry'`, exposing
+ *  the IP that just failed so the banner can render "Connecting to
+ *  {ip} failed (…)". Older engine builds may not emit it. */
 export interface FailInfo {
   /** "connecting_failed" | "killed" | "ssl_verify_error" |
-   *  "socket_closed" | "connecting_restricted" | "connection_blocked" */
+   *  "socket_closed" | "connecting_restricted" | "connection_blocked"
+   *  | "ip_retry" */
   type: string;
   /** Raw reason key (matches IRCCloud's RENDER_REASONS table). */
-  reason: string;
+  reason?: string;
   /** Populated when type === 'killed'; empty otherwise. */
   killedReason?: string;
   /** Nested {type, error} for SSL failures; absent otherwise. */
   sslVerifyError?: { type: string; error: string };
+  /** W3-rev1: IP that just failed when type === 'ip_retry'. */
+  ip?: string;
 }
 
 export interface Network {
@@ -158,6 +180,11 @@ export interface Network {
    * dispatch boundary — see messageHandler.ts and applyRetryStatus).
    * Drives ConnectionStatus's "Reconnecting in {N}s (Mth attempt)"
    * banner copy.
+   *
+   * Also populated when `connectionState === 'waiting_to_retry'` so the
+   * banner can show a live countdown (W3). The engine sets both fields
+   * together — `connectionState` = 'waiting_to_retry' is the binary
+   * "is mid-backoff" signal, this object carries the timing.
    */
   retryStatus?: RetryStatus | null;
   /**
@@ -166,9 +193,39 @@ export interface Network {
    * (the legacy free-text string) by ConnectionStatus when both
    * are present — `disconnectReason` stays in the Network interface
    * for back-compat with networks that pre-date the structured
-   * payload (per plan dual-emit constraint).
+   * payload (per plan dual-emit constraint). Mirrors IRCCloud's
+   * `applyFail` action — `reason`, `killedReason`, `sslVerifyError`,
+   * and `ip` branch the banner copy.
    */
   failInfo?: FailInfo | null;
+  /**
+   * W3-T01: when true, the banner shows a "Click to disconnect" button
+   * instead of "Click to reconnect". Set by the engine for unrecoverable
+   * scenarios (e.g. the user is blocked by the server). Optional
+   * because not every engine build emits this flag yet.
+   */
+  badRetry?: boolean;
+  /**
+   * W3-rev1: when `connectionState === 'connected_ready'`, the engine
+   * sets this to the channel name it intends to auto-join (e.g.
+   * `'#ircfiber'`). The banner renders `"Connected; waiting to join
+   * {channel}…"`. Empty / `'*'` falls back to the generic
+   * `"Connected; waiting to join…"`. Optional because the engine only
+   * populates it for networks that have at least one auto-join channel
+   * configured and the WS sync happens to land during the brief
+   * ready-but-not-joined window.
+   */
+  focusOnMakeBuffer?: string;
+  /**
+   * W3-rev1: when `connectionState === 'ip_retry'`, the engine sets
+   * this to the IP that just failed so the banner can show
+   * `"Connecting to {ip} failed (…)"`. Optional — older engine builds
+   * may not surface an IP field, in which case the banner falls back to
+   * `"Connecting failed; resolving a new IP…"`. The ConnectionStatus
+   * banner reads `failInfo.ip` first, falling back to this top-level
+   * field when `failInfo.ip` is absent.
+   */
+  ip?: string;
 }
 
 export interface Buffer {
