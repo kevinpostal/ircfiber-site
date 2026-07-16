@@ -62,6 +62,12 @@ describe('classifyServerLog', () => {
     expect(classifyServerLog(m({ command: 'ERROR' }))).toBe('skip');
   });
 
+  it('drops WHOIS/WHOX responses (311, 354, 671) to prevent SuperNets flood', () => {
+    expect(classifyServerLog(m({ command: '311' }))).toBe('skip');
+    expect(classifyServerLog(m({ command: '354' }))).toBe('skip');
+    expect(classifyServerLog(m({ command: '671' }))).toBe('skip');
+  });
+
   it('falls back to notice for unknown commands', () => {
     expect(classifyServerLog(m({ command: 'SOMETHING' }))).toBe('notice');
   });
@@ -296,6 +302,7 @@ describe('groupServerLog', () => {
       + a.cap.length + a.numeric.length + a.notices.length, 0);
     expect(total).toBe(2);
   });
+
 });
 
 describe('phaseToLabel', () => {
@@ -356,6 +363,41 @@ describe('formatDuration', () => {
   });
   it('renders minute+ durations as XmSS', () => {
     expect(formatDuration(75_000)).toBe('1m15s');
+  });
+});
+
+describe('reconnect supersede', () => {
+  it('marks old connected card as superseded when a new reconnect starts', () => {
+    // Simulate: connect → disconnect → reconnect. The dedup pass in
+    // groupServerLog requires phase events to be >60s apart or have
+    // different canonical text to survive dedup. We use queued vs resolving
+    // as start phases (both are START_PHASES) with distinct text so the
+    // second one survives the dedup window.
+    let t = 1000;
+    const next = (overrides: Partial<IRCMessage> = {}): IRCMessage =>
+      m({ t: ++t, ...overrides });
+
+    const events: IRCMessage[] = [
+      // First connection: queued → connecting → ... → welcome
+      next({ phase: 'queued', text: 'queued' }),
+      next({ phase: 'connecting', text: 'Connecting to ircd:6667' }),
+      next({ phase: 'tcp_open', text: 'TCP connection established' }),
+      next({ phase: 'registering', text: 'Registering connection' }),
+      next({ phase: 'caps', text: 'Negotiating capabilities' }),
+      next({ command: 'NOTICE', nick: 'irc.ircfiber.com', text: '*** Looking up your hostname...' }),
+      next({ phase: 'welcome', text: 'Welcome to the network' }),
+      // DISCONNECTED
+      next({ command: 'DISCONNECTED', text: 'Connection closed' }),
+      // New reconnect: resolving fires (different from queued, same START set)
+      next({ phase: 'resolving', text: 'resolve irc.ircfiber.com' }),
+    ];
+
+    const attempts = groupServerLog(events);
+    // Should have exactly 1 visible card: the new connecting attempt
+    const visible = attempts.filter(a => a.status !== 'superseded');
+    expect(visible).toHaveLength(1);
+    expect(visible[0].status).toBe('pending');
+    expect(visible[0].phases[0].phase).toBe('resolving');
   });
 });
 

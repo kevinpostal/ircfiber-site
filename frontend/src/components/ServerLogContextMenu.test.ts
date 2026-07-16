@@ -213,7 +213,7 @@ describe('ServerLogContextMenu', () => {
     expect(ircState.overlay.type).toBe('channel_delete_confirm');
   });
 
-  it('Clear backlog purges the _server buffer and removes the load-more button', async () => {
+  it('Clear backlog purges the _server buffer and hides old messages', async () => {
     setupConnectedNetwork();
     const buf = ircState.networks[0].buffers[0];
     const onClose = vi.fn();
@@ -221,9 +221,11 @@ describe('ServerLogContextMenu', () => {
       props: { x: 100, y: 100, buf, onClose, onJoinChannel: vi.fn(), onEditNetwork: vi.fn() },
     });
     await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
-    // After a successful API delete, the clearedAt entry is removed so
-    // "Load more backlog" does not appear (server has nothing to load).
-    expect(clearedAtMap['net1:_server']).toBeUndefined();
+    // The component sets clearedAt as a local filter immediately (before
+    // the API call), then calls the API to scrub the server-side data.
+    // The clearedAt entry persists so the UI shows "nothing to load"
+    // instead of re-fetching deleted history from Redis.
+    expect(typeof clearedAtMap['net1:_server']).toBe('number');
     expect(clearBacklogMock).toHaveBeenCalledWith('net1', '_server');
     expect(onClose).toHaveBeenCalled();
   });

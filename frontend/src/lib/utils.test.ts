@@ -432,3 +432,48 @@ describe('parseChannelList', () => {
     expect(parseChannelList('#a\t#b   #c')).toEqual(['#a', '#b', '#c']);
   });
 });
+
+describe('isSkippedCommand — server-log spam filters', () => {
+  // Regression for: "I don't like seeing all of this in server log" —
+  // WHOX replies (354) flooded the server-log timeline on SuperNets-scale
+  // networks (2000+ users → 2000+ 354 rows per channel JOIN). The engine
+  // also drops 354 at publish time (`case "354": return;` in connection.d),
+  // so this is defense-in-depth: the chat UI must NEVER render a 354 row
+  // even if a replayed scrollback or a stale older-engine binary still
+  // ships one through. Mirror every numeric the engine consumes
+  // internally and ships in the network sync payload (net.realnames,
+  // net.buffers[].users) so the chat has no need for the raw reply.
+  it('skips WHOX 354 (defense-in-depth against SuperNets flood)', async () => {
+    const { isSkippedCommand } = await import('./utils');
+    expect(isSkippedCommand('354')).toBe(true);
+  });
+  it('skips WHOIS chain 311-319 + 330', async () => {
+    const { isSkippedCommand } = await import('./utils');
+    ['311', '312', '313', '315', '317', '318', '319', '330'].forEach((c) => {
+      expect(isSkippedCommand(c)).toBe(true);
+    });
+  });
+  it('skips NAMES chain 353 + 366', async () => {
+    const { isSkippedCommand } = await import('./utils');
+    expect(isSkippedCommand('353')).toBe(true);
+    expect(isSkippedCommand('366')).toBe(true);
+  });
+  it('skips TOPIC 332 + 333 and MOTD terminator 376 + 422', async () => {
+    const { isSkippedCommand } = await import('./utils');
+    expect(isSkippedCommand('332')).toBe(true);
+    expect(isSkippedCommand('333')).toBe(true);
+    expect(isSkippedCommand('376')).toBe(true);
+    expect(isSkippedCommand('422')).toBe(true);
+  });
+  it('skips ERR_NOSUCHNICK 401', async () => {
+    const { isSkippedCommand } = await import('./utils');
+    expect(isSkippedCommand('401')).toBe(true);
+  });
+  it('does NOT skip chat-bearing numerics like 001 / 433', async () => {
+    // 001 (welcome) and 433 (nick in use) MUST reach the chat UI — they
+    // are user-visible IRC state changes that need their own timeline rows.
+    const { isSkippedCommand } = await import('./utils');
+    expect(isSkippedCommand('001')).toBe(false);
+    expect(isSkippedCommand('433')).toBe(false);
+  });
+});

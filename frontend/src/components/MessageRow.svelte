@@ -12,11 +12,12 @@
     msg: IRCMessage;
     isHighlight?: boolean;
     isSameAuthor?: boolean;
+    isEntrance?: boolean;
     onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
     memberByNick?: Map<string, Member>;
   }
 
-  let { msg, isHighlight = false, isSameAuthor = false, onNickClick, memberByNick = new Map() }: Props = $props();
+  let { msg, isHighlight = false, isSameAuthor = false, isEntrance = false, onNickClick, memberByNick = new Map() }: Props = $props();
 
   const cmd = $derived(msg.command);
   const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
@@ -465,7 +466,7 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}

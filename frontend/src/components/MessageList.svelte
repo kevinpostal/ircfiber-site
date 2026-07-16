@@ -388,11 +388,105 @@
 
   let lastFirstProcessedKey = '';
 
+  // ── Message entrance animation ───────────────────────────────────────
+  // Tracks which message keys should get the .messageEntrance class.
+  // Only the batch head (firstAuthor rows or non-grouped messages) gets
+  // the slide-in; same-author continuations get a subtler fade.
+  let entranceKeys = $state(new Set<string>());
+  let lastBottomKey = '';
+
+  function scheduleEntranceCleanup(): void {
+    setTimeout(() => {
+      entranceKeys = new Set();
+    }, 150);
+  }
+
   // IRCCloud-style: when the scroll container shrinks (e.g. a typing
+  // Force-scroll trigger: when the user sends a message, InputArea
+  // increments forceScrollToBottomNonce (see ircStore.svelte). We
+  // always snap to the bottom in that case — even if the user scrolled
+  // up to inspect history. IRCCloud always shows you your own message
+  // after you hit Enter; we match that. Reads forceScrollToBottomNonce
+  // here so the effect re-runs whenever it changes; reads isServerBuffer
+  // first so server-log views (where the user owns their scroll position
+  // while inspecting connection history) are excluded.
+  //
+  // Singleton force-scroll: when the user sends a message (or navigates
+  // to a buffer), snap to the bottom immediately with a synchronous
+  // layout reflow so the clamp lands on the true scrollHeight. Then
+  // run a SINGLE short polling chain (3 × 200ms = 600ms) to catch any
+  // late-arriving content. A new nonce while polling cancels the old
+  // chain and starts a fresh one — critical for the rapid-typing case:
+  // typing 5-6 messages in a row MUST NOT start 5-6 overlapping chains,
+  // each doing flushSync + layout reflow + 10 polls (that was the
+  // source of the UI lag that made the user say "it lags and takes a
+  // while to show them").
+  let lastForceScrollNonce = 0;
+  let pendingPollTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    if (isServerBuffer) {
+      lastForceScrollNonce = ircState.forceScrollToBottomNonce;
+      return;
+    }
+    const nonce = ircState.forceScrollToBottomNonce;
+    if (nonce === lastForceScrollNonce) return;
+    lastForceScrollNonce = nonce;
+    if (!container) return;
+    snapToBottom(container);
+  });
+  function snapToBottom(c: HTMLDivElement): void {
+    // Cancel any in-flight polling chain so we don't stack 5 chains
+    // when the user types rapidly.
+    if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
+    // Force-layout: flushSync guarantees the DOM is up to date after
+    // the renderStart assignment. Without this, scrollHeight is stale.
+    flushSync();
+    const msgs = untrack(() => processedMessages);
+    if (msgs.length > 0) {
+      renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+    }
+    flushSync();
+    // Double-set with layout reflow: reading scrollHeight after writing
+    // scrollTop forces a synchronous reflow so the second set uses the
+    // true clamped position — no small gap.
+    c.scrollTop = c.scrollHeight;
+    void c.scrollHeight;
+    c.scrollTop = c.scrollHeight;
+    cachedAtBottom = true;
+    // Single short polling chain (3 × 200ms). If a newer nonce arrives
+    // mid-chain, the next snapToBottom call cancels and restarts.
+    let polls = 0;
+    function poll(): void {
+      if (!container) return;
+      const msgs2 = untrack(() => processedMessages);
+      if (msgs2.length > 0) {
+        renderStart = Math.max(0, msgs2.length - BATCH_SIZE);
+      }
+      container.scrollTop = container.scrollHeight;
+      void container.scrollHeight;
+      container.scrollTop = container.scrollHeight;
+      cachedAtBottom = true;
+      polls++;
+      if (polls < 3) {
+        pendingPollTimer = setTimeout(poll, 200);
+      } else {
+        pendingPollTimer = null;
+      }
+    }
+    // Start the polling chain from a rAF so the initial scroll has time
+    // to paint before the first poll.
+    requestAnimationFrame(() => {
+      // Avoid double-scroll if the user typed another message during the
+      // rAF interval — the new snapToBottom already cleared this timer.
+      if (!pendingPollTimer) pendingPollTimer = setTimeout(poll, 200);
+    });
+  }
+
   // indicator appears below, stealing flex space), snap back to bottom
   // if the user was pinned there — otherwise they see the viewport drift
   // up with no scroll event to correct it.
   $effect(() => {
+    if (isServerBuffer) return;
     const el = container;
     if (!el) return;
     const ro = new ResizeObserver(() => {
@@ -456,6 +550,44 @@
     if (cachedAtBottom) {
       // IRCCloud checkFlush → checkTrim: bound the DOM while pinned.
       maybeTrim();
+
+      // Entrance animation: detect which messages are new since the last
+      // time we were at the bottom. Only the batch head (firstAuthor or
+      // non-grouped rows) gets the full slide-in; sameAuthor rows get a
+      // subtler fade via CSS (.messageEntrance.sameAuthor).
+      const allMsgs = processedMessages;
+      if (allMsgs.length > 0) {
+        const lastKey = itemKeyOf(allMsgs[allMsgs.length - 1]);
+        if (lastKey !== lastBottomKey) {
+          if (lastBottomKey) {
+            let foundBoundary = false;
+            let prevWasEntrance = false;
+            const newKeys = new Set<string>();
+            for (let i = allMsgs.length - 1; i >= 0; i--) {
+              const key = itemKeyOf(allMsgs[i]);
+              if (key === lastBottomKey) break;
+              // Only animate the head of each sameAuthor group (plus
+              // non-grouped rows like system messages). We walk backwards
+              // from the end, so the FIRST row we encounter (closest to
+              // bottom) is a candidate. Subsequent rows get the entrance
+              // class only if they start a new group.
+              const msg = allMsgs[i];
+              const isGroupHead = msg.command !== 'PRIVMSG' && msg.type !== 'action'
+                || (i > 0 && !checkSameAuthor(msg, allMsgs[i - 1]));
+              if (!foundBoundary || isGroupHead) {
+                newKeys.add(key);
+                foundBoundary = true;
+              }
+            }
+            if (newKeys.size > 0) {
+              entranceKeys = newKeys;
+              scheduleEntranceCleanup();
+            }
+          }
+          lastBottomKey = lastKey;
+        }
+      }
+
       // IRCCloud scrollToBottom: only scroll if we're not already at the
       // bottom.  Re-reading the DOM here is the same pattern as IRCCloud's
       // isScrolledToBottom(true) inside scrollToBottom — checking the live
@@ -934,6 +1066,7 @@
             {msg}
             isHighlight={msg.highlight ?? false}
             isSameAuthor={checkSameAuthor(msg, prevMsg)}
+            isEntrance={entranceKeys.has(itemKeyOf(msg))}
             {onNickClick}
             {memberByNick}
           />
@@ -942,7 +1075,13 @@
     {/if}
   </div>
 
-  {#if stickyNick}
+  {#if stickyNick && !isServerBuffer}
+    <!-- Sticky avatar is a chat-buffer affordance (IRCCloud parity: the
+         sender's letter avatar pins to the top of the viewport as you
+         scroll). It must NOT render in the server log view — server-log
+         rows have no nicks / no author concept, so showing a colored
+         circle next to a "Connection attempt" header reads as a leak from
+         a previous channel and confuses the user. -->
     <div class="stickyAvatar authorWrap" role="presentation" aria-hidden="true" bind:this={stickyAvatarEl}>
       <span class="avatar letterAvatar {stickyColor}">
         <span role="presentation">{stickyNick.charAt(0).toUpperCase()}</span>

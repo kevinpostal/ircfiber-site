@@ -7,6 +7,7 @@ import {
   appendToProcessed,
   prependReprocess,
   buildProcessedBuffer,
+  replaceInProcessedBuffer,
 } from './messageBuilder';
 import type { IRCMessage, JoinPartGroupMessage } from '../types';
 
@@ -412,5 +413,89 @@ describe('prependReprocess', () => {
     ];
     const result = prependReprocess(existing, prepended);
     expect(result).toHaveLength(1);
+  });
+});
+
+describe('replaceInProcessedBuffer (W7-T03 echo swap)', () => {
+  // Regression for the multi-message typing lag: ircStore.appendMessage
+  // used to call buildProcessedBuffer(list) on every server echo, which
+  // ran preprocessMessages over the ENTIRE buffer. Typing 10 messages
+  // meant 10 × preprocessMessages(N) render-blocking work. The fix
+  // replaces just the optimistic entry in O(n) — no preprocessMessages
+  // call. The reprocess path remains the fallback if no match is found.
+
+  function mkRaw(text: string, label?: string, eid?: number, t = 1): IRCMessage {
+    return { command: 'PRIVMSG', nick: 'alice', text, t, eid, label };
+  }
+
+  it('replaces the matching optimistic entry by label in O(n)', () => {
+    const optimistic: IRCMessage = { ...mkRaw('hello', 'lbl-1'), eid: 100 };
+    const processed: IRCMessage[] = [
+      { ...mkRaw('first', undefined, 1), t: 1 },
+      { ...mkRaw('second', undefined, 2), t: 2 },
+      optimistic,
+      { ...mkRaw('fourth', undefined, 4), t: 4 },
+    ];
+    const echo: IRCMessage = { ...mkRaw('hello', 'lbl-1', 100), t: 1 };
+    const result = replaceInProcessedBuffer(processed, optimistic, echo);
+    expect(result).not.toBeNull();
+    expect(result![2]).toBe(echo);
+    // Other entries preserved (same reference, not a rebuild).
+    expect(result![0]).toBe(processed[0]);
+    expect(result![1]).toBe(processed[1]);
+    expect(result![3]).toBe(processed[3]);
+    // Same length — no spurious inserts.
+    expect(result).toHaveLength(4);
+  });
+
+  it('returns null when no entry matches (caller falls back to buildProcessedBuffer)', () => {
+    const optimistic: IRCMessage = { ...mkRaw('optimistic', 'lbl-1') };
+    const processed: IRCMessage[] = [
+      { ...mkRaw('other', undefined, 1) },
+    ];
+    const echo: IRCMessage = { ...mkRaw('different text', 'lbl-doesnt-exist') };
+    const result = replaceInProcessedBuffer(processed, optimistic, echo);
+    expect(result).toBeNull();
+  });
+
+  it('self-echo fallback: matches by text + nick + command (no label match)', () => {
+    // Server without labeled-response sends echo without a label. The
+    // optimistic had a label, the echo doesn't — match walks back from
+    // the tail to find the matching optimistic by content.
+    const optimistic: IRCMessage = { ...mkRaw('hello world', 'lbl-1') };
+    const processed: IRCMessage[] = [
+      { ...mkRaw('old message', undefined, 1) },
+      optimistic,
+      { ...mkRaw('another', undefined, 3) },
+    ];
+    const echo: IRCMessage = { ...mkRaw('hello world') }; // no label
+    const result = replaceInProcessedBuffer(processed, optimistic, echo);
+    expect(result).not.toBeNull();
+    expect(result![1]).toBe(echo);
+  });
+
+  it('handles 10 echo replacements in a row without rebuild churn', () => {
+    // The exact failure mode the fix addresses: typing 10 messages in a
+    // row would call buildProcessedBuffer(processed) 10 times. The fix
+    // uses replaceInProcessedBuffer which is O(n) per echo, no
+    // preprocessMessages call. Simulate 10 messages with a 500-message
+    // buffer; verify each replacement is in-place and the array length
+    // doesn't grow.
+    const base: IRCMessage[] = [];
+    for (let i = 0; i < 490; i++) {
+      base.push({ ...mkRaw(`seed-${i}`, undefined, i), t: i });
+    }
+    const processed: IRCMessage[] = [...base];
+    for (let i = 0; i < 10; i++) {
+      const opt: IRCMessage = { ...mkRaw(`msg-${i}`, `lbl-${i}`, 1000 + i), t: 1000 + i };
+      processed.push(opt);
+      const echo: IRCMessage = { ...mkRaw(`msg-${i}`, `lbl-${i}`, 1000 + i), t: 1000 + i };
+      const result = replaceInProcessedBuffer(processed, opt, echo);
+      expect(result).not.toBeNull();
+      // The replacement overwrites the optimistic at the end.
+      expect(result!.at(-1)).toBe(echo);
+      // No spurious inserts — the array grew by exactly the new message.
+      expect(result).toHaveLength(491 + i);
+    }
   });
 });

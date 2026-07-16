@@ -11,6 +11,23 @@
   }
   let { onNickClick }: Props = $props();
 
+  // Buffer switch crossfade: briefly flash the messages area to 40% opacity
+  // when switching channels so the transition feels smooth rather than a
+  // jarring instant replace.
+  let switching = $state(false);
+  let lastBufferKey = $state('');
+  const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
+  $effect(() => {
+    if (lastBufferKey && bufferKey !== lastBufferKey) {
+      switching = true;
+      setTimeout(() => { switching = false; }, 50);
+    }
+    lastBufferKey = bufferKey;
+    // Reset entrance tracking on buffer switch — stale keys from the
+    // previous buffer would flash the animation on the new buffer.
+    switching = false;
+  });
+
   // IRCCloud-style: when the oldest message has a UUID msgid that can't
   // be looked up in MongoDB, we pin the cursor to the API response's
   // earliest_ts so each call jumps to STRICTLY older messages instead
@@ -117,7 +134,7 @@
 </script>
 
 <div class="chat-body">
-  <article class="messages-area" role="log" aria-label="Chat messages" aria-live="polite" aria-atomic="false">
+  <article class="messages-area" class:switching role="log" aria-label="Chat messages" aria-live="polite" aria-atomic="false">
     <MessageList {onNickClick} onLoadMore={handleLoadMore} />
   </article>
   <ConnectionStatus />

@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable, initiateRejoin, appendMessage } from '../stores/ircStore.svelte';
   import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
-  import { generateLabel, getAvatarColor, normalizeChannelName } from '../lib/utils';
+  import { generateLabel, getAvatarColor, normalizeChannelName, stripPrefix } from '../lib/utils';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
   import { dataURIToBlob } from '../lib/upload';
@@ -457,6 +457,12 @@
       const label = generateLabel();
       onSendMessage(networkId, target, text, label);
 
+      // Always snap MessageList to the bottom when the user sends — they
+      // pressed Enter to chat, not to lurk in the scrollback. The
+      // MessageList effect bumps forceScrollToBottomNonce and overrides
+      // the cachedAtBottom guard.
+      requestForceScrollToBottom();
+
       const optimistic: IRCMessage = {
         timestamp: new Date().toISOString(),
         t: Date.now(),
@@ -534,8 +540,24 @@
     if (!activeNetwork) return;
     const newNick = prompt('Change nickname:', myNick);
     if (newNick && newNick !== myNick) {
-      // Optimistic: update the displayed nick immediately
+      // Optimistic: update the displayed nick immediately. Remember the
+      // pre-change nick so the NICK echo handler can identify this as
+      // self (see Network.pendingSelfNickChange in types.ts).
+      const oldNick = activeNetwork.currentNick || activeNetwork.nick || '';
+      activeNetwork.pendingSelfNickChange = { oldNick, newNick, setAt: Date.now() };
       activeNetwork.currentNick = newNick;
+      // Optimistic member list update: rename every matching entry in ALL
+      // buffers immediately (IRCCloud-style). Without this, the sidebar
+      // waits ~10s for the you_nickchange engine round-trip.
+      for (const buf of activeNetwork.buffers) {
+        if (buf.users) {
+          for (const u of buf.users) {
+            if (stripPrefix(u.nick) === oldNick) {
+              u.nick = (u.prefix || '') + newNick;
+            }
+          }
+        }
+      }
       onSendRaw(activeNetwork.networkId, 'NICK ' + newNick);
     }
   }

@@ -4,7 +4,8 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
-import { ircState } from '../stores/ircStore.svelte';
+import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage } from '../stores/ircStore.svelte';
+import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
 import { clearedAtMap } from '../stores/preferences.svelte';
 import type { IRCMessage } from '../types';
 
@@ -13,9 +14,12 @@ function resetState(): void {
 	ircState.activeBuffer.networkId = null;
 	ircState.activeBuffer.bufferName = null;
 	ircState.messages = {};
+	ircState.processedMessages = {};
+	ircState.optimisticMessages.clear();
 	ircState.backlogDivider = {};
 	ircState.lastSeenMsgTime = null;
 	ircState.focusLost = false;
+	ircState.forceScrollToBottomNonce = 0;
 	Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
 }
 
@@ -593,6 +597,382 @@ describe('MessageList', () => {
 			expect(olderIndex).toBeGreaterThanOrEqual(0);
 			expect(initialIndex).toBeGreaterThanOrEqual(0);
 			expect(olderIndex).toBeLessThan(initialIndex);
+		});
+	});
+
+	describe('server log auto-scroll guard (W7-T02b)', () => {
+		// Regression: viewing the _server buffer used to flicker because
+		// the MessageList's ResizeObserver + scrollToBottom effects fired
+		// on every phase event (~10/s during a connect), slamming
+		// container.scrollTop = scrollHeight and animating the scrollbar.
+		// The server log is a fixed-content view; the user owns their
+		// scroll position. Both effects now early-return when
+		// isServerBuffer is true.
+		it('does NOT snap to bottom when new content arrives in the _server buffer', async () => {
+			ircState.networks.length = 0;
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			const network = createNetwork({ networkId: 'net1', host: 'irc.test.com', port: 6697 });
+			network.buffers.push(createBuffer({ name: '_server' }));
+			ircState.networks.push(network);
+
+			// Seed with a few phase events so the attempt has rows to render
+			ircState.messages['net1:_server'] = [
+				createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+				createMessage({ command: 'NOTICE', text: 'connecting', t: 1100, eid: 2, phase: 'connecting' }),
+			];
+			flushSync();
+
+			render(MessageList, { props: {} });
+			await new Promise((r) => requestAnimationFrame(r));
+
+			const container = document.getElementById('messages') as HTMLDivElement | null;
+			expect(container).not.toBeNull();
+			if (!container) return;
+
+			// Make sure we are NOT at the bottom (user is reading history)
+			container.scrollTop = Math.max(0, Math.floor(container.scrollHeight * 0.5));
+			const pinnedScroll = container.scrollTop;
+			await new Promise((r) => setTimeout(r, 30));
+
+			// Simulate a new phase event arriving mid-connect — the
+			// container's height grows, the ResizeObserver fires (or
+			// would have fired), and the main scroll effect re-runs.
+			ircState.messages['net1:_server'] = [
+				...ircState.messages['net1:_server'],
+				createMessage({ command: 'NOTICE', text: 'tcp_open', t: 1200, eid: 3, phase: 'tcp_open' }),
+			];
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+
+			// Scroll position must NOT have been forced to scrollHeight.
+			// (We allow up to 4px drift for browser sub-pixel rounding.)
+			const drift = container.scrollTop - pinnedScroll;
+			expect(Math.abs(drift)).toBeLessThan(4);
+		});
+	});
+
+	describe('force-scroll-to-bottom on user send', () => {
+		// Regression: when the user sends a message, the chat should snap
+		// to the bottom even if the user has scrolled up inspecting
+		// history. IRCCloud always shows you your own message after you
+		// hit Enter; we match that via requestForceScrollToBottom().
+
+		it('snaps to the bottom when the user sends, even if scrolled up', async () => {
+			ircState.networks.length = 0;
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '#chan' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#chan';
+
+			// Seed with enough messages to make the container scrollable.
+			// 600 messages so the windowing logic kicks in (renderStart=400),
+			// putting the container in the same state as the "never stranded"
+			// test below (the existing test relies on the windowing to make
+			// the scrollToTop auto-fill fire).
+			const now = Date.now();
+			const seed: IRCMessage[] = [];
+			for (let i = 0; i < 600; i++) {
+				seed.push(createMessage({
+					command: 'PRIVMSG',
+					nick: 'alice',
+					text: `message-${i + 1}`,
+					t: now - (600 - i) * 1000,
+					msgid: `seed-${i + 1}`,
+				}));
+			}
+			ircState.messages['net1:#chan'] = seed;
+			flushSync();
+
+			render(MessageList, { props: {} });
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 30));
+
+			const container = document.getElementById('messages') as HTMLDivElement | null;
+			expect(container).not.toBeNull();
+			if (!container) return;
+			// Force a fixed viewport height so the test is independent of the
+			// test browser's window size — with 600 messages the natural
+			// scrollHeight (~3600px) often matches the default viewport
+			// (~3600px), making the container un-scrollable.
+			container.style.height = '600px';
+
+			// User is reading history mid-buffer (scrolled up, NOT at bottom).
+			// Use a fixed small offset (50px) so the test is viewport-size
+			// independent: a percentage-based scroll can land exactly at
+			// maxScroll on tall viewports where the user appears "at the
+			// bottom" mathematically.
+			expect(container.scrollHeight).toBeGreaterThan(container.clientHeight);
+			container.scrollTop = 50;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+			const pre = container.scrollTop;
+			expect(pre).toBeGreaterThan(0);
+			expect(container.scrollTop + container.clientHeight).toBeLessThan(container.scrollHeight - 20);
+
+			// User sends a message → InputArea calls requestForceScrollToBottom().
+			requestForceScrollToBottom();
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 50));
+
+			// Scroll MUST be at the bottom regardless of where it was before.
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
+		});
+
+		it('does NOT snap on _server even when the trigger fires (only chat buffers force-scroll)', async () => {
+			// See the force-scroll effect in MessageList.svelte — it
+			// early-returns when isServerBuffer is true, so the server
+			// log's scroll position is owned by the user.
+			ircState.networks.length = 0;
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			const network = createNetwork({ networkId: 'net1' });
+			network.buffers.push(createBuffer({ name: '_server' }));
+			ircState.networks.push(network);
+			ircState.messages['net1:_server'] = [
+				createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+				createMessage({ command: 'NOTICE', text: 'connecting', t: 1100, eid: 2, phase: 'connecting' }),
+			];
+			flushSync();
+
+			render(MessageList, { props: {} });
+			await new Promise((r) => requestAnimationFrame(r));
+
+			const container = document.getElementById('messages') as HTMLDivElement | null;
+			expect(container).not.toBeNull();
+			if (!container) return;
+
+			container.scrollTop = 0;
+			await new Promise((r) => setTimeout(r, 30));
+
+			// Trigger fires — but the server-log effect must ignore it.
+			requestForceScrollToBottom();
+			await new Promise((r) => requestAnimationFrame(r));
+			flushSync();
+			await new Promise((r) => setTimeout(r, 30));
+
+			expect(container.scrollTop).toBe(0);
+		});
+	});
+
+	describe('force-scroll on URL navigation (setActiveBuffer)', () => {
+		// Regression: opening /irc/<network>/channel/<channel> directly (or
+		// otherwise switching to a different buffer via the router) must
+		// always snap the chat to the bottom so the user lands on the
+		// latest messages, not at scrollTop 0. setActiveBuffer is the
+		// central choke-point for buffer switches (URL nav, sidebar click,
+		// /join, nick click) so the force-scroll lives there.
+		it('increments the force-scroll nonce on a buffer switch', () => {
+			const net = createNetwork({ networkId: 'net1', name: 'FiberAdmin' });
+			net.buffers.push(createBuffer({ name: 'ircfiber' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = null;
+			ircState.activeBuffer.bufferName = null;
+			// Reset the nonce so we can observe the increment cleanly.
+			ircState.forceScrollToBottomNonce = 0;
+
+			const before = ircState.forceScrollToBottomNonce;
+			setActiveBuffer('net1', '#ircfiber');
+			expect(ircState.forceScrollToBottomNonce).toBe(before + 1);
+
+			// Switching to a second buffer increments again.
+			setActiveBuffer('net1', '#other-channel');
+			expect(ircState.forceScrollToBottomNonce).toBe(before + 2);
+		});
+
+		it('does NOT increment when the same buffer is re-set (no-op switch)', () => {
+			// setActiveBuffer is sometimes called repeatedly with the same
+			// args (e.g. re-render during router popstate). The force-scroll
+			// only fires on a real switch so we don't fight the user's
+			// scroll position when they haven't actually navigated.
+			const net = createNetwork({ networkId: 'net1', name: 'FiberAdmin' });
+			net.buffers.push(createBuffer({ name: 'ircfiber' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#ircfiber';
+			ircState.forceScrollToBottomNonce = 0;
+
+			setActiveBuffer('net1', '#ircfiber');
+			expect(ircState.forceScrollToBottomNonce).toBe(0);
+		});
+
+		it('does NOT increment when switching TO the _server buffer', () => {
+			// The server log is a fixed-content view; the user owns their
+			// scroll position while inspecting connection history. Skipping
+			// the force-scroll for the _server buffer matches the
+			// "isServerBuffer early-return" in MessageList's effect.
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '_server' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#ircfiber';
+			ircState.forceScrollToBottomNonce = 0;
+
+			setActiveBuffer('net1', '_server');
+			expect(ircState.forceScrollToBottomNonce).toBe(0);
+		});
+	});
+
+	describe('rapid message sends (W7-T03b typing-lag regression)', () => {
+		// User-reported bug: typing 9 messages back-to-back as fast as
+		// possible caused some of them to fail to render in the chat.
+		// Root cause: each `InputArea.handleSend` calls
+		// `appendToProcessed(processed, [optimistic])` with the *previous*
+		// processed array. If two send-handlers interleave on the
+		// microtask queue (which they do — each handler awaits
+		// requestForceScrollToBottom's effect flush), the second handler's
+		// `appendToProcessed` runs against the FIRST handler's output and
+		// appends on top of the in-flight optimistic. The optimistic
+		// message it adds is then visible, but the next handler stomps it
+		// with a `processedMessages[key] = ...` write that drops the
+		// previous append's tail. The result: a few messages vanish.
+		//
+		// This test sends 9 messages in a single synchronous tick (no awaits
+		// between) and asserts all 9 are in the rendered DOM. The fix
+		// needs to either sequence the appends through a queue or detect
+		// the in-flight append and concatenate.
+
+		// Helper: same code path InputArea.handleSend uses after send —
+		// pushes the optimistic onto ircState.messages and updates the
+		// processed cache. We replicate it here instead of stubbing
+		// WebSocket send so the test exercises the actual hot path.
+		function sendOptimistic(label: string, text: string): void {
+			const key = 'net1:#chan';
+			const optimistic: IRCMessage = {
+				command: 'PRIVMSG',
+				nick: 'me',
+				text,
+				t: Date.now(),
+				label,
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+				msgid: '',
+			};
+			ircState.optimisticMessages.set(label, optimistic);
+			const list = ircState.messages[key] ?? [];
+			list.push(optimistic);
+			ircState.messages[key] = list;
+			if (ircState.processedMessages[key]) {
+				ircState.processedMessages[key] = appendToProcessed(
+					ircState.processedMessages[key],
+					[optimistic],
+				);
+			} else {
+				ircState.processedMessages[key] = buildProcessedBuffer(list);
+			}
+		}
+
+		it('shows all 9 messages when typed back-to-back in a single tick', async () => {
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '#chan' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#chan';
+
+			render(MessageList, { props: {} });
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+
+			// Simulate 9 rapid sends in a single synchronous tick (no awaits
+			// between). The user types Enter 9 times as fast as they can.
+			for (let i = 1; i <= 9; i++) {
+				sendOptimistic(`lbl-${i}`, String(i));
+			}
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+
+			// All 9 messages must be in the rendered DOM. Use the `.content`
+			// span (not the entire row, which includes the timestamp) so
+			// "4:43:13 PM" digits don't false-match "1", "3", "4" in the
+			// timestamp. We also pull from ircState to verify the processed
+			// cache matches the raw list (the echo path replaces entries
+			// in-place; the optimistic path appends).
+			const rows = document.querySelectorAll('.row.messageRow .content');
+			const renderedTexts = Array.from(rows).map((r) => (r.textContent ?? '').trim());
+			expect(renderedTexts).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+
+			// ircState side: all 9 messages are in the raw list.
+			const raw = ircState.messages['net1:#chan'] ?? [];
+			expect(raw.length).toBe(9);
+			expect(raw.map((m) => m.text)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+
+			// The processed cache must have all 9 too — no appends dropped.
+			const processed = ircState.processedMessages['net1:#chan'] ?? [];
+			const processedTexts = processed
+				.filter((m) => m.text && /^\d$/.test(m.text))
+				.map((m) => m.text);
+			expect(processedTexts).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+		});
+
+		it('shows all 9 messages when each send is followed by its echo (echo round-trip)', async () => {
+			// The realistic failure mode: each send appends the optimistic
+			// (InputArea) and then the server echo comes back and replaces
+			// it (ircStore.appendMessage). If the echo replace path drops or
+			// duplicates messages, the user sees them vanish or appear
+			// twice as they type rapidly. We send 9 optimistic + 9 echoes
+			// interleaved in a single tick (matching what handleSend +
+			// WebSocket round-trip looks like in the real app when the user
+			// mashes Enter).
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '#chan' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#chan';
+
+			render(MessageList, { props: {} });
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+
+			// For each message: send the optimistic, then immediately the
+			// echo replaces it. Same end-state as the real app where the
+			// echo arrives ~50ms after the optimistic. Doing them back-to-
+			// back in a single tick exposes any state-divergence between
+			// the optimistic append and the echo replace.
+			for (let i = 1; i <= 9; i++) {
+				sendOptimistic(`lbl-${i}`, String(i));
+				// Echo replaces the optimistic — same label, same text,
+				// but with an eid (which the optimistic didn't have).
+				appendMessage('net1', '#chan', {
+					command: 'PRIVMSG',
+					nick: 'me',
+					text: String(i),
+					t: Date.now(),
+					eid: 1000 + i,
+					msgid: `srv-${i}`,
+					label: `lbl-${i}`,
+					timestamp: new Date().toISOString(),
+					params: [],
+					prefix: '',
+				});
+			}
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+
+			const rows = document.querySelectorAll('.row.messageRow .content');
+			const renderedTexts = Array.from(rows).map((r) => (r.textContent ?? '').trim());
+			expect(renderedTexts).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+
+			// ircState side: 9 messages, each with its echo's eid.
+			const raw = ircState.messages['net1:#chan'] ?? [];
+			expect(raw.length).toBe(9);
+			expect(raw.map((m) => m.eid)).toEqual([1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]);
+			expect(raw.map((m) => m.text)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+
+			// Processed cache must have all 9 too.
+			const processed = ircState.processedMessages['net1:#chan'] ?? [];
+			const processedTexts = processed
+				.filter((m) => m.text && /^\d$/.test(m.text))
+				.map((m) => m.text);
+			expect(processedTexts).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+			const processedEids = processed
+				.filter((m) => m.text && /^\d$/.test(m.text))
+				.map((m) => m.eid);
+			expect(processedEids).toEqual([1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]);
 		});
 	});
 });

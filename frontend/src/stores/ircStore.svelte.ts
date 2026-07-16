@@ -1,10 +1,10 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState } from '../types';
 import { MODE_HIERARCHY } from '../types';
-import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare } from '../lib/utils';
+import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
 import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
-import { appendToProcessed, buildProcessedBuffer, prependReprocess, type ProcessedBuffer } from '../lib/messageBuilder';
+import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 
 // ── Single reactive state object ──
@@ -95,6 +95,14 @@ export const ircState = $state({
   // discontinuity so the UI can show "Load more backlog" even if the API
   // says there's nothing more.
   backlogDiscontinuity: {} as Record<string, { earliestEid: number; timer: ReturnType<typeof setTimeout> }>,
+  // Monotonic counter incremented every time InputArea sends an outgoing
+  // message (via requestForceScrollToBottom()). MessageList reads this
+  // and snaps to bottom even when the user has scrolled up — IRCCloud
+  // always scrolls to the user's own message so they can confirm what
+  // they sent, regardless of scroll position. The counter (not a
+  // boolean) ensures the same value incrementing again still triggers
+  // a re-run if needed (e.g. multiple sends in the same micro-task).
+  forceScrollToBottomNonce: 0,
   // Per-buffer typing state: bufferKey -> (nick -> timestamp of last TAGMSG)
   typing: {} as Record<string, Record<string, number>>,
   // IRCCloud-style "reorder mode": when true, the Sidebar enters drag-and-drop
@@ -105,6 +113,10 @@ export const ircState = $state({
   // expireAt = serverTs + countdownMs (unix ms). The UI computes remaining
   // = max(0, expireAt - Date.now()).
   tempUnavailable: {} as Record<string, { expireAt: number }>,
+  // IRCCloud-style badge pulse: buffer keys that should briefly pulse their
+  // unread badge on the next render (set when unread count increments,
+  // auto-cleared after 300ms). The Sidebar reads this to add the .pulse class.
+  pulseBuffers: new Set<string>(),
 });
 
 // IRCCloud-style previous-buffer tracking: the buffer that was active before
@@ -121,8 +133,36 @@ let previousBuffer: { networkId: string | null; bufferName: string | null } = { 
 // pending change, then clears the entry once the sync confirms the new nick.
 // Keyed by `${networkId}:${bufferName}:${oldBareNick}`.
 const pendingNickChanges: Map<string, { newNick: string; setAt: number }> = new Map();
+/** Exported for test cleanup only — clears all pending nick change entries. */
+export function clearPendingNickChanges(): void { pendingNickChanges.clear(); }
 // Auto-clear stale pending entries after 60s in case a sync never confirms.
 const PENDING_NICK_TTL_MS = 60_000;
+// How long a /nick attempt stays pending before we give up on the echo
+// and stop treating it as authoritative for self-detection. Generous
+// enough to cover one engine snapshot cycle (10s) plus a slow IRC server
+// echo on a flakey connection.
+const PENDING_SELF_NICK_TTL_MS = 30_000;
+// How long after a local nick change event the sync's currentNick is
+// treated as potentially stale. Sync snapshots are taken every ~10s and
+// may carry the old nick for up to one cycle after the engine processes
+// the change. 2 × sync interval (20s) is enough for the engine to catch
+// up even on a busy reactor.
+const NICK_SYNC_COOLDOWN_MS = 20_000;
+
+// ── W7-T02: orphan reconciliation guard ──
+// The engine publishes its channelState snapshot every ~10s. A buffer
+// missing from a single snapshot does NOT mean the user left — the
+// snapshot can lag a JOIN that just propagated (e.g. immediately after
+// an engine restart or during a busy reconnect window). Without a guard,
+// the frontend flipped isJoined: true → false on the very next sync and
+// surfaced a bogus Rejoin button in BufferHeader — exactly the symptom
+// reported on `#superbowl` (SuperNets).
+//
+// ORPHAN_FLIP_THRESHOLD = 3 consecutive missed syncs (~30s) before we
+// trust the orphan reconciliation enough to mark the channel as parted.
+// At that point the engine has consistently omitted the channel across
+// multiple sync cycles, which only happens for genuinely stale state.
+const ORPHAN_FLIP_THRESHOLD = 3;
 
 // ── W1-T08: tempUnavailable helpers ──
 export function setTempUnavailable(networkId: string, bufferName: string, expireAt: number): void {
@@ -202,12 +242,23 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
   // Track previous buffer (IRCCloud-style) for archive focus selection
   const prevNetworkId = ircState.activeBuffer.networkId;
   const prevBufferName = ircState.activeBuffer.bufferName;
-  if (prevNetworkId && prevBufferName && (prevNetworkId !== networkId || prevBufferName !== bufferName)) {
+  const isBufferChange =
+    prevNetworkId !== networkId || prevBufferName !== bufferName;
+  if (prevNetworkId && prevBufferName && isBufferChange) {
     previousBuffer = { networkId: prevNetworkId, bufferName: prevBufferName };
   }
 
   ircState.activeBuffer.networkId = networkId;
   ircState.activeBuffer.bufferName = bufferName;
+  // Any buffer switch (URL navigation, sidebar click, /join, nick click)
+  // should snap MessageList to the bottom of the new buffer — the user
+  // is going there to see what's new, not to land at scrollTop 0 of an
+  // already-loaded buffer. We skip the _server view because the server
+  // log is a fixed-content view where the user owns their scroll position
+  // while inspecting connection history.
+  if (isBufferChange && bufferName !== '_server') {
+    requestForceScrollToBottom();
+  }
   // Clear temp_unavailable on buffer switch (W1-T08)
   clearTempUnavailable(networkId, bufferName);
   // Auto-expand the Conversations section in the sidebar when switching
@@ -489,24 +540,38 @@ export function initiateRejoin(
   const normalized = normalizeChannelName(bufferName);
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
-  const buf = net.buffers.find(b => b.name === normalized);
+  let buf = net.buffers.find(b => b.name === normalized);
 
   // Idempotency: if a JOIN is already in flight for this buffer, the
   // existing pendingJoins entry blocks double-issuance. Mirrors
   // maybeAutoJoinChannel's guard at App.svelte:557.
   if (isJoinPending(networkId, normalized)) return;
 
+  // If the buffer doesn't exist locally, create it so the sidebar
+  // shows the channel immediately and the join-in-flight chip appears.
+  // The JOIN echo from the engine will promote it to isJoined=true.
+  if (!buf) {
+    buf = {
+      name: normalized, type: 'channel', isJoined: false,
+      unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+      topic: '', topicSetBy: '', topicSetAt: 0, users: [],
+      lastSeenMsgTime: null, firstUnseenMsgIndex: null,
+      lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
+      joinInFlight: true, pendingIsJoined: true, pendingConfirmations: 2, joinError: null,
+    };
+    net.buffers.push(buf);
+    sortBuffers(net);
+  }
+
   // Set the FULL state-machine quartet. This is the single source
   // of truth — every caller sets all four flags.
-  if (buf) {
-    buf.joinError = null;          // clear stale failure text
-    buf.joinInFlight = true;       // drives BufferHeader chip + sidebar modifier
-    buf.pendingIsJoined = true;    // belt-and-suspenders for WS-round-trip clobber
-    buf.pendingConfirmations = 2;  // require TWO confirming syncs to clear
-    // W1-T06: track user-initiated JOIN so buffersToDelete during WS
-    // resume cannot reap this buffer.
-    prePopulateOwnNick(buf, net.currentNick);
-  }
+  buf.joinError = null;          // clear stale failure text
+  buf.joinInFlight = true;       // drives BufferHeader chip + sidebar modifier
+  buf.pendingIsJoined = true;    // belt-and-suspenders for WS-round-trip clobber
+  buf.pendingConfirmations = 2;  // require TWO confirming syncs to clear
+  // W1-T06: track user-initiated JOIN so buffersToDelete during WS
+  // resume cannot reap this buffer.
+  prePopulateOwnNick(buf, net.currentNick);
   markJoinPending(networkId, normalized);
   recordJoin(networkId, normalized);
   sendRaw(networkId, 'JOIN ' + normalized);
@@ -604,12 +669,18 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     ircState.optimisticMessages.delete(msg.label);
     const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
     if (idx >= 0) {
+      const optimistic = list[idx];
       list[idx] = msg;
       ircState.messages[key] = list;
-      // Rebuild the processed cache so the echo replaces the stale
-      // optimistic entry — otherwise the cache diverges from the raw
-      // array and the optimistic can reappear on re-render.
-      ircState.processedMessages[key] = buildProcessedBuffer(list);
+      // Swap the stale optimistic entry for the server echo in O(n) —
+      // no full preprocessMessages call. The old code rebuilt the entire
+      // processed cache on every echo, which made typing 10 messages in a
+      // row lag visibly (10 × preprocessMessages(N) ≈ 10× render-blocking
+      // work for every buffer that was already populated).
+      const replaced = ircState.processedMessages[key]
+        ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
+        : null;
+      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
       return;
     }
   }
@@ -620,10 +691,13 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
   if (msg.label) {
     const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
     if (idx >= 0) {
+      const optimistic = list[idx];
       list[idx] = msg;
       ircState.messages[key] = list;
-      // Rebuild processed cache since the message text changed in-place
-      ircState.processedMessages[key] = buildProcessedBuffer(list);
+      const replaced = ircState.processedMessages[key]
+        ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
+        : null;
+      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
       return;
     }
   }
@@ -639,9 +713,13 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
         ircState.optimisticMessages.delete(optLabel);
         const idx = list.findIndex((m: IRCMessage) => m.label === optLabel);
         if (idx >= 0) {
+          const optimistic = list[idx];
           list[idx] = msg;
           ircState.messages[key] = list;
-          ircState.processedMessages[key] = buildProcessedBuffer(list);
+          const replaced = ircState.processedMessages[key]
+            ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
+            : null;
+          ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
           return;
         }
       }
@@ -818,6 +896,12 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         buf.highlightCount = (buf.highlightCount ?? 0) + 1;
       }
     }
+    // Badge pulse: mark the buffer for a brief scale animation on the
+    // sidebar badge. Auto-clears after 300ms.
+    if (net && buf && (addedUnread > 0 || hasHighlight)) {
+      ircState.pulseBuffers.add(key);
+      setTimeout(() => ircState.pulseBuffers.delete(key), 300);
+    }
   }
 
   // Per-message processing for things that can't be batched (highlight
@@ -858,6 +942,10 @@ export function incrementUnread(networkId: string, bufferName: string, msg: IRCM
     msg.highlight = true;
     if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
   }
+
+  // Badge pulse animation
+  ircState.pulseBuffers.add(key);
+  setTimeout(() => ircState.pulseBuffers.delete(key), 300);
 }
 
 export function checkHighlight(msg: IRCMessage, net: Network): boolean {
@@ -895,6 +983,18 @@ export function setTyping(networkId: string, channel: string, nick: string): voi
   const key = `${networkId}:${normalizeChannelName(channel)}`;
   if (!ircState.typing[key]) ircState.typing[key] = {};
   ircState.typing[key][nick] = Date.now();
+}
+
+/**
+ * Increment the forceScrollToBottom nonce. Call from any code path that
+ * wants the active buffer's MessageList to snap to the bottom even when
+ * the user has scrolled up — IRCCloud always scrolls to the user's own
+ * message so they can confirm what they sent, regardless of scroll
+ * position. The nonce (not a boolean) ensures repeated calls always
+ * trigger the reactive effect.
+ */
+export function requestForceScrollToBottom(): void {
+  ircState.forceScrollToBottomNonce = ircState.forceScrollToBottomNonce + 1;
 }
 
 export function clearTyping(networkId: string, channel: string, nick: string): void {
@@ -1278,23 +1378,56 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           // reports it (e.g. during an exponential-backoff reconnect
           // window) the user needs to see "Disconnect" so they can cancel
           // the pending attempt.
-          if (!(connectionState === 'connected' && userDisconnectedAt.has(existing.networkId))) {
+          if (!userDisconnectedAt.has(existing.networkId)
+              || connectionState === 'disconnected') {
             existing.connected = net.connected;
             existing.connectionState = connectionState;
           }
-          } else if (connectionState === 'connecting' && !isLiveConnected) {
+          } else if (connectionState === 'connecting' && !isLiveConnected
+              && !userDisconnectedAt.has(existing.networkId)) {
         // The sync confirms connection is in progress — this is new info
         // that live events haven't provided yet (001 hasn't fired, or the
         // engine is between attempts in its backoff loop). Show it so the
         // user gets a "Disconnect" button to cancel the pending reconnect.
+        // If the user has explicitly disconnected (userDisconnectedAt set),
+        // suppress this — they don't want to see "Connecting" cards and the
+        // synthetic attempt in ServerLogTimeline would create a ghost card.
         existing.connectionState = connectionState;
       }
       // Don't blindly overwrite currentNick from sync — the IRC NICK event
       // handler is the authoritative source for nick changes. Sync snapshots
       // are taken on a timer and may contain the old nick for a few seconds
       // after a /nick, which would clobber the optimistic UI update. Only
-      // adopt the sync value if we don't have one locally yet (initial load).
+      // adopt the sync value if we don't have one locally yet (initial load),
+      // or while a /nick attempt is in flight (track via pendingSelfNickChange).
       if (!existing.currentNick && net.currentNick) {
+        existing.currentNick = net.currentNick;
+      } else if (existing.pendingSelfNickChange && existing.currentNick && net.currentNick) {
+        // While a /nick is in flight, prefer the engine's authoritative
+        // currentNick ONCE it has caught up to the new value (case-insensitive
+        // per IRC RFC 1459). Before that, the sync value will be the old
+        // nick and we keep the optimistic local value to avoid flicker.
+        if (normaliseIdentifier(existing.currentNick) === normaliseIdentifier(net.currentNick)) {
+          // Engine agrees — clear the pending tracker, we are in sync.
+          existing.pendingSelfNickChange = undefined;
+          existing.currentNickUpdatedAt = Date.now();
+        }
+      } else if (existing.currentNick && net.currentNick
+          && normaliseIdentifier(existing.currentNick) !== normaliseIdentifier(net.currentNick)
+          && existing.currentNickUpdatedAt && Date.now() - existing.currentNickUpdatedAt < NICK_SYNC_COOLDOWN_MS) {
+        // The you_nickchange live event has already cleared pendingSelfNickChange
+        // and set currentNick, but the periodic sync snapshot was taken before
+        // the engine processed the nick change. The sync still carries the old
+        // nick. Keep our event-driven value — the sync will catch up on the
+        // next cycle when the engine's snapshot reflects the change.
+        // Don't overwrite.
+      } else if (existing.currentNick && net.currentNick
+          && normaliseIdentifier(existing.currentNick) !== normaliseIdentifier(net.currentNick)) {
+        // Sync has a different currentNick than our local value and either
+        // we never tracked a recent change or the cooldown has expired.
+        // Adopt the sync value — the nick was changed from another client
+        // or services (NickServ/Ghost), or we're reconciling after a
+        // reload where the sync is the authoritative source.
         existing.currentNick = net.currentNick;
       }
 
@@ -1338,11 +1471,12 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             const asStrings = incomingBuf.users as unknown as string[];
             incomingBuf.users = asStrings.map(normalizeUser);
           }
-          // Dedup by stripped nick, preferring the entry WITH an IRC
-          // prefix over a bare nick, so that a services-granted op survives
-          // the snapshot round-trip even when the engine's channelUsers
-          // briefly contains both "user" and "@user" (a known race between
-          // the JOIN handler and the 353/WHO dedup).
+          // Dedup by stripped nick, preferring the BARE form (no host suffix)
+          // when one exists, so the channel roster doesn't keep a stale
+          // `nick!user@host` entry alongside the bare one after a NICK
+          // change. We still prefer a prefixed form (e.g. `@user`) over a
+          // bare form so services-granted op status survives the snapshot
+          // round-trip.
           const seen = new Map<string, number>();  // bareNick -> index in deduped
           const deduped: Member[] = [];
           for (const u of incomingBuf.users) {
@@ -1353,13 +1487,16 @@ export function updateNetworkFromSync(incoming: Network[]): void {
               seen.set(bare, deduped.length);
               deduped.push(u);
             } else {
-              // Prefer the entry with a prefix if this one has it and
-              // the existing one doesn't, or if the existing one's nick
-              // is shorter (bare), replace it.
               const existingU = deduped[existing];
               const existingHasPrefix = existingU.prefix && existingU.prefix.length > 0;
               const thisHasPrefix = u.prefix && u.prefix.length > 0;
+              const existingHasHost = existingU.nick.includes('!');
+              const thisHasHost = u.nick.includes('!');
               if (thisHasPrefix && !existingHasPrefix) {
+                // Promote bare → prefixed (e.g. services op arrived).
+                deduped[existing] = u;
+              } else if (!thisHasHost && existingHasHost) {
+                // Prefer the bare entry over a stale host-bearing entry.
                 deduped[existing] = u;
               }
             }
@@ -1438,11 +1575,19 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             }
           }
           existingBuf.users = patchedUsers;
-          // Ensure the self-nick survives the sync even when the engine's
-          // channelUsers snapshot doesn't include it yet (race between JOIN
-          // echo and NAMES/353 response). Without this, the user disappears
-          // from the member list until the next periodic snapshot.
-          if (existingBuf.isJoined && existing.currentNick) {
+          // IRCCloud-style: ensure the current user's nick is present in
+          // the member list whenever the buffer is genuinely joined. The
+          // engine's RPL_NAMREPLY (353) doesn't always include self (some
+          // IRCds omit it, and channelUsers snapshot can race the JOIN
+          // echo), so a stale sync would otherwise permanently drop the
+          // self-nick from the roster — surfacing as "I'm not in the
+          // member list even though the channel header says I'm joined".
+          //
+          // Guard: only re-add when isJoined === true. A PART/KICK for self
+          // already sets isJoined=false (line 2110/2122) and the orphan
+          // reconciliation loop keeps it false once the engine confirms,
+          // so we won't resurrect a ghost nick in a parted channel.
+          if (existingBuf.isJoined === true && existing.currentNick) {
             const selfBare = stripPrefix(existing.currentNick);
             if (!existingBuf.users.some(u => stripPrefix(u.nick) === selfBare)) {
               existingBuf.users.push({
@@ -1486,19 +1631,32 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           existingBuf.highlight = localHighlight || remoteHighlight;
           const incomingJoined = incomingBuf.isJoined;
           const pending = existingBuf.pendingIsJoined;
+          const joinInFlight = existingBuf.joinInFlight === true;
           // W7-T01: if a JOIN is in-flight from URL navigation, treat it as
           // pending=true. The engine sync snapshot often races the JOIN and
           // reports isJoined=false before the JOIN event reaches us; without
           // this guard the snapshot would clobber the user-initiated join.
-          const effectivePending =
-            existingBuf.joinInFlight === true ? true : pending;
-          if (existingBuf.isPhantom) {
+          const effectivePending = joinInFlight ? true : pending;
+          // W7-T03: if the engine confirms we're joined AND we have an
+          // in-flight JOIN attempt, the JOIN already succeeded server-side.
+          // Adopt isJoined=true and clear the in-flight flags — otherwise
+          // joinInFlight stays stuck true forever (the JOIN echo only fires
+          // when the server processes our JOIN; some IRCds return
+          // ERR_USERONCHANNEL 443 instead, or the echo never reaches us
+          // because the user was already joined before the WS reconnected).
+          // This caused a persistent "Rejoin" button on #superbowl even
+          // though the user was actually in the channel.
+          if (joinInFlight && incomingJoined === true) {
+            existingBuf.isJoined = true;
+            existingBuf.isPhantom = false;
+            existingBuf.joinInFlight = false;
+            existingBuf.pendingIsJoined = undefined;
+            existingBuf.pendingConfirmations = undefined;
+          } else if (existingBuf.isPhantom) {
             // Phantom buffers have no event-driven state — adopt blindly,
-            // but only if no JOIN is in-flight from URL nav.
-            if (existingBuf.joinInFlight !== true) {
-              existingBuf.isJoined = incomingJoined;
-              existingBuf.isPhantom = false;
-            }
+            // but only if no JOIN is in-flight from URL nav (handled above).
+            existingBuf.isJoined = incomingJoined;
+            existingBuf.isPhantom = false;
           } else if (effectivePending === undefined) {
             // No pending event-driven change — sync is authoritative
             existingBuf.isJoined = incomingJoined;
@@ -1512,7 +1670,10 @@ export function updateNetworkFromSync(incoming: Network[]): void {
             // channelState) can't clobber isJoined back to false.
             // Counter starts at 2 (set in updateChannelUsers), decrements
             // here on each confirm, clears when it hits 0.
-            const c = existingBuf.pendingConfirmations ?? 2;
+            // Start at 2 when explicitly set (JOIN handler sets this value
+            // for extra safety), default to 1 when undefined (PART handler
+            // clears pendingConfirmations, so only 1 confirm needed).
+            const c = existingBuf.pendingConfirmations ?? 1;
             if (c <= 1) {
               existingBuf.pendingIsJoined = undefined;
               existingBuf.pendingConfirmations = undefined;
@@ -1527,16 +1688,45 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           unreadMap[mapKey] = existingBuf.unreadCount;
           if (existingBuf.highlight) highlightMap[mapKey] = true;
           else delete highlightMap[mapKey];
+          // W7-T02: the channel appeared in this sync — reset the missed-sync
+          // counter so a fresh streak of misses starts from zero. (Only
+          // runs for buffers that were already in existing.buffers; newly
+          // added buffers default to undefined → 0 via `?? 0` in the
+          // orphan loop below.)
+          existingBuf.syncMissedCount = 0;
         } else {
           existing.buffers.push(incomingBuf);
         }
       }
       // Reconcile orphan channels: buffers that were in existing.buffers but
-      // NOT in the incoming sync.  These are channels the engine no longer
+      // NOT in the incoming sync. These are channels the engine no longer
       // tracks (not in channelState nor partedChannels) — the user is no
-      // longer joined.  Without this, a stale isJoined:true would persist
+      // longer joined. Without this, a stale isJoined:true would persist
       // and block auto-join on URL navigation (maybeAutoJoinChannel's guard
       // at App.svelte:545 would skip the JOIN).
+      //
+      // W7-T02: BUT the engine's channelState snapshot lags behind live
+      // JOIN events by up to one snapshot cycle (~10s). A single missed
+      // sync must NOT flip isJoined — that surfaced the bogus "Rejoin"
+      // button on `#superbowl` (the engine snapshot didn't yet include
+      // the freshly-joined channel). We now:
+      //   1. Increment `syncMissedCount` each time the buffer is missing
+      //   2. Skip the flip entirely if the buffer has ANY local message
+      //      ever — the user has demonstrably been in this channel, so
+      //      the engine snapshot is just stale (engine restart, network
+      //      glitch, handoff race, joined from another client, etc).
+      //      Without this, a channel the user is actively chatting in
+      //      drops into "Inactive" the moment they go quiet for a few
+      //      minutes (the original 5-minute activity window let this
+      //      flip fire during lurking / idle tabs).
+      //   3. Only flip isJoined: true → false once the buffer has been
+      //      missing for ORPHAN_FLIP_THRESHOLD consecutive syncs (~30s)
+      //      AND the buffer has never had any local message — empty
+      //      buffers have no signal to prefer over the engine, so we
+      //      trust the engine in that case. PART/KICK for self already
+      //      clears isJoined directly via updateChannelUsers, so this
+      //      guard doesn't hide a genuine leave from the same IRC
+      //      connection.
       for (const buf of existing.buffers) {
         if (buf.name === '_server') continue;
         if (buf.isJoined !== true) continue;
@@ -1544,9 +1734,43 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         // If a JOIN is in-flight, don't clobber it — the user explicitly
         // wants to join.
         if (buf.joinInFlight === true) continue;
+        buf.syncMissedCount = (buf.syncMissedCount ?? 0) + 1;
+        // Activity guard: if the buffer has ANY local message (ever), the
+        // user has demonstrably been in this channel — the engine snapshot
+        // is just stale (lost track after a restart, network glitch,
+        // handoff race, etc). Don't flip — without this guard the user
+        // sees a bogus "Rejoin" button and the channel drops into the
+        // Inactive section even though they're still chatting in the room.
+        // The original guard only checked the last 5 minutes, which let
+        // the flip happen during quiet periods (lurking, idle tabs).
+        // The user-initiated PART/KICK for self already clears isJoined
+        // directly (see updateChannelUsers), so this guard doesn't hide
+        // a genuine leave.
+        const bufKey = `${existing.networkId}:${buf.name}`;
+        const localMsgs = ircState.messages[bufKey];
+        if (localMsgs && localMsgs.length > 0) continue;
+        // Only flip after the threshold is reached. Otherwise just hold
+        // the counter and wait for the next sync — the engine snapshot
+        // will likely catch up on its own.
+        if (buf.syncMissedCount < ORPHAN_FLIP_THRESHOLD) continue;
         buf.isJoined = false;
         buf.pendingIsJoined = undefined;
         buf.pendingConfirmations = undefined;
+      }
+      // Remove phantom buffers that were auto-created from URL navigation
+      // but never appeared in the engine's sync data. These are channels
+      // that don't exist on this network — keeping them in the sidebar
+      // (even under "Inactive") is confusing. Phantoms use a lower
+      // threshold (1 sync) than orphan channels (3 syncs) because the
+      // sync arrives within milliseconds — if it doesn't include the
+      // phantom, the channel genuinely doesn't exist on this network.
+      for (const buf of existing.buffers) {
+        if (!buf.isPhantom) continue;
+        if (syncedBufferNames.has(buf.name)) continue;
+        if (buf.joinInFlight === true) continue;
+        buf.syncMissedCount = (buf.syncMissedCount ?? 0) + 1;
+        if (buf.syncMissedCount < 1) continue;
+        existing.buffers = existing.buffers.filter(b => b !== buf);
       }
       // IRCCloud-style: sync now includes message history in the buffer
       // objects (sourced from Redis scrollback on the server).  Pull it
@@ -1571,6 +1795,15 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           if (!ircState.messages[key] || ircState.messages[key].length === 0) {
             const msgs = rawMsgs.map((m) => normalizeMessage(m as unknown as Record<string, unknown>));
             setMessages(existing.networkId, buf.name, msgs);
+            // Force-scroll the active buffer when its initial messages arrive
+            // from the sync — the buffer-switch force-scroll (in setActiveBuffer)
+            // often fires before messages are loaded, landing at scrollTop=0.
+            // Without this re-trigger the user lands partway through history
+            // instead of at the very bottom.
+            const active = ircState.activeBuffer;
+            if (active.networkId === existing.networkId && active.bufferName === buf.name) {
+              requestForceScrollToBottom();
+            }
           }
           delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
         }
@@ -1635,6 +1868,15 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       net.awayNicks = net.awayNicks ?? new Set();
       net.capabilities = net.capabilities ?? new Set();
       net.isupport = net.isupport ?? {};
+      // Mirror the engine's parsed ISUPPORT map (every key=value or
+      // bare flag the server advertised in its 005 stream). The engine
+      // sends this both in the initial WS sync payload AND in a
+      // dedicated `ISUPPORT` event as the 005 stream completes, so the
+      // categorised "Server features" panel can render from structured
+      // data instead of having to re-parse raw 005 message text.
+      if (typeof rawNet.isupport === 'object' && rawNet.isupport !== null) {
+        net.isupport = rawNet.isupport as Record<string, string>;
+      }
       net.chanTypes = net.chanTypes ?? '#';
       net.connectionState =
         net.status === 'connecting' ? 'connecting' :
@@ -1659,6 +1901,10 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           if (!ircState.messages[key] || ircState.messages[key].length === 0) {
             const msgs = rawMsgs.map((m) => normalizeMessage(m as unknown as Record<string, unknown>));
             setMessages(net.networkId, buf.name, msgs);
+            const active = ircState.activeBuffer;
+            if (active.networkId === net.networkId && active.bufferName === buf.name) {
+              requestForceScrollToBottom();
+            }
           }
           delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
         }
@@ -1736,6 +1982,30 @@ export function handleConnect(cmd: string, networkId: string, text?: string): vo
   markNetworkSeen(networkId);
 }
 
+/**
+ * Apply a freshly-received ISUPPORT map to the network. Sent by the
+ * engine as a dedicated synthetic event when the 005 reply stream
+ * finishes — see `IRCRawEvent.makeIsupport` in
+ * `source/ircfiber/models/irc_event.d`. Each entry is `{key=value}` or
+ * `{key}` (bare flag); the WS payload is a JSON object whose keys are
+ * the upper-cased ISUPPORT tokens and whose values are wire-format
+ * values (empty string for bare flags).
+ *
+ * Empty value means "bare flag" — the server sent `KNOCK` not
+ * `KNOCK=something`. `CategorizedFeature.isFlag` in
+ * `lib/isupportCategorize.ts` is what downstream consumers should
+ * inspect to distinguish.
+ */
+export function applyIsupportUpdate(
+  networkId: string,
+  raw: Record<string, string>,
+): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  net.isupport = { ...raw };
+  markNetworkSeen(networkId);
+}
+
 export function updateChannelUsers(networkId: string, bufferName: string, cmd: string, nick: string, params?: string[], prefix?: string): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
@@ -1766,6 +2036,29 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     sortBuffers(net);
     // W1-T06: track user-initiated JOIN (auto-created buffer path)
     recordJoin(networkId, normalized);
+  }
+
+  // you_nickchange is a network-level event (IRCCloud-style). Handle it
+  // BEFORE the buffer check so it updates currentNick and ALL buffers'
+  // member lists even when targeting _server (which has no users array).
+  if (cmd === 'you_nickchange' && params && params.length >= 2) {
+    const newNick = params[params.length - 1];
+    const oldNick = params[0];
+    net.currentNick = newNick;
+    net.currentNickUpdatedAt = Date.now();
+    net.pendingSelfNickChange = undefined;
+    for (const b of net.buffers) {
+      if (b.users) {
+        for (const u of b.users) {
+          if (stripPrefix(u.nick) === oldNick) {
+            const oldBare = stripPrefix(u.nick);
+            u.nick = u.prefix + newNick;
+            pendingNickChanges.set(`${networkId}:${b.name}:${oldBare}`, { newNick, setAt: Date.now() });
+          }
+        }
+      }
+    }
+    return;
   }
 
   if (!buf) return;
@@ -1933,6 +2226,13 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     } else buf.users = buf.users.filter(u => stripPrefix(u.nick) !== params[1]);
   } else if (cmd === 'NICK' && nick && params && params.length > 0) {
     const newNick = params[params.length - 1];
+    // Mutate EVERY entry that matches the old nick. The same user can
+    // appear twice in buf.users — once as a bare entry (added by the JOIN
+    // echo), once with the host attached (added by 353 with
+    // userhost-in-names, or by WHO). Without this loop, only one entry
+    // gets renamed and the other lingers as a stale duplicate in the
+    // member list, which the user sees as "the old nick is still in
+    // the sidebar".
     for (const u of buf.users) {
       if (stripPrefix(u.nick) === nick) {
         // Capture the OLD bare nick before mutating u.nick — the pending
@@ -1943,11 +2243,56 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
         u.nick = u.prefix + newNick;
         const key = `${networkId}:${normalized}:${oldBare}`;
         pendingNickChanges.set(key, { newNick, setAt: Date.now() });
-        break;
+        // No break — continue mutating every matching entry.
       }
     }
-    if (nick === net.currentNick) {
+    // Self-detection: prefer the pending self-nick-change tracker set by
+    // /nick, the nick-edit form, or the input-area nick click. The plain
+    // `nick === net.currentNick` fallback is exact-only and misses two
+    // real-world cases:
+    //   1. Local /nick optimistically sets currentNick to the NEW value,
+    //      so the echo's `nick` (the OLD value) never matches currentNick
+    //      even though the change is unambiguously ours.
+    //   2. IRC nick comparison is casemap-aware (RFC 1459), so a /nick
+    //      that only differs in case ("alice" → "Alice") wouldn't match
+    //      either.
+    // The tracker remembers the pre-change nick exactly so we can match
+    // either side without ambiguity.
+    const pending = net.pendingSelfNickChange;
+    if (pending && Date.now() - pending.setAt < PENDING_SELF_NICK_TTL_MS) {
+      const nickMatches = normaliseIdentifier(nick) === normaliseIdentifier(pending.oldNick);
+      const newMatches = normaliseIdentifier(newNick) === normaliseIdentifier(pending.newNick);
+      if (nickMatches && newMatches) {
+        net.currentNick = newNick;
+        net.currentNickUpdatedAt = Date.now();
+        net.pendingSelfNickChange = undefined;
+      } else if (nickMatches && !newMatches) {
+        // Server applied a different nick than what we asked for
+        // (e.g. normalised a casing variant). Trust the server's value.
+        net.currentNick = newNick;
+        net.currentNickUpdatedAt = Date.now();
+        net.pendingSelfNickChange = undefined;
+      }
+    } else if (normaliseIdentifier(nick) === normaliseIdentifier(net.currentNick)) {
+      // Server-initiated or other-source change that matches our current
+      // nick (no pending tracker because we didn't initiate it).
       net.currentNick = newNick;
+      net.currentNickUpdatedAt = Date.now();
+    }
+  } else if (cmd === '433' || cmd === '432') {
+    // ERR_NICKNAMEINUSE / ERR_ERRONEUSNICKNAME — the server rejected a
+    // /nick we just sent. The engine logs and reverts its sessionNick
+    // (see source/ircfiber/irc/connection.d); the frontend mirrors that
+    // by reverting the optimistic currentNick. Without this, the input
+    // area keeps showing the rejected nick until the next sync — and on
+    // reload, the sync reveals the user's actual still-`Zodiac_` nick,
+    // making the change look like it never happened at all.
+    console.log('[nick-fix] 433/432 handler fired for network', networkId, 'cmd', cmd, 'pending:', net.pendingSelfNickChange);
+    const pending = net.pendingSelfNickChange;
+    if (pending) {
+      net.currentNick = pending.oldNick;
+      net.currentNickUpdatedAt = Date.now();
+      net.pendingSelfNickChange = undefined;
     }
   } else if (cmd === 'MODE' && params && params.length >= 2) {
     // IRC wire format: MODE <target> <modes> [<mode-params>...]

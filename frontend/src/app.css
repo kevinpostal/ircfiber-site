@@ -298,3 +298,135 @@ body.mode-hidesymbol .mode_prefix.mode_pill   { display: inline; }
   font-weight: 600;
   text-decoration: none;
 }
+
+/* ─── Message entrance animation ──────────────────────────────────────
+   IRCCloud-style: new messages that land while pinned to the bottom get a
+   subtle slide-up + fade-in. Only the batch head (the first message in a
+   same-author group, or any non-grouped message) gets animated so the
+   user sees a clean "new line appears" feel rather than each line flickering
+   individually. The animation is 120ms — fast enough to not feel laggy,
+   slow enough to register as movement. */
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.row.messageRow.messageEntrance {
+  animation: messageSlideIn 120ms ease-out both;
+}
+
+/* Same-author continuation rows fade only (no vertical movement — the row
+   above already slid the group into view, so sliding each successor would
+   look like a staggered cascade rather than a fast fill). */
+.row.messageRow.messageEntrance.sameAuthor {
+  animation: messageEntranceFade 100ms ease-out both;
+}
+
+@keyframes messageEntranceFade {
+  from { opacity: 0.4; }
+  to   { opacity: 1; }
+}
+
+/* ─── Buffer switch crossfade ─────────────────────────────────────────
+   When switching channels, the message area does a brief 100ms crossfade
+   so the transition feels smooth rather than a jarring instant replace. */
+.messages-area {
+  transition: opacity 100ms ease-out;
+}
+.messages-area.switching {
+  opacity: 0.4;
+}
+
+/* ─── Connection status smooth in/out ──────────────────────────────────
+   The connection banner slides down from the top with a gentle spring. */
+.connectionstatuscell {
+  transition: max-height 200ms ease-out, opacity 150ms ease-out, margin 200ms ease-out;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  margin: 0;
+}
+.connectionstatuscell.show {
+  max-height: 56px;
+  opacity: 1;
+  margin-bottom: 4px;
+}
+.connectionStatus {
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+/* ─── Member list item enter/leave ────────────────────────────────────
+   Smooth members joining/leaving the list with a crossfade. */
+.memberList .user {
+  transition: opacity 200ms ease, transform 200ms ease, max-height 200ms ease;
+  overflow: hidden;
+}
+
+/* ─── Input focus ring ────────────────────────────────────────────────
+   A subtle 1px blue ring appears when the chat input is focused so the
+   user always knows where their keystrokes are going — especially after
+   clicking messages to copy or interacting with the member list. */
+textarea.message-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px #1e72ff;
+  border-color: #1e72ff;
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+textarea.message-input {
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+
+/* ─── Sidebar unread badge pulse ──────────────────────────────────────
+   When a new unread arrives, the badge briefly scales up then settles.
+   The `.pulse` class is added via JS and removed after the animation. */
+@keyframes badgePulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.25); }
+  100% { transform: scale(1); }
+}
+.unread.buffer-unread.pulse {
+  animation: badgePulse 250ms ease-out;
+}
+
+/* ─── ChatterBar slide-in ─────────────────────────────────────────────
+   The "N unread messages above/below" bar slides in from its edge. */
+@keyframes chatterSlideDown {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+@keyframes chatterSlideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+.chattercell.upperchattercell {
+  animation: chatterSlideDown 180ms ease-out both;
+}
+.chattercell.lowerchattercell {
+  animation: chatterSlideUp 180ms ease-out both;
+}
+
+/* ─── ScrollClock fade-in ─────────────────────────────────────────────
+   The floating timestamp clock fades in when the user scrolls up. */
+.messages-viewport :global(.scrollclock) {
+  transition: opacity 150ms ease;
+}
+
+/* ─── Seen divider fade-in ──────────────────────────────────────────── */
+.seendivider {
+  transition: opacity 200ms ease;
+}
+
+/* ─── Global smooth scroll ────────────────────────────────────────────
+   The messages container uses smooth scrolling for programmatic scrolls
+   (scrollToBottom / scrollToTop from ChatterBar clicks) so the chatters
+   animate instead of teleporting. Auto-scroll (new messages) remains
+   instant via direct scrollTop assignment. */
+.messages {
+  scroll-behavior: smooth;
+}

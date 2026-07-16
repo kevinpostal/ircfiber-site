@@ -1,8 +1,9 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
+import { tick } from 'svelte';
 import ServerLogTimeline from './ServerLogTimeline.svelte';
 import { ircState } from '../stores/ircStore.svelte';
-import { clearedAtMap } from '../stores/preferences.svelte';
+import { clearedAtMap, serverlogCollapsedMap } from '../stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 
 beforeEach(() => {
@@ -10,66 +11,457 @@ beforeEach(() => {
   ircState.activeBuffer.networkId = null;
   ircState.activeBuffer.bufferName = null;
   Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
+  for (const k of Object.keys(serverlogCollapsedMap)) delete serverlogCollapsedMap[k];
 });
 
-function setupServerBuffer(opts: { connected?: boolean } = {}): void {
-  const network = createNetwork({
-    networkId: 'net1',
-    name: 'SuperNets',
-    connected: opts.connected ?? true,
-    connectionState: opts.connected === false ? 'disconnected' : 'connected',
-  });
-  const buf = createBuffer({ name: '_server' });
-  network.buffers.push(buf);
+function setupServerBuffer(): void {
+  const network = createNetwork({ networkId: 'net1', name: 'TestNet', connected: true, connectionState: 'connected', host: 'irc.test.com', port: 6697 });
+  network.buffers.push(createBuffer({ name: '_server' }));
   ircState.networks.push(network);
   ircState.activeBuffer.networkId = 'net1';
   ircState.activeBuffer.bufferName = '_server';
 }
 
 describe('ServerLogTimeline', () => {
-  it('renders connection-attempt cards from messages', async () => {
+  it('renders empty state when no messages', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+    render(ServerLogTimeline, { props: { messages: [], network } });
+    expect(document.querySelector('.serverLogTimeline__empty')).toBeInTheDocument();
+  });
+
+  it('renders connection attempts as expandable headers', async () => {
     setupServerBuffer();
     const network = ircState.networks[0];
 
-    // phase events give groupServerLog a clear start/end for one attempt.
     const messages = [
-      createMessage({ phase: 'connecting', text: 'connecting', t: 1000, eid: 1 }),
-      createMessage({ phase: 'welcome', text: 'welcome', t: 1100, eid: 2 }),
+      createMessage({ command: 'NOTICE', text: '*** Connecting to irc.test.com:6697...', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'TCP connection established', t: 1100, eid: 2, phase: 'tcp_open' }),
     ];
     render(ServerLogTimeline, { props: { messages, network } });
-    expect(document.querySelectorAll('.serverLogCard').length).toBeGreaterThan(0);
+
+    const header = document.querySelector('[data-testid="server-log-attempt"]');
+    expect(header).toBeInTheDocument();
+    expect(header!.textContent).toContain('Connecting to');
+    expect(header!.textContent).toContain('6697');
+    expect(header!.classList.contains('head')).toBe(true);
   });
 
-  it('hides cards when clearedAt is set after every message', async () => {
-    // Disconnected network so the synthetic "Network is connected" card
-    // doesn't fill in for the filtered-out real cards.
-    setupServerBuffer({ connected: false });
+  it('renders disconnect attempts with the disconnected variant class', async () => {
+    setupServerBuffer();
     const network = ircState.networks[0];
 
     const messages = [
-      createMessage({ phase: 'connecting', text: 'connecting', t: 1000, eid: 1 }),
-      createMessage({ phase: 'welcome', text: 'welcome', t: 1100, eid: 2 }),
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'CONNECT', text: 'Connecting...', t: 1100, eid: 2 }),
+      createMessage({ command: 'DISCONNECT', text: 'Disconnected', t: 1200, eid: 3 }),
     ];
-    // Future timestamp = filter out every message above, so attempts -> 0
-    clearedAtMap['net1:_server'] = Date.now() + 60_000;
     render(ServerLogTimeline, { props: { messages, network } });
-    expect(document.querySelectorAll('.serverLogCard').length).toBe(0);
+
+    const header = document.querySelector('[data-testid="server-log-attempt"]');
+    expect(header).toBeInTheDocument();
+    expect(header!.textContent).toContain('Disconnected from');
+    // Either head--error or head--disconnected is acceptable for a failed attempt.
+    const isDiscoClass =
+      header!.classList.contains('head--disconnected') ||
+      header!.classList.contains('head--error');
+    expect(isDiscoClass).toBe(true);
   });
 
-  it('shows cards again when clearedAt is removed', async () => {
-    setupServerBuffer({ connected: false });
+  it('expands a pending attempt to show phase rows by default', async () => {
+    setupServerBuffer();
     const network = ircState.networks[0];
 
     const messages = [
-      createMessage({ phase: 'connecting', text: 'connecting', t: 1000, eid: 1 }),
-      createMessage({ phase: 'welcome', text: 'welcome', t: 1100, eid: 2 }),
+      createMessage({ command: 'NOTICE', text: 'DNS resolving...', t: 1000, eid: 1, phase: 'resolving' }),
+      createMessage({ command: 'NOTICE', text: 'TCP established', t: 1100, eid: 2, phase: 'tcp_open' }),
     ];
-    clearedAtMap['net1:_server'] = Date.now() + 60_000;
-    const { rerender } = render(ServerLogTimeline, { props: { messages, network } });
-    expect(document.querySelectorAll('.serverLogCard').length).toBe(0);
+    render(ServerLogTimeline, { props: { messages, network } });
 
-    delete clearedAtMap['net1:_server'];
-    await rerender({ messages, network });
-    expect(document.querySelectorAll('.serverLogCard').length).toBeGreaterThan(0);
+    const header = document.querySelector('[data-testid="server-log-attempt"]');
+    expect(header).toBeInTheDocument();
+
+    // Phase rows should be visible (pending attempts default to expanded).
+    const phaseRows = document.querySelectorAll('[data-testid="phase-row"]');
+    expect(phaseRows.length).toBe(2);
+    expect(phaseRows[0].textContent).toContain('DNS resolving');
+    expect(phaseRows[1].textContent).toContain('TCP established');
+  });
+
+  it('shows welcome banner rows when expanded', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    // The engine emits a "welcome" phase to mark the attempt as ended,
+    // then the IRC server delivers RPL_WELCOME (001) as a numeric reply.
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered as nick', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '001', text: 'Welcome to the TestNet IRC Network nick', t: 1100, eid: 3 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const infoRow = document.querySelector('.row--info');
+    expect(infoRow).toBeInTheDocument();
+    expect(infoRow!.textContent).toContain('Welcome');
+  });
+
+  it('parses welcome banner (001-004) into typed segments for color/weight', async () => {
+    // Live data shape from irc.ircfiber.com after a clean connect — the
+    // exact text the user reported. The parser must split each line into
+    // segments so the renderer can apply the typed color/weight.
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered as Zod', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '001', text: 'Welcome to the ircfiber IRC Network Zod', t: 1100, eid: 3 }),
+      createMessage({ command: '002', text: 'Your host is irc.ircfiber.com, running version ergo-v2.18.0', t: 1200, eid: 4 }),
+      createMessage({ command: '003', text: 'This server was created Tue, 30 Jun 2026 00:33:12 UTC', t: 1300, eid: 5 }),
+      createMessage({ command: '004', text: 'Zod irc.ircfiber.com ergo-v2.18.0 BERTZios CEIMRUabefhiklmnoqstuv Iabefhkloqv', t: 1400, eid: 6 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    // Every welcome row carries the typed segment classes. Spot-check the
+    // critical tokens — network name (001), hostname (002), date (003),
+    // and the 004 token breakdown (nick / server / version / umodes /
+    // cmodes / cmodes-with-prefix).
+    const row001 = document.querySelector('[data-cmd="001"]');
+    expect(row001!.querySelector('.welcome-seg--network')!.textContent).toBe('ircfiber');
+    expect(row001!.querySelector('.welcome-seg--nick')!.textContent).toBe('Zod');
+
+    const row002 = document.querySelector('[data-cmd="002"]');
+    expect(row002!.querySelector('.welcome-seg--host')!.textContent).toBe('irc.ircfiber.com');
+    expect(row002!.querySelector('.welcome-seg--version')!.textContent).toBe('ergo-v2.18.0');
+
+    const row003 = document.querySelector('[data-cmd="003"]');
+    expect(row003!.querySelector('.welcome-seg--date')!.textContent).toBe('Tue, 30 Jun 2026 00:33:12 UTC');
+
+    const row004 = document.querySelector('[data-cmd="004"]');
+    const segs = Array.from(row004!.querySelectorAll('.welcome-seg')).map((el) => ({
+      text: el.textContent,
+      kind: Array.from(el.classList).find((c) => c.startsWith('welcome-seg--'))?.replace('welcome-seg--', ''),
+    }));
+    expect(segs).toEqual([
+      { text: 'Zod', kind: 'nick' },
+      { text: ' ', kind: 'plain' },
+      { text: 'irc.ircfiber.com', kind: 'host' },
+      { text: ' ', kind: 'plain' },
+      { text: 'ergo-v2.18.0', kind: 'version' },
+      { text: '  ', kind: 'plain' },
+      { text: 'BERTZios', kind: 'mode-table' },
+      { text: '  ', kind: 'plain' },
+      { text: 'CEIMRUabefhiklmnoqstuv', kind: 'mode-table' },
+      { text: '  ', kind: 'plain' },
+      { text: 'Iabefhkloqv', kind: 'mode-prefix' },
+    ]);
+  });
+
+  it('hides events when clearedAt is set', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Welcome', t: 1000, eid: 1, phase: 'welcome' }),
+    ];
+    clearedAtMap['net1:_server'] = 2000;
+    render(ServerLogTimeline, { props: { messages, network } });
+    expect(document.querySelector('[data-testid="server-log-attempt"]')).toBeNull();
+  });
+
+  it('renders MOTD with IRCCloud .groupedLines structure (all lines, no collapse)', async () => {
+    // IRCCloud parity: every MOTD line is a `.groupedLines__line` div
+    // (the first one is an `<h2>`); spaces are pre-substituted with &nbsp;
+    // so ASCII art column alignment survives the HTML whitespace collapse.
+    // Long MOTDs scroll horizontally inside `.groupedLines` instead of
+    // collapsing behind a <details> (also matches IRCCloud).
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '375', text: ':- test.com Message of the Day -', t: 1100, eid: 3 }),
+      createMessage({ command: '372', text: 'Welcome to the network', t: 1200, eid: 4 }),
+      createMessage({ command: '372', text: 'Please be respectful', t: 1300, eid: 5 }),
+      createMessage({ command: '372', text: 'Have fun!', t: 1400, eid: 6 }),
+      createMessage({ command: '372', text: 'No bots allowed', t: 1500, eid: 7 }),
+      createMessage({ command: '376', text: ':End of MOTD command', t: 1600, eid: 8 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const grouped = document.querySelector('.groupedLines.motd-groupedLines');
+    expect(grouped).toBeInTheDocument();
+
+    const lines = grouped!.querySelectorAll('.groupedLines__line');
+    // 6 MOTD lines (375 banner + 4x372 body + 376 end marker).
+    expect(lines.length).toBe(6);
+
+    // First line is the title — IRCCloud wraps it as <h2>.
+    expect(lines[0].tagName).toBe('H2');
+    // Subsequent lines are <div>.
+    expect(lines[1].tagName).toBe('DIV');
+
+    // ASCII art column alignment is preserved via `white-space: pre` on
+    // the parent `.motd-groupedLines` (inherited by every line). Verify
+    // the CSS is correctly applied by checking that the first line's
+    // computed style preserves whitespace.
+    const titleStyle = window.getComputedStyle(lines[0]);
+    expect(titleStyle.whiteSpace).toBe('pre');
+  });
+
+  it('renders ISUPPORT as the categorised ServerFeaturesPanel', async () => {
+    setupServerBuffer();
+    // Populate `network.isupport` so the panel reads it from the
+    // engine-synced state — the new primary path. Mirrors what the
+    // engine sends via the WS sync payload / `ISUPPORT` event.
+    const network = {
+      ...ircState.networks[0],
+      isupport: {
+        CHANTYPES: '#',
+        EXCEPTS: '',
+        INVEX: '',
+        CHANMODES: 'b,e,I,k,l,imnpst',
+      },
+    };
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '005', text: 'CHANTYPES=# EXCEPTS INVEX CHANMODES=b,e,I,k,l,imnpst', t: 1100, eid: 3 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    // The new panel replaces the old `.isupport-details` collapsible.
+    const panel = document.querySelector('[data-testid="server-features-panel"]');
+    expect(panel).toBeInTheDocument();
+    // The panel's header still has the "Server features" eyebrow.
+    expect(panel!.textContent).toContain('Server features');
+
+    // Dense-mode (timeline-embedded) panel collapses every category by
+    // default — drill in to make the per-token rows observable. Give
+    // Svelte a tick to react to the toggled state before asserting.
+    const catHeads = panel!.querySelectorAll('.server-features-panel__cat-head');
+    expect(catHeads.length).toBeGreaterThan(0);
+    catHeads.forEach((h) => (h as HTMLButtonElement).click());
+    await tick();
+
+    // Now the panel's DOM contains the expanded row texts.
+    const expanded = panel!.textContent || '';
+    expect(expanded).toContain('CHANTYPES');
+    expect(expanded).toContain('EXCEPTS');
+    expect(expanded).toContain('INVEX');
+    expect(expanded).toContain('CHANMODES');
+  });
+
+  it('renders server NOTICEs as a collapsible block', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: 'NOTICE', nick: 'irc.test.com', text: '*** Looking up your hostname...', t: 1100, eid: 3 }),
+      createMessage({ command: 'NOTICE', nick: 'irc.test.com', text: '*** Found your hostname', t: 1200, eid: 4 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const notices = document.querySelector('.notices-details');
+    expect(notices).toBeInTheDocument();
+    expect(notices!.textContent).toContain('NOTICE');
+    expect(notices!.textContent).toContain('2 messages');
+  });
+
+  it('highlights digit runs in LUSERS / RPL numerics (cyan numbers, dim prose)', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '251', text: '0 users and 5 invisible on 1 server(s)', t: 1100, eid: 3 }),
+      createMessage({ command: '252', text: 'IRC Operators online', t: 1200, eid: 4 }),
+      createMessage({ command: '255', text: 'I have 5 clients and 0 servers', t: 1300, eid: 5 }),
+      createMessage({ command: '265', text: 'Current local users 5, max 9', t: 1400, eid: 6 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    // Each numeric row carries the cmd kicker + every digit run highlighted.
+    const row251 = document.querySelector('[data-cmd="251"]');
+    expect(row251!.querySelector('.row-cmd')!.textContent).toBe('251');
+    const numSegs251 = Array.from(row251!.querySelectorAll('.stat-seg--number')).map((el) => el.textContent);
+    expect(numSegs251).toEqual(['0', '5', '1']);
+
+    // 252 has no digit runs in the body — only prose.
+    const row252 = document.querySelector('[data-cmd="252"]');
+    expect(row252!.querySelectorAll('.stat-seg--number').length).toBe(0);
+
+    // 255 has "5 clients" and "0 servers".
+    const row255 = document.querySelector('[data-cmd="255"]');
+    const numSegs255 = Array.from(row255!.querySelectorAll('.stat-seg--number')).map((el) => el.textContent);
+    expect(numSegs255).toEqual(['5', '0']);
+
+    // 265 — "Current local users 5, max 9" — two digits, both highlighted.
+    const row265 = document.querySelector('[data-cmd="265"]');
+    const numSegs265 = Array.from(row265!.querySelectorAll('.stat-seg--number')).map((el) => el.textContent);
+    expect(numSegs265).toEqual(['5', '9']);
+  });
+
+  it('renders ISUPPORT (005) tokens in the categorized ServerFeaturesPanel', async () => {
+    setupServerBuffer();
+    // Populate `network.isupport` (the engine's sync payload) so the
+    // panel reads it directly instead of having to re-parse the raw
+    // 005 message stream. The message buffer below stays as-is so we
+    // also exercise the timeline's connection-lifecycle events.
+    const network = {
+      ...ircState.networks[0],
+      isupport: {
+        AWAYLEN: '390',
+        BOT: 'B',
+        EXCEPTS: '',
+        CHANMODES: 'Ibe,k,fl,CEMRUimnstu',
+      },
+    };
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '001', text: 'Welcome', t: 1100, eid: 3 }),
+      // Each entry below would land in attempt.cap (one per 005 token)
+      // if we needed to fall back, but the synced isupport supersedes.
+      createMessage({ command: '005', text: 'AWAYLEN=390', t: 1200, eid: 4 }),
+      createMessage({ command: '005', text: 'BOT=B', t: 1300, eid: 5 }),
+      createMessage({ command: '005', text: 'EXCEPTS', t: 1400, eid: 6 }),
+      createMessage({ command: '005', text: 'CHANMODES=Ibe,k,fl,CEMRUimnstu', t: 1500, eid: 7 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+     // The new ServerFeaturesPanel replaces the old flat `.isupport-list`.
+     const panel = document.querySelector('[data-testid="server-features-panel"]');
+     expect(panel).toBeInTheDocument();
+     expect(panel!.querySelector('[data-testid="server-features-panel-search"]')).not.toBeInTheDocument();
+
+     // The four 005 tokens surface as <category, count> pairs even when
+    // each category is collapsed (which is the dense default — categories
+    // show just their header summary, not the per-row list). Verify the
+    // counts match the expected distribution: AWAYLEN + KICKLEN-style
+    // lengths → user-limits (1); BOT → bare-capabilities (1); EXCEPTS
+    // → channel-bans (1); CHANMODES → channel-modes (1).
+    const cats = Array.from(
+      panel!.querySelectorAll('[data-testid="server-features-panel-cat"]')
+    ) as HTMLElement[];
+    expect(cats.length).toBe(4);
+
+    // Each category carries its token in the per-category title / blurb
+    // text (click-to-expand reveals the row). We assert the panel
+    // surfaces the info in any visible form — the `panel!.textContent`
+    // includes both the categories' blurb text AND the "4 features · …
+    // categories · 0 IRCv3 · 1 core" summary line.
+    const allText = panel!.textContent || '';
+
+    // Summary sanity: stats line should mention 4 features, 4 categories.
+    expect(allText).toContain('4 features');
+    expect(allText).toContain('categories');
+  });
+
+  it('renders server NOTICEs with *** label and CAP LS lines as cyan capability tags', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '001', text: 'Welcome', t: 1100, eid: 3 }),
+      createMessage({ command: 'NOTICE', nick: 'irc.test.com', text: '*** Looking up your hostname...', t: 1200, eid: 4 }),
+      createMessage({ command: 'NOTICE', nick: 'irc.test.com', text: '*** Found your hostname', t: 1300, eid: 5 }),
+      createMessage({ command: 'NOTICE', text: 'account-notify account-tag away-notify batch cap-notify', t: 1400, eid: 6 }),
+      createMessage({ command: 'NOTICE', text: 'sasl=PLAIN,EXTERNAL', t: 1500, eid: 7 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const noticeItems = Array.from(document.querySelectorAll('.notices-list .notices-item'));
+
+    // First two items are *** server NOTICEs — *** should be cyan-bold label,
+    // rest is plain prose.
+    const notice1 = noticeItems[0].querySelectorAll('.notice-seg');
+    expect(notice1[0].textContent).toBe('***');
+    expect(notice1[0].classList.contains('notice-seg--notice-label')).toBe(true);
+    expect(notice1[1].textContent).toBe(' Looking up your hostname...');
+    expect(notice1[1].classList.contains('notice-seg--plain')).toBe(true);
+
+    const notice2 = noticeItems[1].querySelectorAll('.notice-seg');
+    expect(notice2[0].textContent).toBe('***');
+    expect(notice2[0].classList.contains('notice-seg--notice-label')).toBe(true);
+    expect(notice2[1].textContent).toBe(' Found your hostname');
+    expect(notice2[1].classList.contains('notice-seg--plain')).toBe(true);
+
+    // CAP LS line — 4 bare capability names rendered as cyan tags.
+    const cap1 = noticeItems[2].querySelectorAll('.notice-seg--cap-tag');
+    expect(Array.from(cap1).map((el) => el.textContent)).toEqual([
+      'account-notify', 'account-tag', 'away-notify', 'batch', 'cap-notify',
+    ]);
+    // The space separators between tags are plain
+    const plains1 = noticeItems[2].querySelectorAll('.notice-seg--plain');
+    expect(plains1.length).toBe(4); // 4 spaces between 5 tags
+
+    // sasl=PLAIN,EXTERNAL — key/value split
+    const cap2 = noticeItems[3].querySelector('.notice-seg--cap-key');
+    expect(cap2?.textContent).toBe('sasl');
+    const cap2val = noticeItems[3].querySelector('.notice-seg--cap-value');
+    expect(cap2val?.textContent).toBe('PLAIN,EXTERNAL');
+  });
+
+  it('classifies MOTD lines (separator / art / section / list / command / empty)', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting...', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Connection registered', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '375', text: ':- irc.test.com Message of the day -', t: 1100, eid: 3 }),
+      // ASCII art — long line dominated by `/ \ | _ ( ) < >`
+      createMessage({ command: '372', text: '   _____ _____ ____      ______ _           _      ', t: 1200, eid: 4 }),
+      createMessage({ command: '372', text: '  |  _  _/  ___|  _ \\    |  ___\\ |         | |     ', t: 1300, eid: 5 }),
+      // Empty line
+      createMessage({ command: '372', text: '', t: 1400, eid: 6 }),
+      // Section header — ends with `:`
+      createMessage({ command: '372', text: '- Welcome to the network!', t: 1500, eid: 7 }),
+      // Body line
+      createMessage({ command: '372', text: '- irc.test.com', t: 1600, eid: 8 }),
+      // Numbered list
+      createMessage({ command: '372', text: '-   1. Be respectful.', t: 1700, eid: 9 }),
+      // Slash command
+      createMessage({ command: '372', text: '-   /msg NickServ HELP', t: 1800, eid: 10 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    // Banner with kicker + title + line count
+    const banner = document.querySelector('.motd-banner');
+    expect(banner).toBeInTheDocument();
+    expect(banner!.textContent).toContain('MOTD');
+    expect(banner!.textContent).toContain('Message of the Day');
+
+    // Each classified line gets a `data-motd-kind` attribute
+    const kinds = Array.from(
+      document.querySelectorAll('.motd-groupedLines .groupedLines__line')
+    ).map((el) => el.getAttribute('data-motd-kind'));
+
+    expect(kinds[0]).toBe('separator'); // ":- irc.test.com Message of the day -"
+    expect(kinds[1]).toBe('art');       // ASCII art line 1
+    expect(kinds[2]).toBe('art');       // ASCII art line 2
+    expect(kinds[3]).toBe('empty');     // empty
+    expect(kinds[4]).toBe('section');   // "Welcome to the network!"
+    expect(kinds[5]).toBe('body');      // "irc.test.com"
+    expect(kinds[6]).toBe('list');      // "1. Be respectful."
+    expect(kinds[7]).toBe('command');   // "/msg NickServ HELP"
+
+    // Closing footer — "End of MOTD command" lives outside the body,
+    // in the .motd-footer block, regardless of how many MOTDs were
+    // delivered (it's a static fixture rather than a re-classified
+    // MOTD line, which would otherwise be tagged `body`).
+    const footer = document.querySelector('.motd-footer');
+    expect(footer).toBeInTheDocument();
+    expect(footer!.textContent).toContain('End of MOTD command');
   });
 });

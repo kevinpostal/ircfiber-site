@@ -478,3 +478,52 @@ export function prependReprocess(
 export function buildProcessedBuffer(raw: IRCMessage[]): IRCMessage[] {
   return preprocessMessages(raw);
 }
+
+/**
+ * Incrementally replace a single entry in a processed buffer in O(n) — no
+ * `preprocessMessages` call. Used by `appendMessage` to swap an optimistic
+ * outgoing message for its server echo without reprocessing the entire
+ * buffer (which was the cause of multi-message typing lag — 10 echoes
+ * × preprocessMessages(N) ≈ 10× render-blocking work).
+ *
+ * `oldEntry` is the optimistic message that was just popped from the
+ * optimistic map; `newEntry` is the server echo. Returns the new processed
+ * array, or `null` if no match was found (the caller falls back to
+ * `buildProcessedBuffer(list)` so the cache never silently diverges).
+ */
+export function replaceInProcessedBuffer(
+  processed: IRCMessage[],
+  oldEntry: IRCMessage,
+  newEntry: IRCMessage,
+): IRCMessage[] | null {
+  // Label match: the server echo carries the same label as the optimistic
+  // message we sent (labeled-response or echo-message). The echo's label
+  // is the lookup key, not the optimistic's (which was already consumed
+  // by the time the echo arrives).
+  const label = newEntry.label ?? oldEntry.label;
+  if (label) {
+    for (let i = 0; i < processed.length; i++) {
+      if (processed[i].label === label) {
+        const result = processed.slice();
+        result[i] = newEntry;
+        return result;
+      }
+    }
+  }
+  // Self-echo fallback (no labeled-response): the optimistic had a label
+  // but the echo doesn't. Walk back to find the matching optimistic by
+  // text + nick + command.
+  for (let i = processed.length - 1; i >= 0; i--) {
+    const m = processed[i];
+    if (
+      m.text === oldEntry.text &&
+      m.nick?.toLowerCase() === oldEntry.nick?.toLowerCase() &&
+      m.command === oldEntry.command
+    ) {
+      const result = processed.slice();
+      result[i] = newEntry;
+      return result;
+    }
+  }
+  return null;
+}

@@ -156,9 +156,9 @@
             <span class="buffer" role="tab" tabindex="0">
               <span class="label buffer-name">{(p.buffer.type === 'query' ? '' : '#') + stripHash(p.buffer.name)}</span>
               {#if p.buffer.unreadCount > 0}
-                <span class="unread buffer-unread">{p.buffer.unreadCount}</span>
+                <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${p.networkId}:${normalizeChannelName(p.buffer.name)}`)}>{p.buffer.unreadCount}</span>
               {:else if (p.buffer.highlightCount ?? 0) > 0}
-                <span class="unread buffer-unread">{p.buffer.highlightCount}</span>
+                <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${p.networkId}:${normalizeChannelName(p.buffer.name)}`)}>{p.buffer.highlightCount}</span>
               {/if}
             </span>
           </li>
@@ -264,9 +264,9 @@
                 <span class="buffer" role="tab" tabindex="0">
                   <span class="label buffer-name">{'#' + stripHash(buf.name)}</span>
                   {#if buf.unreadCount > 0}
-                    <span class="unread buffer-unread">{buf.unreadCount}</span>
+                    <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
                   {:else if (buf.highlightCount ?? 0) > 0}
-                    <span class="unread buffer-unread">{buf.highlightCount}</span>
+                    <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.highlightCount}</span>
                   {/if}
                 </span>
               </li>
@@ -333,9 +333,9 @@
                     <span class="buffer" role="tab" tabindex="0">
                       <span class="label buffer-name">{buf.name}</span>
                       {#if buf.unreadCount > 0}
-                        <span class="unread buffer-unread">{buf.unreadCount}</span>
+                        <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
                       {:else if (buf.highlightCount ?? 0) > 0}
-                        <span class="unread buffer-unread">{buf.highlightCount}</span>
+                        <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.highlightCount}</span>
                       {/if}
                     </span>
                   </li>

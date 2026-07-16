@@ -143,6 +143,34 @@
   function isImage(mime: string): boolean {
     return ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mime);
   }
+
+  let disconnecting = $state<Set<string>>(new Set());
+
+  async function disconnectNetwork(net: NetworkData) {
+    if (!confirm(`Disconnect ${net.name} (${net.host}:${net.port})? The connection will be closed but the network config is kept.`)) return;
+    disconnecting.add(net.id);
+    try {
+      await api.post(`/api/admin/servers/host/${encodeURIComponent(net.host)}/disconnect/${net.id}`);
+      // Optimistic update: mark disconnected locally so the UI
+      // reflects the change immediately. The engine processes the
+      // disconnect asynchronously; without this the reload below
+      // would read the stale Redis snapshot that still says
+      // connected=true.
+      if (user) {
+        const netData = user.networks.find(n => n.id === net.id);
+        if (netData) {
+          netData.connected = false;
+          netData.disabled = true;
+        }
+      }
+      toastSuccess(`Disconnected ${net.name}`);
+      await loadUser();
+    } catch (e) {
+      toastError(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      disconnecting.delete(net.id);
+    }
+  }
 </script>
 
 {#if loading}
@@ -216,6 +244,16 @@
                 <StatusBadge label={net.connected ? 'connected' : net.disabled ? 'disabled' : 'offline'} tone={net.connected ? 'success' : net.disabled ? 'danger' : 'muted'} size="sm" />
                 {#if net.currentNick}
                   <span class="text-xs text-muted">nick: {net.currentNick}</span>
+                {/if}
+                {#if net.connected}
+                  <button
+                    type="button"
+                    onclick={() => disconnectNetwork(net)}
+                    disabled={disconnecting.has(net.id)}
+                    class="rounded border border-danger/30 px-2 py-0.5 text-[10px] font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+                  >
+                    {disconnecting.has(net.id) ? 'Disconnecting…' : 'Disconnect'}
+                  </button>
                 {/if}
               </div>
             </div>

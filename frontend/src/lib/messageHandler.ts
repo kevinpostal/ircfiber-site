@@ -1,5 +1,5 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData } from '../types';
-import { ircState, handleConnect, updateChannelUsers,
+import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
@@ -215,6 +215,57 @@ export function processIrcEvent(
   if (cmd === 'idle') {
     const sinceMs = parseInt((data.s as string) || '0', 10);
     net.connectionIdleSince = sinceMs;
+    return {};
+  }
+
+  // ── ISUPPORT — Engine pushed the parsed feature map. Apply it
+  //    to `net.isupport` so the categorised "Server features" panel
+  //    can render from structured data instead of re-parsing the raw
+  //    005 message stream. The map is JSON-encoded into `msg.text`
+  //    by `IRCRawEvent.makeIsupport` in source/ircfiber/models/irc_event.d.
+  if (cmd === 'ISUPPORT') {
+    try {
+      const raw = JSON.parse(msg.text || '{}');
+      if (raw && typeof raw === 'object') {
+        applyIsupportUpdate(networkId, raw as Record<string, string>);
+      }
+    } catch {
+      // Malformed payload — leave `net.isupport` untouched; the
+      // fallback parser in ServerLogTimeline will still get us a
+      // view from the buffered 005 lines.
+    }
+    return {};
+  }
+
+  // ── IRCCloud-style you_nickchange — Self nick changed ──
+  // The engine emits this dedicated message type when OUR nick changes
+  // (detected via sessionNick match in connection.d's NICK handler).
+  // It carries [oldNick, newNick] params. We update currentNick and ALL
+  // channel member lists immediately so the sidebar reflects the change
+  // in realtime, without waiting for per-channel NICK fan-out events.
+  // This mimics IRCCloud's event-driven member list architecture where
+  // `you_nickchange` is the authoritative signal and the member list
+  // reacts through `change:nick` events on individual Member models.
+  if (cmd === 'you_nickchange' && msg.params && msg.params.length >= 2) {
+    const oldNick = msg.params[0];
+    const newNick = msg.params[msg.params.length - 1];
+    net.currentNick = newNick;
+    net.pendingSelfNickChange = undefined;
+    // Update ALL channel member lists immediately — this is the single
+    // authoritative event for self-nick changes. Per-channel NICK fan-out
+    // events that follow will be redundant (no matching old nick left to
+    // rename) but harmless. This mirrors IRCCloud's design where the
+    // connection-level `you_nickchange` message triggers the member list
+    // update across every channel the user is in, providing realtime UX.
+    for (const buf of net.buffers) {
+      if (buf.users) {
+        for (const u of buf.users) {
+          if (stripPrefix(u.nick) === oldNick) {
+            u.nick = u.prefix + newNick;
+          }
+        }
+      }
+    }
     return {};
   }
 

@@ -3,7 +3,7 @@ import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte
 import { reconnectNetwork, disconnectNetwork, clearBacklog } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
 import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
-import { normalizeChannelName, generateLabel } from './utils';
+import { normalizeChannelName, generateLabel, stripPrefix } from './utils';
 import { updateRoute } from './routing';
 
 export type SlashHandler = (args: string[], networkId: string, target: string, network: Network | null) => void;
@@ -22,9 +22,27 @@ export function getSlashHandler(name: string): SlashHandler | undefined {
 
 registerSlash(['nick'], (args, networkId, _target, net) => {
   if (!args[0]) throw new Error('Usage: /nick <nickname>');
-  // Optimistic: update currentNick immediately so the UI reflects the change
-  // before the server echoes back the NICK response.
-  if (net) net.currentNick = args[0];
+  if (net) {
+    const oldNick = net.currentNick || net.nick || '';
+    const newNick = args[0];
+    net.pendingSelfNickChange = { oldNick, newNick, setAt: Date.now() };
+    net.currentNick = newNick;
+    net.currentNickUpdatedAt = Date.now();
+    // IRCCloud-style OPTIMISTIC member list update: rename EVERY matching
+    // entry in ALL buffers immediately, before the engine even sees the
+    // /nick command. This makes the sidebar update INSTANTLY on Enter,
+    // not ~10s later when the you_nickchange event finishes its MongoDB
+    // + Redis pub/sub round-trip through the engine event processor.
+    for (const buf of net.buffers) {
+      if (buf.users) {
+        for (const u of buf.users) {
+          if (stripPrefix(u.nick) === oldNick) {
+            u.nick = (u.prefix || '') + newNick;
+          }
+        }
+      }
+    }
+  }
   sendRaw(networkId, 'NICK ' + args[0]);
 });
 

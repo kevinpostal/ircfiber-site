@@ -167,7 +167,22 @@ export function isJoinPartLike(cmd: string): boolean {
 }
 
 export function isSkippedCommand(cmd: string): boolean {
-  return ['315', '332', '333', '353', '366', '376', '422', 'PONG', 'TAGMSG', 'QUIT', '311', '312', '313', '317', '318', '319', '330', '401'].includes(cmd);
+  // IRC server metadata noise the engine forwards for the
+  // server-log timeline but the chat UI never displays:
+  //   - WHOIS replies (311–319, 330): consumed by the engine's realname
+  //     cache, surfaced via the WS sync payload (net.realnames).
+  //   - NAMES list (353, 366): consumed by the engine's channelUsers
+  //     cache, surfaced via net.buffers[].users on every sync.
+  //   - WHOX (354): engine-side case "354" returns early so this only
+  //     fires for older engines still in flight during a rolling upgrade.
+  //     Without this the timeline can briefly show 2000+ WHOX rows per
+  //     JOIN on SuperNets-scale channels.
+  //   - WHO (315, 352), TOPIC (332, 333), MOTD (376, 422).
+  //   - PONG, TAGMSG (IRCv3 typing/react), QUIT duplicates, ERR_NOSUCHNICK.
+  // The engine also drops the same set at publish time (see the
+  // `noPublishDuringRegistration` guard in source/ircfiber/irc/connection.d)
+  // so this filter is defense-in-depth for older binaries / replays.
+  return ['315', '332', '333', '353', '354', '366', '376', '422', 'PONG', 'TAGMSG', 'QUIT', '311', '312', '313', '317', '318', '319', '330', '401', 'you_nickchange'].includes(cmd);
 }
 
 export function isDisconnectLike(cmd: string, text?: string): boolean {

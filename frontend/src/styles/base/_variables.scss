@@ -9,6 +9,39 @@
   --input-bg: #1e2126;
   --font-mono: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
   --status-disconnected: #f85149;
+
+  // ── Fiber palette (homepage brand tokens) ──
+  // Mirror of the variables exposed on ircfiber.com so the web app can
+  // match the marketing site's visual language. Used today by the server
+  // log (ServerLogTimeline + BufferHeader for _server) and available for
+  // any future component that wants to opt into the homepage aesthetic.
+  --fiber-void:       #05080c;
+  --fiber-ink:        #0a0e14;
+  --fiber-paper:      #0e131a;
+  --fiber-line:       #1a212b;
+  --fiber-line-2:     #232c38;
+  --fiber-mist:       #4d5867;
+  --fiber-fog:        #8b96a4;
+  --fiber-cloud:      #c8d2dd;
+  --fiber-snow:       #ecf2f8;
+
+  --fiber-blue:       #67e8f9;
+  --fiber-blue-hi:    #a5f3fc;
+  --fiber-blue-dim:   rgba(103, 232, 249, 0.18);
+  --fiber-blue-soft:  rgba(103, 232, 249, 0.08);
+  --fiber-blue-glow:  rgba(103, 232, 249, 0.35);
+
+  --fiber-amber:      #fbbf24;
+  --fiber-amber-dim:  rgba(251, 191, 36, 0.18);
+
+  --fiber-signal:     #34d399;
+  --fiber-stop:       #f87171;
+
+  --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  // Fall back to the existing app mono when JetBrains Mono isn't loaded;
+  // the homepage loads it via Google Fonts which the web app doesn't.
+  --font-mono-fiber: 'JetBrains Mono', var(--font-mono);
 }
 
 * {

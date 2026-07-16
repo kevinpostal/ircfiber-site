@@ -76,6 +76,22 @@ export interface Network {
    * backend refuses DELETE /api/networks/:id with 403.
    */
   systemManaged?: boolean;
+  /**
+   * Tracks a /nick attempt in flight so the NICK echo handler can
+   * identify the change as self even after the optimistic update has
+   * moved currentNick to the new value. Cleared on echo success or
+   * 432/433 rejection; auto-expires after PENDING_SELF_NICK_TTL_MS so
+   * a lost echo doesn't strand the optimistic update.
+   */
+  pendingSelfNickChange?: { oldNick: string; newNick: string; setAt: number };
+  /**
+   * Set by every live nick-change event (you_nickchange, NICK, 433/432
+   * revert, /nick optimistic). Used by the sync handler to distinguish
+   * a stale snapshot (which carries the old nick) from the true event-
+   * driven state. Protected from sync overwrite for NICK_SYNC_COOLDOWN_MS
+   * after the most recent event.
+   */
+  currentNickUpdatedAt?: number;
 }
 
 export interface Buffer {
@@ -139,6 +155,20 @@ export interface Buffer {
    * snapshots from clobbering the in-flight join with isJoined=false.
    */
   joinInFlight?: boolean;
+  /**
+   * Consecutive-sync-miss counter for the orphan reconciliation loop in
+   * updateNetworkFromSync. The engine publishes its channelState snapshot
+   * every ~10s; a single missed snapshot does NOT mean the user left the
+   * channel — it usually just means the snapshot was taken one tick before
+   * a recent JOIN propagated to the engine's internal state. The counter
+   * is incremented each time the buffer is missing from an incoming sync,
+   * reset to 0 when the buffer appears in a sync. isJoined is only flipped
+   * to false once the counter reaches ORPHAN_FLIP_THRESHOLD (see
+   * `ircStore.svelte.ts`) — at that point the engine has consistently
+   * omitted the channel across multiple sync cycles and we trust the
+   * orphan reconciliation.
+   */
+  syncMissedCount?: number;
   unreadCount: number;
   highlight: boolean;
   /** Number of unseen mentions; drives the red sidebar badge (IRCCloud-style). */

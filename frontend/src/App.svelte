@@ -12,9 +12,10 @@
   import Overlay from './components/Overlay.svelte';
   import NotificationBadge from './components/NotificationBadge.svelte';
   import UserPopup from './components/UserPopup.svelte';
-import {
+  import {
     ircState, getActiveNetwork, getActiveBufferObj,
     updateNetworkFromSync, handleConnect,
+    applyIsupportUpdate,
     updateChannelUsers, setMessages, prependMessages,
     setActiveBuffer, updateChannelTopic,
     appendMessage, batchAppendMessages,
@@ -22,7 +23,7 @@ import {
     isJoinPending, initiateRejoin,
     resetPendingState,
     isUserDisconnected
-} from './stores/ircStore.svelte';
+  } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';

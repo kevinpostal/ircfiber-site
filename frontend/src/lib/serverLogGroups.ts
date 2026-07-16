@@ -38,6 +38,18 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   // RPL_WELCOME / YOURHOST / CREATED / MYINFO — server's connection banner.
   // Always visible like MOTD.
   if (cmd === '001' || cmd === '002' || cmd === '003' || cmd === '004') return 'welcome';
+  // WHOIS / WHOX responses (311 = RPL_WHOISUSER, 354 = WHOX reply, 671 = RPL_WHOISSECURE)
+  // flood the server log on large networks like SuperNets (2000+ users → 2000+ WHOIS queries).
+  // The engine sends WHOIS for every user on every JOIN to discover realnames, but the
+  // responses are consumed internally (stored in `realnames[]`) and don't need to be
+  // surfaced in the server log timeline. Skip them to keep the log readable.
+  //
+  // The engine also drops 354 at publish time (`case "354": return;` in
+  // source/ircfiber/irc/connection.d), so this skip is defense-in-depth for
+  // replays from older binaries during a rolling upgrade. 311 still arrives
+  // for the registration-time WHOIS burst, and 671 is filtered because the
+  // "is using a Secure Connection" notice adds nothing.
+  if (cmd === '311' || cmd === '354' || cmd === '671') return 'skip';
   if (/^\d{3}$/.test(cmd)) return 'numeric';
   return 'notice';
 }
@@ -49,7 +61,7 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
  * the same attempt, so treating it as a fresh boundary would split a single
  * connection into two cards.
  */
-const START_PHASES = new Set(['queued', 'resolving', 'connecting']);
+const START_PHASES = new Set(['queued', 'resolving']);
 
 /**
  * Phases / commands that mark the END of an attempt. After this we close
@@ -88,8 +100,11 @@ export interface ServerLogAttempt {
   notices: IRCMessage[];
   /** Other numeric replies (visible inline, muted) */
   numeric: IRCMessage[];
-  /** Status the engine gave the attempt — derived from phases + end */
-  status: 'pending' | 'success' | 'error' | 'disconnected';
+  /** Status the engine gave the attempt — derived from phases + end.
+   *  'superseded' = a newer attempt opened before this one closed (the
+   *  user-facing card is hidden from the timeline; the prior attempt's
+   *  events were absorbed into the new one). */
+  status: 'pending' | 'success' | 'error' | 'disconnected' | 'superseded';
 }
 
 /**
@@ -164,13 +179,21 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
           prev.status = 'disconnected';
         }
         prev.end = msg;
-        // Clear lastAttempt so a future synthetic attempt doesn't
-        // reopen this one again.
-        lastAttempt = null;
         continue;
       }
       current = newAttempt(msg);
       current.phases.push(msg);
+      // Path B: lifecycle event outside an attempt with no previous
+      // ended attempt to extend. Must explicitly set status here
+      // because the `continue` below skips the lifecycle switch
+      // (line 273-281) that would normally set status='disconnected'
+      // for DISCONNECT/DISCONNECTED events. Without this, the card
+      // shows "Connecting…" with a DISCONNECTED phase — the user sees
+      // a false connecting state on every sync re-evaluation.
+      if (msg.command === 'DISCONNECT' || msg.command === 'DISCONNECTED') {
+        current.status = 'disconnected';
+        current.end = msg;
+      }
       continue;
     }
 
@@ -185,14 +208,19 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
       // queued phases without an intervening DISCONNECT event (e.g.
       // consumer reconnect path where queued is emitted synchronously
       // but the old connection's DISCONNECTED fires asynchronously).
-      if (current && current.status === 'pending') {
-        current.status = 'disconnected';
-      }
+      //
+      // Jul 8 2026 fix: removed. The original 1st if was a buggy
+      // "pending → disconnected" semaphore that fired for any
+      // START_PHASES event, prematurely closing an in-progress
+      // attempt when its own connecting event arrived a second later.
+      // The user's "There should only be 1 connected card" concern
+      // is now handled by the 'superseded' status in the welcome
+      // branch (above) and the ServerLogTimeline filter (below).
       // Discard any synthetic (pre-phase) attempt — it has no phases
       // and would stay frozen on "Connecting…" forever after the real
       // connection events start flowing into the new card. Transfer
       // any pre-attachment chatter (MOTD, welcome, caps, notices,
-      // numerics into the real attempt so nothing is lost.
+      // numerics into the real attempt so nothing is lost).
       let discarded: ServerLogAttempt | null = null;
       if (current && current.phases.length === 0 && current.end === null) {
         discarded = current;
@@ -207,19 +235,38 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
         current.numeric = discarded.numeric;
         current.notices = discarded.notices;
       }
+      // IRCCloud-style: when a new connection attempt starts, mark any
+      // prior non-pending attempt as 'superseded' so it's hidden from the
+      // timeline. Without this, every reconnect leaves a visible
+      // "Connected" or "Disconnected" card stacked above the new
+      // "Connecting…" card. The old attempt may already have been changed
+      // from 'success' to 'disconnected' by a DISCONNECTED lifecycle event
+      // before this START_PHASES event arrives.
+      for (const a of attempts) {
+        if (a.status !== 'pending' && a !== current) {
+          a.status = 'superseded';
+        }
+      }
       current.phases.push(msg);
       continue;
     }
 
-// Post-attempt chatter (MOTD, CAP, raw NOTICEs that arrive after
+    // Post-attempt chatter (MOTD, CAP, raw NOTICEs that arrive after
     // welcome) must be appended to the LAST attempt, not a new
     // synthetic one — the connection is still open at this point, the
     // MOTD is just the server's welcome packet finishing up. Without
     // this we'd open a fresh synthetic card for every MOTD line.
+    //
+    // Jul 8 2026 fix: this branch must NOT reopen the previous attempt
+    // for 'phase' events (like a second 'welcome'). A second welcome
+    // means a NEW attempt opened; if we reopen the old attempt, the
+    // user sees one card with two welcomes instead of two separate
+    // cards. 'welcome' is excluded so the second welcome is treated
+    // as the end of the new attempt (its end timestamp).
     const prev: ServerLogAttempt | null = readAttempt(lastAttempt);
     const isPostAttemptChatter =
       current === null && prev !== null && prev.end !== null &&
-      (kind === 'motd' || kind === 'welcome' || kind === 'cap' || kind === 'numeric' || kind === 'notice');
+      (kind === 'motd' || kind === 'cap' || kind === 'numeric' || kind === 'notice');
 
     if (isPostAttemptChatter) {
       // Reopen the previous attempt so the chatter folds into it.
@@ -272,6 +319,20 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
     if (isEndOfAttempt(msg)) {
       if (msg.phase === 'welcome' && current!.status === 'pending') {
         current!.status = 'success';
+        // Jul 8 2026 fix: when a new attempt successfully connects (welcome
+        // phase) while a prior success card is still in the timeline,
+        // mark the prior card as 'superseded' so the UI hides it.
+        // Without this, the engine restart + reconnectNetwork path
+        // stacks multiple "Connected" cards within 1-2 seconds
+        // (Disconnected → Connected → Connecting → Connected),
+        // confusing the user. The superseded card stays in the
+        // attempts array (for the MOTD/ISUPPORT history) but the
+        // ServerLogTimeline filter (below) hides it from the view.
+        for (const a of attempts) {
+          if (a.status === 'success' && a !== current) {
+            a.status = 'superseded';
+          }
+        }
       }
       current!.end = msg;
       pushCurrent();
@@ -416,20 +477,34 @@ export function formatIsupport(msg: IRCMessage): string {
  * We dedup by phase + a canonical text pattern (normalising "via holder"
  * and "established" differences) within a 60-second window. Chat messages
  * without a phase tag pass through untouched.
+ *
+ * Lifecycle commands (DISCONNECT/DISCONNECTED/CONNECT/CONNECTED) are deduped
+ * by command type only — the engine, holder daemon, and handleServerError()
+ * can each emit a DISCONNECTED with different text for the same disconnect,
+ * and those all represent the same logical event.
  */
 function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
-  // Track last-seen timestamp per (phase, command) pair within a 60s window.
-  // If the same phase fires again within 60s, it's a duplicate (engine +
-  // holder both emit the same logical step). The 60s window is generous —
-  // no real connection handshake takes that long between phases.
   const DUP_WINDOW_MS = 60_000;
   const lastSeen = new Map<string, number>();
+  const lifecycleLastSeen = new Map<string, number>();
   const out: IRCMessage[] = [];
   for (const msg of messages) {
     const cmd = msg.command ?? '';
     const isLifecycle = cmd === 'CONNECT' || cmd === 'CONNECTED'
       || cmd === 'DISCONNECT' || cmd === 'DISCONNECTED';
     if (!msg.phase && !isLifecycle) {
+      out.push(msg);
+      continue;
+    }
+    // Lifecycle events: dedup by command type only (ignore text differences).
+    // Three different code paths can emit DISCONNECTED for the same drop
+    // (handleServerError, handleDisconnection, holder onDisconnected) with
+    // different text strings. They all mean the same thing — one disconnect.
+    if (isLifecycle) {
+      const now = msg.t ?? 0;
+      const last = lifecycleLastSeen.get(cmd);
+      if (last !== undefined && (now - last) < DUP_WINDOW_MS) continue;
+      lifecycleLastSeen.set(cmd, now);
       out.push(msg);
       continue;
     }
@@ -441,7 +516,7 @@ function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
       .replace(/to \S+:\d+/i, '')  // strip host:port so TLS connects to
       .replace(/for \S+/i, '')      // different hosts don't collide
       .trim();
-    const key = `${msg.phase ?? ''}|${cmd}|${canonText.slice(0, 60)}`;
+    const key = `${msg.phase ?? ''}|${canonText.slice(0, 60)}`;
     const last = lastSeen.get(key);
     const now = msg.t ?? 0;
     if (last !== undefined && (now - last) < DUP_WINDOW_MS) continue;

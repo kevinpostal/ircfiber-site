@@ -272,7 +272,7 @@ describe('ChannelContextMenu', () => {
     expect(unpinChannelMock).toHaveBeenCalledWith('net1', '#chan');
   });
 
-	it('Clear backlog purges the channel buffer and removes the load-more button', async () => {
+	it('Clear backlog purges the channel buffer and hides old messages', async () => {
 		const network = createNetwork({ networkId: 'net1' });
 		const buf = createBuffer({ name: '#general' });
 		network.buffers.push(createBuffer({ name: '_server', type: 'server' }), buf);
@@ -285,9 +285,10 @@ describe('ChannelContextMenu', () => {
 			props: { x: 100, y: 100, buf, onClose, onToggleMembers: vi.fn(), memberPanelOpen: false },
 		});
 		await userEvent.click(page.getByRole('button', { name: 'Clear backlog' }));
-		// After a successful API delete, the clearedAt entry is removed so
-		// "Load more backlog" does not appear (server has nothing to load).
-		expect(clearedAtMap['net1:#general']).toBeUndefined();
+		// The component sets clearedAt as a local filter immediately (before
+		// the API call), then calls the API to scrub server-side data.
+		// The clearedAt entry persists to prevent re-fetching deleted history.
+		expect(typeof clearedAtMap['net1:#general']).toBe('number');
 		expect(clearBacklogMock).toHaveBeenCalledWith('net1', '#general');
 		expect(onClose).toHaveBeenCalled();
 	});

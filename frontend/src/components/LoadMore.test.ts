@@ -13,26 +13,15 @@ describe('LoadMore', () => {
     Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
   });
 
-  it('shows button when clearedAt is set', async () => {
+  it('shows nothing when clearedAt is set (backlog cleared)', async () => {
+    // When clearedAt is set, the component renders an empty fragment
+    // because there's no history to load. IRCCloud hides the loadMore
+    // row until the user interacts with the "Backlog cleared" banner.
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#chan';
     clearedAtMap['net1:#chan'] = Date.now();
     render(LoadMore);
-    await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
-  });
-
-  it('keeps showing the loadMore button after clearedAt is cleared by click', async () => {
-    ircState.activeBuffer.networkId = 'net1';
-    ircState.activeBuffer.bufferName = '#chan';
-    clearedAtMap['net1:#chan'] = Date.now();
-    render(LoadMore);
-    await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
-    const button = page.getByRole('button');
-    await userEvent.click(button);
-    // clearedAt is removed; the row becomes IRCCloud's regular
-    // "Load more backlog…" button at the top of the log.
-    expect(clearedAtMap['net1:#chan']).toBeUndefined();
-    await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
+    await expect.element(page.getByText('Load more backlog…')).not.toBeInTheDocument();
   });
 
   it('shows the loadMore button without clearedAt (IRCCloud renderLoadMore)', async () => {

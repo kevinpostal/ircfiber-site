@@ -37,6 +37,7 @@ import {
 	isUserDisconnected,
 	initiateRejoin,
 	resetPendingState,
+	clearPendingNickChanges,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
@@ -119,6 +120,7 @@ beforeEach(() => {
 	ircState.activeBuffer.bufferName = null;
 	ircState.messages = {};
 	ircState.optimisticMessages.clear();
+	clearPendingNickChanges();
 
 	// Reset preference-derived singletons that ircStore writes into
 	Object.keys(unreadMap).forEach((k) => delete (unreadMap as Record<string, unknown>)[k]);
@@ -605,8 +607,11 @@ describe('updateChannelUsers', () => {
 		const net = createNetwork({ networkId: 'net1', currentNick: 'oldnick' });
 		ircState.networks.push(net);
 
-		// User types /nick newnick — optimistic update fires
+		// User types /nick newnick — optimistic update fires. The
+		// pendingSelfNickChange tracker is what tells the sync handler
+		// "this value is in flight, don't clobber it".
 		net.currentNick = 'newnick';
+		net.pendingSelfNickChange = { oldNick: 'oldnick', newNick: 'newnick', setAt: Date.now() };
 
 		// Backend sync snapshot arrives with the OLD nick (server hasn't
 		// confirmed yet). This must not clobber the optimistic UI value.
@@ -653,6 +658,12 @@ describe('updateChannelUsers', () => {
 		// Live NICK event — user typed /nick newnick
 		updateChannelUsers('net1', '#chan', 'NICK', 'oldnick', ['oldnick', 'newnick']);
 		flushSync();
+
+		// The handler set pendingSelfNickChange? No — only the slash
+		// command / form / prompt do that. The live NICK echo alone
+		// doesn't track pending (the engine's echo IS the
+		// authoritative signal). The pendingNickChanges map (per-buffer
+		// nick patch) is what protects buf.users across sync.
 
 		// Pre-change sync snapshot arrives carrying the old nick (engine
 		// hadn't observed the rename yet). Must NOT revert members list.
@@ -713,6 +724,138 @@ describe('updateChannelUsers', () => {
 		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
 		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
 		expect(foundBuf?.users[0].nick).toBe('newnick');
+	});
+
+	describe('self nick-change handling (optimistic + echo + rejection)', () => {
+		it('updates currentNick on NICK echo when pendingSelfNickChange matches', () => {
+			// Regression for: user types /nick newnick → optimistic update
+			// fires first (currentNick=newnick) → echo arrives with the OLD
+			// nick in the prefix. The plain `nick === net.currentNick`
+			// check fails because currentNick has already moved; the
+			// pendingSelfNickChange tracker is the authoritative path.
+			const net = createNetwork({ networkId: 'net1', currentNick: 'oldnick' });
+			const buf = createBuffer({
+				name: '#chan',
+				users: [createMember({ nick: 'oldnick' })],
+			});
+			net.buffers.push(buf);
+			net.pendingSelfNickChange = { oldNick: 'oldnick', newNick: 'newnick', setAt: Date.now() };
+			net.currentNick = 'newnick';
+			ircState.networks.push(net);
+
+			updateChannelUsers('net1', '#chan', 'NICK', 'oldnick', ['newnick']);
+			flushSync();
+
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+			expect(foundNet?.currentNick).toBe('newnick');
+			expect(foundNet?.pendingSelfNickChange).toBeUndefined();
+		});
+
+		it('matches pendingSelfNickChange case-insensitively (IRC casemap)', () => {
+			// RFC 1459 says nicks are case-insensitive; "Alice" and
+			// "alice" are the same identity. A /nick from "alice" to
+			// "Alice" must still be detected as self even though the
+			// strings differ.
+			const net = createNetwork({ networkId: 'net1', currentNick: 'alice' });
+			const buf = createBuffer({ name: '#chan', users: [createMember({ nick: 'alice' })] });
+			net.buffers.push(buf);
+			net.pendingSelfNickChange = { oldNick: 'alice', newNick: 'Alice', setAt: Date.now() };
+			net.currentNick = 'Alice';
+			ircState.networks.push(net);
+
+			updateChannelUsers('net1', '#chan', 'NICK', 'alice', ['Alice']);
+			flushSync();
+
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+			expect(foundNet?.currentNick).toBe('Alice');
+			expect(foundNet?.pendingSelfNickChange).toBeUndefined();
+		});
+
+		it('reverts currentNick on 433 (nickname in use) rejection', () => {
+			// Regression for: user types /nick Zodiac → optimistic update
+			// sets currentNick='Zodiac' → server rejects with 433 because
+			// the nick is taken → without a 433 handler, currentNick
+			// stays stuck on the rejected value until page reload.
+			const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac_' });
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			net.pendingSelfNickChange = { oldNick: 'Zodiac_', newNick: 'Zodiac', setAt: Date.now() };
+			net.currentNick = 'Zodiac';
+			ircState.networks.push(net);
+
+			// 433 is delivered to the _server buffer (server numeric).
+			updateChannelUsers('net1', '_server', '433', '', ['Zodiac', 'Nickname is already in use']);
+			flushSync();
+
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+			expect(foundNet?.currentNick).toBe('Zodiac_');
+			expect(foundNet?.pendingSelfNickChange).toBeUndefined();
+		});
+
+		it('reverts currentNick on 432 (erroneous nickname) rejection', () => {
+			const net = createNetwork({ networkId: 'net1', currentNick: 'goodname' });
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			net.pendingSelfNickChange = { oldNick: 'goodname', newNick: 'bad!name', setAt: Date.now() };
+			net.currentNick = 'bad!name';
+			ircState.networks.push(net);
+
+			updateChannelUsers('net1', '_server', '432', '', ['bad!name', 'Erroneous nickname']);
+			flushSync();
+
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+			expect(foundNet?.currentNick).toBe('goodname');
+			expect(foundNet?.pendingSelfNickChange).toBeUndefined();
+		});
+
+		it('does not revert currentNick on 433 if no pending self change', () => {
+			// 433 unrelated to a /nick we initiated (e.g. server probe
+			// response from a different network) must not clobber an
+			// unrelated currentNick.
+			const net = createNetwork({ networkId: 'net1', currentNick: 'mynick' });
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			ircState.networks.push(net);
+
+			updateChannelUsers('net1', '_server', '433', '', ['othernick', 'Nickname is already in use']);
+			flushSync();
+
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+			expect(foundNet?.currentNick).toBe('mynick');
+		});
+
+		it('sync clears pendingSelfNickChange when engine agrees with optimistic value', () => {
+			// The user typed /nick, the optimistic update fired, and the
+			// engine snapshot has now caught up to the new value. The
+			// pending tracker is no longer needed — clear it so subsequent
+			// flows don't think we're still mid-/nick.
+			const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+			net.pendingSelfNickChange = { oldNick: 'Zodiac_', newNick: 'Zodiac', setAt: Date.now() };
+			ircState.networks.push(net);
+
+			updateNetworkFromSync([
+				createNetwork({ networkId: 'net1', nick: 'Zodiac', currentNick: 'Zodiac' }),
+			]);
+			flushSync();
+
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+			expect(foundNet?.currentNick).toBe('Zodiac');
+			expect(foundNet?.pendingSelfNickChange).toBeUndefined();
+		});
+
+		it('sync keeps optimistic currentNick while a /nick is in flight', () => {
+			const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac_' });
+			net.pendingSelfNickChange = { oldNick: 'Zodiac_', newNick: 'Zodiac', setAt: Date.now() };
+			net.currentNick = 'Zodiac';
+			ircState.networks.push(net);
+
+			// Stale sync carrying the old nick — must NOT clobber the
+			// optimistic value while the change is in flight.
+			updateNetworkFromSync([
+				createNetwork({ networkId: 'net1', nick: 'Zodiac_', currentNick: 'Zodiac_' }),
+			]);
+			flushSync();
+
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
+			expect(foundNet?.currentNick).toBe('Zodiac');
+		});
 	});
 
 	it('prependMessages dedupes against the boundary msgid', () => {
@@ -992,6 +1135,352 @@ describe('PART/KICK/JOIN isJoined lifecycle', () => {
 		const parted = net?.buffers.find((b) => b.name === '#parted');
 		expect(active?.isJoined).toBe(true);
 		expect(parted?.isJoined).toBe(false);
+	});
+});
+
+// ── W7-T02: orphan reconciliation threshold + activity guard ──
+// Regression tests for the "thinks we're not in the room" bug reported
+// on #superbowl. The engine's channelState snapshot runs every ~10s and
+// can lag a fresh JOIN by one cycle. The old code flipped isJoined:
+// true → false on the very first missed sync, which surfaced a bogus
+// Rejoin button in BufferHeader. Now:
+//   1. Each missed sync increments `syncMissedCount`
+//   2. The flip only fires after ORPHAN_FLIP_THRESHOLD (3) consecutive
+//      missed syncs
+//   3. The flip is skipped entirely if the buffer has any local message
+//      within RECENT_ACTIVITY_GUARD_MS (5 min) — the user is actively
+//      chatting, so the engine snapshot is stale
+//   4. The counter resets to 0 when the channel appears in a sync
+describe('orphan reconciliation (W7-T02)', () => {
+	function getBuf(networkId: string, name: string): Buffer | undefined {
+		return ircState.networks
+			.find((n) => n.networkId === networkId)
+			?.buffers.find((b) => b.name === name);
+	}
+
+	function syncWithout(networkId: string, except: Set<string>): void {
+		// A sync that omits every channel in `except`. This simulates the
+		// engine snapshot being one cycle behind a recent JOIN.
+		const incoming = createNetwork({ networkId });
+		// Always include the server log so it doesn't trip the orphan loop.
+		incoming.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		updateNetworkFromSync([incoming]);
+		flushSync();
+	}
+
+	function syncWith(networkId: string, channels: string[]): void {
+		const incoming = createNetwork({ networkId });
+		incoming.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		for (const name of channels) {
+			incoming.buffers.push(createBuffer({ name, isJoined: true }));
+		}
+		updateNetworkFromSync([incoming]);
+		flushSync();
+	}
+
+	it('a single missed sync does NOT flip isJoined to false (regression for #superbowl)', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: '#superbowl', isJoined: true });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		// First sync after the JOIN: the channel is missing from the
+		// engine's channelState snapshot (engine is one tick behind).
+		syncWithout('net1', new Set());
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		expect(found?.isJoined).toBe(true); // NOT flipped
+		expect(found?.syncMissedCount).toBe(1);
+	});
+
+	it('two consecutive missed syncs still do NOT flip isJoined', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#superbowl', isJoined: true }));
+		ircState.networks.push(net);
+
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		expect(found?.isJoined).toBe(true); // still NOT flipped
+		expect(found?.syncMissedCount).toBe(2);
+	});
+
+	it('three consecutive missed syncs flip isJoined to false (threshold reached)', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#superbowl', isJoined: true }));
+		ircState.networks.push(net);
+
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		expect(found?.isJoined).toBe(false); // NOW flipped
+		expect(found?.syncMissedCount).toBe(3);
+	});
+
+	it('syncMissedCount resets to 0 when the channel reappears in a sync', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#superbowl', isJoined: true }));
+		ircState.networks.push(net);
+
+		// Build up the counter
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		const found = getBuf('net1', '#superbowl');
+		expect(found?.syncMissedCount).toBe(2);
+
+		// Engine snapshot catches up
+		syncWith('net1', ['#superbowl']);
+		expect(found?.syncMissedCount).toBe(0);
+		expect(found?.isJoined).toBe(true);
+	});
+
+	it('activity guard: ANY local message prevents the flip even after threshold', () => {
+		// User has been in #superbowl at some point (we have a local
+		// message in the buffer). The engine snapshot is just stale (lost
+		// track after a restart, network glitch, handoff race, etc).
+		// Don't flip isJoined no matter how many syncs miss — otherwise
+		// the user sees a bogus "Rejoin" button even though they're still
+		// chatting in the room. A genuine leave (PART/KICK for self)
+		// already clears isJoined directly via updateChannelUsers, so the
+		// orphan flip would only catch the "left via another client"
+		// scenario — which is rare and the user can always rejoin.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#superbowl', isJoined: true }));
+		ircState.networks.push(net);
+
+		// Seed the buffer with a recent PRIVMSG.
+		setMessages('net1', '#superbowl', [
+			createMessage({
+				command: 'PRIVMSG',
+				nick: 'alice',
+				text: 'hello',
+				t: Date.now(),
+			}),
+		]);
+
+		// Miss the threshold by 2x — still no flip.
+		for (let i = 0; i < 10; i++) {
+			syncWithout('net1', new Set());
+		}
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		expect(found?.isJoined).toBe(true); // activity guard wins
+		expect(found?.syncMissedCount).toBe(10);
+	});
+
+	it('joinInFlight=true still protects against the orphan flip (existing guard preserved)', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: '#newchan', isJoined: true, joinInFlight: true });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		// Miss the threshold many times
+		for (let i = 0; i < 10; i++) {
+			syncWithout('net1', new Set());
+		}
+		flushSync();
+
+		const found = getBuf('net1', '#newchan');
+		expect(found?.isJoined).toBe(true); // joinInFlight guard wins
+		expect(found?.syncMissedCount).toBeUndefined(); // not even incremented
+	});
+
+	it('activity guard: old messages (10 min ago) still protect — any local message wins', () => {
+		// Regression for #superbowl-style "I went idle for a bit and came
+		// back to a Rejoin button" bug. The original guard checked only
+		// the last 5 minutes, which let the flip fire during quiet
+		// periods. Now any message in the buffer's history protects the
+		// channel — the engine snapshot being missing for 3 cycles is no
+		// longer enough to declare the user has left.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#superbowl', isJoined: true }));
+		ircState.networks.push(net);
+
+		// Seed with a message from 10 minutes ago (was previously outside
+		// the 5-min guard, now still counts).
+		setMessages('net1', '#superbowl', [
+			createMessage({
+				command: 'PRIVMSG',
+				nick: 'alice',
+				text: 'old message',
+				t: Date.now() - 10 * 60 * 1000,
+			}),
+		]);
+
+		// Miss the threshold many times.
+		for (let i = 0; i < 5; i++) {
+			syncWithout('net1', new Set());
+		}
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		// ANY local message wins — old message still protects.
+		expect(found?.isJoined).toBe(true);
+		expect(found?.syncMissedCount).toBe(5);
+	});
+
+	it('activity guard: empty buffer with no messages still flips after threshold', () => {
+		// If the buffer has never had any local messages, the engine
+		// snapshot is the only signal we have. After the threshold, trust
+		// the engine and mark the channel as parted.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#newchan', isJoined: true }));
+		ircState.networks.push(net);
+
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		flushSync();
+
+		const found = getBuf('net1', '#newchan');
+		expect(found?.isJoined).toBe(false);
+		expect(found?.syncMissedCount).toBe(3);
+	});
+
+	it('_server buffer is excluded from the orphan reconciliation', () => {
+		// _server should always be present (it's the connection log) — but
+		// even if it weren't, the orphan loop skips it explicitly.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		ircState.networks.push(net);
+
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		syncWithout('net1', new Set());
+		flushSync();
+
+		const found = getBuf('net1', '_server');
+		expect(found?.isJoined).toBe(true);
+	});
+});
+
+// ── Self-nick presence in member list ──
+//
+// Regression for: navigating to /irc/<network>/channel/<chan> (e.g. via URL)
+// shows the channel header as joined (isJoined=true) but the user doesn't
+// appear in the members list. Root cause: the sync handler unconditionally
+// overwrites buf.users with the incoming snapshot, but the self-nick
+// re-add guard only fires when there's a pending join (pendingIsJoined ||
+// joinInFlight). After the initial join completes and those flags clear,
+// a sync snapshot that omits self-nick (stale engine snapshot, race with
+// RPL_NAMREPLY on some IRCds, the user joined from another client, etc.)
+// permanently wipes the self-nick from the member list — there's no
+// further mechanism to re-add it.
+describe('self-nick presence in member list (W8-T01)', () => {
+	function getBuf(networkId: string, name: string): Buffer | undefined {
+		return ircState.networks
+			.find((n) => n.networkId === networkId)
+			?.buffers.find((b) => b.name === name);
+	}
+
+	it('sync restores self-nick when the snapshot omits it but buffer is joined', () => {
+		// User has been in #superbowl for a while. pendingIsJoined/joinInFlight
+		// are both cleared. A sync arrives with the channel's userlist but
+		// self-nick is missing from the engine's channelUsers (e.g. the engine
+		// snapshot was taken just before the user's own JOIN echoed through
+		// to channelUsers, or the user joined from another client and the
+		// engine doesn't track them in channelUsers yet).
+		const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const buf = createBuffer({ name: '#superbowl', isJoined: true });
+		buf.users = [
+			createMember({ nick: 'alice' }),
+			createMember({ nick: 'bob' }),
+		];
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		const incoming = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const incomingBuf = createBuffer({ name: '#superbowl', isJoined: true });
+		incomingBuf.users = [
+			createMember({ nick: 'alice' }),
+			createMember({ nick: 'bob' }),
+			// no Zodiac — simulates the missing-self case
+		];
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		const bareNicks = found?.users.map((u) => stripPrefix(u.nick)) ?? [];
+		expect(bareNicks).toContain('Zodiac');
+	});
+
+	it('sync does NOT re-add self-nick when buffer is not joined', () => {
+		// Inverse case: user has parted from #superbowl. The sync should NOT
+		// resurrect a ghost self-nick in the userlist.
+		const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const buf = createBuffer({ name: '#superbowl', isJoined: false });
+		buf.users = [createMember({ nick: 'alice' })];
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		const incoming = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const incomingBuf = createBuffer({ name: '#superbowl', isJoined: false });
+		incomingBuf.users = [createMember({ nick: 'alice' })];
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		const bareNicks = found?.users.map((u) => stripPrefix(u.nick)) ?? [];
+		expect(bareNicks).not.toContain('Zodiac');
+	});
+
+	it('sync does NOT duplicate self-nick when both lists include it', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const buf = createBuffer({ name: '#superbowl', isJoined: true });
+		buf.users = [
+			createMember({ nick: 'alice' }),
+			createMember({ nick: 'Zodiac' }),
+		];
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		const incoming = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const incomingBuf = createBuffer({ name: '#superbowl', isJoined: true });
+		incomingBuf.users = [
+			createMember({ nick: 'alice' }),
+			createMember({ nick: 'Zodiac' }),
+		];
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		const selfCount = (found?.users ?? []).filter((u) => stripPrefix(u.nick) === 'Zodiac').length;
+		expect(selfCount).toBe(1);
+	});
+
+	it('sync preserves prefix from incoming member list (e.g. @Zodiac if self is op)', () => {
+		// If the engine's snapshot DOES include self-nick (with or without a
+		// prefix), the sync must use that — don't replace it with a bare entry.
+		// This protects the member list from losing its op/voice indicator
+		// when the self-nick is in the snapshot.
+		const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const buf = createBuffer({ name: '#superbowl', isJoined: true });
+		buf.users = [createMember({ nick: 'Zodiac' })];
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		const incoming = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const incomingBuf = createBuffer({ name: '#superbowl', isJoined: true });
+		incomingBuf.users = [createMember({ nick: '@Zodiac', prefix: '@', category: 'OP' })];
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const found = getBuf('net1', '#superbowl');
+		const zodiac = found?.users.find((u) => stripPrefix(u.nick) === 'Zodiac');
+		expect(zodiac?.nick).toBe('@Zodiac');
+		expect(zodiac?.prefix).toBe('@');
 	});
 });
 
@@ -1398,25 +1887,69 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			expect(found.joinInFlight).toBe(true);
 		});
 
-		it('sync snapshot with isJoined=true clears joinInFlight', () => {
+		// Regression for the persistent "Rejoin" button on #superbowl:
+		// when the user is already joined server-side and the frontend
+		// initiates a JOIN anyway (URL nav, click on inactive channel),
+		// the server returns ERR_USERONCHANNEL (443) instead of a JOIN
+		// echo. updateChannelUsers for 443 does set isJoined=true and
+		// clears joinInFlight, but if the 443 frame is dropped or arrives
+		// AFTER the next sync, the frontend's joinInFlight flag stays
+		// stuck true forever and the sync handler never sets isJoined=true
+		// (the joinInFlight guard short-circuits the phantom branch).
+		// When the engine snapshot reports the channel as joined, that IS
+		// authoritative — the JOIN succeeded. Adopt and clear all the
+		// in-flight flags so the buffer stops showing "Rejoin".
+		it('sync snapshot with isJoined=true clears joinInFlight on phantom', () => {
 			const net = createNetwork({ networkId: 'n1' });
-			const phantom = createBuffer({ name: '#foo', isJoined: false, isPhantom: true });
+			const phantom = createBuffer({ name: '#superbowl', isJoined: false, isPhantom: true });
 			phantom.joinInFlight = true;
+			phantom.pendingIsJoined = true;
+			phantom.pendingConfirmations = 2;
 			net.buffers.push(phantom);
 			ircState.networks.push(net);
 
-			// Sync reports isJoined=true (the JOIN did propagate)
+			// Sync reports isJoined=true (the engine confirms we're joined)
 			const syncNet = createNetwork({ networkId: 'n1' });
-			syncNet.buffers.push(createBuffer({ name: '#foo', isJoined: true }));
+			syncNet.buffers.push(createBuffer({ name: '#superbowl', isJoined: true }));
 			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
 			updateNetworkFromSync([syncNet]);
 			flushSync();
 
 			const found = ircState.networks.find(n => n.networkId === 'n1')!
-				.buffers.find(b => b.name === '#foo')!;
-			// joinInFlight must persist until JOIN for self arrives; sync alone
-			// doesn't clear it (the JOIN echo is the authoritative handshake).
-			expect(found.joinInFlight).toBe(true);
+				.buffers.find(b => b.name === '#superbowl')!;
+			// Engine confirms we're joined — adopt isJoined=true and clear
+			// all in-flight flags. The sync IS authoritative for "are we
+			// joined" once the engine's snapshot reflects the JOIN.
+			expect(found.isJoined).toBe(true);
+			expect(found.isPhantom).toBe(false);
+			expect(found.joinInFlight).toBe(false);
+			expect(found.pendingIsJoined).toBeUndefined();
+			expect(found.pendingConfirmations).toBeUndefined();
+		});
+
+		it('sync snapshot with isJoined=true clears joinInFlight on non-phantom buffer', () => {
+			// Same regression as above but the buffer is no longer a phantom
+			// (e.g. the user previously joined, the buffer has full state,
+			// then they re-joined via the Rejoin button).
+			const net = createNetwork({ networkId: 'n1' });
+			const buf = createBuffer({ name: '#superbowl', isJoined: false });
+			buf.joinInFlight = true;
+			buf.pendingIsJoined = true;
+			buf.pendingConfirmations = 2;
+			net.buffers.push(buf);
+			ircState.networks.push(net);
+
+			const syncNet = createNetwork({ networkId: 'n1' });
+			syncNet.buffers.push(createBuffer({ name: '#superbowl', isJoined: true }));
+			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+			updateNetworkFromSync([syncNet]);
+			flushSync();
+
+			const found = ircState.networks.find(n => n.networkId === 'n1')!
+				.buffers.find(b => b.name === '#superbowl')!;
+			expect(found.isJoined).toBe(true);
+			expect(found.joinInFlight).toBe(false);
+			expect(found.pendingIsJoined).toBeUndefined();
 		});
 	});
 
@@ -1719,7 +2252,14 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			expect(found.users.map(u => u.nick).sort()).toEqual(['+bob', '@alice', 'charlie', 'me']);
 		});
 
-		it('preserves own nick through sync overwrite', () => {
+		it('re-adds own nick when sync overwrites users without it (W8-T01)', () => {
+			// Regression for the "I'm not in the member list" bug: a sync
+			// snapshot that omits self-nick (engine snapshot taken before
+			// the user's own JOIN echoed through to channelUsers, or the
+			// user joined from another client) used to permanently wipe
+			// self from the roster. The sync handler now re-adds self-nick
+			// whenever isJoined === true and the incoming users list
+			// doesn't already include the bare self-nick.
 			const net = createNetwork({ networkId: 'n1', currentNick: 'zod' });
 			const buf = createBuffer({ name: '#zod', users: [{ nick: 'zod', prefix: '', category: 'MEMBER', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' }] });
 			net.buffers.push(buf);
@@ -1735,11 +2275,12 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 
 			const found = ircState.networks.find(n => n.networkId === 'n1')!
 				.buffers.find(b => b.name === '#zod')!;
-			// Sync overwrites users wholesale — this is the expected behavior.
-			// The engine's channelUsers must include "zod" for it to be in the
-			// snapshot; the frontend fix ensures self is added on the JOIN
-			// event path, but sync is authoritative when no pending change.
-			expect(found.users.map(u => u.nick).sort()).toEqual(['@alice', 'charlie']);
+			// Self-nick is re-added by the sync handler because the buffer
+			// is genuinely joined (isJoined === true). Without this re-add,
+			// the user would disappear from the member list and stay gone
+			// until the next JOIN/PART cycle — see W8-T01 regression tests
+			// at the end of this file for the full lifecycle.
+			expect(found.users.map(u => u.nick).sort()).toEqual(['@alice', 'charlie', 'zod']);
 		});
 
 		it('self-nick is always exactly one entry in users after JOIN', () => {
@@ -1766,6 +2307,68 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			updateChannelUsers('n1', '#cycle', 'JOIN', 'me');
 			flushSync();
 			expect(found().users.filter(u => u.nick === 'me')).toHaveLength(1);
+		});
+
+		it('realtime nick change: updates member list, no stale nicks, no duplicates, across all channels', () => {
+			// Uses ircState to read reactive values so Svelte $state proxies
+			// are consulted, not the POJO returned by createNetwork.
+			const net = createNetwork({ networkId: 'n1', currentNick: 'alice' });
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			const chanA = createBuffer({ name: '#foo', users: [
+				{ nick: '@alice', prefix: '@', category: 'OP', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' },
+				{ nick: 'bob', prefix: '', category: 'MEMBER', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' },
+			] });
+			const chanB = createBuffer({ name: '#bar', users: [
+				{ nick: 'alice', prefix: '', category: 'MEMBER', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' },
+				{ nick: 'charlie', prefix: '', category: 'MEMBER', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' },
+			] });
+			net.buffers.push(chanA, chanB);
+			ircState.networks.push(net);
+
+			const foundNet = () => ircState.networks.find(n => n.networkId === 'n1')!;
+
+			// Step 1: simulate /nick command (optimistic update)
+			foundNet().pendingSelfNickChange = { oldNick: 'alice', newNick: 'alice_new', setAt: Date.now() };
+			foundNet().currentNick = 'alice_new';
+			flushSync();
+			expect(foundNet().currentNick).toBe('alice_new');
+
+			// Step 2: you_nickchange event arrives (network-level handler)
+			updateChannelUsers('n1', '#foo', 'you_nickchange', 'alice', ['alice', 'alice_new']);
+			flushSync();
+
+			expect(foundNet().currentNick).toBe('alice_new');
+			expect(foundNet().pendingSelfNickChange).toBeUndefined();
+
+			// Step 3: verify member list in EVERY channel
+			const foundA = () => foundNet().buffers.find(b => b.name === '#foo')!;
+			const foundB = () => foundNet().buffers.find(b => b.name === '#bar')!;
+
+			const nickA = foundA().users.map(u => u.nick);
+			const nickB = foundB().users.map(u => u.nick);
+
+			// #foo: @alice → @alice_new (prefix preserved)
+			expect(nickA).toContain('@alice_new');
+			expect(nickA).not.toContain('@alice');
+			expect(nickA).toContain('bob');
+			expect(nickA.filter(n => n.includes('alice_new')).length).toBe(1);
+			expect(new Set(nickA).size).toBe(nickA.length);
+
+			// #bar: alice → alice_new
+			expect(nickB).toContain('alice_new');
+			expect(nickB).not.toContain('alice');
+			expect(nickB).toContain('charlie');
+			expect(nickB.filter(n => n.includes('alice_new')).length).toBe(1);
+			expect(new Set(nickB).size).toBe(nickB.length);
+
+			// Step 4: per-channel NICK events are redundant but harmless
+			updateChannelUsers('n1', '#foo', 'NICK', 'alice', ['alice', 'alice_new']);
+			updateChannelUsers('n1', '#foo', 'NICK', 'alice', ['alice', 'alice_new']);
+			flushSync();
+
+			const fooAfter = foundA().users.map(u => u.nick);
+			expect(fooAfter.filter(n => n.includes('alice_new')).length).toBe(1);
+			expect(new Set(fooAfter).size).toBe(fooAfter.length);
 		});
 	});
 
@@ -1806,7 +2409,7 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			expect(found.connectionState).toBe('disconnected');
 		});
 
-		it('sync with connecting=true CAN overwrite after user disconnected', () => {
+		it('sync with connecting=true does NOT overwrite after user disconnected', () => {
 			const net = createNetwork({ networkId: 'n1' });
 			net.connectionState = 'disconnected';
 			net.connected = false;
@@ -1823,8 +2426,10 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			flushSync();
 
 			const found = ircState.networks.find(n => n.networkId === 'n1')!;
-			// 'connecting' is NOT suppressed — user needs to see Disconnect button
-			expect(found.connectionState).toBe('connecting');
+			// After explicit disconnect, 'connecting' IS suppressed — the user
+			// has already said "disconnect me" and does not want to see
+			// auto-reconnect attempts in the UI as "Connecting" phantom cards.
+			expect(found.connectionState).toBe('disconnected');
 		});
 
 		it('clearUserDisconnected allows sync connected=true to update after reconnect', () => {
@@ -1971,8 +2576,8 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			ircState.networks.push(net);
 			ircState.messages[key] = [];
 			ircState.processedMessages[key] = buildProcessedBuffer([]);
-			ircState.optimisticMessages.clear();
-		});
+	ircState.optimisticMessages.clear();
+});
 
 		function setCurrentNick(nick: string): void {
 			const net = ircState.networks.find(n => n.networkId === networkId)!;

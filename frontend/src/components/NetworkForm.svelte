@@ -4,7 +4,7 @@
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
-  import { parseChannelList } from '../lib/utils';
+  import { parseChannelList, stripPrefix } from '../lib/utils';
 
   interface Props {
     mode: 'add' | 'edit';
@@ -172,8 +172,24 @@
             // Optimistic: reflect the new nick in the UI before the server
             // echoes back. The NICK event handler in updateChannelUsers
             // (ircStore.svelte.ts) will overwrite this with the authoritative
-            // server-acknowledged value when the echo arrives.
+            // server-acknowledged value when the echo arrives. Remember
+            // the pre-change nick so the echo handler can identify this
+            // change as self even though currentNick has already moved.
+            const oldNick = existing.currentNick || existing.nick || '';
+            existing.pendingSelfNickChange = { oldNick, newNick: nick, setAt: Date.now() };
             existing.currentNick = nick;
+            // Optimistic member list update (IRCCloud-style): rename every
+            // matching entry in ALL buffers immediately so the sidebar shows
+            // the new nick before the engine round-trip completes.
+            for (const buf of existing.buffers) {
+              if (buf.users) {
+                for (const u of buf.users) {
+                  if (stripPrefix(u.nick) === oldNick) {
+                    u.nick = (u.prefix || '') + nick;
+                  }
+                }
+              }
+            }
             // Send NICK to the live IRC connection so the change happens
             // immediately (same wire path as /nick). The next sync/realname
             // may apply user mode changes (like +r) the way IRCCloud does.
