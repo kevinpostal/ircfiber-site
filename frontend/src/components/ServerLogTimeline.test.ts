@@ -1,9 +1,15 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { tick } from 'svelte';
+import { userEvent } from 'vitest/browser';
 import ServerLogTimeline from './ServerLogTimeline.svelte';
 import { ircState } from '../stores/ircStore.svelte';
-import { clearedAtMap, serverlogCollapsedMap } from '../stores/preferences.svelte';
+import {
+  clearedAtMap,
+  serverlogCollapsedMap,
+  getServerlogCollapseEvents,
+  setServerlogCollapseEvents,
+} from '../stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 
 beforeEach(() => {
@@ -12,6 +18,11 @@ beforeEach(() => {
   ircState.activeBuffer.bufferName = null;
   Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
   for (const k of Object.keys(serverlogCollapsedMap)) delete serverlogCollapsedMap[k];
+  // Reset the global connection-events pref so each test starts from
+  // the default-true (collapsed) state. Mirrors the per-test reset of
+  // serverlogCollapsedMap above.
+  window.localStorage.removeItem('ircfiber:serverlogCollapseEvents');
+  setServerlogCollapseEvents(true);
 });
 
 function setupServerBuffer(): void {
@@ -463,5 +474,293 @@ describe('ServerLogTimeline', () => {
     const footer = document.querySelector('.motd-footer');
     expect(footer).toBeInTheDocument();
     expect(footer!.textContent).toContain('End of MOTD command');
+  });
+
+  // ── W4-T01: connection-events <details> wrap ──────────────────────
+  // Per-attempt detail rows (phases + welcome + motd + numerics +
+  // isupport + notices) live under a single <details
+  // class="connection-events">. Open state is bound to the global
+  // `serverlogCollapseEvents` pref via `bind:open` + local $state
+  // mirror + $effect (CRITIQUE B4 pattern).
+
+  it('wraps phases + welcome + numerics + isupport + notices in a single <details class="connection-events">', async () => {
+    setupServerBuffer();
+    const network = {
+      ...ircState.networks[0],
+      isupport: { CHANTYPES: '#', EXCEPTS: '', INVEX: '', CHANMODES: 'b,e,I,k,l,imnpst' },
+    };
+
+    // `phase: 'queued'` is a START_PHASE so the entire sequence below
+    // folds into ONE attempt. The 'welcome' phase ends the attempt; the
+    // trailing 005 / NOTICE / numeric messages are post-attempt chatter
+    // (kind ∈ {cap, notice, numeric}) and reopen the same attempt so
+    // they fold in too. If we used `phase: 'connecting'` instead, the
+    // grouping would open a SECOND synthetic attempt for the 001 welcome
+    // row — the test would still pass but it would be testing two cards
+    // instead of one.
+    //
+    // We deliberately don't include `phase: 'resolving'` because
+    // 'resolving' is ALSO a START_PHASE — serverLogGroups opens a new
+    // attempt for it, which would give us 2 attempts instead of 1.
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'connecting', t: 1050, eid: 2, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1100, eid: 3, phase: 'welcome' }),
+      createMessage({ command: '005', text: 'CHANTYPES=# EXCEPTS INVEX CHANMODES=b,e,I,k,l,imnpst', t: 1200, eid: 4 }),
+      createMessage({ command: 'NOTICE', nick: 'irc.test.com', text: '*** Looking up your hostname...', t: 1300, eid: 5 }),
+      createMessage({ command: '251', text: '5 users on 1 server', t: 1400, eid: 6 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    // Open the pref so the body is visible — the assertions below need
+    // access to the nested rows.
+    setServerlogCollapseEvents(false);
+    await tick();
+
+    const details = document.querySelector('[data-testid="connection-events"]') as HTMLDetailsElement;
+    expect(details).toBeInTheDocument();
+    expect(details.tagName).toBe('DETAILS');
+    expect(details.classList.contains('connection-events')).toBe(true);
+    expect(details.hasAttribute('open')).toBe(true);
+
+    // The ISUPPORT panel must live INSIDE the <details>. Pinned by W2-T04
+    // acceptance + the planner's TG3 follow-up.
+    const panel = details.querySelector('[data-testid="server-features-panel"]');
+    expect(panel).toBeInTheDocument();
+
+    // The phase / numerics / notices rows also live inside.
+    expect(details.querySelector('[data-testid="phase-row"]')).toBeInTheDocument();
+    expect(details.querySelector('[data-cmd="251"]')).toBeInTheDocument();
+    expect(details.querySelector('.notices-details')).toBeInTheDocument();
+
+    // The summary count = phases(3) + welcome(0) + motd(0) + numerics(1)
+    //   + isupport(1) + notices(1) = 6.
+    const summary = details.querySelector('[data-testid="connection-events-summary"]') as HTMLElement;
+    expect(summary.textContent).toContain('Connection events');
+    expect(summary.textContent).toContain('6');
+  });
+
+  it('renders connection events collapsed by default when pref=true', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    // Two START_PHASES + welcome → one attempt with phases=[queued, welcome].
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1100, eid: 2, phase: 'welcome' }),
+    ];
+
+    // Pref starts at the test default (true = collapsed).
+    expect(getServerlogCollapseEvents()).toBe(true);
+
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const details = document.querySelector('[data-testid="connection-events"]') as HTMLDetailsElement;
+    expect(details).toBeInTheDocument();
+    // The <details> must NOT carry the `open` attribute when the pref
+    // says collapsed. Browsers strip the attribute when open=false but the
+    // boolean property is also false.
+    expect(details.open).toBe(false);
+    expect(details.hasAttribute('open')).toBe(false);
+
+    // The summary is visible (one-liner) with the count badge.
+    const summary = details.querySelector('[data-testid="connection-events-summary"]') as HTMLElement;
+    expect(summary).toBeInTheDocument();
+    // 2 phase rows → badge shows "2".
+    expect(summary.textContent).toContain('Connection events');
+    expect(summary.textContent).toContain('2');
+  });
+
+  it('renders connection events expanded when pref=false', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    setServerlogCollapseEvents(false);
+    expect(getServerlogCollapseEvents()).toBe(false);
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1100, eid: 2, phase: 'welcome' }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const details = document.querySelector('[data-testid="connection-events"]') as HTMLDetailsElement;
+    expect(details).toBeInTheDocument();
+    expect(details.open).toBe(true);
+    expect(details.hasAttribute('open')).toBe(true);
+
+    // The phase rows are visible because the body is open.
+    const phaseRow = details.querySelector('[data-testid="phase-row"]');
+    expect(phaseRow).toBeInTheDocument();
+  });
+
+  it('toggling the <summary> persists the choice via setServerlogCollapseEvents', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1100, eid: 2, phase: 'welcome' }),
+    ];
+
+    // Start expanded (open=true) so we can prove a user click collapses
+    // it AND writes the inverse pref back to the store.
+    setServerlogCollapseEvents(false);
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const details = document.querySelector('[data-testid="connection-events"]') as HTMLDetailsElement;
+    expect(details.open).toBe(true);
+
+    const summary = details.querySelector('[data-testid="connection-events-summary"]') as HTMLElement;
+    // `userEvent.click` from vitest/browser simulates a real user
+    // interaction (including the browser's default toggle action on the
+    // parent <details>); a plain HTMLElement.click() in the synthetic
+    // test environment fires the click event but does NOT trigger the
+    // native <details> toggle, leaving the ontoggle handler un-fired.
+    await userEvent.click(summary);
+    await tick();
+
+    // Browser toggled open -> false; ontoggle handler flipped the pref
+    // to true (collapsed).
+    expect(details.open).toBe(false);
+    expect(getServerlogCollapseEvents()).toBe(true);
+
+    // And vice-versa.
+    await userEvent.click(summary);
+    await tick();
+    expect(details.open).toBe(true);
+    expect(getServerlogCollapseEvents()).toBe(false);
+  });
+
+  it('mirrors external pref flips back into the <details> open state', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1100, eid: 2, phase: 'welcome' }),
+    ];
+
+    // Start collapsed (default).
+    setServerlogCollapseEvents(true);
+    render(ServerLogTimeline, { props: { messages, network } });
+    const details = document.querySelector('[data-testid="connection-events"]') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+
+    // Simulate a programmatic flip (e.g. context-menu toggle, cross-tab
+    // storage event). The $effect should mirror the pref into local
+    // state so the <details> re-renders without a page reload.
+    setServerlogCollapseEvents(false);
+    await tick();
+    expect(details.open).toBe(true);
+
+    setServerlogCollapseEvents(true);
+    await tick();
+    expect(details.open).toBe(false);
+  });
+
+  it('info_response row has padding only (no cyan-stripe accent, no cyan bg)', async () => {
+    // IRCCloud parity (CRITIQUE + W4-T01 Refactor B): IRCCloud renders
+    // .type_info_response with `padding:10px` and NO cyan stripe + NO
+    // cyan-soft fill. The fiber restyle drops both, keeping only the
+    // hairline border-bottom and the welcome-segment token typography.
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    setServerlogCollapseEvents(false);
+    // Use 002 (YOURHOST) instead of 001 (WELCOME) so the welcome row
+    // folds into the SAME attempt as the phases — see groupServerLog:
+    // `kind='welcome'` (001-004) is NOT in the post-attempt-chatter set,
+    // so 001 would open a SECOND synthetic attempt. 002 is the same kind
+    // but the test only cares about the .row--info CSS treatment, so the
+    // second-attempt variant works too — but the single-attempt path is
+    // cleaner and matches what real engines emit.
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '002', text: 'Your host is irc.test.com, running version test-1.0', t: 1100, eid: 3 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const row002 = document.querySelector('[data-cmd="002"]') as HTMLElement;
+    expect(row002).toBeInTheDocument();
+    expect(row002.classList.contains('row--info')).toBe(true);
+
+    const style = window.getComputedStyle(row002);
+    // Padding must be the IRCCloud 10px value (browser normalises to
+    // `10px` when all four sides are equal).
+    expect(style.paddingTop).toBe('10px');
+    expect(style.paddingBottom).toBe('10px');
+    expect(style.paddingLeft).toBe('10px');
+    expect(style.paddingRight).toBe('10px');
+
+    // Background must be transparent — no cyan-soft fill.
+    expect(style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+
+    // The cyan-stripe `.row-accent` exists in the DOM but is hidden via
+    // `display: none` (see `.row--info .row-accent { display: none; }`).
+    // Verify it's NOT visually contributing.
+    const accent = row002.querySelector('.row-accent') as HTMLElement;
+    expect(accent).toBeInTheDocument();
+    expect(window.getComputedStyle(accent).display).toBe('none');
+  });
+
+  it('motd row has padding only (no cyan-stripe accent, no cyan bg)', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    setServerlogCollapseEvents(false);
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1050, eid: 2, phase: 'welcome' }),
+      createMessage({ command: '375', text: ':- irc.test.com Message of the day -', t: 1100, eid: 3 }),
+      createMessage({ command: '372', text: 'Welcome to the network', t: 1200, eid: 4 }),
+      createMessage({ command: '376', text: ':End of MOTD command', t: 1300, eid: 5 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const motdRow = document.querySelector('.row--motd') as HTMLElement;
+    expect(motdRow).toBeInTheDocument();
+
+    const style = window.getComputedStyle(motdRow);
+    expect(style.paddingTop).toBe('10px');
+    // The motd body still has its bottom padding from the inner
+    // .motd-body — only verify the cyan-stripe bg + accent are gone.
+    expect(style.backgroundColor).toBe('rgba(0, 0, 0, 0)');
+
+    const accent = motdRow.querySelector('.row-accent') as HTMLElement;
+    expect(accent).toBeInTheDocument();
+    expect(window.getComputedStyle(accent).display).toBe('none');
+  });
+
+  it('phase rows use the mono typographic `.row-type-prefix` (Refactor C)', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'resolving', t: 1000, eid: 1, phase: 'resolving' }),
+      createMessage({ command: 'NOTICE', text: 'tcp_open', t: 1100, eid: 2, phase: 'tcp_open' }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+
+    const phaseRows = document.querySelectorAll('[data-testid="phase-row"]');
+    expect(phaseRows.length).toBe(2);
+
+    const firstPrefix = phaseRows[0].querySelector('.row-type-prefix') as HTMLElement;
+    expect(firstPrefix).toBeInTheDocument();
+    // The phase token is rendered as the human-friendly label ('dns')
+    expect(firstPrefix.textContent).toBe('dns');
+
+    const style = window.getComputedStyle(firstPrefix);
+    // Mono font family is enforced so prefix + body align in the column.
+    expect(style.fontFamily.toLowerCase()).toContain('mono');
+    // Cyan, not chip — color, not background.
+    expect(style.color).not.toBe('');
+    // Display must be inline so the prefix flows with the body text, not
+    // on its own line.
+    expect(style.display).toBe('inline');
+
+    // The legacy `.row-tag` chip is no longer used in phase rows.
+    expect(phaseRows[0].querySelector('.row-tag')).toBeNull();
   });
 });

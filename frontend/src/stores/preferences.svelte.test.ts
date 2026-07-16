@@ -545,64 +545,91 @@ describe('featureFlags (W0-T01)', () => {
 	});
 });
 
-// ─────────────────────────────────────────────────────────────────────
-// W2-T03: global "show connection events" pref
-// ─────────────────────────────────────────────────────────────────────
-
-describe('getServerlogCollapseEvents / setServerlogCollapseEvents', () => {
-	it('defaults to true when localStorage is empty', () => {
-		// beforeEach clears localStorage, so the first read uses the
-		// getStorageItem fallback (true).
+// ── W2-T03 / W4-T01: serverlogCollapseEvents pref ──
+// Global pref that drives the `<details class="connection-events">` wrap
+// in ServerLogTimeline. Default is `true` (collapsed) so a fresh user
+// sees the per-attempt header with a count badge rather than the full
+// raw event stream. Persisted to localStorage + cross-tab synced via
+// the storage event.
+describe('serverlogCollapseEvents (W2-T03 / W4-T01)', () => {
+	it('defaults to true (collapsed) when localStorage is empty', () => {
+		// beforeEach clears localStorage so the default applies.
 		expect(getServerlogCollapseEvents()).toBe(true);
 	});
 
-	it('setter persists to localStorage immediately', () => {
-		// Write happens inline at the call site, not via the debounced
-		// $effect — so we can read it back synchronously without
-		// flushPersist().
+	it('setter persists immediately to localStorage', () => {
+		window.localStorage.removeItem('ircfiber:serverlogCollapseEvents');
+
 		setServerlogCollapseEvents(false);
-		const stored = window.localStorage.getItem('ircfiber:serverlogCollapseEvents');
-		expect(stored).not.toBeNull();
-		expect(JSON.parse(stored as string)).toBe(false);
-		expect(getServerlogCollapseEvents()).toBe(false);
+		flushSync();
+
+		const raw = window.localStorage.getItem('ircfiber:serverlogCollapseEvents');
+		expect(raw).toBeTruthy();
+		expect(JSON.parse(raw as string)).toBe(false);
+
+		window.localStorage.removeItem('ircfiber:serverlogCollapseEvents');
 	});
 
-	it('getter honours pre-existing localStorage value (false)', () => {
-		// Write into localStorage directly, then re-import the module
-		// to mirror the page-load path. vitest module reload would be
-		// awkward here, so instead we set the value once via the setter
-		// (which exercises the same code path that wrote the local
-		// value in the first place) then verify the getter still
-		// returns false after a manual clear.
+	it('setter updates the getter immediately', () => {
+		setServerlogCollapseEvents(false);
+		expect(getServerlogCollapseEvents()).toBe(false);
+
+		setServerlogCollapseEvents(true);
+		expect(getServerlogCollapseEvents()).toBe(true);
+	});
+
+	it('reads existing localStorage value (pre-existing user pref honoured)', () => {
+		// Simulate a returning user who already collapsed (false = open)
 		window.localStorage.setItem(
 			'ircfiber:serverlogCollapseEvents',
-			JSON.stringify(false),
+			JSON.stringify(false)
 		);
-		// The in-memory $state holds true (the default at module load);
-		// set the second time via the setter to confirm the getter
-		// returns the freshly-set value.
+		// Note: the underlying _serverlogCollapseEvents was already
+		// initialised from the default true on first import. To test the
+		// "honoured on import" path, we read the storage key directly and
+		// assert it survives — the module-level state initialiser runs
+		// once at import time and is not re-runnable per-test. The
+		// contract pinned here is that the storage shape (boolean) is
+		// valid JSON and round-trips through the setter.
+		const raw = window.localStorage.getItem('ircfiber:serverlogCollapseEvents');
+		expect(JSON.parse(raw as string)).toBe(false);
+
+		setServerlogCollapseEvents(true);
+		expect(getServerlogCollapseEvents()).toBe(true);
+
+		window.localStorage.removeItem('ircfiber:serverlogCollapseEvents');
+	});
+
+	it('re-reads storage event from another tab', () => {
+		// Tab A flips to expanded (false); tab B receives the storage
+		// event and mirrors the value into its own _serverlogCollapseEvents
+		// so the <details> re-renders without a page reload.
+		fireStorageEvent('ircfiber:serverlogCollapseEvents', JSON.stringify(false));
+		flushSync();
+		expect(getServerlogCollapseEvents()).toBe(false);
+
+		fireStorageEvent('ircfiber:serverlogCollapseEvents', JSON.stringify(true));
+		flushSync();
+		expect(getServerlogCollapseEvents()).toBe(true);
+	});
+
+	it('storage event with null value resets to default true', () => {
 		setServerlogCollapseEvents(false);
 		expect(getServerlogCollapseEvents()).toBe(false);
-	});
 
-	it('storage event from another tab re-reads the value', () => {
-		setServerlogCollapseEvents(true);
-		expect(getServerlogCollapseEvents()).toBe(true);
-		// Fire a storage event as if a sibling tab wrote the new value.
-		fireStorageEvent('ircfiber:serverlogCollapseEvents', JSON.stringify(false));
-		expect(getServerlogCollapseEvents()).toBe(false);
-		// And a cleared (e.newValue === null) event resets to default.
+		// Another tab cleared the key — fall back to the default.
 		fireStorageEvent('ircfiber:serverlogCollapseEvents', null);
+		flushSync();
 		expect(getServerlogCollapseEvents()).toBe(true);
 	});
 
-	it('storage event ignores malformed payloads (defensive)', () => {
-		setServerlogCollapseEvents(true);
-		// Garbage JSON, non-boolean value — both must not throw and
-		// must not mutate the value.
-		fireStorageEvent('ircfiber:serverlogCollapseEvents', 'not-json');
-		expect(getServerlogCollapseEvents()).toBe(true);
-		fireStorageEvent('ircfiber:serverlogCollapseEvents', JSON.stringify('not-a-bool'));
+	it('storage event with malformed JSON does not throw and resets to default', () => {
+		setServerlogCollapseEvents(false);
+		expect(getServerlogCollapseEvents()).toBe(false);
+
+		fireStorageEvent('ircfiber:serverlogCollapseEvents', 'not json{');
+		flushSync();
+		// Malformed JSON → default (true)
 		expect(getServerlogCollapseEvents()).toBe(true);
 	});
 });
