@@ -1,5 +1,5 @@
-import type { IRCMessage, Network, WhoisData, BanEntry, BanListData } from '../types';
-import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate,
+import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus, FailInfo } from '../types';
+import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
@@ -234,6 +234,54 @@ export function processIrcEvent(
       // fallback parser in ServerLogTimeline will still get us a
       // view from the buffered 005 lines.
     }
+    return {};
+  }
+
+  // ── W2-T02: CONNECTION_RETRY_STATUS — engine surfaced the
+  //    structured retry state for the current backoff cycle.
+  //    Source: source/ircfiber/models/irc_event.d
+  //    `IRCRawEvent.makeConnectionRetryStatus` -> `data.rs`.
+  //    The engine emits this both at every reconnect-loop deadline
+  //    AND at every `backoff.reset()` site with all-zero arguments.
+  //    The all-zero form means "retry cleared" — applyRetryStatus
+  //    accepts that and clears BOTH retryStatus AND failInfo on the
+  //    network store. (Test suite pins this invariant as TG5.)
+  if (cmd === 'CONNECTION_RETRY_STATUS') {
+    const rs = data.rs as RetryStatus | undefined;
+    if (rs && typeof rs === 'object' && typeof rs.attemptCount === 'number') {
+      const isZero = rs.attemptCount === 0
+        && rs.nextRetryAtMs === 0
+        && rs.delayMs === 0;
+      if (isZero) {
+        applyRetryStatus(networkId, null);
+      } else {
+        applyRetryStatus(networkId, rs);
+      }
+    } else {
+      // Malformed payload — clear defensively. Mirrors the ISUPPORT
+      // branch's "leave store untouched on parse failure" policy, but
+      // inverts because a missing retryStatus means "no retry scheduled"
+      // which is the safe default.
+      applyRetryStatus(networkId, null);
+    }
+    return {};
+  }
+
+  // ── W2-T02: CONNECTION_FAIL — engine surfaced the structured
+  //    disconnect reason alongside the legacy DISCONNECTED event.
+  //    Source: source/ircfiber/models/irc_event.d
+  //    `IRCRawEvent.makeConnectionFail` -> `data.fi`. The payload's
+  //    `sslVerifyError` is a NESTED object (not a flat pair) per plan
+  //    B2 — the TS `FailInfo.sslVerifyError?: { type, error }`
+  //    matches byte-for-byte, no conversion needed.
+  if (cmd === 'CONNECTION_FAIL') {
+    const fi = data.fi as FailInfo | undefined;
+    if (fi && typeof fi === 'object' && typeof fi.reason === 'string') {
+      applyFail(networkId, fi);
+    }
+    // Discard malformed payloads — keep the previous failInfo so the
+    // banner doesn't briefly flash "Disconnected" if the wire ever
+    // sends a truncated frame mid-disconnect.
     return {};
   }
 

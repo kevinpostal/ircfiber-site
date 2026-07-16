@@ -22,6 +22,50 @@ export type ConnectionState =
   | 'connected'
   | 'connected_joining'; // connected, auto-joining channels
 
+// ── W2-T02: structured retry + fail info from the D engine ──
+//
+// Mirror of `ircfiber.redis.protocol.RetryStatus` and
+// `ircfiber.redis.protocol.FailInfoSnapshot`. Field naming mirrors the
+// wire payload exactly so the frontend can read both the
+// `CONNECTION_RETRY_STATUS` event (`data.rs`) and the WS sync
+// `netObj["retryStatus"]` field through the same TS interface — see
+// source/ircfiber/api/websocket.d:518 and protocol.d:299-308.
+//
+// The engine intentionally OMITS `retryStatus` on healthy / freshly
+// reset snapshots (gated by `hasRetryStatus`, see protocol.d:518) so
+// the frontend can use presence-vs-absence to drive apply/clear.
+// `failInfo` is similarly omitted unless populated (websocket.d:528).
+// Both are typed as `T | null` here so consumers can rely on truthiness
+// (the field being absent and the field being null are equivalent on
+// the wire).
+
+/** Engine-emitted structured retry state, one snapshot per reconnect
+ *  cycle. `attemptCount` is 1-based (the first retry attempt is "1st"
+ *  per IRCCloud's ordinal label), and `nextRetryAtMs` is a wall-clock
+ *  unix-ms timestamp used by ConnectionStatus's 1s countdown. */
+export interface RetryStatus {
+  attemptCount: number;
+  nextRetryAtMs: number;
+  delayMs: number;
+}
+
+/** Top-level disconnect reason shape, lifted from the engine's
+ *  `FailInfo` struct (ircfiber.models.irc_event.d). `sslVerifyError`
+ *  is a NESTED object (per plan B2) rather than a flat pair — the
+ *  shape matches the wire format byte-for-byte so messageHandler.ts
+ *  does no conversion. */
+export interface FailInfo {
+  /** "connecting_failed" | "killed" | "ssl_verify_error" |
+   *  "socket_closed" | "connecting_restricted" | "connection_blocked" */
+  type: string;
+  /** Raw reason key (matches IRCCloud's RENDER_REASONS table). */
+  reason: string;
+  /** Populated when type === 'killed'; empty otherwise. */
+  killedReason?: string;
+  /** Nested {type, error} for SSL failures; absent otherwise. */
+  sslVerifyError?: { type: string; error: string };
+}
+
 export interface Network {
   networkId: string;
   name: string;
@@ -104,6 +148,27 @@ export interface Network {
    * Optional because older engine builds may omit the field.
    */
   channelUsersMap?: Record<string, string[]>;
+  /**
+   * W2-T02: engine-reported structured retry state. Populated from
+   * `CONNECTION_RETRY_STATUS` events AND from the WS sync
+   * `netObj["retryStatus"]` field. Cleared when the engine's
+   * `backoff.reset()` emits a zero-valued retry payload (the engine
+   * encodes "retry cleared" as `{attemptCount:0, nextRetryAtMs:0,
+   * delayMs:0}`; the frontend normalises that to `null` at the
+   * dispatch boundary — see messageHandler.ts and applyRetryStatus).
+   * Drives ConnectionStatus's "Reconnecting in {N}s (Mth attempt)"
+   * banner copy.
+   */
+  retryStatus?: RetryStatus | null;
+  /**
+   * W2-T02: structured disconnect reason from the
+   * `CONNECTION_FAIL` event. Preferred over `disconnectReason`
+   * (the legacy free-text string) by ConnectionStatus when both
+   * are present — `disconnectReason` stays in the Network interface
+   * for back-compat with networks that pre-date the structured
+   * payload (per plan dual-emit constraint).
+   */
+  failInfo?: FailInfo | null;
 }
 
 export interface Buffer {
