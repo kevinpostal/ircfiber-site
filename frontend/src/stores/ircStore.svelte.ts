@@ -1910,7 +1910,13 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         for (const chanName of haveNames) {
           const normalized = chanName.startsWith('#')
             ? normalizeChannelName(chanName) : chanName;
-          if (existing.buffers.some(b => b.name === normalized)) continue;
+          // `existing` may be undefined on the very first sync for
+          // this network (we haven't built a local copy yet). Skip
+          // the local-buffer dedup in that case — the incoming
+          // `net.buffers` check below already protects against
+          // duplicates that the engine itself shipped twice.
+          if (existing && existing.buffers.some(b => b.name === normalized))
+            continue;
           if (net.buffers.some(b => b.name === normalized)) continue;
           // Convert string[] into Member[] via the existing pipeline
           // so the member panel renders with the correct prefix /

@@ -493,6 +493,102 @@ describe('updateNetworkFromSync', () => {
 		expect(bufNames).toContain('_server');
 		expect(bufNames).not.toContain('#chan');
 	});
+
+	// ── Defense-in-depth C: channelState-drift frontend fallback ──────
+	// Reproduces the SuperNets #superbowl symptom — engine loses track
+	// of a joined channel in channelState (so the engine's snapshot
+	// doesn't ship it in `buffers[]`) but a fresh NAMES reply just
+	// arrived, populating the per-channel `users` array. The frontend
+	// must still render the room as joined + populated so the user
+	// doesn't see a stale "Rejoin" button on an empty member list.
+	it('synthesises a joined buffer from channelUsersMap when the engine drift drops it from buffers', () => {
+		const incoming = createNetwork({
+			networkId: 'supernets',
+			name: 'SuperNets',
+			connected: true,
+			currentNick: 'Zodiac',
+		});
+		// engine-side: only the four "real" channels survive the
+		// channelState.keys-based snapshot iteration. #superbowl is
+		// gone from buffers but still has its 175 names in
+		// channelUsersMap (top-level payload field).
+		incoming.buffers = [
+			createBuffer({ name: '_server', type: 'server', isJoined: true }),
+			createBuffer({ name: '#dev', isJoined: true, users: [] }),
+		];
+		(incoming as Network & { channelUsersMap?: Record<string, string[]> })
+			.channelUsersMap = {
+			'#superbowl': [
+				'+alice!~alice@host1',
+				'@bob!~bob@host2',
+				'Zodiac',
+			],
+		};
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === 'supernets');
+		const bufNames = net?.buffers.map((b) => b.name) ?? [];
+		expect(bufNames).toContain('#superbowl');
+		const superbowl = net?.buffers.find((b) => b.name === '#superbowl');
+		expect(superbowl?.isJoined).toBe(true);
+		expect(superbowl?.type).toBe('channel');
+		// Members are copied over (string[] → Member[] via normalizeUser).
+		expect(superbowl?.users.length).toBe(3);
+		// Normalise nick names so prefix chars (@/+) on the engine-side
+		// strings survive the snapshot round-trip — same parity the
+		// MemberList needs for the category headers (Ops/Voiced).
+		const bobs = superbowl?.users.filter(
+			u => stripPrefix(u.nick) === 'bob');
+		expect(bobs?.[0]?.prefix).toBe('@');
+		const alices = superbowl?.users.filter(
+			u => stripPrefix(u.nick) === 'alice');
+		expect(alices?.[0]?.prefix).toBe('+');
+		// Self-nick is also re-added (NAMES didn't include it
+		// in the drift case, just like on some IRCds — mirrors the
+		// existing isJoined===true re-add guard for normal syncs).
+		const self = superbowl?.users.filter(
+			u => stripPrefix(u.nick) === 'Zodiac');
+		expect(self).toBeDefined();
+	});
+
+	it('does NOT synthesise when the network is disconnected (server no longer believes we are in the room)', () => {
+		const incoming = createNetwork({
+			networkId: 'supernets',
+			connected: false,
+			currentNick: 'Zodiac',
+		});
+		incoming.buffers = [
+			createBuffer({ name: '_server', type: 'server', isJoined: true }),
+		];
+		(incoming as Network & { channelUsersMap?: Record<string, string[]> })
+			.channelUsersMap = { '#superbowl': ['+alice'] };
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === 'supernets');
+		const bufNames = net?.buffers.map((b) => b.name) ?? [];
+		expect(bufNames).not.toContain('#superbowl');
+	});
+
+	it('does NOT synthesise from an empty NAMES reply (legal but rare — better to not phantom-adopt)', () => {
+		const incoming = createNetwork({
+			networkId: 'supernets',
+			connected: true,
+			currentNick: 'Zodiac',
+		});
+		incoming.buffers = [
+			createBuffer({ name: '_server', type: 'server', isJoined: true }),
+		];
+		(incoming as Network & { channelUsersMap?: Record<string, string[]> })
+			.channelUsersMap = { '#superbowl': [] };
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const net = ircState.networks.find((n) => n.networkId === 'supernets');
+		const bufNames = net?.buffers.map((b) => b.name) ?? [];
+		expect(bufNames).not.toContain('#superbowl');
+	});
 });
 
 describe('handleConnect', () => {
