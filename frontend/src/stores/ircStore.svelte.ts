@@ -1878,6 +1878,87 @@ export function updateNetworkFromSync(incoming: Network[]): void {
         net.isupport = rawNet.isupport as Record<string, string>;
       }
       net.chanTypes = net.chanTypes ?? '#';
+
+      // Defense-in-depth C (frontend fallback): if the engine's
+      // `channelUsersMap` lists a channel that didn't make it into
+      // `net.buffers` (engine-side channelState drift — JOIN
+      // self-echo dropped, 353 still arrived), synthesise a
+      // joined=true buffer entry for it so the user sees the
+      // members list and the correct joined status instead of a
+      // Rejoin button on an empty room. The orphan reconciliation
+      // loop above would otherwise leave this buffer with
+      // isJoined=false and no users, because it's not in
+      // syncedBufferNames and has no local messages.
+      //
+      // We ONLY adopt here when (a) the engine had names for the
+      // channel, (b) no existing buffer (joined OR phantom) exists
+      // for it, and (c) the network is currently connected — i.e.
+      // the IRC server actually believes we're in this room. PART /
+      // KICK for self already removes the channel from
+      // channelUsers, so adopting from this map is safe even on a
+      // racing self-leave.
+      const channelUsersMap = (rawNet as any).channelUsersMap as
+        Record<string, string[]> | undefined;
+      if (channelUsersMap && net.connected) {
+        const haveNames = new Set(Object.keys(channelUsersMap));
+        // Drop empties so we don't synthesise a "phantom joined" buffer
+        // for a channel whose NAMES reply was empty (rare but legal).
+        for (const k of [...haveNames]) {
+          if (!channelUsersMap[k] || channelUsersMap[k].length === 0)
+            haveNames.delete(k);
+        }
+        for (const chanName of haveNames) {
+          const normalized = chanName.startsWith('#')
+            ? normalizeChannelName(chanName) : chanName;
+          if (existing.buffers.some(b => b.name === normalized)) continue;
+          if (net.buffers.some(b => b.name === normalized)) continue;
+          // Convert string[] into Member[] via the existing pipeline
+          // so the member panel renders with the correct prefix /
+          // category / dedup. normalizeUser is defined in this file
+          // and handles the bare `nick!user@host` userhost-in-names
+          // format the engine emits.
+          const stringUsers = channelUsersMap[chanName];
+          const memberUsers = stringUsers.map(u =>
+            typeof u === 'string'
+              ? (normalizeUser as unknown as (x: string) => Member)(u)
+              : (u as Member)
+          );
+          net.buffers.push({
+            name: normalized,
+            type: 'channel',
+            isJoined: true,
+            isPhantom: false,
+            unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+            topic: '', topicSetBy: '', topicSetAt: 0,
+            users: memberUsers,
+            lastSeenMsgTime: null, firstUnseenMsgIndex: null,
+          } as Buffer);
+        }
+        // Re-sort by IRCCloud convention now that we've inserted new
+        // channels out-of-order.
+        sortBuffers(net);
+      }
+      // Make sure currentNick is present in every synthesised
+      // channel's member list — the engine's RPL_NAMREPLY doesn't
+      // always include self (some IRCds omit it). Mirrors the
+      // existingBuf.isJoined===true re-add block at line 1590 so a
+      // hand-synthesised buffer from channelUsersMap also includes
+      // the current user, even if the NAMES reply dropped us.
+      if (net.connected && net.currentNick) {
+        const selfBare = stripPrefix(net.currentNick);
+        for (const buf of net.buffers) {
+          if (buf.name === '_server') continue;
+          if (buf.isJoined !== true) continue;
+          if (!buf.users) buf.users = [];
+          if (!buf.users.some(u => stripPrefix(u.nick) === selfBare)) {
+            buf.users.push({
+              nick: net.currentNick, prefix: '', category: 'MEMBER',
+              ident: '', realname: '', isAway: false, awayMessage: '',
+              lastSpoke: 0, lastHighlighted: 0, account: '',
+            });
+          }
+        }
+      }
       net.connectionState =
         net.status === 'connecting' ? 'connecting' :
         net.connected               ? 'connected'   :
