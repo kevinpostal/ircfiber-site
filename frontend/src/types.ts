@@ -104,6 +104,43 @@ export interface Network {
    * Optional because older engine builds may omit the field.
    */
   channelUsersMap?: Record<string, string[]>;
+  /**
+   * W3-T01: structured payload describing the *next* reconnect attempt
+   * when the engine's exponential-backoff loop is sleeping between
+   * tries. Populated by an `applyRetryStatus` call from
+   * `lib/messageHandler.ts` mirroring IRCCloud's `applyRetryStatus`
+   * action — `connectionState` is set to `waiting_to_retry` alongside
+   * this, so the banner can show a live "Reconnecting in 12s… (3rd
+   * attempt)" countdown without polling.
+   */
+  retryStatus?: {
+    attemptCount: number;
+    nextRetryAtMs: number;
+    delayMs: number;
+  };
+  /**
+   * W3-T01: structured payload describing a terminal disconnect reason.
+   * Mirrors IRCCloud's `applyFail` action — the engine previously only
+   * surfaced a free-form `disconnectReason` string which was hard to
+   * format (no distinction between "killed" vs "TLS verify failure"
+   * vs "connection refused"). With `failInfo` we render the rich
+   * IRCCloud-style banner copy and pull the per-fail-type icon. Kept
+   * as an optional field for backward compatibility with older engine
+   * builds that don't emit it yet.
+   */
+  failInfo?: {
+    type: string;
+    reason?: string;
+    killedReason?: string;
+    sslVerifyError?: { type: string; error: string };
+  };
+  /**
+   * W3-T01: when true, the banner shows a "Click to disconnect" button
+   * instead of "Click to reconnect". Set by the engine for unrecoverable
+   * scenarios (e.g. the user is blocked by the server). Optional
+   * because not every engine build emits this flag yet.
+   */
+  badRetry?: boolean;
 }
 
 export interface Buffer {
