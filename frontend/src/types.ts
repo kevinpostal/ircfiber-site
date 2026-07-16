@@ -92,6 +92,18 @@ export interface Network {
    * after the most recent event.
    */
   currentNickUpdatedAt?: number;
+  /**
+   * Network-wide channel-user map keyed by channel name. Mirrors the
+   * engine's `snapshot.users` (see websocket.d:performStateDump). The
+   * frontend reads it only as a defense-in-depth fallback: when the
+   * engine's `buffers[]` list drops a channel due to internal state
+   * drift (channelState missed the JOIN self-echo but kept the 353
+   * names), `updateNetworkFromSync` synthesises a joined buffer from
+   * this map so the user sees the members list and the correct
+   * joined status instead of a Rejoin button on an empty room.
+   * Optional because older engine builds may omit the field.
+   */
+  channelUsersMap?: Record<string, string[]>;
 }
 
 export interface Buffer {
