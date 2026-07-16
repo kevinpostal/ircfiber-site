@@ -12,9 +12,14 @@
     classifyServerLog,
   } from '../lib/serverLogGroups';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { serverlogCollapsedMap, serverlogHiddenMap } from '../stores/preferences.svelte';
-  import { updateServerlogCollapsed } from '../stores/api';
+  import {
+    serverlogCollapsedMap,
+    serverlogHiddenMap,
+    getServerlogCollapseEvents,
+    setServerlogCollapseEvents,
+  } from '../stores/preferences.svelte';
   import { getClearedAt } from '../stores/preferences.svelte';
+  import { updateServerlogCollapsed } from '../stores/api';
   import { ircState } from '../stores/ircStore.svelte';
   import ServerFeaturesPanel from './ServerFeaturesPanel.svelte';
   import { isupportFromMessages } from '../lib/isupportCategorize';
@@ -25,6 +30,38 @@
   }
 
   let { messages, network }: Props = $props();
+
+  // ── Connection-events pref (W2-T03 / W4-T01) ─────────────────────
+  // Wraps the per-attempt detail rows (phases + welcome + motd +
+  // numerics + isupport + notices) in a single <details> element. The
+  // <details> is the canonical Svelte 5 pattern for an independently-
+  // collapsible block — clicking the <summary> toggles `open` natively.
+  //
+  // Binding pattern (see CRITIQUE B4): we use Svelte 5's native
+  // `bind:open` directive on a LOCAL `$state` mirror, NOT a raw
+  // `open={!pref}` attribute. `bind:open` is the native directive that
+  // proxies the browser's two-way toggle into a local `$state` variable;
+  // combined with the `$effect` below, this gives a clean two-way flow:
+  //   browser click ↔ local `eventsOpen` $state
+  //                 ↔ setServerlogCollapseEvents → store $state
+  //                 ↔ localStorage (immediate)
+  //                 ↔ storage event → other tabs
+  //
+  // The mirror is necessary because `getServerlogCollapseEvents()` reads
+  // a module-level $state (the pref), which the BROWSER doesn't know
+  // about when it toggles <details> natively. Without the mirror, an
+  // external write (setServerlogCollapseEvents from another tab, a
+  // context-menu toggle) wouldn't re-render the <details>.
+  let eventsOpen = $state<boolean>(!getServerlogCollapseEvents());
+
+  // Mirror external pref changes back into local state. Reads
+  // getServerlogCollapseEvents() inside $effect so Svelte 5 subscribes
+  // to the underlying $state proxy and re-runs when the pref flips from
+  // another source (cross-tab storage event, future context-menu item,
+  // etc.).
+  $effect(() => {
+    eventsOpen = !getServerlogCollapseEvents();
+  });
 
   // ── Filter cleared messages ──────────────────────────────────────
   const visibleMessages = $derived.by(() => {
@@ -391,146 +428,179 @@
 
       <!-- ── Expanded body: plain IRC chat rows ───────────────────── -->
       {#if !collapsed}
-        <!-- Phase events as one-line rows -->
-        {#each attempt.phases as msg, pi (pi)}
-          <div class="row" class:row--last={pi === attempt.phases.length - 1} data-testid="phase-row">
-            <span class="row-prefix">→</span>
-            <span class="row-content">
-              <span class="row-tag">{msg.phase ? phaseToLabel(msg.phase) : (msg.command ?? '').toLowerCase()}</span>
-              {#if msg.text}<span class="row-text">{msg.text}</span>{/if}
-            </span>
-          </div>
-        {/each}
-
-        <!-- Welcome banner (001-004) — cyan-accent hairline border + structured
-             color so the network name, your nick, hostname, version, and
-             mode tables each get their own weight and color. parseWelcomeLine
-             splits the flat RPL body into typed segments; the template
-             renders each with .welcome-seg--{kind}. -->
-        {#each attempt.welcome as msg, wi (wi)}
-          {@const segments = parseWelcomeLine(msg.command ?? '', numericBody(msg))}
-          <div class="row row--info" data-cmd={msg.command}>
-            <span class="row-accent row-accent--cyan" aria-hidden="true"></span>
-            <span class="row-content">
-              {#each segments as seg, si (si)}
-                <span class="welcome-seg welcome-seg--{seg.kind}">{seg.text}</span>
-              {/each}
-            </span>
-          </div>
-        {/each}
-
-        <!-- MOTD — fiber restyle.
-             Each line is classified via `classifyMotdLine` so we can give
-             separators, ASCII art, section headers, list items, commands,
-             and the closing "End of MOTD command" line their own visual
-             treatment. Spaces are replaced with &nbsp; on every line so
-             ASCII art column alignment survives HTML whitespace collapse
-             (IRCCloud does the same). -->
-        {#if attempt.motd.length > 0}
-          {@const motdLines = attempt.motd.map((m) => numericBody(m))}
-          {@const classified = motdLines.map((t) => classifyMotdLine(t))}
-          <div class="row row--motd" aria-label="Message of the Day">
-            <span class="row-accent row-accent--cyan" aria-hidden="true"></span>
-            <div class="motd-body">
-              <div class="motd-banner">
-                <span class="motd-kicker">MOTD</span>
-                <span class="motd-title">Message of the Day</span>
-                <span class="motd-meta">{attempt.motd.length} lines</span>
-              </div>
-              <div class="groupedLines motd-groupedLines">
-                {#each attempt.motd as msg, i (i)}
-                  {@const kind = classified[i]}
-                  {@const isFirst = i === 0}
-                  {@const Tag = isFirst ? 'h2' : 'div'}
-                  <svelte:element
-                    this={Tag}
-                    class="groupedLines__line groupedLines__line--{kind}"
-                    data-motd-kind={kind}
-                  >
-                    {@html renderLine(motdLines[i])}
-                  </svelte:element>
-                {/each}
-              </div>
-              <div class="motd-footer">
-                <span class="motd-footer-rule" aria-hidden="true"></span>
-                <span class="motd-footer-text">End of MOTD command</span>
-                <span class="motd-footer-rule" aria-hidden="true"></span>
-              </div>
-            </div>
-          </div>
-        {/if}
-
-        <!-- Remaining numerics (not 001-004, not MOTD, not ISUPPORT) — each
-             line shows its RPL number as a small kicker, and the body
-             has every digit run highlighted in cyan-bold via
-             parseNumericStat so "5 invisible", "max 9", "1 server(s)"
-             all read as data points instead of buried in prose. -->
-        {#each attempt.numeric as msg, ni (ni)}
-          {@const statSegs = parseNumericStat(numericBody(msg))}
-          <div class="row row--stat" data-cmd={msg.command}>
-            {#if msg.command}
-              <span class="row-cmd">{msg.command}</span>
-            {/if}
-            <span class="row-content">
-              {#each statSegs as seg, si (si)}
-                <span class="stat-seg stat-seg--{seg.kind}">{seg.text}</span>
-              {/each}
-            </span>
-          </div>
-        {/each}
-
-         <!-- ISUPPORT (005) — categorized, clickable.
-              Prefers the engine-synced `network.isupport` Record (populated
-             by the dedicated `ISUPPORT` WS event AND by the initial sync
-             payload, so it's available even on cold sync). Falls back to
-             re-parsing the raw 005 lines from `attempt.cap` for historical
-             attempts or when the engine hasn't pushed the parsed map yet. -->
+        <!-- W4-T01: wrap all per-attempt detail rows in a single
+             <details class="connection-events"> whose open state is bound
+             to the global `serverlogCollapseEvents` pref via a local
+             `$state` mirror + `$effect` (see script). Independent of the
+             per-attempt serverlogCollapsedMap pref that drives the
+             <div class="head"> toggle above — a user can fold the
+             per-attempt header AND the inner detail block separately. -->
         {@const syncedIsupport = network?.isupport ?? null}
         {@const bufferedIsupport = isupportFromMessages(attempt.cap)}
         {@const isupportMap = (syncedIsupport && Object.keys(syncedIsupport).length > 0)
           ? syncedIsupport
           : bufferedIsupport}
-        {#if Object.keys(isupportMap).length > 0}
-          <div class="row row--isupport" data-testid="row-isupport">
-            <div class="isupport-frame">
-              <ServerFeaturesPanel
-                isupport={isupportMap}
-                dense={true}
-                titleFallback="This server"
-              />
-            </div>
-          </div>
-        {/if}
+        {@const connectionEventsCount =
+          attempt.phases.length +
+          attempt.welcome.length +
+          attempt.motd.length +
+          attempt.numeric.length +
+          (Object.keys(isupportMap).length > 0 ? 1 : 0) +
+          (attempt.notices.length > 0 ? 1 : 0)}
+        <details
+          class="connection-events"
+          bind:open={eventsOpen}
+          ontoggle={(e) => {
+            const isOpen = (e.currentTarget as HTMLDetailsElement).open;
+            setServerlogCollapseEvents(!isOpen);
+          }}
+          data-testid="connection-events"
+        >
+          <summary
+            class="connection-events-summary"
+            data-testid="connection-events-summary"
+          >
+            Connection events ({connectionEventsCount})
+          </summary>
 
-        <!-- Raw server NOTICEs as collapsible block. parseNoticeOrCapLine
-             splits the two shapes that arrive here:
-               · "*** Looking up your hostname…" — the *** is a cyan-bold
-                 label, the rest is plain prose.
-               · CAP LS responses like "account-notify account-tag …" —
-                 each capability name is a cyan tag, spaces between them
-                 are thin separators, key=value pairs get key/value split. -->
-        {#if attempt.notices.length > 0}
-          <div class="row row--notices">
-            <details class="notices-details">
-              <summary class="row-content">
-                <span class="row-tag">NOTICE</span>
-                <span class="notices-summary">{attempt.notices.length} message{attempt.notices.length === 1 ? '' : 's'}</span>
-              </summary>
-              <ul class="notices-list">
-                {#each attempt.notices as msg, ni (ni)}
-                  {#if msg.text}
-                    {@const segs = parseNoticeOrCapLine(msg.text)}
-                    <li class="notices-item">
-                      {#each segs as seg, si (si)}
-                        <span class="notice-seg notice-seg--{seg.kind}">{seg.text}</span>
-                      {/each}
-                    </li>
-                  {/if}
-                {/each}
-              </ul>
-            </details>
+          <div class="connection-events-body">
+            <!-- Phase events as one-line rows -->
+            {#each attempt.phases as msg, pi (pi)}
+              <div class="row" class:row--last={pi === attempt.phases.length - 1} data-testid="phase-row">
+                <span class="row-prefix">→</span>
+                <span class="row-content">
+                  <span class="row-type-prefix">{msg.phase ? phaseToLabel(msg.phase) : (msg.command ?? '').toLowerCase()}</span>
+                  {#if msg.text}<span class="row-text">{msg.text}</span>{/if}
+                </span>
+              </div>
+            {/each}
+
+            <!-- Welcome banner (001-004) — cyan-accent hairline border + structured
+                 color so the network name, your nick, hostname, version, and
+                 mode tables each get their own weight and color. parseWelcomeLine
+                 splits the flat RPL body into typed segments; the template
+                 renders each with .welcome-seg--{kind}. -->
+            {#each attempt.welcome as msg, wi (wi)}
+              {@const segments = parseWelcomeLine(msg.command ?? '', numericBody(msg))}
+              <div class="row row--info" data-cmd={msg.command}>
+                <span class="row-accent row-accent--cyan" aria-hidden="true"></span>
+                <span class="row-content">
+                  {#each segments as seg, si (si)}
+                    <span class="welcome-seg welcome-seg--{seg.kind}">{seg.text}</span>
+                  {/each}
+                </span>
+              </div>
+            {/each}
+
+            <!-- MOTD — fiber restyle.
+                 Each line is classified via `classifyMotdLine` so we can give
+                 separators, ASCII art, section headers, list items, commands,
+                 and the closing "End of MOTD command" line their own visual
+                 treatment. Spaces are replaced with &nbsp; on every line so
+                 ASCII art column alignment survives HTML whitespace collapse
+                 (IRCCloud does the same). -->
+            {#if attempt.motd.length > 0}
+              {@const motdLines = attempt.motd.map((m) => numericBody(m))}
+              {@const classified = motdLines.map((t) => classifyMotdLine(t))}
+              <div class="row row--motd" aria-label="Message of the Day">
+                <span class="row-accent row-accent--cyan" aria-hidden="true"></span>
+                <div class="motd-body">
+                  <div class="motd-banner">
+                    <span class="motd-kicker">MOTD</span>
+                    <span class="motd-title">Message of the Day</span>
+                    <span class="motd-meta">{attempt.motd.length} lines</span>
+                  </div>
+                  <div class="groupedLines motd-groupedLines">
+                    {#each attempt.motd as msg, i (i)}
+                      {@const kind = classified[i]}
+                      {@const isFirst = i === 0}
+                      {@const Tag = isFirst ? 'h2' : 'div'}
+                      <svelte:element
+                        this={Tag}
+                        class="groupedLines__line groupedLines__line--{kind}"
+                        data-motd-kind={kind}
+                      >
+                        {@html renderLine(motdLines[i])}
+                      </svelte:element>
+                    {/each}
+                  </div>
+                  <div class="motd-footer">
+                    <span class="motd-footer-rule" aria-hidden="true"></span>
+                    <span class="motd-footer-text">End of MOTD command</span>
+                    <span class="motd-footer-rule" aria-hidden="true"></span>
+                  </div>
+                </div>
+              </div>
+            {/if}
+
+            <!-- Remaining numerics (not 001-004, not MOTD, not ISUPPORT) — each
+                 line shows its RPL number as a small kicker, and the body
+                 has every digit run highlighted in cyan-bold via
+                 parseNumericStat so "5 invisible", "max 9", "1 server(s)"
+                 all read as data points instead of buried in prose. -->
+            {#each attempt.numeric as msg, ni (ni)}
+              {@const statSegs = parseNumericStat(numericBody(msg))}
+              <div class="row row--stat" data-cmd={msg.command}>
+                {#if msg.command}
+                  <span class="row-cmd">{msg.command}</span>
+                {/if}
+                <span class="row-content">
+                  {#each statSegs as seg, si (si)}
+                    <span class="stat-seg stat-seg--{seg.kind}">{seg.text}</span>
+                  {/each}
+                </span>
+              </div>
+            {/each}
+
+             <!-- ISUPPORT (005) — categorized, clickable.
+                  Prefers the engine-synced `network.isupport` Record (populated
+                 by the dedicated `ISUPPORT` WS event AND by the initial sync
+                 payload, so it's available even on cold sync). Falls back to
+                 re-parsing the raw 005 lines from `attempt.cap` for historical
+                 attempts or when the engine hasn't pushed the parsed map yet. -->
+            {#if Object.keys(isupportMap).length > 0}
+              <div class="row row--isupport" data-testid="row-isupport">
+                <div class="isupport-frame">
+                  <ServerFeaturesPanel
+                    isupport={isupportMap}
+                    dense={true}
+                    titleFallback="This server"
+                  />
+                </div>
+              </div>
+            {/if}
+
+            <!-- Raw server NOTICEs as collapsible block. parseNoticeOrCapLine
+                 splits the two shapes that arrive here:
+                   · "*** Looking up your hostname…" — the *** is a cyan-bold
+                     label, the rest is plain prose.
+                   · CAP LS responses like "account-notify account-tag …" —
+                     each capability name is a cyan tag, spaces between them
+                     are thin separators, key=value pairs get key/value split. -->
+            {#if attempt.notices.length > 0}
+              <div class="row row--notices">
+                <details class="notices-details">
+                  <summary class="row-content">
+                    <span class="row-tag">NOTICE</span>
+                    <span class="notices-summary">{attempt.notices.length} message{attempt.notices.length === 1 ? '' : 's'}</span>
+                  </summary>
+                  <ul class="notices-list">
+                    {#each attempt.notices as msg, ni (ni)}
+                      {#if msg.text}
+                        {@const segs = parseNoticeOrCapLine(msg.text)}
+                        <li class="notices-item">
+                          {#each segs as seg, si (si)}
+                            <span class="notice-seg notice-seg--{seg.kind}">{seg.text}</span>
+                          {/each}
+                        </li>
+                      {/if}
+                    {/each}
+                  </ul>
+                </details>
+              </div>
+            {/if}
           </div>
-        {/if}
+        </details>
       {/if}
     {/each}
   {/if}
@@ -733,6 +803,22 @@
     color: var(--fiber-cloud, #c8d2dd);
   }
 
+  /* ── Typographic status prefix (W4-T01 Refactor C) ──────────────
+   *  Replaces the cyan-chip `.row-tag` for status / notice rows. IRCCloud
+   *  uses an inline mono prefix (no chip, no background) so the eye reads
+   *  the type token as typography, not as a badge. Inherits the row's
+   *  monospace family so prefix + body align in the column.
+   */
+  .row-type-prefix {
+    display: inline;
+    margin-right: 8px;
+    color: var(--fiber-blue, #67e8f9);
+    font-weight: 600;
+    font-family: var(--font-mono-fiber, monospace);
+    font-variant-numeric: tabular-nums;
+  }
+  .row-type-prefix--notice { letter-spacing: 0.08em; }
+
   /* ── Cyan left-edge accent strip (welcome banner + MOTD) ────────── */
   .row-accent {
     position: absolute;
@@ -747,13 +833,21 @@
   .row-accent--cyan { background: var(--fiber-blue, #67e8f9); }
 
   /* ── Welcome banner (001-004) ───────────────────────────────────── */
+  /* W4-T01 Refactor B: IRCCloud parity. IRCCloud renders .type_info_response
+   * with `padding:10px` and NO cyan stripe, NO cyan-soft background.
+   * Fiber used to give these a 4px/12px padding + soft cyan fill + left
+   * stripe, which read as "loud card" instead of "quiet info line".
+   * Drop the cyan stripe + bg, keep the welcome-segment token coloring
+   * (those are typographic — they stay).
+   */
   .row--info {
     position: relative;
-    background: var(--fiber-blue-soft, rgba(103, 232, 249, 0.04));
+    background: transparent;
     color: var(--fiber-cloud, #c8d2dd);
-    padding: 4px 12px;
+    padding: 10px;
     border-bottom-color: var(--fiber-line, #1a212b);
   }
+  .row--info .row-accent { display: none; }
   .row--info .row-content { color: var(--fiber-cloud, #c8d2dd); }
 
   /* Welcome-banner segments. The plain text (prose around the
@@ -877,13 +971,17 @@
   }
 
   /* ── MOTD block ─────────────────────────────────────────────────── */
+  /* W4-T01 Refactor B: IRCCloud parity. Same treatment as .row--info —
+   * drop the cyan stripe + soft bg, keep the inner `.motd-body` / banner /
+   * footer typography that gives MOTD its visual identity. */
   .row--motd {
     position: relative;
-    background: var(--fiber-blue-soft, rgba(103, 232, 249, 0.04));
-    padding: 10px 16px 14px 16px;
+    background: transparent;
+    padding: 10px;
     display: block;
     border-bottom: 1px solid var(--fiber-line, #1a212b);
   }
+  .row--motd .row-accent { display: none; }
   .motd-body {
     display: block;
     padding: 4px 14px 10px 0;
@@ -1141,5 +1239,75 @@
     font-size: 13px;
     font-family: var(--font-mono-fiber, monospace);
     letter-spacing: 0.04em;
+  }
+
+  /* ── W4-T01: connection-events <details> wrap ─────────────────────
+   *  Wraps every per-attempt detail row (phases + welcome + motd +
+   *  numerics + isupport + notices) under a single <summary> so the
+   *  user can collapse the entire detail stream to one line. The
+   *  `<summary>` reads "Connection events (N)" — N is the count of
+   *  nested rows computed in the template. Native browser toggle on
+   *  click; the open state is bound to the global `serverlogCollapseEvents`
+   *  pref via `bind:open` + local $state mirror + $effect.
+   *
+   *  The block has no chrome — just a hairline divider between the
+   *  per-attempt header above and the wrapped detail rows. The cyan
+   *  marker on the summary is the only color signal; it matches the
+   *  existing `.row-cmd` / `.motd-kicker` cyan treatment so the user
+   *  learns one color = "section heading".
+   */
+  .connection-events {
+    margin: 0;
+    padding: 0;
+    border-bottom: 1px solid var(--fiber-line, #1a212b);
+  }
+  .connection-events > summary.connection-events-summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    color: var(--fiber-mist, #4d5867);
+    font-family: var(--font-mono-fiber, monospace);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    user-select: none;
+    background: transparent;
+    transition: color 120ms ease, background-color 120ms ease;
+  }
+  .connection-events > summary.connection-events-summary:hover {
+    color: var(--fiber-cloud, #c8d2dd);
+    background: rgba(255, 255, 255, 0.02);
+  }
+  /* The disclosure triangle — cyan dot to match the rest of the
+     section-marker language; hidden on webkit so we get one consistent
+     shape across browsers (the ::marker is the fallback for firefox). */
+  .connection-events > summary.connection-events-summary::-webkit-details-marker {
+    display: none;
+  }
+  .connection-events > summary.connection-events-summary::before {
+    content: "▸";
+    color: var(--fiber-blue, #67e8f9);
+    font-size: 10px;
+    transition: transform 120ms ease;
+    display: inline-block;
+    width: 12px;
+    text-align: center;
+  }
+  .connection-events[open] > summary.connection-events-summary::before {
+    transform: rotate(90deg);
+  }
+  /* The body has no padding of its own — each nested row carries its
+     own padding so the cyan stripe / numeric kicker / etc. align in
+     their own columns. */
+  .connection-events-body {
+    display: block;
+  }
+  /* Hide the global [open] marker on the OUTER connection-events
+     <details> so it doesn't render its own default triangle alongside
+     the ::before above. */
+  .connection-events > summary.connection-events-summary {
+    list-style: none;
   }
 </style>

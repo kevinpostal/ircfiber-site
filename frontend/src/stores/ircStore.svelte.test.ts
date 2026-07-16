@@ -38,10 +38,13 @@ import {
 	initiateRejoin,
 	resetPendingState,
 	clearPendingNickChanges,
+	applyRetryStatus,
+	applyFail,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
 import { stripPrefix } from '../lib/utils';
+import type { Network, RetryStatus, FailInfo } from '../types';
 
 // ── W3-T04: mock sendRaw + reconnectNetwork so the helper's side effects
 // are observable. Use a flat factory like the rest of the test files in
@@ -2797,5 +2800,208 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			expect(ircState.messages[key]).toHaveLength(1);
 			expect(ircState.optimisticMessages.has(label)).toBe(false);
 		});
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// W2-T02 + W1-T01 B3: applyRetryStatus / applyFail + sync adopt.
+// TG5 explicitly pins `applyRetryStatus(networkId, null)` to clear
+// BOTH retryStatus AND failInfo — the on-store counterpart to the
+// engine's zero-valued CONNECTION_RETRY_STATUS emitted from every
+// `backoff.reset()` site.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('applyRetryStatus (W2-T02 — engine CONNECTION_RETRY_STATUS adapter)', () => {
+	function setupNetwork(networkId: string): Network {
+		const net = createNetwork({ networkId });
+		ircState.networks.push(net);
+		return net;
+	}
+	// Read the live, proxied network. `net` (the local return value
+	// of setupNetwork) is a pre-push reference that doesn't track the
+	// proxied mutations Svelte 5 performs after ircState.networks.push;
+	// all assertions read through ircState.networks.find so we observe
+	// the post-mutation reactive state.
+	const live = (id: string) => ircState.networks.find((n) => n.networkId === id)!;
+
+	it('writes retryStatus onto the matching network', () => {
+		setupNetwork('net1');
+		const rs: RetryStatus = {
+			attemptCount: 2,
+			nextRetryAtMs: Date.now() + 5000,
+			delayMs: 5000,
+		};
+		applyRetryStatus('net1', rs);
+		flushSync();
+		expect(live('net1').retryStatus).toEqual(rs);
+	});
+
+	it('null status clears retryStatus AND failInfo (TG5 critical invariant)', () => {
+		// Simulates the post-fail recovery cycle: the engine emits
+		// `{attemptCount:0, nextRetryAtMs:0, delayMs:0}` from every
+		// `backoff.reset()` site. The frontend converts that to null
+		// at the dispatch boundary; applyRetryStatus must clear BOTH
+		// retryStatus AND failInfo so a stale "Disconnected: ..." line
+		// doesn't survive a successful reconnect.
+		const net = setupNetwork('net1');
+		net.retryStatus = {
+			attemptCount: 2,
+			nextRetryAtMs: Date.now() + 5000,
+			delayMs: 5000,
+		};
+		net.failInfo = {
+			type: 'connecting_failed',
+			reason: 'econnrefused',
+			killedReason: '',
+		} as FailInfo;
+
+		// First confirm the precondition so a silent break doesn't make
+		// the cleanup branch the only assertion.
+		expect(live('net1').retryStatus).not.toBeNull();
+		expect(live('net1').failInfo).not.toBeNull();
+
+		applyRetryStatus('net1', null);
+		flushSync();
+
+		expect(live('net1').retryStatus).toBeNull();
+		expect(live('net1').failInfo).toBeNull();
+	});
+
+	it('null status clears failInfo even when retryStatus was already null', () => {
+		// Belt-and-suspenders: the same null-clear must drain failInfo
+		// even if retryStatus was never set (e.g. snapshot arrived
+		// without one). Without this a failInfo left over from an
+		// earlier CONNECTION_FAIL event survives a successful connect.
+		const net = setupNetwork('net1');
+		net.failInfo = {
+			type: 'killed',
+			reason: '',
+			killedReason: '(Ghost)',
+		} as FailInfo;
+
+		applyRetryStatus('net1', null);
+		flushSync();
+
+		expect(live('net1').failInfo).toBeNull();
+	});
+
+	it('is a no-op when the network is unknown', () => {
+		// ircStore stays silent for unknown networkId on every other
+		// apply function (applyIsupportUpdate, applyFail). Match that.
+		expect(() => applyRetryStatus('not-a-network', {
+			attemptCount: 1,
+			nextRetryAtMs: Date.now(),
+			delayMs: 1000,
+		})).not.toThrow();
+		// Same for null — must not throw on a missing network.
+		expect(() => applyRetryStatus('not-a-network', null)).not.toThrow();
+	});
+
+	it('sync snapshot adopts retryStatus when present, nulls when absent (W2-T02 syncing path)', () => {
+		// Update mechanism: the WS fresh-sync netObj carries retryStatus
+		// only when the engine considers it active. Presence drives
+		// apply/clear; absence forces a null — the engine CAN'T ship a
+		// zero-valued retryStatus because `hasRetryStatus` gates that
+		// at the protocol layer (protocol.d:518).
+		setupNetwork('net1');
+		const liveNet1 = () => live('net1');
+		// Pre-existing retry survives if the new sync doesn't ship one.
+		liveNet1().retryStatus = {
+			attemptCount: 4,
+			nextRetryAtMs: Date.now() + 30000,
+			delayMs: 30000,
+		};
+		const incoming = createNetwork({
+			networkId: 'net1',
+		});
+		// Note: incoming.retryStatus is undefined (default). The sync
+		// path's "absent" branch then clears the local retryStatus.
+		updateNetworkFromSync([incoming]);
+		flushSync();
+		// Sync omitted retryStatus — engine-omitted means healthy →
+		// clear locally too. (This is the "fan-out" of TG5.)
+		expect(liveNet1().retryStatus).toBeNull();
+
+		// Now adopt a populated retryStatus from the sync. We populate
+		// the incoming network then call updateNetworkFromSync; the
+		// sync branch must adopt the populated value.
+		const next = createNetwork({ networkId: 'net1' });
+		next.retryStatus = {
+			attemptCount: 7,
+			nextRetryAtMs: Date.now() + 12000,
+			delayMs: 12000,
+		};
+		updateNetworkFromSync([next]);
+		flushSync();
+		expect(liveNet1().retryStatus).toEqual(next.retryStatus);
+	});
+});
+
+describe('applyFail (W2-T02 — engine CONNECTION_FAIL adapter)', () => {
+	const live = (id: string) => ircState.networks.find((n) => n.networkId === id)!;
+
+	it('writes failInfo onto the matching network', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		ircState.networks.push(net);
+		const fail: FailInfo = {
+			type: 'connecting_failed',
+			reason: 'nxdomain',
+		};
+		applyFail('net1', fail);
+		flushSync();
+		expect(live('net1').failInfo).toEqual(fail);
+	});
+
+	it('preserves a populated retryStatus (fail does not clear retry)', () => {
+		// A CONNECTION_FAIL can land while the engine is mid-backoff
+		// (the fail reason arrived; the retry schedule hasn't been
+		// cleared yet). The clear-on-fail belongs to the engine's
+		// NEXT backoff.reset() emit (which calls applyRetryStatus(null));
+		// applyFail alone must NOT touch retryStatus.
+		const net = createNetwork({ networkId: 'net1' });
+		net.retryStatus = {
+			attemptCount: 3,
+			nextRetryAtMs: Date.now() + 8000,
+			delayMs: 8000,
+		};
+		ircState.networks.push(net);
+		applyFail('net1', {
+			type: 'connecting_failed',
+			reason: 'econnrefused',
+		});
+		flushSync();
+		const liveNet = live('net1');
+		expect(liveNet.retryStatus).toEqual({
+			attemptCount: 3,
+			nextRetryAtMs: expect.any(Number),
+			delayMs: 8000,
+		});
+		expect(liveNet.failInfo).toEqual({
+			type: 'connecting_failed',
+			reason: 'econnrefused',
+		});
+	});
+
+	it('preserves structured sslVerifyError (nested shape byte-for-byte)', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		ircState.networks.push(net);
+		const fail: FailInfo = {
+			type: 'connecting_failed',
+			reason: 'ssl_verify_error',
+			sslVerifyError: { type: 'bad_cert', error: 'cert_expired' },
+		};
+		applyFail('net1', fail);
+		flushSync();
+		expect(live('net1').failInfo?.sslVerifyError).toEqual({
+			type: 'bad_cert',
+			error: 'cert_expired',
+		});
+	});
+
+	it('is a no-op when the network is unknown', () => {
+		expect(() => applyFail('not-a-network', {
+			type: 'connecting_failed',
+			reason: 'econnrefused',
+		})).not.toThrow();
 	});
 });

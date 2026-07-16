@@ -211,6 +211,61 @@ export function setPastebinDisablePrompt(value: boolean): void {
   _pastebinDisablePrompt = value;
 }
 
+// ── W2-T03 / W4-T01: server-log "connection events" preference ──
+//
+// IRCCloud collapses connection-attempt events (phases + welcome +
+// MOTD + numerics + ISUPPORT + notices) under a single global
+// `<details>` element, default-collapsed. fiber mirrors that UX:
+// the pref is GLOBAL (not per-network) and defaults to TRUE so the
+// server-log timeline stays restrained out of the box.
+//
+// When true (default), the `<details class="connection-events">` block in
+// ServerLogTimeline is collapsed — the user sees just the per-attempt
+// header (Connecting / Connected / Disconnected) and the count badge in
+// the summary, not the individual phase / welcome / MOTD / ISUPPORT /
+// NOTICE rows.
+//
+// Distinct from `serverlogCollapsedMap`, which is per-attempt (each
+// connection attempt's own collapse state). This is a GLOBAL pref that
+// applies across all networks + attempts, matching IRCCloud's behaviour.
+//
+// Key lives at `ircfiber:serverlogCollapseEvents`. The getter / setter
+// pair is the read API consumed by ServerLogTimeline.svelte (W4-T01)
+// and any future disclosure / collapse affordance. The setter writes
+// to localStorage immediately so a fast page-refresh (< 500ms debounce)
+// preserves the user's toggle.
+//
+// Cross-device sync is intentionally NOT wired to a server endpoint
+// here — the pref lives in localStorage only. Tying it to the existing
+// `updateServerlogCollapsed` REST call (which is shaped for the
+// per-attempt `serverlogCollapsedMap` and uses different storage keys)
+// would conflate two orthogonal collapse concepts. If cross-device
+// sync is requested later, the cheapest path is a new
+// `updateServerlogCollapseEvents` server-side route that mirrors the
+// localStorage key shape; tracked as a follow-up.
+//
+// Persistence:
+//   · Read on first import via `getStorageItem` (TTL-aware).
+//   · Written immediately on every setter call (no debounce) so a fast
+//     page refresh (< 500ms debounce window) doesn't lose the choice.
+//   · Re-read on `storage` events from other tabs (see storage switch
+//     below) so opening a second tab inherits the user's choice.
+let _serverlogCollapseEvents = $state<boolean>(
+  getStorageItem('ircfiber:serverlogCollapseEvents', true)
+);
+
+/** Read the current "show connection events" pref. Default: `true`
+ *  (collapsed). Consumed by ServerLogTimeline.svelte's wrapping
+ *  `<details open={!getServerlogCollapseEvents()}>` attribute. */
+export function getServerlogCollapseEvents(): boolean {
+  return _serverlogCollapseEvents;
+}
+
+export function setServerlogCollapseEvents(value: boolean): void {
+  _serverlogCollapseEvents = value;
+  setStorageItem('ircfiber:serverlogCollapseEvents', value);
+}
+
 // Per-buffer channel preferences (showUnread, mute, formatColor, etc.)
 // Key: `${networkId}:${bufferName}`. Value: partial record of toggles.
 export interface BufferPrefs {
@@ -309,6 +364,7 @@ $effect.root(() => {
   $effect(() => schedulePersistMap('ircfiber:bottomSeen', bottomSeenMap));
   $effect(() => schedulePersistMap('ircfiber:focusSeen', focusSeenMap));
   $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
+  $effect(() => setStorageItem('ircfiber:serverlogCollapseEvents', _serverlogCollapseEvents));
   $effect(() => schedulePersistMap('ircfiber:bufferPrefs', bufferPrefsMap));
   $effect(() => { setStorageItem('ircfiber:globalPrefs', globalPrefs); });
 });
@@ -451,6 +507,25 @@ if (typeof window !== 'undefined') {
       case 'ircfiber:bufferPrefs':       applyObject(bufferPrefsMap as Record<string, BufferPrefs>); break;
       case 'ircfiber:ignores':           applyArray(ignoreList); break;
       case 'ircfiber:highlightWords':    applyArray(highlightWords); break;
+      case 'ircfiber:serverlogCollapseEvents': {
+        // Cross-tab mirror — a second tab toggling the pref via the
+        // server-log context menu (W4-T01) updates this tab in real
+        // time. The dispatch is single-key so we don't accidentally
+        // replay a multi-key storage event from another tab. Scalar
+        // pref — re-read straight into the local $state. Null and
+        // malformed JSON both fall back to the default (true).
+        if (e.newValue === null) {
+          _serverlogCollapseEvents = true;
+        } else {
+          try {
+            const v = JSON.parse(e.newValue);
+            _serverlogCollapseEvents = v === true || v === false ? v : true;
+          } catch {
+            _serverlogCollapseEvents = true;
+          }
+        }
+        break;
+      }
       case 'ircfiber:globalPrefs': {
         try {
           if (e.newValue) {

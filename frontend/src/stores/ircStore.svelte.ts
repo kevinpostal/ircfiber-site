@@ -1,4 +1,4 @@
-import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState } from '../types';
+import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
 import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap } from './preferences.svelte';
@@ -1363,6 +1363,32 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       // value yet (initial load). Treat undefined/missing as false.
       if (net.systemManaged !== undefined) existing.systemManaged = net.systemManaged;
 
+      // W2-T02: sync payload ships `retryStatus` only when the engine
+      // considers it active (gated by `hasRetryStatus` in protocol.d).
+      // Presence adopts the new value; absence (the sync-omitted
+      // case) means the engine considers the network healthy and the
+      // local value must be cleared — the on-store counterpart to the
+      // engine's zero-valued `backoff.reset()` emit. Delegate to the
+      // shared apply* helper so the dual-clear semantics (TG5: clear
+      // BOTH retryStatus AND failInfo on null-status) live in one
+      // place. Mirrors the engine-emitted CONNECTION_RETRY_STATUS
+      // event's identical null payload.
+      if (rawNet.retryStatus && typeof rawNet.retryStatus === 'object') {
+        existing.retryStatus = rawNet.retryStatus as RetryStatus;
+        // Presence of retryStatus on the sync means the engine thinks
+        // we're mid-retry — keep any prior failInfo (rare but
+        // legitimate: the engine might emit a retryStatus AFTER the
+        // failInfo from the same cycle landed).
+      } else {
+        applyRetryStatus(existing.networkId, null);
+      }
+      // failInfo adoption: only when shipped on the wire (no implicit
+      // clear — see the new-network branch for the rationale; absent
+      // here means "engine hasn't shipped yet" not "engine cleared it").
+      if (rawNet.failInfo && typeof rawNet.failInfo === 'object') {
+        existing.failInfo = rawNet.failInfo as FailInfo;
+      }
+
       // Connection state: only overwrite from sync when it represents
       // genuinely new info, not when the sync is just slower than live
       // IRC events (the race window described above).
@@ -1879,6 +1905,36 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       }
       net.chanTypes = net.chanTypes ?? '#';
 
+      // W2-T02: sync payload ships `retryStatus` only when the engine
+      // considers it active (gated by `hasRetryStatus` in protocol.d).
+      // Presence adopts the new value; absence (the sync-omitted
+      // case) means the engine considers the network healthy and the
+      // local value must be cleared — the on-store counterpart to the
+      // engine's zero-valued `backoff.reset()` emit. Mirror the
+      // ISUPPORT branch above so future readers can scan the two
+      // side by side and see the same shape.
+      if (rawNet.retryStatus && typeof rawNet.retryStatus === 'object') {
+        net.retryStatus = rawNet.retryStatus as RetryStatus;
+      } else {
+        // Engine intentionally omitted retryStatus. Clear locally too
+        // — a stale `attemptCount: N` would otherwise survive a
+        // successful reconnect until the next CONNECTION_RETRY_STATUS
+        // arrived (which is post-reconnect, not on the same wire
+        // frame). Also clear failInfo for the same reason: a
+        // successful reconnect should never carry a stale
+        // "Disconnected: ..." line. applyRetryStatus's null-clear
+        // path handles both fields atomically (TG5 invariant).
+        applyRetryStatus(net.networkId, null);
+      }
+      // failInfo has no engine-omits-vs-presents gate; if it was
+      // shipped in the sync, adopt the latest. We DON'T auto-clear
+      // here because absent == "engine just sent an empty failInfo"
+      // which is indistinguishable from "engine hasn't shipped yet".
+      // The CONNECTION_FAIL event path is the authoritative clear.
+      if (rawNet.failInfo && typeof rawNet.failInfo === 'object') {
+        net.failInfo = rawNet.failInfo as FailInfo;
+      }
+
       // Defense-in-depth C (frontend fallback): if the engine's
       // `channelUsersMap` lists a channel that didn't make it into
       // `net.buffers` (engine-side channelState drift — JOIN
@@ -2090,6 +2146,66 @@ export function applyIsupportUpdate(
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
   net.isupport = { ...raw };
+  markNetworkSeen(networkId);
+}
+
+/**
+ * W2-T02: apply the engine's `CONNECTION_RETRY_STATUS` event payload
+ * to a network's `retryStatus` field. The engine emits this event at
+ * every reconnect-loop cycle (see source/ircfiber/irc/connection.d
+ * around line 1595) AND at every `backoff.reset()` site with all-zero
+ * arguments so the frontend can clear both `net.retryStatus` AND
+ * `net.failInfo` in one shot (per plan W1-T01 B3 / TG5).
+ *
+ * Critical invariant (TG5): a `null` status CLEARs BOTH `retryStatus`
+ * AND `failInfo`. Without the dual-clear, a successful reconnect
+ * following a fail cycle would leave a stale "Disconnected: ..."
+ * line on the banner even after the connection came back. The
+ * dispatch boundary in messageHandler.ts converts the engine's
+ * zero-valued payload (`{attemptCount:0, nextRetryAtMs:0, delayMs:0}`)
+ * to a literal `null` before calling this function.
+ */
+export function applyRetryStatus(
+  networkId: string,
+  status: RetryStatus | null,
+): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  net.retryStatus = status;
+  if (!status) {
+    // Same recovery path as the engine's `backoff.reset()` site — a
+    // cleared retry implies "we are no longer in a failure cycle".
+    // Wipe failInfo too so the banner stops showing "Disconnected: ..."
+    // copy on the next render.
+    net.failInfo = null;
+  }
+  markNetworkSeen(networkId);
+}
+
+/**
+ * W2-T02: apply the engine's `CONNECTION_FAIL` event payload to a
+ * network's `failInfo` field. The engine emits this event at the
+ * disconnect path (see source/ircfiber/irc/connection.d around line
+ * 1422-1431 and `IRCRawEvent.makeConnectionFail` in
+ * source/ircfiber/models/irc_event.d). The legacy `disconnectReason`
+ * string is still set elsewhere for back-compat — new code reads
+ * `failInfo` first.
+ *
+ * Note: this function DOES NOT touch `net.retryStatus`. A
+ * CONNECTION_FAIL can arrive while the engine is mid-backoff (the
+ * fail reason just landed; the retry schedule hasn't been cancelled
+ * yet). Clearing belongs to the engine's NEXT `backoff.reset()`
+ * emit, which calls `applyRetryStatus(networkId, null)` and triggers
+ * the dual-clear path above. Splitting the two keeps the dispatch
+ * order canonical: one event → one store function.
+ */
+export function applyFail(
+  networkId: string,
+  failInfo: FailInfo,
+): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  net.failInfo = failInfo;
   markNetworkSeen(networkId);
 }
 
