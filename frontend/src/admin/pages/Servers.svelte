@@ -148,6 +148,33 @@
     }
   }
 
+  async function deleteAssignment(networkId: string, label: string) {
+    // Two-stage confirm: the first confirm asks whether the operator
+    // really wants a destructive full-delete (Mongo + Redis + engine
+    // stop). The second confirm demands they type the network label
+    // back — a typo on a destructive action would be expensive to
+    // reverse (lost scrollback, lost auto-join list, lost SASL creds).
+    const isOrphanRow = !networkId || networkId.length === 0;
+    const firstPrompt = isOrphanRow
+      ? `Remove the ghost row "${label}" from the engine's assignment table? This scrubs the orphan entry from the engine's server record (no Mongo record to delete, no engine client to stop).`
+      : `Permanently delete network "${label}"? This stops the engine client, scrubs Redis state (scrollback, lease, fail counter), and removes the MongoDB config. The user must re-add the network to bring it back.`;
+    if (!confirm(firstPrompt)) return;
+    const typed = prompt(`Type the network label "${label}" to confirm deletion:`);
+    if (typed !== label) {
+      toastError('Delete aborted — label did not match.');
+      return;
+    }
+    try {
+      const res = await api.post<{ networkId: string; serverId: string; scrubbed: boolean }>(
+        `/api/admin/servers/assignments/${encodeURIComponent(networkId)}/delete`
+      );
+      toastSuccess(`Deleted ${label}${res.serverId ? ` (was on ${res.serverId})` : ''}`);
+      await fetchData();
+    } catch (e) {
+      toastError(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
   async function saveRouting() {
     const form = document.getElementById('routing-form') as HTMLFormElement;
     if (!form) return;
@@ -391,6 +418,14 @@
                   class="ml-1 rounded border border-danger/30 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
                 >
                   Remove
+                </button>
+                <button
+                  type="button"
+                  onclick={() => deleteAssignment(a.networkId, label)}
+                  class="ml-1 rounded border border-danger/60 bg-danger/10 px-2 py-1 text-[11px] font-semibold text-danger hover:bg-danger/20"
+                  title={a.networkId ? 'Permanently delete network config + engine client + Redis state' : 'Scrub ghost row from engine assignedNetworks'}
+                >
+                  Delete
                 </button>
               </td>
             </tr>
