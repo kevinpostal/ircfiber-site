@@ -27,10 +27,20 @@ import { render } from 'vitest-browser-svelte';
 import { page } from 'vitest/browser';
 
 import Servers from './Servers.svelte';
-import * as ui from '../stores/ui';
-import { api, ApiError } from '../lib/api-client';
+import * as ui from '/src/admin/stores/ui';
+import { api, ApiError } from '/src/admin/lib/api-client';
 
-vi.mock('../lib/api-client', () => ({
+// `api.get` / `api.post` are the vi.fn() instances from the mock factory
+// below. Cast through `unknown` because the static import sees the real
+// generic type (Promise<T>) but the test runtime sees the vi.fn() value.
+// vitest's hoisting of vi.mock above the import line makes this safe.
+// Same pattern as src/admin/components/logs/LogsToolbar.svelte.test.ts.
+const mockedGet       = api.get                       as unknown as ReturnType<typeof vi.fn>;
+const mockedPost      = api.post                      as unknown as ReturnType<typeof vi.fn>;
+const mockedToastOk   = ui.toastSuccess               as unknown as ReturnType<typeof vi.fn>;
+const mockedToastErr  = ui.toastError                 as unknown as ReturnType<typeof vi.fn>;
+
+vi.mock('/src/admin/lib/api-client', () => ({
   api: {
     get: vi.fn(),
     post: vi.fn(),
@@ -44,13 +54,13 @@ vi.mock('../lib/api-client', () => ({
   },
 }));
 
-vi.mock('../stores/ui', () => ({
+vi.mock('/src/admin/stores/ui', () => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   pollingEnabled: { subscribe: vi.fn() },
 }));
 
-vi.mock('../stores/polling', () => ({
+vi.mock('/src/admin/stores/polling', () => ({
   // Always run the fetcher once immediately so the page renders data
   // without depending on the global pollingEnabled toggle (which would
   // otherwise leave the test fixture empty).
@@ -106,8 +116,8 @@ const baseFixture = (overrides: Partial<typeof fixture> = {}) => ({
 describe('Servers.svelte — Delete button (orphan-network fix)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(api.get).mockResolvedValue(baseFixture());
-    vi.mocked(api.post).mockResolvedValue({ serverId: 'ovh', scrubbed: true });
+    mockedGet.mockResolvedValue(baseFixture());
+    mockedPost.mockResolvedValue({ serverId: 'ovh', scrubbed: true });
   });
 
   it('renders a Delete button on every assignment row', async () => {
@@ -165,7 +175,7 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
 
     // The api.post delete endpoint should NOT have been called; the toast
     // should explain the abort. This guards against a one-click delete.
-    const deleteCalls = vi.mocked(api.post).mock.calls.filter(([url]) =>
+    const deleteCalls = mockedPost.mock.calls.filter(([url]) =>
       String(url).endsWith('/delete')
     );
     expect(deleteCalls).toHaveLength(0);
@@ -179,7 +189,7 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
   it('surfaces API errors via toast instead of silently swallowing them', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('IRC Fiber');
-    vi.mocked(api.post).mockRejectedValueOnce(new ApiError('engine busy', 503));
+    mockedPost.mockRejectedValueOnce(new ApiError('engine busy', 503));
     render(Servers);
     await vi.waitFor(() => expect(api.get).toHaveBeenCalled());
 
@@ -197,8 +207,8 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
     // Simulate the live bug: the engine's assignedNetworks array has an
     // empty-string entry that surfaces in the SPA table as a row with
     // empty networkName / networkHost / userId.
-    vi.mocked(api.get).mockReset();
-    vi.mocked(api.get).mockResolvedValue(
+    mockedGet.mockReset();
+    mockedGet.mockResolvedValue(
       baseFixture({
         assignments: [
           {
@@ -225,7 +235,7 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
   });
 
   it('ghost-row Delete uses a scrubbed-from-server-records prompt (no Mongo to delete)', async () => {
-    vi.mocked(api.get).mockResolvedValue(
+    mockedGet.mockResolvedValue(
       baseFixture({
         assignments: [
           {
@@ -259,7 +269,7 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
     // backend walks every server's assignedNetworks array and strips
     // matching ids.
     await vi.waitFor(() => {
-      const calls = vi.mocked(api.post).mock.calls.filter(([url]) =>
+      const calls = mockedPost.mock.calls.filter(([url]) =>
         String(url).endsWith('/delete')
       );
       expect(calls).toHaveLength(1);
