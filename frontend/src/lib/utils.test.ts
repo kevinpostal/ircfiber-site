@@ -12,6 +12,7 @@ import {
   getIrcCloudTypeClass,
   formatNumericText,
   normaliseIdentifier,
+  normalizeChannelName,
   nickColorIndex,
   parseChannelList,
   getDisplayName,
@@ -475,5 +476,51 @@ describe('isSkippedCommand — server-log spam filters', () => {
     const { isSkippedCommand } = await import('./utils');
     expect(isSkippedCommand('001')).toBe(false);
     expect(isSkippedCommand('433')).toBe(false);
+  });
+});
+
+describe('normalizeChannelName', () => {
+  // The function used to unconditionally `#`-prefix everything, which was
+  // fine for channels but turned a query buffer named `faggy_6094`
+  // into `#faggy_6094` — silently breaking the PM send because the
+  // engine's synthetic self-message (`event.channel = target`) was
+  // stored under `net:#faggy_6094` while MessageList's `bufferKey`
+  // read from `net:faggy_6094` (the bare activeBuffer.bufferName set
+  // when the conversation was opened). The fix: only modify names
+  // that already look like channels.
+
+  it('lowercases channel names', () => {
+    expect(normalizeChannelName('#Zod')).toBe('#zod');
+    expect(normalizeChannelName('#WELCOME')).toBe('#welcome');
+    expect(normalizeChannelName('#welcome')).toBe('#welcome');
+  });
+
+  it('passes nick-based query buffers through unchanged', () => {
+    // These are bare nicks used as ircState buffer names. The PM-active
+    // buffer `"faggy_6094"` MUST stay that way so the engine's
+    // synthetic self-message stored under the same key actually shows
+    // up in MessageList (which builds the lookup key from the bare
+    // activeBuffer.bufferName).
+    expect(normalizeChannelName('faggy_6094')).toBe('faggy_6094');
+    expect(normalizeChannelName('Zod')).toBe('Zod');
+    expect(normalizeChannelName('alice')).toBe('alice');
+  });
+
+  it('passes the _server buffer unchanged', () => {
+    expect(normalizeChannelName('_server')).toBe('_server');
+  });
+
+  it('returns empty string for empty input', () => {
+    expect(normalizeChannelName('')).toBe('');
+  });
+
+  it('does not collapse bare names into `#`-prefixed keys', async () => {
+    // Regression test for the PM send bug: pre-fix, normalizeChannelName
+    // turned `"alice"` into `"#alice"` and broke the lookup. Make sure
+    // that round-tripping through the function doesn't introduce a `#`.
+    const { normalizeChannelName: n } = await import('./utils');
+    expect(n('alice')).not.toMatch(/^#/);
+    expect(n('Zod')).not.toMatch(/^#/);
+    expect(n('faggy_6094_')).not.toMatch(/^#/);
   });
 });

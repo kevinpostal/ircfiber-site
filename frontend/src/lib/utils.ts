@@ -24,8 +24,17 @@ export function stripHash(name: string): string {
 
 export function normalizeChannelName(name: string): string {
   if (!name || name === '_server') return name;
-  const ch = name.startsWith('#') ? name : '#' + name;
-  return '#' + ch.substring(1).toLowerCase();
+  // Channels are case-insensitive on IRC (`#Zod` === `#zod`) and we
+  // lower-case them so the buffer key (`<net>:<chan>`) collides them
+  // for storage + lookup. PM/query buffers are bare nicks — they must
+  // NOT be `#`-prefixed here, otherwise the engine's synthetic
+  // self-message (`event.channel = target`) lands under
+  // `<net>:#faggy_6094` while MessageList looks up `<net>:faggy_6094`
+  // (where the buffer was registered when switchToBuffer opened the
+  // conversation), so the message disappears from view. Conditionally
+  // prepend `#` only for the names that already look like channels.
+  if (name[0] !== '#') return name;
+  return name.toLowerCase();
 }
 
 /**
