@@ -131,6 +131,26 @@ describe('NetworkForm', () => {
     expect(call[1]).not.toHaveProperty('nspass');
   });
 
+  it('Update mode includes autoJoinDelaySeconds in payload', async () => {
+    const network = createNetwork({ autoJoinDelaySeconds: 6 });
+    ircState.networks.push(network);
+    const onClose = vi.fn();
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    const call = mockUpdateNetwork.mock.calls[0];
+    expect(call[1]).toHaveProperty('autoJoinDelaySeconds', 6);
+  });
+
+  it('Advanced options exposes auto-join delay and pre-fills it', async () => {
+    const network = createNetwork({ autoJoinDelaySeconds: 6 });
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
+    const delay = page.getByLabelText(/Auto-join delay/).element() as HTMLInputElement;
+    expect(delay).toBeTruthy();
+    expect(delay.value).toBe('6');
+  });
+
   it('Edit mode pre-fills autoJoinChannels from existing network state', async () => {
     const network = createNetwork({ autoJoinChannels: ['#chat', '#feedback'] });
     ircState.networks.push(network);

@@ -114,6 +114,10 @@ export interface Network {
   /** Channels the user has configured to auto-join. Mirrors the backend
    *  `autoJoinChannels` field; populated by WS sync and by the add flow. */
   autoJoinChannels?: string[];
+  /** Seconds to wait after connecting before auto-JOINs are sent (0 =
+   *  join immediately after registration). Some IRCds (SuperNETs/
+   *  DangerousIRCd) throttle JOIN inside the first 5s of a connection. */
+  autoJoinDelaySeconds?: number;
   buffers: Buffer[];
   awayNicks: Set<string>;
   // Server capabilities (from CAP)

@@ -29,6 +29,7 @@
   let nick = $state('');
   let realName = $state('');
   let autoJoinChannels = $state('');
+  let autoJoinDelaySeconds = $state(0);
   let nspass = $state('');
   let serverPass = $state('');
   let commands = $state('');
@@ -51,6 +52,7 @@
       nick = existing.nick;
       realName = existing.realName;
       autoJoinChannels = (existing.autoJoinChannels ?? []).join(', ');
+      autoJoinDelaySeconds = existing.autoJoinDelaySeconds ?? 0;
       nspass = '';
       serverPass = '';
       commands = '';
@@ -65,6 +67,7 @@
       nick = '';
       realName = '';
       autoJoinChannels = '';
+      autoJoinDelaySeconds = 0;
       nspass = '';
       serverPass = '';
       commands = '';
@@ -87,7 +90,7 @@
       if (mode === 'add') {
         const result = await onAddNetwork({
           name, host, port, tls, nick, realName,
-          autoJoinChannels, nspass, serverPass, commands,
+          autoJoinChannels, autoJoinDelaySeconds, nspass, serverPass, commands,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
           saslPassword: saslMechanism !== 'none' ? saslPassword : undefined,
@@ -115,6 +118,8 @@
             disconnectReason: '',
             isAway: false,
             awayMessage: '',
+            autoJoinChannels: (result.autoJoinChannels as string[]) ?? [],
+            autoJoinDelaySeconds: (result.autoJoinDelaySeconds as number) ?? 0,
             buffers: [{
               name: '_server', type: 'server' as const, isJoined: true,
               unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
@@ -151,6 +156,7 @@
           saslUsername: saslMechanism !== 'none' ? saslUsername : '',
           saslPassword: saslMechanism !== 'none' && saslPassword ? saslPassword : undefined,
           autoJoinChannels: parsedChannels,
+          autoJoinDelaySeconds,
         });
 
         // Mirror the saved fields into local state so the form pre-fills
@@ -166,6 +172,7 @@
           if (saslPassword) existing.saslPassword = saslPassword;
           if (realName) existing.realName = realName;
           existing.autoJoinChannels = parsedChannels;
+          existing.autoJoinDelaySeconds = autoJoinDelaySeconds;
           // nick is handled separately below because it also needs NICK raw
           if (nickChanged) {
             existing.nick = nick;
@@ -389,6 +396,19 @@
                         <span>Reveal</span>
                       </label>
                     </div>
+                  </td>
+                </tr>
+                <tr>
+                  <th class="joindelay optional" colspan="2">
+                    <label for="add-network-join-delay">
+                      Auto-join delay <small class="explanation">— seconds to wait after connecting before sending the channel JOINs above. Some IRCds (e.g. SuperNETs) reject JOINs sent in the first 5 seconds of a connection; set this to 6 or higher to wait that out. 0 joins immediately after registration.</small>
+                    </label>
+                  </th>
+                </tr>
+                <tr>
+                  <td class="joindelay optional" colspan="2">
+                    <input id="add-network-join-delay" class="input" type="number"
+                           bind:value={autoJoinDelaySeconds} min="0" max="300" step="1" />
                   </td>
                 </tr>
 
