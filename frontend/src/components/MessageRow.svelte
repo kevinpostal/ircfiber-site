@@ -22,7 +22,7 @@
   const cmd = $derived(msg.command);
   const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
   const isLifecycle = $derived(['CONNECT', 'DISCONNECT'].includes(cmd));
-  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
+  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','WHOIS_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
   const isAction = $derived(msg.type === 'action');
   // Server-log progress entries from the engine carry a `phase` tag. We
   // expose both a boolean (for styling) and the raw phase (for the
@@ -31,6 +31,7 @@
   const isServerLog = $derived(!!phase && cmd === 'NOTICE' && !msg.nick);
   const phaseLabel = $derived(isServerLog ? phaseToLabel(phase) : '');
   const isJoinPartGroup = $derived(cmd === 'JOINPART_GROUP');
+  const isWhoisGroup = $derived(cmd === 'WHOIS_GROUP');
   const isGrouped = $derived(isJoinPartGroup);
   const typeClass = $derived(getIrcCloudTypeClass(cmd, msg.params, msg.type));
 
@@ -299,6 +300,36 @@
         + ` was kicked by ${escapeHtml(nick)}` + (msg.text ? ` (${renderText(msg.text)})` : '');
     } else if (cmd === 'INVITE') {
       inner += '<span class="prefix">&#x2192;</span> ' + escapeHtml(nick) + ' invited ' + escapeHtml(msg.params?.[0] || '') + ' to ' + escapeHtml(msg.params?.[1] || '');
+    } else if (cmd === 'WHOIS_GROUP') {
+      const w = (msg as any).whois as any;
+      const failed = (msg as any).whoisFailed;
+      if (failed) {
+        inner += '<span class="prefix">&#x2715;</span> No such nick: <b>' + escapeHtml(w?.nick || nick) + '</b>';
+      } else if (w) {
+        // IRCCloud-style inline WHOIS block — compact, monospace labels, fiber colors
+        const esc = escapeHtml;
+        const idleStr = w.idle ? (()=>{const m=Math.floor(w.idle/60), s=w.idle%60; return m>0?`${m}m ${s}s`:`${s}s`;})() : '';
+        const signonStr = w.signon ? new Date(w.signon*1000).toLocaleString() : '';
+        inner += '<div class="whoisInline">';
+        inner += '<div class="whoisInline__head"><span class="whoisInline__nick">' + esc(w.nick) + '</span> <span class="whoisInline__host">' + esc(w.user||'') + '@' + esc(w.host||'') + '</span></div>';
+        if (w.realname) inner += '<div class="whoisInline__row"><span class="whoisInline__label">real name</span><span class="whoisInline__val">' + esc(w.realname) + '</span></div>';
+        if (w.server) inner += '<div class="whoisInline__row"><span class="whoisInline__label">server</span><span class="whoisInline__val">' + esc(w.server) + (w.serverInfo ? ' <span class="whoisInline__info">(' + esc(w.serverInfo) + ')</span>' : '') + '</span></div>';
+        if (w.account) inner += '<div class="whoisInline__row"><span class="whoisInline__label">account</span><span class="whoisInline__val">' + esc(w.account) + '</span></div>';
+        if ((w as any).operator) inner += '<div class="whoisInline__row"><span class="whoisInline__label">operator</span><span class="whoisInline__val">is an IRC operator</span></div>';
+        if (w.away) inner += '<div class="whoisInline__row"><span class="whoisInline__label">away</span><span class="whoisInline__val">' + esc(w.away) + '</span></div>';
+        if (w.secure) inner += '<div class="whoisInline__row"><span class="whoisInline__label">secure</span><span class="whoisInline__val">using a secure connection</span></div>';
+        if (w.idle || w.signon) {
+          let idlePart = w.idle ? 'idle ' + idleStr : '';
+          let sep = (w.idle && w.signon) ? ', ' : '';
+          let signonPart = w.signon ? 'signed on ' + esc(signonStr) : '';
+          inner += '<div class="whoisInline__row"><span class="whoisInline__label">idle</span><span class="whoisInline__val">' + idlePart + sep + signonPart + '</span></div>';
+        }
+        if (w.channels && w.channels.length) {
+          const chHtml = w.channels.map((c:string)=>'<span class="bufferLink channel link">' + esc(c) + '</span>').join(' ');
+          inner += '<div class="whoisInline__row"><span class="whoisInline__label">channels</span><span class="whoisInline__val">' + chHtml + '</span></div>';
+        }
+        inner += '</div>';
+      }
     } else if (cmd === 'AWAY') {
       inner += '<span class="prefix">&#x2026;</span> ' + escapeHtml(nick) + ' is ' + (msg.text ? 'away: ' + msg.text : 'back');
     } else if (cmd === 'ACCOUNT') {

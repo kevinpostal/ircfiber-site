@@ -100,7 +100,8 @@
 
   function doWhois(): void {
     if (networkId) {
-      ircState.pendingWhois.add(displayNick.toLowerCase());
+      const buf = ircState.activeBuffer.bufferName || displayNick;
+      ircState.pendingWhois.set(displayNick.toLowerCase(), { networkId, bufferName: buf, ts: Date.now() });
       onSendRaw(networkId, 'WHOIS ' + displayNick);
     }
     close();

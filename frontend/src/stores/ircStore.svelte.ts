@@ -79,11 +79,11 @@ export const ircState = $state({
   // Nicks the user has explicitly requested WHOIS for (via /whois or the
   // user-popup "Whois" action). The server also sends automatic WHOIS
   // queries on JOIN to discover realnames (see ircfiber/irc/connection.d),
-  // but those should NOT pop up the WHOIS overlay. App.svelte consumes
-  // this set to gate the overlay. Entries are removed when the matching
-  // WHOIS completes (318) or fails (401).
-  pendingWhois: new Set<string>(),
-  // IRCCloud backlogDivider: per-buffer marker identifying the message that
+  // but those should NOT pop up the WHOIS overlay or inline block.
+  // We store the originating buffer so the inline WHOIS_GROUP can be
+  // appended to the right channel/query (IRCCloud shows WHOIS where you
+  // typed /whois, not always in the active buffer at response time).
+  pendingWhois: new Map<string, { networkId: string; bufferName: string; ts: number }>(),
   // was the earliest rendered message before the last backlog fetch. The
   // divider row renders immediately above it (BufferLogView.renderBacklogDivider).
   // Only one divider exists per buffer at a time; cleared on buffer switch

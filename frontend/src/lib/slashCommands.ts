@@ -76,7 +76,8 @@ registerSlash(['invite'], (args, networkId, target) => {
 
 registerSlash(['whois', 'wi'], (args, networkId) => {
   if (!args[0]) throw new Error('Usage: /whois <nickname>');
-  ircState.pendingWhois.add(args[0].toLowerCase());
+  const buf = ircState.activeBuffer.bufferName || args[0];
+  ircState.pendingWhois.set(args[0].toLowerCase(), { networkId, bufferName: buf, ts: Date.now() });
   sendRaw(networkId, 'WHOIS ' + args[0]);
 });
 

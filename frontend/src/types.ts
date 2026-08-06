@@ -402,6 +402,12 @@ export interface DiscoGroupMessage extends IRCMessage {
   sentences: string;    // Pre-rendered HTML
 }
 
+export interface WhoisGroupMessage extends IRCMessage {
+  command: 'WHOIS_GROUP';
+  whois: WhoisData;
+  expanded?: boolean;
+}
+
 export interface ActiveBuffer {
   networkId: string | null;
   bufferName: string | null;
@@ -458,6 +464,8 @@ export interface WhoisData {
   account: string;
   secure: boolean;
   away: string;
+  operator?: boolean;
+  waway?: string;
 }
 
 export interface BanEntry {

@@ -188,7 +188,7 @@ export function processIrcEvent(
   const result: { whoisData?: WhoisData; whoisFailedNick?: string; banListData?: BanListData } = {};
 
   // ── Whois accumulation ──
-  if (/^3(11|312|313|317|319|330)$/.test(cmd)) {
+  if (/^(311|312|313|317|319|330|301|671)$/.test(cmd)) {
     if (!accum.whoisAcc || accum.whoisAcc.nick !== msg.params?.[0]) {
       accum.whoisAcc = { nick: msg.params?.[0] || '' };
     }
@@ -454,6 +454,14 @@ function accumulateWhois(accum: AccumState, cmd: string, params: string[], text:
       accum.whoisAcc.server = params[1];
       accum.whoisAcc.serverInfo = text;
       break;
+    case '301':
+      // RPL_AWAY: nick :away message
+      accum.whoisAcc.away = text;
+      break;
+    case '313':
+      // RPL_WHOISOPERATOR: nick :is an IRC operator
+      (accum.whoisAcc as any).operator = true;
+      break;
     case '317':
       accum.whoisAcc.idle = parseInt(params[1] || '0', 10);
       accum.whoisAcc.signon = parseInt(params[2] || '0', 10);
@@ -463,6 +471,10 @@ function accumulateWhois(accum: AccumState, cmd: string, params: string[], text:
       break;
     case '330':
       accum.whoisAcc.account = params[1];
+      break;
+    case '671':
+      // RPL_WHOISSECURE: nick :is using a secure connection
+      accum.whoisAcc.secure = true;
       break;
   }
 }

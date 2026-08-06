@@ -607,26 +607,17 @@
         }
       }
 
-      // IRCCloud scrollToBottom: only scroll if we're not already at the
-      // bottom.  Re-reading the DOM here is the same pattern as IRCCloud's
-      // isScrolledToBottom(true) inside scrollToBottom — checking the live
-      // position, not the cached value, so we never scroll unnecessarily
-      // when the content grew but the user is already at the end.
-      const scrollHeight = container.scrollHeight;
-      const offsetHeight = container.clientHeight;
-      const scrollPos = Math.ceil(container.scrollTop);
-      const bottom = (scrollHeight - offsetHeight) + 1;
-      const atBottom = (bottom - scrollPos) <= 1;
-      if (!atBottom) {
-        // Snap to bottom. We're inside a $effect, so the DOM has already
-        // been updated by Svelte — no need to wait for an rAF. The browser
-        // applies the scroll on the next paint, which is what we want
-        // (we want a single paint, not a 16ms gap). For huge batches
-        // (50+ new messages) the rAF was adding a frame of latency that
-        // made the chat feel like it "wasn't keeping up" with rapid input.
-        container.scrollTop = scrollHeight;
-        cachedAtTop = false;
-      }
+      // IRCCloud scrollToBottom: snap to bottom when pinned.
+      // We always snap when cachedAtBottom is true, even if atBottom
+      // already true, to ensure small status rows like "is away: Auto-away"
+      // are visible. The previous "only if !atBottom" optimization relied on
+      // browser anchoring, but for collapsed JOINPART groups or reordered
+      // timestamps the new row may not be at the visual bottom.
+      container.scrollTop = container.scrollHeight;
+      // Force reflow to ensure clamped position
+      void container.scrollHeight;
+      container.scrollTop = container.scrollHeight;
+      cachedAtTop = false;
     } else if (newDivider && cachedAtTop) {
       // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
       requestAnimationFrame(() => {
