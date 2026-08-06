@@ -78,6 +78,15 @@
   // ── Group into connection attempts ───────────────────────────────
   const attempts = $derived(groupServerLog(visibleMessages));
 
+  // Live ticker for pending duration — ticks 1s while a pending attempt exists
+  let liveNow = $state<number>(Date.now());
+  $effect(() => {
+    const hasPending = attempts.some((a) => a.status === 'pending');
+    if (!hasPending) return;
+    const id = setInterval(() => { liveNow = Date.now(); }, 1000);
+    return () => clearInterval(id);
+  });
+
   // ── Helpers ──────────────────────────────────────────────────────
   function formatTime(ts: number | undefined): string {
     if (!ts) return '';
@@ -142,7 +151,19 @@
   //   003 : "This server was created <human-readable date>"
   //   004 : "<nick> <server> <version> <user-modes> <chan-modes> <chan-modes-with-prefix>"
   type WelcomeSeg = { text: string; kind: 'plain' | 'network' | 'nick' | 'host' | 'version' | 'date' | 'mode-table' | 'mode-prefix' };
-  function parseWelcomeLine(cmd: string, body: string): WelcomeSeg[] {
+  function formatCreatedDate(ts?: number): string {
+    if (!ts) return 'recently';
+    try { return new Date(ts).toUTCString(); } catch { return 'recently'; }
+  }
+  function parseWelcomeLine(cmd: string, body: string, ts?: number): WelcomeSeg[] {
+    if (body.includes('__DATE__') || body.includes('__TIME__')) {
+      const fallback = formatCreatedDate(ts);
+      const sub = body.replace('__DATE__', fallback.split(' ').slice(0,4).join(' ')).replace(' at __TIME__', '').replace('__TIME__', '').trim();
+      if (sub.includes('__')) {
+        return [{ text: 'This server was created ', kind: 'plain' }, { text: fallback, kind: 'date' }];
+      }
+      body = sub;
+    }
     if (cmd === '001') {
       const m = body.match(/^Welcome to the (.+?) IRC Network (.+)$/);
       return m
@@ -328,11 +349,21 @@
     const key = getCollapsedKey(a);
     if (serverlogHiddenMap[key] === true) return true;
     if (a.status === 'pending') return serverlogCollapsedMap[key] === true;
-    // For ended attempts, default collapsed — but always show the most
-    // recent attempt expanded so the user can see the current state.
-    if (index === total - 1) return serverlogCollapsedMap[key] === true;
-    return serverlogCollapsedMap[key] !== false;
+    // Stable default: ended attempts are collapsed unless user expanded.
+    // Don't use index===total-1 — it flips previous most-recent from expanded to collapsed the instant a new attempt arrives, flashing the timeline.
+    if (key in serverlogCollapsedMap) return serverlogCollapsedMap[key] === true;
+    return true;
   }
+
+  // One-time init: keep newest ended attempt expanded on first sight without making isCollapsed reactive to total
+  $effect(() => {
+    if (!network?.networkId || attempts.length === 0) return;
+    const last = attempts[attempts.length - 1];
+    if (!last || last.status === 'pending') return;
+    const key = getCollapsedKey(last);
+    if (!key || key in serverlogCollapsedMap) return;
+    serverlogCollapsedMap[key] = false;
+  });
 
   function toggleAttempt(a: ServerLogAttempt, e: MouseEvent): void {
     e.preventDefault();
@@ -378,12 +409,12 @@
   {#if attempts.length === 0}
     <div class="serverLogTimeline__empty">No connection history yet.</div>
   {:else}
-    {#each attempts as attempt, i (attempt.start.id || i)}
+    {#each attempts as attempt, i (getCollapsedKey(attempt) || attempt.start.id || String(i))}
       {@const collapsed = isCollapsed(attempt, i, attempts.length)}
       {@const headerLabel = getHeaderLabel(attempt)}
       {@const hostLabel = getHostLabel(attempt, network)}
-      {@const durationMs = attemptDuration(attempt)}
-      {@const durationLabel = durationMs != null ? formatDuration(durationMs) : ''}
+      {@const durationMs = attempt.status === 'pending' && attempt.start.t ? liveNow - attempt.start.t : attemptDuration(attempt)}
+      {@const durationLabel = durationMs != null && durationMs >= 0 ? formatDuration(durationMs) : ''}
       {@const kind = getStatusKind(attempt)}
       {@const glyph = getStatusGlyph(attempt)}
 
@@ -449,9 +480,10 @@
           (attempt.notices.length > 0 ? 1 : 0)}
         <details
           class="connection-events"
-          bind:open={eventsOpen}
+          open={eventsOpen}
           ontoggle={(e) => {
             const isOpen = (e.currentTarget as HTMLDetailsElement).open;
+            if (isOpen === eventsOpen) return;
             setServerlogCollapseEvents(!isOpen);
           }}
           data-testid="connection-events"
@@ -481,7 +513,7 @@
                  splits the flat RPL body into typed segments; the template
                  renders each with .welcome-seg--{kind}. -->
             {#each attempt.welcome as msg, wi (wi)}
-              {@const segments = parseWelcomeLine(msg.command ?? '', numericBody(msg))}
+              {@const segments = parseWelcomeLine(msg.command ?? '', numericBody(msg), msg.t)}
               <div class="row row--info" data-cmd={msg.command}>
                 <span class="row-accent row-accent--cyan" aria-hidden="true"></span>
                 <span class="row-content">
@@ -627,6 +659,7 @@
 
   .serverLogTimeline {
     padding: 0;
+    contain: content;
   }
 
   /* ── Header (one-line) ──────────────────────────────────────────── */

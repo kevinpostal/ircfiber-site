@@ -83,7 +83,12 @@ describe('ConnectionStatus — banner states (W3-T01)', () => {
     pushNetwork({ isAway: true, connected: true });
     render(ConnectionStatus);
     await expect.element(page.getByText('Away')).toBeInTheDocument();
-    await expect.element(page.getByText(/Click to come back/)).toBeInTheDocument();
+    // Calm-mono redesign: the CTA pill is gone from the visible DOM and
+    // lives in the row's aria-label instead. Verify via the accessible
+    // role+name so screen-reader users hear the action hint.
+    await expect.element(
+      page.getByRole('button', { name: /Click to come back/ }),
+    ).toBeInTheDocument();
   });
 
   it('renders Connecting to <host> when state=connecting', async () => {
@@ -199,18 +204,16 @@ describe('ConnectionStatus — banner states (W3-T01)', () => {
   });
 
   it('hides banner entirely when fully connected and not away', async () => {
-    // W3-rev1: `connectionState === 'connected'` is now reserved for the
-    // handshake window (per the IRCCloud parity spec), so the engine
-    // signal that means "fully ready, no transient state" is whatever
-    // value the engine emits once JOINs finish. We model that here as
-    // `connected: true` + a connectionState that's NOT one of the
-    // transient values — for the test, we use 'disconnected' as the
-    // most-recent engine state. The combined effect: isDisconnected is
-    // false (since connected=true), so the showStatus gate reduces to
-    // isAway || isTransient → false, and the cell hides.
+    // The engine's `ConnectionState.connected` is the only "alive" value
+    // and never transitions out until disconnect, so `connected: true`
+    // + `connectionState: 'connected'` is the realistic post-handshake
+    // state. Previously (W3-rev1) the banner stuck at "Connected;
+    // handshaking…" here — see the regression note on `isTransient` in
+    // ConnectionStatus.svelte for the full root cause. Now the banner
+    // hides as soon as registration completes.
     pushNetwork({
       connected: true,
-      connectionState: 'disconnected',
+      connectionState: 'connected',
       isAway: false,
     });
     render(ConnectionStatus);
@@ -224,17 +227,6 @@ describe('ConnectionStatus — transient state coverage (W3-rev1)', () => {
     pushNetwork({ connected: false, connectionState: 'queued', host: 'irc.example.com' });
     render(ConnectionStatus);
     await expect.element(page.getByText(/Connection queued; waiting our turn/)).toBeInTheDocument();
-  });
-
-  it('renders "Connected; handshaking…" when connectionState=connected (handshake window)', async () => {
-    pushNetwork({
-      connected: true,
-      connectionState: 'connected',
-      host: 'irc.example.com',
-      isAway: false,
-    });
-    render(ConnectionStatus);
-    await expect.element(page.getByText(/Connected; handshaking/)).toBeInTheDocument();
   });
 
   it('renders "Connected; setting up…" when connectionState=connected_joining', async () => {
@@ -420,13 +412,15 @@ describe('ConnectionStatus — inline warnings (W3-T01)', () => {
 });
 
 describe('ConnectionStatus — button behaviour (W3-T01)', () => {
-  it('shows "Click to reconnect" by default', async () => {
+  it('exposes "Click to reconnect" in the row aria-label by default', async () => {
     pushNetwork({ connected: false, connectionState: 'disconnected', disconnectReason: 'lost' });
     render(ConnectionStatus);
-    await expect.element(page.getByText(/Click to reconnect/)).toBeInTheDocument();
+    await expect.element(
+      page.getByRole('button', { name: /Click to reconnect/ }),
+    ).toBeInTheDocument();
   });
 
-  it('shows "Click to disconnect" when badRetry=true', async () => {
+  it('exposes "Click to disconnect" in the row aria-label when badRetry=true', async () => {
     pushNetwork({
       connected: false,
       connectionState: 'disconnected',
@@ -434,13 +428,17 @@ describe('ConnectionStatus — button behaviour (W3-T01)', () => {
       failInfo: { type: 'connection_blocked' },
     });
     render(ConnectionStatus);
-    await expect.element(page.getByText(/Click to disconnect/)).toBeInTheDocument();
+    await expect.element(
+      page.getByRole('button', { name: /Click to disconnect/ }),
+    ).toBeInTheDocument();
   });
 
   it('calls reconnect on click when not badRetry', async () => {
     pushNetwork({ connected: false, connectionState: 'disconnected', disconnectReason: 'lost' });
     render(ConnectionStatus);
-    await page.getByText(/Click to reconnect/).click();
+    // Calm-mono redesign: the whole bar is the button. Click the visible
+    // headline (the user-visible click target) — bubbles to handleClick.
+    await page.getByText(/^Disconnected: lost$/).click();
     expect(reconnectNetwork).toHaveBeenCalledWith('net1');
   });
 
@@ -452,15 +450,33 @@ describe('ConnectionStatus — button behaviour (W3-T01)', () => {
       failInfo: { type: 'connection_blocked' },
     });
     render(ConnectionStatus);
-    await page.getByText(/Click to disconnect/).click();
+    await page.getByText(/^Disconnected - Connections to this server have been blocked$/).click();
     expect(disconnectNetwork).toHaveBeenCalledWith('net1', expect.any(String));
   });
 
   it('calls sendRaw(AWAY) on Away click', async () => {
     pushNetwork({ isAway: true, connected: true });
     render(ConnectionStatus);
+    // Away's headline is still just "Away" — click the visible text.
     await page.getByText('Away').click();
     expect(sendRaw).toHaveBeenCalledWith('net1', 'AWAY');
+  });
+
+  it('disables the row when the banner is non-actionable (connecting)', async () => {
+    // W3-redux: transient connecting states show the headline but the row
+    // has no in-band cancel — match IRCCloud and don't pretend the bar
+    // is tappable. The <button> must be `disabled` so keyboard / screen
+    // readers know not to expect an action.
+    pushNetwork({ connected: false, connectionState: 'connecting', host: 'irc.example.com' });
+    render(ConnectionStatus);
+    const headline = page.getByText(/Connecting to irc\.example\.com/);
+    const button = headline.element().closest('button.connectionStatus__row');
+    expect(button).not.toBeNull();
+    // Debug: dump the rendered HTML so we can see what Svelte actually
+    // emitted. Cheap on a 1-row bar.
+    const html = button?.outerHTML ?? '<missing>';
+    expect(button?.disabled).toBe(true);
+    expect({ html, disabled: button?.disabled }).toEqual({ html, disabled: true });
   });
 });
 

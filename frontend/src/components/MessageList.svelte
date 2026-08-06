@@ -134,13 +134,32 @@
     return jpFiltered;
   });
 
-  function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean {
-    if (!prev) return false;
+  function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean;
+  function checkSameAuthor(msg: IRCMessage, messages: IRCMessage[], index: number): boolean;
+  function checkSameAuthor(msg: IRCMessage, prevOrMessages: IRCMessage[] | IRCMessage | null, index?: number): boolean {
     if (msg.command !== 'PRIVMSG' && msg.type !== 'action') return false;
-    if (prev.command !== 'PRIVMSG' && prev.type !== 'action') return false;
     const nick = stripPrefix(msg.nick || '');
+    if (!nick) return false;
+    let prev: IRCMessage | null = null;
+    if (Array.isArray(prevOrMessages) && typeof index === 'number') {
+      // Smart grouping: skip over JOIN/PART/NICK system messages so a
+      // single "Zod joined" between two bursts from the same nick
+      // doesn't split the bubble.
+      for (let j = index - 1; j >= 0; j--) {
+        const cand = prevOrMessages[j];
+        if (cand.command === 'PRIVMSG' || cand.type === 'action') { prev = cand; break; }
+        if (JOIN_PART_COMMANDS.has(cand.command)) continue;
+        if (cand.command === 'MOTD_GROUP' || /^\d{3}$/.test(cand.command)) continue;
+        continue;
+      }
+      if (!prev) return false;
+    } else {
+      prev = prevOrMessages as IRCMessage | null;
+      if (!prev) return false;
+      if (prev.command !== 'PRIVMSG' && prev.type !== 'action') return false;
+    }
     const prevNick = stripPrefix(prev.nick || '');
-    if (!nick || !prevNick || nick !== prevNick) return false;
+    if (!prevNick || prevNick !== nick) return false;
     return true;
   }
 
@@ -573,7 +592,7 @@
               // class only if they start a new group.
               const msg = allMsgs[i];
               const isGroupHead = msg.command !== 'PRIVMSG' && msg.type !== 'action'
-                || (i > 0 && !checkSameAuthor(msg, allMsgs[i - 1]));
+                || (i > 0 && !checkSameAuthor(msg, allMsgs, i));
               if (!foundBoundary || isGroupHead) {
                 newKeys.add(key);
                 foundBoundary = true;
@@ -1043,7 +1062,7 @@
            (ChatterBar, ScrollClock, bottomSeen) keeps working. -->
       <ServerLogTimeline messages={rawMessages} network={activeNetwork} />
     {:else}
-      {#each messagesWithDates as item (item._key)}
+      {#each messagesWithDates as item, idx (item._key)}
         {@const msg = item.msg}
         {@const msgDate = item.msgDate}
         {@const prevDate = item.prevDate}
@@ -1065,7 +1084,7 @@
           <MessageRow
             {msg}
             isHighlight={msg.highlight ?? false}
-            isSameAuthor={checkSameAuthor(msg, prevMsg)}
+            isSameAuthor={checkSameAuthor(msg, messagesWithDates.map(x=>x.msg), idx)}
             isEntrance={entranceKeys.has(itemKeyOf(msg))}
             {onNickClick}
             {memberByNick}

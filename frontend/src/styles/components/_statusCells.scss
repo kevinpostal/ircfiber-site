@@ -50,142 +50,40 @@
   text-align: center;
 }
 
-/* Connection status cell — IRCCloud-style pill */
+/* Connection status cell.
+   The visible chrome (borders, padding, state colours) is owned by
+   `frontend/src/components/ConnectionStatus.svelte` under the calm
+   minimal-mono redesign (W3-redux). This file only owns the show/hide
+   toggle so ChatArea can collapse the cell when there's nothing to say
+   without disturbing the new Svelte-scoped styles.
+
+   History: the original IRCCloud-style "pill" (rounded background,
+   colors per state, spinner) was replaced by the W3-T01 IRCCloud-parity
+   palette and then by the calm minimal-mono redesign; the legacy
+   `.connectionStatus.connecting / .away / a.reconnect` rules below
+   would fight the Svelte component's borders + colours, so they were
+   removed alongside the redesign. If you need to debug a regression in
+   the Svelte banner, look there first. */
 .connectionstatuscell {
   display: none;
   font-size: 13px;
   text-align: center;
   flex-shrink: 0;
-  padding: 0 16px;
+  padding: 0;
 }
 
 .connectionstatuscell.show {
   display: block;
 }
 
-.connectionStatus {
-  display: none;
-  margin: 6px 0;
-  padding: 8px 12px;
-  border-radius: 5px;
-  background: #1d4063;
-  color: #c4d9ee;
-  border: 1px solid #224d77;
-  font-size: 13px;
-}
-
 .connectionStatus--show {
   display: block;
 }
 
-/* Connecting / Reconnecting — pill */
-.connectionStatus.connecting {
-  background: #142b43;
-  border-color: #1d4063;
-  color: #9cc7ff;
-}
-
-.connectionStatus.connecting .connecting-msg {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.connectionStatus.connecting .connecting-msg::before {
-  content: '';
-  display: inline-block;
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(232, 197, 71, 0.3);
-  border-top-color: #e8c547;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.connectionStatus.connecting {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 12px;
-}
-
-.connectionStatus.connecting a.disconnect.connecting {
-  color: #fff;
-  background: rgba(237, 66, 69, 0.8);
-  text-decoration: none;
-  padding: 4px 12px;
-  border-radius: 3px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s;
-  white-space: nowrap;
-  margin-left: 12px;
-}
-
-.connectionStatus.connecting a.disconnect.connecting:hover {
-  background: rgba(237, 66, 69, 1);
-}
-
-/* Disconnected — pill (inherits base #1d4063 bg) */
-.connectionStatus a.reconnect {
-  color: #c4d9ee;
-  text-decoration: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.connectionStatus a.reconnect:hover {
-  background: #28598a;
-  color: #fff;
-  border-radius: 5px;
-}
-
-.connectionStatus a.reconnect span.reconnect {
-  opacity: 0.85;
-}
-
-.connectionStatus a.reconnect .disconnect-reason {
-  opacity: 0.7;
-  font-size: 12px;
-}
-
-/* Away — gray pill */
-.connectionStatus.away {
-  background: #2c2f35;
-  color: #d1d5db;
-  border-color: #1a1d21;
-}
-
-.connectionStatus.away a.back {
-  color: #d1d5db;
-  text-decoration: none;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.connectionStatus.away a.back:hover {
-  color: #fff;
-}
-
-.connectionStatus.away a.back span.back {
-  color: #aaa;
-}
-
-/* Midnight theme overrides */
-#app.midnight-theme .connectionstatuscell .connectionStatus {
-  background: #404040;
-  color: #d9d9d9;
-  border-color: #4d4d4d;
-}
-
-#app.midnight-theme .connectionstatuscell .connecting {
-  background: #1a1a1a;
+/* The Svelte component's scoped `.connectionStatus` rules paint the
+   border-left + top + bottom hairlines, and the state-specific colour.
+   Kept here as a fallback for any tests/Storybook that render the
+   component outside the normal Svelte style pipeline. */
+.connectionStatus {
+  background: transparent;
 }

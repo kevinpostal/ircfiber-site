@@ -201,6 +201,19 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
     // included in the timeline (the user wants to see "Connecting…"
     // appear in the card, not just in the header).
     if (kind === 'phase' && msg.phase && START_PHASES.has(msg.phase)) {
+      // Fix: duplicate START events for the same physical connect
+      // produce two cards. The frontend's synthetic `queued` (BufferHeader)
+      // and the engine's control-plane `queued` (consumer.d reconnectNetwork)
+      // fire within milliseconds of each other with different text, so the
+      // 60s dedup window doesn't collapse them. Both are START_PHASES, so
+      // the old logic pushed the first attempt and opened a second one,
+      // giving the user two "Connecting..." cards for one click.
+      // If there's already an in-flight pending attempt, merge the new
+      // START into it instead of splitting.
+      if (current && current.end === null && current.status === 'pending') {
+        current.phases.push(msg);
+        continue;
+      }
       // Enterprise semaphore: if there is an existing pending attempt
       // (phases emitted but no disconnect yet), close it as 'disconnected'
       // BEFORE opening the new one.  This prevents multiple "Connecting…"

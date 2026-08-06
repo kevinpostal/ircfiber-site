@@ -50,7 +50,6 @@
   const isDisconnected = $derived(activeNetwork ? !activeNetwork.connected : false);
   const isConnecting = $derived(activeNetwork?.connectionState === 'connecting');
   const isWaitingToRetry = $derived(activeNetwork?.connectionState === 'waiting_to_retry');
-  const isHandshake = $derived(activeNetwork?.connectionState === 'connected');
   const isJoining = $derived(activeNetwork?.connectionState === 'connected_joining');
   const isReadyWaiting = $derived(activeNetwork?.connectionState === 'connected_ready');
   const isQueued = $derived(activeNetwork?.connectionState === 'queued');
@@ -58,20 +57,21 @@
   const isIpRetry = $derived(activeNetwork?.connectionState === 'ip_retry');
   const disconnectReason = $derived(activeNetwork?.disconnectReason || '');
 
-  // Show banner for any transient state. W3-rev1: lifted the showStatus
-  // gate so transient mid-handshake states (`connected`, `connected_joining`,
-  // `connected_ready`, `queued`, `quitting`, `ip_retry`) all keep the
-  // banner visible — previously the `if (connected) hide` logic hid it
-  // during the brief `connected` (handshake) window even when the engine
-  // hadn't yet joined any channels. Mirrors IRCCloud's
-  // `ConnectionStatusView.render` pipeline which always shows during the
-  // transient window. Once the engine emits `connected_ready` and the
-  // focus buffer is resolved (or the user is just `connected` with no
-  // auto-joins), the engine flips connectionState away from these
-  // transient values and the banner hides via the !isTransient fallback.
+  // Show banner for any transient state. The engine's `ConnectionState`
+  // enum has only one "alive" value — `connected` — and never transitions
+  // out of it until the next disconnect. So `connectionState === 'connected'`
+  // means "fully connected and ready" (the brief 001→JOIN window is
+  // already past by the time 001 publishes and the heartbeat fires),
+  // NOT "still in the transient handshake window" — the banner must hide.
+  //
+  // W3-rev1 originally included `isHandshake` (= `connectionState === 'connected'`)
+  // in `isTransient`, mirroring IRCCloud's transient handshake branch.
+  // But our engine never flips `connectionState` to a non-transient value
+  // once registration completes, so the banner stuck at
+  // "Connected; handshaking…" forever — visible to users who had joined
+  // channels and were actively chatting.
   const isTransient = $derived(
     isQueued ||
-    isHandshake ||
     isJoining ||
     isReadyWaiting ||
     isQuitting ||
@@ -93,7 +93,6 @@
     | 'away'
     | 'connecting'
     | 'queued'
-    | 'handshake'
     | 'connected-joining'
     | 'connected-ready'
     | 'quitting'
@@ -135,7 +134,6 @@
       if (t === FAIL_TYPES.SOCKET_CLOSED) return 'fail-socket';
     }
     if (isQueued) return 'queued';
-    if (isHandshake) return 'handshake';
     if (isJoining) return 'connected-joining';
     if (isReadyWaiting) return 'connected-ready';
     if (isQuitting) return 'quitting';
@@ -161,11 +159,6 @@
         return isReconnectingLabel()
           ? `Reconnecting to ${host}…`
           : `Connecting to ${host}…`;
-      case 'handshake':
-        // W3-rev1: shown during the `connected` window between the
-        // engine emitting 001 (RPL_WELCOME) and the first JOIN echo.
-        // IRCCloud lifts this verbatim from connectionstatusview.js:73.
-        return 'Connected; handshaking…';
       case 'connected-joining':
         // W3-rev1: handshake done, JOINs in flight.
         return 'Connected; setting up…';
@@ -296,11 +289,18 @@
   // The banner is clickable for AWAY (clear-away), disconnected
   // (reconnect), waiting_to_retry (cancel-via-reconnect). Connecting is
   // transient and has no in-band cancel — match IRCCloud.
-  const isClickable = $derived(
-    activeNetwork !== undefined &&
-    activeNetwork !== null &&
-    (bannerKind === 'away' || ((isDisconnected || isWaitingToRetry) && !isConnecting)),
-  );
+  //
+  // Note: spelled out with explicit intermediate constants so Svelte's
+  // runtime expression optimiser doesn't drop the `!isConnecting` gate.
+  // An equivalent one-liner (`(isDisconnected || isWaitingToRetry) && !isConnecting`)
+  // was observed to drop the negation in some 5.x builds.
+  const isClickable = $derived.by(() => {
+    if (!activeNetwork) return false;
+    if (bannerKind === 'away') return true;
+    const isReconnectableState = isDisconnected || isWaitingToRetry;
+    if (!isConnecting && isReconnectableState) return true;
+    return false;
+  });
 
   // ── Handlers ─────────────────────────────────────────────────────
   function handleBack(e: MouseEvent): void {
@@ -365,9 +365,6 @@
       case 'queued':
         classes.push('queued', 'connectionStatus--queued');
         break;
-      case 'handshake':
-        classes.push('handshake', 'connectionStatus--handshake');
-        break;
       case 'connected-joining':
         classes.push('connecting', 'connectionStatus--connected-joining');
         break;
@@ -400,81 +397,60 @@
     return classes.join(' ');
   });
 
-  const iconClass = $derived.by(() => {
-    switch (bannerKind) {
-      case 'away':           return 'fa fa-check-circle';
-      case 'connecting':     return 'fa fa-spinner';
-      case 'queued':         return 'fa fa-hourglass-half';
-      case 'handshake':      return 'fa fa-spinner';
-      case 'connected-joining': return 'fa fa-spinner';
-      case 'connected-ready':return 'fa fa-clock-o';
-      case 'quitting':       return 'fa fa-sign-out';
-      case 'ip-retry':       return 'fa fa-warning';
-      case 'retry':
-      case 'retry-giveup':   return 'fa fa-clock-o';
-      case 'fail-killed':
-      case 'fail-ssl':
-      case 'fail-blocked':
-      case 'fail-connecting':
-      case 'fail-socket':    return 'fa fa-warning';
-      default:               return 'fa fa-warning';
-    }
-  });
-
   // ── Avoid touching the layout when there's no active network ──
   const showHost = $derived(activeNetwork !== undefined && activeNetwork !== null);
+
+  // ── Accessible name on the clickable row ─────────────────────────────
+  // The visible headline carries the message; the aria-label adds the
+  // action hint ("Click to reconnect …") so screen-reader users hear
+  // both. Non-clickable rows use the headline alone — there's no action
+  // to advertise.
+  const rowLabel = $derived.by(() => {
+    if (!activeNetwork) return '';
+    return isClickable ? `${headline}. ${buttonLabel}` : headline;
+  });
 </script>
 
 <!--
-  Outer `.connectionstatuscell` keeps the same class name as the
-  legacy component so ChatArea's existing styling continues to apply.
-  The inner `.connectionStatus` carries the new fiber-dusk palette.
+  Calm minimal-mono redesign. Three structural changes vs the W3-T01
+  bar:
+
+    1. Whole row IS the button (real <button>, not <a href="/">) — the
+       fake-link hack with role="button" + manual keydown is gone. Native
+       activation handles Enter/Space and disabled state for free.
+    2. No spinner / icon badge / CTA pill — the state is signalled by a
+       2px coloured left rule on the outer container. Calm by default.
+    3. Warnings render in their own <ul>, indented to align with the
+       headline, in fog-tone so they don't compete with the headline.
+
+  Outer `.connectionstatuscell` keeps the same class name as the legacy
+  component so ChatArea's existing styling continues to apply. Outer
+  borders + disabled-state are part of the inner `.connectionStatus` so
+  the cell itself stays chrome-free.
 -->
 <div class="connectionstatuscell" class:show={showStatus}>
-  {#if showHost}
+  {#if showHost && activeNetwork}
     <div class={bannerClass}>
-      <!--
-        svelte-ignore a11y_click_events_have_key_events — the banner
-        is keyboard-accessible via the role="button" + tabindex + the
-        matching keydown handler below.
-      -->
-      <a
-        class="connectionStatus__inner"
-        href="/"
-        role={isClickable ? 'button' : undefined}
-        tabindex={isClickable ? 0 : -1}
-        aria-disabled={isClickable ? undefined : 'true'}
+      <button
+        type="button"
+        class="connectionStatus__row"
+        disabled={!isClickable}
+        aria-label={rowLabel}
         onclick={isClickable ? handleClick : undefined}
-        onkeydown={isClickable
-          ? (e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleClick(e as unknown as MouseEvent);
-              }
-            }
-          : undefined}
       >
-        <span class="connectionStatus__icon" aria-hidden="true">
-          <i class={iconClass}></i>
-        </span>
         <span class="connectionStatus__headline">
-          {#if isAway}
-            <span class="connectionStatus__away-label">{headline}</span>
-          {:else if bannerKind === 'retry'}
+          {#if bannerKind === 'retry'}
             {retryText || headline}
           {:else}
             {headline}
           {/if}
         </span>
-        {#if isClickable}
-          <span class="connectionStatus__cta">{buttonLabel}</span>
-        {/if}
-      </a>
+      </button>
 
       {#if warnings.length > 0}
         <ul class="connectionStatus__warnings" aria-label="Connection warnings">
           {#each warnings as warning}
-            <li class="connectionStatus__warning">{warning}</li>
+            <li>{warning}</li>
           {/each}
         </ul>
       {/if}
@@ -483,184 +459,153 @@
 </div>
 
 <style>
-  /* ── Connection status banner — IRCCloud dusk palette (W3-T01) ──
-     Matches the IRCCloud "ConnectionStatusView" structure: outer
-     `.connectionStatus` (full-width flex row) + inner clickable
-     `<a>` carrying the icon + headline + CTA. Warnings render below
-     the inner row as a separate <ul>. Transitions over 200ms so the
-     palette swap during a state change is smooth. */
+  /* ── Connection status banner — calm minimal mono ────────────────
+     Three deliberate constraints:
+       • No spinner / icon badge / CTA pill. The state is signalled
+         by a 2px coloured left rule on the outer container.
+       • No tinted background per state — the bar is chrome-free
+         apart from hairline borders. Headline copy carries the
+         semantic meaning.
+       • Whole row IS the button — real <button type="button">, not
+         the legacy <a href="/"> + role="button" hack. Native
+         activation handles Enter/Space + disabled state.
+
+     Outer `.connectionstatuscell` keeps the same class name as the
+     legacy component so ChatArea's existing styling continues to
+     apply. The outer cell stays chrome-free so ChatArea's collapse
+     animation when `show` toggles stays clean. */
 
   .connectionstatuscell {
     padding: 0;
     border: 0;
+    display: block;
   }
 
   .connectionStatus {
-    /* Container itself is padding: 0 / border: 0 — the inner <a>
-       carries all the visible chrome so we can collapse cleanly when
-       the banner is hidden. */
-    padding: 0;
+    /* Container carries the top + bottom hairlines + the 2px left
+       state edge. The inner button does the rest. No tinted
+       background — the headline copy is the entire visible surface. */
+    border-top: 1px solid var(--fiber-line);
+    border-bottom: 1px solid var(--fiber-line);
+    border-left: 2px solid var(--fiber-line);
+    background: transparent;
+    transition: border-left-color 160ms ease;
+  }
+
+  /* ── Clickable row — the entire bar ────────────────────────────── */
+  .connectionStatus__row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
     border: 0;
-  }
-
-  /* ── Inner clickable row ─────────────────────────────────────── */
-  :global(.connectionStatus--show) > .connectionStatus__inner {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-    padding: 5px 7px 5px 27px;
-    border-top: 1px solid;
-    border-bottom: 1px solid;
-    background-color: var(--fiber-blue-soft);
-    color: var(--fiber-cloud);
-    text-decoration: none;
-    cursor: pointer;
-    transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
-  }
-
-  :global(.connectionStatus--clickable) > .connectionStatus__inner {
-    cursor: pointer;
-  }
-
-  /* Hover / focus: brighten to the cyan accent border + slightly
-     brighter background so the user sees the banner is interactive. */
-  :global(.connectionStatus--clickable) > .connectionStatus__inner:hover,
-  :global(.connectionStatus--clickable) > .connectionStatus__inner:focus {
-    border-top-color: var(--fiber-blue);
-    border-bottom-color: var(--fiber-blue);
-    background-color: var(--fiber-blue-dim);
-    outline: none;
-    text-decoration: none;
-  }
-
-  /* ── State-specific palettes ──────────────────────────────────── */
-
-  /* Connecting (live spinner) */
-  :global(.connectionStatus--connecting) > .connectionStatus__inner {
-    border-top-color: var(--fiber-blue);
-    border-bottom-color: var(--fiber-blue);
-  }
-
-  /* Waiting for retry (live countdown) — same cyan family but with a
-     subtle tint shift so the user can tell connecting vs retrying. */
-  :global(.connectionStatus--waiting) > .connectionStatus__inner {
-    border-top-color: var(--fiber-blue);
-    border-bottom-color: var(--fiber-blue);
-  }
-
-  /* Away — fog background */
-  :global(.connectionStatus--away) > .connectionStatus__inner {
-    background-color: var(--fiber-fog);
-    color: var(--fiber-cloud);
-    border-top-color: var(--fiber-mist);
-    border-bottom-color: var(--fiber-mist);
-  }
-
-  /* Fail states — amber.
-     TODO: --fiber-amber-soft isn't defined yet; we ship with a literal
-     rgba fallback so the palette match is correct in dev. Once
-     _variables.scss gains the token, remove the fallback. */
-  :global(.connectionStatus--fail) > .connectionStatus__inner {
-    background-color: var(--fiber-amber-soft, rgba(251, 191, 36, 0.08));
-    color: var(--fiber-cloud);
-    border-top-color: var(--fiber-amber);
-    border-bottom-color: var(--fiber-amber);
-  }
-
-  :global(.connectionStatus--fail-ssl) > .connectionStatus__inner {
-    /* Slightly stronger amber tint so TLS verify failures stand out
-       from generic connection-refused errors. */
-    background-color: var(--fiber-amber-soft, rgba(251, 191, 36, 0.12));
-  }
-
-  /* ── Icon + text layout ───────────────────────────────────────── */
-
-  .connectionStatus__icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    flex-shrink: 0;
-    color: inherit;
-  }
-
-  .connectionStatus__icon i {
-    font-size: 14px;
-    line-height: 1;
-  }
-
-  .connectionStatus__headline {
-    flex: 1 1 auto;
-    min-width: 0;
+    padding: 6px 12px 6px 10px;
+    color: var(--fiber-snow);
+    font: inherit;
+    font-size: 12.5px;
+    line-height: 1.4;
+    letter-spacing: 0.005em;
+    cursor: default;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 13px;
+    transition: background-color 160ms ease;
   }
 
-  .connectionStatus__cta {
-    /* Right-aligned, brighter accent colour, no underline by default.
-       Margin-left:auto so it floats right even when the flex layout
-       has only one row item. */
-    margin-left: auto;
-    color: var(--fiber-blue-hi);
-    font-size: 12px;
-    font-weight: 600;
-    text-decoration: none;
-    flex-shrink: 0;
+  .connectionStatus__row:disabled {
+    cursor: default;
+    color: var(--fiber-cloud);
+  }
+
+  .connectionStatus__row:not(:disabled) {
+    cursor: pointer;
+  }
+
+  .connectionStatus__row:not(:disabled):hover,
+  .connectionStatus__row:not(:disabled):focus-visible {
+    background-color: rgba(255, 255, 255, 0.025);
+  }
+
+  .connectionStatus__row:focus-visible {
+    outline: 2px solid var(--fiber-blue);
+    outline-offset: -2px;
+  }
+
+  /* ── Headline ──────────────────────────────────────────────────── */
+  .connectionStatus__headline {
+    display: block;
+    font-weight: 500;
+    color: inherit;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .connectionStatus__away-label {
-    font-weight: 600;
-    color: var(--fiber-snow);
+  /* ── State-coloured left edge ─────────────────────────────────── */
+  /* The left rule IS the only signal of state. Headline copy carries
+     the semantic meaning; the colour is just to help users skim a
+     column of banners when several nets are flapping at once. */
+  :global(.connectionStatus--connecting),
+  :global(.connectionStatus--connected-joining),
+  :global(.connectionStatus--connected-ready),
+  :global(.connectionStatus--queued),
+  :global(.connectionStatus--waiting) {
+    border-left-color: var(--fiber-blue);
   }
 
-  /* ── Spinner animation (live "connecting") ────────────────────── */
-  :global(.connectionStatus--connecting) .connectionStatus__icon i {
-    animation: connectionStatus-spin 1.1s linear infinite;
+  :global(.connectionStatus--ip-retry) {
+    border-left-color: var(--fiber-blue);
   }
 
-  @keyframes connectionStatus-spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
+  :global(.connectionStatus--quitting) {
+    border-left-color: var(--fiber-fog);
+  }
+
+  :global(.connectionStatus--away) {
+    border-left-color: var(--fiber-mist);
+  }
+  :global(.connectionStatus--away) .connectionStatus__headline {
+    color: var(--fiber-fog);
+    font-style: italic;
+  }
+
+  :global(.connectionStatus--fail) {
+    border-left-color: var(--fiber-amber);
+  }
+
+  /* Fail hover gets the barest amber tint (1.5x the row's resting tint)
+     so the click affordance reads without overpowering the calm. */
+  :global(.connectionStatus--fail.connectionStatus--clickable) .connectionStatus__row:not(:disabled):hover,
+  :global(.connectionStatus--fail.connectionStatus--clickable) .connectionStatus__row:not(:disabled):focus-visible {
+    background-color: rgba(251, 191, 36, 0.04);
   }
 
   /* ── Inline warnings (rendered as a separate list below the
-       clickable row) ─────────────────────────────────────────── */
+       headline) ──────────────────────────────────────────────── */
   .connectionStatus__warnings {
     list-style: none;
     margin: 0;
-    padding: 4px 12px 6px 27px;
-    border-top: 0;
-    background-color: var(--fiber-blue-soft);
-    color: var(--fiber-cloud);
-    font-size: 12px;
-    line-height: 1.5;
+    padding: 0 12px 7px 14px;
+    border: 0;
+    background: transparent;
+    color: var(--fiber-fog);
+    font-size: 11.5px;
+    line-height: 1.55;
   }
 
-  :global(.connectionStatus--fail) .connectionStatus__warnings {
-    background-color: var(--fiber-amber-soft, rgba(251, 191, 36, 0.08));
-  }
-
-  :global(.connectionStatus--away) .connectionStatus__warnings {
-    background-color: var(--fiber-fog);
-  }
-
-  .connectionStatus__warning {
+  .connectionStatus__warnings li {
     margin: 0;
     padding: 1px 0;
   }
 
   /* The CTA-style warning ("Check your host, port and ssl settings")
      sits on its own line so the user can scan past the others. */
-  .connectionStatus__warning:last-child {
-    color: var(--fiber-blue-hi);
+  .connectionStatus__warnings li:last-child {
+    color: var(--fiber-cloud);
+    font-weight: 500;
   }
 
-  /* ── Hidden helpers ──────────────────────────────────────────── */
-  .back {
-    display: none;
+  :global(.connectionStatus--fail) .connectionStatus__warnings li:last-child {
+    color: var(--fiber-amber);
   }
 </style>

@@ -263,7 +263,24 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .totalMemberCount:hover { background: rgba(255,255,255,0.08); }
 .totalMemberCount i { display: inline-block !important; line-height: 18px; height: 18px; margin: 0 5px 0 0; vertical-align: middle; }
 .totalMemberCount span { display: inline; line-height: 18px; }
-.bufferOptions { display: inline-block !important; margin: -2px 0 0 8px; padding: 2px; font-size: 18px; line-height: 18px; color: #ccc; vertical-align: middle; }
+ .bufferOptions { display: inline-block !important; margin: -2px 0 0 8px; padding: 2px; font-size: 18px; line-height: 18px; color: #ccc; vertical-align: middle; }
+  /* Gear SVG — center correctly (FA → inline SVG no longer relies on line-height) */
+  .bufferOptions:has(svg) {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin: 0 0 0 8px;
+    padding: 0;
+    vertical-align: middle;
+  }
+  .bufferOptions svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
 
 
 .chat-body {
