@@ -88,7 +88,7 @@ User authenticateRequest(scope HTTPServerRequest req, UserRepository repo) {
  */
 void requireAuth(scope HTTPServerRequest req, scope HTTPServerResponse res) {
     auto repo = new UserRepository();
-    const user = authenticateRequest(req, repo);
+    auto user = authenticateRequest(req, repo);
 
     if (user.username.length == 0) {
         auto path = req.requestPath.toString();
@@ -109,6 +109,10 @@ void requireAuth(scope HTTPServerRequest req, scope HTTPServerResponse res) {
         req.session.set("lastAccess", Clock.currTime.toUnixTime() * 1000L);
     } catch (Exception) {}
 
+    // Store mutable User in Variant — retrieving with get!User requires exact
+    // type match; storing const(User) would throw "incompatible types
+    // const(User) and User" on every authenticated request (Variant is strict
+    // about constness). Keep the local mutable so Variant holds User.
     req.context["user"] = user;
 }
 
