@@ -188,28 +188,46 @@ export function processIrcEvent(
 
   const result: { whoisData?: WhoisData; whoisFailedNick?: string; banListData?: BanListData } = {};
 
+  // Helper to extract target nick from WHOIS numerics.
+  // Explicit WHOIS for "MAGIC" from "Zodiac_" comes as "311 Zodiac_ MAGIC ~magic ..." (params[0]=requester, params[1]=target).
+  // Automatic WHOIS for "Zod" comes as "311 Zod incog ..." (params[0]=target). Use current nick to disambiguate.
+  function whoisTarget(params: string[], currentNick: string): string {
+    if (!params || params.length === 0) return '';
+    if (params.length >= 2 && params[0].toLowerCase() === currentNick.toLowerCase()) return params[1] || params[0];
+    return params[0] || '';
+  }
   // ── Whois accumulation (per-nick, avoids interleaving) ──
   if (/^(311|312|313|317|319|330|301|671)$/.test(cmd)) {
-    const targetNick = msg.params?.[0] || '';
+    const rawTarget = whoisTarget(msg.params || [], net.currentNick || '');
+    const targetNick = rawTarget || msg.params?.[0] || '';
     const key = targetNick.toLowerCase();
     let acc = accum.whoisAccs.get(key);
-    if (!acc || acc.nick !== targetNick) {
+    if (!acc || (acc.nick || '').toLowerCase() !== targetNick.toLowerCase()) {
       acc = { nick: targetNick };
       accum.whoisAccs.set(key, acc);
     }
     // keep legacy single pointer in sync for accumulateWhois
     accum.whoisAcc = acc;
-    accumulateWhois(accum, cmd, msg.params || [], msg.text || '');
+    // For accumulateWhois we need params where target is first, so it can use params[0] as nick.
+    // If the original had requester prefix, strip it so 311's params[0] is target.
+    let whoisParams = msg.params || [];
+    if (whoisParams.length >= 2 && whoisParams[0].toLowerCase() === (net.currentNick || '').toLowerCase() && whoisParams[1].toLowerCase() === targetNick.toLowerCase()) {
+      whoisParams = [whoisParams[1], ...whoisParams.slice(2)];
+    }
+    accumulateWhois(accum, cmd, whoisParams, msg.text || '');
     // ensure map entry reflects any new fields added by accumulateWhois
     accum.whoisAccs.set(key, acc);
   } else if (cmd === '318') {
-    // 318 params: [requester, target] or [target] depending on ircd; try both
-    const cand1 = (msg.params?.[0] || '').toLowerCase();
-    const cand2 = (msg.params?.[1] || '').toLowerCase();
+    // 318: [<you> ]<target> :End of /WHOIS list.  Target is params[1] when
+    // present, otherwise params[0].  Check target first so an explicit
+    // WHOIS for "MAGIC" (318 Zodiac_ MAGIC) doesn't match the pending
+    // "zodiac_" entry from a previous self-WHOIS.
+    const candTarget = (msg.params?.[1] || msg.params?.[0] || '').toLowerCase();
+    const candYou = (msg.params?.[0] || '').toLowerCase();
     let key: string | null = null;
     let acc: Partial<WhoisData> | undefined;
-    if (cand1 && accum.whoisAccs.has(cand1)) { key = cand1; acc = accum.whoisAccs.get(cand1); }
-    else if (cand2 && accum.whoisAccs.has(cand2)) { key = cand2; acc = accum.whoisAccs.get(cand2); }
+    if (candTarget && accum.whoisAccs.has(candTarget)) { key = candTarget; acc = accum.whoisAccs.get(candTarget); }
+    else if (candYou && accum.whoisAccs.has(candYou) && candYou !== candTarget) { key = candYou; acc = accum.whoisAccs.get(candYou); }
     else if (accum.whoisAcc) { acc = accum.whoisAcc; key = (acc.nick || '').toLowerCase(); }
     if (acc) {
       result.whoisData = { ...acc } as WhoisData;

@@ -77,8 +77,25 @@ registerSlash(['invite'], (args, networkId, target) => {
 registerSlash(['whois', 'wi'], (args, networkId) => {
   if (!args[0]) throw new Error('Usage: /whois <nickname>');
   const buf = ircState.activeBuffer.bufferName || args[0];
-  ircState.pendingWhois.set(args[0].toLowerCase(), { networkId, bufferName: buf, ts: Date.now() });
-  sendRaw(networkId, 'WHOIS ' + args[0]);
+  const nick = args[0];
+  ircState.pendingWhois.set(nick.toLowerCase(), { networkId, bufferName: buf, ts: Date.now() });
+  // Show immediate loading overlay so /whois always gives feedback
+  ircState.overlay.type = 'whois';
+  ircState.overlay.data = {
+    nick: nick,
+    user: '',
+    host: '',
+    realname: '',
+    server: '',
+    serverInfo: '',
+    channels: [],
+    idle: 0,
+    signon: 0,
+    account: '',
+    secure: false,
+    away: '',
+  } as any;
+  sendRaw(networkId, 'WHOIS ' + nick);
 });
 
 registerSlash(['ignore'], (args, networkId) => {

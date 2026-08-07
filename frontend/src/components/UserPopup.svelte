@@ -3,7 +3,7 @@
   import { sendRaw, sendMessage } from '../stores/wsConnection.svelte.ts';
   import { ignoreList } from '../stores/preferences.svelte';
   import { getAvatarColor, stripPrefix } from '../lib/utils';
-  import type { Member, ModeCategory } from '../types';
+  import type { Member, ModeCategory, WhoisData } from '../types';
 
   interface Props {
     nick: string;
@@ -102,6 +102,45 @@
     if (networkId) {
       const buf = ircState.activeBuffer.bufferName || displayNick;
       ircState.pendingWhois.set(displayNick.toLowerCase(), { networkId, bufferName: buf, ts: Date.now() });
+      // IRCCloud-style: show cached whois immediately so the user gets
+      // instant feedback even if the server is slow or the nick is only
+      // known via the member list realname cache. The live WHOIS reply
+      // (via App.svelte) will then refresh the overlay with fresh data.
+      const m = member;
+      const ident = m?.ident || '';
+      const at = ident.indexOf('@');
+      const u = at >= 0 ? ident.slice(0, at).split('!').pop() || ident.slice(0, at) : '';
+      // ident may be "user@host" or "nick!user@host" - handle both
+      let user = '';
+      let host = '';
+      if (ident.includes('@')) {
+        const parts = ident.split('@');
+        host = parts.pop() || '';
+        const userPart = parts.join('@');
+        // userPart may be "nick!user" or just "user"
+        if (userPart.includes('!')) user = userPart.split('!').pop() || '';
+        else user = userPart;
+        if (!user && m?.ident) user = m.ident.split('@')[0].split('!').pop() || '';
+      }
+      const whoisData: WhoisData = {
+        nick: displayNick,
+        user: user || m?.ident?.split('@')[0]?.split('!').pop() || '',
+        host: host || m?.ident?.split('@')[1] || '',
+        realname: m?.realname || '',
+        server: '',
+        serverInfo: '',
+        channels: [],
+        idle: 0,
+        signon: 0,
+        account: m?.account || '',
+        secure: false,
+        away: m?.isAway ? (m.awayMessage || '') : '',
+      };
+      // Show overlay immediately with cached data (if any) so click always
+      // produces visible feedback, fixing "only able to whois myself"
+      // where server WHOIS for other nicks was delayed or coalesced.
+      ircState.overlay.type = 'whois';
+      ircState.overlay.data = whoisData;
       onSendRaw(networkId, 'WHOIS ' + displayNick);
     }
     close();

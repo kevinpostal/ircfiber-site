@@ -1147,7 +1147,28 @@ let showNetworkForm: boolean = $state(false);
       }
     }
     if (result.whoisFailedNick) {
-      ircState.pendingWhois.delete(result.whoisFailedNick.toLowerCase());
+      const fk = result.whoisFailedNick.toLowerCase();
+      const pend = ircState.pendingWhois.get(fk);
+      ircState.pendingWhois.delete(fk);
+      if (pend) {
+        ircState.overlay.type = 'whois';
+        ircState.overlay.data = {
+          nick: result.whoisFailedNick,
+          user: '',
+          host: '',
+          realname: '',
+          server: '',
+          serverInfo: '',
+          channels: [],
+          idle: 0,
+          signon: 0,
+          account: '',
+          secure: false,
+          away: '',
+          operator: false,
+        } as WhoisData;
+        (ircState.overlay.data as any).whoisFailed = true;
+      }
     }
     if (result.banListData) {
       ircState.overlay.type = 'banlist';

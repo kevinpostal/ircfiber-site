@@ -233,6 +233,12 @@
         <h2>WHOIS: {w.nick}</h2>
         <button class="overlay-done" onclick={close} style="margin-right: 32px;">Done</button>
       </div>
+      {#if (w as any).whoisFailed}
+        <div style="padding: 32px 20px; text-align: center; color: #8b949e;">
+          <div style="font-size: 14px; color: #f85149; margin-bottom: 8px;">No such nick</div>
+          <div style="font-size: 12px; color: #8b949e;">No such nick/channel: <b style="color:#d9d9d9">{w.nick}</b></div>
+        </div>
+      {:else}
       <table cellspacing="0" class="overlayTable whois-table">
         <tbody>
           <tr class="odd">
@@ -285,6 +291,7 @@
           {/if}
         </tbody>
       </table>
+      {/if}
     {:else if ircState.overlay.type === 'banlist' && ircState.overlay.data}
       {@const data = ircState.overlay.data as BanListData}
       <div class="overlay-header">
