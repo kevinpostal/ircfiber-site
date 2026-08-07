@@ -1628,22 +1628,15 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           // extra fields beyond the Buffer/Network interface).
           const syncAccounts = (rawNet as any).accounts as Record<string, string> | undefined;
           const syncIdents = (rawNet as any).idents as Record<string, string> | undefined;
-          const syncRealnames = (rawNet as any).realnames as Record<string, string> | undefined;
-          const bufRealnames = (incomingBuf as any).realnames as Record<string, string> | undefined;
-          if (syncAccounts || syncIdents || syncRealnames || bufRealnames) {
+          if (syncAccounts || syncIdents) {
             for (const m of existingBuf.users) {
               if (syncAccounts && !m.account) {
-                const acct = syncAccounts[m.nick] || syncAccounts[stripPrefix(m.nick)];
+                const acct = syncAccounts[m.nick];
                 if (acct) m.account = acct;
               }
               if (syncIdents && !m.ident) {
-                const id = syncIdents[m.nick] || syncIdents[stripPrefix(m.nick)];
+                const id = syncIdents[m.nick];
                 if (id) m.ident = id;
-              }
-              if (!m.realname) {
-                const rn = (syncRealnames && (syncRealnames[m.nick] || syncRealnames[stripPrefix(m.nick)])) ||
-                           (bufRealnames && (bufRealnames[m.nick] || bufRealnames[stripPrefix(m.nick)]));
-                if (rn) m.realname = rn;
               }
             }
           }
