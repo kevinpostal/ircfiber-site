@@ -45,6 +45,39 @@
     )
   );
 
+  // Smartly hide servers that are down (e.g. irc.ircfiber.com not running)
+  // instead of showing a perpetual "disconnected" entry. We keep the
+  // network in ircState.networks so it can auto-reappear when the server
+  // comes back, but we don't render it in the sidebar.
+  function isServerDown(net: Network): boolean {
+    if (net.connected) return false;
+    // User explicitly hit Disconnect — keep it visible with Reconnect button
+    if (net.disconnectReason === 'You disconnected') return false;
+    if (net.disconnectReason?.toLowerCase().includes('you disconnected')) return false;
+    // Actively retrying / queued — show as "Connecting..." with spinner
+    const st = (net as any).status || (net as any).connectionState || '';
+    if (['waiting_to_retry', 'connecting', 'queued', 'connected', 'connected_joining', 'connected_ready'].includes(st)) return false;
+    // Hard connect failure — hide
+    const fail = (net as any).failInfo;
+    if (fail) return true;
+    const reason = (net.disconnectReason || '').toLowerCase();
+    if (reason.includes('failed to connect') || reason.includes('connection refused') || reason.includes('connection closed') || reason.includes('kicked')) {
+      return true;
+    }
+    // Fallback: not connected for >60s and not user-disconnected
+    const lastSeen = (net as any).lastSeenAt || 0;
+    if (lastSeen && Date.now() - lastSeen > 60000) return true;
+    if (!net.connected && !lastSeen) return true;
+    return false;
+  }
+
+  const visibleNetworks = $derived(
+    uniqueNetworks.filter(net => {
+      if (net.networkId === ircState.activeBuffer.networkId) return true;
+      return !isServerDown(net);
+    })
+  );
+
   // Local mutable copy that svelte-dnd-action mutates during drag. We
   // apply the new order to ircState.networks + networkOrder + the server
   // only on `finalize` (drop), to avoid spamming the backend while the
@@ -57,7 +90,7 @@
   let dragList = $state<DragItem[]>([]);
   let dragActive = $state(false);
   $effect(() => {
-    dragList = uniqueNetworks.map(net => ({ id: net.networkId, net }));
+    dragList = visibleNetworks.map(net => ({ id: net.networkId, net }));
   });
 
   function handleConsider(e: CustomEvent<DndEvent<DragItem>>): void {
