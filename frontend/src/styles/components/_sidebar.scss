@@ -261,7 +261,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 }
 .totalMemberCount { display: inline-flex !important; align-items: center; gap: 4px; cursor: pointer; font-size: 13px; font-weight: 300; color: #ccc; padding: 0 6px; margin-left: 8px; line-height: 0; height: 20px; border-radius: 4px; background: transparent; vertical-align: middle; position: relative; top: 1px; }
 .totalMemberCount:hover { background: rgba(255,255,255,0.08); }
-.totalMemberCount i { display: inline-block !important; font-size: 11px; line-height: 1; height: auto; margin: 0; vertical-align: middle; }
+.totalMemberCount i { display: inline-block !important; font-size: 12px; line-height: 1; height: auto; margin: 0; vertical-align: middle; }
 .totalMemberCount i.fa-twitch { font-size: 10px; opacity: 0.9; }
 .totalMemberCount svg { display: block; width: 12px; height: 12px; flex-shrink: 0; }
 .totalMemberCount span { display: inline; line-height: 1; font-variant-numeric: tabular-nums; }
