@@ -16,7 +16,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 
 const manifestPath = resolve(projectRoot, 'public/dist/.vite/manifest.json');
-const dtPath = resolve(projectRoot, 'engine/views/index.dt');
+// Split-layout gateway: the gateway image builds /app/views from backend/views.
+const dtPath = resolve(projectRoot, 'backend/views/index.dt');
 
 // Read manifest
 let manifest;
