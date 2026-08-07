@@ -50,6 +50,9 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   // for the registration-time WHOIS burst, and 671 is filtered because the
   // "is using a Secure Connection" notice adds nothing.
   if (cmd === '311' || cmd === '354' || cmd === '671') return 'skip';
+  // Ban list (367 = RPL_BANLIST, 368 = RPL_ENDOFBANLIST) — consumed by the
+  // ban-list overlay; 368 is "End of Channel Ban List" noise.
+  if (cmd === '367' || cmd === '368') return 'skip';
   if (/^\d{3}$/.test(cmd)) return 'numeric';
   return 'notice';
 }
