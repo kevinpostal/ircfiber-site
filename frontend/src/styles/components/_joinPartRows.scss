@@ -181,12 +181,19 @@
   box-sizing: border-box;
 }
 
-.row.groupedJoinPart .sentence {
+ .row.groupedJoinPart .sentence {
   color: #8b949e;
   display: inline;
   white-space: normal;
+  word-break: normal;
+  overflow-wrap: normal;
 }
-
+.row.groupedJoinPart .sentence .bufferLink {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  display: inline-block;
+}
 .row.groupedJoinPart .sentence .bullet {
   color: #555;
   margin: 0 6px;
