@@ -487,6 +487,32 @@ let showNetworkForm: boolean = $state(false);
       if (uploadState.pastebinPanelOpen) { uploadState.pastebinPanelOpen = false; }
       if (userPopup) { userPopup = null; }
     }
+    // IRCCloud parity: typing anywhere focuses the compose input
+    // (http://127.0.0.1:8090/irc/Supernets/channel/superbowl). If the
+    // active buffer has a compose box and no input is focused, printable
+    // keys auto-focus #compose-input so the character lands there.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
+      const target = e.target as HTMLElement | null;
+      const isTypingTarget = target && (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.tagName === 'SELECT'
+      );
+      if (isTypingTarget) return;
+      // Don't steal when any modal/overlay is open
+      if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts ||
+          ircState.overlay.type || showNetworkForm || showJoinModal ||
+          ircState.contextMenu.visible || !!userPopup) return;
+      if (ircState.activeBuffer.bufferName === '_server') return;
+      const compose = document.getElementById('compose-input') as HTMLTextAreaElement | null;
+      if (compose && document.activeElement !== compose) {
+        compose.focus();
+        // Don't preventDefault — let the browser deliver this same keystroke
+        // to the newly focused input. Focusing synchronously during keydown
+        // makes the subsequent input event target the compose box.
+      }
+    }
   }
 
   function switchAdjacentBuffer(direction: number): void {
