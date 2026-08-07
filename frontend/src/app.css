@@ -422,6 +422,7 @@ textarea.message-input {
 }
 .chattercell.lowerchattercell {
   animation: chatterSlideUp 180ms ease-out both;
+}
 /* ─── Global scroll handling ───────────────────────────────────────────
    IRCCloud uses scroll-behavior:auto and drives divider snaps via
    JS animate (swing 100ms). `smooth` makes every programmatic
