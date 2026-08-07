@@ -267,26 +267,26 @@
   display: none;
 }
 
-.row.messageRow .message {
+ .row.messageRow .message {
   display: block;
-  max-width: 100%;
-  box-sizing: border-box;
+  width: 100%;
   overflow: hidden;
-  word-break: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
-.row.messageRow .timestamp {
+ .row.messageRow .timestamp {
   cursor: default;
   white-space: nowrap;
 }
 
-.row.messageRow .content {
+ .row.messageRow .content {
   display: block;
   width: 100%;
   color: var(--text-primary);
   white-space: normal;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
+  word-break: normal;
+  overflow-wrap: anywhere;
   overflow: hidden;
   box-sizing: border-box;
 }
