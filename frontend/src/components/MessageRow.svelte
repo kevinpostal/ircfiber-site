@@ -45,7 +45,20 @@
   // every WS sync). Covers senders who are NOT in the active buffer's
   // member list — PM counterparts, users who have left the channel, and
   // history rows whose author is no longer present in the roster.
-  const networkRealname = $derived(activeNetwork?.realnames?.[stripPrefix(nick)] ?? '');
+  // IRC nicks are case-insensitive, and the engine may store "AShapiro"
+  // vs "ashapiro" — try exact then lowercased, then scan.
+  const networkRealname = $derived.by(() => {
+    if (!activeNetwork?.realnames || !nick) return '';
+    const bare = stripPrefix(nick);
+    const map = activeNetwork.realnames as Record<string, string>;
+    if (map[bare] !== undefined) return map[bare];
+    const low = bare.toLowerCase();
+    if (map[low] !== undefined) return map[low];
+    for (const k of Object.keys(map)) {
+      if (k.toLowerCase() === low) return map[k];
+    }
+    return '';
+  });
   const isOwn = $derived(!!nick && !!myNick && stripPrefix(nick).toLowerCase() === myNick.toLowerCase());
   const isBot = $derived(isBotNick(nick, findMemberForNick(nick), msg.prefix));
   const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));

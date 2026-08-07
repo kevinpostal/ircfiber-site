@@ -1319,19 +1319,36 @@ function enrichMembersFromSync(
     bufRealnames?: Record<string, string>;
   }
 ): void {
+  // Helper for case-insensitive lookup — IRC nicks are case-insensitive
+  // per RFC 1459, and the engine may store "AShapiro" vs "ashapiro"
+  // depending on extended-join vs WHOIS. Try exact then lowercase.
+  const findCI = (map: Record<string, string> | undefined, key: string): string | undefined => {
+    if (!map) return undefined;
+    if (map[key] !== undefined) return map[key];
+    const low = key.toLowerCase();
+    // Fast path: direct lowercase key
+    if (map[low] !== undefined) return map[low];
+    // Fallback: scan for case-insensitive match (covers "AShapiro" stored as "AShapiro" but looked up as "ashapiro")
+    for (const k of Object.keys(map)) {
+      if (k.toLowerCase() === low) return map[k];
+    }
+    return undefined;
+  };
   for (const m of users) {
     const bare = stripPrefix(m.nick);
     if (caches.accounts && !m.account) {
-      const acct = caches.accounts[m.nick] ?? caches.accounts[bare];
+      const acct = findCI(caches.accounts, m.nick) ?? findCI(caches.accounts, bare);
       if (acct) m.account = acct;
     }
     if (caches.idents && !m.ident) {
-      const id = caches.idents[m.nick] ?? caches.idents[bare];
+      const id = findCI(caches.idents, m.nick) ?? findCI(caches.idents, bare);
       if (id) m.ident = id;
     }
     if (caches.realnames && !m.realname) {
-      const rn = caches.bufRealnames?.[m.nick] ?? caches.realnames[bare];
-      if (rn && rn !== bare) m.realname = rn;
+      const rn = (caches.bufRealnames ? (findCI(caches.bufRealnames, m.nick) ?? findCI(caches.bufRealnames, bare)) : undefined)
+              ?? findCI(caches.realnames, bare)
+              ?? findCI(caches.realnames, m.nick);
+      if (rn && rn.toLowerCase() !== bare.toLowerCase()) m.realname = rn;
     }
   }
 }
@@ -1412,7 +1429,17 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       // rows can show a real name for nicks NOT in the active buffer's
       // member list (PM counterparts, users who left the channel, and
       // history rows) — see MessageRow's fallback lookup.
-      if (net.realnames !== undefined) existing.realnames = net.realnames;
+      // Merge rather than overwrite: a sync with empty realnames (e.g.
+      // snapshot before WHOIS) must not clear previously learned names.
+      if (net.realnames !== undefined) {
+        if (!existing.realnames) existing.realnames = {};
+        // Only merge if incoming has entries; empty incoming keeps existing
+        if (Object.keys(net.realnames).length > 0) {
+          existing.realnames = { ...existing.realnames, ...net.realnames };
+        } else if (Object.keys(existing.realnames).length === 0) {
+          existing.realnames = net.realnames;
+        }
+      }
       existing.sasl = net.sasl;
       existing.saslUsername = net.saslUsername;
       // Don't overwrite saslPassword from sync if empty — the API may
