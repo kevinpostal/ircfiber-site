@@ -164,7 +164,15 @@
   // up without dark slivers between consecutive lines.
   function containsBlockArt(text: string): boolean {
     if (!text) return false;
-    return /[\u2580-\u259F]/.test(text);
+    if (/[\u2580-\u259F]/.test(text)) return true;
+    // ASCII cat / owl art like d4rkm4g3's D00M TooL — many | / \ . - _ " ' ( ) [ ] and multiple lines with checkboxes
+    const lines = text.split('\n');
+    if (lines.length < 3) return false;
+    const hasBoxes = (text.match(/\[ \]/g) || []).length >= 2;
+    const symbols = (text.match(/[|\/\\\-_\.\"]/g) || []).length;
+    // At least 12 symbol chars and 2 checkboxes, or the tool name
+    if (text.includes("d4rkm4g3") || text.includes("D00M TooL")) return true;
+    return hasBoxes && symbols >= 12;
   }
 
   function getUsermask(prefix: string): string {
