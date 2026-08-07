@@ -515,8 +515,8 @@
                 title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}{nick}</span>
           <span class="g" aria-hidden="true">&gt;</span>
           &nbsp;
-          {#if sensibleRealname && sensibleRealname !== nick}
-            <span class="author-realname">{sensibleRealname}&nbsp;</span>
+          {#if sensibleRealname}
+            <span class="author-realname">{sensibleRealname}</span>
           {/if}
         </span>
       {/if}
