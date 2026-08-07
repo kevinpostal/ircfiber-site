@@ -185,7 +185,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .bufferHead .bufferHeading { display: block; flex: 1; min-width: 0; margin: 0; padding: 0; font-weight: 400; }
 .bufferHead .bufferHeading .bufferlabel { display: inline; margin: 0 2px 0 0; padding: 0; font-size: 15px; font-weight: 400; color: #fff; line-height: 18px; white-space: nowrap; vertical-align: middle; }
 .bufferHead .bufferHeading .topic { display: inline; margin: 0; padding: 0; font-size: 14px; font-weight: 400; color: #d9d9d9; line-height: 18px; word-break: break-word; overflow-wrap: anywhere; vertical-align: middle; }
-.bufferHead .bufferControls { display: flex; flex-direction: row; align-items: center; flex-shrink: 0; margin: 0 0 0 8px; padding: 0; line-height: 18px; }
+ .bufferHead .bufferControls { display: flex !important; flex-direction: row !important; align-items: center !important; flex-shrink: 0 !important; margin: 0 0 0 8px !important; padding: 0 !important; line-height: 1 !important; float: none !important; height: auto !important; gap: 4px !important; }
 .bufferHead .buttons { display: flex; flex-direction: row; align-items: center; flex-shrink: 0; margin: 0 0 0 8px; padding: 0; line-height: 18px; }
 .bufferHead .buttons button {
   display: inline-flex;
