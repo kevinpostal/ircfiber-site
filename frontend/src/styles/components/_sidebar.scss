@@ -182,7 +182,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .chat { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .channel { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .bufferHead { display: flex; flex-direction: row; align-items: center; padding: 8px 8px 8px 24px; font-size: 14px; line-height: 18px; color: #d9d9d9; }
-.bufferHead .bufferHeading { display: block; flex: 1; min-width: 0; margin: 0; padding: 0; font-weight: 400; }
+.bufferHead .bufferHeading { display: block; flex: 1; min-width: 0; margin: 0; padding: 6px 0; font-weight: 400; }
 .bufferHead .bufferHeading .bufferlabel { display: inline; margin: 0 2px 0 0; padding: 0; font-size: 15px; font-weight: 400; color: #fff; line-height: 18px; white-space: nowrap; vertical-align: middle; }
 .bufferHead .bufferHeading .topic { display: inline; margin: 0; padding: 0; font-size: 14px; font-weight: 400; color: #d9d9d9; line-height: 18px; word-break: break-word; overflow-wrap: anywhere; vertical-align: middle; }
  .bufferHead .bufferControls { display: flex !important; flex-direction: row !important; align-items: center !important; flex-shrink: 0 !important; margin: 0 0 0 8px !important; padding: 0 !important; line-height: 1 !important; float: none !important; height: auto !important; gap: 4px !important; }
