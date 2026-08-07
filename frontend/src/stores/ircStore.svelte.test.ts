@@ -44,7 +44,8 @@ import {
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
 import { stripPrefix } from '../lib/utils';
-import type { Network, RetryStatus, FailInfo } from '../types';
+import type { Network, Member, RetryStatus, FailInfo } from '../types';
+import type { SyncNetwork, SyncBuffer } from './ircStore.svelte';
 
 // ── W3-T04: mock sendRaw + reconnectNetwork so the helper's side effects
 // are observable. Use a flat factory like the rest of the test files in
@@ -411,6 +412,50 @@ describe('updateNetworkFromSync', () => {
 		expect(updated?.host).toBe('new.host');
 	});
 
+	it('enriches member realnames from sync caches (bare + prefixed keys)', () => {
+		// The engine ships a network-wide `realnames` cache (bare nick keys,
+		// from extended-join + WHOIS 311) plus a per-buffer `chan.realnames`
+		// subset keyed by the exact raw nick form used in `chan["users"]`
+		// (mode prefix + optional userhost). Both must feed member.realname
+		// or the author-realname span never renders.
+		const existing = createNetwork({ networkId: 'net1' });
+		existing.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		const buf = createBuffer({ name: '#chan', isJoined: true });
+		buf.users = [
+			createMember({ nick: '@alice!alice@example.com', prefix: '@', category: 'OP' }),
+			createMember({ nick: 'bob', prefix: '', category: 'MEMBER' }),
+		];
+		existing.buffers.push(buf);
+		ircState.networks.push(existing);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
+		const incomingBuf = createBuffer({ name: '#chan', isJoined: true });
+		// Wire chan["users"]: raw nick strings, not Member objects.
+		incomingBuf.users = ['@alice!alice@example.com', 'bob'] as unknown as Member[];
+		(incomingBuf as SyncBuffer).realnames = { '@alice!alice@example.com': 'Alice Smith' };
+		incoming.buffers.push(incomingBuf);
+		(incoming as SyncNetwork).realnames = { alice: 'Alice Smith', bob: 'Bob Builder' };
+		(incoming as SyncNetwork).accounts = { bob: 'bob_account' };
+		(incoming as SyncNetwork).idents = { bob: 'bob_ident' };
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		const foundNet = ircState.networks.find((n) => n.networkId === 'net1')!;
+		// Network-wide cache is persisted on the Network object (MessageRow /
+		// BufferHeader fall back to it for nicks outside the member list).
+		expect(foundNet.realnames).toEqual({ alice: 'Alice Smith', bob: 'Bob Builder' });
+		const foundBuf = foundNet.buffers.find((b) => b.name === '#chan')!;
+		// Prefixed+userhost nick resolved via the per-buffer subset.
+		const alice = foundBuf.users.find((u) => stripPrefix(u.nick) === 'alice')!;
+		expect(alice.realname).toBe('Alice Smith');
+		// Bare nick resolved via the network-wide cache.
+		const bob = foundBuf.users.find((u) => stripPrefix(u.nick) === 'bob')!;
+		expect(bob.realname).toBe('Bob Builder');
+		expect(bob.account).toBe('bob_account');
+		expect(bob.ident).toBe('bob_ident');
+	});
+
 	it('preserves local unreadCount when backend sync has 0', () => {
 		// Regression: the backend periodically syncs its buffer state which
 		// always has unreadCount: 0 for buffers the user is viewing. The
@@ -633,6 +678,42 @@ describe('updateChannelUsers', () => {
 		expect(foundBuf?.users[1].category).toBe('VOICED');
 		expect(foundBuf?.users[2].nick).toBe('charlie');
 		expect(foundBuf?.users[2].category).toBe('MEMBER');
+	});
+
+	it('fills realname from the network cache on 353', () => {
+		// NAMES itself doesn't carry realnames; the 353 handler must look
+		// them up in the engine's network-wide cache (which is populated by
+		// extended-join / WHOIS and shipped with every sync) so the member
+		// roster shows the real name immediately.
+		const net = createNetwork({ networkId: 'net1' });
+		net.realnames = { alice: 'Alice Smith', bob: 'Bob' };
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', '353', '', ['#chan', '@alice bob']);
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')!
+			.buffers.find((b) => b.name === '#chan')!;
+		const alice = foundBuf.users.find((u) => stripPrefix(u.nick) === 'alice')!;
+		expect(alice.realname).toBe('Alice Smith');
+		const bob = foundBuf.users.find((u) => stripPrefix(u.nick) === 'bob')!;
+		expect(bob.realname).toBe('Bob');
+	});
+
+	it('fills realname from the network cache on JOIN without extended-join', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		net.realnames = { charlie: 'Charlie Brown' };
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'JOIN', 'charlie', ['#chan'], ':charlie!c@host');
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')!
+			.buffers.find((b) => b.name === '#chan')!;
+		const charlie = foundBuf.users.find((u) => stripPrefix(u.nick) === 'charlie')!;
+		expect(charlie.realname).toBe('Charlie Brown');
 	});
 
 	it('removes users on PART/QUIT', () => {
@@ -2365,8 +2446,13 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			ircState.networks.push(net);
 
 			// Sync overwrites users without "zod" (e.g. engine snapshot
-			// from before the self-JOIN was added to channelUsers)
-			const syncNet = createNetwork({ networkId: 'n1' });
+			// from before the self-JOIN was added to channelUsers). The
+			// sync payload MUST carry the same currentNick as the live
+			// network — the sync handler adopts the engine's authoritative
+			// nick when it differs (no currentNickUpdatedAt guard), and a
+			// stale factory default would clobber 'zod' with 'tester' and
+			// break the self-nick re-add below.
+			const syncNet = createNetwork({ networkId: 'n1', currentNick: 'zod' });
 			syncNet.buffers.push(createBuffer({ name: '#zod', users: [{ nick: '@alice', prefix: '@', category: 'OP', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' }, { nick: 'charlie', prefix: '', category: 'MEMBER', ident: '', realname: '', isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0, account: '' }] }));
 			syncNet.buffers.push(createBuffer({ name: '_server', type: 'server', isJoined: true }));
 			updateNetworkFromSync([syncNet]);

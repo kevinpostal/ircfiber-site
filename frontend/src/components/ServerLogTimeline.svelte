@@ -79,13 +79,10 @@
   const attempts = $derived(groupServerLog(visibleMessages));
 
   // Live ticker for pending duration — ticks 1s while a pending attempt exists
+  // Disabled to prevent 1Hz full re-render that disrupts reading. Duration
+  // for pending attempts now shows static "connecting…" without live count.
   let liveNow = $state<number>(Date.now());
-  $effect(() => {
-    const hasPending = attempts.some((a) => a.status === 'pending');
-    if (!hasPending) return;
-    const id = setInterval(() => { liveNow = Date.now(); }, 1000);
-    return () => clearInterval(id);
-  });
+  // was: $effect(() => { const hasPending = attempts.some(...); if (!hasPending) return; setInterval(...) })
 
   // ── Helpers ──────────────────────────────────────────────────────
   function formatTime(ts: number | undefined): string {

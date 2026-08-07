@@ -4,15 +4,16 @@
   interface Props {
     text: string;
     render: (text: string) => string;
+    isBlockArt?: boolean;
   }
 
-  let { text, render }: Props = $props();
+  let { text, render, isBlockArt = false }: Props = $props();
 
   let expanded = $state(false);
 
   const lineCount = $derived(countLines(text));
-  const needsTruncation = $derived(lineCount > MAX_PREVIEW_LINES || text.length > MAX_PREVIEW_CHARS);
-  const displayText = $derived(expanded ? text : previewText(text, false));
+  const needsTruncation = $derived(!isBlockArt && (lineCount > MAX_PREVIEW_LINES || text.length > MAX_PREVIEW_CHARS));
+  const displayText = $derived(expanded || isBlockArt ? text : previewText(text, false));
 </script>
 
 <span class="longMessageContent">{@html render(displayText)}{#if needsTruncation}<button

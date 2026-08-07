@@ -566,8 +566,7 @@
     const newDivider = mark !== '' && mark !== handledDividerMark;
     handledDividerMark = mark;
 
-    if (cachedAtBottom) {
-      // IRCCloud checkFlush → checkTrim: bound the DOM while pinned.
+    if (cachedAtBottom && !isServerBuffer) {
       maybeTrim();
       // Ensure trim has been applied to the DOM before measuring
       // scrollHeight. Without this, renderStart may have just been moved

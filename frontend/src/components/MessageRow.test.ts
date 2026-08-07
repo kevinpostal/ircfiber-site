@@ -182,6 +182,59 @@ describe('MessageRow', () => {
 		expect(document.querySelector('.mode_prefix')).toBeInTheDocument();
 	});
 
+	it('renders the real name next to the nick from the member list', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: 'alice', realname: 'Alice Smith' })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		flushSync();
+
+		const msg = createMessage({ nick: 'alice', text: 'hello', command: 'PRIVMSG' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.author-realname')?.textContent).toBe('Alice Smith');
+	});
+
+	it('falls back to the network-wide realname cache when the sender is not a member', async () => {
+		// PM counterparts / users who left the channel / history rows have no
+		// entry in the active buffer's member list. The engine's network-wide
+		// realname cache (persisted on the Network object by the sync handler)
+		// must still surface the real name.
+		const net = createNetwork({ networkId: 'net1', realnames: { alice: 'Alice Smith' } });
+		// #chan has no member entry for alice (e.g. she left the channel).
+		net.buffers.push(createBuffer({ name: '#chan', users: [createMember({ nick: 'bob' })] }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		flushSync();
+
+		const msg = createMessage({ nick: 'alice', text: 'hello', command: 'PRIVMSG' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.author-realname')?.textContent).toBe('Alice Smith');
+	});
+
+	it('does not render a placeholder realname when unknown', async () => {
+		// IRCCloud parity: no member data and no network cache entry means no
+		// realname span at all — never an empty or nick-echoing placeholder.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		flushSync();
+
+		const msg = createMessage({ nick: 'alice', text: 'hello', command: 'PRIVMSG' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.author-realname')).toBeNull();
+	});
+
 	it('truncates long PRIVMSG bodies to 20 lines with a "Show more" button', async () => {
 		const lines: string[] = [];
 		for (let i = 0; i < 25; i++) lines.push(`line ${i}`);
@@ -194,7 +247,7 @@ describe('MessageRow', () => {
 		expect(document.querySelector('.longMessageContent')).toBeInTheDocument();
 		const content = document.querySelector('.longMessageContent');
 		expect(content).toBeTruthy();
-		const visible = content!.textContent || '';
+		const visible = (content!.textContent || '').replace(/\u00a0/g, ' ');
 		expect(visible).toContain('line 0');
 		expect(visible).toContain('line 19');
 		expect(visible).not.toContain('line 20');
@@ -219,7 +272,7 @@ describe('MessageRow', () => {
 
 		// After clicking, the full body renders
 		const content = document.querySelector('.longMessageContent');
-		const visible = content!.textContent || '';
+		const visible = (content!.textContent || '').replace(/\u00a0/g, ' ');
 		expect(visible).toContain('line 24');
 		expect(document.querySelector('.messageTruncated')?.textContent).toContain('Show less');
 	});

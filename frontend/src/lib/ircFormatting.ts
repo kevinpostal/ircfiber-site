@@ -97,7 +97,14 @@ export function parseIrcFormatting(text: string): string {
     else if (c === '>') out += '&gt;';
     else if (c === '"') out += '&quot;';
     else if (c === "'") out += '&#039;';
-    else out += c;
+    else if (c === ' ') {
+      const nextIsSpace = i + 1 < text.length && text.charCodeAt(i + 1) === 0x20;
+      const prevIsSpace = i > 0 && text.charCodeAt(i - 1) === 0x20;
+      const isConsecutive = nextIsSpace || prevIsSpace;
+      const hasBg = bg !== null || hexBg !== null;
+      if (isConsecutive || hasBg) out += '&nbsp;';
+      else out += ' ';
+    } else out += c;
   }
 
   while (i < text.length) {
@@ -171,10 +178,13 @@ export function parseIrcFormatting(text: string): string {
       closeAll();
       const openTag = makeOpen();
       if (openTag) {
-        // <wbr> gives the browser a line-wrap opportunity between colored
-        // block-character spans. Default <wbr> rendering is zero-width,
-        // matching IRCCloud exactly.
-        out += '<wbr>' + openTag;
+        const isColor = fg !== null || bg !== null || hexFg !== null || hexBg !== null;
+        // <wbr> only for color boundaries (ANSI art block spans). For
+        // bold/italic/underline alone it creates spurious break
+        // opportunities — e.g. "- <wbr><span class="bold">Flat" would
+        // isolate the dash on its own line.
+        if (isColor) out += '<wbr>' + openTag;
+        else out += openTag;
         openStack = 1;
       }
     }

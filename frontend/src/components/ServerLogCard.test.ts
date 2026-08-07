@@ -89,6 +89,10 @@ describe('ServerLogCard', () => {
     ]);
     render(ServerLogCard, { props: { attempt, network } });
     await expandCard();
+    // Phase timeline is collapsed behind "Connection steps" toggle by default
+    // (only auto-expanded for pending latest cards). Click it to reveal.
+    const toggle = page.getByRole('button', { name: /Connection steps/ });
+    await toggle.click();
     const timeline = page.getByRole('list');
     await expect.element(timeline).toBeInTheDocument();
   });

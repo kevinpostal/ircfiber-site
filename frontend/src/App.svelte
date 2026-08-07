@@ -596,7 +596,7 @@ let showNetworkForm: boolean = $state(false);
         // IRCCloud renders the last batchSize=200 messages on buffer open
         // (BufferLogView.render → messages.last(this.scroll.batchSize)).
         count: 200,
-        fetchFromUpstream: true,
+        fetchFromUpstream: false,
         fetchCommand: 'LATEST',
       });
       performance.mark('history-api-end');

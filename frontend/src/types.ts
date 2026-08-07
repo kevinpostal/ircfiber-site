@@ -175,6 +175,18 @@ export interface Network {
    */
   channelUsersMap?: Record<string, string[]>;
   /**
+   * Network-wide realname cache (bare nick → realname) shipped by the
+   * engine on every WS sync (`netObj["realnames"]`, mirror of the
+   * engine's `realnames[]` cache populated from IRCv3 extended-join and
+   * RPL_WHOISUSER 311). Persisted here so message rows can look up a
+   * sender's real name even when the sender is not in the active
+   * buffer's member list — PM counterparts, users who have since left
+   * the channel, and history rows. Optional because older engine builds
+   * may omit the field (the per-buffer `chan["realnames"]` subset is
+   * consumed by updateNetworkFromSync directly from the buffer JSON).
+   */
+  realnames?: Record<string, string>;
+  /**
    * W2-T02: engine-reported structured retry state. Populated from
    * `CONNECTION_RETRY_STATUS` events AND from the WS sync
    * `netObj["retryStatus"]` field. Cleared when the engine's

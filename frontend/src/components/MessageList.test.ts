@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
-import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage } from '../stores/ircStore.svelte';
+import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage, batchAppendMessages, updateChannelUsers } from '../stores/ircStore.svelte';
 import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
 import { clearedAtMap } from '../stores/preferences.svelte';
 import type { IRCMessage } from '../types';
@@ -973,6 +973,175 @@ describe('MessageList', () => {
 				.filter((m) => m.text && /^\d$/.test(m.text))
 				.map((m) => m.eid);
 			expect(processedEids).toEqual([1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009]);
+		});
+	});
+
+	describe('pinned-at-bottom auto-scroll on incoming messages', () => {
+		// Regression: new messages must force the scrollbar to the very
+		// bottom when the user is pinned there — regardless of whether the
+		// sender is new (firstAuthor row) or the message is an action
+		// (/me). These rows render through different MessageRow branches
+		// than same-author continuations and used to leave the viewport
+		// stranded a row short.
+
+		async function setupScrollableChannel(count: number): Promise<HTMLDivElement | null> {
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '#chan' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#chan';
+
+			const now = Date.now();
+			const seed: IRCMessage[] = [];
+			for (let i = 0; i < count; i++) {
+				seed.push(createMessage({
+					command: 'PRIVMSG',
+					nick: 'alice',
+					text: `seed-${i + 1}`,
+					t: now - (count - i) * 1000,
+					msgid: `seed-${i + 1}`,
+				}));
+			}
+			ircState.messages['net1:#chan'] = seed;
+			flushSync();
+
+			render(MessageList, { props: {} });
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 30));
+
+			const container = document.getElementById('messages') as HTMLDivElement | null;
+			if (!container) return null;
+			// Force a fixed viewport height so the container is scrollable
+			// regardless of the test browser's window size.
+			container.style.height = '600px';
+			expect(container.scrollHeight).toBeGreaterThan(container.clientHeight);
+			// Pin to the bottom explicitly and let the scroll handler catch up.
+			container.scrollTop = container.scrollHeight;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+			expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeLessThan(4);
+			return container;
+		}
+
+		it('snaps to the very bottom when a message from a NEW user arrives', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'bob', // different author → firstAuthor row
+				text: 'hello from bob',
+				t: Date.now(),
+				msgid: 'bob-1',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 50));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
+		});
+
+		it('snaps to the very bottom when an action (/me) message arrives', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'bob',
+				type: 'action', // /me → action branch
+				text: 'dances',
+				t: Date.now(),
+				msgid: 'act-1',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 50));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
+		});
+
+		it('snaps to the very bottom on a same-author continuation (control)', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'alice',
+				text: 'more from alice',
+				t: Date.now(),
+				msgid: 'alice-2',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 50));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
+		});
+
+		it('snaps to the very bottom on the realtime path (batched append + JOIN side effects)', async () => {
+			// Mirrors the real WS flow: the new user's JOIN runs
+			// updateChannelUsers (member added) and the batcher coalesces
+			// the JOIN + PRIVMSG into one batchAppendMessages flush. The
+			// trim threshold is engaged (250 rendered rows) so maybeTrim
+			// also runs in the same effect pass.
+			const container = await setupScrollableChannel(250);
+			if (!container) return;
+
+			// Scroll up first so the render window is mid-buffer, then back
+			// to the bottom — recreates the trim state of a long session.
+			container.scrollTop = 100;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+			container.scrollTop = container.scrollHeight;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+
+			// JOIN for the new user (member roster side effect).
+			updateChannelUsers('net1', '#chan', 'JOIN', 'bob', ['#chan'], ':bob!b@host');
+
+			// Realtime path: enqueueMessage → flush → batchAppendMessages.
+			batchAppendMessages('net1', '#chan', [
+				{
+					command: 'PRIVMSG',
+					nick: 'bob',
+					text: 'hello from bob',
+					t: Date.now(),
+					msgid: 'bob-1',
+					timestamp: new Date().toISOString(),
+					params: [],
+					prefix: '',
+				},
+				{
+					command: 'PRIVMSG',
+					nick: 'bob',
+					type: 'action',
+					text: 'dances',
+					t: Date.now() + 1,
+					msgid: 'act-1',
+					timestamp: new Date().toISOString(),
+					params: [],
+					prefix: '',
+				},
+			]);
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 50));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
 		});
 	});
 });

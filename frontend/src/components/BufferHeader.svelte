@@ -26,6 +26,13 @@
       : (activeBufferObj?.name || ircState.activeBuffer.bufferName || '\u2014')
   );
   const topic = $derived(activeBufferObj?.topic || '');
+  // IRCCloud shows the counterpart's real name under the "Conversation
+  // with <nick>" line in a PM. Query buffers have no member list, so look
+  // it up in the engine's network-wide realname cache (WS sync
+  // `realnames`, bare-nick keyed); fall back to the nick when unknown.
+  const conversationRealname = $derived(
+    activeNetwork?.realnames?.[activeBufferObj?.name ?? ''] ?? activeBufferObj?.name ?? ''
+  );
   const memberCount = $derived(activeBufferObj?.users?.length ?? 0);
   const isChannel = $derived(ircState.activeBuffer.bufferName?.startsWith('#') ?? false);
   const connected = $derived(activeNetwork?.connected ?? false);
@@ -178,7 +185,7 @@
     <h2 class="bufferHeading{!isJoined ? ' bufferHeadingCollapsed' : ''}">
       {#if ircState.activeBuffer.bufferName && !ircState.activeBuffer.bufferName.startsWith('#') && ircState.activeBuffer.bufferName !== '_server'}
         <span class="bufferlabel label" id="current-channel">Conversation with {channelName}</span>
-        <span class="realname" id="conversation-realname">{activeBufferObj?.name}</span>
+        <span class="realname" id="conversation-realname">{conversationRealname}</span>
       {:else}
         <span class="bufferlabel label bufferlabel--fiber" id="current-channel">
           {#if isServerBuffer}

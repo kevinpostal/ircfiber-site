@@ -41,6 +41,11 @@
 
   const activeNetwork = $derived(getActiveNetwork());
   const myNick = $derived(activeNetwork?.currentNick || '');
+  // Fallback realname from the engine's network-wide cache (shipped on
+  // every WS sync). Covers senders who are NOT in the active buffer's
+  // member list — PM counterparts, users who have left the channel, and
+  // history rows whose author is no longer present in the roster.
+  const networkRealname = $derived(activeNetwork?.realnames?.[stripPrefix(nick)] ?? '');
   const isOwn = $derived(!!nick && !!myNick && stripPrefix(nick).toLowerCase() === myNick.toLowerCase());
   const isBot = $derived(isBotNick(nick, findMemberForNick(nick), msg.prefix));
   const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));
@@ -507,7 +512,7 @@
         {@const usermask = getUsermask(msg.prefix || '')}
         {@const authorTitle = usermask ? `${nick} (${usermask})` : nick}
         {@const member = findMemberForNick(nick)}
-        {@const sensibleRealname = getSensibleRealname(member?.realname)}
+        {@const sensibleRealname = getSensibleRealname(member?.realname || networkRealname)}
         {@const botFlag = isBotNick(nick, member, msg.prefix)}
         <span class="authorWrap">
           <span class="g" aria-hidden="true">&lt;</span>
@@ -547,10 +552,10 @@
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
           --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} />
+                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />
         </span>
       {:else if chatContent}
-        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} /></span>
+        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} /></span>
       {:else}
         {@html getContentHTML()}
       {/if}

@@ -60,21 +60,20 @@
 }
 
 /* ASCII art / blockArt — preserve monospaced layout, no wrapping inside art */
-.row.messageRow.blockArt,
-.row.messageRow.blockArt .message,
 .row.messageRow.blockArt .content {
-  white-space: pre !important;
-  font-family: var(--font-mono, ui-monospace, monospace) !important;
-  word-break: normal !important;
-  overflow-wrap: normal !important;
+  white-space: pre;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  word-break: normal;
+  overflow-wrap: normal;
   overflow-x: auto;
   display: block;
 }
 .row.messageRow.blockArt .content span {
-  white-space: pre !important;
+  white-space: pre;
 }
-
-/* ── /clear support ── */
+.row.messageRow.blockArt wbr {
+  display: none;
+}
 .row.messageRow.cleared {
   display: none;
 }

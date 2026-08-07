@@ -1280,10 +1280,66 @@ export function sortBuffers(net: Network): void {
   });
 }
 
-export function updateNetworkFromSync(incoming: Network[]): void {
-  for (const rawNet of incoming as (Network & { id?: string })[]) {
+/**
+ * Wire-only fields the engine ships on WS sync snapshots beyond the
+ * Buffer/Network interfaces (websocket.d:performStateDump). `accounts`,
+ * `idents` and `realnames` are network-wide caches (extended-join +
+ * WHOIS/311) keyed by BARE nick; channel buffers additionally carry
+ * per-buffer subsets (`chan["realnames"]` etc.) keyed by the exact raw
+ * nick form used in `chan["users"]` (mode prefix + optional userhost).
+ */
+export interface SyncNetwork extends Network {
+  /** Backend `id` field, mapped to the frontend `networkId`. */
+  id?: string;
+  accounts?: Record<string, string>;
+  idents?: Record<string, string>;
+  realnames?: Record<string, string>;
+}
+
+export interface SyncBuffer extends Buffer {
+  realnames?: Record<string, string>;
+  accounts?: Record<string, string>;
+  idents?: Record<string, string>;
+}
+
+/**
+ * Fill member account/ident/realname from the engine's sync caches.
+ * The network-wide caches are keyed by bare nick while m.nick may carry
+ * a mode prefix and/or userhost, so try the exact key first (the
+ * per-buffer subsets use the raw form), then the bare form. Only fills
+ * fields the member doesn't already have — live extended-join JOINs set
+ * realname directly and must not be clobbered by a stale sync.
+ */
+function enrichMembersFromSync(
+  users: Member[],
+  caches: {
+    accounts?: Record<string, string>;
+    idents?: Record<string, string>;
+    realnames?: Record<string, string>;
+    bufRealnames?: Record<string, string>;
+  }
+): void {
+  for (const m of users) {
+    const bare = stripPrefix(m.nick);
+    if (caches.accounts && !m.account) {
+      const acct = caches.accounts[m.nick] ?? caches.accounts[bare];
+      if (acct) m.account = acct;
+    }
+    if (caches.idents && !m.ident) {
+      const id = caches.idents[m.nick] ?? caches.idents[bare];
+      if (id) m.ident = id;
+    }
+    if (caches.realnames && !m.realname) {
+      const rn = caches.bufRealnames?.[m.nick] ?? caches.realnames[bare];
+      if (rn && rn !== bare) m.realname = rn;
+    }
+  }
+}
+
+export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
+  for (const rawNet of incoming) {
     // Map backend `id` field to frontend `networkId`
-    const net = rawNet as Network;
+    const net = rawNet;
     if (!net.networkId && rawNet.id) {
       net.networkId = rawNet.id;
     }
@@ -1351,6 +1407,12 @@ export function updateNetworkFromSync(incoming: Network[]): void {
       existing.tls = net.tls;
       existing.nick = net.nick;
       existing.realName = net.realName;
+      // Network-wide realname cache (nick → realname) from the engine's
+      // `netObj["realnames"]`. Keep it on the Network object so message
+      // rows can show a real name for nicks NOT in the active buffer's
+      // member list (PM counterparts, users who left the channel, and
+      // history rows) — see MessageRow's fallback lookup.
+      if (net.realnames !== undefined) existing.realnames = net.realnames;
       existing.sasl = net.sasl;
       existing.saslUsername = net.saslUsername;
       // Don't overwrite saslPassword from sync if empty — the API may
@@ -1623,23 +1685,15 @@ export function updateNetworkFromSync(incoming: Network[]): void {
               });
             }
           }
-          // Enrich members with extended-join data from network-level
-          // accounts/idents/realnames caches (sync JSON carries these as
-          // extra fields beyond the Buffer/Network interface).
-          const syncAccounts = (rawNet as any).accounts as Record<string, string> | undefined;
-          const syncIdents = (rawNet as any).idents as Record<string, string> | undefined;
-          if (syncAccounts || syncIdents) {
-            for (const m of existingBuf.users) {
-              if (syncAccounts && !m.account) {
-                const acct = syncAccounts[m.nick];
-                if (acct) m.account = acct;
-              }
-              if (syncIdents && !m.ident) {
-                const id = syncIdents[m.nick];
-                if (id) m.ident = id;
-              }
-            }
-          }
+          // Enrich members with extended-join data from the network-level
+          // accounts/idents/realnames caches the engine ships as extra
+          // fields on the sync payload (websocket.d:performStateDump).
+          enrichMembersFromSync(existingBuf.users, {
+            accounts: rawNet.accounts,
+            idents: rawNet.idents,
+            realnames: rawNet.realnames,
+            bufRealnames: (incomingBuf as SyncBuffer).realnames,
+          });
           // Re-apply saved member activity that the incoming sync wiped out.
           for (const m of existingBuf.users) {
             const key = `${existing.networkId}:${existingBuf.name}:${m.nick}`;
@@ -1876,6 +1930,16 @@ export function updateNetworkFromSync(incoming: Network[]): void {
           if (buf.users && buf.users.length > 0 && typeof buf.users[0] === 'string') {
             buf.users = (buf.users as unknown as string[]).map(normalizeUser);
           }
+          // First sync after boot: fill account/ident/realname so history
+          // renders the real name immediately instead of waiting for the
+          // next periodic sync (the existing-network branch re-applies
+          // this enrichment on every sync).
+          enrichMembersFromSync(buf.users, {
+            accounts: rawNet.accounts,
+            idents: rawNet.idents,
+            realnames: rawNet.realnames,
+            bufRealnames: (b as SyncBuffer).realnames,
+          });
           return buf;
         })
         // Defensive dedup: the sync payload may contain the same channel
@@ -2300,15 +2364,22 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       // on JOIN leave the bare entry in place and the prefixed form
       // gets dropped, hiding the op indicator in the member list.
       const existing = buf.users.find(u => stripPrefix(u.nick) === stripped);
+      // Realname from the engine's network-wide cache (populated from
+      // extended-join / WHOIS 311; shipped on every WS sync). NAMES
+      // itself doesn't carry a realname, so without this the member
+      // would stay bare until the next sync enrichment runs.
+      const cachedRealname = net.realnames?.[stripped] ?? '';
+      const sensibleRealname = cachedRealname && cachedRealname !== stripped ? cachedRealname : '';
       if (existing) {
         if (existing.nick !== n) existing.nick = n;
         if (!existing.prefix) existing.prefix = mode.prefix;
         if (existing.category === 'MEMBER' || !existing.category) existing.category = mode.category;
         if (identEJ && !existing.ident) existing.ident = identEJ;
+        if (sensibleRealname && !existing.realname) existing.realname = sensibleRealname;
       } else {
         buf.users.push({
           nick: n, prefix: mode.prefix, category: mode.category,
-          ident: identEJ, realname: '', isAway: false, awayMessage: '',
+          ident: identEJ, realname: sensibleRealname, isAway: false, awayMessage: '',
           lastSpoke: 0, lastHighlighted: 0, account: ''
         });
       }
@@ -2401,9 +2472,18 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       // extended-join: params = [channel, account, realname]
       const acct = params && params.length >= 3 ? params[1] : '';
       const realnameEJ = params && params.length >= 3 ? params[2] : '';
+      // Fall back to the engine's network-wide realname cache when the
+      // server didn't negotiate extended-join (the engine learns it via
+      // a follow-up WHOIS/311 and ships it on the next sync — using the
+      // cache here shows it without waiting for that round-trip).
+      const cachedRealname = net.realnames?.[nick] ?? '';
+      const realname =
+        realnameEJ && realnameEJ !== nick
+          ? realnameEJ
+          : cachedRealname && cachedRealname !== nick ? cachedRealname : '';
       buf.users.push({
         nick, prefix: '', category: 'MEMBER',
-        ident, realname: realnameEJ || '', isAway: false, awayMessage: '',
+        ident, realname, isAway: false, awayMessage: '',
         lastSpoke: 0, lastHighlighted: 0, account: acct, isBot
       });
     }
