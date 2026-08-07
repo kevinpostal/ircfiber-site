@@ -275,6 +275,7 @@ export interface BufferPrefs {
   notifyAll?: boolean;
   formatColor?: boolean;
   showJoinPart?: boolean;
+  showAway?: boolean;
   collapseDisconnects?: boolean;
   replyCollapse?: boolean;
   replyQuote?: boolean;

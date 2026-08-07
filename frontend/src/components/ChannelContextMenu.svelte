@@ -193,6 +193,7 @@
     notifyAll: prefs.notifyAll ?? false,
     mute: prefs.mute ?? false,
     showJoinPart: prefs.showJoinPart ?? true,
+    showAway: prefs.showAway ?? true,
     collapsed: false,
     replyCollapse: prefs.replyCollapse ?? false,
     replyQuote: prefs.replyQuote ?? false,
@@ -213,6 +214,7 @@
     toggles.notifyAll = prefs.notifyAll ?? false;
     toggles.mute = prefs.mute ?? false;
     toggles.showJoinPart = prefs.showJoinPart ?? true;
+    toggles.showAway = prefs.showAway ?? true;
     toggles.replyCollapse = prefs.replyCollapse ?? false;
     toggles.replyQuote = prefs.replyQuote ?? false;
     toggles.typing = prefs.typing ?? true;
@@ -338,19 +340,9 @@
           {#if toggles.showJoinPart}<i class="fa fa-check"></i>{/if}Show nick changes, joins and parts
         </button>
       </li>
-      <li class="collapseJoinPart" aria-disabled="false" class:enabled={toggles.collapsed}>
-        <button class="contextMenu__item joinpartcollapse" aria-pressed={toggles.collapsed} onclick={() => toggle('collapsed')}>
-          {#if toggles.collapsed}<i class="fa fa-check"></i>{/if}Collapsed
-        </button>
-      </li>
-      <li class="replyCollapse" aria-disabled="false" class:enabled={toggles.replyCollapse}>
-        <button class="contextMenu__item replyCollapse" aria-pressed={toggles.replyCollapse} onclick={() => toggle('replyCollapse')}>
-          {#if toggles.replyCollapse}<i class="fa fa-check"></i>{/if}Collapse reply threads
-        </button>
-      </li>
-      <li class="replyQuote" aria-disabled="false" class:enabled={toggles.replyQuote}>
-        <button class="contextMenu__item replyQuote" aria-pressed={toggles.replyQuote} onclick={() => toggle('replyQuote')}>
-          {#if toggles.replyQuote}<i class="fa fa-check"></i>{/if}Show reply quotes
+      <li class="showAway" class:enabled={toggles.showAway}>
+        <button class="contextMenu__item away" aria-pressed={toggles.showAway} onclick={() => toggle('showAway')}>
+          {#if toggles.showAway}<i class="fa fa-check"></i>{/if}Show away status
         </button>
       </li>
       <li class="typing" aria-disabled="false" class:enabled={toggles.typing}>

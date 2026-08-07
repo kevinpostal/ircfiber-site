@@ -92,22 +92,44 @@ export function startXHRFallback(): void {
 
   xhrFallbackController = new AbortController();
 
+  const scheduleNext = (delayMs: number) => {
+    if (xhrFallbackController?.signal.aborted) return;
+    setTimeout(poll, delayMs);
+  };
+
   const poll = async () => {
     if (xhrFallbackController?.signal.aborted) return;
 
     try {
       const response = await fetch(`/api/events?since=${maxEidTracker.value}`, {
         signal: xhrFallbackController.signal,
+        credentials: 'include',
       });
+      // 401/403 means session expired or never authenticated — stop
+      // polling instead of hammering the gateway with unauthenticated
+      // requests that each emit a 401 trace (has_error=true noise).
+      if (response.status === 401 || response.status === 403) {
+        stopXHRFallback();
+        return;
+      }
       const data = await response.json();
       if (Array.isArray(data)) {
         for (const item of data) {
           handleResponse(item as Record<string, unknown>);
         }
+        // Avoid tight-loop hammering when the stream is idle: empty
+        // result means no new events — back off 1s. Non-empty we can
+        // poll immediately to drain the next batch.
+        if (!xhrFallbackController?.signal.aborted) {
+          if (data.length === 0) scheduleNext(1000);
+          else poll();
+        }
       } else if (data && typeof data === 'object') {
         handleResponse(data as Record<string, unknown>);
+        if (!xhrFallbackController?.signal.aborted) scheduleNext(1000);
+      } else {
+        if (!xhrFallbackController?.signal.aborted) scheduleNext(1000);
       }
-      if (!xhrFallbackController?.signal.aborted) poll();
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         return; // intentional abort via stopXHRFallback
@@ -227,6 +249,8 @@ export function connectWebSocket(
   messageCallback = onMessage;
   if (onOpen) openCallback = onOpen;
   if (onClose) closeCallback = onClose;
+
+  socket = new WebSocket(url);
 
   socket.addEventListener('open', () => {
     // PM8 mitigation: stop XHR BEFORE WS handshake completes so there

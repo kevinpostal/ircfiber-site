@@ -94,6 +94,17 @@
     return messages.filter(m => !JOIN_PART_COMMANDS.has(m.command));
   }
 
+  const AWAY_COMMANDS = new Set(['AWAY']);
+
+  function filterAway(messages: IRCMessage[]): IRCMessage[] {
+    if (messages.length === 0) return messages;
+    const showAway = ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
+      ? getBufferPrefs(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName).showAway
+      : true;
+    if (showAway ?? true) return messages;
+    return messages.filter(m => !AWAY_COMMANDS.has(m.command));
+  }
+
   // (cold start / migration).  The clearedAt filter and empty-message
   // filter are still applied on top of the cached processed array because
   // they depend on UI state, not on the raw stream.
@@ -106,13 +117,15 @@
         ? getClearedAt(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName) : null;
       if (!clearedAt) {
         const jpFiltered = filterJoinPart(cached);
-        perfMeasure(`processedMessages len=${jpFiltered.length} (cache hit)`, t0);
-        return jpFiltered;
+        const awayFiltered = filterAway(jpFiltered);
+        perfMeasure(`processedMessages len=${awayFiltered.length} (cache hit)`, t0);
+        return awayFiltered;
       }
       const filtered = cached.filter(m => (m.t || 0) > clearedAt);
       const jpFiltered = filterJoinPart(filtered);
-      perfMeasure(`processedMessages len=${jpFiltered.length} (cache hit, cleared)`, t0);
-      return jpFiltered;
+      const awayFiltered = filterAway(jpFiltered);
+      perfMeasure(`processedMessages len=${awayFiltered.length} (cache hit, cleared)`, t0);
+      return awayFiltered;
     }
     // Fallback: cold start / cache miss.  We can't write to the cache
     // from inside a $derived (Svelte 5 forbids state mutation in derived
@@ -130,8 +143,9 @@
     });
     const result = preprocessMessages(noEmpty);
     const jpFiltered = filterJoinPart(result);
-    perfMeasure(`processedMessages len=${jpFiltered.length} (cold)`, t0);
-    return jpFiltered;
+    const awayFiltered = filterAway(jpFiltered);
+    perfMeasure(`processedMessages len=${awayFiltered.length} (cold)`, t0);
+    return awayFiltered;
   });
 
   function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean;

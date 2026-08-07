@@ -106,7 +106,17 @@
   }
 
   function getHeaderLabel(a: ServerLogAttempt): string {
-    switch (a.status) {
+    // If the network is currently connected, the last pending attempt should
+    // be treated as success — but only if it actually has a welcome/MOTD
+    // (e.g. the engine's snapshot says connected:true but the attempt's
+    // welcome phase hasn't yet been grouped due to timing). This prevents
+    // "Connecting to" when the banner and snapshot both say connected, while
+    // still allowing a true pending (queued+tcp_open with no welcome) to
+    // correctly show "Connecting to" (as in the unit test).
+    const hasWelcome = a.welcome.length > 0 || a.motd.length > 0 || a.phases.some(p => p.phase === 'welcome');
+    const isLastPending = a.status === 'pending' && network?.connected && a === attempts[attempts.length - 1] && hasWelcome;
+    const effectiveStatus = isLastPending ? 'success' : a.status;
+    switch (effectiveStatus) {
       case 'success':       return 'Connected to';
       case 'error':         return 'Connection failed';
       case 'disconnected':  return 'Disconnected from';
@@ -116,7 +126,10 @@
   }
 
   function getStatusGlyph(a: ServerLogAttempt): string {
-    switch (a.status) {
+    const hasWelcome = a.welcome.length > 0 || a.motd.length > 0 || a.phases.some(p => p.phase === 'welcome');
+    const isLastPending = a.status === 'pending' && network?.connected && a === attempts[attempts.length - 1] && hasWelcome;
+    const effectiveStatus = isLastPending ? 'success' : a.status;
+    switch (effectiveStatus) {
       case 'success':       return '✓';
       case 'error':         return '×';
       case 'disconnected':  return '×';
@@ -126,7 +139,10 @@
   }
 
   function getStatusKind(a: ServerLogAttempt): 'success' | 'error' | 'disconnected' | 'pending' {
-    return a.status === 'superseded' ? 'disconnected' : (a.status as 'success' | 'error' | 'disconnected' | 'pending');
+    const hasWelcome = a.welcome.length > 0 || a.motd.length > 0 || a.phases.some(p => p.phase === 'welcome');
+    const isLastPending = a.status === 'pending' && network?.connected && a === attempts[attempts.length - 1] && hasWelcome;
+    const effectiveStatus = isLastPending ? 'success' : a.status;
+    return effectiveStatus === 'superseded' ? 'disconnected' : (effectiveStatus as 'success' | 'error' | 'disconnected' | 'pending');
   }
 
   // ── Per-row type tint mapping (IRCCloud parity) ──────────────────

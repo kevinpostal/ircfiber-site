@@ -2592,7 +2592,6 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // area keeps showing the rejected nick until the next sync — and on
     // reload, the sync reveals the user's actual still-`Zodiac_` nick,
     // making the change look like it never happened at all.
-    console.log('[nick-fix] 433/432 handler fired for network', networkId, 'cmd', cmd, 'pending:', net.pendingSelfNickChange);
     const pending = net.pendingSelfNickChange;
     if (pending) {
       net.currentNick = pending.oldNick;
