@@ -412,9 +412,18 @@
   color: #777;
 }
 
-.row.messageRow .author-realname {
+ .row.messageRow .author-realname {
   color: #737373;
   font-size: 14px;
   font-weight: 400;
   margin-left: 4px;
+}
+
+ .row.messageRow .author-host {
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 6px;
+  font-family: var(--font-mono, monospace);
+  opacity: 0.9;
 }
