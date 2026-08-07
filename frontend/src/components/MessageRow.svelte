@@ -509,21 +509,17 @@
         {@const member = findMemberForNick(nick)}
         {@const sensibleRealname = getSensibleRealname(member?.realname)}
         {@const botFlag = isBotNick(nick, member, msg.prefix)}
-        {@const hostMask = getUsermask(msg.prefix || '') || member?.ident || ''}
         <span class="authorWrap">
           <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <span role="button" tabindex="0" class="buffer bufferLink author {colorCls} user hasUserParent link"
                 title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}{nick}</span>
           <span class="g" aria-hidden="true">&gt;</span>
-          {#if hostMask}
-            <span class="author-host">{hostMask}</span>
+          {#if sensibleRealname}
+            <span class="author-realname">{sensibleRealname}</span>
           {/if}
           {#if botFlag}
             <span class="author-bot">BOT</span>
-          {/if}
-          {#if sensibleRealname}
-            <span class="author-realname">{sensibleRealname}</span>
           {/if}
         </span>
       {/if}
