@@ -569,6 +569,11 @@
     if (cachedAtBottom) {
       // IRCCloud checkFlush → checkTrim: bound the DOM while pinned.
       maybeTrim();
+      // Ensure trim has been applied to the DOM before measuring
+      // scrollHeight. Without this, renderStart may have just been moved
+      // (trimming 150 rows at top) but the DOM still contains the old
+      // rows, so scrollHeight is stale and the snap lands half-cut.
+      flushSync();
 
       // Entrance animation: detect which messages are new since the last
       // time we were at the bottom. Only the batch head (firstAuthor or
@@ -608,16 +613,23 @@
       }
 
       // IRCCloud scrollToBottom: snap to bottom when pinned.
-      // We always snap when cachedAtBottom is true, even if atBottom
-      // already true, to ensure small status rows like "is away: Auto-away"
-      // are visible. The previous "only if !atBottom" optimization relied on
-      // browser anchoring, but for collapsed JOINPART groups or reordered
-      // timestamps the new row may not be at the visual bottom.
+      // Always snap when cachedAtBottom, even if already at bottom, to
+      // ensure small status rows like "is away: Auto-away" are fully
+      // visible. Use flushSync above so scrollHeight reflects the trimmed
+      // DOM, then double-set with reflow and a rAF for late layout
+      // (images, entrance animation, font loading) which can otherwise
+      // leave the new row half-cut.
       container.scrollTop = container.scrollHeight;
-      // Force reflow to ensure clamped position
       void container.scrollHeight;
       container.scrollTop = container.scrollHeight;
       cachedAtTop = false;
+      // One more rAF to catch any height that settles after paint
+      // (e.g. image decode, entrance transform). Only if still pinned.
+      requestAnimationFrame(() => {
+        if (cachedAtBottom && container) {
+          container.scrollTop = container.scrollHeight;
+        }
+      });
     } else if (newDivider && cachedAtTop) {
       // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
       requestAnimationFrame(() => {
