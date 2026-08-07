@@ -49,6 +49,11 @@ body.ascii-compact .row.messageRow {
 .row.messageRow {
   line-height: 1.15;
   font-size: 14px;
+  /* Contain layout/paint so off-screen rows (especially ANSI art with
+     thousands of spans) don't participate in global layout on scroll.
+     IRCCloud uses similar containment; without it scrolling up through
+     block art triggers full-page reflow. */
+  contain: layout paint;
 }
 
 /* Bot chat rows (e.g. ANSI art from scroll, znc, etc.) render monospace so
@@ -62,12 +67,13 @@ body.ascii-compact .row.messageRow {
 .row.messageRow.type_buffer_msg,
 .row.messageRow.blockArt {
   font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  /* IRCCloud renders channel messages at 14px/16px line-height. Using 16px
-     for bot/block-art rows makes each character cell taller, so ANSI art
-     images match IRCCloud's more-square aspect ratio instead of looking
-     horizontally stretched. */
   line-height: 16px;
   padding: 0 118px 0 68px;
+  /* Block art can be 20-100 lines × 10 spans/line. content-visibility
+     skips off-screen art during scroll, intrinsic-size avoids scrollbar
+     jitter. */
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 300px;
 }
 /* The .type_buffer_msg / .bot / .blockArt shorthand above (specificity
    0,3,0) comes after the generic .row.messageRow.firstAuthor { padding-top:
@@ -110,6 +116,13 @@ body.ascii-compact .row.messageRow {
   display: inline;
   white-space: pre-wrap;
   word-break: break-all;
+  overflow-wrap: anywhere;
+}
+.row.messageRow.blockArt .content {
+  /* Art lines preserve columns; avoid break-all inside art which would
+     slice mid-glyph and cause extra reflow. Art already has <wbr> at
+     color boundaries for wrap. */
+  word-break: normal;
   overflow-wrap: anywhere;
 }
 
@@ -409,24 +422,16 @@ textarea.message-input {
 }
 .chattercell.lowerchattercell {
   animation: chatterSlideUp 180ms ease-out both;
+/* ─── Global scroll handling ───────────────────────────────────────────
+   IRCCloud uses scroll-behavior:auto and drives divider snaps via
+   JS animate (swing 100ms). `smooth` makes every programmatic
+   scrollTop= interpolated, fighting wheelUp through ANSI art. */
+.messages {
+  scroll-behavior: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
-
-/* ─── ScrollClock fade-in ─────────────────────────────────────────────
-   The floating timestamp clock fades in when the user scrolls up. */
-.messages-viewport :global(.scrollclock) {
-  transition: opacity 150ms ease;
-}
-
 /* ─── Seen divider fade-in ──────────────────────────────────────────── */
 .seendivider {
   transition: opacity 200ms ease;
-}
-
-/* ─── Global smooth scroll ────────────────────────────────────────────
-   The messages container uses smooth scrolling for programmatic scrolls
-   (scrollToBottom / scrollToTop from ChatterBar clicks) so the chatters
-   animate instead of teleporting. Auto-scroll (new messages) remains
-   instant via direct scrollTop assignment. */
-.messages {
-  scroll-behavior: smooth;
 }

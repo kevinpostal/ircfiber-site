@@ -230,11 +230,18 @@
   });
 
   // IRCCloud BufferLogView.checkTrim — only while scrolled to the bottom.
+  // Pixel-aware for ANSI art: one blockArt row can be 20-100 visual lines
+  // (thousands of spans) so count alone under-trims. Also trim when
+  // scrollHeight exceeds ~12k px (roughly 200 normal rows).
   function maybeTrim(): void {
     const len = processedMessages.length;
     const start = untrack(() => renderStart);
-    if (len - start > TRIM_DETECT_THRESHOLD) {
-      renderStart = len - TRIM_THRESHOLD;
+    const countOver = len - start > TRIM_DETECT_THRESHOLD;
+    const pixelOver = !!container && container.scrollHeight > 12000;
+    if (countOver || pixelOver) {
+      // Keep 200 normally, but if pixel-heavy keep fewer to bound paint.
+      const keep = pixelOver && !countOver ? 150 : TRIM_THRESHOLD;
+      renderStart = Math.max(0, len - keep);
     }
   }
 
@@ -272,13 +279,19 @@
       if (divider) {
         const pos = dividerPos(divider);
         container.scrollTop = pos - 31;
-        animateScrollTo(Math.max(pos - 152, 48), () => {
-          if (!container) return;
-          // Recalculate top and scroll to it again, might have moved
-          const pos2 = dividerPos(divider);
-          container.scrollTop = Math.max(pos2 - 152, 48);
-        });
+        // For pixel-heavy art, skip the swing animation which would
+        // interpolate scrollTop across thousands of spans and jank.
+        if (container.scrollHeight > 12000) {
+          container.scrollTop = Math.max(pos - 152, 48);
+        } else {
+          animateScrollTo(Math.max(pos - 152, 48), () => {
+            if (!container) return;
+            const pos2 = dividerPos(divider);
+            container.scrollTop = Math.max(pos2 - 152, 48);
+          });
+        }
       } else {
+        container.scrollTop = 48;
         // Guard: never strand the user at scrollTop 0 (no scroll events
         // fire at the boundary, so the next chunk could never trigger).
         container.scrollTop = 48;
@@ -1125,6 +1138,9 @@
     overflow-y: auto;
     overflow-x: hidden;
     flex: 1;
+    scroll-behavior: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
   }
   /* IRCCloud .clockShown: pad the top rows so the floating scroll clock
      doesn't cover the loadMore button / fetching divider. */
