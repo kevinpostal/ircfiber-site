@@ -1,12 +1,12 @@
 import type { IRCMessage } from '../types';
 import { detectCtcpAction } from '../lib/messageHandler';
 import { parseChannelList } from '../lib/utils';
-
-const API_BASE = '/api';
+// VITE_API_BASE is optional Vite env for swappable backend (Step 3); default /api behind Caddy.
+const viteEnv = import.meta.env as { VITE_API_BASE?: string };
+const API_BASE = viteEnv.VITE_API_BASE ?? '/api';
 
 /**
  * Unpack a wire-format event (compact JSON keys `i, c, x, n, m, p, hm, px, l, ch, se, phase, ...`)
- * OR a long-format REST field (`id, command, text, nick, ...`) into the IRCMessage
  * shape used everywhere in the frontend. Idempotent: calling it on a value
  * that's already in the IRCMessage shape returns an equivalent message.
  *

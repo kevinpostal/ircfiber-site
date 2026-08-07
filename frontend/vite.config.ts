@@ -4,18 +4,20 @@ import { playwright } from '@vitest/browser-playwright';
 import tailwindcss from '@tailwindcss/vite';
 
 // Backend URL for the dev server's API + WS proxy. Override via env vars
-// to point at a non-local backend (e.g. the tailnet gateway):
+// to point at a non-local backend (e.g. the tailnet gateway or Python gateway):
 //
-//   npm run dev:local    # → http://127.0.0.1:8090 (local docker-compose)
+//   npm run dev:local    # → http://127.0.0.1:8090 (local D gateway)
 //   npm run dev:tailnet  # → https://ircfiber-ovh.tail544547.ts.net
 //                        #   (tailnet gateway; real cert via Tailscale ACME)
 //   VITE_BACKEND_URL=http://192.168.1.50:8090 npm run dev
 //                        # → arbitrary HTTP backend
+//   VITE_API_BACKEND=http://127.0.0.1:8001 npm run dev  # Python gateway (Step 3)
 const BACKEND_URL =
-  process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8090';
-// WS target defaults to the same host with the ws/wss scheme.
+  process.env.VITE_API_BACKEND || process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8090';
+// WS target defaults to the same host with the ws/wss scheme, unless overridden.
+// VITE_WS_BASE / VITE_BACKEND_WS_URL both accepted (Step 3 swappable API).
 const BACKEND_WS_URL =
-  process.env.VITE_BACKEND_WS_URL || BACKEND_URL.replace(/^http/, 'ws');
+  process.env.VITE_WS_BASE || process.env.VITE_BACKEND_WS_URL || BACKEND_URL.replace(/^http/, 'ws');
 
 // SigNoz URL for the dev server's SigNoz proxy. Override via env var when
 // pointing at a non-local SigNoz instance (e.g. the tailnet gateway). The

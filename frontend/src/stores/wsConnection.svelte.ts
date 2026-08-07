@@ -215,13 +215,14 @@ export function connectWebSocket(
   if (socket && socket.readyState !== WebSocket.CLOSED) {
     return socket;
   }
-
   setStreamState('connecting');
-  const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+  // VITE_WS_BASE allows swapping to Python gateway (Step 3); default is same host /ws behind Caddy.
+  const viteWsEnv = import.meta.env as { VITE_WS_BASE?: string };
+  const baseWs = viteWsEnv.VITE_WS_BASE ?? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+  const wsUrl = baseWs;
   // IRCCloud-style stream resume: send maxEid so the server only
   // streams events with eid > since — no gaps, no duplicates.
   const url = maxEidTracker.value > 0 ? `${wsUrl}?since=${maxEidTracker.value}` : wsUrl;
-  socket = new WebSocket(url);
 
   messageCallback = onMessage;
   if (onOpen) openCallback = onOpen;
