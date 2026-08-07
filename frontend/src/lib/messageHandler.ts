@@ -138,6 +138,7 @@ export interface HandlerCallbacks {
  */
 export interface AccumState {
   whoisAcc: Partial<WhoisData> | null;
+  whoisAccs: Map<string, Partial<WhoisData>>;
   banAcc: BanEntry[];
   banTargetChannel: string;
 }
@@ -187,20 +188,48 @@ export function processIrcEvent(
 
   const result: { whoisData?: WhoisData; whoisFailedNick?: string; banListData?: BanListData } = {};
 
-  // ── Whois accumulation ──
+  // ── Whois accumulation (per-nick, avoids interleaving) ──
   if (/^(311|312|313|317|319|330|301|671)$/.test(cmd)) {
-    if (!accum.whoisAcc || accum.whoisAcc.nick !== msg.params?.[0]) {
-      accum.whoisAcc = { nick: msg.params?.[0] || '' };
+    const targetNick = msg.params?.[0] || '';
+    const key = targetNick.toLowerCase();
+    let acc = accum.whoisAccs.get(key);
+    if (!acc || acc.nick !== targetNick) {
+      acc = { nick: targetNick };
+      accum.whoisAccs.set(key, acc);
     }
+    // keep legacy single pointer in sync for accumulateWhois
+    accum.whoisAcc = acc;
     accumulateWhois(accum, cmd, msg.params || [], msg.text || '');
-  } else if (cmd === '318' && accum.whoisAcc) {
-    result.whoisData = { ...accum.whoisAcc } as WhoisData;
-    accum.whoisAcc = null;
-  } else if (cmd === '401' && accum.whoisAcc && msg.params?.[0] === accum.whoisAcc.nick) {
-    // ERR_NOSUCHNICK mid-whois: server rejected the nick. Drop the partial
-    // accumulator and let App.svelte clear pendingWhois.
-    result.whoisFailedNick = accum.whoisAcc.nick;
-    accum.whoisAcc = null;
+    // ensure map entry reflects any new fields added by accumulateWhois
+    accum.whoisAccs.set(key, acc);
+  } else if (cmd === '318') {
+    // 318 params: [requester, target] or [target] depending on ircd; try both
+    const cand1 = (msg.params?.[0] || '').toLowerCase();
+    const cand2 = (msg.params?.[1] || '').toLowerCase();
+    let key: string | null = null;
+    let acc: Partial<WhoisData> | undefined;
+    if (cand1 && accum.whoisAccs.has(cand1)) { key = cand1; acc = accum.whoisAccs.get(cand1); }
+    else if (cand2 && accum.whoisAccs.has(cand2)) { key = cand2; acc = accum.whoisAccs.get(cand2); }
+    else if (accum.whoisAcc) { acc = accum.whoisAcc; key = (acc.nick || '').toLowerCase(); }
+    if (acc) {
+      result.whoisData = { ...acc } as WhoisData;
+      if (key) accum.whoisAccs.delete(key);
+      // keep legacy pointer clear if it pointed to this nick
+      if (accum.whoisAcc && (accum.whoisAcc.nick || '').toLowerCase() === key) accum.whoisAcc = null;
+    }
+  } else if (cmd === '401') {
+    // 401: <you> <target> :No such nick — target is params[1] if present
+    const failedNick = (msg.params?.[1] || msg.params?.[0] || '');
+    const fk = failedNick.toLowerCase();
+    let acc = accum.whoisAccs.get(fk);
+    if (acc) {
+      result.whoisFailedNick = acc.nick || failedNick;
+      accum.whoisAccs.delete(fk);
+      if (accum.whoisAcc && (accum.whoisAcc.nick || '').toLowerCase() === fk) accum.whoisAcc = null;
+    } else if (accum.whoisAcc && (accum.whoisAcc.nick || '').toLowerCase() === fk) {
+      result.whoisFailedNick = accum.whoisAcc.nick;
+      accum.whoisAcc = null;
+    }
   }
 
   // ── W1-T08: temp_unavailable — Server busy, show countdown ──

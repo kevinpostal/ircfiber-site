@@ -126,12 +126,15 @@ let showNetworkForm: boolean = $state(false);
   let userPopup: { nick: string; member?: Member | null; x: number; y: number } | null = $state(null);
 
   let whoisAcc: Partial<WhoisData> | null = null;
+  let whoisAccs: Map<string, Partial<WhoisData>> = new Map();
   let banAcc: BanEntry[] = [];
   let banTargetChannel = '';
   let locallyInitiated = false;
   const accum: AccumState = {
     get whoisAcc() { return whoisAcc; },
     set whoisAcc(v) { whoisAcc = v as Partial<WhoisData> | null; },
+    get whoisAccs() { return whoisAccs; },
+    set whoisAccs(v) { whoisAccs = v as Map<string, Partial<WhoisData>>; },
     get banAcc() { return banAcc; },
     set banAcc(v: BanEntry[]) { banAcc = v; },
     get banTargetChannel() { return banTargetChannel; },
@@ -1131,65 +1134,20 @@ let showNetworkForm: boolean = $state(false);
       }
     }
     if (result.whoisData) {
-      // Only pop the WHOIS overlay / inline block when the user explicitly
-      // requested it. The server also issues automatic WHOIS queries on
-      // JOIN to populate realnames (see ircfiber/irc/connection.d); those
-      // responses must not interrupt the user with a modal or inline block.
+      // Only pop the WHOIS overlay when the user explicitly requested it.
+      // The server also issues automatic WHOIS queries on JOIN to populate
+      // realnames (see ircfiber/irc/connection.d); those responses must not
+      // interrupt the user with a modal.
       const nickKey = (result.whoisData.nick || '').toLowerCase();
       const pending = nickKey ? ircState.pendingWhois.get(nickKey) : undefined;
       if (nickKey && pending) {
         ircState.pendingWhois.delete(nickKey);
         ircState.overlay.type = 'whois';
         ircState.overlay.data = result.whoisData as WhoisData;
-        // IRCCloud-style inline WHOIS: also append a WHOIS_GROUP to the
-        // originating buffer so the result lives in the scrollback where
-        // the user typed /whois or clicked the nick. Uses the stored
-        // bufferName (channel/query at request time) rather than the
-        // current activeBuffer, so switching buffers mid-WHOIS doesn't
-        // misplace the result.
-        try {
-          const whoisMsg = {
-            command: 'WHOIS_GROUP',
-            nick: result.whoisData.nick,
-            text: '',
-            t: Date.now(),
-            id: `whois-${Date.now()}-${nickKey}`,
-            timestamp: new Date().toISOString(),
-            params: [],
-            prefix: '',
-            msgid: '',
-            label: '',
-            whois: { ...result.whoisData },
-          } as unknown as IRCMessage;
-          appendMessage(pending.networkId, pending.bufferName, whoisMsg);
-        } catch {}
       }
     }
     if (result.whoisFailedNick) {
-      const fk = result.whoisFailedNick.toLowerCase();
-      const pend = ircState.pendingWhois.get(fk);
-      ircState.pendingWhois.delete(fk);
-      // Inline failure notice where the user asked
-      if (pend) {
-        try {
-          const failMsg = {
-            command: 'WHOIS_GROUP',
-            nick: result.whoisFailedNick,
-            text: '',
-            t: Date.now(),
-            id: `whois-fail-${Date.now()}-${fk}`,
-            timestamp: new Date().toISOString(),
-            params: [],
-            prefix: '',
-            msgid: '',
-            label: '',
-            whois: { nick: result.whoisFailedNick, user: '', host: '', realname: '', server: '', serverInfo: '', channels: [], idle: 0, signon: 0, account: '', secure: false, away: '' } as WhoisData,
-          } as unknown as IRCMessage;
-          // Mark as failed via empty user/host so the renderer shows "No such nick"
-          (failMsg as any).whoisFailed = true;
-          appendMessage(pend.networkId, pend.bufferName, failMsg);
-        } catch {}
-      }
+      ircState.pendingWhois.delete(result.whoisFailedNick.toLowerCase());
     }
     if (result.banListData) {
       ircState.overlay.type = 'banlist';

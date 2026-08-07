@@ -537,78 +537,12 @@
   flex-shrink: 0;
 }
 
-/* ── Inline WHOIS (IRCCloud-style WHOIS_GROUP) ──────────────────────
- * Rendered inside MessageRow as a system message block when the user
- * runs /whois or clicks Whois. Shares the same data shape as the
- * overlay table but lives in the scrollback where it was requested,
- * so the result is visible without dismissing a modal.
- * Fiber: hairline border, monospace values, channel pills.
- */
-.whoisInline {
-  display: block;
-  margin: 6px 0 2px;
-  background: var(--fiber-paper, #0e131a);
-  border: 1px solid var(--fiber-line, #1a212b);
-  border-radius: 6px;
-  overflow: hidden;
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-.whoisInline__head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 9px 12px;
-  background: linear-gradient(180deg, rgba(103,232,249,0.06) 0%, transparent 100%);
-  border-bottom: 1px solid var(--fiber-line, #1a212b);
-  flex-wrap: wrap;
-}
-.whoisInline__nick {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-weight: 700;
-  color: var(--fiber-blue, #67e8f9);
-  font-size: 13px;
-}
-.whoisInline__host {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11.5px;
-  color: var(--fiber-fog, #8b96a4);
-}
-.whoisInline__row {
-  display: flex;
-  gap: 12px;
-  padding: 5px 12px;
-  border-top: 1px solid rgba(26,33,43,0.6);
-}
-.whoisInline__row:first-of-type { border-top: 0; }
-.whoisInline__label {
-  flex: 0 0 72px;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--fiber-mist, #4d5867);
-  padding-top: 2px;
-  white-space: nowrap;
-}
-.whoisInline__val {
-  flex: 1;
-  min-width: 0;
-  color: var(--fiber-cloud, #c8d2dd);
-  word-break: break-word;
-}
-.whoisInline__info { color: var(--fiber-fog, #8b96a4); font-size: 11.5px; }
-.whoisInline .bufferLink.channel { color: var(--fiber-blue, #67e8f9); text-decoration: none; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; }
-.whoisInline .bufferLink.channel:hover { text-decoration: underline; }
-
 /* Overlay WHOIS polish — fiber header, same row language as inline */
 .overlay-panel .whois-table { padding: 0; border-collapse: collapse; width: 100%; }
 .overlay-panel .whois-table td.whois-label { width: 110px; font-family: var(--font-mono, ui-monospace, monospace); font-weight: 600; color: var(--fiber-mist, #8b949e); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; padding: 8px 12px; border-bottom: 1px solid #21262d; }
 .overlay-panel .whois-table td.whois-value { color: #d9d9d9; padding: 8px 12px; border-bottom: 1px solid #21262d; font-size: 12.5px; }
 .overlay-panel .whois-table tr:last-child td { border-bottom: 0; }
 
-/* Ensure WHOIS_GROUP rows don't get the default status gutters */
-.row.messageRow.status:has(.whoisInline) { padding: 4px 8px; }
-.row.messageRow.status:has(.whoisInline) .content { display: block; width: 100%; }
+
+
 
