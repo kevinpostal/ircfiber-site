@@ -23,7 +23,7 @@
     // debounce) doesn't lose the collapse state — same pattern as hideChannel
     // and setClearedAt in preferences.svelte.ts.
     setStorageItem('ircfiber:collapsed', collapsedMap);
-    updateCollapsed(networkId, newValue);
+    void updateCollapsed(networkId, newValue).catch(() => {});
   }
 
   const pinned = $derived(
@@ -111,7 +111,7 @@
       if (draggedId && !collapsedMap[draggedId]) {
         collapsedMap[draggedId] = true;
         setStorageItem('ircfiber:collapsed', collapsedMap);
-        updateCollapsed(draggedId, true);
+        void updateCollapsed(draggedId, true).catch(() => {});
       }
     }
   }
@@ -241,7 +241,7 @@
             role="button"
             tabindex="0"
             onclick={() => onSwitchBuffer(net.networkId, '_server')}
-            ondblclick={() => { if (collapsedMap[net.networkId]) { collapsedMap[net.networkId] = false; setStorageItem('ircfiber:collapsed', collapsedMap); updateCollapsed(net.networkId, false); } }}
+            ondblclick={() => { if (collapsedMap[net.networkId]) { collapsedMap[net.networkId] = false; setStorageItem('ircfiber:collapsed', collapsedMap); void updateCollapsed(net.networkId, false).catch(() => {}); } }}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSwitchBuffer(net.networkId, '_server'); } }}>
           <span class="buffer" role="tab">
             {#if net.connected}
@@ -307,14 +307,14 @@
           {#if inactive.length > 0}
             <div class="sidebar-section-header inactive-header"
                  role="button" tabindex="0"
-                 onclick={() => { const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; updateInactiveCollapsed(net.networkId, next); }}
-                 onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; updateInactiveCollapsed(net.networkId, next); } }}
+                 onclick={() => { const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; void updateInactiveCollapsed(net.networkId, next).catch(() => {}); }}
+                 onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; void updateInactiveCollapsed(net.networkId, next).catch(() => {}); } }}
                  aria-expanded={!inactiveIsCollapsed}>
               <span class="inactive-header-label">Inactive</span>
               <button type="button" class="inactive-header-toggle"
                       title={inactiveIsCollapsed ? 'Expand' : 'Collapse'}
                       aria-label={inactiveIsCollapsed ? 'Expand Inactive' : 'Collapse Inactive'}
-                      onclick={(e) => { e.stopPropagation(); const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; updateInactiveCollapsed(net.networkId, next); }}>
+                      onclick={(e) => { e.stopPropagation(); const next = !inactiveIsCollapsed; inactiveCollapsedMap[net.networkId] = next; void updateInactiveCollapsed(net.networkId, next).catch(() => {}); }}>
                 <i class="fa fa-chevron-{inactiveIsCollapsed ? 'right' : 'down'}" aria-hidden="true"></i>
               </button>
             </div>

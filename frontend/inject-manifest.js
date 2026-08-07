@@ -16,7 +16,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 
 const manifestPath = resolve(projectRoot, 'public/dist/.vite/manifest.json');
-const dtPath = resolve(projectRoot, 'views/index.dt');
+const dtPath = resolve(projectRoot, 'engine/views/index.dt');
 
 // Read manifest
 let manifest;

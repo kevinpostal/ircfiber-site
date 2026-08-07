@@ -377,7 +377,7 @@
     } catch {}
     const eid = a.start?.eid ? Number(a.start.eid) : undefined;
     const msgid = (!a.start?.eid && a.start?.msgid) ? a.start.msgid : undefined;
-    updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, newVal);
+    void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, newVal).catch(() => {});
   }
 
   // ── Collapse auto-close on disconnect / error ────────────────────
@@ -395,7 +395,7 @@
           } catch {}
           const eid = a.start?.eid ? Number(a.start.eid) : undefined;
           const msgid = (!a.start?.eid && a.start?.msgid) ? a.start.msgid : undefined;
-          updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, true);
+          void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, true).catch(() => {});
         }
       }
     }

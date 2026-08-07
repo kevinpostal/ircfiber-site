@@ -455,6 +455,40 @@
   // while to show them").
   let lastForceScrollNonce = 0;
   let pendingPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ── Pinned re-snap settle chain ──────────────────────────────────
+  // Late layout can land AFTER the synchronous snap + single rAF:
+  //   - the 120ms messageEntrance slide-in (firstAuthor / action rows)
+  //   - image/embed decode after the row renders
+  //   - sync-driven member enrichment (WHOIS → realname on the next
+  //     sync) growing the author row — the author-realname span appears
+  //     after the message row was already snapped into view
+  // Each of these grows scrollHeight after the snap, leaving the
+  // viewport a few pixels short of the very bottom while the user is
+  // pinned ("the scrollbar isn't forced to the very bottom"). We run a
+  // short poll chain (4 × 200ms) that re-snaps while cachedAtBottom is
+  // still true, and cancels/restarts on every snap so a busy channel
+  // never stacks chains. Reading scrolled-up history is never forced —
+  // the poll bails the moment the user scrolls away.
+  let pinnedResnapTimer: ReturnType<typeof setTimeout> | null = null;
+  function schedulePinnedResnap(): void {
+    if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
+    let polls = 0;
+    function poll(): void {
+      pinnedResnapTimer = null;
+      if (!cachedAtBottom || !container) return;
+      // Only write when the viewport actually drifted off the bottom —
+      // avoids forcing a layout read on every poll tick while settled.
+      const bottom = container.scrollHeight - container.clientHeight;
+      if (bottom - container.scrollTop > 1) {
+        container.scrollTop = container.scrollHeight;
+      }
+      polls += 1;
+      if (polls < 4) pinnedResnapTimer = setTimeout(poll, 200);
+    }
+    pinnedResnapTimer = setTimeout(poll, 200);
+  }
+
   $effect(() => {
     if (isServerBuffer) {
       lastForceScrollNonce = ircState.forceScrollToBottomNonce;
@@ -549,6 +583,10 @@
       cachedAtTop = false;
       prevScrollHeight = 0;
       handledDividerMark = '';
+      // Cancel any in-flight pinned re-snap chain from the previous
+      // buffer — it would otherwise keep polling the shared container
+      // while the new buffer's window is being established.
+      if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
       // IRCCloud BufferLogView.render: open with the last batchSize=200.
       renderStart = Math.max(0, msgs.length - BATCH_SIZE);
       renderEndKey = '';
@@ -642,6 +680,10 @@
           container.scrollTop = container.scrollHeight;
         }
       });
+      // Then keep re-snapping briefly while pinned — late layout (the
+      // entrance animation, embed decode, sync-driven realname spans)
+      // can land well after the rAF above.
+      schedulePinnedResnap();
     } else if (newDivider && cachedAtTop) {
       // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
       requestAnimationFrame(() => {

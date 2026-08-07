@@ -927,21 +927,19 @@ let showNetworkForm: boolean = $state(false);
     }
     if (user.bufferPrefs) {
       const serverPrefs = user.bufferPrefs as Record<string, Record<string, boolean>>;
-      // Merge server-side buffer prefs into the local bufferPrefsMap.
-      // Local overrides from this session take priority - we only merge
-      // keys not already present locally.
-      for (const [key, prefs] of Object.entries(serverPrefs)) {
-        if (!(key in bufferPrefsMap)) {
-          bufferPrefsMap[key] = prefs;
-        } else {
-          // Merge individual fields that the local doesn't have
-          const existing = bufferPrefsMap[key];
-          for (const [k, v] of Object.entries(prefs)) {
-            if (!(k in existing)) {
-              (existing as Record<string, boolean>)[k] = v as boolean;
-            }
-          }
-        }
+      // Server is authoritative for bufferPrefs (including notifyAll/mute).
+      // Normalize channel part of the key (IRC channels are case-insensitive)
+      // and overwrite local fields so a refresh correctly restores the dropdown
+      // check state even if localStorage was stale or debounced.
+      const normalizeKey = (k: string) => {
+        const idx = k.indexOf(':');
+        if (idx === -1) return k;
+        return k.slice(0, idx) + ':' + normalizeChannelName(k.slice(idx + 1));
+      };
+      for (const [rawKey, prefs] of Object.entries(serverPrefs)) {
+        const key = normalizeKey(rawKey);
+        const existing = bufferPrefsMap[key] ?? {};
+        bufferPrefsMap[key] = { ...existing, ...prefs } as Record<string, boolean>;
       }
     }
   }
@@ -1057,15 +1055,23 @@ let showNetworkForm: boolean = $state(false);
         return 0;
       });
     } else if (key === 'bufferPrefs') {
-      // Real-time sync of per-buffer prefs from another tab/device
-      const serverPrefs = (data.value as Record<string, Record<string, boolean>>) ?? {};
+      // Real-time sync of per-buffer prefs from another tab/device.
+      // Normalize server keys so "#TEST" and "#test" collide.
+      const rawPrefs = (data.value as Record<string, Record<string, boolean>>) ?? {};
+      const normalizeKey = (k: string) => {
+        const idx = k.indexOf(':');
+        if (idx === -1) return k;
+        return k.slice(0, idx) + ':' + normalizeChannelName(k.slice(idx + 1));
+      };
+      const serverPrefs: Record<string, Record<string, boolean>> = {};
+      for (const [rk, v] of Object.entries(rawPrefs)) serverPrefs[normalizeKey(rk)] = v;
       for (const [k, v] of Object.entries(serverPrefs)) {
         bufferPrefsMap[k] = { ...(bufferPrefsMap[k] ?? {}), ...v };
       }
       // Remove keys that were deleted (empty object -> removed on server)
-      for (const key of Object.keys(bufferPrefsMap)) {
-        if (!(key in serverPrefs)) {
-          delete bufferPrefsMap[key];
+      for (const k of Object.keys(bufferPrefsMap)) {
+        if (!(k in serverPrefs)) {
+          delete bufferPrefsMap[k];
         }
       }
     }
@@ -1096,8 +1102,13 @@ let showNetworkForm: boolean = $state(false);
         }
       }
       if (netId) {
-        // Retry auto-join for the active channel buffer (if any)
-        if (ircState.activeBuffer.bufferName) {
+        // Retry auto-join for the active channel buffer ONLY if the
+        // active buffer belongs to the network that just connected.
+        // Without this guard, viewing #tclmafia on GangNet while
+        // Supernets connects would incorrectly JOIN #tclmafia on
+        // Supernets (cross-network pollution). See
+        // irc.supernets.org autoJoinChannels=["#tclmafia"] bug.
+        if (ircState.activeBuffer.bufferName && ircState.activeBuffer.networkId === netId) {
           maybeAutoJoinChannel(netId, ircState.activeBuffer.bufferName);
         }
         // Auto-collapse the previous disconnect card in the server log so

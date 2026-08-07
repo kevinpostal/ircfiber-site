@@ -26,8 +26,7 @@ const BACKEND_WS_URL =
 // through `/api/v5/` and `/signoz/` rules MUST come BEFORE it so Vite's
 // first-match-wins picks the SigNoz target for SigNoz paths.
 const SIGNOZ_URL =
-  process.env.VITE_SIGNOZ_URL || 'http://127.0.0.1:8080';
-
+  process.env.VITE_SIGNOZ_URL || 'http://127.0.0.1:3301';
 export default defineConfig({
   plugins: [tailwindcss(), svelte({
     onwarn(warning, handler) {

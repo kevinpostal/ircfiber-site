@@ -69,7 +69,6 @@
   // disconnects (or the connection dies), the connection log is no
   // longer "live" — collapsing it gets it out of the way until they
   // intentionally re-open it. The collapse state is persisted so it
-  // survives page refresh, just like a manual collapse.
   $effect(() => {
     const status = effectiveStatus;
     if ((status === 'disconnected' || status === 'error')
@@ -83,7 +82,7 @@
         data[collapsedKey] = true;
         localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
       } catch {}
-      updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, true);
+      void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, true).catch(() => {});
     }
   });
 
@@ -102,7 +101,7 @@
       else delete data[collapsedKey];
       localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
     } catch {}
-    updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, !next);
+    void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, !next).catch(() => {});
   }
 
   /** Dismiss (hide) this connection attempt card from the timeline. */

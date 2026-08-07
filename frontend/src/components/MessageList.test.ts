@@ -6,6 +6,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage, batchAppendMessages, updateChannelUsers } from '../stores/ircStore.svelte';
 import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
+import { stripPrefix } from '../lib/utils';
 import { clearedAtMap } from '../stores/preferences.svelte';
 import type { IRCMessage } from '../types';
 
@@ -1086,6 +1087,83 @@ describe('MessageList', () => {
 			flushSync();
 			await new Promise((r) => requestAnimationFrame(r));
 			await new Promise((r) => setTimeout(r, 50));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
+		});
+
+		it('re-snaps to the very bottom when member data arrives after the message (sync settle)', async () => {
+			// The real "new user" sequence: the JOIN creates a member
+			// WITHOUT a realname (the engine learns it via WHOIS and ships
+			// it on the next WS sync). The message row snaps into view, then
+			// the sync enriches the member → the row re-renders taller
+			// (author-realname span) → the viewport drifts off the very
+			// bottom with no new append to trigger another snap. The pinned
+			// settle chain must catch it and re-snap.
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			updateChannelUsers('net1', '#chan', 'JOIN', 'bob', ['#chan'], ':bob!b@host');
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'bob',
+				text: 'hello from bob',
+				t: Date.now(),
+				msgid: 'bob-1',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 30));
+
+			// Pinned at the bottom with bob's row rendered (no realname yet).
+			expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeLessThan(4);
+
+			// Next sync: the engine's WHOIS reply fills member.realname.
+			const foundNet = ircState.networks.find((n) => n.networkId === 'net1')!;
+			const foundBuf = foundNet.buffers.find((b) => b.name === '#chan')!;
+			const bob = foundBuf.users.find((u) => stripPrefix(u.nick) === 'bob')!;
+			bob.realname = 'Bob Builder';
+			flushSync();
+			// The row grew; the settle chain (4 × 200ms) must re-snap.
+			await new Promise((r) => setTimeout(r, 250));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
+		});
+
+		it('re-snaps to the very bottom when an embed/image grows the last row after the snap', async () => {
+			// Same settle mechanism for any late height change: the snap
+			// lands, then the row's content grows (image decode, embed
+			// expansion). The viewport must return to the very bottom.
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'alice',
+				text: 'look at this',
+				t: Date.now(),
+				msgid: 'img-1',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 30));
+			expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeLessThan(4);
+
+			// Simulate a decoded image landing in the last row: grow the
+			// bottommost row by 60px (the row is already snapped into view).
+			const rows = container.querySelectorAll('.row.messageRow');
+			const lastRow = rows[rows.length - 1] as HTMLElement | null;
+			expect(lastRow).not.toBeNull();
+			if (!lastRow) return;
+			lastRow.style.height = (lastRow.offsetHeight + 60) + 'px';
+			await new Promise((r) => setTimeout(r, 250));
 
 			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
 			expect(Math.abs(drift)).toBeLessThan(4);

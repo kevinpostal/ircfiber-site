@@ -53,8 +53,6 @@
         <ul class="categoryMemberList">
           {#each members as member (stripPrefix(member.nick))}
             {@const nick = stripPrefix(member.nick)}
-            {@const rn = (member.realname || '').trim()}
-            {@const sensibleRn = rn && rn.toLowerCase() !== 'realname' && rn.toLowerCase() !== 'unknown' && rn !== nick ? rn : ''}
             <!-- Display the bare nick (stripped of prefix chars and
                  !user@host). Operator/voice status is conveyed by the
                  category header above (Ops / Voiced / Half-Ops / Members)
@@ -67,9 +65,6 @@
                       class:away={member.isAway}
                       onclick={(e) => onNickClick?.(nick, e, member)}>
                 <span class="member-nick">{nick}</span>
-                {#if sensibleRn}
-                  <span class="author-realname">{sensibleRn}</span>
-                {/if}
               </button>
             </li>
           {/each}

@@ -109,7 +109,7 @@
       const newValue = !collapsedMap[network.networkId];
       collapsedMap[network.networkId] = newValue;
       setStorageItem('ircfiber:collapsed', collapsedMap);
-      updateCollapsed(network.networkId, newValue);
+      void updateCollapsed(network.networkId, newValue).catch(() => {});
     }
     onClose();
   }

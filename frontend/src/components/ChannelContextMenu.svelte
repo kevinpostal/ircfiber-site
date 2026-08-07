@@ -204,6 +204,25 @@
     inlineReddit: prefs.inlineReddit ?? false,
     formatColor: prefs.formatColor ?? true,
   });
+  // Real-time sync: when prefs change from server (pref_update broadcast)
+  // or another tab (storage event), keep the menu UI in sync while it's open.
+  // Without this, toggles would stay stuck at the mount-time snapshot.
+  $effect(() => {
+    toggles.showUnread = prefs.showUnread ?? true;
+    toggles.markAsRead = prefs.markAsRead ?? true;
+    toggles.notifyAll = prefs.notifyAll ?? false;
+    toggles.mute = prefs.mute ?? false;
+    toggles.showJoinPart = prefs.showJoinPart ?? true;
+    toggles.replyCollapse = prefs.replyCollapse ?? false;
+    toggles.replyQuote = prefs.replyQuote ?? false;
+    toggles.typing = prefs.typing ?? true;
+    toggles.inlineFiles = prefs.inlineFiles ?? true;
+    toggles.inlineImages = prefs.inlineImages ?? true;
+    toggles.inlinePastes = prefs.inlinePastes ?? true;
+    toggles.inlineSocial = prefs.inlineSocial ?? true;
+    toggles.inlineReddit = prefs.inlineReddit ?? false;
+    toggles.formatColor = prefs.formatColor ?? true;
+  });
   function toggle(key: keyof typeof toggles | 'pinned'): void {
     if (key === 'pinned') {
       const pinnedKey = `${networkId}:${buf.name}`;

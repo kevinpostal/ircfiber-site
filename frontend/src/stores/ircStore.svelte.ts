@@ -922,6 +922,29 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   markNetworkSeen(networkId);
 }
 
+export function checkHighlight(msg: IRCMessage, net: Network): boolean {
+  if (!msg.text || !msg.nick) return false;
+  const text = msg.text.toLowerCase();
+  const myNick = (net.currentNick || net.nick || '').toLowerCase();
+
+  if (myNick && text.includes(myNick)) return true;
+
+  for (const word of highlightWords) {
+    if (text.includes(word.toLowerCase())) return true;
+  }
+
+  return false;
+}
+
+export function recordHighlight(networkId: string, bufferName: string, nick: string): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const list = recentHighlightersCache.get(key) ?? [];
+  const filtered = list.filter(n => n !== nick);
+  // Prepend (most recent first), max 10
+  filtered.unshift(nick);
+  recentHighlightersCache.set(key, filtered.slice(0, 10));
+}
+
 export function incrementUnread(networkId: string, bufferName: string, msg: IRCMessage): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const net = ircState.networks.find(n => n.networkId === networkId);
@@ -947,34 +970,6 @@ export function incrementUnread(networkId: string, bufferName: string, msg: IRCM
   ircState.pulseBuffers.add(key);
   setTimeout(() => ircState.pulseBuffers.delete(key), 300);
 }
-
-export function checkHighlight(msg: IRCMessage, net: Network): boolean {
-  if (!msg.text || !msg.nick) return false;
-  const text = msg.text.toLowerCase();
-  const myNick = (net.currentNick || net.nick || '').toLowerCase();
-
-  if (myNick && text.includes(myNick)) return true;
-
-  for (const word of highlightWords) {
-    if (text.includes(word.toLowerCase())) return true;
-  }
-
-  return false;
-}
-
-// ── Recent highlighters tracking (Tab completion cycling) ──
-
-export function recordHighlight(networkId: string, bufferName: string, nick: string): void {
-  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
-  const list = recentHighlightersCache.get(key) ?? [];
-  // De-dupe: remove existing occurrence if present
-  const filtered = list.filter(n => n !== nick);
-  // Prepend (most recent first), max 10
-  filtered.unshift(nick);
-  recentHighlightersCache.set(key, filtered.slice(0, 10));
-}
-
-// ── Typing indicators (IRCCloud-style TAGMSG) ──
 // Each TAGMSG from a nick resets a 6.5s heartbeat. The UI reads the
 // timestamp and hides the indicator when the window expires. Entries
 // are lazily cleaned up on read.
