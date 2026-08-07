@@ -18,24 +18,36 @@ import ircfiber.web.admin.helpers : stripJsonStr, parseLongField;
 
 /// Row data for the Sessions admin page.
 struct SessionInfo {
+    /// Full Redis key, e.g. "session:abc...".
     string sessionKey;     // full Redis key, e.g. "session:abc..."
+    /// Bare session id without prefix.
     string sessionId;      // bare id without prefix
+    /// The owning user's id.
     string userId;
+    /// The owning user's display name.
     string username;
+    /// Client IP the session connected from.
     string clientIp;
+    /// User agent of the session's client.
     string userAgent;
+    /// Session creation time (epoch milliseconds).
     long   createdAt;
+    /// Time of last access (epoch milliseconds).
     long   lastAccess;
+    /// Remaining session lifetime in seconds.
     long   ttlSeconds;
+    /// Whether this is the current session.
     bool   isCurrent;
+    /// Whether the user is an admin.
     bool   isAdmin;
+    /// Comma-joined role list.
     string roles;
 }
 
 package void adminSessions(HTTPServerRequest req, HTTPServerResponse res,
                             RedisStorage redis) {
     SessionInfo[] sessions;
-    long nowMs = Clock.currTime.toUnixTime() * 1000L;
+    const long nowMs = Clock.currTime.toUnixTime() * 1000L;
     string currentSid;
     if (req.session) currentSid = req.session.id;
     auto store = new RedisSessionStore(redis);
@@ -43,7 +55,7 @@ package void adminSessions(HTTPServerRequest req, HTTPServerResponse res,
 
     try {
         foreach (sid; store.listAllSessionIds()) {
-            auto fields = store.getSessionFields(sid);
+            const fields = store.getSessionFields(sid);
             if (fields is null) continue;
             auto uidPtr = "sessionUserId" in fields;
             if (!uidPtr || (*uidPtr).length == 0) continue;
@@ -93,7 +105,7 @@ package void adminSessions(HTTPServerRequest req, HTTPServerResponse res,
     int idleCount      = 0;
     bool[string] seenUsers;
     int uniqueUsers    = 0;
-    long idleThreshold = 60L * 60L * 1000L;
+    const long idleThreshold = 60L * 60L * 1000L;
     foreach (s; sessions) {
         if (s.isCurrent) yourSessions++;
         if (s.isAdmin)   adminsOnline++;
@@ -131,12 +143,12 @@ package void adminSessions(HTTPServerRequest req, HTTPServerResponse res,
 
 package void adminSessionsClear(HTTPServerRequest req, HTTPServerResponse res,
                                  RedisStorage redis) {
-    auto currentUid = req.session.get("sessionUserId", "");
+    const currentUid = req.session.get("sessionUserId", "");
     int cleared;
     auto store = new RedisSessionStore(redis);
     try {
         foreach (sid; store.listAllSessionIds()) {
-            auto fields = store.getSessionFields(sid);
+            const fields = store.getSessionFields(sid);
             if (fields is null) continue;
             auto uidPtr = "sessionUserId" in fields;
             if (uidPtr && stripJsonStr(*uidPtr) == currentUid) continue;
@@ -157,7 +169,7 @@ package void adminSessionsClearUser(HTTPServerRequest req, HTTPServerResponse re
     auto store = new RedisSessionStore(redis);
     try {
         foreach (sid; store.listAllSessionIds()) {
-            auto fields = store.getSessionFields(sid);
+            const fields = store.getSessionFields(sid);
             if (fields is null) continue;
             auto uidPtr = "sessionUserId" in fields;
             if (uidPtr && stripJsonStr(*uidPtr) == targetUid) {

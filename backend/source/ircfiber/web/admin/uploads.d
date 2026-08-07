@@ -17,15 +17,25 @@ import ircfiber.upload.local : uploadDir;
 
 /// Display row for the uploads list.
 struct AdminUploadRow {
+    /// Upload record id.
     string id;
+    /// Owning user's id.
     string userId;
+    /// Owning user's display name.
     string username;
+    /// Original filename.
     string filename;
+    /// Uploaded buffer contents.
     string buffer;
+    /// MIME type of the upload.
     string mimeType;
+    /// Upload size in bytes.
     long size;
+    /// Human-readable size label.
     string sizeLabel;
+    /// Direct URL to the upload.
     string directUrl;
+    /// Upload creation time.
     long createdAt;
 }
 
@@ -52,8 +62,8 @@ package void adminUploads(HTTPServerRequest req, HTTPServerResponse res) {
         row.buffer = r.buffer;
         row.mimeType = r.mimeType;
         row.size = r.size;
-        if (r.size >= 1048576)
-            row.sizeLabel = (r.size / 1048576).to!string ~ " MB";
+        if (r.size >= 1_048_576)
+            row.sizeLabel = (r.size / 1_048_576).to!string ~ " MB";
         else if (r.size >= 1024)
             row.sizeLabel = (r.size / 1024).to!string ~ " KB";
         else
@@ -62,7 +72,7 @@ package void adminUploads(HTTPServerRequest req, HTTPServerResponse res) {
         row.createdAt = r.createdAt;
         try {
             auto uid = parseUUID(r.userId);
-            auto usr = userRepo.findById(uid);
+            const usr = userRepo.findById(uid);
             row.username = usr.username.length > 0 ? usr.username : "unknown";
         } catch (Exception) { row.username = "unknown"; }
         uploads ~= row;
@@ -81,7 +91,7 @@ package void adminUploadDelete(HTTPServerRequest req, HTTPServerResponse res) {
     auto coll = AppMongoConnection.getDb()["uploads"];
     auto doc = coll.findOne(Bson(["_id": Bson(id)]));
     if (!doc.isNull) {
-        auto rec = UploadRecord.fromBson(doc);
+        const rec = UploadRecord.fromBson(doc);
 
         auto url = rec.directUrl.strip;
         auto uploadPrefix = "/uploads/";

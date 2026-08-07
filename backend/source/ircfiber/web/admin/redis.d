@@ -12,7 +12,7 @@ import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, formString, jsonArray;
 
 /// GET /api/admin/redis/info — full INFO document with sections.
-package void apiRedisInfo(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+package void apiRedisInfo(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
     Json data = Json.emptyObject;
     try {
         data["info"] = redis.infoJson();
@@ -24,7 +24,7 @@ package void apiRedisInfo(HTTPServerRequest req, HTTPServerResponse res, RedisSt
 }
 
 /// GET /api/admin/redis/summary — small dashboard card.
-package void apiRedisSummary(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+package void apiRedisSummary(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
     Json data = Json.emptyObject;
     try {
         auto info = redis.infoJson();
@@ -152,7 +152,6 @@ package void apiRedisSlowlog(HTTPServerRequest req, HTTPServerResponse res, Redi
         Json[] arr;
         Json entry;
         int state = 0;
-        int depth = 0;
         string[] cmdParts;
         foreach (item; reply) {
             if (state == 0) {
@@ -163,7 +162,8 @@ package void apiRedisSlowlog(HTTPServerRequest req, HTTPServerResponse res, Redi
                 try entry["timestampMs"] = Json(item.to!long); catch (Exception) entry["timestampMs"] = Json(item);
                 state = 2;
             } else if (state == 2) {
-                try entry["durationMicros"] = Json(item.to!long); catch (Exception) entry["durationMicros"] = Json(item);
+                try entry["durationMicros"] = Json(item.to!long);
+                catch (Exception) entry["durationMicros"] = Json(item);
                 state = 3;
             } else if (state == 3) {
                 // command parts — append until we see something that looks like an id (next entry)
@@ -200,7 +200,7 @@ package void apiRedisPubsub(HTTPServerRequest req, HTTPServerResponse res, Redis
 }
 
 /// GET /api/admin/redis/clients — CLIENT LIST (truncated).
-package void apiRedisClients(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+package void apiRedisClients(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
     try {
         auto raw = redis.clientList();
         Json data = Json.emptyObject;

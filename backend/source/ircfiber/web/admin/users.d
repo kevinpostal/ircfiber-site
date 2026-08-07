@@ -46,7 +46,7 @@ package void adminUserList(HTTPServerRequest req, HTTPServerResponse res) {
 }
 
 /// New user form (GET).
-package void adminUserNew(HTTPServerRequest req, HTTPServerResponse res) {
+package void adminUserNew(HTTPServerRequest, HTTPServerResponse res) {
     string message;
     res.render!("admin/user_new.dt", message)();
 }
@@ -66,7 +66,7 @@ package void adminUserCreate(HTTPServerRequest req, HTTPServerResponse res) {
         return;
     }
 
-    auto existing = repo.findByUsername(username);
+    const existing = repo.findByUsername(username);
     if (existing.username.length > 0) {
         message = "Username already taken";
         res.render!("admin/user_new.dt", message)();
@@ -89,7 +89,7 @@ package void adminUserCreate(HTTPServerRequest req, HTTPServerResponse res) {
 
 /// User detail — loads networks + uploads + live state for the side panels.
 package void adminUserDetail(HTTPServerRequest req, HTTPServerResponse res,
-                             RedisStorage redis, ServerRegistry serverRegistry) {
+                             RedisStorage redis, ServerRegistry) {
     auto repo = new UserRepository();
     auto id = parseUUID(req.params["id"]);
 
@@ -100,7 +100,7 @@ package void adminUserDetail(HTTPServerRequest req, HTTPServerResponse res,
         return;
     }
 
-    auto currentUser = req.context["user"].get!User;
+    const currentUser = req.context["user"].get!User;
     auto canEdit = !(currentUser.id == user.id);
     string message;
     string rolesStr = join(user.roles, ", ");
@@ -123,7 +123,7 @@ package void adminUserDetail(HTTPServerRequest req, HTTPServerResponse res,
 
 /// User update (POST).
 package void adminUserUpdate(HTTPServerRequest req, HTTPServerResponse res,
-                             RedisStorage redis, ServerRegistry serverRegistry) {
+                             RedisStorage redis, ServerRegistry) {
     auto repo = new UserRepository();
     auto id = parseUUID(req.params["id"]);
 
@@ -145,7 +145,7 @@ package void adminUserUpdate(HTTPServerRequest req, HTTPServerResponse res,
     }
     if (user.roles.length == 0) user.roles ~= ["user"];
 
-    auto currentUser = req.context["user"].get!User;
+    const currentUser = req.context["user"].get!User;
     auto canEdit = !(currentUser.id == user.id);
 
     repo.update(user);
@@ -214,7 +214,7 @@ package void adminUserDelete(HTTPServerRequest req, HTTPServerResponse res,
         int cleared;
         foreach (k; keys) {
             auto key = () @trusted { return cast(string) k.idup; } ();
-            auto fields = redis.hgetAll(key);
+            const fields = redis.hgetAll(key);
             auto uidPtr = "sessionUserId" in fields;
             if (uidPtr && *uidPtr == id.toString()) {
                 db.del(key);
@@ -283,7 +283,7 @@ package void adminUserDelete(HTTPServerRequest req, HTTPServerResponse res,
 
 /// Reset a user's password (defaults to "changeme123" if blank).
 package void adminResetPassword(HTTPServerRequest req, HTTPServerResponse res,
-                                RedisStorage redis, ServerRegistry serverRegistry) {
+                                RedisStorage redis, ServerRegistry) {
     auto repo = new UserRepository();
     auto id = parseUUID(req.params["id"]);
     auto user = repo.findById(id);
@@ -295,7 +295,7 @@ package void adminResetPassword(HTTPServerRequest req, HTTPServerResponse res,
     repo.update(user);
     logInfo("Admin reset password for user: %s", user.username);
 
-    auto currentUser = req.context["user"].get!User;
+    const currentUser = req.context["user"].get!User;
     auto canEdit = !(currentUser.id == user.id);
 
     string message = "Password reset successfully";

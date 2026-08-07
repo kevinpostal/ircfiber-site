@@ -13,7 +13,7 @@ import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody;
 
 /// GET /api/admin/mongo/status — connection + dbStats + serverStatus subset.
-package void apiMongoStatus(HTTPServerRequest req, HTTPServerResponse res) {
+package void apiMongoStatus(HTTPServerRequest, HTTPServerResponse res) {
     Json data = Json.emptyObject;
     data["connected"] = Json(AppMongoConnection.isConnected());
     data["dbName"] = Json(AppMongoConnection.name());
@@ -41,7 +41,7 @@ package void apiMongoStatus(HTTPServerRequest req, HTTPServerResponse res) {
 }
 
 /// GET /api/admin/mongo/collections — list with counts and sizes.
-package void apiMongoCollections(HTTPServerRequest req, HTTPServerResponse res) {
+package void apiMongoCollections(HTTPServerRequest, HTTPServerResponse res) {
     Json data = Json.emptyObject;
     if (!AppMongoConnection.isConnected()) {
         data["connected"] = Json(false);
@@ -149,13 +149,16 @@ package void apiMongoQuery(HTTPServerRequest req, HTTPServerResponse res) {
     }
 
     if (collName.length == 0) { jsonError(res, 400, "collection is required"); return; }
-    if (!filterIsSafe(filter)) { jsonError(res, 400, "Filter contains a blocked operator ($where/$function/$lookup/etc.)"); return; }
+    if (!filterIsSafe(filter)) {
+        jsonError(res, 400, "Filter contains a blocked operator ($where/$function/$lookup/etc.)");
+        return;
+    }
 
     // Final clamping (safeFind re-clamps but we want to honor what the client asked within bounds)
     if (limit < 1) limit = 1;
     if (limit > 100) limit = 100;
     if (maxTimeMs < 1) maxTimeMs = 2000;
-    if (maxTimeMs > 10000) maxTimeMs = 10000;
+    if (maxTimeMs > 10_000) maxTimeMs = 10_000;
 
     auto docs = AppMongoConnection.safeFind(collName, filter, projection, sort, limit, maxTimeMs);
     Json[] arr;

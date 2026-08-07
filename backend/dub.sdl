@@ -46,3 +46,10 @@ configuration "gateway" {
     mainSourceFile "source/app.d"
     versions "VibeUseFibers" "GatewayOnly"
 }
+
+// Library config for engine test configs that import backend modules
+// (ircfiber.api.rest / ircfiber.api.session / ircfiber.auth etc.) after the
+// split. Executable configs cannot be consumed as module sources by dub.
+configuration "library" {
+    targetType "library"
+}

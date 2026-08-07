@@ -96,7 +96,7 @@ final class WebController {
 
         // If not authenticated, serve the static marketing landing page.
         // Logged-in users get the SPA, which detects auth state via /api/me.
-        auto sid = req.session ? req.session.get("sessionUserId", "") : "";
+        const sid = req.session ? req.session.get("sessionUserId", "") : "";
         if (sid.length == 0) {
             serveLanding(req, res);
             return;

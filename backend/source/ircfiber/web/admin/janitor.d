@@ -11,7 +11,7 @@ import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonOk, jsonError;
 
 /// GET /api/admin/janitor/status — lock holder + cycle counters.
-package void apiJanitorStatus(HTTPServerRequest req, HTTPServerResponse res,
+package void apiJanitorStatus(HTTPServerRequest, HTTPServerResponse res,
                               EngineJanitor janitor) {
     try {
         jsonOk(res, janitor.getStatus());
@@ -27,7 +27,7 @@ package void apiJanitorEvents(HTTPServerRequest req, HTTPServerResponse res,
     int limit = 100;
     if (auto l = "limit" in req.query) {
         try {
-            auto v = (*l).to!int;
+            const v = (*l).to!int;
             if (v > 0 && v <= 1000) limit = v;
         } catch (Exception) {}
     }
@@ -68,7 +68,7 @@ package void apiJanitorReap(HTTPServerRequest req, HTTPServerResponse res,
 }
 
 /// POST /api/admin/janitor/cycle — run one janitor cycle synchronously.
-package void apiJanitorCycle(HTTPServerRequest req, HTTPServerResponse res,
+package void apiJanitorCycle(HTTPServerRequest, HTTPServerResponse res,
                              EngineJanitor janitor) {
     try {
         auto reaped = janitor.runOnce();

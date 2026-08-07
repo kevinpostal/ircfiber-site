@@ -25,27 +25,45 @@ import ircfiber.web.admin.helpers : isAjax, jsonOk, jsonError;
 
 /// Detail data for a single host's connections
 struct HostNetworkInfo {
+    /// Owning user's display name.
     string username;
+    /// Owning user's id.
     string userId;
+    /// User-facing network label.
     string networkName;
+    /// Network id as string.
     string networkId;
+    /// Current IRC nick reported by the engine.
     string nick;
+    /// Whether the network is currently connected.
     bool connected;
+    /// Connection status string.
     string status;
+    /// Assigned engine server id.
     string serverId;
+    /// IRC server host.
     string host;
+    /// Whether the network is banned.
     bool isBanned;
+    /// Whether the network is disabled.
     bool disabled;
 }
 
 /// Enriched assignment record shown in the Network Assignments table.
 struct AssignmentRow {
+    /// Network id as string.
     string networkId;     // UUID as string
+    /// Assigned engine server id.
     string serverId;      // assigned engine
+    /// User-facing network label.
     string networkName;   // user-facing label (config.name || host || id)
+    /// IRC host (irc.libera.chat etc.).
     string networkHost;   // IRC host (irc.libera.chat etc.)
+    /// Owning user id; "" if unknown.
     string userId;        // owning user (UUID as string); "" if unknown
+    /// Owning user's display name; "" if unknown.
     string username;      // owning user's display name; "" if unknown
+    /// Current IRC nick as reported by the engine.
     string nick;          // current IRC nick as reported by the engine; "" if disconnected / unknown
 }
 
@@ -53,7 +71,7 @@ struct AssignmentRow {
 /// a given network ID. Falls back from the server-aware key to the legacy key.
 NetworkStateSnapshot loadNetworkSnapshot(RedisStorage redis, string networkId) {
     try {
-        auto assignments = redis.hgetAll(RedisKeys.networkAssignments());
+        const assignments = redis.hgetAll(RedisKeys.networkAssignments());
         auto srv = networkId in assignments;
         auto serverId = srv ? *srv : "";
 
@@ -74,7 +92,7 @@ NetworkStateSnapshot loadNetworkSnapshot(RedisStorage redis, string networkId) {
 }
 
 /// Dashboard page — KPIs + summaries.
-package void adminDashboard(HTTPServerRequest req, HTTPServerResponse res,
+package void adminDashboard(HTTPServerRequest, HTTPServerResponse res,
                             RedisStorage redis, ServerRegistry serverRegistry) {
     auto repo = new UserRepository();
     auto userCount = repo.count();
@@ -101,7 +119,7 @@ package void adminDashboard(HTTPServerRequest req, HTTPServerResponse res,
 
     // Server/engine stats
     auto allServers = serverRegistry.getAllServers();
-    auto healthyServers = serverRegistry.getHealthyServers();
+    const healthyServers = serverRegistry.getHealthyServers();
     int totalNetworks;
     foreach (s; allServers) {
         totalNetworks += s.assignedNetworks.length;
@@ -122,7 +140,7 @@ package void adminDashboard(HTTPServerRequest req, HTTPServerResponse res,
 
 /// Servers & Routing page — engines + assignments + host routing.
 package void adminServers(HTTPServerRequest req, HTTPServerResponse res,
-                          RedisStorage redis, ServerRegistry serverRegistry) {
+                          RedisStorage, ServerRegistry serverRegistry) {
     auto allServers = serverRegistry.getAllServers();
     auto healthyServers = serverRegistry.getHealthyServers();
     auto hostSummary = serverRegistry.getHostConnectionSummary();
@@ -134,7 +152,7 @@ package void adminServers(HTTPServerRequest req, HTTPServerResponse res,
 
     // Merge saved engine config overrides into server display data.
     foreach (ref s; allServers) {
-        auto cfg = serverRegistry.getEngineConfig(s.serverId);
+        const cfg = serverRegistry.getEngineConfig(s.serverId);
         if (cfg.priority != 0 || cfg.maxConnections != 0 || cfg.fallbackOnly) {
             if (cfg.priority != 0) s.priority = cfg.priority;
             if (cfg.maxConnections != 0) s.maxConnections = cfg.maxConnections;
@@ -164,7 +182,7 @@ package void adminServers(HTTPServerRequest req, HTTPServerResponse res,
                     row.networkHost = nw.config.host;
                     if (userRepo && nw.userId != UUID.init) {
                         try {
-                            auto u = userRepo.findById(nw.userId);
+                            const u = userRepo.findById(nw.userId);
                             if (u.username.length > 0) {
                                 row.userId = nw.userId.toString();
                                 row.username = u.username;
@@ -197,7 +215,7 @@ package void adminHostDetail(HTTPServerRequest req, HTTPServerResponse res,
     auto netRepo = new NetworkRepository();
     auto allNetworks = netRepo.findAll();
 
-    auto hostLower = host.toLower();
+    const hostLower = host.toLower();
     auto userRepo = new UserRepository();
 
     HostNetworkInfo[] connections;
@@ -209,15 +227,15 @@ package void adminHostDetail(HTTPServerRequest req, HTTPServerResponse res,
         info.networkId = nw.config.id.toString();
         info.host = nw.config.host;
 
-        auto user = userRepo.findById(nw.userId);
+        const user = userRepo.findById(nw.userId);
         info.username = user.username.length > 0 ? user.username : "unknown";
         info.userId = nw.userId.toString();
 
         auto netId = nw.config.id.toString();
-        auto directSid = serverRegistry.getServerForNetwork(netId);
+        const directSid = serverRegistry.getServerForNetwork(netId);
         info.serverId = directSid.length > 0 ? directSid : "unassigned";
 
-        auto snapshot = loadNetworkSnapshot(redis, netId);
+        const snapshot = loadNetworkSnapshot(redis, netId);
         info.connected = snapshot.connected;
         info.status = snapshot.status.length > 0 ? snapshot.status : (snapshot.connected ? "connected" : "offline");
         info.nick = snapshot.currentNick.length > 0 ? snapshot.currentNick : nw.config.nick;
@@ -386,7 +404,8 @@ package void adminReassignServerPost(HTTPServerRequest req, HTTPServerResponse r
         }
     }
     logInfo("Admin reassigned %d/%d networks from server %s", reassigned, networks.length, serverId);
-    res.redirect("/admin/servers?message=Reassigned " ~ reassigned.to!string ~ "/" ~ networks.length.to!string ~ " networks from " ~ serverId);
+    res.redirect("/admin/servers?message=Reassigned " ~ reassigned.to!string
+        ~ "/" ~ networks.length.to!string ~ " networks from " ~ serverId);
 }
 
 /// Reassign one network to the best available engine.
@@ -411,7 +430,7 @@ package void adminReassignAssignmentPost(HTTPServerRequest req, HTTPServerRespon
 package void adminRemoveAssignmentPost(HTTPServerRequest req, HTTPServerResponse res,
                                        RedisStorage redis, ServerRegistry serverRegistry) {
     auto networkId = req.params["networkId"];
-    bool ajax = isAjax(req);
+    const bool ajax = isAjax(req);
 
     auto oldServerId = serverRegistry.getServerForNetwork(networkId);
     if (oldServerId.length > 0) {

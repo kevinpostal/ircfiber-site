@@ -17,11 +17,13 @@ string uploadDir() @safe {
 
 /// Result of a successful local upload.
 struct LocalUploadResult {
+    /// Direct URL to the uploaded file.
     string url; // https://ircfiber.com/uploads/<uuid>.<ext>
 }
 
 /// Thrown when the file can't be written.
 class LocalUploadException : Exception {
+    /// Constructs the exception with an error message.
     this(string msg, string file = __FILE__, size_t line = __LINE__) @safe {
         super(msg, file, line);
     }
@@ -44,7 +46,7 @@ LocalUploadResult saveUpload(string filename, string mime, const(ubyte)[] data, 
         else ext = ".bin";
     }
 
-    auto uuid = randomUUID().toString().replace("-", "");
+    const uuid = randomUUID().toString().replace("-", "");
     auto destName = uuid ~ ext;
     auto dir = uploadDir();
     auto destPath = buildPath(dir, destName);
@@ -77,7 +79,7 @@ unittest {
     import std.algorithm : canFind, startsWith;
     import std.file : exists;
 
-    auto tmpDir = "/tmp/ircfiber-upload-test";
+    const tmpDir = "/tmp/ircfiber-upload-test";
     auto testData = cast(const(ubyte)[])"fakeimagedata";
 
     // Set env var to a writable temp dir so the test works on any machine
@@ -94,7 +96,7 @@ unittest {
 unittest {
     import std.algorithm : canFind;
 
-    auto tmpDir = "/tmp/ircfiber-upload-test2";
+    const tmpDir = "/tmp/ircfiber-upload-test2";
     auto testData = cast(const(ubyte)[])"data";
 
     environment["UPLOAD_DIR"] = tmpDir;

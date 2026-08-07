@@ -10,6 +10,7 @@ import vibe.core.log;
 
 import ircfiber.storage.redis : RedisStorage;
 
+/// Prefix for Redis session keys.
 enum SESSION_KEY_PREFIX = "session:";
 package enum MAX_SESSIONS_PER_USER = 10;
 
@@ -77,7 +78,7 @@ final class RedisSessionStore : SessionStore {
         m_draining = true;
         logInfo("RedisSessionStore: drain requested — destroying all sessions");
         try {
-            auto db = redis.getDb();
+            cast(void) redis.getDb();
             foreach (id; listAllSessionIds()) {
                 try destroy(id);
                 catch (Exception) { }

@@ -43,6 +43,7 @@ final class AdminController {
     private ServerRegistry serverRegistry;
     private EngineJanitor janitor;
 
+    /// Creates the admin controller bound to the given Redis storage.
     this(RedisStorage redis) {
         this.redis = redis;
         this.serverRegistry = new ServerRegistry(redis);
@@ -212,15 +213,21 @@ private:
     void apiResetPasswordRoute(HTTPServerRequest req, HTTPServerResponse res) { apiResetPassword(req, res); }
     void apiSessionsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSessions(req, res, redis); }
     void apiSessionsClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSessionsClear(req, res, redis); }
-    void apiSessionsClearUserRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSessionsClearUser(req, res, redis); }
-    void apiSessionsClearOneRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSessionsClearOne(req, res, redis); }
+    void apiSessionsClearUserRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiSessionsClearUser(req, res, redis);
+    }
+    void apiSessionsClearOneRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiSessionsClearOne(req, res, redis);
+    }
     void apiUploadsListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUploadsList(req, res); }
     void apiUploadDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUploadDelete(req, res); }
 
     // Mongo
     void apiMongoStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMongoStatus(req, res); }
     void apiMongoCollectionsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMongoCollections(req, res); }
-    void apiMongoCollectionDetailRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMongoCollectionDetail(req, res); }
+    void apiMongoCollectionDetailRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiMongoCollectionDetail(req, res);
+    }
     void apiMongoQueryRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMongoQuery(req, res); }
 
     // Redis
@@ -249,7 +256,7 @@ private:
     /// Serves the built Svelte admin SPA shell (`public/dist/admin.html`)
     /// for any authenticated admin request that didn't match a specific
     /// route above. The SPA handles client-side routing from there.
-    void adminSpaShell(HTTPServerRequest req, HTTPServerResponse res) {
+    void adminSpaShell(HTTPServerRequest, HTTPServerResponse res) {
         import std.file : read, exists, isFile;
         import std.path : buildPath;
         try {
@@ -261,7 +268,8 @@ private:
                     "<!doctype html><meta charset=utf-8><title>Admin not built</title>" ~
                     "<body style=\"background:#0a0e14;color:#c8d2dd;font-family:system-ui;padding:48px\">" ~
                     "<h1>Admin SPA not built yet</h1>" ~
-                    "<p>Run <code>cd frontend &amp;&amp; npm run build</code> to generate <code>public/dist/admin.html</code>.</p>" ~
+                    "<p>Run <code>cd frontend &amp;&amp; npm run build</code> to generate " ~
+                    "<code>public/dist/admin.html</code>.</p>" ~
                     "<p>The diet-template admin pages are still available at:</p>" ~
                     "<ul><li><a href=\"/admin/servers\" style=\"color:#67e8f9\">/admin/servers</a></li>" ~
                     "<li><a href=\"/admin/sessions\" style=\"color:#67e8f9\">/admin/sessions</a></li>" ~

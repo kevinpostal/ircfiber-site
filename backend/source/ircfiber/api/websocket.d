@@ -195,7 +195,7 @@ final class WebSocketGateway {
     // events before subscribing to live updates.
     session.sinceEid = 0;
     try {
-        auto sinceParam = socket.request.query.get("since", "");
+        const sinceParam = socket.request.query.get("since", "");
         if (sinceParam.length > 0) session.sinceEid = sinceParam.to!long;
     } catch (Exception) {}
     if (session.sinceEid > 0) {
@@ -208,7 +208,7 @@ final class WebSocketGateway {
     // sessions (different browser, same user).
     try {
         auto persistedKey = "irc:session:" ~ session.id.toString() ~ ":ack";
-        auto persisted = redis.getDb().get(persistedKey);
+        const persisted = redis.getDb().get(persistedKey);
         if (persisted.length > 0) {
             auto restored = persisted.to!long;
             if (restored > session.lastDeliveredEid) {
@@ -306,7 +306,7 @@ final class WebSocketGateway {
                 string persistedKey = "irc:session:" ~ session.id.toString() ~ ":ack";
                 auto db = redis.getDb();
                 db.set(persistedKey, teardown.lastDeliveredEid.to!string);
-                db.expire(persistedKey, 86400);
+                db.expire(persistedKey, 86_400);
             }
             // The session is now inactive (deactivateAndSnapshot set the
             // map entry's flag), so any in-flight sendToSession() producer
@@ -405,7 +405,7 @@ final class WebSocketGateway {
     // names while the state snapshots (topics, users, buffers) are still
     // being loaded by performStateDump.
     // Accepts pre-fetched configs so we don't hit MongoDB twice on boot.
-    private void sendNetworkList(UserSession session, WebSocket socket, NetworkConfig[] configs) {
+    private void sendNetworkList(UserSession, WebSocket socket, NetworkConfig[] configs) {
         auto msg = Json.emptyObject;
         msg["type"] = Json("networks");
         msg["t"] = Json(Clock.currTime.toUnixTime!long * 1000);
@@ -422,7 +422,8 @@ final class WebSocketGateway {
         socket.send(sanitizeUtf8(msg.toString()));
     }
 
-    private void performStateDump(UserSession session, WebSocket socket, NetworkConfig[] configs, UserPreferences prefs) {
+    private void performStateDump(UserSession session, WebSocket socket,
+        NetworkConfig[] configs, UserPreferences prefs) {
         // Server-side phase timestamps for boot profiling — included in
         // the sync message as "phases" so the frontend can correlate
         // server processing time with client-side timing marks.
@@ -444,7 +445,7 @@ final class WebSocketGateway {
         // no longer exist server-side (ghost channels). Computed per-network
         // from the snapshot before the buffer list is populated.
         string[] buffersToDelete;
-        bool isResume = session.sinceEid > 0;
+        const bool isResume = session.sinceEid > 0;
 
         foreach (ref cfg; configs) {
             auto netObj = cfg.toJson();
@@ -650,7 +651,9 @@ final class WebSocketGateway {
                     if (auto u = name in users) {
                         foreach (nick; *u) {
                             string bare = nick;
-                            while (bare.length > 0 && (bare[0] == '~' || bare[0] == '&' || bare[0] == '@' || bare[0] == '%' || bare[0] == '+'))
+                            while (bare.length > 0
+                                && (bare[0] == '~' || bare[0] == '&' || bare[0] == '@'
+                                    || bare[0] == '%' || bare[0] == '+'))
                                 bare = bare[1 .. $];
                             auto bang = bare.indexOf('!');
                             if (bang >= 0) bare = bare[0 .. bang];
@@ -666,7 +669,9 @@ final class WebSocketGateway {
                     if (auto u = name in users) {
                         foreach (nick; *u) {
                             string bare = nick;
-                            while (bare.length > 0 && (bare[0] == '~' || bare[0] == '&' || bare[0] == '@' || bare[0] == '%' || bare[0] == '+'))
+                            while (bare.length > 0
+                                && (bare[0] == '~' || bare[0] == '&' || bare[0] == '@'
+                                    || bare[0] == '%' || bare[0] == '+'))
                                 bare = bare[1 .. $];
                             auto bang = bare.indexOf('!');
                             if (bang >= 0) bare = bare[0 .. bang];
@@ -682,7 +687,9 @@ final class WebSocketGateway {
                     if (auto u = name in users) {
                         foreach (nick; *u) {
                             string bare = nick;
-                            while (bare.length > 0 && (bare[0] == '~' || bare[0] == '&' || bare[0] == '@' || bare[0] == '%' || bare[0] == '+'))
+                            while (bare.length > 0
+                                && (bare[0] == '~' || bare[0] == '&' || bare[0] == '@'
+                                    || bare[0] == '%' || bare[0] == '+'))
                                 bare = bare[1 .. $];
                             auto bang = bare.indexOf('!');
                             if (bang >= 0) bare = bare[0 .. bang];
@@ -865,7 +872,7 @@ final class WebSocketGateway {
      * filters events with eid > sinceEid, sends the newest 200, and trims
      * the list. After replay, the live pub/sub listener takes over.
      */
-    private void replayMissedEvents(UserSession session, WebSocket socket) {
+    private void replayMissedEvents(UserSession session, WebSocket) {
         try {
             import std.string : indexOf;
             auto db = redis.getDb();
@@ -892,7 +899,7 @@ final class WebSocketGateway {
                 catch (Exception) { continue; }
                 if (s.length == 0) continue;
                 try {
-                    auto json = parseJsonString(s);
+                    const json = parseJsonString(s);
                     long eid;
                     if (auto e = "eid" in json) {
                         if (e.type == Json.Type.int_) eid = e.get!long;
@@ -950,7 +957,7 @@ final class WebSocketGateway {
         auto channel = RedisKeys.events(userId);
         subscriber.subscribe(channel);
 
-        auto task = subscriber.listen((string ch, string msg) @safe nothrow {
+        auto task = subscriber.listen((string _, string msg) @safe nothrow {
             try {
                 // IRCCloud-style: do NOT log every event on the hot path.
                 // Logging even at INFO level was adding 1-10ms per message
@@ -1069,7 +1076,7 @@ final class WebSocketGateway {
             // metric fires once per flood-check interval, not every
             // iteration, to avoid log spam.
             auto depth = peek.depth;
-            if (depth > 32768 && depth % 1000 < 100) {
+            if (depth > 32_768 && depth % 1000 < 100) {
                 recordCounter("ws_backpressure", 1,
                     ["sessionId": sessionId.to!string, "depth": depth.to!string]);
                 logWarn("Backpressure: session %s outbound queue at %d entries (cap 65536) — consumer may be slow",
@@ -1213,8 +1220,8 @@ final class WebSocketGateway {
      * Returns: true when an engine can take the command, false otherwise.
      */
     private bool ensureEngineHealthy(UserSession session, string networkId, string serverId, string cmd) {
-        bool assigned = serverId.length > 0;
-        bool healthy = assigned && serverRegistry.isServerHealthy(serverId);
+        const bool assigned = serverId.length > 0;
+        const bool healthy = assigned && serverRegistry.isServerHealthy(serverId);
         if (healthy) return true;
 
         auto healthyServers = serverRegistry.getHealthyServers();
@@ -1324,7 +1331,7 @@ private void ircPoolDispatch(string userId, UUID sessionId) nothrow @trusted {
 
         logInfo("ircPool: subscribed to events for user %s session %s", userId, sessionId);
 
-        subscriber.listen((string ch, string msg) @safe nothrow {
+        subscriber.listen((string _, string msg) @safe nothrow {
             try {
                 auto gw = () @trusted { return g_gwForIrcPool; } ();
                 if (gw is null) return;

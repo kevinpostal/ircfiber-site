@@ -88,7 +88,7 @@ User authenticateRequest(scope HTTPServerRequest req, UserRepository repo) {
  */
 void requireAuth(scope HTTPServerRequest req, scope HTTPServerResponse res) {
     auto repo = new UserRepository();
-    auto user = authenticateRequest(req, repo);
+    const user = authenticateRequest(req, repo);
 
     if (user.username.length == 0) {
         auto path = req.requestPath.toString();

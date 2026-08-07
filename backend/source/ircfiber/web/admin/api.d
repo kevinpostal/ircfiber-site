@@ -48,7 +48,7 @@ package void apiMe(HTTPServerRequest req, HTTPServerResponse res) {
 }
 
 /// GET /api/admin/dashboard — KPIs + host summary + recent activity.
-package void apiDashboard(HTTPServerRequest req, HTTPServerResponse res,
+package void apiDashboard(HTTPServerRequest, HTTPServerResponse res,
                           RedisStorage redis, ServerRegistry serverRegistry) {
     auto repo = new UserRepository();
     auto userCount = repo.count();
@@ -103,7 +103,7 @@ package void apiDashboard(HTTPServerRequest req, HTTPServerResponse res,
         bool healthy = false;
         foreach (h; healthyServers) if (h.serverId == s.serverId) { healthy = true; break; }
         e["healthy"] = Json(healthy);
-        long nowMs = Clock.currTime.toUnixTime!long * 1000L;
+        const long nowMs = Clock.currTime.toUnixTime!long * 1000L;
         e["lastHeartbeat"] = Json(s.lastHeartbeat);
         e["ageSeconds"] = Json((nowMs - s.lastHeartbeat) / 1000);
         engArr ~= e;
@@ -146,7 +146,7 @@ package void apiDashboard(HTTPServerRequest req, HTTPServerResponse res,
 // ────────────────────────────────────────────────────────────
 
 /// GET /api/admin/servers — engines + assignments + host routing.
-package void apiServers(HTTPServerRequest req, HTTPServerResponse res,
+package void apiServers(HTTPServerRequest, HTTPServerResponse res,
                         RedisStorage redis, ServerRegistry serverRegistry) {
     auto allServers = serverRegistry.getAllServers();
     auto healthyServers = serverRegistry.getHealthyServers();
@@ -156,7 +156,7 @@ package void apiServers(HTTPServerRequest req, HTTPServerResponse res,
 
     // Apply saved config overrides to the displayed engines
     foreach (ref s; allServers) {
-        auto cfg = serverRegistry.getEngineConfig(s.serverId);
+        const cfg = serverRegistry.getEngineConfig(s.serverId);
         if (cfg.priority != 0) s.priority = cfg.priority;
         if (cfg.maxConnections != 0) s.maxConnections = cfg.maxConnections;
         s.fallbackOnly = cfg.fallbackOnly;
@@ -183,7 +183,7 @@ package void apiServers(HTTPServerRequest req, HTTPServerResponse res,
                     row.networkHost = nw.config.host;
                     if (userRepo && nw.userId != UUID.init) {
                         try {
-                            auto u = userRepo.findById(nw.userId);
+                            const u = userRepo.findById(nw.userId);
                             if (u.username.length > 0) {
                                 row.userId = nw.userId.toString();
                                 row.username = u.username;
@@ -198,13 +198,13 @@ package void apiServers(HTTPServerRequest req, HTTPServerResponse res,
         // Falls back to the configured nick when the engine hasn't
         // reported yet, and stays empty when the network is offline.
         try {
-            auto snap = loadNetworkSnapshot(redis, a.networkId);
+            const snap = loadNetworkSnapshot(redis, a.networkId);
             if (snap.currentNick.length > 0) {
                 row.nick = snap.currentNick;
             } else if (netRepo) {
                 try {
                     auto netId = parseUUID(a.networkId);
-                    auto nw = netRepo.findByIdWithUser(netId);
+                    const nw = netRepo.findByIdWithUser(netId);
                     if (nw.config.id != UUID.init && nw.config.nick.length > 0) {
                         row.nick = nw.config.nick;
                     }
@@ -229,7 +229,7 @@ package void apiServers(HTTPServerRequest req, HTTPServerResponse res,
         e["assignedNetworks"] = jsonArray(s.assignedNetworks);
         e["healthy"] = Json(healthy);
         e["lastHeartbeat"] = Json(s.lastHeartbeat);
-        long nowMs = Clock.currTime.toUnixTime!long * 1000L;
+        const long nowMs = Clock.currTime.toUnixTime!long * 1000L;
         e["ageSeconds"] = Json((nowMs - s.lastHeartbeat) / 1000);
         engArr ~= e;
     }
@@ -272,7 +272,7 @@ package void apiServerHost(HTTPServerRequest req, HTTPServerResponse res,
     auto host = req.params["host"];
     auto netRepo = new NetworkRepository();
     auto allNetworks = netRepo.findAll();
-    auto hostLower = host.toLower();
+    const hostLower = host.toLower();
     auto userRepo = new UserRepository();
 
     Json[] connArr;
@@ -296,7 +296,9 @@ package void apiServerHost(HTTPServerRequest req, HTTPServerResponse res,
         c["username"] = Json(user.username.length > 0 ? user.username : "unknown");
         c["serverId"] = Json(directSid.length > 0 ? directSid : "unassigned");
         c["connected"] = Json(snapshot.connected);
-        c["status"] = Json(snapshot.status.length > 0 ? snapshot.status : (snapshot.connected ? "connected" : "offline"));
+        c["status"] = Json(snapshot.status.length > 0
+            ? snapshot.status
+            : (snapshot.connected ? "connected" : "offline"));
         c["nick"] = Json(snapshot.currentNick.length > 0 ? snapshot.currentNick : nw.config.nick);
         c["isBanned"] = Json(isBanned);
         c["disabled"] = Json(nw.config.disabled);
@@ -415,7 +417,7 @@ package void apiHostDisconnect(HTTPServerRequest req, HTTPServerResponse res,
     if (owner.userId != UUID.init)
         redis.del(RedisKeys.userNetworks(owner.userId.toString()));
     auto serverId = serverRegistry.getServerForNetwork(networkId);
-    bool engineHealthy = serverId.length > 0 && serverRegistry.isServerHealthy(serverId);
+    const bool engineHealthy = serverId.length > 0 && serverRegistry.isServerHealthy(serverId);
     if (engineHealthy) {
         auto msg = ControlMessage("disconnectNetwork", networkId);
         msg.reason = "Disconnected by admin";
@@ -432,7 +434,6 @@ package void apiHostDisconnect(HTTPServerRequest req, HTTPServerResponse res,
 package void apiHostReconnect(HTTPServerRequest req, HTTPServerResponse res,
                              RedisStorage redis, ServerRegistry serverRegistry) {
     import std.uuid : parseUUID, UUID;
-    auto host = req.params["host"];
     auto networkIdStr = req.params["networkId"];
     auto networkId = parseUUID(networkIdStr);
     auto netRepo = new NetworkRepository();
@@ -471,7 +472,7 @@ package void apiHostReconnect(HTTPServerRequest req, HTTPServerResponse res,
 /// is a UUID unless `allowEmpty` is set, which is used by the SPA's
 /// "Delete" button to scrub the orphan-empty-string entry from the
 /// server record (no Mongo row to delete, no UUID to parse).
-private void deleteNetworkCore(HTTPServerRequest req, HTTPServerResponse res,
+private void deleteNetworkCore(HTTPServerRequest, HTTPServerResponse res,
                                 RedisStorage redis, ServerRegistry serverRegistry,
                                 string networkIdStr, bool allowEmpty) {
     import std.uuid : parseUUID, UUID;
@@ -531,7 +532,7 @@ private void deleteNetworkCore(HTTPServerRequest req, HTTPServerResponse res,
         // the empty entry every heartbeat because the mirror still held it.
         try {
             auto srv = serverRegistry.getServer(serverId);
-            auto before = srv.assignedNetworks.length;
+            const before = srv.assignedNetworks.length;
             srv.assignedNetworks = srv.assignedNetworks
                 .filter!(n => n != networkIdStr)
                 .array;
@@ -550,7 +551,7 @@ private void deleteNetworkCore(HTTPServerRequest req, HTTPServerResponse res,
         foreach (sid; serverRegistry.getAllServers().map!(s => s.serverId)) {
             try {
                 auto srv = serverRegistry.getServer(sid);
-                auto before = srv.assignedNetworks.length;
+                const before = srv.assignedNetworks.length;
                 srv.assignedNetworks = srv.assignedNetworks
                     .filter!(n => n != networkIdStr)
                     .array;
@@ -643,7 +644,7 @@ package void apiUserCreate(HTTPServerRequest req, HTTPServerResponse res) {
             throw new Exception("All fields are required");
 
         auto repo = new UserRepository();
-        auto existing = repo.findByUsername(username);
+        const existing = repo.findByUsername(username);
         if (existing.username.length > 0) throw new Exception("Username already taken");
 
         User u;
@@ -798,9 +799,9 @@ package void apiUserDelete(HTTPServerRequest req, HTTPServerResponse res,
     // Clear sessions via store (uses vibed session APIs)
     try {
         auto store = new RedisSessionStore(redis);
-        auto targetUid = id.toString();
+        const targetUid = id.toString();
         foreach (sid; store.listAllSessionIds()) {
-            auto fields = store.getSessionFields(sid);
+            const fields = store.getSessionFields(sid);
             if (fields is null) continue;
             auto uidPtr = "sessionUserId" in fields;
             if (uidPtr) {
@@ -862,7 +863,7 @@ package void apiResetPassword(HTTPServerRequest req, HTTPServerResponse res) {
 package void apiSessions(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     import ircfiber.web.admin.sessions : SessionInfo;
     SessionInfo[] sessions;
-    long nowMs = Clock.currTime.toUnixTime!long * 1000L;
+    const long nowMs = Clock.currTime.toUnixTime!long * 1000L;
     string currentSid;
     if (req.session) currentSid = req.session.id;
     auto userRepo = new UserRepository();
@@ -871,7 +872,7 @@ package void apiSessions(HTTPServerRequest req, HTTPServerResponse res, RedisSto
     try {
         auto sessionIds = store.listAllSessionIds();
         foreach (sid; sessionIds) {
-            auto fields = store.getSessionFields(sid);
+            const fields = store.getSessionFields(sid);
             if (fields is null) continue;
             auto uidPtr = "sessionUserId" in fields;
             if (!uidPtr || (*uidPtr).length == 0) continue;
@@ -939,12 +940,12 @@ package void apiSessions(HTTPServerRequest req, HTTPServerResponse res, RedisSto
 }
 
 package void apiSessionsClear(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
-    auto currentUid = req.session.get("sessionUserId", "");
+    const currentUid = req.session.get("sessionUserId", "");
     int cleared;
     auto store = new RedisSessionStore(redis);
     try {
         foreach (sid; store.listAllSessionIds()) {
-            auto fields = store.getSessionFields(sid);
+            const fields = store.getSessionFields(sid);
             if (fields is null) continue;
             auto uidPtr = "sessionUserId" in fields;
             if (uidPtr && stripJsonStr(*uidPtr) == currentUid) continue;
@@ -965,7 +966,7 @@ package void apiSessionsClearUser(HTTPServerRequest req, HTTPServerResponse res,
     auto store = new RedisSessionStore(redis);
     try {
         foreach (sid; store.listAllSessionIds()) {
-            auto fields = store.getSessionFields(sid);
+            const fields = store.getSessionFields(sid);
             if (fields is null) continue;
             auto uidPtr = "sessionUserId" in fields;
             if (uidPtr && stripJsonStr(*uidPtr) == targetUid) {
@@ -1002,7 +1003,7 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 
     auto store = new RedisSessionStore(redis);
     try {
-        auto fields = store.getSessionFields(targetSid);
+        const fields = store.getSessionFields(targetSid);
         if (fields is null || fields.length == 0) {
             jsonError(res, 404, "Session not found or already expired");
             return;
@@ -1075,7 +1076,7 @@ package void apiUploadDelete(HTTPServerRequest req, HTTPServerResponse res) {
     auto coll = AppMongoConnection.getDb()["uploads"];
     auto doc = coll.findOne(Bson(["_id": Bson(id)]));
     if (!doc.isNull) {
-        auto rec = UploadRecord.fromBson(doc);
+        const rec = UploadRecord.fromBson(doc);
         auto url = rec.directUrl.strip;
         auto prefixPos = url.indexOf("/uploads/");
         if (prefixPos != -1) {

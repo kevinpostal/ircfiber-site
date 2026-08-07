@@ -276,7 +276,7 @@ void main() {
     startFiberWatchdog();
     logInfo("Fiber watchdog started");
 
-    auto registry = new ServerRegistry(redis);
+    cast(void) new ServerRegistry(redis);
     // Run engine health monitor on g_bgPool with its own Redis connection
     // so it never contends with HTTP handlers.
     g_bgPool.runTask(&bgEngineHealthTask);
@@ -439,7 +439,7 @@ private void bgShutdownListenerTask() nothrow {
             // Create registry once, then capture for the listener delegate.
             auto shutdownRegistry = new ServerRegistry(redis);
 
-            subscriber.listen((string channel, string message) @safe nothrow {
+            subscriber.listen((string _, string message) @safe nothrow {
                 if (message.length == 0) return;
                 try {
                     () @trusted {

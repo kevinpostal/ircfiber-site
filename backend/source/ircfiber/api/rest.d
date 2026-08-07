@@ -191,7 +191,7 @@ final class RESTAPI {
         // Auto-join delay (seconds after connect before JOINs are sent).
         // 0 = join immediately after registration (legacy behavior).
         if (bodyJson["autoJoinDelaySeconds"].type != Json.Type.undefined) {
-            auto v = bodyJson["autoJoinDelaySeconds"].get!int;
+            const v = bodyJson["autoJoinDelaySeconds"].get!int;
             cfg.autoJoinDelaySeconds = v > 0 ? cast(uint) v : 0;
         }
 
@@ -258,7 +258,7 @@ final class RESTAPI {
         // Auto-join delay (seconds after connect before JOINs are sent).
         // 0 = join immediately after registration (legacy behavior).
         if (bodyJson["autoJoinDelaySeconds"].type != Json.Type.undefined) {
-            auto v = bodyJson["autoJoinDelaySeconds"].get!int;
+            const v = bodyJson["autoJoinDelaySeconds"].get!int;
             cfg.autoJoinDelaySeconds = v > 0 ? cast(uint) v : 0;
         }
 
@@ -293,7 +293,7 @@ final class RESTAPI {
 
         // Refuse to delete platform-provisioned networks. Admins can
         // still remove them via the admin tools which bypass this API.
-        auto existing = networkRepo.findById(id);
+        const existing = networkRepo.findById(id);
         if (existing.id != UUID.init && existing.systemManaged) {
             res.statusCode = 403;
             res.writeJsonBody(Json([
@@ -423,7 +423,7 @@ final class RESTAPI {
         if (res.headerWritten) return;
 
         auto id = parseUUID(req.params["id"]);
-        auto cfg = networkRepo.findById(id);
+        const cfg = networkRepo.findById(id);
         if (cfg.name.length == 0) {
             res.statusCode = 404;
             res.writeJsonBody(Json(["error": Json("Network not found")]));
@@ -436,7 +436,7 @@ final class RESTAPI {
         // owning userId looked up separately (NetworkConfig itself
         // doesn't carry userId).
         auto user = req.context["user"].get!User;
-        auto ownerInfo = networkRepo.findByIdWithUser(id);
+        const ownerInfo = networkRepo.findByIdWithUser(id);
         if (ownerInfo.userId != UUID.init && ownerInfo.userId != user.id) {
             res.statusCode = 403;
             res.writeJsonBody(Json(["error": Json("Not your network")]));
@@ -491,7 +491,8 @@ final class RESTAPI {
                 auto mongoRepo = new MessageRepository();
                 mongoRepo.deleteByChannel(serverId, id.toString(), buffer);
             } catch (Exception e) {
-                logError("clearNetworkBuffer: MongoDB purge failed for %s/%s: %s — returning 500 so frontend keeps clearedAt active",
+                logError("clearNetworkBuffer: MongoDB purge failed for %s/%s: %s — " ~
+                    "returning 500 so frontend keeps clearedAt active",
                     id.toString(), buffer, e.msg);
                 res.statusCode = 500;
                 res.writeJsonBody(Json(["error": Json("MongoDB purge failed — buffer not fully cleared")]));
@@ -557,7 +558,7 @@ final class RESTAPI {
         long mostRecentSnapshot = 0;
 
         foreach (key; candidateKeys) {
-            auto fields = redis.hgetAll(key);
+            const fields = redis.hgetAll(key);
             auto data = "data" in fields;
             if (data is null) continue;
             try {
@@ -664,7 +665,7 @@ final class RESTAPI {
         // after a /join or /reconnect so the first message load always
         // sees the upstream backfill. The gateway pushes a "chathistory"
         // command to the engine which issues LATEST/BEFORE on the wire.
-        bool triggerFetch = ("fetch" in req.query) && req.query["fetch"] == "1";
+        const bool triggerFetch = ("fetch" in req.query) && req.query["fetch"] == "1";
         // The frontend may also pass a ref msgid for explicit
         // pagination against the upstream, falling back to whatever's
         // already in the local buffer when not provided.
@@ -715,10 +716,12 @@ final class RESTAPI {
         Json[] messages;
         if (serverId.length > 0) {
             // Decentralized: use server-namespaced buffer
-            messages = bufferManager.getRecent(serverId, networkId.toString(), channel, count, before, after, beforeMsgid, afterMsgid);
+            messages = bufferManager.getRecent(serverId, networkId.toString(),
+                channel, count, before, after, beforeMsgid, afterMsgid);
         } else {
             // Legacy: non-namespaced buffer
-            messages = bufferManager.getRecent(networkId.toString(), channel, count, before, after, beforeMsgid, afterMsgid);
+            messages = bufferManager.getRecent(networkId.toString(),
+                channel, count, before, after, beforeMsgid, afterMsgid);
         }
 
         // Fall through to MongoDB if Redis returned fewer than `count`
@@ -733,11 +736,15 @@ final class RESTAPI {
                 auto mongoRepo = new MessageRepository();
                 Json[] older;
                 if (beforeEid > 0) {
-                    older = mongoRepo.getBeforeEid(serverId, networkId.toString(), channel, beforeEid, before, cast(int)(count - messages.length));
+                    older = mongoRepo.getBeforeEid(serverId, networkId.toString(),
+                        channel, beforeEid, before, cast(int)(count - messages.length));
                 } else if (beforeMsgid.length > 0) {
-                    older = mongoRepo.getBeforeMsgid(serverId, networkId.toString(), channel, beforeMsgid, before, cast(int)(count - messages.length));
+                    older = mongoRepo.getBeforeMsgid(serverId, networkId.toString(),
+                        channel, beforeMsgid, before, cast(int)(count - messages.length));
                 } else if (before > 0) {
-                    older = mongoRepo.getBeforeTimestamp(serverId, networkId.toString(), channel, before, cast(int)(count - messages.length));
+                    older = mongoRepo.getBeforeTimestamp(serverId,
+                        networkId.toString(), channel, before,
+                        cast(int)(count - messages.length));
                 } else if (messages.length > 0) {
                     // Redis has SOME messages but fewer than `count`. The
                     // engine writes each event to BOTH Redis and MongoDB, so
@@ -753,12 +760,15 @@ final class RESTAPI {
                     if (auto t = "t" in messages[0])
                         if (t.type == Json.Type.int_) oldestTs = t.get!long;
                     if (oldestTs > 0) {
-                        older = mongoRepo.getBeforeTimestamp(serverId, networkId.toString(), channel, oldestTs, cast(int)(count - messages.length));
+                        older = mongoRepo.getBeforeTimestamp(serverId,
+                            networkId.toString(), channel, oldestTs,
+                            cast(int)(count - messages.length));
                     } else {
                         // Redis messages lack timestamps (legacy). Fall back to
                         // an unfiltered newest-N — then dedup against Redis by
                         // msgid so we don't return the same message twice.
-                        older = mongoRepo.getBeforeTimestamp(serverId, networkId.toString(), channel, 0, cast(int)count);
+                        older = mongoRepo.getBeforeTimestamp(serverId,
+                            networkId.toString(), channel, 0, cast(int)count);
                     }
                 } else {
                     // Cold start: Redis is empty, fetch newest N from Mongo.
@@ -785,7 +795,9 @@ final class RESTAPI {
         if (messages.length < count) {
             try {
                 auto mongoRepoAny = new MessageRepository();
-                Json[] olderAny = mongoRepoAny.getBeforeTimestamp("", networkId.toString(), channel, 0, cast(int)(count - messages.length));
+                Json[] olderAny = mongoRepoAny.getBeforeTimestamp("",
+                    networkId.toString(), channel, 0,
+                    cast(int)(count - messages.length));
                 if (olderAny.length > 0) {
                     auto dedupedAny = RESTAPI.dedupMessages(messages, olderAny);
                     if (dedupedAny.length > 0) messages = dedupedAny ~ messages;
@@ -825,7 +837,7 @@ final class RESTAPI {
         long earliestTs = 0;
         long earliestEid = 0;
         if (msgsArr.length > 0) {
-            auto first = msgsArr[0];
+            const first = msgsArr[0];
             if (auto e = "eid" in first) {
                 if (e.type == Json.Type.int_) earliestEid = e.get!long;
             }
@@ -888,7 +900,7 @@ final class RESTAPI {
         requireAuth(req, res);
         if (res.headerWritten) return;
 
-        auto user = req.context["user"].get!User;
+        const user = req.context["user"].get!User;
 
         // network: required (the network the client was on when it
         // detected the gap — we fetch across all its channels)
@@ -923,7 +935,7 @@ final class RESTAPI {
 
         // Look up the network config to validate ownership + get the
         // assigned serverId. (Required for the namespaced Mongo query.)
-        auto found = networkRepo.findByIdWithUser(networkId);
+        const found = networkRepo.findByIdWithUser(networkId);
         if (found.config.name.length == 0) {
             res.statusCode = 404;
             res.writeJsonBody(Json(["error": Json("network not found")]));
@@ -1340,7 +1352,7 @@ final class RESTAPI {
         if (res.headerWritten) return;
 
         auto user = req.context["user"].get!User;
-        auto bodyJson = req.json;
+        const bodyJson = req.json;
 
         string[] order;
         if (auto o = "order" in bodyJson) {
@@ -1496,7 +1508,7 @@ final class RESTAPI {
                         if (j.type == Json.Type.object) {
                             bool draining = false;
                             if ("draining" in j) {
-                                auto dv = j["draining"];
+                                const dv = j["draining"];
                                 draining = dv.get!bool;
                             }
                             if (draining)
@@ -1526,7 +1538,7 @@ final class RESTAPI {
         if (res.headerWritten) return;
 
         auto serverId = req.params["id"];
-        auto server = serverRegistry.getServer(serverId);
+        const server = serverRegistry.getServer(serverId);
 
         if (server.serverId.length == 0) {
             res.statusCode = 404;
@@ -1669,7 +1681,7 @@ final class RESTAPI {
             if (auto p = "before" in req.query) before = (*p).to!long;
             records = uploadRepo.listByUser(user.id.toString(), before, limit);
         }
-        long total = uploadRepo.countByUser(user.id.toString());
+        const long total = uploadRepo.countByUser(user.id.toString());
         auto arr = Json.emptyArray;
         foreach (r; records) {
             arr ~= Json([
@@ -1690,7 +1702,7 @@ final class RESTAPI {
         auto userId = user.id.toString();
 
         // 1. Fetch the record first so we know the URL/file path
-        auto rec = uploadRepo.getById(userId, id);
+        const rec = uploadRepo.getById(userId, id);
         if (rec is UploadRecord.init) {
             // If we found nothing (or it's not theirs), maybe another request
             // already deleted it — double-check with the old soft-delete
@@ -1758,7 +1770,7 @@ final class RESTAPI {
         int offset = 0;
         if (auto p = "offset" in req.query) offset = (*p).to!int;
         auto records = pastebinRepo.pageByUser(user.id.toString(), offset, limit);
-        long total = pastebinRepo.countByUser(user.id.toString());
+        const long total = pastebinRepo.countByUser(user.id.toString());
         auto arr = Json.emptyArray;
         foreach (r; records) arr ~= pasteToJson(r);
         res.writeJsonBody(Json(["pastebins": arr, "total": Json(total)]));
@@ -1951,7 +1963,7 @@ unittest {
         Json(["m": Json("msg-c"), "eid": Json(102)]),  // new
         Json(["m": Json("msg-b"), "eid": Json(101)]),  // dup
     ];
-    auto deduped = RESTAPI.dedupMessages(existing, older);
+    const deduped = RESTAPI.dedupMessages(existing, older);
     assert(deduped.length == 1);
     assert(deduped[0]["m"].get!string == "msg-c");
 }
@@ -1967,7 +1979,7 @@ unittest {
         Json(["eid": Json(42), "x": Json("hello")]),  // dup by eid
         Json(["eid": Json(43), "x": Json("world")]),  // new
     ];
-    auto deduped = RESTAPI.dedupMessages(existing, older);
+    const deduped = RESTAPI.dedupMessages(existing, older);
     assert(deduped.length == 1);
     assert(deduped[0]["eid"].get!long == 43);
 }
@@ -1981,6 +1993,6 @@ unittest {
         Json(["m": Json("b"), "eid": Json(2)]),
         Json(["m": Json("c"), "eid": Json(3)]),
     ];
-    auto deduped = RESTAPI.dedupMessages(existing, older);
+    const deduped = RESTAPI.dedupMessages(existing, older);
     assert(deduped.length == 2);
 }

@@ -131,7 +131,7 @@ Json verifySessionJWT(string token) {
         // Verify signature
         auto signingInput = parts[0] ~ "." ~ parts[1];
         auto sig = hmacSha256(cast(ubyte[])jwtSecret(), cast(ubyte[])signingInput);
-        auto expectedSigB64 = base64UrlEncode(sig[]);
+        const expectedSigB64 = base64UrlEncode(sig[]);
         if (parts[2] != expectedSigB64) return Json(null);
 
         // Decode payload
@@ -141,7 +141,7 @@ Json verifySessionJWT(string token) {
         // Check expiration
         if (auto exp = "exp" in payloadJson) {
             if (exp.type == Json.Type.int_) {
-                auto nowMs = Clock.currTime.toUnixTime() * 1000L;
+                const nowMs = Clock.currTime.toUnixTime() * 1000L;
                 if (nowMs > exp.get!long) return Json(null); // expired
             }
         }
@@ -216,7 +216,7 @@ private UserSession deserializeSessionFromRedis(Json j) {
     if (auto v = "sinceEid" in j) s.sinceEid = v.get!long;
     if (auto v = "lastDeliveredEid" in j) s.lastDeliveredEid = v.get!long;
     if (auto v = "lastEnqueuedEid" in j) s.lastEnqueuedEid = v.get!long;
-    s.outbound = RingBuffer!string(65536);
+    s.outbound = RingBuffer!string(65_536);
     s.outboundNotify = allocSharedEvent();
     return s;
 }
@@ -364,7 +364,7 @@ final class SessionManager {
             isActive: true,
             lastDeliveredEid: 0,
             lastEnqueuedEid: 0,
-            outbound: RingBuffer!string(65536),
+            outbound: RingBuffer!string(65_536),
             outboundNotify: allocSharedEvent()
         );
 
@@ -382,7 +382,6 @@ final class SessionManager {
     /// The restored session gets a fresh outbound queue and no socket —
     /// the caller must attach the WebSocket.
     UserSession restoreSession(UUID sessionId, User user, WebSocket ws) {
-        UserSession session;
         synchronized (m_mutex) {
             if (auto existing = sessionId in sessions) {
                 // Already in memory — update socket and return
@@ -398,7 +397,7 @@ final class SessionManager {
             if (restored.id != UUID.init) {
                 restored.socket = ws;
                 restored.isActive = true;
-                restored.outbound = RingBuffer!string(65536);
+                restored.outbound = RingBuffer!string(65_536);
                 restored.outboundNotify = allocSharedEvent();
                 restored.lastDeliveredEid = 0;  // reset — fresh cursor for this WS
                 restored.lastEnqueuedEid = 0;
@@ -528,7 +527,7 @@ final class SessionManager {
                 // by comparing this to the engine's global_eid in Redis.
                 long eid = 0;
                 try {
-                    auto json = parseJsonString(message);
+                    const json = parseJsonString(message);
                     if (auto e = "eid" in json) {
                         if (e.type == Json.Type.int_) eid = e.get!long;
                     }
@@ -540,8 +539,9 @@ final class SessionManager {
                     // Should never happen with a healthy drain. Log loudly
                     // so an operator sees the WS is wedged — the session
                     // will be torn down by the next heartbeat miss.
-                    logWarn("sendToSession: outbound queue full for session %s (cap=%d, eid=%d); skipping frame, client will recover via replay/oob",
-                        s.id, 65536, eid);
+                    logWarn("sendToSession: outbound queue full for session %s " ~
+                        "(cap=%d, eid=%d); skipping frame, client will recover via replay/oob",
+                        s.id, 65_536, eid);
                     return;
                 }
                 s.outbound.put(sanitizeUtf8(message));
@@ -610,10 +610,13 @@ final class SessionManager {
     /// so the unacked-gap diagnostics and the persisted ack cursor would
     /// silently report zero. Returns zeros when the session is gone.
     struct SessionTeardown {
+        /// Highest eid enqueued to the session's outbound queue.
         long lastEnqueuedEid;
+        /// Highest eid delivered to the client.
         long lastDeliveredEid;
     }
 
+    /// Marks the session inactive and snapshots its ack cursors.
     SessionTeardown deactivateAndSnapshot(UUID sessionId) {
         SessionTeardown r;
         synchronized (m_mutex) {
@@ -632,14 +635,14 @@ final class SessionManager {
         synchronized (m_mutex) {
             stats.total = sessions.length;
             foreach (ref s; sessions) {
-                auto depth = s.outbound.length;
+                const depth = s.outbound.length;
                 if (depth > stats.maxDepth) stats.maxDepth = depth;
                 if (s.lastEnqueuedEid > stats.lastEnqueuedEid)
                     stats.lastEnqueuedEid = s.lastEnqueuedEid;
                 if (s.lastDeliveredEid > stats.lastDeliveredEid)
                     stats.lastDeliveredEid = s.lastDeliveredEid;
                 // 2026-07-08: backpressure detection — queue > 32k
-                if (depth > 32768) stats.backpressured++;
+                if (depth > 32_768) stats.backpressured++;
                 // 2026-07-08: ghost detection — deactivated sessions
                 if (!s.isActive) stats.ghosts++;
             }
