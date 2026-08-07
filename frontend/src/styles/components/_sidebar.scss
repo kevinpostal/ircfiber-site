@@ -122,7 +122,7 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-buffers { padding-bottom: 0; }
 .buffer { display: flex; align-items: center; width: 100%; }
 .buffer-item { display: block !important; position: relative; font-size: 15px; color: #999; cursor: pointer; border-radius: 0; margin: 0; flex: 0 0 auto !important; flex-direction: initial !important; }
-.buffer-item .buffer { display: block; padding: 3px 0 2px 17px; margin-left: -5px; border-radius: 0 4px 4px 0; line-height: 18px; }
+.buffer-item .buffer { display: block; padding: 3px 0 2px 17px; margin-left: -5px; border-left: 5px solid transparent; border-radius: 0 4px 4px 0; line-height: 18px; }
 .buffer-item .buffer .label { padding: 0 7px; }
 .buffer-item:hover .buffer { background: #1a1a1a; color: #d9d9d9; }
 .buffer-item.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #d9d9d9; }
