@@ -57,8 +57,32 @@
       history = existing;
     }
   });
+  // Synchronous helper — avoids the $effect timing race where handleSend
+  // could push to the stale `history` (previous buffer or 'global') before
+  // the effect has swapped it. Always resolves the correct per-buffer history.
+  function getCurrentHistory(): InputHistory {
+    const netId = ircState.activeBuffer.networkId;
+    const bufName = ircState.activeBuffer.bufferName;
+    if (netId && bufName) {
+      const key = `${netId}:${bufName}`;
+      let h = historyMap.get(key);
+      if (!h) {
+        h = new InputHistory(key);
+        historyMap.set(key, h);
+        // Keep the reactive `history` in sync for any legacy readers
+        history = h;
+      }
+      return h;
+    }
+    return history;
+  }
+  function scrollMessagesBy(delta: number): boolean {
+    const container = document.getElementById('messages') as HTMLElement | null;
+    if (!container || container.scrollHeight <= container.clientHeight) return false;
+    container.scrollBy({ top: delta, behavior: 'smooth' });
+    return true;
+  }
   let isTabbing = $state(false);
-  // IRCCloud-style: empty-input Tab cycles recent highlighters.
   // Tracks whether we're in that mode so subsequent Tabs cycle regardless
   // of the input value (which is no longer empty after the first press).
   let isEmptyTabbing = $state(false);
@@ -232,31 +256,45 @@
       return;
     }
 
-    if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey) {
+    if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
       if (InputHistory.isMultiline(inputValue)) return;
-      const entry = history.getEarlier(inputValue);
+      const h = getCurrentHistory();
+      const entry = h.getEarlier(inputValue);
       if (entry !== undefined) {
         e.preventDefault();
+        e.stopPropagation();
         inputValue = entry;
         requestAnimationFrame(() => {
           if (textarea) textarea.selectionStart = textarea.selectionEnd = inputValue.length;
         });
+      } else {
+        if (scrollMessagesBy(-120)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
       }
       return;
     }
 
-    if (e.key === 'ArrowDown' && !e.shiftKey && !e.altKey) {
+    if (e.key === 'ArrowDown' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
       if (InputHistory.isMultiline(inputValue)) return;
-      const entry = history.getLater();
+      const h = getCurrentHistory();
+      const entry = h.getLater();
       if (entry !== undefined) {
         e.preventDefault();
+        e.stopPropagation();
         inputValue = entry;
+      } else {
+        if (scrollMessagesBy(120)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
       }
       return;
     }
 
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') {
-      history.resetIndex();
+      getCurrentHistory().resetIndex();
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -333,7 +371,7 @@
 
     // Edit message path (Ctrl/Cmd+Up)
     if (editTarget) {
-      history.push(text);
+      getCurrentHistory().push(text);
       // Strip [edit] prefix added by the Ctrl/Cmd+Up handler
       const editPrefix = '[edit] ';
       if (text.startsWith(editPrefix)) {
@@ -356,8 +394,7 @@
       return;
     }
 
-    history.push(text);
-
+    getCurrentHistory().push(text);
     if (text.startsWith('/')) {
       const parts = text.slice(1).split(/\s+/);
       const cmd = parts[0].toLowerCase();

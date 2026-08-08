@@ -471,12 +471,34 @@ let showNetworkForm: boolean = $state(false);
   }
 
   function handleGlobalKeyboard(e: KeyboardEvent): void {
-    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    // If the compose input already handled ArrowUp/Down for history/scroll,
+    // don't also switch buffers (plain Arrow is handled in InputArea with
+    // stopPropagation, but Alt+Arrow bubbles — respect defaultPrevented).
+    if (e.defaultPrevented) return;
+    // Plain ArrowUp/Down outside of inputs should scroll the message list,
+    // not switch channels. This covers the case where the user clicks outside
+    // the compose box (e.g. on the message list) and expects Up/Down to
+    // scroll the chat history.
+    if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      const target = e.target as HTMLElement | null;
+      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable);
+      if (!isInput) {
+        if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts || ircState.overlay.type || showNetworkForm || showJoinModal || ircState.contextMenu.visible || !!userPopup) {
+          return;
+        }
+        const container = document.getElementById('messages') as HTMLElement | null;
+        if (container && container.scrollHeight > container.clientHeight) {
+          e.preventDefault();
+          container.scrollBy({ top: e.key === 'ArrowUp' ? -120 : 120, behavior: 'smooth' });
+          return;
+        }
+      }
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault();
       switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
+      return;
     }
-    // Cmd/Ctrl+Shift+K - quick-switch channel
-    // Svelte 5's compiler strips parens around `||` inside `&&` chains,
     // which would turn `(a||b) && c && d` into `a || b && c && d` (wrong
     // precedence). Bind the modifier check to a const first so the emitted
     // JS preserves grouping.
