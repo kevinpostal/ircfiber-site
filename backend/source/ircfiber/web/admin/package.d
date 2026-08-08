@@ -12,19 +12,19 @@ import ircfiber.db.user : UserRepository;
 import ircfiber.irc.engine_janitor : EngineJanitor;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.storage.redis : RedisStorage;
-
-import ircfiber.web.admin.helpers : captureSessionMeta, touchSessionAccess;
-import ircfiber.web.admin.auth : adminLoginPage, adminLoginPost, adminLogout,
-    adminImpersonate, adminStopImpersonating;
-
 import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiServers, apiServerHost, apiReassignServer, apiReassignAssignment,
     apiRemoveAssignment, apiEngineConfig, apiHostDisconnect, apiHostReconnect,
     apiHostDeleteNetwork, apiAssignmentDelete, apiRouting,
+    apiFiberConfig, apiFiberConfigSet,
     apiUsersList, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete,
     apiResetPassword,
     apiSessions, apiSessionsClear, apiSessionsClearUser, apiSessionsClearOne,
     apiUploadsList, apiUploadDelete;
+
+import ircfiber.web.admin.helpers : captureSessionMeta, touchSessionAccess;
+import ircfiber.web.admin.auth : adminLoginPage, adminLoginPost, adminLogout,
+    adminImpersonate, adminStopImpersonating;
 
 import ircfiber.web.admin.janitor : apiJanitorStatus, apiJanitorEvents,
     apiJanitorReap, apiJanitorCycle;
@@ -97,9 +97,10 @@ final class AdminController {
         router.post("/api/admin/servers/host/:host/reconnect/:networkId", &adminWrap!apiHostReconnectRoute);
         router.post("/api/admin/servers/host/:host/delete-network/:networkId", &adminWrap!apiHostDeleteNetworkRoute);
         router.post("/api/admin/routing", &adminWrap!apiRoutingRoute);
+        router.get("/api/admin/config/fiber", &adminWrap!apiFiberConfigRoute);
+        router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
 
         router.get("/api/admin/users", &adminWrap!apiUsersListRoute);
-        router.post("/api/admin/users", &adminWrap!apiUserCreateRoute);
         router.get("/api/admin/users/:id", &adminWrap!apiUserDetailRoute);
         router.post("/api/admin/users/:id", &adminWrap!apiUserUpdateRoute);
         router.post("/api/admin/users/:id/delete", &adminWrap!apiUserDeleteRoute);
@@ -201,8 +202,13 @@ private:
     void apiRoutingRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiRouting(req, res, serverRegistry);
     }
+    void apiFiberConfigRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiFiberConfig(req, res, redis);
+    }
+    void apiFiberConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiFiberConfigSet(req, res, redis, serverRegistry);
+    }
     void apiUsersListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUsersList(req, res); }
-    void apiUserCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUserCreate(req, res); }
     void apiUserDetailRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiUserDetail(req, res, redis);
     }

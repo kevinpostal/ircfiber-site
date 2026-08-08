@@ -24,6 +24,8 @@ export function isFiberServer(net: Pick<Network, 'host' | 'systemManaged'>): boo
  */
 export function isFiberServerDown(net: Network): boolean {
   if (!isFiberServer(net)) return false;
+  // Admin kill-switch: disabled Fiber networks are always hidden
+  if ((net as any).disabled) return true;
   if (net.connected) return false;
   // User explicitly hit Disconnect — keep visible with Reconnect button
   if (isUserDisconnected(net.networkId)) return false;
@@ -31,7 +33,6 @@ export function isFiberServerDown(net: Network): boolean {
   if (net.disconnectReason?.toLowerCase().includes('you disconnected')) return false;
 
   // Smart detection: retryStatus / failInfo indicates the server is down
-  // (covers DNS timeout, TCP timeout, TLS fail, circuit breaker open)
   if (net.retryStatus && net.retryStatus.attemptCount >= 1) return true;
   if (net.failInfo) return true;
 

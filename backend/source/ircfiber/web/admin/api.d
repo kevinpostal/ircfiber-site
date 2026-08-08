@@ -606,10 +606,122 @@ package void apiRouting(HTTPServerRequest req, HTTPServerResponse res,
 }
 
 // ────────────────────────────────────────────────────────────
-// Users API
+// Fiber auto-connect toggle — GET + POST /api/admin/config/fiber
 // ────────────────────────────────────────────────────────────
 
-/// GET /api/admin/users?q=&role=
+/// GET /api/admin/config/fiber — returns {enabled, fiberNetworkCount, disabledCount}
+package void apiFiberConfig(HTTPServerRequest req, HTTPServerResponse res,
+                            RedisStorage redis) {
+    import ircfiber.default_network : isFiberEnabled, FIBER_ENABLED_KEY, DEFAULT_FIBER_HOST;
+    bool enabled = true;
+    try enabled = isFiberEnabled(redis);
+    catch (Exception) {}
+    int total = 0, disabled = 0;
+    try {
+        auto netRepo = new NetworkRepository();
+        auto all = netRepo.findAll();
+        foreach (nw; all) {
+            if (nw.config.host == DEFAULT_FIBER_HOST) {
+                total++;
+                if (nw.config.disabled) disabled++;
+            }
+        }
+    } catch (Exception e) {
+        logWarn("apiFiberConfig count failed: %s", e.msg);
+    }
+    Json data = Json.emptyObject;
+    data["enabled"] = Json(enabled);
+    data["key"] = Json(FIBER_ENABLED_KEY);
+    data["fiberNetworkCount"] = Json(total);
+    data["disabledCount"] = Json(disabled);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/config/fiber — {enabled: bool} bulk enable/disable Fiber networks
+package void apiFiberConfigSet(HTTPServerRequest req, HTTPServerResponse res,
+                               RedisStorage redis, ServerRegistry serverRegistry) {
+    import ircfiber.default_network : isFiberEnabled, setFiberEnabled, DEFAULT_FIBER_HOST;
+    auto body = readJsonBody(req);
+    bool enabled;
+    try {
+        enabled = body["enabled"].get!bool;
+    } catch (Exception e) {
+        jsonError(res, 400, "enabled boolean required");
+        return;
+    }
+    bool prev = true;
+    try prev = isFiberEnabled(redis);
+    catch (Exception) {}
+    setFiberEnabled(redis, enabled);
+    int total = 0, changed = 0, skipped = 0;
+    string[] errors;
+    try {
+        auto netRepo = new NetworkRepository();
+        auto all = netRepo.findAll();
+        foreach (nw; all) {
+            if (nw.config.host != DEFAULT_FIBER_HOST) continue;
+            total++;
+            if (enabled) {
+                // Enable: clear disabled flag and re-assign/reconnect
+                if (!nw.config.disabled) { skipped++; continue; }
+                try {
+                    netRepo.setDisabled(nw.config.id, false);
+                    if (nw.userId != typeof(nw.userId).init)
+                        redis.del(RedisKeys.userNetworks(nw.userId.toString()));
+                    // Re-assign if needed and push reconnect
+                    auto nid = nw.config.id.toString();
+                    auto ownerId = nw.userId.toString();
+                    auto sid = serverRegistry.getServerForNetwork(nid);
+                    if (sid.length == 0 || !serverRegistry.isServerHealthy(sid))
+                        sid = serverRegistry.reassignNetwork(nid);
+                    if (sid.length > 0) {
+                        auto cfg = netRepo.findById(nw.config.id);
+                        auto msg = ControlMessage("reconnectNetwork", nid, ownerId, cfg.toJson());
+                        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+                        redis.lpush(RedisKeys.control(sid), msg.toJson().toString());
+                    }
+                    changed++;
+                } catch (Exception e) {
+                    errors ~= nw.config.id.toString() ~ ": " ~ e.msg;
+                }
+            } else {
+                // Disable: set disabled and disconnect
+                if (nw.config.disabled) { skipped++; continue; }
+                try {
+                    netRepo.setDisabled(nw.config.id, true);
+                    if (nw.userId != typeof(nw.userId).init)
+                        redis.del(RedisKeys.userNetworks(nw.userId.toString()));
+                    auto sid = serverRegistry.getServerForNetwork(nw.config.id.toString());
+                    if (sid.length > 0 && serverRegistry.isServerHealthy(sid)) {
+                        auto msg = ControlMessage("disconnectNetwork", nw.config.id.toString());
+                        msg.reason = "Fiber auto-connect disabled by admin";
+                        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+                        redis.lpush(RedisKeys.control(sid), msg.toJson().toString());
+                    }
+                    changed++;
+                } catch (Exception e) {
+                    errors ~= nw.config.id.toString() ~ ": " ~ e.msg;
+                }
+            }
+        }
+    } catch (Exception e) {
+        logWarn("apiFiberConfigSet bulk failed: %s", e.msg);
+        jsonError(res, 500, e.msg);
+        return;
+    }
+    Json data = Json.emptyObject;
+    data["enabled"] = Json(enabled);
+    data["prevEnabled"] = Json(prev);
+    data["total"] = Json(total);
+    data["changed"] = Json(changed);
+    data["skipped"] = Json(skipped);
+    if (errors.length > 0) data["errors"] = jsonArray(errors);
+    jsonOk(res, data);
+}
+
+// ────────────────────────────────────────────────────────────
+// Users API
+// ────────────────────────────────────────────────────────────
 package void apiUsersList(HTTPServerRequest req, HTTPServerResponse res) {
     auto repo = new UserRepository();
     auto q = formString(req, "q");

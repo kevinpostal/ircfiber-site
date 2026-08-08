@@ -147,6 +147,12 @@ export interface Network {
    */
   systemManaged?: boolean;
   /**
+   * Whether the network is disabled (admin disconnect that persists across
+   * redeploys). Disabled networks are not loaded by the engine and are
+   * hidden by isFiberServerDown when they are the Fiber server.
+   */
+  disabled?: boolean;
+  /**
    * Tracks a /nick attempt in flight so the NICK echo handler can
    * identify the change as self even after the optimistic update has
    * moved currentNick to the new value. Cleared on echo success or

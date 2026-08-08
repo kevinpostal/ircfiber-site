@@ -1446,8 +1446,8 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       // during a session; only adopt it from sync if we don't have a
       // value yet (initial load). Treat undefined/missing as false.
       if (net.systemManaged !== undefined) existing.systemManaged = net.systemManaged;
+      if ((net as any).disabled !== undefined) (existing as any).disabled = (net as any).disabled;
 
-      // W2-T02: sync payload ships `retryStatus` only when the engine
       // considers it active (gated by `hasRetryStatus` in protocol.d).
       // Presence adopts the new value; absence (the sync-omitted
       // case) means the engine considers the network healthy and the

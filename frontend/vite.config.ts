@@ -57,6 +57,7 @@ export default defineConfig({
   build: {
     outDir: '../public/dist',
     emptyOutDir: true,
+    copyPublicDir: false,
     manifest: true,
     // Vite 5+ puts assets under `assets/` (e.g. public/dist/assets/index-*.js)
     // and the HTML references them as `/assets/index-*.js`. The irc-fiber

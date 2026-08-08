@@ -7,6 +7,7 @@
   import { dashboard, dashboardError, dashboardLoading, fetchDashboard } from '../stores/dashboard';
   import { redisSummary, fetchRedisSummary } from '../stores/redis';
   import { mongoStatus, fetchMongoStatus } from '../stores/mongo';
+  import { fiberConfig, fiberConfigError, fiberConfigLoading, fiberConfigSaving, fetchFiberConfig, setFiberEnabled } from '../stores/fiberConfig';
   import { startPolling } from '../stores/polling';
   import PageHeader from '../components/PageHeader.svelte';
   import KpiCard from '../components/KpiCard.svelte';
@@ -23,21 +24,79 @@
   const setLastFetched = () => { lastFetchedAt = Date.now(); };
 
   onMount(() => {
+    fetchFiberConfig();
     stop = startPolling(async () => {
       await Promise.all([
         fetchDashboard().then(setLastFetched),
         fetchRedisSummary(),
         fetchMongoStatus(),
+        fetchFiberConfig(),
       ]);
     });
   });
   onDestroy(() => stop?.());
+
+  let toggling = $state(false);
+  async function toggleFiber() {
+    if (!$fiberConfig || $fiberConfigSaving) return;
+    toggling = true;
+    try {
+      await setFiberEnabled(!$fiberConfig.enabled);
+    } finally {
+      toggling = false;
+    }
+  }
 </script>
 
 <PageHeader
   title="Dashboard"
   subtitle="Real-time view of engines, sessions, MongoDB and Redis health"
 />
+
+<!-- IRC Fiber auto-connect toggle -->
+<Card class="mb-4">
+  <div class="flex items-center justify-between gap-4">
+    <div>
+      <div class="text-sm font-medium">IRC Fiber auto-connect</div>
+      <div class="text-xs text-muted-foreground">
+        {#if $fiberConfigLoading && !$fiberConfig}
+          Loading…
+        {:else if $fiberConfig}
+          irc.ircfiber.com — {$fiberConfig.fiberNetworkCount} networks
+          ({$fiberConfig.disabledCount} disabled)
+          {#if !$fiberConfig.enabled}
+            <span class="ml-2 text-amber-500">disabled — hidden from sidebar & not provisioned for new users</span>
+          {:else}
+            <span class="ml-2 text-green-600">enabled</span>
+          {/if}
+        {:else}
+          —
+        {/if}
+        {#if $fiberConfigError}
+          <span class="ml-2 text-danger">{$fiberConfigError}</span>
+        {/if}
+      </div>
+    </div>
+    <button
+      class="adm-btn {($fiberConfig?.enabled ?? true) ? 'adm-btn-primary' : ''}"
+      disabled={$fiberConfigSaving || toggling || $fiberConfigLoading}
+      onclick={toggleFiber}
+    >
+      {#if $fiberConfigSaving || toggling}
+        Saving…
+      {:else if $fiberConfig?.enabled}
+        Disable
+      {:else}
+        Enable
+      {/if}
+    </button>
+  </div>
+  {#if $fiberConfig && !$fiberConfig.enabled}
+    <div class="mt-2 text-xs text-muted-foreground">
+      When disabled, the Fiber server is hidden from the sidebar (via <code>isFiberServerDown</code>) and new users will not get an auto-provisioned irc.ircfiber.com network. Existing Fiber networks were bulk-disabled on toggle.
+    </div>
+  {/if}
+</Card>
 
 {#if $dashboardError}
   <Card class="mb-4">
