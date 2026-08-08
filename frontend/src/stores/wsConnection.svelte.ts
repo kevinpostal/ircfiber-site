@@ -377,7 +377,5 @@ export function requestSync(): void {
 }
 
 export function requestSwitchBuffer(networkId: string, channel: string): void {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify({ cmd: 'buffer', network: networkId, channel }));
-  }
+  doSend(JSON.stringify({ cmd: 'buffer', network: networkId, channel }));
 }

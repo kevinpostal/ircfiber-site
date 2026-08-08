@@ -193,8 +193,7 @@
     close();
   }
 
-  function submitMessage(e: SubmitEvent): void {
-    e.preventDefault();
+  function doSend(): void {
     const text = messageValue.trim();
     if (text && networkId) {
       // Open a DM/query buffer so the user sees the conversation in the
@@ -210,6 +209,16 @@
     }
     messageValue = '';
     close();
+  }
+
+  function submitMessage(e: SubmitEvent): void {
+    e.preventDefault();
+    doSend();
+  }
+
+  function handleSendClick(e: MouseEvent): void {
+    e.preventDefault();
+    doSend();
   }
 </script>
 
@@ -287,7 +296,7 @@
           </div>
           <div class="input-wrapper">
             <input class="input message" id="contextMenuMessage" placeholder="Type a message&hellip;" bind:value={messageValue} bind:this={messageInput} />
-            <button class="send-btn" type="submit" aria-label="Send"><i class="fa-solid fa-arrow-right"></i></button>
+            <button class="send-btn" type="button" aria-label="Send" onclick={handleSendClick}><i class="fa-solid fa-arrow-right"></i></button>
           </div>
         </form>
       </li>

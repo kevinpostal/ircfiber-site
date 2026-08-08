@@ -18,6 +18,7 @@
   // $state so the viewport-fill effect re-runs once onMount assigns it.
   let scrollEl = $state<HTMLElement | null>(null);
   let consecutiveEmptyLoads = 0;
+  let checkedBufferKey = $state('');
   const MAX_EMPTY_RETRIES = 5;
 
   const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
