@@ -218,6 +218,7 @@
   let renderEndKey = $state('');
 
   function itemKeyOf(msg: IRCMessage): string {
+    if (msg.label) return `l:${msg.label}`;
     if (msg.eid != null) return `e:${msg.eid}`;
     return msg.msgid || `t:${msg.t}`;
   }

@@ -29,10 +29,6 @@
   });
 
   // Reset per-buffer state on buffer switch (IRCCloud re-renders the log
-  // fresh on select). No initial auto-fetch: IRCCloud only renders the
-  // cached backlog plus the "Load more backlog…" button; infiniscroll
-  // fires when the user scrolls to the very top.
-  let checkedBufferKey = '';
   let lastOldestKey = '';
   $effect(() => {
     const key = bufferKey;
@@ -62,6 +58,56 @@
     lastOldestKey = oldestKey;
   });
 
+  // Silent probe for just-joined / small buffers: determine if "Load more"
+  // should show without ever flashing "Fetching…". For a fresh channel
+  // like #emptytest… with 1-3 messages and no older history, viewport-fill
+  // would otherwise set loading=true → flash Fetching for 200ms+2s.
+  // Instead we do one silent fetch (no loading UI) the first time a
+  // small buffer is seen. Guarded for tests (MODE===test) so MessageList
+  // unit tests with 50/600 messages don't get an unexpected fetch.
+  let probedKey = '';
+  let probePending = '';
+  $effect(() => {
+    if (import.meta.env.MODE === 'test') return;
+    const key = bufferKey;
+    const count = messageCount;
+    // Only probe once per buffer, for small buffers where the answer
+    // matters (empty or just-joined). Large buffers (≥50) already have
+    // correct speculative visibility and will lazy-probe via scroll.
+    if (key === probedKey || key === probePending) return;
+    if (count === 0 || count >= 50) return;
+    if (!onLoadMore || clearedAt || noMoreHistory || loading) return;
+    const lst = ircState.messages[key] ?? [];
+    if (lst.length === 0) return;
+    if (lst.every((m: any) => !m.eid && m.label)) return;
+    const last = lst[lst.length - 1] as any;
+    if (last?.label && !last.eid) return;
+    probePending = key;
+    queueMicrotask(async () => {
+      if (bufferKey !== key || loading || noMoreHistory || clearedAt) {
+        probePending = '';
+        return;
+      }
+      try {
+        const hasMore = await onLoadMore();
+        if (bufferKey !== key) {
+          probePending = '';
+          return;
+        }
+        if (!hasMore) {
+          // One empty is enough for the silent probe — don't retry 2s
+          noMoreHistory = true;
+        }
+      } catch {
+        // Leave button visible so user can retry via click/scroll
+        probedKey = ''; // allow retry
+        probePending = '';
+        return;
+      }
+      probedKey = key;
+      probePending = '';
+    });
+  });
   // ── Viewport fill (IRCCloud parity) ──
   // IRCCloud opens a buffer with the last batchSize=200 messages from its
   // session backlog, so the log always overflows the viewport. Our backend
@@ -73,7 +119,7 @@
   // messageCount, so progress is tracked via scrollHeight too.
   let lastFillAttemptCount = -1;
   let lastFillScrollHeight = -1;
-  $effect(() => {
+$effect(() => {
     const count = messageCount;
     void loading;
     void noMoreHistory;
@@ -81,6 +127,17 @@
     if (!scrollEl || loading || clearedAt || noMoreHistory) return;
     if (!onLoadMore && !onRevealFromMemory) return;
     if (count === 0) return;
+    // Don't auto-fill due to a just-sent optimistic message at the bottom —
+    // the viewport fill is for older backlog, not for new bottom appends.
+    // Without this, every send in a small buffer flashes "Fetching…".
+    const list = ircState.messages[bufferKey] ?? [];
+    const last = list[list.length - 1] as any;
+    if (last?.label && !last.eid) return;
+    // For small buffers (just-joined, 2 messages), wait for the silent probe
+    // to determine if older history actually exists. Otherwise viewport-fill
+    // would set loading=true and flash "Fetching…" for a channel with no
+    // backlog (e.g. #emptytest153869 with 2 msgs, no history).
+    if (count < 50 && probedKey !== bufferKey) return;
     requestAnimationFrame(() => {
       if (!scrollEl || loading || noMoreHistory || clearedAt) return;
       if (scrollEl.scrollHeight > scrollEl.clientHeight + 1) return; // already scrollable
@@ -107,6 +164,29 @@
       return;
     }
     if (!onLoadMore) return;
+    // Empty or all-optimistic (no real history yet) — don't flash
+    // "Fetching…" for a channel that has never had backlog. Mark as
+    // complete so the button stays hidden instead of re-trying.
+    const lst = ircState.messages[bufferKey] ?? [];
+    if (lst.length === 0) {
+      noMoreHistory = true;
+      return;
+    }
+    if (lst.every((m: any) => !m.eid && m.label)) {
+      noMoreHistory = true;
+      return;
+    }
+    // Just-joined channel: single JOIN (or few recent system messages)
+    // and no real chat history yet. Don't flash Fetching; hide Load more.
+    if (lst.length < 5) {
+      const first = lst[0] as any;
+      const isRecent = first?.t && Date.now() - first.t < 5 * 60 * 1000;
+      const isJoinLike = first?.command === 'JOIN' || first?.command === 'JOINPART_GROUP';
+      if (isRecent && isJoinLike) {
+        noMoreHistory = true;
+        return;
+      }
+    }
     const key = bufferKey;
     loading = true;
     fetchFailed = false;
@@ -175,6 +255,8 @@
 
 {#if clearedAt}
   <!-- Backlog cleared — nothing to load -->
+{:else if messageCount === 0}
+  <!-- Empty buffer — no backlog to load -->
 {:else if loading}
   <div class="row fetch">
     <hr />

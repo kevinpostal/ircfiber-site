@@ -714,6 +714,11 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
         const idx = list.findIndex((m: IRCMessage) => m.label === optLabel);
         if (idx >= 0) {
           const optimistic = list[idx];
+          // Carry the optimistic's label onto the echo so MessageList's
+          // label-first key (l:<label>#idx) stays stable — otherwise the
+          // key flips from l:<label> to e:<eid> and Svelte recreates the
+          // row, causing a visible flicker + double entrance animation.
+          if (!msg.label) msg.label = optLabel;
           list[idx] = msg;
           ircState.messages[key] = list;
           const replaced = ircState.processedMessages[key]
@@ -816,8 +821,8 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         ircState.optimisticMessages.delete(foundOptLabel);
         const idx = list.findIndex((m: IRCMessage) => m.label === foundOptLabel);
         if (idx >= 0) {
+          if (!msg.label) msg.label = foundOptLabel;
           list[idx] = msg;
-          replacedEdit = true;
           continue;
         }
       }

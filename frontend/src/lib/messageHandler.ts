@@ -117,7 +117,7 @@ export function unpackEvent(
     params: ((data.params as string[]) || (data.p as string[]) || []) as string[],
     prefix: ((data.prefix as string) || (data.px as string) || '') as string,
     msgid: ((data.msgid as string) || (data.m as string) || (data.i as string) || '') as string,
-    label: ((data.label as string) || (data.l as string) || '') as string,
+    label: ((data.label as string) || (data.l as string) || (data.le as string) || '') as string,
     t: data.t as number,
     eid: (data.eid as number) || undefined,
     selfEcho: !!(data.se as string | undefined),
