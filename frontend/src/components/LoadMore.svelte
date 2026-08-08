@@ -14,7 +14,7 @@
 
   let loading = $state(false);
   let fetchFailed = $state(false);
-  let noMoreHistory = $state(false);
+  let noMoreHistory = $state(true); // start hidden to avoid flash — probe will show if needed
   // $state so the viewport-fill effect re-runs once onMount assigns it.
   let scrollEl = $state<HTMLElement | null>(null);
   let consecutiveEmptyLoads = 0;
@@ -34,7 +34,13 @@
     const key = bufferKey;
     if (key !== checkedBufferKey) {
       checkedBufferKey = key;
-      noMoreHistory = false;
+      // Start hidden for small/empty buffers to avoid flash of Load more
+      // that then hides after silent probe. Large buffers (≥50) are likely
+      // to have more history, so start visible and let scroll probe confirm.
+      const lst = ircState.messages[key] ?? [];
+      const small = lst.length > 0 && lst.length < 50;
+      const empty = lst.length === 0;
+      noMoreHistory = small || empty ? true : false;
       fetchFailed = false;
       consecutiveEmptyLoads = 0;
       lastOldestKey = '';
@@ -76,7 +82,7 @@
     // correct speculative visibility and will lazy-probe via scroll.
     if (key === probedKey || key === probePending) return;
     if (count === 0 || count >= 50) return;
-    if (!onLoadMore || clearedAt || noMoreHistory || loading) return;
+    if (!onLoadMore || clearedAt || loading) return;
     const lst = ircState.messages[key] ?? [];
     if (lst.length === 0) return;
     if (lst.every((m: any) => !m.eid && m.label)) return;
@@ -84,7 +90,7 @@
     if (last?.label && !last.eid) return;
     probePending = key;
     queueMicrotask(async () => {
-      if (bufferKey !== key || loading || noMoreHistory || clearedAt) {
+      if (bufferKey !== key || loading || clearedAt) {
         probePending = '';
         return;
       }
@@ -94,10 +100,8 @@
           probePending = '';
           return;
         }
-        if (!hasMore) {
-          // One empty is enough for the silent probe — don't retry 2s
-          noMoreHistory = true;
-        }
+        // hasMore true → show Load more, false → keep hidden (started hidden to avoid flash)
+        noMoreHistory = !hasMore;
       } catch {
         // Leave button visible so user can retry via click/scroll
         probedKey = ''; // allow retry
