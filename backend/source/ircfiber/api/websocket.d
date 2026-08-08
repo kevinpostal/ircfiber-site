@@ -1324,13 +1324,16 @@ private void ircPoolDispatch(string userId, UUID sessionId) nothrow @trusted {
         // Create a fresh Redis connection on this pool thread.
         auto redis = new RedisStorage();
         redis.connectFromUrl(environment.get("IRCFIBER_REDIS_URL", "redis://127.0.0.1:6379"));
+        // Per-session RedisClient holds a TCP fd via its pool. Without
+        // explicit close the fd is reclaimed only by GC finalizers
+        // (observed ~5/min growth → 1024 fds in ~4h → EMFILE → site down).
+        scope(exit) redis.close();
 
         auto subscriber = redis.getClient.createSubscriber();
         auto channel = RedisKeys.events(userId);
         subscriber.subscribe(channel);
 
         logInfo("ircPool: subscribed to events for user %s session %s", userId, sessionId);
-
         subscriber.listen((string _, string msg) @safe nothrow {
             try {
                 auto gw = () @trusted { return g_gwForIrcPool; } ();
