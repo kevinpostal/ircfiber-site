@@ -16,7 +16,7 @@ import vibe.core.log;
 import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.auth : verifyPassword, hashPassword, requireAuth;
-import ircfiber.redis.protocol : RedisKeys;
+import ircfiber.redis.protocol : RedisKeys, NetworkStateSnapshot;
 import ircfiber.storage.buffer : sanitizeUtf8;
 import ircfiber.db.user : UserRepository;
 import ircfiber.db.network : NetworkRepository;
@@ -49,10 +49,34 @@ import ircfiber.storage.session : limitUserSessions;
 /// Web controller for pages and static assets.
 final class WebController {
     private RedisStorage redis;
+    private ServerRegistry serverRegistry;
 
     /// Creates a new web controller.
-    this(RedisStorage redis) @safe {
+    this(RedisStorage redis) {
         this.redis = redis;
+        this.serverRegistry = new ServerRegistry(redis);
+    }
+
+    /// Live connection state for a network, from the engine's Redis
+    /// snapshot (server-aware key first, then legacy). Returns false when
+    /// no snapshot exists (e.g. never connected or engine down).
+    private bool isNetworkConnected(string networkId) {
+        auto serverId = serverRegistry.getServerForNetwork(networkId);
+        if (serverId.length > 0) {
+            auto fields = redis.hgetAll(RedisKeys.state(serverId, networkId));
+            if ("data" in fields) {
+                try {
+                    return NetworkStateSnapshot.fromJson(parseJsonString(fields["data"])).connected;
+                } catch (Exception e) { logWarn("Failed to parse snapshot for %s", networkId); }
+            }
+        }
+        auto fields = redis.hgetAll(RedisKeys.state_legacy(networkId));
+        if ("data" in fields) {
+            try {
+                return NetworkStateSnapshot.fromJson(parseJsonString(fields["data"])).connected;
+            } catch (Exception e) { logWarn("Failed to parse legacy snapshot for %s", networkId); }
+        }
+        return false;
     }
 
     /// Registers web routes on the given router.
@@ -100,6 +124,36 @@ final class WebController {
         if (sid.length == 0) {
             serveLanding(req, res);
             return;
+        }
+        // Handle bare /irc and /irc/ — redirect to first visible network, not Fiber when down
+        if ((path == "/irc" || path == "/irc/") && sid.length != 0) {
+            try {
+                import std.uuid : parseUUID;
+                import std.uri : encodeComponent;
+                auto uid = parseUUID(sid);
+                auto repo = new NetworkRepository();
+                auto nets = repo.findByUserId(uid);
+                foreach (net; nets) {
+                    bool isFiber = net.host == "irc.ircfiber.com" && net.systemManaged;
+                    bool isDown = isFiber && !isNetworkConnected(net.id.toString());
+                    if (isDown) continue;
+                    if (net.host.length == 0) continue;
+                    auto encodedName = encodeComponent(net.name);
+                    res.redirect("/irc/" ~ encodedName);
+                    return;
+                }
+                // Fallback: if all are down or no visible, don't redirect to Fiber
+                foreach (net; nets) {
+                    bool isFiber = net.host == "irc.ircfiber.com" && net.systemManaged;
+                    if (!isFiber) {
+                        auto encodedName = encodeComponent(net.name);
+                        res.redirect("/irc/" ~ encodedName);
+                        return;
+                    }
+                }
+            } catch (Exception e) {
+                logWarn("Failed to handle bare /irc redirect: %s", e.msg);
+            }
         }
         // If visiting root and we have a last visited location, redirect there.
         // Skip the redirect for client-side routes (e.g. /?/shortcuts, /?/settings)

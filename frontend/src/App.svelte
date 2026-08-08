@@ -40,6 +40,7 @@
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
+  import { isFiberServerDown } from './lib/fiberServer';
   import { enqueueMessage, setFlushFn } from './lib/messageBatcher';
 import WelcomePage from './components/WelcomePage.svelte';
 import SettingsPage from './components/SettingsPage.svelte';
@@ -202,15 +203,45 @@ let showNetworkForm: boolean = $state(false);
   });
 
   // Auto-select first network's server buffer when networks exist but none is active
+  // Skip the IRC Fiber system network when it's down — it should not be
+  // the default landing page for /irc/. Pick the first *visible* network
+  // (host !== '' ensures we have full sync data, not just the skeleton
+  // from the `networks` WS message which lacks host/systemManaged).
   $effect(() => {
     if (ircState.showSettings || ircState.showShortcuts) return;
     if (!ircState.activeBuffer.networkId && !ircState.activeBuffer.bufferName && ircState.networks.length > 0) {
-      const firstNet = ircState.networks[0];
-      if (firstNet) {
-        setActiveBuffer(firstNet.networkId, '_server');
-        updateRoute(firstNet.networkId, '_server');
-      }
+      const candidates = ircState.networks.filter(n => n.host && !isFiberServerDown(n as any));
+      const firstNet = candidates.length > 0 ? candidates[0] : null;
+      // Only auto-select once we have real sync data (host populated).
+      // The skeleton phase (host === '') would incorrectly pick the Fiber
+      // network even when it's down because isFiberServerDown can't detect
+      // it without host/systemManaged. Defer to selectLastActiveBuffer
+      // which runs after the full sync.
+      if (!firstNet) return;
+      setActiveBuffer(firstNet.networkId, '_server');
+      updateRoute(firstNet.networkId, '_server');
     }
+  });
+
+  // If the active buffer is the Fiber server while it's down, bounce to
+  // the next visible network. This handles the case where /irc/ initially
+  // landed on Fiber (e.g. before the sync had host/systemManaged to
+  // detect isDown, or via a stale lastVisited cookie).
+  $effect(() => {
+    const activeId = ircState.activeBuffer.networkId;
+    const activeBuf = ircState.activeBuffer.bufferName;
+    if (!activeId || !activeBuf) return;
+    const net = ircState.networks.find(n => n.networkId === activeId);
+    if (!net) return;
+    if (!isFiberServerDown(net as any)) return;
+    // Only auto-bounce for the Fiber server buffer itself; don't yank the
+    // user out of a Fiber channel they explicitly navigated to.
+    if (activeBuf !== '_server') return;
+    const next = ircState.networks.find(n => n.host && !isFiberServerDown(n as any));
+    if (!next) return;
+    // bounce
+    setActiveBuffer(next.networkId, '_server');
+    updateRoute(next.networkId, '_server');
   });
 
   // Apply global settings to the DOM
@@ -540,7 +571,7 @@ let showNetworkForm: boolean = $state(false);
   }
 
   function switchToBuffer(networkId: string, bufferName: string): void {
-    const isSameBuffer =
+      const isSameBuffer =
       ircState.activeBuffer.networkId === networkId &&
       ircState.activeBuffer.bufferName === normalizeChannelName(bufferName);
     setActiveBuffer(networkId, bufferName);
@@ -775,7 +806,11 @@ let showNetworkForm: boolean = $state(false);
     // or auto-select the first network's server buffer
     checkRoute();
     if (!ircState.activeBuffer.networkId && ircState.networks.length > 0) {
-      setActiveBuffer(ircState.networks[0].networkId, '_server');
+      // Same filter as the $effect above — don't pick the Fiber server
+      // when it's down, and don't pick skeletons (host === '').
+      const cand = ircState.networks.filter(n => n.host && !isFiberServerDown(n as any));
+      const pick = cand.length > 0 ? cand[0] : null;
+      if (pick) setActiveBuffer(pick.networkId, '_server');
     }
   }
 
@@ -1229,6 +1264,19 @@ let showNetworkForm: boolean = $state(false);
     }
     ircState.showSettings = false;
     ircState.showShortcuts = false;
+    // Handle bare /irc and /irc/ — redirect to first visible network, not Fiber when down
+    if (path === '/irc' || path === '/irc/') {
+      if (ircState.networks.length === 0) return;
+      const visible = ircState.networks.filter(n => (n as any).host && !isFiberServerDown(n as any));
+      const first = visible[0] ?? ircState.networks.find(n => (n as any).host && !isFiberServerDown(n as any));
+      if (first) {
+        switchToBuffer(first.networkId, '_server');
+      } else {
+        window.history.replaceState({}, '', '/');
+        document.cookie = 'lastVisited=; path=/; expires=Thu, 01 Jan 1971 00:00:00 GMT';
+      }
+      return;
+    }
     const m = path.match(/^\/irc\/([^\/]+)(?:\/(channel|messages)\/([^\/]+))?\/?$/);
     if (!m) return;
     const netName = decodeURIComponent(m[1]);
@@ -1262,6 +1310,7 @@ let showNetworkForm: boolean = $state(false);
   }
 
   function selectLastActiveBuffer(syncNetworks: Network[]): void {
+
     if (ircState.showSettings || ircState.showShortcuts) return;
     if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) return;
     for (const net of syncNetworks) {
@@ -1281,6 +1330,14 @@ let showNetworkForm: boolean = $state(false);
       requestSwitchBuffer(net.networkId, '_server');
       void loadBufferHistory(net.networkId, '_server');
       return;
+    }
+    // No connected network — fallback to first visible (non-Fiber-down)
+    // so /irc/ doesn't land on the Fiber server when it's down.
+    const fallback = syncNetworks.find(n => (n as any).host && !isFiberServerDown(n as any));
+    if (fallback) {
+      setActiveBuffer(fallback.networkId, '_server');
+      requestSwitchBuffer(fallback.networkId, '_server');
+      void loadBufferHistory(fallback.networkId, '_server');
     }
   }
 

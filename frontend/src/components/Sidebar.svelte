@@ -47,10 +47,7 @@
   );
 
   const visibleNetworks = $derived(
-    uniqueNetworks.filter(net => {
-      if (net.networkId === ircState.activeBuffer.networkId) return true;
-      return !isServerDown(net);
-    })
+    uniqueNetworks.filter(net => !isServerDown(net))
   );
   // Local mutable copy that svelte-dnd-action mutates during drag. We
   // apply the new order to ircState.networks + networkOrder + the server
