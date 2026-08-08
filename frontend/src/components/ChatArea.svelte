@@ -102,6 +102,20 @@
       });
 
       const older = result.messages;
+      // Smart check: only show Load more if older batch contains real chat
+      // (PRIVMSG/NOTICE). A channel like #emptytest153869 with 1 JOIN + 2 chats
+      // and 8 older JOINs in DB would otherwise keep Load more visible
+      // forever, even though there's no older chat to load. For just-joined
+      // channels with no history, this hides Load more without flashing Fetching.
+      const hasChat = older.some(m => (m.command === 'PRIVMSG' || m.command === 'NOTICE') && typeof m.text === 'string' && m.text.trim() !== '');
+      if (older.length > 0 && !hasChat) {
+        // No meaningful chat in older — treat as fully loaded, hide Load more
+        // Don't prepend bare JOINs; they'd just add noise to the timeline
+        if (isPhantom && result.earliest_ts > 0) {
+          phantomCursorTs = result.earliest_ts;
+        }
+        return false;
+      }
       if (older.length > 0) {
         const beforeLen = (ircState.messages[key] ?? []).length;
         prependMessages(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, older);
