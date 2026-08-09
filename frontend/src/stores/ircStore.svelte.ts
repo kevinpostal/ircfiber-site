@@ -664,7 +664,6 @@ export function prependMessage(networkId: string, bufferName: string, msg: IRCMe
 export function appendMessage(networkId: string, bufferName: string, msg: IRCMessage): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const list = ircState.messages[key] ?? [];
-
   if (msg.label && ircState.optimisticMessages.has(msg.label)) {
     ircState.optimisticMessages.delete(msg.label);
     const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
@@ -709,14 +708,15 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
       // Compare nicks case-insensitively: the IRC server's echo may use
       // a different casing (e.g. "Zod") than the local currentNick
       // ("zod"), causing the strict equality to miss the match.
-      if (optMsg.text === msg.text && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
+      // Also trim trailing \r that the IRC parser may leave on the echo
+      // (e.g. "https://youtu.be/..." vs "https://youtu.be/...\r").
+      const optText = optMsg.text.trim();
+      const echoText = msg.text.trim();
+      if (optText === echoText && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
         ircState.optimisticMessages.delete(optLabel);
         const idx = list.findIndex((m: IRCMessage) => m.label === optLabel);
         if (idx >= 0) {
           const optimistic = list[idx];
-          // Carry the optimistic's label onto the echo so MessageList's
-          // label-first key (l:<label>#idx) stays stable — otherwise the
-          // key flips from l:<label> to e:<eid> and Svelte recreates the
           // row, causing a visible flicker + double entrance animation.
           if (!msg.label) msg.label = optLabel;
           list[idx] = msg;
@@ -727,6 +727,39 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
           ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
           return;
         }
+      }
+    }
+    // Synthetic+echo race: when echo-message is absent the engine emits a
+    // synthetic with label=optLabel; when labeled-response is also absent
+    // the server echo arrives WITHOUT a label (selfEcho, no le). The
+    // synthetic already consumed the optimistic map, so the loop above
+    // finds nothing. Without this fallback the echo would be appended as
+    // a second copy. Search the live list for the synthetic we just
+    // placed (same nick+trimmed text, same command) and replace it.
+    // This is the #zod duplicate (user sees 2 rows for 1 send).
+    const echoTrim = msg.text.trim();
+    const echoNickLower = msg.nick.toLowerCase();
+    // Walk backwards — the synthetic is at the tail for this buffer.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const existing = list[i];
+      if (existing.text.trim() === echoTrim && existing.nick.toLowerCase() === echoNickLower && existing.command === msg.command) {
+        // Guard: only replace if the existing entry is recent and looks
+        // like a pending/optimistic row (has a label but no eid/msgid yet,
+        // or was created within 30s). Without this, a user who legitimately
+        // sends the same text twice would have the second send swallowed.
+        const isPendingLike = !!existing.label && !existing.eid && !existing.msgid;
+        const isRecent = !existing.t || (Date.now() - existing.t) < 30_000;
+        if (!isPendingLike && !isRecent) continue;
+        const optimistic = existing;
+        if (!msg.label && existing.label) msg.label = existing.label;
+        if (existing.label) ircState.optimisticMessages.delete(existing.label);
+        list[i] = msg;
+        ircState.messages[key] = list;
+        const replaced = ircState.processedMessages[key]
+          ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
+          : null;
+        ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
+        return;
       }
     }
   }
@@ -792,8 +825,6 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         continue;
       }
     }
-    // Edit-echo label match: same label as an existing message but the
-    // optimistic entry was consumed by the original echo. Replace in-place.
     if (msg.label) {
       const idx = list.findIndex((m: IRCMessage) => m.label === msg.label);
       if (idx >= 0) {
@@ -808,11 +839,13 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     // so we don't end up with both the optimistic and the echo.
     if (msg.selfEcho) {
       // Search optimistic messages for one with matching text content.
-      // Compare nicks case-insensitively: the IRC server's echo may use
-      // different casing than the local currentNick.
+      // Compare nicks case-insensitively and trim trailing \r that the
+      // IRC parser may leave on the echo (e.g. "https://..." vs "...\r").
       let foundOptLabel: string | null = null;
       for (const [optLabel, optMsg] of ircState.optimisticMessages) {
-        if (optMsg.text === msg.text && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
+        const optText = optMsg.text.trim();
+        const echoText = msg.text.trim();
+        if (optText === echoText && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
           foundOptLabel = optLabel;
           break;
         }
@@ -823,9 +856,32 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         if (idx >= 0) {
           if (!msg.label) msg.label = foundOptLabel;
           list[idx] = msg;
+          replacedEdit = true;
           continue;
         }
       }
+      // Synthetic+echo race fallback (same as appendMessage): synthetic
+      // already consumed optimisticMessages, so the loop above finds nothing
+      // and the unlabeled echo would be appended as a duplicate. Walk the
+      // live list tail for a pending-like entry with same trimmed text.
+      const echoTrim = msg.text.trim();
+      const echoNickLower = msg.nick.toLowerCase();
+      let replacedByListSearch = false;
+      for (let i = list.length - 1; i >= 0; i--) {
+        const existing = list[i];
+        if (existing.text.trim() === echoTrim && existing.nick.toLowerCase() === echoNickLower && existing.command === msg.command) {
+          const isPendingLike = !!existing.label && !existing.eid && !existing.msgid;
+          const isRecent = !existing.t || (Date.now() - existing.t) < 30_000;
+          if (!isPendingLike && !isRecent) continue;
+          if (!msg.label && existing.label) msg.label = existing.label;
+          if (existing.label) ircState.optimisticMessages.delete(existing.label);
+          list[i] = msg;
+          replacedEdit = true;
+          replacedByListSearch = true;
+          break;
+        }
+      }
+      if (replacedByListSearch) continue;
     }
     // Dedup against the existing list AND against earlier messages in
     // the same batch (eid/msgid could collide within a burst if the

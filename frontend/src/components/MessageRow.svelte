@@ -4,10 +4,11 @@
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, mentionNicksWithPattern } from '../lib/autolinker';
   import { getActiveBufferObj, getActiveNetwork, setBufferInputText } from '../stores/ircStore.svelte';
-  import { clearedAtMap } from '../stores/preferences.svelte';
+  import { clearedAtMap, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
-
+  import YoutubeEmbed from './YoutubeEmbed.svelte';
+  import { extractYoutubeIdsFromText } from '../lib/youtube';
   interface Props {
     msg: IRCMessage;
     isHighlight?: boolean;
@@ -247,7 +248,26 @@
     return null;
   });
 
-  // Returns the full <span class="content">…</span> HTML for the message
+  // Inline YouTube previews — IRCCloud parity. Gated by inlineVideos (global)
+  // and inlineImages (per-buffer, via ChannelContextMenu). IRCCloud's
+  // buildYoutubeFrame uses buffer.inlineImagesAllowed() as the gate, so we
+  // check both: if per-buffer images are disabled, don't embed; if global
+  // videos are disabled, don't embed.
+  const youtubeIds = $derived.by(() => {
+    if (!globalPrefs.inlineVideos) return [];
+    const net = getActiveNetwork();
+    const buf = getActiveBufferObj();
+    if (buf && net?.networkId) {
+      const bp = getBufferPrefs(net.networkId, buf.name);
+      if (bp.inlineImages === false) return [];
+    }
+    // Only embed for chat-like commands where text is user content
+    const isChat = cmd === 'PRIVMSG' || cmd === 'NOTICE' || msg.type === 'action' || /^\d{3}$/.test(cmd);
+    if (!isChat) return [];
+    const text = chatContent?.text ?? msg.text ?? '';
+    if (!text) return [];
+    return extractYoutubeIdsFromText(text);
+  });
   // body.  Building the string in JavaScript and using {@html} avoids the
   // whitespace text node that Svelte inserts between block tags when the
   // same span wraps a long {#if}/{:else if}/{:else} chain — that space
@@ -565,12 +585,15 @@
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
           --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />
+                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}</span>{/if}
         </span>
       {:else if chatContent}
-        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} /></span>
+        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}</span>{/if}</span>
       {:else}
         {@html getContentHTML()}
+      {/if}
+      {#if youtubeIds.length > 0 && !chatContent && !(isAction && nick)}
+        <span class="inlineEmbeds inlineEmbeds--outside">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}</span>
       {/if}
     </span>
     <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>

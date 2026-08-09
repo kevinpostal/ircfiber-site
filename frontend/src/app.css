@@ -141,6 +141,19 @@ body.ascii-compact .row.messageRow {
 .longMessageContent {
   display: inline;
 }
+/* IRCCloud-style inline YouTube previews — sits inside span.content but
+   creates its own block so the 416×234 iframe drops to the next line.
+   The outer span is display:block so it breaks out of the inline content
+   flow; the inner .directEmbedWrap in YoutubeEmbed.svelte handles the
+   actual sizing/close button. */
+.inlineEmbeds {
+  display: block;
+  margin-top: 6px;
+}
+.inlineEmbeds--outside {
+  display: block;
+  margin-top: 6px;
+}
 .messageTruncated {
   display: inline-block;
   margin-left: 6px;
