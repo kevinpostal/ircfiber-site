@@ -369,4 +369,41 @@ describe('BufferHeader', () => {
 		// Cleanup
 		clearTempUnavailable('net1', '#general');
 	});
+
+	it('banned buffer shows error chip + Rejoin + Archive (disconnected recovery state)', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#superbowl', isJoined: false, joinError: 'banned' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#superbowl';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		// join-error chip with the banned copy
+		await expect.element(page.getByText(/You are banned from this channel/i)).toBeInTheDocument();
+		// Retry (in chip) + Rejoin (in p.buttons) + Archive
+		await expect.element(page.getByRole('button', { name: /Retry/i })).toBeInTheDocument();
+		await expect.element(page.getByRole('button', { name: /Rejoin/i })).toBeInTheDocument();
+		await expect.element(page.getByRole('button', { name: /Archive/i })).toBeInTheDocument();
+	});
+
+	it('joined channel header shows member controls only — no Rejoin, no Archive', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#superbowl', isJoined: true, users: [createMember({})] }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#superbowl';
+		flushSync();
+
+		render(BufferHeader, {
+			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+		});
+
+		await expect.element(page.getByRole('button', { name: /Members list/i })).toBeInTheDocument();
+		await expect(page.getByRole('button', { name: /Rejoin/i })).not.toBeInTheDocument();
+		await expect(page.getByRole('button', { name: /Archive/i })).not.toBeInTheDocument();
+	});
 });

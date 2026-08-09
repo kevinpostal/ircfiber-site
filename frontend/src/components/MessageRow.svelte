@@ -328,11 +328,15 @@
     } else if (cmd === 'TOPIC') {
       inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' changed the topic to: ' + renderText(msg.text || '');
     } else if (cmd === 'MODE') {
-      const modeInfo = parseBanMode(msg.params || []);
-      if (modeInfo) {
+      const banInfos = expandBanModes(msg.params || []);
+      if (banInfos.length === 1) {
+        const modeInfo = banInfos[0];
         inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> `
           + `${escapeHtml(modeInfo.action)} <b>${escapeHtml(modeInfo.target)}</b> `
           + `(<span class="mono rawMode">${escapeHtml(modeInfo.diff)}${escapeHtml(modeInfo.mode)}</span>)`;
+      } else if (banInfos.length > 1) {
+        const parts = banInfos.map(b => `${escapeHtml(b.action)} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`);
+        inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> ${parts.join(', ')}`;
       } else if (msg.params && !msg.params[0]?.startsWith('#') && !msg.params[0]?.startsWith('&')) {
         inner += '<span class="prefix">&#x2699;</span> user mode: ' + escapeHtml(msg.params.slice(1).join(' ') || msg.text || '');
       } else {
@@ -364,18 +368,30 @@
     mode: string;
   }
 
-  function parseBanMode(params: string[]): BanModeInfo | null {
-    if (params.length < 3) return null;
-    const modeStr = params[1];
-    const m = /^[+\-]b$/.exec(modeStr);
-    if (!m) return null;
-    const diff = modeStr[0];
-    const mode = modeStr[1];
-    const target = params[2];
-    const action = diff === '+' ? 'banned' : 'un-banned';
-    return { action, target, diff, mode };
+  function expandBanModes(params: string[]): BanModeInfo[] {
+    if (!params || params.length < 2) return [];
+    const modeStr = params[1] || '';
+    const targets = params.slice(2);
+    let adding = true;
+    let targetIdx = 0;
+    const out: BanModeInfo[] = [];
+    for (const ch of modeStr) {
+      if (ch === '+') { adding = true; continue; }
+      if (ch === '-') { adding = false; continue; }
+      if (ch !== 'b') continue;
+      if (targetIdx < targets.length) {
+        const diff = adding ? '+' : '-';
+        const action = adding ? 'banned' : 'un-banned';
+        out.push({ action, target: targets[targetIdx++], diff, mode: 'b' });
+      }
+    }
+    return out;
   }
 
+  function parseBanMode(params: string[]): BanModeInfo | null {
+    const expanded = expandBanModes(params);
+    return expanded.length === 1 ? expanded[0] : null;
+  }
   function toggleExpand(): void {
     expanded = !expanded;
   }
@@ -447,18 +463,16 @@
         html = `<span class="prefix">&#x2691;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> is back`;
       }
     } else if (eCmd === 'MODE') {
-      const ep = evt.params || [];
-      if (ep.length >= 3 && /^[+\-]b$/.test(ep[1])) {
-        const diff = ep[1][0];
-        const mode = ep[1][1];
-        const target = ep[2];
-        const action = diff === '+' ? 'banned' : 'un-banned';
-        html = `<span class="buffer bufferLink user link">${escapeHtml(eNick)}</span> ${action} <b>${escapeHtml(target)}</b> (<span class="mono rawMode">${diff}${escapeHtml(mode)}</span>)`;
+      const bans = expandBanModes(evt.params || []);
+      if (bans.length === 1) {
+        const b = bans[0];
+        html = `<span class="buffer bufferLink user link">${escapeHtml(eNick)}</span> ${b.action} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`;
+      } else if (bans.length > 1) {
+        const parts = bans.map(b => `${b.action} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`);
+        html = `<span class="buffer bufferLink user link">${escapeHtml(eNick)}</span> ${parts.join(', ')}`;
       } else {
         html = `<span class="prefix">&#x2699;</span> Channel mode is <b>${escapeHtml(formatModeText(evt))}</b>`;
       }
-    } else {
-      html = escapeHtml(evt.text || '');
     }
 
     return { timeStr: eTimeStr, fullTitle: eFullTitle, html, typeClass: eTypeClass };

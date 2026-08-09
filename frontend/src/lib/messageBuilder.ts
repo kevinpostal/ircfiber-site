@@ -119,11 +119,30 @@ function formatModeText(evt: IRCMessage): string {
   return modeStr;
 }
 
+function expandBanModes(params: string[]): { action: string; target: string; diff: string; mode: string }[] {
+  if (!params || params.length < 2) return [];
+  const modeStr = params[1] || '';
+  const targets = params.slice(2);
+  let adding = true;
+  let targetIdx = 0;
+  const out: { action: string; target: string; diff: string; mode: string }[] = [];
+  for (const ch of modeStr) {
+    if (ch === '+') { adding = true; continue; }
+    if (ch === '-') { adding = false; continue; }
+    if (ch !== 'b') continue;
+    if (targetIdx < targets.length) {
+      const diff = adding ? '+' : '-';
+      const action = adding ? 'banned' : 'un-banned';
+      out.push({ action, target: targets[targetIdx++], diff, mode: 'b' });
+    }
+  }
+  return out;
+}
+
 function buildJoinPartGroup(events: IRCMessage[]): JoinPartGroupMessage {
   const nickStates = new Map<string, NickState>();
   const modeEvents: IRCMessage[] = [];
   const awayEvents: { nick: string; reason: string; isBack: boolean }[] = [];
-
   for (const evt of events) {
     if (evt.command === 'MODE') {
       modeEvents.push(evt);
@@ -220,9 +239,15 @@ function buildJoinPartGroup(events: IRCMessage[]): JoinPartGroupMessage {
   if (nippedOut.length) sentences.push(`<span class="prefix">&#x2194;</span> ${nippedOut.join(', ')} nipped out`);
   if (nickchanged.length) sentences.push(nickchanged.join(', '));
   for (const me of modeEvents) {
-    sentences.push(`<span class="prefix">&#x2699;</span> Channel mode: <b>${escapeHtml(formatModeText(me))}</b>`);
+    const bans = expandBanModes(me.params || []);
+    if (bans.length) {
+      for (const b of bans) {
+        sentences.push(`<span class="buffer bufferLink user link">${escapeHtml(me.nick || '')}</span> ${b.action} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`);
+      }
+    } else {
+      sentences.push(`<span class="prefix">&#x2699;</span> Channel mode: <b>${escapeHtml(formatModeText(me))}</b>`);
+    }
   }
-  // Group AWAY events: list all unique nicks going away / coming back
   if (awayEvents.length) {
     const awayNicksSet = new Set<string>();
     const backNicksSet = new Set<string>();

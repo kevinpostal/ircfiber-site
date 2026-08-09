@@ -450,7 +450,7 @@
           // Deduplicate against echo that arrived before optimistic (race).
           // The engine's synthetic/echo can beat the local optimistic push by a few ms;
           // without this guard we'd push a second row with the same label/text.
-          if (list.some(m => m.label === label || (m.text.trim() === optimistic.text.trim() && m.nick.toLowerCase() === optimistic.nick.toLowerCase() && m.command === optimistic.command && Math.abs((m.t||0) - optimistic.t) < 5000))) {
+          if (list.some(m => m.label === label || (((m.text ?? '').trim() === (optimistic.text ?? '').trim()) && (m.nick ?? '').toLowerCase() === (optimistic.nick ?? '').toLowerCase() && m.command === optimistic.command && Math.abs((m.t||0) - (optimistic.t||0)) < 5000))) {
             ircState.optimisticMessages.delete(label);
           } else {
             list.push(optimistic);
@@ -517,7 +517,7 @@
       ircState.optimisticMessages.set(label, optimistic);
       const key = `${networkId}:${target}`;
       const list = ircState.messages[key] ?? [];
-      if (list.some(m => m.label === label || (m.text.trim() === optimistic.text.trim() && m.nick.toLowerCase() === optimistic.nick.toLowerCase() && m.command === optimistic.command && Math.abs((m.t||0) - optimistic.t) < 5000))) {
+      if (list.some(m => m.label === label || (((m.text ?? '').trim() === (optimistic.text ?? '').trim()) && (m.nick ?? '').toLowerCase() === (optimistic.nick ?? '').toLowerCase() && m.command === optimistic.command && Math.abs((m.t||0) - (optimistic.t||0)) < 5000))) {
         ircState.optimisticMessages.delete(label);
       } else {
         list.push(optimistic);

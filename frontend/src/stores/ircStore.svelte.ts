@@ -703,15 +703,20 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
 
   // Self-echo fallback: server echo without label — match optimistic
   // by text content to avoid duplicate when labeled-response is absent.
-  if (msg.selfEcho) {
+  // Also triggers for unlabeled self messages even if `msg.selfEcho` is
+  // missing (e.g. server without echo-message cap tags, or synthetic race).
+  const netForSelf = ircState.networks.find(n => n.networkId === networkId);
+  const curNick = netForSelf?.currentNick || netForSelf?.nick || '';
+  const isSelf = !!msg.nick && !!curNick && msg.nick.toLowerCase() === curNick.toLowerCase() && msg.command === 'PRIVMSG';
+  if (msg.selfEcho || isSelf) {
     for (const [optLabel, optMsg] of ircState.optimisticMessages) {
       // Compare nicks case-insensitively: the IRC server's echo may use
       // a different casing (e.g. "Zod") than the local currentNick
       // ("zod"), causing the strict equality to miss the match.
       // Also trim trailing \r that the IRC parser may leave on the echo
       // (e.g. "https://youtu.be/..." vs "https://youtu.be/...\r").
-      const optText = optMsg.text.trim();
-      const echoText = msg.text.trim();
+      const optText = (optMsg.text ?? '').trim();
+      const echoText = (msg.text ?? '').trim();
       if (optText === echoText && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
         ircState.optimisticMessages.delete(optLabel);
         const idx = list.findIndex((m: IRCMessage) => m.label === optLabel);
@@ -737,12 +742,12 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     // a second copy. Search the live list for the synthetic we just
     // placed (same nick+trimmed text, same command) and replace it.
     // This is the #zod duplicate (user sees 2 rows for 1 send).
-    const echoTrim = msg.text.trim();
-    const echoNickLower = msg.nick.toLowerCase();
+    const echoTrim = (msg.text ?? '').trim();
+    const echoNickLower = (msg.nick ?? '').toLowerCase();
     // Walk backwards — the synthetic is at the tail for this buffer.
     for (let i = list.length - 1; i >= 0; i--) {
       const existing = list[i];
-      if (existing.text.trim() === echoTrim && existing.nick.toLowerCase() === echoNickLower && existing.command === msg.command) {
+      if ((existing.text ?? '').trim() === echoTrim && (existing.nick ?? '').toLowerCase() === echoNickLower && existing.command === msg.command) {
         // Guard: only replace if the existing entry is recent and looks
         // like a pending/optimistic row (has a label but no eid/msgid yet,
         // or was created within 30s). Without this, a user who legitimately
@@ -766,6 +771,24 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
 
   if (msg.eid && list.some((m: IRCMessage) => m.eid === msg.eid)) return;
   if (msg.msgid && list.some((m: IRCMessage) => m.msgid === msg.msgid)) return;
+
+  // Final self-echo dedup: even if `isSelf` was false (curNick not found), a
+  // pending optimistic anywhere in the tail with same text/nick is almost certainly
+  // the same send. This catches the #zod double where the echo arrives
+  // without `se` and curNick lookup fails due to timing, or where an
+  // intervening server notice pushes the optimistic off the tail.
+  for (let i = list.length - 1; i >= 0; i--) {
+    const cand = list[i];
+    if (cand.label && !cand.eid && !cand.msgid && (cand.text ?? '').trim() === (msg.text ?? '').trim() && (cand.nick ?? '').toLowerCase() === (msg.nick ?? '').toLowerCase() && cand.command === msg.command && Math.abs((cand.t || 0) - (msg.t || 0)) < 30000) {
+      if (!msg.label && cand.label) msg.label = cand.label;
+      if (cand.label) ircState.optimisticMessages.delete(cand.label);
+      list[i] = msg;
+      ircState.messages[key] = list;
+      const replaced = ircState.processedMessages[key] ? replaceInProcessedBuffer(ircState.processedMessages[key], cand, msg) : null;
+      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
+      return;
+    }
+  }
 
   list.push(msg);
   ircState.messages[key] = list;
@@ -837,14 +860,18 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     // is not, the server echo arrives without a label. The optimistic
     // message has a label but the echo doesn't — match by text content
     // so we don't end up with both the optimistic and the echo.
-    if (msg.selfEcho) {
+    // Also handle self messages even when `se` tag is missing.
+    const netForSelfBatch = ircState.networks.find(n => n.networkId === networkId);
+    const curNickBatch = netForSelfBatch?.currentNick || netForSelfBatch?.nick || '';
+    const isSelfBatch = !!msg.nick && !!curNickBatch && msg.nick.toLowerCase() === curNickBatch.toLowerCase() && msg.command === 'PRIVMSG';
+    if (msg.selfEcho || isSelfBatch) {
       // Search optimistic messages for one with matching text content.
       // Compare nicks case-insensitively and trim trailing \r that the
       // IRC parser may leave on the echo (e.g. "https://..." vs "...\r").
       let foundOptLabel: string | null = null;
       for (const [optLabel, optMsg] of ircState.optimisticMessages) {
-        const optText = optMsg.text.trim();
-        const echoText = msg.text.trim();
+        const optText = (optMsg.text ?? '').trim();
+        const echoText = (msg.text ?? '').trim();
         if (optText === echoText && optMsg.nick.toLowerCase() === msg.nick.toLowerCase() && optMsg.command === 'PRIVMSG') {
           foundOptLabel = optLabel;
           break;
@@ -864,12 +891,12 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       // already consumed optimisticMessages, so the loop above finds nothing
       // and the unlabeled echo would be appended as a duplicate. Walk the
       // live list tail for a pending-like entry with same trimmed text.
-      const echoTrim = msg.text.trim();
-      const echoNickLower = msg.nick.toLowerCase();
+      const echoTrim = (msg.text ?? '').trim();
+      const echoNickLower = (msg.nick ?? '').toLowerCase();
       let replacedByListSearch = false;
       for (let i = list.length - 1; i >= 0; i--) {
         const existing = list[i];
-        if (existing.text.trim() === echoTrim && existing.nick.toLowerCase() === echoNickLower && existing.command === msg.command) {
+        if ((existing.text ?? '').trim() === echoTrim && (existing.nick ?? '').toLowerCase() === echoNickLower && existing.command === msg.command) {
           const isPendingLike = !!existing.label && !existing.eid && !existing.msgid;
           const isRecent = !existing.t || (Date.now() - existing.t) < 30_000;
           if (!isPendingLike && !isRecent) continue;
@@ -895,6 +922,21 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       if (seenMsgids.has(msg.msgid)) continue;
       seenMsgids.add(msg.msgid);
     }
+    // Final fallback: pending optimistic with same text/nick anywhere in
+    // list, even when isSelf was false (curNick mismatch or no se tag).
+    let replacedByFallback = false;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const cand = list[i];
+      if (cand.label && !cand.eid && !cand.msgid && (cand.text ?? '').trim() === (msg.text ?? '').trim() && (cand.nick ?? '').toLowerCase() === (msg.nick ?? '').toLowerCase() && cand.command === msg.command && Math.abs((cand.t || 0) - (msg.t || 0)) < 30000) {
+        if (!msg.label && cand.label) msg.label = cand.label;
+        if (cand.label) ircState.optimisticMessages.delete(cand.label);
+        list[i] = msg;
+        replacedEdit = true;
+        replacedByFallback = true;
+        break;
+      }
+    }
+    if (replacedByFallback) continue;
     list.push(msg);
     pending.push(msg);
     newForProcessed.push(msg);
@@ -1178,6 +1220,46 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     else if (m.msgid) dedupKeys.add(m.msgid);
     else if (m.t) dedupKeys.add(`!${m.t}:${(m.text || '').slice(0, 80)}`);
   }
+
+  // Self-echo dedup for batch-tagged echoes: events inside an in-flight
+  // CHATHISTORY batch carry batch=chathistory and are routed here (the
+  // backfill path) instead of appendMessage. A batch fetched right after
+  // the user sends can contain the echo of that send (the engine tags it
+  // in connection.d activeBatchType == "chathistory"). The optimistic row
+  // is already in `existing` — replace it in place instead of appending a
+  // second copy. Matches by label (labeled-response echoes the label back)
+  // or by text+nick+command within 30s against a pending optimistic.
+  for (const m of msgs) {
+    if (m.eid == null && !m.msgid) continue; // only echo-shaped entries replace
+    let matchIdx = -1;
+    if (m.label) {
+      matchIdx = existing.findIndex(e => e.label === m.label);
+    } else {
+      const mText = (m.text ?? '').trim();
+      const mNick = (m.nick ?? '').toLowerCase();
+      for (let i = existing.length - 1; i >= 0; i--) {
+        const e = existing[i];
+        if (e.label && !e.eid && !e.msgid &&
+            (e.text ?? '').trim() === mText &&
+            (e.nick ?? '').toLowerCase() === mNick &&
+            e.command === m.command &&
+            Math.abs((e.t ?? 0) - (m.t ?? 0)) < 30000) {
+          matchIdx = i;
+          break;
+        }
+      }
+    }
+    if (matchIdx >= 0) {
+      const pending = existing[matchIdx];
+      if (!m.label && pending.label) m.label = pending.label;
+      if (pending.label) ircState.optimisticMessages.delete(pending.label);
+      existing[matchIdx] = m;
+      // Claim the echo's identity so the dedup loop below skips it.
+      if (m.eid != null) eidSet.add(m.eid);
+      else if (m.msgid) dedupKeys.add(m.msgid);
+    }
+  }
+
   const filtered: IRCMessage[] = [];
   for (const m of msgs) {
     if (m.eid != null) {
@@ -2528,7 +2610,8 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     cmd === '471' || cmd === '473' || cmd === '474' ||
     cmd === '475' || cmd === '477' || cmd === '405' ||
     cmd === '437' || cmd === '442' || cmd === '443' ||
-    cmd === '476' || cmd === '484' || cmd === '403'
+    cmd === '476' || cmd === '484' || cmd === '403' ||
+    cmd === '470'
   ) {
     // JOIN failure numerics — clear the in-flight flag, surface the error
     // in the BufferHeader, and keep the buffer in the sidebar so the user
@@ -2547,6 +2630,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       '476': 'unknown',        // ERR_BADCHANMASK (RFC 2812 §5)
       '484': 'unknown',        // ERR_RESTRICTED (RFC 2812 §5)
       '403': 'unknown',        // ERR_NOSUCHCHANNEL
+      '470': 'unknown',        // ERR_LINKCHANNEL — forwarding to another channel (e.g. #superbowl → #blackhole)
     };
     if (buf) {
       // 443 (ERR_USERONCHANNEL) means the user IS already in the channel —
@@ -2561,6 +2645,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       } else {
         buf.joinError = codeMap[cmd] ?? 'unknown';
         buf.joinInFlight = false;
+        buf.isJoined = false;
         buf.pendingIsJoined = undefined;
         buf.pendingConfirmations = undefined;
       }
