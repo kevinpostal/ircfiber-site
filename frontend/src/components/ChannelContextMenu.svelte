@@ -1,8 +1,9 @@
 <script lang="ts">
   import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt, unreadMap, highlightMap } from '../stores/preferences.svelte';
   import { pinChannel, unpinChannel, updateBufferPrefs, clearBacklog as apiClearBacklog } from '../stores/api';
+  import { normalizeChannelName } from '../lib/utils';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { updateRoute } from '../lib/routing';
@@ -252,6 +253,14 @@
       } else {
         // Persist all other toggles per-buffer so they survive a refresh
         setBufferPref(networkId, buf.name, key, toggles[key]);
+        if ((key === 'mute' && toggles[key] === true) || (key === 'showUnread' && toggles[key] === false)) {
+          const mapKey = `${networkId}:${normalizeChannelName(buf.name)}`;
+          delete unreadMap[mapKey];
+          delete highlightMap[mapKey];
+          buf.unreadCount = 0;
+          buf.highlight = false;
+          (buf as unknown as Record<string, unknown>).highlightCount = 0;
+        }
         // Sync to server for cross-device realtime propagation
         updateBufferPrefs(networkId, buf.name, { [key]: toggles[key] })
           .catch((err) => console.error('Failed to sync buffer prefs:', err));

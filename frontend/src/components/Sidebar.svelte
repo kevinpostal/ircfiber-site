@@ -1,13 +1,20 @@
 <script lang="ts">
   import { ircState } from '../stores/ircStore.svelte';
   import { isFiberServerDown as isServerDown } from '../lib/fiberServer';
-  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem, getBufferPrefs } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
   import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder } from '../stores/api';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
   import type { Buffer, Network } from '../types';
   import AccountMenu from './AccountMenu.svelte';
   import StaleIndicator from './StaleIndicator.svelte';
+
+  function canShowUnread(networkId: string, bufferName: string): boolean {
+    const p = getBufferPrefs(networkId, bufferName);
+    if (p.mute) return false;
+    if (p.showUnread === false) return false;
+    return true;
+  }
 
   interface Props {
     onSwitchBuffer: (networkId: string, bufferName: string) => void;
@@ -153,15 +160,15 @@
           <li role="presentation"
               class="buffer channel buffer-item"
               class:active={isActive}
-              class:unread={p.buffer.unreadCount > 0}
-              class:highlight={p.buffer.highlight}
+              class:unread={p.buffer.unreadCount > 0 && canShowUnread(p.networkId, p.buffer.name)}
+              class:highlight={p.buffer.highlight && canShowUnread(p.networkId, p.buffer.name)}
               class:buffer-item--joining={p.buffer.joinInFlight}
               onclick={() => onSwitchBuffer(p.networkId, p.buffer.name)}>
             <span class="buffer" role="tab" tabindex="0">
               <span class="label buffer-name">{(p.buffer.type === 'query' ? '' : '#') + stripHash(p.buffer.name)}</span>
-              {#if p.buffer.unreadCount > 0}
+              {#if p.buffer.unreadCount > 0 && canShowUnread(p.networkId, p.buffer.name)}
                 <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${p.networkId}:${normalizeChannelName(p.buffer.name)}`)}>{p.buffer.unreadCount}</span>
-              {:else if (p.buffer.highlightCount ?? 0) > 0}
+              {:else if (p.buffer.highlightCount ?? 0) > 0 && canShowUnread(p.networkId, p.buffer.name)}
                 <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${p.networkId}:${normalizeChannelName(p.buffer.name)}`)}>{p.buffer.highlightCount}</span>
               {/if}
             </span>
@@ -252,8 +259,8 @@
               {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
               <li class="buffer channel buffer-item"
                   class:active={isActive}
-                  class:unread={buf.unreadCount > 0}
-                  class:highlight={buf.highlight}
+                  class:unread={buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
+                  class:highlight={buf.highlight && canShowUnread(net.networkId, buf.name)}
                   class:secret={buf.modeFlags?.secret}
                   class:private={buf.modeFlags?.private}
                   class:moderated={buf.modeFlags?.moderated}
@@ -264,9 +271,9 @@
                   role="presentation">
                 <span class="buffer" role="tab" tabindex="0">
                   <span class="label buffer-name">{'#' + stripHash(buf.name)}</span>
-                  {#if buf.unreadCount > 0}
+                  {#if buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
                     <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
-                  {:else if (buf.highlightCount ?? 0) > 0}
+                  {:else if (buf.highlightCount ?? 0) > 0 && canShowUnread(net.networkId, buf.name)}
                     <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.highlightCount}</span>
                   {/if}
                 </span>
@@ -327,15 +334,15 @@
                   {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
                   <li class="buffer conversation buffer-item"
                       class:active={isActive}
-                      class:unread={buf.unreadCount > 0}
-                      class:highlight={buf.highlight}
+                      class:unread={buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
+                      class:highlight={buf.highlight && canShowUnread(net.networkId, buf.name)}
                       onclick={() => onSwitchBuffer(net.networkId, buf.name)}
                       role="presentation">
                     <span class="buffer" role="tab" tabindex="0">
                       <span class="label buffer-name">{buf.name}</span>
-                      {#if buf.unreadCount > 0}
+                      {#if buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
                         <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
-                      {:else if (buf.highlightCount ?? 0) > 0}
+                      {:else if (buf.highlightCount ?? 0) > 0 && canShowUnread(net.networkId, buf.name)}
                         <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.highlightCount}</span>
                       {/if}
                     </span>

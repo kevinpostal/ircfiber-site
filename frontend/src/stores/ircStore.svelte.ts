@@ -1,7 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
-import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap } from './preferences.svelte';
+import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
@@ -849,10 +849,13 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
     if (isChatMessage) {
       hasChat = true;
-      const normBuf = normalizeChannelName(bufferName);
-      const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-      if (!isActive || ircState.focusLost) addedUnread++;
-      if (msg.highlight) hasHighlight = true;
+      const track = shouldTrackUnread(networkId, bufferName);
+      if (track) {
+        const normBuf = normalizeChannelName(bufferName);
+        const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
+        if (!isActive || ircState.focusLost) addedUnread++;
+        if (msg.highlight) hasHighlight = true;
+      }
     }
   }
 
@@ -887,7 +890,10 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   // Batch the unread-count updates: write unreadMap once and buf.unreadCount
   // once instead of per-message. This is the single biggest win for
   // perceived speed when 50+ messages arrive at once.
-  if (addedUnread > 0 || hasHighlight) {
+  // Respect per-buffer mute / showUnread: muted buffers never accumulate
+  // unread or highlight counts, matching the expectation that "mute all
+  // notifications" on a channel hides the sidebar badge.
+  if ((addedUnread > 0 || hasHighlight) && shouldTrackUnread(networkId, bufferName)) {
     const net = ircState.networks.find(n => n.networkId === networkId);
     const buf = net?.buffers.find(b => b.name === normalizeChannelName(bufferName));
     if (addedUnread > 0) {
@@ -950,7 +956,15 @@ export function recordHighlight(networkId: string, bufferName: string, nick: str
   recentHighlightersCache.set(key, filtered.slice(0, 10));
 }
 
+function shouldTrackUnread(networkId: string, bufferName: string): boolean {
+  const prefs = getBufferPrefs(networkId, bufferName);
+  if (prefs.mute) return false;
+  if (prefs.showUnread === false) return false;
+  return true;
+}
+
 export function incrementUnread(networkId: string, bufferName: string, msg: IRCMessage): void {
+  if (!shouldTrackUnread(networkId, bufferName)) return;
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net || bufferName === '_server') return;
