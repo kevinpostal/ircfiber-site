@@ -65,24 +65,24 @@
     lastOldestKey = oldestKey;
   });
 
-  // Silent probe for just-joined / small buffers: determine if "Load more"
-  // should show without ever flashing "Fetching…". For a fresh channel
-  // like #emptytest… with 1-3 messages and no older history, viewport-fill
-  // would otherwise set loading=true → flash Fetching for 200ms+2s.
-  // Instead we do one silent fetch (no loading UI) the first time a
-  // small buffer is seen. Guarded for tests (MODE===test) so MessageList
-  // unit tests with 50/600 messages don't get an unexpected fetch.
+  // Silent probe: determine if "Load more" should show without ever
+  // flashing "Fetching…". Runs once per buffer for EVERY size — a large
+  // buffer whose history is exhausted (e.g. a channel whose scrollback
+  // is dominated by WHO/NAMES noise the reader now filters out) would
+  // otherwise show a lying "Load more backlog…" button that confirms
+  // empty only after two clicks. The probe does one silent fetch (no
+  // loading UI) and sets noMoreHistory from the result. Guarded for
+  // tests (MODE===test) so MessageList unit tests with 50/600 messages
+  // don't get an unexpected fetch.
   let probedKey = '';
   let probePending = '';
   $effect(() => {
     if (import.meta.env.MODE === 'test') return;
     const key = bufferKey;
     const count = messageCount;
-    // Only probe once per buffer, for small buffers where the answer
-    // matters (empty or just-joined). Large buffers (≥50) already have
-    // correct speculative visibility and will lazy-probe via scroll.
+    // Only probe once per buffer.
     if (key === probedKey || key === probePending) return;
-    if (count === 0 || count >= 50) return;
+    if (count === 0) return;
     if (!onLoadMore || clearedAt || loading) return;
     const lst = ircState.messages[key] ?? [];
     if (lst.length === 0) return;
@@ -189,13 +189,12 @@ $effect(() => {
     const list = ircState.messages[bufferKey] ?? [];
     const last = list[list.length - 1] as any;
     if (last?.label && !last.eid) return;
-    // For small buffers (just-joined, 2 messages), wait for the silent probe
-    // to determine if older history actually exists. Otherwise viewport-fill
-    // would flash "Fetching…" for a channel with no
-    // backlog (e.g. #emptytest153869 with 2 msgs, no history).
+    // Wait for the silent probe to determine whether older history exists
+    // before auto-filling — otherwise viewport-fill would fetch in parallel
+    // with the probe and flash "Fetching…" for a channel with no backlog.
     // In test mode the probe is disabled (MODE==='test' early-return), so
     // don't block fill — the unit test for auto-fill expects immediate fetch.
-    if (import.meta.env.MODE !== 'test' && count < 50 && probedKey !== bufferKey) return;
+    if (import.meta.env.MODE !== 'test' && probedKey !== bufferKey) return;
     requestAnimationFrame(() => {
       if (!scrollEl || loading || noMoreHistory || clearedAt) return;
       if (scrollEl.scrollHeight > scrollEl.clientHeight + 1) return; // already scrollable

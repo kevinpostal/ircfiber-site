@@ -795,9 +795,27 @@ final class RESTAPI {
         if (messages.length < count) {
             try {
                 auto mongoRepoAny = new MessageRepository();
-                Json[] olderAny = mongoRepoAny.getBeforeTimestamp("",
-                    networkId.toString(), channel, 0,
-                    cast(int)(count - messages.length));
+                Json[] olderAny;
+                // MUST respect the pagination cursor — previously this
+                // always fetched with beforeTs=0, which returned the whole
+                // channel on EVERY "load more" call. That made the frontend
+                // believe more history existed forever (the cursor never
+                // advanced), so a fully-loaded buffer like #welcome kept
+                // showing a lying "Load more backlog…" button that refetched
+                // the same messages.
+                if (beforeEid > 0) {
+                    olderAny = mongoRepoAny.getBeforeEid("",
+                        networkId.toString(), channel, beforeEid, before,
+                        cast(int)(count - messages.length));
+                } else if (beforeMsgid.length > 0) {
+                    olderAny = mongoRepoAny.getBeforeMsgid("",
+                        networkId.toString(), channel, beforeMsgid, before,
+                        cast(int)(count - messages.length));
+                } else if (before > 0) {
+                    olderAny = mongoRepoAny.getBeforeTimestamp("",
+                        networkId.toString(), channel, before,
+                        cast(int)(count - messages.length));
+                }
                 if (olderAny.length > 0) {
                     auto dedupedAny = RESTAPI.dedupMessages(messages, olderAny);
                     if (dedupedAny.length > 0) messages = dedupedAny ~ messages;
@@ -822,6 +840,29 @@ final class RESTAPI {
         // Wrap the response in an envelope so we can include metadata
         // alongside the messages. The frontend reads `messages` for the
         // list and `backlog_size` / `earliest_msgid` for pagination.
+        //
+        // Strip scrollback noise (WHO 315 / NAMES 353 / TAGMSG / …) that
+        // the chat UI cannot render. The Redis reader already skips it;
+        // this second pass covers the MongoDB fall-through so a
+        // noise-heavy channel's window fills with the real conversation
+        // instead of a wall of invisible "End of WHO list" rows that
+        // push PRIVMSGs out of view. The _server log is exempt — its
+        // timeline renders numerics/MOTD.
+        if (channel != "_server") {
+            Json[] clean;
+            clean.reserve(messages.length);
+            foreach (m; messages) {
+                string cmd = "";
+                if ("c" in m) {
+                    try { cmd = m["c"].get!string; } catch (Exception) {}
+                } else if ("command" in m) {
+                    try { cmd = m["command"].get!string; } catch (Exception) {}
+                }
+                if (!BufferManager.isScrollbackNoiseCommand(cmd))
+                    clean ~= m;
+            }
+            messages = clean;
+        }
         Json[] msgsArr;
         foreach (m; messages) msgsArr ~= m;
 
