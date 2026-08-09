@@ -665,9 +665,11 @@ let showNetworkForm: boolean = $state(false);
       }
       // Show cached messages immediately while we fetch fresh data
       let cached: IRCMessage[] | null = null;
+      let hadCached = false;
       cached = loadCachedMessages(networkId, bufferName);
-      if (cached && cached.length > 0) {
+      if (cached && cached.length > 0 && existing.length === 0) {
         setMessages(networkId, bufferName, cached);
+        hadCached = true;
       }
       // Cold start: fetch from REST.  This shouldn't normally happen since
       // sync includes scrollback, but covers the case where the user opens
@@ -688,8 +690,35 @@ let showNetworkForm: boolean = $state(false);
         // live events (arrived via batchAppendMessages while the REST call
         // was in flight) are not overwritten.
         prependMessages(networkId, bufferName, msgs);
-      } else if (existing.length === 0 || ircState.messages[key] === cached) {
-        setMessages(networkId, bufferName, msgs);
+      } else if (hadCached) {
+        // We already showed cached history (instant paint). REST is the
+        // source of truth for older backlog, but it must NOT overwrite the
+        // tail — the cached array may contain optimistic messages (label
+        // without eid) that haven't been persisted to Redis yet. Replacing
+        // via setMessages would flicker and make the user's recent sends
+        // disappear until the echo arrives. Merge via prependMessages
+        // which dedups by eid/msgid and preserves the tail.
+        if (msgs.length > 0) {
+          prependMessages(networkId, bufferName, msgs);
+        }
+        // If REST is empty (no history), keep the cached messages as-is —
+        // don't clear the buffer.
+      } else if (existing.length === 0) {
+        const current = ircState.messages[key] ?? [];
+        if (current.length === 0) {
+          // No cached and no sync arrived in the meantime — use REST
+          // only if it actually has messages; an empty REST must not
+          // clear a buffer that just received live events.
+          if (msgs.length > 0) {
+            setMessages(networkId, bufferName, msgs);
+          }
+        } else {
+          // A sync or live batch arrived while REST was in flight.
+          // Merge older REST history without clobbering the new tail.
+          if (msgs.length > 0) {
+            prependMessages(networkId, bufferName, msgs);
+          }
+        }
       }
       backlogReady = true;  // IRCCloud backlog_complete equivalent
       performance.mark('backlog-ready');

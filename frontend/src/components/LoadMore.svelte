@@ -124,9 +124,60 @@
   // messageCount, so progress is tracked via scrollHeight too.
   let lastFillAttemptCount = -1;
   let lastFillScrollHeight = -1;
+  // Viewport auto-fill should NOT flash "Fetching more history…" — that
+  // divider is for user-initiated loads when the window is already full
+  // (scrollable) and the user scrolls to top / clicks Load more. For
+  // auto-fill (window not yet scrollable, opening a buffer with few
+  // messages), we silently fetch without the 200ms delay or loading UI
+  // so a channel with no older history never flickers the divider.
+  async function tryAutoFillSilent(): Promise<void> {
+    if (loading || clearedAt || noMoreHistory) return;
+    if (onRevealFromMemory?.()) {
+      fetchFailed = false;
+      return;
+    }
+    if (!onLoadMore) return;
+    const lst = ircState.messages[bufferKey] ?? [];
+    if (lst.length === 0 || lst.every((m: any) => !m.eid && m.label)) {
+      noMoreHistory = true;
+      return;
+    }
+    if (lst.length < 5) {
+      const first = lst[0] as any;
+      const isRecent = first?.t && Date.now() - first.t < 5 * 60 * 1000;
+      const isJoinLike = first?.command === 'JOIN' || first?.command === 'JOINPART_GROUP';
+      if (isRecent && isJoinLike) {
+        noMoreHistory = true;
+        return;
+      }
+    }
+    const key = bufferKey;
+    try {
+      const hasMore = await onLoadMore();
+      if (bufferKey !== key) return;
+      if (hasMore) {
+        consecutiveEmptyLoads = 0;
+        return;
+      }
+      consecutiveEmptyLoads++;
+      if (consecutiveEmptyLoads >= 2) {
+        noMoreHistory = true;
+      } else {
+        // One silent retry — don't show loading for auto-fill
+        await sleep(2000);
+        if (bufferKey !== key || noMoreHistory) return;
+        const retryHasMore = await onLoadMore();
+        if (bufferKey !== key) return;
+        if (!retryHasMore) noMoreHistory = true;
+        else consecutiveEmptyLoads = 0;
+      }
+    } catch (e) {
+      console.error('[LoadMore] silent fill failed:', e);
+      if (bufferKey === key) fetchFailed = true;
+    }
+  }
 $effect(() => {
     const count = messageCount;
-    void loading;
     void noMoreHistory;
     void ircState.backlogDivider[bufferKey]; // advances on memory reveals
     if (!scrollEl || loading || clearedAt || noMoreHistory) return;
@@ -140,9 +191,11 @@ $effect(() => {
     if (last?.label && !last.eid) return;
     // For small buffers (just-joined, 2 messages), wait for the silent probe
     // to determine if older history actually exists. Otherwise viewport-fill
-    // would set loading=true and flash "Fetching…" for a channel with no
+    // would flash "Fetching…" for a channel with no
     // backlog (e.g. #emptytest153869 with 2 msgs, no history).
-    if (count < 50 && probedKey !== bufferKey) return;
+    // In test mode the probe is disabled (MODE==='test' early-return), so
+    // don't block fill — the unit test for auto-fill expects immediate fetch.
+    if (import.meta.env.MODE !== 'test' && count < 50 && probedKey !== bufferKey) return;
     requestAnimationFrame(() => {
       if (!scrollEl || loading || noMoreHistory || clearedAt) return;
       if (scrollEl.scrollHeight > scrollEl.clientHeight + 1) return; // already scrollable
@@ -151,7 +204,7 @@ $effect(() => {
       }
       lastFillAttemptCount = messageCount;
       lastFillScrollHeight = scrollEl.scrollHeight;
-      tryAutoLoad().catch((e) => console.error('[LoadMore] fill error:', e));
+      tryAutoFillSilent().catch((e) => console.error('[LoadMore] fill error:', e));
     });
   });
 

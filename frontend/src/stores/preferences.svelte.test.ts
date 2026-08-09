@@ -44,8 +44,7 @@ function resetPreferenceState(): void {
 	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
 	networkOrder.length = 0;
-	// Reset globalPrefs to DEFAULT_PREFS so tests don't leak flag state
-	// between cases. Deep assignment preserves Svelte 5 proxy reactivity.
+	setServerlogCollapseEvents(true);
 	Object.assign(globalPrefs, DEFAULT_PREFS);
 }
 
@@ -60,7 +59,6 @@ beforeEach(() => {
 	// cross-tab sync tests don't see stale values from previous runs.
 	window.localStorage.clear();
 });
-
 describe('getClearedAt', () => {
 	it('returns null when not set', () => {
 		expect(getClearedAt('net1', '#chan')).toBeNull();
