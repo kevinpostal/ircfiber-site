@@ -41,14 +41,14 @@
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
   import { isFiberServerDown } from './lib/fiberServer';
-  import { enqueueMessage, setFlushFn } from './lib/messageBatcher';
-import WelcomePage from './components/WelcomePage.svelte';
-import SettingsPage from './components/SettingsPage.svelte';
-import ShortcutsPage from './components/ShortcutsPage.svelte';
-import ChannelSwitcher from './components/ChannelSwitcher.svelte';
-import LoadingSkeleton from './components/LoadingSkeleton.svelte';
-import LoginPage from './components/LoginPage.svelte';
-import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member, ConnectionState } from './types';
+  import { enqueueMessage, setFlushFn, setBackfillFlushFn } from './lib/messageBatcher';
+  import WelcomePage from './components/WelcomePage.svelte';
+  import SettingsPage from './components/SettingsPage.svelte';
+  import ShortcutsPage from './components/ShortcutsPage.svelte';
+  import ChannelSwitcher from './components/ChannelSwitcher.svelte';
+  import LoadingSkeleton from './components/LoadingSkeleton.svelte';
+  import LoginPage from './components/LoginPage.svelte';
+  import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member, ConnectionState } from './types';
 
 // IRCCloud-style: cache network IDs + names so we can eager-load message
 // history from the URL before the WebSocket opens.  Stored as an array of
@@ -414,7 +414,9 @@ let showNetworkForm: boolean = $state(false);
     setFlushFn((networkId, bufferName, msgs) => {
       batchAppendMessages(networkId, bufferName, msgs);
     });
-
+    setBackfillFlushFn((networkId, bufferName, msgs) => {
+      prependMessages(networkId, bufferName, msgs);
+    });
     startOnlineChecker();
     window.addEventListener('popstate', checkRoute);
     document.addEventListener('visibilitychange', handleVisibility);

@@ -444,17 +444,28 @@ export function processIrcEvent(
 
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {
-    // Server-log progress entries (NOTICE-shaped, no nick, in _server)
-    // bypass the message batcher so each phase appears the instant the
-    // engine emits it. Chat messages still flow through the batcher so
-    // paste bursts and MOTD dumps coalesce into one reactive update.
-    // `append` is the batched path (enqueueMessage); `defaultAppend` is
-    // the immediate path (appendMessage / prependMessage directly).
-    const appendFn: AppendFn = shouldBypassBatcher(msg, channel)
-      ? defaultAppend
-      : append;
+    if (isBackfill) {
+      // CHATHISTORY replay: batch via the backfill queue so it's prepended
+      // at the top without incrementing unread or firing notifications.
+      // The 0ms batcher coalesces the 50-100 replay burst into one
+      // prependMessages() call, matching sync/REST history paths which
+      // never count as unread. Previously this went through the live
+      // batcher (enqueueMessage → batchAppendMessages) which always
+      // treated every PRIVMSG as new and bumped the sidebar badge.
+      enqueueMessage(networkId, channel, msg, true);
+    } else {
+      // Server-log progress entries (NOTICE-shaped, no nick, in _server)
+      // bypass the message batcher so each phase appears the instant the
+      // engine emits it. Chat messages still flow through the batcher so
+      // paste bursts and MOTD dumps coalesce into one reactive update.
+      // `append` is the batched path (enqueueMessage); `defaultAppend` is
+      // the immediate path (appendMessage / prependMessage directly).
+      const appendFn: AppendFn = shouldBypassBatcher(msg, channel)
+        ? defaultAppend
+        : append;
 
-    appendFn(networkId, channel, msg, isBackfill);
+      appendFn(networkId, channel, msg, false);
+    }
 
     const isActiveBuffer = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === channel;
     const documentHidden = typeof document !== 'undefined' && document.hidden;

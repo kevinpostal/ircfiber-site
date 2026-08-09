@@ -35,12 +35,15 @@ import type { IRCMessage } from '../types';
 
 type FlushFn = (networkId: string, bufferName: string, msgs: IRCMessage[]) => void;
 let flushFn: FlushFn | null = null;
+let backfillFlushFn: FlushFn | null = null;
 
 // Per-buffer queue: key = `${networkId}:${bufferName}`
 const queue = new Map<string, IRCMessage[]>();
+const backfillQueue = new Map<string, IRCMessage[]>();
 
 // Tracked separately from queue iteration so the cap check is O(1).
 let totalQueued = 0;
+let totalBackfillQueued = 0;
 
 const MAX_BUFFER_SIZE = 200;        // force-flush threshold
 
@@ -48,7 +51,29 @@ export function setFlushFn(fn: FlushFn): void {
   flushFn = fn;
 }
 
-export function enqueueMessage(networkId: string, bufferName: string, msg: IRCMessage): void {
+export function setBackfillFlushFn(fn: FlushFn): void {
+  backfillFlushFn = fn;
+}
+
+export function enqueueMessage(networkId: string, bufferName: string, msg: IRCMessage, isBackfill = false): void {
+  if (isBackfill) {
+    const key = `${networkId}:${bufferName}`;
+    let list = backfillQueue.get(key);
+    if (!list) {
+      list = [];
+      backfillQueue.set(key, list);
+    }
+    list.push(msg);
+    totalBackfillQueued++;
+    if (totalBackfillQueued >= MAX_BUFFER_SIZE) {
+      flushAll();
+      return;
+    }
+    if (flushTimeout === null) {
+      flushTimeout = setTimeout(flushAll, 0);
+    }
+    return;
+  }
   const key = `${networkId}:${bufferName}`;
   let list = queue.get(key);
   if (!list) {
@@ -81,24 +106,45 @@ function flushAll(): void {
     clearTimeout(flushTimeout);
     flushTimeout = null;
   }
-  if (!flushFn) {
+
+  // Flush live queue
+  if (flushFn && queue.size > 0) {
+    const snapshot = new Map(queue);
     queue.clear();
     totalQueued = 0;
-    return;
+    for (const [key, msgs] of snapshot) {
+      if (msgs.length > 0) {
+        const idx = key.indexOf(':');
+        const networkId = key.slice(0, idx);
+        const bufferName = key.slice(idx + 1);
+        flushFn(networkId, bufferName, msgs);
+      }
+    }
+  } else if (queue.size > 0) {
+    queue.clear();
+    totalQueued = 0;
   }
 
-  // Snapshot the queue and clear it before calling flushFn,
-  // because flushFn might synchronously enqueue new messages.
-  const snapshot = new Map(queue);
-  queue.clear();
-  totalQueued = 0;
-
-  for (const [key, msgs] of snapshot) {
-    if (msgs.length > 0) {
-      const idx = key.indexOf(':');
-      const networkId = key.slice(0, idx);
-      const bufferName = key.slice(idx + 1);
-      flushFn(networkId, bufferName, msgs);
+  // Flush backfill queue via separate flush fn (prepend path, no unread)
+  if (backfillFlushFn && backfillQueue.size > 0) {
+    const snapshot = new Map(backfillQueue);
+    backfillQueue.clear();
+    totalBackfillQueued = 0;
+    for (const [key, msgs] of snapshot) {
+      if (msgs.length > 0) {
+        const idx = key.indexOf(':');
+        const networkId = key.slice(0, idx);
+        const bufferName = key.slice(idx + 1);
+        backfillFlushFn(networkId, bufferName, msgs);
+      }
     }
+  } else if (backfillQueue.size > 0) {
+    backfillQueue.clear();
+    totalBackfillQueued = 0;
+  }
+
+  // If flushFn was not set, we still cleared the queues to avoid leak.
+  if (!flushFn && !backfillFlushFn) {
+    // already cleared above, nothing more
   }
 }

@@ -38,6 +38,8 @@
     { name: 'LibertaCasa', host: 'irc.libertacasa.com', port: 6697, tls: 'required' },
     { name: 'TwiT', host: 'irc.twit.tv', port: 6697, tls: 'required' },
     { name: 'Snoonet', host: 'irc.snoonet.org', port: 6697, tls: 'required' },
+    { name: 'BLCKND', host: 'irc.blcknd.network', port: 6697, tls: 'required' },
+    { name: 'SUPERNETS', host: 'irc.supernets.org', port: 6697, tls: 'required' },
   ];
 
   let host = $state('');
