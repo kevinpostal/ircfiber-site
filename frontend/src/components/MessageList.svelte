@@ -62,12 +62,13 @@
   // Server log view needs raw (un-grouped) messages — preprocessing
   // merges consecutive 372/375 MOTD lines into MOTD_GROUP blocks that
   // our classifier doesn't understand, burying them in "Raw IRC traffic".
-  const rawMessages = $derived.by(() => {
-    // Spread guarantees a NEW array reference every time the store mutates,
-    // which triggers `$derived` to re-run (Svelte 5 uses reference identity
-    // for proxy updates even when the same array is reassigned in place).
-    return [...(ircState.messages[bufferKey] ?? [])];
-  });
+  // FIX: return the original array reference without spreading. The previous
+  // spread `[...arr]` created a new array on every store mutation, even when
+  // a different buffer's messages changed (e.g. a channel PRIVMSG while
+  // viewing _server), causing ServerLogTimeline to re-group and flicker.
+  // With reference identity, downstream deriveds only re-run when the
+  // _server array itself is reassigned (new message for _server).
+  const rawMessages = $derived(ircState.messages[bufferKey] ?? []);
 
   // _server buffers use the ServerLogTimeline card view instead of
   // the flat message-row view — each connection attempt becomes a card

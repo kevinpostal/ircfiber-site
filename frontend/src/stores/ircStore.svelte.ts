@@ -1992,9 +1992,16 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       // categorised "Server features" panel can render from structured
       // data instead of having to re-parse raw 005 message text.
       if (typeof rawNet.isupport === 'object' && rawNet.isupport !== null) {
-        net.isupport = rawNet.isupport as Record<string, string>;
+        const raw = rawNet.isupport as Record<string, string>;
+        const old = net.isupport ?? {};
+        const oldKeys = Object.keys(old);
+        const newKeys = Object.keys(raw);
+        const same =
+          oldKeys.length === newKeys.length &&
+          newKeys.every(k => old[k] === raw[k]) &&
+          oldKeys.every(k => raw[k] === old[k]);
+        if (!same) net.isupport = { ...raw };
       }
-      net.chanTypes = net.chanTypes ?? '#';
 
       // W2-T02: sync payload ships `retryStatus` only when the engine
       // considers it active (gated by `hasRetryStatus` in protocol.d).
@@ -2236,10 +2243,17 @@ export function applyIsupportUpdate(
 ): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
+  const old = net.isupport ?? {};
+  const oldKeys = Object.keys(old);
+  const newKeys = Object.keys(raw);
+  const same =
+    oldKeys.length === newKeys.length &&
+    newKeys.every(k => old[k] === raw[k]) &&
+    oldKeys.every(k => raw[k] === old[k]);
+  if (same) return;
   net.isupport = { ...raw };
   markNetworkSeen(networkId);
 }
-
 /**
  * W2-T02: apply the engine's `CONNECTION_RETRY_STATUS` event payload
  * to a network's `retryStatus` field. The engine emits this event at

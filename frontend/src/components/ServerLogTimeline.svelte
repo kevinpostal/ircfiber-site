@@ -64,19 +64,49 @@
   });
 
   // ── Filter cleared messages ──────────────────────────────────────
+  // FIX: memoize to prevent flicker. The previous `messages.filter` created
+  // a new array on every store mutation, even when a channel PRIVMSG
+  // (different buffer) was added while viewing _server. With reference
+  // checks, visibleMessages only changes when the _server array itself
+  // changes or clearedAt flips.
+  let _prevMessagesRef: IRCMessage[] | null = null;
+  let _prevClearedAt: number | null = null;
+  let _prevVisibleRef: IRCMessage[] | null = null;
   const visibleMessages = $derived.by(() => {
+    const msgs = messages;
     const clearedAt = (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName)
       ? getClearedAt(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName)
       : null;
-    return messages.filter(m => {
+    if (msgs === _prevMessagesRef && clearedAt === _prevClearedAt && _prevVisibleRef) return _prevVisibleRef;
+    _prevMessagesRef = msgs;
+    _prevClearedAt = clearedAt;
+    const filtered = msgs.filter(m => {
       if (m.command === 'PING' || m.command === 'PONG') return false;
       if (clearedAt && (m.t || 0) <= clearedAt) return false;
       return true;
     });
+    if (_prevVisibleRef && filtered.length === _prevVisibleRef.length && filtered.every((m, i) => m === _prevVisibleRef![i])) return _prevVisibleRef;
+    _prevVisibleRef = filtered;
+    return filtered;
   });
 
   // ── Group into connection attempts ───────────────────────────────
-  const attempts = $derived(groupServerLog(visibleMessages));
+  // FIX: memoize groupServerLog result. The grouping is pure but returns
+  // new objects each call; the whole attempts array being new caused the
+  // timeline to re-mount and flicker on every isupport heartbeat.
+  let _prevVisibleForAttempts: IRCMessage[] | null = null;
+  let _prevAttempts: ServerLogAttempt[] | null = null;
+  const attempts = $derived.by(() => {
+    const vis = visibleMessages;
+    if (vis === _prevVisibleForAttempts && _prevAttempts) return _prevAttempts;
+    _prevVisibleForAttempts = vis;
+    const grouped = groupServerLog(vis);
+    if (_prevAttempts && grouped.length === _prevAttempts.length && grouped.every((a, i) => a.start.id === _prevAttempts![i].start.id && a.status === _prevAttempts![i].status && a.welcome.length === _prevAttempts![i].welcome.length && a.motd.length === _prevAttempts![i].motd.length)) {
+      return _prevAttempts;
+    }
+    _prevAttempts = grouped;
+    return grouped;
+  });
 
   // Live ticker for pending duration — ticks 1s while a pending attempt exists
   // Disabled to prevent 1Hz full re-render that disrupts reading. Duration
