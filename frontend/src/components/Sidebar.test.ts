@@ -514,7 +514,7 @@ describe('Sidebar', () => {
   });
 
   describe('pinning', () => {
-    it('shows pinned channel in pinned section and hides from regular list', async () => {
+    it('shows pinned channel in pinned section and also under its network', async () => {
       const net = createNetwork({ networkId: 'net1', name: 'Libera' });
       net.buffers.push(createBuffer({ name: '#general' }));
       net.buffers.push(createBuffer({ name: '#random' }));
@@ -530,10 +530,12 @@ describe('Sidebar', () => {
       expect(pinnedSection).toBeInTheDocument();
       expect(pinnedSection?.textContent).toContain('general');
 
-      // Regular list should only have the non-pinned channel
+      // Regular list should ALSO contain the pinned channel (duplicated) + non-pinned
       const regularList = document.querySelector('.network-buffers');
-      expect(regularList?.textContent).not.toContain('general');
+      expect(regularList?.textContent).toContain('general');
       expect(regularList?.textContent).toContain('random');
+      // Visual pin indicator in the in-network row
+      expect(regularList?.querySelector('.pinned-indicator')).toBeInTheDocument();
     });
 
     it('removes channel from pinned section when unpinned', async () => {

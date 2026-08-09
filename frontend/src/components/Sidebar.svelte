@@ -251,7 +251,7 @@
           </span>
         </div>
         {#if !collapsedMap[net.networkId]}
-          {@const activeFilter = (b: Buffer) => b.name !== '_server' && b.isJoined !== false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`]}
+          {@const activeFilter = (b: Buffer) => b.name !== '_server' && b.isJoined !== false && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`]}
           {@const currentChannels = uniqueBuffersByName(net.buffers.filter(b => activeFilter(b) && b.name.startsWith('#')))}
           {@const currentConversations = uniqueBuffersByName(net.buffers.filter(b => activeFilter(b) && b.type === 'query' && !b.name.startsWith('#')))}
           <ul class="buffers channels network-buffers">
@@ -271,6 +271,7 @@
                   role="presentation">
                 <span class="buffer" role="tab" tabindex="0">
                   <span class="label buffer-name">{'#' + stripHash(buf.name)}</span>
+                  {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
                   {#if buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
                     <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
                   {:else if (buf.highlightCount ?? 0) > 0 && canShowUnread(net.networkId, buf.name)}
@@ -280,7 +281,7 @@
               </li>
             {/each}
           </ul>
-          {@const inactive = net.buffers.filter(b => b.name !== '_server' && b.isJoined === false && !pinnedMap[`${net.networkId}:${b.name}`] && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])}
+          {@const inactive = net.buffers.filter(b => b.name !== '_server' && b.isJoined === false && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])}
           {@const inactiveIsCollapsed = inactiveCollapsedMap[net.networkId] ?? false}
           {#if inactive.length > 0}
             <div class="sidebar-section-header inactive-header"
@@ -307,6 +308,7 @@
                       role="presentation">
                     <span class="buffer" role="tab" tabindex="0">
                       <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
+                      {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
                     </span>
                   </li>
                 {/each}
@@ -340,6 +342,7 @@
                       role="presentation">
                     <span class="buffer" role="tab" tabindex="0">
                       <span class="label buffer-name">{buf.name}</span>
+                      {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
                       {#if buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
                         <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
                       {:else if (buf.highlightCount ?? 0) > 0 && canShowUnread(net.networkId, buf.name)}
