@@ -52,15 +52,28 @@
   // about when it toggles <details> natively. Without the mirror, an
   // external write (setServerlogCollapseEvents from another tab, a
   // context-menu toggle) wouldn't re-render the <details>.
+  //
+  // Auto-expand on connect: when the engine connects, the MOTD / welcome
+  // / numerics / ISUPPORT rows should be visible without an extra click.
+  // The pref still defaults to collapsed (true) for the disconnected /
+  // pending states, but the transition to `network.connected === true`
+  // force-opens the panel once and persists the expanded pref. After
+  // that the user can still collapse and the pref is respected until the
+  // next reconnect cycle — we track `prevConnected` so the force-open
+  // only fires on the rising edge, not continuously.
   let eventsOpen = $state<boolean>(!getServerlogCollapseEvents());
+  let prevConnected = false;
 
-  // Mirror external pref changes back into local state. Reads
-  // getServerlogCollapseEvents() inside $effect so Svelte 5 subscribes
-  // to the underlying $state proxy and re-runs when the pref flips from
-  // another source (cross-tab storage event, future context-menu item,
-  // etc.).
   $effect(() => {
-    eventsOpen = !getServerlogCollapseEvents();
+    const isConnected = !!network?.connected;
+    const collapsed = getServerlogCollapseEvents();
+    if (isConnected && !prevConnected) {
+      eventsOpen = true;
+      if (collapsed) setServerlogCollapseEvents(false);
+    } else {
+      eventsOpen = !collapsed;
+    }
+    prevConnected = isConnected;
   });
 
   // ── Filter cleared messages ──────────────────────────────────────

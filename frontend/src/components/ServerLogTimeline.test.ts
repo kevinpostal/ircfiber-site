@@ -540,9 +540,15 @@ describe('ServerLogTimeline', () => {
     expect(summary.textContent).toContain('6');
   });
 
-  it('renders connection events collapsed by default when pref=true', async () => {
-    setupServerBuffer();
-    const network = ircState.networks[0];
+  it('renders connection events collapsed by default when pref=true (disconnected)', async () => {
+    // When disconnected/pending the panel respects the collapsed pref.
+    // Use a disconnected network so the new "auto-expand on connect"
+    // behaviour doesn't force it open.
+    const network = createNetwork({ networkId: 'net1', name: 'TestNet', connected: false, connectionState: 'connecting', host: 'irc.test.com', port: 6697 });
+    network.buffers.push(createBuffer({ name: '_server' }));
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '_server';
 
     // Two START_PHASES + welcome → one attempt with phases=[queued, welcome].
     const messages = [
@@ -569,6 +575,30 @@ describe('ServerLogTimeline', () => {
     // 2 phase rows → badge shows "2".
     expect(summary.textContent).toContain('Connection events');
     expect(summary.textContent).toContain('2');
+  });
+
+  it('auto-expands connection events when engine connects (connected=true)', async () => {
+    setupServerBuffer();
+    const network = ircState.networks[0];
+
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+      createMessage({ command: 'NOTICE', text: 'ready', t: 1100, eid: 2, phase: 'welcome' }),
+    ];
+
+    // Start with the default collapsed pref — auto-expand should override it
+    // when network.connected is true so MOTD / welcome are visible.
+    expect(getServerlogCollapseEvents()).toBe(true);
+
+    render(ServerLogTimeline, { props: { messages, network } });
+    await tick();
+
+    const details = document.querySelector('[data-testid="connection-events"]') as HTMLDetailsElement;
+    expect(details).toBeInTheDocument();
+    expect(details.open).toBe(true);
+    expect(details.hasAttribute('open')).toBe(true);
+    // Pref was persisted to expanded as well (so a reload stays open)
+    expect(getServerlogCollapseEvents()).toBe(false);
   });
 
   it('renders connection events expanded when pref=false', async () => {
@@ -633,8 +663,12 @@ describe('ServerLogTimeline', () => {
   });
 
   it('mirrors external pref flips back into the <details> open state', async () => {
-    setupServerBuffer();
-    const network = ircState.networks[0];
+    // Use disconnected so auto-expand on connect doesn't override the pref
+    const network = createNetwork({ networkId: 'net1', name: 'TestNet', connected: false, connectionState: 'connecting', host: 'irc.test.com', port: 6697 });
+    network.buffers.push(createBuffer({ name: '_server' }));
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '_server';
 
     const messages = [
       createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
