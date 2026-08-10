@@ -506,7 +506,7 @@
   // never stacks chains. Reading scrolled-up history is never forced —
   // the poll bails the moment the user scrolls away.
   let pinnedResnapTimer: ReturnType<typeof setTimeout> | null = null;
-  function schedulePinnedResnap(): void {
+  function schedulePinnedResnap(maxPolls: number = 8): void {
     if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
     let polls = 0;
@@ -514,25 +514,16 @@
       pinnedResnapTimer = null;
       if (!container) return;
       if (!cachedAtBottom) return;
-      // Clear the stick only if scrollTop decreased vs the last scroll
-      // EVENT (prevScrollTop) — not vs a poll-captured baseline: a user
-      // who scrolls up then back down into the near-bottom band within a
-      // poll interval would otherwise be misread as still scrolling up
-      // (the poll's stale baseline is above their re-engaged position),
-      // and the re-engagement would be undone. prevScrollTop is updated
-      // by every scroll event, so it reflects the user's actual movement.
       if (container.scrollTop < prevScrollTop - 2) {
         cachedAtBottom = false;
         return;
       }
-      // Only write when the viewport actually drifted off the bottom —
-      // avoids forcing a layout read on every poll tick while settled.
       const bottom = container.scrollHeight - container.clientHeight;
       if (bottom - container.scrollTop > 4) {
         container.scrollTop = container.scrollHeight;
       }
       polls += 1;
-      if (polls < 8) pinnedResnapTimer = setTimeout(poll, 200);
+      if (polls < maxPolls) pinnedResnapTimer = setTimeout(poll, 200);
     }
     pinnedResnapTimer = setTimeout(poll, 200);
   }
@@ -668,20 +659,32 @@
         if (lastFirstProcessedKey === '') {
           // Buffer content arrived (initial history load): window the tail.
           renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+          // Cold-start: messages arrived after the buffer was already active
+          // but empty (first URL load, no cache). The initial mount's
+          // pendingInitialSnap was already consumed for the empty state, so
+          // force a new one to ensure we land at the very bottom.
+          pendingInitialSnap = true;
+          cachedAtBottom = true;
+          cachedAtTop = false;
         } else {
-          const start = untrack(() => renderStart);
           const oldScrollHeight = container ? container.scrollHeight : 0;
           const oldScrollTop = container ? container.scrollTop : 0;
           const atTopBefore = container ? container.scrollTop <= 0 : false;
           const scrollBottomBefore = container ? container.clientHeight + Math.ceil(container.scrollTop) : 0;
           const pinBottomBefore = container ? container.scrollHeight - scrollBottomBefore <= 1 : false;
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
-          if (idx > 0) {
+          if (pendingInitialSnap) {
+            // Still in the initial snap window (first URL load). Keep the
+            // window pinned to the tail so we stay at the very bottom when
+            // loadHistory prepends the remaining backlog right after the
+            // initial sync. Without this, the idx>0 path would keep the
+            // viewport anchored mid-history (Super%20Nets first load).
+            renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+          } else if (idx > 0) {
             if (start > 0) renderStart = start + idx;
             // start==0 (fully rendered, at top of backlog): keep renderStart 0
             // so the new older rows become visible above the divider.
             // The mid-buffer anchor below keeps the viewport stable if the
-            // user is reading in the middle (not at top/bottom).
           } else if (idx < 0) {
             // Head key vanished — the first processed row changed identity
             // (e.g. a backlog fetch merged JOINs into the head
@@ -694,7 +697,6 @@
             // up forces me back down").
           }
           // Anchor scroll after the window shift so the viewport stays on
-          // the same content (no jump). For mid-buffer reads (!atTop &&
           // !pinBottom) we compensate manually with scrollTop += delta
           // (IRCCloud fetched() does the same). If the browser's native
           // scroll anchoring also adjusted scrollTop during the render,
@@ -735,7 +737,6 @@
     // MessageList.refresh.test.ts async arrival case.
     const hasMessagesForInitialSnap = processedMessages.length > 0;
     const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
-    if (hasMessagesForInitialSnap) pendingInitialSnap = false;
     const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || isInitialSnap);
 
     if (shouldSnapToBottom) {
@@ -843,12 +844,19 @@
           if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 2) {
             doSnap();
           }
-          schedulePinnedResnap();
+          schedulePinnedResnap(25);
         });
       }
+      // Clear pendingInitialSnap: keep it for 2s after an initial snap so
+      // rapid successive prepends (loadHistory right after sync) still see
+      // isInitialSnap true and stay pinned to bottom. Normal pinned snaps
+      // clear immediately.
+      if (isInitialSnap) {
+        setTimeout(() => { pendingInitialSnap = false; }, 5000);
+      } else if (hasMessagesForInitialSnap) {
+        pendingInitialSnap = false;
+      }
     } else if (newDivider && cachedAtTop) {
-      // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
-      // Do it synchronously (no rAF) so the first paint after prepend already
       // shows the divider at -31, not a flash of the very-top with all new
       // rows before the rAF fires. Mirrors IRCCloud's immediate scrollTo(a-31)
       // inside fetched() and matches revealBacklogFromMemory's sync path.
