@@ -683,7 +683,9 @@
     handledDividerMark = mark;
 
     if (cachedAtBottom && !isServerBuffer) {
-      if (container && container.scrollTop < lastEffectScrollTop - 2) { cachedAtBottom = false; lastEffectScrollTop = container.scrollTop; } else {
+      const distFromBottom = container.scrollHeight - (container.clientHeight + Math.ceil(container.scrollTop));
+      const scrolledUp = container ? container.scrollTop < lastEffectScrollTop - 2 : false;
+      if (distFromBottom > 50 || scrolledUp) { cachedAtBottom = false; lastEffectScrollTop = container ? container.scrollTop : lastEffectScrollTop; } else {
       lastEffectScrollTop = container ? container.scrollTop : lastEffectScrollTop;
       maybeTrim();
       // Ensure trim has been applied to the DOM before measuring
