@@ -8,7 +8,9 @@
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
   import YoutubeEmbed from './YoutubeEmbed.svelte';
+  import ImageInline from './ImageInline.svelte';
   import { extractYoutubeIdsFromText } from '../lib/youtube';
+  import { extractImageUrlsFromText } from '../lib/imageInline';
   interface Props {
     msg: IRCMessage;
     isHighlight?: boolean;
@@ -247,7 +249,7 @@
     }
     return null;
   });
-
+  const isChat = $derived(cmd === 'PRIVMSG' || cmd === 'NOTICE' || msg.type === 'action' || /^\d{3}$/.test(cmd));
   // Inline YouTube previews — IRCCloud parity. Gated by inlineVideos (global)
   // and inlineImages (per-buffer, via ChannelContextMenu). IRCCloud's
   // buildYoutubeFrame uses buffer.inlineImagesAllowed() as the gate, so we
@@ -261,17 +263,30 @@
       const bp = getBufferPrefs(net.networkId, buf.name);
       if (bp.inlineImages === false) return [];
     }
-    // Only embed for chat-like commands where text is user content
-    const isChat = cmd === 'PRIVMSG' || cmd === 'NOTICE' || msg.type === 'action' || /^\d{3}$/.test(cmd);
     if (!isChat) return [];
     const text = chatContent?.text ?? msg.text ?? '';
     if (!text) return [];
     return extractYoutubeIdsFromText(text);
   });
-  // body.  Building the string in JavaScript and using {@html} avoids the
-  // whitespace text node that Svelte inserts between block tags when the
-  // same span wraps a long {#if}/{:else if}/{:else} chain — that space
-  // used to render as a visible character before every message.
+  // Inline image previews — IRCCloud parity. Gated by global inlineImages
+  // (Settings → Inline media) and per-buffer inlineImages (channel context
+  // menu "Embed external media"). Mirrors IRCCloud's
+  // Buffer.inlineImagesAllowed() → checkPref('inlineimages') with
+  // buffer-level override. Extension check is IMAGE_EXT_RE (jpe?g|gif|png|webp)
+  // on pathname/search/hash. See frontend/src/lib/imageInline.ts.
+  const imageUrls = $derived.by(() => {
+    if (!globalPrefs.inlineImages) return [];
+    const net = getActiveNetwork();
+    const buf = getActiveBufferObj();
+    if (buf && net?.networkId) {
+      const bp = getBufferPrefs(net.networkId, buf.name);
+      if (bp.inlineImages === false) return [];
+    }
+    if (!isChat) return [];
+    const text = chatContent?.text ?? msg.text ?? '';
+    if (!text) return [];
+    return extractImageUrlsFromText(text);
+  });
   //
   // Chat-content commands (PRIVMSG / NOTICE / CONNECT / 001 / numeric /
   // TOPIC / KICK / action) render through LongMessageContent in the
@@ -599,15 +614,15 @@
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
           --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}</span>{/if}
+                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}</span>{/if}
         </span>
       {:else if chatContent}
-        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}</span>{/if}</span>
+        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}</span>{/if}</span>
       {:else}
         {@html getContentHTML()}
-      {/if}
-      {#if youtubeIds.length > 0 && !chatContent && !(isAction && nick)}
-        <span class="inlineEmbeds inlineEmbeds--outside">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}</span>
+        {#if youtubeIds.length > 0 || imageUrls.length > 0}
+          <span class="inlineEmbeds inlineEmbeds--outside">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}</span>
+        {/if}
       {/if}
     </span>
     <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
