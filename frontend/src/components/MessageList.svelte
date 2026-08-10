@@ -216,6 +216,11 @@
   const BATCH_SIZE = 200;
   const TRIM_DETECT_THRESHOLD = 350;
   const TRIM_THRESHOLD = 200;
+  // stick-to-bottom-svelte's STICK_TO_BOTTOM_OFFSET_PX: after the user
+  // scrolls up (breaking the stick), a DOWNWARD scroll into this band
+  // re-engages the bottom-stick. A stopped position within the band does
+  // NOT re-engage — reading 50px up is never yanked.
+  const STICK_BAND_PX = 70;
   let renderStart = $state(0);
 
   // IRCCloud BufferLogView.bufferMessage/checkFlush: while the user is
@@ -488,27 +493,25 @@
   // never stacks chains. Reading scrolled-up history is never forced —
   // the poll bails the moment the user scrolls away.
   let pinnedResnapTimer: ReturnType<typeof setTimeout> | null = null;
-  let lastEffectScrollTop = 0;
   function schedulePinnedResnap(): void {
     if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
     let polls = 0;
-    // Track scrollTop between polls: if it decreased the user scrolled
-    // up (even without a scroll event for small trackpad deltas), so
-    // clear cachedAtBottom. If it stayed same or increased (image/embed
-    // growth), it's genuine pinned-at-bottom drift — snap to correct.
-    let lastPollScrollTop = container ? container.scrollTop : 0;
     function poll(): void {
       pinnedResnapTimer = null;
       if (!container) return;
-      if (!cachedAtBottom) { lastPollScrollTop = container.scrollTop; return; }
-      // User scrolled up since last poll? Clear cachedAtBottom.
-      if (container.scrollTop < lastPollScrollTop) {
+      if (!cachedAtBottom) return;
+      // Clear the stick only if scrollTop decreased vs the last scroll
+      // EVENT (prevScrollTop) — not vs a poll-captured baseline: a user
+      // who scrolls up then back down into the near-bottom band within a
+      // poll interval would otherwise be misread as still scrolling up
+      // (the poll's stale baseline is above their re-engaged position),
+      // and the re-engagement would be undone. prevScrollTop is updated
+      // by every scroll event, so it reflects the user's actual movement.
+      if (container.scrollTop < prevScrollTop - 2) {
         cachedAtBottom = false;
-        lastPollScrollTop = container.scrollTop;
         return;
       }
-      lastPollScrollTop = container.scrollTop;
       // Only write when the viewport actually drifted off the bottom —
       // avoids forcing a layout read on every poll tick while settled.
       const bottom = container.scrollHeight - container.clientHeight;
@@ -597,18 +600,16 @@
     if (isServerBuffer) return;
     const el = container;
     if (!el) return;
-    let lastResizeScrollTop = 0;
     const ro = new ResizeObserver(() => {
       if (!container) return;
-      // If scrollTop decreased since last resize, the user scrolled up
-      // (even without a scroll event for small trackpad deltas). Clear
-      // cachedAtBottom so we don't snap them back.
-      if (container.scrollTop < lastResizeScrollTop) {
+      // Clear the stick only if scrollTop decreased vs the last scroll
+      // EVENT (prevScrollTop), not vs a resize-captured baseline: a user
+      // who scrolls up then back down into the near-bottom band between
+      // resizes would otherwise be misread as still scrolling up.
+      if (container.scrollTop < prevScrollTop - 2) {
         cachedAtBottom = false;
-        lastResizeScrollTop = container.scrollTop;
         return;
       }
-      lastResizeScrollTop = container.scrollTop;
       if (!cachedAtBottom) return;
       // IRCCloud isScrolledToBottom(true) check: only snap if we've
       // drifted away from the bottom (don't write scrollTop on every
@@ -704,10 +705,21 @@
     handledDividerMark = mark;
 
     if (cachedAtBottom && !isServerBuffer) {
-      const distFromBottom = container.scrollHeight - (container.clientHeight + Math.ceil(container.scrollTop));
-      const scrolledUp = container ? container.scrollTop < lastEffectScrollTop - 2 : false;
-      if (distFromBottom > 50 || scrolledUp) { cachedAtBottom = false; lastEffectScrollTop = container ? container.scrollTop : lastEffectScrollTop; } else {
-      lastEffectScrollTop = container ? container.scrollTop : lastEffectScrollTop;
+      // User-intent check ONLY via scrollTop direction (stick-to-bottom-svelte
+      // model): a decreased scrollTop means the user scrolled up — clear the
+      // stick. Deliberately NOT a distance check: `distFromBottom > 50` misread
+      // content growth BELOW a pinned viewport (a tall embed row lands →
+      // scrollHeight grows → the user is suddenly >50px above the new bottom)
+      // as a user scroll-up and broke the stick — messages stopped sticking
+      // to the bottom exactly when embeds arrived.
+      //
+      // Baseline is prevScrollTop (the last scroll EVENT's position, updated
+      // by handleScroll's dedup) — never stale: a re-window clamp or a
+      // band re-engagement moves prevScrollTop with the event, so the
+      // comparison only fires on a genuine decrease with no intervening
+      // event (tiny trackpad deltas Chromium doesn't report).
+      const scrolledUp = container ? container.scrollTop < prevScrollTop - 2 : false;
+      if (scrolledUp) { cachedAtBottom = false; } else {
       maybeTrim();
       // Ensure trim has been applied to the DOM before measuring
       // scrollHeight. Without this, renderStart may have just been moved
@@ -812,21 +824,27 @@
     const scrollTop = container.scrollTop;
     const scrollHeight = container.scrollHeight;
     if (prevScrollTop === scrollTop && prevScrollHeight === scrollHeight) return;
+    // Capture the previous event's scrollTop BEFORE updating prevScrollTop —
+    // used to detect actual downward movement for the stick re-engagement
+    // band below (stick-to-bottom-svelte's isScrollingDown).
+    const prevTop = prevScrollTop;
     prevScrollTop = scrollTop;
     prevScrollHeight = scrollHeight;
 
     // IRCCloud isScrolledToTop(): user is at the very top of the container.
     cachedAtTop = scrollTop <= 0;
 
-    // IRCCloud isScrolledToBottom(true): 1px slop for zoomed browsers
-    // when ARRIVING at the bottom. When already at the bottom, use a
-    // strict 0px check — any intentional scroll-up (even 1px on a
-    // trackpad) must clear cachedAtBottom immediately, otherwise the
-    // ResizeObserver and schedulePinnedResnap keep fighting the user.
+    // IRCCloud isScrolledToBottom(true): when already pinned, use a strict
+    // 0px check — any intentional scroll-up (even 1px on a trackpad) must
+    // clear cachedAtBottom immediately, otherwise the ResizeObserver and
+    // schedulePinnedResnap keep fighting the user.
+    // When NOT pinned (stick broken by a scroll-up), re-engage only on an
+    // actual DOWNWARD scroll into the near-bottom band — a stopped position
+    // within the band does NOT re-stick (reading is never yanked).
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
     const atBottom = cachedAtBottom
-      ? scrollHeight - scrollBottom <= 0   // strict: already at bottom, any scroll-up leaves
-      : scrollHeight - scrollBottom <= 1;  // loose: 1px slop to arrive (zoom-safe)
+      ? scrollHeight - scrollBottom <= 0                       // strict: already at bottom, any scroll-up leaves
+      : scrollTop > prevTop && scrollHeight - scrollBottom <= STICK_BAND_PX; // down-scroll into band re-engages
 
     // IRCCloud setScrolledToBottom: only act when the value CHANGES.
     if (cachedAtBottom === atBottom) {
@@ -846,6 +864,17 @@
         // messages and trims the DOM back to 200 rows.
         renderEndKey = '';
         maybeTrim();
+        // Band re-engagement: the stick was broken (user scrolled up) and
+        // they scrolled back DOWN into the near-bottom band — that means
+        // "return to the live stream", so snap to the bottom NOW. This
+        // keeps the latched state unambiguous ("latched" ≡ "at the
+        // bottom"); without the snap, a 30px-offset latch would be
+        // misread as pinned-drift by the poll/RO and re-yanked, and its
+        // stale baseline would misfire the effect's scrolledUp check on
+        // the next message.
+        if (container.scrollHeight - container.clientHeight - container.scrollTop > 0) {
+          container.scrollTop = container.scrollHeight;
+        }
       } else {
         // Just left bottom — 100ms grace period for autogrow-input only
         if (recentlyScrolledTimeout) clearTimeout(recentlyScrolledTimeout);

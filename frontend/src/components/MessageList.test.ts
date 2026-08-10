@@ -1025,6 +1025,133 @@ describe('MessageList', () => {
 			return container;
 		}
 
+		it('sticks to the bottom when a tall (embed) message arrives while pinned', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			// Tall multi-line message (~380px) — the same geometry as a
+			// YouTube/embed row. Regression: distFromBottom > 50 misread the
+			// content growth below the pinned viewport as a user scroll-up and
+			// cleared cachedAtBottom, stranding the viewport ~380px short.
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'bob',
+				text: Array.from({ length: 20 }, () => 'tall embed line').join('\n'),
+				t: Date.now(),
+				msgid: 'tall-1',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 400));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(10);
+		});
+
+		it('keeps the stick when the buffer re-windows (scrollHeight clamp) while pinned', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			// Re-window: the buffer is replaced with a shorter set (engine
+			// re-sync / trim) → scrollHeight shrinks → the browser clamps
+			// scrollTop DOWN with no user intent. Regression: the effect's
+			// scrolledUp check compared against a stale lastEffectScrollTop
+			// and misread the clamp as a scroll-up, breaking the stick.
+			const now = Date.now();
+			const shorter: IRCMessage[] = [];
+			for (let i = 0; i < 35; i++) {
+				shorter.push(createMessage({ text: `rw-${i}`, t: now - (35 - i) * 1000, msgid: `rw-${i}` }));
+			}
+			ircState.messages['net1:#chan'] = shorter;
+			ircState.processedMessages['net1:#chan'] = buildProcessedBuffer(shorter);
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 100));
+			expect(container.scrollHeight - container.clientHeight).toBeGreaterThan(0); // still scrollable
+
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG', nick: 'carol', text: 'after re-window', t: Date.now(), msgid: 'rw-msg',
+				timestamp: new Date().toISOString(), params: [], prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 400));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(10);
+		});
+
+		it('keeps sticking across consecutive messages after a tall embed lands', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			const tall = Array.from({ length: 20 }, () => 'tall embed line').join('\n');
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG', nick: 'bob', text: tall, t: Date.now(), msgid: 'tall-a',
+				timestamp: new Date().toISOString(), params: [], prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 400));
+
+			let drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(10);
+
+			// Second message lands ~200ms later (live traffic cadence) — the
+			// stick must still hold (regression: the resnap poll chain died
+			// and the drift accumulated).
+			await new Promise((r) => setTimeout(r, 200));
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG', nick: 'carol', text: 'follow-up', t: Date.now(), msgid: 'tall-b',
+				timestamp: new Date().toISOString(), params: [], prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 400));
+
+			drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(10);
+		});
+
+		it('re-sticks when the user scrolls down near the bottom after reading up', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			// Read up 100px — the stick breaks.
+			container.scrollTop -= 100;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+			expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeGreaterThan(50);
+
+			// Scroll back DOWN into the near-bottom band (30px from bottom).
+			// stick-to-bottom-svelte: a downward scroll within
+			// STICK_TO_BOTTOM_OFFSET_PX re-engages the stick; a stopped
+			// position does not (reading is never yanked).
+			container.scrollTop = container.scrollHeight - container.clientHeight - 30;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'carol',
+				text: 're-stick me',
+				t: Date.now(),
+				msgid: 'restick-1',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 400));
+
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(10);
+		});
+
 		it('snaps to the very bottom when a message from a NEW user arrives', async () => {
 			const container = await setupScrollableChannel(40);
 			if (!container) return;
