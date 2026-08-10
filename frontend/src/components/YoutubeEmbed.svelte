@@ -8,18 +8,12 @@
   let { id }: Props = $props();
 
   let closed = $state(false);
-  let thumbHidden = $state(false);
 
   const src = $derived(youtubeEmbedUrl(id));
 
   function onClose(e: MouseEvent): void {
     e.preventDefault();
     closed = true;
-  }
-
-  function onThumbClick(e: MouseEvent): void {
-    e.preventDefault();
-    thumbHidden = true;
   }
 </script>
 
@@ -38,7 +32,6 @@
       src={src}
       title="YouTube video {id}"
       style="width: 416px; height: 234px; max-width: 416px"
-      loading="lazy"
       referrerpolicy="strict-origin-when-cross-origin"
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
     ></iframe>
@@ -53,17 +46,6 @@
       role="button"
       aria-label="Close video"
     ></a>
-    <!-- Thumbnail overlay — shows YouTube's hqdefault.jpg centered inside the 416×234 frame.
-         IRCCloud's iframe itself shows a thumbnail, but when YouTube returns
-         "Video unavailable" we still want a visible preview. This overlay
-         sits *on top* of the iframe (absolute, top:0 left:0) and hides on click
-         to reveal the iframe player underneath. -->
-    {#if !thumbHidden}
-    <a href={`https://www.youtube.com/watch?v=${id}`} target="_blank" rel="noreferrer" class="youtubeThumbOverlay" title="Watch on YouTube" onclick={onThumbClick}>
-      <img src={`https://i.ytimg.com/vi/${id}/hqdefault.jpg`} alt={`YouTube thumbnail ${id}`} width="416" height="234" loading="lazy" />
-      <span class="youtubePlayButton" aria-hidden="true"></span>
-    </a>
-    {/if}
   </span>
 {/if}
 
@@ -113,8 +95,9 @@
   :global(.embedClose:focus) {
     background-position: 0 -25px;
   }
-  /* Thumbnail overlay — sits *inside* the 416×234 frame, covering the iframe
-     so the preview image is on top of the player bounds, not below. */
+  /* Thumbnail overlay — in facade mode (iframe not yet created) it's the
+     wrapper's only child so it must be in-flow (relative); after click the
+     iframe replaces it entirely, so no absolute stacking needed. */
   :global(.youtubeThumbOverlay) {
     position: absolute;
     top: 0;
@@ -129,6 +112,11 @@
     overflow: hidden;
     text-decoration: none;
     z-index: 1;
+  }
+  :global(.youtubeThumbOverlay--facade) {
+    position: relative;
+    top: auto;
+    left: auto;
   }
   :global(.youtubeThumbOverlay img) {
     width: 100%;

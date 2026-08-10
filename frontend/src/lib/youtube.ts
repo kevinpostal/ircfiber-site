@@ -110,11 +110,15 @@ export function extractYoutubeStart(rawUrl: string): number | undefined {
 }
 
 export function youtubeEmbedUrl(id: string, startSeconds?: number): string {
-  // YouTube's embed origin check is stricter for http:// origins with ports
-  // (like http://127.0.0.1:8090). Use the production https origin always so
-  // local dev and prod both send a known-good https origin. youtube-nocookie
-  // is more permissive for privacy and embedding.
-  const origin = 'https://ircfiber.com';
+  // IRCCloud uses www.youtube.com with origin=https://www.irccloud.com, but for
+  // ircfiber.com the origin triggers "Sign in to confirm you're not a bot" on
+  // click for some videos (hyPXF5q_1BA: www.youtube.com+origin ircfiber=FAIL,
+  // same URL with origin irccloud=PASS, no origin=PASS, nocookie+origin ircfiber=PASS).
+  // Isolated e2e via /assets/single-hypx.html confirms: only
+  // "www.youtube.com + origin ircfiber" fails after click; all other combos pass.
+  // Fix: omit origin entirely (bare embed also passes). This matches the
+  // minimal YouTube oembed URL and avoids referer/origin mismatch when testing
+  // on http://127.0.0.1:8090 vs https://ircfiber.com.
   const params: Record<string, string> = {
     autohide: '1',
     controls: '1',
@@ -124,12 +128,11 @@ export function youtubeEmbedUrl(id: string, startSeconds?: number): string {
     iv_load_policy: '3',
     modestbranding: '1',
     autoplay: '0',
-    origin,
   };
   if (startSeconds !== undefined && startSeconds > 0) {
     params.start = String(startSeconds);
   }
-  return `https://www.youtube-nocookie.com/embed/${id}?${new URLSearchParams(params).toString()}`;
+  return `https://www.youtube.com/embed/${id}?${new URLSearchParams(params).toString()}`;
 }
 
 /**
