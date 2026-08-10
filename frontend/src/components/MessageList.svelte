@@ -165,17 +165,24 @@
   function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean;
   function checkSameAuthor(msg: IRCMessage, messages: IRCMessage[], index: number): boolean;
   function checkSameAuthor(msg: IRCMessage, prevOrMessages: IRCMessage[] | IRCMessage | null, index?: number): boolean {
-    if (msg.command !== 'PRIVMSG' && msg.type !== 'action') return false;
+    // Actions (/me) are never grouped — they always render as a standalone
+    // row with their own avatar/inline header. A normal message that
+    // follows an action from the same nick must start a new group so its
+    // nick/avatar are visible (bug: "grouped under the action/me which
+    // does not have the nick and avatar correct").
+    if (msg.type === 'action') return false;
+    if (msg.command !== 'PRIVMSG') return false;
     const nick = stripPrefix(msg.nick || '');
     if (!nick) return false;
     let prev: IRCMessage | null = null;
     if (Array.isArray(prevOrMessages) && typeof index === 'number') {
       // Smart grouping: skip over JOIN/PART/NICK system messages so a
       // single "Zod joined" between two bursts from the same nick
-      // doesn't split the bubble.
+      // doesn't split the bubble — but an action DOES split the bubble.
       for (let j = index - 1; j >= 0; j--) {
         const cand = prevOrMessages[j];
-        if (cand.command === 'PRIVMSG' || cand.type === 'action') { prev = cand; break; }
+        if (cand.type === 'action') return false;
+        if (cand.command === 'PRIVMSG' && cand.type !== 'action') { prev = cand; break; }
         if (JOIN_PART_COMMANDS.has(cand.command)) continue;
         if (cand.command === 'MOTD_GROUP' || /^\d{3}$/.test(cand.command)) continue;
         continue;
@@ -184,7 +191,8 @@
     } else {
       prev = prevOrMessages as IRCMessage | null;
       if (!prev) return false;
-      if (prev.command !== 'PRIVMSG' && prev.type !== 'action') return false;
+      if (prev.type === 'action') return false;
+      if (prev.command !== 'PRIVMSG') return false;
     }
     const prevNick = stripPrefix(prev.nick || '');
     if (!prevNick || prevNick !== nick) return false;
@@ -642,6 +650,7 @@
       wasRecentlyAtBottom = true;
       cachedAtTop = false;
       prevScrollHeight = 0;
+      prevScrollTop = 0;
       handledDividerMark = '';
       // Cancel any in-flight re-snap chains from the previous
       // buffer — it would otherwise keep polling the shared container
@@ -716,10 +725,18 @@
     // if a stray scroll event cleared cachedAtBottom between the
     // renderStart assignment and this snap check.  pendingInitialSnap
     // survives the `if (!container) return` gap on first mount and
-    // forces one unconditional snap.
-    const isInitialSnap = pendingInitialSnap;
-    pendingInitialSnap = false;
-    const shouldSnapToBottom = !isServerBuffer && (cachedAtBottom || isInitialSnap);
+    // forces one unconditional snap. It is kept until we have messages
+    // to snap to — a buffer that mounts empty (pre-sync, e.g. first
+    // login with no cache) must NOT consume the flag with 0 messages,
+    // otherwise the subsequent sync-payload arrival runs as a normal
+    // pinned check and a scrollTop=0 event from the incoming
+    // scrollHeight growth can clear cachedAtBottom and leave the user
+    // stranded mid-history (first-login midway bug). See
+    // MessageList.refresh.test.ts async arrival case.
+    const hasMessagesForInitialSnap = processedMessages.length > 0;
+    const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
+    if (hasMessagesForInitialSnap) pendingInitialSnap = false;
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || isInitialSnap);
 
     if (shouldSnapToBottom) {
       // For an initial buffer open we force the snap unconditionally —
@@ -819,6 +836,7 @@
           container.scrollTop = container.scrollHeight;
         };
         doSnap();
+        cachedAtBottom = true;
         cachedAtTop = false;
         requestAnimationFrame(() => {
           doSnap();

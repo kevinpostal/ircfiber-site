@@ -201,7 +201,16 @@
       // Pull focus into the compose input so the user can type immediately
       // after switching buffers (sidebar click, alt+arrow, /join, etc.).
       // Guarded by lastBufferKey so we don't steal focus on initial mount.
-      tick().then(() => textarea?.focus());
+      // Mobile: don't auto-focus — virtual keyboard would cover half the
+      // viewport on every room switch (IRCCloud parity: mobile requires an
+      // explicit tap on the input to bring up the keyboard). Detect real
+      // touch/coarse devices, not just narrow viewports (tests run narrow
+      // on desktop and must still auto-focus).
+      const isMobile = typeof window !== 'undefined' && (
+        window.matchMedia('(pointer: coarse)').matches ||
+        (window.matchMedia('(max-width: 800px)').matches && (('ontouchstart' in window) || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)))
+      );
+      if (!isMobile) tick().then(() => textarea?.focus());
     }
     // Reset highlight cycling state on buffer switch
     if (lastBufferKey && lastBufferKey !== newKey) {

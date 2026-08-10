@@ -547,7 +547,15 @@ let showNetworkForm: boolean = $state(false);
     // (http://127.0.0.1:8090/irc/Supernets/channel/superbowl). If the
     // active buffer has a compose box and no input is focused, printable
     // keys auto-focus #compose-input so the character lands there.
+    // Mobile: skip — keyboard would pop on every key and hide the chat
+    // (IRCCloud mobile also requires an explicit tap). Detect coarse/touch
+    // not just narrow width (tests run narrow on desktop).
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
+      const isMobileForTyping = typeof window !== 'undefined' && (
+        window.matchMedia('(pointer: coarse)').matches ||
+        (window.matchMedia('(max-width: 800px)').matches && (('ontouchstart' in window) || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)))
+      );
+      if (isMobileForTyping) return;
       const target = e.target as HTMLElement | null;
       const isTypingTarget = target && (
         target.tagName === 'INPUT' ||
