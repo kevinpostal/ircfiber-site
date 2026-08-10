@@ -52,8 +52,8 @@
   scrollbar-color: #4a5568 transparent;
 }
 
-html, body { font-family: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 14px; letter-spacing: normal; background: #333333; color: #d1d5db; height: 100vh; overflow: hidden; }
-#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+html, body { font-family: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 14px; letter-spacing: normal; background: #333333; color: #d1d5db; height: 100vh; overflow: hidden; overflow-x: hidden; max-width: 100vw; }
+#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; overflow-x: clip; max-width: 100vw; }
 
 /* Scrollbars — IRCCloud-style thin scrollbars */
 ::-webkit-scrollbar {
@@ -94,6 +94,8 @@ a:hover { color: #79c0ff; text-decoration: underline; }
   grid-template-rows: 1fr;
   height: 100vh;
   overflow: hidden;
+  overflow-x: clip;
+  max-width: 100vw;
 }
 /* IRCCloud .mainSpin pattern: hide the sidebar grid column during the
    loading phase so the centered spinner fills the full viewport */

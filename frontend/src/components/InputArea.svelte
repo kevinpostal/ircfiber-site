@@ -749,6 +749,13 @@
           <i class="fa-regular fa-copy" aria-hidden="true"></i>
         {/if}
       </div>
+      <div class="sendcell">
+        <button class="sendBtn" type="button" aria-label="Send message" title="Send"
+                disabled={inputValue.trim().length === 0}
+                onclick={() => void handleSend()}>
+          <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>
+        </button>
+      </div>
       {#if uploadMenuOpen}
         <div class="uploadMenuAnchor">
           <UploadMenu onClose={() => { uploadMenuOpen = false; }} />

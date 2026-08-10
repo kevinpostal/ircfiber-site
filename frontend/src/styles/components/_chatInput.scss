@@ -1,4 +1,5 @@
 /* Buffer input cell */
+/* Buffer input cell — desktop */
 .bufferinputcell {
   display: flex;
   align-items: center;
@@ -216,6 +217,28 @@
   margin-left: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Send button — hidden on desktop, iOS thumb target on mobile ── */
+.bufferinputcell .sendcell {
+  display: none;
+}
+.bufferinputcell .sendBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: #1e72ff;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 120ms ease, transform 120ms ease, opacity 120ms ease;
+}
+.bufferinputcell .sendBtn:active { transform: scale(0.94); background: #1158cc; }
+.bufferinputcell .sendBtn:disabled { opacity: 0.35; pointer-events: none; }
 
 /* Emoji picker popover */
 .emoji-popover {
