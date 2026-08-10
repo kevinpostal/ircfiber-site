@@ -309,7 +309,15 @@
         // forces me back down". The boundary message stays put under the
         // divider; the user scrolls up through the new batch at their own
         // pace.
-        container.scrollTop = Math.max(pos - 31, 0);
+        //
+        // The 260px floor keeps the viewport OUT of LoadMore's 200px
+        // pre-load band (rootMargin): if the divider sits near the top
+        // (a short chunk), scrollTop = pos - 31 could clamp to 0 and the
+        // sentinel would stay intersecting forever — no IO transition, no
+        // next chunk, and wheel-up at scrollTop 0 fires no scroll events.
+        // Landing at ≥260px pulls the sentinel clearly out of the band so
+        // the next deliberate scroll to the top re-enters and fires.
+        container.scrollTop = Math.max(pos - 31, 260);
       } else {
         // Guard: never strand the user at scrollTop 0 (no scroll events
         // fire at the boundary, so the next chunk could never trigger).
@@ -325,8 +333,16 @@
     const start = Math.max(0, Math.min(renderStart, all.length));
     let end = all.length;
     if (renderEndKey) {
-      const endIdx = processedIndexByKey.get(renderEndKey);
-      if (endIdx !== undefined && endIdx >= start) end = endIdx + 1;
+      // Resolve the freeze key to the LAST message that carries it.
+      // itemKeyOf collisions (msgid-less messages sharing a timestamp)
+      // make the first match the WRONG message: the frozen tail would
+      // resolve to index 0 and, once renderStart reaches 0 (whole backlog
+      // revealed), the window would collapse to a single row.
+      let endIdx = -1;
+      for (let i = all.length - 1; i >= 0; i--) {
+        if (itemKeyOf(all[i]) === renderEndKey) { endIdx = i; break; }
+      }
+      if (endIdx >= start) end = endIdx + 1;
     }
     const msgs = start > 0 || end < all.length ? all.slice(start, end) : all;
     const dividerMark = backlogDividerKey;
@@ -775,7 +791,9 @@
         // Same as revealBacklogFromMemory: snap the divider to the top,
         // no animated scroll-to-152 (see note there — the swing fights the
         // user's scroll-up input and reads as a forced jump back down).
-        container.scrollTop = Math.max(pos - 31, 0);
+        // 260px floor: keep the viewport out of LoadMore's 200px pre-load
+        // band so the sentinel re-enters on the next deliberate scroll.
+        container.scrollTop = Math.max(pos - 31, 260);
       }
     }
     // else: browser handles position (IRCCloud: fetchDone(true, pinBottom) → no scroll)
@@ -848,15 +866,11 @@
       scheduleScrollStateUpdate();
     }
 
-    // IRCCloud BufferScrollView.checkInfiniscroll → loadOrRenderBacklog:
-    // when the user reaches the top of the scroll, reveal the previous
-    // batch from memory.  This is what powers IRCCloud's chunk-by-chunk
-    // infinite scroll — without it, scrolling to the top of a long
-    // buffer would park the user at scrollTop 0 where the browser fires
-    // no further scroll events on wheel-up, wedging the infinite scroll.
-    if (cachedAtTop && !cachedAtBottom) {
-      revealBacklogFromMemory();
-    }
+    // Infinite scroll is triggered by LoadMore's top sentinel
+    // (IntersectionObserver with a 200px rootMargin pre-load buffer,
+    // svelte-infinite pattern) instead of a scrollTop===0 check here.
+    // The observer fires on layout, so it cannot wedge at scrollTop 0
+    // where no scroll events fire on wheel-up.
   }
 
   function scheduleScrollStateUpdate(): void {

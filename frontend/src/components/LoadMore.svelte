@@ -287,15 +287,29 @@ $effect(() => {
     }
   }
 
-  // IRCCloud BufferScrollView.checkInfiniscroll: fire only when scrolled
-  // to the very top (scrollTop === 0), not already at the bottom (short
-  // buffers don't infiniscroll), and there's still history to load.
-  function onScroll(): void {
+  // IRCCloud BufferScrollView.checkInfiniscroll, redesigned as the
+  // svelte-infinite pattern: an IntersectionObserver on a sentinel at the
+  // top of the scroll content with a 200px rootMargin pre-load buffer.
+  // The sentinel intersects up to 200px BEFORE the user reaches the top,
+  // so the previous batch is revealed/fetched while the user is still
+  // scrolling — no dead zone at the top and no reliance on scroll events
+  // firing at the exact boundary (which wedged at scrollTop 0).
+  let sentinelEl = $state<HTMLElement | null>(null);
+  let io: IntersectionObserver | null = null;
+
+  function onSentinelVisible(): void {
     if (!scrollEl || loading || clearedAt || noMoreHistory) return;
     if (!onLoadMore && !onRevealFromMemory) return;
-    if (scrollEl.scrollTop > 0) return;
-    const scrollBottom = scrollEl.clientHeight + Math.ceil(scrollEl.scrollTop);
-    if (scrollEl.scrollHeight - scrollBottom <= 1) return;
+    // Short/empty buffers: the sentinel is visible at scrollTop 0 by
+    // construction. The viewport-fill effect handles those (silently);
+    // firing tryAutoLoad here would flash "Fetching more history…".
+    if (scrollEl.scrollHeight <= scrollEl.clientHeight + 1) return;
+    // No loop protection needed (svelte-infinite's loop detection is for
+    // loaders whose appends can be shorter than the rootMargin): every
+    // successful reveal adds BATCH_SIZE rows (~5-10k px), moving the
+    // sentinel far out of the 200px band, and the fetch path sets
+    // `loading`/`noMoreHistory`. A re-entry therefore means the user
+    // really scrolled back up — fire again.
     tryAutoLoad().catch((e) => console.error('[LoadMore] tryAutoLoad error:', e));
   }
 
@@ -311,12 +325,44 @@ $effect(() => {
     const el = document.getElementById('messages');
     if (!el) return;
     scrollEl = el;
-    el.addEventListener('scroll', onScroll, { passive: true });
+    // Arm the pre-load observer on the FIRST scroll. Mount-time scrollTop
+    // is transiently 0 before the open-pin (snap-to-bottom) lands; arming
+    // then would observe the sentinel as intersecting and pre-reveal
+    // history the user hasn't scrolled toward. The first scroll event
+    // (programmatic pin or user input) arms it; after that the sentinel
+    // sits far above the viewport until the user actually scrolls up.
+    const arm = () => {
+      el.removeEventListener('scroll', arm);
+      if (!scrollEl || !sentinelEl) return;
+      if (scrollEl.scrollHeight <= scrollEl.clientHeight + 1) return; // fill handles it
+      // rootMargin top 200px: extend the root's top edge 200px past the
+      // viewport so the sentinel (first row of the scroll content)
+      // intersects while the user is still up to 200px from the top.
+      // IntersectionObserver fires on layout, not scroll events, so the
+      // trigger cannot wedge at scrollTop 0.
+      io = new IntersectionObserver(
+        (entries) => {
+          if (entries[0]?.isIntersecting) onSentinelVisible();
+        },
+        { root: scrollEl, rootMargin: '200px 0px 0px 0px', threshold: 0 },
+      );
+      io.observe(sentinelEl);
+    };
+    el.addEventListener('scroll', arm, { passive: true });
     return () => {
-      el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('scroll', arm);
+      io?.disconnect();
+      io = null;
     };
   });
 </script>
+
+<!-- Reverse-infinite-scroll sentinel (svelte-infinite pattern): the
+     IntersectionObserver watches this 1px row, which sits at the very
+     top of the scroll content, and pre-loads the previous batch when
+     the user scrolls within 200px of it. Always rendered so the
+     observer stays armed; the callback guards on state. -->
+<div class="infinite-sentinel" aria-hidden="true" bind:this={sentinelEl}></div>
 
 {#if clearedAt}
   <!-- Backlog cleared — nothing to load -->
@@ -344,6 +390,15 @@ $effect(() => {
 {/if}
 
 <style>
+  /* Reverse-infinite-scroll sentinel — 1px invisible row at the top of
+     the scroll content. Must not collapse to 0px height (the observer
+     still works, but a 0-height box with threshold 0 is less reliable
+     across browsers). */
+  .infinite-sentinel {
+    height: 1px;
+    width: 100%;
+    pointer-events: none;
+  }
   /* IRCCloud fetch divider: line with centered text chip */
   .row.fetch {
     position: relative;
