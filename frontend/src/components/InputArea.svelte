@@ -6,6 +6,7 @@
   import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
   import { generateLabel, getAvatarColor, normalizeChannelName, stripPrefix } from '../lib/utils';
+  import { smoothScrollBy } from '../lib/scroll';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
   import { dataURIToBlob } from '../lib/upload';
@@ -79,7 +80,7 @@
   function scrollMessagesBy(delta: number): boolean {
     const container = document.getElementById('messages') as HTMLElement | null;
     if (!container || container.scrollHeight <= container.clientHeight) return false;
-    container.scrollBy({ top: delta, behavior: 'smooth' });
+    smoothScrollBy(container, delta, 100);
     return true;
   }
   let isTabbing = $state(false);

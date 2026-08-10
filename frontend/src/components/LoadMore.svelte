@@ -47,6 +47,8 @@
       lastOldestKey = '';
       lastFillAttemptCount = -1;
       lastFillScrollHeight = -1;
+      lastFillTime = 0;
+      silentFillIterations = 0;
     }
   });
 
@@ -124,6 +126,9 @@
   // messageCount, so progress is tracked via scrollHeight too.
   let lastFillAttemptCount = -1;
   let lastFillScrollHeight = -1;
+  let lastFillTime = 0;
+  let silentFillIterations = 0;
+  const MAX_SILENT_FILLS = 3;
   // Viewport auto-fill should NOT flash "Fetching more history…" — that
   // divider is for user-initiated loads when the window is already full
   // (scrollable) and the user scrolls to top / clicks Load more. For
@@ -131,7 +136,6 @@
   // messages), we silently fetch without the 200ms delay or loading UI
   // so a channel with no older history never flickers the divider.
   async function tryAutoFillSilent(): Promise<void> {
-    if (loading || clearedAt || noMoreHistory) return;
     if (onRevealFromMemory?.()) {
       fetchFailed = false;
       return;
@@ -201,14 +205,17 @@ $effect(() => {
       if (messageCount === lastFillAttemptCount && scrollEl.scrollHeight === lastFillScrollHeight) {
         return; // no progress — stop
       }
-      lastFillAttemptCount = messageCount;
-      lastFillScrollHeight = scrollEl.scrollHeight;
+      // 150ms debounce between silent fills + cap to 3 iterations (covers
+      // BATCH_SIZE=200 needing at most 2 fetches to overflow 800px at ~24px/row)
+      const now = Date.now();
+      if (now - lastFillTime < 150) return;
+      lastFillTime = now;
+      silentFillIterations += 1;
       tryAutoFillSilent().catch((e) => console.error('[LoadMore] fill error:', e));
     });
   });
 
   function sleep(ms: number): Promise<void> {
-    return new Promise((r) => setTimeout(r, ms));
   }
 
   async function tryAutoLoad(): Promise<void> {

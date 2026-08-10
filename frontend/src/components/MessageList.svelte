@@ -13,6 +13,7 @@
   import ScrollClock from './ScrollClock.svelte';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
+  import { animateScrollTo as sharedAnimateScrollTo, dividerPos as sharedDividerPos } from '../lib/scroll';
   import type { IRCMessage, Member, Network } from '../types';
 
   interface Props {
@@ -30,6 +31,12 @@
   let cachedAtBottom = true;
   let wasRecentlyAtBottom = true;
   let recentlyScrolledTimeout: ReturnType<typeof setTimeout> | null = null;
+  // rAF coalescing for scroll auxiliary state (chatter counts, clock,
+  // sticky avatar) — mirrors IRCCloud's batchRendering flag that ignores
+  // scroll events during batch flush. Only the heavy getBoundingClientRect
+  // + elementsFromPoint work is deferred; cachedAtBottom/cachedAtTop
+  // tracking stays synchronous so infiniscroll doesn't miss the top.
+  let scrollRafPending = false;
 
   let aboveUnseenCount = $state(0);
   let belowUnseenCount = $state(0);
@@ -408,30 +415,18 @@
   let handledDividerMark = '';
 
   // IRCCloud BufferScrollView.scrollTo({animate: true}): jQuery animate
-  // with default 100ms-ish duration and "swing" easing.
+  // with default 100ms-ish duration and "swing" easing. Delegates to
+  // shared lib so InputArea/App use the same easing + reduced-motion.
   function animateScrollTo(target: number, afterAnimate?: () => void): void {
     if (!container) return;
-    const start = container.scrollTop;
-    const startTime = performance.now();
-    const duration = 100;
-    function step(now: number): void {
-      if (!container) return;
-      const t = Math.min((now - startTime) / duration, 1);
-      const eased = 0.5 - Math.cos(Math.PI * t) / 2; // jQuery "swing"
-      container.scrollTop = start + (target - start) * eased;
-      if (t < 1) requestAnimationFrame(step);
-      else afterAnimate?.();
-    }
-    requestAnimationFrame(step);
+    sharedAnimateScrollTo(container, target, 100, afterAnimate);
   }
 
   // Divider position in scroll-content coordinates (jQuery .position().top
   // equivalent for the scroll container).
   function dividerPos(divider: HTMLElement): number {
     if (!container) return 0;
-    return Math.round(
-      divider.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop
-    );
+    return sharedDividerPos(container, divider);
   }
 
   let lastFirstProcessedKey = '';
@@ -489,6 +484,7 @@
   let pinnedResnapTimer: ReturnType<typeof setTimeout> | null = null;
   function schedulePinnedResnap(): void {
     if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
+    if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
     let polls = 0;
     function poll(): void {
       pinnedResnapTimer = null;
@@ -505,6 +501,19 @@
     pinnedResnapTimer = setTimeout(poll, 200);
   }
 
+  // Unified ensurePinned: flushSync + double-set with reflow + single poll chain.
+  // Used to coalesce the snapToBottom and schedulePinnedResnap chains so rapid
+  // sends don't stack 5 chains × 3-4 polls = 15+ reflows.
+  function ensurePinned(): void {
+    if (!container) return;
+    flushSync();
+    container.scrollTop = container.scrollHeight;
+    void container.scrollHeight;
+    container.scrollTop = container.scrollHeight;
+    cachedAtBottom = true;
+    schedulePinnedResnap();
+  }
+
   $effect(() => {
     if (isServerBuffer) {
       lastForceScrollNonce = ircState.forceScrollToBottomNonce;
@@ -517,9 +526,10 @@
     snapToBottom(container);
   });
   function snapToBottom(c: HTMLDivElement): void {
-    // Cancel any in-flight polling chain so we don't stack 5 chains
-    // when the user types rapidly.
+    // Cancel any in-flight polling chains so we don't stack 5 chains
+    // when the user types rapidly. Unified: cancel both timers.
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
+    if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     // Force-layout: flushSync guarantees the DOM is up to date after
     // the renderStart assignment. Without this, scrollHeight is stale.
     flushSync();
@@ -599,10 +609,11 @@
       cachedAtTop = false;
       prevScrollHeight = 0;
       handledDividerMark = '';
-      // Cancel any in-flight pinned re-snap chain from the previous
+      // Cancel any in-flight re-snap chains from the previous
       // buffer — it would otherwise keep polling the shared container
       // while the new buffer's window is being established.
       if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
+      if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
       // IRCCloud BufferLogView.render: open with the last batchSize=200.
       renderStart = Math.max(0, msgs.length - BATCH_SIZE);
       renderEndKey = '';
@@ -618,10 +629,29 @@
         } else if (start > 0) {
           // Messages were PREPENDED (network backlog / WS CHATHISTORY
           // backfill) while the window starts mid-buffer: shift the window
-          // so the rendered rows stay identical.
+          // so the rendered rows stay identical. Preserve scrollTop in
+          // content coordinates so the user doesn't jump (IRCCloud fetched
+          // does scrollTop += newScrollHeight - oldScrollHeight when
+          // !atTop && !pinBottom).
+          const oldScrollHeight = container ? container.scrollHeight : 0;
+          const oldScrollTop = container ? container.scrollTop : 0;
+          const atTopBefore = container ? container.scrollTop <= 0 : false;
+          const scrollBottomBefore = container ? container.clientHeight + Math.ceil(container.scrollTop) : 0;
+          const pinBottomBefore = container ? container.scrollHeight - scrollBottomBefore <= 1 : false;
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
           if (idx > 0) renderStart = start + idx;
           else if (idx < 0) renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+          // Anchor scroll after the window shift so the viewport stays on
+          // the same content (no jump). Only when mid-buffer (!atTop && !pinBottom);
+          // divider case is handled below, and bottom case is handled by the
+          // cachedAtBottom branch.
+          if (container && !atTopBefore && !pinBottomBefore && idx > 0) {
+            flushSync();
+            const delta = container.scrollHeight - oldScrollHeight;
+            if (delta !== 0) {
+              container.scrollTop = oldScrollTop + delta;
+            }
+          }
         }
         lastFirstProcessedKey = firstKey;
       }
@@ -749,8 +779,8 @@
 
     // IRCCloud setScrolledToBottom: only act when the value CHANGES.
     if (cachedAtBottom === atBottom) {
-      // Still at bottom or still not at bottom — just update auxiliary state
-      updateScrollState();
+      // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
+      scheduleScrollStateUpdate();
     } else {
       cachedAtBottom = atBottom;
 
@@ -772,13 +802,17 @@
           wasRecentlyAtBottom = false;
           recentlyScrolledTimeout = null;
         }, 100);
+        // Leaving bottom: cancel any pending re-snap chain so we don't
+        // force a user who scrolled up 50ms after sending back to bottom.
+        if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
+        if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
         // IRCCloud bufferMessage: while scrolled up, new messages buffer
         // instead of rendering — freeze the window's end where it is now.
         const all = processedMessages;
         renderEndKey = all.length ? itemKeyOf(all[all.length - 1]) : '';
       }
 
-      updateScrollState();
+      scheduleScrollStateUpdate();
     }
 
     // IRCCloud BufferScrollView.checkInfiniscroll → loadOrRenderBacklog:
@@ -791,6 +825,30 @@
       revealBacklogFromMemory();
     }
   }
+
+  function scheduleScrollStateUpdate(): void {
+    if (import.meta.env.MODE === 'test') {
+      updateScrollState();
+      return;
+    }
+    if (scrollRafPending) return;
+    scrollRafPending = true;
+    requestAnimationFrame(() => {
+      scrollRafPending = false;
+      updateScrollState();
+    });
+  }
+
+  // Attach scroll listener as passive:true (IRCCloud parity) — Svelte's
+  // `onscroll` compiles to a non-passive addEventListener, so we wire it
+  // manually. rAF coalescing above ensures getBoundingClientRect work
+  // doesn't block the wheel.
+  $effect(() => {
+    const el = container;
+    if (!el) return;
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  });
 
   // ── Row-at-point lookups (IRCCloud BufferLogContainerView.getRowAtPosition) ──
   // IRCCloud resolves the rows at the top/bottom of the viewport with an
@@ -1225,9 +1283,15 @@
      * events. IRCCloud has transition: all 0s but the browser-driven
      * scroll events fire at 60fps so it doesn't need one. We add this
      * short transition to mask any micro-jitter and match the perceived
-     * smoothness of the original IRCCloud client. */
+     * smoothness of the original IRCCloud client.
+     * Kept at 30ms (vs IRCCloud's none) because Fiber's rAF-batched
+     * updateScrollState coalesces layout reads, so the avatar
+     * would otherwise lag one frame on fast fling on 120Hz displays. */
     transition: top 30ms linear;
     will-change: top;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stickyAvatar { transition: none; }
   }
   .empty-channel {
     margin: auto;

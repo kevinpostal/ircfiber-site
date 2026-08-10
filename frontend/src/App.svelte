@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { smoothScrollBy } from './lib/scroll';
   import Sidebar from './components/Sidebar.svelte';
   import ChatArea from './components/ChatArea.svelte';
   import MemberList from './components/MemberList.svelte';
@@ -491,7 +492,7 @@ let showNetworkForm: boolean = $state(false);
         const container = document.getElementById('messages') as HTMLElement | null;
         if (container && container.scrollHeight > container.clientHeight) {
           e.preventDefault();
-          container.scrollBy({ top: e.key === 'ArrowUp' ? -120 : 120, behavior: 'smooth' });
+          smoothScrollBy(container, e.key === 'ArrowUp' ? -120 : 120, 100);
           return;
         }
       }

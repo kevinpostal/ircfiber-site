@@ -1,0 +1,42 @@
+/**
+ * Shared scroll helpers — mirrors IRCCloud's animateScrollTo (swing 100ms).
+ * Extracted from MessageList.svelte:412-426 so InputArea/App can reuse
+ * the same easing without duplicating the rAF loop.
+ */
+
+export function animateScrollTo(
+  container: HTMLElement,
+  target: number,
+  duration = 100,
+  afterAnimate?: () => void,
+): void {
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    container.scrollTop = target;
+    afterAnimate?.();
+    return;
+  }
+  const start = container.scrollTop;
+  const startTime = performance.now();
+  function step(now: number): void {
+    const t = Math.min((now - startTime) / duration, 1);
+    const eased = 0.5 - Math.cos(Math.PI * t) / 2; // jQuery "swing"
+    container.scrollTop = start + (target - start) * eased;
+    if (t < 1) requestAnimationFrame(step);
+    else afterAnimate?.();
+  }
+  requestAnimationFrame(step);
+}
+
+export function smoothScrollBy(container: HTMLElement, delta: number, duration = 100): void {
+  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    container.scrollTop += delta;
+    return;
+  }
+  animateScrollTo(container, container.scrollTop + delta, duration);
+}
+
+export function dividerPos(container: HTMLElement, divider: HTMLElement): number {
+  return Math.round(
+    divider.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop,
+  );
+}
