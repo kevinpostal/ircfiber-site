@@ -347,7 +347,7 @@
       const showDate = !!(msgDate && msgDate !== prevDate && msgDate !== lastDate);
       if (showDate) lastDate = msgDate;
       const showBacklogDivider = !dividerPlaced && dividerMark !== '' && i > 0 &&
-        (msg.msgid ? msg.msgid === dividerMark : `t:${msg.t}` === dividerMark);
+        itemKeyOf(msg) === dividerMark;
       if (showBacklogDivider) dividerPlaced = true;
       // Use the absolute index in processedMessages as the tiebreaker so the
       // key stays stable when the render window shifts (trim/reveal). Without
