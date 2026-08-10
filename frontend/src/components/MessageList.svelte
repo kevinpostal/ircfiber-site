@@ -486,13 +486,24 @@
     if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
     let polls = 0;
+    // Track scrollTop between polls: if it decreased the user scrolled
+    // up (even without a scroll event for small trackpad deltas), so
+    // clear cachedAtBottom. If it stayed same or increased (image/embed
+    // growth), it's genuine pinned-at-bottom drift — snap to correct.
+    let lastPollScrollTop = container ? container.scrollTop : 0;
     function poll(): void {
       pinnedResnapTimer = null;
-      if (!cachedAtBottom || !container) return;
+      if (!container) return;
+      if (!cachedAtBottom) { lastPollScrollTop = container.scrollTop; return; }
+      // User scrolled up since last poll? Clear cachedAtBottom.
+      if (container.scrollTop < lastPollScrollTop) {
+        cachedAtBottom = false;
+        lastPollScrollTop = container.scrollTop;
+        return;
+      }
+      lastPollScrollTop = container.scrollTop;
       // Only write when the viewport actually drifted off the bottom —
       // avoids forcing a layout read on every poll tick while settled.
-      // 4px threshold — same as ResizeObserver, prevents 1-2px font
-      // settling jitter from yanking the user back to bottom.
       const bottom = container.scrollHeight - container.clientHeight;
       if (bottom - container.scrollTop > 4) {
         container.scrollTop = container.scrollHeight;
@@ -502,10 +513,6 @@
     }
     pinnedResnapTimer = setTimeout(poll, 200);
   }
-
-  // Unified ensurePinned: flushSync + double-set with reflow + single poll chain.
-  // Used to coalesce the snapToBottom and schedulePinnedResnap chains so rapid
-  // sends don't stack 5 chains × 3-4 polls = 15+ reflows.
   function ensurePinned(): void {
     if (!container) return;
     flushSync();
@@ -583,20 +590,28 @@
     if (isServerBuffer) return;
     const el = container;
     if (!el) return;
+    let lastResizeScrollTop = 0;
     const ro = new ResizeObserver(() => {
-      if (cachedAtBottom && container) {
-        // IRCCloud isScrolledToBottom(true) check: only snap if we've
-        // drifted away from the bottom (don't write scrollTop on every
-        // resize frame when nothing moved). Use 4px threshold — a 1px
-        // drift from font/metric settling shouldn't yank the scrollbar
-        // while the user is reading.
-        const scrollHeight = container.scrollHeight;
-        const offsetHeight = container.clientHeight;
-        const scrollPos = Math.ceil(container.scrollTop);
-        const bottom = (scrollHeight - offsetHeight) + 1;
-        if ((bottom - scrollPos) > 4) {
-          container.scrollTop = scrollHeight;
-        }
+      if (!container) return;
+      // If scrollTop decreased since last resize, the user scrolled up
+      // (even without a scroll event for small trackpad deltas). Clear
+      // cachedAtBottom so we don't snap them back.
+      if (container.scrollTop < lastResizeScrollTop) {
+        cachedAtBottom = false;
+        lastResizeScrollTop = container.scrollTop;
+        return;
+      }
+      lastResizeScrollTop = container.scrollTop;
+      if (!cachedAtBottom) return;
+      // IRCCloud isScrolledToBottom(true) check: only snap if we've
+      // drifted away from the bottom (don't write scrollTop on every
+      // resize frame when nothing moved).
+      const scrollHeight = container.scrollHeight;
+      const offsetHeight = container.clientHeight;
+      const scrollPos = Math.ceil(container.scrollTop);
+      const bottom = (scrollHeight - offsetHeight) + 1;
+      if ((bottom - scrollPos) > 4) {
+        container.scrollTop = scrollHeight;
       }
     });
     ro.observe(el);
