@@ -31,6 +31,12 @@
   let cachedAtBottom = true;
   let wasRecentlyAtBottom = true;
   let recentlyScrolledTimeout: ReturnType<typeof setTimeout> | null = null;
+  // Pending unconditional snap for a freshly-opened buffer. Set when the
+  // bufferKey changes but the container is not yet bound (first mount
+  // after a refresh) so the normal `if (!container) return` early-exit
+  // doesn't swallow the initial bottom snap. Cleared on the next run
+  // once the container exists and we have snapped.
+  let pendingInitialSnap = false;
   // rAF coalescing for scroll auxiliary state (chatter counts, clock,
   // sticky avatar) — mirrors IRCCloud's batchRendering flag that ignores
   // scroll events during batch flush. Only the heavy getBoundingClientRect
@@ -518,7 +524,7 @@
         container.scrollTop = container.scrollHeight;
       }
       polls += 1;
-      if (polls < 4) pinnedResnapTimer = setTimeout(poll, 200);
+      if (polls < 8) pinnedResnapTimer = setTimeout(poll, 200);
     }
     pinnedResnapTimer = setTimeout(poll, 200);
   }
@@ -539,8 +545,8 @@
     }
     const nonce = ircState.forceScrollToBottomNonce;
     if (nonce === lastForceScrollNonce) return;
-    lastForceScrollNonce = nonce;
     if (!container) return;
+    lastForceScrollNonce = nonce;
     snapToBottom(container);
   });
   function snapToBottom(c: HTMLDivElement): void {
@@ -628,7 +634,9 @@
   $effect(() => {
     const key = bufferKey;
     const msgs = processedMessages;
-    if (key !== lastBufferKey) {
+    const isNewBuffer = key !== lastBufferKey;
+    if (isNewBuffer) {
+      pendingInitialSnap = true;
       lastBufferKey = key;
       cachedAtBottom = true;
       wasRecentlyAtBottom = true;
@@ -703,22 +711,23 @@
     const newDivider = mark !== '' && mark !== handledDividerMark;
     handledDividerMark = mark;
 
-    if (cachedAtBottom && !isServerBuffer) {
-      // User-intent check ONLY via scrollTop direction (stick-to-bottom-svelte
-      // model): a decreased scrollTop means the user scrolled up — clear the
-      // stick. Deliberately NOT a distance check: `distFromBottom > 50` misread
-      // content growth BELOW a pinned viewport (a tall embed row lands →
-      // scrollHeight grows → the user is suddenly >50px above the new bottom)
-      // as a user scroll-up and broke the stick — messages stopped sticking
-      // to the bottom exactly when embeds arrived.
-      //
-      // Baseline is prevScrollTop (the last scroll EVENT's position, updated
-      // by handleScroll's dedup) — never stale: a re-window clamp or a
-      // band re-engagement moves prevScrollTop with the event, so the
-      // comparison only fires on a genuine decrease with no intervening
-      // event (tiny trackpad deltas Chromium doesn't report).
-      const scrolledUp = container ? container.scrollTop < prevScrollTop - 2 : false;
-      if (scrolledUp) { cachedAtBottom = false; } else {
+    // Refresh-not-at-bottom fix: a freshly-opened buffer (first mount
+    // after a page reload) must always land at the very bottom, even
+    // if a stray scroll event cleared cachedAtBottom between the
+    // renderStart assignment and this snap check.  pendingInitialSnap
+    // survives the `if (!container) return` gap on first mount and
+    // forces one unconditional snap.
+    const isInitialSnap = pendingInitialSnap;
+    pendingInitialSnap = false;
+    const shouldSnapToBottom = !isServerBuffer && (cachedAtBottom || isInitialSnap);
+
+    if (shouldSnapToBottom) {
+      // For an initial buffer open we force the snap unconditionally —
+      // do not run the scrolledUp direction check that would otherwise
+      // clear the stick when scrollHeight grew under a pinned viewport.
+      if (!isInitialSnap) {
+        const scrolledUp = container ? container.scrollTop < prevScrollTop - 2 : false;
+        if (scrolledUp) { cachedAtBottom = false; } else {
       maybeTrim();
       // Ensure trim has been applied to the DOM before measuring
       // scrollHeight. Without this, renderStart may have just been moved
@@ -785,6 +794,39 @@
       // entrance animation, embed decode, sync-driven realname spans)
       // can land well after the rAF above.
       schedulePinnedResnap();
+      }
+      } else {
+        // Initial snap for a freshly-opened buffer (refresh): unconditional.
+        maybeTrim();
+        flushSync();
+        const allMsgs2 = processedMessages;
+        if (allMsgs2.length > 0) {
+          const lastKey2 = itemKeyOf(allMsgs2[allMsgs2.length - 1]);
+          if (lastKey2 !== lastBottomKey) {
+            lastBottomKey = lastKey2;
+          }
+        }
+        // Double-set with layout reflow, then rAF + resnap chain.
+        // Use rAF to ensure the container has been laid out (clientHeight
+        // > 0) after the isBootLoading → ChatArea mount transition.
+        // Without this, a synchronous snap can land at scrollTop 0 when
+        // the flex container hasn't been sized yet, leaving the user
+        // stranded mid-history after a refresh.
+        const doSnap = () => {
+          if (!container) return;
+          container.scrollTop = container.scrollHeight;
+          void container.scrollHeight;
+          container.scrollTop = container.scrollHeight;
+        };
+        doSnap();
+        cachedAtTop = false;
+        requestAnimationFrame(() => {
+          doSnap();
+          if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 2) {
+            doSnap();
+          }
+          schedulePinnedResnap();
+        });
       }
     } else if (newDivider && cachedAtTop) {
       // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
