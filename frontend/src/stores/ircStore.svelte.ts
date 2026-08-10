@@ -822,14 +822,11 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
 
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const list = ircState.messages[key] ?? [];
-  // Build a Set of eids/msgids already in the buffer so dedup is O(1)
-  // per new message instead of O(n) with list.some().  Without this, a
-  // burst of 200 messages appended to a 200-message list is 40,000 ops.
   const seenEids = new Set<number>();
   const seenMsgids = new Set<string>();
   for (const m of list) {
     if (m.eid != null) seenEids.add(m.eid);
-    else if (m.msgid) seenMsgids.add(m.msgid);
+    if (m.msgid) seenMsgids.add(m.msgid);
   }
   const pending: IRCMessage[] = [];
   const newForProcessed: IRCMessage[] = [];
@@ -912,16 +909,15 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     }
     // Dedup against the existing list AND against earlier messages in
     // the same batch (eid/msgid could collide within a burst if the
-    // server replays the same event). Without the within-batch check
-    // the same eid can reach the {#each} twice and Svelte throws
-    // each_key_duplicate.
-    if (msg.eid != null) {
-      if (seenEids.has(msg.eid)) continue;
-      seenEids.add(msg.eid);
-    } else if (msg.msgid) {
-      if (seenMsgids.has(msg.msgid)) continue;
-      seenMsgids.add(msg.msgid);
-    }
+    // server replays the same event). Must check BOTH eid and msgid
+    // even when eid is present — history can return the same msgid
+    // with two different eids (e.g. 65ZsMF… appeared as 225503 and
+    // 223472 in #superbowl), which the old else-if missed and
+    // rendered twice. Without the within-batch check the same eid
+    // can reach the {#each} twice and Svelte throws each_key_duplicate.
+    if ((msg.eid != null && seenEids.has(msg.eid)) || (msg.msgid && seenMsgids.has(msg.msgid))) continue;
+    if (msg.eid != null) seenEids.add(msg.eid);
+    if (msg.msgid) seenMsgids.add(msg.msgid);
     // Final fallback: pending optimistic with same text/nick anywhere in
     // list, even when isSelf was false (curNick mismatch or no se tag).
     let replacedByFallback = false;
@@ -930,7 +926,6 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       if (cand.label && !cand.eid && !cand.msgid && (cand.text ?? '').trim() === (msg.text ?? '').trim() && (cand.nick ?? '').toLowerCase() === (msg.nick ?? '').toLowerCase() && cand.command === msg.command && Math.abs((cand.t || 0) - (msg.t || 0)) < 30000) {
         if (!msg.label && cand.label) msg.label = cand.label;
         if (cand.label) ircState.optimisticMessages.delete(cand.label);
-        list[i] = msg;
         replacedEdit = true;
         replacedByFallback = true;
         break;
@@ -1187,9 +1182,21 @@ export function loadCachedMessages(networkId: string, bufferName: string): IRCMe
 
 export function setMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
-  ircState.messages[key] = msgs;
-  ircState.processedMessages[key] = buildProcessedBuffer(msgs);
-  saveMessageCache(key, msgs);
+  // Dedup within the incoming batch — history can contain the same
+  // msgid twice with different eids (e.g. 65ZsMF… as 225503 and
+  // 223472). The old setMessages stored both and rendered twice.
+  const seenEids = new Set<number>();
+  const seenMsgids = new Set<string>();
+  const deduped: IRCMessage[] = [];
+  for (const m of msgs) {
+    if ((m.eid != null && seenEids.has(m.eid)) || (m.msgid && seenMsgids.has(m.msgid))) continue;
+    if (m.eid != null) seenEids.add(m.eid);
+    if (m.msgid) seenMsgids.add(m.msgid);
+    deduped.push(m);
+  }
+  ircState.messages[key] = deduped;
+  ircState.processedMessages[key] = buildProcessedBuffer(deduped);
+  saveMessageCache(key, deduped);
   markNetworkSeen(networkId);
 }
 
@@ -1217,10 +1224,9 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   const dedupKeys = new Set<string>();
   for (const m of existing) {
     if (m.eid != null) eidSet.add(m.eid);
-    else if (m.msgid) dedupKeys.add(m.msgid);
+    if (m.msgid) dedupKeys.add(m.msgid);
     else if (m.t) dedupKeys.add(`!${m.t}:${(m.text || '').slice(0, 80)}`);
   }
-
   // Self-echo dedup for batch-tagged echoes: events inside an in-flight
   // CHATHISTORY batch carry batch=chathistory and are routed here (the
   // backfill path) instead of appendMessage. A batch fetched right after
@@ -1256,17 +1262,15 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
       existing[matchIdx] = m;
       // Claim the echo's identity so the dedup loop below skips it.
       if (m.eid != null) eidSet.add(m.eid);
-      else if (m.msgid) dedupKeys.add(m.msgid);
+      if (m.msgid) dedupKeys.add(m.msgid);
     }
   }
 
   const filtered: IRCMessage[] = [];
   for (const m of msgs) {
-    if (m.eid != null) {
-      if (eidSet.has(m.eid)) continue;
-      eidSet.add(m.eid);
-    } else if (m.msgid) {
-      if (dedupKeys.has(m.msgid)) continue;
+    if ((m.eid != null && eidSet.has(m.eid)) || (m.msgid && dedupKeys.has(m.msgid))) continue;
+    if (m.eid != null) eidSet.add(m.eid);
+    if (m.msgid) {
       dedupKeys.add(m.msgid);
     } else if (m.t) {
       const k = `!${m.t}:${(m.text || '').slice(0, 80)}`;
@@ -1275,7 +1279,6 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     }
     filtered.push(m);
   }
-
   if (filtered.length > 0) {
     const boundary = existing.find(m => m.eid != null || m.msgid || m.t);
     if (boundary) {
