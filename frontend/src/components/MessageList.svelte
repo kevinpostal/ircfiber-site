@@ -305,24 +305,23 @@
     if (atTop && !pinBottom) {
       const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
       if (divider) {
-        const pos = dividerPos(divider);
-        // Snap the divider to the top of the viewport, showing a sliver of
-        // the newly-revealed batch above it. Deliberately NO animated
-        // scroll to (pos - 152): the 100ms swing overrides the user's
-        // scroll-up input for 100ms and pushes their reading position down
-        // ~120px every time a batch lands — that reads as "scrolling up
-        // forces me back down". The boundary message stays put under the
-        // divider; the user scrolls up through the new batch at their own
-        // pace.
+        // The browser's native scroll anchoring (overflow-anchor is NOT
+        // disabled) already kept the boundary message at the top of the
+        // viewport when the chunk was prepended — scrollTop grew by the
+        // prepended height. Deliberately do NOT override it with a
+        // divider-position snap: that shifted the user's content down
+        // ~60px at every chunk boundary ("holding ArrowUp keeps resetting
+        // me back down"). The divider slides into view as the user scrolls
+        // up through the new batch.
         //
         // The 260px floor keeps the viewport OUT of LoadMore's 200px
-        // pre-load band (rootMargin): if the divider sits near the top
-        // (a short chunk), scrollTop = pos - 31 could clamp to 0 and the
-        // sentinel would stay intersecting forever — no IO transition, no
-        // next chunk, and wheel-up at scrollTop 0 fires no scroll events.
+        // pre-load band (rootMargin): if the chunk is tiny (near memory
+        // exhaustion), the anchored scrollTop stays inside the band and
+        // the sentinel would keep intersecting — no IO transition, no next
+        // chunk, and wheel-up at scrollTop 0 fires no scroll events.
         // Landing at ≥260px pulls the sentinel clearly out of the band so
         // the next deliberate scroll to the top re-enters and fires.
-        container.scrollTop = Math.max(pos - 31, 260);
+        if (container.scrollTop < 260) container.scrollTop = 260;
       } else {
         // Guard: never strand the user at scrollTop 0 (no scroll events
         // fire at the boundary, so the next chunk could never trigger).
@@ -799,13 +798,11 @@
         // fire at the boundary, so the next batch could never trigger.
         if (container.scrollTop <= 0) container.scrollTop = 48;
       } else {
-        const pos = dividerPos(divider);
-        // Same as revealBacklogFromMemory: snap the divider to the top,
-        // no animated scroll-to-152 (see note there — the swing fights the
-        // user's scroll-up input and reads as a forced jump back down).
-        // 260px floor: keep the viewport out of LoadMore's 200px pre-load
-        // band so the sentinel re-enters on the next deliberate scroll.
-        container.scrollTop = Math.max(pos - 31, 260);
+        // Same as revealBacklogFromMemory: keep the browser's native
+        // anchoring position (no divider-snap override — that shifted the
+        // user's content down and read as "reset me back down"), only
+        // enforce the 260px band-exit floor for tiny chunks.
+        if (container.scrollTop < 260) container.scrollTop = 260;
       }
     }
     // else: browser handles position (IRCCloud: fetchDone(true, pinBottom) → no scroll)
@@ -919,11 +916,44 @@
   // `onscroll` compiles to a non-passive addEventListener, so we wire it
   // manually. rAF coalescing above ensures getBoundingClientRect work
   // doesn't block the wheel.
+  //
+  // User scroll-INTENT pre-clear (stick-to-bottom-svelte handleWheel /
+  // handlePointerDown): the pinned-snap machinery (effect bottom branch,
+  // ResizeObserver, resnap polls) reads cachedAtBottom and yanks the
+  // viewport to the bottom. A message landing between the user's input
+  // (keydown/wheel) and the FIRST scroll event — which clears
+  // cachedAtBottom via the strict check — would snap them back down
+  // ("holding ArrowUp keeps resetting me back down"). Clear the stick at
+  // input time, before any scroll event fires. The near-bottom band
+  // re-engages it on the next downward scroll, so clearing on any wheel
+  // or scroll key is safe.
+  const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Spacebar']);
   $effect(() => {
     const el = container;
     if (!el) return;
+    const clearStickOnUserInput = () => {
+      if (!cachedAtBottom) return;
+      cachedAtBottom = false;
+      if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
+      if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
+    };
+    const onWheel = () => clearStickOnUserInput();
+    const onPointerDown = () => clearStickOnUserInput();
+    const onKeyDown = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || (t as HTMLElement).isContentEditable)) return;
+      if (SCROLL_KEYS.has(e.key)) clearStickOnUserInput();
+    };
     el.addEventListener('scroll', handleScroll, { passive: true });
-    return () => el.removeEventListener('scroll', handleScroll);
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('keydown', onKeyDown, { capture: true });
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown, { capture: true } as EventListenerOptions);
+    };
   });
 
   // ── Row-at-point lookups (IRCCloud BufferLogContainerView.getRowAtPosition) ──

@@ -1116,6 +1116,32 @@ describe('MessageList', () => {
 			expect(Math.abs(drift)).toBeLessThan(10);
 		});
 
+		it('does NOT snap back when a message lands right after ArrowUp is pressed (input-intent pre-clear)', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+
+			// User presses ArrowUp (outside an input) — the stick clears at
+			// input time, BEFORE the resulting scroll event fires.
+			// Regression: on a busy channel a message arriving between the
+			// keydown and the first scroll event used to find cachedAtBottom
+			// still true and snap the viewport back to the bottom (holding
+			// ArrowUp "keeps resetting me back down").
+			window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG', nick: 'carol', text: 'lands right after the keydown', t: Date.now(), msgid: 'race-1',
+				timestamp: new Date().toISOString(), params: [], prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 300));
+
+			// The message grew the bottom below the user's pinned position;
+			// the user must NOT have been yanked down to it.
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(drift).toBeGreaterThan(10);
+		});
+
 		it('re-sticks when the user scrolls down near the bottom after reading up', async () => {
 			const container = await setupScrollableChannel(40);
 			if (!container) return;
