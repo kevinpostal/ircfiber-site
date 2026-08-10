@@ -189,11 +189,16 @@ export function isSkippedCommand(cmd: string): boolean {
   //   - WHO (315, 352), TOPIC (332, 333), MOTD (376, 422).
   //   - Ban list (367, 368): consumed by the ban-list overlay; 368 is
   //     "End of Channel Ban List" and is redundant with the overlay UI.
-  //   - PONG, TAGMSG (IRCv3 typing/react), QUIT duplicates, ERR_NOSUCHNICK.
+  //   - PONG, TAGMSG (IRCv3 typing/react), ERR_NOSUCHNICK.
+  // IRCCloud parity: QUIT is NOT skipped — it renders as
+  // type_quit / joinPart grouping (see MessageRow svelte type_quit
+  // and messageBuilder buildJoinPartGroup quit sentence). Mirrors
+  // IRCCloud's backlog where :nick!u@h QUIT :reason appears in
+  // channel buffers alongside JOIN / PART.
   // The engine also drops the same set at publish time (see the
   // `noPublishDuringRegistration` guard in source/ircfiber/irc/connection.d)
   // so this filter is defense-in-depth for older binaries / replays.
-  return ['315', '352', '332', '333', '353', '354', '366', '367', '368', '376', '422', 'PONG', 'TAGMSG', 'QUIT', '311', '312', '313', '317', '318', '319', '330', '301', '671', '401', 'you_nickchange'].includes(cmd);
+  return ['315', '352', '332', '333', '353', '354', '366', '367', '368', '376', '422', 'PONG', 'TAGMSG', '311', '312', '313', '317', '318', '319', '330', '301', '671', '401', 'you_nickchange'].includes(cmd);
 }
 
 export function isDisconnectLike(cmd: string, text?: string): boolean {

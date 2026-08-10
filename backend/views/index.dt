@@ -26,4 +26,4 @@ block body
 
 block scripts
   link(rel="stylesheet", href="/public/dist/assets/main-B4FHR7UE.css")
-  script(type="module", src="/public/dist/assets/main-C67sCHDh.js")
+  script(type="module", src="/public/dist/assets/main-C3f27HA7.js")
