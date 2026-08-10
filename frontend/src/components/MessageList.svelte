@@ -491,8 +491,10 @@
       if (!cachedAtBottom || !container) return;
       // Only write when the viewport actually drifted off the bottom —
       // avoids forcing a layout read on every poll tick while settled.
+      // 4px threshold — same as ResizeObserver, prevents 1-2px font
+      // settling jitter from yanking the user back to bottom.
       const bottom = container.scrollHeight - container.clientHeight;
-      if (bottom - container.scrollTop > 1) {
+      if (bottom - container.scrollTop > 4) {
         container.scrollTop = container.scrollHeight;
       }
       polls += 1;
@@ -585,12 +587,14 @@
       if (cachedAtBottom && container) {
         // IRCCloud isScrolledToBottom(true) check: only snap if we've
         // drifted away from the bottom (don't write scrollTop on every
-        // resize frame when nothing moved).
+        // resize frame when nothing moved). Use 4px threshold — a 1px
+        // drift from font/metric settling shouldn't yank the scrollbar
+        // while the user is reading.
         const scrollHeight = container.scrollHeight;
         const offsetHeight = container.clientHeight;
         const scrollPos = Math.ceil(container.scrollTop);
         const bottom = (scrollHeight - offsetHeight) + 1;
-        if ((bottom - scrollPos) > 1) {
+        if ((bottom - scrollPos) > 4) {
           container.scrollTop = scrollHeight;
         }
       }
@@ -773,9 +777,15 @@
     // IRCCloud isScrolledToTop(): user is at the very top of the container.
     cachedAtTop = scrollTop <= 0;
 
-    // IRCCloud isScrolledToBottom(true): 1px slop for zoomed browsers.
+    // IRCCloud isScrolledToBottom(true): 1px slop for zoomed browsers
+    // when ARRIVING at the bottom. When already at the bottom, use a
+    // strict 0px check — any intentional scroll-up (even 1px on a
+    // trackpad) must clear cachedAtBottom immediately, otherwise the
+    // ResizeObserver and schedulePinnedResnap keep fighting the user.
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
-    const atBottom = scrollHeight - scrollBottom <= 1;
+    const atBottom = cachedAtBottom
+      ? scrollHeight - scrollBottom <= 0   // strict: already at bottom, any scroll-up leaves
+      : scrollHeight - scrollBottom <= 1;  // loose: 1px slop to arrive (zoom-safe)
 
     // IRCCloud setScrolledToBottom: only act when the value CHANGES.
     if (cachedAtBottom === atBottom) {
