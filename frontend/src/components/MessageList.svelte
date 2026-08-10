@@ -482,6 +482,7 @@
   // never stacks chains. Reading scrolled-up history is never forced —
   // the poll bails the moment the user scrolls away.
   let pinnedResnapTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastEffectScrollTop = 0;
   function schedulePinnedResnap(): void {
     if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
@@ -682,6 +683,8 @@
     handledDividerMark = mark;
 
     if (cachedAtBottom && !isServerBuffer) {
+      if (container && container.scrollTop < lastEffectScrollTop - 2) { cachedAtBottom = false; lastEffectScrollTop = container.scrollTop; } else {
+      lastEffectScrollTop = container ? container.scrollTop : lastEffectScrollTop;
       maybeTrim();
       // Ensure trim has been applied to the DOM before measuring
       // scrollHeight. Without this, renderStart may have just been moved
@@ -748,6 +751,7 @@
       // entrance animation, embed decode, sync-driven realname spans)
       // can land well after the rAF above.
       schedulePinnedResnap();
+      }
     } else if (newDivider && cachedAtTop) {
       // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
       // Do it synchronously (no rAF) so the first paint after prepend already
@@ -1282,7 +1286,6 @@
     scroll-behavior: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    overflow-anchor: none;
   }
   /* IRCCloud .clockShown: pad the top rows so the floating scroll clock
      doesn't cover the loadMore button / fetching divider. */
