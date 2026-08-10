@@ -622,29 +622,29 @@
     } else {
       const firstKey = msgs.length ? itemKeyOf(msgs[0]) : '';
       if (firstKey !== lastFirstProcessedKey) {
-        const start = untrack(() => renderStart);
         if (lastFirstProcessedKey === '') {
           // Buffer content arrived (initial history load): window the tail.
           renderStart = Math.max(0, msgs.length - BATCH_SIZE);
-        } else if (start > 0) {
-          // Messages were PREPENDED (network backlog / WS CHATHISTORY
-          // backfill) while the window starts mid-buffer: shift the window
-          // so the rendered rows stay identical. Preserve scrollTop in
-          // content coordinates so the user doesn't jump (IRCCloud fetched
-          // does scrollTop += newScrollHeight - oldScrollHeight when
-          // !atTop && !pinBottom).
+        } else {
+          const start = untrack(() => renderStart);
           const oldScrollHeight = container ? container.scrollHeight : 0;
           const oldScrollTop = container ? container.scrollTop : 0;
           const atTopBefore = container ? container.scrollTop <= 0 : false;
           const scrollBottomBefore = container ? container.clientHeight + Math.ceil(container.scrollTop) : 0;
           const pinBottomBefore = container ? container.scrollHeight - scrollBottomBefore <= 1 : false;
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
-          if (idx > 0) renderStart = start + idx;
-          else if (idx < 0) renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+          if (idx > 0) {
+            if (start > 0) renderStart = start + idx;
+            // start==0 (fully rendered, at top of backlog): keep renderStart 0
+            // so the new older rows become visible above the divider.
+            // The mid-buffer anchor below keeps the viewport stable if the
+            // user is reading in the middle (not at top/bottom).
+          } else if (idx < 0) renderStart = Math.max(0, msgs.length - BATCH_SIZE);
           // Anchor scroll after the window shift so the viewport stays on
-          // the same content (no jump). Only when mid-buffer (!atTop && !pinBottom);
-          // divider case is handled below, and bottom case is handled by the
-          // cachedAtBottom branch.
+          // the same content (no jump). For mid-buffer reads (!atTop &&
+          // !pinBottom) the browser's native overflow-anchor is disabled
+          // (see CSS overflow-anchor:none) so we must compensate manually
+          // here. IRCCloud fetched() does scrollTop += delta for this case.
           if (container && !atTopBefore && !pinBottomBefore && idx > 0) {
             flushSync();
             const delta = container.scrollHeight - oldScrollHeight;
@@ -658,7 +658,6 @@
     }
 
     if (!container) return;
-
     const mark = backlogDividerMark;
     const newDivider = mark !== '' && mark !== handledDividerMark;
     handledDividerMark = mark;
@@ -732,15 +731,16 @@
       schedulePinnedResnap();
     } else if (newDivider && cachedAtTop) {
       // IRCCloud fetched(): atTop && !pinBottom && divider → divider scroll.
-      requestAnimationFrame(() => {
-        if (!container) return;
-        const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
-        if (!divider) {
-          // Guard: never strand the user at scrollTop 0 — no scroll events
-          // fire at the boundary, so the next batch could never trigger.
-          if (container.scrollTop <= 0) container.scrollTop = 48;
-          return;
-        }
+      // Do it synchronously (no rAF) so the first paint after prepend already
+      // shows the divider at -31, not a flash of the very-top with all new
+      // rows before the rAF fires. Mirrors IRCCloud's immediate scrollTo(a-31)
+      // inside fetched() and matches revealBacklogFromMemory's sync path.
+      const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
+      if (!divider) {
+        // Guard: never strand the user at scrollTop 0 — no scroll events
+        // fire at the boundary, so the next batch could never trigger.
+        if (container.scrollTop <= 0) container.scrollTop = 48;
+      } else {
         const pos = dividerPos(divider);
         container.scrollTop = pos - 31;
         animateScrollTo(Math.max(pos - 152, 48), () => {
@@ -749,7 +749,7 @@
           const pos2 = dividerPos(divider);
           container.scrollTop = Math.max(pos2 - 152, 48);
         });
-      });
+      }
     }
     // else: browser handles position (IRCCloud: fetchDone(true, pinBottom) → no scroll)
   });
@@ -1257,6 +1257,7 @@
     scroll-behavior: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
+    overflow-anchor: none;
   }
   /* IRCCloud .clockShown: pad the top rows so the floating scroll clock
      doesn't cover the loadMore button / fetching divider. */
