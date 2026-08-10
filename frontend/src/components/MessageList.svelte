@@ -13,7 +13,7 @@
   import ScrollClock from './ScrollClock.svelte';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
-  import { animateScrollTo as sharedAnimateScrollTo, dividerPos as sharedDividerPos } from '../lib/scroll';
+  import { dividerPos as sharedDividerPos } from '../lib/scroll';
   import type { IRCMessage, Member, Network } from '../types';
 
   interface Props {
@@ -301,23 +301,19 @@
       const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
       if (divider) {
         const pos = dividerPos(divider);
-        container.scrollTop = pos - 31;
-        // For pixel-heavy art, skip the swing animation which would
-        // interpolate scrollTop across thousands of spans and jank.
-        if (container.scrollHeight > 12000) {
-          container.scrollTop = Math.max(pos - 152, 48);
-        } else {
-          animateScrollTo(Math.max(pos - 152, 48), () => {
-            if (!container) return;
-            const pos2 = dividerPos(divider);
-            container.scrollTop = Math.max(pos2 - 152, 48);
-          });
-        }
+        // Snap the divider to the top of the viewport, showing a sliver of
+        // the newly-revealed batch above it. Deliberately NO animated
+        // scroll to (pos - 152): the 100ms swing overrides the user's
+        // scroll-up input for 100ms and pushes their reading position down
+        // ~120px every time a batch lands — that reads as "scrolling up
+        // forces me back down". The boundary message stays put under the
+        // divider; the user scrolls up through the new batch at their own
+        // pace.
+        container.scrollTop = Math.max(pos - 31, 0);
       } else {
-        container.scrollTop = 48;
         // Guard: never strand the user at scrollTop 0 (no scroll events
         // fire at the boundary, so the next chunk could never trigger).
-        container.scrollTop = 48;
+        if (container.scrollTop <= 0) container.scrollTop = 48;
       }
     }
     return true;
@@ -397,8 +393,10 @@
   //   - captures atTop + pinBottom BEFORE render
   //   - renders fetched messages + backlogDivider at the boundary
   //   - if pinBottom → scrollToBottom
-  //   - if atTop && divider → snap to (dividerPos - 31), animate 100ms to
-  //     max(dividerPos - 152, 48), then recalc divider pos and snap again
+  //   - if atTop && divider → snap to (dividerPos - 31) so the divider
+  //     (and a sliver of the new batch) is visible; NO animated scroll —
+  //     the swing overrides the user's scroll-up input and reads as a
+  //     forced jump back down
   //   - if neither → DO NOTHING (browser scroll anchoring keeps position)
   // Landing at ≥48px pulls the user off scrollTop=0, so the next batch
   // needs another deliberate scroll to the very top — that's IRCCloud's
@@ -413,14 +411,6 @@
   let prevScrollHeight = 0;
   let prevScrollTop = 0;
   let handledDividerMark = '';
-
-  // IRCCloud BufferScrollView.scrollTo({animate: true}): jQuery animate
-  // with default 100ms-ish duration and "swing" easing. Delegates to
-  // shared lib so InputArea/App use the same easing + reduced-motion.
-  function animateScrollTo(target: number, afterAnimate?: () => void): void {
-    if (!container) return;
-    sharedAnimateScrollTo(container, target, 100, afterAnimate);
-  }
 
   // Divider position in scroll-content coordinates (jQuery .position().top
   // equivalent for the scroll container).
@@ -659,13 +649,28 @@
             // so the new older rows become visible above the divider.
             // The mid-buffer anchor below keeps the viewport stable if the
             // user is reading in the middle (not at top/bottom).
-          } else if (idx < 0) renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+          } else if (idx < 0) {
+            // Head key vanished — the first processed row changed identity
+            // (e.g. a backlog fetch merged JOINs into the head
+            // JOINPART_GROUP, changing the group's first event and therefore
+            // its key; or an optimistic echo replaced the head in place).
+            // In every such case the old head is STILL the first processed
+            // entry — it merged or was replaced in place — so renderStart
+            // must stay put. NEVER reset to the tail here: that yanks the
+            // user from old history down to the newest messages ("scrolling
+            // up forces me back down").
+          }
           // Anchor scroll after the window shift so the viewport stays on
           // the same content (no jump). For mid-buffer reads (!atTop &&
-          // !pinBottom) the browser's native overflow-anchor is disabled
-          // (see CSS overflow-anchor:none) so we must compensate manually
-          // here. IRCCloud fetched() does scrollTop += delta for this case.
-          if (container && !atTopBefore && !pinBottomBefore && idx > 0) {
+          // !pinBottom) we compensate manually with scrollTop += delta
+          // (IRCCloud fetched() does the same). If the browser's native
+          // scroll anchoring also adjusted scrollTop during the render,
+          // the write is idempotent (both shift by the same prepended
+          // height); if it didn't, this is the only compensation. delta is
+          // measured from the DOM after the render, so a re-keyed head
+          // group that merges without growing the row count (delta 0)
+          // needs no compensation.
+          if (container && !atTopBefore && !pinBottomBefore) {
             flushSync();
             const delta = container.scrollHeight - oldScrollHeight;
             if (delta !== 0) {
@@ -767,13 +772,10 @@
         if (container.scrollTop <= 0) container.scrollTop = 48;
       } else {
         const pos = dividerPos(divider);
-        container.scrollTop = pos - 31;
-        animateScrollTo(Math.max(pos - 152, 48), () => {
-          if (!container) return;
-          // Recalculate top and scroll to it again, might have moved
-          const pos2 = dividerPos(divider);
-          container.scrollTop = Math.max(pos2 - 152, 48);
-        });
+        // Same as revealBacklogFromMemory: snap the divider to the top,
+        // no animated scroll-to-152 (see note there — the swing fights the
+        // user's scroll-up input and reads as a forced jump back down).
+        container.scrollTop = Math.max(pos - 31, 0);
       }
     }
     // else: browser handles position (IRCCloud: fetchDone(true, pinBottom) → no scroll)

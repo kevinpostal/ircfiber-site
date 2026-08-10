@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
-import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage, batchAppendMessages, updateChannelUsers } from '../stores/ircStore.svelte';
+import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage, batchAppendMessages, prependMessages, updateChannelUsers } from '../stores/ircStore.svelte';
 import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
 import { stripPrefix } from '../lib/utils';
 import { clearedAtMap } from '../stores/preferences.svelte';
@@ -1245,6 +1245,142 @@ describe('MessageList', () => {
 			await new Promise((r) => requestAnimationFrame(r));
 			await new Promise((r) => setTimeout(r, 600));
 			expect(container.scrollTop).toBe(scrolledTop);
+		});
+	});
+
+	describe('backlog prepend while reading history', () => {
+		it('keeps the reading position when a prepend merges into the head JOIN group (no tail reset)', async () => {
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '#chan' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#chan';
+
+			const now = Date.now();
+			const seed: IRCMessage[] = [];
+			for (let i = 0; i < 600; i++) {
+				const isJoin = i < 8;
+				seed.push(createMessage({
+					command: isJoin ? 'JOIN' : 'PRIVMSG',
+					nick: 'alice',
+					text: isJoin ? `join-${i}` : `m-${i}`,
+					t: now - (600 - i) * 1000,
+					msgid: `seed-${i}`,
+				}));
+			}
+			ircState.messages['net1:#chan'] = seed;
+			flushSync();
+
+			render(MessageList, { props: {} });
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 30));
+
+			const container = document.getElementById('messages') as HTMLDivElement | null;
+			if (!container) return;
+			container.style.height = '600px';
+			expect(container.scrollHeight).toBeGreaterThan(container.clientHeight);
+
+			// Scroll to the top repeatedly so the in-memory reveal pages the
+			// WHOLE backlog into the DOM (renderStart → 0) — the state a user
+			// reaches by reading up through a long history.
+			for (let r = 0; r < 4; r++) {
+				container.scrollTop = 0;
+				container.dispatchEvent(new Event('scroll'));
+				await new Promise((r2) => setTimeout(r2, 60));
+			}
+			expect(container.scrollTop).toBe(0);
+			const topKeyBefore = (container.querySelector('.row.messageRow') as HTMLElement | null)?.dataset.msgid ?? '';
+			expect(topKeyBefore).toBe('seed-0');
+
+			// Backlog fetch lands: older JOINs that merge into the head group,
+			// changing the group's first event → the head key churns.
+			const older: IRCMessage[] = [];
+			for (let i = 0; i < 20; i++) {
+				older.push(createMessage({
+					command: 'JOIN',
+					nick: 'carol',
+					text: `join-${i}`,
+					t: now - (620 - i) * 1000,
+					msgid: `older-${i}`,
+				}));
+			}
+			prependMessages('net1', '#chan', older);
+			flushSync();
+			await new Promise((r2) => requestAnimationFrame(r2));
+			await new Promise((r2) => setTimeout(r2, 100));
+
+			// The user was reading the OLDEST messages. After the prepend they
+			// must still be at the top of the backlog — NOT yanked down to the
+			// newest tail (the pre-fix behavior reset the window to the last
+			// 200 messages, showing seed-420 at the top).
+			const topKeyAfter = (container.querySelector('.row.messageRow') as HTMLElement | null)?.dataset.msgid ?? '';
+			expect(topKeyAfter).toBe('older-0');
+		});
+
+		it('keeps the viewport anchored when a prepend changes the head key while reading mid-buffer', async () => {
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '#chan' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#chan';
+
+			const now = Date.now();
+			const seed: IRCMessage[] = [];
+			for (let i = 0; i < 600; i++) {
+				const isJoin = i < 8;
+				seed.push(createMessage({
+					command: isJoin ? 'JOIN' : 'PRIVMSG',
+					nick: 'alice',
+					text: isJoin ? `join-${i}` : `m-${i}`,
+					t: now - (600 - i) * 1000,
+					msgid: `seed-${i}`,
+				}));
+			}
+			ircState.messages['net1:#chan'] = seed;
+			flushSync();
+
+			render(MessageList, { props: {} });
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 30));
+
+			const container = document.getElementById('messages') as HTMLDivElement | null;
+			if (!container) return;
+			container.style.height = '600px';
+			expect(container.scrollHeight).toBeGreaterThan(container.clientHeight);
+
+			// Scroll up mid-window (not top, not bottom): reading older history.
+			container.scrollTop = Math.floor(container.scrollHeight * 0.4);
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 50));
+			const topMsgBefore = (container.querySelector('.row.messageRow') as HTMLElement | null)?.dataset.msgid ?? '';
+			expect(topMsgBefore).not.toBe('');
+			expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeGreaterThan(4);
+
+			// Backlog fetch lands: older JOINs merging into the head group
+			// churn the head key even though the head is below the window.
+			const older: IRCMessage[] = [];
+			for (let i = 0; i < 20; i++) {
+				older.push(createMessage({
+					command: 'JOIN',
+					nick: 'carol',
+					text: `join-${i}`,
+					t: now - (620 - i) * 1000,
+					msgid: `older-${i}`,
+				}));
+			}
+			prependMessages('net1', '#chan', older);
+			flushSync();
+			await new Promise((r2) => requestAnimationFrame(r2));
+			await new Promise((r2) => setTimeout(r2, 100));
+
+			// The top visible message must be the SAME content — the window
+			// shifted by the prepend count and scrollTop compensated by the
+			// prepended height. (Pre-fix, renderStart reset to the tail and
+			// the viewport clamped down to the newest messages.)
+			const topMsgAfter = (container.querySelector('.row.messageRow') as HTMLElement | null)?.dataset.msgid ?? '';
+			expect(topMsgAfter).toBe(topMsgBefore);
 		});
 	});
 });
