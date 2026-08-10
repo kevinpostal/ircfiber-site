@@ -149,32 +149,53 @@
   .row.messageRow .avatar,
   .row.messageRow .messageAvatar,
   .row.messageRow .avatar.letterAvatar { display: none !important; }
-  /* Timestamps: fit on phones — reserve gutter instead of hiding,
-     prevents "Hes got rich parents..." truncation seen on #superbowl */
-  .row.messageRow { padding-right: 78px !important; }
+  /* Timestamps: own column on phones — fixes wordwrap + overlap
+     (was absolute right:12px with 78px right padding, which still
+     let long lines like "genetic change..." paint under the date;
+     grid gives the time its own 70px column so text wraps before it) */
+  .row.messageRow {
+    display: grid !important;
+    grid-template-columns: 1fr auto;
+    gap: 0 8px;
+    align-items: start;
+    padding: 4px 12px !important;
+  }
   .row.messageRow .date {
+    position: static !important;
     display: block !important;
-    position: absolute !important;
-    right: 12px !important;
-    bottom: 4px !important;
-    top: auto !important;
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+    white-space: nowrap;
+    text-align: right;
     font-size: 11px !important;
-    line-height: 1 !important;
+    line-height: 1.4 !important;
     padding-right: 0 !important;
-    opacity: 0.75;
+    opacity: 0.7;
+    margin-left: 0 !important;
   }
   .row.messageRow .date .timestamp { font-size: 11px !important; }
-  .row.messageRow.joinPart .date { top: 4px !important; bottom: auto !important; }
+  .row.messageRow .message {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    overflow-wrap: break-word !important;
+    word-break: normal !important;
+  }
+  .row.messageRow .content {
+    overflow-wrap: break-word !important;
+    word-break: normal !important;
+  }
+  .row.messageRow .g { display: none !important; }
+  .row.messageRow.joinPart .date { top: auto !important; bottom: auto !important; }
   /* Status rows: keep same breathing room */
-  .row.messageRow.status { padding: 4px 12px 4px 12px !important; }
+  .row.messageRow.status { padding: 4px 12px !important; }
   .row.messageRow.status .date { display: none !important; }
-
-  /* Buffer header: tighter padding + smaller member-count button so
-     the channel name fits without truncation on phones. */
   .bufferHead {
     padding-top: 6px;
     padding-bottom: 6px;
     gap: 4px;
+    flex-wrap: wrap;
   }
   .bufferHead .bufferHeading .bufferlabel { font-size: 14px; }
   .bufferHead .bufferHeading .topic { font-size: 13px; }
@@ -195,8 +216,19 @@
   .bufferHead .bufferHeading .topic {
     display: none;
   }
-  /* When there's no topic, the heading still has a flex container
-     — make sure the channel name still gets all the room. */
+  /* Join chips: s-u8PZTiLyXqbz was cut off (nowrap + flex-shrink:0) */
+  .bufferHead .join-inflight-chip,
+  .bufferHead .join-error-chip,
+  .bufferHead .temp-unavailable-chip {
+    white-space: normal !important;
+    word-break: break-all;
+    overflow-wrap: anywhere;
+    max-width: 100%;
+    flex: 1 1 100%;
+    min-width: 0;
+    margin: 4px 0 0 0 !important;
+  }
+  .bufferHead .join-error-chip { flex-wrap: wrap; gap: 6px; }
   .bufferHead .bufferHeading { min-width: 0; }
   .bufferHead .bufferHeading .bufferlabel {
     overflow: hidden;
@@ -379,9 +411,7 @@
   .row.messageRow.joinPart,
   .row.messageRow.groupedJoinPart,
   .row.groupedJoinPart { padding: 4px 6px 4px 6px !important; }
-  .row.messageRow { padding-right: 68px !important; }
-  .row.messageRow .date { right: 6px !important; font-size: 10px !important; }
-  .row.messageRow.status { padding-right: 6px !important; }
+  .row.messageRow .date { font-size: 10px !important; }
   .bufferinputcell { padding: 8px 8px max(8px, env(safe-area-inset-bottom, 0px)); }
   #sidebar { width: 92vw; }
 }
