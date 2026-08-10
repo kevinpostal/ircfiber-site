@@ -1221,5 +1221,30 @@ describe('MessageList', () => {
 			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
 			expect(Math.abs(drift)).toBeLessThan(4);
 		});
+
+		it('does NOT snap to bottom when user scrolled up via ArrowUp and a new message arrives', async () => {
+			const container = await setupScrollableChannel(40);
+			if (!container) return;
+			// Simulate ArrowUp: scroll up 100px from bottom
+			container.scrollTop -= 100;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+			const scrolledTop = container.scrollTop;
+			expect(container.scrollHeight - container.clientHeight - scrolledTop).toBeGreaterThan(50);
+			appendMessage('net1', '#chan', {
+				command: 'PRIVMSG',
+				nick: 'bob',
+				text: 'new while reading history',
+				t: Date.now(),
+				msgid: 'new-1',
+				timestamp: new Date().toISOString(),
+				params: [],
+				prefix: '',
+			});
+			flushSync();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 600));
+			expect(container.scrollTop).toBe(scrolledTop);
+		});
 	});
 });
