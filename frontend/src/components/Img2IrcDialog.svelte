@@ -62,11 +62,15 @@
     }
     const w = getWorker();
     if (!w) { console.info('[img2irc] Worker miss: getWorker() null after check'); return null; }
+    let bitmap: ImageBitmap | null = null;
     let handler: ((e: MessageEvent) => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const _tWStart = performance.now();
     try {
+      console.info(`[img2irc] Worker: creating ImageBitmap for ${img.naturalWidth}x${img.naturalHeight}...`);
       bitmap = await createImageBitmap(img);
-      if (expectedGen !== gen) { try { bitmap.close(); } catch {} return null; }
+      console.info(`[img2irc] Worker: ImageBitmap ${bitmap.width}x${bitmap.height} created in ${(performance.now()-_tWStart).toFixed(1)}ms, posting to worker...`);
+      if (expectedGen !== gen) { try { bitmap.close(); } catch {} console.info('[img2irc] Worker abort: gen changed after bitmap create'); return null; }
       const id = Math.random();
       const res = await new Promise<string>((resolve, reject) => {
         handler = (e: MessageEvent) => {
@@ -74,24 +78,28 @@
           if (d.id !== id) return;
           if (handler) w.removeEventListener('message', handler as any);
           if (timer) clearTimeout(timer);
-          if (d.ok) resolve(d.result);
-          else reject(new Error(d.error));
+          const elapsed = (performance.now()-_tWStart).toFixed(1);
+          if (d.ok) { console.info(`[img2irc] Worker success: ${elapsed}ms off-thread`); resolve(d.result); }
+          else { console.info(`[img2irc] Worker error: ${d.error} after ${elapsed}ms`); reject(new Error(d.error)); }
         };
         w.addEventListener('message', handler as any);
         w.postMessage({ id, bitmap: bitmap!, opts }, [bitmap as any]);
-        // Transferable bitmap is now owned by worker — null our ref so we don't double-close
         bitmap = null;
         timer = setTimeout(() => {
           if (handler) w.removeEventListener('message', handler as any);
+          console.info(`[img2irc] Worker timeout after 15000ms — falling back to main thread (Viterbi was ${opts.viterbiW} for ${opts.width} cols)`);
           reject(new Error('worker timeout'));
-        }, 8000);
+        }, 15000);
       });
       return res;
-    } catch { return null; }
-    finally {
+    } catch (e) {
+      console.info(`[img2irc] Worker exception: ${String(e)}`);
+      return null;
+    } finally {
       if (timer) clearTimeout(timer);
       if (handler) { try { w.removeEventListener('message', handler as any); } catch {} }
       if (bitmap) { try { bitmap.close(); } catch {} }
+      console.info(`[img2irc] Worker total: ${(performance.now()-_tWStart).toFixed(1)}ms`);
     }
   }
 
