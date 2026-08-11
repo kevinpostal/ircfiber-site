@@ -648,8 +648,13 @@ export async function renderPixelsCore(
   _timings['emit'] = _perf() - _t;
   _timings['total'] = _perf() - _tStart;
   if (_shouldLog() || _timings['total'] > 100) {
+    const ctx = `pW=${pW} pH=${pH} cols=${cols} rows=${rows} pm=${pm} viterbiW=${o.viterbiW} pal=${getMidgardPalette(o).length} mode=${o.colorMatching} comic=${o.comic} dither=${o.ditherMode} ${typeof OffscreenCanvas!=='undefined'?'OffscreenCanvas':'no-OffscreenCanvas'} ${typeof Worker!=='undefined'?'Worker':'no-Worker'}`;
     const line = Object.entries(_timings).sort((a,b)=>b[1]-a[1]).map(([k,v])=> `${k}:${v.toFixed(1)}ms`).join(' | ');
-    console.info(`[img2irc] ${_timings['total'].toFixed(1)}ms total | ${line}`);
+    console.info(`[img2irc] ${_timings['total'].toFixed(1)}ms total | ${ctx} | ${line}`);
+    // Also warn if Viterbi dominates (>80% of total) — suggests need for faster path or smaller S
+    if (_timings['viterbi'] && _timings['viterbi'] > _timings['total']*0.8) {
+      console.info(`[img2irc] Viterbi dominates (${(_timings['viterbi']/_timings['total']*100).toFixed(0)}%) — cellGlyph:${_timings['viterbi_cellGlyph']?.toFixed(1)}ms rowPal:${_timings['viterbi_rowPal']?.toFixed(1)}ms dp:${_timings['viterbi_dp']?.toFixed(1)}ms — consider viterbiW=0 (greedy) or smaller S for initial preview`);
+    }
   }
   return lines.join('\n');
 }

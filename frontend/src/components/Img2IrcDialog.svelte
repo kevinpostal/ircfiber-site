@@ -54,13 +54,14 @@
     return _worker;
   }
   async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number): Promise<string | null> {
-    // Skip worker for tiny previews — overhead (createImageBitmap + postMessage) exceeds benefit
-    // Threshold: < 40x40 (1600 px) and not comic -> main thread is faster and no jank
     const estimatedPixels = (opts.width || 60) * Math.max(1, Math.round((opts.width || 60) * ((img.naturalHeight||img.height)/(img.naturalWidth||img.width)||1) * 0.9)) * 2;
-    if (estimatedPixels < 4000 && !opts.comic) return null;
+    const reasonNotWorker = (()=>{ if(estimatedPixels < 4000 && !opts.comic) return `small image (${estimatedPixels}px <4000 && !comic)`; if(!getWorker()) return 'Worker failed to create'; if(typeof OffscreenCanvas==='undefined') return 'OffscreenCanvas unavailable'; if(typeof createImageBitmap==='undefined') return 'createImageBitmap unavailable'; return null; })();
+    if (reasonNotWorker) {
+      console.info(`[img2irc] Worker skip: ${reasonNotWorker} — main thread fallback | img ${img.naturalWidth}x${img.naturalHeight} -> ${opts.width} cols, ~${estimatedPixels}px, comic=${opts.comic}, mode=${opts.colorMatching}, pm=${opts.pixelMode}, viterbiW=${opts.viterbiW}`);
+      return null;
+    }
     const w = getWorker();
-    if (!w || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return null;
-    let bitmap: ImageBitmap | null = null;
+    if (!w) { console.info('[img2irc] Worker miss: getWorker() null after check'); return null; }
     let handler: ((e: MessageEvent) => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
     try {
@@ -128,13 +129,17 @@
         // Try off-main-thread Worker with transferable ImageBitmap (no copy) — falls back to main thread
         // Pass expectedGen so worker can abort if user changed sliders while bitmap was being created
         let res: string | null = null;
+        const _tWorker = performance.now();
         try { res = await convertViaWorker(img, opts, cur); } catch {}
+        if (res !== null) {
+          console.info(`[img2irc] Worker success: ${(performance.now()-_tWorker).toFixed(1)}ms off-thread, main thread ~${(performance.now()-_tWorker).toFixed(1)}ms blocked? no — jank avoided`);
+        } else {
+          console.info(`[img2irc] Worker miss — OffscreenCanvas/createImageBitmap unavailable, timeout, or small image — main thread fallback`);
+        }
         if (cur!==gen) { revokeImageUrl(img); return; }
         if (res == null) {
-          console.info('[img2irc] Worker miss — OffscreenCanvas/createImageBitmap unavailable, timeout, or small image — main thread fallback');
           res = await imageToIrcArt(img, opts);
         }
-        art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
       } finally { revokeImageUrl(img); }
     } catch(e:any){ if(cur===gen){ error=e?.message??'Failed'; }}
