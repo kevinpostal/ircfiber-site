@@ -3,7 +3,7 @@
   import { fetchUploadsOffset, deleteUpload, editUpload, type UploadEntry } from '../stores/api';
   import { sizeToString } from '../lib/upload';
   import CodeEditor from './CodeEditor.svelte';
-  import { detectSyntaxFromFilename } from '../lib/textFiles';
+  import { detectSyntaxFromFilename, isTextFile } from '../lib/textFiles';
 
   interface Props {
     onClose: () => void;
@@ -24,17 +24,11 @@
   let editingLang = $state('text');
   let saving = $state(false);
 
+
   // Text preview cache — fetched once per text file, truncated to 1500 chars
   let textPreviews = $state<Record<string, string>>({});
   let textPreviewErrors = $state<Record<string, boolean>>({});
 
-  function isTextFile(mime: string, name: string): boolean {
-    if (mime && /^text\//i.test(mime)) return true;
-    if (['application/json', 'application/javascript', 'application/xml', 'application/x-python', 'text/x-python'].includes(mime)) return true;
-    const lower = name.toLowerCase();
-    if (lower === 'dockerfile' || lower === 'makefile' || lower === '.env') return true;
-    return /\.(txt|text|md|markdown|mdown|mkd|json|json5|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyw|pyi|rb|gemspec|rake|java|c|h|cpp|hpp|cc|cxx|hh|go|rs|php|phtml|sh|bash|zsh|ksh|fish|html|htm|xhtml|css|scss|sass|less|stylus|yaml|yml|xml|svg|toml|sql|pgsql|mysql|graphql|gql|dockerfile|containerfile|makefile|mk|ini|conf|cfg|properties|lua|perl|pl|pm|swift|kotlin|kt|kts|scala|clj|ex|exs|dart|r|rmd|jl|hs|erl|elm|vue|svelte|astro|tf|hcl|nix|nginx|apache|htaccess|bat|cmd|ps1|tex|diff|patch|csv|prql|proto|zig|nim|coffee|jade|pug|hbs|liquid)$/i.test(lower) || /\.(log|csv)$/i.test(lower);
-  }
 
   $effect(() => {
     // Fetch text previews for visible text files. Guard prevents re-fetch.
@@ -119,6 +113,7 @@
     editingId = null;
     editError = null;
     editingContent = '';
+    editName = '';
     saving = false;
   }
 
@@ -239,10 +234,12 @@
                   <div class="name" hidden>{entry.name}</div>
                   <form action="" method="post" class="editForm" onsubmit={saveEdit}>
                     <p class="form">
-                      <textarea class="input nameInput" name="name" bind:value={editName}></textarea>
+                      <label for="editNameInput">Filename</label>
+                      <input id="editNameInput" class="input nameInput" name="name" bind:value={editName} />
                     </p>
+                    {#if editError}<p class="userError">{editError}</p>{/if}
                     <p class="form">
-                      <button type="submit" class="action"><span>Save</span></button>
+                      <button type="submit" class="action" disabled={saving}><span>{saving ? 'Saving…' : 'Save'}</span></button>
                       <button type="button" class="cancel" onclick={cancelEdit}><span>Cancel</span></button>
                     </p>
                   </form>
