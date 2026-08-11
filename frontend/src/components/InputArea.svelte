@@ -99,7 +99,29 @@
   const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
 
   // ── Typing indicators (IRCCloud-style) ──
+  // The store's getTypersForBuffer() expires entries 6.5s after the
+  // last TAGMSG, but a $derived only re-runs when its reactive inputs
+  // mutate. In a quiet channel nothing does after the final TAGMSG, so
+  // "Alice is typing" used to stick forever. typingTick (bumped 1/s
+  // only while someone is inside the window) forces the expiry to
+  // re-evaluate on its own.
+  let typingTick = $state(0);
+  const hasActiveTypers = $derived.by(() => {
+    void typingTick; // re-evaluate each tick so expiry applies without new events
+    void ircState.typingVersion; // explicit invalidation for every set/clear (see store)
+    const netId = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!netId || !buf) return false;
+    return getTypersForBuffer(netId, buf).length > 0;
+  });
+  $effect(() => {
+    if (!hasActiveTypers) return; // no interval while idle
+    const id = setInterval(() => { typingTick++; }, 1000);
+    return () => clearInterval(id);
+  });
   const typingNicks = $derived.by(() => {
+    void typingTick; // re-evaluate every second while typing is active
+    void ircState.typingVersion; // explicit invalidation for every set/clear (see store)
     const netId = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
     if (!netId || !buf) return [];

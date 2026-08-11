@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import InputArea from './InputArea.svelte';
 import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
-import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText } from '../stores/ircStore.svelte';
+import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText, setTyping, clearTyping } from '../stores/ircStore.svelte';
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 
@@ -582,5 +582,66 @@ describe('InputArea', () => {
 		// No last sent message for this buffer
 		const result = lastSentMessageForBuffer(ircState.activeBuffer);
 		expect(result).toBeNull();
+	});
+
+	it('hides the typing indicator immediately when clearTyping fires (done TAGMSG), without waiting for a tick', async () => {
+		// Regression: clearTyping deletes the nick from the store map and
+		// reassigns it, but Svelte 5's proxy tracking does not invalidate
+		// $deriveds on that path — the indicator used to linger until the
+		// next 1s ticker tick (and forever, pre-ticker). The store's
+		// typingVersion counter forces immediate invalidation.
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		setTyping('net1', '#general', 'Alice');
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		flushSync();
+
+		expect(page.getByText('Alice is typing').query()).not.toBeNull();
+
+		clearTyping('net1', '#general', 'Alice');
+		flushSync();
+
+		// No fake timers, no ticker advance — the clear must be reactive.
+		expect(page.getByText('Alice is typing').query()).toBeNull();
+	});
+
+	it('hides the typing indicator on its own after the 6.5s expiry window (no new TAGMSGs)', async () => {
+		// Regression: typingNicks was a plain $derived that only re-ran when
+		// ircState mutated. After the final TAGMSG nothing re-evaluated the
+		// store's 6.5s expiry, so "Alice is typing" stuck forever in a quiet
+		// channel. The 1s ticker (running only while someone is inside the
+		// window) must expire Alice without any new events.
+		//
+		// Fake timers must be installed BEFORE render so the ticker interval
+		// is created faked; leave setTimeout real so the test harness stays
+		// responsive. Date is faked so the store's wall-clock expiry advances
+		// with the fake clock.
+		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+		try {
+			const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+			net.buffers.push(createBuffer({ name: '#general' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#general';
+			setTyping('net1', '#general', 'Alice');
+			flushSync();
+
+			render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+			flushSync();
+
+			expect(page.getByText('Alice is typing').query()).not.toBeNull();
+
+			vi.advanceTimersByTime(7000);
+			flushSync();
+
+			expect(page.getByText('Alice is typing').query()).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

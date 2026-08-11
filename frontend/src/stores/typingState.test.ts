@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setTyping, clearTyping, getTypersForBuffer, ircState } from './ircStore.svelte';
+import { processIrcEvent } from '../lib/messageHandler';
 
 describe('typing state management', () => {
   beforeEach(() => {
@@ -88,5 +89,49 @@ describe('TAGMSG → setTyping integration', () => {
     // Both Alie and Bob are in the same buffer
     expect(typers).toContain('Alice');
     expect(typers).toContain('Bob');
+  });
+});
+
+describe('TAGMSG → processIrcEvent dispatch (active vs done)', () => {
+  function tagmsg(payload: Record<string, unknown>): void {
+    processIrcEvent(
+      { network: 'net1', nid: 'net1', c: 'TAGMSG', ch: '#chan', n: 'Alice', ...payload },
+      { value: 0 },
+      {} as never,
+      { switchToBuffer: () => {} },
+    );
+  }
+
+  beforeEach(() => {
+    ircState.typing = {};
+    ircState.networks.length = 0;
+    ircState.networks.push({ networkId: 'net1', name: 'Net One', buffers: [] } as never);
+  });
+
+  it('TAGMSG with typing=active sets the nick', () => {
+    tagmsg({ typing: 'active' });
+    expect(getTypersForBuffer('net1', '#chan')).toEqual(['Alice']);
+  });
+
+  it('TAGMSG with typing=done clears the nick immediately', () => {
+    // Regression: every TAGMSG used to call setTyping, so a `done`
+    // refreshed the 6.5s heartbeat instead of clearing it — the
+    // indicator stayed up long after the other client stopped typing.
+    setTyping('net1', '#chan', 'Alice');
+    tagmsg({ typing: 'done' });
+    expect(getTypersForBuffer('net1', '#chan')).toEqual([]);
+  });
+
+  it('TAGMSG done via long-form data.tags[+typing] also clears', () => {
+    setTyping('net1', '#chan', 'Alice');
+    tagmsg({ tags: { '+typing': 'done' } });
+    expect(getTypersForBuffer('net1', '#chan')).toEqual([]);
+  });
+
+  it('TAGMSG without a typing tag falls back to setTyping (back-compat)', () => {
+    // Pre-engine-change TAGMSG payloads carry no typing field; keep the
+    // old behavior (treat as active) so older engine builds still work.
+    tagmsg({});
+    expect(getTypersForBuffer('net1', '#chan')).toEqual(['Alice']);
   });
 });

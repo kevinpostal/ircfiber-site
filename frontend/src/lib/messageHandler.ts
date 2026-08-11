@@ -426,8 +426,20 @@ export function processIrcEvent(
     || (data.batch as string | undefined) === 'chathistory';
 
   // ── Typing indicators (IRCCloud-style TAGMSG) ──
+  // The engine ships the IRCv3 `+typing` tag as `data.typing` on the
+  // compact WS wire (see IRCRawEvent.toCompactJson); long-form/replayed
+  // payloads carry it inside `data.tags['+typing']`. `active` (or any
+  // value we can't classify) refreshes the 6.5s heartbeat; `done`
+  // clears the indicator immediately so "X is typing" vanishes the
+  // moment the other client stops — not 6.5s later.
   if (cmd === 'TAGMSG' && msg.nick && channel !== '_server') {
-    setTyping(networkId, channel, msg.nick);
+    const typingTag = (data.typing as string | undefined)
+      ?? (data.tags as Record<string, string> | undefined)?.['+typing'];
+    if (typingTag === 'done') {
+      clearTyping(networkId, channel, msg.nick);
+    } else {
+      setTyping(networkId, channel, msg.nick);
+    }
     return {};
   }
 

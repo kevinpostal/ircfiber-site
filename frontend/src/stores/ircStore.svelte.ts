@@ -105,6 +105,11 @@ export const ircState = $state({
   forceScrollToBottomNonce: 0,
   // Per-buffer typing state: bufferKey -> (nick -> timestamp of last TAGMSG)
   typing: {} as Record<string, Record<string, number>>,
+  // Invalidation counter for typing displays. clearTyping tombstones via
+  // a deep SET (the tracked path) and this counter is bumped on every
+  // set/clear as belt-and-suspenders — consumers (InputArea) read it so
+  // a display derived can never miss a typing-state change.
+  typingVersion: 0,
   // IRCCloud-style "reorder mode": when true, the Sidebar enters drag-and-drop
   // reorder for the network list and suppresses normal click/collapse on
   // network headers. Toggled by the "Reorder Networks" / "Done" buttons.
@@ -1090,6 +1095,7 @@ export function setTyping(networkId: string, channel: string, nick: string): voi
   const key = `${networkId}:${normalizeChannelName(channel)}`;
   if (!ircState.typing[key]) ircState.typing[key] = {};
   ircState.typing[key][nick] = Date.now();
+  ircState.typingVersion++;
 }
 
 /**
@@ -1106,9 +1112,16 @@ export function requestForceScrollToBottom(): void {
 
 export function clearTyping(networkId: string, channel: string, nick: string): void {
   const key = `${networkId}:${normalizeChannelName(channel)}`;
-  if (ircState.typing[key]) {
-    delete ircState.typing[key][nick];
-    ircState.typing = { ...ircState.typing };
+  const typing = ircState.typing[key];
+  // Tombstone instead of delete: Svelte 5's proxy tracking reliably
+  // invalidates on a deep property SET (the same path setTyping uses —
+  // proven to re-render the indicator), but `delete` + shallow-reassign
+  // is NOT reliably tracked, which left "X is typing" stuck on screen
+  // after a `done` TAGMSG. ts=0 is filtered out by getTypersForBuffer's
+  // 6.5s window, so the tombstone is invisible to consumers.
+  if (typing && nick in typing) {
+    typing[nick] = 0;
+    ircState.typingVersion++;
   }
 }
 
