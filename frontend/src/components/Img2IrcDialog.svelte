@@ -3,9 +3,9 @@
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode } from '../lib/img2irc';
   // Worker is loaded lazily via dynamic import to keep main bundle small and not break if Worker unsupported
+  import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { generateLabel } from '../lib/utils';
-
   interface Props { file: File|Blob; filename:string; onClose:()=>void; onBack?:()=>void; }
   let { file, filename, onClose, onBack }: Props = $props();
 
@@ -167,9 +167,8 @@
 
   const stats=$derived(estimateLineLengths(art));
   const hardStats=$derived(estimateLineLengths(art, IRC_HARD_LIMIT));
+  const activeTarget=$derived(ircState.activeBuffer.bufferName||'');
   const activeNetworkId=$derived(ircState.activeBuffer.networkId||'');
-
-  // ── Smart fit: adjust compression / width / colour mode until longest line ≤ 512 ──
   // Ladder is quality-preserving: cheapest quality cost first. Viterbi w uses bisection (LambdaPareto.lean: bytes_antitone)
   // so we binary-search the minimal w that fits before touching geometry.
   async function smartFit(){
