@@ -3,7 +3,6 @@
   import 'highlight.js/styles/atom-one-dark.css';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { splitIntoMessages } from '../lib/messageSplitter';
-  import { getPastebinDisablePrompt, setPastebinDisablePrompt } from '../stores/preferences.svelte';
 
   interface Props {
     open?: boolean;
@@ -100,7 +99,6 @@
   let lang = $state<string>('text');
   let name = $state('');
   let message = $state('');
-  let askChecked = $state(!getPastebinDisablePrompt());
   let posting = $state(false);
   let error = $state<string | null>(null);
 
@@ -142,7 +140,6 @@
       lang = initialLanguage && (LANGUAGES as readonly string[]).includes(initialLanguage) ? initialLanguage : 'text';
       name = initialFilename;
       message = '';
-      askChecked = !getPastebinDisablePrompt();
       error = null;
       posting = false;
     }
@@ -176,12 +173,6 @@
 
   function close() {
     oncloseCb?.();
-  }
-
-  function onAskChange(e: Event) {
-    const checked = (e.target as HTMLInputElement).checked;
-    askChecked = checked;
-    setPastebinDisablePrompt(!checked);
   }
 
   // "Send as messages" — strict line-by-line.  Each newline-separated line
@@ -256,15 +247,17 @@
     aria-labelledby="pastebinTitle"
   >
     <form id="pastebinForm" onsubmit={postSnippet} onkeydown={onKeyDown}>
-      <span class="pastebinSelect">
-        <select name="aceMode" bind:value={lang} aria-label="Language">
-          {#each LANGUAGES as L}
-            <option value={L}>{L === 'text' ? 'Plain Text' : L}</option>
-          {/each}
-        </select>
-      </span>
-
-      <h1 id="pastebinTitle" tabindex="0">Text snippet</h1>
+      <div class="pastebinHeader">
+        <h1 id="pastebinTitle" tabindex="0">Text snippet</h1>
+        <span class="pastebinSelect">
+          <label for="aceMode">Syntax</label>
+          <select id="aceMode" name="aceMode" bind:value={lang} aria-label="Language">
+            {#each LANGUAGES as L}
+              <option value={L}>{L === 'text' ? 'Plain Text' : L}</option>
+            {/each}
+          </select>
+        </span>
+      </div>
 
       <div class="pastebinWrapper">
         <!-- Editable, live-highlighted preview: a transparent textarea sits
@@ -316,19 +309,6 @@
         />
       </p>
 
-      <p class="pasteConfirmExtra" id="pasteConfirmAskContainer">
-        <input
-          type="checkbox"
-          id="pasteConfirmAsk"
-          tabindex="-1"
-          checked={askChecked}
-          onchange={onAskChange}
-        />
-        <label for="pasteConfirmAsk">Offer to post a snippet when sending multi-line messages</label>
-        <br>
-        <span class="explanation">You can revert this in Settings</span>
-      </p>
-
       {#if error}
         <p class="pasteError" role="alert">{error}</p>
       {/if}
@@ -368,12 +348,13 @@
     flex-direction: column;
     overflow: hidden;
     z-index: 1000;
-    background: #2a2a2a;
+    /* Match the userPopup design language */
+    background: #131418;
     color: #e6e6e6;
-    border: 1px solid #4a4a4a;
-    border-radius: 6px;
-    padding: 16px 20px 20px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    border: 1px solid #2c2f35;
+    border-radius: 10px;
+    padding: 0 0 20px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     font-size: 13px;
     line-height: 1.4;
@@ -385,28 +366,70 @@
     min-height: 0;
     overflow: auto;
   }
+  .pastebinHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 20px 12px;
+    background: linear-gradient(135deg, #1a1d25 0%, #131418 100%);
+    border-bottom: 1px solid #2c2f35;
+    position: relative;
+  }
+  .pastebinHeader::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #58a6ff, #8b5cf6);
+  }
   .pastebin h1 {
     font-size: 16px;
     font-weight: 600;
-    margin: 0 0 8px;
-    color: #fff;
+    margin: 0;
+    color: #e6edf3;
     outline: none;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .pastebinSelect {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+  }
+  .pastebinSelect label {
+    color: #8b949e;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
   .pastebinSelect select {
-    background: #1e1e1e;
+    background: #0d1117;
     color: #e6e6e6;
-    border: 1px solid #4a4a4a;
-    border-radius: 3px;
-    padding: 3px 6px;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 5px 8px;
     font-size: 12px;
-    margin-bottom: 8px;
+    font-family: inherit;
+    max-width: 180px;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .pastebinSelect select:focus {
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+    outline: none;
   }
   .pastebinWrapper {
     flex: 1 1 auto;
     min-height: 160px;
-    margin: 8px 0 4px;
-    border: 1px solid #1e1e1e;
-    border-radius: 3px;
+    margin: 12px 20px 8px;
+    border: 1px solid #2c2f35;
+    border-radius: 8px;
     overflow: hidden;
     display: flex;
   }
@@ -540,89 +563,92 @@
   .explanation {
     color: #8b949e;
     font-size: 12px;
-    margin: 6px 0;
+    margin: 6px 20px;
   }
   .pastebin .form {
     margin: 10px 0;
+    padding: 0 20px;
   }
   .pastebin .form label {
-    color: #e6e6e6;
+    color: #e6edf3;
     font-size: 12px;
     font-weight: 600;
   }
   .pastebin .form .input {
     width: 100%;
-    background: #1e1e1e;
+    background: #0d1117;
     color: #e6e6e6;
-    border: 1px solid #4a4a4a;
-    border-radius: 3px;
-    padding: 5px 8px;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 6px 10px;
     font-size: 13px;
     margin-top: 4px;
     box-sizing: border-box;
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
   .pastebin .form .input:focus {
     border-color: #58a6ff;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
     outline: none;
-  }
-  .pasteConfirmExtra {
-    color: #e6e6e6;
-    font-size: 12px;
-    margin: 10px 0;
-  }
-  .pasteConfirmExtra label {
-    margin-left: 4px;
-    cursor: pointer;
   }
   .pasteError {
     color: #ff7b72;
     background: rgba(255, 123, 114, 0.1);
     padding: 6px 10px;
-    border-radius: 3px;
-    margin: 8px 0;
+    border-radius: 6px;
+    margin: 8px 20px;
   }
   .pastebin .buttons {
     display: flex;
     gap: 8px;
     margin: 14px 0 4px;
+    padding: 0 20px;
   }
   .pastebin .buttons button {
-    background: #2a2a2a;
+    background: #1c2128;
     color: #e6e6e6;
-    border: 1px solid #4a4a4a;
-    border-radius: 3px;
-    padding: 6px 14px;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 7px 16px;
     font-size: 13px;
+    font-weight: 500;
     cursor: pointer;
     flex: 0 0 auto;
+    transition: background 0.12s, border-color 0.12s, transform 0.1s;
   }
   .pastebin .buttons button:hover:not(:disabled) {
-    background: #3a3a3a;
-    border-color: #5a5a5a;
+    background: #252a33;
+    border-color: #3b4148;
+  }
+  .pastebin .buttons button:active:not(:disabled) {
+    transform: scale(0.97);
   }
   .pastebin .buttons button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
   }
   .pastebin .buttons button.confirm {
-    background: #238636;
-    color: #fff;
-    border-color: #2ea043;
-  }
-  .pastebin .buttons button.confirm:hover:not(:disabled) {
-    background: #2ea043;
-  }
-  .pastebin .buttons button.sendAsText {
     background: #1f6feb;
     color: #fff;
-    border-color: #388bfd;
+    border: none;
+  }
+  .pastebin .buttons button.confirm:hover:not(:disabled) {
+    background: #388bfd;
+  }
+  .pastebin .buttons button.sendAsText {
+    background: #1c2128;
+    color: #79b8ff;
+    border: 1px solid #2a4761;
   }
   .pastebin .buttons button.sendAsText:hover:not(:disabled) {
-    background: #388bfd;
+    background: #1f2a36;
+    color: #79b8ff;
+    border-color: #388bfd;
   }
   .pasteConfirm__help {
     color: #6e7681;
     font-size: 11px;
     margin: 8px 0 0;
+    padding: 0 20px;
   }
 </style>
