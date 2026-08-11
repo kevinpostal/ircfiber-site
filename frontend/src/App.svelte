@@ -1367,8 +1367,6 @@ let showNetworkForm: boolean = $state(false);
     let bufferName = '_server';
     if (type === 'channel') bufferName = target.startsWith('#') ? target : '#' + target;
     else if (type === 'messages') bufferName = target;
-
-    // When navigating to a channel via URL, the user is explicitly asking
     // to see that channel.  The engine sync + live IRC events are the only
     // authorities for isJoined — see the pendingIsJoined guard in
     // updateNetworkFromSync which prevents stale sync snapshots from

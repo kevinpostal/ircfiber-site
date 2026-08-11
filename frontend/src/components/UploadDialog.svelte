@@ -1,6 +1,7 @@
 <script lang="ts">
   import { uploadState } from '../stores/uploadStore.svelte';
   import { ircState } from '../stores/ircStore.svelte';
+  import Img2IrcDialog from './Img2IrcDialog.svelte';
 
   interface Props {
     onConfirm: (data: { filename?: string; message: string }) => void;
@@ -10,6 +11,12 @@
 
   let filenameInput = $state('');
   let messageInput = $state('');
+  let showIrcConvert = $state(false);
+
+  function isImageFile(filename: string, type?: string): boolean {
+    if (type && /^image\//i.test(type)) return true;
+    return /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(filename);
+  }
 
   // Text preview state — loaded via File.text() once per file so we don't
   // re-fetch a blob: URL on every render (Svelte {#await fetch(...)} re-creates
@@ -70,7 +77,10 @@
   }
 
   function handleKeydown(e: KeyboardEvent): void {
-    if (e.key === 'Escape') onCancel();
+    if (e.key === 'Escape') {
+      if (showIrcConvert) showIrcConvert = false;
+      else onCancel();
+    }
   }
 
   function activeUpload() {
@@ -87,6 +97,10 @@
     if (size > 1_000_000) return (size / 1_000_000).toFixed(2) + 'MB';
     if (size > 1_000) return (size / 1_000).toFixed(0) + 'KB';
     return size + 'B';
+  }
+
+  function handleConvertToIrc(): void {
+    showIrcConvert = true;
   }
 </script>
 
@@ -109,6 +123,7 @@
       {:else}
         {@const u = activeUpload()}
         {@const isText = u ? isTextPreviewFile(u.filename, (u.file as File)?.type) : false}
+        {@const isImg = u ? isImageFile(u.filename, (u.file as File)?.type) : false}
         <div class="single" style="">
           {#if u?.previewUrl}
             {#if isText}
@@ -143,7 +158,7 @@
             />
           </p>
 
-          <p class="explanation info">{formatSize(u?.size ?? 0)} • {u?.filename.split('.').pop() ?? ''} {#if isText}• text{/if}</p>
+          <p class="explanation info">{formatSize(u?.size ?? 0)} • {u?.filename.split('.').pop() ?? ''} {#if isText}• text{/if}{#if isImg}• image{/if}</p>
         </div>
       {/if}
 
@@ -164,9 +179,24 @@
 
       <p class="buttons">
         <button type="submit" class="action confirm"><span>Upload</span></button>
+        {#if (() => { const u = activeUpload(); return u ? isImageFile(u.filename, (u.file as File)?.type) : false; })()}
+          <button type="button" class="action convertToIrc" onclick={handleConvertToIrc} title="Convert image to mIRC color codes and send as text art"><span>Convert to IRC</span></button>
+        {/if}
         <button type="button" class="sendAsText" style="display: none;"><span>Send as text</span></button>
         <button type="button" class="close mainClose" onclick={onCancel}><span>Cancel</span></button>
       </p>
     </form>
   </div>
+{/if}
+
+{#if showIrcConvert && uploadState.dialog}
+  {@const u = activeUpload()}
+  {#if u?.file}
+    <Img2IrcDialog
+      file={u.file as File}
+      filename={u.filename}
+      onClose={() => { showIrcConvert = false; onCancel(); }}
+      onBack={() => { showIrcConvert = false; }}
+    />
+  {/if}
 {/if}

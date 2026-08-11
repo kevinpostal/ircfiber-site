@@ -48,7 +48,11 @@
       name = existing.name;
       host = existing.host;
       port = existing.port;
-      tls = existing.tls as 'enabled' | 'disabled' | 'required';
+      // Migrate legacy "enabled" on TLS-only ports to "required" so it works by default
+      // (engine also treats enabled+6697 as required, but UI should show correct value).
+      let initTls = existing.tls as 'enabled' | 'disabled' | 'required';
+      if (initTls === 'enabled' && [6697,6698,7000,6699].includes(existing.port)) initTls = 'required';
+      tls = initTls;
       nick = existing.nick;
       realName = existing.realName;
       autoJoinChannels = (existing.autoJoinChannels ?? []).join(', ');
@@ -63,7 +67,7 @@
       name = '';
       host = '';
       port = 6697;
-      tls = 'enabled';
+      tls = 'required';
       nick = '';
       realName = '';
       autoJoinChannels = '';
@@ -74,6 +78,16 @@
       saslMechanism = 'none';
       saslUsername = '';
       saslPassword = '';
+    }
+  });
+
+  // Keep TLS in sync when user changes port: 6697-family defaults to required
+  $effect(() => {
+    if (mode !== 'add') return;
+    if ([6697,6698,7000,6699].includes(port) && tls === 'disabled') {
+      // User explicitly disabled TLS on TLS port — respect it (e.g. testing plain)
+    } else if ([6697,6698,7000,6699].includes(port) && tls === 'enabled') {
+      tls = 'required';
     }
   });
 

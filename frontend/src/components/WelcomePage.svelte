@@ -44,7 +44,7 @@
 
   let host = $state('');
   let port = $state(6697);
-  let tls = $state<'enabled' | 'disabled' | 'required'>('enabled');
+  let tls = $state<'enabled' | 'disabled' | 'required'>('required');
   let nick = $state('');
   let realName = $state('');
   let autoJoinChannels = $state('');
