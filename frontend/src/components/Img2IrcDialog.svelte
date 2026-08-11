@@ -364,8 +364,8 @@
 </div>
 
 <style>
-  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:10000;padding:12px}
-  .dialog{background:#1a1d21;border:1px solid #2c2f35;border-radius:8px;width:min(900px,98vw);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.6)}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:10000;padding:8px}
+  .dialog{background:#1a1d21;border:1px solid #2c2f35;border-radius:8px;width:min(960px,98vw);height:96vh;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,.6)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #2c2f35}
   header h2{margin:0;font-size:13px;color:#e6e6e6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis} .sub{font-weight:400;color:#8b949e;font-size:11px}
   .x{background:0;border:0;color:#8b949e;font-size:22px;cursor:pointer;line-height:1;padding:0 4px}
@@ -454,13 +454,12 @@
   .slider.sm{width:90px}
 
   .previewWrap{
-    position:relative; flex:1; min-height:180px; max-height:42vh;
+    position:relative; flex:1 1 auto; min-height:320px; max-height:none;
     background:#000; padding:0;
     overflow:auto; overscroll-behavior:contain;
     scrollbar-width:thin; scrollbar-color:#30363d #000;
     border-top:1px solid #21252c; border-bottom:1px solid #21252c;
   }
-  .previewWrap::-webkit-scrollbar{width:8px;height:8px}
   .previewWrap::-webkit-scrollbar-thumb{background:#30363d;border-radius:999px;border:1px solid #000}
   .previewWrap::-webkit-scrollbar-thumb:hover{background:#3d4451}
   .previewWrap::-webkit-scrollbar-corner{background:#000}
