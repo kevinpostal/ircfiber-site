@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchUploadsOffset, deleteUpload, type UploadEntry } from '../stores/api';
+  import { fetchUploadsOffset, deleteUpload, editUpload, type UploadEntry } from '../stores/api';
   import { sizeToString } from '../lib/upload';
+  import CodeEditor from './CodeEditor.svelte';
+  import { detectSyntaxFromFilename } from '../lib/textFiles';
 
   interface Props {
     onClose: () => void;
@@ -18,6 +20,9 @@
   let editingId = $state<string | null>(null);
   let editName = $state('');
   let editError = $state<string | null>(null);
+  let editingContent = $state('');
+  let editingLang = $state('text');
+  let saving = $state(false);
 
   // Text preview cache — fetched once per text file, truncated to 1500 chars
   let textPreviews = $state<Record<string, string>>({});
@@ -88,22 +93,70 @@
     loadPage(p);
   }
 
-  function startEdit(entry: UploadEntry): void {
+  async function startEdit(entry: UploadEntry): Promise<void> {
     editingId = entry.id;
     editName = entry.name;
     editError = null;
+    saving = false;
+    if (isTextFile(entry.mimeType, entry.name)) {
+      try {
+        const fetchUrl = (() => { try { return new URL(entry.url).pathname; } catch { return entry.url; } })();
+        const r = await fetch(fetchUrl);
+        if (!r.ok) throw new Error('fetch failed');
+        editingContent = await r.text();
+        editingLang = detectSyntaxFromFilename(entry.name);
+      } catch {
+        editingContent = '';
+        editError = 'Failed to load file content';
+      }
+    } else {
+      editingContent = '';
+      editingLang = 'text';
+    }
   }
 
   function cancelEdit(): void {
     editingId = null;
     editError = null;
+    editingContent = '';
+    saving = false;
   }
 
-  function saveEdit(e: Event): void {
+  async function saveEdit(e: Event): Promise<void> {
     e.preventDefault();
-    editError = 'Editing is not yet supported';
+    if (!editingId) return;
+    const entry = entries.find((en) => en.id === editingId);
+    if (!entry) return;
+    if (!editName.trim()) {
+      editError = 'Filename required';
+      return;
+    }
+    const wasTextFile = isTextFile(entry.mimeType, entry.name);
+    if (!wasTextFile) {
+      editError = 'Only text files can be edited';
+      return;
+    }
+    saving = true;
+    editError = null;
+    try {
+      await editUpload(editingId, { content: editingContent, filename: editName });
+      entry.name = editName;
+      entries = [...entries];
+      delete textPreviews[editingId];
+      textPreviewErrors[editingId] = false;
+      const fetchUrl = (() => { try { return new URL(entry.url).pathname; } catch { return entry.url; } })();
+      try {
+        const r = await fetch(fetchUrl);
+        const t = await r.text();
+        textPreviews[editingId] = t.slice(0, 1500);
+      } catch {}
+      editingId = null;
+    } catch (err) {
+      editError = err instanceof Error ? err.message : 'Failed to save';
+    } finally {
+      saving = false;
+    }
   }
-
   async function handleDelete(entry: UploadEntry): Promise<void> {
     try {
       await deleteUpload(entry.id);
@@ -169,16 +222,31 @@
             <div class="info">
               <p class="date">{formatDate(entry.createdAt)}</p>
               {#if editingId === entry.id}
-                <div class="name" hidden>{entry.name}</div>
-                <form action="" method="post" class="editForm" onsubmit={saveEdit}>
-                  <p class="form">
-                    <textarea class="input nameInput" name="name" bind:value={editName}></textarea>
-                  </p>
-                  <p class="form">
-                    <button type="submit" class="action"><span>Save</span></button>
-                    <button type="button" class="cancel" onclick={cancelEdit}><span>Cancel</span></button>
-                  </p>
-                </form>
+                {#if isTextFile(entry.mimeType, entry.name)}
+                  <form action="" method="post" class="editForm" onsubmit={saveEdit}>
+                    <CodeEditor bind:value={editingContent} language={editingLang} />
+                    <p class="form">
+                      <label for="editNameInput">Filename</label>
+                      <input id="editNameInput" class="input nameInput" name="name" bind:value={editName} />
+                    </p>
+                    {#if editError}<p class="userError">{editError}</p>{/if}
+                    <p class="form">
+                      <button type="submit" class="action" disabled={saving}><span>{saving ? 'Saving…' : 'Save'}</span></button>
+                      <button type="button" class="cancel" onclick={cancelEdit}><span>Cancel</span></button>
+                    </p>
+                  </form>
+                {:else}
+                  <div class="name" hidden>{entry.name}</div>
+                  <form action="" method="post" class="editForm" onsubmit={saveEdit}>
+                    <p class="form">
+                      <textarea class="input nameInput" name="name" bind:value={editName}></textarea>
+                    </p>
+                    <p class="form">
+                      <button type="submit" class="action"><span>Save</span></button>
+                      <button type="button" class="cancel" onclick={cancelEdit}><span>Cancel</span></button>
+                    </p>
+                  </form>
+                {/if}
               {:else}
                 <div class="name">{entry.name}</div>
                 <p class="link">{sizeToString(entry.size)} • {entry.mimeType}</p>
