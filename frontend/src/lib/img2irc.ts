@@ -316,13 +316,16 @@ export function rowPaletteForViterbi(
 
 // Bilateral pre-filter — edge-preserving smoother (spec §6, Midgard comic mode)
 // Tries WASM (wasm-img2irc/pkg) via getWasm() cache — never breaks build, no per-call import
+let _wasmBilateralAvailable: boolean | null = null;
 export async function tryWasmBilateral(d: Uint8ClampedArray, pW:number, pH:number, radius:number, sigma:number, passes:number): Promise<boolean> {
+  if (_wasmBilateralAvailable === false) return false;
   try {
     const mod = await getWasm();
-    if (!mod?.bilateral_filter) return false;
+    if (!mod?.bilateral_filter) { _wasmBilateralAvailable = false; return false; }
+    _wasmBilateralAvailable = true;
     mod.bilateral_filter(d, pW, pH, radius, sigma, passes);
     return true;
-  } catch { return false; }
+  } catch { _wasmBilateralAvailable = false; return false; }
 }
 // Precomputed exp LUT for bilateral: wt = exp(-d2/sigma2), d2 in [0, 195075] (255^2*3), sigma2=3200
 // d2*32/sigma2 maps to [0, 1952], clamp to 2047. Cuts 720K Math.exp → array lookup for 120×120×2.
