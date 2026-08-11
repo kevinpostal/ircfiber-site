@@ -1,8 +1,8 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode } from '../lib/img2irc';
   // Worker is loaded lazily via dynamic import to keep main bundle small and not break if Worker unsupported
-  import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { generateLabel } from '../lib/utils';
 
@@ -103,6 +103,9 @@
     }
   }
 
+  let fitBusy=$state(false);
+  let fitting=false;
+
   function schedule(){
     if(fitting) return;
     const my=++gen;
@@ -120,9 +123,7 @@
     if (!isFast) return base;
     return { ...base, viterbiW: 0, comic: false, dither: false }; // greedy, no bilateral/dither for speed
   }
-  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void dither; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void comicFilter; schedule(); });
-  $effect(()=>{ const c=++gen; void convert(c); return ()=>{gen++; if(debounce) clearTimeout(debounce);}; });
-
+  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void dither; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void comicFilter; untrack(()=>schedule()); });
   async function convert(expected=gen){
     const cur=expected;
     if(!htmlPreview) loading=true;
@@ -146,21 +147,16 @@
         // Try off-main-thread Worker with transferable ImageBitmap (no copy) — falls back to main thread
         // Pass expectedGen so worker can abort if user changed sliders while bitmap was being created
         let res: string | null = null;
-        const _tWorker = performance.now();
         try { res = await convertViaWorker(img, opts, cur); } catch {}
-        if (res !== null) {
-          console.info(`[img2irc] Worker success: ${(performance.now()-_tWorker).toFixed(1)}ms off-thread`);
-        } else {
-          console.info(`[img2irc] Worker miss — falling back to main thread`);
-        }
         if (cur!==gen) { revokeImageUrl(img); return; }
         if (res == null) {
           res = await imageToIrcArt(img, opts);
         }
-        // If we did fast preview, schedule a full-quality refine in background when idle
         if (isInteractive && opts.viterbiW === 0 && baseOpts.viterbiW !== 0) {
-          setTimeout(() => { if (gen === cur) void convert(cur); }, 300);
+          setTimeout(() => { if (gen === cur) untrack(()=>void convert(cur)); }, 300);
         }
+        if(cur!==gen) return;
+        art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
       } finally { revokeImageUrl(img); }
     } catch(e:any){ if(cur===gen){ error=e?.message??'Failed'; }}
@@ -169,17 +165,13 @@
 
   const stats=$derived(estimateLineLengths(art));
   const hardStats=$derived(estimateLineLengths(art, IRC_HARD_LIMIT));
-  const activeTarget=$derived(ircState.activeBuffer.bufferName||'');
   const activeNetworkId=$derived(ircState.activeBuffer.networkId||'');
 
   // ── Smart fit: adjust compression / width / colour mode until longest line ≤ 512 ──
   // Ladder is quality-preserving: cheapest quality cost first. Viterbi w uses bisection (LambdaPareto.lean: bytes_antitone)
   // so we binary-search the minimal w that fits before touching geometry.
-  let fitBusy=$state(false);
-  let fitting=false;
   async function smartFit(){
     if(!art || fitBusy) return;
-    fitBusy=true; fitting=true;
     try{
       let steps=0;
       while(steps++ < 14){
