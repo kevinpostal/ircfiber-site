@@ -481,7 +481,8 @@ final class WebController {
                 return;
             }
 
-            // Only serve known image types
+            // Serve known image AND text/code types (uploads now include
+            // hosted text snippets — see RESTAPI.validateUpload).
             string mime = "application/octet-stream";
             if (endsWith(rel, ".png"))       mime = "image/png";
             else if (endsWith(rel, ".jpg")
@@ -490,8 +491,22 @@ final class WebController {
             else if (endsWith(rel, ".webp")) mime = "image/webp";
             else if (endsWith(rel, ".svg"))  mime = "image/svg+xml";
             else if (endsWith(rel, ".avif")) mime = "image/avif";
+            else if (endsWith(rel, ".txt") || endsWith(rel, ".text") || endsWith(rel, ".log")) mime = "text/plain";
+            else if (endsWith(rel, ".md") || endsWith(rel, ".markdown")) mime = "text/markdown";
+            else if (endsWith(rel, ".py")) mime = "text/x-python";
+            else if (endsWith(rel, ".js") || endsWith(rel, ".mjs") || endsWith(rel, ".jsx")) mime = "text/javascript";
+            else if (endsWith(rel, ".ts") || endsWith(rel, ".tsx")) mime = "text/typescript";
+            else if (endsWith(rel, ".json") || endsWith(rel, ".json5")) mime = "application/json";
+            else if (endsWith(rel, ".yml") || endsWith(rel, ".yaml")) mime = "text/yaml";
+            else if (endsWith(rel, ".xml") || endsWith(rel, ".html") || endsWith(rel, ".htm")) mime = "text/xml";
+            else if (endsWith(rel, ".css") || endsWith(rel, ".scss") || endsWith(rel, ".less")) mime = "text/css";
+            else if (endsWith(rel, ".sh") || endsWith(rel, ".bash")) mime = "text/x-sh";
+            else if (endsWith(rel, ".sql")) mime = "text/x-sql";
+            else if (endsWith(rel, ".toml")) mime = "text/x-toml";
+            else if (endsWith(rel, ".ini") || endsWith(rel, ".conf") || endsWith(rel, ".cfg")) mime = "text/plain";
+            else if (endsWith(rel, ".csv")) mime = "text/csv";
             else {
-                // Non-image file — refuse to serve
+                // Unrecognized file — refuse to serve
                 res.statusCode = 403;
                 return;
             }

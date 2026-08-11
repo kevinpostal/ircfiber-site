@@ -1,10 +1,11 @@
 import { uploadFile, validateFile, flattenFileList, joinMessageLink, type UploadHandle, type UploadResponse } from '../lib/upload';
+import { isTextFile, detectSyntaxFromFilename, MAX_TEXT_FILE_BYTES } from '../lib/textFiles';
 import { uploadState, trackUpload, setProgress, finishUpload, failUpload, removeUpload, type ActiveUpload } from './uploadStore.svelte';
+import { openFromFile } from './pastebinStore.svelte';
 import { sendMessage } from './wsConnection.svelte.ts';
 import { ircState } from './ircStore.svelte';
 import { generateLabel } from '../lib/utils';
 import type { IRCMessage } from '../types';
-
 export interface UploadFlowDeps {
   uploader: typeof uploadFile;
   send: (networkId: string, target: string, text: string, label?: string) => void;
@@ -30,10 +31,51 @@ export function setDeps(overrides: Partial<UploadFlowDeps>): void {
 interface PendingUpload extends ActiveUpload { handle: UploadHandle; }
 const handles = new Map<number, UploadHandle>();
 
-export function startUploads(
+export async function startUploads(
   files: File[] | Blob[],
   opts: { networkId: string; buffer: string; immediate?: boolean },
-): void {
+): Promise<void> {
+  // IRCCloud parity: a single text file (text/* or known code extension)
+  // under MAX_TEXT_FILE_BYTES opens the snippet/pastebin dialog with syntax
+  // auto-detected from the filename — it does NOT go through /api/upload.
+  // Mirrors common.js o1Zz doUpload: `s.isText(l.type)` => FileReader.readAsText
+  // => pasteConfirm flow. Size guard matches n.MAX_LENGTH_BYTES 15,728,640.
+  const maybeCandidate = files[0] as File | undefined;
+  const isSingleFile = files.length === 1 && !!maybeCandidate && typeof maybeCandidate.name === 'string' && typeof maybeCandidate.size === 'number';
+  if (isSingleFile) {
+    const maybeText = maybeCandidate as File;
+    if (isTextFile(maybeText)) {
+      if (maybeText.size === 0) {
+        deps.notifyError(`${maybeText.name}: Empty file`);
+        return;
+      }
+      if (maybeText.size > MAX_TEXT_FILE_BYTES) {
+        deps.notifyError(`${maybeText.name}: File too large (max ${Math.round(MAX_TEXT_FILE_BYTES / 1e6)} MB)`);
+        return;
+      }
+      try {
+        const text = await maybeText.text();
+        if (text.length === 0) {
+          deps.notifyError(`${maybeText.name}: Empty file`);
+          return;
+        }
+        const lang = detectSyntaxFromFilename(maybeText.name);
+        openFromFile({
+          text,
+          filename: maybeText.name,
+          language: lang,
+          networkId: opts.networkId,
+          target: opts.buffer,
+        });
+        return;
+      } catch (e) {
+        deps.notifyError(`${maybeText.name}: Could not read file`);
+        return;
+      }
+    }
+  }
+
+
   const { accepted, truncated } = flattenFileList(
     (files as (File | Blob)[]).map(f => (f instanceof File ? f : new File([f], 'pasted-image.png', { type: f.type || 'image/png' })))
   );

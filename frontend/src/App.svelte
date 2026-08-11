@@ -482,7 +482,14 @@ let showNetworkForm: boolean = $state(false);
     // not switch channels. This covers the case where the user clicks outside
     // the compose box (e.g. on the message list) and expects Up/Down to
     // scroll the chat history.
-    if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    // Svelte 5 strips the parens around `(ArrowUp || ArrowDown)` inside the
+    // `&&` chain, silently turning the guard into `... && ArrowUp || ArrowDown`
+    // — which matches ANY ArrowDown, preventDefault-ing it in every textarea
+    // (breaking the Down-arrow in the compose box and snippet editor) and
+    // switching buffers. Bind the key check to a const first so the emitted
+    // JS preserves grouping.
+    const isArrowKey = e.key === 'ArrowUp' || e.key === 'ArrowDown';
+    if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && isArrowKey) {
       const target = e.target as HTMLElement | null;
       const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable);
       if (!isInput) {
@@ -497,7 +504,7 @@ let showNetworkForm: boolean = $state(false);
         }
       }
     }
-    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && isArrowKey) {
       e.preventDefault();
       switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
       return;

@@ -62,13 +62,26 @@
         </div>
       {:else}
         {@const u = activeUpload()}
+        {@const isText = u ? /\.(txt|md|json|js|ts|jsx|tsx|py|java|c|cpp|h|go|rs|php|rb|sh|yaml|yml|xml|html|css|sql|toml|ini|log|csv|dockerfile|makefile)$/i.test(u.filename) || u.filename.toLowerCase() === 'dockerfile' || u.filename.toLowerCase() === 'makefile' : false}
         <div class="single" style="">
           {#if u?.previewUrl}
-            <span class="previewWrapper">
-              <span class="localPreview localImagePreview">
-                <img class="unknownFilePreview" src={u.previewUrl} alt={u.filename} />
+            {#if isText}
+              <span class="previewWrapper">
+                <span class="localPreview localTextPreview" style="display:block; max-height:min(320px, 40vh); overflow:auto; background:#1e1e1e; color:#e6e6e6; padding:10px; border-radius:3px; font-family: 'Hack', monospace; font-size:12px; white-space: pre; word-wrap: break-word;">
+                  {#await fetch(u.previewUrl).then(r => r.text()) then text}
+                    <span style="white-space: pre-wrap;">{text.slice(0, 4000)}{#if text.length > 4000}…{/if}</span>
+                  {:catch}
+                    <span>Preview unavailable</span>
+                  {/await}
+                </span>
               </span>
-            </span>
+            {:else}
+              <span class="previewWrapper">
+                <span class="localPreview localImagePreview">
+                  <img class="unknownFilePreview" src={u.previewUrl} alt={u.filename} />
+                </span>
+              </span>
+            {/if}
           {/if}
 
           <p class="form">
@@ -82,7 +95,7 @@
             />
           </p>
 
-          <p class="explanation info">{formatSize(u?.size ?? 0)} • {u?.filename.split('.').pop() ?? ''}</p>
+          <p class="explanation info">{formatSize(u?.size ?? 0)} • {u?.filename.split('.').pop() ?? ''} {#if isText}• text{/if}</p>
         </div>
       {/if}
 

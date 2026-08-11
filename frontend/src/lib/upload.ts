@@ -8,8 +8,31 @@ export function isUploadableImage(mime: string): boolean {
   return /^image\//i.test(mime);
 }
 
+export function isUploadableText(mime: string, filename = ""): boolean {
+  if (/^text\//i.test(mime)) return true;
+  const textMimes = new Set([
+    "application/json", "application/javascript", "application/xml",
+    "application/x-javascript", "application/x-python", "text/x-python",
+    "application/x-sh", "text/x-sh",
+  ]);
+  if (textMimes.has(mime.toLowerCase())) return true;
+  // Fallback by extension for empty/generic MIME (e.g. .txt drag with no MIME)
+  if (filename) {
+    const ext = filename.toLowerCase().match(/\.([^.]+)$/)?.[1] ?? "";
+    const textExts = new Set(["txt","md","json","js","ts","jsx","tsx","py","java","c","cpp","h","go","rs","php","rb","sh","yaml","yml","xml","html","css","sql","toml","ini","log","csv","dockerfile","makefile"]);
+    if (textExts.has(ext)) return true;
+    const base = filename.toLowerCase().split('/').pop()!.split('\\').pop()!;
+    if (["dockerfile","makefile","gemfile","rakefile"].includes(base)) return true;
+  }
+  return false;
+}
+
+export function isUploadableFile(mime: string, filename = ""): boolean {
+  return isUploadableImage(mime) || isUploadableText(mime, filename);
+}
+
 export function validateFile(file: FileLike): string | null {
-  if (!isUploadableImage(file.type)) return 'Only images are supported';
+  if (!isUploadableFile(file.type, file.name)) return 'Only images and text files are supported';
   if (file.size > MAX_UPLOAD_BYTES) return 'File too large (max 200 MB)';
   if (file.size <= 0) return 'Empty file';
   return null;

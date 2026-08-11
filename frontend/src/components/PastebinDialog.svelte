@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import hljs from 'highlight.js/lib/common';
+  import 'highlight.js/styles/atom-one-dark.css';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { splitIntoMessages } from '../lib/messageSplitter';
   import { getPastebinDisablePrompt, setPastebinDisablePrompt } from '../stores/preferences.svelte';
@@ -9,10 +10,12 @@
     text?: string;
     networkId?: string;
     target?: string;
+    initialFilename?: string;
+    initialLanguage?: string;
     onclose?: () => void;
     onsent?: () => void;
   }
-  let { open = false, text = '', networkId = '', target = '', onclose: oncloseCb, onsent: onsentCb }: Props = $props();
+  let { open = false, text = '', networkId = '', target = '', initialFilename = '', initialLanguage = '', onclose: oncloseCb, onsent: onsentCb }: Props = $props();
 
   // Language selector — mirrors IRCCloud's <select> list verbatim (text default
   // + ~200 code modes).  We display the value, the backend only needs 'text'
@@ -43,6 +46,56 @@
     'vue','wollok','xml','xquery','yaml','zeek','zig',
   ] as const;
 
+  // highlight.js language ids differ from ace ids for a few modes.
+  const HLJS_MAP: Record<string, string> = {
+    text: 'plaintext',
+    c_cpp: 'cpp',
+    csharp: 'csharp',
+    golang: 'go',
+    graphqlschema: 'graphql',
+    java: 'java',
+    javascript: 'javascript',
+    json: 'json',
+    json5: 'json',
+    kotlin: 'kotlin',
+    less: 'less',
+    lua: 'lua',
+    makefile: 'makefile',
+    markdown: 'markdown',
+    python: 'python',
+    ruby: 'ruby',
+    rust: 'rust',
+    scss: 'scss',
+    sh: 'bash',
+    shell: 'bash',
+    sql: 'sql',
+    swift: 'swift',
+    typescript: 'typescript',
+    tsx: 'tsx',
+    jsx: 'javascript',
+    xml: 'xml',
+    yaml: 'yaml',
+    dockerfile: 'dockerfile',
+    ini: 'ini',
+    nginx: 'nginx',
+    protobuf: 'protobuf',
+    powershell: 'powershell',
+    r: 'r',
+    toml: 'toml',
+    twig: 'twig',
+    verilog: 'verilog',
+    vhdl: 'vhdl',
+    zig: 'zig',
+    css: 'css',
+    perl: 'perl',
+    php: 'php',
+    dart: 'dart',
+  };
+
+  function escapeHtml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
   let editor = $state(text);
   let lang = $state<string>('text');
   let name = $state('');
@@ -51,22 +104,67 @@
   let posting = $state(false);
   let error = $state<string | null>(null);
 
-  // Reset state every time the dialog opens with new text
+  // Live syntax highlight for the visible layer of the overlay editor.
+  let highlightedHtml = $derived.by(() => {
+    if (!editor) return '';
+    if (lang === 'text') return escapeHtml(editor);
+    const raw = HLJS_MAP[lang] ?? lang;
+    const useLang = hljs.getLanguage(raw) ? raw : 'plaintext';
+    try {
+      return hljs.highlight(editor, { language: useLang }).value;
+    } catch {
+      try { return hljs.highlightAuto(editor).value; } catch { return escapeHtml(editor); }
+    }
+  });
+
+  // Line-number gutter — derived so it tracks edits without making the
+  // reset effect depend on `editor` (that dependency caused the reset
+  // effect to re-fire after every keystroke and clobber the edit).
+  let gutterText = $derived.by(() => {
+    const n = Math.max(editor.split('\n').length, 1);
+    const nums: string[] = [];
+    for (let i = 1; i <= n; i++) nums.push(String(i));
+    return nums.join('\n');
+  });
+
+  // Reset state every time the dialog opens with new text. Guarded by a
+  // last-seen sentinel so an unrelated re-render can never clobber an
+  // in-progress edit (and it never reads `editor`, so typing can't
+  // re-trigger it).
+  let lastAppliedText = '';
   $effect(() => {
-    if (open) {
+    if (open && text !== lastAppliedText) {
+      lastAppliedText = text;
       editor = text;
-      lang = 'text';
-      name = '';
+      // IRCCloud parity: when the dialog is opened from a text-file upload,
+      // the language is auto-detected from the filename extension (ace/ext/modelist
+      // getModeForPath). Multi-line paste keeps the old 'text' default.
+      lang = initialLanguage && (LANGUAGES as readonly string[]).includes(initialLanguage) ? initialLanguage : 'text';
+      name = initialFilename;
       message = '';
       askChecked = !getPastebinDisablePrompt();
       error = null;
       posting = false;
-      tick().then(() => editorEl?.focus());
     }
   });
 
-  // svelte-ignore non_reactive_update — bind:this target, not user state
+  // svelte-ignore non_reactive_update — bind:this targets, not user state
   let editorEl: HTMLTextAreaElement | undefined;
+  let hlEl: HTMLPreElement | undefined;
+  let gutterEl: HTMLPreElement | undefined;
+
+  // Keep the highlighted layer + gutter scrolled in lockstep with the textarea.
+  function syncScroll(): void {
+    if (!editorEl) return;
+    const top = editorEl.scrollTop;
+    const left = editorEl.scrollLeft;
+    if (hlEl) { hlEl.scrollTop = top; hlEl.scrollLeft = left; }
+    if (gutterEl) gutterEl.scrollTop = top;
+  }
+
+  function onEditorInput(): void {
+    syncScroll();
+  }
 
   function onKeyDown(e: KeyboardEvent) {
     // Shift+Enter = send as messages
@@ -109,27 +207,41 @@
     sendNext();
   }
 
-  // "Post snippet" — upload to a pastebin service, send the URL.
-  // Uses ix.io (no auth, no rate limits for moderate use).  Falls back to
-  // showing an error if the upload fails.
+  // "Post snippet" — host the text file like an image (via /api/upload),
+  // preserving the selected language for inline highlighting. Falls back to
+  // showing an error if the upload fails. Mirrors image upload flow.
   async function postSnippet(e: Event) {
     e.preventDefault();
     if (posting) return;
     posting = true;
     error = null;
     try {
-      const fd = new FormData();
-      // ix.io simple API: text=<snippet>. Default is permanent storage.
-      fd.append('text', editor);
-      const resp = await fetch('https://ix.io', { method: 'POST', body: fd });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const url = (await resp.text()).trim();
+      // Use the current filename or default to snippet.<ext> based on lang
+      const extForLang: Record<string, string> = {
+        python: 'py', javascript: 'js', typescript: 'ts', bash: 'sh', json: 'json',
+        yaml: 'yaml', markdown: 'md', sql: 'sql', xml: 'xml', css: 'css', scss: 'scss',
+        java: 'java', cpp: 'cpp', csharp: 'cs', go: 'go', rust: 'rs', ruby: 'rb',
+        php: 'php', swift: 'swift', kotlin: 'kt', dart: 'dart', ini: 'ini',
+        dockerfile: 'Dockerfile', makefile: 'Makefile', nginx: 'conf', lua: 'lua',
+        perl: 'pl', powershell: 'ps1', r: 'r', graphql: 'graphql', protobuf: 'proto',
+        twig: 'twig', verilog: 'v', vhdl: 'vhd', zig: 'zig', toml: 'toml',
+        html: 'html', sh: 'sh',
+      };
+      const ext = extForLang[lang] ?? (lang === 'text' ? 'txt' : lang);
+      const filename = (name?.trim() || initialFilename?.trim() || `snippet.${ext}`).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const blob = new Blob([editor], { type: 'text/plain' });
+      const file = new File([blob], filename, { type: 'text/plain' });
+      // Use the same upload path as images — POST /api/upload
+      const { uploadFile } = await import('../lib/upload');
+      const handle = uploadFile(file, { filename, networkId, buffer: target });
+      const result = await handle.promise;
+      const url = result.url;
       const finalText = message ? `${message} ${url}` : url;
       oncloseCb?.();
       sendMessage(networkId, target, finalText);
       onsentCb?.();
     } catch (e) {
-      error = (e as Error).message || 'Failed to post snippet';
+      error = (e as Error).message || 'Failed to upload snippet';
       posting = false;
     }
   }
@@ -155,16 +267,19 @@
       <h1 id="pastebinTitle" tabindex="0">Text snippet</h1>
 
       <div class="pastebinWrapper">
-        <div class="paste">
-          <div
-            class="editor ace_editor ace_hidpi ace_tm"
-            class:ace_dark={lang !== 'text'}
-            style="height: 192px;"
-          >
+        <!-- Editable, live-highlighted preview: a transparent textarea sits
+             over a highlighted <pre> with a synced line-number gutter.
+             Edit the code directly; colors and numbers update live. -->
+        <div class="codeEditor">
+          <pre bind:this={gutterEl} class="gutter" aria-hidden="true">{gutterText}</pre>
+          <div class="editorWrap">
+            <pre bind:this={hlEl} class="hlLayer" aria-hidden="true"><code>{@html highlightedHtml}</code></pre>
             <textarea
               bind:this={editorEl}
               bind:value={editor}
-              class="ace_text-input"
+              oninput={onEditorInput}
+              onscroll={syncScroll}
+              class="editLayer"
               wrap="off"
               autocapitalize="off"
               spellcheck="false"
@@ -239,14 +354,19 @@
 
 <style>
   .pastebin {
-    /* IRCCloud uses display: block; flexbox would steal viewport space */
+    /* IRCCloud parity: bounded dialog that always fits the window.
+       IRCCloud .accountContainer: top:50px, width:550px, max-height:80%,
+       margin-left:-275px, overflow:auto — content scrolls internally.
+       We widen slightly for code and let the editor flex to fill. */
     position: fixed;
-    top: 12%;
+    top: 50px;
     left: 50%;
     transform: translateX(-50%);
-    width: min(560px, 92vw);
-    max-height: 80vh;
-    overflow: auto;
+    width: min(680px, 94vw);
+    max-height: calc(100vh - 100px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     z-index: 1000;
     background: #2a2a2a;
     color: #e6e6e6;
@@ -258,6 +378,12 @@
     font-size: 13px;
     line-height: 1.4;
     box-sizing: border-box;
+  }
+  .pastebin form {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: auto;
   }
   .pastebin h1 {
     font-size: 16px;
@@ -276,34 +402,137 @@
     margin-bottom: 8px;
   }
   .pastebinWrapper {
+    flex: 1 1 auto;
+    min-height: 160px;
     margin: 8px 0 4px;
     border: 1px solid #1e1e1e;
     border-radius: 3px;
     overflow: hidden;
+    display: flex;
   }
-  .paste .editor {
-    background: #141414;
-    color: #f8f8f8;
+  .codeEditor {
+    display: flex;
+    align-items: stretch;
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #282c34;
+    overflow: hidden;
   }
-  .paste .editor.ace_tm {
-    background: #1e1e1e;
-    color: #e6e6e6;
-  }
-  .paste textarea.ace_text-input {
-    display: block;
-    width: 100%;
-    height: 192px;
-    box-sizing: border-box;
-    background: transparent;
-    color: inherit;
-    border: 0;
-    outline: 0;
-    padding: 8px 10px;
-    margin: 0;
+  /* All three layers share EXACT metrics so the overlay aligns pixel-perfect.
+     Scoped under .pastebin so the compose-input rule
+     `.bufferinputcell textarea { max-height:200px; padding:2px 0 2px 8px }`
+     (which also matches this textarea as a DOM descendant) cannot clamp it. */
+  .pastebin .gutter,
+  .pastebin .hlLayer,
+  .pastebin .editLayer {
     font-family: 'Hack', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 13px;
-    line-height: 16px;
-    resize: vertical;
+    line-height: 1.4;
+  }
+  .gutter {
+    flex: 0 0 auto;
+    min-width: 3.2em;
+    margin: 0;
+    padding: 12px 8px 12px 12px;
+    text-align: right;
+    color: #5c6370;
+    background: #21252b;
+    border-right: 1px solid #2c313a;
+    user-select: none;
+    overflow: hidden;
+    white-space: pre;
+  }
+  .editorWrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .hlLayer {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 12px 14px;
+    background: transparent;
+    color: #abb2bf;
+    /* The highlight layer scrolls in lockstep with the textarea via
+       syncScroll(); showing its own scrollbars creates the "double
+       scrollbar" ghost. Hide them (overflow:hidden still honors
+       programmatic scrollTop/scrollLeft). scrollbar-gutter:stable
+       reserves the SAME gutter as the textarea so text never shifts. */
+    overflow: hidden;
+    scrollbar-gutter: stable;
+    pointer-events: none;
+    white-space: pre;
+    word-wrap: normal;
+  }
+  .hlLayer code {
+    background: transparent;
+    font-family: 'Hack', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+    white-space: inherit;
+    letter-spacing: normal;
+    word-spacing: normal;
+    tab-size: 4;
+  }
+  .pastebin .editLayer {
+    position: absolute;
+    /* inset only (no width/height %): the textarea fills the wrapper
+       exactly so its scrollbar track spans the whole editor. */
+    inset: 0;
+    display: block;
+    box-sizing: border-box;
+    padding: 12px 14px !important;
+    margin: 0;
+    font-family: 'Hack', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+    background: transparent !important;
+    color: transparent !important;
+    caret-color: #e6e6e6;
+    border: 0;
+    outline: 0;
+    resize: none;
+    /* Defeat the compose-input rule's max-height:200px clamp. */
+    min-height: 0;
+    max-height: none;
+    /* Vertical scrollbar always visible (no appear/disappear shift) and
+       its gutter reserved permanently, so the highlight layer — which
+       reserves the same gutter — never drifts out of alignment.
+       Horizontal scrollbar removed: long lines clip rather than flash a
+       second scrollbar that would overlap the highlighted layer. */
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: #4d5867 #1e1e1e;
+    white-space: pre;
+    word-wrap: normal;
+    letter-spacing: normal;
+    word-spacing: normal;
+    tab-size: 4;
+  }
+  .pastebin .editLayer::-webkit-scrollbar {
+    width: 10px;
+  }
+  .pastebin .editLayer::-webkit-scrollbar-track {
+    background: #1e1e1e;
+  }
+  .pastebin .editLayer::-webkit-scrollbar-thumb {
+    background: #4d5867;
+    border-radius: 5px;
+    border: 2px solid #1e1e1e;
+  }
+  .pastebin .editLayer::-webkit-scrollbar-thumb:hover {
+    background: #5a6b7d;
+  }
+  .pastebin .editLayer::selection {
+    background: rgba(88, 166, 255, 0.3);
+    color: #e6e6e6;
+  }
+  .pastebin .editLayer::-moz-selection {
+    background: rgba(88, 166, 255, 0.3);
   }
   .pasteConfirm__public,
   .explanation {

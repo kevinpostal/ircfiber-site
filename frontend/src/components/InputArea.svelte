@@ -9,6 +9,7 @@
   import { smoothScrollBy } from '../lib/scroll';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
+  import { pastebinStore, closeFromFile } from '../stores/pastebinStore.svelte';
   import { dataURIToBlob } from '../lib/upload';
   import UploadMenu from './UploadMenu.svelte';
   import PastebinDialog from './PastebinDialog.svelte';
@@ -502,6 +503,8 @@
         pastebinText = text;
         pastebinNetworkId = networkId;
         pastebinTarget = target;
+        pastebinFilename = '';
+        pastebinLanguage = 'text';
         // Don't clear the input yet — if the user cancels from the dialog
         // we want their text preserved.  clear() happens after the dialog
         // dismisses (via the 'close'/'sent' events).
@@ -550,21 +553,43 @@
   function shouldPromptPastebin(text: string): boolean {
     return text.indexOf('\n') !== -1 || text.length > MESSAGE_LENGTH_TRIGGER;
   }
-
   let pastebinOpen = $state(false);
   let pastebinText = $state('');
   let pastebinNetworkId = $state('');
   let pastebinTarget = $state('');
+  let pastebinFilename = $state('');
+  let pastebinLanguage = $state('text');
+
+  // File-initiated snippet: App/DropTarget opened pastebinStore from a text
+  // file. Mirror it into the local PastebinDialog props so a single dialog
+  // instance renders (IRCCloud parity: file upload with isText => pasteConfirm).
+  $effect(() => {
+    if (pastebinStore.open) {
+      pastebinOpen = true;
+      pastebinText = pastebinStore.text;
+      pastebinNetworkId = pastebinStore.networkId;
+      pastebinTarget = pastebinStore.target;
+      pastebinFilename = pastebinStore.filename;
+      pastebinLanguage = pastebinStore.language;
+    }
+  });
 
   function onPastebinClose() {
+    const wasFile = pastebinStore.open;
     pastebinOpen = false;
-    // User cancelled from the dialog: restore the text to the input.
+    if (wasFile) {
+      closeFromFile();
+      void autoResizeAfterClear();
+      return;
+    }
     inputValue = pastebinText;
     void autoResizeAfterClear();
   }
 
   function onPastebinSent() {
+    const wasFile = pastebinStore.open;
     pastebinOpen = false;
+    if (wasFile) closeFromFile();
     inputValue = '';
     void autoResizeAfterClear();
   }
@@ -777,6 +802,8 @@
     text={pastebinText}
     networkId={pastebinNetworkId}
     target={pastebinTarget}
+    initialFilename={pastebinFilename}
+    initialLanguage={pastebinLanguage}
     onclose={onPastebinClose}
     onsent={onPastebinSent}
   />

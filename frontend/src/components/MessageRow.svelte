@@ -9,8 +9,10 @@
   import LongMessageContent from './LongMessageContent.svelte';
   import YoutubeEmbed from './YoutubeEmbed.svelte';
   import ImageInline from './ImageInline.svelte';
-  import { extractYoutubeIdsFromText } from '../lib/youtube';
+  import TextInline from './TextInline.svelte';
   import { extractImageUrlsFromText } from '../lib/imageInline';
+  import { extractTextUrlsFromText } from '../lib/textInline';
+  import { extractYoutubeIdsFromText } from '../lib/youtube';
   interface Props {
     msg: IRCMessage;
     isHighlight?: boolean;
@@ -287,8 +289,16 @@
     if (!text) return [];
     return extractImageUrlsFromText(text);
   });
+  // Inline text/code previews — hosted text files (like images) with svelte-highlight.
+  const textUrls = $derived.by(() => {
+    const text = chatContent?.text ?? msg.text ?? '';
+    const extracted = extractTextUrlsFromText(text);
+    if (!isChat) return [];
+    if (!text) return [];
+    const imgs = new Set(imageUrls);
+    return extracted.filter(u => !imgs.has(u));
+  });
   //
-  // Chat-content commands (PRIVMSG / NOTICE / CONNECT / 001 / numeric /
   // TOPIC / KICK / action) render through LongMessageContent in the
   // template instead, so the body is capped at MAX_PREVIEW_LINES with a
   // "Show more" button. For those commands this function returns an empty
@@ -614,14 +624,14 @@
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
           --><span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}</span>{/if}
+                title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
         </span>
       {:else if chatContent}
-        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}</span>{/if}</span>
+        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}</span>
       {:else}
         {@html getContentHTML()}
-        {#if youtubeIds.length > 0 || imageUrls.length > 0}
-          <span class="inlineEmbeds inlineEmbeds--outside">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}</span>
+        {#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}
+          <span class="inlineEmbeds inlineEmbeds--outside">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>
         {/if}
       {/if}
     </span>

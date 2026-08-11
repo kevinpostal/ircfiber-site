@@ -1605,9 +1605,32 @@ final class RESTAPI {
     enum MAX_UPLOAD_BYTES = 200L * 1024 * 1024;
 
     /// Returns null if acceptable, else a user-presentable rejection reason.
-    package static string validateUpload(string mime, long size) @safe {
+    package static string validateUpload(string mime, long size, string filename = "") @safe {
         import std.algorithm.searching : startsWith;
-        if (!mime.startsWith("image/")) return "Only images are supported";
+        import std.string : toLower;
+        auto lowerMime = mime.toLower();
+        bool isImage = lowerMime.startsWith("image/");
+        bool isText = lowerMime.startsWith("text/") ||
+            lowerMime == "application/json" || lowerMime == "application/javascript" ||
+            lowerMime == "application/xml" || lowerMime == "application/x-javascript" ||
+            lowerMime == "application/x-python" || lowerMime == "text/x-python" ||
+            lowerMime == "application/x-sh" || lowerMime == "text/x-sh";
+        // Fallback: allow by extension for empty/generic MIME (e.g. .txt with no MIME)
+        if (!isImage && !isText && filename.length > 0) {
+            import std.path : extension;
+            import std.uni : toLower;
+            auto ext = extension(filename).toLower();
+            // Common text/code extensions — matches frontend/textFiles.ts
+            immutable string[] textExts = [".txt",".md",".json",".js",".ts",".py",".java",".c",".cpp",".h",".go",".rs",".php",".rb",".sh",".yaml",".yml",".xml",".html",".css",".sql",".toml",".ini",".log",".csv"];
+            foreach (e; textExts) if (ext == e) { isText = true; break; }
+            // Also allow Dockerfile, Makefile without extension
+            if (!isText) {
+                import std.path : baseName;
+                auto base = baseName(filename).toLower();
+                if (base == "dockerfile" || base == "makefile" || base == "gemfile" || base == "rakefile") isText = true;
+            }
+        }
+        if (!isImage && !isText) return "Only images and text files are supported";
         if (size <= 0) return "Empty file";
         if (size > MAX_UPLOAD_BYTES) return "File too large (max 200 MB)";
         return null;
@@ -1665,7 +1688,7 @@ final class RESTAPI {
         auto mime = pf.headers.get("Content-Type", "");
         auto filename = req.form.get("filename", pf.filename.name);
 
-        if (auto err = validateUpload(mime, cast(long)data.length)) {
+        if (auto err = validateUpload(mime, cast(long)data.length, filename)) {
             res.statusCode = 400;
             res.writeJsonBody(Json(["error": Json(err)]));
             return;
@@ -1972,17 +1995,22 @@ final class RESTAPI {
     }
 }
 
-@("validateUpload accepts images under the size cap")
+@("validateUpload accepts images and text files under the size cap")
 unittest {
     assert(RESTAPI.validateUpload("image/png", 1024) is null);
     assert(RESTAPI.validateUpload("image/jpeg", 32 * 1024 * 1024) is null);
+    assert(RESTAPI.validateUpload("text/plain", 1024) is null);
+    assert(RESTAPI.validateUpload("text/x-python", 1024, "script.py") is null);
+    assert(RESTAPI.validateUpload("application/json", 1024) is null);
+    assert(RESTAPI.validateUpload("", 1024, "notes.txt") is null);
 }
 
-@("validateUpload rejects non-images and oversize files")
+@("validateUpload rejects non-images/non-text and oversize files")
 unittest {
     assert(RESTAPI.validateUpload("application/pdf", 10) !is null);
     assert(RESTAPI.validateUpload("video/mp4", 10) !is null);
     assert(RESTAPI.validateUpload("", 10) !is null);
+    assert(RESTAPI.validateUpload("", 10, "photo.jpg") !is null); // empty mime + image ext without mime should still be rejected (needs image/ mime)
     assert(RESTAPI.validateUpload("image/png", 201 * 1024 * 1024) !is null);
 }
 

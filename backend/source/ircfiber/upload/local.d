@@ -3,7 +3,7 @@ module ircfiber.upload.local;
 import std.file : mkdirRecurse, write;
 import std.path : buildPath, extension;
 import std.uuid : randomUUID;
-import std.string : replace;
+import std.string : replace, startsWith;
 import std.process : environment;
 import vibe.core.log;
 
@@ -43,7 +43,17 @@ LocalUploadResult saveUpload(string filename, string mime, const(ubyte)[] data, 
         else if (mime == "image/jpeg" || mime == "image/jpg") ext = ".jpg";
         else if (mime == "image/gif") ext = ".gif";
         else if (mime == "image/webp") ext = ".webp";
-        else ext = ".bin";
+        else if (mime == "text/plain") ext = ".txt";
+        else if (mime == "application/json") ext = ".json";
+        else if (mime == "text/x-python" || mime == "application/x-python") ext = ".py";
+        else if (mime == "application/javascript" || mime == "text/javascript") ext = ".js";
+        else if (mime.startsWith("text/")) ext = ".txt";
+        else {
+            import std.string : toLower;
+            auto lower = filename.toLower();
+            if (lower == "dockerfile" || lower == "makefile" || lower == "gemfile" || lower == "rakefile") ext = "";
+            else ext = ".bin";
+        }
     }
 
     const uuid = randomUUID().toString().replace("-", "");
