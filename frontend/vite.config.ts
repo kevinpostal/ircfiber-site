@@ -113,6 +113,11 @@ export default defineConfig({
         target: BACKEND_URL,
         changeOrigin: true,
         secure: false,
+      },
+      '/uploads': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: false,
       }
     }
   },

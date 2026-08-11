@@ -11,6 +11,52 @@
   let filenameInput = $state('');
   let messageInput = $state('');
 
+  // Text preview state — loaded via File.text() once per file so we don't
+  // re-fetch a blob: URL on every render (Svelte {#await fetch(...)} re-creates
+  // the promise and flashes). $effect tracks the active file identity.
+  let textPreview = $state<string | null>(null);
+  let textPreviewLoading = $state(false);
+  let textPreviewError = $state(false);
+
+  function isTextPreviewFile(filename: string, type?: string): boolean {
+    if (type && /^text\//i.test(type)) return true;
+    const lower = filename.toLowerCase();
+    if (lower === 'dockerfile' || lower === 'makefile' || lower === '.env') return true;
+    return /\.(txt|text|md|markdown|mdown|mkd|json|json5|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyw|pyi|rb|gemspec|rake|java|c|h|cpp|hpp|cc|cxx|hh|go|rs|php|phtml|sh|bash|zsh|ksh|fish|html|htm|xhtml|css|scss|sass|less|stylus|yaml|yml|xml|svg|toml|sql|pgsql|mysql|graphql|gql|dockerfile|containerfile|makefile|mk|ini|conf|cfg|properties|lua|perl|pl|pm|swift|kotlin|kt|kts|scala|clj|ex|exs|dart|r|rmd|jl|hs|erl|elm|vue|svelte|astro|tf|hcl|nix|nginx|apache|htaccess|bat|cmd|ps1|tex|diff|patch|csv|prql|proto|zig|nim|coffee|jade|pug|hbs|liquid)$/i.test(lower) || /\.(log|csv)$/i.test(lower);
+  }
+
+  $effect(() => {
+    const d = uploadState.dialog;
+    const u = d?.uploads.length === 1 ? d.uploads[0] : null;
+    if (!d || d.mode !== 'single' || !u || !isTextPreviewFile(u.filename, (u.file as File)?.type)) {
+      textPreview = null;
+      textPreviewError = false;
+      textPreviewLoading = false;
+      return;
+    }
+    const file = u.file as File | undefined;
+    if (!file) {
+      textPreview = null;
+      textPreviewError = true;
+      textPreviewLoading = false;
+      return;
+    }
+    let cancelled = false;
+    textPreview = null;
+    textPreviewError = false;
+    textPreviewLoading = true;
+    file.text().then((t) => {
+      if (cancelled) return;
+      textPreview = t.length > 4000 ? t.slice(0, 4000) + '…' : t;
+      textPreviewLoading = false;
+    }).catch(() => {
+      if (cancelled) return;
+      textPreviewError = true;
+      textPreviewLoading = false;
+    });
+    return () => { cancelled = true; };
+  });
+
   $effect(() => {
     const d = uploadState.dialog;
     if (!d) return;
@@ -62,17 +108,19 @@
         </div>
       {:else}
         {@const u = activeUpload()}
-        {@const isText = u ? /\.(txt|md|json|js|ts|jsx|tsx|py|java|c|cpp|h|go|rs|php|rb|sh|yaml|yml|xml|html|css|sql|toml|ini|log|csv|dockerfile|makefile)$/i.test(u.filename) || u.filename.toLowerCase() === 'dockerfile' || u.filename.toLowerCase() === 'makefile' : false}
+        {@const isText = u ? isTextPreviewFile(u.filename, (u.file as File)?.type) : false}
         <div class="single" style="">
           {#if u?.previewUrl}
             {#if isText}
               <span class="previewWrapper">
-                <span class="localPreview localTextPreview" style="display:block; max-height:min(320px, 40vh); overflow:auto; background:#1e1e1e; color:#e6e6e6; padding:10px; border-radius:3px; font-family: 'Hack', monospace; font-size:12px; white-space: pre; word-wrap: break-word;">
-                  {#await fetch(u.previewUrl).then(r => r.text()) then text}
-                    <span style="white-space: pre-wrap;">{text.slice(0, 4000)}{#if text.length > 4000}…{/if}</span>
-                  {:catch}
+                <span class="localPreview localTextPreview" style="display:block; max-height:min(320px, 40vh); overflow:auto; background:#1e1e1e; color:#e6e6e6; padding:10px; border-radius:3px; font-family: 'Hack', monospace; font-size:12px; white-space: pre-wrap; overflow-wrap: break-word;">
+                  {#if textPreviewLoading}
+                    <span>Loading preview…</span>
+                  {:else if textPreviewError}
                     <span>Preview unavailable</span>
-                  {/await}
+                  {:else if textPreview !== null}
+                    <span style="white-space: pre-wrap; overflow-wrap: break-word;">{textPreview}</span>
+                  {/if}
                 </span>
               </span>
             {:else}

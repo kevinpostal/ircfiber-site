@@ -19,6 +19,36 @@
   let editName = $state('');
   let editError = $state<string | null>(null);
 
+  // Text preview cache — fetched once per text file, truncated to 1500 chars
+  let textPreviews = $state<Record<string, string>>({});
+  let textPreviewErrors = $state<Record<string, boolean>>({});
+
+  function isTextFile(mime: string, name: string): boolean {
+    if (mime && /^text\//i.test(mime)) return true;
+    if (['application/json', 'application/javascript', 'application/xml', 'application/x-python', 'text/x-python'].includes(mime)) return true;
+    const lower = name.toLowerCase();
+    if (lower === 'dockerfile' || lower === 'makefile' || lower === '.env') return true;
+    return /\.(txt|text|md|markdown|mdown|mkd|json|json5|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyw|pyi|rb|gemspec|rake|java|c|h|cpp|hpp|cc|cxx|hh|go|rs|php|phtml|sh|bash|zsh|ksh|fish|html|htm|xhtml|css|scss|sass|less|stylus|yaml|yml|xml|svg|toml|sql|pgsql|mysql|graphql|gql|dockerfile|containerfile|makefile|mk|ini|conf|cfg|properties|lua|perl|pl|pm|swift|kotlin|kt|kts|scala|clj|ex|exs|dart|r|rmd|jl|hs|erl|elm|vue|svelte|astro|tf|hcl|nix|nginx|apache|htaccess|bat|cmd|ps1|tex|diff|patch|csv|prql|proto|zig|nim|coffee|jade|pug|hbs|liquid)$/i.test(lower) || /\.(log|csv)$/i.test(lower);
+  }
+
+  $effect(() => {
+    // Fetch text previews for visible text files. Guard prevents re-fetch.
+    for (const entry of entries) {
+      const id = entry.id;
+      if (!isTextFile(entry.mimeType, entry.name)) continue;
+      if (id in textPreviews || textPreviewErrors[id]) continue;
+      const fetchUrl = (() => { try { return new URL(entry.url).pathname; } catch { return entry.url; } })();
+      fetch(fetchUrl).then((r) => {
+        if (!r.ok) throw new Error('fetch failed');
+        return r.text();
+      }).then((t) => {
+        textPreviews[id] = t.slice(0, 1500);
+      }).catch(() => {
+        textPreviewErrors[id] = true;
+      });
+    }
+  });
+
   function getVisiblePages(current: number, total: number): (number | '...')[] {
     if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
     const pages: (number | '...')[] = [];
@@ -155,9 +185,23 @@
               {/if}
             </div>
             <div class="preview">
-              <a target="_blank" class="fileLink previewLink" href={entry.url}>
-                <img class="filePreview" src={entry.url} alt={entry.name} loading="lazy" />
-              </a>
+              {#if isTextFile(entry.mimeType, entry.name)}
+                {#if textPreviews[entry.id]}
+                  <a target="_blank" class="fileLink previewLink textPreviewLink" href={entry.url} title={entry.name}>
+                    <pre class="textFilePreview">{textPreviews[entry.id]}</pre>
+                  </a>
+                {:else if textPreviewErrors[entry.id]}
+                  <a target="_blank" class="fileLink previewLink" href={entry.url}>
+                    <span class="fileIcon">📄</span> {entry.name}
+                  </a>
+                {:else}
+                  <span class="loadingPreview">Loading preview…</span>
+                {/if}
+              {:else}
+                <a target="_blank" class="fileLink previewLink" href={entry.url}>
+                  <img class="filePreview" src={entry.url} alt={entry.name} loading="lazy" />
+                </a>
+              {/if}
               {#if editingId === entry.id && editError}
                 <p class="userError editError">{editError}</p>
               {/if}
@@ -178,3 +222,29 @@
     {/if}
   </div>
 </div>
+
+<style>
+  .textFilePreview {
+    display: block;
+    max-height: 180px;
+    overflow: auto;
+    background: #1e1e1e;
+    color: #e6e6e6;
+    padding: 10px;
+    border-radius: 3px;
+    font-family: 'Hack', 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    text-align: left;
+    border: 1px solid #2c2f35;
+  }
+  .loadingPreview {
+    color: #8b949e;
+    font-size: 12px;
+    padding: 20px;
+    display: block;
+    text-align: center;
+  }
+</style>
