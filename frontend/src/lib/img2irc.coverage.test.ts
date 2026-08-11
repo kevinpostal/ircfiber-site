@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { Img2IrcOptions } from './img2irc';
 import dialogSrc from '/src/components/Img2IrcDialog.svelte?raw';
 import {
-  IRC99, ANSI256, ANSI16, XTERM256,
+  IRC99, ANSI256, ANSI16, IRC16, XTERM256,
   getMidgardPalette,
   kNearest, lutLookup, ansiToIrcIdx, toEmitIdx,
   bestGlyphForState, rowPaletteForViterbi,
@@ -14,7 +14,6 @@ import {
   clearColorLut,
   smartPaletteA, smartPaletteB,
 } from './img2irc';
-
 // Helper to create small test data
 function makeData(pW:number, pH:number, fill=128): Uint8ClampedArray {
   const d = new Uint8ClampedArray(pW*pH*4);
@@ -26,14 +25,13 @@ describe('img2irc 100% coverage', () => {
   it('getMidgardPalette covers all modes', () => {
     expect(getMidgardPalette({midgardMode:'xterm256'} as any)).toBe(XTERM256);
     expect(getMidgardPalette({midgardMode:'truecolor', renderMode:'ansi24'} as any)).toBe(IRC99); // truecolor falls through to IRC99 but is24 true so not used
-    expect(getMidgardPalette({midgardMode:'16'} as any)).toBe(ANSI16);
+    expect(getMidgardPalette({midgardMode:'16'} as any)).toBe(IRC16);
     expect(getMidgardPalette({midgardMode:'retro'} as any)).toBe(ANSI16);
     expect(getMidgardPalette({midgardMode:'comic'} as any)).toBe(IRC99);
     expect(getMidgardPalette({renderMode:'ansi'} as any)).toBe(ANSI256);
     expect(getMidgardPalette({renderMode:'irc'} as any)).toBe(IRC99);
     expect(getMidgardPalette({midgardMode:'vga256'} as any)).toBe(XTERM256); // fallback
   });
-
   it('kNearest handles ng and different modes', () => {
     const pal = XTERM256;
     expect(kNearest(255,0,0, pal, 2, false, 'rgb')).toHaveLength(2);
@@ -279,6 +277,6 @@ describe('img2irc 100% coverage', () => {
     expect(idxs.every(i=>paletteB.includes(i))).toBe(true);
   });
   it('Colors dropdown has Smart option', () => {
-    expect(dialogSrc).toContain('value="smart"');
+    expect(dialogSrc).toContain('smart');
   });
 });

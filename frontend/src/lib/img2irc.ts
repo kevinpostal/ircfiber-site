@@ -8,8 +8,8 @@
  *  - Shade blocks ░▒▓ + measured ASCII ramp ' =QB*gF' in Viterbi (§3, glyph_coverage.txt)
  *  - Shared row palette (S=12, S²=144 states) + collapsed O(M·K) ViterbiDP (§3,5)
  *  - OKLab Euclidean (§5) — 3.9× faster matcher, enables O(M²) seg DP; scaled ×85000 vs Lab
- *  - Midgard Colors selector (truecolor/xterm256/16/retro/comic) — render-core.js palettes
- *  - Comic = bilateral pre-filter r2 σ40 ×2 (§6): landscape -11%, run 2.42→3.54
+ *  - Midgard Colors selector (truecolor/xterm256/16/smart) — render-core.js palettes
+ *  - Bilateral pre-filter available via comic flag (r2 σ40 ×2, spec §6) but not exposed in UI
  *  Viterbi objective: Σ[ err(glyph,f,b) + w·glyphBytes ] + w·prefixBytes (w≈2.5 knee)
  */
 import { getWasm } from './img2irc.wasm';
@@ -71,14 +71,15 @@ export const ANSI16: number[] = [
   0x555555, 0xff5555, 0x55ff55, 0xffff55,
   0x5555ff, 0xff55ff, 0x55ffff, 0xffffff,
 ];
+/** mIRC 16 — first 16 of IRC99, what IRC clients actually display for \x0300-\x0315 */
+export const IRC16: number[] = IRC99.slice(0, 16);
 export const XTERM256: number[] = (()=>{ const pal:number[]=[]; const ANSI_16=[[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]]; for(const c of ANSI_16) pal.push((c[0]<<16)|(c[1]<<8)|c[2]); const levels=[0,95,135,175,215,255]; for(let r=0;r<6;r++) for(let g=0;g<6;g++) for(let b=0;b<6;b++) pal.push((levels[r]<<16)|(levels[g]<<8)|levels[b]); for(let i=0;i<24;i++){const v=8+i*10; pal.push((v<<16)|(v<<8)|v);} return pal; })();
-
 export type RenderMode = 'irc' | 'ansi' | 'ansi24';
 export type PixelMode = 'half' | 'full' | 'quarter' | 'braille';
 export type SamplingFilter = 'nearest' | 'linear';
 export type DitherMode = 'none' | 'bayer4' | 'bayer8' | 'floyd' | 'atkinson' | 'sierra' | 'stucki' | 'jarvis';
 export type ColorMatching = 'rgb' | 'lab' | 'oklab';
-export type MidgardColorMode = 'truecolor' | 'xterm256' | '16' | 'retro' | 'comic' | 'smart';
+export type MidgardColorMode = 'truecolor' | 'xterm256' | '16' | 'smart';
 
 export interface Img2IrcOptions {
   width: number; height?: number;
@@ -111,8 +112,10 @@ export function getMidgardPalette(o: Img2IrcOptions): number[] {
     return (o as any)._smartPaletteA || IRC99;
   }
   if((o.midgardMode as string)==='vga256') return XTERM256; // removed DOS/VGA palette — fallback to xterm256
+  if((o.midgardMode as string)==='retro') return ANSI16; // legacy: retro removed from UI, maps to 16 for compat
   if(o.midgardMode==='xterm256') return XTERM256;
-  if(o.midgardMode==='16' || o.midgardMode==='retro') return ANSI16;
+  if(o.midgardMode==='16') return IRC16; // mIRC 16 — exact IRC display colors, not ANSI CGA
+  if((o.midgardMode as string)==='comic') return IRC99; // legacy: comic removed from UI
   if(o.renderMode==='ansi') return ANSI256;
   return IRC99;
 }
@@ -504,7 +507,7 @@ export async function renderPixelsCore(
       const bayer8=[[0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],[3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]];
       for(let y=0;y<pH;y++){ for(let x=0;x<pW;x++){ const i=(y*pW+x)*4; const tt=(bayer8[y%8][x%8]/64 -0.5)*28; d[i]=Math.max(0,Math.min(255,d[i]+tt)); d[i+1]=Math.max(0,Math.min(255,d[i+1]+tt)); d[i+2]=Math.max(0,Math.min(255,d[i+2]+tt)); }}
     } else if(ditherMode==='floyd'){
-      if(o.renderMode==='ansi24' || o.midgardMode==='truecolor' || o.midgardMode==='comic'){ }
+      if(o.renderMode==='ansi24' || o.midgardMode==='truecolor'){ }
       else {
         const w2=pW, h2=pH, data2=new Float32Array(d);
         const pal=getMidgardPalette(o);
@@ -516,13 +519,87 @@ export async function renderPixelsCore(
       const pal=getMidgardPalette(o);
       for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb; const d1=er/8, dg1=eg/8, db1=eb/8; if(x+1<w2){ data2[i+4]+=d1; data2[i+5]+=dg1; data2[i+6]+=db1; } if(x+2<w2){ data2[i+8]+=d1; data2[i+9]+=dg1; data2[i+10]+=db1; } if(y+1<h2){ if(x>0){ data2[i+w2*4-4]+=d1; data2[i+w2*4-3]+=dg1; data2[i+w2*4-2]+=db1;} data2[i+w2*4]+=d1; data2[i+w2*4+1]+=dg1; data2[i+w2*4+2]+=db1; if(x+1<w2){ data2[i+w2*4+4]+=d1; data2[i+w2*4+5]+=dg1; data2[i+w2*4+6]+=db1; } } } }
       for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
+    } else if(ditherMode==='sierra'){
+      if(o.renderMode==='ansi24' || o.midgardMode==='truecolor'){ }
+      else {
+        const w2=pW, h2=pH, data2=new Float32Array(d);
+        const pal=getMidgardPalette(o);
+        for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb;
+          if(x+1<w2){ data2[i+4]+=er*5/32; data2[i+5]+=eg*5/32; data2[i+6]+=eb*5/32; }
+          if(x+2<w2){ data2[i+8]+=er*3/32; data2[i+9]+=eg*3/32; data2[i+10]+=eb*3/32; }
+          if(y+1<h2){
+            if(x-2>=0){ data2[i+w2*4-8]+=er*2/32; data2[i+w2*4-7]+=eg*2/32; data2[i+w2*4-6]+=eb*2/32; }
+            if(x-1>=0){ data2[i+w2*4-4]+=er*4/32; data2[i+w2*4-3]+=eg*4/32; data2[i+w2*4-2]+=eb*4/32; }
+            data2[i+w2*4]+=er*5/32; data2[i+w2*4+1]+=eg*5/32; data2[i+w2*4+2]+=eb*5/32;
+            if(x+1<w2){ data2[i+w2*4+4]+=er*4/32; data2[i+w2*4+5]+=eg*4/32; data2[i+w2*4+6]+=eb*4/32; }
+            if(x+2<w2){ data2[i+w2*4+8]+=er*2/32; data2[i+w2*4+9]+=eg*2/32; data2[i+w2*4+10]+=eb*2/32; }
+          }
+          if(y+2<h2){
+            if(x-1>=0){ data2[i+w2*8-4]+=er*1/32; data2[i+w2*8-3]+=eg*1/32; data2[i+w2*8-2]+=eb*1/32; }
+            data2[i+w2*8]+=er*2/32; data2[i+w2*8+1]+=eg*2/32; data2[i+w2*8+2]+=eb*2/32;
+            if(x+1<w2){ data2[i+w2*8+4]+=er*1/32; data2[i+w2*8+5]+=eg*1/32; data2[i+w2*8+6]+=eb*1/32; }
+          }
+        } }
+        for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
+      }
+    } else if(ditherMode==='stucki'){
+      if(o.renderMode==='ansi24' || o.midgardMode==='truecolor'){ }
+      else {
+        const w2=pW, h2=pH, data2=new Float32Array(d);
+        const pal=getMidgardPalette(o);
+        for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb;
+          if(x+1<w2){ data2[i+4]+=er*8/42; data2[i+5]+=eg*8/42; data2[i+6]+=eb*8/42; }
+          if(x+2<w2){ data2[i+8]+=er*4/42; data2[i+9]+=eg*4/42; data2[i+10]+=eb*4/42; }
+          if(y+1<h2){
+            if(x-2>=0){ data2[i+w2*4-8]+=er*2/42; data2[i+w2*4-7]+=eg*2/42; data2[i+w2*4-6]+=eb*2/42; }
+            if(x-1>=0){ data2[i+w2*4-4]+=er*4/42; data2[i+w2*4-3]+=eg*4/42; data2[i+w2*4-2]+=eb*4/42; }
+            data2[i+w2*4]+=er*8/42; data2[i+w2*4+1]+=eg*8/42; data2[i+w2*4+2]+=eb*8/42;
+            if(x+1<w2){ data2[i+w2*4+4]+=er*4/42; data2[i+w2*4+5]+=eg*4/42; data2[i+w2*4+6]+=eb*4/42; }
+            if(x+2<w2){ data2[i+w2*4+8]+=er*2/42; data2[i+w2*4+9]+=eg*2/42; data2[i+w2*4+10]+=eb*2/42; }
+          }
+          if(y+2<h2){
+            if(x-2>=0){ data2[i+w2*8-8]+=er*1/42; data2[i+w2*8-7]+=eg*1/42; data2[i+w2*8-6]+=eb*1/42; }
+            if(x-1>=0){ data2[i+w2*8-4]+=er*2/42; data2[i+w2*8-3]+=eg*2/42; data2[i+w2*8-2]+=eb*2/42; }
+            data2[i+w2*8]+=er*4/42; data2[i+w2*8+1]+=eg*4/42; data2[i+w2*8+2]+=eb*4/42;
+            if(x+1<w2){ data2[i+w2*8+4]+=er*2/42; data2[i+w2*8+5]+=eg*2/42; data2[i+w2*8+6]+=eb*2/42; }
+            if(x+2<w2){ data2[i+w2*8+8]+=er*1/42; data2[i+w2*8+9]+=eg*1/42; data2[i+w2*8+10]+=eb*1/42; }
+          }
+        } }
+        for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
+      }
+    } else if(ditherMode==='jarvis'){
+      if(o.renderMode==='ansi24' || o.midgardMode==='truecolor'){ }
+      else {
+        const w2=pW, h2=pH, data2=new Float32Array(d);
+        const pal=getMidgardPalette(o);
+        for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb;
+          if(x+1<w2){ data2[i+4]+=er*7/48; data2[i+5]+=eg*7/48; data2[i+6]+=eb*7/48; }
+          if(x+2<w2){ data2[i+8]+=er*5/48; data2[i+9]+=eg*5/48; data2[i+10]+=eb*5/48; }
+          if(y+1<h2){
+            if(x-2>=0){ data2[i+w2*4-8]+=er*3/48; data2[i+w2*4-7]+=eg*3/48; data2[i+w2*4-6]+=eb*3/48; }
+            if(x-1>=0){ data2[i+w2*4-4]+=er*5/48; data2[i+w2*4-3]+=eg*5/48; data2[i+w2*4-2]+=eb*5/48; }
+            data2[i+w2*4]+=er*7/48; data2[i+w2*4+1]+=eg*7/48; data2[i+w2*4+2]+=eb*7/48;
+            if(x+1<w2){ data2[i+w2*4+4]+=er*5/48; data2[i+w2*4+5]+=eg*5/48; data2[i+w2*4+6]+=eb*5/48; }
+            if(x+2<w2){ data2[i+w2*4+8]+=er*3/48; data2[i+w2*4+9]+=eg*3/48; data2[i+w2*4+10]+=eb*3/48; }
+          }
+          if(y+2<h2){
+            if(x-2>=0){ data2[i+w2*8-8]+=er*1/48; data2[i+w2*8-7]+=eg*1/48; data2[i+w2*8-6]+=eb*1/48; }
+            if(x-1>=0){ data2[i+w2*8-4]+=er*3/48; data2[i+w2*8-3]+=eg*3/48; data2[i+w2*8-2]+=eb*3/48; }
+            data2[i+w2*8]+=er*5/48; data2[i+w2*8+1]+=eg*5/48; data2[i+w2*8+2]+=eb*5/48;
+            if(x+1<w2){ data2[i+w2*8+4]+=er*3/48; data2[i+w2*8+5]+=eg*3/48; data2[i+w2*8+6]+=eb*3/48; }
+            if(x+2<w2){ data2[i+w2*8+8]+=er*1/48; data2[i+w2*8+9]+=eg*1/48; data2[i+w2*8+10]+=eb*1/48; }
+          }
+        } }
+        for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
+      }
     }
   }
   const pxAt=(x:number,y:number):[number,number,number,number]=>{
     if(x<0||y<0||x>=pW||y>=pH)return[0,0,0,0];
     const i=(y*pW+x)*4;return[d[i],d[i+1],d[i+2],d[i+3]];
   };
-  const is24=o.renderMode==='ansi24' || o.midgardMode==='truecolor' || o.midgardMode==='comic', ng=o.nograyscale;
+  const is24=o.renderMode==='ansi24' || o.midgardMode==='truecolor', ng=o.nograyscale;
+  const is16=o.midgardMode==='16';
   const lines:string[]=[];
   if(pm==='braille'){
     const palB=getMidgardPalette(o);
@@ -530,8 +607,7 @@ export async function renderPixelsCore(
     for(let r=0;r<rows;r++){let ln='',lastCode='',first=true;
       for(let c=0;c<cols;c++){let br=0x2800,sR=0,sG=0,sB=0,sN=0;
         for(const[dx,dy,bit]of POS){const x=c*2+dx,y=r*4+dy;const[rr,gg,bb,aa]=pxAt(x,y);if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(luma(rr,gg,bb)>127){br|=bit;sR+=rr;sG+=gg;sB+=bb;sN++;}}
-        if(sN===0||br===0x2800){ln+=' ';first=false;continue;}
-        const code=is24? '\x04'+toHex6(sR/sN|0,sG/sN|0,sB/sN|0) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).ansi : lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).irc, o.renderMode, palB, o.colorMatching));
+        const code=is16? '\x03'+String(nearestIndex(sR/sN|0,sG/sN|0,sB/sN|0,palB, o.colorMatching)) : is24? '\x04'+toHex6(sR/sN|0,sG/sN|0,sB/sN|0) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).ansi : lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).irc, o.renderMode, palB, o.colorMatching));
         if(first||lastCode!==code){ln+=code;lastCode=code;}
         ln+=String.fromCharCode(br);first=false;
       }
@@ -554,12 +630,23 @@ export async function renderPixelsCore(
             const cd='\x04'+toHex6(onR/onC|0,onG/onC|0,onB/onC|0);
             if(first||lastFg!==cd||lastBg!==''){ln+=cd;lastFg=cd;lastBg='';}
             ln+='█';first=false;continue;
+          } else if(is16){
+            const bgS=String(nearestIndex(onR/onC|0,onG/onC|0,onB/onC|0,qPal, o.colorMatching));
+            const cd='\x03'+bgS+','+bgS;
+            if(first||lastFg!==bgS||lastBg!==bgS){ln+=cd;lastFg=bgS;lastBg=bgS;}
+            ln+=' ';first=false;continue;
           } else {
             const bgS=String(toEmitIdx(o.renderMode==='ansi'? lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).ansi : lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).irc, o.renderMode, qPal, o.colorMatching));
             const cd='\x03'+bgS+','+bgS;
             if(first||lastFg!==bgS||lastBg!==bgS){ln+=cd;lastFg=bgS;lastBg=bgS;}
             ln+=' ';first=false;continue;
           }
+        } else if(is16){
+          const fgS=String(nearestIndex(onR/onC|0,onG/onC|0,onB/onC|0,qPal, o.colorMatching));
+          const bgS=String(nearestIndex(offR/offC|0,offG/offC|0,offB/offC|0,qPal, o.colorMatching));
+          const cd='\x03'+fgS+','+bgS;
+          const fgF=fgS, bgF=bgS;
+          if(first||lastFg!==fgF||lastBg!==bgF){ln+=cd;lastFg=fgF;lastBg=bgF;}
         } else {
           const fgS=is24? toHex6(onR/onC|0,onG/onC|0,onB/onC|0) : String(toEmitIdx(o.renderMode==='ansi'? lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).ansi : lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).irc, o.renderMode, qPal, o.colorMatching));
           const bgS=is24? toHex6(offR/offC|0,offG/offC|0,offB/offC|0) : String(toEmitIdx(o.renderMode==='ansi'? lutLookup(offR/offC|0,offG/offC|0,offB/offC|0,qPal,ng, o.colorMatching).ansi : lutLookup(offR/offC|0,offG/offC|0,offB/offC|0,qPal,ng, o.colorMatching).irc, o.renderMode, qPal, o.colorMatching));
@@ -761,6 +848,23 @@ export async function renderPixelsCore(
             else if((o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){const c='\x04'+fg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▀';}
             else if(fg===bg){const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
             else {const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+='▀';}
+          } else if(is16){
+            const fg=nearestIndex(r1,g1,b1,pal, o.colorMatching), bg=nearestIndex(r2,g2,b2,pal, o.colorMatching);
+            if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)||(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){
+              const u=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?bg:fg; const cd='\x03'+u; if(first||lastFg!==String(u)||lastBg!==''){ln+=cd;lastFg=String(u);lastBg='';}ln+=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?'▄':'▀';
+            } else if(fg===bg){
+              const need=first || lastBg!==String(bg);
+              if(need){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
+              ln+=' ';
+            } else {
+              const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
+              if(needFgOnly){
+                const cd='\x03'+fg; ln+=cd; lastFg=String(fg);
+              } else if(first||lastFg!==String(fg)||lastBg!==String(bg)){
+                const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg);
+              }
+              ln+='▀';
+            }
           } else {
             const l1=lutLookup(r1,g1,b1,pal,ng, o.colorMatching), l2=lutLookup(r2,g2,b2,pal,ng, o.colorMatching);
             const fgRaw=o.renderMode==='ansi'?l1.ansi:l1.irc; const fg=toEmitIdx(fgRaw, o.renderMode, pal, o.colorMatching); const bgRaw=o.renderMode==='ansi'?l2.ansi:l2.irc; const bg=toEmitIdx(bgRaw, o.renderMode, pal, o.colorMatching);
@@ -790,7 +894,7 @@ export async function renderPixelsCore(
     for(let y=0;y<pH;y++){let ln='',lastCode='',first=true;
       for(let x=0;x<pW;x++){const[r,g,b,a]=pxAt(x,y);
         if((o.alphaMode==='transparent' ? a < o.alphaThreshold : false)||_nearBlack(r,g,b)){ln+=' ';continue;}
-        const cd=is24? '\x04'+toHex6(r,g,b) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(r,g,b,fullPal,ng, o.colorMatching).ansi : lutLookup(r,g,b,fullPal,ng, o.colorMatching).irc, o.renderMode, fullPal, o.colorMatching));
+        const cd=is16? '\x03'+String(nearestIndex(r,g,b,fullPal, o.colorMatching)) : is24? '\x04'+toHex6(r,g,b) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(r,g,b,fullPal,ng, o.colorMatching).ansi : lutLookup(r,g,b,fullPal,ng, o.colorMatching).irc, o.renderMode, fullPal, o.colorMatching));
         if(first||lastCode!==cd){ln+=cd;lastCode=cd;}
         ln+='█'; first=false;
       }

@@ -1,12 +1,19 @@
 <script lang="ts">
-  import { getActiveBufferObj, getSortedMembers } from '../stores/ircStore.svelte';
+  import { getActiveBufferObj, getSortedMembers, getActiveNetwork } from '../stores/ircStore.svelte';
   import { stripPrefix } from '../lib/utils';
   import type { ModeCategory, Member } from '../types';
 
   interface Props {
     onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
+    onNickHover?: (nick: string | null) => void;
+    hoveredNick?: string | null;
   }
-  let { onNickClick }: Props = $props();
+  let { onNickClick, onNickHover, hoveredNick = null }: Props = $props();
+
+  const myNick = $derived.by(() => {
+    const net = getActiveNetwork();
+    return stripPrefix(net?.currentNick ?? net?.nick ?? '');
+  });
 
   const CATEGORY_LABELS: Record<ModeCategory, string> = {
     OPER: 'IRC Operators',
@@ -53,17 +60,16 @@
         <ul class="categoryMemberList">
           {#each members as member (stripPrefix(member.nick))}
             {@const nick = stripPrefix(member.nick)}
-            <!-- Display the bare nick (stripped of prefix chars and
-                 !user@host). Operator/voice status is conveyed by the
-                 category header above (Ops / Voiced / Half-Ops / Members)
-                 which is driven by `member.category`; the inline prefix
-                 char is no longer shown next to the nick. The each-block
-                 key and click handler still use the stripped form. -->
-            <li class="user" class:away={member.isAway}>
+            {@const isSelf = nick === myNick}
+            {@const isMatch = hoveredNick !== null && hoveredNick === nick}
+            <li class="user member-item" class:away={member.isAway} class:isSelf={isSelf} class:match={isMatch} data-category={category}>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <button type="button" class="bufferLink"
                       class:away={member.isAway}
-                      onclick={(e) => onNickClick?.(nick, e, member)}>
+                      onclick={(e) => onNickClick?.(nick, e, member)}
+                      onmouseenter={() => onNickHover?.(nick)}
+                      onmouseleave={() => onNickHover?.(null)}>
+                <span class="member-mode-prefix" aria-hidden="true">{CATEGORY_SYMBOLS[member.category] ?? CATEGORY_SYMBOLS[category] ?? ''}</span>
                 <span class="member-nick">{nick}</span>
               </button>
             </li>
@@ -92,6 +98,23 @@
   button.bufferLink {
     display: inline-flex !important;
     align-items: center;
-    gap: 0;
+    gap: 4px;
   }
+  .member-mode-prefix {
+    width: 14px;
+    flex-shrink: 0;
+    text-align: center;
+    font: 600 12px/1 var(--font-mono, ui-monospace, monospace);
+    color: #6e7681;
+  }
+  /* Mode colors — mirror MessageRow .mode_prefix but scoped to member list */
+  :global(.member-item[data-category="OWNER"] .member-mode-prefix),
+  :global(.member-item[data-category="OPER"] .member-mode-prefix) { color: rgb(255,99,71); }
+  :global(.member-item[data-category="ADMIN"] .member-mode-prefix) { color: rgb(181,145,0); }
+  :global(.member-item[data-category="OP"] .member-mode-prefix) { color: rgb(50,205,50); }
+  :global(.member-item[data-category="HALFOP"] .member-mode-prefix) { color: rgb(181,89,0); }
+  :global(.member-item[data-category="VOICED"] .member-mode-prefix) { color: rgb(0,191,255); }
+  :global(.member-item.away) { opacity: .5; }
+  :global(.member-item.isSelf .member-nick) { font-weight: 600; color: #fff; }
+  :global(.member-item.match) { background: rgba(88,166,255,.08); border-left: 3px solid #58a6ff; }
 </style>

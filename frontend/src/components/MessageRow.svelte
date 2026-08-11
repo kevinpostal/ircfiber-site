@@ -1,9 +1,10 @@
 <script lang="ts">
   import type { IRCMessage, Member } from '../types';
-  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex } from '../lib/utils';
+  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, mentionNicksWithPattern } from '../lib/autolinker';
   import { getActiveBufferObj, getActiveNetwork, setBufferInputText } from '../stores/ircStore.svelte';
+  import { sendMessage } from '../stores/wsConnection.svelte.ts';
   import { clearedAtMap, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
@@ -82,6 +83,7 @@
 
   let expanded = $state(false);
   let hover = $state(false);
+  const pendingState = $derived((msg as any).pendingState as string | undefined);
 
   async function copyText(): Promise<void> {
     const text = msg.text || '';
@@ -115,6 +117,17 @@
     if (!networkId || !buf?.name) return;
     const ts = msg.t ?? Date.now();
     clearedAtMap[`${networkId}:${buf.name}`] = ts;
+  }
+
+  function handleFailedRetry(): void {
+    if ((msg as any).pendingState !== 'failed' || !msg.label) return;
+    const networkId = getActiveNetwork()?.networkId;
+    const buf = getActiveBufferObj();
+    if (!networkId || !buf?.name) return;
+    const text2 = msg.text || '';
+    if (!text2) return;
+    const newLabel = generateLabel();
+    sendMessage(networkId, buf.name, text2, newLabel);
   }
 
   function getModeForNick(n: string): string {
@@ -567,7 +580,7 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {pendingState ?? ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
@@ -651,7 +664,14 @@
         {/if}
       {/if}
     </span>
-    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
+    <span class="date"><span class="timestamp" title={fullTitle} role={pendingState === 'failed' ? 'button' : undefined} tabindex={pendingState === 'failed' ? 0 : undefined} onclick={pendingState === 'failed' ? handleFailedRetry : undefined} onkeydown={pendingState === 'failed' ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleFailedRetry(); } } : undefined}>{timeStr}</span></span>
+    {#if hover && !isJoinPart && !isBlockArt && !isGrouped}
+      <div class="rowActions" role="toolbar" aria-label="Message actions">
+        <button type="button" aria-label="Copy message" title="Copy message" onclick={copyText}><i class="fa fa-copy" aria-hidden="true"></i></button>
+        <button type="button" aria-label="Quote reply" title="Quote reply" onclick={quote}><i class="fa fa-reply" aria-hidden="true"></i></button>
+        <button type="button" aria-label="Mark read here" title="Mark read here" onclick={markReadHere}><i class="fa fa-check" aria-hidden="true"></i></button>
+      </div>
+    {/if}
 
   </div>
 {/if}

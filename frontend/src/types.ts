@@ -389,6 +389,8 @@ export interface IRCMessage {
   selfEcho?: boolean;
   type?: string;       // 'action' for /me messages
   highlight?: boolean;
+  /** Optimistic message state — mirrors IRCCloud .pending / .pendingOut / .failed */
+  pendingState?: 'pending' | 'pendingOut' | 'failed';
   // For grouped messages
   lines?: string[];    // MOTD group lines
   sentences?: string;  // JOINPART_GROUP / DISCO_GROUP pre-rendered HTML

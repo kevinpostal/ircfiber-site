@@ -476,6 +476,7 @@
             text: msgText,
             command: 'PRIVMSG',
             label,
+            pendingState: 'pending',
           };
           ircState.optimisticMessages.set(label, optimistic);
           const key = `${networkId}:${msgTarget}`;
@@ -548,6 +549,7 @@
         text,
         command: 'PRIVMSG',
         label,
+        pendingState: 'pending',
       };
       ircState.optimisticMessages.set(label, optimistic);
       const key = `${networkId}:${target}`;
