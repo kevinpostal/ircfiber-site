@@ -71,8 +71,13 @@
   });
 
   function onKeyDown(e: KeyboardEvent) {
-    // Shift+Enter = send as messages
-    if (e.shiftKey && e.key === 'Enter') {
+    // Shift+Enter now inserts a new line (default textarea behavior) — the
+    // previous Shift+Enter = send-as-text shortcut is removed per user
+    // request. Use the buttons or plain Enter (with form submit) to act.
+    // We intentionally do NOT prevent default for Shift+Enter so the
+    // textarea can insert a newline.
+    if (e.key === 'Enter' && !e.shiftKey && e.ctrlKey) {
+      // Ctrl+Enter = send as messages (alternative to the button)
       e.preventDefault();
       sendAsText();
     }
@@ -210,7 +215,7 @@
       </p>
 
       <p class="pasteConfirm__help">
-        Shortcuts: <strong>Return</strong> to post snippet / <strong>Shift</strong> <strong>Return</strong> to send as messages.
+        Shortcuts: <strong>Return</strong> to post snippet · <strong>Shift</strong> <strong>Return</strong> for new line · <strong>Ctrl</strong> <strong>Return</strong> to send as messages.
       </p>
     </form>
   </div>

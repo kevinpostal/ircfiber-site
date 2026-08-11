@@ -4,6 +4,7 @@
   import { sizeToString } from '../lib/upload';
   import CodeEditor from './CodeEditor.svelte';
   import { detectSyntaxFromFilename, isTextFile } from '../lib/textFiles';
+  import { ircState, setBufferInputText, getBufferInputText } from '../stores/ircStore.svelte';
 
   const EDIT_LANGUAGES = [
     'text','python','javascript','typescript','bash','sh','yaml','json','markdown','html','css','sql','go','rust','java','php','ruby','dockerfile','ini','xml','c_cpp','csharp','golang','graphqlschema','toml','ini','nginx','makefile','perl','swift','kotlin','yaml','json5'
@@ -27,6 +28,7 @@
   let editingContent = $state('');
   let editingLang = $state('text');
   let saving = $state(false);
+  let copiedId = $state<string | null>(null);
 
   // Derived for full-page edit view
   let editingEntry = $derived(entries.find((e) => e.id === editingId) ?? null);
@@ -169,6 +171,46 @@
     }
   }
 
+  function copyUrl(url: string, id: string): void {
+    const doCopy = () => {
+      copiedId = id;
+      setTimeout(() => { if (copiedId === id) copiedId = null; }, 2000);
+    };
+    navigator.clipboard.writeText(url).then(() => {
+      doCopy();
+    }).catch(() => {
+      // Fallback for older browsers
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      doCopy();
+    });
+  }
+
+  function insertUrl(url: string): void {
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (!networkId || !bufferName) {
+      // Fallback: just copy
+      copyUrl(url);
+      return;
+    }
+    const current = getBufferInputText(networkId, bufferName) || '';
+    const newText = current ? `${current} ${url}` : url;
+    setBufferInputText(networkId, bufferName, newText);
+    // Also update the visible textarea directly for immediate feedback
+    const textarea = document.querySelector('#compose-input') as HTMLTextAreaElement | null;
+    if (textarea) {
+      textarea.value = newText;
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      textarea.focus();
+    }
+    onClose();
+    // inserted
+  }
+
   function formatDate(ms: number): string {
     return new Date(ms).toLocaleString('en-US', {
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -297,22 +339,23 @@
             <div class="preview">
               {#if isTextFile(entry.mimeType, entry.name)}
                 {#if textPreviews[entry.id]}
-                  <a target="_blank" class="fileLink previewLink textPreviewLink" href={entry.url} title={entry.name}>
+                  <div class="fileLink previewLink textPreviewLink" role="button" tabindex="0" title="Click to insert URL into chat" onclick={() => insertUrl(entry.url)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); insertUrl(entry.url); } }}>
                     <pre class="textFilePreview">{textPreviews[entry.id]}</pre>
-                  </a>
+                  </div>
                 {:else if textPreviewErrors[entry.id]}
-                  <a target="_blank" class="fileLink previewLink" href={entry.url}>
+                  <div class="fileLink previewLink" role="button" tabindex="0" title="Click to insert URL into chat" onclick={() => insertUrl(entry.url)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); insertUrl(entry.url); } }}>
                     <span class="fileIcon">📄</span> {entry.name}
-                  </a>
+                  </div>
                 {:else}
                   <span class="loadingPreview">Loading preview…</span>
                 {/if}
               {:else}
-                <a target="_blank" class="fileLink previewLink" href={entry.url}>
+                <div class="fileLink previewLink" role="button" tabindex="0" title="Click to insert URL into chat" onclick={() => insertUrl(entry.url)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); insertUrl(entry.url); } }}>
                   <img class="filePreview" src={entry.url} alt={entry.name} loading="lazy" />
-                </a>
+                </div>
               {/if}
               <span class="actions">
+                <button type="button" class="copy" class:copied={copiedId === entry.id} onclick={() => copyUrl(entry.url, entry.id)} title="Copy URL"><span>{copiedId === entry.id ? 'copied!' : 'copy'}</span></button>
                 <button type="button" class="edit" onclick={() => startEdit(entry)}><span>edit</span></button>
                 <button type="button" class="delete" onclick={() => handleDelete(entry)}>
                   <span>delete</span>
@@ -352,6 +395,35 @@
     padding: 20px;
     display: block;
     text-align: center;
+  }
+  .previewLink {
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  .previewLink:hover {
+    opacity: 0.85;
+  }
+  .previewLink:focus-visible {
+    outline: 2px solid #58a6ff;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  .file .actions .copy {
+    background: #1f6feb;
+    border-color: #388bfd;
+    color: #fff;
+  }
+  .file .actions .copy:hover {
+    background: #388bfd;
+    border-color: #58a6ff;
+  }
+  .file .actions .copy.copied {
+    background: #238636;
+    border-color: #2ea043;
+    color: #fff;
+  }
+  .file .actions .copy.copied:hover {
+    background: #2ea043;
   }
   #filesOverlayContents.editing {
     background: #131418;
@@ -620,5 +692,71 @@
   }
   .editNonTextInfo {
     padding: 16px 20px;
+  }
+  @media (max-width: 800px) {
+    #filesOverlayContents {
+      margin: 10px;
+      padding: 12px 16px;
+      max-height: calc(100% - 20px);
+    }
+    #filesOverlayContents #filesList {
+      display: flex !important;
+      flex-direction: column !important;
+      gap: 16px;
+    }
+    #filesOverlayContents .file {
+      flex-direction: column;
+      min-height: auto;
+    }
+    #filesOverlayContents .file .info,
+    #filesOverlayContents .file .preview {
+      flex: 1 1 auto;
+    }
+    #filesOverlayContents .file .preview .previewLink {
+      min-height: 120px;
+    }
+    #filesOverlayContents .file .actions {
+      display: flex;
+      position: static;
+      margin-top: 8px;
+      justify-content: flex-end;
+      background: rgba(0, 0, 0, 0.15);
+      padding: 6px;
+      border-radius: 4px;
+    }
+    .editFullPage .pastebinHeader {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 12px 16px;
+    }
+    .editFullPage .pastebinHeader h1 {
+      font-size: 15px;
+    }
+    .editFullPage .pastebinSelect {
+      width: 100%;
+      justify-content: space-between;
+    }
+    .editFullPage .pastebinSelect select {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    .editFileInfo {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      padding: 8px 16px;
+    }
+    .editEditorWrapper {
+      margin: 8px 12px;
+      min-height: 240px;
+      max-height: 50vh;
+    }
+    .editFormFull {
+      padding: 10px 12px 14px;
+    }
+    .editFilenameInputWrap {
+      padding: 0 8px;
+    }
   }
 </style>
