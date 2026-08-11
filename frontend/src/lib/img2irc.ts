@@ -13,6 +13,8 @@
  *  Viterbi objective: Σ[ err(glyph,f,b) + w·glyphBytes ] + w·prefixBytes (w≈2.5 knee)
  */
 import { getWasm } from './img2irc.wasm';
+const _perf = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
+const _shouldLog = () => typeof window !== 'undefined' && ( (window as any).__IMG2IRC_PERF || localStorage.getItem('img2irc:perf') || location.search.includes('perf=1') );
 
 export const IRC99: number[] = [
   0xffffff, 0x000000, 0x00007f, 0x009300, 0xff0000, 0x7f0000, 0x9c009c, 0xfc7f00,
@@ -267,13 +269,19 @@ const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number}> = [
 const GLYPH_BYTES_HALF=3, GLYPH_BYTES_SPACE=1;
 export function bestGlyphForState(
   r1:number,g1:number,b1:number, r2:number,g2:number,b2:number,
-  f:number,b:number, pal:number[], mode:ColorMatching, w:number
+  f:number,b:number, pal:number[], mode:ColorMatching, w:number, palOkLab?: number[][] | null
 ):{err:number, bytes:number, glyph:string}{
   let bestErr=1e18, bestB=GLYPH_BYTES_HALF, bestG='▀';
   const fRgb=(pal[f]>>16)&255, fG2=(pal[f]>>8)&255, fB2=pal[f]&255;
   const bRgb=(pal[b]>>16)&255, bG2=(pal[b]>>8)&255, bB2=pal[b]&255;
-  const fOk = mode==='oklab' ? srgbToOkLab(fRgb,fG2,fB2) : null;
-  const bOk = mode==='oklab' ? srgbToOkLab(bRgb,bG2,bB2) : null;
+  let fOk: number[] | null = null, bOk: number[] | null = null;
+  if (mode==='oklab') {
+    if (palOkLab && f < pal.length && b < pal.length) {
+      fOk = palOkLab[f]; bOk = palOkLab[b];
+    } else {
+      fOk = srgbToOkLab(fRgb,fG2,fB2); bOk = srgbToOkLab(bRgb,bG2,bB2);
+    }
+  }
   for(const g of GLYPHS){
     const ct=g.ct, cb=g.cb;
     let tR:number,tG:number,tB:number, boR:number,boG:number,boB:number;
@@ -366,13 +374,20 @@ export async function renderPixelsCore(
   pm: PixelMode,
   o: Img2IrcOptions
 ): Promise<string> {
+  const _tStart = _perf();
+  const _timings: Record<string, number> = {};
+  let _t = _perf();
   if (COLOR_LUT.size>8000) COLOR_LUT.clear();
+  _timings['lutClear'] = _perf() - _t; _t = _perf();
   if(o.gamma!==0&&o.gamma!==1){const g=o.gamma;for(let i=0;i<d.length;i+=4){d[i]=255*Math.pow(d[i]/255,1/g);d[i+1]=255*Math.pow(d[i+1]/255,1/g);d[i+2]=255*Math.pow(d[i+2]/255,1/g);}}
+  _timings['gamma'] = _perf() - _t; _t = _perf();
   if(o.normalize){let mn=255,mx=0;for(let i=0;i<d.length;i+=4){const l=luma(d[i],d[i+1],d[i+2]);if(l<mn)mn=l;if(l>mx)mx=l;}const rng=Math.max(1,mx-mn);for(let i=0;i<d.length;i+=4){d[i]=((d[i]-mn)*255)/rng;d[i+1]=((d[i+1]-mn)*255)/rng;d[i+2]=((d[i+2]-mn)*255)/rng;}}
+  _timings['normalize'] = _perf() - _t; _t = _perf();
   if(o.comic){
     const wasmOk = await tryWasmBilateral(d, pW, pH, 2, 40, 2);
     if (!wasmOk) applyBilateralFilter(d, pW, pH, 2, 40, 2);
   }
+  _timings['bilateral'] = _perf() - _t; _t = _perf();
   const ditherMode = o.dither ? (o.ditherMode==='none' ? 'bayer4' : o.ditherMode) : 'none';
   if(ditherMode!=='none'){
     if(ditherMode==='bayer4'){
@@ -453,6 +468,8 @@ export async function renderPixelsCore(
     const pal=getMidgardPalette(o);
     const useViterbi = o.viterbiW>0 && !is24 && cols>1;
     if(useViterbi){
+      const _tViterbi = _perf();
+      let _tRowPal=0, _tCellGlyph=0, _tDP=0;
       for(let r=0;r<rows;r++){
         const tops:Array<[number,number,number,number]>=[], bots:Array<[number,number,number,number]>=[];
         for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
@@ -464,13 +481,14 @@ export async function renderPixelsCore(
           if(!emp && !blk){ allEmpty=false; break; }
         }
         if(allEmpty){ lines.push(''); continue; }
-        const S=rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,12);
+        let _tr = _perf(); const S=rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,12); _tRowPal += _perf() - _tr;
         const states: Array<[number,number]> = [];
         for(const f of S) for(const b of S) states.push([f,b]);
         const M=cols;
         type GlyphInfo={err:number, bytes:number, glyph:string};
         const cellGlyph: GlyphInfo[][] = new Array(M);
         const cellIsEmpty: boolean[] = new Array(M);
+        let _tc = _perf();
         for(let i=0;i<M;i++){
           const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
           const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
@@ -483,6 +501,7 @@ export async function renderPixelsCore(
           }
           cellGlyph[i]=rowGlyphs;
         }
+        _tCellGlyph += _perf() - _tc;
         const INF=1e18;
         let dp=new Array(states.length).fill(INF);
         const back: number[][] = Array.from({length:M},()=>new Array(states.length).fill(-1));
@@ -497,6 +516,7 @@ export async function renderPixelsCore(
             dp[s]=g.err + o.viterbiW*(g.bytes + pc);
           }
         }
+        let _tdp = _perf();
         for(let i=1;i<M;i++){
           if(cellIsEmpty[i]){
             const bestIdx=dp.indexOf(Math.min(...dp));
@@ -530,6 +550,8 @@ export async function renderPixelsCore(
           }
           dp=nd;
         }
+        _tDP += _perf() - _tdp;
+
         let bestEnd=0; for(let s=1;s<states.length;s++) if(dp[s]<dp[bestEnd]) bestEnd=s;
         const chosenIdx=new Array(M).fill(0);
         chosenIdx[M-1]=bestEnd;
@@ -568,6 +590,10 @@ export async function renderPixelsCore(
         }
         ln=ln.replace(/[ ]+$/g,''); lines.push(ln);
       }
+      _timings['viterbi'] = _perf() - _tViterbi;
+      _timings['viterbi_rowPal'] = _tRowPal;
+      _timings['viterbi_cellGlyph'] = _tCellGlyph;
+      _timings['viterbi_dp'] = _tDP;
     } else {
       for(let r=0;r<rows;r++){
         let ln='',lastFg='',lastBg='',first=true;
@@ -619,6 +645,12 @@ export async function renderPixelsCore(
   }
 
   while(lines.length&&lines[lines.length-1].replace(/[\x03\x04\x0f0-9,a-fA-F]/g,'').trim()==='')lines.pop();
+  _timings['emit'] = _perf() - _t;
+  _timings['total'] = _perf() - _tStart;
+  if (_shouldLog() || _timings['total'] > 100) {
+    const line = Object.entries(_timings).sort((a,b)=>b[1]-a[1]).map(([k,v])=> `${k}:${v.toFixed(1)}ms`).join(' | ');
+    console.info(`[img2irc] ${_timings['total'].toFixed(1)}ms total | ${line}`);
+  }
   return lines.join('\n');
 }
 

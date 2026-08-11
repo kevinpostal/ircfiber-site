@@ -3,10 +3,8 @@ module ircfiber.api.rest;
 import std.uuid : UUID, parseUUID, randomUUID;
 import std.conv : to;
 import std.datetime : Clock;
-import std.algorithm : canFind, filter;
+import std.algorithm : canFind, countUntil, filter;
 import std.array : array;
-
-import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 import vibe.http.router : URLRouter;
 import vibe.data.json : Json, deserializeJson, parseJson, parseJsonString, serializeToJson;
 import vibe.data.bson : Bson;
@@ -31,11 +29,41 @@ import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.irc.server : ConnectionServer;
 import ircfiber.redis.protocol : RedisKeys, ControlMessage, NetworkStateSnapshot, IRCCommand;
-import ircfiber.api.session : SessionManager, SessionStats;
+
+private string normalizeHost(string host) @safe pure {
+    host = host.strip();
+    auto schemeSep = host.indexOf("://");
+    if (schemeSep >= 0) {
+        host = host[schemeSep + 3 .. $];
+        auto slash = host.indexOf("/");
+        if (slash >= 0) host = host[0 .. slash];
+        auto bracketClose = host.indexOf("]");
+        if (bracketClose >= 0) {
+            auto open = host.indexOf("[");
+            if (open >= 0) host = host[open .. bracketClose + 1];
+            else host = host[0 .. bracketClose + 1];
+        } else {
+            auto colon = host.lastIndexOf(":");
+            if (colon >= 0) {
+                auto after = host[colon + 1 .. $];
+                bool allDigits = after.length > 0;
+                foreach (c; after) if (c < '0' || c > '9') { allDigits = false; break; }
+                bool looksLikeIPv6 = host.canFind("::") || host.countUntil(":") != host.lastIndexOf(":");
+                if (allDigits && !looksLikeIPv6) host = host[0 .. colon];
+            }
+        }
+        host = host.strip();
+    }
+    if (host.length >= 2 && host[0] == '[') {
+        auto close = host.indexOf("]");
+        if (close > 0) return host[1 .. close];
+    }
+    return host;
+}
 
 /**
  * Decentralized REST API
- * 
+ *
  * Routes commands to the correct connection server based on network
  * assignments stored in the ServerRegistry. Each command is pushed to
  * the server-specific queue rather than the global queue.
@@ -156,7 +184,7 @@ final class RESTAPI {
         NetworkConfig cfg;
         cfg.id = randomUUID();
         cfg.name = bodyJson["name"].get!string;
-        cfg.host = bodyJson["host"].get!string;
+        cfg.host = normalizeHost(bodyJson["host"].get!string);
         cfg.port = cast(ushort) bodyJson["port"].get!int;
         cfg.tls = bodyJson["tls"].get!string.to!TLSMode;
         cfg.nick = bodyJson["nick"].get!string;
@@ -223,7 +251,7 @@ final class RESTAPI {
         auto cfg = networkRepo.findById(id);
 
         if (bodyJson["name"].type != Json.Type.undefined) cfg.name = bodyJson["name"].get!string;
-        if (bodyJson["host"].type != Json.Type.undefined) cfg.host = bodyJson["host"].get!string;
+        if (bodyJson["host"].type != Json.Type.undefined) cfg.host = normalizeHost(bodyJson["host"].get!string);
         if (bodyJson["port"].type != Json.Type.undefined) cfg.port = cast(ushort) bodyJson["port"].get!int;
         if (bodyJson["tls"].type != Json.Type.undefined) cfg.tls = bodyJson["tls"].get!string.to!TLSMode;
         if (bodyJson["nick"].type != Json.Type.undefined) cfg.nick = bodyJson["nick"].get!string;

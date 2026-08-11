@@ -130,8 +130,10 @@
         let res: string | null = null;
         try { res = await convertViaWorker(img, opts, cur); } catch {}
         if (cur!==gen) { revokeImageUrl(img); return; }
-        if (res == null) res = await imageToIrcArt(img, opts);
-        if(cur!==gen) return;
+        if (res == null) {
+          console.info('[img2irc] Worker miss — OffscreenCanvas/createImageBitmap unavailable, timeout, or small image — main thread fallback');
+          res = await imageToIrcArt(img, opts);
+        }
         art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
       } finally { revokeImageUrl(img); }

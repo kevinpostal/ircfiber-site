@@ -5,6 +5,7 @@
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { parseChannelList, stripPrefix } from '../lib/utils';
+  import { normalizeHost, parseHostUrl } from '../lib/host';
 
   interface Props {
     mode: 'add' | 'edit';
@@ -94,7 +95,19 @@
   async function handleSubmit(e?: Event): Promise<void> {
     e?.preventDefault();
     if (busy) return;
-    if (!name || !host || !nick) {
+    // Normalize host: strips brackets, ircs:// scheme, and trailing :port if pasted as URL
+    const normalizedHost = normalizeHost(host);
+    // If user pasted a full ircs:// URL, also auto-extract port/tls via URL parse
+    const parsed = parseHostUrl(host);
+    let effectiveHost = normalizedHost;
+    let effectivePort = port;
+    let effectiveTls = tls;
+    if (parsed) {
+      effectiveHost = parsed.host;
+      if (parsed.port) effectivePort = parsed.port;
+      if (parsed.tls) effectiveTls = parsed.tls;
+    }
+    if (!name || !effectiveHost || !nick) {
       error = 'Please provide a valid network name, hostname, and nickname';
       return;
     }
@@ -103,7 +116,7 @@
     try {
       if (mode === 'add') {
         const result = await onAddNetwork({
-          name, host, port, tls, nick, realName,
+          name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
           autoJoinChannels, autoJoinDelaySeconds, nspass, serverPass, commands,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
@@ -165,7 +178,7 @@
         const parsedChannels = parseChannelList(autoJoinChannels);
 
         await onUpdateNetwork(networkId, {
-          name, host, port, tls, nick, realName,
+          name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : '',
           saslPassword: saslMechanism !== 'none' && saslPassword ? saslPassword : undefined,
@@ -178,12 +191,11 @@
         // edits immediately (the engine sync will eventually catch up).
         if (existing) {
           existing.name = name;
-          existing.host = host;
-          existing.port = port;
-          existing.tls = tls;
+          existing.host = effectiveHost;
+          existing.port = effectivePort;
+          existing.tls = effectiveTls;
           existing.sasl = saslMechanism;
           existing.saslUsername = saslUsername;
-          if (saslPassword) existing.saslPassword = saslPassword;
           if (realName) existing.realName = realName;
           existing.autoJoinChannels = parsedChannels;
           existing.autoJoinDelaySeconds = autoJoinDelaySeconds;

@@ -3,7 +3,7 @@
   import { addNetwork } from '../stores/api';
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
-
+  import { normalizeHost, parseHostUrl } from '../lib/host';
   interface NetworkPreset {
     name: string;
     host: string;
@@ -74,7 +74,17 @@
 
   async function handleSubmit(): Promise<void> {
     if (busy) return;
-    if (!host || !nick) {
+    const normalizedHost = normalizeHost(host);
+    const parsed = parseHostUrl(host);
+    let effectiveHost = normalizedHost;
+    let effectivePort = port;
+    let effectiveTls = tls;
+    if (parsed) {
+      effectiveHost = parsed.host;
+      if (parsed.port) effectivePort = parsed.port;
+      if (parsed.tls) effectiveTls = parsed.tls;
+    }
+    if (!effectiveHost || !nick) {
       error = 'Please provide a hostname and nickname';
       return;
     }
@@ -82,9 +92,9 @@
     error = '';
     try {
       const result = await addNetwork({
-        name: host,
-        host, port, tls, nick, realName,
-        autoJoinChannels, nspass, commands,
+        name: effectiveHost,
+        host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
+        autoJoinChannels, nspass, serverPass, commands,
         sasl: saslMechanism,
         saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
         saslPassword: saslMechanism !== 'none' ? saslPassword : undefined,
