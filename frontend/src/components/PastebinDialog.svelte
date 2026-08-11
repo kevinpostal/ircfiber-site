@@ -282,10 +282,6 @@
         </div>
       </div>
 
-      <p class="pasteConfirm__public explanation">
-        Text snippets are visible to anyone with the URL but are not publicly listed or indexed.
-      </p>
-
       <p class="form">
         <label for="pastePreviewName">Choose a file name <span class="explanation">optional</span></label>
         <br>
@@ -559,7 +555,6 @@
   .pastebin .editLayer::-moz-selection {
     background: rgba(88, 166, 255, 0.3);
   }
-  .pasteConfirm__public,
   .explanation {
     color: #8b949e;
     font-size: 12px;
