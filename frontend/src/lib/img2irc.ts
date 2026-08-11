@@ -194,6 +194,29 @@ export function lutLookup(r:number,g:number,b:number,pal:number[],ng:boolean, mo
   return ng?{ansi:e.ansiNg,irc:e.ircNg}:{ansi:e.ansi,irc:e.irc};
 }
 export function clearColorLut(){COLOR_LUT.clear();}
+const _palOkLabCache = new Map<string, number[][]>();
+function getPalOkLab(pal: number[]): number[][] {
+  const key = pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : pal===ANSI16 ? 'ansi16' : String(pal.length);
+  let arr = _palOkLabCache.get(key);
+  if (!arr) {
+    arr = pal.map(c => { const v = srgbToOkLab((c>>16)&255,(c>>8)&255,c&255); return v; }) as any;
+    if (_palOkLabCache.size > 4) _palOkLabCache.clear();
+    _palOkLabCache.set(key, arr);
+  }
+  return arr;
+}
+const _palToIrcCache = new Map<string, Uint8Array>();
+function getPalToIrc(pal: number[], mode: ColorMatching): Uint8Array {
+  const key = (pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : pal===ANSI16 ? 'ansi16' : String(pal.length)) + ':' + mode;
+  let arr = _palToIrcCache.get(key);
+  if (!arr) {
+    arr = new Uint8Array(pal.length);
+    for(let i=0;i<pal.length;i++) arr[i] = ansiToIrcIdx(i, pal, mode);
+    if (_palToIrcCache.size > 8) _palToIrcCache.clear();
+    _palToIrcCache.set(key, arr);
+  }
+  return arr;
+}
 // For IRC, \x03 only supports 0-98. ANSI 256 indices 99-255 must be remapped to nearest 99.
 export function ansiToIrcIdx(ansiIdx:number, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
   const c=srcPal[ansiIdx & 255], r=(c>>16)&255,g=(c>>8)&255,b=c&255;
@@ -489,6 +512,7 @@ export async function renderPixelsCore(
         const cellGlyph: GlyphInfo[][] = new Array(M);
         const cellIsEmpty: boolean[] = new Array(M);
         let _tc = _perf();
+        const _rowPalOkLab = o.colorMatching==='oklab' ? getPalOkLab(pal) : null;
         for(let i=0;i<M;i++){
           const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
           const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
@@ -497,7 +521,7 @@ export async function renderPixelsCore(
           const rowGlyphs: GlyphInfo[] = new Array(states.length);
           for(let s=0;s<states.length;s++){
             const [f,b]=states[s];
-            rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,pal,o.colorMatching,o.viterbiW);
+            rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,pal,o.colorMatching,o.viterbiW, _rowPalOkLab);
           }
           cellGlyph[i]=rowGlyphs;
         }
@@ -505,13 +529,14 @@ export async function renderPixelsCore(
         const INF=1e18;
         let dp=new Array(states.length).fill(INF);
         const back: number[][] = Array.from({length:M},()=>new Array(states.length).fill(-1));
+        const _palToIrc = o.renderMode==='ansi' ? getPalToIrc(pal, o.colorMatching) : null;
         for(let s=0;s<states.length;s++){
           if(cellIsEmpty[0]){
             dp[s]=0;
           } else {
             const g=cellGlyph[0][s];
             const [f,b]=states[s];
-            const fgM=o.renderMode==='ansi'? ansiToIrcIdx(f, pal, o.colorMatching): f, bgM=o.renderMode==='ansi'? ansiToIrcIdx(b, pal, o.colorMatching): b;
+            const fgM=_palToIrc ? _palToIrc[f & 255] : f, bgM=_palToIrc ? _palToIrc[b & 255] : b;
             const pc=pairPref(fgM,bgM);
             dp[s]=g.err + o.viterbiW*(g.bytes + pc);
           }
@@ -537,7 +562,7 @@ export async function renderPixelsCore(
           const nd=new Array(states.length).fill(INF);
           for(let s=0;s<states.length;s++){
             const [f,b]=states[s];
-            const fgM=o.renderMode==='ansi'? ansiToIrcIdx(f, pal, o.colorMatching): f, bgM=o.renderMode==='ansi'? ansiToIrcIdx(b, pal, o.colorMatching): b;
+            const fgM=_palToIrc ? _palToIrc[f & 255] : f, bgM=_palToIrc ? _palToIrc[b & 255] : b;
             const g=cellGlyph[i][s];
             const candStay=bMinCost.get(b)!.cost + o.viterbiW*fgPref(fgM);
             const candSwitch=gmin + o.viterbiW*pairPref(fgM,bgM);
@@ -566,7 +591,7 @@ export async function renderPixelsCore(
           const [fRaw,bRaw]=states[sIdx];
           const g=cellGlyph[c][sIdx];
           const glyph=g.glyph;
-          const fg=o.renderMode==='ansi'? ansiToIrcIdx(fRaw, pal, o.colorMatching): fRaw, bg=o.renderMode==='ansi'? ansiToIrcIdx(bRaw, pal, o.colorMatching): bRaw;
+          const fg=_palToIrc ? _palToIrc[fRaw & 255] : fRaw, bg=_palToIrc ? _palToIrc[bRaw & 255] : bRaw;
           if(glyph===' '){
             const need=first || lastBg!==String(bg);
             if(need){

@@ -107,12 +107,18 @@
     if(fitting) return;
     const my=++gen;
     if(debounce) clearTimeout(debounce);
-    // keep converting indicator subtle, don't flash "Converting…"
     if(htmlPreview) isConverting=true;
     debounce=setTimeout(async()=>{
       if(my!==gen) return;
       await convert(my);
     }, 70);
+  }
+  // Fast preview for interactive adjustment: when user is actively dragging
+  // (isConverting true or debounce pending), use greedy (viterbiW=0) for <50ms preview,
+  // then full Viterbi in background when idle. This makes slider feedback near-realtime.
+  function getPreviewOpts(base: any, isFast: boolean) {
+    if (!isFast) return base;
+    return { ...base, viterbiW: 0, comic: false, dither: false }; // greedy, no bilateral/dither for speed
   }
   $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void dither; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void comicFilter; schedule(); });
   $effect(()=>{ const c=++gen; void convert(c); return ()=>{gen++; if(debounce) clearTimeout(debounce);}; });
@@ -133,20 +139,27 @@
         hasAlpha=found;
       } catch {}
       try{
-        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: comicFilter==='comic', alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as const;
+        const baseOpts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: comicFilter==='comic', alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as const;
+        const isInteractive = isConverting || debounce !== null;
+        const opts = getPreviewOpts(baseOpts, isInteractive);
+        if (isInteractive) console.info(`[img2irc] Fast preview: viterbiW=0 (greedy) for ${opts.width} cols — full Viterbi on idle`);
         // Try off-main-thread Worker with transferable ImageBitmap (no copy) — falls back to main thread
         // Pass expectedGen so worker can abort if user changed sliders while bitmap was being created
         let res: string | null = null;
         const _tWorker = performance.now();
         try { res = await convertViaWorker(img, opts, cur); } catch {}
         if (res !== null) {
-          console.info(`[img2irc] Worker success: ${(performance.now()-_tWorker).toFixed(1)}ms off-thread, main thread ~${(performance.now()-_tWorker).toFixed(1)}ms blocked? no — jank avoided`);
+          console.info(`[img2irc] Worker success: ${(performance.now()-_tWorker).toFixed(1)}ms off-thread`);
         } else {
-          console.info(`[img2irc] Worker miss — OffscreenCanvas/createImageBitmap unavailable, timeout, or small image — main thread fallback`);
+          console.info(`[img2irc] Worker miss — falling back to main thread`);
         }
         if (cur!==gen) { revokeImageUrl(img); return; }
         if (res == null) {
           res = await imageToIrcArt(img, opts);
+        }
+        // If we did fast preview, schedule a full-quality refine in background when idle
+        if (isInteractive && opts.viterbiW === 0 && baseOpts.viterbiW !== 0) {
+          setTimeout(() => { if (gen === cur) void convert(cur); }, 300);
         }
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
       } finally { revokeImageUrl(img); }
