@@ -12,6 +12,7 @@
  *  - Comic = bilateral pre-filter r2 σ40 ×2 (§6): landscape -11%, run 2.42→3.54
  *  Viterbi objective: Σ[ err(glyph,f,b) + w·glyphBytes ] + w·prefixBytes (w≈2.5 knee)
  */
+import { getWasm } from './img2irc.wasm';
 
 export const IRC99: number[] = [
   0xffffff, 0x000000, 0x00007f, 0x009300, 0xff0000, 0x7f0000, 0x9c009c, 0xfc7f00,
@@ -176,7 +177,7 @@ function nearestIndex(r:number,g:number,b:number,pal:number[], mode:ColorMatchin
 
 // ── Color LUT + nograyscale ───────────────────────────────────────────────────
 const COLOR_LUT=new Map<string,{irc:number,ansi:number,ircNg:number,ansiNg:number}>();
-function lutLookup(r:number,g:number,b:number,pal:number[],ng:boolean, mode:ColorMatching='rgb'){
+export function lutLookup(r:number,g:number,b:number,pal:number[],ng:boolean, mode:ColorMatching='rgb'){
   const palId = pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : pal===ANSI16 ? 'ansi16' : `len${pal.length}`;
   const k=`${r},${g},${b},${palId},${mode},${ng}`; let e=COLOR_LUT.get(k);
   if(!e){
@@ -192,15 +193,15 @@ function lutLookup(r:number,g:number,b:number,pal:number[],ng:boolean, mode:Colo
 }
 export function clearColorLut(){COLOR_LUT.clear();}
 // For IRC, \x03 only supports 0-98. ANSI 256 indices 99-255 must be remapped to nearest 99.
-function ansiToIrcIdx(ansiIdx:number, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
+export function ansiToIrcIdx(ansiIdx:number, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
   const c=srcPal[ansiIdx & 255], r=(c>>16)&255,g=(c>>8)&255,b=c&255;
   return Math.min(nearestIndex(r,g,b,IRC99,colorMode),98);
 }
-function toEmitIdx(idx:number, mode:RenderMode, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
+export function toEmitIdx(idx:number, mode:RenderMode, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
   return mode==='ansi' ? ansiToIrcIdx(idx, srcPal, colorMode) : Math.min(idx,98);
 }
 
-function kNearest(r:number,g:number,b:number,pal:number[],k:number,ng:boolean, mode:ColorMatching='rgb'):number[]{
+export function kNearest(r:number,g:number,b:number,pal:number[],k:number,ng:boolean, mode:ColorMatching='rgb'):number[]{
   const cand:Array<{i:number,d:number}>=[];
   const isGray=_isNearGray(_pack(r,g,b));
   for(let i=0;i<pal.length;i++){
@@ -264,7 +265,7 @@ const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number}> = [
   {ch:'█', ct:1.0,   cb:1.0,   bytes:3}, // never best vs ' ' (same error, 3B vs 1B) — kept to prove dominated
 ];
 const GLYPH_BYTES_HALF=3, GLYPH_BYTES_SPACE=1;
-function bestGlyphForState(
+export function bestGlyphForState(
   r1:number,g1:number,b1:number, r2:number,g2:number,b2:number,
   f:number,b:number, pal:number[], mode:ColorMatching, w:number
 ):{err:number, bytes:number, glyph:string}{
@@ -294,7 +295,7 @@ function bestGlyphForState(
  * Picks up to `size` indices minimising Σ f·digits(σ) + λ·f·ΔE, approximated by
  * frequency rank + digit-length penalty. λ≈0.02 biases toward 1-digit without hurting ΔE much.
  */
-function rowPaletteForViterbi(
+export function rowPaletteForViterbi(
   tops:Array<[number,number,number,number]>, bots:Array<[number,number,number,number]>,
   pal:number[], ng:boolean, mode:ColorMatching, size=12
 ):number[]{
@@ -314,21 +315,19 @@ function rowPaletteForViterbi(
 }
 
 // Bilateral pre-filter — edge-preserving smoother (spec §6, Midgard comic mode)
-// Single pass radius 2 sigma 40: landscape 15 930→14 184 B (-11%), run 2.42→3.54
-// Tries WASM (wasm-img2irc/pkg) via dynamic import, Falls back to JS — never breaks build
-async function tryWasmBilateral(d: Uint8ClampedArray, pW:number, pH:number, radius:number, sigma:number, passes:number): Promise<boolean> {
+// Tries WASM (wasm-img2irc/pkg) via getWasm() cache — never breaks build, no per-call import
+export async function tryWasmBilateral(d: Uint8ClampedArray, pW:number, pH:number, radius:number, sigma:number, passes:number): Promise<boolean> {
   try {
-    const mod: any = await import('../../wasm-img2irc/pkg/wasm_img2irc.js');
-    if ((mod as any)?._isWasmShim) return false;
-    if (mod?.bilateral_filter) {
-      await mod.default?.().catch(()=>{});
-      mod.bilateral_filter(d, pW, pH, radius, sigma, passes);
-      return true;
-    }
-  } catch {}
-  return false;
+    const mod = await getWasm();
+    if (!mod?.bilateral_filter) return false;
+    mod.bilateral_filter(d, pW, pH, radius, sigma, passes);
+    return true;
+  } catch { return false; }
 }
-function applyBilateralFilter(d: Uint8ClampedArray, pW:number, pH:number, radius=2, sigma=40, passes=1): void {
+// Precomputed exp LUT for bilateral: wt = exp(-d2/sigma2), d2 in [0, 195075] (255^2*3), sigma2=3200
+// d2*32/sigma2 maps to [0, 1952], clamp to 2047. Cuts 720K Math.exp → array lookup for 120×120×2.
+export const EXP_LUT = (()=>{ const a=new Float64Array(2048); for(let i=0;i<2048;i++) a[i]=Math.exp(-i/32); return a; })();
+export function applyBilateralFilter(d: Uint8ClampedArray, pW:number, pH:number, radius=2, sigma=40, passes=1): void {
   const sigma2 = 2*sigma*sigma;
   const tmp = new Uint8ClampedArray(d.length);
   for(let pass=0; pass<passes; pass++){
@@ -345,7 +344,7 @@ function applyBilateralFilter(d: Uint8ClampedArray, pW:number, pH:number, radius
             const j=(yy*pW+xx)*4;
             const r=src[j], g=src[j+1], b=src[j+2];
             const d2=(r-r0)*(r-r0)+(g-g0)*(g-g0)+(b-b0)*(b-b0);
-            const wt=Math.exp(-d2/sigma2);
+            const wt=EXP_LUT[Math.min(2047, Math.round(d2*32/sigma2))];
             accR+=wt*r; accG+=wt*g; accB+=wt*b; wsum+=wt;
           }
         }
@@ -356,9 +355,8 @@ function applyBilateralFilter(d: Uint8ClampedArray, pW:number, pH:number, radius
   }
 }
 
-
 // Shared core — single source of truth for both entry points (main thread + Worker)
-async function renderPixelsCore(
+export async function renderPixelsCore(
   d: Uint8ClampedArray,
   pW: number, pH: number,
   cols: number, rows: number,

@@ -54,6 +54,10 @@
     return _worker;
   }
   async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number): Promise<string | null> {
+    // Skip worker for tiny previews — overhead (createImageBitmap + postMessage) exceeds benefit
+    // Threshold: < 40x40 (1600 px) and not comic -> main thread is faster and no jank
+    const estimatedPixels = (opts.width || 60) * Math.max(1, Math.round((opts.width || 60) * ((img.naturalHeight||img.height)/(img.naturalWidth||img.width)||1) * 0.9)) * 2;
+    if (estimatedPixels < 4000 && !opts.comic) return null;
     const w = getWorker();
     if (!w || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return null;
     let bitmap: ImageBitmap | null = null;
