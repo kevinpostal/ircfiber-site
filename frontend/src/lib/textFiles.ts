@@ -115,7 +115,14 @@ export function detectSyntaxFromFilename(filename: string): string {
  *  Matches `s.isText(l.type)` plus fallback to extension (for files where
  *  browser reports empty or generic mime like `application/octet-stream`).
  */
-export function isTextFile(file: { name: string; type: string }): boolean {
+export function isTextFile(fileOrMime: string | { name: string; type: string }, maybeName?: string): boolean {
+  // Overload: isTextFile(mime, name) or isTextFile({ name, type })
+  let file: { name: string; type: string };
+  if (typeof fileOrMime === 'string') {
+    file = { name: maybeName ?? '', type: fileOrMime };
+  } else {
+    file = fileOrMime;
+  }
   if (isTextMime(file.type)) return true;
   // Fallback: known texty extensions are treated as text even if mime is empty/generic.
   // This covers OS cases where .txt is reported as "" or application/octet-stream,

@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchUploadsOffset, deleteUpload, type UploadEntry } from '../stores/api';
+  import { fetchUploadsOffset, deleteUpload, editUpload, type UploadEntry } from '../stores/api';
   import { sizeToString } from '../lib/upload';
+  import CodeEditor from './CodeEditor.svelte';
+  import { detectSyntaxFromFilename, isTextFile } from '../lib/textFiles';
+
+  const EDIT_LANGUAGES = [
+    'text','python','javascript','typescript','bash','sh','yaml','json','markdown','html','css','sql','go','rust','java','php','ruby','dockerfile','ini','xml','c_cpp','csharp','golang','graphqlschema','toml','ini','nginx','makefile','perl','swift','kotlin','yaml','json5'
+  ] as const;
 
   interface Props {
     onClose: () => void;
@@ -18,18 +24,17 @@
   let editingId = $state<string | null>(null);
   let editName = $state('');
   let editError = $state<string | null>(null);
+  let editingContent = $state('');
+  let editingLang = $state('text');
+  let saving = $state(false);
+
+  // Derived for full-page edit view
+  let editingEntry = $derived(entries.find((e) => e.id === editingId) ?? null);
 
   // Text preview cache — fetched once per text file, truncated to 1500 chars
   let textPreviews = $state<Record<string, string>>({});
   let textPreviewErrors = $state<Record<string, boolean>>({});
 
-  function isTextFile(mime: string, name: string): boolean {
-    if (mime && /^text\//i.test(mime)) return true;
-    if (['application/json', 'application/javascript', 'application/xml', 'application/x-python', 'text/x-python'].includes(mime)) return true;
-    const lower = name.toLowerCase();
-    if (lower === 'dockerfile' || lower === 'makefile' || lower === '.env') return true;
-    return /\.(txt|text|md|markdown|mdown|mkd|json|json5|js|mjs|cjs|jsx|ts|tsx|mts|cts|py|pyw|pyi|rb|gemspec|rake|java|c|h|cpp|hpp|cc|cxx|hh|go|rs|php|phtml|sh|bash|zsh|ksh|fish|html|htm|xhtml|css|scss|sass|less|stylus|yaml|yml|xml|svg|toml|sql|pgsql|mysql|graphql|gql|dockerfile|containerfile|makefile|mk|ini|conf|cfg|properties|lua|perl|pl|pm|swift|kotlin|kt|kts|scala|clj|ex|exs|dart|r|rmd|jl|hs|erl|elm|vue|svelte|astro|tf|hcl|nix|nginx|apache|htaccess|bat|cmd|ps1|tex|diff|patch|csv|prql|proto|zig|nim|coffee|jade|pug|hbs|liquid)$/i.test(lower) || /\.(log|csv)$/i.test(lower);
-  }
 
   $effect(() => {
     // Fetch text previews for visible text files. Guard prevents re-fetch.
@@ -71,9 +76,27 @@
     try {
       const offset = (p - 1) * PAGE_SIZE;
       const result = await fetchUploadsOffset(offset, PAGE_SIZE);
-      entries = result.entries;
+      // File uploads should only show non-text files; text uploads live in
+      // the Text snippets panel. Filter here so README.md / serve.py etc.
+      // don't appear as broken image cards in the File uploads modal.
+      const filtered = result.entries.filter((e) => !isTextFile(e.mimeType, e.name));
+      // If the page is full of text files, the filtered page will be empty
+      // but total still counts text files — the next page fetch will fill it.
+      // For now keep total as-is so pagination still reflects the underlying
+      // data; the empty-state message will prompt to use Text snippets.
+      entries = filtered;
       total = result.total;
       page = p;
+      // If we filtered everything and there are more pages, try the next page
+      // automatically so the user doesn't see an empty page when files exist.
+      if (filtered.length === 0 && result.entries.length > 0 && p < Math.ceil(result.total / PAGE_SIZE)) {
+        // Recursively load next page (avoid infinite loop with guard)
+        if (p < 10) {
+          loading = false;
+          await loadPage(p + 1);
+          return;
+        }
+      }
     } catch (e) {
       error = 'Failed to load files. Please refresh the page and try again later.';
     } finally {
@@ -88,22 +111,72 @@
     loadPage(p);
   }
 
-  function startEdit(entry: UploadEntry): void {
+  async function startEdit(entry: UploadEntry): Promise<void> {
     editingId = entry.id;
     editName = entry.name;
     editError = null;
+    saving = false;
+    if (isTextFile(entry.mimeType, entry.name)) {
+      try {
+        const fetchUrl = (() => { try { return new URL(entry.url).pathname; } catch { return entry.url; } })();
+        const r = await fetch(fetchUrl);
+        if (!r.ok) throw new Error('fetch failed');
+        editingContent = await r.text();
+        editingLang = detectSyntaxFromFilename(entry.name);
+      } catch {
+        editingContent = '';
+        editError = 'Failed to load file content';
+      }
+    } else {
+      editingContent = '';
+      editingLang = 'text';
+    }
   }
 
   function cancelEdit(): void {
     editingId = null;
     editError = null;
+    editingContent = '';
+    editName = '';
+    saving = false;
   }
 
-  function saveEdit(e: Event): void {
-    e.preventDefault();
-    editError = 'Editing is not yet supported';
+  async function saveEdit(e?: Event): Promise<void> {
+    e?.preventDefault();
+    if (!editingId) return;
+    const entry = entries.find((en) => en.id === editingId);
+    if (!entry) return;
+    if (!editName.trim()) {
+      editError = 'Filename required';
+      return;
+    }
+    const wasTextFile = isTextFile(entry.mimeType, entry.name);
+    if (!wasTextFile) {
+      editError = 'Only text files can be edited';
+      return;
+    }
+    saving = true;
+    editError = null;
+    try {
+      await editUpload(editingId, { content: editingContent, filename: editName });
+      entry.name = editName;
+      entries = [...entries];
+      const savedId = editingId;
+      editingId = null;
+      delete textPreviews[savedId];
+      textPreviewErrors[savedId] = false;
+      const fetchUrl = (() => { try { return new URL(entry.url).pathname; } catch { return entry.url; } })();
+      try {
+        const r = await fetch(fetchUrl, { cache: 'no-store' });
+        const t = await r.text();
+        textPreviews[savedId] = t.slice(0, 1500);
+      } catch {}
+    } catch (err) {
+      editError = err instanceof Error ? err.message : 'Failed to save';
+    } finally {
+      saving = false;
+    }
   }
-
   async function handleDelete(entry: UploadEntry): Promise<void> {
     try {
       await deleteUpload(entry.id);
@@ -132,7 +205,7 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div id="filesContainer">
-  <div id="filesOverlayContents">
+  <div id="filesOverlayContents" class:editing={!!editingId}>
     <div class="filesHeader">
       <h1 tabindex="0">File uploads <i class="spin {loading ? 'visible' : ''}"></i></h1>
       <button type="button" class="closeBtn" onclick={onClose}>Close</button>
@@ -143,7 +216,75 @@
       <p class="loadingError userError">{error}</p>
     {/if}
 
-    {#if entries.length > 0}
+    {#if editingId && editingEntry}
+      <!-- Full-page edit view — styled like the upload snippet dialog (pastebin) -->
+      <div class="editFullPage pastebin">
+        <div class="pastebinHeader">
+          <h1>Edit file</h1>
+          <span class="pastebinSelect">
+            <label for="editLangSelect">Syntax</label>
+            <select id="editLangSelect" bind:value={editingLang} aria-label="Language">
+              {#each EDIT_LANGUAGES as L}
+                <option value={L}>{L === 'text' ? 'Plain Text' : L}</option>
+              {/each}
+            </select>
+          </span>
+        </div>
+        <div class="editFileInfo">
+          <span class="editFileName">{editingEntry.name}</span>
+          <span class="editFileMeta">{editingEntry.mimeType} • {sizeToString(editingEntry.size)}</span>
+        </div>
+        {#if isTextFile(editingEntry.mimeType, editingEntry.name)}
+          <div class="pastebinWrapper editEditorWrapper">
+            <CodeEditor bind:value={editingContent} language={editingLang} />
+          </div>
+          <form class="editFormFull" onsubmit={saveEdit}>
+            <div class="editFilenameSection">
+              <label for="editNameInputFull" class="editFilenameLabel">
+                <span class="labelMain">Filename</span>
+                <span class="labelHint">extension sets syntax highlighting</span>
+              </label>
+              <div class="editFilenameInputWrap">
+                <span class="filenameIcon">📄</span>
+                <input id="editNameInputFull" class="input nameInput editFilenameInput" name="name" bind:value={editName} placeholder="example.py" spellcheck="false" autocomplete="off" />
+              </div>
+            </div>
+            {#if editError}<p class="userError editErrorFull">{editError}</p>{/if}
+            <p class="form editActions">
+              <button type="submit" class="action confirm" disabled={saving}><span>{saving ? 'Saving…' : 'Save'}</span></button>
+              <button type="button" class="cancel close" onclick={cancelEdit} disabled={saving}><span>Cancel</span></button>
+            </p>
+            <p class="pasteConfirm__help">
+              <button type="button" class="linkBtn backBtn" onclick={cancelEdit}>← Back to files</button>
+            </p>
+          </form>
+        {:else}
+          <div class="editNonTextInfo">
+            <p class="userInfo">Only text files can have their content edited. You can still rename this file.</p>
+          </div>
+          <form class="editFormFull" onsubmit={saveEdit}>
+            <div class="editFilenameSection">
+              <label for="editNameInputFull" class="editFilenameLabel">
+                <span class="labelMain">Filename</span>
+                <span class="labelHint">renaming changes syntax highlighting</span>
+              </label>
+              <div class="editFilenameInputWrap">
+                <span class="filenameIcon">📄</span>
+                <input id="editNameInputFull" class="input nameInput editFilenameInput" name="name" bind:value={editName} spellcheck="false" autocomplete="off" />
+              </div>
+            </div>
+            {#if editError}<p class="userError">{editError}</p>{/if}
+            <p class="form editActions">
+              <button type="submit" class="action confirm" disabled={saving}><span>{saving ? 'Saving…' : 'Save'}</span></button>
+              <button type="button" class="cancel close" onclick={cancelEdit}><span>Cancel</span></button>
+            </p>
+            <p class="pasteConfirm__help">
+              <button type="button" class="linkBtn backBtn" onclick={cancelEdit}>← Back to files</button>
+            </p>
+          </form>
+        {/if}
+      </div>
+    {:else if entries.length > 0}
       {@const visiblePages = getVisiblePages(page, totalPages)}
       <ul class="pagination">
         <li class:disabled={page === 1}>
@@ -168,21 +309,8 @@
           <div class="file">
             <div class="info">
               <p class="date">{formatDate(entry.createdAt)}</p>
-              {#if editingId === entry.id}
-                <div class="name" hidden>{entry.name}</div>
-                <form action="" method="post" class="editForm" onsubmit={saveEdit}>
-                  <p class="form">
-                    <textarea class="input nameInput" name="name" bind:value={editName}></textarea>
-                  </p>
-                  <p class="form">
-                    <button type="submit" class="action"><span>Save</span></button>
-                    <button type="button" class="cancel" onclick={cancelEdit}><span>Cancel</span></button>
-                  </p>
-                </form>
-              {:else}
-                <div class="name">{entry.name}</div>
-                <p class="link">{sizeToString(entry.size)} • {entry.mimeType}</p>
-              {/if}
+              <div class="name">{entry.name}</div>
+              <p class="link">{sizeToString(entry.size)} • {entry.mimeType}</p>
             </div>
             <div class="preview">
               {#if isTextFile(entry.mimeType, entry.name)}
@@ -202,12 +330,8 @@
                   <img class="filePreview" src={entry.url} alt={entry.name} loading="lazy" />
                 </a>
               {/if}
-              {#if editingId === entry.id && editError}
-                <p class="userError editError">{editError}</p>
-              {/if}
               <span class="actions">
-                <button type="button" class="edit" hidden={editingId === entry.id}
-                        onclick={() => startEdit(entry)}><span>edit</span></button>
+                <button type="button" class="edit" onclick={() => startEdit(entry)}><span>edit</span></button>
                 <button type="button" class="delete" onclick={() => handleDelete(entry)}>
                   <span>delete</span>
                 </button>
@@ -218,7 +342,7 @@
         {/each}
       </div>
     {:else if !loading && !error}
-      <p class="emptyMsg">No uploads yet. Drag an image onto the chat to upload.</p>
+      <p class="emptyMsg">No file uploads yet. Text snippets are shown in Text snippets. Drag an image onto the chat to upload.</p>
     {/if}
   </div>
 </div>
@@ -246,5 +370,273 @@
     padding: 20px;
     display: block;
     text-align: center;
+  }
+  #filesOverlayContents.editing {
+    background: #131418;
+    border: 1px solid #2c2f35;
+    border-radius: 10px;
+    overflow: visible;
+    position: relative;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+  }
+  #filesContainer:has(#filesOverlayContents.editing) {
+    overflow-y: auto;
+  }
+  #filesOverlayContents.editing::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #58a6ff, #8b5cf6);
+    z-index: 2;
+    border-radius: 10px 10px 0 0;
+  }
+  .editFullPage.pastebin {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+    box-shadow: none;
+    max-height: none;
+  }
+  .editFullPage .pastebinHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 20px 12px;
+    background: linear-gradient(135deg, #1a1d25 0%, #131418 100%);
+    border-bottom: 1px solid #2c2f35;
+    position: relative;
+  }
+  .editFullPage .pastebinHeader h1 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+    color: #e6edf3;
+  }
+  .editFullPage .pastebinSelect {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: #0d1117;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 4px 6px 4px 10px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .editFullPage .pastebinSelect:hover {
+    border-color: #30363d;
+    background: #161b22;
+  }
+  .editFullPage .pastebinSelect label {
+    color: #8b949e;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  .editFullPage .pastebinSelect select {
+    background: #161b22;
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 6px 28px 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238b949e' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    cursor: pointer;
+    min-width: 130px;
+    transition: all 0.15s ease;
+  }
+  .editFullPage .pastebinSelect select:hover {
+    border-color: #58a6ff;
+    background-color: #1c2128;
+    color: #fff;
+  }
+  .editFullPage .pastebinSelect select:focus {
+    outline: none;
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.2);
+    background-color: #1c2128;
+  }
+  .editFullPage .pastebinSelect select option {
+    background: #0d1117;
+    color: #e6edf3;
+  }
+  .editFileInfo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 20px;
+    font-size: 12px;
+    color: #8b949e;
+    border-bottom: 1px solid #2c2f35;
+    background: #0d1117;
+  }
+  .editFileName {
+    font-weight: 600;
+    color: #e6edf3;
+    word-break: break-all;
+  }
+  .editFileMeta {
+    color: #8b949e;
+  }
+  .editEditorWrapper {
+    flex: 1 1 auto;
+    min-height: 320px;
+    max-height: min(60vh, 600px);
+    margin: 12px 20px 8px;
+    border: 1px solid #2c2f35;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    background: #282c34;
+  }
+  .editEditorWrapper :global(.codeEditor) {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .editFormFull {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 20px 16px;
+    background: #0d1117;
+    border-top: 1px solid #21262d;
+    margin-top: 4px;
+  }
+  .editFormFull .form {
+    margin: 0;
+  }
+  .editFormFull .buttons,
+  .editFormFull .editActions {
+    display: flex;
+    gap: 8px;
+    margin: 8px 0 0;
+  }
+  .editFilenameSection {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: #010409;
+    border: 1px solid #21262d;
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .editFilenameLabel {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #8b949e;
+  }
+  .editFilenameLabel .labelMain {
+    color: #e6edf3;
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 600;
+  }
+  .editFilenameLabel .labelHint {
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
+    color: #6e7681;
+    font-size: 11px;
+  }
+  .editFilenameInputWrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 0 10px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .editFilenameInputWrap:focus-within {
+    border-color: #58a6ff;
+    box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+  }
+  .filenameIcon {
+    color: #8b949e;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .editFilenameInput {
+    flex: 1 1 auto;
+    background: transparent !important;
+    border: none !important;
+    padding: 8px 0 !important;
+    font-family: 'Hack', 'SF Mono', Menlo, monospace;
+    font-size: 13px;
+    color: #e6edf3;
+    outline: none;
+    box-shadow: none !important;
+  }
+  .editFilenameInput::placeholder {
+    color: #484f58;
+  }
+  .editFormFull .action.confirm {
+    background: #238636;
+    color: #fff;
+    border: 1px solid #2ea043;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .editFormFull .action.confirm:hover {
+    background: #2ea043;
+  }
+  .editFormFull .close {
+    background: #21262d;
+    color: #e6edf3;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 6px 16px;
+    cursor: pointer;
+  }
+  .editFormFull .pasteConfirm__help {
+    text-align: center;
+    font-size: 12px;
+    color: #8b949e;
+    margin: 4px 0 0;
+  }
+  .editFormFull .linkBtn.backBtn {
+    background: none;
+    border: none;
+    color: #58a6ff;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .editFormFull .linkBtn.backBtn:hover {
+    text-decoration: underline;
+  }
+  .editErrorFull {
+    margin: 0;
+    color: #f85149;
+    font-size: 12px;
+  }
+  .editNonTextInfo {
+    padding: 16px 20px;
   }
 </style>

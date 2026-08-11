@@ -421,6 +421,16 @@ export async function deleteUpload(id: string): Promise<void> {
   if (!r.ok) throw new Error('Delete failed');
 }
 
+export async function editUpload(id: string, data: { content: string; filename: string }): Promise<{ status: string }> {
+  const r = await fetch(`${API_BASE}/uploads/${encodeURIComponent(id)}/edit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw new Error('Failed to edit');
+  return r.json();
+}
+
 export interface PasteEntry {
   id: string; name: string; syntax: string; lines: number;
   body: string; createdAt: number; buffer: string; networkId: string;

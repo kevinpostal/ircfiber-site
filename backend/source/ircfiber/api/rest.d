@@ -105,10 +105,10 @@ final class RESTAPI {
         router.get("/api/admin/handoff/status", &getHandoffStatus);
         // Manual draining recovery: clear a stuck draining flag
         router.post("/api/admin/servers/:id/clear-draining", &clearServerDraining);
-        // Upload endpoints
         router.post("/api/upload", &uploadFile);
         router.get("/api/uploads", &getUploads);
         router.delete_("/api/uploads/:id", &deleteUpload);
+        router.post("/api/uploads/:id/edit", &editUpload);
         // Pastebin (text snippet) endpoints
         router.get("/api/pastebins", &getPastebins);
         router.post("/api/pastebins", &createPastebin);
@@ -1818,6 +1818,39 @@ final class RESTAPI {
             res.statusCode = 204;
             res.writeVoidBody();
         }
+    }
+
+    private void editUpload(HTTPServerRequest req, HTTPServerResponse res) {
+        import std.file : write;
+        import std.path : buildPath;
+        import ircfiber.upload.local : uploadDir;
+        import ircfiber.db.uploads : UploadRepository;
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto id = req.params["id"];
+        auto json = req.json;
+        string newContent;
+        string newFilename;
+        try { newContent = json["content"].get!string; newFilename = json["filename"].get!string; } catch (Exception) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("invalid json")])); return; }
+        if (newFilename.length == 0) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("filename required")])); return; }
+        if (newContent.length > 15_728_640) { res.statusCode = 413; return; }
+        auto repo = new UploadRepository();
+        auto rec = repo.getById(user.id.toString(), id);
+        if (rec.id.length == 0) { res.statusCode = 404; return; }
+        auto url = rec.directUrl;
+        auto prefix = "/uploads/";
+        auto pos = url.indexOf(prefix);
+        if (pos == -1) { res.statusCode = 500; return; }
+        auto filename = url[pos + prefix.length .. $];
+        auto qIdx = filename.indexOf("?");
+        if (qIdx >= 0) filename = filename[0..qIdx];
+        if (filename.length == 0 || filename.canFind("..") || filename.canFind("/")) { res.statusCode = 400; return; }
+        auto filePath = buildPath(uploadDir(), filename);
+        try { write(filePath, newContent); } catch (Exception e) { res.statusCode = 500; res.writeJsonBody(Json(["error": Json(e.msg)])); return; }
+        bool ok = repo.updateContent(user.id.toString(), id, newContent, newFilename, newContent.length);
+        if (!ok) { res.statusCode = 500; return; }
+        res.writeJsonBody(Json(["status": Json("ok"), "id": Json(id)]));
     }
 
     private Json pasteToJson(const ref PasteRecord r) {
