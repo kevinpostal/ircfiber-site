@@ -141,19 +141,21 @@
       } catch {}
       try{
         const baseOpts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: comicFilter==='comic', alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as const;
-        const isInteractive = isConverting || debounce !== null;
+        const isInteractive = isConverting;
         const opts = getPreviewOpts(baseOpts, isInteractive);
-        if (isInteractive) console.info(`[img2irc] Fast preview: viterbiW=0 (greedy) for ${opts.width} cols — full Viterbi on idle`);
+        if (isInteractive && localStorage.getItem('img2irc:perf')) console.info(`[img2irc] Fast preview: viterbiW=0 (greedy) for ${opts.width} cols`);
         // Try off-main-thread Worker with transferable ImageBitmap (no copy) — falls back to main thread
         // Pass expectedGen so worker can abort if user changed sliders while bitmap was being created
         let res: string | null = null;
-        try { res = await convertViaWorker(img, opts, cur); } catch {}
+        try { res = await convertViaWorker(img, opts, cur); } catch (e) {
+          if (localStorage.getItem('img2irc:perf')) console.info(`[img2irc] convertViaWorker threw: ${String(e)}`);
+        }
         if (cur!==gen) { revokeImageUrl(img); return; }
         if (res == null) {
+          if (localStorage.getItem('img2irc:perf')) console.info(`[img2irc] Worker miss — falling back to main thread`);
           res = await imageToIrcArt(img, opts);
-        }
-        if (isInteractive && opts.viterbiW === 0 && baseOpts.viterbiW !== 0) {
-          setTimeout(() => { if (gen === cur) untrack(()=>void convert(cur)); }, 300);
+        } else if (localStorage.getItem('img2irc:perf')) {
+          console.info(`[img2irc] Worker success`);
         }
         if(cur!==gen) return;
         art=res;
