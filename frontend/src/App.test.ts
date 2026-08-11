@@ -59,6 +59,7 @@ vi.mock('/src/stores/api', () => ({
   uploadAvatar: vi.fn(async () => undefined),
   removeAvatar: vi.fn(async () => undefined),
   deleteUpload: vi.fn(async () => undefined),
+  editUpload: vi.fn(async () => ({ status: 'ok' })),
   fetchUploadsOffset: vi.fn(async () => ({ uploads: [], total: 0 })),
   updateCollapsed: vi.fn(async () => undefined),
   updateInactiveCollapsed: vi.fn(async () => undefined),

@@ -2,6 +2,7 @@
   import { uploadState, type ActiveUpload } from '../stores/uploadStore.svelte';
   import { startUploads } from '../stores/uploadFlow.svelte';
   import { ircState } from '../stores/ircStore.svelte';
+  import { openFromFile } from '../stores/pastebinStore.svelte';
 
   interface Props {
     onClose: () => void;
@@ -32,16 +33,20 @@
   }
 
   function handleNewPaste(): void {
+    const networkId = ircState.activeBuffer.networkId ?? '';
+    const target = ircState.activeBuffer.bufferName ?? '';
+    openFromFile({
+      text: '',
+      filename: '',
+      language: 'text',
+      networkId,
+      target,
+    });
     onClose();
   }
 
   function handleShowFiles(): void {
     uploadState.panelOpen = true;
-    onClose();
-  }
-
-  function handleShowPastes(): void {
-    uploadState.pastebinPanelOpen = true;
     onClose();
   }
 
@@ -95,11 +100,6 @@
       <li>
         <button class="contextMenu__item showFiles" onclick={handleShowFiles}>
           File uploads
-        </button>
-      </li>
-      <li>
-        <button class="contextMenu__item showPastes" onclick={handleShowPastes}>
-          Text snippets
         </button>
       </li>
     </ul>
