@@ -4,12 +4,12 @@ import UploadsPanel from './UploadsPanel.svelte';
 import { fetchUploadsOffset } from '../stores/api';
 
 vi.mock('/src/stores/api', () => ({
-  fetchUploadsOffset: vi.fn(() => Promise.resolve({ entries: [{ id: '1', name: 'photo.png', mimeType: 'image/png', size: 100, url: '/uploads/1.png', createdAt: Date.now() }], total: 1 })),
+  fetchUploadsOffset: vi.fn(() => Promise.resolve({ entries: [{ id: '1', name: 'test.py', mimeType: 'text/x-python', size: 100, url: '/uploads/1.py', createdAt: Date.now() }], total: 1 })),
   deleteUpload: vi.fn(() => Promise.resolve()),
   editUpload: vi.fn(() => Promise.resolve({ status: 'ok' })),
 }));
 vi.mock('../stores/api', () => ({
-  fetchUploadsOffset: vi.fn(() => Promise.resolve({ entries: [{ id: '1', name: 'photo.png', mimeType: 'image/png', size: 100, url: '/uploads/1.png', createdAt: Date.now() }], total: 1 })),
+  fetchUploadsOffset: vi.fn(() => Promise.resolve({ entries: [{ id: '1', name: 'test.py', mimeType: 'text/x-python', size: 100, url: '/uploads/1.py', createdAt: Date.now() }], total: 1 })),
   deleteUpload: vi.fn(() => Promise.resolve()),
   editUpload: vi.fn(() => Promise.resolve({ status: 'ok' })),
 }));
@@ -17,55 +17,64 @@ vi.mock('../stores/api', () => ({
 describe('UploadsPanel edit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // File uploads panel now filters text files — default to an image so the file list is visible
-    vi.mocked(fetchUploadsOffset).mockResolvedValue({ entries: [{ id: '1', name: 'photo.png', mimeType: 'image/png', size: 100, url: '/uploads/1.png', createdAt: Date.now() }], total: 1 });
-  });
-
-  it('text files are filtered from File uploads (shown in Text snippets instead)', async () => {
-    // File uploads should not show text files — they belong in Text snippets
     vi.mocked(fetchUploadsOffset).mockResolvedValue({ entries: [{ id: '1', name: 'test.py', mimeType: 'text/x-python', size: 100, url: '/uploads/1.py', createdAt: Date.now() }], total: 1 });
-    const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
-    await vi.waitFor(() => expect(container.querySelector('.emptyMsg')?.textContent).toContain('No file uploads yet'));
-    expect(container.querySelector('.file .name')).toBeFalsy();
-    expect(container.textContent).toContain('Text snippets');
   });
 
-  it('edit view for text files is full-page (not inline)', async () => {
+  it('text files show text preview (not broken image)', async () => {
+    // File uploads should show text files with a text preview, not a broken image
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('file content preview') } as Response));
     const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
-    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('photo.png'));
-    // For File uploads, text files are filtered, so we test the full-page edit UI exists for any file
-    // The full-page view should hide the file list when editing
-    expect(container.querySelector('#filesList')).toBeTruthy();
-    expect(container.querySelector('.editFullPage')).toBeFalsy();
+    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('test.py'));
+    // Should have text preview, not image (may be loading or loaded)
+    await vi.waitFor(() => expect(container.querySelector('pre.textFilePreview') || container.querySelector('.loadingPreview') || container.querySelector('.fileIcon')).toBeTruthy());
+    expect(container.querySelector('img.filePreview')).toBeFalsy();
+    // Eventually should show the text preview
+    await vi.waitFor(() => expect(container.querySelector('pre.textFilePreview')?.textContent).toContain('file content'));
   });
 
-  it('cancel edit discards changes (rename)', async () => {
+  it('clicking edit on text file shows full-page code editor', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('file content here test') } as Response));
     const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
-    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('photo.png'));
+    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('test.py'));
     await (container.querySelector('button.edit') as HTMLButtonElement)?.click();
-    await vi.waitFor(() => expect(container.querySelector('input.nameInput')).toBeTruthy());
-    const input = container.querySelector('input.nameInput') as HTMLInputElement;
-    const original = input.value;
-    input.value = 'changed.png';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    await (container.querySelector('button.cancel') as HTMLButtonElement)?.click();
+    await vi.waitFor(() => expect(container.querySelector('.editFullPage')).toBeTruthy());
+    await vi.waitFor(() => expect(container.querySelector('.codeEditor')).toBeTruthy());
+    expect(container.querySelector('#filesList')).toBeFalsy();
+  });
+
+  it('cancel edit discards changes', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('file content here test') } as Response));
+    const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
+    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('test.py'));
+    await (container.querySelector('button.edit') as HTMLButtonElement)?.click();
+    await vi.waitFor(() => expect(container.querySelector('.editFullPage')).toBeTruthy());
+    const ta = container.querySelector('.editFullPage .codeEditor textarea') as HTMLTextAreaElement;
+    ta.value = 'changed';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    await (container.querySelector('.editFullPage button.cancel') as HTMLButtonElement)?.click();
     await vi.waitFor(() => expect(container.querySelector('.editFullPage')).toBeFalsy());
-    // Reopen should show original name, not changed
+    await vi.waitFor(() => expect(container.querySelector('#filesList')).toBeTruthy());
+    // Reopen should show original content, not changed
     await (container.querySelector('button.edit') as HTMLButtonElement)?.click();
-    await vi.waitFor(() => expect(container.querySelector('input.nameInput')).toBeTruthy());
-    expect((container.querySelector('input.nameInput') as HTMLInputElement).value).toBe(original);
+    await vi.waitFor(() => expect(container.querySelector('.editFullPage')).toBeTruthy());
+    await vi.waitFor(() => {
+      const val = (container.querySelector('.editFullPage .codeEditor textarea') as HTMLTextAreaElement).value;
+      expect(val).not.toContain('changed');
+      expect(val).toContain('file content');
+    });
   });
 
   it('save with empty filename shows error', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('file content here test') } as Response));
     const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
-    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('photo.png'));
+    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('test.py'));
     await (container.querySelector('button.edit') as HTMLButtonElement)?.click();
-    await vi.waitFor(() => expect(container.querySelector('input.nameInput')).toBeTruthy());
-    const input = container.querySelector('input.nameInput') as HTMLInputElement;
+    await vi.waitFor(() => expect(container.querySelector('.editFullPage')).toBeTruthy());
+    const input = container.querySelector('#editNameInputFull') as HTMLInputElement;
     input.value = '';
     input.dispatchEvent(new Event('input', { bubbles: true }));
     await vi.waitFor(() => expect(input.value).toBe(''));
-    await (container.querySelector('button[type="submit"]') as HTMLButtonElement)?.click();
+    await (container.querySelector('.editFullPage button[type="submit"]') as HTMLButtonElement)?.click();
     await vi.waitFor(() => expect(container.textContent).toContain('Filename required'));
   });
 
@@ -75,8 +84,9 @@ describe('UploadsPanel edit', () => {
     const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
     await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('photo.png'));
     await (container.querySelector('button.edit') as HTMLButtonElement)?.click();
-    await vi.waitFor(() => expect(container.querySelector('input.nameInput')).toBeTruthy());
-    expect(container.querySelector('.codeEditor')).toBeFalsy();
-    expect(container.querySelector('input.nameInput')).toBeTruthy();
+    await vi.waitFor(() => expect(container.querySelector('.editFullPage')).toBeTruthy());
+    // Non-text files should not show CodeEditor, just the rename input
+    expect(container.querySelector('.editFullPage .codeEditor')).toBeFalsy();
+    expect(container.querySelector('#editNameInputFull')).toBeTruthy();
   });
 });

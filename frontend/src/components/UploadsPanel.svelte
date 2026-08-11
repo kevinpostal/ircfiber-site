@@ -76,27 +76,9 @@
     try {
       const offset = (p - 1) * PAGE_SIZE;
       const result = await fetchUploadsOffset(offset, PAGE_SIZE);
-      // File uploads should only show non-text files; text uploads live in
-      // the Text snippets panel. Filter here so README.md / serve.py etc.
-      // don't appear as broken image cards in the File uploads modal.
-      const filtered = result.entries.filter((e) => !isTextFile(e.mimeType, e.name));
-      // If the page is full of text files, the filtered page will be empty
-      // but total still counts text files — the next page fetch will fill it.
-      // For now keep total as-is so pagination still reflects the underlying
-      // data; the empty-state message will prompt to use Text snippets.
-      entries = filtered;
+      entries = result.entries;
       total = result.total;
       page = p;
-      // If we filtered everything and there are more pages, try the next page
-      // automatically so the user doesn't see an empty page when files exist.
-      if (filtered.length === 0 && result.entries.length > 0 && p < Math.ceil(result.total / PAGE_SIZE)) {
-        // Recursively load next page (avoid infinite loop with guard)
-        if (p < 10) {
-          loading = false;
-          await loadPage(p + 1);
-          return;
-        }
-      }
     } catch (e) {
       error = 'Failed to load files. Please refresh the page and try again later.';
     } finally {
@@ -342,7 +324,7 @@
         {/each}
       </div>
     {:else if !loading && !error}
-      <p class="emptyMsg">No file uploads yet. Text snippets are shown in Text snippets. Drag an image onto the chat to upload.</p>
+      <p class="emptyMsg">No uploads yet. Drag an image onto the chat to upload.</p>
     {/if}
   </div>
 </div>
