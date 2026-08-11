@@ -77,6 +77,12 @@ const REASON_TRANSLATIONS: Record<string, string> = {
   cert_expired: 'Server certificate has expired',
   cert_unknown_authority: 'Server certificate is not trusted',
   hostname_mismatch: 'Server certificate does not match the hostname',
+  // Ban family — surfaced by the engine's BAN_KEYWORDS handler.
+  zlined: 'Banned (Z-Lined)',
+  glined: 'Banned (G-Lined)',
+  klined: 'Banned (K-Lined)',
+  elined: 'Banned (E-Lined)',
+  banned: 'Banned',
 };
 
 export function renderReason(reason: string | undefined | null): string {

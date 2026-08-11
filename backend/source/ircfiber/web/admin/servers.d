@@ -65,6 +65,8 @@ struct AssignmentRow {
     string username;      // owning user's display name; "" if unknown
     /// Current IRC nick as reported by the engine.
     string nick;          // current IRC nick as reported by the engine; "" if disconnected / unknown
+    /// Mullvad egress selection: "" = random, else label like "se"/"us"
+    string egressNodeId;
 }
 
 /// Network state helper — reads the latest engine snapshot from Redis for

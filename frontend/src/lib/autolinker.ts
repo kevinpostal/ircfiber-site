@@ -115,7 +115,10 @@ function splitOnChannels(text: string): LinkPart[] {
 
   const parts: LinkPart[] = [];
   const escapedChars = chanPrefixChars.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const chanRegex = new RegExp(`(?:^|(?<=\\s))([${escapedChars}][^\\s<>"',]+)`, 'g');
+  // Exclude '&' and ';' so HTML entities like &nbsp; after a channel (e.g.
+  // "##&nbsp;&nbsp;") are not swallowed into the channel name. Art lines
+  // like "##     ##" would otherwise become a single link "##&nbsp;...".
+  const chanRegex = new RegExp(`(?:^|(?<=\\s))([${escapedChars}][^\\s<>"',&;]+)`, 'g');
 
   let lastIdx = 0;
   let m: RegExpExecArray | null;

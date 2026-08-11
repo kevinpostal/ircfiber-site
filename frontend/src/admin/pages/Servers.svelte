@@ -41,6 +41,15 @@
     userId: string;
     username: string;
     nick: string;
+    egressNodeId: string;
+  }
+
+  interface MullvadNode {
+    id: string;
+    label: string;
+    host: string;
+    port: number;
+    socksUrl: string;
   }
 
   interface ServersResponse {
@@ -54,6 +63,7 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let lastFetchedAt = $state<number | null>(null);
+  let mullvadPool = $state<MullvadNode[]>([]);
 
   // Inline editing — which engine has its config form expanded
   let editingConfig = $state<Record<string, boolean>>({});
@@ -63,6 +73,7 @@
   onMount(() => {
     stop = startPolling(async () => {
       await fetchData();
+      await fetchMullvad();
       lastFetchedAt = Date.now();
     });
   });
@@ -76,6 +87,25 @@
       error = e instanceof ApiError ? e.message : (e as Error).message;
     } finally { loading = false; }
   }
+
+  async function fetchMullvad() {
+    try {
+      const r = await api.get<{ pool: MullvadNode[] }>('/api/admin/mullvad/status');
+      mullvadPool = r.pool ?? [];
+    } catch {}
+  }
+
+  async function setEgress(networkId: string, label: string, egressNodeId: string) {
+    try {
+      await api.post(`/api/admin/networks/${encodeURIComponent(networkId)}/egress`, { egressNodeId });
+      toastSuccess(`${label} egress → ${egressNodeId || 'Random'}`);
+      await fetchData();
+    } catch (e) {
+      toastError(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  }
+
+
 
   // Compute derived stats
   const healthyCount = $derived(data?.engines.filter((e) => e.healthy).length ?? 0);
@@ -364,6 +394,7 @@
             <th class="py-2 text-left font-semibold">IRC Nick</th>
             <th class="py-2 text-left font-semibold">Owner</th>
             <th class="py-2 text-left font-semibold">Server</th>
+            <th class="py-2 text-left font-semibold">Egress</th>
             <th class="py-2 text-right font-semibold">Actions</th>
           </tr>
         </thead>
@@ -394,6 +425,18 @@
               </td>
               <td class="py-2">
                 <StatusBadge label={a.serverId} tone="info" size="sm" />
+              </td>
+              <td class="py-2">
+                <select
+                  class="rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text"
+                  value={a.egressNodeId || ''}
+                  onchange={(e) => setEgress(a.networkId, label, (e.target as HTMLSelectElement).value)}
+                >
+                  <option value="">Random</option>
+                  {#each mullvadPool as n (n.id)}
+                    <option value={n.id}>{n.label.toUpperCase()} — {n.host}</option>
+                  {/each}
+                </select>
               </td>
               <td class="py-2 text-right whitespace-nowrap">
                 {#if a.networkHost}

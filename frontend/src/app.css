@@ -217,6 +217,38 @@ body.ascii-compact .row.messageRow {
 .irccolor-bg.bg-13, .irccolor-bg.bg-magenta{ background-color: rgb(255, 0, 255); }
 .irccolor-bg.bg-14, .irccolor-bg.bg-grey   { background-color: grey; }
 .irccolor-bg.bg-15, .irccolor-bg.bg-silver { background-color: silver; color: #000; }
+/* Solid-block art uses fg==bg (e.g. yellow ## on yellow bg) to paint
+   rectangles via the glyph's background. The light-bg rules above force
+   color:#000 for readability, which would make those blocks render as
+   black text on yellow instead of solid yellow. Override when the span
+   carries the matching fg class so the glyph stays invisible and the
+   background paints solid. Specificity (0,4,0) beats the (0,2,0) bg
+   rule above. */
+.irccolor.white.irccolor-bg.bg-white,
+.irccolor.color-0.irccolor-bg.bg-0 { color: #ffffff !important; }
+.irccolor.yellow.irccolor-bg.bg-yellow,
+.irccolor.color-8.irccolor-bg.bg-8 { color: rgb(255, 255, 0) !important; }
+.irccolor.lime.irccolor-bg.bg-lime,
+.irccolor.color-9.irccolor-bg.bg-9 { color: lime !important; }
+.irccolor.cyan.irccolor-bg.bg-cyan,
+.irccolor.color-11.irccolor-bg.bg-11 { color: cyan !important; }
+.irccolor.silver.irccolor-bg.bg-silver,
+.irccolor.color-15.irccolor-bg.bg-15 { color: silver !important; }
+/* Links inside solid blocks must also be invisible — they otherwise
+   pick up the global link blue via .row.messageRow .content a. The
+   groupedLines rule sets them to inherit, but add explicit
+   !important overrides to guarantee the solid-block color wins even
+   if that inherit is ever overridden. */
+.irccolor.white.irccolor-bg.bg-white a,
+.irccolor.color-0.irccolor-bg.bg-0 a { color: #ffffff !important; }
+.irccolor.yellow.irccolor-bg.bg-yellow a,
+.irccolor.color-8.irccolor-bg.bg-8 a { color: rgb(255, 255, 0) !important; }
+.irccolor.lime.irccolor-bg.bg-lime a,
+.irccolor.color-9.irccolor-bg.bg-9 a { color: lime !important; }
+.irccolor.cyan.irccolor-bg.bg-cyan a,
+.irccolor.color-11.irccolor-bg.bg-11 a { color: cyan !important; }
+.irccolor.silver.irccolor-bg.bg-silver a,
+.irccolor.color-15.irccolor-bg.bg-15 a { color: silver !important; }
 
 /* ─── ACTION (/me) message — IRCCloud parity ───────────────────────────
    IRCCloud renders an ACTION as a `.row.messageRow.me` with everything

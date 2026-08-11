@@ -188,6 +188,22 @@
   function containsBlockArt(text: string): boolean {
     if (!text) return false;
     if (/[\u2580-\u259F]/.test(text)) return true;
+    // mIRC/hex colored ASCII art (e.g. SuperNets . + ## mosaics).
+    // These are single-line PRIVMSGs with many \x03/\x04 color segments
+    // and no block characters, so the Unicode check misses them.
+    // Heuristic: >=6 color codes + moderate length + art-like glyphs
+    // (dots/hashes/blocks with spaces) => treat as blockArt to get
+    // white-space:pre + no break-all wrapping. Normal rainbow chat
+    // rarely has >=6 codes on one line, so false-positive rate is low
+    // and the fallback styling (pre, overflow-x:auto) is harmless.
+    const colorCodes = (text.match(/\x03|\x04/g) || []).length;
+    if (colorCodes >= 6 && text.length >= 30) {
+      // Art typically mixes '.' and '#' / '█' with spaced gaps
+      if (/[.#\u2580-\u259F]/.test(text) && /\s{2,}/.test(text)) return true;
+      // Or many hashes/dots regardless of double-space
+      const artGlyphs = (text.match(/[#.]/g) || []).length;
+      if (artGlyphs >= 8) return true;
+    }
     // ASCII cat / owl art like d4rkm4g3's D00M TooL — many | / \ . - _ " ' ( ) [ ] and multiple lines with checkboxes
     const lines = text.split('\n');
     if (lines.length < 3) return false;

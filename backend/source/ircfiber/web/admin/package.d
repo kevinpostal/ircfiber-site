@@ -17,6 +17,7 @@ import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiRemoveAssignment, apiEngineConfig, apiHostDisconnect, apiHostReconnect,
     apiHostDeleteNetwork, apiAssignmentDelete, apiRouting,
     apiFiberConfig, apiFiberConfigSet,
+    apiMullvadStatus, apiNetworkEgressSet,
     apiUsersList, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete,
     apiResetPassword,
     apiSessions, apiSessionsClear, apiSessionsClearUser, apiSessionsClearOne,
@@ -95,10 +96,10 @@ final class AdminController {
         router.post("/api/admin/servers/:id/config", &adminWrap!apiEngineConfigRoute);
         router.post("/api/admin/servers/host/:host/disconnect/:networkId", &adminWrap!apiHostDisconnectRoute);
         router.post("/api/admin/servers/host/:host/reconnect/:networkId", &adminWrap!apiHostReconnectRoute);
-        router.post("/api/admin/servers/host/:host/delete-network/:networkId", &adminWrap!apiHostDeleteNetworkRoute);
-        router.post("/api/admin/routing", &adminWrap!apiRoutingRoute);
         router.get("/api/admin/config/fiber", &adminWrap!apiFiberConfigRoute);
         router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
+        router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
+        router.post("/api/admin/networks/:id/egress", &adminWrap!apiNetworkEgressSetRoute);
 
         router.get("/api/admin/users", &adminWrap!apiUsersListRoute);
         router.get("/api/admin/users/:id", &adminWrap!apiUserDetailRoute);
@@ -208,6 +209,8 @@ private:
     void apiFiberConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiFiberConfigSet(req, res, redis, serverRegistry);
     }
+    void apiMullvadStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadStatus(req, res); }
+    void apiNetworkEgressSetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNetworkEgressSet(req, res, redis, serverRegistry); }
     void apiUsersListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUsersList(req, res); }
     void apiUserDetailRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiUserDetail(req, res, redis);

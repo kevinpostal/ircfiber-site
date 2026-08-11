@@ -1,7 +1,7 @@
 module ircfiber.web.admin.api;
 
 import std.uuid : UUID, parseUUID, randomUUID;
-import std.string : strip, split, join, indexOf;
+import std.string : strip, split, join, indexOf, startsWith, lastIndexOf;
 import std.algorithm : canFind, filter, map;
 import std.array : array;
 import std.conv : to;
@@ -181,6 +181,7 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
                 if (nw.config.id != UUID.init) {
                     row.networkName = nw.config.name.length > 0 ? nw.config.name : nw.config.host;
                     row.networkHost = nw.config.host;
+                    row.egressNodeId = nw.config.egressNodeId;
                     if (userRepo && nw.userId != UUID.init) {
                         try {
                             const u = userRepo.findById(nw.userId);
@@ -193,7 +194,6 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
                 }
             } catch (Exception) {}
         }
-        // Pull the live nick from the engine's last state snapshot so
         // admins can see which IRC identity is in use on this server.
         // Falls back to the configured nick when the engine hasn't
         // reported yet, and stays empty when the network is offline.
@@ -256,6 +256,7 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         j["userId"] = Json(a.userId);
         j["username"] = Json(a.username);
         j["nick"] = Json(a.nick);
+        j["egressNodeId"] = Json(a.egressNodeId);
         assignArr ~= j;
     }
     data["assignments"] = Json(assignArr);
@@ -1136,9 +1137,99 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 // ────────────────────────────────────────────────────────────
 // Uploads API
 // ────────────────────────────────────────────────────────────
+/// GET /api/admin/mullvad/status — returns available SOCKS pool + labels
+package void apiMullvadStatus(HTTPServerRequest, HTTPServerResponse res) {
+    import std.process : environment;
+    import std.string : split, strip, indexOf, lastIndexOf, toLower;
+    import std.conv : to;
+    Json[] pool;
+    auto raw = environment.get("IRCFIBER_MULLVAD_POOL", "");
+    // fallback to engine env file if gateway env empty
+    if (raw.length == 0) {
+        try {
+            import std.file : readText, exists;
+            if (exists("/etc/ircfiber/engine/env-ovh")) {
+                auto txt = readText("/etc/ircfiber/engine/env-ovh");
+                foreach (line; txt.split("\n")) {
+                    auto t = line.strip();
+                    if (t.startsWith("IRCFIBER_MULLVAD_POOL=")) { raw = t["IRCFIBER_MULLVAD_POOL=".length .. $].strip(); break; }
+                }
+            }
+        } catch (Exception) {}
+    }
+    if (raw.length > 0) {
+        foreach (entry; raw.split(",")) {
+            auto e = entry.strip();
+            if (e.length == 0) continue;
+            auto p = e.indexOf("://");
+            if (p >= 0) e = e[p+3 .. $];
+            auto colon = e.lastIndexOf(":");
+            string host = e; ushort port = 1080;
+            if (colon >= 0) { host = e[0 .. colon].strip(); try { port = e[colon+1 .. $].strip().to!ushort; } catch (Exception) {} }
+            string label = host.toLower();
+            auto dash = host.lastIndexOf("-");
+            if (dash >= 0 && dash+1 < host.length) label = host[dash+1 .. $].toLower();
+            else { auto dot = host.indexOf("."); if (dot > 0) label = host[0 .. dot].toLower(); }
+            Json o = Json.emptyObject;
+            o["id"] = Json(label);
+            o["label"] = Json(label);
+            o["host"] = Json(host);
+            o["port"] = Json(port);
+            o["socksUrl"] = Json("socks5://" ~ host ~ ":" ~ port.to!string);
+            pool ~= o;
+        }
+    }
+    Json data = Json.emptyObject;
+    data["pool"] = Json(pool);
+    data["count"] = Json(cast(int)pool.length);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/networks/:id/egress — set egressNodeId ("" = random, else pinned label)
+package void apiNetworkEgressSet(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, ServerRegistry serverRegistry) {
+    import std.uuid : parseUUID;
+    import std.string : toLower, strip;
+    auto networkIdStr = req.params["id"];
+    UUID networkId;
+    try { networkId = parseUUID(networkIdStr); } catch (Exception e) { jsonError(res, 400, "Invalid network id: " ~ e.msg); return; }
+    auto body = readJsonBody(req);
+    string egressNodeId = "";
+    if (body.type == Json.Type.object && body["egressNodeId"].type != Json.Type.undefined) {
+        try { egressNodeId = body["egressNodeId"].get!string.strip().toLower(); } catch (Exception) {}
+    } else if (body.type == Json.Type.object && body["egress"].type != Json.Type.undefined) {
+        try { egressNodeId = body["egress"].get!string.strip().toLower(); } catch (Exception) {}
+    }
+    // "random" / "auto" / "" all mean random
+    if (egressNodeId == "random" || egressNodeId == "auto") egressNodeId = "";
+    auto netRepo = new NetworkRepository();
+    auto existing = netRepo.findById(networkId);
+    if (existing.id == typeof(existing.id).init) { jsonError(res, 404, "Network not found"); return; }
+    netRepo.setEgressNodeId(networkId, egressNodeId);
+    // invalidate user cache
+    try {
+        auto owner = netRepo.findByIdWithUser(networkId);
+        if (owner.userId != typeof(owner.userId).init) redis.del(RedisKeys.userNetworks(owner.userId.toString()));
+    } catch (Exception) {}
+    // push reconnect so engine picks new egress on next attempt
+    try {
+        auto cfg = netRepo.findById(networkId);
+        auto owner = netRepo.findByIdWithUser(networkId);
+        string ownerId = owner.userId != typeof(owner.userId).init ? owner.userId.toString() : "";
+        auto serverId = serverRegistry.getServerForNetwork(networkIdStr);
+        if (serverId.length == 0 || !serverRegistry.isServerHealthy(serverId)) serverId = serverRegistry.reassignNetwork(networkIdStr);
+        if (serverId.length > 0) {
+            auto msg = ControlMessage("reconnectNetwork", networkIdStr, ownerId, cfg.toJson());
+            msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+            redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+        }
+    } catch (Exception e) { logWarn("egress set control push failed: %s", e.msg); }
+    Json data = Json.emptyObject;
+    data["networkId"] = Json(networkIdStr);
+    data["egressNodeId"] = Json(egressNodeId);
+    jsonOk(res, data);
+}
 
 package void apiUploadsList(HTTPServerRequest req, HTTPServerResponse res) {
-    import std.conv : to;
     int page = 0;
     int limit = 50;
     if (auto p = "page" in req.query) page = (*p).to!int;

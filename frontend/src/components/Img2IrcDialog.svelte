@@ -1,6 +1,6 @@
 <script lang="ts">
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, type RenderMode, type PixelMode } from '../lib/img2irc';
+  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode } from '../lib/img2irc';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { generateLabel } from '../lib/utils';
@@ -11,17 +11,32 @@
   let width=$state(DEFAULT_IRC_WIDTH);
   let renderMode=$state<RenderMode>('ansi24');
   let pixelMode=$state<PixelMode>('half');
+  let midgardMode=$state<MidgardColorMode>('truecolor');
   let brightness=$state(0), contrast=$state(0), saturation=$state(0), hue=$state(0), gamma=$state(0), blur=$state(0), pixelize=$state(0);
-  let grayscale=$state(false), invert=$state(false), sepia=$state(false), normalize=$state(false), dither=$state(false), nograyscale=$state(false), flipH=$state(false), flipV=$state(false);
+  let grayscale=$state(false), invert=$state(false), sepia=$state(false), normalize=$state(false), dither=$state(false), nograyscale=$state(false), flipH=$state(false), flipV=$state(false), comicFilter=$state<'none'|'comic'>('none');
+  let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('lab');
+  let viterbiW=$state(2.5);
   let rotate=$state('0');
   let filter=$state('linear');
   let showAdv=$state(false);
 
+  $effect(()=>{
+    void midgardMode;
+    if(midgardMode==='truecolor'){ renderMode='ansi24'; if(comicFilter==='comic') comicFilter='none'; }
+    else if(midgardMode==='vga256'){ renderMode='ansi'; comicFilter='none'; }
+    else if(midgardMode==='xterm256'){ renderMode='ansi'; comicFilter='none'; }
+    else if(midgardMode==='16'){ renderMode='irc'; comicFilter='none'; }
+    else if(midgardMode==='retro'){ renderMode='irc'; comicFilter='none'; pixelMode='half'; }
+    else if(midgardMode==='comic'){ renderMode='ansi24'; comicFilter='comic'; }
+  });
+
   let art=$state(''), htmlPreview=$state(''), loading=$state(true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
+  let hasAlpha=$state(false);
   let gen=0;
   let debounce: ReturnType<typeof setTimeout>|null=null;
 
   function schedule(){
+    if(fitting) return;
     const my=++gen;
     if(debounce) clearTimeout(debounce);
     // keep converting indicator subtle, don't flash "Converting…"
@@ -31,7 +46,7 @@
       await convert(my);
     }, 70);
   }
-  $effect(()=>{ void width; void renderMode; void pixelMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void dither; void nograyscale; void flipH; void flipV; void rotate; void filter; schedule(); });
+  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void dither; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void comicFilter; schedule(); });
   $effect(()=>{ const c=++gen; void convert(c); return ()=>{gen++; if(debounce) clearTimeout(debounce);}; });
 
   async function convert(expected=gen){
@@ -41,8 +56,17 @@
     try{
       const img=await loadImageFromFile(file as File);
       if(cur!==gen){ revokeImageUrl(img); return; }
+      // detect alpha for professional auto-hide
       try{
-        const res=await imageToIrcArt(img, { width, renderMode, pixelMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, nograyscale, flipH, flipV, rotate: Number(rotate) });
+        const c=document.createElement('canvas'); c.width=Math.min(64, img.naturalWidth); c.height=Math.min(64, img.naturalHeight);
+        const cx=c.getContext('2d')!; cx.drawImage(img,0,0,c.width,c.height);
+        const d=cx.getImageData(0,0,c.width,c.height).data;
+        let found=false; for(let i=3;i<d.length;i+=4) if(d[i]<250){found=true;break;}
+        hasAlpha=found;
+      } catch {}
+      try{
+        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: comicFilter==='comic', alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as const;
+        const res=await imageToIrcArt(img, opts);
         if(cur!==gen) return;
         art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
@@ -52,8 +76,46 @@
   }
 
   const stats=$derived(estimateLineLengths(art));
+  const hardStats=$derived(estimateLineLengths(art, IRC_HARD_LIMIT));
   const activeTarget=$derived(ircState.activeBuffer.bufferName||'');
   const activeNetworkId=$derived(ircState.activeBuffer.networkId||'');
+
+  // ── Smart fit: adjust compression / width / colour mode until longest line ≤ 512 ──
+  let fitBusy=$state(false);
+  let fitting=false;
+  async function smartFit(){
+    if(!art || fitBusy) return;
+    fitBusy=true; fitting=true;
+    try{
+      let steps=0;
+      while(steps++ < 14){
+        const longest=estimateLineLengths(art).longest;
+        if(longest<=IRC_HARD_LIMIT) break;
+        const step=pickFitStep();
+        if(!step) break;
+        step();
+        // let the state effects flush, then convert directly (schedule() is paused while fitting)
+        await new Promise(r=>setTimeout(r, 30));
+        const my=++gen;
+        await convert(my);
+        if(my!==gen) return; // user changed something while we were converting
+      }
+    } finally { fitting=false; fitBusy=false; }
+  }
+  function pickFitStep(): (()=>void)|null{
+    const indexed = renderMode!=='ansi24' && midgardMode!=='truecolor' && midgardMode!=='comic';
+    // 1. bump Viterbi byte weight (indexed only) — smallest quality loss
+    if(indexed && viterbiW < 6) return ()=>{ viterbiW=Math.min(6, Math.round((viterbiW+1)*2)/2); };
+    // 2. shrink width
+    if(width > MIN_IRC_WIDTH + 4) return ()=>{ width=Math.max(MIN_IRC_WIDTH, width-4); };
+    // 3. comic bilateral pre-filter lengthens runs (indexed only)
+    if(indexed && comicFilter!=='comic') return ()=>{ comicFilter='comic'; };
+    // 4. switch truecolor/256 → 16 colours (biggest byte lever, biggest quality hit)
+    if(midgardMode==='truecolor' || midgardMode==='vga256' || midgardMode==='xterm256') return ()=>{ midgardMode='16'; };
+    // 5. last resort: minimum width
+    if(width > MIN_IRC_WIDTH) return ()=>{ width=MIN_IRC_WIDTH; };
+    return null;
+  }
 
   async function copy(){
     try{ await navigator.clipboard.writeText(art); copied=true; setTimeout(()=>copied=false,1200);}catch{
@@ -64,7 +126,7 @@
     if(!art||!activeNetworkId||!activeTarget) return;
     sending=true; sentCount=0;
     const lines=art.split('\n');
-    const BURST=5, BD=70, SD=220;
+    const BURST=5, BD=35, SD=110;
     for(let i=0;i<lines.length;i++){
       const line=lines[i];
       if(!line.replace(/[\x03\x04\x0f0-9,a-fA-F ]/g,'').trim() && line.trim()==='') continue;
@@ -74,12 +136,22 @@
     }
     sending=false; onClose();
   }
-  function resetAdv(){ brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0; grayscale=false; invert=false; sepia=false; normalize=false; dither=false; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; }
+  function resetAll(){
+    width=DEFAULT_IRC_WIDTH;
+    renderMode='ansi24';
+    pixelMode='half';
+    midgardMode='truecolor';
+    brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
+    grayscale=false; invert=false; sepia=false; normalize=false; dither=false; ditherMode='none'; colorMatching='lab'; nograyscale=false; flipH=false; flipV=false; comicFilter='none'; rotate='0'; filter='linear'; viterbiW=2.5;
+  }
+  function resetAdv(){ resetAll(); }
+  function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
+  function handleOverlayClick(e:MouseEvent){ if(e.target===e.currentTarget) onClose(); }
 </script>
 
 <svelte:window onkeydown={handleKey} />
 
-<div class="overlay" role="dialog" aria-modal="true">
+<div class="overlay" role="dialog" aria-modal="true" onclick={handleOverlayClick}>
   <div class="dialog">
     <header>
       <h2>Convert to IRC <span class="sub">• {filename}</span></h2>
@@ -89,10 +161,13 @@
     <div class="bar">
       <label class="ctrl"><span>Width</span><input class="slider" type="range" min={MIN_IRC_WIDTH} max={MAX_IRC_WIDTH} step="2" bind:value={width} /><b class="val">{width}</b></label>
       <label class="ctrl">
-        <select bind:value={renderMode} class="sel">
-          <option value="ansi24">True color</option>
-          <option value="ansi">256 colors</option>
-          <option value="irc">IRC 99</option>
+        <select bind:value={midgardMode} class="sel" aria-label="Colors">
+          <option value="truecolor" data-i18n="colors.truecolor">True-Color (24-bit)</option>
+          <option value="vga256" data-i18n="colors.vga256">DOS 256 (VGA)</option>
+          <option value="xterm256" data-i18n="colors.xterm256">ANSI/xterm 256</option>
+          <option value="16" data-i18n="colors.16">16 colors</option>
+          <option value="retro" data-i18n="colors.retro">Retro / Demoscene</option>
+          <option value="comic" data-i18n="colors.comic">Comic / Pop Art</option>
         </select>
       </label>
       <label class="ctrl">
@@ -104,9 +179,19 @@
         </select>
       </label>
       <button class="advBtn" onclick={()=>showAdv=!showAdv}>{showAdv?'▴ Simple':'▾ Advanced'}</button>
+      <button class="fitBtn" onclick={smartFit} disabled={fitBusy||!art} title="Auto-fit under 512 B: bump compression, shrink width, switch to cheaper colours">{fitBusy?'Fitting…':'⚡ Fit'}</button>
+      <button class="resetBtn" onclick={resetAll} title="Reset all presets to defaults">↺ Reset</button>
       <span class="stats" class:warn={!stats.ok}>{#if art}{stats.lines}×{width} • {stats.longest}B{/if}</span>
       {#if isConverting}<span class="pulse" aria-label="Updating">● updating</span>{/if}
     </div>
+
+    {#if art}
+    <div class="budget" class:over={!hardStats.ok} title="Longest line vs RFC 2812 512-byte hard limit — 400 is safe everywhere.">
+      <div class="budget-track"><div class="budget-fill" style="width:{Math.min(100, (hardStats.longest/IRC_HARD_LIMIT)*100)}%"></div></div>
+      <span class="budget-label">{hardStats.longest} / {IRC_HARD_LIMIT} <span class="safe">({IRC_SAFE_PAYLOAD} safe)</span> {#if hardStats.ok}✓{:else}⚠ over{/if}</span>
+      {#if !hardStats.ok}<button class="link" onclick={smartFit} disabled={fitBusy}>⚡ Fit</button>{/if}
+    </div>
+    {/if}
 
     {#if showAdv}
       <div class="adv">
@@ -122,17 +207,23 @@
           <label><span>Pixelize</span><input class="slider sm" type="range" min="0" max="16" step="1" bind:value={pixelize} /><em>{pixelize||'off'}</em></label>
             <label><span>Rotate</span><select bind:value={rotate} class="sel sm"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
         </div>
+        <div class="row">
+          <label title="Viterbi byte-aware — w≈2-4 is 57-59% saving"><span>Compress</span><input class="slider sm" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={renderMode==='ansi24'} /><em>{renderMode==='ansi24' ? '—' : viterbiW===0?'off':viterbiW}</em></label>
+          <label><span>Dither</span><select bind:value={ditherMode} class="sel sm"><option value="none">None</option><option value="bayer4">Bayer 4</option><option value="bayer8">Bayer 8</option><option value="floyd">Floyd</option><option value="atkinson">Atkinson</option></select></label>
+          <label><span>Match</span><select bind:value={colorMatching} class="sel sm"><option value="rgb">RGB</option><option value="lab">Lab</option><option value="oklab">OKLab</option></select></label>
+        </div>
         <div class="row checks">
           <label><input type="checkbox" bind:checked={grayscale}/> Gray</label>
           <label><input type="checkbox" bind:checked={invert}/> Invert</label>
           <label><input type="checkbox" bind:checked={sepia}/> Sepia</label>
           <label><input type="checkbox" bind:checked={normalize}/> Normalize</label>
+          <label title="Edge-preserving smoother — flattens gradients, lengthens colour runs without blurring edges. 2× bilateral radius 2 σ40: landscape -11% (spec §6)">Comic <select class="sel sm" bind:value={comicFilter}><option value="none">Off</option><option value="comic">Comic</option></select></label>
           <label><input type="checkbox" bind:checked={dither}/> Dither</label>
           <label title="Skip near-gray palette colors for richer color (--nograyscale)"><input type="checkbox" bind:checked={nograyscale}/> <span class="t">NoGray</span></label>
           <label><input type="checkbox" bind:checked={flipH}/> Flip H</label>
           <label><input type="checkbox" bind:checked={flipV}/> Flip V</label>
           <label>Filter <select bind:value={filter} class="sel sm"><option value="linear">Linear</option><option value="nearest">Nearest</option></select></label>
-          <button class="link" onclick={resetAdv}>Reset</button>
+          <button class="link" onclick={resetAdv}>Reset all</button>
         </div>
       </div>
     {/if}
@@ -177,8 +268,24 @@
   .sel:focus{outline:none;border-color:#58a6ff}
   .advBtn{background:#21262d;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer}
   .advBtn:hover{background:#30363d}
+  .resetBtn{background:#21262d;border:1px solid #30363d;color:#8b949e;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;transition:all .12s}
+  .resetBtn:hover{background:#2a1215;border-color:#5a2a2e;color:#ff7b72}
+  .fitBtn{background:#1f3a5f;border:1px solid #2d5a9e;color:#58a6ff;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;transition:all .12s}
+  .fitBtn:hover:not(:disabled){background:#2d5a9e;color:#fff}
+  .fitBtn:disabled{opacity:.5;cursor:default}
   .stats{font-size:10px;color:#8b949e;margin-left:auto}
   .stats.warn{color:#f0883e}
+  .budget{display:flex;align-items:center;gap:10px;padding:6px 14px;background:#0f1216;border-bottom:1px solid #21252c;font-size:11px}
+  .budget.over{background:#1a1500;border-bottom-color:#3d2e1a}
+  .budget-track{flex:1;height:6px;background:#21262d;border-radius:999px;overflow:hidden;max-width:360px;box-shadow:inset 0 1px 1px rgba(0,0,0,.3)}
+  .budget-fill{height:100%;background:#3fb950;transition:width .2s, background .2s}
+  .budget.over .budget-fill{background:#d29922}
+  .budget-label{color:#8b949e;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11px}
+  .budget.over .budget-label{color:#d29922}
+  .budget .safe{color:#6e7681}
+  .budget .link{margin-left:auto;background:0;border:0;color:#58a6ff;font-size:11px;cursor:pointer}
+  .budget .link:hover{text-decoration:underline}
+  .budget .link:disabled{opacity:.5;cursor:default}
   .pulse{font-size:10px;color:#58a6ff;animation:pulse 1s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
   .adv{padding:10px 12px;background:#0f1216;border-bottom:1px solid #21252c;display:flex;flex-direction:column;gap:10px}
