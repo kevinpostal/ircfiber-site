@@ -500,10 +500,11 @@
     /* Vertical scrollbar always visible (no appear/disappear shift) and
        its gutter reserved permanently, so the highlight layer — which
        reserves the same gutter — never drifts out of alignment.
-       Horizontal scrollbar removed: long lines clip rather than flash a
-       second scrollbar that would overlap the highlighted layer. */
+       Horizontal scrollbar restored for long lines; the highlight layer
+       stays in sync via scrollLeft, and the stable vertical gutter keeps
+       the text aligned. */
     overflow-y: scroll;
-    overflow-x: hidden;
+    overflow-x: auto;
     scrollbar-gutter: stable;
     scrollbar-width: thin;
     scrollbar-color: #4d5867 #1e1e1e;
@@ -515,6 +516,7 @@
   }
   .pastebin .editLayer::-webkit-scrollbar {
     width: 10px;
+    height: 10px;
   }
   .pastebin .editLayer::-webkit-scrollbar-track {
     background: #1e1e1e;

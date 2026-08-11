@@ -1695,10 +1695,14 @@ final class RESTAPI {
         }
 
         // Construct base URL from the incoming Host header (set by Caddy).
-        // Fall back to a reasonable default for local dev.
+        // Scheme: honor X-Forwarded-Proto (Caddy sets it to https in prod);
+        // default to http so local dev against the plain-HTTP gateway
+        // produces links that actually resolve (a hardcoded https:// made
+        // every posted upload URL dead on 127.0.0.1:8090).
         auto host = req.headers["Host"];
         if (host.length == 0) host = "localhost:8090";
-        auto baseUrl = "https://" ~ host;
+        string proto = req.headers.get("X-Forwarded-Proto", "http");
+        auto baseUrl = proto ~ "://" ~ host;
 
         LocalUploadResult uploaded;
         try {
