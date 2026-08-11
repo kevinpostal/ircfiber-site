@@ -35,11 +35,18 @@
   let hasAlpha=$state(false);
   let gen=0;
   let debounce: ReturnType<typeof setTimeout>|null=null;
+  // Settle pass: after the last interaction, re-convert at full quality so the
+  // final art uses Viterbi (not the greedy fast-preview). 250ms of quiet first.
+  let settleTimer: ReturnType<typeof setTimeout>|null=null;
+  // Derived smart palettes (midgardMode='smart') — derived once per image, reused
+  // by worker + main-thread converts so slider drags never reshuffle colours.
+  let smartPalCache: { A: number[]; B: number[] } | null = null;
   let _worker: Worker | null = null;
   // Cleanup worker and timers on destroy — prevents leak when dialog is opened/closed repeatedly
   $effect(() => {
     return () => {
       if (debounce) { clearTimeout(debounce); debounce = null; }
+      if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
       try { _worker?.terminate(); } catch {}
       _worker = null;
       gen++; // cancel any in-flight converts
@@ -54,7 +61,7 @@
     } catch { _worker = null; }
     return _worker;
   }
-  async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number): Promise<string | null> {
+  async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number): Promise<{ art: string; paletteA?: number[]; paletteB?: number[] } | null> {
     const estimatedPixels = (opts.width || 60) * Math.max(1, Math.round((opts.width || 60) * ((img.naturalHeight||img.height)/(img.naturalWidth||img.width)||1) * 0.9)) * 2;
     const reasonNotWorker = (()=>{ if(estimatedPixels < 4000 && !opts.comic) return `small image (${estimatedPixels}px <4000 && !comic)`; if(!getWorker()) return 'Worker failed to create'; if(typeof OffscreenCanvas==='undefined') return 'OffscreenCanvas unavailable'; if(typeof createImageBitmap==='undefined') return 'createImageBitmap unavailable'; return null; })();
     if (reasonNotWorker) {
@@ -73,14 +80,17 @@
       console.info(`[img2irc] Worker: ImageBitmap ${bitmap.width}x${bitmap.height} created in ${(performance.now()-_tWStart).toFixed(1)}ms, posting to worker...`);
       if (expectedGen !== gen) { try { bitmap.close(); } catch {} console.info('[img2irc] Worker abort: gen changed after bitmap create'); return null; }
       const id = Math.random();
-      const res = await new Promise<string>((resolve, reject) => {
+      const res = await new Promise<{ art: string; paletteA?: number[]; paletteB?: number[] }>((resolve, reject) => {
         handler = (e: MessageEvent) => {
           const d: any = e.data;
           if (d.id !== id) return;
           if (handler) w.removeEventListener('message', handler as any);
           if (timer) clearTimeout(timer);
           const elapsed = (performance.now()-_tWStart).toFixed(1);
-          if (d.ok) { console.info(`[img2irc] Worker success: ${elapsed}ms off-thread`); resolve(d.result); }
+          if (d.ok) {
+            console.info(`[img2irc] Worker success: ${elapsed}ms off-thread`);
+            resolve({ art: d.result, paletteA: d.paletteA, paletteB: d.paletteB });
+          }
           else { console.info(`[img2irc] Worker error: ${d.error} after ${elapsed}ms`); reject(new Error(d.error)); }
         };
         w.addEventListener('message', handler as any);
@@ -109,6 +119,7 @@
 
   function schedule(){
     if(fitting) return;
+    if(settleTimer){ clearTimeout(settleTimer); settleTimer=null; }
     const my=++gen;
     if(debounce) clearTimeout(debounce);
     if(htmlPreview) isConverting=true;
@@ -125,9 +136,11 @@
     return { ...base, viterbiW: 0, comic: false, dither: false }; // greedy, no bilateral/dither for speed
   }
   $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void dither; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void comicFilter; untrack(()=>schedule()); });
-  async function convert(expected=gen){
+  async function convert(expected=gen, forceFull=false){
     const cur=expected;
+    if(settleTimer){ clearTimeout(settleTimer); settleTimer=null; }
     if(!htmlPreview) loading=true;
+    if(forceFull) isConverting=true; // show activity pulse while the settle pass upgrades to full quality
     error=null;
     try{
       const img=await loadImageFromFile(file as File);
@@ -142,25 +155,45 @@
       } catch {}
       try{
         const baseOpts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: comicFilter==='comic', alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as const;
-        const isInteractive = isConverting;
+        const isInteractive = !forceFull && isConverting;
         const opts = getPreviewOpts(baseOpts, isInteractive);
         if (isInteractive && localStorage.getItem('img2irc:perf')) console.info(`[img2irc] Fast preview: viterbiW=0 (greedy) for ${opts.width} cols`);
+        // Reuse the image's derived smart palettes (cached from the first full convert) so
+        // fast previews and settle passes all render against the same palette — no reshuffle.
+        if(midgardMode==='smart' && smartPalCache){ opts._smartPaletteA = smartPalCache.A; opts._smartPaletteB = smartPalCache.B; }
         // Try off-main-thread Worker with transferable ImageBitmap (no copy) — falls back to main thread
         // Pass expectedGen so worker can abort if user changed sliders while bitmap was being created
         let res: string | null = null;
-        try { res = await convertViaWorker(img, opts, cur); } catch (e) {
+        try {
+          const wr = await convertViaWorker(img, opts, cur);
+          if (cur!==gen) { revokeImageUrl(img); return; }
+          if (wr != null) {
+            res = wr.art;
+            if (wr.paletteA && wr.paletteB) smartPalCache = { A: wr.paletteA, B: wr.paletteB };
+          }
+        } catch (e) {
           if (localStorage.getItem('img2irc:perf')) console.info(`[img2irc] convertViaWorker threw: ${String(e)}`);
         }
         if (cur!==gen) { revokeImageUrl(img); return; }
         if (res == null) {
           if (localStorage.getItem('img2irc:perf')) console.info(`[img2irc] Worker miss — falling back to main thread`);
           res = await imageToIrcArt(img, opts);
+          // imageToIrcArt mutates opts with the derived palettes (main-thread path)
+          if(midgardMode==='smart' && !smartPalCache && opts._smartPaletteA && opts._smartPaletteB){
+            smartPalCache = { A: opts._smartPaletteA, B: opts._smartPaletteB };
+          }
         } else if (localStorage.getItem('img2irc:perf')) {
           console.info(`[img2irc] Worker success`);
         }
         if(cur!==gen) return;
         art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
+        // Settle pass: the fast-preview convert above ran greedy (viterbiW=0). Once the user
+        // stops interacting (no new schedule for 250ms), re-convert at full quality so the
+        // final art uses Viterbi. Aborted automatically if a newer change bumps gen.
+        if(isInteractive && cur===gen && !fitting){
+          settleTimer=setTimeout(()=>{ settleTimer=null; if(cur===gen) convert(cur, true); }, 250);
+        }
       } finally { revokeImageUrl(img); }
     } catch(e:any){ if(cur===gen){ error=e?.message??'Failed'; }}
     if(cur===gen){ loading=false; isConverting=false; }
@@ -179,9 +212,10 @@
       while(steps++ < 14){
         const longest=estimateLineLengths(art).longest;
         if(longest<=IRC_HARD_LIMIT) break;
-        // Try bisection on w first if indexed and w<6
-        const indexed = renderMode!=='ansi24' && midgardMode!=='truecolor' && midgardMode!=='comic';
-        if(indexed && viterbiW < 6){
+        // Try bisection on w first if Viterbi-capable and w<6. Viterbi-capable =
+        // every mode except plain truecolor/comic greedy (includes smart truecolor Viterbi).
+        const viterbiCapable = midgardMode!=='truecolor' && midgardMode!=='comic';
+        if(viterbiCapable && viterbiW < 6){
           const ok = await bisectViterbiW();
           if(ok) continue; // re-measure after bisection
         }
@@ -190,7 +224,7 @@
         step();
         await new Promise(r=>setTimeout(r, 30));
         const my=++gen;
-        await convert(my);
+        await convert(my, true); // full quality — fit must measure real Viterbi bytes, not fast-preview
         if(my!==gen) return;
       }
     } finally { fitting=false; fitBusy=false; }
@@ -199,30 +233,32 @@
     const lo=viterbiW, hi=6;
     let best=hi, found=false;
     const savedW=viterbiW;
-    viterbiW=hi; await new Promise(r=>setTimeout(r, 30)); let my=++gen; await convert(my); if(my!==gen) return false;
+    viterbiW=hi; await new Promise(r=>setTimeout(r, 30)); let my=++gen; await convert(my, true); if(my!==gen) return false;
     if(estimateLineLengths(art).longest <= IRC_HARD_LIMIT){ found=true; best=hi; }
-    else { viterbiW=savedW; await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my); return false; }
+    else { viterbiW=savedW; await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my, true); return false; }
     let l=lo, h=hi;
     for(let iter=0; iter<4; iter++){
       const mid=Math.round(((l+h)/2)*2)/2;
       if(mid===l || mid===h) break;
-      viterbiW=mid; await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my); if(my!==gen) return false;
+      viterbiW=mid; await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my, true); if(my!==gen) return false;
       if(estimateLineLengths(art).longest <= IRC_HARD_LIMIT){ best=mid; h=mid; found=true; } else l=mid;
     }
     if(found) viterbiW=best;
     else viterbiW=savedW;
-    await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my);
+    await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my, true);
     return found;
   }
   function pickFitStep(): (()=>void)|null{
-    const indexed = renderMode!=='ansi24' && midgardMode!=='truecolor' && midgardMode!=='comic';
-    // 1. bump Viterbi byte weight (indexed only) — smallest quality loss (fallback if bisection already tried)
-    if(indexed && viterbiW < 6) return ()=>{ viterbiW=Math.min(6, Math.round((viterbiW+0.5)*2)/2); };
+    const viterbiCapable = midgardMode!=='truecolor' && midgardMode!=='comic';
+    // 1. bump Viterbi byte weight (Viterbi-capable modes) — smallest quality loss (fallback if bisection already tried)
+    if(viterbiCapable && viterbiW < 6) return ()=>{ viterbiW=Math.min(6, Math.round((viterbiW+0.5)*2)/2); };
     // 2. shrink width
     if(width > MIN_IRC_WIDTH + 4) return ()=>{ width=Math.max(MIN_IRC_WIDTH, width-4); };
-    // 3. comic bilateral pre-filter lengthens runs (indexed only)
-    if(indexed && comicFilter!=='comic') return ()=>{ comicFilter='comic'; };
-    // 4. switch truecolor/256 → 16 colours (biggest byte lever, biggest quality hit)
+    // 3. comic bilateral pre-filter lengthens runs (Viterbi-capable modes only)
+    if(viterbiCapable && comicFilter!=='comic') return ()=>{ comicFilter='comic'; };
+    // 4. switch truecolor/256 → 16 colours (biggest byte lever, biggest quality hit). Smart
+    //    degrades to xterm256 first (keeps a real palette), then 256 → 16.
+    if(midgardMode==='smart') return ()=>{ midgardMode='xterm256'; };
     if(midgardMode==='truecolor' || midgardMode==='xterm256') return ()=>{ midgardMode='16'; };
     // 5. last resort: minimum width
     if(width > MIN_IRC_WIDTH) return ()=>{ width=MIN_IRC_WIDTH; };
@@ -320,7 +356,7 @@
             <label><span>Rotate</span><select bind:value={rotate} class="sel sm"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
         </div>
         <div class="row">
-          <label title="Viterbi byte-aware — w≈2-4 is 57-59% saving"><span>Compress</span><input class="slider sm" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={renderMode==='ansi24'} /><em>{renderMode==='ansi24' ? '—' : viterbiW===0?'off':viterbiW}</em></label>
+          <label title="Viterbi byte-aware — w≈2-4 is 57-59% saving"><span>Compress</span><input class="slider sm" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={renderMode==='ansi24' && midgardMode!=='smart'} /><em>{renderMode==='ansi24' && midgardMode!=='smart' ? '—' : viterbiW===0?'off':viterbiW}</em></label>
           <label><span>Dither</span><select bind:value={ditherMode} class="sel sm"><option value="none">None</option><option value="bayer4">Bayer 4</option><option value="bayer8">Bayer 8</option><option value="floyd">Floyd</option><option value="atkinson">Atkinson</option></select></label>
           <label><span>Match</span><select bind:value={colorMatching} class="sel sm"><option value="rgb">RGB</option><option value="lab">Lab</option><option value="oklab">OKLab</option></select></label>
         </div>

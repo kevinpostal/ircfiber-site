@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import * as fs from 'node:fs';
 import type { Img2IrcOptions } from './img2irc';
+import dialogSrc from '/src/components/Img2IrcDialog.svelte?raw';
 import {
   IRC99, ANSI256, ANSI16, XTERM256,
   getMidgardPalette,
@@ -279,7 +279,6 @@ describe('img2irc 100% coverage', () => {
     expect(idxs.every(i=>paletteB.includes(i))).toBe(true);
   });
   it('Colors dropdown has Smart option', () => {
-    const src = fs.readFileSync('src/components/Img2IrcDialog.svelte','utf8');
-    expect(src).toContain('value="smart"');
+    expect(dialogSrc).toContain('value="smart"');
   });
 });

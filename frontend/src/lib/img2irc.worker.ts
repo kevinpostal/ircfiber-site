@@ -6,7 +6,12 @@
 import { imageToIrcArtFromBitmap } from './img2irc';
 
 export type WorkerReq = { id: number; bitmap: ImageBitmap; opts: any };
-export type WorkerRes = { id: number; ok: boolean; result?: string; error?: string };
+export type WorkerRes = {
+  id: number; ok: boolean; result?: string; error?: string;
+  /** Derived smart palettes (midgardMode='smart') — returned so the dialog can cache them once per image. */
+  paletteA?: number[];
+  paletteB?: number[];
+};
 
 self.onmessage = async (e: MessageEvent<WorkerReq>) => {
   const { id, bitmap, opts } = e.data;
@@ -19,7 +24,8 @@ self.onmessage = async (e: MessageEvent<WorkerReq>) => {
       // Fallback: worker full pipeline not wired — signal fallback
       throw err;
     }
-    (self as any).postMessage({ id, ok: true, result } as WorkerRes);
+    const o: any = opts;
+    (self as any).postMessage({ id, ok: true, result, paletteA: o._smartPaletteA, paletteB: o._smartPaletteB } as WorkerRes);
   } catch (err: any) {
     (self as any).postMessage({ id, ok: false, error: err?.message ?? String(err) } as WorkerRes);
   } finally {

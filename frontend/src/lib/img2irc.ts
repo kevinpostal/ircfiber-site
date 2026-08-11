@@ -204,11 +204,11 @@ const _palOkLabCache = new Map<string, number[][]>();
 const _palOkLabWeak = new WeakMap<number[], number[][]>();
 function getPalOkLab(pal: number[]): number[][] {
   const isKnown = pal===XTERM256 || pal===ANSI256 || pal===IRC99 || pal===ANSI16;
-  if(!isKnown){ let w=_palOkLabWeak.get(pal); if(w) return w; const arr2 = pal.map(c => { const v = srgbToOkLab((c>>16)&255,(c>>8)&255,c&255); return v; }) as any; _palOkLabWeak.set(pal, arr2); return arr2; }
+  if(!isKnown){ const w=_palOkLabWeak.get(pal); if(w) return w; const arr2: number[][] = pal.map(c => { const v = srgbToOkLab((c>>16)&255,(c>>8)&255,c&255); return v; }); _palOkLabWeak.set(pal, arr2); return arr2; }
   const key = pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : 'ansi16';
   let arr = _palOkLabCache.get(key);
   if (!arr) {
-    arr = pal.map(c => { const v = srgbToOkLab((c>>16)&255,(c>>8)&255,c&255); return v; }) as any;
+    arr = pal.map(c => { const v = srgbToOkLab((c>>16)&255,(c>>8)&255,c&255); return v; });
     if (_palOkLabCache.size > 4) _palOkLabCache.clear();
     _palOkLabCache.set(key, arr);
   }
