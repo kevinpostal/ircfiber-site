@@ -30,6 +30,7 @@ const BACKEND_WS_URL =
 const SIGNOZ_URL =
   process.env.VITE_SIGNOZ_URL || 'http://127.0.0.1:3301';
 export default defineConfig({
+  assetsInclude: ['**/*.wasm'],
   plugins: [tailwindcss(), svelte({
     onwarn(warning, handler) {
       // Suppress a11y warnings that we've reviewed as acceptable:
@@ -53,6 +54,7 @@ export default defineConfig({
       handler(warning);
     }
   })],
+  worker: { format: 'es' },
   publicDir: '../public',
   build: {
     outDir: '../public/dist',

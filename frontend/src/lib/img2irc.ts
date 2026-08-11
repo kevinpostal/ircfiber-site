@@ -8,7 +8,7 @@
  *  - Shade blocks ░▒▓ + measured ASCII ramp ' =QB*gF' in Viterbi (§3, glyph_coverage.txt)
  *  - Shared row palette (S=12, S²=144 states) + collapsed O(M·K) ViterbiDP (§3,5)
  *  - OKLab Euclidean (§5) — 3.9× faster matcher, enables O(M²) seg DP; scaled ×85000 vs Lab
- *  - Midgard Colors selector (truecolor/vga256/xterm256/16/retro/comic) — render-core.js palettes
+ *  - Midgard Colors selector (truecolor/xterm256/16/retro/comic) — render-core.js palettes
  *  - Comic = bilateral pre-filter r2 σ40 ×2 (§6): landscape -11%, run 2.42→3.54
  *  Viterbi objective: Σ[ err(glyph,f,b) + w·glyphBytes ] + w·prefixBytes (w≈2.5 knee)
  */
@@ -68,7 +68,6 @@ export const ANSI16: number[] = [
   0x555555, 0xff5555, 0x55ff55, 0xffff55,
   0x5555ff, 0xff55ff, 0x55ffff, 0xffffff,
 ];
-export const VGA256: number[] = (()=>{ const pal:number[]=[]; const CGA_16=[[0,0,0],[0,0,170],[0,170,0],[0,170,170],[170,0,0],[170,0,170],[170,85,0],[170,170,170],[85,85,85],[85,85,255],[85,255,85],[85,255,255],[255,85,85],[255,85,255],[255,255,85],[255,255,255]]; for(const c of CGA_16) pal.push((c[0]<<16)|(c[1]<<8)|c[2]); for(let i=0;i<16;i++){const v=Math.round(i*255/15); pal.push((v<<16)|(v<<8)|v);} const levels=[0,51,102,153,204,255]; for(let r=0;r<6;r++) for(let g=0;g<6;g++) for(let b=0;b<6;b++) pal.push((levels[r]<<16)|(levels[g]<<8)|levels[b]); for(let i=0;i<8;i++){const v=Math.round(i*40/7); pal.push((v<<16)|(v<<8)|v);} return pal; })();
 export const XTERM256: number[] = (()=>{ const pal:number[]=[]; const ANSI_16=[[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]]; for(const c of ANSI_16) pal.push((c[0]<<16)|(c[1]<<8)|c[2]); const levels=[0,95,135,175,215,255]; for(let r=0;r<6;r++) for(let g=0;g<6;g++) for(let b=0;b<6;b++) pal.push((levels[r]<<16)|(levels[g]<<8)|levels[b]); for(let i=0;i<24;i++){const v=8+i*10; pal.push((v<<16)|(v<<8)|v);} return pal; })();
 
 export type RenderMode = 'irc' | 'ansi' | 'ansi24';
@@ -76,7 +75,7 @@ export type PixelMode = 'half' | 'full' | 'quarter' | 'braille';
 export type SamplingFilter = 'nearest' | 'linear';
 export type DitherMode = 'none' | 'bayer4' | 'bayer8' | 'floyd' | 'atkinson' | 'sierra' | 'stucki' | 'jarvis';
 export type ColorMatching = 'rgb' | 'lab' | 'oklab';
-export type MidgardColorMode = 'truecolor' | 'vga256' | 'xterm256' | '16' | 'retro' | 'comic';
+export type MidgardColorMode = 'truecolor' | 'xterm256' | '16' | 'retro' | 'comic';
 
 export interface Img2IrcOptions {
   width: number; height?: number;
@@ -102,7 +101,7 @@ export interface Img2IrcOptions {
 }
 
 export function getMidgardPalette(o: Img2IrcOptions): number[] {
-  if(o.midgardMode==='vga256') return VGA256;
+  if((o.midgardMode as string)==='vga256') return XTERM256; // removed DOS/VGA palette — fallback to xterm256
   if(o.midgardMode==='xterm256') return XTERM256;
   if(o.midgardMode==='16' || o.midgardMode==='retro') return ANSI16;
   if(o.renderMode==='ansi') return ANSI256;
@@ -117,11 +116,12 @@ export const IRC_HARD_LIMIT = 512;
 /** Safe payload that fits everywhere — leaves ~112 for PRIVMSG prefix/tags. Soft limit. */
 export const IRC_SAFE_PAYLOAD = 400;
 const DEFAULTS: Img2IrcOptions = {
-  width: 60, renderMode: 'ansi24', pixelMode: 'half', filter: 'linear',
+  width: 60, renderMode: 'ansi', pixelMode: 'half', filter: 'linear',
   brightness: 0, contrast: 0, gamma: 0, saturation: 0, hue: 0,
   invert: false, grayscale: false, sepia: false, normalize: false, dither: false,
-  ditherMode: 'none', colorMatching: 'lab',
+  ditherMode: 'none', colorMatching: 'oklab',
   flipH: false, flipV: false, rotate: 0, pixelize: 0, blur: 0, nograyscale: false, viterbiW: 2.5, comic: false,
+  midgardMode: 'xterm256',
   alphaMode: 'opaque', alphaThreshold: 128, trimTransparent: false, smartEdges: true, background: '#000000',
 };
 
@@ -176,13 +176,14 @@ function nearestIndex(r:number,g:number,b:number,pal:number[], mode:ColorMatchin
 
 // ── Color LUT + nograyscale ───────────────────────────────────────────────────
 const COLOR_LUT=new Map<string,{irc:number,ansi:number,ircNg:number,ansiNg:number}>();
-function lutLookup(r:number,g:number,b:number,ng:boolean, mode:ColorMatching='rgb'){
-  const k=`${r},${g},${b},${mode},${ng}`; let e=COLOR_LUT.get(k);
+function lutLookup(r:number,g:number,b:number,pal:number[],ng:boolean, mode:ColorMatching='rgb'){
+  const palId = pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : pal===ANSI16 ? 'ansi16' : `len${pal.length}`;
+  const k=`${r},${g},${b},${palId},${mode},${ng}`; let e=COLOR_LUT.get(k);
   if(!e){
-    const ansi=nearestIndex(r,g,b,ANSI256, mode)&255, irc=Math.min(nearestIndex(r,g,b,IRC99, mode),98);
+    const ansi=nearestIndex(r,g,b,pal, mode)&255, irc=Math.min(nearestIndex(r,g,b,IRC99, mode),98);
     let ansiNg=ansi, ircNg=irc;
     if(!_isNearGray(_pack(r,g,b))){
-      let bd=1e12; for(let i=0;i<ANSI256.length;i++){if(_isNearGray(ANSI256[i]))continue;const c=ANSI256[i],cr=(c>>16)&255,cg=(c>>8)&255,cb=c&255, d=colorDist2(r,g,b, cr,cg,cb, mode); if(d<bd){bd=d;ansiNg=i;if(d===0)break;}}
+      let bd=1e12; for(let i=0;i<pal.length;i++){if(_isNearGray(pal[i]))continue;const c=pal[i],cr=(c>>16)&255,cg=(c>>8)&255,cb=c&255, d=colorDist2(r,g,b, cr,cg,cb, mode); if(d<bd){bd=d;ansiNg=i;if(d===0)break;}}
       bd=1e12; for(let i=0;i<IRC99.length;i++){if(_isNearGray(IRC99[i]))continue;const c=IRC99[i],cr=(c>>16)&255,cg=(c>>8)&255,cb=c&255, d=colorDist2(r,g,b, cr,cg,cb, mode); if(d<bd){bd=d;ircNg=Math.min(i,98);if(d===0)break;}}
     }
     e={ansi,irc,ansiNg,ircNg}; COLOR_LUT.set(k,e);
@@ -191,12 +192,12 @@ function lutLookup(r:number,g:number,b:number,ng:boolean, mode:ColorMatching='rg
 }
 export function clearColorLut(){COLOR_LUT.clear();}
 // For IRC, \x03 only supports 0-98. ANSI 256 indices 99-255 must be remapped to nearest 99.
-function ansiToIrcIdx(ansiIdx:number):number{
-  const c=ANSI256[ansiIdx & 255], r=(c>>16)&255,g=(c>>8)&255,b=c&255;
-  return Math.min(nearestIndex(r,g,b,IRC99),98);
+function ansiToIrcIdx(ansiIdx:number, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
+  const c=srcPal[ansiIdx & 255], r=(c>>16)&255,g=(c>>8)&255,b=c&255;
+  return Math.min(nearestIndex(r,g,b,IRC99,colorMode),98);
 }
-function toEmitIdx(idx:number, mode:RenderMode):number{
-  return mode==='ansi' ? ansiToIrcIdx(idx) : Math.min(idx,98);
+function toEmitIdx(idx:number, mode:RenderMode, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
+  return mode==='ansi' ? ansiToIrcIdx(idx, srcPal, colorMode) : Math.min(idx,98);
 }
 
 function kNearest(r:number,g:number,b:number,pal:number[],k:number,ng:boolean, mode:ColorMatching='rgb'):number[]{
@@ -228,9 +229,22 @@ function blendRgb(f:number,b:number,r:number,pal:number[]){
   const r2=(cb>>16)&255, g2=(cb>>8)&255, b2=cb&255;
   return [Math.round(r1*r + r2*(1-r)), Math.round(g1*r + g2*(1-r)), Math.round(b1*r + b2*(1-r))];
 }
+/** OKLab-correct blend: blend in OKLab space then convert back via linear sRGB. */
+function oklabToSrgb(L:number,a:number,b:number):[number,number,number]{
+  const l_ = L + 0.3963377774*a + 0.2158037573*b;
+  const m_ = L - 0.1055613458*a - 0.0638541728*b;
+  const s_ = L - 0.0894841775*a - 1.2914855480*b;
+  const l = l_*l_*l_, m = m_*m_*m_, s = s_*s_*s_;
+  let R =  4.0767416621*l - 3.3077115913*m + 0.2309699292*s;
+  let G = -1.2684380046*l + 2.6097574011*m - 0.3413193965*s;
+  let B = -0.0041960863*l - 0.7034186147*m + 1.7076147010*s;
+  const toSrgb = (c:number)=> c<=0.0031308 ? 12.92*c : 1.055*Math.pow(c,1/2.4)-0.055;
+  return [Math.max(0,Math.min(255, Math.round(toSrgb(R)*255))), Math.max(0,Math.min(255, Math.round(toSrgb(G)*255))), Math.max(0,Math.min(255, Math.round(toSrgb(B)*255)))];
+}
 // Glyphs — measured ink coverage of DejaVu Sans Mono (reference/glyph_coverage.txt)
 // A glyph of coverage c shows blend c*fg + (1-c)*bg; swapped needs no entry: ordered (fg,bg) state already realises 1-c.
-// The 1-byte shade ramp covers 0.273 max: 55% of blend range [0,0.273]U[0.727,1], mid gap needs 3-byte ▒ (0.494)
+// The 1-byte shade ramp covers 0.273 max: 55% of blend range [0,0.273]U[0.727,1], mid gap needs 3-byte block (optimal 0.4243, measured ▒ 0.494)
+// Aristotle GlyphCoverage.lean: optimal_block_coverage r*=(1+cmax)/3≈0.4243, band error (1-2·cmax)/6=0.07567 vs 0.11075 for ▒ (−32%); no DejaVu block measures near r* — closest available is ▒ at 0.490/0.499, so DP uses measured value (known gap: +46% over optimum, see measured_optimal_block)
 const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number}> = [
   // 1-byte: coloured space + ASCII ramp (safe after \x03 — no digit/comma, no leading '/' )
   {ch:' ', ct:0.0,   cb:0.0,   bytes:1}, // 0.000
@@ -243,8 +257,8 @@ const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number}> = [
   // 3-byte block elements
   {ch:'▀', ct:1.0,   cb:0.0,   bytes:3}, // half top=fg bottom=bg
   {ch:'▄', ct:0.0,   cb:1.0,   bytes:3}, // complement
-  {ch:'▒', ct:0.490, cb:0.499, bytes:3}, // mid-tone gap filler (0.494)
-  // dominated but kept — Viterbi never picks over 1-byte/▀▄ at same ΔE
+  {ch:'▒', ct:0.490, cb:0.499, bytes:3}, // measured DejaVu 0.490/0.499 (avg 0.4945); optimum r*=0.4243 would be 32% lower band error (0.07567 vs 0.11075) per GlyphCoverage.lean but no glyph measures there — known suboptimal gap, closest Unicode to r* is ▒
+  // dominated but kept — Viterbi never picks over 1-byte/▀▄ at same ΔE (up to contrast ≈41 per GlyphCoverage.lean)
   {ch:'░', ct:0.183, cb:0.181, bytes:3},
   {ch:'▓', ct:0.796, cb:0.816, bytes:3},
   {ch:'█', ct:1.0,   cb:1.0,   bytes:3}, // never best vs ' ' (same error, 3B vs 1B) — kept to prove dominated
@@ -255,36 +269,65 @@ function bestGlyphForState(
   f:number,b:number, pal:number[], mode:ColorMatching, w:number
 ):{err:number, bytes:number, glyph:string}{
   let bestErr=1e18, bestB=GLYPH_BYTES_HALF, bestG='▀';
-  const fR=(pal[f]>>16)&255, fG=(pal[f]>>8)&255, fB=pal[f]&255;
-  const bR=(pal[b]>>16)&255, bG=(pal[b]>>8)&255, bB=pal[b]&255;
+  const fRgb=(pal[f]>>16)&255, fG2=(pal[f]>>8)&255, fB2=pal[f]&255;
+  const bRgb=(pal[b]>>16)&255, bG2=(pal[b]>>8)&255, bB2=pal[b]&255;
+  const fOk = mode==='oklab' ? srgbToOkLab(fRgb,fG2,fB2) : null;
+  const bOk = mode==='oklab' ? srgbToOkLab(bRgb,bG2,bB2) : null;
   for(const g of GLYPHS){
     const ct=g.ct, cb=g.cb;
-    const tR=Math.round(fR*ct + bR*(1-ct)), tG=Math.round(fG*ct + bG*(1-ct)), tB=Math.round(fB*ct + bB*(1-ct));
-    const boR=Math.round(fR*cb + bR*(1-cb)), boG=Math.round(fG*cb + bG*(1-cb)), boB=Math.round(fB*cb + bB*(1-cb));
+    let tR:number,tG:number,tB:number, boR:number,boG:number,boB:number;
+    if(mode==='oklab' && fOk && bOk){
+      const Lt=fOk[0]*ct + bOk[0]*(1-ct), At=fOk[1]*ct + bOk[1]*(1-ct), Bt=fOk[2]*ct + bOk[2]*(1-ct);
+      const Lb=fOk[0]*cb + bOk[0]*(1-cb), Ab=fOk[1]*cb + bOk[1]*(1-cb), Bb=fOk[2]*cb + bOk[2]*(1-cb);
+      [tR,tG,tB]=oklabToSrgb(Lt,At,Bt); [boR,boG,boB]=oklabToSrgb(Lb,Ab,Bb);
+    } else {
+      tR=Math.round(fRgb*ct + bRgb*(1-ct)); tG=Math.round(fG2*ct + bG2*(1-ct)); tB=Math.round(fB2*ct + bB2*(1-ct));
+      boR=Math.round(fRgb*cb + bRgb*(1-cb)); boG=Math.round(fG2*cb + bG2*(1-cb)); boB=Math.round(fB2*cb + bB2*(1-cb));
+    }
     const e=colorDist2(r1,g1,b1, tR,tG,tB, mode) + colorDist2(r2,g2,b2, boR,boG,boB, mode);
     const cand=e + w*g.bytes;
     if(cand < bestErr + w*bestB){ bestErr=e; bestB=g.bytes; bestG=g.ch; }
   }
   return {err:bestErr, bytes:bestB, glyph:bestG};
 }
+/** Greedy Hungarian-inspired palette selection with single-digit bias (PaletteAssignment.lean).
+ * Picks up to `size` indices minimising Σ f·digits(σ) + λ·f·ΔE, approximated by
+ * frequency rank + digit-length penalty. λ≈0.02 biases toward 1-digit without hurting ΔE much.
+ */
 function rowPaletteForViterbi(
   tops:Array<[number,number,number,number]>, bots:Array<[number,number,number,number]>,
   pal:number[], ng:boolean, mode:ColorMatching, size=12
 ):number[]{
   const k=2, freq=new Map<number,number>();
+  const lambda=0.02;
   for(let c=0;c<tops.length;c++){
     const [r1,g1,b1]=tops[c], [r2,g2,b2]=bots[c];
     if(_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)) continue;
     for(const idx of kNearest(r1,g1,b1,pal,k,ng,mode)) freq.set(idx,(freq.get(idx)||0)+1);
     for(const idx of kNearest(r2,g2,b2,pal,k,ng,mode)) freq.set(idx,(freq.get(idx)||0)+1);
   }
-  const sorted=[...freq.entries()].sort((a,b)=>b[1]-a[1]||a[0]-b[0]).slice(0,size).map(e=>e[0]);
+  const scored=[...freq.entries()].map(([idx,f])=>({idx,f,score:f / (1 + lambda*codeLen(idx))}));
+  scored.sort((a,b)=>b.score-a.score||b.f-a.f||a.idx-b.idx);
+  const sorted=scored.slice(0,size).map(e=>e.idx);
   if(sorted.length===0) return [0,1,7].slice(0,size);
   return sorted;
 }
 
 // Bilateral pre-filter — edge-preserving smoother (spec §6, Midgard comic mode)
 // Single pass radius 2 sigma 40: landscape 15 930→14 184 B (-11%), run 2.42→3.54
+// Tries WASM (wasm-img2irc/pkg) via dynamic import, Falls back to JS — never breaks build
+async function tryWasmBilateral(d: Uint8ClampedArray, pW:number, pH:number, radius:number, sigma:number, passes:number): Promise<boolean> {
+  try {
+    const mod: any = await import('../../wasm-img2irc/pkg/wasm_img2irc.js');
+    if ((mod as any)?._isWasmShim) return false;
+    if (mod?.bilateral_filter) {
+      await mod.default?.().catch(()=>{});
+      mod.bilateral_filter(d, pW, pH, radius, sigma, passes);
+      return true;
+    }
+  } catch {}
+  return false;
+}
 function applyBilateralFilter(d: Uint8ClampedArray, pW:number, pH:number, radius=2, sigma=40, passes=1): void {
   const sigma2 = 2*sigma*sigma;
   const tmp = new Uint8ClampedArray(d.length);
@@ -312,6 +355,276 @@ function applyBilateralFilter(d: Uint8ClampedArray, pW:number, pH:number, radius
     d.set(tmp);
   }
 }
+
+
+// Shared core — single source of truth for both entry points (main thread + Worker)
+async function renderPixelsCore(
+  d: Uint8ClampedArray,
+  pW: number, pH: number,
+  cols: number, rows: number,
+  pm: PixelMode,
+  o: Img2IrcOptions
+): Promise<string> {
+  if (COLOR_LUT.size>8000) COLOR_LUT.clear();
+  if(o.gamma!==0&&o.gamma!==1){const g=o.gamma;for(let i=0;i<d.length;i+=4){d[i]=255*Math.pow(d[i]/255,1/g);d[i+1]=255*Math.pow(d[i+1]/255,1/g);d[i+2]=255*Math.pow(d[i+2]/255,1/g);}}
+  if(o.normalize){let mn=255,mx=0;for(let i=0;i<d.length;i+=4){const l=luma(d[i],d[i+1],d[i+2]);if(l<mn)mn=l;if(l>mx)mx=l;}const rng=Math.max(1,mx-mn);for(let i=0;i<d.length;i+=4){d[i]=((d[i]-mn)*255)/rng;d[i+1]=((d[i+1]-mn)*255)/rng;d[i+2]=((d[i+2]-mn)*255)/rng;}}
+  if(o.comic){
+    const wasmOk = await tryWasmBilateral(d, pW, pH, 2, 40, 2);
+    if (!wasmOk) applyBilateralFilter(d, pW, pH, 2, 40, 2);
+  }
+  const ditherMode = o.dither ? (o.ditherMode==='none' ? 'bayer4' : o.ditherMode) : 'none';
+  if(ditherMode!=='none'){
+    if(ditherMode==='bayer4'){
+      const bayer=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+      for(let y=0;y<pH;y++){ for(let x=0;x<pW;x++){ const i=(y*pW+x)*4; const tt=(bayer[y%4][x%4]/16 -0.5)*28; d[i]=Math.max(0,Math.min(255,d[i]+tt)); d[i+1]=Math.max(0,Math.min(255,d[i+1]+tt)); d[i+2]=Math.max(0,Math.min(255,d[i+2]+tt)); }}
+    } else if(ditherMode==='bayer8'){
+      const bayer8=[[0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],[3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]];
+      for(let y=0;y<pH;y++){ for(let x=0;x<pW;x++){ const i=(y*pW+x)*4; const tt=(bayer8[y%8][x%8]/64 -0.5)*28; d[i]=Math.max(0,Math.min(255,d[i]+tt)); d[i+1]=Math.max(0,Math.min(255,d[i+1]+tt)); d[i+2]=Math.max(0,Math.min(255,d[i+2]+tt)); }}
+    } else if(ditherMode==='floyd'){
+      if(o.renderMode==='ansi24' || o.midgardMode==='truecolor' || o.midgardMode==='comic'){ }
+      else {
+        const w2=pW, h2=pH, data2=new Float32Array(d);
+        const pal=getMidgardPalette(o);
+        for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb; if(x+1<w2){ data2[i+4]+=er*7/16; data2[i+5]+=eg*7/16; data2[i+6]+=eb*7/16; } if(y+1<h2){ if(x>0){ data2[i+w2*4-4]+=er*3/16; data2[i+w2*4-3]+=eg*3/16; data2[i+w2*4-2]+=eb*3/16;} data2[i+w2*4]+=er*5/16; data2[i+w2*4+1]+=eg*5/16; data2[i+w2*4+2]+=eb*5/16; if(x+1<w2){ data2[i+w2*4+4]+=er*1/16; data2[i+w2*4+5]+=eg*1/16; data2[i+w2*4+6]+=eb*1/16; } } } }
+        for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
+      }
+    } else if(ditherMode==='atkinson'){
+      const w2=pW, h2=pH, data2=new Float32Array(d);
+      const pal=getMidgardPalette(o);
+      for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb; const d1=er/8, dg1=eg/8, db1=eb/8; if(x+1<w2){ data2[i+4]+=d1; data2[i+5]+=dg1; data2[i+6]+=db1; } if(x+2<w2){ data2[i+8]+=d1; data2[i+9]+=dg1; data2[i+10]+=db1; } if(y+1<h2){ if(x>0){ data2[i+w2*4-4]+=d1; data2[i+w2*4-3]+=dg1; data2[i+w2*4-2]+=db1;} data2[i+w2*4]+=d1; data2[i+w2*4+1]+=dg1; data2[i+w2*4+2]+=db1; if(x+1<w2){ data2[i+w2*4+4]+=d1; data2[i+w2*4+5]+=dg1; data2[i+w2*4+6]+=db1; } } } }
+      for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
+    }
+  }
+  const pxAt=(x:number,y:number):[number,number,number,number]=>{
+    if(x<0||y<0||x>=pW||y>=pH)return[0,0,0,0];
+    const i=(y*pW+x)*4;return[d[i],d[i+1],d[i+2],d[i+3]];
+  };
+  const is24=o.renderMode==='ansi24' || o.midgardMode==='truecolor' || o.midgardMode==='comic', ng=o.nograyscale;
+  const lines:string[]=[];
+  if(pm==='braille'){
+    const palB=getMidgardPalette(o);
+    const POS:Array<[number,number,number]>=[[0,0,0x01],[0,1,0x02],[0,2,0x04],[1,0,0x08],[1,1,0x10],[1,2,0x20],[0,3,0x40],[1,3,0x80]];
+    for(let r=0;r<rows;r++){let ln='',lastCode='',first=true;
+      for(let c=0;c<cols;c++){let br=0x2800,sR=0,sG=0,sB=0,sN=0;
+        for(const[dx,dy,bit]of POS){const x=c*2+dx,y=r*4+dy;const[rr,gg,bb,aa]=pxAt(x,y);if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(luma(rr,gg,bb)>127){br|=bit;sR+=rr;sG+=gg;sB+=bb;sN++;}}
+        if(sN===0||br===0x2800){ln+=' ';first=false;continue;}
+        const code=is24? '\x04'+toHex6(sR/sN|0,sG/sN|0,sB/sN|0) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).ansi : lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).irc, o.renderMode, palB, o.colorMatching));
+        if(first||lastCode!==code){ln+=code;lastCode=code;}
+        ln+=String.fromCharCode(br);first=false;
+      }
+      ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
+    }
+  } else if(pm==='quarter'){
+    const qPal=getMidgardPalette(o);
+    const qMap=[' ','▘','▝','▀','▖','▌','▞','▛','▗','▚','▐','▜','▄','▙','▟','█'];
+    for(let r=0;r<rows;r++){let ln='',lastFg='',lastBg='',first=true;
+      for(let c=0;c<cols;c++){
+        const p=[[pxAt(c*2,r*2),pxAt(c*2+1,r*2)],[pxAt(c*2,r*2+1),pxAt(c*2+1,r*2+1)]];
+        const b=[0,1,2,3].map(i=>luma(p[i>>1][i&1][0],p[i>>1][i&1][1],p[i>>1][i&1][2])>127?1:0);
+        const bits=b[0]|(b[1]<<1)|(b[2]<<2)|(b[3]<<3), ch=qMap[bits]||' ';
+        if(ch===' '){ln+=' ';first=false;continue;}
+        let onR=0,onG=0,onB=0,onC=0, offR=0,offG=0,offB=0,offC=0;
+        for(let i=0;i<4;i++){const[rr,gg,bb,aa]=p[i>>1][i&1];if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(b[i]){onR+=rr;onG+=gg;onB+=bb;onC++;}else{offR+=rr;offG+=gg;offB+=bb;offC++;}}
+        if(onC===0){ln+=' ';first=false;continue;}
+        if(offC===0){
+          if(is24){
+            const cd='\x04'+toHex6(onR/onC|0,onG/onC|0,onB/onC|0);
+            if(first||lastFg!==cd||lastBg!==''){ln+=cd;lastFg=cd;lastBg='';}
+            ln+='█';first=false;continue;
+          } else {
+            const bgS=String(toEmitIdx(o.renderMode==='ansi'? lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).ansi : lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).irc, o.renderMode, qPal, o.colorMatching));
+            const cd='\x03'+bgS+','+bgS;
+            if(first||lastFg!==bgS||lastBg!==bgS){ln+=cd;lastFg=bgS;lastBg=bgS;}
+            ln+=' ';first=false;continue;
+          }
+        } else {
+          const fgS=is24? toHex6(onR/onC|0,onG/onC|0,onB/onC|0) : String(toEmitIdx(o.renderMode==='ansi'? lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).ansi : lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,qPal,ng, o.colorMatching).irc, o.renderMode, qPal, o.colorMatching));
+          const bgS=is24? toHex6(offR/offC|0,offG/offC|0,offB/offC|0) : String(toEmitIdx(o.renderMode==='ansi'? lutLookup(offR/offC|0,offG/offC|0,offB/offC|0,qPal,ng, o.colorMatching).ansi : lutLookup(offR/offC|0,offG/offC|0,offB/offC|0,qPal,ng, o.colorMatching).irc, o.renderMode, qPal, o.colorMatching));
+          const cd=is24? '\x04'+fgS+','+bgS : '\x03'+fgS+','+bgS;
+          const fgF=fgS, bgF=bgS;
+          if(first||lastFg!==fgF||lastBg!==bgF){ln+=cd;lastFg=fgF;lastBg=bgF;}
+        }
+        ln+=ch;first=false;
+      }
+      ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
+    }
+  } else if(pm==='half'){
+    const pal=getMidgardPalette(o);
+    const useViterbi = o.viterbiW>0 && !is24 && cols>1;
+    if(useViterbi){
+      for(let r=0;r<rows;r++){
+        const tops:Array<[number,number,number,number]>=[], bots:Array<[number,number,number,number]>=[];
+        for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
+        let allEmpty=true;
+        for(let c=0;c<cols;c++){
+          const [r1,g1,b1,a1]=tops[c], [r2,g2,b2,a2]=bots[c];
+          const emp=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false);
+          const blk=_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2);
+          if(!emp && !blk){ allEmpty=false; break; }
+        }
+        if(allEmpty){ lines.push(''); continue; }
+        const S=rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,12);
+        const states: Array<[number,number]> = [];
+        for(const f of S) for(const b of S) states.push([f,b]);
+        const M=cols;
+        type GlyphInfo={err:number, bytes:number, glyph:string};
+        const cellGlyph: GlyphInfo[][] = new Array(M);
+        const cellIsEmpty: boolean[] = new Array(M);
+        for(let i=0;i<M;i++){
+          const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
+          const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+          cellIsEmpty[i]=isEmpty;
+          if(isEmpty){ cellGlyph[i]=[]; continue; }
+          const rowGlyphs: GlyphInfo[] = new Array(states.length);
+          for(let s=0;s<states.length;s++){
+            const [f,b]=states[s];
+            rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,pal,o.colorMatching,o.viterbiW);
+          }
+          cellGlyph[i]=rowGlyphs;
+        }
+        const INF=1e18;
+        let dp=new Array(states.length).fill(INF);
+        const back: number[][] = Array.from({length:M},()=>new Array(states.length).fill(-1));
+        for(let s=0;s<states.length;s++){
+          if(cellIsEmpty[0]){
+            dp[s]=0;
+          } else {
+            const g=cellGlyph[0][s];
+            const [f,b]=states[s];
+            const fgM=o.renderMode==='ansi'? ansiToIrcIdx(f, pal, o.colorMatching): f, bgM=o.renderMode==='ansi'? ansiToIrcIdx(b, pal, o.colorMatching): b;
+            const pc=pairPref(fgM,bgM);
+            dp[s]=g.err + o.viterbiW*(g.bytes + pc);
+          }
+        }
+        for(let i=1;i<M;i++){
+          if(cellIsEmpty[i]){
+            const bestIdx=dp.indexOf(Math.min(...dp));
+            const nd=new Array(states.length).fill(INF);
+            for(let s=0;s<states.length;s++){ nd[s]=dp[bestIdx]; back[i][s]=bestIdx; }
+            dp=nd;
+            continue;
+          }
+          let gmin=INF, gidx=-1;
+          for(let s=0;s<states.length;s++) if(dp[s]<gmin){gmin=dp[s]; gidx=s;}
+          const bMinCost=new Map<number,{cost:number,idx:number}>();
+          for(let s=0;s<states.length;s++){
+            const bg=states[s][1];
+            const c=dp[s];
+            const cur=bMinCost.get(bg);
+            if(!cur || c<cur.cost) bMinCost.set(bg,{cost:c, idx:s});
+          }
+          const nd=new Array(states.length).fill(INF);
+          for(let s=0;s<states.length;s++){
+            const [f,b]=states[s];
+            const fgM=o.renderMode==='ansi'? ansiToIrcIdx(f, pal, o.colorMatching): f, bgM=o.renderMode==='ansi'? ansiToIrcIdx(b, pal, o.colorMatching): b;
+            const g=cellGlyph[i][s];
+            const candStay=bMinCost.get(b)!.cost + o.viterbiW*fgPref(fgM);
+            const candSwitch=gmin + o.viterbiW*pairPref(fgM,bgM);
+            let best=dp[s];
+            let bestIdxPrev=s;
+            if(candStay < best){ best=candStay; bestIdxPrev=bMinCost.get(b)!.idx; }
+            if(candSwitch < best){ best=candSwitch; bestIdxPrev=gidx; }
+            nd[s]=best + g.err + o.viterbiW*g.bytes;
+            back[i][s]=bestIdxPrev;
+          }
+          dp=nd;
+        }
+        let bestEnd=0; for(let s=1;s<states.length;s++) if(dp[s]<dp[bestEnd]) bestEnd=s;
+        const chosenIdx=new Array(M).fill(0);
+        chosenIdx[M-1]=bestEnd;
+        for(let i=M-1;i>0;i--){
+          if(cellIsEmpty[i]){ chosenIdx[i-1]=chosenIdx[i]; }
+          else { chosenIdx[i-1]=back[i][chosenIdx[i]]; }
+        }
+        // Help GC: large per-row structures no longer needed after backtracking
+        // (cellGlyph holds M*144 GlyphInfo objects, back holds M*144 ints)
+        // @ts-ignore — help GC by dropping refs before string emit
+        (cellGlyph as any) = null; (back as any) = null; (dp as any) = null;
+        let ln='', lastFg='', lastBg='', first=true;
+        for(let c=0;c<M;c++){
+          if(cellIsEmpty[c]){ ln+=' '; first=false; continue; }
+          const sIdx=chosenIdx[c];
+          const [fRaw,bRaw]=states[sIdx];
+          const g=cellGlyph[c][sIdx];
+          const glyph=g.glyph;
+          const fg=o.renderMode==='ansi'? ansiToIrcIdx(fRaw, pal, o.colorMatching): fRaw, bg=o.renderMode==='ansi'? ansiToIrcIdx(bRaw, pal, o.colorMatching): bRaw;
+          if(glyph===' '){
+            const need=first || lastBg!==String(bg);
+            if(need){
+              const cd='\x03'+fg+','+bg;
+              ln+=cd; lastFg=String(fg); lastBg=String(bg);
+            }
+            ln+=' ';
+          } else {
+            const needFull=first || lastFg!==String(fg) || lastBg!==String(bg);
+            const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
+            if(needFgOnly){
+              const cd='\x03'+fg;
+              ln+=cd; lastFg=String(fg);
+            } else if(needFull){
+              const cd='\x03'+fg+','+bg;
+              ln+=cd; lastFg=String(fg); lastBg=String(bg);
+            }
+            ln+=glyph;
+          }
+          first=false;
+        }
+        ln=ln.replace(/[ ]+$/g,''); lines.push(ln);
+      }
+    } else {
+      for(let r=0;r<rows;r++){
+        let ln='',lastFg='',lastBg='',first=true;
+        for(let c=0;c<cols;c++){
+          const[r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
+          if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)&&(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){ln+=' ';first=false;continue;}
+          if(_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)){ln+=' ';first=false;continue;}
+          if(is24){
+            const fg=toHex6(r1,g1,b1), bg=toHex6(r2,g2,b2);
+            if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)){const c='\x04'+bg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▄';}
+            else if((o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){const c='\x04'+fg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▀';}
+            else if(fg===bg){const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
+            else {const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+='▀';}
+          } else {
+            const l1=lutLookup(r1,g1,b1,pal,ng, o.colorMatching), l2=lutLookup(r2,g2,b2,pal,ng, o.colorMatching);
+            const fgRaw=o.renderMode==='ansi'?l1.ansi:l1.irc; const fg=toEmitIdx(fgRaw, o.renderMode, pal, o.colorMatching); const bgRaw=o.renderMode==='ansi'?l2.ansi:l2.irc; const bg=toEmitIdx(bgRaw, o.renderMode, pal, o.colorMatching);
+            if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)||(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){
+              const u=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?bg:fg; const cd='\x03'+u; if(first||lastFg!==String(u)||lastBg!==''){ln+=cd;lastFg=String(u);lastBg='';}ln+=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?'▄':'▀';
+            } else if(fg===bg){
+              const need=first || lastBg!==String(bg);
+              if(need){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
+              ln+=' ';
+            } else {
+              const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
+              if(needFgOnly){
+                const cd='\x03'+fg; ln+=cd; lastFg=String(fg);
+              } else if(first||lastFg!==String(fg)||lastBg!==String(bg)){
+                const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg);
+              }
+              ln+='▀';
+            }
+          }
+          first=false;
+        }
+        ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
+      }
+    }
+  } else {
+    const fullPal=getMidgardPalette(o);
+    for(let y=0;y<pH;y++){let ln='',lastCode='',first=true;
+      for(let x=0;x<pW;x++){const[r,g,b,a]=pxAt(x,y);
+        if((o.alphaMode==='transparent' ? a < o.alphaThreshold : false)||_nearBlack(r,g,b)){ln+=' ';continue;}
+        const cd=is24? '\x04'+toHex6(r,g,b) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(r,g,b,fullPal,ng, o.colorMatching).ansi : lutLookup(r,g,b,fullPal,ng, o.colorMatching).irc, o.renderMode, fullPal, o.colorMatching));
+        if(first||lastCode!==cd){ln+=cd;lastCode=cd;}
+        ln+='█'; first=false;
+      }
+      ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
+    }
+  }
+
+  while(lines.length&&lines[lines.length-1].replace(/[\x03\x04\x0f0-9,a-fA-F]/g,'').trim()==='')lines.pop();
+  return lines.join('\n');
+}
+
 
 export function loadImageFromFile(file:File|Blob):Promise<HTMLImageElement>{
   return new Promise((res,rej)=>{
@@ -384,270 +697,112 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
   let id=src.getContext('2d')!.getImageData(0,0,pW,pH);
   let d=id.data;
 
-  if(o.gamma!==0&&o.gamma!==1){const g=o.gamma;for(let i=0;i<d.length;i+=4){d[i]=255*Math.pow(d[i]/255,1/g);d[i+1]=255*Math.pow(d[i+1]/255,1/g);d[i+2]=255*Math.pow(d[i+2]/255,1/g);}}
-  if(o.normalize){let mn=255,mx=0;for(let i=0;i<d.length;i+=4){const l=luma(d[i],d[i+1],d[i+2]);if(l<mn)mn=l;if(l>mx)mx=l;}const rng=Math.max(1,mx-mn);for(let i=0;i<d.length;i+=4){d[i]=((d[i]-mn)*255)/rng;d[i+1]=((d[i+1]-mn)*255)/rng;d[i+2]=((d[i+2]-mn)*255)/rng;}}
-  if(o.comic){
-    // Comic / bilateral: edge-preserving smoother — flattens gradients, lengthens runs
-    // without blurring edges (spec §6, O(W·H·r²)). 2 passes radius 2 sigma 40 matches
-    // measured landscape 15 930→14 184 B (-11%) run 2.42→3.54, ΔE 14.78→17.53
-    applyBilateralFilter(d, pW, pH, 2, 40, 2);
+  return await renderPixelsCore(d, pW, pH, cols, rows, pm, o);
+}
+
+// ── Base94 framing — 9 bytes → 11 chars optimal for 94 printable symbols (Base94.lean) ──
+// 94 = printable ASCII minus space (33–126). 9→11 is optimal for short blocks: 256⁹ ≤ 94¹¹ < 256¹⁰ demands 11 chars.
+// Rate 9/11 = 0.818 beats base64's 3/4 = 0.75 by 12/11 (+9.09%). Per 400B payload: 327B vs 300B.
+const B94_CHARS='!"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~';
+const B94_MAP: Record<string,number> = Object.fromEntries([...B94_CHARS].map((c,i)=>[c,i]));
+export function base94Encode(bytes: Uint8Array): string{
+  let out='';
+  for(let i=0;i<bytes.length;i+=9){
+    const chunk=bytes.subarray(i, Math.min(i+9, bytes.length));
+    let n=0n; for(let j=0;j<chunk.length;j++) n = (n<<8n) | BigInt(chunk[j]);
+    const need = chunk.length===9 ? 11 : Math.ceil(chunk.length* Math.log(256)/Math.log(94));
+    let s=''; for(let k=0;k<need;k++){ s = B94_CHARS[Number(n % 94n)] + s; n/=94n; }
+    out+=s;
   }
-  const ditherMode = o.dither ? (o.ditherMode==='none' ? 'bayer4' : o.ditherMode) : 'none';
-  if(ditherMode!=='none'){
-    if(ditherMode==='bayer4'){
-      const bayer=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
-      for(let y=0;y<pH;y++){ for(let x=0;x<pW;x++){ const i=(y*pW+x)*4; const tt=(bayer[y%4][x%4]/16 -0.5)*28; d[i]=Math.max(0,Math.min(255,d[i]+tt)); d[i+1]=Math.max(0,Math.min(255,d[i+1]+tt)); d[i+2]=Math.max(0,Math.min(255,d[i+2]+tt)); }}
-    } else if(ditherMode==='bayer8'){
-      const bayer8=[[0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],[3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]];
-      for(let y=0;y<pH;y++){ for(let x=0;x<pW;x++){ const i=(y*pW+x)*4; const tt=(bayer8[y%8][x%8]/64 -0.5)*28; d[i]=Math.max(0,Math.min(255,d[i]+tt)); d[i+1]=Math.max(0,Math.min(255,d[i+1]+tt)); d[i+2]=Math.max(0,Math.min(255,d[i+2]+tt)); }}
-    } else if(ditherMode==='floyd'){
-      if(o.renderMode==='ansi24' || o.midgardMode==='truecolor' || o.midgardMode==='comic'){ /* no palette to dither to in truecolor */ }
-      else {
-        const w2=pW, h2=pH, data2=new Float32Array(d);
-        const pal=getMidgardPalette(o);
-        for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb; if(x+1<w2){ data2[i+4]+=er*7/16; data2[i+5]+=eg*7/16; data2[i+6]+=eb*7/16; } if(y+1<h2){ if(x>0){ data2[i+w2*4-4]+=er*3/16; data2[i+w2*4-3]+=eg*3/16; data2[i+w2*4-2]+=eb*3/16;} data2[i+w2*4]+=er*5/16; data2[i+w2*4+1]+=eg*5/16; data2[i+w2*4+2]+=eb*5/16; if(x+1<w2){ data2[i+w2*4+4]+=er*1/16; data2[i+w2*4+5]+=eg*1/16; data2[i+w2*4+6]+=eb*1/16; } } } }
-        for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
-      }
-    } else if(ditherMode==='atkinson'){
-      const w2=pW, h2=pH, data2=new Float32Array(d);
-      const pal=getMidgardPalette(o);
-      for(let y=0;y<h2;y++){ for(let x=0;x<w2;x++){ const i=(y*w2+x)*4; const r=data2[i], g=data2[i+1], b=data2[i+2]; const idx=nearestIndex(r,g,b, pal, o.colorMatching); const pr=(pal[idx]>>16)&255, pg=(pal[idx]>>8)&255, pb=pal[idx]&255; const er=r-pr, eg=g-pg, eb=b-pb; data2[i]=pr; data2[i+1]=pg; data2[i+2]=pb; const d1=er/8, dg1=eg/8, db1=eb/8; if(x+1<w2){ data2[i+4]+=d1; data2[i+5]+=dg1; data2[i+6]+=db1; } if(x+2<w2){ data2[i+8]+=d1; data2[i+9]+=dg1; data2[i+10]+=db1; } if(y+1<h2){ if(x>0){ data2[i+w2*4-4]+=d1; data2[i+w2*4-3]+=dg1; data2[i+w2*4-2]+=db1;} data2[i+w2*4]+=d1; data2[i+w2*4+1]+=dg1; data2[i+w2*4+2]+=db1; if(x+1<w2){ data2[i+w2*4+4]+=d1; data2[i+w2*4+5]+=dg1; data2[i+w2*4+6]+=db1; } } } }
-      for(let i=0;i<d.length;i++) d[i]=Math.max(0,Math.min(255, data2[i]));
-    }
+  return out;
+}
+export function base94Decode(str: string): Uint8Array{
+  const bytes:number[]=[];
+  for(let i=0;i<str.length;){
+    const isLast = str.length - i < 11;
+    const clen = isLast ? str.length - i : 11;
+    const chunk=str.slice(i, i+clen); i+=clen;
+    let n=0n; for(const c of chunk){ const v=B94_MAP[c]; if(v===undefined) throw new Error(`invalid base94 char: ${c}`); n = n*94n + BigInt(v); }
+    const blen = clen===11 ? 9 : Math.floor(clen * Math.log(94)/Math.log(256));
+    const tmp:number[]=[]; for(let k=0;k<blen;k++){ tmp.unshift(Number(n & 0xFFn)); n>>=8n; }
+    bytes.push(...tmp);
   }
-  src.getContext('2d')!.putImageData(id,0,0);
-  id=src.getContext('2d')!.getImageData(0,0,pW,pH);
-  d=id.data;
+  return new Uint8Array(bytes);
+}
+export function base94EncodedLength(byteLen: number): number{
+  const full=Math.floor(byteLen/9), rem=byteLen%9;
+  return full*11 + (rem===0?0:Math.ceil(rem*Math.log(256)/Math.log(94)));
+}
 
-  const pxAt=(x:number,y:number):[number,number,number,number]=>{
-    if(x<0||y<0||x>=pW||y>=pH)return[0,0,0,0];
-    const i=(y*pW+x)*4;return[d[i],d[i+1],d[i+2],d[i+3]];
-  };
-
-  const is24=o.renderMode==='ansi24' || o.midgardMode==='truecolor' || o.midgardMode==='comic', ng=o.nograyscale;
-  const lines:string[]=[];
-
-  if(pm==='braille'){
-    const POS:Array<[number,number,number]>=[[0,0,0x01],[0,1,0x02],[0,2,0x04],[1,0,0x08],[1,1,0x10],[1,2,0x20],[0,3,0x40],[1,3,0x80]];
-    for(let r=0;r<rows;r++){let ln='',lastCode='',first=true;
-      for(let c=0;c<cols;c++){let br=0x2800,sR=0,sG=0,sB=0,sN=0;
-        for(const[dx,dy,bit]of POS){const x=c*2+dx,y=r*4+dy;const[rr,gg,bb,aa]=pxAt(x,y);if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(luma(rr,gg,bb)>127){br|=bit;sR+=rr;sG+=gg;sB+=bb;sN++;}}
-        if(sN===0||br===0x2800){ln+=' ';first=false;continue;}
-        const code=is24? '\x04'+toHex6(sR/sN|0,sG/sN|0,sB/sN|0) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,ng, o.colorMatching).ansi : lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,ng, o.colorMatching).irc, o.renderMode));
-        if(first||lastCode!==code){ln+=code;lastCode=code;}
-        ln+=String.fromCharCode(br);first=false;
-      }
-      ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
-    }
-  } else if(pm==='quarter'){
-    const qMap=[' ','▘','▝','▀','▖','▌','▞','▛','▗','▚','▐','▜','▄','▙','▟','█'];
-    for(let r=0;r<rows;r++){let ln='',lastFg='',lastBg='',first=true;
-      for(let c=0;c<cols;c++){
-        const p=[[pxAt(c*2,r*2),pxAt(c*2+1,r*2)],[pxAt(c*2,r*2+1),pxAt(c*2+1,r*2+1)]];
-        const b=[0,1,2,3].map(i=>luma(p[i>>1][i&1][0],p[i>>1][i&1][1],p[i>>1][i&1][2])>127?1:0);
-        const bits=b[0]|(b[1]<<1)|(b[2]<<2)|(b[3]<<3), ch=qMap[bits]||' ';
-        if(ch===' '){ln+=' ';first=false;continue;}
-        let onR=0,onG=0,onB=0,onC=0, offR=0,offG=0,offB=0,offC=0;
-        for(let i=0;i<4;i++){const[rr,gg,bb,aa]=p[i>>1][i&1];if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(b[i]){onR+=rr;onG+=gg;onB+=bb;onC++;}else{offR+=rr;offG+=gg;offB+=bb;offC++;}}
-        if(onC===0){ln+=' ';first=false;continue;}
-        if(offC===0){
-          if(is24){
-            const cd='\x04'+toHex6(onR/onC|0,onG/onC|0,onB/onC|0);
-            if(first||lastFg!==cd||lastBg!==''){ln+=cd;lastFg=cd;lastBg='';}
-            ln+='█';first=false;continue;
-          } else {
-            // indexed: never emit █ — use space+bg (1B vs 3B, bg sticky)
-            const bgS=String(toEmitIdx(o.renderMode==='ansi'? lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,ng, o.colorMatching).ansi : lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,ng, o.colorMatching).irc, o.renderMode));
-            const cd='\x03'+bgS+','+bgS;
-            if(first||lastFg!==bgS||lastBg!==bgS){ln+=cd;lastFg=bgS;lastBg=bgS;}
-            ln+=' ';first=false;continue;
-          }
-        } else {
-          const fgS=is24? toHex6(onR/onC|0,onG/onC|0,onB/onC|0) : String(toEmitIdx(o.renderMode==='ansi'? lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,ng, o.colorMatching).ansi : lutLookup(onR/onC|0,onG/onC|0,onB/onC|0,ng, o.colorMatching).irc, o.renderMode));
-          const bgS=is24? toHex6(offR/offC|0,offG/offC|0,offB/offC|0) : String(toEmitIdx(o.renderMode==='ansi'? lutLookup(offR/offC|0,offG/offC|0,offB/offC|0,ng, o.colorMatching).ansi : lutLookup(offR/offC|0,offG/offC|0,offB/offC|0,ng, o.colorMatching).irc, o.renderMode));
-          const cd=is24? '\x04'+fgS+','+bgS : '\x03'+fgS+','+bgS;
-          const fgF=fgS, bgF=bgS;
-          if(first||lastFg!==fgF||lastBg!==bgF){ln+=cd;lastFg=fgF;lastBg=bgF;}
-        }
-        ln+=ch;first=false;
-      }
-      ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
-    }
-  } else if(pm==='half'){
-    const pal=getMidgardPalette(o);
-    const useViterbi = o.viterbiW>0 && !is24 && cols>1;
-    if(useViterbi){
-      for(let r=0;r<rows;r++){
-        const tops:Array<[number,number,number,number]>=[], bots:Array<[number,number,number,number]>=[];
-        for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
-        let allEmpty=true;
-        for(let c=0;c<cols;c++){
-          const [r1,g1,b1,a1]=tops[c], [r2,g2,b2,a2]=bots[c];
-          const emp=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false);
-          const blk=_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2);
-          if(!emp && !blk){ allEmpty=false; break; }
-        }
-        if(allEmpty){ lines.push(''); continue; }
-        const S=rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,12);
-        const states: Array<[number,number]> = [];
-        for(const f of S) for(const b of S) states.push([f,b]);
-        const M=cols;
-        type GlyphInfo={err:number, bytes:number, glyph:string};
-        const cellGlyph: GlyphInfo[][] = new Array(M);
-        const cellIsEmpty: boolean[] = new Array(M);
-        for(let i=0;i<M;i++){
-          const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
-          const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
-          cellIsEmpty[i]=isEmpty;
-          if(isEmpty){ cellGlyph[i]=[]; continue; }
-          const rowGlyphs: GlyphInfo[] = new Array(states.length);
-          for(let s=0;s<states.length;s++){
-            const [f,b]=states[s];
-            rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,pal,o.colorMatching,o.viterbiW);
-          }
-          cellGlyph[i]=rowGlyphs;
-        }
-        // DP with predecessor-independent collapsed transition (study_improvements.py)
-        const INF=1e18;
-        let dp=new Array(states.length).fill(INF);
-        const back: number[][] = Array.from({length:M},()=>new Array(states.length).fill(-1));
-        for(let s=0;s<states.length;s++){
-          if(cellIsEmpty[0]){
-            dp[s]=0;
-          } else {
-            const g=cellGlyph[0][s];
-            const [f,b]=states[s];
-            const fgM=o.renderMode==='ansi'? ansiToIrcIdx(f): f, bgM=o.renderMode==='ansi'? ansiToIrcIdx(b): b;
-            const pc=pairPref(fgM,bgM);
-            dp[s]=g.err + o.viterbiW*(g.bytes + pc);
-          }
-        }
-        for(let i=1;i<M;i++){
-          if(cellIsEmpty[i]){
-            const bestIdx=dp.indexOf(Math.min(...dp));
-            const nd=new Array(states.length).fill(INF);
-            for(let s=0;s<states.length;s++){ nd[s]=dp[bestIdx]; back[i][s]=bestIdx; }
-            dp=nd;
-            continue;
-          }
-          let gmin=INF, gidx=-1;
-          for(let s=0;s<states.length;s++) if(dp[s]<gmin){gmin=dp[s]; gidx=s;}
-          const bMinCost=new Map<number,{cost:number,idx:number}>();
-          for(let s=0;s<states.length;s++){
-            const bg=states[s][1];
-            const c=dp[s];
-            const cur=bMinCost.get(bg);
-            if(!cur || c<cur.cost) bMinCost.set(bg,{cost:c, idx:s});
-          }
-          const nd=new Array(states.length).fill(INF);
-          for(let s=0;s<states.length;s++){
-            const [f,b]=states[s];
-            const fgM=o.renderMode==='ansi'? ansiToIrcIdx(f): f, bgM=o.renderMode==='ansi'? ansiToIrcIdx(b): b;
-            const g=cellGlyph[i][s];
-            const candStay=bMinCost.get(b)!.cost + o.viterbiW*fgPref(fgM);
-            const candSwitch=gmin + o.viterbiW*pairPref(fgM,bgM);
-            let best=dp[s];
-            let bestIdxPrev=s;
-            if(candStay < best){ best=candStay; bestIdxPrev=bMinCost.get(b)!.idx; }
-            if(candSwitch < best){ best=candSwitch; bestIdxPrev=gidx; }
-            nd[s]=best + g.err + o.viterbiW*g.bytes;
-            back[i][s]=bestIdxPrev;
-          }
-          dp=nd;
-        }
-        let bestEnd=0; for(let s=1;s<states.length;s++) if(dp[s]<dp[bestEnd]) bestEnd=s;
-        const chosenIdx=new Array(M).fill(0);
-        chosenIdx[M-1]=bestEnd;
-        for(let i=M-1;i>0;i--){
-          if(cellIsEmpty[i]){ chosenIdx[i-1]=chosenIdx[i]; }
-          else { chosenIdx[i-1]=back[i][chosenIdx[i]]; }
-        }
-        let ln='', lastFg='', lastBg='', first=true;
-        for(let c=0;c<M;c++){
-          if(cellIsEmpty[c]){ ln+=' '; first=false; continue; }
-          const sIdx=chosenIdx[c];
-          const [fRaw,bRaw]=states[sIdx];
-          const g=cellGlyph[c][sIdx];
-          const glyph=g.glyph;
-          const fg=o.renderMode==='ansi'? ansiToIrcIdx(fRaw): fRaw, bg=o.renderMode==='ansi'? ansiToIrcIdx(bRaw): bRaw;
-          if(glyph===' '){
-            const need=first || lastBg!==String(bg);
-            if(need){
-              const cd='\x03'+fg+','+bg;
-              ln+=cd; lastFg=String(fg); lastBg=String(bg);
-            }
-            ln+=' ';
-          } else {
-            // ▀ ▄ ░▒▓ + ASCII ramp all need fg+bg; use fg-only when bg sticky
-            const needFull=first || lastFg!==String(fg) || lastBg!==String(bg);
-            const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
-            if(needFgOnly){
-              const cd='\x03'+fg;
-              ln+=cd; lastFg=String(fg);
-            } else if(needFull){
-              const cd='\x03'+fg+','+bg;
-              ln+=cd; lastFg=String(fg); lastBg=String(bg);
-            }
-            ln+=glyph;
-          }
-          first=false;
-        }
-        ln=ln.replace(/[ ]+$/g,''); lines.push(ln);
-      }
-    } else {
-      // greedy fallback
-      for(let r=0;r<rows;r++){
-        let ln='',lastFg='',lastBg='',first=true;
-        for(let c=0;c<cols;c++){
-          const[r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
-          if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)&&(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){ln+=' ';first=false;continue;}
-          if(_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)){ln+=' ';first=false;continue;}
-          if(is24){
-            const fg=toHex6(r1,g1,b1), bg=toHex6(r2,g2,b2);
-            if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)){const c='\x04'+bg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▄';}
-            else if((o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){const c='\x04'+fg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▀';}
-            else if(fg===bg){const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
-            else {const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+='▀';}
-          } else {
-            const l1=lutLookup(r1,g1,b1,ng, o.colorMatching), l2=lutLookup(r2,g2,b2,ng, o.colorMatching);
-            const fgRaw=o.renderMode==='ansi'?l1.ansi:l1.irc; const fg=toEmitIdx(fgRaw, o.renderMode); const bgRaw=o.renderMode==='ansi'?l2.ansi:l2.irc; const bg=toEmitIdx(bgRaw, o.renderMode);
-            if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)||(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){
-              const u=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?bg:fg; const cd='\x03'+u; if(first||lastFg!==String(u)||lastBg!==''){ln+=cd;lastFg=String(u);lastBg='';}ln+=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?'▄':'▀';
-            } else if(fg===bg){
-              // never emit █ — use space+bg (1B vs 3B, bg sticky)
-              const need=first || lastBg!==String(bg);
-              if(need){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
-              ln+=' ';
-            } else {
-              // fg-only optimization for row continuity
-              const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
-              if(needFgOnly){
-                const cd='\x03'+fg; ln+=cd; lastFg=String(fg);
-              } else if(first||lastFg!==String(fg)||lastBg!==String(bg)){
-                const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg);
-              }
-              ln+='▀';
-            }
-          }
-          first=false;
-        }
-        ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
-      }
-    }
-  } else {
-    for(let y=0;y<pH;y++){let ln='',lastCode='',first=true;
-      for(let x=0;x<pW;x++){const[r,g,b,a]=pxAt(x,y);
-        if((o.alphaMode==='transparent' ? a < o.alphaThreshold : false)||_nearBlack(r,g,b)){ln+=' ';continue;}
-        const cd=is24? '\x04'+toHex6(r,g,b) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(r,g,b,ng, o.colorMatching).ansi : lutLookup(r,g,b,ng, o.colorMatching).irc, o.renderMode));
-        if(first||lastCode!==cd){ln+=cd;lastCode=cd;}
-        ln+='█'; first=false;
-      }
-      ln=ln.replace(/[ ]+$/g,'');lines.push(ln);
-    }
+// ── Inter-line diff — bitmask vs sparse (InterLineDiff.lean) ──
+// sparseCost = k·(idx+val), maskCost = ceil(M/6)+k·val (base64 mask). Mask wins iff ceil(M/6) ≤ k·idx.
+export function diffCrossoverK(M:number, idxBytes=2): number{
+  const maskOverhead=Math.ceil(M/6);
+  return Math.ceil(maskOverhead/idxBytes);
+}
+export function shouldUseBitmask(M:number, changed:number, idxBytes=2): boolean{
+  return Math.ceil(M/6) <= changed*idxBytes;
+}
+export function estimateDiffSaving(M:number, p:number, valBytes=1, totalBytesPerCell=2): number{
+  const maskOverhead=Math.ceil(M/6);
+  const expected = maskOverhead/(M*totalBytesPerCell) + p*valBytes/totalBytesPerCell;
+  return 1 - expected;
+}
+export function encodeLineDiff(prev: string[], curr: string[]): { useMask: boolean, payload: string }{
+  const M=curr.length;
+  const changed:number[]=[];
+  for(let i=0;i<M;i++) if(prev[i]!==curr[i]) changed.push(i);
+  const k=changed.length;
+  if(k===0) return {useMask:false, payload:''};
+  if(shouldUseBitmask(M,k)){
+    let bits=0n; for(const idx of changed) bits |= 1n << BigInt(idx);
+    const maskBytes=Math.ceil(M/8);
+    const mask=new Uint8Array(maskBytes);
+    for(let i=0;i<maskBytes;i++) mask[i]= Number((bits >> BigInt(i*8)) & 0xFFn);
+    const b64Chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    let maskB64=''; let buf=0, blen=0;
+    for(const by of mask){ buf=(buf<<8)|by; blen+=8; while(blen>=6){ blen-=6; maskB64+=b64Chars[(buf>>blen)&63]; } }
+    if(blen>0) maskB64+=b64Chars[(buf<<(6-blen))&63];
+    return {useMask:true, payload: maskB64 + ':' + changed.map(i=>curr[i]).join('')};
   }
+  return {useMask:false, payload: changed.map(i=>`${i}:${curr[i]}`).join(',')};
+}
 
-  while(lines.length&&lines[lines.length-1].replace(/[\x03\x04\x0f0-9,a-fA-F]/g,'').trim()==='')lines.pop();
-  return lines.join('\n');
+
+export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial<Img2IrcOptions> = {}): Promise<string> {
+  if (typeof OffscreenCanvas === 'undefined') throw new Error('OffscreenCanvas not available');
+  const o: Img2IrcOptions = { ...DEFAULTS, ...opts } as any;
+  const w = Math.max(MIN_IRC_WIDTH, Math.min(MAX_IRC_WIDTH, o.width));
+  const asp = (bitmap.height / bitmap.width) || 1;
+  const pm = o.pixelMode;
+  let pW:number,pH:number,cols:number,rows:number;
+  if(pm==='braille'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.45));if(o.height)rows=o.height;pH=rows*4;}
+  else if(pm==='quarter'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows*2;}
+  else if(pm==='half'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
+  else {cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows;}
+  if(rows>120){rows=120;pH=pm==='braille'?480:pm==='quarter'?240:pm==='half'?240:120;}
+  const isRot90 = o.rotate===90 || o.rotate===270;
+  if(isRot90){ const tmpCols=cols; cols=rows; rows=tmpCols; const tmpW=pW; pW=pH; pH=tmpW; }
+  let eW=pW,eH=pH;
+  if(o.pixelize>0){const s=Math.max(2,o.pixelize);eW=Math.max(1,Math.round(pW/s));eH=Math.max(1,Math.round(pH/s));}
+  const cvs: any = new (OffscreenCanvas as any)(eW, eH);
+  const ctx: any = cvs.getContext('2d')!;
+  ctx.imageSmoothingEnabled = o.filter!=='nearest';
+  ctx.filter = cssFilter(o);
+  if(o.alphaMode==='opaque'){ ctx.fillStyle=o.background||'#000'; ctx.fillRect(0,0,eW,eH); } else { ctx.clearRect(0,0,eW,eH); }
+  ctx.save(); ctx.translate(eW/2, eH/2);
+  if(o.rotate) ctx.rotate(o.rotate*Math.PI/180);
+  ctx.scale(o.flipH?-1:1, o.flipV?-1:1);
+  ctx.drawImage(bitmap, -eW/2, -eH/2, eW, eH);
+  ctx.restore(); ctx.filter='none';
+  let src: any = cvs;
+  if(o.pixelize>0){
+    const up: any = new (OffscreenCanvas as any)(pW, pH);
+    const uc: any = up.getContext('2d')!; uc.imageSmoothingEnabled=false; uc.drawImage(cvs,0,0,pW,pH); src=up;
+  }
+  let id: any = src.getContext('2d')!.getImageData(0,0,pW,pH);
+  let d: any = id.data;
+  return await renderPixelsCore(d, pW, pH, cols, rows, pm, o);
 }
 
 export function estimateLineLengths(art:string,maxBytes=IRC_SAFE_PAYLOAD){const ls=art.split('\n');let lg=0;for(const l of ls){const b=new TextEncoder().encode(l).length;if(b>lg)lg=b;}return{ok:lg<=maxBytes,longest:lg,lines:ls.length, total:new TextEncoder().encode(art).length};}

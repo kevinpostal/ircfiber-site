@@ -746,13 +746,12 @@
       if (!isInitialSnap) {
         const scrolledUp = container ? container.scrollTop < prevScrollTop - 2 : false;
         if (scrolledUp) { cachedAtBottom = false; } else {
-      maybeTrim();
-      // Ensure trim has been applied to the DOM before measuring
-      // scrollHeight. Without this, renderStart may have just been moved
-      // (trimming 150 rows at top) but the DOM still contains the old
-      // rows, so scrollHeight is stale and the snap lands half-cut.
-      flushSync();
-
+        maybeTrim();
+        // Ensure trim has been applied to the DOM before measuring
+        // scrollHeight. Without this, renderStart may have just been moved
+        // (trimming 150 rows at top) but the DOM still contains the old
+        // rows, so scrollHeight is stale and the snap lands half-cut.
+        flushSync();
       // Entrance animation: detect which messages are new since the last
       // time we were at the bottom. Only the batch head (firstAuthor or
       // non-grouped rows) gets the full slide-in; sameAuthor rows get a
@@ -906,10 +905,19 @@
     // When NOT pinned (stick broken by a scroll-up), re-engage only on an
     // actual DOWNWARD scroll into the near-bottom band — a stopped position
     // within the band does NOT re-stick (reading is never yanked).
+    // FIX: visually at the very bottom (≤4px) always counts as pinned,
+    // regardless of scroll direction. Without this, a wheel jitter that
+    // cleared cachedAtBottom via the pre-clear handler left the user
+    // visually at bottom (scrollHeight - scrollBottom ≈0) but logically
+    // unpinned, so new messages never snapped ("I thought it was at the
+    // bottom but it was not").
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
-    const atBottom = cachedAtBottom
-      ? scrollHeight - scrollBottom <= 0                       // strict: already at bottom, any scroll-up leaves
-      : scrollTop > prevTop && scrollHeight - scrollBottom <= STICK_BAND_PX; // down-scroll into band re-engages
+    const distFromBottom = scrollHeight - scrollBottom;
+    const atBottom = distFromBottom <= 4
+      ? true
+      : cachedAtBottom
+        ? distFromBottom <= 0
+        : scrollTop > prevTop && distFromBottom <= STICK_BAND_PX;
 
     // IRCCloud setScrolledToBottom: only act when the value CHANGES.
     if (cachedAtBottom === atBottom) {
@@ -1005,7 +1013,7 @@
       if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
       if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     };
-    const onWheel = () => clearStickOnUserInput();
+    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) clearStickOnUserInput(); };
     const onPointerDown = () => clearStickOnUserInput();
     const onKeyDown = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;

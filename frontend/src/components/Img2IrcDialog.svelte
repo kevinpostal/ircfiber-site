@@ -1,6 +1,7 @@
 <script lang="ts">
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode } from '../lib/img2irc';
+  // Worker is loaded lazily via dynamic import to keep main bundle small and not break if Worker unsupported
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { generateLabel } from '../lib/utils';
@@ -9,12 +10,12 @@
   let { file, filename, onClose, onBack }: Props = $props();
 
   let width=$state(DEFAULT_IRC_WIDTH);
-  let renderMode=$state<RenderMode>('ansi24');
+  let renderMode=$state<RenderMode>('ansi');
   let pixelMode=$state<PixelMode>('half');
-  let midgardMode=$state<MidgardColorMode>('truecolor');
+  let midgardMode=$state<MidgardColorMode>('xterm256');
   let brightness=$state(0), contrast=$state(0), saturation=$state(0), hue=$state(0), gamma=$state(0), blur=$state(0), pixelize=$state(0);
   let grayscale=$state(false), invert=$state(false), sepia=$state(false), normalize=$state(false), dither=$state(false), nograyscale=$state(false), flipH=$state(false), flipV=$state(false), comicFilter=$state<'none'|'comic'>('none');
-  let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('lab');
+  let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('oklab');
   let viterbiW=$state(2.5);
   let rotate=$state('0');
   let filter=$state('linear');
@@ -22,18 +23,72 @@
 
   $effect(()=>{
     void midgardMode;
+    if((midgardMode as string)==='vga256'){ midgardMode='xterm256'; return; } // removed DOS/VGA — migrate to xterm256
     if(midgardMode==='truecolor'){ renderMode='ansi24'; if(comicFilter==='comic') comicFilter='none'; }
-    else if(midgardMode==='vga256'){ renderMode='ansi'; comicFilter='none'; }
     else if(midgardMode==='xterm256'){ renderMode='ansi'; comicFilter='none'; }
     else if(midgardMode==='16'){ renderMode='irc'; comicFilter='none'; }
     else if(midgardMode==='retro'){ renderMode='irc'; comicFilter='none'; pixelMode='half'; }
     else if(midgardMode==='comic'){ renderMode='ansi24'; comicFilter='comic'; }
   });
-
   let art=$state(''), htmlPreview=$state(''), loading=$state(true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
   let hasAlpha=$state(false);
   let gen=0;
   let debounce: ReturnType<typeof setTimeout>|null=null;
+  let _worker: Worker | null = null;
+  // Cleanup worker and timers on destroy — prevents leak when dialog is opened/closed repeatedly
+  $effect(() => {
+    return () => {
+      if (debounce) { clearTimeout(debounce); debounce = null; }
+      try { _worker?.terminate(); } catch {}
+      _worker = null;
+      gen++; // cancel any in-flight converts
+    };
+  });
+  function getWorker(): Worker | null {
+    if (_worker) return _worker;
+    try {
+      // Vite handles ?worker&url — dynamic, no static import to break build
+      _worker = new Worker(new URL('../lib/img2irc.worker.ts', import.meta.url), { type: 'module' });
+      _worker.onerror = () => { try { _worker?.terminate(); } catch {}; _worker = null; };
+    } catch { _worker = null; }
+    return _worker;
+  }
+  async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number): Promise<string | null> {
+    const w = getWorker();
+    if (!w || typeof OffscreenCanvas === 'undefined' || typeof createImageBitmap === 'undefined') return null;
+    let bitmap: ImageBitmap | null = null;
+    let handler: ((e: MessageEvent) => void) | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    try {
+      bitmap = await createImageBitmap(img);
+      if (expectedGen !== gen) { try { bitmap.close(); } catch {} return null; }
+      const id = Math.random();
+      const res = await new Promise<string>((resolve, reject) => {
+        handler = (e: MessageEvent) => {
+          const d: any = e.data;
+          if (d.id !== id) return;
+          if (handler) w.removeEventListener('message', handler as any);
+          if (timer) clearTimeout(timer);
+          if (d.ok) resolve(d.result);
+          else reject(new Error(d.error));
+        };
+        w.addEventListener('message', handler as any);
+        w.postMessage({ id, bitmap: bitmap!, opts }, [bitmap as any]);
+        // Transferable bitmap is now owned by worker — null our ref so we don't double-close
+        bitmap = null;
+        timer = setTimeout(() => {
+          if (handler) w.removeEventListener('message', handler as any);
+          reject(new Error('worker timeout'));
+        }, 8000);
+      });
+      return res;
+    } catch { return null; }
+    finally {
+      if (timer) clearTimeout(timer);
+      if (handler) { try { w.removeEventListener('message', handler as any); } catch {} }
+      if (bitmap) { try { bitmap.close(); } catch {} }
+    }
+  }
 
   function schedule(){
     if(fitting) return;
@@ -66,7 +121,12 @@
       } catch {}
       try{
         const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: comicFilter==='comic', alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as const;
-        const res=await imageToIrcArt(img, opts);
+        // Try off-main-thread Worker with transferable ImageBitmap (no copy) — falls back to main thread
+        // Pass expectedGen so worker can abort if user changed sliders while bitmap was being created
+        let res: string | null = null;
+        try { res = await convertViaWorker(img, opts, cur); } catch {}
+        if (cur!==gen) { revokeImageUrl(img); return; }
+        if (res == null) res = await imageToIrcArt(img, opts);
         if(cur!==gen) return;
         art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
@@ -81,6 +141,8 @@
   const activeNetworkId=$derived(ircState.activeBuffer.networkId||'');
 
   // ── Smart fit: adjust compression / width / colour mode until longest line ≤ 512 ──
+  // Ladder is quality-preserving: cheapest quality cost first. Viterbi w uses bisection (LambdaPareto.lean: bytes_antitone)
+  // so we binary-search the minimal w that fits before touching geometry.
   let fitBusy=$state(false);
   let fitting=false;
   async function smartFit(){
@@ -91,27 +153,51 @@
       while(steps++ < 14){
         const longest=estimateLineLengths(art).longest;
         if(longest<=IRC_HARD_LIMIT) break;
+        // Try bisection on w first if indexed and w<6
+        const indexed = renderMode!=='ansi24' && midgardMode!=='truecolor' && midgardMode!=='comic';
+        if(indexed && viterbiW < 6){
+          const ok = await bisectViterbiW();
+          if(ok) continue; // re-measure after bisection
+        }
         const step=pickFitStep();
         if(!step) break;
         step();
-        // let the state effects flush, then convert directly (schedule() is paused while fitting)
         await new Promise(r=>setTimeout(r, 30));
         const my=++gen;
         await convert(my);
-        if(my!==gen) return; // user changed something while we were converting
+        if(my!==gen) return;
       }
     } finally { fitting=false; fitBusy=false; }
   }
+  async function bisectViterbiW(): Promise<boolean>{
+    const lo=viterbiW, hi=6;
+    let best=hi, found=false;
+    const savedW=viterbiW;
+    viterbiW=hi; await new Promise(r=>setTimeout(r, 30)); let my=++gen; await convert(my); if(my!==gen) return false;
+    if(estimateLineLengths(art).longest <= IRC_HARD_LIMIT){ found=true; best=hi; }
+    else { viterbiW=savedW; await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my); return false; }
+    let l=lo, h=hi;
+    for(let iter=0; iter<4; iter++){
+      const mid=Math.round(((l+h)/2)*2)/2;
+      if(mid===l || mid===h) break;
+      viterbiW=mid; await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my); if(my!==gen) return false;
+      if(estimateLineLengths(art).longest <= IRC_HARD_LIMIT){ best=mid; h=mid; found=true; } else l=mid;
+    }
+    if(found) viterbiW=best;
+    else viterbiW=savedW;
+    await new Promise(r=>setTimeout(r,30)); my=++gen; await convert(my);
+    return found;
+  }
   function pickFitStep(): (()=>void)|null{
     const indexed = renderMode!=='ansi24' && midgardMode!=='truecolor' && midgardMode!=='comic';
-    // 1. bump Viterbi byte weight (indexed only) — smallest quality loss
-    if(indexed && viterbiW < 6) return ()=>{ viterbiW=Math.min(6, Math.round((viterbiW+1)*2)/2); };
+    // 1. bump Viterbi byte weight (indexed only) — smallest quality loss (fallback if bisection already tried)
+    if(indexed && viterbiW < 6) return ()=>{ viterbiW=Math.min(6, Math.round((viterbiW+0.5)*2)/2); };
     // 2. shrink width
     if(width > MIN_IRC_WIDTH + 4) return ()=>{ width=Math.max(MIN_IRC_WIDTH, width-4); };
     // 3. comic bilateral pre-filter lengthens runs (indexed only)
     if(indexed && comicFilter!=='comic') return ()=>{ comicFilter='comic'; };
     // 4. switch truecolor/256 → 16 colours (biggest byte lever, biggest quality hit)
-    if(midgardMode==='truecolor' || midgardMode==='vga256' || midgardMode==='xterm256') return ()=>{ midgardMode='16'; };
+    if(midgardMode==='truecolor' || midgardMode==='xterm256') return ()=>{ midgardMode='16'; };
     // 5. last resort: minimum width
     if(width > MIN_IRC_WIDTH) return ()=>{ width=MIN_IRC_WIDTH; };
     return null;
@@ -138,13 +224,12 @@
   }
   function resetAll(){
     width=DEFAULT_IRC_WIDTH;
-    renderMode='ansi24';
+    renderMode='ansi';
     pixelMode='half';
-    midgardMode='truecolor';
+    midgardMode='xterm256';
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
-    grayscale=false; invert=false; sepia=false; normalize=false; dither=false; ditherMode='none'; colorMatching='lab'; nograyscale=false; flipH=false; flipV=false; comicFilter='none'; rotate='0'; filter='linear'; viterbiW=2.5;
+    grayscale=false; invert=false; sepia=false; normalize=false; dither=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; comicFilter='none'; rotate='0'; filter='linear'; viterbiW=2.5;
   }
-  function resetAdv(){ resetAll(); }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
   function handleOverlayClick(e:MouseEvent){ if(e.target===e.currentTarget) onClose(); }
 </script>
@@ -163,7 +248,6 @@
       <label class="ctrl">
         <select bind:value={midgardMode} class="sel" aria-label="Colors">
           <option value="truecolor" data-i18n="colors.truecolor">True-Color (24-bit)</option>
-          <option value="vga256" data-i18n="colors.vga256">DOS 256 (VGA)</option>
           <option value="xterm256" data-i18n="colors.xterm256">ANSI/xterm 256</option>
           <option value="16" data-i18n="colors.16">16 colors</option>
           <option value="retro" data-i18n="colors.retro">Retro / Demoscene</option>
@@ -218,7 +302,7 @@
           <label><input type="checkbox" bind:checked={sepia}/> Sepia</label>
           <label><input type="checkbox" bind:checked={normalize}/> Normalize</label>
           <label title="Edge-preserving smoother — flattens gradients, lengthens colour runs without blurring edges. 2× bilateral radius 2 σ40: landscape -11% (spec §6)">Comic <select class="sel sm" bind:value={comicFilter}><option value="none">Off</option><option value="comic">Comic</option></select></label>
-          <label><input type="checkbox" bind:checked={dither}/> Dither</label>
+          <label title="Dithering is byte-adverse on IRC: it breaks colour runs (STUDY §8). Shade blocks buy the same tones at zero prefix cost."><input type="checkbox" bind:checked={dither}/> Dither {#if dither && viterbiW>0}<span class="warn" title="Byte-adverse with Viterbi — disables run compression">⚠</span>{/if}</label>
           <label title="Skip near-gray palette colors for richer color (--nograyscale)"><input type="checkbox" bind:checked={nograyscale}/> <span class="t">NoGray</span></label>
           <label><input type="checkbox" bind:checked={flipH}/> Flip H</label>
           <label><input type="checkbox" bind:checked={flipV}/> Flip V</label>
