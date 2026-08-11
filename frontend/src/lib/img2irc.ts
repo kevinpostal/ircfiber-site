@@ -536,10 +536,6 @@ async function renderPixelsCore(
           if(cellIsEmpty[i]){ chosenIdx[i-1]=chosenIdx[i]; }
           else { chosenIdx[i-1]=back[i][chosenIdx[i]]; }
         }
-        // Help GC: large per-row structures no longer needed after backtracking
-        // (cellGlyph holds M*144 GlyphInfo objects, back holds M*144 ints)
-        // @ts-ignore — help GC by dropping refs before string emit
-        (cellGlyph as any) = null; (back as any) = null; (dp as any) = null;
         let ln='', lastFg='', lastBg='', first=true;
         for(let c=0;c<M;c++){
           if(cellIsEmpty[c]){ ln+=' '; first=false; continue; }
