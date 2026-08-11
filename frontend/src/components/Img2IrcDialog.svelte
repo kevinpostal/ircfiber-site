@@ -255,6 +255,7 @@
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
     grayscale=false; invert=false; sepia=false; normalize=false; dither=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; comicFilter='none'; rotate='0'; filter='linear'; viterbiW=2.5;
   }
+  function resetAdv(){ resetAll(); }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
   function handleOverlayClick(e:MouseEvent){ if(e.target===e.currentTarget) onClose(); }
 </script>
