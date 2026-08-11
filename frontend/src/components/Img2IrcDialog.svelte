@@ -29,6 +29,7 @@
     else if(midgardMode==='16'){ renderMode='irc'; comicFilter='none'; }
     else if(midgardMode==='retro'){ renderMode='irc'; comicFilter='none'; pixelMode='half'; }
     else if(midgardMode==='comic'){ renderMode='ansi24'; comicFilter='comic'; }
+    else if(midgardMode==='smart'){ renderMode='ansi24'; comicFilter='none'; }
   });
   let art=$state(''), htmlPreview=$state(''), loading=$state(true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
   let hasAlpha=$state(false);
@@ -274,6 +275,7 @@
       <label class="ctrl">
         <select bind:value={midgardMode} class="sel" aria-label="Colors">
           <option value="truecolor" data-i18n="colors.truecolor">True-Color (24-bit)</option>
+          <option value="smart">Smart</option>
           <option value="xterm256" data-i18n="colors.xterm256">ANSI/xterm 256</option>
           <option value="16" data-i18n="colors.16">16 colors</option>
           <option value="retro" data-i18n="colors.retro">Retro / Demoscene</option>

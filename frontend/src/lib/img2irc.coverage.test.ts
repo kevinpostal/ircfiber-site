@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import type { Img2IrcOptions } from './img2irc';
 import {
   IRC99, ANSI256, ANSI16, XTERM256,
   getMidgardPalette,
@@ -9,7 +11,8 @@ import {
   renderPixelsCore,
   base94Encode, base94Decode, base94EncodedLength,
   diffCrossoverK, shouldUseBitmask, estimateDiffSaving, encodeLineDiff,
-  clearColorLut
+  clearColorLut,
+  smartPaletteA, smartPaletteB,
 } from './img2irc';
 
 // Helper to create small test data
@@ -209,7 +212,6 @@ describe('img2irc 100% coverage', () => {
     expect(diffCrossoverK(0)).toBe(0);
     expect(estimateDiffSaving(0,0)).toBeDefined();
   });
-
   it('EXP_LUT correctness vs Math.exp', () => {
     const sigma2 = 3200;
     for(let d2 of [0, 100, 1000, 10000, 195075]) {
@@ -218,5 +220,66 @@ describe('img2irc 100% coverage', () => {
       // Allow small error due to quantization (32 steps)
       expect(Math.abs(actual - expected)).toBeLessThan(0.02);
     }
+  });
+
+  it('smartPaletteA k-means returns K distinct OKLab-clustered hex colors', () => {
+    const px = new Uint8ClampedArray(24*24*4);
+    for(let y=0;y<24;y++) for(let x=0;x<24;x++){ const i=(y*24+x)*4; px[i]=x*10; px[i+1]=y*10; px[i+2]=128; px[i+3]=255; }
+    const pal = smartPaletteA(px, 24, 24, 24);
+    expect(pal.length).toBe(24);
+    expect(new Set(pal).size).toBe(24);
+  });
+  it('smartPaletteA clusters two dominant colors (red/blue)', () => {
+    const px = new Uint8ClampedArray(4*4*4);
+    for(let i=0;i<px.length;i+=4){ px[i]= i<32? 200:20; px[i+1]=10; px[i+2]= i<32? 20:200; px[i+3]=255; }
+    const pal = smartPaletteA(px, 4, 4, 24);
+    const isRed=(c:number):boolean=>((c>>16)&255)>100 && ((c>>8)&255)<80;
+    const isBlue=(c:number):boolean=>(c&255)>100 && ((c>>16)&255)<80;
+    expect(pal.some(isRed)).toBe(true);
+    expect(pal.some(isBlue)).toBe(true);
+  });
+  it('smartPaletteB selects K distinct indices from the fixed 99, biased to frequent colors', () => {
+    const px = new Uint8ClampedArray(4*4*4);
+    for(let i=0;i<px.length;i+=4){ px[i]=200; px[i+1]=10; px[i+2]=20; px[i+3]=255; }
+    const sel = smartPaletteB(px, 4, 4, 16, 0.02);
+    expect(sel.length).toBeLessThanOrEqual(16);
+    expect(new Set(sel).size).toBe(sel.length);
+    expect(sel.every(i=>i>=0 && i<99)).toBe(true);
+    expect(sel.includes(4) || sel.includes(52)).toBe(true);
+  });
+  it('smart mode is truecolor (is24) and not viterbi-indexed', async () => {
+    const smartPal = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24];
+    const pal = getMidgardPalette({ midgardMode:'smart', renderMode:'ansi24', _smartPaletteA: smartPal } as unknown as Img2IrcOptions);
+    expect(pal.length).toBe(24);
+    const opts = { width:4, renderMode:'ansi24', pixelMode:'half', midgardMode:'smart', filter:'linear', brightness:0, contrast:0, gamma:0, saturation:0, hue:0, invert:false, grayscale:false, sepia:false, normalize:false, dither:false, ditherMode:'none', colorMatching:'oklab', flipH:false, flipV:false, rotate:0, pixelize:0, blur:0, nograyscale:false, viterbiW:0, comic:false, alphaMode:'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', _smartPaletteA:[0xff0000,0x00ff00,0x0000ff,0xffff00,0xff00ff,0x00ffff,0xffffff,0x000000,0x7f7f7f,0x3f3f3f,0xafafaf,0x123456,0x654321,0x112233,0x332211,0x445566,0x665544,0x778899,0x998877,0xaabbcc,0xccbbaa,0xdeadbe,0xbeef00,0x00beef] } as unknown as Img2IrcOptions;
+    const d = new Uint8ClampedArray(4*2*4); d.fill(128); for(let i=3;i<d.length;i+=4) d[i]=255;
+    const res = await renderPixelsCore(d, 4, 2, 4, 1, 'half', opts);
+    expect(res.includes('\x04')).toBe(true);
+    expect(res.includes('\x03')).toBe(false);
+  });
+  it('smart truecolor viterbi emits \\x04 with palette-A colors and sticky elision', async () => {
+    const paletteA = [0xff0000, 0x0000ff, 0x00ff00];
+    const hexSet = new Set(paletteA.map(c=>c.toString(16).padStart(6,'0')));
+    const opts = { width:6, renderMode:'ansi24', pixelMode:'half', midgardMode:'smart', filter:'linear', brightness:0, contrast:0, gamma:0, saturation:0, hue:0, invert:false, grayscale:false, sepia:false, normalize:false, dither:false, ditherMode:'none', colorMatching:'oklab', flipH:false, flipV:false, rotate:0, pixelize:0, blur:0, nograyscale:false, viterbiW:2.5, comic:false, alphaMode:'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', _smartPaletteA: paletteA } as unknown as Img2IrcOptions;
+    const d = new Uint8ClampedArray(6*2*4);
+    for(let i=0;i<d.length;i+=4){ d[i]=200; d[i+1]=10; d[i+2]=20; d[i+3]=255; }
+    const res = await renderPixelsCore(d, 6, 2, 6, 1, 'half', opts);
+    expect(res.includes('\x04')).toBe(true);
+    const emitted = [...res.matchAll(/\x04([0-9a-f]{6})/g)].map(m=>m[1]);
+    expect(emitted.length).toBeGreaterThan(0);
+    expect(emitted.every(h=>hexSet.has(h))).toBe(true);
+  });
+  it('smart indexed viterbi uses palette B as candidate set, not per-row S=12', async () => {
+    const paletteB = [4, 52, 12, 14, 2, 5, 9, 1];
+    const opts = { width:6, renderMode:'irc', pixelMode:'half', midgardMode:'smart', filter:'linear', brightness:0, contrast:0, gamma:0, saturation:0, hue:0, invert:false, grayscale:false, sepia:false, normalize:false, dither:false, ditherMode:'none', colorMatching:'oklab', flipH:false, flipV:false, rotate:0, pixelize:0, blur:0, nograyscale:false, viterbiW:2.5, comic:false, alphaMode:'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', _smartPaletteB: paletteB } as unknown as Img2IrcOptions;
+    const d = new Uint8ClampedArray(6*2*4); d.fill(128); for(let i=3;i<d.length;i+=4) d[i]=255; for(let i=0;i<4;i++){ d[i*4]=200; d[i*4+1]=10; d[i*4+2]=20; }
+    const res = await renderPixelsCore(d, 6, 2, 6, 1, 'half', opts);
+    const idxs = [...res.matchAll(/\x03(\d+)/g)].map(m=>Number(m[1]));
+    expect(idxs.length).toBeGreaterThan(0);
+    expect(idxs.every(i=>paletteB.includes(i))).toBe(true);
+  });
+  it('Colors dropdown has Smart option', () => {
+    const src = fs.readFileSync('src/components/Img2IrcDialog.svelte','utf8');
+    expect(src).toContain('value="smart"');
   });
 });

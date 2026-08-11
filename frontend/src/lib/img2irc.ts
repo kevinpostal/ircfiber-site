@@ -78,7 +78,7 @@ export type PixelMode = 'half' | 'full' | 'quarter' | 'braille';
 export type SamplingFilter = 'nearest' | 'linear';
 export type DitherMode = 'none' | 'bayer4' | 'bayer8' | 'floyd' | 'atkinson' | 'sierra' | 'stucki' | 'jarvis';
 export type ColorMatching = 'rgb' | 'lab' | 'oklab';
-export type MidgardColorMode = 'truecolor' | 'xterm256' | '16' | 'retro' | 'comic';
+export type MidgardColorMode = 'truecolor' | 'xterm256' | '16' | 'retro' | 'comic' | 'smart';
 
 export interface Img2IrcOptions {
   width: number; height?: number;
@@ -101,9 +101,15 @@ export interface Img2IrcOptions {
   trimTransparent: boolean;
   smartEdges: boolean;
   background: string; // hex or 'transparent'
+  _smartPaletteA?: number[];
+  _smartPaletteB?: number[];
 }
 
 export function getMidgardPalette(o: Img2IrcOptions): number[] {
+  if(o.midgardMode==='smart'){
+    if(o.renderMode==='irc' || o.renderMode==='ansi') return IRC99;
+    return (o as any)._smartPaletteA || IRC99;
+  }
   if((o.midgardMode as string)==='vga256') return XTERM256; // removed DOS/VGA palette — fallback to xterm256
   if(o.midgardMode==='xterm256') return XTERM256;
   if(o.midgardMode==='16' || o.midgardMode==='retro') return ANSI16;
@@ -195,8 +201,11 @@ export function lutLookup(r:number,g:number,b:number,pal:number[],ng:boolean, mo
 }
 export function clearColorLut(){COLOR_LUT.clear();}
 const _palOkLabCache = new Map<string, number[][]>();
+const _palOkLabWeak = new WeakMap<number[], number[][]>();
 function getPalOkLab(pal: number[]): number[][] {
-  const key = pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : pal===ANSI16 ? 'ansi16' : String(pal.length);
+  const isKnown = pal===XTERM256 || pal===ANSI256 || pal===IRC99 || pal===ANSI16;
+  if(!isKnown){ let w=_palOkLabWeak.get(pal); if(w) return w; const arr2 = pal.map(c => { const v = srgbToOkLab((c>>16)&255,(c>>8)&255,c&255); return v; }) as any; _palOkLabWeak.set(pal, arr2); return arr2; }
+  const key = pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : 'ansi16';
   let arr = _palOkLabCache.get(key);
   if (!arr) {
     arr = pal.map(c => { const v = srgbToOkLab((c>>16)&255,(c>>8)&255,c&255); return v; }) as any;
@@ -206,8 +215,11 @@ function getPalOkLab(pal: number[]): number[][] {
   return arr;
 }
 const _palToIrcCache = new Map<string, Uint8Array>();
+const _palToIrcWeak = new WeakMap<number[], Map<string, Uint8Array>>();
 function getPalToIrc(pal: number[], mode: ColorMatching): Uint8Array {
-  const key = (pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : pal===ANSI16 ? 'ansi16' : String(pal.length)) + ':' + mode;
+  const isKnown2 = pal===XTERM256 || pal===ANSI256 || pal===IRC99 || pal===ANSI16;
+  if(!isKnown2){ let byMode=_palToIrcWeak.get(pal); if(!byMode){ byMode=new Map(); _palToIrcWeak.set(pal, byMode); } let a2=byMode.get(mode); if(a2) return a2; const arrW=new Uint8Array(pal.length); for(let i=0;i<pal.length;i++) arrW[i]=ansiToIrcIdx(i,pal,mode); byMode.set(mode, arrW); return arrW; }
+  const key = (pal===XTERM256 ? 'xterm' : pal===ANSI256 ? 'ansi' : pal===IRC99 ? 'irc99' : 'ansi16') + ':' + mode;
   let arr = _palToIrcCache.get(key);
   if (!arr) {
     arr = new Uint8Array(pal.length);
@@ -224,6 +236,71 @@ export function ansiToIrcIdx(ansiIdx:number, srcPal:number[]=ANSI256, colorMode:
 }
 export function toEmitIdx(idx:number, mode:RenderMode, srcPal:number[]=ANSI256, colorMode:ColorMatching='rgb'):number{
   return mode==='ansi' ? ansiToIrcIdx(idx, srcPal, colorMode) : Math.min(idx,98);
+}
+
+// ── Smart palettes ──────────────────────────────────────────────────────────
+// Palette A: OKLab k-means K=24 (truecolor \x04). Palette B: mIRC-99 subset K≈16 (\x03).
+// Both derived once per image; deterministic (seeded) so slider drags are stable.
+
+export function smartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, K=24): number[] {
+  const pts: number[][] = [];
+  for(let y=0;y<pH;y++) for(let x=0;x<pW;x++){
+    const i=(y*pW+x)*4;
+    if(d[i+3] < 128) continue;
+    pts.push([d[i], d[i+1], d[i+2]]);
+  }
+  if(pts.length===0) return [0];
+  // cap K at distinct colours so centroids don't collapse
+  const seen = new Set<string>();
+  for(const c of pts) seen.add(c[0]+','+c[1]+','+c[2]);
+  const Kc = Math.min(K, seen.size, pts.length);
+  const oklab: number[][] = pts.map(c=> srgbToOkLab(c[0],c[1],c[2]) as any);
+  // deterministic PRNG (xorshift32 seeded from content hash)
+  let seed = 0x9e3779b9 ^ (pts.length * 2654435761) >>> 0;
+  for(let i=0;i<Math.min(pts.length, 16); i++) seed ^= (pts[i][0]*374761393 + pts[i][1]*668265263 + pts[i][2]*1274126177) >>> 0;
+  const rnd = ()=>{ seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed>>>0)/4294967296; };
+  const cents: number[][] = [];
+  cents.push([...oklab[Math.floor(rnd()*oklab.length)]]);
+  const dist2 = new Float64Array(oklab.length).fill(Infinity);
+  while(cents.length < Kc){
+    let sum=0;
+    const last = cents[cents.length-1];
+    for(let i=0;i<oklab.length;i++){
+      const dl=oklab[i][0]-last[0], da=oklab[i][1]-last[1], db=oklab[i][2]-last[2];
+      const d2=dl*dl+da*da+db*db;
+      if(d2 < dist2[i]) dist2[i]=d2;
+      sum+=dist2[i];
+    }
+    if(sum===0) break;
+    let r = rnd()*sum;
+    let pick = oklab.length-1;
+    for(let i=0;i<oklab.length;i++){ r-=dist2[i]; if(r<=0){ pick=i; break; } }
+    cents.push([...oklab[pick]]);
+  }
+  for(let iter=0; iter<20; iter++){
+    const sums = cents.map(()=>[0,0,0]);
+    const counts = new Array(cents.length).fill(0);
+    for(let i=0;i<oklab.length;i++){
+      let bi=0, bd=Infinity;
+      for(let c=0;c<cents.length;c++){ const dl=oklab[i][0]-cents[c][0], da=oklab[i][1]-cents[c][1], db=oklab[i][2]-cents[c][2]; const d2=dl*dl+da*da+db*db; if(d2<bd){bd=d2; bi=c;} }
+      sums[bi][0]+=oklab[i][0]; sums[bi][1]+=oklab[i][1]; sums[bi][2]+=oklab[i][2]; counts[bi]++;
+    }
+    for(let c=0;c<cents.length;c++) if(counts[c]>0){ cents[c][0]=sums[c][0]/counts[c]; cents[c][1]=sums[c][1]/counts[c]; cents[c][2]=sums[c][2]/counts[c]; }
+  }
+  return cents.map(c=>{ const [r,g,b]=oklabToSrgb(c[0],c[1],c[2]); return (r<<16)|(g<<8)|b; });
+}
+
+export function smartPaletteB(d: Uint8ClampedArray, pW:number, pH:number, K=16, lambda=0.02, mode:ColorMatching='oklab'): number[] {
+  const freq = new Map<number, number>();
+  for(let y=0;y<pH;y++) for(let x=0;x<pW;x++){
+    const i=(y*pW+x)*4;
+    if(d[i+3] < 128) continue;
+    for(const idx of kNearest(d[i], d[i+1], d[i+2], IRC99, 2, false, mode)) freq.set(idx, (freq.get(idx)||0)+1);
+  }
+  if(freq.size===0) return [0,1,7].slice(0, Math.min(K,3));
+  const scored = [...freq.entries()].map(([idx,f])=>({idx,f,score: f / (1 + lambda*codeLen(idx))}));
+  scored.sort((a,b)=> b.score-a.score || b.f-a.f || a.idx-b.idx);
+  return scored.slice(0, Math.min(K, scored.length)).map(s=>s.idx);
 }
 
 export function kNearest(r:number,g:number,b:number,pal:number[],k:number,ng:boolean, mode:ColorMatching='rgb'):number[]{
@@ -389,6 +466,13 @@ export function applyBilateralFilter(d: Uint8ClampedArray, pW:number, pH:number,
   }
 }
 
+function rankSmartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, pal:number[], topN:number, mode:ColorMatching): number[] {
+  const counts=new Array(pal.length).fill(0);
+  for(let y=0;y<pH;y++) for(let x=0;x<pW;x++){ const i=(y*pW+x)*4; if(d[i+3]<128) continue; let bi=0,bd=Infinity; for(let c=0;c<pal.length;c++){ const cr=(pal[c]>>16)&255,cg=(pal[c]>>8)&255,cb=pal[c]&255,d2=colorDist2(d[i],d[i+1],d[i+2],cr,cg,cb,mode); if(d2<bd){bd=d2; bi=c;}} counts[bi]++; }
+  const ranked=counts.map((c,i)=>({c,i})).sort((a,b)=>b.c-a.c||a.i-b.i);
+  return ranked.slice(0, Math.min(topN, pal.length)).map(e=>e.i);
+}
+
 // Shared core — single source of truth for both entry points (main thread + Worker)
 export async function renderPixelsCore(
   d: Uint8ClampedArray,
@@ -489,7 +573,8 @@ export async function renderPixelsCore(
     }
   } else if(pm==='half'){
     const pal=getMidgardPalette(o);
-    const useViterbi = o.viterbiW>0 && !is24 && cols>1;
+    const smart24 = (o as any).midgardMode==='smart' && (o as any)._smartPaletteA && o.renderMode==='ansi24';
+    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -504,7 +589,18 @@ export async function renderPixelsCore(
           if(!emp && !blk){ allEmpty=false; break; }
         }
         if(allEmpty){ lines.push(''); continue; }
-        let _tr = _perf(); const S=rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,12); _tRowPal += _perf() - _tr;
+        let S: number[];
+        let _tr = _perf();
+        if((o as any).midgardMode==='smart' && (o as any)._smartPaletteB && !smart24){
+          S = (o as any)._smartPaletteB as number[];
+        } else if(smart24){
+          const fullA = (o as any)._smartPaletteA as number[];
+          const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(16, fullA.length), o.colorMatching);
+          S = top;
+        } else {
+          S = rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,12);
+        }
+        _tRowPal += _perf() - _tr;
         const states: Array<[number,number]> = [];
         for(const f of S) for(const b of S) states.push([f,b]);
         const M=cols;
@@ -512,7 +608,8 @@ export async function renderPixelsCore(
         const cellGlyph: GlyphInfo[][] = new Array(M);
         const cellIsEmpty: boolean[] = new Array(M);
         let _tc = _perf();
-        const _rowPalOkLab = o.colorMatching==='oklab' ? getPalOkLab(pal) : null;
+        const effPal = smart24 ? ((o as any)._smartPaletteA as number[]) : pal;
+        const _rowPalOkLab = o.colorMatching==='oklab' ? getPalOkLab(effPal) : null;
         for(let i=0;i<M;i++){
           const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
           const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
@@ -521,7 +618,7 @@ export async function renderPixelsCore(
           const rowGlyphs: GlyphInfo[] = new Array(states.length);
           for(let s=0;s<states.length;s++){
             const [f,b]=states[s];
-            rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,pal,o.colorMatching,o.viterbiW, _rowPalOkLab);
+            rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW, _rowPalOkLab);
           }
           cellGlyph[i]=rowGlyphs;
         }
@@ -530,15 +627,20 @@ export async function renderPixelsCore(
         let dp=new Array(states.length).fill(INF);
         const back: number[][] = Array.from({length:M},()=>new Array(states.length).fill(-1));
         const _palToIrc = o.renderMode==='ansi' ? getPalToIrc(pal, o.colorMatching) : null;
+        const _palToIrcEff: Uint8Array | null = smart24 ? null : (o.renderMode==='ansi' ? getPalToIrc(effPal, o.colorMatching) : null);
         for(let s=0;s<states.length;s++){
           if(cellIsEmpty[0]){
             dp[s]=0;
           } else {
             const g=cellGlyph[0][s];
             const [f,b]=states[s];
-            const fgM=_palToIrc ? _palToIrc[f & 255] : f, bgM=_palToIrc ? _palToIrc[b & 255] : b;
-            const pc=pairPref(fgM,bgM);
-            dp[s]=g.err + o.viterbiW*(g.bytes + pc);
+            if(smart24){
+              dp[s]=g.err + o.viterbiW*(g.bytes + 14);
+            } else {
+              const fgM=_palToIrcEff ? _palToIrcEff[f & 255] : f, bgM=_palToIrcEff ? _palToIrcEff[b & 255] : b;
+              const pc=pairPref(fgM,bgM);
+              dp[s]=g.err + o.viterbiW*(g.bytes + pc);
+            }
           }
         }
         let _tdp = _perf();
@@ -562,16 +664,27 @@ export async function renderPixelsCore(
           const nd=new Array(states.length).fill(INF);
           for(let s=0;s<states.length;s++){
             const [f,b]=states[s];
-            const fgM=_palToIrc ? _palToIrc[f & 255] : f, bgM=_palToIrc ? _palToIrc[b & 255] : b;
             const g=cellGlyph[i][s];
-            const candStay=bMinCost.get(b)!.cost + o.viterbiW*fgPref(fgM);
-            const candSwitch=gmin + o.viterbiW*pairPref(fgM,bgM);
-            let best=dp[s];
-            let bestIdxPrev=s;
-            if(candStay < best){ best=candStay; bestIdxPrev=bMinCost.get(b)!.idx; }
-            if(candSwitch < best){ best=candSwitch; bestIdxPrev=gidx; }
-            nd[s]=best + g.err + o.viterbiW*g.bytes;
-            back[i][s]=bestIdxPrev;
+            if(smart24){
+              const candStay=bMinCost.get(b)!.cost + o.viterbiW*7;
+              const candSwitch=gmin + o.viterbiW*14;
+              let best=dp[s];
+              let bestIdxPrev=s;
+              if(candStay < best){ best=candStay; bestIdxPrev=bMinCost.get(b)!.idx; }
+              if(candSwitch < best){ best=candSwitch; bestIdxPrev=gidx; }
+              nd[s]=best + g.err + o.viterbiW*g.bytes;
+              back[i][s]=bestIdxPrev;
+            } else {
+              const fgM=_palToIrcEff ? _palToIrcEff[f & 255] : f, bgM=_palToIrcEff ? _palToIrcEff[b & 255] : b;
+              const candStay=bMinCost.get(b)!.cost + o.viterbiW*fgPref(fgM);
+              const candSwitch=gmin + o.viterbiW*pairPref(fgM,bgM);
+              let best=dp[s];
+              let bestIdxPrev=s;
+              if(candStay < best){ best=candStay; bestIdxPrev=bMinCost.get(b)!.idx; }
+              if(candSwitch < best){ best=candSwitch; bestIdxPrev=gidx; }
+              nd[s]=best + g.err + o.viterbiW*g.bytes;
+              back[i][s]=bestIdxPrev;
+            }
           }
           dp=nd;
         }
@@ -591,25 +704,41 @@ export async function renderPixelsCore(
           const [fRaw,bRaw]=states[sIdx];
           const g=cellGlyph[c][sIdx];
           const glyph=g.glyph;
-          const fg=_palToIrc ? _palToIrc[fRaw & 255] : fRaw, bg=_palToIrc ? _palToIrc[bRaw & 255] : bRaw;
-          if(glyph===' '){
-            const need=first || lastBg!==String(bg);
-            if(need){
-              const cd='\x03'+fg+','+bg;
-              ln+=cd; lastFg=String(fg); lastBg=String(bg);
+          if(smart24){
+            const fHex=toHex6((effPal[fRaw]>>16)&255,(effPal[fRaw]>>8)&255,effPal[fRaw]&255);
+            const bHex=toHex6((effPal[bRaw]>>16)&255,(effPal[bRaw]>>8)&255,effPal[bRaw]&255);
+            if(glyph===' '){
+              const need=first || lastBg!==bHex;
+              if(need){ const cd='\x04'+fHex+','+bHex; ln+=cd; lastFg=fHex; lastBg=bHex; }
+              ln+=' ';
+            } else {
+              const needFull=first || lastFg!==fHex || lastBg!==bHex;
+              const needFgOnly=!first && lastBg===bHex && lastFg!==fHex;
+              if(needFgOnly){ const cd='\x04'+fHex; ln+=cd; lastFg=fHex; }
+              else if(needFull){ const cd='\x04'+fHex+','+bHex; ln+=cd; lastFg=fHex; lastBg=bHex; }
+              ln+=glyph;
             }
-            ln+=' ';
           } else {
-            const needFull=first || lastFg!==String(fg) || lastBg!==String(bg);
-            const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
-            if(needFgOnly){
-              const cd='\x03'+fg;
-              ln+=cd; lastFg=String(fg);
-            } else if(needFull){
-              const cd='\x03'+fg+','+bg;
-              ln+=cd; lastFg=String(fg); lastBg=String(bg);
+            const fg=_palToIrcEff ? _palToIrcEff[fRaw & 255] : fRaw, bg=_palToIrcEff ? _palToIrcEff[bRaw & 255] : bRaw;
+            if(glyph===' '){
+              const need=first || lastBg!==String(bg);
+              if(need){
+                const cd='\x03'+fg+','+bg;
+                ln+=cd; lastFg=String(fg); lastBg=String(bg);
+              }
+              ln+=' ';
+            } else {
+              const needFull=first || lastFg!==String(fg) || lastBg!==String(bg);
+              const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
+              if(needFgOnly){
+                const cd='\x03'+fg;
+                ln+=cd; lastFg=String(fg);
+              } else if(needFull){
+                const cd='\x03'+fg+','+bg;
+                ln+=cd; lastFg=String(fg); lastBg=String(bg);
+              }
+              ln+=glyph;
             }
-            ln+=glyph;
           }
           first=false;
         }
@@ -755,6 +884,10 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
 
   let id=src.getContext('2d')!.getImageData(0,0,pW,pH);
   let d=id.data;
+  if(o.midgardMode==='smart'){
+    if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24);
+    if(!(o as any)._smartPaletteB) (o as any)._smartPaletteB = smartPaletteB(d as any, pW, pH, 16, 0.02, o.colorMatching);
+  }
 
   return await renderPixelsCore(d, pW, pH, cols, rows, pm, o);
 }
@@ -861,6 +994,10 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
   }
   let id: any = src.getContext('2d')!.getImageData(0,0,pW,pH);
   let d: any = id.data;
+  if(o.midgardMode==='smart'){
+    if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24);
+    if(!(o as any)._smartPaletteB) (o as any)._smartPaletteB = smartPaletteB(d as any, pW, pH, 16, 0.02, o.colorMatching);
+  }
   return await renderPixelsCore(d, pW, pH, cols, rows, pm, o);
 }
 
