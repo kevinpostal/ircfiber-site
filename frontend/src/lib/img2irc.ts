@@ -592,11 +592,12 @@ export async function probePolygonGlyphs(): Promise<boolean> {
   } catch { return true; }
 }
 
-/** Greedy Hungarian-inspired palette selection with single-digit bias (PaletteAssignment.lean).
+/** Greedy Hungarian-inspired palette selection with single-digit bias (PaletteAssignment.lean + OneDigitNonMonotone.lean).
  * Lean: digits j = 1 if j<10 else 2, prefixCost f σ = Σ f·digits, assignCost = prefixCost + λ·Σ f·ΔE,
  * exists_optimal_assignment (Hungarian finite), prefixCost_eq = Σf + Σ_{¬single} f, card_oneDigit_le ≤10,
  * topSum = max weight on ≤10 singles, prefixCost_ge = 2Σf - topSum ≤ prefixCost,
  * greedy_prefix_optimal (max single weight optimal for prefix), greedy_gap_le ≤ λ·Dmax·Σf.
+ * OneDigitNonMonotone: restricting to singles can raise cost 23→28 and bytes 3→8 (sticky prefix) — so we bias, not restrict.
  * Picks up to `size` indices minimising Σ f·digits(σ) + λ·f·ΔE, approximated by
  * frequency rank + digit-length penalty. λ≈0.02 biases toward 1-digit without hurting ΔE much (gap ≤0.02·Dmax·Σf).
  */
