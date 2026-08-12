@@ -309,7 +309,7 @@ export function toEmitIdx(idx:number, mode:RenderMode, srcPal:number[]=ANSI256, 
 // Palette A: OKLab k-means K=24 (truecolor \x04). Palette B: mIRC-99 subset K≈16 (\x03).
 // Both derived once per image; deterministic (seeded) so slider drags are stable.
 
-export function smartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, K=24): number[] {
+export function smartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, K=24, mode: ColorMatching='oklab'): number[] {
   const pts: number[][] = [];
   for(let y=0;y<pH;y++) for(let x=0;x<pW;x++){
     const i=(y*pW+x)*4;
@@ -321,18 +321,20 @@ export function smartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, K=24):
   const seen = new Set<string>();
   for(const c of pts) seen.add(c[0]+','+c[1]+','+c[2]);
   const Kc = Math.min(K, seen.size, pts.length);
-  const oklab: number[][] = pts.map(c=> srgbToOkLab(c[0],c[1],c[2]) as any);
+  // Smart palette respects colorMatching: rgb → RGB Euclidean, else OkLab (perceptual, best for truecolor)
+  const useRgb = mode==='rgb';
+  const convPts: number[][] = useRgb ? pts : pts.map(c=> srgbToOkLab(c[0],c[1],c[2]) as any);
   // deterministic PRNG (xorshift32 seeded from content hash)
   let seed = 0x9e3779b9 ^ (pts.length * 2654435761) >>> 0;
   for(let i=0;i<Math.min(pts.length, 16); i++) seed ^= (pts[i][0]*374761393 + pts[i][1]*668265263 + pts[i][2]*1274126177) >>> 0;
   const rnd = ()=>{ seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed>>>0)/4294967296; };
   const cents: number[][] = [];
-  cents.push([...oklab[Math.floor(rnd()*oklab.length)]]);
-  const dist2 = new Float64Array(oklab.length).fill(Infinity);
+  cents.push([...convPts[Math.floor(rnd()*convPts.length)]]);
+  const dist2 = new Float64Array(convPts.length).fill(Infinity);
   while(cents.length < Kc){
     let sum=0;
     const last = cents[cents.length-1];
-    for(let i=0;i<oklab.length;i++){
+    for(let i=0;i<convPts.length;i++){
       const dl=oklab[i][0]-last[0], da=oklab[i][1]-last[1], db=oklab[i][2]-last[2];
       const d2=dl*dl+da*da+db*db;
       if(d2 < dist2[i]) dist2[i]=d2;
@@ -341,19 +343,20 @@ export function smartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, K=24):
     if(sum===0) break;
     let r = rnd()*sum;
     let pick = oklab.length-1;
-    for(let i=0;i<oklab.length;i++){ r-=dist2[i]; if(r<=0){ pick=i; break; } }
+    for(let i=0;i<convPts.length;i++){ r-=dist2[i]; if(r<=0){ pick=i; break; } }
     cents.push([...oklab[pick]]);
   }
   for(let iter=0; iter<20; iter++){
     const sums = cents.map(()=>[0,0,0]);
     const counts = new Array(cents.length).fill(0);
-    for(let i=0;i<oklab.length;i++){
+    for(let i=0;i<convPts.length;i++){
       let bi=0, bd=Infinity;
       for(let c=0;c<cents.length;c++){ const dl=oklab[i][0]-cents[c][0], da=oklab[i][1]-cents[c][1], db=oklab[i][2]-cents[c][2]; const d2=dl*dl+da*da+db*db; if(d2<bd){bd=d2; bi=c;} }
       sums[bi][0]+=oklab[i][0]; sums[bi][1]+=oklab[i][1]; sums[bi][2]+=oklab[i][2]; counts[bi]++;
     }
     for(let c=0;c<cents.length;c++) if(counts[c]>0){ cents[c][0]=sums[c][0]/counts[c]; cents[c][1]=sums[c][1]/counts[c]; cents[c][2]=sums[c][2]/counts[c]; }
   }
+  if(useRgb) return cents.map(c=> ((c[0]|0)<<16)|((c[1]|0)<<8)|(c[2]|0));
   return cents.map(c=>{ const [r,g,b]=oklabToSrgb(c[0],c[1],c[2]); return (r<<16)|(g<<8)|b; });
 }
 
@@ -1890,7 +1893,7 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
   (o as unknown as Record<string,unknown>)._debugResizeMs = _tResize;
   let d=id.data;
   if(o.midgardMode==='smart'){
-    if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24);
+    if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24, o.colorMatching);
     if(!(o as any)._smartPaletteB) (o as any)._smartPaletteB = smartPaletteB(d as any, pW, pH, 16, 0.02, o.colorMatching);
   }
 
@@ -2065,7 +2068,7 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
   (o as unknown as Record<string,unknown>)._debugResizeMs = _tResize;
   let d: any = id.data;
   if(o.midgardMode==='smart'){
-    if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24);
+    if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24, o.colorMatching);
     if(!(o as any)._smartPaletteB) (o as any)._smartPaletteB = smartPaletteB(d as any, pW, pH, 16, 0.02, o.colorMatching);
   }
   return await renderPixelsCore(d, pW, pH, cols, rows, pm, o);

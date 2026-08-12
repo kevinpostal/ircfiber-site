@@ -108,6 +108,10 @@
       _lastFile=file as any;
     }
   });
+  $effect(()=>{ // smart palette is per-colorMatching — bust when matching or mode changes
+    void colorMatching; void midgardMode;
+    smartPalCache=null;
+  });
   $effect(() => {
     return () => {
       if (debounce) { clearTimeout(debounce); debounce = null; }
