@@ -2290,6 +2290,7 @@ final class RESTAPI {
         result["builtAt"] = Json(BUILD_TIME);
         result["version"] = Json(VERSION);
         res.writeJsonBody(result);
+    }
 
     private void healthCheck(HTTPServerRequest, HTTPServerResponse res) {
         bool allOk = true;
