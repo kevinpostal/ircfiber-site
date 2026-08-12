@@ -23,7 +23,7 @@
   import RedisMonitor from './pages/RedisMonitor.svelte';
   import Logs from './pages/Logs.svelte';
   import Version from './pages/Version.svelte';
-  import { current, onChange, navigate, match } from './lib/router';
+  import ToastViewport from './components/ToastViewport.svelte';
   import { adminUser, loadMe } from './stores/auth';
 
   let path = $state(current());
