@@ -2280,17 +2280,16 @@ final class RESTAPI {
                 enginesJson ~= o;
             }
         } catch (Exception) {}
-        auto out = Json.emptyObject;
-        out["gateway"] = gateway;
-        out["engines"] = Json(enginesJson);
-        out["commit"] = Json(GIT_HASH);
-        out["short"] = Json(GIT_SHORT);
-        out["describe"] = Json(GIT_DESCRIBE);
-        out["branch"] = Json(GIT_BRANCH);
-        out["builtAt"] = Json(BUILD_TIME);
-        out["version"] = Json(VERSION);
-        res.writeJsonBody(out);
-    }
+        auto result = Json.emptyObject;
+        result["gateway"] = gateway;
+        result["engines"] = Json(enginesJson);
+        result["commit"] = Json(GIT_HASH);
+        result["short"] = Json(GIT_SHORT);
+        result["describe"] = Json(GIT_DESCRIBE);
+        result["branch"] = Json(GIT_BRANCH);
+        result["builtAt"] = Json(BUILD_TIME);
+        result["version"] = Json(VERSION);
+        res.writeJsonBody(result);
 
     private void healthCheck(HTTPServerRequest, HTTPServerResponse res) {
         bool allOk = true;
