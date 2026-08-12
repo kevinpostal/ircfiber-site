@@ -2293,6 +2293,7 @@ final class RESTAPI {
     }
 
     private void healthCheck(HTTPServerRequest, HTTPServerResponse res) {
+        auto services = Json.emptyObject;
         bool allOk = true;
 
         // Check MongoDB
