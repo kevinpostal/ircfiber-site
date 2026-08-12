@@ -111,10 +111,12 @@
     return _worker;
   }
   async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number): Promise<{ art: string; paletteA?: number[]; paletteB?: number[] } | null> {
-    const estimatedPixels = (opts.width || 60) * Math.max(1, Math.round((opts.width || 60) * ((img.naturalHeight||img.height)/(img.naturalWidth||img.width)||1) * 0.9)) * 2;
-    const reasonNotWorker = (()=>{ if(estimatedPixels < 4000) return `small image (${estimatedPixels}px <4000)`; if(!getWorker()) return 'Worker failed to create'; if(typeof OffscreenCanvas==='undefined') return 'OffscreenCanvas unavailable'; if(typeof createImageBitmap==='undefined') return 'createImageBitmap unavailable'; return null; })();
+    // Always try worker for heavy work — even small images benefit from off-main-thread WASM (246ms for 80 still janks)
+    // The 4000px threshold was for old per-cell WASM (5× slower), now batched WASM is 13× faster but still blocks main thread.
     const w = getWorker();
     if (!w) return null;
+    if(typeof OffscreenCanvas==='undefined') return null;
+    if(typeof createImageBitmap==='undefined') return null;
     let bitmap: ImageBitmap | null = null;
     let handler: ((e: MessageEvent) => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -233,7 +235,6 @@
   }
 
   async function precachePresets(baseFile: File|Blob, baseOpts: any, curGen: number, baseHasAlpha: boolean) {
-    if (isDummyFile) return;
     try {
       if (typeof navigator !== 'undefined' && (navigator as any).deviceMemory && (navigator as any).deviceMemory < 4) return;
     } catch {}
@@ -263,7 +264,15 @@
         if (curGen !== gen) break;
         if (renderCache.size >= 24) break;
         try {
-          const res = await imageToIrcArt(pImg!, preset);
+          // Off-main-thread via worker so UI stays responsive (was imageToIrcArt on main thread → 246ms jank per preset)
+          let res: string | null = null;
+          try {
+            const wr = await convertViaWorker(pImg!, preset, curGen);
+            if (wr) res = wr.art;
+            else res = await imageToIrcArt(pImg!, preset);
+          } catch {
+            res = await imageToIrcArt(pImg!, preset);
+          }
           if (curGen !== gen) break;
           const html = res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
           const k = makeCacheKeyForOpts(preset, baseHasAlpha);
@@ -274,6 +283,7 @@
       if (pImg) try{ revokeImageUrl(pImg); }catch{}
     }
   }
+
 
   const stats=$derived(estimateLineLengths(art));
   const hardStats=$derived(estimateLineLengths(art, IRC_HARD_LIMIT));
