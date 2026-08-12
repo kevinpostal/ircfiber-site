@@ -5,6 +5,7 @@
    */
   import { current, href } from '../lib/router';
   import { sidebarCollapsed } from '../stores/ui';
+  import { BUILD_INFO } from '../../lib/buildInfo';
 
   interface NavItem {
     label: string;
@@ -16,11 +17,13 @@
     label: string;
     items: NavItem[];
   }
+
   const sections: NavSection[] = [
     {
       label: 'Overview',
       items: [
         { label: 'Dashboard', path: '/dashboard', icon: '📊' },
+        { label: 'Version', path: '/version', icon: '🏷️' },
       ],
     },
     {
@@ -85,6 +88,18 @@
       </div>
     {/each}
   </nav>
+
+  <div class="border-t border-border px-3 py-2 text-[10px] font-mono text-muted">
+    {#if !$sidebarCollapsed}
+      <a href="#/version" class="flex items-center gap-1.5 hover:text-text" title="View build versions">
+        <span class="h-2 w-2 rounded-full bg-success"></span>
+        <span>frontend {BUILD_INFO.short}</span>
+      </a>
+      <div class="mt-1 text-[9px] leading-none">tap for gateway + engines</div>
+    {:else}
+      <a href="#/version" class="flex justify-center" title="Version"><span class="text-[10px]">🏷️</span></a>
+    {/if}
+  </div>
 
   <button
     type="button"

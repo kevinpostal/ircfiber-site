@@ -11,7 +11,6 @@
   import { onMount, onDestroy } from 'svelte';
   import AdminSidebar from './shell/AdminSidebar.svelte';
   import AdminTopbar from './shell/AdminTopbar.svelte';
-  import ToastViewport from './components/ToastViewport.svelte';
   import Dashboard from './pages/Dashboard.svelte';
   import Servers from './pages/Servers.svelte';
   import ServerHost from './pages/ServerHost.svelte';
@@ -23,6 +22,7 @@
   import MongoMonitor from './pages/MongoMonitor.svelte';
   import RedisMonitor from './pages/RedisMonitor.svelte';
   import Logs from './pages/Logs.svelte';
+  import Version from './pages/Version.svelte';
   import { current, onChange, navigate, match } from './lib/router';
   import { adminUser, loadMe } from './stores/auth';
 
@@ -54,6 +54,7 @@
     if (match('/uploads', path)) return { kind: 'uploads' } as const;
     if (match('/mongo', path)) return { kind: 'mongo' } as const;
     if (match('/redis', path)) return { kind: 'redis' } as const;
+    if (match('/version', path)) return { kind: 'version' } as const;
     return { kind: 'notfound' } as const;
   });
 </script>
@@ -89,6 +90,8 @@
         <MongoMonitor />
       {:else if page?.kind === 'redis'}
         <RedisMonitor />
+      {:else if page?.kind === 'version'}
+        <Version />
       {:else}
         <div class="text-center">
           <h2 class="text-xl font-semibold text-heading">Page not found</h2>

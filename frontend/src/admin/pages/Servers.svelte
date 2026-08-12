@@ -286,6 +286,18 @@
               Last heartbeat:
               <strong class="text-text">{duration(engine.ageSeconds * 1000)} ago</strong>
             </span>
+            <span class="font-mono text-[11px]" title={engine.gitHash ?? ''}>
+              {#if engine.gitShort}
+                {engine.gitShort}
+                {#if engine.gitBranch}<span class="text-muted"> ({engine.gitBranch})</span>{/if}
+                {#if engine.version}<span class="text-muted"> v{engine.version}</span>{/if}
+              {:else}
+                <span class="text-muted">no version</span>
+              {/if}
+              {#if engine.buildTime}
+                <span class="ml-1 text-muted">built {new Date(engine.buildTime).toLocaleString()}</span>
+              {/if}
+            </span>
             {#if engine.assignedNetworks.length > 0}
               <button
                 type="button"

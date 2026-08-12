@@ -12,6 +12,7 @@
   import PageHeader from '../components/PageHeader.svelte';
   import KpiCard from '../components/KpiCard.svelte';
   import Card from '../components/Card.svelte';
+  import VersionPanel from '../components/VersionPanel.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Sparkline from '../components/Sparkline.svelte';
@@ -279,3 +280,6 @@
     </Card>
   </div>
 {/if}
+<div class="mt-6">
+  <VersionPanel />
+</div>

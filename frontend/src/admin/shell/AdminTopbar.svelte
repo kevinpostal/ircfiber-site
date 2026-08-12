@@ -4,6 +4,7 @@
    */
   import ThemeToggle from '../components/ThemeToggle.svelte';
   import RefreshIndicator from '../components/RefreshIndicator.svelte';
+  import VersionBadge from '../components/VersionBadge.svelte';
   import { adminUser, logout } from '../stores/auth';
   import { current } from '../lib/router';
 
@@ -39,8 +40,8 @@
     <h1 class="truncate text-lg font-semibold text-heading">{pageTitle}</h1>
     <span class="rounded-md bg-surface-2 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">Admin</span>
   </div>
-
   <div class="flex items-center gap-2">
+    <VersionBadge />
     <RefreshIndicator {lastFetchedAt} {loading} />
     <ThemeToggle />
 
