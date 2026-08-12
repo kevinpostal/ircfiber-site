@@ -28,6 +28,7 @@
  */
 import { getWasm, hasWasmSync, getWasmSync, preloadWasm, tryWasmBatchBestGlyphSync, tryWasmBatchRowPaletteSync, tryWasmBatchNearestSync, tryWasmBatchBestGlyphPolygonSync } from './img2irc.wasm';
 import { dpSeg } from './segmentation';
+import { safeTrim as uniformSafeTrim } from './uniform';
 if (typeof window !== 'undefined') try { preloadWasm(); } catch {}
 const _perf = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
 const _shouldLog = () => typeof window !== 'undefined' && ( (window as any).__IMG2IRC_PERF || localStorage.getItem('img2irc:perf') || location.search.includes('perf=1') );
@@ -1682,6 +1683,26 @@ export async function renderPixelsCore(
   // UniformTail §1 vertical analog: only pop wholly empty rows ('') or default-blank space rows (no \x03/\x04 bg).
   // Rows like "\x031,1     " (uniform matte) have non-default bg — popping would create ragged bottom (same theorem vertically).
   // UniformHead rectangular_of_first_last_opaque needs both ends opaque ⇒ keep bottom matte.
+  // UniformTail §1: safeTrim per row — trim trailing default-blank spaces (right edge)
+  // Lean: paint_trim / safeTrim_last_opaque / rectangular_of_last_opaque / flatTail
+  {
+    const dStr='1';
+    for(let idx=0; idx<lines.length; idx++){
+      const ln=lines[idx];
+      let end=ln.length;
+      while(end>0 && ln[end-1]===' ') end--;
+      if(end===ln.length) continue;
+      const prefix=ln.slice(0,end);
+      let lastBg: string|null=null;
+      const re=/\x03(\d{1,2})(?:,(\d{1,2}))?/g;
+      let m: RegExpExecArray|null;
+      while((m=re.exec(prefix))!==null){
+        if(m[2]!==undefined) lastBg=m[2];
+      }
+      const isDefault = lastBg===null || lastBg===dStr;
+      if(isDefault) lines[idx]=prefix;
+    }
+  }
   while(lines.length){
     const last = lines[lines.length-1];
     if(last === ''){ lines.pop(); continue; }
