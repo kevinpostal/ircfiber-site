@@ -1880,12 +1880,27 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
 // Rate 9/11 = 0.818 beats base64's 3/4 = 0.75 by 12/11 (+9.09%). Per 400B payload: 327B vs 300B.
 const B94_CHARS='!"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~';
 const B94_MAP: Record<string,number> = Object.fromEntries([...B94_CHARS].map((c,i)=>[c,i]));
+/** Lean Base94.Feasible n m := 256^n ≤ 94^m (decodable) */
+export function base94Feasible(n:number, m:number): boolean {
+  if(n<0||m<0) return false;
+  // use BigInt to avoid overflow (94^61 fits in ~400 bits)
+  let a=1n, b=1n;
+  for(let i=0;i<n;i++) a*=256n;
+  for(let i=0;i<m;i++) b*=94n;
+  return a <= b;
+}
+/** Lean Base94.minChars n = sInf {m | Feasible n m} */
+export function base94MinChars(n:number): number {
+  if(n<=0) return 0;
+  let m=0; while(!base94Feasible(n,m)) m++;
+  return m;
+}
 export function base94Encode(bytes: Uint8Array): string{
   let out='';
   for(let i=0;i<bytes.length;i+=9){
     const chunk=bytes.subarray(i, Math.min(i+9, bytes.length));
     let n=0n; for(let j=0;j<chunk.length;j++) n = (n<<8n) | BigInt(chunk[j]);
-    const need = chunk.length===9 ? 11 : Math.ceil(chunk.length* Math.log(256)/Math.log(94));
+    const need = chunk.length===9 ? 11 : base94MinChars(chunk.length);
     let s=''; for(let k=0;k<need;k++){ s = B94_CHARS[Number(n % 94n)] + s; n/=94n; }
     out+=s;
   }
@@ -1899,14 +1914,23 @@ export function base94Decode(str: string): Uint8Array{
     const chunk=str.slice(i, i+clen); i+=clen;
     let n=0n; for(const c of chunk){ const v=B94_MAP[c]; if(v===undefined) throw new Error(`invalid base94 char: ${c}`); n = n*94n + BigInt(v); }
     const blen = clen===11 ? 9 : Math.floor(clen * Math.log(94)/Math.log(256));
-    const tmp:number[]=[]; for(let k=0;k<blen;k++){ tmp.unshift(Number(n & 0xFFn)); n>>=8n; }
+    // For remainder, derive exact bytes from clen via inverse of minChars (avoid floating off-by-one: search n)
+    let realBlen=blen;
+    if(isLast){
+      // find smallest n with minChars(n)==clen (or largest n that fits)
+      // brute small n ≤9
+      for(let cand=0;cand<=9;cand++) if(base94MinChars(cand)===clen){ realBlen=cand; break; }
+      // fallback to floating if not found (should not happen for valid encodings)
+      if(base94MinChars(realBlen)!==clen) realBlen=blen;
+    }
+    const tmp:number[]=[]; for(let k=0;k<realBlen;k++){ tmp.unshift(Number(n & 0xFFn)); n>>=8n; }
     bytes.push(...tmp);
   }
   return new Uint8Array(bytes);
 }
 export function base94EncodedLength(byteLen: number): number{
   const full=Math.floor(byteLen/9), rem=byteLen%9;
-  return full*11 + (rem===0?0:Math.ceil(rem*Math.log(256)/Math.log(94)));
+  return full*11 + (rem===0?0:base94MinChars(rem));
 }
 
 // ── Erasure coding overhead: Singleton bound (Erasure.lean §2.6) ───────────────
