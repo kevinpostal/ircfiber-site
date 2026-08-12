@@ -1861,6 +1861,33 @@ export function base94EncodedLength(byteLen: number): number{
   return full*11 + (rem===0?0:Math.ceil(rem*Math.log(256)/Math.log(94)));
 }
 
+// ── Erasure coding overhead: Singleton bound (Erasure.lean §2.6) ───────────────
+// Lean Erasure.singleton_bound: if every n−r subset determines payload, |P| ≤ |Sym|^(n−r).
+// Lean Erasure.messages_ge: if |P| > |Sym|^(k−1) then n ≥ k+r — tolerating r drops costs ≥r extra messages.
+/** Lean singleton_bound check: does payload alphabet fit in n−r symbols? */
+export function erasureSingletonBoundHolds(payloadCard:number, symCard:number, n:number, r:number): boolean {
+  if (n < r) return false;
+  if (payloadCard <= 1) return true;
+  if (symCard <= 1) return false;
+  // |P| ≤ |Sym|^(n−r)
+  return payloadCard <= Math.pow(symCard, n - r);
+}
+/** Lean messages_ge: minimal n to tolerate r drops when payload needs k symbols (k>0, |Sym|>1) */
+export function erasureMinMessages(k:number, r:number): number { return k + r; }
+/** Overhead in messages for r erasures (Singleton bound: ≥r) */
+export function erasureOverhead(r:number): number { return r; }
+/** Helpers for byte payloads: k = ⌈payloadBytes·log256 / log symCard⌉ symbols needed (k≥1 if payload>0) */
+export function erasureSymbolsNeeded(payloadBytes:number, symCard:number): number {
+  if (payloadBytes <= 0) return 0;
+  if (symCard <= 1) throw new Error('symCard must be >1');
+  return Math.ceil(payloadBytes * Math.log(256) / Math.log(symCard));
+}
+/** Minimal n for payloadBytes with r erasures under symbol alphabet symCard (e.g. 94 for Base94) */
+export function erasureNeededMessages(payloadBytes:number, symCard:number, r:number): number {
+  const k = erasureSymbolsNeeded(payloadBytes, symCard);
+  return k === 0 ? r : k + r;
+}
+
 // ── Inter-line diff — bitmask vs sparse (InterLineDiff.lean) ──
 // sparseCost = k·(idx+val), maskCost = ceil(M/6)+k·val (base64 mask). Mask wins iff ceil(M/6) ≤ k·idx.
 // Lean: maskBytes M = (M+5)/6 = ⌈M/6⌉ base64 chars (6 bits/char)
