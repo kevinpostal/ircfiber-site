@@ -6,8 +6,8 @@
   import { ircState } from '../stores/ircStore.svelte';
   import { generateLabel } from '../lib/utils';
   import { createIrcArtSave, updateIrcArtSave } from '../stores/api';
-  interface Props { file: File|Blob; filename:string; onClose:()=>void; onBack?:()=>void; initialParams?: Record<string, unknown>; initialName?: string; editId?: string; onSaved?:()=>void; initialArt?: string; }
-  let { file, filename, onClose, onBack, initialParams, initialName, editId, onSaved, initialArt }: Props = $props();
+  interface Props { file: File|Blob; filename:string; onClose:()=>void; onBack?:()=>void; initialParams?: Record<string, unknown>; initialName?: string; editId?: string; onSaved?:()=>void; initialArt?: string; thumbnailUrl?: string; }
+  let { file, filename, onClose, onBack, initialParams, initialName, editId, onSaved, initialArt, thumbnailUrl }: Props = $props();
 
   let width=$state(DEFAULT_IRC_WIDTH);
   let renderMode=$state<RenderMode>('ansi');
@@ -377,9 +377,9 @@
     {#if isDummyFile}
       <div class="dummyNotice" data-testid="dummy-notice">Original image not available — preview is static. You can still rename and save the art.</div>
     {/if}
-
     <!-- Primary controls -->
-    <div class="primary">
+    <div class="primary" class:hasThumb={!!thumbnailUrl}>
+      <div class="primary-main">
       <div class="p-row">
         <span class="p-label">Colors</span>
         <div class="pill-group" role="radiogroup" aria-label="Colors">
@@ -417,6 +417,16 @@
           <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺</button>
         </div>
       </div>
+      </div>
+      {#if thumbnailUrl}
+        <img
+          class="primaryThumb"
+          src={(() => { try { return new URL(thumbnailUrl).pathname; } catch { return thumbnailUrl; } })()}
+          alt="Thumbnail"
+          loading="lazy"
+          onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+        />
+      {/if}
     </div>
 
     <!-- byte budget -->
@@ -513,8 +523,10 @@
   .x{background:0;border:0;color:#7d8590;font-size:22px;cursor:pointer;line-height:1;padding:0 6px;border-radius:6px}
   .x:hover{color:#e6edf3;background:#1a1f29}
   .dummyNotice{margin:0 16px;padding:8px 12px;background:#1a1400;border:1px solid #3d2a0a;color:#d29922;border-radius:8px;font-size:11px;line-height:1.4}
-
   .primary{padding:12px 16px;background:#0d0f13;border-bottom:1px solid #1e232b;display:flex;flex-direction:column;gap:12px}
+  .primary.hasThumb{flex-direction:row;align-items:flex-start;gap:16px}
+  .primary-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
+  .primaryThumb{width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #1e232b;background:#010409;flex-shrink:0;align-self:flex-start}
   .p-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .p-row.split{flex-wrap:wrap}
   .p-label{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7d8590;min-width:48px}

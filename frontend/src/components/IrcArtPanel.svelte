@@ -192,6 +192,7 @@
         initialName={editingEntry.name}
         editId={editingEntry.id}
         initialArt={editingEntry.art}
+        thumbnailUrl={editingEntry.thumbnailUrl}
         onSaved={onEditClose}
       />
     {:else if entries.length>0}
