@@ -84,6 +84,7 @@
   let transparencyEnabled=$state(false); // user toggle, auto-synced to hasAlpha when image loads
   let matteColor=$state<string | null>(null); // null = bleed (naked space, cheapest, trimmed) | hex = matte opaque (renderCellMatte)
   let isDummyFile=$derived((file as File)?.name==='dummy.png');
+  let gen=0;
   let debounce: ReturnType<typeof setTimeout>|null=null;
   let settleTimer: ReturnType<typeof setTimeout>|null=null;
   let smartPalCache: { A: number[]; B: number[] } | null = null;
