@@ -50,6 +50,12 @@
   let code = $state<string | null>(null);
   let errored = $state(false);
   let closed = $state(false);
+  let gutterHidden = $state(false);
+  let editing = $state(false);
+  let editValue = $state('');
+  let editFilename = $state('');
+  let localName = $state<string | null>(null);
+  let editError = $state<string | null>(null);
 
   // Map URL extension to svelte-highlight language
   function detectLang(u: string): any {
@@ -112,117 +118,176 @@
     e.preventDefault();
     closed = true;
   }
-</script>
+
+  function startEdit() {
+    if (code === null) return;
+    editValue = code;
+    const urlName = (()=>{ try{ return new URL(url).pathname.split('/').pop() ?? url; }catch{ return url.split('/').pop() ?? url; }})();
+    editFilename = localName ?? urlName;
+    editError = null;
+    editing = true;
+  }
+
+  function cancelEdit() {
+    editing = false;
+    editError = null;
+  }
+
+  function saveEdit() {
+    if (!editFilename.trim()) {
+      editError = 'Name cannot be empty';
+      return;
+    }
+    localName = editFilename.trim();
+    code = editValue;
+    editing = false;
+    editError = null;
+  }
+
 
 {#if !closed && !errored && code !== null}
-  <span class="directEmbedWrap textWrap" data-text-url={url}>
-    <div class="textInlineHeader">
-      <a href={displayUrl} target="_blank" rel="noreferrer" class="textLink">{url.split('/').pop()}</a>
-      <span class="textLang">{hlLang?.name ?? 'text'}</span>
-      <a href={displayUrl} target="_blank" rel="noreferrer" class="textOpen">open</a>
-    </div>
-    <div class="textInlineBody">
-      <Highlight language={hlLang} code={code} let:highlighted>
-        <LineNumbers
-          {highlighted}
-          startingLineNumber={1}
-          --line-number-color="rgba(255, 255, 255, 0.35)"
-          --border-color="rgba(255, 255, 255, 0.08)"
-        />
-      </Highlight>
-    </div>
+  {@const urlFilename = (()=>{ try{ return new URL(url).pathname.split('/').pop() ?? url.split('/').pop() ?? url; } catch { return url.split('/').pop() ?? url; } })()}
+  {@const filename = localName ?? urlFilename}
+  {@const lineCount = code.split('\n').length}
+  {@const syntaxName = hlLang?.name ?? 'Plain Text'}
+  <span class="directEmbedWrap textWrap paste" data-text-url={url}>
+    <h1 class="header">
+      {#if editing}
+        <span class="details" style="display:flex; align-items:center; gap:6px; flex:1;">
+          <label for="inline-edit-name" style="font-size:12px; color:#b0b0b0; white-space:nowrap;">Name</label>
+          <input id="inline-edit-name" class="input nameInput" style="flex:1; max-width:200px; background:#2a2c2f; color:#e6e6e6; border:1px solid #4a4d50; border-radius:3px; padding:3px 6px; font-size:13px;" placeholder="e.g. index.html" title="Name for referencing" bind:value={editFilename} />
+          <button type="button" class="action" style="background:#4c83e8; color:#fff; border:1px solid #4c83e8; border-radius:3px; padding:3px 10px; font-size:12px; cursor:pointer;" onclick={saveEdit}>Save</button>
+          <button type="button" class="cancel" style="background:#45484c; color:#fff; border:1px solid #2c2f35; border-radius:3px; padding:3px 10px; font-size:12px; cursor:pointer;" onclick={cancelEdit}>Cancel</button>
+        </span>
+        <span class="actions">
+          <button class="link closeButton" onclick={onClose}>close</button>
+        </span>
+      {:else}
+        <span class="details">
+          <span class="name">{filename}</span>
+          <span class="info"><span class="syntax">{syntaxName}</span> • <span class="lines">{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span> </span>
+          <span class="modes"><a target="_blank" rel="noreferrer" href={displayUrl}>raw</a> | <button class="link linesButton" onclick={() => gutterHidden = !gutterHidden}>line numbers</button> </span>
+        </span>
+        <span class="actions">
+          <button class="link editButton" onclick={startEdit}>edit</button>
+          •
+          <button class="link closeButton" onclick={onClose}>close</button>
+        </span>
+      {/if}
+    </h1>
+    {#if editError}<p class="userError" style="color:#f85149; font-size:12px; margin:4px 0;">{editError}</p>{/if}
+    {#if editing}
+      <div class="editor editing" style="height: 192px; overflow:auto;">
+        <textarea bind:value={editValue} style="width:100%; height:100%; background:#141414; color:#F8F8F8; border:none; padding:4px 8px; font-family:Monaco, monospace; font-size:12px; line-height:16px; resize:none;"></textarea>
+      </div>
+    {:else}
+      <div class="editor" style="height: {Math.min(lineCount, 12) * 16}px;">
+        <div class="editorScroll">
+          {#if !gutterHidden}
+            <div class="gutter" aria-hidden="true">
+              {#each { length: lineCount } as _, i}
+                <div class="gutterCell">{i + 1}</div>
+              {/each}
+            </div>
+          {/if}
+          <Highlight language={hlLang} code={code} let:highlighted>
+            <pre class="code hljs">{@html highlighted}</pre>
+          </Highlight>
+        </div>
+      </div>
+    {/if}
   </span>
 {/if}
 
 <style>
-  .textWrap {
+  .textWrap.paste {
     display: block;
-    margin: 6px 0;
-    border: 1px solid #2c2f35;
-    border-radius: 6px;
-    overflow: hidden;
-    background: #0d1117;
+    margin: 8px 0 12px;
+    border: none;
+    background: transparent;
     max-width: 100%;
   }
-  .textInlineHeader {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 10px;
-    background: #161b22;
-    border-bottom: 1px solid #21262d;
-    font-size: 12px;
-    color: #8b949e;
+  .textWrap.paste .header {
+    position: relative;
+    margin: 0 0 6px;
+    padding: 0;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 20px;
+    color: #d9d9d9;
+    display: block;
   }
-  .textLink {
-    color: #58a6ff;
-    text-decoration: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-  }
-  .textLink:hover { text-decoration: underline; }
-  .textLang {
-    background: #21262d;
-    color: #8b949e;
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-size: 11px;
-    text-transform: uppercase;
-  }
-  .textOpen {
-    color: #8b949e;
-    text-decoration: none;
-    font-size: 11px;
-  }
-  .textOpen:hover { color: #e6edf3; }
-  .embedClose {
+  .textWrap.paste .details .name { color: #fff; font-weight: 600; margin-right: 4px; }
+  .textWrap.paste .details .info { color: #b0b0b0; margin-right: 4px; }
+  .textWrap.paste .details a,
+  .textWrap.paste .modes a { color: #58a6ff; text-decoration: none; }
+  .textWrap.paste .details a:hover,
+  .textWrap.paste .modes a:hover { text-decoration: underline; }
+  .textWrap.paste .modes { color: #8b949e; font-size: 13px; }
+  .textWrap.paste button.link {
     background: none;
     border: none;
-    color: #8b949e;
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    padding: 0 4px;
-  }
-  .embedClose:hover { color: #f85149; }
-  .textInlineBody {
-    max-height: min(480px, 60vh);
-    overflow: auto;
-    background: #282c34;
-  }
-  /* svelte-highlight LineNumbers structure: div > table > tbody > tr > td */
-  .textInlineBody :global(div) {
-    background: transparent;
-  }
-  .textInlineBody :global(table),
-  .textInlineBody :global(tr),
-  .textInlineBody :global(td) {
-    background: transparent;
     padding: 0;
+    margin: 0;
+    font: inherit;
+    font-size: 13px;
+    color: #58a6ff;
+    cursor: pointer;
     vertical-align: baseline;
   }
-  .textInlineBody :global(pre) {
+  .textWrap.paste button.link:hover { text-decoration: underline; }
+  .textWrap.paste .actions { float: right; color: #8b949e; font-size: 13px; }
+  .textWrap.paste .editor {
+    background-color: #141414;
+    color: #F8F8F8;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace;
+    font-size: 12px;
+    line-height: 16px;
+    overflow: hidden;
+  }
+  .textWrap.paste .editor .editorScroll { display: flex; align-items: stretch; height: 100%; overflow: auto; }
+  .textWrap.paste .editor .gutter {
+    position: sticky;
+    left: 0;
+    flex: 0 0 auto;
+    min-width: 40px;
+    padding: 0 13px 0 19px;
+    box-sizing: border-box;
+    background: #232323;
+    color: #E2E2E2;
+    text-align: right;
+    user-select: none;
+  }
+  .textWrap.paste .editor .gutterCell { height: 16px; }
+  .textWrap.paste .editor pre.code {
+    flex: 1 0 auto;
     margin: 0;
-    background: transparent;
-    font-family: 'Hack', 'SF Mono', Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.35;
-  }
-  .textInlineBody :global(pre code) {
-    display: block;
-    padding: 0 12px 0 0;
-    background: transparent;
-    font-family: inherit;
-    font-size: inherit;
-    line-height: inherit;
+    padding: 0 8px 0 4px;
+    font: inherit;
+    color: inherit;
     white-space: pre;
-    word-wrap: normal;
+    letter-spacing: normal;
   }
-  .textInlineBody :global(td > code) {
-    font-family: 'Hack', 'SF Mono', Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.35;
+  .textWrap.paste .editor .hljs {
+    background: #141414;
+    color: #F8F8F8;
+    padding: 0;
   }
+  .textWrap.paste .editor .hljs-keyword,
+  .textWrap.paste .editor .hljs-meta { color: #CDA869; }
+  .textWrap.paste .editor .hljs-string { color: #8F9D6A; }
+  .textWrap.paste .editor .hljs-regexp { color: #E9C062; }
+  .textWrap.paste .editor .hljs-comment { color: #5F5A60; font-style: italic; }
+  .textWrap.paste .editor .hljs-variable { color: #7587A6; }
+  .textWrap.paste .editor .hljs-tag,
+  .textWrap.paste .editor .hljs-name { color: #AC885B; }
+  .textWrap.paste .editor .hljs-attr { color: #7587A6; }
+  .textWrap.paste .editor .hljs-attribute { color: #9B859D; }
+  .textWrap.paste .editor .hljs-title { color: #AC885B; }
+  .textWrap.paste .editor .hljs-built_in { color: #9B859D; }
+  .textWrap.paste .editor .hljs-number,
+  .textWrap.paste .editor .hljs-literal { color: #CF6A4C; }
+  .textWrap.paste .editor .hljs-type { color: #9B859D; }
+  .textWrap.paste .editor .hljs-selector-class,
+  .textWrap.paste .editor .hljs-selector-id { color: #F9EE98; }
 </style>

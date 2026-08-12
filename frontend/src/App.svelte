@@ -41,17 +41,17 @@
   import { startOnlineChecker } from './lib/onlineChecker';
   import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap, setShowMemberPrefixes } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
-  import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
+  import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
   import { isFiberServerDown } from './lib/fiberServer';
   import { enqueueMessage, setFlushFn, setBackfillFlushFn } from './lib/messageBatcher';
   import WelcomePage from './components/WelcomePage.svelte';
   import SettingsPage from './components/SettingsPage.svelte';
   import ShortcutsPage from './components/ShortcutsPage.svelte';
+  import FileViewerPage from './components/FileViewerPage.svelte';
   import ChannelSwitcher from './components/ChannelSwitcher.svelte';
   import LoadingSkeleton from './components/LoadingSkeleton.svelte';
   import LoginPage from './components/LoginPage.svelte';
-  import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, Member, ConnectionState } from './types';
 
 // IRCCloud-style: cache network IDs + names so we can eager-load message
 // history from the URL before the WebSocket opens.  Stored as an array of
@@ -334,6 +334,12 @@ let showNetworkForm: boolean = $state(false);
   //   false → not authenticated, LoginPage overlay shown
   let isAuthenticated: boolean | null = $state(null);
 
+  // File viewer overlay — mirrors settings/shortcuts routing via ?/view=
+  let fileViewerId: string | null = $state(getFileViewerIdFromUrl());
+  function syncFileViewer(): void {
+    fileViewerId = getFileViewerIdFromUrl();
+  }
+
   function startHeartbeatTimer(): void {
     if (!globalPrefs.featureFlags.heartbeat.enabled) return;
     if (heartbeatTimer) return;
@@ -421,8 +427,12 @@ let showNetworkForm: boolean = $state(false);
       prependMessages(networkId, bufferName, msgs);
     });
     startOnlineChecker();
+    // Keep fileViewerId in sync when routing helpers call history.pushState/replaceState
+    const origPushState = history.pushState.bind(history);
+    const origReplaceState = history.replaceState.bind(history);
+    history.pushState = ((...args: any[]) => { (origPushState as any)(...args); syncFileViewer(); }) as any;
+    history.replaceState = ((...args: any[]) => { (origReplaceState as any)(...args); syncFileViewer(); }) as any;
     window.addEventListener('popstate', checkRoute);
-    document.addEventListener('visibilitychange', handleVisibility);
     document.addEventListener('keydown', handleGlobalKeyboard);
     document.addEventListener('click', handleDocumentClick);
 
@@ -1327,6 +1337,13 @@ let showNetworkForm: boolean = $state(false);
   }
 
   function checkRoute(): void {
+    syncFileViewer();
+    // File viewer overlay takes precedence — don't treat as buffer route
+    if (isFileViewerUrl()) {
+      ircState.showSettings = false;
+      ircState.showShortcuts = false;
+      return;
+    }
     const path = window.location.pathname;
     const settingsTab = getSettingsTabFromUrl();
     if (settingsTab) {
@@ -1342,7 +1359,6 @@ let showNetworkForm: boolean = $state(false);
     }
     ircState.showSettings = false;
     ircState.showShortcuts = false;
-    // Handle bare /irc and /irc/ — redirect to first visible network, not Fiber when down
     if (path === '/irc' || path === '/irc/') {
       if (ircState.networks.length === 0) return;
       const visible = ircState.networks.filter(n => (n as any).host && !isFiberServerDown(n as any));
@@ -1528,9 +1544,11 @@ let showNetworkForm: boolean = $state(false);
   {/if}
 {/if}
 
-<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
+<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || fileViewerId !== null || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
   <div class="main-area">
-    {#if ircState.showSettings}
+    {#if fileViewerId !== null}
+      <FileViewerPage id={fileViewerId} onClose={() => { syncFileViewer(); navigateBackFromFileViewer(); }} />
+    {:else if ircState.showSettings}
       <SettingsPage />
     {:else if ircState.showShortcuts}
       <ShortcutsPage />
@@ -1560,13 +1578,13 @@ let showNetworkForm: boolean = $state(false);
         {/if}
       </div>
     {/if}
-    {#if uploadState.panelOpen && !ircState.showSettings && ircState.networks.length > 0}
+    {#if uploadState.panelOpen && !ircState.showSettings && !isShortcutsUrl() && fileViewerId === null && ircState.networks.length > 0}
       <UploadsPanel onClose={() => uploadState.panelOpen = false} />
     {/if}
-    {#if uploadState.pastebinPanelOpen && !ircState.showSettings && ircState.networks.length > 0}
+    {#if uploadState.pastebinPanelOpen && !ircState.showSettings && !isShortcutsUrl() && fileViewerId === null && ircState.networks.length > 0}
       <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
     {/if}
-    {#if ircArtPanelOpen.value && !ircState.showSettings}
+    {#if ircArtPanelOpen.value && !ircState.showSettings && fileViewerId === null}
       <IrcArtPanel onClose={() => ircArtPanelOpen.value = false} />
     {/if}
   </div>

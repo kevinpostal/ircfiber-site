@@ -464,6 +464,7 @@ final class WebController {
     /// Only allows common image MIME types to prevent misuse.
     private void serveUpload(HTTPServerRequest req, HTTPServerResponse res) {
         import ircfiber.upload.local : uploadDir;
+        import std.path : baseName;
         try {
             auto pathStr = req.requestPath.toString();
             // Strip the "/uploads/" prefix
@@ -480,6 +481,11 @@ final class WebController {
                 res.statusCode = 404;
                 return;
             }
+
+            // Modes for viewer tabs — req.query is string[string] (see rest.d:1811)
+            bool isRaw = ("raw" in req.query) !is null;
+            bool isDownload = ("download" in req.query) !is null;
+            bool isHtml = endsWith(rel, ".html") || endsWith(rel, ".htm") || endsWith(rel, ".xhtml");
 
             // Serve known image AND text/code types (uploads now include
             // hosted text snippets — see RESTAPI.validateUpload).
@@ -498,7 +504,10 @@ final class WebController {
             else if (endsWith(rel, ".ts") || endsWith(rel, ".tsx")) mime = "text/typescript";
             else if (endsWith(rel, ".json") || endsWith(rel, ".json5")) mime = "application/json";
             else if (endsWith(rel, ".yml") || endsWith(rel, ".yaml")) mime = "text/yaml";
-            else if (endsWith(rel, ".xml") || endsWith(rel, ".html") || endsWith(rel, ".htm")) mime = "text/xml";
+            else if (endsWith(rel, ".html") || endsWith(rel, ".htm") || endsWith(rel, ".xhtml"))
+                mime = "text/html; charset=utf-8";
+            else if (endsWith(rel, ".xml"))
+                mime = "text/xml";
             else if (endsWith(rel, ".css") || endsWith(rel, ".scss") || endsWith(rel, ".less")) mime = "text/css";
             else if (endsWith(rel, ".sh") || endsWith(rel, ".bash")) mime = "text/x-sh";
             else if (endsWith(rel, ".sql")) mime = "text/x-sql";
@@ -511,7 +520,20 @@ final class WebController {
                 return;
             }
 
-            res.headers["Cache-Control"] = "public, max-age=86400";
+            if (isDownload) {
+                res.headers["Content-Disposition"] = "attachment; filename=\"" ~ baseName(rel) ~ "\"";
+                res.headers["Cache-Control"] = "public, max-age=86400";
+            } else if (isRaw) {
+                mime = "text/plain; charset=utf-8";
+                res.headers["Content-Disposition"] = "inline";
+                res.headers["Cache-Control"] = "public, max-age=86400";
+            } else if (isHtml) {
+                res.headers["Content-Security-Policy"] = "sandbox allow-scripts";
+                res.headers["X-Frame-Options"] = "SAMEORIGIN";
+                res.headers["Cache-Control"] = "public, max-age=60";
+            } else {
+                res.headers["Cache-Control"] = "public, max-age=86400";
+            }
             res.writeBody(cast(const(ubyte)[])read(fsPath), mime);
         } catch (Exception e) {
             logWarn("Failed to serve upload: %s", e.msg);

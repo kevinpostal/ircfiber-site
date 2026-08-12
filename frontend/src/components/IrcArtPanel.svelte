@@ -15,7 +15,7 @@
   let error = $state<string|null>(null);
   let total = $state(0);
   let page = $state(1);
-  const PAGE_SIZE = 2;
+  const PAGE_SIZE = 4;
   let totalPages = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
   let copiedId = $state<string|null>(null);
   let expandedId = $state<string|null>(null);
@@ -255,7 +255,7 @@
 
 <style>
   #filesContainer{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:9000;padding:16px;backdrop-filter:blur(2px)}
-  #filesOverlayContents{background:#0f1115;border:1px solid #1f242d;border-radius:12px;width:min(900px,98vw);max-height:92vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.7);padding:0}
+  #filesOverlayContents{background:#0f1115;border:1px solid #1f242d;border-radius:12px;width:min(1100px,98vw);max-height:92vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.7);padding:0}
   .filesHeader{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid #1e232b;position:sticky;top:0;background:#0f1115;z-index:2}
   .filesHeader h1{margin:0;font-size:14px;font-weight:700;color:#e6edf3}
   .spin{display:inline-block;width:12px;height:12px;border:2px solid #232a36;border-top-color:#58a6ff;border-radius:50%;animation:spin .6s linear infinite;opacity:0}
@@ -271,17 +271,18 @@
   .pageBtn:disabled{opacity:.4;cursor:default}
   .pageBtn.active{background:#58a6ff;color:#fff;border-color:#58a6ff}
   .ellipsis{color:#4d555f;padding:0 4px}
-  #filesList{padding:8px 16px;display:flex;flex-direction:column;gap:10px}
-  .fileEntry{background:#0d0f13;border:1px solid #1e232b;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
-  .fileRow{display:flex;gap:12px;align-items:flex-start}
-  .thumb{width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #1e232b;background:#010409;flex-shrink:0}
+  #filesList{padding:8px 16px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  @media (max-width:720px){ #filesList{grid-template-columns:1fr} }
+  .fileEntry{background:#0d0f13;border:1px solid #1e232b;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-width:0}
+  .fileRow{display:flex;gap:12px;align-items:flex-start;min-width:0}
+  .thumb{width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid #1e232b;background:#010409;flex-shrink:0}
   .thumb.placeholder{display:flex;align-items:center;justify-content:center;font-size:20px;color:#4d555f}
   .fileMeta{flex:1;min-width:0}
   .fileName{font-size:13px;font-weight:600;color:#e6edf3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .fileInfo{font-size:11px;color:#7d8590;margin-top:2px}
-  .paramChips{font-size:10px;color:#8b949e;background:#1a1f29;border:1px solid #232a36;border-radius:999px;display:inline-block;padding:2px 8px;margin-top:6px}
-  .artPreviewWrap{margin-top:8px;cursor:pointer}
-  .artPreview{background:#000;border:1px solid #1e232b;border-radius:6px;padding:10px 12px;overflow:auto;font:13px/1.25 "Hack",monospace;max-height:340px}
+  .fileInfo{font-size:11px;color:#7d8590;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .paramChips{font-size:10px;color:#8b949e;background:#1a1f29;border:1px solid #232a36;border-radius:999px;display:inline-block;padding:2px 8px;margin-top:6px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .artPreviewWrap{margin-top:8px;cursor:pointer;min-width:0}
+  .artPreview{background:#000;border:1px solid #1e232b;border-radius:6px;padding:10px 12px;overflow:auto;font:11px/1.25 "Hack",monospace;max-height:220px}
   .artPreview.full{max-height:none}
   .more{font-size:10px;color:#58a6ff;margin-top:4px}
   .fileActions{display:flex;gap:6px;flex-wrap:wrap}

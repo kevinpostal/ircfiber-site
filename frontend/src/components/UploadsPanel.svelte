@@ -3,7 +3,8 @@
   import { fetchUploadsOffset, deleteUpload, editUpload, type UploadEntry } from '../stores/api';
   import { sizeToString } from '../lib/upload';
   import CodeEditor from './CodeEditor.svelte';
-  import { detectSyntaxFromFilename, isTextFile } from '../lib/textFiles';
+  import { detectSyntaxFromFilename, isTextFile, isHtmlFile } from '../lib/textFiles';
+  import { navigateToFileViewer } from '../lib/routing';
   import { ircState, setBufferInputText, getBufferInputText } from '../stores/ircStore.svelte';
 
   const EDIT_LANGUAGES = [
@@ -355,6 +356,9 @@
                 </div>
               {/if}
               <span class="actions">
+                {#if isHtmlFile(entry.mimeType, entry.name) || isTextFile(entry.mimeType, entry.name)}
+                  <button type="button" class="view" onclick={() => navigateToFileViewer(entry.id)}><span>view</span></button>
+                {/if}
                 <button type="button" class="copy" class:copied={copiedId === entry.id} onclick={() => copyUrl(entry.url, entry.id)} title="Copy URL"><span>{copiedId === entry.id ? 'copied!' : 'copy'}</span></button>
                 <button type="button" class="edit" onclick={() => startEdit(entry)}><span>edit</span></button>
                 <button type="button" class="delete" onclick={() => handleDelete(entry)}>

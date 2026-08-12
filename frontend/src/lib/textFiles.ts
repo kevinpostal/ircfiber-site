@@ -28,9 +28,10 @@ export function isTextMime(mime: string): boolean {
 // Extension -> ace mode id (subset of ACE_MODES; covers IRCCloud parity for common files)
 // IRCCloud via `ace/ext/modelist` maps extension regex -> mode. We mirror the common ones;
 // unknown extensions fall back to 'text' (Plain Text).
+export const HTML_EXTS = ['html', 'htm', 'xhtml'] as const;
+export const HTML_EXT_RE = /\.(?:html|htm|xhtml)$/i;
+
 const EXT_TO_MODE: Record<string, string> = {
-  // no extension / dotfiles
-  txt: 'text', log: 'text', text: 'text',
   md: 'markdown', markdown: 'markdown', mdown: 'markdown', mkd: 'markdown',
   js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'jsx',
   ts: 'typescript', tsx: 'tsx', mts: 'typescript', cts: 'typescript',
@@ -140,6 +141,27 @@ export function isTextFile(fileOrMime: string | { name: string; type: string }, 
     const binaryExt = /\.(png|jpe?g|gif|webp|bmp|ico|tiff?|mp4|mov|avi|mkv|webm|mp3|wav|ogg|flac|zip|tar|gz|bz2|xz|7z|rar|pdf|doc|docx|xls|xlsx|ppt|pptx|exe|dll|so|dylib|bin)$/i;
     if (!binaryExt.test(lower)) return true;
   }
+  return false;
+}
+
+/**
+ * HTML-file predicate — mirrors `isTextFile` overload shape.
+ * Call sites wanting viewer decoration test `isHtmlFile` first but
+ * do not gate the pastebin/edit path on it; `isTextFile` still
+ * returns true for html (via EXT_TO_MODE / texty regex).
+ */
+export function isHtmlFile(fileOrMime: string | { name: string; type: string }, maybeName?: string): boolean {
+  let file: { name: string; type: string };
+  if (typeof fileOrMime === 'string') {
+    file = { name: maybeName ?? '', type: fileOrMime };
+  } else {
+    file = fileOrMime;
+  }
+  const typeLower = (file.type || '').toLowerCase();
+  if (/^text\/html$/i.test(file.type) || typeLower === 'application/xhtml+xml') return true;
+  if (HTML_EXT_RE.test(file.name.toLowerCase())) return true;
+  if ((file.type === '' || typeLower === 'application/octet-stream') && HTML_EXT_RE.test(file.name.toLowerCase())) return true;
+  if (/^image\//i.test(file.type)) return false;
   return false;
 }
 

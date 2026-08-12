@@ -136,9 +136,9 @@ final class RESTAPI {
         router.post("/api/admin/servers/:id/clear-draining", &clearServerDraining);
         router.post("/api/upload", &uploadFile);
         router.get("/api/uploads", &getUploads);
+        router.get("/api/uploads/:id", &getUploadById);
         router.delete_("/api/uploads/:id", &deleteUpload);
         router.post("/api/uploads/:id/edit", &editUpload);
-        // Pastebin (text snippet) endpoints
         router.get("/api/pastebins", &getPastebins);
         router.post("/api/pastebins", &createPastebin);
         router.put("/api/pastebins/:id", &updatePastebin);
@@ -1679,17 +1679,16 @@ final class RESTAPI {
         auto lowerMime = mime.toLower();
         bool isImage = lowerMime.startsWith("image/");
         bool isText = lowerMime.startsWith("text/") ||
+            lowerMime == "text/html" || lowerMime == "application/xhtml+xml" ||
             lowerMime == "application/json" || lowerMime == "application/javascript" ||
             lowerMime == "application/xml" || lowerMime == "application/x-javascript" ||
             lowerMime == "application/x-python" || lowerMime == "text/x-python" ||
             lowerMime == "application/x-sh" || lowerMime == "text/x-sh";
-        // Fallback: allow by extension for empty/generic MIME (e.g. .txt with no MIME)
         if (!isImage && !isText && filename.length > 0) {
             import std.path : extension;
-            import std.uni : toLower;
             auto ext = extension(filename).toLower();
             // Common text/code extensions — matches frontend/textFiles.ts
-            immutable string[] textExts = [".txt",".md",".json",".js",".ts",".py",".java",".c",".cpp",".h",".go",".rs",".php",".rb",".sh",".yaml",".yml",".xml",".html",".css",".sql",".toml",".ini",".log",".csv"];
+            immutable string[] textExts = [".txt",".md",".json",".js",".ts",".py",".java",".c",".cpp",".h",".go",".rs",".php",".rb",".sh",".yaml",".yml",".xml",".html",".htm",".xhtml",".css",".sql",".toml",".ini",".log",".csv"];
             foreach (e; textExts) if (ext == e) { isText = true; break; }
             // Also allow Dockerfile, Makefile without extension
             if (!isText) {
@@ -1828,6 +1827,25 @@ final class RESTAPI {
             ]);
         }
         res.writeJsonBody(Json(["uploads": arr, "total": Json(total)]));
+    }
+
+    private void getUploadById(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto id = req.params["id"];
+        auto rec = uploadRepo.getById(user.id.toString(), id);
+        if (rec is UploadRecord.init || rec.id.length == 0) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("not found")]));
+            return;
+        }
+        res.writeJsonBody(Json([
+            "id": Json(rec.id), "url": Json(rec.directUrl), "name": Json(rec.filename),
+            "mimeType": Json(rec.mimeType), "size": Json(rec.size),
+            "createdAt": Json(rec.createdAt), "buffer": Json(rec.buffer),
+            "networkId": Json(rec.networkId),
+        ]));
     }
 
     private void deleteUpload(HTTPServerRequest req, HTTPServerResponse res) {
@@ -1982,11 +2000,22 @@ final class RESTAPI {
         auto j = req.json;
         string name = ("name" in j) ? j["name"].get!string : existing.name;
         string syntax = ("syntax" in j) ? j["syntax"].get!string : existing.syntax;
-        pastebinRepo.updateMeta(user.id.toString(), existing.id, name, syntax);
-        existing.name = name;
-        existing.syntax = syntax;
+        if ("body" in j || "content" in j) {
+            string body_ = ("body" in j) ? j["body"].get!string : j["content"].get!string;
+            pastebinRepo.updateFull(user.id.toString(), existing.id, name, syntax, body_);
+            existing.name = name;
+            existing.syntax = syntax;
+            existing.content = body_;
+            import ircfiber.db.pastebins : countLines;
+            existing.lines = countLines(body_);
+        } else {
+            pastebinRepo.updateMeta(user.id.toString(), existing.id, name, syntax);
+            existing.name = name;
+            existing.syntax = syntax;
+        }
         res.writeJsonBody(pasteToJson(existing));
     }
+
 
     private void deletePastebin(HTTPServerRequest req, HTTPServerResponse res) {
         requireAuth(req, res);

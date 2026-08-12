@@ -16,10 +16,17 @@
   let brightness=$state(0), contrast=$state(0), saturation=$state(0), hue=$state(0), gamma=$state(0), blur=$state(0), pixelize=$state(0);
   let grayscale=$state(false), invert=$state(false), sepia=$state(false), normalize=$state(false), nograyscale=$state(false), flipH=$state(false), flipV=$state(false);
   let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('oklab');
-  let viterbiW=$state(2.5);
+  let viterbiW=$state(0);
   let rotate=$state('0');
   let filter=$state('linear');
-  // single source: dither = ditherMode !== 'none' (kept for img2irc API)
+  let scrollPreset=$state(2);
+  const SCROLL_PRESETS = [
+    { label: 'Instant', bd: 0, sd: 0, hint: '0ms · instant' },
+    { label: 'Fast',    bd: 18, sd: 60, hint: '60ms/line' },
+    { label: 'Normal',  bd: 35, sd: 110, hint: '110ms · default' },
+    { label: 'Smooth',  bd: 55, sd: 220, hint: '220ms · gentle' },
+    { label: 'Cinema',  bd: 90, sd: 450, hint: '450ms · dramatic' },
+  ] as const;
   let dither=$derived(ditherMode !== 'none');
   // Viterbi compression only for paletted modes + smart truecolor; truecolor greedy
   let compressionDisabled=$derived(renderMode==='ansi24' && midgardMode!=='smart');
@@ -343,22 +350,21 @@
     if(width > MIN_IRC_WIDTH) return ()=>{ width=MIN_IRC_WIDTH; };
     return null;
   }
-  async function copy(){
-    try{ await navigator.clipboard.writeText(art); copied=true; setTimeout(()=>copied=false,1200);}catch{
-      const ta=document.getElementById('ircArtRaw') as HTMLTextAreaElement|null; if(ta){ ta.select(); document.execCommand('copy'); copied=true; setTimeout(()=>copied=false,1200);}
-    }
-  }
   async function send(){
     if(!art||!activeNetworkId||!activeTarget) return;
     sending=true; sentCount=0;
     const lines=art.split('\n');
-    const BURST=5, BD=35, SD=110;
+    const { bd: BD, sd: SD } = SCROLL_PRESETS[scrollPreset];
+    const BURST=5;
     for(let i=0;i<lines.length;i++){
       const line=lines[i];
       if(!line.replace(/[\x03\x04\x0f0-9,a-fA-F ]/g,'').trim() && line.trim()==='') continue;
       sendMessage(activeNetworkId, activeTarget, line, generateLabel());
       sentCount=i+1;
-      if(i<lines.length-1) await new Promise(r=>setTimeout(r, i<BURST?BD:SD));
+      if(i<lines.length-1){
+        const delay = i<BURST ? BD : SD;
+        if(delay>0) await new Promise(r=>setTimeout(r, delay));
+      }
     }
     sending=false; onClose();
   }
@@ -402,7 +408,7 @@
     pixelMode='half';
     midgardMode='xterm256';
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
-    grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=2.5;
+    grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; scrollPreset=2;
     accTone=false; accFx=false; accOut=false;
   }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
@@ -440,12 +446,22 @@
     <!-- Primary controls -->
     <div class="primary" class:hasThumb={!!thumbnailUrl}>
       <div class="primary-main">
-      <div class="p-row">
-        <span class="p-label">Colors</span>
-        <div class="pill-group" role="radiogroup" aria-label="Colors">
-          {#each colorOpts as o}
-            <button class="pill" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
-          {/each}
+      <div class="p-row two-col">
+        <div class="p-col">
+          <span class="p-label">Colors</span>
+          <div class="pill-group" role="radiogroup" aria-label="Colors">
+            {#each colorOpts as o}
+              <button class="pill" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
+            {/each}
+          </div>
+        </div>
+        <div class="p-col">
+          <span class="p-label">Normalize</span>
+          <div class="pill-group" role="radiogroup" aria-label="Normalize">
+            <button class="pill" class:on={!normalize} onclick={()=>normalize=false} role="radio" aria-checked={!normalize}>Off</button>
+            <button class="pill" class:on={normalize} onclick={()=>normalize=true} role="radio" aria-checked={normalize}>On</button>
+          </div>
+          <span class="p-hint">auto-contrast luma stretch</span>
         </div>
       </div>
       <div class="p-row">
@@ -475,6 +491,17 @@
         <div class="primary-actions">
           <button class="btn-fit" onclick={smartFit} disabled={fitBusy||!art}>{fitBusy?'Fitting…':'⚡ Fit'}</button>
           <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺</button>
+        </div>
+      </div>
+      <div class="p-row scroll-row">
+        <span class="p-label">Scroll</span>
+        <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} aria-label="Scroll speed" />
+        <span class="scroll-value" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
+        <span class="p-hint">{SCROLL_PRESETS[scrollPreset].hint}</span>
+        <div class="scroll-ticks" aria-hidden="true">
+          {#each SCROLL_PRESETS as p,i}
+            <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i} title="{p.label}: {p.hint} — burst {p.bd}ms then {p.sd}ms">{p.label}</button>
+          {/each}
         </div>
       </div>
       </div>
@@ -523,7 +550,6 @@
             <label><span>Hue</span><input class="slider sm" type="range" min="0" max="360" bind:value={hue} /><em>{hue}°</em></label>
             <label><span>Gamma</span><input class="slider sm" type="range" min="0" max="4" step="0.1" bind:value={gamma} /><em>{gamma||'off'}</em></label>
             <label class="check"><input type="checkbox" bind:checked={grayscale}/> Grayscale</label>
-            <label class="check"><input type="checkbox" bind:checked={normalize}/> Normalize</label>
             <label class="check"><input type="checkbox" bind:checked={invert}/> Invert</label>
             <label class="check"><input type="checkbox" bind:checked={sepia}/> Sepia</label>
             <label class="check" title="Skip near-gray palette entries for richer color"><input type="checkbox" bind:checked={nograyscale}/> No gray</label>
@@ -564,7 +590,7 @@
     <footer>
       {#if onBack}<button class="btn" onclick={onBack}>← Back</button>{/if}
       <div class="foot-left">
-        <span class="hint">{renderMode==='ansi24'?'True-Color':renderMode==='ansi'?'256-color':'99-color'} · {pixelMode} · burst 5×35ms then 110ms</span>
+        <span class="hint">{renderMode==='ansi24'?'True-Color':renderMode==='ansi'?'256-color':'99-color'} · {pixelMode} · {SCROLL_PRESETS[scrollPreset].label} · {SCROLL_PRESETS[scrollPreset].sd===0 ? 'instant' : `burst 5×${SCROLL_PRESETS[scrollPreset].bd}ms then ${SCROLL_PRESETS[scrollPreset].sd}ms`}</span>
       </div>
       <button class="btn" onclick={copy} disabled={!art||loading}>{copied?'Copied!':'Copy'}</button>
       <button class="btn primary" onclick={send} disabled={!art||loading||sending||!activeTarget}>
@@ -592,11 +618,18 @@
   .primaryThumb{width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #1e232b;background:#010409;flex-shrink:0;align-self:flex-start}
   .p-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .p-row.split{flex-wrap:wrap}
-  .p-label{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#7d8590;min-width:48px}
+  .p-row.two-col{justify-content:space-between;gap:16px 24px}
+  .p-col{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .p-row.scroll-row{gap:10px 12px}
+  .scroll-value{font-size:11px;font-weight:600;color:#e6edf3;min-width:52px;text-align:left}
+  .scroll{flex:1;min-width:140px;max-width:260px}
+  .scroll-ticks{display:flex;gap:4px;flex-wrap:wrap}
+  .tick{font-size:9px;font-weight:500;padding:3px 7px;border-radius:999px;border:1px solid #232a36;background:transparent;color:#7d8590;cursor:pointer;transition:all .14s;line-height:1}
+  .tick:hover{border-color:#2d3648;color:#c9d1d9;background:#141821}
+  .tick.on{background:#e6edf3;border-color:#e6edf3;color:#0f1115;font-weight:600}
   .p-hint{font-size:10px;color:#4d555f;margin-left:4px;white-space:nowrap}
   .pill-group{display:flex;gap:4px;flex-wrap:wrap}
   .pill{font-size:11px;font-weight:500;padding:5px 10px;border-radius:999px;border:1px solid #232a36;background:#141821;color:#9aa4b2;cursor:pointer;transition:all .14s}
-  .pill:hover{border-color:#2d3648;color:#c9d1d9;background:#1a1f29}
   .pill.on{background:#e6edf3;color:#0f1115;border-color:#e6edf3;font-weight:600;box-shadow:0 1px 8px rgba(230,237,243,.15)}
   .pill .glyph{font-size:11px;margin-right:2px}
   .field{display:flex;align-items:center;gap:8px;font-size:11px;color:#9aa4b2;white-space:nowrap}

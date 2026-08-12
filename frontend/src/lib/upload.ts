@@ -9,6 +9,7 @@ export function isUploadableImage(mime: string): boolean {
 }
 
 export function isUploadableText(mime: string, filename = ""): boolean {
+  if (mime.toLowerCase() === 'text/html' || mime.toLowerCase() === 'application/xhtml+xml') return true;
   if (/^text\//i.test(mime)) return true;
   const textMimes = new Set([
     "application/json", "application/javascript", "application/xml",
@@ -30,7 +31,6 @@ export function isUploadableText(mime: string, filename = ""): boolean {
 export function isUploadableFile(mime: string, filename = ""): boolean {
   return isUploadableImage(mime) || isUploadableText(mime, filename);
 }
-
 export function validateFile(file: FileLike): string | null {
   if (!isUploadableFile(file.type, file.name)) return 'Only images and text files are supported';
   if (file.size > MAX_UPLOAD_BYTES) return 'File too large (max 200 MB)';

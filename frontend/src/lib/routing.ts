@@ -61,3 +61,17 @@ export function navigateBackFromShortcuts(): void {
     window.location.href = '/';
   }
 }
+
+export function navigateToFileViewer(id: string): void {
+  history.pushState({ fileView: true, id }, '', `/?/view=${encodeURIComponent(id)}`);
+}
+export function getFileViewerIdFromUrl(): string | null {
+  const m = window.location.search.match(/^\?\/view=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+export function isFileViewerUrl(): boolean {
+  return /^\?\/view=/.test(window.location.search);
+}
+export function navigateBackFromFileViewer(): void {
+  history.back();
+}

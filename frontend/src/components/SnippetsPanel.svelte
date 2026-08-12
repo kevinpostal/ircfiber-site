@@ -1,7 +1,48 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import Highlight, { LineNumbers } from 'svelte-highlight';
+  import 'svelte-highlight/styles/atom-one-dark.css';
+  import plaintext from 'svelte-highlight/languages/plaintext';
+  import python from 'svelte-highlight/languages/python';
+  import javascript from 'svelte-highlight/languages/javascript';
+  import typescript from 'svelte-highlight/languages/typescript';
+  import bash from 'svelte-highlight/languages/bash';
+  import json from 'svelte-highlight/languages/json';
+  import yaml from 'svelte-highlight/languages/yaml';
+  import markdown from 'svelte-highlight/languages/markdown';
+  import sql from 'svelte-highlight/languages/sql';
+  import xml from 'svelte-highlight/languages/xml';
+  import css from 'svelte-highlight/languages/css';
+  import scss from 'svelte-highlight/languages/scss';
+  import less from 'svelte-highlight/languages/less';
+  import java from 'svelte-highlight/languages/java';
+  import cpp from 'svelte-highlight/languages/cpp';
+  import csharp from 'svelte-highlight/languages/csharp';
+  import go from 'svelte-highlight/languages/go';
+  import rust from 'svelte-highlight/languages/rust';
+  import ruby from 'svelte-highlight/languages/ruby';
+  import php from 'svelte-highlight/languages/php';
+  import swift from 'svelte-highlight/languages/swift';
+  import kotlin from 'svelte-highlight/languages/kotlin';
+  import dart from 'svelte-highlight/languages/dart';
+  import ini from 'svelte-highlight/languages/ini';
+  import dockerfile from 'svelte-highlight/languages/dockerfile';
+  import makefile from 'svelte-highlight/languages/makefile';
+  import nginx from 'svelte-highlight/languages/nginx';
+  import lua from 'svelte-highlight/languages/lua';
+  import perl from 'svelte-highlight/languages/perl';
+  import powershell from 'svelte-highlight/languages/powershell';
+  import rlang from 'svelte-highlight/languages/r';
+  import graphql from 'svelte-highlight/languages/graphql';
+  import protobuf from 'svelte-highlight/languages/protobuf';
+  import twig from 'svelte-highlight/languages/twig';
+  import verilog from 'svelte-highlight/languages/verilog';
+  import vhdl from 'svelte-highlight/languages/vhdl';
+  import zig from 'svelte-highlight/languages/zig';
+  import toml from 'svelte-highlight/languages/toml';
   import { fetchPastebinsOffset, updatePastebin, deletePastebin, pastebinRawUrl, type PasteEntry } from '../stores/api';
   import { ACE_MODES, aceModeLabel } from '../lib/aceModes';
+  import CodeEditor from './CodeEditor.svelte';
 
   interface Props {
     onClose: () => void;
@@ -22,6 +63,7 @@
   let editingId = $state<string | null>(null);
   let editName = $state('');
   let editSyntax = $state('text');
+  let editBody = $state('');
   let editError = $state<string | null>(null);
   let confirmingId = $state<string | null>(null);
   let saving = $state(false);
@@ -71,6 +113,7 @@
     confirmingId = null;
     editName = entry.name;
     editSyntax = entry.syntax || 'text';
+    editBody = entry.body;
     editError = null;
   }
 
@@ -78,16 +121,15 @@
     editingId = null;
     editError = null;
   }
-
   async function saveEdit(e: Event, entry: PasteEntry): Promise<void> {
     e.preventDefault();
     if (saving) return;
     saving = true;
     editError = null;
     try {
-      const updated = await updatePastebin(entry.id, { name: editName, syntax: editSyntax });
-      entry.name = updated.name;
-      entry.syntax = updated.syntax;
+      const updated = await updatePastebin(entry.id, { name: editName, syntax: editSyntax, body: editBody });
+      // Replace entry in array immutably to trigger Svelte 5 reactivity
+      entries = entries.map(p => p.id === entry.id ? { ...p, name: updated.name, syntax: updated.syntax, body: updated.body, lines: updated.lines } : p);
       editingId = null;
     } catch (err) {
       editError = 'There was a problem editing this snippet';
@@ -95,6 +137,8 @@
       saving = false;
     }
   }
+
+
 
   async function confirmDelete(entry: PasteEntry): Promise<void> {
     try {
@@ -109,6 +153,38 @@
 
   function editorHeight(entry: PasteEntry): number {
     return Math.min(Math.max(entry.lines, 1), MAX_VISIBLE_LINES) * LINE_HEIGHT;
+  }
+
+  function getHighlightLang(mode: string): any {
+    const m = mode.toLowerCase();
+    const map: Record<string, any> = {
+      text: plaintext, plaintext: plaintext, txt: plaintext,
+      html: xml, htm: xml, xhtml: xml, xml: xml, svg: xml,
+      javascript: javascript, js: javascript, jsx: javascript, mjs: javascript, cjs: javascript,
+      typescript: typescript, ts: typescript, tsx: typescript,
+      python: python, py: python,
+      java: java, c_cpp: cpp, c: cpp, cpp: cpp, cc: cpp, cxx: cpp, h: cpp, hpp: cpp,
+      csharp: csharp, cs: csharp,
+      go: go, golang: go,
+      rust: rust, rs: rust,
+      ruby: ruby, rb: ruby,
+      php: php,
+      swift: swift,
+      kotlin: kotlin, kt: kotlin,
+      dart: dart,
+      css: css, scss: scss, less: less,
+      json: json, json5: json,
+      yaml: yaml, yml: yaml,
+      markdown: markdown, md: markdown,
+      sql: sql, toml: toml, ini: ini,
+      sh: bash, bash: bash, shell: bash, zsh: bash,
+      lua: lua, perl: perl, powershell: powershell, r: rlang,
+      graphql: graphql, graphqlschema: graphql,
+      protobuf: protobuf,
+      twig: twig, verilog: verilog, vhdl: vhdl, zig: zig,
+      dockerfile: dockerfile, makefile: makefile, nginx: nginx,
+    };
+    return map[m] ?? null;
   }
 
   function formatDate(ms: number): string {
@@ -171,8 +247,9 @@
             {#if editingId === entry.id}
               <form action="" method="post" class="editForm" onsubmit={(e) => saveEdit(e, entry)}>
                 <p class="form">
-                  <input class="input nameInput" name="name" placeholder="Name" bind:value={editName} />
-                  <select name="aceMode" bind:value={editSyntax}>
+                  <label for="edit-name-{entry.id}" style="font-size:12px; color:#b0b0b0; margin-right:4px;">Name</label>
+                  <input id="edit-name-{entry.id}" class="input nameInput" name="name" placeholder="e.g. index.html" title="Name for referencing (shown in header)" bind:value={editName} />
+                  <select name="aceMode" bind:value={editSyntax} aria-label="Syntax">
                     {#each ACE_MODES as [value, label]}
                       <option {value}>{label}</option>
                     {/each}
@@ -206,18 +283,30 @@
               <p class="userError editError">{editError}</p>
             {/if}
           </h1>
-          <div class="editor" class:noGutter={gutterHidden[entry.id]} style="height: {editorHeight(entry)}px;">
-            <div class="editorScroll">
-              {#if !gutterHidden[entry.id]}
-                <div class="gutter" aria-hidden="true">
-                  {#each { length: entry.lines } as _, i}
-                    <div class="gutterCell">{i + 1}</div>
-                  {/each}
-                </div>
-              {/if}
-              <pre class="code">{entry.body}</pre>
+          {#if editingId === entry.id}
+            <div class="editor editing" style="height: {Math.min(Math.max(editBody.split('\n').length, 1), MAX_VISIBLE_LINES) * LINE_HEIGHT}px;">
+              <CodeEditor bind:value={editBody} language={editSyntax} />
             </div>
-          </div>
+          {:else}
+            <div class="editor" class:noGutter={gutterHidden[entry.id]} style="height: {editorHeight(entry)}px;">
+              <div class="editorScroll">
+                {#if !gutterHidden[entry.id]}
+                  <div class="gutter" aria-hidden="true">
+                    {#each { length: entry.lines } as _, i}
+                      <div class="gutterCell">{i + 1}</div>
+                    {/each}
+                  </div>
+                {/if}
+                {#if getHighlightLang(entry.syntax)}
+                  <Highlight language={getHighlightLang(entry.syntax)} code={entry.body} let:highlighted>
+                    <pre class="code hljs">{@html highlighted}</pre>
+                  </Highlight>
+                {:else}
+                  <pre class="code">{entry.body}</pre>
+                {/if}
+              </div>
+            </div>
+          {/if}
         </div>
       {:else}
         {#if !loading && !error}
@@ -229,3 +318,63 @@
     {@render pagination()}
   </div>
 </div>
+
+<style>
+  /* Twilight overrides for svelte-highlight to match IRCCloud's ace-twilight */
+  :global(#pastebinList .paste .editor .hljs) {
+    background: #141414;
+    color: #F8F8F8;
+    padding: 0;
+  }
+  :global(#pastebinList .paste .editor .hljs-keyword),
+  :global(#pastebinList .paste .editor .hljs-meta),
+  :global(#pastebinList .paste .editor .hljs-selector-tag) {
+    color: #CDA869;
+  }
+  :global(#pastebinList .paste .editor .hljs-string),
+  :global(#pastebinList .paste .editor .hljs-attr .hljs-string) {
+    color: #8F9D6A;
+  }
+  :global(#pastebinList .paste .editor .hljs-regexp) {
+    color: #E9C062;
+  }
+  :global(#pastebinList .paste .editor .hljs-comment) {
+    color: #5F5A60;
+    font-style: italic;
+  }
+  :global(#pastebinList .paste .editor .hljs-variable),
+  :global(#pastebinList .paste .editor .hljs-template-variable) {
+    color: #7587A6;
+  }
+  :global(#pastebinList .paste .editor .hljs-tag),
+  :global(#pastebinList .paste .editor .hljs-name) {
+    color: #AC885B;
+  }
+  :global(#pastebinList .paste .editor .hljs-attr) {
+    color: #7587A6;
+  }
+  :global(#pastebinList .paste .editor .hljs-attribute) {
+    color: #9B859D;
+  }
+  :global(#pastebinList .paste .editor .hljs-title.function),
+  :global(#pastebinList .paste .editor .hljs-title) {
+    color: #AC885B;
+  }
+  :global(#pastebinList .paste .editor .hljs-built_in) {
+    color: #9B859D;
+  }
+  :global(#pastebinList .paste .editor .hljs-number),
+  :global(#pastebinList .paste .editor .hljs-literal) {
+    color: #CF6A4C;
+  }
+  :global(#pastebinList .paste .editor .hljs-type) {
+    color: #9B859D;
+  }
+  :global(#pastebinList .paste .editor .hljs-selector-class),
+  :global(#pastebinList .paste .editor .hljs-selector-id) {
+    color: #F9EE98;
+  }
+  :global(#pastebinList .paste .editor .hljs-doctag) {
+    color: #494949;
+  }
+</style>

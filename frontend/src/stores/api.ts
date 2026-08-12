@@ -421,6 +421,12 @@ export async function deleteUpload(id: string): Promise<void> {
   if (!r.ok) throw new Error('Delete failed');
 }
 
+export async function fetchUploadById(id: string): Promise<UploadEntry> {
+  const r = await fetch(`${API_BASE}/uploads/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error('Failed to fetch upload');
+  return await r.json();
+}
+
 export async function editUpload(id: string, data: { content: string; filename: string }): Promise<{ status: string }> {
   const r = await fetch(`${API_BASE}/uploads/${encodeURIComponent(id)}/edit`, {
     method: 'POST',
@@ -456,7 +462,7 @@ export async function createPastebin(data: { name?: string; body: string; syntax
   return r.json();
 }
 
-export async function updatePastebin(id: string, data: { name: string; syntax: string }): Promise<PasteEntry> {
+export async function updatePastebin(id: string, data: { name: string; syntax: string; body?: string }): Promise<PasteEntry> {
   const r = await fetch(`${API_BASE}/pastebins/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -465,6 +471,7 @@ export async function updatePastebin(id: string, data: { name: string; syntax: s
   if (!r.ok) throw new Error('Failed to update pastebin');
   return r.json();
 }
+
 
 export async function deletePastebin(id: string): Promise<void> {
   const r = await fetch(`${API_BASE}/pastebins/${encodeURIComponent(id)}`, { method: 'DELETE' });

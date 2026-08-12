@@ -134,12 +134,12 @@ export const MAX_IRC_WIDTH = 120;
 export const IRC_HARD_LIMIT = 512;
 /** Safe payload that fits everywhere — leaves ~112 for PRIVMSG prefix/tags. Soft limit. */
 export const IRC_SAFE_PAYLOAD = 400;
-const DEFAULTS: Img2IrcOptions = {
+const DEFAULTS: Img2ircOptions = {
   width: 60, renderMode: 'ansi', pixelMode: 'half', filter: 'linear',
   brightness: 0, contrast: 0, gamma: 0, saturation: 0, hue: 0,
   invert: false, grayscale: false, sepia: false, normalize: false, dither: false,
   ditherMode: 'none', colorMatching: 'oklab',
-  flipH: false, flipV: false, rotate: 0, pixelize: 0, blur: 0, nograyscale: false, viterbiW: 2.5, comic: false,
+  flipH: false, flipV: false, rotate: 0, pixelize: 0, blur: 0, nograyscale: false, viterbiW: 0, comic: false,
   midgardMode: 'xterm256',
   alphaMode: 'opaque', alphaThreshold: 128, trimTransparent: false, smartEdges: true, background: '#000000',
 };
