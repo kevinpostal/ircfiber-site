@@ -1926,6 +1926,38 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
 
 export function estimateLineLengths(art:string,maxBytes=IRC_SAFE_PAYLOAD){const ls=art.split('\n');let lg=0;for(const l of ls){const b=new TextEncoder().encode(l).length;if(b>lg)lg=b;}return{ok:lg<=maxBytes,longest:lg,lines:ls.length, total:new TextEncoder().encode(art).length};}
 export function stripTrailingReset(line:string){return line.replace(/\x0f$/,'');}
+// ── LambdaPareto.lean (§2.4 / §3.7) — λ-sweep: monotonicity, Pareto & bisection ────────
+// Lean: IrcRD.cost B D lam x = D x + lam * B x  (D=ΔE distortion, B=wire bytes)
+//       IrcRD.Optimal B D lam x  ≔  ∀ y, cost lam x ≤ cost lam y
+// The Viterbi DP in renderPixelsCore realises this exactly:
+//   dp[s] = g.err + viterbiW * (g.bytes + prefix)   — D + λ·B
+// and picks the argmin over S×S states.  Lean's theorems are emergent properties:
+//   bytes_antitone      (λ₁<λ₂ → B x₂ ≤ B x₁)        — raising λ never increases bytes
+//   distortion_monotone  (0≤λ₁<λ₂ → D x₁ ≤ D x₂)      — raising λ never improves distortion
+//   pareto               (λ>0, Optimal → Pareto-optimal) — no y dominates in B and D
+//   msgCount_antitone / fits_upward_closed           — bisection on λ is sound
+//   msgCount_pack_le     ((R+k-1)/k ≤ R)              — row packing never increases msgs
+/** IrcRD.msgCount — number of PRIVMSGs for b bytes at payload budget C per line. */
+export function msgCount(C: number, b: number): number {
+  if (!(C > 0)) throw new Error('msgCount: C must be > 0');
+  if (b <= 0) return 0;
+  return Math.ceil(b / C);
+}
+/** IrcRD.msgCount_pack_le — packing k rows per PRIVMSG never increases message count. */
+export function msgCountPacked(R: number, k: number): number {
+  if (!(k >= 1)) throw new Error('msgCountPacked: k must be >= 1');
+  if (R <= 0) return 0;
+  return Math.floor((R + k - 1) / k); // = ⌈R/k⌉, satisfies ⌈R/k⌉ ≤ R  (Lean: msgCount_pack_le)
+}
+/** Check Lean's msgCount_pack_le inequality directly. */
+export function msgCountPackLe(R: number, k: number): boolean {
+  return msgCountPacked(R, k) <= R;
+}
+/** Wire helper: count PRIVMSGs under optimal row-packing for a given art at payload C. */
+export function estimatePackedMessages(art: string, C = IRC_SAFE_PAYLOAD, rowsPerMsg = 1): number {
+  const { lines } = estimateLineLengths(art, C);
+  return msgCountPacked(lines, rowsPerMsg);
+}
 export function serializeImg2IrcOptions(o: Img2IrcOptions): Record<string, unknown> {
   const { _smartPaletteA, _smartPaletteB, ...rest } = o as any;
   return { ...rest };

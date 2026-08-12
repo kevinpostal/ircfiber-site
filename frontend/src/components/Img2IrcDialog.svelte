@@ -325,6 +325,10 @@
       }
     } finally { fitting=false; fitBusy=false; }
   }
+  // LambdaPareto.lean IrcRD.fits_upward_closed / msgCount_antitone:
+  // Feasible set {λ | longest(λ) ≤ 512} is upward-closed because B (bytes) is
+  // antitone in λ (bytes_antitone). So if hi fits, every λ≥hi fits, and bisection
+  // finds the smallest feasible λ (Pareto-optimal by IrcRD.pareto for λ>0).
   async function bisectViterbiW(): Promise<boolean>{
     const lo=viterbiW, hi=6;
     let best=hi, found=false;
