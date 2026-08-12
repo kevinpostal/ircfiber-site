@@ -49,10 +49,10 @@ export function normalizeTextUrl(rawUrl: string): string | null {
     return null;
   }
   if (/^(javascript|vbscript|data):/i.test(u.protocol)) return null;
-
   // Always allow our own upload URLs if they have a text-like extension
   // Also allow any URL with a known text extension
-  u.protocol = 'https:';
+  const isLoopback = /^(localhost|127\.0\.0\.1|::1)$/i.test(u.hostname) || u.hostname.startsWith('127.');
+  if (!isLoopback) u.protocol = 'https:';
   if (isTextParts(u.pathname, u.search, u.hash)) return u.href;
   // Special: check for /uploads/<id> without extension? Try to allow if host is ours and path starts with /uploads/
   if (u.pathname.startsWith('/uploads/')) {

@@ -266,8 +266,29 @@ export function setServerlogCollapseEvents(value: boolean): void {
   setStorageItem('ircfiber:serverlogCollapseEvents', value);
 }
 
+// ── Member list prefix visibility ──
+//
+// Controls whether mode-prefix glyphs (@, +, %, etc.) are shown in the
+// member list sidebar. Default true (show). Synced cross-tab via
+// localStorage `storage` event and cross-device via `pref_update`
+// (`showMemberPrefixes` key) + `stat_user` boot seed. The setter writes
+// to localStorage immediately so a fast refresh (<500ms debounce) keeps
+// the choice; the Settings UI also POSTs to
+// `/api/me/show-member-prefixes` which then fans out via WS.
+let _showMemberPrefixes = $state<boolean>(
+  getStorageItem('ircfiber:showMemberPrefixes', true)
+);
+
+export function getShowMemberPrefixes(): boolean {
+  return _showMemberPrefixes;
+}
+
+export function setShowMemberPrefixes(value: boolean): void {
+  _showMemberPrefixes = value;
+  setStorageItem('ircfiber:showMemberPrefixes', value);
+}
+
 // Per-buffer channel preferences (showUnread, mute, formatColor, etc.)
-// Key: `${networkId}:${bufferName}`. Value: partial record of toggles.
 export interface BufferPrefs {
   showUnread?: boolean;
   markAsRead?: boolean;
@@ -534,6 +555,19 @@ if (typeof window !== 'undefined') {
             if (v && typeof v === 'object') Object.assign(globalPrefs, v);
           }
         } catch {}
+        break;
+      }
+      case 'ircfiber:showMemberPrefixes': {
+        if (e.newValue === null) {
+          _showMemberPrefixes = true;
+        } else {
+          try {
+            const v = JSON.parse(e.newValue);
+            _showMemberPrefixes = v === true || v === false ? v : true;
+          } catch {
+            _showMemberPrefixes = true;
+          }
+        }
         break;
       }
     }

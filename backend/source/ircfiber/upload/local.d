@@ -83,6 +83,47 @@ LocalUploadResult saveUpload(string filename, string mime, const(ubyte)[] data, 
     logInfo("Saved upload: %s (%s bytes, mime=%s)", url, data.length, mime);
     return LocalUploadResult(url);
 }
+/// Saves an IRC art original image under uploadDir/img2irc/<uuid>.<ext>.
+/// Returns the URL path (e.g. https://host/uploads/img2irc/<uuid>.png).
+LocalUploadResult saveIrcArtOriginal(string filename, string mime, const(ubyte)[] data, string baseUrl) @trusted {
+    import std.string : strip;
+    auto ext = extension(filename).strip;
+    if (ext.length == 0) {
+        if (mime == "image/png") ext = ".png";
+        else if (mime == "image/jpeg" || mime == "image/jpg") ext = ".jpg";
+        else if (mime == "image/gif") ext = ".gif";
+        else if (mime == "image/webp") ext = ".webp";
+        else if (mime.startsWith("text/")) ext = ".txt";
+        else ext = ".bin";
+    }
+    const uuid = randomUUID().toString().replace("-", "");
+    auto destName = uuid ~ ext;
+    auto dir = buildPath(uploadDir(), "img2irc");
+    auto destPath = buildPath(dir, destName);
+    try { mkdirRecurse(dir); } catch (Exception e) { throw new LocalUploadException("Failed to create img2irc directory: " ~ e.msg); }
+    try { write(destPath, data); } catch (Exception e) { throw new LocalUploadException("Failed to write img2irc original: " ~ e.msg); }
+    auto base = baseUrl.strip;
+    while (base.length > 0 && base[$-1] == '/') base = base[0..$-1];
+    auto url = base ~ "/uploads/img2irc/" ~ destName;
+    logInfo("Saved img2irc original: %s (%s bytes)", url, data.length);
+    return LocalUploadResult(url);
+}
+
+/// Saves a PNG thumbnail under uploadDir/img2irc/thumbs/<uuid>.png.
+LocalUploadResult saveIrcArtThumbnail(const(ubyte)[] pngBytes, string baseUrl) @trusted {
+    import std.string : strip;
+    const uuid = randomUUID().toString().replace("-", "");
+    auto destName = uuid ~ ".png";
+    auto dir = buildPath(uploadDir(), "img2irc", "thumbs");
+    auto destPath = buildPath(dir, destName);
+    try { mkdirRecurse(dir); } catch (Exception e) { throw new LocalUploadException("Failed to create img2irc thumbs directory: " ~ e.msg); }
+    try { write(destPath, pngBytes); } catch (Exception e) { throw new LocalUploadException("Failed to write img2irc thumbnail: " ~ e.msg); }
+    auto base = baseUrl.strip;
+    while (base.length > 0 && base[$-1] == '/') base = base[0..$-1];
+    auto url = base ~ "/uploads/img2irc/thumbs/" ~ destName;
+    logInfo("Saved img2irc thumbnail: %s (%s bytes)", url, pngBytes.length);
+    return LocalUploadResult(url);
+}
 
 @("saveUpload generates a URL and writes to disk")
 unittest {

@@ -2,6 +2,7 @@
   import { getActiveBufferObj, getSortedMembers, getActiveNetwork } from '../stores/ircStore.svelte';
   import { stripPrefix } from '../lib/utils';
   import type { ModeCategory, Member } from '../types';
+  import { getShowMemberPrefixes } from '../stores/preferences.svelte';
 
   interface Props {
     onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
@@ -44,6 +45,7 @@
   }
 
   const sortedMembers = $derived(getSortedMembers());
+  const showPrefixes = $derived(getShowMemberPrefixes());
 </script>
 
 <div class="memberwrapper" id="flat-members">
@@ -54,7 +56,7 @@
         <h2>
           {CATEGORY_LABELS[category]}
           <span class="memberExtras">
-            <span class="memberCount">{CATEGORY_SYMBOLS[category]}{CATEGORY_SYMBOLS[category] ? ' ' : ''}{members.length}</span>
+            <span class="memberCount">{showPrefixes ? CATEGORY_SYMBOLS[category] : ''}{showPrefixes && CATEGORY_SYMBOLS[category] ? ' ' : ''}{members.length}</span>
           </span>
         </h2>
         <ul class="categoryMemberList">
@@ -69,7 +71,9 @@
                       onclick={(e) => onNickClick?.(nick, e, member)}
                       onmouseenter={() => onNickHover?.(nick)}
                       onmouseleave={() => onNickHover?.(null)}>
-                <span class="member-mode-prefix" aria-hidden="true">{CATEGORY_SYMBOLS[member.category] ?? CATEGORY_SYMBOLS[category] ?? ''}</span>
+                {#if showPrefixes}
+                  <span class="member-mode-prefix" aria-hidden="true">{CATEGORY_SYMBOLS[member.category] ?? CATEGORY_SYMBOLS[category] ?? ''}</span>
+                {/if}
                 <span class="member-nick">{nick}</span>
               </button>
             </li>

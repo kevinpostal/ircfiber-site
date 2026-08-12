@@ -1,12 +1,13 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode } from '../lib/img2irc';
+  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode, serializeImg2IrcOptions } from '../lib/img2irc';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { generateLabel } from '../lib/utils';
-  interface Props { file: File|Blob; filename:string; onClose:()=>void; onBack?:()=>void; }
-  let { file, filename, onClose, onBack }: Props = $props();
+  import { createIrcArtSave, updateIrcArtSave } from '../stores/api';
+  interface Props { file: File|Blob; filename:string; onClose:()=>void; onBack?:()=>void; initialParams?: Record<string, unknown>; initialName?: string; editId?: string; onSaved?:()=>void; initialArt?: string; }
+  let { file, filename, onClose, onBack, initialParams, initialName, editId, onSaved, initialArt }: Props = $props();
 
   let width=$state(DEFAULT_IRC_WIDTH);
   let renderMode=$state<RenderMode>('ansi');
@@ -25,7 +26,35 @@
   let accTone=$state(false);
   let accFx=$state(false);
   let accOut=$state(false);
-
+  let _initApplied=$state(false);
+  $effect(()=>{
+    if(_initApplied || !initialParams) return;
+    _initApplied=true;
+    const p=initialParams as any;
+    if(p.width!=null) width=p.width;
+    if(p.renderMode) renderMode=p.renderMode;
+    if(p.pixelMode) pixelMode=p.pixelMode;
+    if(p.midgardMode) midgardMode=p.midgardMode;
+    if(p.filter) filter=p.filter;
+    if(p.brightness!=null) brightness=p.brightness;
+    if(p.contrast!=null) contrast=p.contrast;
+    if(p.saturation!=null) saturation=p.saturation;
+    if(p.hue!=null) hue=p.hue;
+    if(p.gamma!=null) gamma=p.gamma;
+    if(p.blur!=null) blur=p.blur;
+    if(p.pixelize!=null) pixelize=p.pixelize;
+    if(p.grayscale!=null) grayscale=p.grayscale;
+    if(p.invert!=null) invert=p.invert;
+    if(p.sepia!=null) sepia=p.sepia;
+    if(p.normalize!=null) normalize=p.normalize;
+    if(p.nograyscale!=null) nograyscale=p.nograyscale;
+    if(p.flipH!=null) flipH=p.flipH;
+    if(p.flipV!=null) flipV=p.flipV;
+    if(p.rotate!=null) rotate=String(p.rotate);
+    if(p.ditherMode) ditherMode=p.ditherMode;
+    if(p.colorMatching) colorMatching=p.colorMatching;
+    if(p.viterbiW!=null) viterbiW=p.viterbiW;
+  });
   $effect(()=>{
     void midgardMode;
     if((midgardMode as string)==='vga256'){ midgardMode='xterm256'; return; }
@@ -36,8 +65,10 @@
     else if(midgardMode==='16'){ renderMode='irc'; }
     else if(midgardMode==='smart'){ renderMode='ansi24'; }
   });
-  let art=$state(''), htmlPreview=$state(''), loading=$state(true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
+  let art=$state(initialArt ?? ''), htmlPreview=$state(initialArt ? initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('') : ''), loading=$state(initialArt ? false : true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
+  let saving=$state(false), saveError=$state<string|null>(null), saveOk=$state(false), saveName=$state((initialName ?? filename.replace(/\.[^.]+$/,'')) || 'IRC Art');
   let hasAlpha=$state(false);
+  let isDummyFile=$derived((file as File)?.name==='dummy.png');
   let gen=0;
   let debounce: ReturnType<typeof setTimeout>|null=null;
   let settleTimer: ReturnType<typeof setTimeout>|null=null;
@@ -115,8 +146,8 @@
 
   let fitBusy=$state(false);
   let fitting=false;
-
   function schedule(){
+    if(isDummyFile){ isConverting=false; loading=false; return; }
     if(fitting) return;
     if(settleTimer){ clearTimeout(settleTimer); settleTimer=null; }
     const my=++gen;
@@ -132,8 +163,21 @@
     const cur=expected;
     if(cur!==gen) return;
     if(settleTimer){ clearTimeout(settleTimer); settleTimer=null; }
+    const isDummy = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
+    if(editId && initialArt && isDummy){
+      if(!htmlPreview){
+        art = initialArt;
+        htmlPreview = initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
+      }
+      loading=false; isConverting=false;
+      return;
+    }
+    if(editId && initialArt && !htmlPreview){
+      art = initialArt;
+      htmlPreview = initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
+      loading=false; isConverting=false;
+    }
     if(!htmlPreview) loading=true;
-    error=null;
     try{
       const img=await loadImageFromFile(file as File);
       if(cur!==gen){ revokeImageUrl(img); return; }
@@ -258,6 +302,40 @@
     }
     sending=false; onClose();
   }
+  async function makeThumbnailBlob(): Promise<Blob|null> {
+    try {
+      const img=await loadImageFromFile(file as File);
+      const c=document.createElement('canvas');
+      const maxW=120;
+      const scale=Math.min(1, maxW / img.naturalWidth);
+      c.width=Math.max(1, Math.round(img.naturalWidth*scale));
+      c.height=Math.max(1, Math.round(img.naturalHeight*scale));
+      const ctx=c.getContext('2d')!;
+      ctx.drawImage(img,0,0,c.width,c.height);
+      revokeImageUrl(img);
+      return await new Promise<Blob|null>(res=>{
+        try{ c.toBlob(b=>res(b), 'image/png'); } catch { res(null); }
+      });
+    } catch { return null; }
+  }
+  async function handleSave(){
+    if(!art || saving || overBudget) return;
+    saving=true; saveError=null; saveOk=false;
+    try{
+      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic:false, alphaMode: hasAlpha?'transparent':'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as any);
+      let thumb: Blob|null=null;
+      const isDummyFile = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
+      if(!isDummyFile){ try{ thumb=await makeThumbnailBlob(); } catch {} }
+      if(editId){
+        await updateIrcArtSave(editId, { name: saveName, art, params, thumbnailBlob: thumb ?? undefined });
+      } else {
+        await createIrcArtSave({ name: saveName, art, params, originalFile: file as File, thumbnailBlob: thumb ?? undefined, networkId: activeNetworkId, buffer: activeTarget, originalFilename: filename, originalMime: (file as File).type || 'image/png' });
+      }
+      saveOk=true; setTimeout(()=>saveOk=false,2000);
+      onSaved?.();
+    } catch(e:any){ saveError=e?.message??'Save failed'; }
+    finally{ saving=false; }
+  }
   function resetAll(){
     width=DEFAULT_IRC_WIDTH;
     renderMode='ansi';
@@ -296,6 +374,9 @@
       </div>
       <button class="x" onclick={onClose} aria-label="Close">×</button>
     </header>
+    {#if isDummyFile}
+      <div class="dummyNotice" data-testid="dummy-notice">Original image not available — preview is static. You can still rename and save the art.</div>
+    {/if}
 
     <!-- Primary controls -->
     <div class="primary">
@@ -400,6 +481,12 @@
       {/if}
     </div>
     <details class="raw"><summary>Raw {renderMode==='ansi24'?'\\x04':'\\x03'} codes</summary><textarea id="ircArtRaw" readonly value={art} rows={Math.min(10, art.split('\n').length+1)}></textarea></details>
+    <div class="saveRow">
+      <input class="saveName" bind:value={saveName} placeholder="Name" aria-label="Save name" />
+      <button class="btn saveBtn" onclick={handleSave} disabled={saving || !art || overBudget}>{#if saving}Saving…{:else if saveOk}Saved ✓{:else if editId}Update{:else}Save{/if}</button>
+      {#if saveError}<span class="saveErr">{saveError}</span>{/if}
+      {#if overBudget}<span class="saveErr">Fit to 512 first</span>{/if}
+    </div>
 
     <footer>
       {#if onBack}<button class="btn" onclick={onBack}>← Back</button>{/if}
@@ -425,6 +512,7 @@
   .badge{font-size:10px;color:#8b949e;background:#1a1f29;border:1px solid #232a36;border-radius:999px;padding:2px 8px;white-space:nowrap}
   .x{background:0;border:0;color:#7d8590;font-size:22px;cursor:pointer;line-height:1;padding:0 6px;border-radius:6px}
   .x:hover{color:#e6edf3;background:#1a1f29}
+  .dummyNotice{margin:0 16px;padding:8px 12px;background:#1a1400;border:1px solid #3d2a0a;color:#d29922;border-radius:8px;font-size:11px;line-height:1.4}
 
   .primary{padding:12px 16px;background:#0d0f13;border-bottom:1px solid #1e232b;display:flex;flex-direction:column;gap:12px}
   .p-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -512,6 +600,11 @@
   .raw{border-top:1px solid #1e232b;padding:8px 16px;background:#0d0f13}
   .raw summary{font-size:11px;color:#58a6ff;cursor:pointer;user-select:none}
   .raw textarea{margin-top:8px;width:100%;background:#000;color:#7d8590;border:1px solid #1e232b;border-radius:6px;font:10px/1.3 "Hack",monospace;padding:8px;white-space:pre;overflow:auto}
+  .saveRow{display:flex;gap:8px;align-items:center;padding:10px 16px;border-top:1px solid #1e232b;background:#0d0f13;flex-wrap:wrap}
+  .saveName{flex:1;min-width:120px;background:#010409;color:#e6edf3;border:1px solid #232a36;border-radius:6px;padding:6px 10px;font-size:12px}
+  .saveName:focus{outline:none;border-color:#58a6ff}
+  .saveBtn{min-width:80px}
+  .saveErr{font-size:11px;color:#f85149}
 
   footer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid #1e232b;justify-content:flex-end;align-items:center;flex-wrap:wrap;background:#0f1115}
   .foot-left{margin-right:auto}

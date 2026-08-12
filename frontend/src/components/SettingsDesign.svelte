@@ -1,8 +1,29 @@
 <script lang="ts">
-  import { globalPrefs } from '../stores/preferences.svelte';
+  import { globalPrefs, getShowMemberPrefixes, setShowMemberPrefixes } from '../stores/preferences.svelte';
   import SettingsSection from './SettingsSection.svelte';
 
   let fontPreview = $derived(globalPrefs.fontSize + 'px');
+
+  // ── Member prefix pref (backend-synced) ──
+  let showMemberPrefixesLocal = $state(getShowMemberPrefixes());
+  // Mirror external changes (cross-tab `storage` event or cross-device `pref_update`)
+  $effect(() => {
+    // Reading the getter tracks the underlying $state
+    const v = getShowMemberPrefixes();
+    showMemberPrefixesLocal = v;
+  });
+  function onToggleShowMemberPrefixes(e: Event): void {
+    const checked = (e.target as HTMLInputElement).checked;
+    showMemberPrefixesLocal = checked;
+    setShowMemberPrefixes(checked);
+    // Fire-and-forget backend sync for cross-device realtime
+    fetch('/api/me/show-member-prefixes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ showMemberPrefixes: checked }),
+      credentials: 'same-origin',
+    }).catch(() => {});
+  }
 
   // ── Custom CSS ──
   let customCSS = $state(globalPrefs.customCSS || '');
@@ -110,6 +131,18 @@
       <div class="settings-control">
         <label class="toggle-switch">
           <input type="checkbox" bind:checked={globalPrefs.sidebarLeft} />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span class="settings-label-text">Show member prefixes</span>
+        <span class="settings-label-desc">Show @, +, % etc. in the member list</span>
+      </div>
+      <div class="settings-control">
+        <label class="toggle-switch">
+          <input type="checkbox" checked={showMemberPrefixesLocal} onchange={onToggleShowMemberPrefixes} />
           <span class="toggle-slider"></span>
         </label>
       </div>

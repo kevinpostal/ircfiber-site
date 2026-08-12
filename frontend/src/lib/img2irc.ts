@@ -1107,3 +1107,12 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
 
 export function estimateLineLengths(art:string,maxBytes=IRC_SAFE_PAYLOAD){const ls=art.split('\n');let lg=0;for(const l of ls){const b=new TextEncoder().encode(l).length;if(b>lg)lg=b;}return{ok:lg<=maxBytes,longest:lg,lines:ls.length, total:new TextEncoder().encode(art).length};}
 export function stripTrailingReset(line:string){return line.replace(/\x0f$/,'');}
+export function serializeImg2IrcOptions(o: Img2IrcOptions): Record<string, unknown> {
+  const { _smartPaletteA, _smartPaletteB, ...rest } = o as any;
+  return { ...rest };
+}
+export function deserializeImg2IrcOptions(j: Record<string, unknown>): Partial<Img2IrcOptions> {
+  const clone = { ...j } as any;
+  delete clone._smartPaletteA; delete clone._smartPaletteB;
+  return clone;
+}

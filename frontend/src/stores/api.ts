@@ -486,3 +486,72 @@ export async function fetchArchiveNames(): Promise<ArchiveNamesResponse> {
   if (!r.ok) throw new Error('Failed to fetch archive names');
   return r.json();
 }
+export interface IrcArtSaveEntry {
+  id: string; name: string;
+  originalFilename: string; originalMime: string; originalSize: number;
+  originalUrl: string; thumbnailUrl: string;
+  art: string; params: Record<string, unknown>;
+  createdAt: number; updatedAt: number;
+  buffer: string; networkId: string;
+}
+
+export async function fetchIrcArtSavesOffset(offset = 0, limit = 25): Promise<{ entries: IrcArtSaveEntry[]; total: number }> {
+  const params = new URLSearchParams();
+  params.set('offset', String(offset));
+  params.set('limit', String(limit));
+  const r = await fetch(`${API_BASE}/img2irc-saves?${params}`);
+  if (!r.ok) throw new Error('Failed to fetch IRC art saves');
+  const body = await r.json();
+  return { entries: body.ircArtSaves as IrcArtSaveEntry[], total: body.total ?? 0 };
+}
+
+export async function createIrcArtSave(data: { name: string; art: string; params: Record<string, unknown>; originalFile?: File; thumbnailBlob?: Blob; networkId?: string; buffer?: string; originalFilename?: string; originalMime?: string }): Promise<IrcArtSaveEntry> {
+  const fd = new FormData();
+  fd.append('name', data.name);
+  fd.append('art', data.art);
+  fd.append('params', JSON.stringify(data.params ?? {}));
+  if (data.networkId) fd.append('networkId', data.networkId);
+  if (data.buffer) fd.append('buffer', data.buffer);
+  if (data.originalFile) fd.append('original', data.originalFile, data.originalFile.name || data.originalFilename || 'image.png');
+  else {
+    if (data.originalFilename) fd.append('originalFilename', data.originalFilename);
+    if (data.originalMime) fd.append('originalMime', data.originalMime);
+  }
+  if (data.thumbnailBlob) fd.append('thumbnail', data.thumbnailBlob, 'thumb.png');
+  const r = await fetch(`${API_BASE}/img2irc-saves`, { method: 'POST', body: fd, credentials: 'include' });
+  if (!r.ok) throw new Error('Failed to create IRC art save');
+  return r.json();
+}
+
+export async function fetchIrcArtSave(id: string): Promise<IrcArtSaveEntry> {
+  const r = await fetch(`${API_BASE}/img2irc-saves/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error('Failed to fetch IRC art save');
+  return r.json();
+}
+
+export async function updateIrcArtSave(id: string, data: { name?: string; art?: string; params?: Record<string, unknown>; originalFile?: File; thumbnailBlob?: Blob }): Promise<IrcArtSaveEntry> {
+  const hasFile = !!(data.originalFile || data.thumbnailBlob);
+  if (hasFile) {
+    const fd = new FormData();
+    if (data.name != null) fd.append('name', data.name);
+    if (data.art != null) fd.append('art', data.art);
+    if (data.params != null) fd.append('params', JSON.stringify(data.params));
+    if (data.originalFile) fd.append('original', data.originalFile, data.originalFile.name);
+    if (data.thumbnailBlob) fd.append('thumbnail', data.thumbnailBlob, 'thumb.png');
+    const r = await fetch(`${API_BASE}/img2irc-saves/${encodeURIComponent(id)}`, { method: 'PUT', body: fd, credentials: 'include' });
+    if (!r.ok) throw new Error('Failed to update IRC art save');
+    return r.json();
+  }
+  const body: Record<string, unknown> = {};
+  if (data.name != null) body.name = data.name;
+  if (data.art != null) body.art = data.art;
+  if (data.params != null) body.params = data.params;
+  const r = await fetch(`${API_BASE}/img2irc-saves/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), credentials: 'include' });
+  if (!r.ok) throw new Error('Failed to update IRC art save');
+  return r.json();
+}
+
+export async function deleteIrcArtSave(id: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/img2irc-saves/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('Delete failed');
+}

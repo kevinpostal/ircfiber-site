@@ -44,6 +44,8 @@
     url: string;
   }
   let { url }: Props = $props();
+  // For /uploads URLs, use pathname for fetch + href so vite proxy avoids https loopback cert issue
+  let displayUrl = $derived((()=>{ try{ const u=new URL(url, location.origin); if(u.pathname.startsWith('/uploads/')) return u.pathname+u.search+u.hash; }catch{} return url; })());
 
   let code = $state<string | null>(null);
   let errored = $state(false);
@@ -78,7 +80,16 @@
 
   async function load() {
     try {
-      const res = await fetch(url);
+      // For our own /uploads URLs, fetch via pathname so vite's /uploads proxy
+      // handles http->backend and we avoid https://127.0.0.1:8090 mixed-protocol/CORS failures.
+      // Backend may store https://127.0.0.1:8090/uploads/... (loopback forced to https by textInline.ts before fix);
+      // fetching that directly fails (no cert on 8090). Use pathname+search instead.
+      let fetchUrl = url;
+      try {
+        const u = new URL(url, location.origin);
+        if (u.pathname.startsWith('/uploads/')) fetchUrl = u.pathname + u.search + u.hash;
+      } catch {}
+      const res = await fetch(fetchUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
       // Truncate very large files for inline preview (first 50KB)
@@ -106,10 +117,9 @@
 {#if !closed && !errored && code !== null}
   <span class="directEmbedWrap textWrap" data-text-url={url}>
     <div class="textInlineHeader">
-      <a href={url} target="_blank" rel="noreferrer" class="textLink">{url.split('/').pop()}</a>
+      <a href={displayUrl} target="_blank" rel="noreferrer" class="textLink">{url.split('/').pop()}</a>
       <span class="textLang">{hlLang?.name ?? 'text'}</span>
-      <a href={url} target="_blank" rel="noreferrer" class="textOpen">open</a>
-      <button class="embedClose" onclick={onClose} aria-label="Close preview">×</button>
+      <a href={displayUrl} target="_blank" rel="noreferrer" class="textOpen">open</a>
     </div>
     <div class="textInlineBody">
       <Highlight language={hlLang} code={code} let:highlighted>

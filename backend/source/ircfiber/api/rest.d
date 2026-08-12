@@ -6,10 +6,11 @@ import std.datetime : Clock;
 import std.algorithm : canFind, countUntil, filter;
 import std.array : array;
 import vibe.http.router : URLRouter;
+import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 import vibe.data.json : Json, deserializeJson, parseJson, parseJsonString, serializeToJson;
 import vibe.data.bson : Bson;
 import vibe.core.log;
-
+import ircfiber.api.session : SessionManager;
 import ircfiber.models.user : User;
 import ircfiber.models.network : NetworkConfig, TLSMode, SASLMechanism, dedupChannels;
 import ircfiber.models.irc_event : IRCRawEvent;
@@ -20,16 +21,16 @@ import ircfiber.db.messages : MessageRepository;
 import ircfiber.db.preferences : PreferencesRepository, UserPreferences;
 import ircfiber.db.uploads : UploadRepository, UploadRecord;
 import ircfiber.db.pastebins : PastebinRepository, PasteRecord, countLines;
-import ircfiber.upload.local : LocalUploadResult, LocalUploadException, saveUpload, uploadDir;
+import ircfiber.db.img2irc_saves : Img2IrcSaveRecord, Img2IrcSaveRepository;
+import ircfiber.upload.local : LocalUploadResult, LocalUploadException, saveUpload, saveIrcArtOriginal, saveIrcArtThumbnail, uploadDir;
 import std.file : remove;
 import std.path : buildPath;
-import std.string : strip, indexOf;
+import std.string : strip, indexOf, lastIndexOf;
 import ircfiber.auth : requireAuth;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.irc.server : ConnectionServer;
 import ircfiber.redis.protocol : RedisKeys, ControlMessage, NetworkStateSnapshot, IRCCommand;
-
 private string normalizeHost(string host) @safe pure {
     host = host.strip();
     auto schemeSep = host.indexOf("://");
@@ -75,6 +76,7 @@ final class RESTAPI {
         PreferencesRepository prefsRepo;
         UploadRepository uploadRepo;
         PastebinRepository pastebinRepo;
+        Img2IrcSaveRepository ircArtRepo;
         RedisStorage redis;
         ServerRegistry serverRegistry;  // NEW: decentralized routing
         SessionManager sessionManager;  // T1-W3: gateway contention metrics
@@ -89,6 +91,7 @@ final class RESTAPI {
         this.prefsRepo = new PreferencesRepository(redis);
         this.uploadRepo = new UploadRepository();
         this.pastebinRepo = new PastebinRepository();
+        this.ircArtRepo = new Img2IrcSaveRepository();
         this.serverRegistry = new ServerRegistry(redis);  // NEW
     }
 
@@ -108,8 +111,6 @@ final class RESTAPI {
         router.get("/api/me", &getMe);
         router.post("/api/me/pins", &pinChannel);
         router.delete_("/api/me/pins/:network/:channel", &unpinChannel);
-        router.post("/api/me/archives", &archiveChannel);
-        router.delete_("/api/me/archives/:network/:channel", &unarchiveChannel);
         router.post("/api/me/members-collapsed", &updateMembersCollapsed);
         router.post("/api/me/conversations-collapsed", &updateConversationsCollapsed);
         router.post("/api/me/serverlog-collapsed", &updateServerlogCollapsed);
@@ -117,8 +118,8 @@ final class RESTAPI {
         router.post("/api/me/collapsed", &updateCollapsed);
         router.post("/api/me/inactive-collapsed", &updateInactiveCollapsed);
         router.post("/api/me/network-order", &updateNetworkOrder);
+        router.post("/api/me/show-member-prefixes", &updateShowMemberPrefixes);
         router.get("/api/ping", &ping);
-        router.get("/api/health", &healthCheck);
         router.get("/health", &healthCheck);
         // 2026-07-07 redesign: OOB (out-of-band) event fetch for hole
         // filling. The client calls this when it detects a gap in the
@@ -143,6 +144,12 @@ final class RESTAPI {
         router.put("/api/pastebins/:id", &updatePastebin);
         router.delete_("/api/pastebins/:id", &deletePastebin);
         router.get("/api/pastebins/:id/raw", &getPastebinRaw);
+        // IRC Art saves
+        router.get("/api/img2irc-saves", &getIrcArtSaves);
+        router.post("/api/img2irc-saves", &createIrcArtSave);
+        router.get("/api/img2irc-saves/:id", &getIrcArtSave);
+        router.put("/api/img2irc-saves/:id", &updateIrcArtSave);
+        router.delete_("/api/img2irc-saves/:id", &deleteIrcArtSave);
         // W3-T01a: Bulk archive-names endpoint (cached, 5-min TTL)
         router.get("/api/buffers/archive-names", &getArchiveNames);
     }
@@ -1091,6 +1098,7 @@ final class RESTAPI {
             "inactiveCollapsed": ic,
             "networkOrder": serializeToJson(prefs.networkOrder),
             "bufferPrefs": bp,
+            "showMemberPrefixes": Json(prefs.showMemberPrefixes),
             // Monotonic counter incremented by every prefsRepo.save().
             // Lets the frontend decide whether to trust this stat_user
             // payload or skip the merge in favour of its locally-tracked
@@ -1416,9 +1424,41 @@ final class RESTAPI {
     /// stream message body — the full ordered list is sent on every change
     /// rather than a (from, to) delta, which is simpler and matches the
     /// jQuery UI Sortable's `update` callback semantics.
-    private void updateNetworkOrder(HTTPServerRequest req, HTTPServerResponse res) {
+    private void updateShowMemberPrefixes(HTTPServerRequest req, HTTPServerResponse res) {
         requireAuth(req, res);
         if (res.headerWritten) return;
+
+        auto user = req.context["user"].get!User;
+        auto bodyJson = req.json;
+        bool value = true;
+        bool found = false;
+        if (auto v = "showMemberPrefixes" in bodyJson) {
+            if (v.type == Json.Type.bool_) { value = v.get!bool; found = true; }
+            else { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("showMemberPrefixes must be bool")])); return; }
+        } else if (auto v = "value" in bodyJson) {
+            if (v.type == Json.Type.bool_) { value = v.get!bool; found = true; }
+            else { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("value must be bool")])); return; }
+        }
+        if (!found) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("showMemberPrefixes required")]));
+            return;
+        }
+
+        auto prefs = prefsRepo.load(user.id);
+        prefs.showMemberPrefixes = value;
+        auto newVersion = prefsRepo.save(user.id, prefs);
+
+        broadcastPrefUpdate(user.id.toString(), "showMemberPrefixes", Json(value), newVersion);
+
+        res.statusCode = 204;
+        res.writeVoidBody();
+    }
+
+    /// stream message body — the full ordered list is sent on every change
+    /// rather than a (from, to) delta, which is simpler and matches the
+    /// jQuery UI Sortable's `update` callback semantics.
+    private void updateNetworkOrder(HTTPServerRequest req, HTTPServerResponse res) {
 
         auto user = req.context["user"].get!User;
         const bodyJson = req.json;
@@ -1972,6 +2012,153 @@ final class RESTAPI {
             return;
         }
         res.writeBody(rec.content, "text/plain; charset=utf-8");
+    }
+
+    private Json ircArtToJson(const ref Img2IrcSaveRecord r) {
+        return Json([
+            "id": Json(r.id), "name": Json(r.name),
+            "originalFilename": Json(r.originalFilename),
+            "originalMime": Json(r.originalMime),
+            "originalSize": Json(r.originalSize),
+            "originalUrl": Json(r.originalUrl),
+            "thumbnailUrl": Json(r.thumbnailUrl),
+            "art": Json(r.art),
+            "params": r.params.type != Json.Type.undefined ? r.params : Json.emptyObject,
+            "createdAt": Json(r.createdAt),
+            "updatedAt": Json(r.updatedAt),
+            "buffer": Json(r.buffer),
+            "networkId": Json(r.networkId),
+        ]);
+    }
+
+    private void getIrcArtSaves(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        int limit = 25;
+        if (auto p = "limit" in req.query) { try { limit = (*p).to!int; } catch (Exception) {} }
+        if (limit > 50) limit = 50;
+        if (limit < 1) limit = 25;
+        int offset = 0;
+        if (auto p = "offset" in req.query) { try { offset = (*p).to!int; } catch (Exception) {} }
+        if (offset < 0) offset = 0;
+        auto records = ircArtRepo.pageByUser(user.id.toString(), offset, limit);
+        const long total = ircArtRepo.countByUser(user.id.toString());
+        auto arr = Json.emptyArray;
+        foreach (r; records) arr ~= ircArtToJson(r);
+        res.writeJsonBody(Json(["ircArtSaves": arr, "total": Json(total)]));
+    }
+
+    private void createIrcArtSave(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        string name, art, networkId, buffer;
+        Json params = Json.emptyObject;
+        string originalUrl, thumbnailUrl;
+        long originalSize = 0;
+        string originalFilename, originalMime;
+        bool isMultipart = false;
+        auto ct = req.headers.get("Content-Type", "");
+        if (ct.indexOf("multipart/") >= 0) isMultipart = true;
+        if (isMultipart) {
+            name = req.form.get("name", "");
+            art = req.form.get("art", "");
+            auto pStr = req.form.get("params", "");
+            if (pStr.length > 0) { try { params = parseJsonString(pStr); } catch (Exception) { params = Json.emptyObject; } }
+            networkId = req.form.get("networkId", "");
+            buffer = req.form.get("buffer", "");
+            auto host = req.headers.get("Host", "localhost:8090");
+            if (host.length == 0 || host[0] == ':' || host == "127.0.0.1:5173" || host == "localhost:5173") host = "127.0.0.1:8090";
+            string proto = req.headers.get("X-Forwarded-Proto", "http");
+            if (proto.length == 0) proto = "http";
+            auto baseUrl = proto ~ "://" ~ host;
+            if (auto pf = "original" in req.files) {
+                import vibe.core.file : readFile;
+                auto data = cast(const(ubyte)[])readFile(pf.tempPath);
+                originalSize = cast(long)data.length;
+                if (originalSize > MAX_UPLOAD_BYTES) { res.statusCode = 413; res.writeJsonBody(Json(["error": Json("File too large (max 200 MB)")])); return; }
+                originalFilename = pf.filename.name.length ? pf.filename.name : req.form.get("originalFilename", "image.png");
+                originalMime = pf.headers.get("Content-Type", "image/png");
+                try { auto up = saveIrcArtOriginal(originalFilename, originalMime, data, baseUrl); originalUrl = up.url; } catch (LocalUploadException e) { res.statusCode = 502; res.writeJsonBody(Json(["error": Json(e.msg)])); return; }
+            } else {
+                originalFilename = req.form.get("originalFilename", "");
+                originalMime = req.form.get("originalMime", "");
+                originalUrl = req.form.get("originalUrl", "");
+                try { originalSize = req.form.get("originalSize", "0").to!long; } catch (Exception) {}
+            }
+            if (auto tf = "thumbnail" in req.files) {
+                import vibe.core.file : readFile;
+                auto tdata = cast(const(ubyte)[])readFile(tf.tempPath);
+                try { auto tup = saveIrcArtThumbnail(tdata, baseUrl); thumbnailUrl = tup.url; } catch (LocalUploadException e) { logWarn("thumbnail save failed: %s", e.msg); }
+            } else { thumbnailUrl = req.form.get("thumbnailUrl", ""); }
+        } else {
+            auto j = req.json;
+            if (j.type == Json.Type.object) {
+                if ("name" in j) name = j["name"].get!string;
+                if ("art" in j) art = j["art"].get!string;
+                if ("params" in j) params = j["params"];
+                if ("networkId" in j) networkId = j["networkId"].get!string;
+                if ("buffer" in j) buffer = j["buffer"].get!string;
+                if ("originalUrl" in j) originalUrl = j["originalUrl"].get!string;
+                if ("thumbnailUrl" in j) thumbnailUrl = j["thumbnailUrl"].get!string;
+                if ("originalFilename" in j) originalFilename = j["originalFilename"].get!string;
+                if ("originalMime" in j) originalMime = j["originalMime"].get!string;
+                if ("originalSize" in j) try { originalSize = j["originalSize"].get!long; } catch (Exception) {}
+            }
+        }
+        if (art.length == 0) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("art required")])); return; }
+        if (art.length > 200_000) { res.statusCode = 413; res.writeJsonBody(Json(["error": Json("Art too large")])); return; }
+        if (params.toString().length > 10 * 1024) { res.statusCode = 413; res.writeJsonBody(Json(["error": Json("params too large")])); return; }
+        if (name.length == 0) { import std.path : baseName, stripExtension; if (originalFilename.length > 0) name = stripExtension(baseName(originalFilename)); else name = "IRC Art"; }
+        Img2IrcSaveRecord rec;
+        rec.id = randomUUID().toString(); rec.userId = user.id.toString(); rec.networkId = networkId; rec.buffer = buffer; rec.name = name; rec.originalFilename = originalFilename; rec.originalMime = originalMime; rec.originalSize = originalSize; rec.originalUrl = originalUrl; rec.thumbnailUrl = thumbnailUrl; rec.art = art; rec.params = params; rec.createdAt = Clock.currTime.toUnixTime!long * 1000; rec.updatedAt = rec.createdAt; rec.deleted = false;
+        try { ircArtRepo.insert(rec); } catch (Exception e) { logError("Failed to insert ircArt save: %s", e.msg); res.statusCode = 500; res.writeJsonBody(Json(["error": Json("insert failed: "~e.msg)])); return; }
+        res.statusCode = 201; res.writeJsonBody(ircArtToJson(rec));
+    }
+
+    private void getIrcArtSave(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto rec = ircArtRepo.getById(user.id.toString(), req.params["id"]);
+        if (rec.id.length == 0) { res.statusCode = 404; res.writeJsonBody(Json(["error": Json("not found")])); return; }
+        res.writeJsonBody(ircArtToJson(rec));
+    }
+
+    private void updateIrcArtSave(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto id = req.params["id"];
+        auto existing = ircArtRepo.getById(user.id.toString(), id);
+        if (existing.id.length == 0) { res.statusCode = 404; res.writeJsonBody(Json(["error": Json("not found")])); return; }
+        string name = existing.name; string art = existing.art; Json params = existing.params; string originalUrl = existing.originalUrl; string thumbnailUrl = existing.thumbnailUrl;
+        bool isMultipart = false; auto ct = req.headers.get("Content-Type", ""); if (ct.indexOf("multipart/") >= 0) isMultipart = true;
+        if (isMultipart) {
+            if ("name" in req.form) name = req.form["name"];
+            if ("art" in req.form) art = req.form["art"];
+            auto pStr = req.form.get("params", ""); if (pStr.length > 0) { try { params = parseJsonString(pStr); } catch (Exception) {} }
+            auto host = req.headers.get("Host", "localhost:8090"); if (host.length == 0 || host[0] == ':' || host == "127.0.0.1:5173" || host == "localhost:5173") host = "127.0.0.1:8090"; string proto = req.headers.get("X-Forwarded-Proto", "http"); if (proto.length == 0) proto = "http"; auto baseUrl = proto ~ "://" ~ host;
+            if (auto pf = "original" in req.files) { import vibe.core.file : readFile; auto data = cast(const(ubyte)[])readFile(pf.tempPath); auto fn = pf.filename.name.length ? pf.filename.name : existing.originalFilename; auto mime = pf.headers.get("Content-Type", existing.originalMime); try { auto up = saveIrcArtOriginal(fn, mime, data, baseUrl); originalUrl = up.url; } catch (Exception e) { logWarn("original save on update failed: %s", e.msg); } }
+            if (auto tf = "thumbnail" in req.files) { import vibe.core.file : readFile; auto tdata = cast(const(ubyte)[])readFile(tf.tempPath); try { auto tup = saveIrcArtThumbnail(tdata, baseUrl); thumbnailUrl = tup.url; } catch (Exception e) { logWarn("thumb save on update failed: %s", e.msg); } }
+        } else {
+            auto j = req.json; if (j.type == Json.Type.object) { if ("name" in j) name = j["name"].get!string; if ("art" in j) art = j["art"].get!string; if ("params" in j) params = j["params"]; }
+        }
+        if (art.length == 0) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("art required")])); return; }
+        if (art.length > 200_000) { res.statusCode = 413; res.writeJsonBody(Json(["error": Json("Art too large")])); return; }
+        long now = Clock.currTime.toUnixTime!long * 1000; bool ok; if (originalUrl != existing.originalUrl || thumbnailUrl != existing.thumbnailUrl) ok = ircArtRepo.updateWithFiles(user.id.toString(), id, name, art, params, originalUrl, thumbnailUrl, now); else ok = ircArtRepo.update(user.id.toString(), id, name, art, params, now);
+        if (!ok) { res.statusCode = 500; res.writeJsonBody(Json(["error": Json("update failed")])); return; }
+        auto updated = ircArtRepo.getById(user.id.toString(), id); res.writeJsonBody(ircArtToJson(updated));
+    }
+
+    private void deleteIrcArtSave(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User; auto id = req.params["id"]; auto rec = ircArtRepo.getById(user.id.toString(), id);
+        if (rec.id.length == 0) { res.statusCode = 404; res.writeJsonBody(Json(["error": Json("not found")])); return; }
+        foreach (url; [rec.originalUrl, rec.thumbnailUrl]) { if (url.length == 0) continue; auto prefix = "/uploads/"; auto pos = url.indexOf(prefix); if (pos == -1) continue; auto fname = url[pos + prefix.length .. $]; auto qIdx = fname.indexOf("?"); if (qIdx >= 0) fname = fname[0..qIdx]; if (fname.length == 0 || fname.canFind("..")) continue; auto fpath = buildPath(uploadDir(), fname); try { remove(fpath); } catch (Exception e) { logWarn("deleteIrcArtSave remove %s: %s", fpath, e.msg); } }
+        if (ircArtRepo.hardDelete(user.id.toString(), id)) { res.statusCode = 204; res.writeVoidBody(); } else { res.statusCode = 404; res.writeJsonBody(Json(["error": Json("not found")])); }
     }
 
     /// HEAD /api/ping — lightweight connectivity check.  Unauthenticated

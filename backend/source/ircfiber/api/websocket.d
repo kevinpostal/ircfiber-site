@@ -391,6 +391,8 @@ final class WebSocketGateway {
         foreach (k, v; prefs.bufferPrefs) bp[k] = v;
         msg["bufferPrefs"] = bp;
 
+        msg["showMemberPrefixes"] = Json(prefs.showMemberPrefixes);
+
         // Monotonic counter incremented by every prefsRepo.save(). The
         // frontend's mergePreferences() uses this as a last-write-wins
         // tiebreaker against its own local cache — see docs/PREF_VERSION.md.

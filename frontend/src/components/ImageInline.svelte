@@ -3,6 +3,8 @@
     url: string;
   }
   let { url }: Props = $props();
+  // For our own /uploads URLs, use pathname so vite proxy handles http://127.0.0.1:8090 and we avoid https loopback cert failures.
+  let displayUrl = $derived((()=>{ try{ const u=new URL(url, location.origin); if(u.pathname.startsWith('/uploads/')) return u.pathname+u.search+u.hash; }catch{} return url; })());
 
   let closed = $state(false);
   let loaded = $state(false);
@@ -39,11 +41,11 @@
 
 {#if !closed && !errored}
   <span class="directEmbedWrap imageWrap" data-image-url={url}>
-    <a href={url} target="_blank" rel="noreferrer" class="imageLink" tabindex="-1">
+    <a href={displayUrl} target="_blank" rel="noreferrer" class="imageLink" tabindex="-1">
       <!-- svelte-ignore a11y_missing_attribute -->
       <img
         bind:this={imgEl}
-        src={url}
+        src={displayUrl}
         alt=""
         class="image"
         class:imageLoaded={loaded}

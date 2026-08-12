@@ -470,7 +470,7 @@ final class WebController {
             auto rel = pathStr[("/uploads/".length)..$];
             auto qIdx = rel.indexOf('?');
             if (qIdx >= 0) rel = rel[0..qIdx];
-            if (rel.length == 0 || rel.canFind("..") || rel.canFind("/")) {
+            if (rel.length == 0 || rel.canFind("..")) {
                 res.statusCode = 400;
                 return;
             }

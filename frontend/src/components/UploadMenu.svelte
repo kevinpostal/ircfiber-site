@@ -1,9 +1,9 @@
 <script lang="ts">
   import { uploadState, type ActiveUpload } from '../stores/uploadStore.svelte';
+  import { ircArtPanelOpen } from '../stores/ircArtStore.svelte';
   import { startUploads } from '../stores/uploadFlow.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { openFromFile } from '../stores/pastebinStore.svelte';
-
   interface Props {
     onClose: () => void;
   }
@@ -49,7 +49,10 @@
     uploadState.panelOpen = true;
     onClose();
   }
-
+  function handleShowIrcArt(): void {
+    ircArtPanelOpen.value = true;
+    onClose();
+  }
   function onFilePicked(e: Event): void {
     const files = (e.target as HTMLInputElement).files;
     if (!files || files.length === 0) return;
@@ -102,10 +105,14 @@
           File uploads
         </button>
       </li>
+      <li>
+        <button class="contextMenu__item showIrcArt" onclick={handleShowIrcArt}>
+          IRC Art saves
+        </button>
+      </li>
     </ul>
   </div>
   <input
-    type="file"
     bind:this={fileInput}
     class="hidden"
     accept="image/*,text/*,.txt,.md,.json,.js,.ts,.jsx,.tsx,.py,.rb,.java,.c,.cpp,.h,.go,.rs,.php,.sh,.yaml,.yml,.xml,.html,.css,.sql,.dockerfile,.makefile,.ini,.conf,.toml,.log,.csv"

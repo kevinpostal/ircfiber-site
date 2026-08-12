@@ -87,9 +87,9 @@ export function normalizeImageUrl(rawUrl: string): string | null {
     u.protocol = 'https:';
     return u.href;
   }
-
-  // Generic extension check
-  u.protocol = 'https:';
+  // Generic extension check — keep http for loopback so http://127.0.0.1:8090 uploads don't break with fake https.
+  const isLoopback = /^(localhost|127\.0\.0\.1|::1)$/i.test(u.hostname) || u.hostname.startsWith('127.');
+  if (!isLoopback) u.protocol = 'https:';
   if (isImageParts(u.pathname, u.search, u.hash)) return u.href;
   return null;
 }

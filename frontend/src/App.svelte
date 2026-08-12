@@ -33,11 +33,13 @@
   import UploadDialog from './components/UploadDialog.svelte';
   import UploadsPanel from './components/UploadsPanel.svelte';
   import SnippetsPanel from './components/SnippetsPanel.svelte';
+  import IrcArtPanel from './components/IrcArtPanel.svelte';
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
+  import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap } from './stores/preferences.svelte';
+  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap, setShowMemberPrefixes } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -1046,6 +1048,9 @@ let showNetworkForm: boolean = $state(false);
         bufferPrefsMap[key] = { ...existing, ...prefs } as Record<string, boolean>;
       }
     }
+    if (typeof user.showMemberPrefixes === 'boolean') {
+      setShowMemberPrefixes(user.showMemberPrefixes as boolean);
+    }
   }
 
   function handlePrefUpdate(data: Record<string, unknown>): void {
@@ -1178,6 +1183,9 @@ let showNetworkForm: boolean = $state(false);
           delete bufferPrefsMap[k];
         }
       }
+    } else if (key === 'showMemberPrefixes') {
+      const v = data.value as boolean;
+      if (typeof v === 'boolean') setShowMemberPrefixes(v);
     }
   }
 
@@ -1185,6 +1193,7 @@ let showNetworkForm: boolean = $state(false);
     const counter = { value: localMsgIdCounter };
     const result = processIrcEvent(data, counter, accum, { switchToBuffer }, enqueueMessage);
     localMsgIdCounter = counter.value;
+
 
     // When a network connects (001 or CONNECT event), retry auto-join for
     // the currently active channel buffer.  maybeAutoJoinChannel may have
@@ -1557,6 +1566,9 @@ let showNetworkForm: boolean = $state(false);
     {#if uploadState.pastebinPanelOpen && !ircState.showSettings && ircState.networks.length > 0}
       <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
     {/if}
+    {#if ircArtPanelOpen.value && !ircState.showSettings}
+      <IrcArtPanel onClose={() => ircArtPanelOpen.value = false} />
+    {/if}
   </div>
   {#if isNarrow && (sidebarDrawerOpen || mobileMembersOpen)}
     <div class="drawer-backdrop" onclick={closeDrawers} role="presentation"></div>
@@ -1570,7 +1582,6 @@ let showNetworkForm: boolean = $state(false);
   </aside>
   {/if}
 </div>
-
 <!-- IRCCloud-style #noAuth overlay: rendered last so it paints on top
      of the chat shell. Visible only while isAuthenticated === false
      (i.e. /api/me returned 401 at boot or LoginPage just kicked off). -->
