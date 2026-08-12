@@ -345,6 +345,52 @@ export function smartPaletteB(d: Uint8ClampedArray, pW:number, pH:number, K=16, 
   return scored.slice(0, Math.min(K, scored.length)).map(s=>s.idx);
 }
 
+// ── Clustering.lean (§2.3/§2.5/§3.3,§3.5) — centroids, two-colour threshold, k-means ──
+// OkLab squared distance is squared norm of an inner-product space, so Lean holds:
+//   sum_sq_dist_decomp, centroid_minimizes, threshold_minimizes, nearest_eq_threshold,
+//   exists_optimal_split, kmObjective  (assign/centroid/index steps) + descent antitone/converges.
+/** Lean IrcCluster.centroid s x = (|s|⁻¹ • Σ x) — OkLab mean */
+export function okLabCentroid(pts: number[][]): number[] {
+  if (pts.length===0) return [0,0,0];
+  let L=0,a=0,b=0; for(const p of pts){ L+=p[0]; a+=p[1]; b+=p[2]; }
+  const n=pts.length; return [L/n, a/n, b/n];
+}
+/** Σ‖xᵢ−c‖² in OkLab */
+export function okLabSumSqDist(pts: number[][], c:number[]): number {
+  let s=0; for(const p of pts){ const dL=p[0]-c[0], da=p[1]-c[1], db=p[2]-c[2]; s+=dL*dL+da*da+db*db; } return s;
+}
+/** Lean sum_sq_dist_decomp: Σ‖x−c‖² = Σ‖x−mean‖² + n‖c−mean‖² */
+export function okLabSumSqDistDecomp(pts: number[][], c:number[]): { left:number, right:number, mean:number[] } {
+  const m=okLabCentroid(pts);
+  const left=okLabSumSqDist(pts,c);
+  const sumMean=okLabSumSqDist(pts,m);
+  const dmL=c[0]-m[0], dma=c[1]-m[1], dmb=c[2]-m[2];
+  const right=sumMean + pts.length*(dmL*dmL+dma*dma+dmb*dmb);
+  return { left, right, mean:m };
+}
+/** Lean thresholdSet / nearestSet : optimal two-colour split is a luminance threshold at largest gap */
+export function luminanceThresholdForSplit(lumas:number[]): number {
+  if(lumas.length===0) return 127;
+  const sorted=[...lumas].sort((a,b)=>a-b);
+  let maxGap=-1, idx=0;
+  for(let i=1;i<sorted.length;i++){ const g=sorted[i]-sorted[i-1]; if(g>maxGap){maxGap=g; idx=i;}}
+  return maxGap>16 ? (sorted[idx]+sorted[idx-1])/2 : 127;
+}
+/** Lean splitCost / cellCost for luminance (squared error) */
+export function luminanceSplitCost(lumas:number[], S:Set<number>, c1:number, c2:number): number {
+  let s=0; for(let i=0;i<lumas.length;i++){ const x=lumas[i]; s += S.has(i) ? (x-c1)*(x-c1) : (x-c2)*(x-c2); } return s;
+}
+export function luminanceCellCost(lumas:number[], S:Set<number>): number {
+  let s1=0,c1=0,s2=0,c2=0;
+  for(let i=0;i<lumas.length;i++){ if(S.has(i)){s1+=lumas[i]; c1++;} else {s2+=lumas[i]; c2++;} }
+  const m1=c1? s1/c1:0, m2=c2? s2/c2:0;
+  return luminanceSplitCost(lumas,S,m1,m2);
+}
+/** Lean kmObjective: Σ‖xᵢ−c[aᵢ]‖² + pen[aᵢ] — pen = wire cost of index (codeLen) */
+export function kmObjectiveOkLab(pts:number[][], pen:number[], assign:(i:number)=>number, cents:number[][]): number {
+  let s=0; for(let i=0;i<pts.length;i++){ const k=assign(i); const c=cents[k]; const dL=pts[i][0]-c[0], da=pts[i][1]-c[1], db=pts[i][2]-c[2]; s += dL*dL+da*da+db*db + (pen[k] ?? 0); } return s;
+}
+
 export function kNearest(r:number,g:number,b:number,pal:number[],k:number,ng:boolean, mode:ColorMatching='rgb'):number[]{
   const cand:Array<{i:number,d:number}>=[];
   const isGray=_isNearGray(_pack(r,g,b));
@@ -545,6 +591,8 @@ export function _polygonCellMask(d: Uint8ClampedArray, pW:number, pH:number, c:n
     lumas.push(luma(rr,gg,bb));
   }
   if(transCount >= 32) return {mask:0n, fg:[0,0,0], bg:[0,0,0], empty:true};
+  // Clustering.lean IrcCluster.threshold_minimizes / nearest_eq_threshold:
+  // optimal two-colour split is a luminance threshold at the largest gap of sorted lumas.
   const sorted=[...lumas].sort((a,b)=>a-b);
   let maxGap=-1, gapIdx=32;
   for(let i=1;i<64;i++){ const gap=sorted[i]-sorted[i-1]; if(gap>maxGap){maxGap=gap; gapIdx=i;}}
