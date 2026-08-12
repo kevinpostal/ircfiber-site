@@ -590,7 +590,7 @@ export function _polygonCellMask(d: Uint8ClampedArray, pW:number, pH:number, c:n
     if(o.alphaMode==='transparent' && aa < o.alphaThreshold) transCount++;
     lumas.push(luma(rr,gg,bb));
   }
-  if(transCount >= 32) return {mask:0n, fg:[0,0,0], bg:[0,0,0], empty:true};
+  if(transCount >= 32) return {mask:0n, fg:[0,0,0], bg:[0,0,0], empty:false}; // smart bg: transparent 8x8 still opaque
   // Clustering.lean IrcCluster.threshold_minimizes / nearest_eq_threshold:
   // optimal two-colour split is a luminance threshold at the largest gap of sorted lumas.
   const sorted=[...lumas].sort((a,b)=>a-b);
@@ -608,7 +608,6 @@ export function _polygonCellMask(d: Uint8ClampedArray, pW:number, pH:number, c:n
     const avgB = onC ? onB/onC|0 : offB/offC|0;
     return {mask:0n, fg:[avgR,avgG,avgB], bg:[avgR,avgG,avgB], empty:false};
   }
-  if(_nearBlack(onR/onC|0,onG/onC|0,onB/onC|0) && _nearBlack(offR/offC|0,offG/offC|0,offB/offC|0)) return {mask:0n, fg:[0,0,0], bg:[0,0,0], empty:true};
   return {mask, fg:[onR/onC|0,onG/onC|0,onB/onC|0], bg:[offR/offC|0,offG/offC|0,offB/offC|0], empty:false};
 }
 export function bestGlyphForPolygon(
@@ -674,7 +673,6 @@ export function rowPaletteForViterbi(
   const lambda=0.02;
   for(let c=0;c<tops.length;c++){
     const [r1,g1,b1]=tops[c], [r2,g2,b2]=bots[c];
-    if(_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)) continue;
     for(const idx of kNearest(r1,g1,b1,pal,k,ng,mode)) freq.set(idx,(freq.get(idx)||0)+1);
     for(const idx of kNearest(r2,g2,b2,pal,k,ng,mode)) freq.set(idx,(freq.get(idx)||0)+1);
   }
@@ -887,7 +885,7 @@ export async function renderPixelsCore(
         const p=[[pxAt(c*2,r*2),pxAt(c*2+1,r*2)],[pxAt(c*2,r*2+1),pxAt(c*2+1,r*2+1)]];
         const b=[0,1,2,3].map(i=>luma(p[i>>1][i&1][0],p[i>>1][i&1][1],p[i>>1][i&1][2])>127?1:0);
         const bits=b[0]|(b[1]<<1)|(b[2]<<2)|(b[3]<<3), ch=qMap[bits]||' ';
-        if(ch===' '){ln+=' ';first=false;continue;}
+        if(ch===' '){ const avgR=(p[0][0][0]+p[0][1][0]+p[1][0][0]+p[1][1][0])/4|0, avgG=(p[0][0][1]+p[0][1][1]+p[1][0][1]+p[1][1][1])/4|0, avgB=(p[0][0][2]+p[0][1][2]+p[1][0][2]+p[1][1][2])/4|0; const bgS=String(toEmitIdx(lutLookup(avgR,avgG,avgB,qPal,o.nograyscale, o.colorMatching).irc,'irc',qPal, o.colorMatching)); const need=first||lastFg!==bgS||lastBg!==bgS; if(need){ const cd='\x03'+bgS+','+bgS; ln+=cd; lastFg=bgS; lastBg=bgS; } ln+=' '; first=false; continue; }
         let onR=0,onG=0,onB=0,onC=0, offR=0,offG=0,offB=0,offC=0;
         for(let i=0;i<4;i++){const[rr,gg,bb,aa]=p[i>>1][i&1];if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(b[i]){onR+=rr;onG+=gg;onB+=bb;onC++;}else{offR+=rr;offG+=gg;offB+=bb;offC++;}}
         if(onC===0){ln+=' ';first=false;continue;}
@@ -935,14 +933,7 @@ export async function renderPixelsCore(
       for(let r=0;r<rows;r++){
         const tops:Array<[number,number,number,number]>=[], bots:Array<[number,number,number,number]>=[];
         for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
-        let allEmpty=true;
-        for(let c=0;c<cols;c++){
-          const [r1,g1,b1,a1]=tops[c], [r2,g2,b2,a2]=bots[c];
-          const emp=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false);
-          const blk=_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2);
-          if(!emp && !blk){ allEmpty=false; break; }
-        }
-        if(allEmpty){ lines.push(''); continue; }
+        // smart bg: no allEmpty — every row renders opaque (no bleed)
         let S: number[];
         let _tr = _perf();
         if((o as any).midgardMode==='smart' && (o as any)._smartPaletteB && !smart24){
@@ -992,7 +983,7 @@ export async function renderPixelsCore(
           const r2Arr = new Uint8Array(M), g2Arr = new Uint8Array(M), b2Arr = new Uint8Array(M);
           for(let i=0;i<M;i++){
             const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
-            const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
             cellIsEmpty[i]=isEmpty;
             r1Arr[i]=r1; g1Arr[i]=g1; b1Arr[i]=b1;
             r2Arr[i]=r2; g2Arr[i]=g2; b2Arr[i]=b2;
@@ -1027,7 +1018,7 @@ export async function renderPixelsCore(
         if (!usedBatch) {
           for(let i=0;i<M;i++){
             const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
-            const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
             cellIsEmpty[i]=isEmpty;
             if(isEmpty){ cellGlyph[i]=[]; continue; }
             const rowGlyphs: GlyphInfo[] = new Array(states.length);
@@ -1182,8 +1173,7 @@ export async function renderPixelsCore(
         let ln='',lastFg='',lastBg='',first=true;
         for(let c=0;c<cols;c++){
           const[r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
-          if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)&&(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){ln+=' ';first=false;continue;}
-          if(_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)){ln+=' ';first=false;continue;}
+          if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){ln+=' ';first=false;continue;}
           if(is24){
             const fg=toHex6(r1,g1,b1), bg=toHex6(r2,g2,b2);
             if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)){const c='\x04'+bg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▄';}
@@ -1242,9 +1232,7 @@ export async function renderPixelsCore(
       for(let r=0;r<rows;r++){
         const cellInfos: Array<{mask:bigint, fg:[number,number,number], bg:[number,number,number], empty:boolean}> = new Array(cols);
         for(let c=0;c<cols;c++) cellInfos[c]=_polygonCellMask(d,pW,pH,c,r,o);
-        let allEmpty=true;
-        for(let c=0;c<cols;c++) if(!cellInfos[c].empty){ allEmpty=false; break; }
-        if(allEmpty){ lines.push(''); continue; }
+        // smart bg: polygon allEmpty removed
         let S: number[];
         let _tr = _perf();
         if((o as unknown as Record<string,unknown>).midgardMode==='smart' && (o as unknown as Record<string,unknown>)._smartPaletteB && !smart24){
@@ -1533,7 +1521,7 @@ export async function renderPixelsCore(
         let cost=0, lastFg='',lastBg='',first=true;
         for(let i=0;i<len;i++){
           const [r1,g1,b1,a1]=tops[pos+i]??[0,0,0,255], [r2,g2,b2,a2]=bots[pos+i]??[0,0,0,255];
-          const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+          const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
           if(isEmpty){ first=false; continue; }
           const fgIdx=toEmitIdx(lutLookup(r1,g1,b1,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching);
           const bgIdx=toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching);
@@ -1551,7 +1539,6 @@ export async function renderPixelsCore(
         let cost=0, lastFg='',lastBg='',first=true;
         for(let i=0;i<len;i++){
           const [r1,g1,b1]=tops[pos+i]??[0,0,0,255], [r2,g2,b2]=bots[pos+i]??[0,0,0,255];
-          if(_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)){ first=false; continue; }
           const fgS=String(toEmitIdx(lutLookup(r1,g1,b1,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
           const bgS=String(toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
           const needFg=!first&&lastBg===bgS&&lastFg!==fgS, needFull=first||lastFg!==fgS||lastBg!==bgS;
@@ -1565,7 +1552,6 @@ export async function renderPixelsCore(
         let cost=0, lastCode='',first=true;
         for(let i=0;i<len;i++){
           const [r1,g1,b1,a1]=tops[pos+i]??[0,0,0,255], [r2,g2,b2]=bots[pos+i]??[0,0,0,255];
-          if((o.alphaMode==='transparent'?a1<o.alphaThreshold:false) && _nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)){ first=false; continue; }
           const code='\x03'+String(toEmitIdx(lutLookup((r1+r2)/2|0,(g1+g2)/2|0,(b1+b2)/2|0,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
           if(first||lastCode!==code){ cost+=o.viterbiW*code.length; lastCode=code; }
           cost+=o.viterbiW*3; first=false;
@@ -1605,7 +1591,7 @@ export async function renderPixelsCore(
           const isEmptyBatch=new Array(M).fill(false);
           for(let i=0;i<M;i++){
             const [r1,g1,b1,a1]=sTops[i], [r2,g2,b2,a2]=sBots[i];
-            const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
             isEmptyBatch[i]=isEmpty;
             r1Arr[i]=r1; g1Arr[i]=g1; b1Arr[i]=b1; r2Arr[i]=r2; g2Arr[i]=g2; b2Arr[i]=b2;
             if(isEmpty) cellIsEmpty[i]=true;
@@ -1634,14 +1620,14 @@ export async function renderPixelsCore(
         if(!usedBatch){
           for(let i=0;i<M;i++){
             const [r1,g1,b1,a1]=sTops[i], [r2,g2,b2,a2]=sBots[i];
-            const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
             cellIsEmpty[i]=isEmpty; if(isEmpty){ cellGlyph[i]=[]; continue; }
             const rowGlyphs: GI[]=new Array(states.length);
             for(let s=0;s<states.length;s++){ const [f,b]=states[s]; rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW,rowPalOkLab); }
             cellGlyph[i]=rowGlyphs;
           }
         }
-        let allEmpty=true; for(let i=0;i<M;i++) if(!cellIsEmpty[i]){ allEmpty=false; break; } if(allEmpty) return ' '.repeat(M);
+        // smart bg: auto allEmpty removed
         const INF=1e18; let dp=new Array(states.length).fill(INF); const back:number[][]=Array.from({length:M},()=>new Array(states.length).fill(-1));
         const palToIrcEff: Uint8Array|null = ((o as any).midgardMode==='smart' && (o as any)._smartPaletteA && o.renderMode==='ansi24') ? null : (o.renderMode==='ansi' ? getPalToIrc(effPal,o.colorMatching) : null);
         const firstNonEmpty=cellIsEmpty.findIndex(v=>!v);
@@ -1692,7 +1678,6 @@ export async function renderPixelsCore(
         let ln='',lastFg='',lastBg='',first=true;
         for(let c=pos;c<pos+len;c++){
           const idx=c-pos; const [r1,g1,b1]=tops[pos+idx]??[0,0,0,255], [r2,g2,b2]=bots[pos+idx]??[0,0,0,255];
-          if(_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)){ ln+=' '; first=false; continue; }
           const p=[[r1,g1,b1],[r1,g1,b1],[r2,g2,b2],[r2,g2,b2]];
           const b=[0,1,2,3].map(i=>luma(p[i][0],p[i][1],p[i][2])>127?1:0);
           const bits=b[0]|(b[1]<<1)|(b[2]<<2)|(b[3]<<3), ch=qMap[bits]||' ';
@@ -1716,7 +1701,6 @@ export async function renderPixelsCore(
         const palB=palAuto; let ln='',lastCode='',first=true;
         for(let c=pos;c<pos+len;c++){
           const [r1,g1,b1,a1]=tops[c]??[0,0,0,255], [r2,g2,b2]=bots[c]??[0,0,0,255];
-          if((o.alphaMode==='transparent'?a1<o.alphaThreshold:false) && _nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2)){ ln+=' '; first=false; continue; }
           let sR=(r1+r2)/2, sG=(g1+g2)/2, sB=(b1+b2)/2; const code='\x03'+String(toEmitIdx(lutLookup(sR|0,sG|0,sB|0,palB,ngA,o.colorMatching).irc,'irc',palB,o.colorMatching));
           if(first||lastCode!==code){ ln+=code; lastCode=code; }
           ln+=String.fromCharCode(0x2800 | 0xFF); first=false;
@@ -1737,7 +1721,7 @@ export async function renderPixelsCore(
     const fullPal=getMidgardPalette(o);
     for(let y=0;y<pH;y++){let ln='',lastCode='',first=true;
       for(let x=0;x<pW;x++){const[r,g,b,a]=pxAt(x,y);
-        if((o.alphaMode==='transparent' ? a < o.alphaThreshold : false)||_nearBlack(r,g,b)){ln+=' ';continue;}
+        if(o.alphaMode==='transparent' ? a < o.alphaThreshold : false){ln+=' ';first=false;continue;}
         const cd=is16? '\x03'+String(nearestIndex(r,g,b,fullPal, o.colorMatching)) : is24? '\x04'+toHex6(r,g,b) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(r,g,b,fullPal,ng, o.colorMatching).ansi : lutLookup(r,g,b,fullPal,ng, o.colorMatching).irc, o.renderMode, fullPal, o.colorMatching));
         if(first||lastCode!==cd){ln+=cd;lastCode=cd;}
         ln+='█'; first=false;
@@ -1751,8 +1735,8 @@ export async function renderPixelsCore(
   // UniformHead rectangular_of_first_last_opaque needs both ends opaque ⇒ keep bottom matte.
   // UniformTail §1: safeTrim per row — trim trailing default-blank spaces (right edge)
   // Lean: paint_trim / safeTrim_last_opaque / rectangular_of_last_opaque / flatTail
+  // Coverage: defaultIdx=99 (no explicit bg); bg=1 (black) is NOT default, must survive (trailing_black_not_trimmed)
   {
-    const dStr='1';
     for(let idx=0; idx<lines.length; idx++){
       const ln=lines[idx];
       let end=ln.length;
@@ -1765,7 +1749,7 @@ export async function renderPixelsCore(
       while((m=re.exec(prefix))!==null){
         if(m[2]!==undefined) lastBg=m[2];
       }
-      const isDefault = lastBg===null || lastBg===dStr;
+      const isDefault = lastBg===null;
       if(isDefault) lines[idx]=prefix;
     }
   }

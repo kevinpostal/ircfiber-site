@@ -1,9 +1,9 @@
 doctype html
-- import std.uni : toLower;
 html(lang="en")
+  - import std.uni : toLower;
+  head
     meta(charset="utf-8")
     meta(name="viewport", content="width=device-width, initial-scale=1")
-    title IRC Fiber — Servers & Routing
     style.
       :root {
         --adm-bg: #0a0e14; --adm-surface: #11161d; --adm-border: #1c2430;
