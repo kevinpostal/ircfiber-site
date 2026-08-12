@@ -391,6 +391,23 @@ function oklabToSrgb(L:number,a:number,b:number):[number,number,number]{
 // The 1-byte shade ramp covers 0.273 max: 55% of blend range [0,0.273]U[0.727,1], mid gap needs 3-byte block (optimal 0.4243, measured ▒ 0.494)
 // Aristotle GlyphCoverage.lean: optimal_block_coverage r*=(1+cmax)/3≈0.4243, band error (1-2·cmax)/6=0.07567 vs 0.11075 for ▒ (−32%); no DejaVu block measures near r* — closest available is ▒ at 0.490/0.499, so DP uses measured value (known gap: +46% over optimum, see measured_optimal_block)
 // Polygon masks: hp(a,b) filter a*(2r+1-8)+b*(2c+1-8) ≤0, 8×8 row-major bigint (bit r*8+c set if inked). ct/cb derived from mask popcount per half (top 32 vs bottom 32) for coverage pruning.
+// ── GlyphCoverage.lean (§2.2/§3.2) — lean-exposed pure helpers (mirror Lean defs) ──
+/** Lean Glyph.blend c fg bg = c*fg + (1-c)*bg */
+export function glyphBlend(c:number, fg:number, bg:number): number { return c*fg + (1-c)*bg; }
+/** Lean Glyph.cellCost w ct cb bytes tTop tBot fg bg */
+export function glyphCellCost(w:number, ct:number, cb:number, bytes:number, tTop:number, tBot:number, fg:number, bg:number): number {
+  return Math.abs(tTop - glyphBlend(ct, fg, bg)) + Math.abs(tBot - glyphBlend(cb, fg, bg)) + w*bytes;
+}
+/** Lean Glyph.coverages — measured safe alphabet (+ complements) */
+export const GLYPH_COVERAGES: number[] = [0, 121/1000, 254/1000, 273/1000, 4945/10000, 5055/10000, 727/1000, 746/1000, 879/1000, 1];
+/** Lean Glyph.bandError cmax r = max(r-cmax, 1-2r)/2 */
+export function glyphBandError(cmax:number, r:number): number { return Math.max(r - cmax, 1 - 2*r) / 2; }
+/** Lean Glyph.optimal_block_coverage r* = (1+cmax)/3 */
+export function glyphOptimalBlockCoverage(cmax:number): number { return (1 + cmax) / 3; }
+/** Lean Glyph.dominated_of_byte_gap criterion: (|Δct|+|Δcb|)*contrast ≤ w*Δbytes → dominated */
+export function glyphDominatedByByteGap(w:number, ct:number, cb:number, bytes:number, ct2:number, cb2:number, bytes2:number, contrast:number): boolean {
+  return (Math.abs(ct-ct2) + Math.abs(cb-cb2)) * Math.abs(contrast) <= w * (bytes - bytes2);
+}
 const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number, mask?:bigint}> = [
   // 1-byte: coloured space + ASCII ramp (safe after \x03 — no digit/comma, no leading '/' )
   {ch:' ', ct:0.0,   cb:0.0,   bytes:1, mask:0x0000000000000000n}, // 0.000
