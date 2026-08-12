@@ -46,6 +46,32 @@ export async function fetchVersion(): Promise<void> {
   versionError.set(null);
   try {
     const res = await fetch('/api/version', { credentials: 'include' });
+    if (res.status === 404) {
+      // Gateway too old — fallback to frontend build info, don't show error
+      const { BUILD_INFO } = await import('../../lib/buildInfo');
+      const fallback: VersionResponse = {
+        gateway: {
+          service: 'irc-fiber-gateway',
+          version: BUILD_INFO.version,
+          commit: BUILD_INFO.commit,
+          short: BUILD_INFO.short,
+          describe: BUILD_INFO.describe,
+          branch: BUILD_INFO.branch,
+          builtAt: BUILD_INFO.builtAt,
+          builtHost: BUILD_INFO.builtHost,
+        },
+        engines: [],
+        commit: BUILD_INFO.commit,
+        short: BUILD_INFO.short,
+        describe: BUILD_INFO.describe,
+        branch: BUILD_INFO.branch,
+        builtAt: BUILD_INFO.builtAt,
+        version: BUILD_INFO.version,
+      };
+      version.set(fallback);
+      versionError.set(null);
+      return;
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as VersionResponse;
     version.set(data);

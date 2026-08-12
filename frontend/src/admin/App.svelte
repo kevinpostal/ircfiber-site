@@ -24,8 +24,8 @@
   import Logs from './pages/Logs.svelte';
   import Version from './pages/Version.svelte';
   import ToastViewport from './components/ToastViewport.svelte';
+  import { current, onChange, navigate, match } from './lib/router';
   import { adminUser, loadMe } from './stores/auth';
-
   let path = $state(current());
   let ready = $state(false);
   let unsub = () => {};
