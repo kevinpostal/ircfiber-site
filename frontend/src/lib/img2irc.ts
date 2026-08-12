@@ -1846,16 +1846,26 @@ export function base94EncodedLength(byteLen: number): number{
 
 // ── Inter-line diff — bitmask vs sparse (InterLineDiff.lean) ──
 // sparseCost = k·(idx+val), maskCost = ceil(M/6)+k·val (base64 mask). Mask wins iff ceil(M/6) ≤ k·idx.
+// Lean: maskBytes M = (M+5)/6 = ⌈M/6⌉ base64 chars (6 bits/char)
+export function maskBytes(M: number): number { return Math.floor((M + 5) / 6); }
+/** Lean: sparseCost idx val k = k*(idx+val) */
+export function sparseCost(idx: number, val: number, k: number): number { return k * (idx + val); }
+/** Lean: maskCost M val k = maskBytes M + k*val */
+export function maskCost(M: number, val: number, k: number): number { return maskBytes(M) + k * val; }
+/** Lean: least_k — threshold ⌈maskBytes M / idx⌉, the least k where mask wins */
 export function diffCrossoverK(M:number, idxBytes=2): number{
-  const maskOverhead=Math.ceil(M/6);
-  return Math.ceil(maskOverhead/idxBytes);
+  const need = maskBytes(M);
+  return Math.ceil(need/idxBytes);
 }
+/** Lean: crossover — maskCost ≤ sparseCost ↔ maskBytes M ≤ k*idx */
 export function shouldUseBitmask(M:number, changed:number, idxBytes=2): boolean{
-  return Math.ceil(M/6) <= changed*idxBytes;
+  return maskBytes(M) <= changed*idxBytes;
 }
+/** Lean: expected_diff_saving — expected cost ((maskBytes+M·p·val)/(M·c)), saving =1−cost */
 export function estimateDiffSaving(M:number, p:number, valBytes=1, totalBytesPerCell=2): number{
-  const maskOverhead=Math.ceil(M/6);
-  const expected = maskOverhead/(M*totalBytesPerCell) + p*valBytes/totalBytesPerCell;
+  const need = maskBytes(M);
+  if (M <= 0 || totalBytesPerCell <= 0) return 0;
+  const expected = need/(M*totalBytesPerCell) + p*valBytes/totalBytesPerCell;
   return 1 - expected;
 }
 export function encodeLineDiff(prev: string[], curr: string[]): { useMask: boolean, payload: string }{
@@ -1865,14 +1875,13 @@ export function encodeLineDiff(prev: string[], curr: string[]): { useMask: boole
   const k=changed.length;
   if(k===0) return {useMask:false, payload:''};
   if(shouldUseBitmask(M,k)){
+    // Direct M-bit → ⌈M/6⌉ base64 chars (Lean maskBytes), no byte padding.
+    // Pack little-endian 6-bit chunks: bit i = cell i changed.
     let bits=0n; for(const idx of changed) bits |= 1n << BigInt(idx);
-    const maskBytes=Math.ceil(M/8);
-    const mask=new Uint8Array(maskBytes);
-    for(let i=0;i<maskBytes;i++) mask[i]= Number((bits >> BigInt(i*8)) & 0xFFn);
+    const need = maskBytes(M);
     const b64Chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let maskB64=''; let buf=0, blen=0;
-    for(const by of mask){ buf=(buf<<8)|by; blen+=8; while(blen>=6){ blen-=6; maskB64+=b64Chars[(buf>>blen)&63]; } }
-    if(blen>0) maskB64+=b64Chars[(buf<<(6-blen))&63];
+    let maskB64='';
+    for(let i=0;i<need;i++) maskB64 += b64Chars[Number((bits >> BigInt(i*6)) & 0x3Fn)];
     return {useMask:true, payload: maskB64 + ':' + changed.map(i=>curr[i]).join('')};
   }
   return {useMask:false, payload: changed.map(i=>`${i}:${curr[i]}`).join(',')};
