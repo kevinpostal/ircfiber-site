@@ -8,6 +8,11 @@ export class TabCompletionEngine {
   private wordStart = 0;
   private wordEnd = 0;
 
+  get currentCandidates(): TabCompletionCandidate[] { return this.candidates; }
+  get currentOriginalWord(): string { return this.originalWord; }
+  get currentWordStart(): number { return this.wordStart; }
+  get currentWordEnd(): number { return this.wordEnd; }
+  get currentIdx(): number { return this.currentIndex; }
   /**
    * Get completion candidates for the current cursor position.
    */
@@ -116,9 +121,10 @@ export class TabCompletionEngine {
     const after = input.slice(this.wordEnd);
     const text = before + replacement + after;
     const cursor = before.length + replacement.length;
+    // Update wordEnd so subsequent cycles replace the inserted word, not the original slice.
+    this.wordEnd = this.wordStart + replacement.length;
     return { text, cursor };
   }
-
   /** Cycle to next candidate (Tab) or previous (Shift+Tab) */
   cycle(direction: 1 | -1): TabCompletionCandidate | null {
     if (this.candidates.length === 0) return null;

@@ -36,7 +36,49 @@
   let editTarget = $state<{ eid?: number; msgid?: string; label: string } | null>(null);
   let uploadMenuOpen = $state(false);
   const tabEngine = new TabCompletionEngine();
-  // Per-buffer input history map (IRCCloud-style)
+  // IRCCloud-style tab completion popup — shows original fragment + all matches
+  // with the current selection highlighted. Only visible while cycling.
+  type TabPopup = {
+    original: string;
+    candidates: import('../types').TabCompletionCandidate[];
+    selectedIndex: number;
+    originalInput: string;
+    wordStart: number;
+    wordEnd: number;
+  };
+  let tabPopup = $state<TabPopup | null>(null);
+  function buildReplacement(candidate: import('../types').TabCompletionCandidate, wordStart: number): string {
+    let r = candidate.value;
+    if (candidate.type === 'nick' && wordStart === 0) r += ': ';
+    else if (candidate.type === 'nick') r += ' ';
+    else if (candidate.type === 'command') r += ' ';
+    else if (candidate.type === 'channel') r += ' ';
+    else if (candidate.type === 'emoji') r += ': ';
+    return r;
+  }
+  function applyTabPopupCandidate(popup: TabPopup, idx: number): { text: string; cursor: number; replacement: string } {
+    const cand = popup.candidates[idx];
+    const replacement = buildReplacement(cand, popup.wordStart);
+    const before = popup.originalInput.slice(0, popup.wordStart);
+    const after = popup.originalInput.slice(popup.wordEnd);
+    const text = before + replacement + after;
+    const cursor = before.length + replacement.length;
+    return { text, cursor, replacement };
+  }
+  function dismissTabPopup(revert: boolean): void {
+    if (revert && tabPopup) {
+      const savedLen = tabPopup.originalInput.length;
+      inputValue = tabPopup.originalInput;
+      requestAnimationFrame(() => {
+        if (textarea) {
+          textarea.selectionStart = textarea.selectionEnd = savedLen;
+        }
+      });
+    }
+    tabPopup = null;
+    if (isTabbing) { tabEngine.reset(); isTabbing = false; }
+    if (isEmptyTabbing) { isEmptyTabbing = false; tabCycleIndex = -1; }
+  }
   const historyMap = new Map<string, InputHistory>();
 
   let now = $state(new Date());
@@ -239,15 +281,55 @@
     if (lastBufferKey && lastBufferKey !== newKey) {
       isEmptyTabbing = false;
       tabCycleIndex = -1;
+      tabPopup = null;
+      tabEngine.reset();
+      isTabbing = false;
     }
     lastBufferKey = newKey || lastBufferKey;
   });
 
+  function selectTabCandidate(idx: number): void {
+    if (!tabPopup) return;
+    const updated: TabPopup = { ...tabPopup, selectedIndex: idx };
+    tabEngine.setCandidates(tabPopup.candidates);
+    (tabEngine as any).currentIndex = idx - 1;
+    tabEngine.cycle(1);
+    const { text, cursor } = applyTabPopupCandidate(updated, idx);
+    tabPopup = updated;
+    if (updated.original === '' && updated.originalInput === '' && updated.wordStart === 0 && updated.wordEnd === 0) {
+      isEmptyTabbing = true;
+      tabCycleIndex = idx;
+    } else {
+      isTabbing = true;
+    }
+    inputValue = text;
+    requestAnimationFrame(() => {
+      if (textarea) textarea.selectionStart = textarea.selectionEnd = cursor;
+    });
+    textarea?.focus();
+  }
+
   function handleKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'Escape') {
+      if (tabPopup) {
+        e.preventDefault();
+        dismissTabPopup(true);
+        return;
+      }
+      if (isEmptyTabbing) {
+        e.preventDefault();
+        dismissTabPopup(true);
+        return;
+      }
+      if (isTabbing) {
+        e.preventDefault();
+        tabEngine.reset();
+        isTabbing = false;
+        return;
+      }
+    }
     if (e.key === 'Tab') {
       e.preventDefault();
-
-      // Empty-input (or already cycling) in channel → cycle recent highlighters
       if (inputValue === '' || isEmptyTabbing) {
         const activeBufObj = getActiveBufferObj();
         if (activeBufObj?.type === 'channel') {
@@ -255,22 +337,19 @@
           return;
         }
       }
-
       handleTabCompletion(e.shiftKey ? -1 : 1);
       return;
     }
-
-    // Reset highlight cycling state on any non-Tab interaction
     if (isEmptyTabbing && e.key !== 'Tab') {
+      if (tabPopup) tabPopup = null;
       isEmptyTabbing = false;
       tabCycleIndex = -1;
     }
-
     if (isTabbing && e.key !== 'Tab') {
+      if (tabPopup) tabPopup = null;
       tabEngine.reset();
       isTabbing = false;
     }
-
     // Ctrl/Cmd+Up: edit last sent message (IRCv3 draft/edit-message).
     // MUST come before plain ArrowUp so the Ctrl/Cmd check prevents the
     // history navigation handler from stealing the key.
@@ -341,27 +420,58 @@
     const activeBufObj = getActiveBufferObj();
     if (!activeBufObj || !activeNetwork) return;
 
+    // Already cycling — advance the popup selection
+    if (isTabbing && tabPopup) {
+      let next = tabPopup.selectedIndex + direction;
+      if (next < 0) next = tabPopup.candidates.length - 1;
+      if (next >= tabPopup.candidates.length) next = 0;
+      tabEngine.setCandidates(tabPopup.candidates);
+      (tabEngine as any).currentIndex = next - direction;
+      const cand = tabEngine.cycle(direction);
+      if (!cand) return;
+      const updated: TabPopup = { ...tabPopup, selectedIndex: next };
+      const { text, cursor } = applyTabPopupCandidate(updated, next);
+      tabPopup = updated;
+      inputValue = text;
+      requestAnimationFrame(() => {
+        if (textarea) textarea.selectionStart = textarea.selectionEnd = cursor;
+      });
+      return;
+    }
+
     if (!isTabbing) {
       const members = activeBufObj.users || [];
       const bufferNames = activeNetwork.buffers.map(b => b.name).filter(n => n !== '_server');
+      const originalInput = inputValue;
+      const cursorPos = textarea?.selectionStart ?? inputValue.length;
       const candidates = tabEngine.getCandidates(
         inputValue,
-        textarea?.selectionStart ?? inputValue.length,
+        cursorPos,
         members,
         bufferNames,
         myNick
       );
       if (candidates.length === 0) return;
+      const original = tabEngine.currentOriginalWord;
+      const wordStart = tabEngine.currentWordStart;
+      const wordEnd = tabEngine.currentWordEnd;
       tabEngine.setCandidates(candidates);
+      const cand = tabEngine.cycle(direction);
+      if (!cand) return;
+      const popup: TabPopup = {
+        original,
+        candidates,
+        selectedIndex: tabEngine.currentIdx,
+        originalInput,
+        wordStart,
+        wordEnd,
+      };
+      const { text, cursor } = applyTabPopupCandidate(popup, popup.selectedIndex);
+      tabPopup = popup;
       isTabbing = true;
-    }
-
-    const candidate = tabEngine.cycle(direction);
-    if (candidate) {
-      const result = tabEngine.apply(inputValue, candidate);
-      inputValue = result.text;
+      inputValue = text;
       requestAnimationFrame(() => {
-        if (textarea) textarea.selectionStart = textarea.selectionEnd = result.cursor;
+        if (textarea) textarea.selectionStart = textarea.selectionEnd = cursor;
       });
     }
   }
@@ -376,14 +486,43 @@
     const highlighters = recentHighlightersCache.get(key) ?? [];
     if (highlighters.length === 0) return;
 
-    isEmptyTabbing = true;
+    if (!isEmptyTabbing || !tabPopup) {
+      const candidates = highlighters.map(n => ({ value: n, type: 'nick' as const, display: n }));
+      const startIdx = direction === 1 ? 0 : candidates.length - 1;
+      const popup: TabPopup = {
+        original: '',
+        candidates,
+        selectedIndex: startIdx,
+        originalInput: '',
+        wordStart: 0,
+        wordEnd: 0,
+      };
+      tabEngine.setCandidates(candidates);
+      (tabEngine as any).currentIndex = startIdx - direction;
+      tabEngine.cycle(direction);
+      isEmptyTabbing = true;
+      tabCycleIndex = startIdx;
+      tabPopup = popup;
+      const { text, cursor } = applyTabPopupCandidate(popup, startIdx);
+      inputValue = text;
+      requestAnimationFrame(() => {
+        if (textarea) textarea.selectionStart = textarea.selectionEnd = cursor;
+      });
+      return;
+    }
 
-    tabCycleIndex += direction;
-    // Wrap around
-    if (tabCycleIndex < 0) tabCycleIndex = highlighters.length - 1;
-    if (tabCycleIndex >= highlighters.length) tabCycleIndex = 0;
-
-    inputValue = highlighters[tabCycleIndex] + ': ';
+    let next = tabPopup.selectedIndex + direction;
+    if (next < 0) next = tabPopup.candidates.length - 1;
+    if (next >= tabPopup.candidates.length) next = 0;
+    (tabEngine as any).currentIndex = next - direction;
+    tabEngine.cycle(direction);
+    tabPopup = { ...tabPopup, selectedIndex: next };
+    tabCycleIndex = next;
+    const { text, cursor } = applyTabPopupCandidate(tabPopup, next);
+    inputValue = text;
+    requestAnimationFrame(() => {
+      if (textarea) textarea.selectionStart = textarea.selectionEnd = cursor;
+    });
   }
 
   function ensureConnected(): void {
@@ -396,6 +535,9 @@
   }
 
   async function handleSend(): Promise<void> {
+    if (tabPopup) tabPopup = null;
+    if (isTabbing) { tabEngine.reset(); isTabbing = false; }
+    if (isEmptyTabbing) { isEmptyTabbing = false; tabCycleIndex = -1; }
     let text = inputValue.trim();
     if (!text || !ircState.activeBuffer.networkId) return;
 
@@ -735,16 +877,33 @@
   }
 
   function handleDocumentClick(ev: MouseEvent): void {
-    if (!emojiOpen) return;
     const target = ev.target as Node;
-    // Click on the emoji button itself → let the button's onclick toggle it
-    if (emojiButton?.contains(target)) return;
-    // Clicks inside the picker (including its shadow DOM) should not close it
-    if (emojiPicker) {
-      const path = ev.composedPath();
-      if (path.includes(emojiPicker) || emojiPicker.contains(target)) return;
+    if (emojiOpen) {
+      if (emojiButton?.contains(target)) return;
+      if (emojiPicker) {
+        const path = ev.composedPath();
+        if (path.includes(emojiPicker) || emojiPicker.contains(target)) {
+          // still handle tabPopup below
+        } else {
+          emojiOpen = false;
+          if (!tabPopup) return;
+        }
+      } else {
+        emojiOpen = false;
+        if (!tabPopup) return;
+      }
     }
-    emojiOpen = false;
+    if (tabPopup) {
+      const wrapper = document.querySelector('.inputInfoWrapper');
+      if (wrapper && !wrapper.contains(target) && !(target instanceof Element && target.closest('.inputInfoWrapper'))) {
+        const inputEl = document.querySelector('.inputcell');
+        if (!inputEl || (!inputEl.contains(target) && target !== textarea)) {
+          tabPopup = null;
+          if (isTabbing) { tabEngine.reset(); isTabbing = false; }
+          if (isEmptyTabbing) { isEmptyTabbing = false; tabCycleIndex = -1; }
+        }
+      }
+    }
   }
 
   $effect(() => {
@@ -759,6 +918,17 @@
     <div class="typingcell">
       <span class="typing-dots"><i></i><i></i><i></i></span>
       <span class="typing-label">{typingText}</span>
+    </div>
+  {/if}
+  {#if tabPopup}
+    <div class="inputInfoWrapper">
+      <div class="inputInfo" style="display: block;">
+        <span class="hint">Press tab or esc to dismiss</span>
+        <span class="original item">{tabPopup.original}</span>
+        {#each tabPopup.candidates as c, i (c.value + i)}
+          <span class="item" class:highlight={i === tabPopup.selectedIndex} role="button" tabindex="0" onmousedown={(e) => e.preventDefault()} onclick={() => selectTabCandidate(i)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectTabCandidate(i); } }}>{c.display ?? c.value}</span>
+        {/each}
+      </div>
     </div>
   {/if}
   <div class="nickinputcell">

@@ -270,6 +270,69 @@
   position: relative;
 }
 
+/* ── IRCCloud-style tab completion popup ──────────────────────────
+   Shown above the input when Tab is pressed. Mirrors IRCCloud's
+   .inputInfoWrapper > .inputInfo structure so the DOM matches the
+   user's screenshot (hint + original fragment + candidate pills with
+   .highlight on the active one). */
+.inputInfoWrapper {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  pointer-events: auto;
+}
+.inputInfo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #1e2126;
+  border-top: 1px solid #2c2f35;
+  border-bottom: 1px solid #1a1c20;
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: auto;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
+}
+.inputInfo .hint {
+  color: #8b949e;
+  font-style: italic;
+  font-size: 12px;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+.inputInfo .item {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: #2a2d33;
+  color: #c9d1d9;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background 100ms ease, border-color 100ms ease;
+  user-select: none;
+}
+.inputInfo .item.original {
+  background: transparent;
+  border-color: #30363d;
+  color: #8b949e;
+}
+.inputInfo .item.highlight {
+  background: #1f6feb;
+  color: #fff;
+  border-color: #388bfd;
+}
+.inputInfo .item:hover {
+  background: #30363d;
+}
+.inputInfo .item.highlight:hover {
+  background: #1f6feb;
+}
+
 /* Hide old message-input since we replaced it with bufferinputcell */
 .message-input {
   display: none !important;
