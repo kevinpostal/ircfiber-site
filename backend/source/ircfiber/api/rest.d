@@ -28,7 +28,7 @@ import std.file : remove, readText, exists;
 import std.path : buildPath;
 import std.string : strip, indexOf, lastIndexOf;
 import ircfiber.auth : requireAuth;
-import ircfiber.build_version : GIT_HASH, GIT_SHORT, GIT_DESCRIBE, GIT_BRANCH, BUILD_TIME, BUILD_HOST, VERSION;
+import ircfiber.build_version : GIT_HASH, GIT_SHORT, GIT_DESCRIBE, GIT_BRANCH, BUILD_TIME, BUILD_HOST, VERSION, GIT_MESSAGE, GIT_COMMIT_URL;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.irc.server : ConnectionServer;
@@ -2255,6 +2255,8 @@ final class RESTAPI {
         gateway["branch"] = Json(GIT_BRANCH);
         gateway["builtAt"] = Json(BUILD_TIME);
         gateway["builtHost"] = Json(BUILD_HOST);
+        gateway["message"] = Json(GIT_MESSAGE);
+        gateway["commitUrl"] = Json(GIT_COMMIT_URL);
         try {
             if (exists("/opt/ircfiber/.frontend-deploy-hash"))
                 gateway["deployedFrontend"] = Json(readText("/opt/ircfiber/.frontend-deploy-hash").strip());
@@ -2276,6 +2278,8 @@ final class RESTAPI {
                 o["gitBranch"] = Json(s.gitBranch);
                 o["buildTime"] = Json(s.buildTime);
                 o["version"] = Json(s.version_);
+                o["gitMessage"] = Json(s.gitMessage);
+                o["gitCommitUrl"] = Json(s.gitCommitUrl);
                 o["lastHeartbeat"] = Json(s.lastHeartbeat);
                 enginesJson ~= o;
             }
@@ -2289,6 +2293,8 @@ final class RESTAPI {
         result["branch"] = Json(GIT_BRANCH);
         result["builtAt"] = Json(BUILD_TIME);
         result["version"] = Json(VERSION);
+        result["message"] = Json(GIT_MESSAGE);
+        result["commitUrl"] = Json(GIT_COMMIT_URL);
         res.writeJsonBody(result);
     }
 

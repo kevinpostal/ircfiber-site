@@ -7,4 +7,6 @@ export const BUILD_INFO = {
   builtAt: "unknown",
   builtHost: "unknown",
   version: "0.3.0",
+  message: "unknown",
+  commitUrl: "",
 } as const;

@@ -9,6 +9,8 @@ export interface VersionInfo {
   branch: string;
   builtAt: string;
   builtHost: string;
+  message?: string;
+  commitUrl?: string;
   deployedFrontend?: string;
   deployedEngine?: string;
   deployed?: string;
@@ -23,6 +25,8 @@ export interface EngineVersion {
   gitBranch: string;
   buildTime: string;
   version: string;
+  gitMessage?: string;
+  gitCommitUrl?: string;
   lastHeartbeat: number;
 }
 
@@ -35,6 +39,8 @@ export interface VersionResponse {
   branch: string;
   builtAt: string;
   version: string;
+  message?: string;
+  commitUrl?: string;
 }
 
 export const version = writable<VersionResponse | null>(null);
@@ -59,6 +65,8 @@ export async function fetchVersion(): Promise<void> {
           branch: BUILD_INFO.branch,
           builtAt: BUILD_INFO.builtAt,
           builtHost: BUILD_INFO.builtHost,
+          message: (BUILD_INFO as any).message ?? BUILD_INFO.describe,
+          commitUrl: (BUILD_INFO as any).commitUrl ?? '',
         },
         engines: [],
         commit: BUILD_INFO.commit,
@@ -67,6 +75,8 @@ export async function fetchVersion(): Promise<void> {
         branch: BUILD_INFO.branch,
         builtAt: BUILD_INFO.builtAt,
         version: BUILD_INFO.version,
+        message: (BUILD_INFO as any).message ?? BUILD_INFO.describe,
+        commitUrl: (BUILD_INFO as any).commitUrl ?? '',
       };
       version.set(fallback);
       versionError.set(null);

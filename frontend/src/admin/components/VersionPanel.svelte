@@ -22,7 +22,6 @@
     if (!s || s === 'unknown') return '—';
     try { return new Date(s).toLocaleString(); } catch { return s; }
   }
-  function short(v: string): string { return v && v !== 'unknown' ? v.slice(0,7) : '—'; }
 </script>
 
 <Card title="Build Versions" subtitle="Gateway, engines and frontend — git commit, branch, built time">
@@ -35,35 +34,53 @@
   {:else if error && !data}
     <div class="text-sm text-danger">Failed to load version: {error}</div>
   {:else if data}
+    {@const sync = (() => {
+      const commits = new Set([data.gateway.commit, BUILD_INFO.commit, ...data.engines.map(e => e.gitHash)].filter(c => c && c !== 'unknown'));
+      const allSync = commits.size === 1;
+      const times = [
+        { name: 'Gateway', time: data.gateway.builtAt, commit: data.gateway.short },
+        { name: 'Frontend', time: BUILD_INFO.builtAt, commit: BUILD_INFO.short },
+        ...data.engines.map(e => ({ name: e.serverId, time: e.buildTime, commit: e.gitShort }))
+      ].filter(t => t.time && t.time !== 'unknown').sort((a,b) => new Date(b.time).getTime() - new Date(a.time).getTime());
+      const mostRecent = times[0] ?? null;
+      return { allSync, commits: [...commits], mostRecent };
+    })()}
     <div class="space-y-6">
-      <!-- Gateway + Frontend -->
+      {#if sync}
+        {#if sync.allSync}
+          <div class="rounded-md bg-success/10 px-3 py-2 text-xs font-medium text-success">✓ All services in sync at <span class="font-mono">{sync.commits[0]?.slice(0,7) ?? '—'}</span> — gateway, frontend and {data.engines.length} engine(s) same commit. Most recent build: {sync.mostRecent?.name} {sync.mostRecent?.commit?.slice(0,7)} at {fmtTime(sync.mostRecent?.time)}</div>
+        {:else}
+          <div class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">⚠ Services out of sync — most recent: <span class="font-mono font-medium">{sync.mostRecent?.name} {sync.mostRecent?.commit?.slice(0,7)}</span> built {fmtTime(sync.mostRecent?.time)}<div class="mt-1 text-[11px]">Gateway {data.gateway.short} · Frontend {BUILD_INFO.short} · Engines {data.engines.map(e=>e.gitShort || '—').join(', ') || 'none'}</div></div>
+        {/if}
+      {/if}
       <div class="grid gap-4 md:grid-cols-2">
         <div class="rounded-lg border border-border bg-surface-2 p-3">
           <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Gateway <span class="normal-case text-[10px] text-muted">— vibe.d REST + WS</span></div>
-          <dl class="space-y-1 text-xs">
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Commit:</dt><dd class="font-mono text-text">{data.gateway.short} <span class="text-muted">({data.gateway.branch})</span></dd></div>
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Full hash:</dt><dd class="break-all font-mono text-[11px] text-muted">{data.gateway.commit}</dd></div>
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Describe:</dt><dd class="font-mono text-muted">{data.gateway.describe} <span class="text-muted">·</span> <span class="font-medium text-text">v{data.gateway.version}</span></dd></div>
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Built:</dt><dd class="text-muted">{fmtTime(data.gateway.builtAt)} <span class="text-muted">on</span> {data.gateway.builtHost}</dd></div>
-          </dl>
+          <div class="space-y-1 text-xs">
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Commit:</span><span class="font-mono text-text">{data.gateway.short} <span class="text-muted">({data.gateway.branch})</span></span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Full hash:</span><span class="break-all font-mono text-[11px] text-muted">{data.gateway.commit}</span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Describe:</span><span class="font-mono text-muted">{data.gateway.describe} <span class="text-muted">·</span> <span class="font-medium text-text">v{data.gateway.version}</span></span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Message:</span><span class="truncate text-text" title={data.gateway.message ?? ''}>{#if data.gateway.commitUrl}<a href={data.gateway.commitUrl} target="_blank" class="hover:underline hover:text-primary">{data.gateway.message ?? data.gateway.describe}</a>{:else}{data.gateway.message ?? data.gateway.describe}{/if}</span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Built:</span><span class="text-muted">{fmtTime(data.gateway.builtAt)} <span class="text-muted">on</span> {data.gateway.builtHost}</span></div>
+          </div>
           {#if data.gateway.deployed && data.gateway.deployed !== data.gateway.short && data.gateway.deployed !== data.gateway.commit}
             <div class="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">Deployed {data.gateway.deployed.slice(0,7)} ≠ baked {data.gateway.short} — redeploy pending?</div>
           {/if}
         </div>
         <div class="rounded-lg border border-border bg-surface-2 p-3">
           <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Frontend <span class="normal-case text-[10px] text-muted">— Svelte admin + Vite</span></div>
-          <dl class="space-y-1 text-xs">
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Commit:</dt><dd class="font-mono text-text">{BUILD_INFO.short} <span class="text-muted">({BUILD_INFO.branch})</span></dd></div>
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Full hash:</dt><dd class="break-all font-mono text-[11px] text-muted">{BUILD_INFO.commit}</dd></div>
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Describe:</dt><dd class="font-mono text-muted">{BUILD_INFO.describe} <span class="text-muted">·</span> <span class="font-medium text-text">v{BUILD_INFO.version}</span></dd></div>
-            <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Built:</dt><dd class="text-muted">{fmtTime(BUILD_INFO.builtAt)} <span class="text-muted">on</span> {BUILD_INFO.builtHost}</dd></div>
-          </dl>
+          <div class="space-y-1 text-xs">
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Commit:</span><span class="font-mono text-text">{BUILD_INFO.short} <span class="text-muted">({BUILD_INFO.branch})</span></span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Full hash:</span><span class="break-all font-mono text-[11px] text-muted">{BUILD_INFO.commit}</span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Describe:</span><span class="font-mono text-muted">{BUILD_INFO.describe} <span class="text-muted">·</span> <span class="font-medium text-text">v{BUILD_INFO.version}</span></span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Message:</span><span class="truncate text-text" title={(BUILD_INFO as any).message ?? ''}>{#if (BUILD_INFO as any).commitUrl}<a href={(BUILD_INFO as any).commitUrl} target="_blank" class="hover:underline hover:text-primary">{(BUILD_INFO as any).message ?? BUILD_INFO.describe}</a>{:else}{(BUILD_INFO as any).message ?? BUILD_INFO.describe}{/if}</span></div>
+            <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Built:</span><span class="text-muted">{fmtTime(BUILD_INFO.builtAt)} <span class="text-muted">on</span> {BUILD_INFO.builtHost}</span></div>
+          </div>
           {#if data.gateway.short !== BUILD_INFO.short && BUILD_INFO.short !== 'unknown'}
             <div class="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">Frontend {BUILD_INFO.short} ≠ gateway {data.gateway.short} — frontend/gateway drift</div>
           {/if}
         </div>
       </div>
-      <!-- Engines -->
       <div>
         <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Engines ({data.engines.length})</div>
         {#if data.engines.length === 0}
@@ -78,11 +95,12 @@
                     <span class="font-mono text-sm font-medium text-text">{eng.serverId}</span>
                     <StatusBadge label={eng.isHealthy ? 'healthy' : 'down'} tone={eng.isHealthy ? 'success' : 'danger'} size="sm" />
                   </div>
-                  <dl class="mt-1 space-y-0.5 text-xs">
-                    <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Commit:</dt><dd class="font-mono text-text">{eng.gitShort ?? '—'} <span class="text-muted">({eng.gitBranch ?? '—'})</span> <span class="text-muted">· {eng.gitDescribe ?? '—'}</span></dd></div>
-                    <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Full hash:</dt><dd class="break-all font-mono text-[11px] text-muted">{eng.gitHash ?? '—'}</dd></div>
-                    <div class="flex gap-2"><dt class="w-16 shrink-0 font-medium text-muted">Version:</dt><dd class="text-muted">v{eng.version ?? '—'} <span class="text-muted">· built</span> {fmtTime(eng.buildTime)}</dd></div>
-                  </dl>
+                  <div class="mt-1 space-y-0.5 text-xs">
+                    <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Commit:</span><span class="font-mono text-text">{eng.gitShort ?? '—'} <span class="text-muted">({eng.gitBranch ?? '—'})</span> <span class="text-muted">· {eng.gitDescribe ?? '—'}</span></span></div>
+                    <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Full hash:</span><span class="break-all font-mono text-[11px] text-muted">{eng.gitHash ?? '—'}</span></div>
+                    <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Message:</span><span class="truncate text-text" title={eng.gitMessage ?? ''}>{#if eng.gitCommitUrl}<a href={eng.gitCommitUrl} target="_blank" class="hover:underline hover:text-primary">{eng.gitMessage ?? eng.gitDescribe ?? '—'}</a>{:else}{eng.gitMessage ?? eng.gitDescribe ?? '—'}{/if}</span></div>
+                    <div class="flex gap-2"><span class="w-16 shrink-0 font-medium text-muted">Version:</span><span class="text-muted">v{eng.version ?? '—'} <span class="text-muted">· built</span> {fmtTime(eng.buildTime)}</span></div>
+                  </div>
                 </div>
                 <div class="text-xs">
                   {#if eng.gitShort && data.gateway.short && eng.gitShort !== data.gateway.short}
@@ -96,7 +114,6 @@
           </div>
         {/if}
       </div>
-
       <div class="text-xs text-muted">
         <a href="/api/version" target="_blank" class="text-primary hover:underline">Raw JSON → /api/version</a>
         <span class="mx-1">·</span>
