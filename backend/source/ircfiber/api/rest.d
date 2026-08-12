@@ -28,7 +28,7 @@ import std.file : remove, readText, exists;
 import std.path : buildPath;
 import std.string : strip, indexOf, lastIndexOf;
 import ircfiber.auth : requireAuth;
-import ircfiber.version : GIT_HASH, GIT_SHORT, GIT_DESCRIBE, GIT_BRANCH, BUILD_TIME, BUILD_HOST, VERSION;
+import ircfiber.build_version : GIT_HASH, GIT_SHORT, GIT_DESCRIBE, GIT_BRANCH, BUILD_TIME, BUILD_HOST, VERSION;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.irc.server : ConnectionServer;
@@ -2245,7 +2245,7 @@ final class RESTAPI {
     }
 
     private void versionCheck(HTTPServerRequest req, HTTPServerResponse res) {
-        // Gateway's own build info (baked via ircfiber.version)
+        // Gateway's own build info (baked via ircfiber.build_version)
         auto gateway = Json.emptyObject;
         gateway["service"] = Json("irc-fiber-gateway");
         gateway["version"] = Json(VERSION);
