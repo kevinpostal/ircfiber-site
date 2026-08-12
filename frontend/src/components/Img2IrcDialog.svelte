@@ -90,6 +90,8 @@
   let _worker: Worker | null = null;
   let lastTimings=$state<Record<string,number>|null>(null);
   // render cache for instant compare (e.g. RGB vs OKLab) — keyed by opts + hasAlpha, per-file
+  let renderCache=new Map<string,{art:string,html:string}>();
+  let _lastFile: File|Blob|null=null;
   function makeCacheKeyForOpts(o:any, alpha:boolean):string{
     return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}`;
   }
