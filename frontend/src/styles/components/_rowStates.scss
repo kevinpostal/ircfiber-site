@@ -32,24 +32,4 @@
 .row.messageRow.failed .timestamp::after { content: '✕'; margin-left: 4px; color: #df3d43; font-weight: 600; }
 .row.messageRow.failed .timestamp { cursor: pointer; }
 
-// ── Per-row hover toolbar (audit #2) ──────────────────────────────────
-.row.messageRow:has(.rowActions) { position: relative; }
-.rowActions {
-  position: absolute;
-  right: 4px;
-  top: -4px;
-  z-index: 4;
-  display: flex;
-  gap: 2px;
-  background: #fff;
-  border: 1px solid #2c2f35;
-  border-radius: 5px;
-  padding: 2px 4px;
-  opacity: 0;
-  transform: translateY(2px);
-  transition: opacity .12s, transform .12s;
-  box-shadow: 0 2px 6px rgba(0,0,0,.5);
-}
-#app.midnight-theme .rowActions { background: #404040; border-color: #262626; }
-.row.messageRow:hover .rowActions { opacity: 1; transform: none; }
-@media (hover: none) { .rowActions { display: none; } }
+
