@@ -172,18 +172,21 @@ html(lang="en")
                 tr
                   td
                     a(href="/admin/servers/host/#{hcs.host}", style="font-family:monospace; font-size:13px; color:var(--adm-blue); text-decoration:none") #{hcs.host}
+                    - if (hcs.host.toLower() == "irc.ircfiber.com")
+                      span(style="margin-left:8px; font-size:10px; color:var(--adm-green); font-weight:600") unlimited
                   td
                     strong #{hcs.totalConns}
                   td
                     span(style="font-size:12px; color:var(--adm-muted)") #{hcs.serverIds.length}
                   td
-                    - if (hcs.totalConns > 0)
+                    - if (hcs.host.toLower() == "irc.ircfiber.com")
+                      span.adm-badge.adm-badge-green unlimited
+                    - else if (hcs.totalConns > 0)
                       span.adm-badge.adm-badge-green Active
                     - else
                       span.adm-badge(style="background:rgba(139,150,164,0.12); color:var(--adm-muted)") Idle
         - else
           div(style="text-align:center; padding:40px; color:var(--adm-muted)") No active host connections. Engines may be starting up.
-
       // Global routing config
       .adm-card
         h2 Routing Configuration

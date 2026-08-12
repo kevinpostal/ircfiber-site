@@ -227,9 +227,9 @@
         <tbody>
           {#each $dashboard.hosts as host (host.host)}
             <tr class="border-b border-border/40 hover:bg-surface/40">
-              <td class="py-2 font-mono">{host.host}</td>
+              <td class="py-2 font-mono">{host.host} {#if host.host.toLowerCase() === 'irc.ircfiber.com'}<span class="ml-1 text-[10px] text-success">unlimited</span>{/if}</td>
               <td class="py-2 text-right">{host.totalConns}</td>
-              <td class="py-2 text-right text-muted">{host.totalConns}/{host.capacity}</td>
+              <td class="py-2 text-right text-muted">{host.host.toLowerCase() === 'irc.ircfiber.com' ? `${host.totalConns}/∞` : `${host.totalConns}/${host.capacity}`}</td>
               <td class="py-2 text-right">
                 <StatusBadge
                   label={host.status === 'full' ? 'Full' : host.status === 'warn' ? 'Warn' : 'Safe'}

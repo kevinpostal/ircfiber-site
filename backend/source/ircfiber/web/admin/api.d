@@ -1,7 +1,7 @@
 module ircfiber.web.admin.api;
 
 import std.uuid : UUID, parseUUID, randomUUID;
-import std.string : strip, split, join, indexOf, startsWith, lastIndexOf;
+import std.string : strip, split, join, indexOf, startsWith, lastIndexOf, toLower;
 import std.algorithm : canFind, filter, map;
 import std.array : array;
 import std.conv : to;
@@ -117,11 +117,20 @@ package void apiDashboard(HTTPServerRequest, HTTPServerResponse res,
         h["host"] = Json(hcs.host);
         h["totalConns"] = Json(hcs.totalConns);
         h["serverIds"] = jsonArray(hcs.serverIds);
-        long cap = cast(long) maxConns * cast(long) hcs.serverIds.length;
-        h["capacity"] = Json(cap);
-        if (cap > 0 && hcs.totalConns >= cap) h["status"] = Json("full");
-        else if (cap > 0 && hcs.totalConns >= cap * 2 / 3) h["status"] = Json("warn");
-        else h["status"] = Json("safe");
+        // irc.ircfiber.com is our first-party IRCd — no per-IP ban limit,
+        // so the admin should never show it as "full". Treat as unlimited
+        // (capacity 0 → frontend renders ∞) and always safe.
+        bool isUnlimited = hcs.host.toLower() == "irc.ircfiber.com";
+        if (isUnlimited) {
+            h["capacity"] = Json(0);
+            h["status"] = Json("safe");
+        } else {
+            long cap = cast(long) maxConns * cast(long) hcs.serverIds.length;
+            h["capacity"] = Json(cap);
+            if (cap > 0 && hcs.totalConns >= cap) h["status"] = Json("full");
+            else if (cap > 0 && hcs.totalConns >= cap * 2 / 3) h["status"] = Json("warn");
+            else h["status"] = Json("safe");
+        }
         hostArr ~= h;
     }
     data["hosts"] = Json(hostArr);

@@ -107,15 +107,16 @@
 
 
 
-  // Compute derived stats
+  // Compute derived stats — irc.ircfiber.com is unlimited (first-party, no per-IP cap)
   const healthyCount = $derived(data?.engines.filter((e) => e.healthy).length ?? 0);
   const totalNetworks = $derived(data?.engines.reduce((sum, e) => sum + e.assignedNetworks.length, 0) ?? 0);
   const hostsWithCalc = $derived((data?.hosts ?? []).map((h) => {
+    const isUnlimited = h.host.toLowerCase() === 'irc.ircfiber.com';
+    if (isUnlimited) return { ...h, cap: 0, fillPct: 0, isUnlimited: true as const };
     const cap = (data?.maxConnsPerHost ?? 5) * h.serverIds.length;
     const fillPct = cap > 0 ? Math.min((h.totalConns * 100) / cap, 100) : 0;
-    return { ...h, cap, fillPct };
+    return { ...h, cap, fillPct, isUnlimited: false as const };
   }));
-
   async function reassignAll(sid: string, count: number) {
     if (!confirm(`Reassign all ${count} networks from ${sid}?`)) return;
     try {
@@ -381,11 +382,12 @@
               <span class="inline-flex items-center gap-1 text-xs">
                 <span class="h-2 w-20 rounded-full bg-border">
                   <span
-                    class="block h-full rounded-full {h.fillPct >= 100 ? 'bg-danger' : h.fillPct >= 75 ? 'bg-warn' : 'bg-success'}"
-                    style="width: {h.fillPct}%"
+                    class="block h-full rounded-full {h.isUnlimited ? 'bg-success' : h.fillPct >= 100 ? 'bg-danger' : h.fillPct >= 75 ? 'bg-warn' : 'bg-success'}"
+                    style="width: {h.isUnlimited ? 0 : h.fillPct}%"
                   ></span>
                 </span>
-                <span class="font-mono">{h.totalConns}/{h.cap}</span>
+                <span class="font-mono">{h.isUnlimited ? `${h.totalConns}/∞` : `${h.totalConns}/${h.cap}`}</span>
+                {#if h.isUnlimited}<span class="ml-1 text-[10px] text-success">unlimited</span>{/if}
               </span>
             </td>
           </tr>
