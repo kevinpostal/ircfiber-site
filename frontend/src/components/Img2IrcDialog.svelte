@@ -41,7 +41,7 @@
     if(p.width!=null) width=p.width;
     if(p.renderMode) renderMode=p.renderMode;
     if(p.pixelMode){
-      if(['half','full','quarter','braille','polygon'].includes(p.pixelMode)) pixelMode=p.pixelMode;
+      if(['half','full','quarter','braille','polygon','auto'].includes(p.pixelMode)) pixelMode=p.pixelMode;
       else pixelMode='half';
     }
     if(p.midgardMode) midgardMode=p.midgardMode;
@@ -353,6 +353,11 @@
     if(width > MIN_IRC_WIDTH) return ()=>{ width=MIN_IRC_WIDTH; };
     return null;
   }
+  async function copy(){
+    try{ await navigator.clipboard.writeText(art); copied=true; setTimeout(()=>copied=false,1200);}catch{
+      const ta=document.getElementById('ircArtRaw') as HTMLTextAreaElement|null; if(ta){ ta.select(); document.execCommand('copy'); copied=true; setTimeout(()=>copied=false,1200);}
+    }
+  }
   async function send(){
     if(!art||!activeNetworkId||!activeTarget) return;
     sending=true; sentCount=0;
@@ -424,6 +429,7 @@
     { v:'smart', label:'Smart', sub:'auto' },
   ];
   const pixelOpts: Array<{v:PixelMode,label:string,glyph:string,hint?:string}> = [
+    { v:'auto', label:'Auto', glyph:'◈', hint:'mixed per Lean §2.3' },
     { v:'half', label:'Half', glyph:'▀' },
     { v:'polygon', label:'Polygon', glyph:'◤', hint:'smoother diagonals, same bytes' },
     { v:'quarter', label:'Quarter', glyph:'▖' },
