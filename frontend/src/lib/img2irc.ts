@@ -1794,6 +1794,38 @@ export async function renderPixelsCore(
       if(isDefault) lines[idx]=prefix;
     }
   }
+  // UniformTail §2: flatTail optimal completion to rectangular width (square)
+  // Ragged right edge after safeTrim: pad each row to cols cells with flatTail of its last state
+  // so the grid is rectangular (rectangular_of_first_last_opaque, flatTail_optimal)
+  {
+    for(let idx=0; idx<lines.length; idx++){
+      const ln = lines[idx];
+      // Count cells: strip IRC codes, then each remaining char is one cell (half/quarter/braille/full all 1 char per cell)
+      const stripped = ln.replace(/\x03\d{1,2}(?:,\d{1,2})?/g, '').replace(/\x04[0-9a-fA-F]{6}(?:,[0-9a-fA-F]{6})?/g, '').replace(/\x0f/g, '');
+      const cellCount = [...stripped].length;
+      if(cellCount >= cols) continue;
+      if(cellCount === 0) continue; // wholly empty row will be handled by bottom pop (vertical flatTail not needed for square height — keep rows count)
+      // Find last state fg,bg in the trimmed prefix
+      let lastFg: string|null=null, lastBg: string|null=null, isTrueColor=false;
+      const reAll=/\x03(\d{1,2})(?:,(\d{1,2}))?|\x04([0-9a-fA-F]{6})(?:,([0-9a-fA-F]{6}))?/g;
+      let m: RegExpExecArray|null;
+      while((m=reAll.exec(ln))!==null){
+        if(m[1]!==undefined){ lastFg=m[1]; lastBg=m[2]??m[1]; isTrueColor=false; }
+        else if(m[3]!==undefined){ lastFg=m[3]; lastBg=m[4]??m[3]; isTrueColor=true; }
+      }
+      if(lastFg===null || lastBg===null) continue; // no state, keep as is (should not happen for non-empty)
+      const padCount = cols - cellCount;
+      const padCode = isTrueColor ? `\x04${lastFg},${lastBg}` : `\x03${lastFg},${lastBg}`;
+      // Only pad if not already at that state (avoid duplicate prefix)
+      // flatTail is optimal: 1B per cell after first prefix, so whole pad is padCount + (needs prefix ? padCode.length : 0)
+      // Check if ln already ends with padCode
+      if(ln.endsWith(padCode)){
+        lines[idx] = ln + ' '.repeat(padCount);
+      } else {
+        lines[idx] = ln + padCode + ' '.repeat(padCount);
+      }
+    }
+  }
   while(lines.length){
     const last = lines[lines.length-1];
     if(last === ''){ lines.pop(); continue; }
@@ -1801,9 +1833,7 @@ export async function renderPixelsCore(
     if(stripped === '' && !last.includes('\x03') && !last.includes('\x04')){ lines.pop(); continue; }
     break;
   }
-  _timings['emit'] = _perf() - _t;
   _timings['total'] = _perf() - _tStart;
-  _lastTimings = { ..._timings };
   if (_shouldLog() || _timings['total'] > 100) {
     const ctx = `pW=${pW} pH=${pH} cols=${cols} rows=${rows} pm=${pm} viterbiW=${o.viterbiW} pal=${getMidgardPalette(o).length} mode=${o.colorMatching} comic=${o.comic} dither=${o.ditherMode} ${typeof OffscreenCanvas!=='undefined'?'OffscreenCanvas':'no-OffscreenCanvas'} ${typeof Worker!=='undefined'?'Worker':'no-Worker'}`;
     const line = Object.entries(_timings).sort((a,b)=>b[1]-a[1]).map(([k,v])=> `${k}:${v.toFixed(1)}ms`).join(' | ');
