@@ -2256,12 +2256,12 @@ final class RESTAPI {
         gateway["builtAt"] = Json(BUILD_TIME);
         gateway["builtHost"] = Json(BUILD_HOST);
         try {
-            if (std.file.exists("/opt/ircfiber/.frontend-deploy-hash"))
-                gateway["deployedFrontend"] = Json(std.file.readText("/opt/ircfiber/.frontend-deploy-hash").strip());
-            if (std.file.exists("/opt/ircfiber/.engine-deploy-hash"))
-                gateway["deployedEngine"] = Json(std.file.readText("/opt/ircfiber/.engine-deploy-hash").strip());
-            if (std.file.exists("/opt/ircfiber/.deploy-hash"))
-                gateway["deployed"] = Json(std.file.readText("/opt/ircfiber/.deploy-hash").strip());
+            if (exists("/opt/ircfiber/.frontend-deploy-hash"))
+                gateway["deployedFrontend"] = Json(readText("/opt/ircfiber/.frontend-deploy-hash").strip());
+            if (exists("/opt/ircfiber/.engine-deploy-hash"))
+                gateway["deployedEngine"] = Json(readText("/opt/ircfiber/.engine-deploy-hash").strip());
+            if (exists("/opt/ircfiber/.deploy-hash"))
+                gateway["deployed"] = Json(readText("/opt/ircfiber/.deploy-hash").strip());
         } catch (Exception) {}
         Json[] enginesJson;
         try {
