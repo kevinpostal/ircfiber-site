@@ -218,8 +218,11 @@
       } catch {}
       try{
         const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null } as const;
+        if(midgardMode==='smart' && smartPalCache){
+          (opts as any)._smartPaletteA = smartPalCache.A;
+          (opts as any)._smartPaletteB = smartPalCache.B;
+        }
         const _kHit=makeCacheKey();
-        const _hit=renderCache.get(_kHit);
         if(_hit){
           if(cur!==gen) return;
           art=_hit.art;
