@@ -64,6 +64,37 @@ export function batch_best_glyph(r1, g1, b1, r2, g2, b2, states_f, states_b, pal
 }
 
 /**
+ * @param {BigUint64Array} masks
+ * @param {Uint32Array} states_f
+ * @param {Uint32Array} states_b
+ * @param {Uint32Array} palette
+ * @param {number} mode
+ * @param {number} w
+ * @param {Uint8Array} out_glyph
+ * @param {Float32Array} out_err
+ * @param {Uint8Array} out_bytes
+ * @returns {number}
+ */
+export function batch_best_glyph_polygon(masks, states_f, states_b, palette, mode, w, out_glyph, out_err, out_bytes) {
+    const ptr0 = passArray64ToWasm0(masks, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray32ToWasm0(states_f, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray32ToWasm0(states_b, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray32ToWasm0(palette, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    var ptr4 = passArray8ToWasm0(out_glyph, wasm.__wbindgen_malloc);
+    var len4 = WASM_VECTOR_LEN;
+    var ptr5 = passArrayF32ToWasm0(out_err, wasm.__wbindgen_malloc);
+    var len5 = WASM_VECTOR_LEN;
+    var ptr6 = passArray8ToWasm0(out_bytes, wasm.__wbindgen_malloc);
+    var len6 = WASM_VECTOR_LEN;
+    const ret = wasm.batch_best_glyph_polygon(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, mode, w, ptr4, len4, out_glyph, ptr5, len5, out_err, ptr6, len6, out_bytes);
+    return ret >>> 0;
+}
+
+/**
  * @param {Uint8Array} r
  * @param {Uint8Array} g
  * @param {Uint8Array} b
@@ -288,6 +319,14 @@ function getArrayU8FromWasm0(ptr, len) {
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 
+let cachedBigUint64ArrayMemory0 = null;
+function getBigUint64ArrayMemory0() {
+    if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
+        cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
+    }
+    return cachedBigUint64ArrayMemory0;
+}
+
 let cachedFloat32ArrayMemory0 = null;
 function getFloat32ArrayMemory0() {
     if (cachedFloat32ArrayMemory0 === null || cachedFloat32ArrayMemory0.byteLength === 0) {
@@ -315,6 +354,13 @@ function getUint8ArrayMemory0() {
 function passArray32ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 4, 4) >>> 0;
     getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArray64ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 8, 8) >>> 0;
+    getBigUint64ArrayMemory0().set(arg, ptr / 8);
     WASM_VECTOR_LEN = arg.length;
     return ptr;
 }
@@ -390,6 +436,7 @@ function __wbg_finalize_init(instance, module) {
     wasmInstance = instance;
     wasm = instance.exports;
     wasmModule = module;
+    cachedBigUint64ArrayMemory0 = null;
     cachedFloat32ArrayMemory0 = null;
     cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;

@@ -208,6 +208,10 @@ registerSlash(['query'], (args, networkId) => {
 });
 
 registerSlash(['quit', 'disconnect'], (args, networkId) => {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (net && net.host === 'irc.ircfiber.com') {
+    throw new Error('The IRC Fiber server cannot be disconnected');
+  }
   const reason = args.join(' ');
   markUserDisconnected(networkId);
   void disconnectNetwork(networkId, reason);

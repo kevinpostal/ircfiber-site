@@ -40,7 +40,10 @@
     const p=initialParams as any;
     if(p.width!=null) width=p.width;
     if(p.renderMode) renderMode=p.renderMode;
-    if(p.pixelMode) pixelMode=p.pixelMode;
+    if(p.pixelMode){
+      if(['half','full','quarter','braille','polygon'].includes(p.pixelMode)) pixelMode=p.pixelMode;
+      else pixelMode='half';
+    }
     if(p.midgardMode) midgardMode=p.midgardMode;
     if(p.filter) filter=p.filter;
     if(p.brightness!=null) brightness=p.brightness;
@@ -252,7 +255,7 @@
       presets.push({...baseOpts, midgardMode: m, renderMode: rm});
     }
     for (const cm of ['rgb','lab','oklab'] as ColorMatching[]) if (cm !== baseOpts.colorMatching) presets.push({...baseOpts, colorMatching: cm});
-    for (const pm of ['half','full','quarter','braille'] as PixelMode[]) if (pm !== baseOpts.pixelMode) presets.push({...baseOpts, pixelMode: pm});
+    for (const pm of ['half','polygon','quarter','braille','full'] as PixelMode[]) if (pm !== baseOpts.pixelMode) presets.push({...baseOpts, pixelMode: pm});
     for (const w of [60,80,100,120]) if (w !== baseOpts.width) presets.push({...baseOpts, width: w});
     const toCache = presets.slice(0, 16);
     let pImg: HTMLImageElement | null = null;
@@ -420,8 +423,9 @@
     { v:'truecolor', label:'True-Color', sub:'24-bit' },
     { v:'smart', label:'Smart', sub:'auto' },
   ];
-  const pixelOpts: Array<{v:PixelMode,label:string,glyph:string}> = [
+  const pixelOpts: Array<{v:PixelMode,label:string,glyph:string,hint?:string}> = [
     { v:'half', label:'Half', glyph:'▀' },
+    { v:'polygon', label:'Polygon', glyph:'◤', hint:'smoother diagonals, same bytes' },
     { v:'quarter', label:'Quarter', glyph:'▖' },
     { v:'braille', label:'Braille', glyph:'⣿' },
     { v:'full', label:'Full', glyph:'█' },

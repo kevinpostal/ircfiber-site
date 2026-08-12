@@ -153,3 +153,21 @@ export function tryWasmBatchRowPaletteSync(
     return typeof n === 'number' && n>0 ? n : null;
   } catch { return null; }
 }
+export function tryWasmBatchBestGlyphPolygonSync(
+  masks: BigUint64Array,
+  statesF: Uint32Array, statesB: Uint32Array,
+  palette: number[] | Uint32Array,
+  mode: string,
+  w: number,
+  outGlyph: Uint8Array,
+  outErr: Float32Array,
+  outBytes: Uint8Array
+): number | null {
+  if (!wasm?.batch_best_glyph_polygon) return null;
+  try {
+    const u32 = palette instanceof Uint32Array ? palette : new Uint32Array(palette);
+    const m = modeToU8(mode);
+    const n = (wasm.batch_best_glyph_polygon as (masks:BigUint64Array,sf:Uint32Array,sb:Uint32Array,p:Uint32Array,mode:number,w:number,og:Uint8Array,oe:Float32Array,ob:Uint8Array)=>number)(masks,statesF,statesB,u32,m,w,outGlyph,outErr,outBytes);
+    return typeof n === 'number' && n>0 ? n : null;
+  } catch { return null; }
+}

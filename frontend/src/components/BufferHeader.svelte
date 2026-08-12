@@ -7,6 +7,7 @@
   import { normalizeChannelName } from '../lib/utils';
   import { archivedMap, serverlogCollapsedMap } from '../stores/preferences.svelte';
   import { groupServerLog, getServerLogCollapsedKey } from '../lib/serverLogGroups';
+  import { isFiberServer } from '../lib/fiberServer';
 
   interface Props {
     onAddNetwork: () => void;
@@ -37,6 +38,7 @@
   const isChannel = $derived(ircState.activeBuffer.bufferName?.startsWith('#') ?? false);
   const connected = $derived(activeNetwork?.connected ?? false);
   const isConnecting = $derived(activeNetwork?.connectionState === 'connecting');
+  const isFiber = $derived(activeNetwork ? isFiberServer(activeNetwork) : false);
   // Server-log buffer detection — used to scope the fiber-brand restyle
   // (channel-name uses Space Grotesk, status pill mirrors the homepage's
   // topbar LED, buttons use fiber hairline borders). Outside the _server
@@ -84,6 +86,9 @@
 
   async function handleConnectionAction(): Promise<void> {
     if (!activeNetwork || busy) return;
+    if (isFiber) {
+      if (connected || isConnecting) return;
+    }
     const net = activeNetwork;
     busy = true;
     try {
@@ -249,7 +254,7 @@
     {:else}
       <p class="buttons" class:buttons--fiber={isServerBuffer}>
         <button class="rejoin fiber-btn" type="button" onclick={onEditNetwork}>Edit</button>
-        <button class="archive fiber-btn" type="button" onclick={handleConnectionAction} disabled={busy}>
+        <button class="archive fiber-btn" type="button" onclick={handleConnectionAction} disabled={busy || (isFiber ? (connected || isConnecting) : false)}>
           {connected || isConnecting ? 'Disconnect' : (activeNetwork?.disconnectReason ? 'Reconnect' : 'Connect')}
         </button>
         <button class="bufferOptions fiber-btn" type="button" title="Options" aria-label="Options" onclick={(e) => onJoinChannel(e)}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1A1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8.92 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>

@@ -2,7 +2,7 @@
   import { ircState, setActiveBuffer, getActiveNetwork, sortBuffers } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
-  import { normalizeChannelName } from '../lib/utils';
+  import { ensureChannelPrefix } from '../lib/utils';
   import { updateRoute } from '../lib/routing';
 
   interface Props {
@@ -29,7 +29,7 @@
     e?.preventDefault();
     if (!channel || !ircState.activeBuffer.networkId) return;
     const networkId = ircState.activeBuffer.networkId;
-    const chan = normalizeChannelName(channel);
+    const chan = ensureChannelPrefix(channel);
     const net = ircState.networks.find(n => n.networkId === networkId);
     if (net && !net.connected) {
       net.connectionState = 'connecting';

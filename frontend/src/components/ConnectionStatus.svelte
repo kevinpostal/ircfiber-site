@@ -29,6 +29,7 @@
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { serverlogCollapsedMap } from '../stores/preferences.svelte';
   import { groupServerLog, getServerLogCollapsedKey } from '../lib/serverLogGroups';
+  import { isFiberServer } from '../lib/fiberServer';
   import {
     connectionWarnings,
     renderReason,
@@ -36,7 +37,6 @@
     renderRetryCountdown,
     FAIL_TYPES,
   } from '../lib/connectionWarnings';
-
   interface Props {
     onSendRaw?: (networkId: string, cmd: string) => void | Promise<void>;
     onReconnect?: (networkId: string) => void | Promise<void>;
@@ -55,8 +55,8 @@
   const isQueued = $derived(activeNetwork?.connectionState === 'queued');
   const isQuitting = $derived(activeNetwork?.connectionState === 'quitting');
   const isIpRetry = $derived(activeNetwork?.connectionState === 'ip_retry');
+  const isFiber = $derived(activeNetwork ? isFiberServer(activeNetwork) : false);
   const disconnectReason = $derived(activeNetwork?.disconnectReason || '');
-
   // Show banner for any transient state. The engine's `ConnectionState`
   // enum has only one "alive" value — `connected` — and never transitions
   // out of it until the next disconnect. So `connectionState === 'connected'`
@@ -333,6 +333,7 @@
   async function handleDisconnect(e: MouseEvent): Promise<void> {
     e.preventDefault();
     if (!activeNetwork) return;
+    if (isFiber) return;
     try {
       await disconnectNetwork(activeNetwork.networkId, 'user request');
     } catch (err) { console.error(err); }
@@ -346,7 +347,11 @@
       return;
     }
     if (activeNetwork.badRetry === true) {
-      handleDisconnect(e);
+      if (isFiber) {
+        handleReconnect(e);
+      } else {
+        handleDisconnect(e);
+      }
     } else {
       handleReconnect(e);
     }

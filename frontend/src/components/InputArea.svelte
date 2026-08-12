@@ -5,7 +5,7 @@
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
-  import { generateLabel, getAvatarColor, normalizeChannelName, stripPrefix } from '../lib/utils';
+  import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix } from '../lib/utils';
   import { smoothScrollBy } from '../lib/scroll';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
@@ -580,7 +580,7 @@
         const channel = args[0];
         const key = args[1];
         if (channel) {
-          const chan = normalizeChannelName(channel);
+          const chan = ensureChannelPrefix(channel);
           const net = ircState.networks.find(n => n.networkId === networkId);
           if (net && !net.buffers.some(b => b.name === chan)) {
             net.buffers.push({

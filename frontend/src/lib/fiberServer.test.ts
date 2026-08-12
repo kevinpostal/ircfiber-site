@@ -1,13 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { isFiberServer, isFiberServerDown } from './fiberServer';
 import type { Network } from '../types';
 
-const { mockIsUserDisconnected } = vi.hoisted(() => ({
-  mockIsUserDisconnected: vi.fn(() => false),
-}));
-vi.mock('../stores/ircStore.svelte', () => ({
-  isUserDisconnected: mockIsUserDisconnected,
-}));
 function makeNet(overrides: Partial<Network> = {}): Network {
   const base: Network = {
     name: 'IRC Fiber',
@@ -34,84 +28,49 @@ function makeNet(overrides: Partial<Network> = {}): Network {
     chanTypes: '#',
     systemManaged: true,
     lastSeenAt: Date.now(),
-  };
-  return { ...base, ...overrides };
+    networkId: 'fiber-net-id',
+  } as unknown as Network;
+  return { ...base, ...overrides } as Network;
 }
 
 describe('isFiberServer', () => {
   it('identifies fiber server by host and systemManaged', () => {
-    expect(isFiberServer(makeNet({ host: 'irc.ircfiber.com', systemManaged: true }))).toBe(true);
-    expect(isFiberServer(makeNet({ host: 'irc.ircfiber.com', systemManaged: false }))).toBe(false);
-    expect(isFiberServer(makeNet({ host: 'irc.libera.chat', systemManaged: true }))).toBe(false);
-    expect(isFiberServer(makeNet({ host: 'irc.libera.chat', systemManaged: false }))).toBe(false);
+    expect(isFiberServer(makeNet())).toBe(true);
+    expect(isFiberServer(makeNet({ host: 'irc.libera.chat', systemManaged: false } as Partial<Network>))).toBe(false);
+    expect(isFiberServer(makeNet({ host: 'irc.ircfiber.com', systemManaged: false } as Partial<Network>))).toBe(false);
+    expect(isFiberServer(makeNet({ host: 'irc.libera.chat', systemManaged: true } as Partial<Network>))).toBe(false);
   });
 });
 
 describe('isFiberServerDown', () => {
-  beforeEach(() => {
-    mockIsUserDisconnected.mockReturnValue(false);
+  it('never hides fiber on disconnect (removed auto-hide)', () => {
+    const net = makeNet({ connected: false, disabled: true } as Partial<Network>);
+    expect(isFiberServerDown(net)).toBe(false);
   });
 
-  it('hides fiber when not connected and retrying', () => {
+  it('never hides fiber when retrying', () => {
     const net = makeNet({
       connected: false,
       connectionState: 'waiting_to_retry',
       status: 'waiting_to_retry',
       retryStatus: { attemptCount: 3, nextRetryAtMs: Date.now() + 14000, delayMs: 14000 },
       failInfo: { type: 'connecting_failed', reason: 'Failed to connect', killedReason: '', sslVerifyError: null, ip: '' },
-    });
-    expect(isFiberServerDown(net)).toBe(true);
+    } as Partial<Network>);
+    expect(isFiberServerDown(net)).toBe(false);
   });
 
-  it('hides fiber when TLS fail', () => {
-    const net = makeNet({
-      connected: false,
-      disconnectReason: 'TLS handshake failed',
-      failInfo: { type: 'connecting_failed', reason: 'tls_fail', killedReason: '', sslVerifyError: null, ip: '' },
-    });
-    expect(isFiberServerDown(net)).toBe(true);
+  it('never hides fiber even when disabled via admin (visible with reconnect affordance)', () => {
+    const net = makeNet({ connected: false, disabled: true } as Partial<Network>);
+    expect(isFiberServerDown(net)).toBe(false);
+  });
+
+  it('does not hide non-fiber networks', () => {
+    const net = makeNet({ host: 'irc.libera.chat', systemManaged: false, connected: false } as Partial<Network>);
+    expect(isFiberServerDown(net)).toBe(false);
   });
 
   it('shows fiber when connected', () => {
-    const net = makeNet({ connected: true, connectionState: 'connected', status: 'connected' });
+    const net = makeNet({ connected: true, connectionState: 'connected', status: 'connected' } as Partial<Network>);
     expect(isFiberServerDown(net)).toBe(false);
-  });
-
-  it('shows fiber when user explicitly disconnected', () => {
-    mockIsUserDisconnected.mockReturnValue(true);
-    const net = makeNet({ connected: false, disconnectReason: 'You disconnected' });
-    expect(isFiberServerDown(net)).toBe(false);
-    mockIsUserDisconnected.mockReturnValue(false);
-  });
-
-  it('does not hide user networks', () => {
-    const net = makeNet({
-      host: 'irc.libera.chat',
-      systemManaged: false,
-      connected: false,
-      disconnectReason: 'Failed to connect',
-    });
-    expect(isFiberServerDown(net)).toBe(false);
-  });
-
-  it('hides fiber on DNS timeout', () => {
-    const net = makeNet({
-      connected: false,
-      disconnectReason: 'DNS resolution failed for irc.ircfiber.com',
-    });
-    expect(isFiberServerDown(net)).toBe(true);
-  });
-
-  it('shows fiber when no failure evidence but recently seen', () => {
-    const net = makeNet({
-      connected: false,
-      connectionState: 'disconnected',
-      status: 'disconnected',
-      disconnectReason: '',
-      retryStatus: null,
-      failInfo: null,
-      lastSeenAt: Date.now(),
-    });
-    expect(isFiberServerDown(net)).toBe(true);
   });
 });

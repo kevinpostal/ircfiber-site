@@ -168,7 +168,7 @@ describe('NetworkForm', () => {
     await userEvent.fill(channels, '#superbowl\n#Zod');
     await userEvent.click(page.getByRole('button', { name: 'Save' }));
     const call = mockUpdateNetwork.mock.calls[0];
-    expect(call[1].autoJoinChannels).toEqual(['#superbowl', '#Zod']);
+    expect(call[1].autoJoinChannels).toEqual(['#superbowl', '#zod']);
   });
 
   it('Editing channels and submitting parses space separators', async () => {
@@ -192,7 +192,7 @@ describe('NetworkForm', () => {
     await userEvent.fill(channels, '#superbowl,#Zod');
     await userEvent.click(page.getByRole('button', { name: 'Save' }));
     const call = mockUpdateNetwork.mock.calls[0];
-    expect(call[1].autoJoinChannels).toEqual(['#superbowl', '#Zod']);
+    expect(call[1].autoJoinChannels).toEqual(['#superbowl', '#zod']);
   });
 
   it('Reveal toggle shows/hides NickServ password', async () => {

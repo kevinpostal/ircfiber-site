@@ -1,6 +1,8 @@
 <script lang="ts">
-  import Highlight, { LineNumbers } from 'svelte-highlight';
+  import Highlight from 'svelte-highlight';
   import 'svelte-highlight/styles/atom-one-dark.css';
+  import CodeEditor from './CodeEditor.svelte';
+  import { fetchUploadsOffset, editUpload } from '../stores/api';
   import plaintext from 'svelte-highlight/languages/plaintext';
   import python from 'svelte-highlight/languages/python';
   import javascript from 'svelte-highlight/languages/javascript';
@@ -44,7 +46,6 @@
     url: string;
   }
   let { url }: Props = $props();
-  // For /uploads URLs, use pathname for fetch + href so vite proxy avoids https loopback cert issue
   let displayUrl = $derived((()=>{ try{ const u=new URL(url, location.origin); if(u.pathname.startsWith('/uploads/')) return u.pathname+u.search+u.hash; }catch{} return url; })());
 
   let code = $state<string | null>(null);
@@ -56,8 +57,10 @@
   let editFilename = $state('');
   let localName = $state<string | null>(null);
   let editError = $state<string | null>(null);
+  let uploadName = $state<string | null>(null);
+  let uploadIdForEdit = $state<string | null>(null);
+  let editSaving = $state(false);
 
-  // Map URL extension to svelte-highlight language
   function detectLang(u: string): any {
     const pathname = (() => { try { return new URL(u).pathname.toLowerCase(); } catch { return u.toLowerCase(); } })();
     const ext = pathname.split('.').pop() ?? '';
@@ -84,12 +87,14 @@
     return map[ext] ?? plaintext;
   }
 
+  let hlLang: any = $state(plaintext);
+  $effect(() => {
+    hlLang = detectLang(url);
+    void load();
+  });
+
   async function load() {
     try {
-      // For our own /uploads URLs, fetch via pathname so vite's /uploads proxy
-      // handles http->backend and we avoid https://127.0.0.1:8090 mixed-protocol/CORS failures.
-      // Backend may store https://127.0.0.1:8090/uploads/... (loopback forced to https by textInline.ts before fix);
-      // fetching that directly fails (no cert on 8090). Use pathname+search instead.
       let fetchUrl = url;
       try {
         const u = new URL(url, location.origin);
@@ -98,21 +103,22 @@
       const res = await fetch(fetchUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
-      // Truncate very large files for inline preview (first 50KB)
       const truncated = text.length > 50000 ? text.slice(0, 50000) + '\n\n… truncated …' : text;
       code = truncated;
-      hlLang = detectLang(url);
+      try {
+        const uPath = (()=>{ try{ return new URL(url, location.origin).pathname; } catch { return url; } })();
+        const r2 = await fetchUploadsOffset(0, 100);
+        for (const e of r2.entries) {
+          let ePath: string;
+          try { ePath = new URL(e.url).pathname; } catch { ePath = e.url; }
+          if (ePath === uPath || e.url === url) { uploadName = e.name; uploadIdForEdit = e._id; break; }
+        }
+      } catch {}
     } catch (e) {
       console.warn('TextInline failed to load', url, e);
       errored = true;
     }
   }
-
-  let hlLang: any = $state(plaintext);
-  $effect(() => {
-    hlLang = detectLang(url);
-    void load();
-  });
 
   function onClose(e: MouseEvent) {
     e.preventDefault();
@@ -123,7 +129,7 @@
     if (code === null) return;
     editValue = code;
     const urlName = (()=>{ try{ return new URL(url).pathname.split('/').pop() ?? url; }catch{ return url.split('/').pop() ?? url; }})();
-    editFilename = localName ?? urlName;
+    editFilename = uploadName ?? localName ?? urlName;
     editError = null;
     editing = true;
   }
@@ -133,10 +139,28 @@
     editError = null;
   }
 
-  function saveEdit() {
+  async function saveEdit() {
     if (!editFilename.trim()) {
       editError = 'Name cannot be empty';
       return;
+    }
+    const uploadId: string | null = uploadIdForEdit;
+    if (uploadId) {
+      editSaving = true;
+      try {
+        await editUpload(uploadId, { content: editValue, filename: editFilename.trim() });
+        uploadName = editFilename.trim();
+        localName = editFilename.trim();
+        code = editValue;
+        editing = false;
+        editError = null;
+        return;
+      } catch (err: any) {
+        editError = err?.message ?? 'Failed to save';
+        return;
+      } finally {
+        editSaving = false;
+      }
     }
     localName = editFilename.trim();
     code = editValue;
@@ -147,7 +171,7 @@
 
 {#if !closed && !errored && code !== null}
   {@const urlFilename = (()=>{ try{ return new URL(url).pathname.split('/').pop() ?? url.split('/').pop() ?? url; } catch { return url.split('/').pop() ?? url; } })()}
-  {@const filename = localName ?? urlFilename}
+  {@const filename = uploadName ?? localName ?? urlFilename}
   {@const lineCount = code.split('\n').length}
   {@const syntaxName = hlLang?.name ?? 'Plain Text'}
   <span class="directEmbedWrap textWrap paste" data-text-url={url}>
@@ -156,7 +180,7 @@
         <span class="details" style="display:flex; align-items:center; gap:6px; flex:1;">
           <label for="inline-edit-name" style="font-size:12px; color:#b0b0b0; white-space:nowrap;">Name</label>
           <input id="inline-edit-name" class="input nameInput" style="flex:1; max-width:200px; background:#2a2c2f; color:#e6e6e6; border:1px solid #4a4d50; border-radius:3px; padding:3px 6px; font-size:13px;" placeholder="e.g. index.html" title="Name for referencing" bind:value={editFilename} />
-          <button type="button" class="action" style="background:#4c83e8; color:#fff; border:1px solid #4c83e8; border-radius:3px; padding:3px 10px; font-size:12px; cursor:pointer;" onclick={saveEdit}>Save</button>
+          <button type="button" class="action" style="background:#4c83e8; color:#fff; border:1px solid #4c83e8; border-radius:3px; padding:3px 10px; font-size:12px; cursor:pointer;" onclick={saveEdit} disabled={editSaving}>{editSaving ? 'Saving...' : 'Save'}</button>
           <button type="button" class="cancel" style="background:#45484c; color:#fff; border:1px solid #2c2f35; border-radius:3px; padding:3px 10px; font-size:12px; cursor:pointer;" onclick={cancelEdit}>Cancel</button>
         </span>
         <span class="actions">
@@ -177,8 +201,9 @@
     </h1>
     {#if editError}<p class="userError" style="color:#f85149; font-size:12px; margin:4px 0;">{editError}</p>{/if}
     {#if editing}
-      <div class="editor editing" style="height: 192px; overflow:auto;">
-        <textarea bind:value={editValue} style="width:100%; height:100%; background:#141414; color:#F8F8F8; border:none; padding:4px 8px; font-family:Monaco, monospace; font-size:12px; line-height:16px; resize:none;"></textarea>
+      {@const editLines = editValue.split('\n').length}
+      <div class="editor editing" style="height: {Math.min(Math.max(editLines,1),12)*16}px;">
+        <CodeEditor bind:value={editValue} language={hlLang?.name?.toLowerCase() ?? 'text'} />
       </div>
     {:else}
       <div class="editor" style="height: {Math.min(lineCount, 12) * 16}px;">

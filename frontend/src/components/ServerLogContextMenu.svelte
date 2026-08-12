@@ -5,7 +5,7 @@
   import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt, setStorageItem } from '../stores/preferences.svelte';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
-
+  import { isFiberServer } from '../lib/fiberServer';
   interface Props {
     x: number;
     y: number;
@@ -23,6 +23,7 @@
   const isConnected = $derived(network?.connected ?? false);
   const isCollapsed = $derived(network ? (collapsedMap[network.networkId] ?? false) : false);
   const isInactive = $derived(!isConnected);
+  const isFiber = $derived(network ? isFiberServer(network) : false);
   const canDelete = $derived(true);
 
   let menuEl: HTMLDivElement;
@@ -87,6 +88,7 @@
   }
   async function clickDisconnect(): Promise<void> {
     if (!networkId || isInactive) return;
+    if (isFiber) return;
     onClose();
     markUserDisconnected(networkId);
     await disconnectNetwork(networkId);
@@ -191,8 +193,8 @@
       <li class="nickserv" class:inactive={!isConnected} aria-disabled={!isConnected} style:display={isConnected ? '' : 'none'}>
         <button class="contextMenu__item nickserv" class:contextMenu__item--disabled={!isConnected} disabled={!isConnected} onclick={clickIdentify}>Identify Nickname…</button>
       </li>
-      <li class="disconnect" class:inactive={isInactive} aria-disabled={isInactive} style:display={isInactive ? 'none' : ''}>
-        <button class="contextMenu__item disconnect" class:contextMenu__item--disabled={isInactive} disabled={isInactive} onclick={clickDisconnect}>Disconnect</button>
+      <li class="disconnect" class:inactive={isInactive || isFiber} aria-disabled={isInactive || isFiber} style:display={isInactive || isFiber ? 'none' : ''}>
+        <button class="contextMenu__item disconnect" class:contextMenu__item--disabled={isInactive || isFiber} disabled={isInactive || isFiber} onclick={clickDisconnect}>Disconnect</button>
       </li>
       <li>
         <button class="contextMenu__item ignores" onclick={clickIgnores}>Ignore list…</button>

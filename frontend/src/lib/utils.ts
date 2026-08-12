@@ -38,6 +38,20 @@ export function normalizeChannelName(name: string): string {
 }
 
 /**
+ * Normalize a channel for JOIN / auto-join: ensures leading `#` and lowercases.
+ * Bare names like `testing` → `#testing` so the engine sends `JOIN #testing`
+ * instead of `JOIN testing` (which IRC treats as a nick, i.e. a PRIVMSG target).
+ * Existing prefixes `# & + !` are preserved and lowercased. `_server` unchanged.
+ */
+export function ensureChannelPrefix(name: string): string {
+  if (!name || name === '_server') return name;
+  const trimmed = name.trim();
+  if (!trimmed) return '';
+  if (trimmed[0] === '#' || trimmed[0] === '&' || trimmed[0] === '+' || trimmed[0] === '!') return trimmed.toLowerCase();
+  return '#' + trimmed.toLowerCase();
+}
+
+/**
  * Deduplicate and normalize a list of channel names.
  * IRC channel names are case-insensitive, so "#Zod" and "#ZOD" are duplicates.
  */
@@ -60,6 +74,8 @@ export function dedupChannelNames(names: string[]): string[] {
  * Mirrors what IRCCloud accepts: one channel per line, or space/comma
  * separated on a single line.
  *
+ * Bare channel names are auto-prefixed with `#` so `testing` → `#testing`.
+ *
  * Note: because whitespace is a separator, the legacy "channel password"
  * syntax ("#chan key") is no longer supported here. Users needing a keyed
  * join can issue /join #chan key after connecting.
@@ -71,12 +87,14 @@ export function dedupChannelNames(names: string[]): string[] {
  *   "  #a ,  #b  "  -> ["#a", "#b"]
  *   ""              -> []
  *   "#a, , #b"      -> ["#a", "#b"]
+ *   "testing"       -> ["#testing"]
  */
 export function parseChannelList(text: string): string[] {
   return text
     .split(/[\s,]+/)
     .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+    .filter((s) => s.length > 0)
+    .map((s) => ensureChannelPrefix(s));
 }
 
 export function formatTime12Hour(d: Date): string {

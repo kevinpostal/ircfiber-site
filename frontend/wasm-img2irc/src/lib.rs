@@ -173,7 +173,7 @@ pub fn best_glyph_for_state(
     f_r: u8, f_g: u8, f_b: u8, b_r: u8, b_g: u8, b_b: u8,
     mode: &str, w: f32
 ) -> usize {
-    const GLYPHS: [(f32,f32,f32); 13] = [
+    const GLYPHS: [(f32,f32,f32); 19] = [
         (0.0, 0.0, 1.0),
         (0.122, 0.120, 1.0),
         (0.247, 0.261, 1.0),
@@ -187,6 +187,13 @@ pub fn best_glyph_for_state(
         (0.183, 0.181, 3.0),
         (0.796, 0.816, 3.0),
         (1.0, 1.0, 3.0),
+        // polygon extensions
+        (0.5, 0.5, 3.0),      // 13 ▌
+        (0.5, 0.5, 3.0),      // 14 ▐
+        (0.8125, 0.3125, 3.0),// 15 ◤
+        (0.1875, 0.6875, 3.0),// 16 ◢
+        (0.8125, 0.3125, 3.0),// 17 ◥
+        (0.1875, 0.6875, 3.0),// 18 ◣
     ];
     let mut best_idx = 7usize;
     let mut best_cost = f32::INFINITY;
@@ -338,7 +345,7 @@ pub fn batch_best_glyph(
     let s_len = states_f.len().min(states_b.len());
     if m==0 || s_len==0 || out_glyph.len() < m*s_len || out_err.len() < m*s_len || out_bytes.len() < m*s_len { return 0; }
     if palette.is_empty() { return 0; }
-    const GLYPHS: [(f32,f32,f32); 13] = [
+    const GLYPHS: [(f32,f32,f32); 19] = [
         (0.0, 0.0, 1.0),
         (0.122, 0.120, 1.0),
         (0.247, 0.261, 1.0),
@@ -352,6 +359,12 @@ pub fn batch_best_glyph(
         (0.183, 0.181, 3.0),
         (0.796, 0.816, 3.0),
         (1.0, 1.0, 3.0),
+        (0.5, 0.5, 3.0),      // 13 ▌
+        (0.5, 0.5, 3.0),      // 14 ▐
+        (0.8125, 0.3125, 3.0),// 15 ◤
+        (0.1875, 0.6875, 3.0),// 16 ◢
+        (0.8125, 0.3125, 3.0),// 17 ◥
+        (0.1875, 0.6875, 3.0),// 18 ◣
     ];
     let (pal_rgb, pal_oklab) = PAL_CACHE.with(|cache| {
         let mut c = cache.borrow_mut();
@@ -430,6 +443,90 @@ pub fn batch_best_glyph(
             out_glyph[i*s_len+s]=best_idx as u8;
             out_err[i*s_len+s]=best_err;
             out_bytes[i*s_len+s]=GLYPHS[best_idx].2 as u8;
+        }
+    }
+    m*s_len
+}
+#[wasm_bindgen]
+pub fn batch_best_glyph_polygon(
+    masks: &[u64],
+    states_f: &[u32], states_b: &[u32],
+    palette: &[u32],
+    mode: u8,
+    w: f32,
+    out_glyph: &mut [u8],
+    out_err: &mut [f32],
+    out_bytes: &mut [u8],
+) -> usize {
+    let m = masks.len();
+    let s_len = states_f.len().min(states_b.len());
+    if m==0 || s_len==0 || out_glyph.len() < m*s_len || out_err.len() < m*s_len || out_bytes.len() < m*s_len { return 0; }
+    if palette.is_empty() { return 0; }
+    // 9 polygon glyphs mapped to full GLYPHS indices: space(0), ▀(7),▄(8),▌(13),▐(14),◤(15),◢(16),◥(17),◣(18)
+    const POLY_INDICES: [usize; 9] = [0,7,8,13,14,15,16,17,18];
+    const POLY_MASKS: [u64; 9] = [
+        0x0000000000000000u64, // space
+        0x00000000ffffffffu64, // ▀ top half
+        0xffffffff00000000u64, // ▄ bottom half
+        0x0f0f0f0f0f0f0f0fu64, // ▌
+        0xf0f0f0f0f0f0f0f0u64, // ▐
+        0x0103070f1f3f7fffu64, // ◤
+        0xfefcf8f0e0c08000u64, // ◢
+        0x80c0e0f0f8fcfeffu64, // ◥
+        0x7f3f1f0f07030100u64, // ◣
+    ];
+    const POLY_BYTES: [u8; 9] = [1,3,3,3,3,3,3,3,3];
+    let (pal_rgb, pal_oklab) = PAL_CACHE.with(|cache| {
+        let mut c = cache.borrow_mut();
+        let need = match c.as_ref() {
+            Some((cp,_,_)) => cp.len()!=palette.len() || !cp.iter().zip(palette.iter()).all(|(a,b)| a==b),
+            None => true,
+        };
+        if need {
+            let rgb: Vec<(u8,u8,u8)> = palette.iter().map(|&c| (((c>>16)&255) as u8, ((c>>8)&255) as u8, (c&255) as u8)).collect();
+            let oklab: Vec<[f32;3]> = if mode==2 { rgb.iter().map(|&(cr,cg,cb)| srgb_to_oklab_inner(cr,cg,cb)).collect() } else { Vec::new() };
+            *c = Some((palette.to_vec(), rgb.clone(), oklab.clone()));
+            (rgb, oklab)
+        } else {
+            let (_, rgb, oklab) = c.as_ref().unwrap();
+            (rgb.clone(), oklab.clone())
+        }
+    });
+    // need palette oklab for contrast
+    for i in 0..m {
+        let sub = masks[i];
+        for s in 0..s_len {
+            let f_idx = states_f[s] as usize;
+            let b_idx = states_b[s] as usize;
+            if f_idx >= pal_rgb.len() || b_idx >= pal_rgb.len() { out_glyph[i*s_len+s]=0; out_err[i*s_len+s]=0.0; out_bytes[i*s_len+s]=1; continue; }
+            let (f_r,f_g,f_b) = pal_rgb[f_idx];
+            let (b_r,b_g,b_b) = pal_rgb[b_idx];
+            let contrast = if mode==2 {
+                let f_ok = pal_oklab[f_idx];
+                let b_ok = pal_oklab[b_idx];
+                let dl=f_ok[0]-b_ok[0]; let da=f_ok[1]-b_ok[1]; let db=f_ok[2]-b_ok[2];
+                (dl*dl+da*da+db*db)*85000.0
+            } else if mode==1 {
+                // use lab approx via color_dist2_u8 for fg-bg
+                color_dist2_u8(f_r,f_g,f_b,b_r,b_g,b_b,mode)
+            } else {
+                let dr=f_r as f32 - b_r as f32; let dg=f_g as f32 - b_g as f32; let db=f_b as f32 - b_b as f32;
+                dr*dr+dg*dg+db*db
+            };
+            let mut best_cost = f32::INFINITY;
+            let mut best_idx = 0usize;
+            let mut best_err = 0.0;
+            for p in 0..POLY_MASKS.len(){
+                let pm = POLY_MASKS[p];
+                let dist = (sub ^ pm).count_ones() as f32;
+                let err = dist * contrast / 64.0;
+                let bytes = POLY_BYTES[p] as f32;
+                let cost = err + w * bytes;
+                if cost < best_cost { best_cost=cost; best_idx=POLY_INDICES[p]; best_err=err; }
+            }
+            out_glyph[i*s_len+s]=best_idx as u8;
+            out_err[i*s_len+s]=best_err;
+            out_bytes[i*s_len+s]=if best_idx==0 {1} else {3};
         }
     }
     m*s_len

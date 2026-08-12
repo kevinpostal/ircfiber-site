@@ -5,6 +5,7 @@
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { parseChannelList, stripPrefix } from '../lib/utils';
+  import { isFiberServer } from '../lib/fiberServer';
   import { normalizeHost, parseHostUrl } from '../lib/host';
 
   interface Props {
@@ -22,6 +23,11 @@
       ? ircState.networks.find(n => n.networkId === networkId)
       : null
   );
+
+  const isFiber = $derived(
+    existing ? isFiberServer(existing as any) : host.trim().toLowerCase() === 'irc.ircfiber.com'
+  );
+  const fiberUsername = $derived(ircState.me?.username ?? '');
 
   let name = $state('');
   let host = $state('');
@@ -92,9 +98,35 @@
     }
   });
 
+  // Fiber lock: nick/realName always tracks the account username
+  $effect(() => {
+    if (!isFiber || !fiberUsername) return;
+    if (existing && nick !== fiberUsername) nick = fiberUsername;
+    if (existing && realName !== fiberUsername) realName = fiberUsername;
+    if (isFiber) {
+      host = 'irc.ircfiber.com';
+      port = 6697;
+      tls = 'required';
+    }
+  });
+
   async function handleSubmit(e?: Event): Promise<void> {
     e?.preventDefault();
     if (busy) return;
+    // Fiber lock: force managed values for irc.ircfiber.com
+    if (isFiber) {
+      const fu = fiberUsername || nick;
+      if (fu) {
+        nick = fu;
+        if (!realName || realName === existing?.realName) realName = fu;
+      }
+      // Keep auto-join locked to defaults — merge before parse
+      const required = ['#welcome', '#ircfiber'];
+      const lower = autoJoinChannels.toLowerCase();
+      for (const ch of required) {
+        if (!lower.includes(ch)) autoJoinChannels = autoJoinChannels ? autoJoinChannels + ', ' + ch : ch;
+      }
+    }
     // Normalize host: strips brackets, ircs:// scheme, and trailing :port if pasted as URL
     const normalizedHost = normalizeHost(host);
     // If user pasted a full ircs:// URL, also auto-extract port/tls via URL parse
@@ -106,6 +138,15 @@
       effectiveHost = parsed.host;
       if (parsed.port) effectivePort = parsed.port;
       if (parsed.tls) effectiveTls = parsed.tls;
+    }
+    if (isFiber) {
+      effectiveHost = 'irc.ircfiber.com';
+      effectivePort = 6697;
+      effectiveTls = 'required';
+      if (fiberUsername) {
+        nick = fiberUsername;
+        realName = fiberUsername;
+      }
     }
     if (!name || !effectiveHost || !nick) {
       error = 'Please provide a valid network name, hostname, and nickname';
@@ -286,17 +327,17 @@
           <tr>
             <td class="hostname">
               <input id="add-network-host" class="input" type="text"
-                     bind:value={host} placeholder="e.g. irc.libera.chat" required />
+                     bind:value={host} placeholder="e.g. irc.libera.chat" required disabled={isFiber} />
             </td>
             <td class="port">
               <input id="add-network-port" class="input" type="number"
-                     bind:value={port} min="1" max="65535" required />
+                     bind:value={port} min="1" max="65535" required disabled={isFiber} />
             </td>
             <td class="ssl">
               <label class="securePortRow" title="Use a secure connection to this server">
                 <input type="checkbox" id="add-network-tls-secure"
                        checked={tls === 'required' || (tls === 'enabled' && port === 6697)}
-                       onchange={(e) => { const el = e.currentTarget as HTMLInputElement; tls = el.checked ? 'required' : 'disabled'; }} />
+                       onchange={(e) => { const el = e.currentTarget as HTMLInputElement; tls = el.checked ? 'required' : 'disabled'; }} disabled={isFiber} />
                 <i class="fa fa-shield"></i>
                 <span>Secure port</span>
               </label>
@@ -326,15 +367,20 @@
           <tr>
             <td class="nickname">
               <input id="add-network-nick" class="input" type="text"
-                     bind:value={nick} placeholder="Nick" required />
+                     bind:value={nick} placeholder="Nick" required disabled={isFiber} />
             </td>
             <td class="realname">
               <input id="add-network-realname" class="input" type="text"
-                     bind:value={realName} placeholder="optional" />
+                     bind:value={realName} placeholder="optional" disabled={isFiber} />
             </td>
           </tr>
         </tbody>
       </table>
+      {#if isFiber}
+        <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
+          IRC Fiber server is managed — host, port and nick are locked to your username (<strong>{fiberUsername || nick}</strong>) and cannot be edited.
+        </p>
+      {/if}
 
       <table class="form addNetworkCells" cellpadding="0" cellspacing="0">
         <tbody>
@@ -350,6 +396,11 @@
               <textarea id="add-network-channels" class="input" rows="3"
                         bind:value={autoJoinChannels}
                         placeholder="e.g. #chat, #feedback&#10;#superbowl&#10;#Zod"></textarea>
+              {#if isFiber}
+                <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
+                  #welcome and #ircfiber are required for IRC Fiber and will always be joined.
+                </p>
+              {/if}
             </td>
           </tr>
         </tbody>

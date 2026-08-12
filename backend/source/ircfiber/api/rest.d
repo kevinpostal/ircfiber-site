@@ -13,6 +13,7 @@ import vibe.core.log;
 import ircfiber.api.session : SessionManager;
 import ircfiber.models.user : User;
 import ircfiber.models.network : NetworkConfig, TLSMode, SASLMechanism, dedupChannels;
+import ircfiber.default_network : DEFAULT_FIBER_HOST, DEFAULT_FIBER_PORT, DEFAULT_FIBER_CHANNELS;
 import ircfiber.models.irc_event : IRCRawEvent;
 import ircfiber.storage.buffer : BufferManager;
 import ircfiber.storage.redis : RedisStorage;
@@ -203,7 +204,20 @@ final class RESTAPI {
             cfg.realName = cfg.nick;
         }
 
+        // Fiber lock: host/port/tls/nick/realName are managed — ignore client-supplied values
+        if (cfg.host == DEFAULT_FIBER_HOST) {
+            cfg.port = DEFAULT_FIBER_PORT;
+            cfg.tls = TLSMode.required;
+            cfg.nick = user.username;
+            cfg.realName = user.username;
+        }
+
         cfg.autoJoinChannels = dedupChannels(deserializeJson!(string[])(bodyJson["autoJoinChannels"]));
+        // Fiber lock: auto-join must include #welcome and #ircfiber for irc.ircfiber.com
+        if (cfg.host == DEFAULT_FIBER_HOST) {
+            bool[string] _seen; foreach (c; cfg.autoJoinChannels) _seen[c] = true;
+            foreach (ch; DEFAULT_FIBER_CHANNELS) if (ch !in _seen) cfg.autoJoinChannels ~= ch;
+        }
         if (bodyJson["partedChannels"].type != Json.Type.undefined)
             cfg.partedChannels = dedupChannels(deserializeJson!(string[])(bodyJson["partedChannels"]));
 
@@ -269,8 +283,15 @@ final class RESTAPI {
         }
 
         if (bodyJson["autoJoinChannels"].type != Json.Type.undefined)
-        if (bodyJson["autoJoinChannels"].type != Json.Type.undefined)
             cfg.autoJoinChannels = dedupChannels(deserializeJson!(string[])(bodyJson["autoJoinChannels"]));
+        // Fiber lock: re-assert managed fields and ensure auto-join contains required channels
+        if (cfg.host == DEFAULT_FIBER_HOST) {
+            cfg.port = DEFAULT_FIBER_PORT;
+            cfg.tls = TLSMode.required;
+            // cfg.nick / realName will be forced to user.username after user lookup below
+            bool[string] _seen2; foreach (c; cfg.autoJoinChannels) _seen2[c] = true;
+            foreach (ch; DEFAULT_FIBER_CHANNELS) if (ch !in _seen2) cfg.autoJoinChannels ~= ch;
+        }
         if (bodyJson["partedChannels"].type != Json.Type.undefined)
             cfg.partedChannels = dedupChannels(deserializeJson!(string[])(bodyJson["partedChannels"]));
 
@@ -298,6 +319,14 @@ final class RESTAPI {
         }
 
         auto user = req.context["user"].get!User;
+        // Fiber lock: nick/realName must track the account username
+        if (cfg.host == DEFAULT_FIBER_HOST) {
+            cfg.nick = user.username;
+            cfg.realName = user.username;
+            cfg.port = DEFAULT_FIBER_PORT;
+            cfg.tls = TLSMode.required;
+            cfg.host = DEFAULT_FIBER_HOST;
+        }
         networkRepo.save(cfg, user.id);
         redis.del(RedisKeys.userNetworks(user.id.toString()));
 
@@ -379,6 +408,20 @@ final class RESTAPI {
         auto id = parseUUID(req.params["id"]);
         auto user = req.context["user"].get!User;
 
+        // Disable manual disconnect for the platform-provisioned Fiber server.
+        // The Fiber server must stay connected; admin toggle controls it.
+        {
+            auto cfgCheck = networkRepo.findById(id);
+            if (cfgCheck.id != UUID.init && cfgCheck.host == "irc.ircfiber.com" && cfgCheck.systemManaged) {
+                res.statusCode = 403;
+                res.writeJsonBody(Json([
+                    "error": Json("The IRC Fiber server cannot be disconnected"),
+                    "systemManaged": Json(true)
+                ]));
+                return;
+            }
+        }
+
         // Optional QUIT reason in the JSON body. Empty by default — IRCCloud
         // uses an empty quit message so the server response reads "(Quit: )".
         string quitReason = "";
@@ -401,7 +444,6 @@ final class RESTAPI {
         // the network from MongoDB and auto-reconnects it, undoing the user's
         // explicit disconnect.  The reconnect REST API clears this flag.
         networkRepo.setDisabled(id, true);
-
         // Always update the Redis state snapshot immediately so the
         // frontend's next sync sees disconnected — otherwise the stale
         // 'connecting' snapshot survives until the engine processes the

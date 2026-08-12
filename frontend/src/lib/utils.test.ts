@@ -412,13 +412,13 @@ describe('parseChannelList', () => {
     expect(parseChannelList('')).toEqual([]);
   });
   it('splits on newlines', () => {
-    expect(parseChannelList('#superbowl\n#Zod')).toEqual(['#superbowl', '#Zod']);
+    expect(parseChannelList('#superbowl\n#Zod')).toEqual(['#superbowl', '#zod']);
   });
   it('splits on spaces', () => {
     expect(parseChannelList('#superbowl #zod')).toEqual(['#superbowl', '#zod']);
   });
   it('splits on commas', () => {
-    expect(parseChannelList('#superbowl,#Zod')).toEqual(['#superbowl', '#Zod']);
+    expect(parseChannelList('#superbowl,#Zod')).toEqual(['#superbowl', '#zod']);
   });
   it('splits on mixed separators', () => {
     expect(parseChannelList('#a #b\n#c,#d')).toEqual(['#a', '#b', '#c', '#d']);
@@ -431,6 +431,12 @@ describe('parseChannelList', () => {
   });
   it('handles tabs and multiple spaces', () => {
     expect(parseChannelList('#a\t#b   #c')).toEqual(['#a', '#b', '#c']);
+  });
+  it('auto-prefixes bare names with #', () => {
+    expect(parseChannelList('testing')).toEqual(['#testing']);
+  });
+  it('auto-prefixes bare names and lowercases', () => {
+    expect(parseChannelList('Testing MyChan')).toEqual(['#testing', '#mychan']);
   });
 });
 
