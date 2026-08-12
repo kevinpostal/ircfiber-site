@@ -122,6 +122,8 @@ export interface Img2IrcOptions {
   trimTransparent: boolean;
   smartEdges: boolean;
   background: string; // hex or 'transparent'
+  /** Matte colour for transparent cells: null = bleed (naked space, cheapest, trimmed); hex = opaque matte (renderCellMatte) */
+  matte: string | null; // null | '#rrggbb'
   _smartPaletteA?: number[];
   _smartPaletteB?: number[];
   /** debug only, not serialized — canvas resize ms from caller */
@@ -154,9 +156,8 @@ const DEFAULTS: Img2ircOptions = {
   brightness: 0, contrast: 0, gamma: 0, saturation: 0, hue: 0,
   invert: false, grayscale: false, sepia: false, normalize: false, dither: false,
   ditherMode: 'none', colorMatching: 'oklab',
-  flipH: false, flipV: false, rotate: 0, pixelize: 0, blur: 0, nograyscale: false, viterbiW: 0, comic: false,
   midgardMode: 'xterm256',
-  alphaMode: 'opaque', alphaThreshold: 128, trimTransparent: false, smartEdges: true, background: '#000000',
+  alphaMode: 'opaque', alphaThreshold: 128, trimTransparent: false, smartEdges: true, background: '#000000', matte: null,
 };
 
 // ── Utility ───────────────────────────────────────────────────────────────────
@@ -167,6 +168,30 @@ const _nearBlack=(r:number,g:number,b:number)=>r<10&&g<10&&b<10;
 const toHex6=(r:number,g:number,b:number)=>r.toString(16).padStart(2,'0')+g.toString(16).padStart(2,'0')+b.toString(16).padStart(2,'0');
 const luma=(r:number,g:number,b:number)=>0.299*r+0.587*g+0.114*b;
 const codeLen=(n:number)=>n<10?1:2;
+// ── Transparency.lean (§3) — bleed-through is exactly transparency, matte & opaque escape hatches ──
+/** Lean Coverage.bleedsThrough — ¬rendersOpaque */
+/** Lean renderPolicySound — bleeds → isEmptyTransparent */
+/** Lean opaque_mode_no_bleed / matte_no_bleed — thresh 0 or matte ≠99 ⇒ no bleed */
+export function parseMatteHex(hex: string | null): [number,number,number] | null {
+  if(!hex || hex==='transparent') return null;
+  const m = hex.trim().match(/^#?([0-9a-f]{6})$/i);
+  if(!m) return null;
+  const v = parseInt(m[1],16);
+  return [(v>>16)&255, (v>>8)&255, v&255];
+}
+export function getMatteIdx(o: Img2IrcOptions, pal: number[]): number | null {
+  const rgb = parseMatteHex((o as any).matte ?? null);
+  if(!rgb) return null;
+  return nearestIndex(rgb[0],rgb[1],rgb[2], pal, o.colorMatching);
+}
+/** Lean isEmptyTransparent — both alphas below threshold when alphaMode transparent */
+export function isEmptyTransparent(a1:number,a2:number,o: Img2IrcOptions): boolean {
+  return (o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+}
+/** Lean renderCellMatte branch — matte opaque vs bleed */
+export function shouldBleed(o: Img2IrcOptions, isEmpty: boolean): boolean {
+  return isEmpty && !parseMatteHex((o as any).matte ?? null);
+}
 
 // ── Color science ─────────────────────────────────────────────────────────────
 // OKLAB — perceptual uniform from midgardmud.de (Björn Ottosson 2020)
@@ -888,7 +913,7 @@ export async function renderPixelsCore(
         if(ch===' '){ const avgR=(p[0][0][0]+p[0][1][0]+p[1][0][0]+p[1][1][0])/4|0, avgG=(p[0][0][1]+p[0][1][1]+p[1][0][1]+p[1][1][1])/4|0, avgB=(p[0][0][2]+p[0][1][2]+p[1][0][2]+p[1][1][2])/4|0; const bgS=String(toEmitIdx(lutLookup(avgR,avgG,avgB,qPal,o.nograyscale, o.colorMatching).irc,'irc',qPal, o.colorMatching)); const need=first||lastFg!==bgS||lastBg!==bgS; if(need){ const cd='\x03'+bgS+','+bgS; ln+=cd; lastFg=bgS; lastBg=bgS; } ln+=' '; first=false; continue; }
         let onR=0,onG=0,onB=0,onC=0, offR=0,offG=0,offB=0,offC=0;
         for(let i=0;i<4;i++){const[rr,gg,bb,aa]=p[i>>1][i&1];if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(b[i]){onR+=rr;onG+=gg;onB+=bb;onC++;}else{offR+=rr;offG+=gg;offB+=bb;offC++;}}
-        if(onC===0){ln+=' ';first=false;continue;}
+        if(onC===0){ const _matteQ = parseMatteHex((o as any).matte ?? null); if(_matteQ){ const matteIdxQ = nearestIndex(_matteQ[0],_matteQ[1],_matteQ[2], qPal, o.colorMatching); const matteStrQ=String(matteIdxQ); const needQ = first || lastBg!==matteStrQ; if(needQ){ const cd='\x03'+matteStrQ+','+matteStrQ; ln+=cd; lastFg=matteStrQ; lastBg=matteStrQ; } ln+=' '; first=false; continue; } else { ln+=' ';first=false;continue; }}
         if(offC===0){
           if(is24){
             const cd='\x04'+toHex6(onR/onC|0,onG/onC|0,onB/onC|0);
@@ -982,9 +1007,12 @@ export async function renderPixelsCore(
           const r1Arr = new Uint8Array(M), g1Arr = new Uint8Array(M), b1Arr = new Uint8Array(M);
           const r2Arr = new Uint8Array(M), g2Arr = new Uint8Array(M), b2Arr = new Uint8Array(M);
           for(let i=0;i<M;i++){
-            const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
-            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            let [r1,g1,b1,a1]=tops[i]; let [r2,g2,b2,a2]=bots[i];
+            const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            const matteRgb = parseMatteHex((o as any).matte ?? null);
+            const isEmpty = isEmptyTrans && !matteRgb;
             cellIsEmpty[i]=isEmpty;
+            if(isEmptyTrans && matteRgb){ r1=matteRgb[0]; g1=matteRgb[1]; b1=matteRgb[2]; r2=matteRgb[0]; g2=matteRgb[1]; b2=matteRgb[2]; }
             r1Arr[i]=r1; g1Arr[i]=g1; b1Arr[i]=b1;
             r2Arr[i]=r2; g2Arr[i]=g2; b2Arr[i]=b2;
             if(isEmpty) cellGlyph[i]=[];
@@ -1017,10 +1045,13 @@ export async function renderPixelsCore(
         }
         if (!usedBatch) {
           for(let i=0;i<M;i++){
-            const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
-            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            let [r1,g1,b1,a1]=tops[i]; let [r2,g2,b2,a2]=bots[i];
+            const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            const matteRgb = parseMatteHex((o as any).matte ?? null);
+            const isEmpty = isEmptyTrans && !matteRgb;
             cellIsEmpty[i]=isEmpty;
             if(isEmpty){ cellGlyph[i]=[]; continue; }
+            if(isEmptyTrans && matteRgb){ r1=matteRgb[0]; g1=matteRgb[1]; b1=matteRgb[2]; r2=matteRgb[0]; g2=matteRgb[1]; b2=matteRgb[2]; }
             const rowGlyphs: GlyphInfo[] = new Array(states.length);
             for(let s=0;s<states.length;s++){
               const [f,b]=states[s];
@@ -1173,7 +1204,9 @@ export async function renderPixelsCore(
         let ln='',lastFg='',lastBg='',first=true;
         for(let c=0;c<cols;c++){
           const[r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
-          if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){ln+=' ';first=false;continue;}
+          const _isEmptyTransH = (o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+          const _matteRgbH = parseMatteHex((o as any).matte ?? null);
+          if(_isEmptyTransH){ if(_matteRgbH){ const matteIdxH = nearestIndex(_matteRgbH[0],_matteRgbH[1],_matteRgbH[2], pal, o.colorMatching); const matteStr=String(matteIdxH); const needH = first || lastBg!==matteStr; if(needH){ const cd='\x03'+matteStr+','+matteStr; if(is24){ const hex=toHex6(_matteRgbH[0],_matteRgbH[1],_matteRgbH[2]); const cd2='\x04'+hex+','+hex; if(first||lastFg!==hex||lastBg!==hex){ln+=cd2;lastFg=hex;lastBg=hex;}} else {ln+=cd;lastFg=matteStr;lastBg=matteStr;}} ln+=' '; first=false; continue; } else { ln+=' ';first=false;continue; }}
           if(is24){
             const fg=toHex6(r1,g1,b1), bg=toHex6(r2,g2,b2);
             if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)){const c='\x04'+bg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▄';}
@@ -1460,7 +1493,7 @@ export async function renderPixelsCore(
         let ln='',lastFg='',lastBg='',first=true;
         for(let c=0;c<cols;c++){
           const info=_polygonCellMask(d,pW,pH,c,r,o);
-          if(info.empty){ln+=' ';first=false;continue;}
+          if(info.empty){ const _matteP = parseMatteHex((o as any).matte ?? null); if(_matteP){ const matteIdxP = nearestIndex(_matteP[0],_matteP[1],_matteP[2], pal, o.colorMatching); const matteStrP=String(matteIdxP); const needP = first || lastBg!==matteStrP; if(needP){ const cd='\x03'+matteStrP+','+matteStrP; ln+=cd; lastFg=matteStrP; lastBg=matteStrP; } ln+=' '; first=false; continue; } else { ln+=' ';first=false;continue; }}
           let fgIdx:number, bgIdx:number;
           if(is24){
             // For truecolor, use direct hex but need indices for bestGlyphForPolygon; use nearest to effPal then emit hex separately via later branch
@@ -1590,9 +1623,12 @@ export async function renderPixelsCore(
           const r2Arr=new Uint8Array(M), g2Arr=new Uint8Array(M), b2Arr=new Uint8Array(M);
           const isEmptyBatch=new Array(M).fill(false);
           for(let i=0;i<M;i++){
-            const [r1,g1,b1,a1]=sTops[i], [r2,g2,b2,a2]=sBots[i];
-            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            let [r1,g1,b1,a1]=sTops[i]; let [r2,g2,b2,a2]=sBots[i];
+            const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            const matteRgb = parseMatteHex((o as any).matte ?? null);
+            const isEmpty = isEmptyTrans && !matteRgb;
             isEmptyBatch[i]=isEmpty;
+            if(isEmptyTrans && matteRgb){ r1=matteRgb[0]; g1=matteRgb[1]; b1=matteRgb[2]; r2=matteRgb[0]; g2=matteRgb[1]; b2=matteRgb[2]; }
             r1Arr[i]=r1; g1Arr[i]=g1; b1Arr[i]=b1; r2Arr[i]=r2; g2Arr[i]=g2; b2Arr[i]=b2;
             if(isEmpty) cellIsEmpty[i]=true;
           }
@@ -1619,8 +1655,10 @@ export async function renderPixelsCore(
         }
         if(!usedBatch){
           for(let i=0;i<M;i++){
-            const [r1,g1,b1,a1]=sTops[i], [r2,g2,b2,a2]=sBots[i];
-            const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            let [r1,g1,b1,a1]=sTops[i]; let [r2,g2,b2,a2]=sBots[i];
+            const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            const matteRgb = parseMatteHex((o as any).matte ?? null);
+            const isEmpty = isEmptyTrans && !matteRgb;
             cellIsEmpty[i]=isEmpty; if(isEmpty){ cellGlyph[i]=[]; continue; }
             const rowGlyphs: GI[]=new Array(states.length);
             for(let s=0;s<states.length;s++){ const [f,b]=states[s]; rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW,rowPalOkLab); }
@@ -1681,7 +1719,7 @@ export async function renderPixelsCore(
           const p=[[r1,g1,b1],[r1,g1,b1],[r2,g2,b2],[r2,g2,b2]];
           const b=[0,1,2,3].map(i=>luma(p[i][0],p[i][1],p[i][2])>127?1:0);
           const bits=b[0]|(b[1]<<1)|(b[2]<<2)|(b[3]<<3), ch=qMap[bits]||' ';
-          if(ch===' '){ ln+=' '; first=false; continue; }
+          if(ch===' '){ const avgR=(r1+r2)/2|0, avgG=(g1+g2)/2|0, avgB=(b1+b2)/2|0; const bgS=String(toEmitIdx(lutLookup(avgR,avgG,avgB,palAuto,o.nograyscale,o.colorMatching).irc,'irc',palAuto,o.colorMatching)); const need=first||lastFg!==bgS||lastBg!==bgS; if(need){ const cd='\x03'+bgS+','+bgS; ln+=cd; lastFg=bgS; lastBg=bgS; } ln+=' '; first=false; continue; }
           let onR=0,onG=0,onB=0,onC=0, offR=0,offG=0,offB=0,offC=0;
           for(let i=0;i<4;i++){ const rr=p[i][0],gg=p[i][1],bb=p[i][2]; if(b[i]){onR+=rr;onG+=gg;onB+=bb;onC++;}else{offR+=rr;offG+=gg;offB+=bb;offC++;}}
           if(onC===0||offC===0){
@@ -1721,7 +1759,7 @@ export async function renderPixelsCore(
     const fullPal=getMidgardPalette(o);
     for(let y=0;y<pH;y++){let ln='',lastCode='',first=true;
       for(let x=0;x<pW;x++){const[r,g,b,a]=pxAt(x,y);
-        if(o.alphaMode==='transparent' ? a < o.alphaThreshold : false){ln+=' ';first=false;continue;}
+        if(o.alphaMode==='transparent' ? a < o.alphaThreshold : false){ const _matteF = parseMatteHex((o as any).matte ?? null); if(_matteF){ const matteIdxF = nearestIndex(_matteF[0],_matteF[1],_matteF[2], fullPal, o.colorMatching); const matteStrF=String(matteIdxF); const needF = first || lastBg!==matteStrF; if(needF){ const cd='\x03'+matteStrF+','+matteStrF; ln+=cd; lastFg=matteStrF; lastBg=matteStrF; } ln+='█'; first=false; continue; } else { ln+=' ';first=false;continue; }}
         const cd=is16? '\x03'+String(nearestIndex(r,g,b,fullPal, o.colorMatching)) : is24? '\x04'+toHex6(r,g,b) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(r,g,b,fullPal,ng, o.colorMatching).ansi : lutLookup(r,g,b,fullPal,ng, o.colorMatching).irc, o.renderMode, fullPal, o.colorMatching));
         if(first||lastCode!==cd){ln+=cd;lastCode=cd;}
         ln+='█'; first=false;

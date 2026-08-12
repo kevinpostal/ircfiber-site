@@ -61,9 +61,11 @@
     if(p.flipH!=null) flipH=p.flipH;
     if(p.flipV!=null) flipV=p.flipV;
     if(p.rotate!=null) rotate=String(p.rotate);
-    if(p.ditherMode) ditherMode=p.ditherMode;
     if(p.colorMatching) colorMatching=p.colorMatching;
     if(p.viterbiW!=null) viterbiW=p.viterbiW;
+    if(p.alphaMode) transparencyEnabled = p.alphaMode==='transparent';
+    if(p.matte !== undefined) matteColor = p.matte;
+    if(p.alphaThreshold!=null) {} // keep threshold at 128, not exposed
   });
   $effect(()=>{
     void midgardMode;
@@ -78,22 +80,22 @@
   let art=$state(initialArt ?? ''), htmlPreview=$state(initialArt ? initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('') : ''), loading=$state(initialArt ? false : true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
   let saving=$state(false), saveError=$state<string|null>(null), saveOk=$state(false), saveName=$state((initialName ?? filename.replace(/\.[^.]+$/,'')) || 'IRC Art');
   let hasAlpha=$state(false);
+  // Transparency.lean: bleeds_iff_empty — transparency is opt-in, switchable via opaque/matte escape hatches
+  let transparencyEnabled=$state(false); // user toggle, auto-synced to hasAlpha when image loads
+  let matteColor=$state<string | null>(null); // null = bleed (naked space, cheapest, trimmed) | hex = matte opaque (renderCellMatte)
   let isDummyFile=$derived((file as File)?.name==='dummy.png');
-  let gen=0;
   let debounce: ReturnType<typeof setTimeout>|null=null;
   let settleTimer: ReturnType<typeof setTimeout>|null=null;
   let smartPalCache: { A: number[]; B: number[] } | null = null;
   let _worker: Worker | null = null;
   let lastTimings=$state<Record<string,number>|null>(null);
   // render cache for instant compare (e.g. RGB vs OKLab) — keyed by opts + hasAlpha, per-file
-  let renderCache=new Map<string,{art:string,html:string}>();
-  let _lastFile: File|Blob|null=null;
   function makeCacheKeyForOpts(o:any, alpha:boolean):string{
-    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}`;
+    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}`;
   }
   function makeCacheKey():string{
     // keep key small and stable — order matters
-    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000'}, hasAlpha);
+    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null}, hasAlpha);
   }
   $effect(()=>{ // clear cache when file changes
     void file;
@@ -174,7 +176,8 @@
       await convert(my);
     }, 70);
   }
-  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void file; untrack(()=>schedule()); });
+  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void transparencyEnabled; void matteColor; void file; untrack(()=>schedule()); });
+  let _lastHasAlpha: boolean | null = null;
   async function convert(expected=gen){
     const cur=expected;
     if(cur!==gen) return;
@@ -200,12 +203,14 @@
       try{
         const c=document.createElement('canvas'); c.width=Math.min(64, img.naturalWidth); c.height=Math.min(64, img.naturalHeight);
         const cx=c.getContext('2d')!; cx.drawImage(img,0,0,c.width,c.height);
-        const d=cx.getImageData(0,0,c.width,c.height).data;
         let found=false; for(let i=3;i<d.length;i+=4) if(d[i]<250){found=true;break;}
         hasAlpha=found;
+        const hasSavedTransparency = !!(initialParams && (initialParams as any).alphaMode != null);
+        if(hasSavedTransparency){ _lastHasAlpha = found; }
+        else if(_lastHasAlpha !== found){ transparencyEnabled = found; if(!found) matteColor=null; _lastHasAlpha = found; }
       } catch {}
       try{
-        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as const;
+        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null } as const;
         const _kHit=makeCacheKey();
         const _hit=renderCache.get(_kHit);
         if(_hit){
@@ -400,7 +405,7 @@
     if(!art || saving || overBudget) return;
     saving=true; saveError=null; saveOk=false;
     try{
-      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic:false, alphaMode: hasAlpha?'transparent':'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000' } as any);
+      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null } as any);
       let thumb: Blob|null=null;
       const isDummyFile = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
       if(!isDummyFile){ try{ thumb=await makeThumbnailBlob(); } catch {} }
@@ -422,6 +427,7 @@
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
     grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; scrollPreset=2;
     accTone=false; accFx=false; accOut=false;
+    transparencyEnabled = hasAlpha; matteColor = null;
   }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
   function handleOverlayClick(e:MouseEvent){ if(e.target===e.currentTarget) onClose(); }
@@ -495,8 +501,27 @@
         </div>
         <span class="p-hint">OKLab perceptual — best for 256/16</span>
       </div>
+      {#if hasAlpha}
+        <div class="p-row">
+          <span class="p-label">Transparency</span>
+          <div class="pill-group" role="radiogroup" aria-label="Transparency">
+            <button class="pill" class:on={!transparencyEnabled} onclick={()=>{transparencyEnabled=false; matteColor=null}} role="radio" aria-checked={!transparencyEnabled}>Off</button>
+            <button class="pill" class:on={transparencyEnabled && !matteColor} onclick={()=>{transparencyEnabled=true; matteColor=null}} role="radio" aria-checked={transparencyEnabled && !matteColor}>Bleed</button>
+            <button class="pill" class:on={transparencyEnabled && !!matteColor} onclick={()=>{transparencyEnabled=true; if(!matteColor) matteColor='#000000'}} role="radio" aria-checked={!!(transparencyEnabled && matteColor)}>Matte</button>
+          </div>
+          {#if transparencyEnabled && matteColor}
+            <input type="color" value={matteColor} oninput={(e)=> matteColor=(e.target as HTMLInputElement).value} title="Matte colour" style="margin-left:8px;width:32px;height:28px;padding:0;border:1px solid #232a36;border-radius:6px;background:#0f1115" />
+            <span class="p-hint" style="margin-left:6px">{matteColor} — opaque matte (renderCellMatte)</span>
+          {:else if transparencyEnabled}
+            <span class="p-hint">naked space, cheapest, trimmed (bleeds_iff_empty)</span>
+          {:else}
+            <span class="p-hint">opaque, no bleed (opaque_mode_no_bleed)</span>
+          {/if}
+        </div>
+      {:else}
+        <div class="p-row"><span class="p-label">Transparency</span><span class="p-hint">No alpha channel — opaque</span></div>
+      {/if}
       <div class="p-row split">
-        <label class="field width-field"><span>Width</span><input class="slider" type="range" min={MIN_IRC_WIDTH} max={MAX_IRC_WIDTH} step="2" bind:value={width} /><b>{width}</b></label>
         <label class="field comp-field" title={compressionDisabled ? 'Compression N/A for True-Color/Comic (greedy, no palette to optimize) — use ANSI 256 / 16 / Smart to enable Viterbi' : 'Viterbi byte-aware compression — higher = shorter lines, w≈2–4 is the sweet spot (57–59% saving). Off at 0.'}>
           <span>Compression</span>
           <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={compressionDisabled} />
