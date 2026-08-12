@@ -1,6 +1,6 @@
 doctype html
+- import std.uni : toLower;
 html(lang="en")
-  head
     meta(charset="utf-8")
     meta(name="viewport", content="width=device-width, initial-scale=1")
     title IRC Fiber — Servers & Routing
@@ -172,14 +172,14 @@ html(lang="en")
                 tr
                   td
                     a(href="/admin/servers/host/#{hcs.host}", style="font-family:monospace; font-size:13px; color:var(--adm-blue); text-decoration:none") #{hcs.host}
-                    - if (hcs.host.toLower() == "irc.ircfiber.com")
+                    - if (toLower(hcs.host) == "irc.ircfiber.com")
                       span(style="margin-left:8px; font-size:10px; color:var(--adm-green); font-weight:600") unlimited
                   td
                     strong #{hcs.totalConns}
                   td
                     span(style="font-size:12px; color:var(--adm-muted)") #{hcs.serverIds.length}
                   td
-                    - if (hcs.host.toLower() == "irc.ircfiber.com")
+                    - if (toLower(hcs.host) == "irc.ircfiber.com")
                       span.adm-badge.adm-badge-green unlimited
                     - else if (hcs.totalConns > 0)
                       span.adm-badge.adm-badge-green Active
