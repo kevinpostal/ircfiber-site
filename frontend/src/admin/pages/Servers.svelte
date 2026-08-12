@@ -286,16 +286,17 @@
               Last heartbeat:
               <strong class="text-text">{duration(engine.ageSeconds * 1000)} ago</strong>
             </span>
-            <span class="font-mono text-[11px]" title={engine.gitHash ?? ''}>
+            <span class="font-mono text-[11px]" title="Full hash: {engine.gitHash ?? ''}">
               {#if engine.gitShort}
-                {engine.gitShort}
+                <span class="font-medium text-muted">Commit:</span> {engine.gitShort}
                 {#if engine.gitBranch}<span class="text-muted"> ({engine.gitBranch})</span>{/if}
-                {#if engine.version}<span class="text-muted"> v{engine.version}</span>{/if}
+                <span class="text-muted"> · {engine.gitDescribe ?? ''}</span>
+                {#if engine.version}<span class="text-muted"> · v{engine.version}</span>{/if}
               {:else}
                 <span class="text-muted">no version</span>
               {/if}
               {#if engine.buildTime}
-                <span class="ml-1 text-muted">built {new Date(engine.buildTime).toLocaleString()}</span>
+                <span class="ml-2 font-medium text-muted">Built:</span> <span class="text-muted">{new Date(engine.buildTime).toLocaleString()}</span>
               {/if}
             </span>
             {#if engine.assignedNetworks.length > 0}

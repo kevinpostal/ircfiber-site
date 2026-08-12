@@ -20,9 +20,9 @@
   const gatewayShort = $derived(data?.gateway?.short ?? data?.short ?? BUILD_INFO.short);
   const gatewayBranch = $derived(data?.gateway?.branch ?? data?.branch ?? BUILD_INFO.branch);
   const tooltip = $derived.by(() => {
-    if (!data?.gateway) return `frontend ${BUILD_INFO.short} @ ${BUILD_INFO.branch} — gateway not yet fetched`;
+    if (!data?.gateway) return `Frontend\n  Commit: ${BUILD_INFO.short} (${BUILD_INFO.branch})\n  Full: ${BUILD_INFO.commit}\n  Describe: ${BUILD_INFO.describe}\n  Version: v${BUILD_INFO.version}\n  Built: ${BUILD_INFO.builtAt} on ${BUILD_INFO.builtHost}\n— gateway not yet fetched`;
     const g = data.gateway;
-    return `gateway ${g.short} (${g.describe}) @ ${g.branch}\nbuilt ${g.builtAt} on ${g.builtHost}\ncommit ${g.commit}\nfrontend ${BUILD_INFO.short} @ ${BUILD_INFO.branch} built ${BUILD_INFO.builtAt}`;
+    return `Gateway\n  Commit: ${g.short} (${g.branch})\n  Full: ${g.commit}\n  Describe: ${g.describe} · v${g.version}\n  Built: ${g.builtAt} on ${g.builtHost}\nFrontend\n  Commit: ${BUILD_INFO.short} (${BUILD_INFO.branch})\n  Full: ${BUILD_INFO.commit}\n  Describe: ${BUILD_INFO.describe} · v${BUILD_INFO.version}\n  Built: ${BUILD_INFO.builtAt} on ${BUILD_INFO.builtHost}`;
   });
 </script>
 
@@ -32,7 +32,7 @@
   class="hidden items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-1 text-[11px] font-mono text-muted hover:border-primary/30 hover:text-text md:flex"
 >
   <span class="h-2 w-2 rounded-full bg-success"></span>
-  <span>{gatewayShort}</span>
+  <span class="text-[10px] text-muted">Gateway:</span> <span>{gatewayShort}</span>
   {#if gatewayBranch !== 'unknown'}
     <span class="text-[10px] text-muted">({gatewayBranch})</span>
   {/if}
