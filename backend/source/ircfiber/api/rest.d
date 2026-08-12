@@ -24,10 +24,11 @@ import ircfiber.db.uploads : UploadRepository, UploadRecord;
 import ircfiber.db.pastebins : PastebinRepository, PasteRecord, countLines;
 import ircfiber.db.img2irc_saves : Img2IrcSaveRecord, Img2IrcSaveRepository;
 import ircfiber.upload.local : LocalUploadResult, LocalUploadException, saveUpload, saveIrcArtOriginal, saveIrcArtThumbnail, uploadDir;
-import std.file : remove;
+import std.file : remove, readText, exists;
 import std.path : buildPath;
 import std.string : strip, indexOf, lastIndexOf;
 import ircfiber.auth : requireAuth;
+import ircfiber.version : GIT_HASH, GIT_SHORT, GIT_DESCRIBE, GIT_BRANCH, BUILD_TIME, BUILD_HOST, VERSION;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.irc.server : ConnectionServer;
@@ -122,6 +123,10 @@ final class RESTAPI {
         router.post("/api/me/show-member-prefixes", &updateShowMemberPrefixes);
         router.get("/api/ping", &ping);
         router.get("/health", &healthCheck);
+        router.get("/api/health", &healthCheck);
+        router.get("/api/version", &versionCheck);
+        router.get("/api/git", &versionCheck);
+        router.get("/version", &versionCheck);
         // 2026-07-07 redesign: OOB (out-of-band) event fetch for hole
         // filling. The client calls this when it detects a gap in the
         // eid stream from the WS (e.g. WS silently dropped a frame).
@@ -2239,8 +2244,55 @@ final class RESTAPI {
         res.writeJsonBody(Json(["ping": Json("pong")]));
     }
 
+    private void versionCheck(HTTPServerRequest req, HTTPServerResponse res) {
+        // Gateway's own build info (baked via ircfiber.version)
+        auto gateway = Json.emptyObject;
+        gateway["service"] = Json("irc-fiber-gateway");
+        gateway["version"] = Json(VERSION);
+        gateway["commit"] = Json(GIT_HASH);
+        gateway["short"] = Json(GIT_SHORT);
+        gateway["describe"] = Json(GIT_DESCRIBE);
+        gateway["branch"] = Json(GIT_BRANCH);
+        gateway["builtAt"] = Json(BUILD_TIME);
+        gateway["builtHost"] = Json(BUILD_HOST);
+        try {
+            if (std.file.exists("/opt/ircfiber/.frontend-deploy-hash"))
+                gateway["deployedFrontend"] = Json(std.file.readText("/opt/ircfiber/.frontend-deploy-hash").strip());
+            if (std.file.exists("/opt/ircfiber/.engine-deploy-hash"))
+                gateway["deployedEngine"] = Json(std.file.readText("/opt/ircfiber/.engine-deploy-hash").strip());
+            if (std.file.exists("/opt/ircfiber/.deploy-hash"))
+                gateway["deployed"] = Json(std.file.readText("/opt/ircfiber/.deploy-hash").strip());
+        } catch (Exception) {}
+        Json[] enginesJson;
+        try {
+            auto servers = serverRegistry.getAllServers();
+            foreach (s; servers) {
+                auto o = Json.emptyObject;
+                o["serverId"] = Json(s.serverId);
+                o["isHealthy"] = Json(s.isHealthy);
+                o["gitHash"] = Json(s.gitHash);
+                o["gitShort"] = Json(s.gitShort);
+                o["gitDescribe"] = Json(s.gitDescribe);
+                o["gitBranch"] = Json(s.gitBranch);
+                o["buildTime"] = Json(s.buildTime);
+                o["version"] = Json(s.version_);
+                o["lastHeartbeat"] = Json(s.lastHeartbeat);
+                enginesJson ~= o;
+            }
+        } catch (Exception) {}
+        auto out = Json.emptyObject;
+        out["gateway"] = gateway;
+        out["engines"] = Json(enginesJson);
+        out["commit"] = Json(GIT_HASH);
+        out["short"] = Json(GIT_SHORT);
+        out["describe"] = Json(GIT_DESCRIBE);
+        out["branch"] = Json(GIT_BRANCH);
+        out["builtAt"] = Json(BUILD_TIME);
+        out["version"] = Json(VERSION);
+        res.writeJsonBody(out);
+    }
+
     private void healthCheck(HTTPServerRequest, HTTPServerResponse res) {
-        auto services = Json.emptyObject;
         bool allOk = true;
 
         // Check MongoDB
