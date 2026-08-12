@@ -143,7 +143,7 @@
     editing = false;
     editError = null;
   }
-
+</script>
 
 {#if !closed && !errored && code !== null}
   {@const urlFilename = (()=>{ try{ return new URL(url).pathname.split('/').pop() ?? url.split('/').pop() ?? url; } catch { return url.split('/').pop() ?? url; } })()}
