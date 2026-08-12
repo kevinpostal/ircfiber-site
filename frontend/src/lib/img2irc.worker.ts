@@ -2,10 +2,10 @@
 // Off-main-thread worker — receives ImageBitmap + opts, runs heavy pipeline
 // off the UI thread using OffscreenCanvas + WASM (dynamic import fallback).
 // Transferable ImageBitmap avoids copy.
-
+// Pre-warm WASM so first conversion doesn't pay 50-200ms instantiate on hot path.
 import { imageToIrcArtFromBitmap } from './img2irc';
-
-export type WorkerReq = { id: number; bitmap: ImageBitmap; opts: any };
+import { preloadWasm } from './img2irc.wasm';
+preloadWasm();
 export type WorkerRes = {
   id: number; ok: boolean; result?: string; error?: string;
   /** Derived smart palettes (midgardMode='smart') — returned so the dialog can cache them once per image. */

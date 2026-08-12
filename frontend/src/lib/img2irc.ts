@@ -12,10 +12,15 @@
  *  - Bilateral pre-filter available via comic flag (r2 σ40 ×2, spec §6) but not exposed in UI
  *  Viterbi objective: Σ[ err(glyph,f,b) + w·glyphBytes ] + w·prefixBytes (w≈2.5 knee)
  */
-import { getWasm } from './img2irc.wasm';
+import { getWasm, hasWasmSync, getWasmSync, preloadWasm, tryWasmBatchBestGlyphSync, tryWasmBatchRowPaletteSync, tryWasmBatchNearestSync } from './img2irc.wasm';
+if (typeof window !== 'undefined') try { preloadWasm(); } catch {}
 const _perf = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
 const _shouldLog = () => typeof window !== 'undefined' && ( (window as any).__IMG2IRC_PERF || localStorage.getItem('img2irc:perf') || location.search.includes('perf=1') );
-
+// dev-only WASM hit counters — exposed via window.__IMG2IRC_WASM_STATS when img2irc:wasmStats set
+let _wasmHits = 0, _wasmMisses = 0;
+if (typeof window !== 'undefined') {
+  try { (window as unknown as Record<string, unknown>).__IMG2IRC_WASM_STATS = () => ({ hits: _wasmHits, misses: _wasmMisses, hitRate: _wasmHits/ Math.max(1,_wasmHits+_wasmMisses) }); } catch {}
+}
 export const IRC99: number[] = [
   0xffffff, 0x000000, 0x00007f, 0x009300, 0xff0000, 0x7f0000, 0x9c009c, 0xfc7f00,
   0xffff00, 0x00fc00, 0x009393, 0x00ffff, 0x0000fc, 0xff00ff, 0x555555, 0xaaaaaa,
@@ -104,6 +109,8 @@ export interface Img2IrcOptions {
   background: string; // hex or 'transparent'
   _smartPaletteA?: number[];
   _smartPaletteB?: number[];
+  /** debug only, not serialized — canvas resize ms from caller */
+  _debugResizeMs?: number;
 }
 
 export function getMidgardPalette(o: Img2IrcOptions): number[] {
@@ -149,6 +156,13 @@ const codeLen=(n:number)=>n<10?1:2;
 // ── Color science ─────────────────────────────────────────────────────────────
 // OKLAB — perceptual uniform from midgardmud.de (Björn Ottosson 2020)
 function srgbToOkLab(r:number,g:number,b:number){
+  const ws = hasWasmSync() ? (getWasmSync() as unknown as Record<string,unknown>) : null;
+  if (ws && typeof ws['srgb_to_oklab'] === 'function') {
+    try {
+      const v = (ws['srgb_to_oklab'] as (r:number,g:number,b:number)=>Float32Array)(r,g,b);
+      return [v[0], v[1], v[2]];
+    } catch {}
+  }
   let R=r/255, G=g/255, B=b/255;
   R = R<=0.04045? R/12.92 : Math.pow((R+0.055)/1.055,2.4);
   G = G<=0.04045? G/12.92 : Math.pow((G+0.055)/1.055,2.4);
@@ -181,10 +195,20 @@ function colorDist2(r1:number,g1:number,b1:number, r2:number,g2:number,b2:number
 }
 
 function nearestIndex(r:number,g:number,b:number,pal:number[], mode:ColorMatching='rgb'):number{
+  const ws = hasWasmSync() ? (getWasmSync() as unknown as Record<string,unknown>) : null;
+  if (ws && typeof ws['nearest_index'] === 'function') {
+    try {
+      let u32: Uint32Array | undefined = _palU32Weak.get(pal);
+      if (!u32) { u32 = new Uint32Array(pal); _palU32Weak.set(pal, u32); }
+      const idx = (ws['nearest_index'] as (r:number,g:number,b:number,p:Uint32Array,m:string)=>number)(r,g,b, u32, mode);
+      if (typeof idx === 'number' && idx >= 0 && idx < pal.length) { _wasmHits++; return idx; }
+    } catch { _wasmMisses++; }
+  } else if (ws) { _wasmMisses++; }
   let best=0,bestD=1e12;
   for(let i=0;i<pal.length;i++){const c=pal[i],cr=(c>>16)&255,cg=(c>>8)&255,cb=c&255, d=colorDist2(r,g,b, cr,cg,cb, mode); if(d<bestD){bestD=d;best=i;if(d===0)break;}}
   return best;
 }
+const _palU32Weak = new WeakMap<number[], Uint32Array>();
 
 // ── Color LUT + nograyscale ───────────────────────────────────────────────────
 const COLOR_LUT=new Map<string,{irc:number,ansi:number,ircNg:number,ansiNg:number}>();
@@ -374,6 +398,41 @@ export function bestGlyphForState(
   r1:number,g1:number,b1:number, r2:number,g2:number,b2:number,
   f:number,b:number, pal:number[], mode:ColorMatching, w:number, palOkLab?: number[][] | null
 ):{err:number, bytes:number, glyph:string}{
+  // WASM fast path — pick best glyph index via wasm (8× fewer cbrt), then compute err/bytes from GLYPHS table
+  const ws = hasWasmSync() ? (getWasmSync() as unknown as Record<string,unknown>) : null;
+  if (ws && typeof ws['best_glyph_for_state'] === 'function') {
+    try {
+      const fRgb=(pal[f]>>16)&255, fG2=(pal[f]>>8)&255, fB2=pal[f]&255;
+      const bRgb=(pal[b]>>16)&255, bG2=(pal[b]>>8)&255, bB2=pal[b]&255;
+      const idx = (ws['best_glyph_for_state'] as (r1:number,g1:number,b1:number,r2:number,g2:number,b2:number,fr:number,fg:number,fb:number,br:number,bg:number,bb:number,m:string,w:number)=>number)(r1,g1,b1,r2,g2,b2,fRgb,fG2,fB2,bRgb,bG2,bB2,mode,w);
+      if (typeof idx === 'number' && idx >=0 && idx < GLYPHS.length) {
+        _wasmHits++;
+        const g = GLYPHS[idx];
+        let tR:number,tG:number,tB:number, boR:number,boG:number,boB:number;
+        if(mode==='oklab'){
+          let fOk: number[]|null=null, bOk: number[]|null=null;
+          if (palOkLab && f < pal.length && b < pal.length) { fOk=palOkLab[f]; bOk=palOkLab[b]; }
+          else {
+            const fOk2 = srgbToOkLab(fRgb,fG2,fB2); const bOk2 = srgbToOkLab(bRgb,bG2,bB2);
+            fOk=fOk2; bOk=bOk2;
+          }
+          if (fOk && bOk) {
+            const Lt=fOk[0]*g.ct + bOk[0]*(1-g.ct), At=fOk[1]*g.ct + bOk[1]*(1-g.ct), Bt=fOk[2]*g.ct + bOk[2]*(1-g.ct);
+            const Lb=fOk[0]*g.cb + bOk[0]*(1-g.cb), Ab=fOk[1]*g.cb + bOk[1]*(1-g.cb), Bb=fOk[2]*g.cb + bOk[2]*(1-g.cb);
+            [tR,tG,tB]=oklabToSrgb(Lt,At,Bt); [boR,boG,boB]=oklabToSrgb(Lb,Ab,Bb);
+          } else {
+            tR=Math.round(fRgb*g.ct + bRgb*(1-g.ct)); tG=Math.round(fG2*g.ct + bG2*(1-g.ct)); tB=Math.round(fB2*g.ct + bB2*(1-g.ct));
+            boR=Math.round(fRgb*g.cb + bRgb*(1-g.cb)); boG=Math.round(fG2*g.cb + bG2*(1-g.cb)); boB=Math.round(fB2*g.cb + bB2*(1-g.cb));
+          }
+        } else {
+          tR=Math.round(fRgb*g.ct + bRgb*(1-g.ct)); tG=Math.round(fG2*g.ct + bG2*(1-g.ct)); tB=Math.round(fB2*g.ct + bB2*(1-g.ct));
+          boR=Math.round(fRgb*g.cb + bRgb*(1-g.cb)); boG=Math.round(fG2*g.cb + bG2*(1-g.cb)); boB=Math.round(fB2*g.cb + bB2*(1-g.cb));
+        }
+        const e=colorDist2(r1,g1,b1, tR,tG,tB, mode) + colorDist2(r2,g2,b2, boR,boG,boB, mode);
+        return {err:e, bytes:g.bytes, glyph:g.ch};
+      }
+    } catch { _wasmMisses++; }
+  } else if (ws) { _wasmMisses++; }
   let bestErr=1e18, bestB=GLYPH_BYTES_HALF, bestG='▀';
   const fRgb=(pal[f]>>16)&255, fG2=(pal[f]>>8)&255, fB2=pal[f]&255;
   const bRgb=(pal[b]>>16)&255, bG2=(pal[b]>>8)&255, bB2=pal[b]&255;
@@ -427,16 +486,13 @@ export function rowPaletteForViterbi(
 
 // Bilateral pre-filter — edge-preserving smoother (spec §6, Midgard comic mode)
 // Tries WASM (wasm-img2irc/pkg) via getWasm() cache — never breaks build, no per-call import
-let _wasmBilateralAvailable: boolean | null = null;
 export async function tryWasmBilateral(d: Uint8ClampedArray, pW:number, pH:number, radius:number, sigma:number, passes:number): Promise<boolean> {
-  if (_wasmBilateralAvailable === false) return false;
   try {
     const mod = await getWasm();
-    if (!mod?.bilateral_filter) { _wasmBilateralAvailable = false; return false; }
-    _wasmBilateralAvailable = true;
+    if (!mod?.bilateral_filter) return false;
     mod.bilateral_filter(d, pW, pH, radius, sigma, passes);
     return true;
-  } catch { _wasmBilateralAvailable = false; return false; }
+  } catch { return false; }
 }
 // Precomputed exp LUT for bilateral: wt = exp(-d2/sigma2), d2 in [0, 195075] (255^2*3), sigma2=3200
 // d2*32/sigma2 maps to [0, 1952], clamp to 2047. Cuts 720K Math.exp → array lookup for 120×120×2.
@@ -475,8 +531,9 @@ function rankSmartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, pal:numbe
   const ranked=counts.map((c,i)=>({c,i})).sort((a,b)=>b.c-a.c||a.i-b.i);
   return ranked.slice(0, Math.min(topN, pal.length)).map(e=>e.i);
 }
-
 // Shared core — single source of truth for both entry points (main thread + Worker)
+let _lastTimings: Record<string, number> | null = null;
+export function getLastTimings(): Record<string, number> | null { return _lastTimings ? { ..._lastTimings } : null; }
 export async function renderPixelsCore(
   d: Uint8ClampedArray,
   pW: number, pH: number,
@@ -486,7 +543,12 @@ export async function renderPixelsCore(
 ): Promise<string> {
   const _tStart = _perf();
   const _timings: Record<string, number> = {};
+  if ((o as Img2IrcOptions)._debugResizeMs != null) _timings['resize'] = (o as Img2IrcOptions)._debugResizeMs as number;
   let _t = _perf();
+  // Kick WASM load in parallel with gamma/normalize (no await yet) — hot loops later will hit sync cache
+  // Ensure preload if not already — fire-and-forget before await
+  if (!hasWasmSync()) void getWasm().catch(()=>null);
+  const _wasmPreload = getWasm().catch(()=>null);
   if (COLOR_LUT.size>8000) COLOR_LUT.clear();
   _timings['lutClear'] = _perf() - _t; _t = _perf();
   if(o.gamma!==0&&o.gamma!==1){const g=o.gamma;for(let i=0;i<d.length;i+=4){d[i]=255*Math.pow(d[i]/255,1/g);d[i+1]=255*Math.pow(d[i+1]/255,1/g);d[i+2]=255*Math.pow(d[i+2]/255,1/g);}}
@@ -594,6 +656,9 @@ export async function renderPixelsCore(
       }
     }
   }
+  // Ensure WASM is loaded before Viterbi/nearest hot loops — await the preload started at top
+  try { await _wasmPreload; } catch {}
+  _timings['wasmPreload'] = _perf() - _t; _t = _perf();
   const pxAt=(x:number,y:number):[number,number,number,number]=>{
     if(x<0||y<0||x>=pW||y>=pH)return[0,0,0,0];
     const i=(y*pW+x)*4;return[d[i],d[i+1],d[i+2],d[i+3]];
@@ -665,6 +730,7 @@ export async function renderPixelsCore(
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
+      let _maxS = 0;
       for(let r=0;r<rows;r++){
         const tops:Array<[number,number,number,number]>=[], bots:Array<[number,number,number,number]>=[];
         for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
@@ -682,12 +748,33 @@ export async function renderPixelsCore(
           S = (o as any)._smartPaletteB as number[];
         } else if(smart24){
           const fullA = (o as any)._smartPaletteA as number[];
-          const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(16, fullA.length), o.colorMatching);
+          // Adaptive S: 120 cols → 12 states (vs 16) to keep 144 vs 256 states manageable
+          const sSize = cols >= 100 ? 12 : 16;
+          const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
         } else {
-          S = rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,12);
+          const sSize = cols >= 100 ? 10 : 12;
+          let usedRowPalBatch = false;
+          if (hasWasmSync() && tops.length === cols && bots.length === cols) {
+            const rTops = new Uint8Array(cols), gTops = new Uint8Array(cols), bTops = new Uint8Array(cols);
+            const rBots = new Uint8Array(cols), gBots = new Uint8Array(cols), bBots = new Uint8Array(cols);
+            for(let c=0;c<cols;c++){ rTops[c]=tops[c][0]; gTops[c]=tops[c][1]; bTops[c]=tops[c][2]; rBots[c]=bots[c][0]; gBots[c]=bots[c][1]; bBots[c]=bots[c][2]; }
+            const out = new Uint32Array(sSize);
+            const n = tryWasmBatchRowPaletteSync(rTops,gTops,bTops,rBots,gBots,bBots,pal,o.colorMatching,sSize,ng,out);
+            if (n !== null && n>0) {
+              _wasmHits += n;
+              S = Array.from(out.subarray(0,n));
+              usedRowPalBatch = true;
+            } else {
+              _wasmMisses++;
+            }
+          }
+          if (!usedRowPalBatch) {
+            S = rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,sSize);
+          }
         }
         _tRowPal += _perf() - _tr;
+        if (S.length > _maxS) _maxS = S.length;
         const states: Array<[number,number]> = [];
         for(const f of S) for(const b of S) states.push([f,b]);
         const M=cols;
@@ -697,17 +784,58 @@ export async function renderPixelsCore(
         let _tc = _perf();
         const effPal = smart24 ? ((o as any)._smartPaletteA as number[]) : pal;
         const _rowPalOkLab = o.colorMatching==='oklab' ? getPalOkLab(effPal) : null;
-        for(let i=0;i<M;i++){
-          const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
-          const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
-          cellIsEmpty[i]=isEmpty;
-          if(isEmpty){ cellGlyph[i]=[]; continue; }
-          const rowGlyphs: GlyphInfo[] = new Array(states.length);
-          for(let s=0;s<states.length;s++){
-            const [f,b]=states[s];
-            rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW, _rowPalOkLab);
+        // Try batched WASM path — one crossing per row instead of M*S
+        let usedBatch = false;
+        if (hasWasmSync() && states.length > 0 && M * states.length <= 65536) {
+          const r1Arr = new Uint8Array(M), g1Arr = new Uint8Array(M), b1Arr = new Uint8Array(M);
+          const r2Arr = new Uint8Array(M), g2Arr = new Uint8Array(M), b2Arr = new Uint8Array(M);
+          for(let i=0;i<M;i++){
+            const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
+            const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+            cellIsEmpty[i]=isEmpty;
+            r1Arr[i]=r1; g1Arr[i]=g1; b1Arr[i]=b1;
+            r2Arr[i]=r2; g2Arr[i]=g2; b2Arr[i]=b2;
+            if(isEmpty) cellGlyph[i]=[];
           }
-          cellGlyph[i]=rowGlyphs;
+          // Fill any remaining empty entries already handled; need cellGlyph for non-empty later
+          const Slen = states.length;
+          const statesF = new Uint32Array(Slen), statesB = new Uint32Array(Slen);
+          for(let s=0;s<Slen;s++){ statesF[s]=states[s][0]; statesB[s]=states[s][1]; }
+          const outGlyph = new Uint8Array(M * Slen);
+          const outErr = new Float32Array(M * Slen);
+          const outBytes = new Uint8Array(M * Slen);
+          const n = tryWasmBatchBestGlyphSync(r1Arr,g1Arr,b1Arr,r2Arr,g2Arr,b2Arr,statesF,statesB,effPal,o.colorMatching,o.viterbiW,outGlyph,outErr,outBytes);
+          if (n === M * Slen) {
+            _wasmHits += n;
+            for(let i=0;i<M;i++){
+              if(cellIsEmpty[i]) continue;
+              const rowGlyphs: GlyphInfo[] = new Array(Slen);
+              for(let s=0;s<Slen;s++){
+                const idx = i*Slen + s;
+                const gIdx = outGlyph[idx];
+                const g = GLYPHS[gIdx] ?? GLYPHS[7];
+                rowGlyphs[s]={err: outErr[idx], bytes: outBytes[idx] || g.bytes, glyph: g.ch};
+              }
+              cellGlyph[i]=rowGlyphs;
+            }
+            usedBatch = true;
+          } else {
+            _wasmMisses++;
+          }
+        }
+        if (!usedBatch) {
+          for(let i=0;i<M;i++){
+            const [r1,g1,b1,a1]=tops[i], [r2,g2,b2,a2]=bots[i];
+            const isEmpty=(o.alphaMode==='transparent'?a1<o.alphaThreshold:false)&&(o.alphaMode==='transparent'?a2<o.alphaThreshold:false) || (_nearBlack(r1,g1,b1)&&_nearBlack(r2,g2,b2));
+            cellIsEmpty[i]=isEmpty;
+            if(isEmpty){ cellGlyph[i]=[]; continue; }
+            const rowGlyphs: GlyphInfo[] = new Array(states.length);
+            for(let s=0;s<states.length;s++){
+              const [f,b]=states[s];
+              rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW, _rowPalOkLab);
+            }
+            cellGlyph[i]=rowGlyphs;
+          }
         }
         _tCellGlyph += _perf() - _tc;
         const INF=1e18;
@@ -835,6 +963,7 @@ export async function renderPixelsCore(
       _timings['viterbi_rowPal'] = _tRowPal;
       _timings['viterbi_cellGlyph'] = _tCellGlyph;
       _timings['viterbi_dp'] = _tDP;
+      _timings['viterbi_S'] = _maxS;
     } else {
       for(let r=0;r<rows;r++){
         let ln='',lastFg='',lastBg='',first=true;
@@ -905,6 +1034,7 @@ export async function renderPixelsCore(
   while(lines.length&&lines[lines.length-1].replace(/[\x03\x04\x0f0-9,a-fA-F]/g,'').trim()==='')lines.pop();
   _timings['emit'] = _perf() - _t;
   _timings['total'] = _perf() - _tStart;
+  _lastTimings = { ..._timings };
   if (_shouldLog() || _timings['total'] > 100) {
     const ctx = `pW=${pW} pH=${pH} cols=${cols} rows=${rows} pm=${pm} viterbiW=${o.viterbiW} pal=${getMidgardPalette(o).length} mode=${o.colorMatching} comic=${o.comic} dither=${o.ditherMode} ${typeof OffscreenCanvas!=='undefined'?'OffscreenCanvas':'no-OffscreenCanvas'} ${typeof Worker!=='undefined'?'Worker':'no-Worker'}`;
     const line = Object.entries(_timings).sort((a,b)=>b[1]-a[1]).map(([k,v])=> `${k}:${v.toFixed(1)}ms`).join(' | ');
@@ -962,6 +1092,7 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
 
   let eW=pW,eH=pH;
   if(o.pixelize>0){const s=Math.max(2,o.pixelize);eW=Math.max(1,Math.round(pW/s));eH=Math.max(1,Math.round(pH/s));}
+  const _tResize0 = _perf();
   const cvs=document.createElement('canvas');cvs.width=eW;cvs.height=eH;
   const ctx=cvs.getContext('2d')!;
   ctx.imageSmoothingEnabled=o.filter!=='nearest';
@@ -987,6 +1118,8 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
   }
 
   let id=src.getContext('2d')!.getImageData(0,0,pW,pH);
+  const _tResize = _perf() - _tResize0;
+  (o as unknown as Record<string,unknown>)._debugResizeMs = _tResize;
   let d=id.data;
   if(o.midgardMode==='smart'){
     if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24);
@@ -1081,6 +1214,7 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
   if(isRot90){ const tmpCols=cols; cols=rows; rows=tmpCols; const tmpW=pW; pW=pH; pH=tmpW; }
   let eW=pW,eH=pH;
   if(o.pixelize>0){const s=Math.max(2,o.pixelize);eW=Math.max(1,Math.round(pW/s));eH=Math.max(1,Math.round(pH/s));}
+  const _tResize0 = _perf();
   const cvs: any = new (OffscreenCanvas as any)(eW, eH);
   const ctx: any = cvs.getContext('2d')!;
   ctx.imageSmoothingEnabled = o.filter!=='nearest';
@@ -1097,6 +1231,8 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
     const uc: any = up.getContext('2d')!; uc.imageSmoothingEnabled=false; uc.drawImage(cvs,0,0,pW,pH); src=up;
   }
   let id: any = src.getContext('2d')!.getImageData(0,0,pW,pH);
+  const _tResize = _perf() - _tResize0;
+  (o as unknown as Record<string,unknown>)._debugResizeMs = _tResize;
   let d: any = id.data;
   if(o.midgardMode==='smart'){
     if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24);

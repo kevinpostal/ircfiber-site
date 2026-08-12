@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode, serializeImg2IrcOptions } from '../lib/img2irc';
+  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, getLastTimings, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode, serializeImg2IrcOptions } from '../lib/img2irc';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { generateLabel } from '../lib/utils';
@@ -74,12 +74,16 @@
   let settleTimer: ReturnType<typeof setTimeout>|null=null;
   let smartPalCache: { A: number[]; B: number[] } | null = null;
   let _worker: Worker | null = null;
+  let lastTimings=$state<Record<string,number>|null>(null);
   // render cache for instant compare (e.g. RGB vs OKLab) — keyed by opts + hasAlpha, per-file
   let renderCache=new Map<string,{art:string,html:string}>();
   let _lastFile: File|Blob|null=null;
+  function makeCacheKeyForOpts(o:any, alpha:boolean):string{
+    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}`;
+  }
   function makeCacheKey():string{
     // keep key small and stable — order matters
-    return `${width}|${renderMode}|${pixelMode}|${midgardMode}|${filter}|${brightness}|${contrast}|${saturation}|${hue}|${gamma}|${blur}|${pixelize}|${grayscale?1:0}|${invert?1:0}|${sepia?1:0}|${normalize?1:0}|${dither?1:0}|${ditherMode}|${colorMatching}|${nograyscale?1:0}|${flipH?1:0}|${flipV?1:0}|${rotate}|${viterbiW}|${hasAlpha?1:0}`;
+    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: hasAlpha?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000'}, hasAlpha);
   }
   $effect(()=>{ // clear cache when file changes
     void file;
@@ -219,10 +223,56 @@
         if(cur!==gen) return;
         art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
+        try{ lastTimings = getLastTimings(); } catch {}
         try{ const k2=makeCacheKey(); if(!renderCache.has(k2)){ if(renderCache.size>=24){ const f=renderCache.keys().next().value; if(f) renderCache.delete(f); } renderCache.set(k2,{art:res, html:htmlPreview}); } }catch{}
+        // Background precache for instant preset switching — single-axis variations, idle-yielded, cancellable via gen
+        void precachePresets(file, opts, cur, hasAlpha);
       } finally { revokeImageUrl(img); }
     } catch(e:any){ if(cur===gen) error=e?.message??'Failed'; }
     if(cur===gen){ loading=false; isConverting=false; }
+  }
+
+  async function precachePresets(baseFile: File|Blob, baseOpts: any, curGen: number, baseHasAlpha: boolean) {
+    if (isDummyFile) return;
+    try {
+      if (typeof navigator !== 'undefined' && (navigator as any).deviceMemory && (navigator as any).deviceMemory < 4) return;
+    } catch {}
+    const presets: any[] = [];
+    const mids: MidgardColorMode[] = ['xterm256','16','truecolor','smart'];
+    for (const m of mids) if (m !== baseOpts.midgardMode) {
+      const rm: RenderMode = m==='truecolor' ? 'ansi24' : m==='smart' ? 'ansi24' : m==='16' ? 'irc' : 'ansi';
+      presets.push({...baseOpts, midgardMode: m, renderMode: rm});
+    }
+    for (const cm of ['rgb','lab','oklab'] as ColorMatching[]) if (cm !== baseOpts.colorMatching) presets.push({...baseOpts, colorMatching: cm});
+    for (const pm of ['half','full','quarter','braille'] as PixelMode[]) if (pm !== baseOpts.pixelMode) presets.push({...baseOpts, pixelMode: pm});
+    for (const w of [60,80,100,120]) if (w !== baseOpts.width) presets.push({...baseOpts, width: w});
+    const toCache = presets.slice(0, 16);
+    let pImg: HTMLImageElement | null = null;
+    try {
+      pImg = await loadImageFromFile(baseFile as File);
+      if (curGen !== gen) { if(pImg) revokeImageUrl(pImg); return; }
+      for (const preset of toCache) {
+        if (curGen !== gen) break;
+        const key = makeCacheKeyForOpts(preset, baseHasAlpha);
+        if (renderCache.has(key)) continue;
+        await new Promise<void>(r => {
+          const w = window as any;
+          if (w.requestIdleCallback) w.requestIdleCallback(()=>r(), {timeout: 100});
+          else setTimeout(r, 0);
+        });
+        if (curGen !== gen) break;
+        if (renderCache.size >= 24) break;
+        try {
+          const res = await imageToIrcArt(pImg!, preset);
+          if (curGen !== gen) break;
+          const html = res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
+          const k = makeCacheKeyForOpts(preset, baseHasAlpha);
+          if (!renderCache.has(k) && renderCache.size < 24) renderCache.set(k, {art: res, html});
+        } catch {}
+      }
+    } catch {} finally {
+      if (pImg) try{ revokeImageUrl(pImg); }catch{}
+    }
   }
 
   const stats=$derived(estimateLineLengths(art));
@@ -435,6 +485,9 @@
         <div class="budget-track"><div class="budget-fill" style="width:{pct}%"></div></div>
         <span class="budget-label" class:warn={overBudget}>{hardStats.longest} / {IRC_HARD_LIMIT}<span class="safe"> · {stats.lines} lines · {width} cols</span></span>
         {#if isConverting}<span class="pulse">● updating</span>{:else if overBudget}<button class="link" onclick={smartFit} disabled={fitBusy}>⚡ Fit to 512</button>{:else}<span class="ok">✓</span>{/if}
+        {#if lastTimings && (typeof window !== 'undefined' && ( (window as unknown as Record<string,unknown>).__IMG2IRC_PERF || (typeof localStorage !== 'undefined' && localStorage.getItem('img2irc:perf')) || (typeof location !== 'undefined' && location.search.includes('perf=1'))))}
+          <span class="perf" data-testid="perf-badge" title={Object.entries(lastTimings ?? {}).map(([k,v])=>`${k}:${(v as number).toFixed(1)}ms`).join(' | ')}>{lastTimings?.total?.toFixed(0) ?? '?'}ms total · viterbi:{(lastTimings?.viterbi ?? 0).toFixed(0)}ms · resize:{(lastTimings?.resize ?? 0).toFixed(0)}ms · {lastTimings?.viterbi_S ? `S=${lastTimings.viterbi_S}` : ''}</span>
+        {/if}
       </div>
     {/if}
 
@@ -540,9 +593,10 @@
   .field span{color:#7d8590;font-weight:500}
   .field b{min-width:20px;text-align:right;color:#e6edf3;font-size:11px}
   .field b.off{color:#7d8590;font-weight:400}
-  .width-field{flex:0 1 160px}
-  .comp-field{flex:1 1 220px}
-  .primary-actions{display:flex;gap:6px;margin-left:auto}
+  .width-field{flex:1 1 260px}
+  .comp-field{flex:0 1 150px}
+  .width-field .slider{flex:1;min-width:140px}
+  .comp-field .slider{flex:0 0 90px;width:90px;min-width:70px}
   .btn-fit{background:#1a2a44;border:1px solid #2a4a7a;color:#58a6ff;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;transition:all .14s}
   .btn-fit:hover:not(:disabled){background:#243a5e;color:#fff;border-color:#3a6ab8}
   .btn-fit:disabled{opacity:.45;cursor:default}
@@ -557,6 +611,7 @@
   .budget.over .budget-fill{background:#d29922}
   .budget.softWarn .budget-fill{background:#c9a84c}
   .budget-label{color:#7d8590;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11px}
+  .perf{font-size:10px;color:#8b949e;background:#141821;border:1px solid #232a36;border-radius:999px;padding:2px 6px;white-space:nowrap;font-variant-numeric:tabular-nums}
   .budget-label.warn{color:#d29922}
   .budget .safe{color:#4d555f}
   .budget .ok{color:#3fb950;font-size:11px}
