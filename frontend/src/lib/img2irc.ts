@@ -335,24 +335,24 @@ export function smartPaletteA(d: Uint8ClampedArray, pW:number, pH:number, K=24, 
     let sum=0;
     const last = cents[cents.length-1];
     for(let i=0;i<convPts.length;i++){
-      const dl=oklab[i][0]-last[0], da=oklab[i][1]-last[1], db=oklab[i][2]-last[2];
+      const dl=convPts[i][0]-last[0], da=convPts[i][1]-last[1], db=convPts[i][2]-last[2];
       const d2=dl*dl+da*da+db*db;
       if(d2 < dist2[i]) dist2[i]=d2;
       sum+=dist2[i];
     }
     if(sum===0) break;
     let r = rnd()*sum;
-    let pick = oklab.length-1;
+    let pick = convPts.length-1;
     for(let i=0;i<convPts.length;i++){ r-=dist2[i]; if(r<=0){ pick=i; break; } }
-    cents.push([...oklab[pick]]);
+    cents.push([...convPts[pick]]);
   }
   for(let iter=0; iter<20; iter++){
     const sums = cents.map(()=>[0,0,0]);
     const counts = new Array(cents.length).fill(0);
     for(let i=0;i<convPts.length;i++){
       let bi=0, bd=Infinity;
-      for(let c=0;c<cents.length;c++){ const dl=oklab[i][0]-cents[c][0], da=oklab[i][1]-cents[c][1], db=oklab[i][2]-cents[c][2]; const d2=dl*dl+da*da+db*db; if(d2<bd){bd=d2; bi=c;} }
-      sums[bi][0]+=oklab[i][0]; sums[bi][1]+=oklab[i][1]; sums[bi][2]+=oklab[i][2]; counts[bi]++;
+      for(let c=0;c<cents.length;c++){ const dl=convPts[i][0]-cents[c][0], da=convPts[i][1]-cents[c][1], db=convPts[i][2]-cents[c][2]; const d2=dl*dl+da*da+db*db; if(d2<bd){bd=d2; bi=c;} }
+      sums[bi][0]+=convPts[i][0]; sums[bi][1]+=convPts[i][1]; sums[bi][2]+=convPts[i][2]; counts[bi]++;
     }
     for(let c=0;c<cents.length;c++) if(counts[c]>0){ cents[c][0]=sums[c][0]/counts[c]; cents[c][1]=sums[c][1]/counts[c]; cents[c][2]=sums[c][2]/counts[c]; }
   }
