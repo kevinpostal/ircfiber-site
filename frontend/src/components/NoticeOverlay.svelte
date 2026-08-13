@@ -1,9 +1,15 @@
 <script lang="ts">
-  import { noticeState, dismissAll } from '../stores/noticeOverlay.svelte';
+  import { noticeState, dismissAll, addNotice } from '../stores/noticeOverlay.svelte';
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
   import { updateRoute } from '../lib/routing';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml } from '../lib/autolinker';
+
+  // E2E hook: Playwright can call window.__fiberAddNotice({ nick, networkId, networkName, text, t })
+  if (typeof window !== 'undefined') {
+    (window as unknown as Record<string, unknown>).__fiberAddNotice = addNotice;
+    (window as unknown as Record<string, unknown>).__fiberDismissNotice = dismissAll;
+  }
 
   function renderNotice(text: string): string {
     return autolinkHtml(parseIrcFormatting(text || ''));
@@ -16,7 +22,6 @@
       e.preventDefault();
       const chan = chanLink.getAttribute('data-channel') || chanLink.textContent || '';
       if (!chan) return;
-      // Find network from the enclosing notice entry
       const noticeEl = target.closest('.overlay_type_notice') as HTMLElement | null;
       const idxStr = noticeEl?.getAttribute('data-idx');
       const idx = idxStr !== null ? parseInt(idxStr, 10) : -1;
@@ -29,15 +34,11 @@
       }
       return;
     }
-    // Also handle outer bufferLink user/channel in head? Let default close? No
   }
 
   function handleNickClick(nick: string, networkId: string): void {
-    // Open query / whois for the nick? For now switch to query buffer or just dismiss
-    // If we have a query buffer for that nick, switch to it; otherwise trigger WHOIS via overlay? Keep simple: switch to query if exists
     const net = ircState.networks.find((n) => n.networkId === networkId);
     if (!net) return;
-    // Try to find existing query buffer case-insensitive
     const existing = net.buffers.find((b) => b.name.toLowerCase() === nick.toLowerCase());
     if (existing) {
       setActiveBuffer(networkId, existing.name);
@@ -84,45 +85,7 @@
 {/if}
 
 <style>
-  :global(.overlaycontainer.overlay_container_type_notice) {
-    max-height: 80vh;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-  }
-  :global(.overlaycontainer.overlay_container_type_notice .overlaycontents) {
-    overflow-y: auto;
-    max-height: calc(80vh - 32px);
-  }
-  :global(.overlay_type_notice + .overlay_type_notice) {
-    border-top: 1px solid #2c2f35;
-  }
-  :global(.overlay_type_notice .overlayHead) {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  :global(.overlay_type_notice .overlayHead .notice-network) {
-    color: #8b949e;
-    font-weight: 400;
-    font-size: 12px;
-  }
-  :global(.overlay_type_notice .overlay) {
-    color: #d1d5db;
-    font-size: 13px;
-    line-height: 1.5;
-    word-break: break-word;
-    overflow-wrap: anywhere;
-  }
-  :global(.overlay_type_notice .overlay a.channelLink),
-  :global(.overlay_type_notice .overlay a.urlLink) {
-    color: #58a6ff;
-    text-decoration: none;
-  }
-  :global(.overlay_type_notice .overlay a.channelLink:hover),
-  :global(.overlay_type_notice .overlay a.urlLink:hover) {
-    text-decoration: underline;
-  }
+  /* Layout lives in _overlays.scss (.overlaycontainer.overlay_container_type_notice) */
   :global(.overlay_type_notice .overlay .bufferLink) {
     cursor: pointer;
   }

@@ -544,7 +544,7 @@
 .overlay-panel .whois-table tr:last-child td { border-bottom: 0; }
 
 /* ── IRCCloud notice overlay (stacked private NOTICEs) ─────────────────
-   Replicates:
+   Replicates IRCCloud:
      <div class="overlaycontainer overlay_container_type_notice overlay_container_head">
        <button class="close"><span>Close</span></button>
        <div class="overlaycontents">
@@ -554,47 +554,81 @@
          </div>
        </div>
      </div>
-   Stacked notices share one fixed container (top-right, above the chat
-   header). Each .overlay_type_notice is a row with a header + body.
-   The container scrolls internally when >3 notices pile up on connect. */
+   Fiber: centered above the input box (not top-right), matching other
+   popups (same dark #1a1d21 surface, #2c2f35 border, 6px radius, shadow
+   and fiber typography). The container is fixed-bottom centered so it
+   hovers just above .bufferinputcell regardless of sidebar width. */
 .overlaycontainer.overlay_container_type_notice {
-  max-height: 80vh;
+  top: auto !important;
+  right: auto !important;
+  bottom: 72px !important;
+  left: 50% !important;
+  transform: translateX(-50%);
+  z-index: 90;
+  background: #1a1d21;
+  border: 1px solid #2c2f35;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+  min-width: 360px;
+  max-width: 560px;
+  width: min(92vw, 520px);
+  max-height: min(56vh, 420px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  animation: noticeSlideUp 180ms ease-out;
+}
+@keyframes noticeSlideUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 .overlaycontainer.overlay_container_type_notice .overlaycontents {
   overflow-y: auto;
-  max-height: calc(80vh - 28px);
+  max-height: min(56vh, 420px);
   overscroll-behavior: contain;
 }
 .overlay_type_notice + .overlay_type_notice {
   border-top: 1px solid #2c2f35;
 }
 .overlay_type_notice .overlayHead {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  display: block;
   font-size: 12.5px;
+  font-family: var(--font-sans, "Inter", sans-serif);
+  padding-right: 48px;
+  position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.overlay_type_notice .overlayHead .bufferLink {
+  display: inline;
 }
 .overlay_type_notice .overlayHead .notice-network {
-  color: #8b949e;
+  color: var(--text-secondary, #8b949e);
   font-weight: 400;
   font-size: 12px;
 }
 .overlay_type_notice .overlay {
-  color: #d1d5db;
+  color: var(--text-primary, #d1d5db);
   font-size: 13px;
   line-height: 1.5;
   word-break: break-word;
   overflow-wrap: anywhere;
+  background: transparent;
 }
 .overlay_type_notice .overlay a.channelLink,
 .overlay_type_notice .overlay a.urlLink {
-  color: #58a6ff;
+  color: var(--link, #58a6ff);
   text-decoration: none;
 }
 .overlay_type_notice .overlay a.channelLink:hover,
 .overlay_type_notice .overlay a.urlLink:hover {
   text-decoration: underline;
+}
+@media (max-width: 800px) {
+  .overlaycontainer.overlay_container_type_notice {
+    bottom: 64px;
+    width: min(96vw, 520px);
+    min-width: 0;
+  }
 }

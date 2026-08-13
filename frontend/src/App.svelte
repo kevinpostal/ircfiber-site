@@ -754,6 +754,7 @@ let showNetworkForm: boolean = $state(false);
           // Merge older REST history without clobbering the new tail.
           if (msgs.length > 0) { queueHistory(msgs); queued = true; }
         }
+      }
       // Keep spinner until coalesced backfill flush (150ms debounce) completes
       // and MessageList has laid out (clientHeight > 0) and snapped to
       // bottom — prevents subtle flash where flex container is 0-height

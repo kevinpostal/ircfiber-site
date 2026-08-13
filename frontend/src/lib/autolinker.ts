@@ -118,8 +118,9 @@ function splitOnChannels(text: string): LinkPart[] {
   // Exclude '&' and ';' so HTML entities like &nbsp; after a channel (e.g.
   // "##&nbsp;&nbsp;") are not swallowed into the channel name. Art lines
   // like "##     ##" would otherwise become a single link "##&nbsp;...".
-  const chanRegex = new RegExp(`(?:^|(?<=\\s))([${escapedChars}][^\\s<>"',&;]+)`, 'g');
-
+  // Also allow '[' and '(' as delimiters so "[#chan]" and "(#chan)" link the
+  // channel without the brackets — matches IRCCloud's "[#superbowl]" case.
+  const chanRegex = new RegExp(`(?:^|(?<=[\\s\\[\\(]))([${escapedChars}][^\\s<>"',&;\\]\\[\\)\\(]+)`, 'g');
   let lastIdx = 0;
   let m: RegExpExecArray | null;
   while ((m = chanRegex.exec(text)) !== null) {
