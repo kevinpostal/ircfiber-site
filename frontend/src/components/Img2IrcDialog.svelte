@@ -474,87 +474,93 @@
     {#if isDummyFile}
       <div class="dummyNotice" data-testid="dummy-notice">Original image not available — preview is static. You can still rename and save the art.</div>
     {/if}
-    <!-- Primary controls -->
+    <!-- Primary controls — two-column: left (Palette/Geometry/Width/Scroll), right (Transparency/Compression) -->
     <div class="primary" class:hasThumb={!!thumbnailUrl}>
       <div class="primary-main">
-      <div class="p-row two-col">
-        <div class="p-col">
-          <span class="p-label">Colors</span>
-          <div class="pill-group" role="radiogroup" aria-label="Colors">
-            {#each colorOpts as o}
-              <button class="pill" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
-            {/each}
+        <div class="p-grid two-col-main">
+          <div class="p-col left">
+              <span class="p-label">Colors</span>
+              <div class="pill-group" role="radiogroup" aria-label="Colors">
+                {#each colorOpts as o}
+                  <button class="pill" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
+                {/each}
+              </div>
+            </div>
+            <div class="p-col">
+              <span class="p-label">Normalize</span>
+              <div class="pill-group" role="radiogroup" aria-label="Normalize">
+                <button class="pill" class:on={!normalize} onclick={()=>normalize=false} role="radio" aria-checked={!normalize}>Off</button>
+                <button class="pill" class:on={normalize} onclick={()=>normalize=true} role="radio" aria-checked={normalize}>On</button>
+              </div>
+              <span class="p-hint">auto-contrast luma stretch</span>
+            </div>
           </div>
-        </div>
-        <div class="p-col">
-          <span class="p-label">Normalize</span>
-          <div class="pill-group" role="radiogroup" aria-label="Normalize">
-            <button class="pill" class:on={!normalize} onclick={()=>normalize=false} role="radio" aria-checked={!normalize}>Off</button>
-            <button class="pill" class:on={normalize} onclick={()=>normalize=true} role="radio" aria-checked={normalize}>On</button>
+          <div class="p-row">
+            <span class="p-label">Detail</span>
+            <div class="pill-group sm" role="radiogroup" aria-label="Detail">
+              {#each pixelOpts as o}
+                <button class="pill" class:on={pixelMode===o.v} onclick={()=>pixelMode=o.v} role="radio" aria-checked={pixelMode===o.v}><span class="glyph">{o.glyph}</span> {o.label}</button>
+              {/each}
+            </div>
           </div>
-          <span class="p-hint">auto-contrast luma stretch</span>
-        </div>
-      </div>
-      <div class="p-row">
-        <span class="p-label">Detail</span>
-        <div class="pill-group sm" role="radiogroup" aria-label="Detail">
-          {#each pixelOpts as o}
-            <button class="pill" class:on={pixelMode===o.v} onclick={()=>pixelMode=o.v} role="radio" aria-checked={pixelMode===o.v}><span class="glyph">{o.glyph}</span> {o.label}</button>
-          {/each}
-        </div>
-      </div>
-      <div class="p-row">
-        <span class="p-label">Matching</span>
-        <div class="pill-group sm" role="radiogroup" aria-label="Color matching">
-          <button class="pill" class:on={colorMatching==='rgb'} onclick={()=>colorMatching='rgb'} role="radio" aria-checked={colorMatching==='rgb'}>RGB</button>
-          <button class="pill" class:on={colorMatching==='lab'} onclick={()=>colorMatching='lab'} role="radio" aria-checked={colorMatching==='lab'}>Lab</button>
-          <button class="pill" class:on={colorMatching==='oklab'} onclick={()=>colorMatching='oklab'} role="radio" aria-checked={colorMatching==='oklab'}>OKLab</button>
-        </div>
-        <span class="p-hint">OKLab perceptual — best for 256/16</span>
-      </div>
-      {#if hasAlpha}
-        <div class="p-row">
-          <span class="p-label">Transparency</span>
-          <div class="pill-group" role="radiogroup" aria-label="Transparency">
-            <button class="pill" class:on={!transparencyEnabled} onclick={()=>{transparencyEnabled=false; matteColor=null}} role="radio" aria-checked={!transparencyEnabled}>Off</button>
-            <button class="pill" class:on={transparencyEnabled && !matteColor} onclick={()=>{transparencyEnabled=true; matteColor=null}} role="radio" aria-checked={transparencyEnabled && !matteColor}>Bleed</button>
-            <button class="pill" class:on={transparencyEnabled && !!matteColor} onclick={()=>{transparencyEnabled=true; if(!matteColor) matteColor='#000000'}} role="radio" aria-checked={!!(transparencyEnabled && matteColor)}>Matte</button>
+          <div class="p-row">
+            <span class="p-label">Matching</span>
+            <div class="pill-group sm" role="radiogroup" aria-label="Color matching">
+              <button class="pill" class:on={colorMatching==='rgb'} onclick={()=>colorMatching='rgb'} role="radio" aria-checked={colorMatching==='rgb'}>RGB</button>
+              <button class="pill" class:on={colorMatching==='lab'} onclick={()=>colorMatching='lab'} role="radio" aria-checked={colorMatching==='lab'}>Lab</button>
+              <button class="pill" class:on={colorMatching==='oklab'} onclick={()=>colorMatching='oklab'} role="radio" aria-checked={colorMatching==='oklab'}>OKLab</button>
+            </div>
+            <span class="p-hint">OKLab perceptual — best for 256/16</span>
           </div>
-          {#if transparencyEnabled && matteColor}
-            <input type="color" value={matteColor} oninput={(e)=> matteColor=(e.target as HTMLInputElement).value} title="Matte colour" style="margin-left:8px;width:32px;height:28px;padding:0;border:1px solid #232a36;border-radius:6px;background:#0f1115" />
-            <span class="p-hint" style="margin-left:6px">{matteColor} — opaque matte (renderCellMatte)</span>
-          {:else if transparencyEnabled}
-            <span class="p-hint">naked space, cheapest, trimmed (bleeds_iff_empty)</span>
+          <div class="p-row">
+            <label class="field width-field"><span>Width</span><input class="slider" type="range" min={MIN_IRC_WIDTH} max={MAX_IRC_WIDTH} step="2" bind:value={width} /><b>{width}</b></label>
+          </div>
+          <div class="p-row scroll-row">
+            <span class="p-label">Scroll</span>
+            <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} aria-label="Scroll speed" />
+            <span class="scroll-value" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
+            <span class="p-hint">{SCROLL_PRESETS[scrollPreset].hint}</span>
+            <div class="scroll-ticks" aria-hidden="true">
+              {#each SCROLL_PRESETS as p,i}
+                <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i} title="{p.label}: {p.hint} — burst {p.bd}ms then {p.sd}ms">{p.label}</button>
+              {/each}
+            </div>
+        <div class="p-col right">
+          {#if hasAlpha}
+            <div class="p-row">
+              <span class="p-label">Transparency</span>
+              <div class="pill-group" role="radiogroup" aria-label="Transparency">
+                <button class="pill" class:on={!transparencyEnabled} onclick={()=>{transparencyEnabled=false; matteColor=null}} role="radio" aria-checked={!transparencyEnabled}>Off</button>
+                <button class="pill" class:on={transparencyEnabled && !matteColor} onclick={()=>{transparencyEnabled=true; matteColor=null}} role="radio" aria-checked={transparencyEnabled && !matteColor}>Bleed</button>
+                <button class="pill" class:on={transparencyEnabled && !!matteColor} onclick={()=>{transparencyEnabled=true; if(!matteColor) matteColor='#000000'}} role="radio" aria-checked={!!(transparencyEnabled && matteColor)}>Matte</button>
+              </div>
+              {#if transparencyEnabled && matteColor}
+                <input type="color" value={matteColor} oninput={(e)=> matteColor=(e.target as HTMLInputElement).value} title="Matte colour" style="margin-left:8px;width:32px;height:28px;padding:0;border:1px solid #232a36;border-radius:6px;background:#0f1115" />
+                <span class="p-hint" style="margin-left:6px">{matteColor} — opaque matte (renderCellMatte)</span>
+              {:else if transparencyEnabled}
+                <span class="p-hint">naked space, cheapest, trimmed (bleeds_iff_empty)</span>
+              {:else}
+                <span class="p-hint">opaque, no bleed (opaque_mode_no_bleed)</span>
+              {/if}
+            </div>
           {:else}
-            <span class="p-hint">opaque, no bleed (opaque_mode_no_bleed)</span>
+            <div class="p-row"><span class="p-label">Transparency</span><span class="p-hint">No alpha channel — opaque</span></div>
           {/if}
-        </div>
-      {:else}
-        <div class="p-row"><span class="p-label">Transparency</span><span class="p-hint">No alpha channel — opaque</span></div>
-      {/if}
-      <div class="p-row split">
-        <label class="field comp-field" title={compressionDisabled ? 'Compression N/A for True-Color/Comic (greedy, no palette to optimize) — use ANSI 256 / 16 / Smart to enable Viterbi' : 'Viterbi byte-aware compression — higher = shorter lines, w≈2–4 is the sweet spot (57–59% saving). Off at 0.'}>
-          <span>Compression</span>
-          <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={compressionDisabled} />
-          <b class:off={viterbiW===0 || compressionDisabled}>{compressionDisabled?'—':viterbiW===0?'off':viterbiW}</b>
-        </label>
-        <div class="primary-actions">
-          <button class="btn-fit" onclick={smartFit} disabled={fitBusy||!art}>{fitBusy?'Fitting…':'⚡ Fit'}</button>
-          <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺</button>
-        </div>
-      </div>
-      <div class="p-row scroll-row">
-        <span class="p-label">Scroll</span>
-        <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} aria-label="Scroll speed" />
-        <span class="scroll-value" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
-        <span class="p-hint">{SCROLL_PRESETS[scrollPreset].hint}</span>
-        <div class="scroll-ticks" aria-hidden="true">
-          {#each SCROLL_PRESETS as p,i}
-            <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i} title="{p.label}: {p.hint} — burst {p.bd}ms then {p.sd}ms">{p.label}</button>
-          {/each}
+          <div class="p-row">
+            <label class="field comp-field" title={compressionDisabled ? 'Compression N/A for True-Color/Comic (greedy, no palette to optimize) — use ANSI 256 / 16 / Smart to enable Viterbi' : 'Viterbi byte-aware compression — higher = shorter lines, w≈2–4 is the sweet spot (57–59% saving). Off at 0.'}>
+              <span>Compression</span>
+              <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={compressionDisabled} />
+              <b class:off={viterbiW===0 || compressionDisabled}>{compressionDisabled?'—':viterbiW===0?'off':viterbiW}</b>
+            </label>
+          </div>
+          <div class="p-row">
+            <div class="primary-actions">
+              <button class="btn-fit" onclick={smartFit} disabled={fitBusy||!art}>{fitBusy?'Fitting…':'⚡ Fit'}</button>
+              <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺</button>
+            </div>
         </div>
       </div>
-      </div>
+    </div>
       {#if thumbnailUrl}
         <img
           class="primaryThumb"
@@ -661,17 +667,21 @@
   .badge{font-size:10px;color:#8b949e;background:#1a1f29;border:1px solid #232a36;border-radius:999px;padding:2px 8px;white-space:nowrap}
   .x{background:0;border:0;color:#7d8590;font-size:22px;cursor:pointer;line-height:1;padding:0 6px;border-radius:6px}
   .x:hover{color:#e6edf3;background:#1a1f29}
-  .dummyNotice{margin:0 16px;padding:8px 12px;background:#1a1400;border:1px solid #3d2a0a;color:#d29922;border-radius:8px;font-size:11px;line-height:1.4}
   .primary{padding:12px 16px;background:#0d0f13;border-bottom:1px solid #1e232b;display:flex;flex-direction:column;gap:12px}
   .primary.hasThumb{flex-direction:row;align-items:flex-start;gap:16px}
   .primary-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
   .primaryThumb{width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #1e232b;background:#010409;flex-shrink:0;align-self:flex-start}
+  .p-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px}
+  .p-grid.two-col-main{grid-template-columns:1.1fr 0.9fr}
+  .p-group{display:flex;flex-direction:column;gap:8px}
+  .p-group.span-2{grid-column:span 2}
+  .p-col.left{display:flex;flex-direction:column;gap:12px}
+  .p-col.right{display:flex;flex-direction:column;gap:12px;border-left:1px solid #1e232b;padding-left:16px}
   .p-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .p-row.split{flex-wrap:wrap}
   .p-row.two-col{justify-content:space-between;gap:16px 24px}
   .p-col{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .p-row.scroll-row{gap:10px 12px}
-  .scroll-value{font-size:11px;font-weight:600;color:#e6edf3;min-width:52px;text-align:left}
   .scroll{flex:1;min-width:140px;max-width:260px}
   .scroll-ticks{display:flex;gap:4px;flex-wrap:wrap}
   .tick{font-size:9px;font-weight:500;padding:3px 7px;border-radius:999px;border:1px solid #232a36;background:transparent;color:#7d8590;cursor:pointer;transition:all .14s;line-height:1}
