@@ -93,6 +93,7 @@
   let matteColor=$state<string | null>(null); // null = bleed (naked space, cheapest, trimmed) | hex = matte opaque (renderCellMatte)
   let isDummyFile=$derived((file as File)?.name==='dummy.png');
   let gen=0;
+  let abortCtrl: AbortController | null = null;
   let debounce: ReturnType<typeof setTimeout>|null=null;
   let settleTimer: ReturnType<typeof setTimeout>|null=null;
   let smartPalCache: { A: number[]; B: number[] } | null = null;
@@ -124,6 +125,8 @@
     return () => {
       if (debounce) { clearTimeout(debounce); debounce = null; }
       if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+      try { abortCtrl?.abort(); } catch {}
+      abortCtrl = null;
       try { _worker?.terminate(); } catch {}
       _worker = null;
       gen++;
@@ -137,7 +140,8 @@
     } catch { _worker = null; }
     return _worker;
   }
-  async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number): Promise<{ art: string; paletteA?: number[]; paletteB?: number[] } | null> {
+  async function convertViaWorker(img: HTMLImageElement, opts: any, expectedGen: number, signal?: AbortSignal): Promise<{ art: string; paletteA?: number[]; paletteB?: number[] } | null> {
+    if (signal?.aborted) return null;
     // Always try worker for heavy work — even small images benefit from off-main-thread WASM (246ms for 80 still janks)
     // The 4000px threshold was for old per-cell WASM (5× slower), now batched WASM is 13× faster but still blocks main thread.
     const w = getWorker();
@@ -147,25 +151,37 @@
     let bitmap: ImageBitmap | null = null;
     let handler: ((e: MessageEvent) => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let abortHandler: (()=>void) | null = null;
     const _tWStart = performance.now();
     try {
       bitmap = await createImageBitmap(img);
-      if (expectedGen !== gen) { try { bitmap.close(); } catch {} return null; }
+      if (expectedGen !== gen || signal?.aborted) { try { bitmap.close(); } catch {} return null; }
       const id = Math.random();
       const res = await new Promise<{ art: string; paletteA?: number[]; paletteB?: number[] }>((resolve, reject) => {
+        if (signal?.aborted) { reject(new DOMException('Aborted','AbortError')); return; }
         handler = (e: MessageEvent) => {
           const d: any = e.data;
           if (d.id !== id) return;
           if (handler) w.removeEventListener('message', handler as any);
           if (timer) clearTimeout(timer);
+          if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch {}
           if (d.ok) resolve({ art: d.result, paletteA: d.paletteA, paletteB: d.paletteB });
           else reject(new Error(d.error));
         };
+        abortHandler = () => {
+          if (handler) try { w.removeEventListener('message', handler as any); } catch {}
+          if (timer) clearTimeout(timer);
+          // Terminate the worker that is stuck on stale work so next convert gets fresh worker
+          try { w.terminate(); } catch {} _worker = null;
+          reject(new DOMException('Aborted','AbortError'));
+        };
+        if (signal) signal.addEventListener('abort', abortHandler, { once: true });
         w.addEventListener('message', handler as any);
         w.postMessage({ id, bitmap: bitmap!, opts }, [bitmap as any]);
         bitmap = null;
         timer = setTimeout(() => {
           if (handler) w.removeEventListener('message', handler as any);
+          if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch {}
           reject(new Error('worker timeout'));
         }, 15000);
       });
@@ -173,29 +189,36 @@
     } catch { return null; } finally {
       if (timer) clearTimeout(timer);
       if (handler) { try { w.removeEventListener('message', handler as any); } catch {} }
+      if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch {}
       if (bitmap) { try { bitmap.close(); } catch {} }
     }
   }
-
   let fitBusy=$state(false);
   let fitting=false;
   function schedule(){
     if(isDummyFile){ isConverting=false; loading=false; return; }
     if(fitting) return;
     if(settleTimer){ clearTimeout(settleTimer); settleTimer=null; }
+    // Abort any in-flight conversion so rapid slider drags don't queue stale heavy work (UI lockup)
+    try { abortCtrl?.abort(); } catch {}
+    abortCtrl = new AbortController();
+    // If a worker is busy with stale work, terminate it so the next convert gets a fresh worker immediately
+    if (_worker) { try { _worker.terminate(); } catch {} _worker = null; }
     const my=++gen;
+    const mySignal = abortCtrl.signal;
     if(debounce) clearTimeout(debounce);
     if(htmlPreview) isConverting=true;
     debounce=setTimeout(async()=>{
       if(my!==gen) return;
-      await convert(my);
+      if(mySignal.aborted) return;
+      await convert(my, mySignal);
     }, 70);
   }
   $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void transparencyEnabled; void matteColor; void file; untrack(()=>schedule()); });
   let _lastHasAlpha: boolean | null = null;
-  async function convert(expected=gen){
+  async function convert(expected=gen, signal?: AbortSignal){
     const cur=expected;
-    if(cur!==gen) return;
+    if(cur!==gen || signal?.aborted) return;
     if(settleTimer){ clearTimeout(settleTimer); settleTimer=null; }
     const isDummy = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
     if(editId && initialArt && isDummy){
@@ -214,16 +237,19 @@
     if(!htmlPreview) loading=true;
     try{
       const img=await loadImageFromFile(file as File);
-      if(cur!==gen){ revokeImageUrl(img); return; }
+      if(cur!==gen || signal?.aborted){ revokeImageUrl(img); return; }
       try{
         const c=document.createElement('canvas'); c.width=Math.min(64, img.naturalWidth); c.height=Math.min(64, img.naturalHeight);
         const cx=c.getContext('2d')!; cx.drawImage(img,0,0,c.width,c.height);
-        let found=false; for(let i=3;i<d.length;i+=4) if(d[i]<250){found=true;break;}
+        const id=cx.getImageData(0,0,c.width,c.height);
+        const data=id.data;
+        let found=false; for(let i=3;i<data.length;i+=4) if(data[i]<250){found=true;break;}
         hasAlpha=found;
         const hasSavedTransparency = !!(initialParams && (initialParams as any).alphaMode != null);
         if(hasSavedTransparency){ _lastHasAlpha = found; }
         else if(_lastHasAlpha !== found){ transparencyEnabled = found; if(!found) matteColor=null; _lastHasAlpha = found; }
       } catch {}
+      if(signal?.aborted || cur!==gen) { try{ revokeImageUrl(img); }catch{} return; }
       try{
         const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null } as const;
         if(midgardMode==='smart' && smartPalCache){
@@ -233,7 +259,7 @@
         const _kHit=makeCacheKey();
         const _hit=renderCache.get(_kHit);
         if(_hit){
-          if(cur!==gen) return;
+          if(cur!==gen || signal?.aborted) return;
           art=_hit.art;
           htmlPreview=_hit.html;
           if(cur===gen){ loading=false; isConverting=false; }
@@ -241,22 +267,25 @@
         }
         let res: string | null = null;
         try {
-          const wr = await convertViaWorker(img, opts, cur);
-          if(cur!==gen) return;
+          const wr = await convertViaWorker(img, opts, cur, signal);
+          if(cur!==gen || signal?.aborted) return;
           if (wr != null) {
             res = wr.art;
             if (wr.paletteA && wr.paletteB) smartPalCache = { A: wr.paletteA, B: wr.paletteB };
           }
-        } catch {}
-        if(cur!==gen) return;
+        } catch(e:any){
+          if(e?.name==='AbortError' || signal?.aborted) return;
+        }
+        if(cur!==gen || signal?.aborted) return;
         if (res == null) {
-          res = await imageToIrcArt(img, opts);
-          if(cur!==gen) return;
+          if(signal?.aborted) return;
+          res = await imageToIrcArt(img, opts, signal);
+          if(cur!==gen || signal?.aborted) return;
           if(midgardMode==='smart' && !smartPalCache && (opts as any)._smartPaletteA && (opts as any)._smartPaletteB){
             smartPalCache = { A: (opts as any)._smartPaletteA, B: (opts as any)._smartPaletteB };
           }
         }
-        if(cur!==gen) return;
+        if(cur!==gen || signal?.aborted) return;
         art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
         try{ lastTimings = getLastTimings(); } catch {}
@@ -264,8 +293,11 @@
         // Background precache for instant preset switching — single-axis variations, idle-yielded, cancellable via gen
         void precachePresets(file, opts, cur, hasAlpha);
       } finally { revokeImageUrl(img); }
-    } catch(e:any){ if(cur===gen) error=e?.message??'Failed'; }
-    if(cur===gen){ loading=false; isConverting=false; }
+    } catch(e:any){
+      if(e?.name==='AbortError' || signal?.aborted) return;
+      if(cur===gen) error=e?.message??'Failed';
+    }
+    if(cur===gen && !signal?.aborted){ loading=false; isConverting=false; }
   }
 
   async function precachePresets(baseFile: File|Blob, baseOpts: any, curGen: number, baseHasAlpha: boolean) {

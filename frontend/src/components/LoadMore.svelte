@@ -201,17 +201,22 @@ $effect(() => {
     if (import.meta.env.MODE !== 'test' && probedKey !== bufferKey) return;
     requestAnimationFrame(() => {
       if (!scrollEl || loading || noMoreHistory || clearedAt) return;
-      if (scrollEl.scrollHeight > scrollEl.clientHeight + 1) return; // already scrollable
+      if (scrollEl.scrollHeight > scrollEl.clientHeight) return; // already scrollable — spec isScrollable
       if (messageCount === lastFillAttemptCount && scrollEl.scrollHeight === lastFillScrollHeight) {
-        return; // no progress — stop
+        return; // no progress — stop (fix: now correctly tracked)
       }
+      if (silentFillIterations >= MAX_SILENT_FILLS) return; // bounded per ChatInfinite.progressiveLoadTerminates
       // 150ms debounce between silent fills + cap to 3 iterations (covers
       // BATCH_SIZE=200 needing at most 2 fetches to overflow 800px at ~24px/row)
       const now = Date.now();
       if (now - lastFillTime < 150) return;
       lastFillTime = now;
+      lastFillAttemptCount = messageCount;
+      lastFillScrollHeight = scrollEl.scrollHeight;
       silentFillIterations += 1;
       tryAutoFillSilent().catch((e) => console.error('[LoadMore] fill error:', e));
+      // Re-arm sentinel now that content may have become scrollable
+      ensureSentinel();
     });
   });
 
@@ -303,7 +308,7 @@ $effect(() => {
     // Short/empty buffers: the sentinel is visible at scrollTop 0 by
     // construction. The viewport-fill effect handles those (silently);
     // firing tryAutoLoad here would flash "Fetching more history…".
-    if (scrollEl.scrollHeight <= scrollEl.clientHeight + 1) return;
+    if (scrollEl.scrollHeight <= scrollEl.clientHeight) return;
     // No loop protection needed (svelte-infinite's loop detection is for
     // loaders whose appends can be shorter than the rootMargin): every
     // successful reveal adds BATCH_SIZE rows (~5-10k px), moving the
@@ -320,37 +325,46 @@ $effect(() => {
     tryAutoLoad().catch((e) => console.error('[LoadMore] tryAutoLoad error:', e));
   }
 
+  function ensureSentinel(): void {
+    if (io || !scrollEl || !sentinelEl) return;
+    if (scrollEl.scrollHeight <= scrollEl.clientHeight) return; // still not scrollable — fill will retry
+    io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) onSentinelVisible();
+      },
+      { root: scrollEl, rootMargin: '200px 0px 0px 0px', threshold: 0 },
+    );
+    io.observe(sentinelEl);
+  }
+
   onMount(() => {
     if (!onLoadMore && !onRevealFromMemory) return;
     const el = document.getElementById('messages');
     if (!el) return;
     scrollEl = el;
-    // Arm the pre-load observer on the FIRST scroll. Mount-time scrollTop
-    // is transiently 0 before the open-pin (snap-to-bottom) lands; arming
-    // then would observe the sentinel as intersecting and pre-reveal
-    // history the user hasn't scrolled toward. The first scroll event
-    // (programmatic pin or user input) arms it; after that the sentinel
-    // sits far above the viewport until the user actually scrolls up.
+    // Arm on first scroll — mount-time scrollTop is transiently 0 before snap-to-bottom
+    // lands; arming then would pre-reveal history. Also install sync fallback:
+    // IntersectionObserver fires async next frame, so a Home/End jump on same tick
+    // as arm would miss the 200px band — the scroll handler catches it synchronously
+    // per ChatInfinite.noWedgeAtTop / sentinelPreloadFiresBeforeTop.
+    let armed = false;
     const arm = () => {
+      if (armed) return;
+      armed = true;
       el.removeEventListener('scroll', arm);
-      if (!scrollEl || !sentinelEl) return;
-      if (scrollEl.scrollHeight <= scrollEl.clientHeight + 1) return; // fill handles it
-      // rootMargin top 200px: extend the root's top edge 200px past the
-      // viewport so the sentinel (first row of the scroll content)
-      // intersects while the user is still up to 200px from the top.
-      // IntersectionObserver fires on layout, not scroll events, so the
-      // trigger cannot wedge at scrollTop 0.
-      io = new IntersectionObserver(
-        (entries) => {
-          if (entries[0]?.isIntersecting) onSentinelVisible();
-        },
-        { root: scrollEl, rootMargin: '200px 0px 0px 0px', threshold: 0 },
-      );
-      io.observe(sentinelEl);
+      ensureSentinel();
+    };
+    const onScrollFallback = () => {
+      if (!scrollEl) return;
+      if (scrollEl.scrollTop <= 200 && scrollEl.scrollHeight > scrollEl.clientHeight) {
+        if (!loading && !clearedAt && !noMoreHistory) onSentinelVisible();
+      }
     };
     el.addEventListener('scroll', arm, { passive: true });
+    el.addEventListener('scroll', onScrollFallback, { passive: true });
     return () => {
       el.removeEventListener('scroll', arm);
+      el.removeEventListener('scroll', onScrollFallback);
       io?.disconnect();
       io = null;
     };

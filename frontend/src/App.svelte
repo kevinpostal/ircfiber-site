@@ -11,6 +11,7 @@
   import ChannelContextMenu from './components/ChannelContextMenu.svelte';
   import ServerLogContextMenu from './components/ServerLogContextMenu.svelte';
   import Overlay from './components/Overlay.svelte';
+  import NoticeOverlay from './components/NoticeOverlay.svelte';
   import NotificationBadge from './components/NotificationBadge.svelte';
   import UserPopup from './components/UserPopup.svelte';
   import {
@@ -1472,8 +1473,8 @@ let showNetworkForm: boolean = $state(false);
     channelMenu = null;
   }
 </script>
-
 <NotificationBadge />
+<NoticeOverlay />
 
 <DropTarget onFilesDropped={(result, opts) => startUploads(result.accepted, { networkId: ircState.activeBuffer.networkId ?? '', buffer: ircState.activeBuffer.bufferName ?? '', immediate: opts.immediate })} />
 
@@ -1490,7 +1491,6 @@ let showNetworkForm: boolean = $state(false);
 {#if ircState.overlay.type}
   <Overlay />
 {/if}
-
 {#if channelSwitcherOpen}
   <ChannelSwitcher onClose={() => channelSwitcherOpen = false} scope="all" />
 {/if}

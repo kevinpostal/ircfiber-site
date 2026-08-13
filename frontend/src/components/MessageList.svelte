@@ -606,18 +606,10 @@
     if (!el) return;
     const ro = new ResizeObserver(() => {
       if (!container) return;
-      // Clear the stick only if scrollTop decreased vs the last scroll
-      // EVENT (prevScrollTop), not vs a resize-captured baseline: a user
-      // who scrolls up then back down into the near-bottom band between
-      // resizes would otherwise be misread as still scrolling up.
-      if (container.scrollTop < prevScrollTop - 2) {
-        cachedAtBottom = false;
-        return;
-      }
       if (!cachedAtBottom) return;
-      // IRCCloud isScrolledToBottom(true) check: only snap if we've
-      // drifted away from the bottom (don't write scrollTop on every
-      // resize frame when nothing moved).
+      // Don't use stale prevScrollTop — RO fires async after programmatic
+      // snaps; the last scroll event's prevScrollTop is stale. Just check
+      // live distance from bottom per ChatInfinite.anchorFromBottom.
       const scrollHeight = container.scrollHeight;
       const offsetHeight = container.clientHeight;
       const scrollPos = Math.ceil(container.scrollTop);
@@ -883,11 +875,10 @@
     // batch flush (DOM reflow from batch append can trigger them).
     if (batchRendering) return;
 
-    // IRCCloud deduplication: ignore scroll events where nothing actually
-    // changed (prevents double-fires from our own programmatic scrolls).
     const scrollTop = container.scrollTop;
     const scrollHeight = container.scrollHeight;
-    if (prevScrollTop === scrollTop && prevScrollHeight === scrollHeight) return;
+    const prevHeight = prevScrollHeight;
+    if (prevScrollTop === scrollTop && prevHeight === scrollHeight) return;
     // Capture the previous event's scrollTop BEFORE updating prevScrollTop —
     // used to detect actual downward movement for the stick re-engagement
     // band below (stick-to-bottom-svelte's isScrollingDown).
@@ -901,25 +892,21 @@
     // IRCCloud isScrolledToBottom(true): when already pinned, use a strict
     // 0px check — any intentional scroll-up (even 1px on a trackpad) must
     // clear cachedAtBottom immediately, otherwise the ResizeObserver and
-    // schedulePinnedResnap keep fighting the user.
+    // schedulePinnedResnap keep fighting the user. Per ChatInfinite.atBottomStickiness
+    // upward movement inside the 70px band must disengage — reading 50px up
+    // is never yanked back (Controller.lean atBottomStickiness.2).
     // When NOT pinned (stick broken by a scroll-up), re-engage only on an
     // actual DOWNWARD scroll into the near-bottom band — a stopped position
     // within the band does NOT re-stick (reading is never yanked).
-    // FIX: visually at the very bottom (≤4px) always counts as pinned,
-    // regardless of scroll direction. Without this, a wheel jitter that
-    // cleared cachedAtBottom via the pre-clear handler left the user
-    // visually at bottom (scrollHeight - scrollBottom ≈0) but logically
-    // unpinned, so new messages never snapped ("I thought it was at the
-    // bottom but it was not").
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
     const distFromBottom = scrollHeight - scrollBottom;
-    const atBottom = distFromBottom <= 4
-      ? true
+    const scrolledUp = scrollTop < prevTop - 2;
+    const heightChangedWithoutScroll = scrollHeight !== prevHeight && scrollTop === prevTop;
+    const atBottom = scrolledUp
+      ? false
       : cachedAtBottom
-        ? distFromBottom <= 0
-        : scrollTop > prevTop && distFromBottom <= STICK_BAND_PX;
-
-    // IRCCloud setScrolledToBottom: only act when the value CHANGES.
+        ? heightChangedWithoutScroll ? true : distFromBottom <= 4
+        : distFromBottom <= STICK_BAND_PX;
     if (cachedAtBottom === atBottom) {
       // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
       scheduleScrollStateUpdate();
@@ -1076,7 +1063,7 @@
   // IRCCloud BufferScrollView.updateClock / ScrollClockView.update:
   // show the clock with the upper message's time while scrolled up.
   function updateScrollClock(topRow: HTMLElement | null): void {
-    if (cachedAtBottom || !topRow) {
+    if (pendingInitialSnap || cachedAtBottom || !topRow) {
       clockTs = null;
       return;
     }
@@ -1440,13 +1427,13 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
   }
-  /* IRCCloud .clockShown: pad the top rows so the floating scroll clock
-     doesn't cover the loadMore button / fetching divider. */
-  .messages-viewport.clockShown .messages :global(.row.loadMore),
-  .messages-viewport.clockShown .messages :global(.row.fetch) {
-    padding-top: 30px;
-  }
-  /* IRCCloud backlogDivider: blue hr marking the old/new boundary */
+  /* IRCCloud .clockShown: original IRCCloud pads loadMore/fetch by 30px so
+     the floating clock doesn't cover them. That padding changes
+     scrollHeight by 30px, which toggles distFromBottom across the
+     cachedAtBottom exit threshold (4px) and flickers the clock when
+     scrolling down into the 70px stick band (60→30→60 loop). Fiber's
+     ScrollClock is pointer-events:none and overlays without needing
+     layout push — keep it non-affecting. */
   .backlogDivider {
     margin: 0;
   }

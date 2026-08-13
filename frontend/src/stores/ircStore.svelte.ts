@@ -1238,7 +1238,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   for (const m of existing) {
     if (m.eid != null) eidSet.add(m.eid);
     if (m.msgid) dedupKeys.add(m.msgid);
-    else if (m.t) dedupKeys.add(`!${m.t}:${(m.text || '').slice(0, 80)}`);
+    else if (m.t) dedupKeys.add(`!${m.t}:${m.nick ?? ''}:${m.command ?? ''}:${(m.text || '').slice(0, 80)}`);
   }
   // Self-echo dedup for batch-tagged echoes: events inside an in-flight
   // CHATHISTORY batch carry batch=chathistory and are routed here (the
@@ -1286,7 +1286,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     if (m.msgid) {
       dedupKeys.add(m.msgid);
     } else if (m.t) {
-      const k = `!${m.t}:${(m.text || '').slice(0, 80)}`;
+      const k = `!${m.t}:${m.nick ?? ''}:${m.command ?? ''}:${(m.text || '').slice(0, 80)}`;
       if (dedupKeys.has(k)) continue;
       dedupKeys.add(k);
     }
@@ -1299,7 +1299,15 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     }
   }
 
-  const merged = [...filtered, ...existing].sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  // Sort by eid when available (strict total order per ChatInfinite.Ordered),
+  // fallback to t for legacy. Sorting by t alone interleaved pages with
+  // equal timestamps and broke noGaps / Ordered.prependDedup.
+  const merged = [...filtered, ...existing].sort((a, b) => {
+    if (a.eid != null && b.eid != null) return a.eid - b.eid;
+    if (a.eid != null && b.eid == null) return (a.t ?? 0) - (b.t ?? 0) < 0 ? -1 : (a.t ?? 0) > (b.t ?? 0) ? 1 : -1;
+    if (b.eid != null && a.eid == null) return (a.t ?? 0) - (b.t ?? 0) < 0 ? -1 : (a.t ?? 0) > (b.t ?? 0) ? 1 : 1;
+    return (a.t ?? 0) - (b.t ?? 0);
+  });
   ircState.messages[key] = merged;
   // Prepending changes the head boundary in ways that can't be fixed
   // incrementally — fall back to a full pass on the merged raw array.

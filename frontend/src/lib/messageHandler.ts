@@ -8,7 +8,7 @@ import { notify } from './notifications';
 import { shouldNotifyForMessage, getNotificationTitle } from './notificationPolicy';
 import { enqueueMessage } from './messageBatcher';
 import { setMaxEid } from '../stores/wsConnection.svelte';
-
+import { addNotice } from '../stores/noticeOverlay.svelte';
 /** Message append strategy: immediate or batched (IRCCloud-style). */
 export type AppendFn = (networkId: string, bufferName: string, msg: IRCMessage, isBackfill?: boolean) => void;
 
@@ -447,13 +447,49 @@ export function processIrcEvent(
   if (cmd === 'PRIVMSG' && msg.nick) {
     clearTyping(networkId, channel, msg.nick);
   }
-
   // Clear temp_unavailable state when a new chat message arrives
   // (IRCCloud: server busy state clears on any server response).
   if (!isSkippedCommand(cmd) && cmd !== 'temp_unavailable' && cmd !== 'idle') {
     clearTempUnavailable(networkId, channel);
   }
 
+  // ── IRCCloud-style notice overlay ──────────────────────────────────
+  // Private NOTICEs from services/users (NickServ, etc.) pop as a
+  // stacked overlay in the top-right. Matches the HTML the user pasted:
+  //   <div class="overlaycontainer overlay_container_type_notice">
+  //     <button class="close"><span>Close</span></button>
+  //     <div class="overlaycontents">
+  //       <div class="overlay_type_notice">
+  //         <div class="overlayHead">Notice: <span>NickServ</span> (SuperNETs)</div>
+  //         <div class="overlay">Your nickname is not registered...</div>
+  //       </div>
+  //     </div>
+  //   </div>
+  // We trigger for private NOTICEs (target is not a channel), from a
+  // non-server nick, with non-empty text, not self-echo, not CTCP, and
+  // not a "***" server lookup notice (those live in ServerLogTimeline).
+  if (cmd === 'NOTICE' && msg.nick && msg.text) {
+    const target = (msg.params && msg.params[0]) || '';
+    const isChannelTarget = target.length > 0 && ['#', '&', '+', '!'].includes(target[0]);
+    const isServerNick = msg.nick.includes('.');
+    const curNick = net.currentNick || net.nick || '';
+    const isSelf = !!curNick && msg.nick.toLowerCase() === curNick.toLowerCase();
+    const isSelfEcho = msg.selfEcho || !!(data.se as string | undefined);
+    const isCtcp = msg.text.charCodeAt(0) === 0x01;
+    const trimmed = msg.text.trim();
+    const isStarNoise = trimmed.startsWith('***') || trimmed.startsWith('* *');
+    const targetMismatch = !!target && target !== '*' && !!curNick && target.toLowerCase() !== curNick.toLowerCase() && target.toLowerCase() !== (net.nick || '').toLowerCase();
+    if (!isChannelTarget && !isServerNick && !isSelf && !isSelfEcho && !isCtcp && !isStarNoise && !targetMismatch) {
+      addNotice({
+        nick: msg.nick,
+        networkId,
+        networkName: net.name || networkId,
+        text: msg.text,
+        t: (msg.t as number) ?? Date.now(),
+        params: msg.params,
+      });
+    }
+  }
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {
     if (isBackfill) {

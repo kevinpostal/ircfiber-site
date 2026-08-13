@@ -543,6 +543,58 @@
 .overlay-panel .whois-table td.whois-value { color: #d9d9d9; padding: 8px 12px; border-bottom: 1px solid #21262d; font-size: 12.5px; }
 .overlay-panel .whois-table tr:last-child td { border-bottom: 0; }
 
-
-
-
+/* ── IRCCloud notice overlay (stacked private NOTICEs) ─────────────────
+   Replicates:
+     <div class="overlaycontainer overlay_container_type_notice overlay_container_head">
+       <button class="close"><span>Close</span></button>
+       <div class="overlaycontents">
+         <div class="overlay_type_notice">
+           <div class="overlayHead">Notice: <span>NickServ</span> (SuperNETs)</div>
+           <div class="overlay">...</div>
+         </div>
+       </div>
+     </div>
+   Stacked notices share one fixed container (top-right, above the chat
+   header). Each .overlay_type_notice is a row with a header + body.
+   The container scrolls internally when >3 notices pile up on connect. */
+.overlaycontainer.overlay_container_type_notice {
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.overlaycontainer.overlay_container_type_notice .overlaycontents {
+  overflow-y: auto;
+  max-height: calc(80vh - 28px);
+  overscroll-behavior: contain;
+}
+.overlay_type_notice + .overlay_type_notice {
+  border-top: 1px solid #2c2f35;
+}
+.overlay_type_notice .overlayHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.overlay_type_notice .overlayHead .notice-network {
+  color: #8b949e;
+  font-weight: 400;
+  font-size: 12px;
+}
+.overlay_type_notice .overlay {
+  color: #d1d5db;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.overlay_type_notice .overlay a.channelLink,
+.overlay_type_notice .overlay a.urlLink {
+  color: #58a6ff;
+  text-decoration: none;
+}
+.overlay_type_notice .overlay a.channelLink:hover,
+.overlay_type_notice .overlay a.urlLink:hover {
+  text-decoration: underline;
+}

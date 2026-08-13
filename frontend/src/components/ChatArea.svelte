@@ -32,7 +32,8 @@
   // be looked up in MongoDB, we pin the cursor to the API response's
   // earliest_ts so each call jumps to STRICTLY older messages instead
   // of getting stuck at the same phantom's timestamp.
-  let phantomCursorTs: number | null = null;
+  // Per-buffer map — global caused stalls when switching channels (bug 8, ChatInfinite.cursorStrictlyAdvances).
+  const phantomCursors = new Map<string, number>();
 
   async function handleLoadMore(): Promise<boolean> {
     if (!ircState.activeBuffer.networkId || !ircState.activeBuffer.bufferName) {
@@ -69,15 +70,15 @@
     // cursor by pinning to the API response's earliest_ts so each
     // call jumps strictly past messages already in the array.
     const isPhantom = !first?.eid && (!first?.text && !first?.nick || isUuidMsgid(first));
+    const pinned = phantomCursors.get(key) ?? null;
     if (isPhantom) {
       oldestMsgid = undefined;
-      if (phantomCursorTs !== null && phantomCursorTs > 0) {
-        oldestTs = phantomCursorTs;
+      if (pinned !== null && pinned > 0) {
+        oldestTs = pinned;
       }
     } else {
-      phantomCursorTs = null;
+      phantomCursors.delete(key);
     }
-
 
     // No cursor and all messages are optimistic (not yet confirmed by the
     // server) — there's no real backlog to load.  Skip the API call.
@@ -111,7 +112,7 @@
           // cursor to the oldest message in the API response so the
           // next call jumps strictly past already-loaded messages.
           if (isPhantom && result.earliest_ts > 0) {
-            phantomCursorTs = result.earliest_ts;
+            phantomCursors.set(key, result.earliest_ts);
           }
           return true;
         }
@@ -119,7 +120,7 @@
         // cursor to the API response's earliest_ts so the next call
         // requests messages STRICTLY older than anything we've seen.
         if (isPhantom && result.earliest_ts > 0) {
-          phantomCursorTs = result.earliest_ts;
+          phantomCursors.set(key, result.earliest_ts);
           // Return true so LoadMore doesn't count this as a failed load
           // (the cursor IS advancing, just not via new messages yet).
           return true;

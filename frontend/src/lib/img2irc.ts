@@ -766,11 +766,14 @@ export async function renderPixelsCore(
   pW: number, pH: number,
   cols: number, rows: number,
   pm: PixelMode,
-  o: Img2IrcOptions
+  o: Img2IrcOptions,
+  signal?: AbortSignal
 ): Promise<string> {
   const _tStart = _perf();
   const _timings: Record<string, number> = {};
   if ((o as Img2IrcOptions)._debugResizeMs != null) _timings['resize'] = (o as Img2IrcOptions)._debugResizeMs as number;
+  const _checkAbort = () => { if (signal?.aborted) throw new DOMException('Aborted', 'AbortError'); };
+  const _maybeYield = async (row: number) => { if (row % 16 === 0) await new Promise<void>(res => setTimeout(res, 0)); };
   let _t = _perf();
   // Kick WASM load in parallel with gamma/normalize (no await yet) — hot loops later will hit sync cache
   // Ensure preload if not already — fire-and-forget before await
@@ -897,6 +900,7 @@ export async function renderPixelsCore(
     const palB=getMidgardPalette(o);
     const POS:Array<[number,number,number]>=[[0,0,0x01],[0,1,0x02],[0,2,0x04],[1,0,0x08],[1,1,0x10],[1,2,0x20],[0,3,0x40],[1,3,0x80]];
     for(let r=0;r<rows;r++){let ln='',lastCode='',first=true;
+      _checkAbort(); await _maybeYield(r);
       for(let c=0;c<cols;c++){let br=0x2800,sR=0,sG=0,sB=0,sN=0;
         for(const[dx,dy,bit]of POS){const x=c*2+dx,y=r*4+dy;const[rr,gg,bb,aa]=pxAt(x,y);if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(luma(rr,gg,bb)>127){br|=bit;sR+=rr;sG+=gg;sB+=bb;sN++;}}
         const code=is16? '\x03'+String(nearestIndex(sR/sN|0,sG/sN|0,sB/sN|0,palB, o.colorMatching)) : is24? '\x04'+toHex6(sR/sN|0,sG/sN|0,sB/sN|0) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).ansi : lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).irc, o.renderMode, palB, o.colorMatching));
@@ -909,6 +913,7 @@ export async function renderPixelsCore(
     const qPal=getMidgardPalette(o);
     const qMap=[' ','▘','▝','▀','▖','▌','▞','▛','▗','▚','▐','▜','▄','▙','▟','█'];
     for(let r=0;r<rows;r++){let ln='',lastFg='',lastBg='',first=true;
+      _checkAbort(); await _maybeYield(r);
       for(let c=0;c<cols;c++){
         const p=[[pxAt(c*2,r*2),pxAt(c*2+1,r*2)],[pxAt(c*2,r*2+1),pxAt(c*2+1,r*2+1)]];
         const b=[0,1,2,3].map(i=>luma(p[i>>1][i&1][0],p[i>>1][i&1][1],p[i>>1][i&1][2])>127?1:0);
@@ -959,6 +964,7 @@ export async function renderPixelsCore(
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
       let _maxS = 0;
       for(let r=0;r<rows;r++){
+      _checkAbort(); await _maybeYield(r);
         const tops:Array<[number,number,number,number]>=[], bots:Array<[number,number,number,number]>=[];
         for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
         // smart bg: no allEmpty — every row renders opaque (no bleed)
@@ -1204,6 +1210,7 @@ export async function renderPixelsCore(
       _timings['viterbi_S'] = _maxS;
     } else {
       for(let r=0;r<rows;r++){
+      _checkAbort(); await _maybeYield(r);
         let ln='',lastFg='',lastBg='',first=true;
         for(let c=0;c<cols;c++){
           const[r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
@@ -1266,6 +1273,7 @@ export async function renderPixelsCore(
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
       let _maxS = 0;
       for(let r=0;r<rows;r++){
+      _checkAbort(); await _maybeYield(r);
         const cellInfos: Array<{mask:bigint, fg:[number,number,number], bg:[number,number,number], empty:boolean}> = new Array(cols);
         for(let c=0;c<cols;c++) cellInfos[c]=_polygonCellMask(d,pW,pH,c,r,o);
         // smart bg: polygon allEmpty removed
@@ -1493,6 +1501,7 @@ export async function renderPixelsCore(
       _timings['viterbi_S'] = _maxS;
     } else {
       for(let r=0;r<rows;r++){
+      _checkAbort(); await _maybeYield(r);
         let ln='',lastFg='',lastBg='',first=true;
         for(let c=0;c<cols;c++){
           const info=_polygonCellMask(d,pW,pH,c,r,o);
@@ -1551,13 +1560,12 @@ export async function renderPixelsCore(
     const palAuto = getMidgardPalette(o);
     const ngA = o.nograyscale;
     for(let r=0;r<rows;r++){
+      _checkAbort(); await _maybeYield(r);
       const tops: Array<[number,number,number,number]>=[], bots: Array<[number,number,number,number]>=[];
       for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
-      // Precompute per-cell cheap costs for dpSeg to avoid O(n·L·|G|·len) lutLookup
+      // Precompute per-cell half costs (greedy palette) — always needed
       type CheapCell = { fgS:string, bgS:string, cost:number };
       const preHalf: (CheapCell|null)[] = new Array(cols);
-      const preQuarter: (CheapCell|null)[] = new Array(cols);
-      const preBraille: (CheapCell|null)[] = new Array(cols);
       for(let i=0;i<cols;i++){
         const [r1,g1,b1,a1]=tops[i]??[0,0,0,255], [r2,g2,b2,a2]=bots[i]??[0,0,0,255];
         const isEmptyH = (o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false) && !parseMatteHex((o as any).matte ?? null);
@@ -1567,6 +1575,27 @@ export async function renderPixelsCore(
           const bgIdxH=toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching);
           preHalf[i]={fgS:String(fgIdxH), bgS:String(bgIdxH), cost:0};
         }
+      }
+      // Fast path: viterbiW=0 => greedy half is optimal and O(n) not O(n·S²)
+      if(o.viterbiW===0){
+        let ln='', lastFg='', lastBg='', first=true;
+        for(let i=0;i<cols;i++){
+          const cell=preHalf[i];
+          if(!cell){ ln+=' '; first=false; continue; }
+          const {fgS, bgS}=cell;
+          const needFg=!first&&lastBg===bgS&&lastFg!==fgS, needFull=first||lastFg!==fgS||lastBg!==bgS;
+          if(needFg){ const cd='\x03'+fgS; ln+=cd; lastFg=fgS; }
+          else if(needFull){ const cd='\x03'+fgS+','+bgS; ln+=cd; lastFg=fgS; lastBg=bgS; }
+          ln+='▀'; first=false;
+        }
+        lines.push(ln);
+        continue;
+      }
+      // Viterbi path — need quarter/braille precomputations + DP
+      const preQuarter: (CheapCell|null)[] = new Array(cols);
+      const preBraille: (CheapCell|null)[] = new Array(cols);
+      for(let i=0;i<cols;i++){
+        const [r1,g1,b1,a1]=tops[i]??[0,0,0,255], [r2,g2,b2,a2]=bots[i]??[0,0,0,255];
         const fgS_q=String(toEmitIdx(lutLookup(r1,g1,b1,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
         const bgS_q=String(toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
         preQuarter[i]={fgS:fgS_q, bgS:bgS_q, cost:0};
@@ -1576,12 +1605,9 @@ export async function renderPixelsCore(
       const cheapHalfCost=(pos:number,len:number):number=>{
         let cost=0, lastFg='',lastBg='',first=true;
         for(let i=0;i<len;i++){
-          const [r1,g1,b1,a1]=tops[pos+i]??[0,0,0,255], [r2,g2,b2,a2]=bots[pos+i]??[0,0,0,255];
-          const isEmpty=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
-          if(isEmpty){ first=false; continue; }
-          const fgIdx=toEmitIdx(lutLookup(r1,g1,b1,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching);
-          const bgIdx=toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching);
-          const fgS=String(fgIdx), bgS=String(bgIdx);
+          const cell = preHalf[pos+i];
+          if(!cell){ first=false; continue; }
+          const {fgS, bgS}=cell;
           if(first||lastFg!==fgS||lastBg!==bgS){
             const needFg=!first&&lastBg===bgS&&lastFg!==fgS;
             const cd=needFg? '\x03'+fgS : '\x03'+fgS+','+bgS;
@@ -1855,6 +1881,7 @@ export async function renderPixelsCore(
     break;
   }
   _timings['total'] = _perf() - _tStart;
+  _lastTimings = { ..._timings };
   if (_shouldLog() || _timings['total'] > 100) {
     const ctx = `pW=${pW} pH=${pH} cols=${cols} rows=${rows} pm=${pm} viterbiW=${o.viterbiW} pal=${getMidgardPalette(o).length} mode=${o.colorMatching} comic=${o.comic} dither=${o.ditherMode} ${typeof OffscreenCanvas!=='undefined'?'OffscreenCanvas':'no-OffscreenCanvas'} ${typeof Worker!=='undefined'?'Worker':'no-Worker'}`;
     const line = Object.entries(_timings).sort((a,b)=>b[1]-a[1]).map(([k,v])=> `${k}:${v.toFixed(1)}ms`).join(' | ');
@@ -1889,7 +1916,7 @@ function cssFilter(o:Img2IrcOptions):string{
   return f.join(' ')||'none';
 }
 
-export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOptions>={}):Promise<string>{
+export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOptions>={}, signal?: AbortSignal):Promise<string>{
   // Auto-clear LUT if it grew large (prevents unbounded growth across many images)
   if(COLOR_LUT.size>8000) COLOR_LUT.clear();
   const o:Img2IrcOptions={...DEFAULTS,...opts};
@@ -1948,7 +1975,7 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
     if(!(o as any)._smartPaletteB) (o as any)._smartPaletteB = smartPaletteB(d as any, pW, pH, 16, 0.02, o.colorMatching);
   }
 
-  return await renderPixelsCore(d, pW, pH, cols, rows, pm, o);
+  return await renderPixelsCore(d, pW, pH, cols, rows, pm, o, signal);
 }
 
 // ── Base94 framing — 9 bytes → 11 chars optimal for 94 printable symbols (Base94.lean) ──
@@ -2080,7 +2107,7 @@ export function encodeLineDiff(prev: string[], curr: string[]): { useMask: boole
 }
 
 
-export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial<Img2IrcOptions> = {}): Promise<string> {
+export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial<Img2IrcOptions> = {}, signal?: AbortSignal): Promise<string> {
   if (typeof OffscreenCanvas === 'undefined') throw new Error('OffscreenCanvas not available');
   const o: Img2IrcOptions = { ...DEFAULTS, ...opts } as any;
   const w = Math.max(MIN_IRC_WIDTH, Math.min(MAX_IRC_WIDTH, o.width));
@@ -2122,7 +2149,7 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
     if(!(o as any)._smartPaletteA) (o as any)._smartPaletteA = smartPaletteA(d as any, pW, pH, 24, o.colorMatching);
     if(!(o as any)._smartPaletteB) (o as any)._smartPaletteB = smartPaletteB(d as any, pW, pH, 16, 0.02, o.colorMatching);
   }
-  return await renderPixelsCore(d, pW, pH, cols, rows, pm, o);
+  return await renderPixelsCore(d, pW, pH, cols, rows, pm, o, signal);
 }
 
 export function estimateLineLengths(art:string,maxBytes=IRC_SAFE_PAYLOAD){const ls=art.split('\n');let lg=0;for(const l of ls){const b=new TextEncoder().encode(l).length;if(b>lg)lg=b;}return{ok:lg<=maxBytes,longest:lg,lines:ls.length, total:new TextEncoder().encode(art).length};}
