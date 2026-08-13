@@ -33,6 +33,7 @@
   let accTone=$state(false);
   let accFx=$state(false);
   let accOut=$state(false);
+  let showAdvanced=$state(false);
   let _initApplied=$state(false);
   $effect(()=>{
     if(_initApplied || !initialParams) return;
