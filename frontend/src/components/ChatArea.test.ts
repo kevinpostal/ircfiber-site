@@ -21,6 +21,21 @@ vi.mock('/src/stores/api', () => ({
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   updateServerlogCollapsed: vi.fn(async () => undefined),
+  editUpload: vi.fn(async () => undefined),
+  createIrcArtSave: vi.fn(async () => undefined),
+  updateIrcArtSave: vi.fn(async () => undefined),
+  fetchIrcArtSave: vi.fn(async () => undefined),
+  fetchIrcArtSavesOffset: vi.fn(async () => ({ entries: [], total: 0 })),
+  deleteIrcArtSave: vi.fn(async () => undefined),
+  fetchUploads: vi.fn(async () => []),
+  fetchUploadsOffset: vi.fn(async () => ({ entries: [], total: 0 })),
+  deleteUpload: vi.fn(async () => undefined),
+  fetchUploadById: vi.fn(async () => undefined),
+  createPastebin: vi.fn(async () => undefined),
+  fetchPastebinsOffset: vi.fn(async () => ({ entries: [], total: 0 })),
+  deletePastebin: vi.fn(async () => undefined),
+  pastebinRawUrl: vi.fn(() => ''),
+  fetchArchiveNames: vi.fn(async () => ({})),
   // ircStore imports this for the WebSocket-sync message normalization
   // path. The tests in this file don't exercise that path, so pass-through
   // is fine.

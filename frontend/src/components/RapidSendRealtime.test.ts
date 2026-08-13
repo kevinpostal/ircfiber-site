@@ -4,9 +4,11 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import InputArea from './InputArea.svelte';
 import MessageList from './MessageList.svelte';
-import { createNetwork, createBuffer } from '../test/factories';
-import { ircState } from '../stores/ircStore.svelte';
+import { createNetwork, createBuffer, createMessage } from '../test/factories';
+import { ircState, batchAppendMessages } from '../stores/ircStore.svelte';
+import { buildProcessedBuffer } from '../lib/messageBuilder';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import type { IRCMessage } from '../types';
 
 vi.mock('/src/stores/api', () => ({
   reconnectNetwork: vi.fn(async () => undefined),
@@ -22,9 +24,6 @@ vi.mock('/src/stores/api', () => ({
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   updateServerlogCollapsed: vi.fn(async () => undefined),
-  // ircStore imports this for the WebSocket-sync message normalization
-  // path. The tests in this file don't exercise that path, so a
-  // pass-through stub is fine.
   normalizeMessage: vi.fn((m: unknown) => m),
   editUpload: vi.fn(async () => undefined),
   createIrcArtSave: vi.fn(async () => undefined),
@@ -56,38 +55,79 @@ function resetState(): void {
   Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
 }
 
-describe('Send message real-time appearance', () => {
+describe('Rapid same-text sends appear realtime', () => {
   beforeEach(() => {
     resetState();
     vi.clearAllMocks();
   });
 
-  it('typing in InputArea renders the optimistic message in MessageList immediately', async () => {
+  it('spamming "a" + Enter 10x fast creates 10 optimistic rows instantly (no dedup)', async () => {
     const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
-    net.buffers.push(createBuffer({ name: '#general' }));
+    net.buffers.push(createBuffer({ name: '#testing' }));
     ircState.networks.push(net);
     ircState.activeBuffer.networkId = 'net1';
-    ircState.activeBuffer.bufferName = '#general';
+    ircState.activeBuffer.bufferName = '#testing';
     flushSync();
 
-    // Render the input and the message list together as the user sees them.
     render(InputArea, { props: {} });
     render(MessageList, { props: {} });
 
     const textarea = page.getByRole('textbox', { name: /message input/i });
     await expect.element(textarea).toBeInTheDocument();
 
-    const uniqueText = `hello realtime ${Date.now()}`;
-    await userEvent.type(textarea, uniqueText);
-    await userEvent.keyboard('{Enter}');
+    for (let i = 0; i < 10; i++) {
+      await userEvent.type(textarea, 'a');
+      await userEvent.keyboard('{Enter}');
+    }
 
-    // The optimistic message must appear in the processed cache...
-    const processed = ircState.processedMessages['net1:#general'];
-    expect(processed).toHaveLength(1);
-    expect(processed![0].text).toBe(uniqueText);
-    expect(processed![0].nick).toBe('tester');
+    const key = 'net1:#testing';
+    const list = ircState.messages[key] ?? [];
+    const processed = ircState.processedMessages[key] ?? [];
 
-    // ...and MessageList must render it without waiting for a server round-trip.
-    await expect.element(page.getByText(uniqueText).first()).toBeInTheDocument();
+    expect(list).toHaveLength(10);
+    expect(processed).toHaveLength(10);
+    expect(ircState.optimisticMessages.size).toBe(10);
+    for (const m of list) {
+      expect(m.text).toBe('a');
+      expect(m.nick).toBe('tester');
+      expect(m.label).toBeTruthy();
+    }
+
+    await expect.element(page.getByText('a').first()).toBeInTheDocument();
+  });
+
+  it('spamming "a" with echo replacement still keeps 10 rows (batchAppend dedup by label)', async () => {
+    const networkId = 'net1';
+    const channel = '#testing';
+    const key = `${networkId}:${channel}`;
+    ircState.networks.length = 0;
+    ircState.networks.push(createNetwork({ networkId, currentNick: 'tester' }));
+    ircState.messages = {};
+    ircState.processedMessages = {};
+    ircState.optimisticMessages.clear();
+
+    const labels: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const label = `label-${i}-${Date.now()}-${Math.random()}`;
+      labels.push(label);
+      const optimistic = createMessage({ label, nick: 'tester', text: 'a', command: 'PRIVMSG', t: Date.now() + i });
+      ircState.optimisticMessages.set(label, optimistic);
+      const list = ircState.messages[key] ?? [];
+      list.push(optimistic);
+      ircState.messages[key] = list;
+    }
+    ircState.processedMessages[key] = buildProcessedBuffer(ircState.messages[key]);
+    expect(ircState.messages[key]).toHaveLength(10);
+
+    const echoes: IRCMessage[] = labels.map((label, i) =>
+      createMessage({ label, nick: 'tester', text: 'a', command: 'PRIVMSG', t: Date.now() + i + 100, eid: 1000 + i, msgid: `mid-${i}` }),
+    );
+    batchAppendMessages(networkId, channel, echoes);
+    expect(ircState.messages[key]).toHaveLength(10);
+    expect(ircState.optimisticMessages.size).toBe(0);
+    for (const m of ircState.messages[key]) {
+      expect(m.text).toBe('a');
+      expect(m.eid).toBeDefined();
+    }
   });
 });

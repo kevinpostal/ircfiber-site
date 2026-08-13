@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { untrack, flushSync } from 'svelte';
+  import { untrack, flushSync, tick } from 'svelte';
   import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
   import { getClearedAt, setLastSeen, getBufferPrefs } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
@@ -36,8 +36,8 @@
   // after a refresh) so the normal `if (!container) return` early-exit
   // doesn't swallow the initial bottom snap. Cleared on the next run
   // once the container exists and we have snapped.
-  let pendingInitialSnap = $state(false);
-  let initialSnapDone = $state(true);
+  let pendingInitialSnap = false;
+  let initialSnapDone = true;
   // rAF coalescing for scroll auxiliary state (chatter counts, clock,
   // sticky avatar) — mirrors IRCCloud's batchRendering flag that ignores
   // scroll events during batch flush. Only the heavy getBoundingClientRect
@@ -90,8 +90,6 @@
   // for raw IRC traffic. See frontend/src/lib/serverLogGroups.ts.
   const isServerBuffer = $derived(ircState.activeBuffer.bufferName === '_server');
   const activeNetwork = $derived(getActiveNetwork());
-  const isInitialLoading = $derived(pendingInitialSnap && !initialSnapDone && !isServerBuffer);
-  const hideUntilSnap = $derived(isInitialLoading && processedMessages.length > 0);
 
   // IRCCloud-style incremental preprocessing: the ircState maintains a
   // `processedMessages[key]` cache that is updated incrementally on every
@@ -549,55 +547,57 @@
     if (nonce === lastForceScrollNonce) return;
     if (!container) return;
     lastForceScrollNonce = nonce;
+    pendingInitialSnap = false;
+    initialSnapDone = true;
     snapToBottom(container);
   });
   function snapToBottom(c: HTMLDivElement): void {
-    // Cancel any in-flight polling chains so we don't stack 5 chains
-    // when the user types rapidly. Unified: cancel both timers.
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
-    if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
-    // Force-layout: flushSync guarantees the DOM is up to date after
-    // the renderStart assignment. Without this, scrollHeight is stale.
-    flushSync();
+    // Do NOT clear pinnedResnapTimer here - let late layout polls complete even during rapid typing
+    // if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
+    let didFlush = true;
+    try { flushSync(); } catch { didFlush = false; }
     const msgs = untrack(() => processedMessages);
     if (msgs.length > 0) {
       renderStart = Math.max(0, msgs.length - BATCH_SIZE);
     }
-    flushSync();
-    // Double-set with layout reflow: reading scrollHeight after writing
-    // scrollTop forces a synchronous reflow so the second set uses the
-    // true clamped position — no small gap.
-    c.scrollTop = c.scrollHeight;
-    void c.scrollHeight;
-    c.scrollTop = c.scrollHeight;
-    cachedAtBottom = true;
-    // Single short polling chain (3 × 200ms). If a newer nonce arrives
-    // mid-chain, the next snapToBottom call cancels and restarts.
-    let polls = 0;
-    function poll(): void {
-      if (!container) return;
-      const msgs2 = untrack(() => processedMessages);
-      if (msgs2.length > 0) {
-        renderStart = Math.max(0, msgs2.length - BATCH_SIZE);
-      }
-      container.scrollTop = container.scrollHeight;
-      void container.scrollHeight;
-      container.scrollTop = container.scrollHeight;
+    try { flushSync(); } catch { didFlush = false; }
+    const doScroll = () => {
+      c.scrollTop = c.scrollHeight;
+      void c.scrollHeight;
+      c.scrollTop = c.scrollHeight;
       cachedAtBottom = true;
-      polls++;
-      if (polls < 3) {
-        pendingPollTimer = setTimeout(poll, 200);
-      } else {
-        pendingPollTimer = null;
+      prevScrollTop = c.scrollTop;
+      prevScrollHeight = c.scrollHeight;
+      requestAnimationFrame(() => {
+        c.scrollTop = c.scrollHeight;
+        prevScrollTop = c.scrollTop;
+        prevScrollHeight = c.scrollHeight;
+      });
+      let polls = 0;
+      function poll(): void {
+        if (!container) return;
+        const msgs2 = untrack(() => processedMessages);
+        if (msgs2.length > 0) {
+          renderStart = Math.max(0, msgs2.length - BATCH_SIZE);
+        }
+        container.scrollTop = container.scrollHeight;
+        void container.scrollHeight;
+        container.scrollTop = container.scrollHeight;
+        cachedAtBottom = true;
+        polls++;
+        if (polls < 3) {
+          pendingPollTimer = setTimeout(poll, 200);
+        } else {
+          pendingPollTimer = null;
+        }
       }
-    }
-    // Start the polling chain from a rAF so the initial scroll has time
-    // to paint before the first poll.
-    requestAnimationFrame(() => {
-      // Avoid double-scroll if the user typed another message during the
-      // rAF interval — the new snapToBottom already cleared this timer.
-      if (!pendingPollTimer) pendingPollTimer = setTimeout(poll, 200);
-    });
+      requestAnimationFrame(() => {
+        if (!pendingPollTimer) pendingPollTimer = setTimeout(poll, 200);
+      });
+    };
+    if (didFlush) doScroll();
+    else tick().then(doScroll);
   }
 
   // indicator appears below, stealing flex space), snap back to bottom
@@ -678,6 +678,7 @@
             // viewport anchored mid-history (Super%20Nets first load).
             renderStart = Math.max(0, msgs.length - BATCH_SIZE);
           } else if (idx > 0) {
+            const start = untrack(() => renderStart);
             if (start > 0) renderStart = start + idx;
             // start==0 (fully rendered, at top of backlog): keep renderStart 0
             // so the new older rows become visible above the divider.
@@ -703,11 +704,17 @@
           // group that merges without growing the row count (delta 0)
           // needs no compensation.
           if (container && !atTopBefore && !pinBottomBefore) {
-            flushSync();
-            const delta = container.scrollHeight - oldScrollHeight;
-            if (delta !== 0) {
-              container.scrollTop = oldScrollTop + delta;
-            }
+            const c = container;
+            const oldH = oldScrollHeight;
+            const oldTop = oldScrollTop;
+            let didFlush = true;
+            try { flushSync(); } catch { didFlush = false; }
+            const doDelta = () => {
+              const delta = c.scrollHeight - oldH;
+              if (delta !== 0) c.scrollTop = oldTop + delta;
+            };
+            if (didFlush) doDelta();
+            else tick().then(doDelta);
           }
         }
         lastFirstProcessedKey = firstKey;
@@ -743,104 +750,80 @@
       if (!isInitialSnap) {
         const scrolledUp = container ? container.scrollTop < prevScrollTop : false;
         if (scrolledUp) { cachedAtBottom = false; } else {
-        // Ensure trim has been applied to the DOM before measuring
-        // scrollHeight. Without this, renderStart may have just been moved
-        // (trimming 150 rows at top) but the DOM still contains the old
-        // rows, so scrollHeight is stale and the snap lands half-cut.
-        flushSync();
-      // Entrance animation: detect which messages are new since the last
-      // time we were at the bottom. Only the batch head (firstAuthor or
-      // non-grouped rows) gets the full slide-in; sameAuthor rows get a
-      // subtler fade via CSS (.messageEntrance.sameAuthor).
-      const allMsgs = processedMessages;
-      if (allMsgs.length > 0) {
-        const lastKey = itemKeyOf(allMsgs[allMsgs.length - 1]);
-        if (lastKey !== lastBottomKey) {
-          if (lastBottomKey) {
-            let foundBoundary = false;
-            let prevWasEntrance = false;
-            const newKeys = new Set<string>();
-            for (let i = allMsgs.length - 1; i >= 0; i--) {
-              const key = itemKeyOf(allMsgs[i]);
-              if (key === lastBottomKey) break;
-              // Only animate the head of each sameAuthor group (plus
-              // non-grouped rows like system messages). We walk backwards
-              // from the end, so the FIRST row we encounter (closest to
-              // bottom) is a candidate. Subsequent rows get the entrance
-              // class only if they start a new group.
-              const msg = allMsgs[i];
-              const isGroupHead = msg.command !== 'PRIVMSG' && msg.type !== 'action'
-                || (i > 0 && !checkSameAuthor(msg, allMsgs, i));
-              if (!foundBoundary || isGroupHead) {
-                newKeys.add(key);
-                foundBoundary = true;
+          tick().then(() => {
+            if (!container) return;
+            // Entrance animation: detect which messages are new since the last
+            // time we were at the bottom. Only the batch head (firstAuthor or
+            // non-grouped rows) gets the full slide-in; sameAuthor rows get a
+            // subtler fade via CSS (.messageEntrance.sameAuthor).
+            const allMsgs = processedMessages;
+            if (allMsgs.length > 0) {
+              const lastKey = itemKeyOf(allMsgs[allMsgs.length - 1]);
+              if (lastKey !== lastBottomKey) {
+                if (lastBottomKey) {
+                  let foundBoundary = false;
+                  let prevWasEntrance = false;
+                  const newKeys = new Set<string>();
+                  for (let i = allMsgs.length - 1; i >= 0; i--) {
+                    const key = itemKeyOf(allMsgs[i]);
+                    if (key === lastBottomKey) break;
+                    const msg = allMsgs[i];
+                    const isGroupHead = msg.command !== 'PRIVMSG' && msg.type !== 'action'
+                      || (i > 0 && !checkSameAuthor(msg, allMsgs, i));
+                    if (!foundBoundary || isGroupHead) {
+                      newKeys.add(key);
+                      foundBoundary = true;
+                    }
+                  }
+                  if (newKeys.size > 0) {
+                    entranceKeys = newKeys;
+                    scheduleEntranceCleanup();
+                  }
+                }
+                lastBottomKey = lastKey;
               }
             }
-            if (newKeys.size > 0) {
-              entranceKeys = newKeys;
-              scheduleEntranceCleanup();
-            }
-          }
-          lastBottomKey = lastKey;
+            container.scrollTop = container.scrollHeight;
+            void container.scrollHeight;
+            container.scrollTop = container.scrollHeight;
+            cachedAtTop = false;
+            requestAnimationFrame(() => {
+              if (cachedAtBottom && container) {
+                container.scrollTop = container.scrollHeight;
+              }
+            });
+            schedulePinnedResnap();
+          });
         }
-      }
-
-      // IRCCloud scrollToBottom: snap to bottom when pinned.
-      // Always snap when cachedAtBottom, even if already at bottom, to
-      // ensure small status rows like "is away: Auto-away" are fully
-      // visible. Use flushSync above so scrollHeight reflects the trimmed
-      // DOM, then double-set with reflow and a rAF for late layout
-      // (images, entrance animation, font loading) which can otherwise
-      // leave the new row half-cut.
-      container.scrollTop = container.scrollHeight;
-      void container.scrollHeight;
-      container.scrollTop = container.scrollHeight;
-      cachedAtTop = false;
-      // One more rAF to catch any height that settles after paint
-      // (e.g. image decode, entrance transform). Only if still pinned.
-      requestAnimationFrame(() => {
-        if (cachedAtBottom && container) {
-          container.scrollTop = container.scrollHeight;
-        }
-      });
-      // Then keep re-snapping briefly while pinned — late layout (the
-      // entrance animation, embed decode, sync-driven realname spans)
-      // can land well after the rAF above.
-      schedulePinnedResnap();
-      }
       } else {
         // Initial snap for a freshly-opened buffer (refresh): unconditional.
         maybeTrim();
-        flushSync();
-        const allMsgs2 = processedMessages;
-        if (allMsgs2.length > 0) {
-          const lastKey2 = itemKeyOf(allMsgs2[allMsgs2.length - 1]);
-          if (lastKey2 !== lastBottomKey) {
-            lastBottomKey = lastKey2;
-          }
-        }
-        // Double-set with layout reflow, then rAF + resnap chain.
-        // Use rAF to ensure the container has been laid out (clientHeight
-        // > 0) after the isBootLoading → ChatArea mount transition.
-        // Without this, a synchronous snap can land at scrollTop 0 when
-        // the flex container hasn't been sized yet, leaving the user
-        // stranded mid-history after a refresh.
-        const doSnap = () => {
+        tick().then(() => {
           if (!container) return;
-          container.scrollTop = container.scrollHeight;
-          void container.scrollHeight;
-          container.scrollTop = container.scrollHeight;
-        };
-        doSnap();
-        cachedAtBottom = true;
-        cachedAtTop = false;
-        requestAnimationFrame(() => {
-          doSnap();
-          if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 2) {
-            doSnap();
+          const allMsgs2 = processedMessages;
+          if (allMsgs2.length > 0) {
+            const lastKey2 = itemKeyOf(allMsgs2[allMsgs2.length - 1]);
+            if (lastKey2 !== lastBottomKey) {
+              lastBottomKey = lastKey2;
+            }
           }
-          schedulePinnedResnap(25);
-          requestAnimationFrame(() => { initialSnapDone = true; });
+          const doSnap = () => {
+            if (!container) return;
+            container.scrollTop = container.scrollHeight;
+            void container.scrollHeight;
+            container.scrollTop = container.scrollHeight;
+          };
+          doSnap();
+          cachedAtBottom = true;
+          cachedAtTop = false;
+          requestAnimationFrame(() => {
+            doSnap();
+            if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 2) {
+              doSnap();
+            }
+            schedulePinnedResnap(25);
+            requestAnimationFrame(() => { initialSnapDone = true; });
+          });
         });
       }
       // Clear pendingInitialSnap: keep it for 2s after an initial snap so
@@ -1347,16 +1330,10 @@
 {/if}
 
 <div class="messages-viewport" class:clockShown={clockTs !== null}>
-  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll} class:hide-until-snap={hideUntilSnap}>
+  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
     <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
 
     {#if messagesWithDates.length === 0 && !isServerBuffer}
-      {#if isInitialLoading}
-        <div class="empty-loading" role="status" aria-label="Loading messages">
-          <div class="empty-loading__ring"></div>
-          <p class="empty-loading__text">Loading messages…</p>
-        </div>
-      {:else}
         <div class="empty-channel" role="presentation">
           {#if ircState.activeBuffer.bufferName?.startsWith('#')}
             <p class="empty-headline">#{stripHash(ircState.activeBuffer.bufferName || '')}</p>
@@ -1365,7 +1342,6 @@
             <p class="empty-headline">No messages with {ircState.activeBuffer.bufferName || 'this user'} yet</p>
           {/if}
         </div>
-      {/if}
     {/if}
 
     {#if isServerBuffer}

@@ -68,6 +68,15 @@ vi.mock('/src/stores/api', () => ({
   updateBufferPrefs: vi.fn(async () => undefined),
   hideChannel: vi.fn(async () => undefined),
   unhideChannel: vi.fn(async () => undefined),
+  createIrcArtSave: vi.fn(async () => undefined),
+  updateIrcArtSave: vi.fn(async () => undefined),
+  fetchIrcArtSave: vi.fn(async () => undefined),
+  fetchIrcArtSavesOffset: vi.fn(async () => ({ entries: [], total: 0 })),
+  deleteIrcArtSave: vi.fn(async () => undefined),
+  fetchUploads: vi.fn(async () => []),
+  fetchUploadById: vi.fn(async () => undefined),
+  createPastebin: vi.fn(async () => undefined),
+  fetchArchiveNames: vi.fn(async () => ({})),
   // ircStore imports this for the WebSocket-sync message normalization
   // path. The tests in this file don't drive the WebSocket sync payload,
   // so a pass-through stub is fine.
