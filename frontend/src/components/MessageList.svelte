@@ -36,7 +36,8 @@
   // after a refresh) so the normal `if (!container) return` early-exit
   // doesn't swallow the initial bottom snap. Cleared on the next run
   // once the container exists and we have snapped.
-  let pendingInitialSnap = false;
+  let pendingInitialSnap = $state(false);
+  let initialSnapDone = $state(true);
   // rAF coalescing for scroll auxiliary state (chatter counts, clock,
   // sticky avatar) — mirrors IRCCloud's batchRendering flag that ignores
   // scroll events during batch flush. Only the heavy getBoundingClientRect
@@ -89,6 +90,8 @@
   // for raw IRC traffic. See frontend/src/lib/serverLogGroups.ts.
   const isServerBuffer = $derived(ircState.activeBuffer.bufferName === '_server');
   const activeNetwork = $derived(getActiveNetwork());
+  const isInitialLoading = $derived(pendingInitialSnap && !initialSnapDone && !isServerBuffer);
+  const hideUntilSnap = $derived(isInitialLoading && processedMessages.length > 0);
 
   // IRCCloud-style incremental preprocessing: the ircState maintains a
   // `processedMessages[key]` cache that is updated incrementally on every
@@ -628,6 +631,7 @@
     const isNewBuffer = key !== lastBufferKey;
     if (isNewBuffer) {
       pendingInitialSnap = true;
+      initialSnapDone = false;
       lastBufferKey = key;
       cachedAtBottom = true;
       wasRecentlyAtBottom = true;
@@ -656,6 +660,7 @@
           // pendingInitialSnap was already consumed for the empty state, so
           // force a new one to ensure we land at the very bottom.
           pendingInitialSnap = true;
+          initialSnapDone = false;
           cachedAtBottom = true;
           cachedAtTop = false;
         } else {
@@ -835,6 +840,7 @@
             doSnap();
           }
           schedulePinnedResnap(25);
+          requestAnimationFrame(() => { initialSnapDone = true; });
         });
       }
       // Clear pendingInitialSnap: keep it for 2s after an initial snap so
@@ -1341,18 +1347,25 @@
 {/if}
 
 <div class="messages-viewport" class:clockShown={clockTs !== null}>
-  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
+  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll} class:hide-until-snap={hideUntilSnap}>
     <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
 
     {#if messagesWithDates.length === 0 && !isServerBuffer}
-      <div class="empty-channel" role="presentation">
-        {#if ircState.activeBuffer.bufferName?.startsWith('#')}
-          <p class="empty-headline">#{stripHash(ircState.activeBuffer.bufferName || '')}</p>
-          <p class="empty-sub">No messages yet — type below to say something.</p>
-        {:else}
-          <p class="empty-headline">No messages with {ircState.activeBuffer.bufferName || 'this user'} yet</p>
-        {/if}
-      </div>
+      {#if isInitialLoading}
+        <div class="empty-loading" role="status" aria-label="Loading messages">
+          <div class="empty-loading__ring"></div>
+          <p class="empty-loading__text">Loading messages…</p>
+        </div>
+      {:else}
+        <div class="empty-channel" role="presentation">
+          {#if ircState.activeBuffer.bufferName?.startsWith('#')}
+            <p class="empty-headline">#{stripHash(ircState.activeBuffer.bufferName || '')}</p>
+            <p class="empty-sub">No messages yet — type below to say something.</p>
+          {:else}
+            <p class="empty-headline">No messages with {ircState.activeBuffer.bufferName || 'this user'} yet</p>
+          {/if}
+        </div>
+      {/if}
     {/if}
 
     {#if isServerBuffer}
@@ -1425,6 +1438,10 @@
     scroll-behavior: auto;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
+    transition: opacity 80ms ease;
+  }
+  .messages.hide-until-snap {
+    opacity: 0;
   }
   /* IRCCloud .clockShown: original IRCCloud pads loadMore/fetch by 30px so
      the floating clock doesn't cover them. That padding changes
@@ -1467,6 +1484,31 @@
     text-align: center;
     color: #8b949e;
     pointer-events: none;
+  }
+  .empty-loading {
+    margin: auto;
+    padding: 64px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: #8b949e;
+  }
+  .empty-loading__ring {
+    width: 28px;
+    height: 28px;
+    border: 2.5px solid #21262d;
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: msg-loading-spin 0.8s linear infinite;
+  }
+  @keyframes msg-loading-spin {
+    to { transform: rotate(360deg); }
+  }
+  .empty-loading__text {
+    margin: 0;
+    font-size: 13px;
+    color: #8b949e;
   }
   .empty-headline {
     margin: 0 0 6px;
