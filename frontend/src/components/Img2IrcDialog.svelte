@@ -4,6 +4,7 @@
   import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, getLastTimings, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode, serializeImg2IrcOptions } from '../lib/img2irc';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
+  import { globalPrefs } from '../stores/preferences.svelte';
   import { generateLabel } from '../lib/utils';
   import { createIrcArtSave, updateIrcArtSave } from '../stores/api';
   interface Props { file: File|Blob; filename:string; onClose:()=>void; onBack?:()=>void; initialParams?: Record<string, unknown>; initialName?: string; editId?: string; onSaved?:()=>void; initialArt?: string; thumbnailUrl?: string; }
@@ -19,7 +20,7 @@
   let viterbiW=$state(0);
   let rotate=$state('0');
   let filter=$state('linear');
-  let scrollPreset=$state(2);
+  let scrollPreset=$state(globalPrefs.defaultScrollPreset ?? 2);
   const SCROLL_PRESETS = [
     { label: 'Instant', bd: 0, sd: 0, hint: '0ms · instant' },
     { label: 'Fast',    bd: 18, sd: 60, hint: '60ms/line' },
@@ -27,12 +28,18 @@
     { label: 'Smooth',  bd: 55, sd: 220, hint: '220ms · gentle' },
     { label: 'Cinema',  bd: 90, sd: 450, hint: '450ms · dramatic' },
   ] as const;
+  // Persist user’s default scroll speed (cross-tab via globalPrefs storage event)
+  $effect(()=>{
+    const v = scrollPreset;
+    if (v !== globalPrefs.defaultScrollPreset) globalPrefs.defaultScrollPreset = v;
+  });
   let dither=$derived(ditherMode !== 'none');
   // Viterbi compression only for paletted modes + smart truecolor; truecolor greedy
   let compressionDisabled=$derived(renderMode==='ansi24' && midgardMode!=='smart');
   let accTone=$state(false);
   let accFx=$state(false);
   let accOut=$state(false);
+  let accScroll=$state(false);
   let showAdvanced=$state(false);
   let _initApplied=$state(false);
   $effect(()=>{
@@ -438,7 +445,7 @@
     midgardMode='xterm256';
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
     grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; scrollPreset=2;
-    accTone=false; accFx=false; accOut=false;
+    accTone=false; accFx=false; accOut=false; accScroll=false;
     transparencyEnabled = hasAlpha; matteColor = null;
   }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
@@ -475,24 +482,13 @@
     {#if isDummyFile}
       <div class="dummyNotice" data-testid="dummy-notice">Original image not available — preview is static. You can still rename and save the art.</div>
     {/if}
-    <div class="body">
-      <div class="controls">
+    <div class="body twoCol">
+      <div class="leftPane">
+        <div class="leftScroll">
     <!-- Primary controls — minimal: Width + quick palette/mode, rest in Advanced -->
     <div class="primary minimal" class:hasThumb={!!thumbnailUrl}>
       <div class="primary-main">
       <div class="p-grid minimal">
-        <div class="p-group">
-          <span class="p-label">Width</span>
-          <label class="field width-field"><input class="slider" type="range" min={MIN_IRC_WIDTH} max={MAX_IRC_WIDTH} step="2" bind:value={width} /><b>{width}</b></label>
-        </div>
-        <div class="p-group">
-          <span class="p-label">Palette</span>
-          <div class="pill-group" role="radiogroup" aria-label="Colors">
-            {#each colorOpts as o}
-              <button class="pill sm" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
-            {/each}
-          </div>
-        </div>
         <div class="p-group span-2">
           <span class="p-label">Detail</span>
           <div class="pill-group sm" role="radiogroup" aria-label="Detail">
@@ -501,13 +497,19 @@
             {/each}
           </div>
         </div>
-        <div class="p-group actions span-2">
-          <button class="btn-ghost" onclick={()=>showAdvanced=!showAdvanced} aria-expanded={showAdvanced}>{showAdvanced?'▾ Less':'▸ Advanced'}</button>
-          <button class="btn-fit" onclick={smartFit} disabled={fitBusy||!art}>{fitBusy?'Fitting…':'⚡ Fit'}</button>
-          <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺</button>
+        <div class="p-group span-2">
+          <span class="p-label">Palette</span>
+          <div class="pill-group" role="radiogroup" aria-label="Colors">
+            {#each colorOpts as o}
+              <button class="pill sm" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
+            {/each}
+          </div>
         </div>
-        {#if showAdvanced}
-          <div class="p-group">
+        <div class="p-group span-2">
+          <span class="p-label">Width</span>
+          <label class="field width-field"><input class="slider" type="range" min={MIN_IRC_WIDTH} max={MAX_IRC_WIDTH} step="2" bind:value={width} /><b>{width}</b></label>
+        </div>
+        <div class="p-group">
             <span class="p-label">Matching</span>
             <div class="pill-group sm" role="radiogroup" aria-label="Color matching">
               <button class="pill" class:on={colorMatching==='rgb'} onclick={()=>colorMatching='rgb'} role="radio" aria-checked={colorMatching==='rgb'}>RGB</button>
@@ -516,25 +518,7 @@
             </div>
           </div>
           <div class="p-group">
-            <span class="p-label">Transparency</span>
-            {#if hasAlpha}
-              <div class="pill-group" role="radiogroup" aria-label="Transparency">
-                <button class="pill" class:on={!transparencyEnabled} onclick={()=>{transparencyEnabled=false; matteColor=null}} role="radio" aria-checked={!transparencyEnabled}>Off</button>
-                <button class="pill" class:on={transparencyEnabled && !matteColor} onclick={()=>{transparencyEnabled=true; matteColor=null}} role="radio" aria-checked={transparencyEnabled && !matteColor}>Bleed</button>
-                <button class="pill" class:on={transparencyEnabled && !!matteColor} onclick={()=>{transparencyEnabled=true; if(!matteColor) matteColor='#000000'}} role="radio" aria-checked={!!(transparencyEnabled && matteColor)}>Matte</button>
-              </div>
-              {#if transparencyEnabled && matteColor}
-                <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
-                  <input type="color" value={matteColor} oninput={(e)=> matteColor=(e.target as HTMLInputElement).value} style="width:28px;height:22px;padding:0;border:1px solid #232a36;border-radius:6px;background:#0f1115" />
-                  <span class="p-hint" style="margin:0">{matteColor}</span>
-                </div>
-              {/if}
-            {:else}
-              <span class="p-hint">No alpha — opaque</span>
-            {/if}
-          </div>
-          <div class="p-group">
-            <span class="p-label">Tone</span>
+            <span class="p-label">Normalize</span>
             <div class="pill-group" role="radiogroup" aria-label="Normalize">
               <button class="pill" class:on={!normalize} onclick={()=>normalize=false} role="radio" aria-checked={!normalize}>Off</button>
               <button class="pill" class:on={normalize} onclick={()=>normalize=true} role="radio" aria-checked={normalize}>On</button>
@@ -548,19 +532,10 @@
               <b class:off={viterbiW===0 || compressionDisabled}>{compressionDisabled?'—':viterbiW===0?'off':viterbiW}</b>
             </label>
           </div>
-          <div class="p-group span-2">
-            <span class="p-label">Scroll</span>
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} style="flex:1;min-width:120px;max-width:180px" />
-              <span class="scroll-value" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
-            </div>
-            <div class="scroll-ticks" style="margin-top:6px">
-              {#each SCROLL_PRESETS as p,i}
-                <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i}>{p.label}</button>
-              {/each}
-            </div>
-          </div>
-        {/if}
+        <div class="p-group actions span-2">
+          <button class="btn-fit" onclick={smartFit} disabled={fitBusy||!art}>{fitBusy?'Fitting…':'⚡ Fit'}</button>
+          <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺ Reset</button>
+        </div>
       </div>
       </div>
       {#if thumbnailUrl}
@@ -573,17 +548,19 @@
         />
       {/if}
         </div>
-        <!-- Advanced — inside controls, scrolls with controls, not pushing footer -->
+        <!-- Advanced — inside leftScroll, scrolls with controls -->
         <div class="accordion">
-          <button class="acc-head" onclick={()=>accTone=!accTone} aria-expanded={accTone}><span class="chev">{accTone?'▾':'▸'}</span> Tone &amp; color <span class="acc-hint">brightness · contrast · saturation · gamma</span></button>
+          <button class="acc-head" onclick={()=>accTone=!accTone} aria-expanded={accTone}><span class="chev">{accTone?'▾':'▸'}</span> Normalize <span class="acc-hint">brightness · contrast · saturation · gamma</span></button>
           {#if accTone}
-            <div class="acc-body">
-              <div class="grid4">
+            <div class="acc-body tone-layout">
+              <div class="tone-sliders">
                 <label><span>Brightness</span><input class="slider sm" type="range" min="-100" max="100" bind:value={brightness} /><em>{brightness>0?`+${brightness}`:brightness}</em></label>
                 <label><span>Contrast</span><input class="slider sm" type="range" min="-100" max="100" bind:value={contrast} /><em>{contrast>0?`+${contrast}`:contrast}</em></label>
                 <label><span>Saturation</span><input class="slider sm" type="range" min="-100" max="100" bind:value={saturation} /><em>{saturation>0?`+${saturation}`:saturation}</em></label>
                 <label><span>Hue</span><input class="slider sm" type="range" min="0" max="360" bind:value={hue} /><em>{hue}°</em></label>
                 <label><span>Gamma</span><input class="slider sm" type="range" min="0" max="4" step="0.1" bind:value={gamma} /><em>{gamma||'off'}</em></label>
+              </div>
+              <div class="tone-checks">
                 <label class="check"><input type="checkbox" bind:checked={grayscale}/> Grayscale</label>
                 <label class="check"><input type="checkbox" bind:checked={invert}/> Invert</label>
                 <label class="check"><input type="checkbox" bind:checked={sepia}/> Sepia</label>
@@ -593,12 +570,14 @@
           {/if}
           <button class="acc-head" onclick={()=>accFx=!accFx} aria-expanded={accFx}><span class="chev">{accFx?'▾':'▸'}</span> Transform <span class="acc-hint">blur · pixelize · rotate · flip · sampling</span></button>
           {#if accFx}
-            <div class="acc-body">
-              <div class="grid4">
+            <div class="acc-body tone-layout">
+              <div class="tone-sliders">
                 <label><span>Blur</span><input class="slider sm" type="range" min="0" max="6" step="1" bind:value={blur} /><em>{blur? `${blur}px`:'off'}</em></label>
                 <label><span>Pixelize</span><input class="slider sm" type="range" min="0" max="16" step="1" bind:value={pixelize} /><em>{pixelize||'off'}</em></label>
                 <label><span>Rotate</span><select bind:value={rotate} class="sel sm"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
                 <label><span>Sampling</span><select bind:value={filter} class="sel sm"><option value="linear">Linear</option><option value="nearest">Nearest</option></select></label>
+              </div>
+              <div class="tone-checks">
                 <label class="check"><input type="checkbox" bind:checked={flipH}/> Flip H</label>
                 <label class="check"><input type="checkbox" bind:checked={flipV}/> Flip V</label>
               </div>
@@ -613,16 +592,39 @@
               <p class="acc-note">Dithering breaks color runs and is byte-adverse with compression — prefer shade blocks for the same tones.</p>
             </div>
           {/if}
+          <button class="acc-head" onclick={()=>accScroll=!accScroll} aria-expanded={accScroll}><span class="chev">{accScroll?'▾':'▸'}</span> Scroll <span class="acc-hint">{SCROLL_PRESETS[scrollPreset].label} · {SCROLL_PRESETS[scrollPreset].hint}</span></button>
+          {#if accScroll}
+            <div class="acc-body">
+              <div class="scroll-card">
+                <div class="scroll-head">
+                  <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} />
+                  <span class="scroll-badge" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
+                </div>
+                <div class="scroll-ticks">
+                  {#each SCROLL_PRESETS as p,i}
+                    <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i} title={p.hint}>{p.label}</button>
+                  {/each}
+                </div>
+              </div>
+            </div>
+          {/if}
         </div>
         <details class="raw"><summary>Raw {renderMode==='ansi24'?'\x04':'\x03'} codes</summary><textarea id="ircArtRaw" readonly value={art} rows={Math.min(10, art.split('\n').length+1)}></textarea></details>
-        <div class="saveRow">
-          <input class="saveName" bind:value={saveName} placeholder="Name" aria-label="Save name" />
-          <button class="btn saveBtn" onclick={handleSave} disabled={saving || !art || overBudget}>{#if saving}Saving…{:else if saveOk}Saved ✓{:else if editId}Update{:else}Save{/if}</button>
+        </div>
+        <div class="leftActions">
+          <input class="saveName" data-testid="left-save-input" bind:value={saveName} placeholder="Name" aria-label="Save name" />
+          <button class="btn saveBtn" data-testid="left-save" onclick={handleSave} disabled={saving || !art || overBudget}>{#if saving}Saving…{:else if saveOk}Saved ✓{:else if editId}Update{:else}Save{/if}</button>
           {#if saveError}<span class="saveErr">{saveError}</span>{/if}
           {#if overBudget}<span class="saveErr">Fit to 512 first</span>{/if}
+          <div class="sendRow">
+            <button class="btn" data-testid="left-copy" onclick={copy} disabled={!art||loading}>{copied?'Copied!':'Copy'}</button>
+            <button class="btn primary" data-testid="left-send" onclick={send} disabled={!art||loading||sending||!activeTarget}>
+              {#if sending}Sending {sentCount}/{stats.lines}…{:else}Send to {activeTarget||'channel'} ({stats.lines}){/if}
+            </button>
+          </div>
         </div>
       </div>
-      <div class="previewPane">
+      <div class="rightPane">
         {#if art}
           <div class="budget" data-testid="budget" class:over={overBudget} class:softWarn={safeOver && !overBudget}>
             <div class="budget-track"><div class="budget-fill" style="width:{pct}%"></div></div>
@@ -641,8 +643,7 @@
         </div>
       </div>
     </div>
-    <footer>
-    <footer>
+    <footer class="footBar">
       {#if onBack}<button class="btn" onclick={onBack}>← Back</button>{/if}
       <div class="foot-left">
         <span class="hint">{renderMode==='ansi24'?'True-Color':renderMode==='ansi'?'256-color':'99-color'} · {pixelMode} · {SCROLL_PRESETS[scrollPreset].label} · {SCROLL_PRESETS[scrollPreset].sd===0 ? 'instant' : `burst 5×${SCROLL_PRESETS[scrollPreset].bd}ms then ${SCROLL_PRESETS[scrollPreset].sd}ms`}</span>
@@ -658,7 +659,7 @@
 
 <style>
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.68);display:flex;align-items:center;justify-content:center;z-index:10000;padding:12px;backdrop-filter:blur(2px)}
-  .dialog{background:#0f1115;border:1px solid #1f242d;border-radius:12px;width:min(980px,98vw);height:96vh;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.7)}
+  .dialog{background:#0f1115;border:1px solid #1f242d;border-radius:12px;width:min(1100px,98vw);height:96vh;max-height:96vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.7)}
   header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #1e232b;background:#0f1115}
   .head-left{display:flex;align-items:baseline;gap:10px;min-width:0}
   header h2{margin:0;font-size:13px;font-weight:700;color:#e6edf3;letter-spacing:-.01em}
@@ -666,28 +667,43 @@
   .badge{font-size:10px;color:#8b949e;background:#1a1f29;border:1px solid #232a36;border-radius:999px;padding:2px 8px;white-space:nowrap}
   .x{background:0;border:0;color:#7d8590;font-size:22px;cursor:pointer;line-height:1;padding:0 6px;border-radius:6px}
   .x:hover{color:#e6edf3;background:#1a1f29}
-  .primary{padding:12px 16px;background:#0d0f13;border-bottom:1px solid #1e232b;display:flex;flex-direction:column;gap:12px}
-  .primary.hasThumb{flex-direction:row;align-items:flex-start;gap:16px}
-  .primary-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:12px}
+  .body.twoCol{display:grid;grid-template-columns:380px 1fr;grid-template-rows:minmax(0,1fr);flex:1;min-height:0;overflow:hidden}
+  .leftPane{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid #1e232b;background:#0d0f13;overflow:hidden}
+  .leftScroll{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#232a36 transparent}
+  .leftActions{position:sticky;bottom:0;flex-shrink:0;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 16px;border-top:1px solid #1e232b;background:#0f1115;z-index:1}
+  .leftActions .saveName{flex:1 1 140px;min-width:0;background:#0a0c0f;color:#e6edf3;border:1px solid #232a36;border-radius:8px;padding:7px 10px;font-size:12px;font-weight:400;outline:none;transition:border-color .14s, box-shadow .14s, background .14s}
+  .leftActions .saveName::placeholder{color:#4d555f}
+  .leftActions .saveName:hover{border-color:#2d3648;background:#0f1115}
+  .leftActions .saveName:focus{border-color:#58a6ff;box-shadow:0 0 0 2px rgba(88,166,255,.15);background:#010409}
+  .leftActions .saveBtn{flex-shrink:0;min-width:72px}
+  .leftActions .sendRow{display:flex;gap:8px;flex-wrap:wrap;width:100%}
+  .rightPane{display:flex;flex-direction:column;min-width:0;min-height:0;background:#000;overflow:hidden}
+  .rightPane .budget{flex-shrink:0}
+  .rightPane .previewWrap{flex:1;min-height:0;overflow:auto}
+  .primary{padding:12px 16px;background:#0d0f13;border-bottom:1px solid #1e232b;display:flex;flex-direction:column;gap:10px}
+  .primary-main{flex:0 1 auto;min-width:0;display:flex;flex-direction:column;gap:10px;width:100%}
   .primaryThumb{width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #1e232b;background:#010409;flex-shrink:0;align-self:flex-start}
-  .p-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px}
+  .p-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;align-items:start;align-content:start}
   .p-grid.two-col-main{grid-template-columns:1.1fr 0.9fr}
-  .p-group{display:flex;flex-direction:column;gap:8px}
+  .p-group{display:flex;flex-direction:column;gap:6px;justify-content:flex-start;align-self:start}
   .p-group.span-2{grid-column:span 2}
+  .p-group.actions{flex-direction:row;flex-wrap:wrap;gap:6px;align-items:center}
+  .p-group.actions .btn-ghost,.p-group.actions .btn-fit{flex:1 1 auto}
   .p-col.left{display:flex;flex-direction:column;gap:12px}
   .p-col.right{display:flex;flex-direction:column;gap:12px;border-left:1px solid #1e232b;padding-left:16px}
   .p-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .p-row.split{flex-wrap:wrap}
-  .p-row.two-col{justify-content:space-between;gap:16px 24px}
-  .p-col{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
   .p-row.scroll-row{gap:10px 12px}
-  .scroll{flex:1;min-width:140px;max-width:260px}
-  .scroll-ticks{display:flex;gap:4px;flex-wrap:wrap}
-  .tick{font-size:9px;font-weight:500;padding:3px 7px;border-radius:999px;border:1px solid #232a36;background:transparent;color:#7d8590;cursor:pointer;transition:all .14s;line-height:1}
+  .scroll-group{ gap:8px }
+  .scroll-card{background:#0a0c0f;border:1px solid #1e232b;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+  .scroll-head{display:flex;align-items:center;gap:10px}
+  .scroll{flex:1;min-width:0}
+  .scroll-badge{font-size:10px;font-weight:600;color:#e6edf3;background:#1a1f29;border:1px solid #232a36;border-radius:999px;padding:3px 8px;white-space:nowrap;flex-shrink:0}
+  .scroll-ticks{display:flex;gap:4px;flex-wrap:wrap;justify-content:space-between}
+  .tick{flex:1 1 0;min-width:0;text-align:center;font-size:9px;font-weight:500;padding:4px 4px;border-radius:999px;border:1px solid #232a36;background:transparent;color:#7d8590;cursor:pointer;transition:all .14s;line-height:1}
   .tick:hover{border-color:#2d3648;color:#c9d1d9;background:#141821}
   .tick.on{background:#e6edf3;border-color:#e6edf3;color:#0f1115;font-weight:600}
   .p-hint{font-size:10px;color:#4d555f;margin-left:4px;white-space:nowrap}
-  .pill-group{display:flex;gap:4px;flex-wrap:wrap}
   .pill{font-size:11px;font-weight:500;padding:5px 10px;border-radius:999px;border:1px solid #232a36;background:#141821;color:#9aa4b2;cursor:pointer;transition:all .14s}
   .pill.on{background:#e6edf3;color:#0f1115;border-color:#e6edf3;font-weight:600;box-shadow:0 1px 8px rgba(230,237,243,.15)}
   .pill .glyph{font-size:11px;margin-right:2px}
@@ -695,11 +711,10 @@
   .field span{color:#7d8590;font-weight:500}
   .field b{min-width:20px;text-align:right;color:#e6edf3;font-size:11px}
   .field b.off{color:#7d8590;font-weight:400}
-  .width-field{flex:1 1 260px}
-  .comp-field{flex:0 1 150px}
-  .width-field .slider{flex:1;min-width:140px}
-  .comp-field .slider{flex:0 0 90px;width:90px;min-width:70px}
-  .btn-fit{background:#1a2a44;border:1px solid #2a4a7a;color:#58a6ff;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;transition:all .14s}
+  .width-field{flex:0 1 auto;width:100%;margin-top:2px}
+  .comp-field{flex:0 1 auto;width:100%;margin-top:2px}
+  .width-field .slider{flex:1;min-width:0;width:100%}
+  .comp-field .slider{flex:1;min-width:0;width:100%}
   .btn-fit:hover:not(:disabled){background:#243a5e;color:#fff;border-color:#3a6ab8}
   .btn-fit:disabled{opacity:.45;cursor:default}
   .btn-ghost{background:#141821;border:1px solid #232a36;color:#7d8590;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer}
@@ -721,35 +736,35 @@
   .budget .link:hover{text-decoration:underline}
   .pulse{font-size:10px;color:#58a6ff;animation:pulse 1s ease-in-out infinite;margin-left:auto}
   @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
-  .previewWrap{position:relative;flex:1 1 auto;min-height:280px;background:#000;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#232a36 #000;border-bottom:1px solid #1e232b;display:flex;align-items:center;justify-content:center}
+  .previewWrap{position:relative;flex:1 1 auto;min-height:0;background:#000;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#232a36 #000;border-bottom:1px solid #1e232b;display:block}
   .previewWrap::-webkit-scrollbar-thumb{background:#232a36;border-radius:999px}
-  .previewWrap:has(.artWrap){display:block}
-  .artWrap{display:block;min-width:max-content;min-height:max-content;padding:14px}
-  .art{display:inline-block;font:11px/11px "Hack","SF Mono",Menlo,Consolas,monospace;white-space:pre;text-align:left}
+  .artWrap{display:flex;align-items:safe center;justify-content:safe center;min-height:100%;min-width:max-content;padding:14px;box-sizing:border-box}
+  .art{display:inline-block;font:11px/11px "Hack","SF Mono",Menlo,Consolas,monospace;white-space:pre;text-align:left;max-width:100%}
   .msg,.err{color:#7d8590;padding:24px;font-size:12px;text-align:center} .err{color:#ff7b72}
   .msg.updating{display:flex;align-items:center;justify-content:center;gap:8px;color:#58a6ff;font-size:11px}
   .spinner{width:12px;height:12px;border:1.5px solid rgba(88,166,255,.3);border-top-color:#58a6ff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
-  @keyframes spin{to{transform:rotate(360deg)}}
-
-  .accordion{border-top:1px solid #1e232b;background:#0d0f13}
   .acc-head{width:100%;display:flex;align-items:center;gap:8px;padding:9px 16px;background:0;border:0;border-bottom:1px solid #1a1f29;color:#9aa4b2;font-size:11px;font-weight:500;cursor:pointer;text-align:left;transition:background .12s}
   .acc-head:hover{background:#11151c;color:#c9d1d9}
   .acc-head[aria-expanded="true"]{color:#e6edf3;background:#11151c;border-bottom-color:#1e232b}
-  .chev{font-size:10px;color:#7d8590;width:12px;text-align:center}
-  .acc-hint{margin-left:auto;font-size:10px;color:#4d555f;font-weight:400;white-space:nowrap}
   .acc-body{padding:12px 16px;border-bottom:1px solid #1a1f29;background:#0a0c0f}
+  .acc-body.tone-layout{display:grid;grid-template-columns:1fr auto;gap:16px 20px;align-items:start}
+  .tone-sliders{display:flex;flex-direction:column;gap:10px}
+  .tone-sliders label{font-size:11px;color:#9aa4b2;display:flex;gap:6px;align-items:center;white-space:nowrap}
+  .tone-sliders label span{min-width:52px;color:#7d8590;font-size:11px}
+  .tone-sliders em{font-style:normal;color:#4d555f;min-width:34px;font-size:10px;font-variant-numeric:tabular-nums}
+  .tone-checks{display:flex;flex-direction:column;gap:8px;align-items:stretch;justify-content:start;border-left:1px solid #1e232b;padding-left:16px}
+  .tone-checks label.check{font-size:11px;color:#9aa4b2;display:flex;gap:6px;align-items:center;white-space:nowrap;cursor:pointer;user-select:none}
   .grid4{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
   .grid4 label{font-size:11px;color:#9aa4b2;display:flex;gap:6px;align-items:center;white-space:nowrap}
   .grid4 label span{min-width:52px;color:#7d8590;font-size:11px}
   .grid4 em{font-style:normal;color:#4d555f;min-width:34px;font-size:10px;font-variant-numeric:tabular-nums}
   .grid4 label.check{cursor:pointer;user-select:none}
-  .grid4 input[type=checkbox]{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:4px;border:1.5px solid #232a36;background:#141821;display:inline-grid;place-content:center;cursor:pointer;flex-shrink:0;transition:all .14s}
-  .grid4 input[type=checkbox]:hover{border-color:#2d3648;background:#1a1f29}
-  .grid4 input[type=checkbox]:checked{background:#e6edf3;border-color:#e6edf3}
-  .grid4 input[type=checkbox]::before{content:"";width:7px;height:4px;border:solid #0f1115;border-width:0 0 1.8px 1.8px;transform:rotate(-45deg) scale(0);transition:transform .12s}
-  .grid4 input[type=checkbox]:checked::before{transform:rotate(-45deg) scale(1)}
+  .grid4 input[type=checkbox], .tone-checks input[type=checkbox]{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:4px;border:1.5px solid #232a36;background:#141821;display:inline-grid;place-content:center;cursor:pointer;flex-shrink:0;transition:all .14s}
+  .grid4 input[type=checkbox]:hover, .tone-checks input[type=checkbox]:hover{border-color:#2d3648;background:#1a1f29}
+  .grid4 input[type=checkbox]:checked, .tone-checks input[type=checkbox]:checked{background:#e6edf3;border-color:#e6edf3}
+  .grid4 input[type=checkbox]::before, .tone-checks input[type=checkbox]::before{content:"";width:7px;height:4px;border:solid #0f1115;border-width:0 0 1.8px 1.8px;transform:rotate(-45deg) scale(0);transition:transform .12s}
+  .grid4 input[type=checkbox]:checked::before, .tone-checks input[type=checkbox]:checked::before{transform:rotate(-45deg) scale(1)}
   .acc-note{margin:10px 0 0;font-size:10px;color:#4d555f;line-height:1.4}
-
   .sel{background:#141821;color:#c9d1d9;border:1px solid #232a36;border-radius:7px;padding:4px 8px;font-size:11px;cursor:pointer}
   .sel.sm{padding:3px 6px}
   .sel:focus{outline:none;border-color:#2d3648}
@@ -769,13 +784,8 @@
   .raw{border-top:1px solid #1e232b;padding:8px 16px;background:#0d0f13}
   .raw summary{font-size:11px;color:#58a6ff;cursor:pointer;user-select:none}
   .raw textarea{margin-top:8px;width:100%;background:#000;color:#7d8590;border:1px solid #1e232b;border-radius:6px;font:10px/1.3 "Hack",monospace;padding:8px;white-space:pre;overflow:auto}
-  .saveRow{display:flex;gap:8px;align-items:center;padding:10px 16px;border-top:1px solid #1e232b;background:#0d0f13;flex-wrap:wrap}
-  .saveName{flex:1;min-width:120px;background:#010409;color:#e6edf3;border:1px solid #232a36;border-radius:6px;padding:6px 10px;font-size:12px}
-  .saveName:focus{outline:none;border-color:#58a6ff}
-  .saveBtn{min-width:80px}
-  .saveErr{font-size:11px;color:#f85149}
 
-  footer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid #1e232b;justify-content:flex-end;align-items:center;flex-wrap:wrap;background:#0f1115}
+  footer.footBar{display:flex;gap:8px;padding:12px 16px;border-top:1px solid #1e232b;justify-content:flex-end;align-items:center;flex-wrap:wrap;background:#0f1115}
   .foot-left{margin-right:auto}
   .hint{font-size:10px;color:#4d555f}
   .btn{font-size:12px;padding:6px 14px;border-radius:8px;border:1px solid transparent;cursor:pointer;font-weight:500;transition:all .12s}
@@ -786,4 +796,10 @@
   .btn:hover:not(:disabled){background:#232a36;border-color:#2d3648}
   .btn.ghost{background:0;color:#7d8590;border-color:transparent}
   .btn.ghost:hover{color:#c9d1d9;background:#1a1f29}
+  .saveErr{font-size:11px;color:#f85149}
+  @media(max-width:860px){
+    .body.twoCol{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+    .leftPane{border-right:0;border-bottom:1px solid #1e232b;max-height:52vh}
+    .rightPane{min-height:36vh}
+  }
 </style>

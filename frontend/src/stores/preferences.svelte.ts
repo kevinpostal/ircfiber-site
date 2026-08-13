@@ -57,12 +57,12 @@ export interface GlobalPrefs {
   inlinePastes: boolean;
   inlineReddit: boolean;
   inlineSocial: boolean;
+  defaultScrollPreset: number;
   // W0-T01: feature-flag namespace gating Wave 1/2 protocol changes.
   // Most flags still default OFF for safe rollout; usePrefVersion
   // flips to ON in Wave 2 (prefVersion last-write-wins resolution).
   featureFlags: FeatureFlags;
 }
-
 export const DEFAULT_PREFS: GlobalPrefs = {
   theme: 'dark',
   fontSize: 14,
@@ -89,6 +89,7 @@ export const DEFAULT_PREFS: GlobalPrefs = {
   inlinePastes: true,
   inlineReddit: true,
   inlineSocial: true,
+  defaultScrollPreset: 2,
   featureFlags: {
     usePrefVersion: true,
     heartbeat: { enabled: true },
@@ -102,9 +103,14 @@ export const DEFAULT_PREFS: GlobalPrefs = {
 export const globalPrefs = $state<GlobalPrefs>(
   mergeDefaults(getStorageItem('ircfiber:globalPrefs', {}), DEFAULT_PREFS)
 );
-
 function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): GlobalPrefs {
   const out = { ...defaults, ...saved } as GlobalPrefs;
+  // Clamp scroll preset to valid range
+  if (typeof out.defaultScrollPreset !== 'number' || out.defaultScrollPreset < 0 || out.defaultScrollPreset > 4) {
+    out.defaultScrollPreset = defaults.defaultScrollPreset;
+  } else {
+    out.defaultScrollPreset = Math.round(out.defaultScrollPreset);
+  }
   // Deep-merge the featureFlags namespace so partial saved data (e.g.
   // a user who enabled one flag before others were added) does not lose
   // the nested { enabled: false } defaults. Plain spread would replace
