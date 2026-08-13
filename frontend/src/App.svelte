@@ -723,13 +723,14 @@ let showNetworkForm: boolean = $state(false);
       const queueHistory = (list: IRCMessage[]) => {
         for (const m of list) enqueueMessage(networkId, bufferName, m, true);
       };
+      let queued = false;
       if (isServerLog && existing.length > 0) {
         // Merge REST history with existing sync messages.  The sync provides
         // the most recent 50 messages; the REST provides up to 200.  Merge
         // older history before the sync snapshot, deduping by eid so recent
         // live events (arrived via batchAppendMessages while the REST call
         // was in flight) are not overwritten.
-        if (msgs.length > 0) queueHistory(msgs);
+        if (msgs.length > 0) { queueHistory(msgs); queued = true; }
       } else if (hadCached) {
         // We already showed cached history (instant paint). REST is the
         // source of truth for older backlog, but it must NOT overwrite the
@@ -738,22 +739,27 @@ let showNetworkForm: boolean = $state(false);
         // via setMessages would flicker and make the user's recent sends
         // disappear until the echo arrives. Merge via backfill queue
         // which dedups by eid/msgid and preserves the tail.
-        if (msgs.length > 0) queueHistory(msgs);
+        if (msgs.length > 0) { queueHistory(msgs); queued = true; }
         // If REST is empty (no history), keep the cached messages as-is —
         // don't clear the buffer.
       } else if (existing.length === 0) {
         const current = ircState.messages[key] ?? [];
         if (current.length === 0) {
           // No cached and no sync arrived in the meantime — use REST.
-          // Queue as backfill so a concurrent CHATHISTORY BATCH (0ms) merges
+          // Queue as backfill so a concurrent CHATHISTORY BATCH (150ms) merges
           // atomically instead of flashing "REST then CHATHISTORY".
-          if (msgs.length > 0) queueHistory(msgs);
+          if (msgs.length > 0) { queueHistory(msgs); queued = true; }
         } else {
           // A sync or live batch arrived while REST was in flight.
           // Merge older REST history without clobbering the new tail.
-          if (msgs.length > 0) queueHistory(msgs);
+          if (msgs.length > 0) { queueHistory(msgs); queued = true; }
         }
       }
+      // Keep spinner until coalesced backfill flush (150ms debounce) completes
+      // so initial paint is single atomic update, not "older then recent" flash
+      // at /irc/Supernets/channel/superbowl. 180ms covers 150ms debounce +
+      // one rAF for MessageList windowing.
+      if (queued) await new Promise(r => setTimeout(r, 180));
       backlogReady = true;  // IRCCloud backlog_complete equivalent
       performance.mark('backlog-ready');
     } catch (e) {
@@ -776,17 +782,6 @@ let showNetworkForm: boolean = $state(false);
       } else if (obj.type === 'sync') {
         const isBootSync = (obj.cmd === undefined);
         performance.mark(isBootSync ? 'sync-boot' : 'sync-poll');
-        // Dismiss the spinner immediately — the sync JSON has already
-        // been received and parsed, so `updateNetworkFromSync` runs
-        // synchronously below (typically < 50ms for small users).
-        // Hiding the spinner now makes the connection feel instant;
-        // the sidebar populates from `handleNetworks`'s skeletons in
-        // the same tick. IRCCloud does the same: spinner → UI yields
-        // as soon as the sync payload arrives, before processing.
-        if (isBootSync) {
-          backlogReady = true;
-          performance.mark('backlog-ready');
-        }
         syncReceived = true;
         updateNetworkFromSync((obj.networks || []) as Network[]);
         // IRCCloud-style: persist the network names so the next page load
@@ -806,8 +801,19 @@ let showNetworkForm: boolean = $state(false);
           const key = `${ab.networkId!}:${normalizeChannelName(ab.bufferName!)}`;
           const hasMsgs = ircState.messages[key] && ircState.messages[key].length > 0;
           if (!hasMsgs || isServer) {
+            // Defer backlogReady until history batch coalesces (150ms debounce)
+            // so spinner hides *after* REST + CHATHISTORY merge, not before —
+            // prevents "older then recent" flash at /irc/Supernets/channel/superbowl.
             void loadBufferHistory(ab.networkId!, ab.bufferName!);
+          } else {
+            // History already in sync — safe to hide spinner immediately
+            backlogReady = true;
+            performance.mark('backlog-ready');
           }
+        } else if (isBootSync) {
+          // Boot sync with no active buffer (WelcomePage) — no history to wait for
+          backlogReady = true;
+          performance.mark('backlog-ready');
         }
       } else if (obj.type === 'irc_event' || obj.y === 'irc_event') {
         processEvent(obj);
