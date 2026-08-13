@@ -552,6 +552,7 @@
     snapToBottom(container);
   });
   function snapToBottom(c: HTMLDivElement): void {
+    renderEndKey = '';
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
     // Do NOT clear pinnedResnapTimer here - let late layout polls complete even during rapid typing
     // if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
@@ -750,6 +751,7 @@
       if (!isInitialSnap) {
         const scrolledUp = container ? container.scrollTop < prevScrollTop : false;
         if (scrolledUp) { cachedAtBottom = false; } else {
+          renderEndKey = '';
           tick().then(() => {
             if (!container) return;
             // Entrance animation: detect which messages are new since the last
@@ -797,6 +799,7 @@
         }
       } else {
         // Initial snap for a freshly-opened buffer (refresh): unconditional.
+        renderEndKey = '';
         maybeTrim();
         tick().then(() => {
           if (!container) return;
@@ -890,11 +893,19 @@
     const distFromBottom = scrollHeight - scrollBottom;
     const scrolledUp = scrollTop < prevTop;
     const heightChangedWithoutScroll = scrollHeight !== prevHeight && scrollTop === prevTop;
+    // During the initial snap window (pendingInitialSnap), height growth
+    // without scroll is expected as history fills in — don't treat the huge
+    // distFromBottom as leaving the bottom. The pendingInitialSnap snap will
+    // correct scrollTop on its tick. Without this guard, handleScroll would
+    // freeze renderEndKey to the old last key and new messages would stay
+    // hidden until the user manually scrolled away and back.
     const atBottom = scrolledUp
       ? false
-      : cachedAtBottom
-        ? heightChangedWithoutScroll ? true : distFromBottom <= 1
-        : distFromBottom <= STICK_BAND_PX;
+      : pendingInitialSnap && heightChangedWithoutScroll
+        ? true
+        : cachedAtBottom
+          ? heightChangedWithoutScroll ? true : distFromBottom <= 1
+          : distFromBottom <= STICK_BAND_PX;
     if (cachedAtBottom === atBottom) {
       // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
       scheduleScrollStateUpdate();
