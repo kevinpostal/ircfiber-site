@@ -474,94 +474,94 @@
     {#if isDummyFile}
       <div class="dummyNotice" data-testid="dummy-notice">Original image not available — preview is static. You can still rename and save the art.</div>
     {/if}
-    <!-- Primary controls — two-column: left (Palette/Geometry/Width/Scroll), right (Transparency/Compression) -->
-    <div class="primary" class:hasThumb={!!thumbnailUrl}>
+    <div class="body">
+      <div class="controls">
+    <!-- Primary controls — minimal: Width + quick palette/mode, rest in Advanced -->
+    <div class="primary minimal" class:hasThumb={!!thumbnailUrl}>
       <div class="primary-main">
-        <div class="p-grid two-col-main">
-          <div class="p-col left">
-              <span class="p-label">Colors</span>
-              <div class="pill-group" role="radiogroup" aria-label="Colors">
-                {#each colorOpts as o}
-                  <button class="pill" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
-                {/each}
-              </div>
-            </div>
-            <div class="p-col">
-              <span class="p-label">Normalize</span>
-              <div class="pill-group" role="radiogroup" aria-label="Normalize">
-                <button class="pill" class:on={!normalize} onclick={()=>normalize=false} role="radio" aria-checked={!normalize}>Off</button>
-                <button class="pill" class:on={normalize} onclick={()=>normalize=true} role="radio" aria-checked={normalize}>On</button>
-              </div>
-              <span class="p-hint">auto-contrast luma stretch</span>
-            </div>
+      <div class="p-grid minimal">
+        <div class="p-group">
+          <span class="p-label">Width</span>
+          <label class="field width-field"><input class="slider" type="range" min={MIN_IRC_WIDTH} max={MAX_IRC_WIDTH} step="2" bind:value={width} /><b>{width}</b></label>
+        </div>
+        <div class="p-group">
+          <span class="p-label">Palette</span>
+          <div class="pill-group" role="radiogroup" aria-label="Colors">
+            {#each colorOpts as o}
+              <button class="pill sm" class:on={midgardMode===o.v} onclick={()=>midgardMode=o.v} role="radio" aria-checked={midgardMode===o.v}>{o.label}</button>
+            {/each}
           </div>
-          <div class="p-row">
-            <span class="p-label">Detail</span>
-            <div class="pill-group sm" role="radiogroup" aria-label="Detail">
-              {#each pixelOpts as o}
-                <button class="pill" class:on={pixelMode===o.v} onclick={()=>pixelMode=o.v} role="radio" aria-checked={pixelMode===o.v}><span class="glyph">{o.glyph}</span> {o.label}</button>
-              {/each}
-            </div>
+        </div>
+        <div class="p-group span-2">
+          <span class="p-label">Detail</span>
+          <div class="pill-group sm" role="radiogroup" aria-label="Detail">
+            {#each pixelOpts as o}
+              <button class="pill" class:on={pixelMode===o.v} onclick={()=>pixelMode=o.v} role="radio" aria-checked={pixelMode===o.v}><span class="glyph">{o.glyph}</span> {o.label}</button>
+            {/each}
           </div>
-          <div class="p-row">
+        </div>
+        <div class="p-group actions span-2">
+          <button class="btn-ghost" onclick={()=>showAdvanced=!showAdvanced} aria-expanded={showAdvanced}>{showAdvanced?'▾ Less':'▸ Advanced'}</button>
+          <button class="btn-fit" onclick={smartFit} disabled={fitBusy||!art}>{fitBusy?'Fitting…':'⚡ Fit'}</button>
+          <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺</button>
+        </div>
+        {#if showAdvanced}
+          <div class="p-group">
             <span class="p-label">Matching</span>
             <div class="pill-group sm" role="radiogroup" aria-label="Color matching">
               <button class="pill" class:on={colorMatching==='rgb'} onclick={()=>colorMatching='rgb'} role="radio" aria-checked={colorMatching==='rgb'}>RGB</button>
               <button class="pill" class:on={colorMatching==='lab'} onclick={()=>colorMatching='lab'} role="radio" aria-checked={colorMatching==='lab'}>Lab</button>
               <button class="pill" class:on={colorMatching==='oklab'} onclick={()=>colorMatching='oklab'} role="radio" aria-checked={colorMatching==='oklab'}>OKLab</button>
             </div>
-            <span class="p-hint">OKLab perceptual — best for 256/16</span>
           </div>
-          <div class="p-row">
-            <label class="field width-field"><span>Width</span><input class="slider" type="range" min={MIN_IRC_WIDTH} max={MAX_IRC_WIDTH} step="2" bind:value={width} /><b>{width}</b></label>
-          </div>
-          <div class="p-row scroll-row">
-            <span class="p-label">Scroll</span>
-            <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} aria-label="Scroll speed" />
-            <span class="scroll-value" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
-            <span class="p-hint">{SCROLL_PRESETS[scrollPreset].hint}</span>
-            <div class="scroll-ticks" aria-hidden="true">
-              {#each SCROLL_PRESETS as p,i}
-                <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i} title="{p.label}: {p.hint} — burst {p.bd}ms then {p.sd}ms">{p.label}</button>
-              {/each}
-            </div>
-          </div>
-          <div class="p-col right">
+          <div class="p-group">
+            <span class="p-label">Transparency</span>
             {#if hasAlpha}
-              <div class="p-row">
-              <span class="p-label">Transparency</span>
               <div class="pill-group" role="radiogroup" aria-label="Transparency">
                 <button class="pill" class:on={!transparencyEnabled} onclick={()=>{transparencyEnabled=false; matteColor=null}} role="radio" aria-checked={!transparencyEnabled}>Off</button>
                 <button class="pill" class:on={transparencyEnabled && !matteColor} onclick={()=>{transparencyEnabled=true; matteColor=null}} role="radio" aria-checked={transparencyEnabled && !matteColor}>Bleed</button>
                 <button class="pill" class:on={transparencyEnabled && !!matteColor} onclick={()=>{transparencyEnabled=true; if(!matteColor) matteColor='#000000'}} role="radio" aria-checked={!!(transparencyEnabled && matteColor)}>Matte</button>
               </div>
               {#if transparencyEnabled && matteColor}
-                <input type="color" value={matteColor} oninput={(e)=> matteColor=(e.target as HTMLInputElement).value} title="Matte colour" style="margin-left:8px;width:32px;height:28px;padding:0;border:1px solid #232a36;border-radius:6px;background:#0f1115" />
-                <span class="p-hint" style="margin-left:6px">{matteColor} — opaque matte (renderCellMatte)</span>
-              {:else if transparencyEnabled}
-                <span class="p-hint">naked space, cheapest, trimmed (bleeds_iff_empty)</span>
-              {:else}
-                <span class="p-hint">opaque, no bleed (opaque_mode_no_bleed)</span>
+                <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+                  <input type="color" value={matteColor} oninput={(e)=> matteColor=(e.target as HTMLInputElement).value} style="width:28px;height:22px;padding:0;border:1px solid #232a36;border-radius:6px;background:#0f1115" />
+                  <span class="p-hint" style="margin:0">{matteColor}</span>
+                </div>
               {/if}
+            {:else}
+              <span class="p-hint">No alpha — opaque</span>
+            {/if}
+          </div>
+          <div class="p-group">
+            <span class="p-label">Tone</span>
+            <div class="pill-group" role="radiogroup" aria-label="Normalize">
+              <button class="pill" class:on={!normalize} onclick={()=>normalize=false} role="radio" aria-checked={!normalize}>Off</button>
+              <button class="pill" class:on={normalize} onclick={()=>normalize=true} role="radio" aria-checked={normalize}>On</button>
             </div>
-          {:else}
-            <div class="p-row"><span class="p-label">Transparency</span><span class="p-hint">No alpha channel — opaque</span></div>
-          {/if}
-          <div class="p-row">
-            <label class="field comp-field" title={compressionDisabled ? 'Compression N/A for True-Color/Comic (greedy, no palette to optimize) — use ANSI 256 / 16 / Smart to enable Viterbi' : 'Viterbi byte-aware compression — higher = shorter lines, w≈2–4 is the sweet spot (57–59% saving). Off at 0.'}>
-              <span>Compression</span>
+            <span class="p-hint">luma stretch</span>
+          </div>
+          <div class="p-group">
+            <span class="p-label">Compression</span>
+            <label class="field comp-field" title={compressionDisabled ? 'Compression N/A for True-Color — use 256/16/Smart' : 'Viterbi w≈2–4 sweet spot'}>
               <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={compressionDisabled} />
               <b class:off={viterbiW===0 || compressionDisabled}>{compressionDisabled?'—':viterbiW===0?'off':viterbiW}</b>
             </label>
           </div>
-          <div class="p-row">
-            <div class="primary-actions">
-              <button class="btn-fit" onclick={smartFit} disabled={fitBusy||!art}>{fitBusy?'Fitting…':'⚡ Fit'}</button>
-              <button class="btn-ghost" onclick={resetAll} title="Reset to defaults">↺</button>
+          <div class="p-group span-2">
+            <span class="p-label">Scroll</span>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} style="flex:1;min-width:120px;max-width:180px" />
+              <span class="scroll-value" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
             </div>
-        </div>
+            <div class="scroll-ticks" style="margin-top:6px">
+              {#each SCROLL_PRESETS as p,i}
+                <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i}>{p.label}</button>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
-    </div>
+      </div>
       {#if thumbnailUrl}
         <img
           class="primaryThumb"
@@ -571,79 +571,76 @@
           onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
         />
       {/if}
-    </div>
-
-    <!-- byte budget -->
-    {#if art}
-      <div class="budget" data-testid="budget" class:over={overBudget} class:softWarn={safeOver && !overBudget}>
-        <div class="budget-track"><div class="budget-fill" style="width:{pct}%"></div></div>
-        <span class="budget-label" class:warn={overBudget}>{hardStats.longest} / {IRC_HARD_LIMIT}<span class="safe"> · {stats.lines} lines · {width} cols</span></span>
-        {#if isConverting}<span class="pulse">● updating</span>{:else if overBudget}<button class="link" onclick={smartFit} disabled={fitBusy}>⚡ Fit to 512</button>{:else}<span class="ok">✓</span>{/if}
-        {#if lastTimings && (typeof window !== 'undefined' && ( (window as unknown as Record<string,unknown>).__IMG2IRC_PERF || (typeof localStorage !== 'undefined' && localStorage.getItem('img2irc:perf')) || (typeof location !== 'undefined' && location.search.includes('perf=1'))))}
-          <span class="perf" data-testid="perf-badge" title={Object.entries(lastTimings ?? {}).map(([k,v])=>`${k}:${(v as number).toFixed(1)}ms`).join(' | ')}>{lastTimings?.total?.toFixed(0) ?? '?'}ms total · viterbi:{(lastTimings?.viterbi ?? 0).toFixed(0)}ms · resize:{(lastTimings?.resize ?? 0).toFixed(0)}ms · {lastTimings?.viterbi_S ? `S=${lastTimings.viterbi_S}` : ''}</span>
-        {/if}
+        </div>
+        <!-- Advanced — inside controls, scrolls with controls, not pushing footer -->
+        <div class="accordion">
+          <button class="acc-head" onclick={()=>accTone=!accTone} aria-expanded={accTone}><span class="chev">{accTone?'▾':'▸'}</span> Tone &amp; color <span class="acc-hint">brightness · contrast · saturation · gamma</span></button>
+          {#if accTone}
+            <div class="acc-body">
+              <div class="grid4">
+                <label><span>Brightness</span><input class="slider sm" type="range" min="-100" max="100" bind:value={brightness} /><em>{brightness>0?`+${brightness}`:brightness}</em></label>
+                <label><span>Contrast</span><input class="slider sm" type="range" min="-100" max="100" bind:value={contrast} /><em>{contrast>0?`+${contrast}`:contrast}</em></label>
+                <label><span>Saturation</span><input class="slider sm" type="range" min="-100" max="100" bind:value={saturation} /><em>{saturation>0?`+${saturation}`:saturation}</em></label>
+                <label><span>Hue</span><input class="slider sm" type="range" min="0" max="360" bind:value={hue} /><em>{hue}°</em></label>
+                <label><span>Gamma</span><input class="slider sm" type="range" min="0" max="4" step="0.1" bind:value={gamma} /><em>{gamma||'off'}</em></label>
+                <label class="check"><input type="checkbox" bind:checked={grayscale}/> Grayscale</label>
+                <label class="check"><input type="checkbox" bind:checked={invert}/> Invert</label>
+                <label class="check"><input type="checkbox" bind:checked={sepia}/> Sepia</label>
+                <label class="check" title="Skip near-gray palette entries for richer color"><input type="checkbox" bind:checked={nograyscale}/> No gray</label>
+              </div>
+            </div>
+          {/if}
+          <button class="acc-head" onclick={()=>accFx=!accFx} aria-expanded={accFx}><span class="chev">{accFx?'▾':'▸'}</span> Transform <span class="acc-hint">blur · pixelize · rotate · flip · sampling</span></button>
+          {#if accFx}
+            <div class="acc-body">
+              <div class="grid4">
+                <label><span>Blur</span><input class="slider sm" type="range" min="0" max="6" step="1" bind:value={blur} /><em>{blur? `${blur}px`:'off'}</em></label>
+                <label><span>Pixelize</span><input class="slider sm" type="range" min="0" max="16" step="1" bind:value={pixelize} /><em>{pixelize||'off'}</em></label>
+                <label><span>Rotate</span><select bind:value={rotate} class="sel sm"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
+                <label><span>Sampling</span><select bind:value={filter} class="sel sm"><option value="linear">Linear</option><option value="nearest">Nearest</option></select></label>
+                <label class="check"><input type="checkbox" bind:checked={flipH}/> Flip H</label>
+                <label class="check"><input type="checkbox" bind:checked={flipV}/> Flip V</label>
+              </div>
+            </div>
+          {/if}
+          <button class="acc-head" onclick={()=>accOut=!accOut} aria-expanded={accOut}><span class="chev">{accOut?'▾':'▸'}</span> Output <span class="acc-hint">dither</span></button>
+          {#if accOut}
+            <div class="acc-body">
+              <div class="grid4">
+                <label><span>Dither</span><select bind:value={ditherMode} class="sel sm"><option value="none">Off</option><option value="bayer4">Bayer 4×4</option><option value="bayer8">Bayer 8×8</option><option value="floyd">Floyd-Steinberg</option><option value="atkinson">Atkinson</option><option value="sierra">Sierra</option><option value="stucki">Stucki</option><option value="jarvis">Jarvis</option></select></label>
+              </div>
+              <p class="acc-note">Dithering breaks color runs and is byte-adverse with compression — prefer shade blocks for the same tones.</p>
+            </div>
+          {/if}
+        </div>
+        <details class="raw"><summary>Raw {renderMode==='ansi24'?'\x04':'\x03'} codes</summary><textarea id="ircArtRaw" readonly value={art} rows={Math.min(10, art.split('\n').length+1)}></textarea></details>
+        <div class="saveRow">
+          <input class="saveName" bind:value={saveName} placeholder="Name" aria-label="Save name" />
+          <button class="btn saveBtn" onclick={handleSave} disabled={saving || !art || overBudget}>{#if saving}Saving…{:else if saveOk}Saved ✓{:else if editId}Update{:else}Save{/if}</button>
+          {#if saveError}<span class="saveErr">{saveError}</span>{/if}
+          {#if overBudget}<span class="saveErr">Fit to 512 first</span>{/if}
+        </div>
       </div>
-    {/if}
-
-    <div class="previewWrap" class:converting={isConverting}>
-      {#if loading}
-        <div class="msg" data-testid="loading">Converting…</div>
-      {:else if error}
-        <div class="err" data-testid="error">{error}</div>
-      {:else}
-        <div class="artWrap"><div class="art" data-testid="art">{@html htmlPreview}</div></div>
-      {/if}
-    </div>
-
-    <!-- Advanced — clean accordion, collapsed by default -->
-    <div class="accordion">
-      <button class="acc-head" onclick={()=>accTone=!accTone} aria-expanded={accTone}><span class="chev">{accTone?'▾':'▸'}</span> Tone &amp; color <span class="acc-hint">brightness · contrast · saturation · gamma</span></button>
-      {#if accTone}
-        <div class="acc-body">
-          <div class="grid4">
-            <label><span>Brightness</span><input class="slider sm" type="range" min="-100" max="100" bind:value={brightness} /><em>{brightness>0?`+${brightness}`:brightness}</em></label>
-            <label><span>Contrast</span><input class="slider sm" type="range" min="-100" max="100" bind:value={contrast} /><em>{contrast>0?`+${contrast}`:contrast}</em></label>
-            <label><span>Saturation</span><input class="slider sm" type="range" min="-100" max="100" bind:value={saturation} /><em>{saturation>0?`+${saturation}`:saturation}</em></label>
-            <label><span>Hue</span><input class="slider sm" type="range" min="0" max="360" bind:value={hue} /><em>{hue}°</em></label>
-            <label><span>Gamma</span><input class="slider sm" type="range" min="0" max="4" step="0.1" bind:value={gamma} /><em>{gamma||'off'}</em></label>
-            <label class="check"><input type="checkbox" bind:checked={grayscale}/> Grayscale</label>
-            <label class="check"><input type="checkbox" bind:checked={invert}/> Invert</label>
-            <label class="check"><input type="checkbox" bind:checked={sepia}/> Sepia</label>
-            <label class="check" title="Skip near-gray palette entries for richer color"><input type="checkbox" bind:checked={nograyscale}/> No gray</label>
+      <div class="previewPane">
+        {#if art}
+          <div class="budget" data-testid="budget" class:over={overBudget} class:softWarn={safeOver && !overBudget}>
+            <div class="budget-track"><div class="budget-fill" style="width:{pct}%"></div></div>
+            <span class="budget-label" class:warn={overBudget}>{hardStats.longest} / {IRC_HARD_LIMIT}<span class="safe"> · {stats.lines} lines · {width} cols</span></span>
+            {#if isConverting}<span class="pulse">● updating</span>{:else if overBudget}<button class="link" onclick={smartFit} disabled={fitBusy}>⚡ Fit to 512</button>{:else}<span class="ok">✓</span>{/if}
           </div>
+        {/if}
+        <div class="previewWrap" class:converting={isConverting}>
+          {#if loading}
+            <div class="msg" data-testid="loading">Converting…</div>
+          {:else if error}
+            <div class="err" data-testid="error">{error}</div>
+          {:else}
+            <div class="artWrap"><div class="art" data-testid="art">{@html htmlPreview}</div></div>
+          {/if}
         </div>
-      {/if}
-      <button class="acc-head" onclick={()=>accFx=!accFx} aria-expanded={accFx}><span class="chev">{accFx?'▾':'▸'}</span> Transform <span class="acc-hint">blur · pixelize · rotate · flip · sampling</span></button>
-      {#if accFx}
-        <div class="acc-body">
-          <div class="grid4">
-            <label><span>Blur</span><input class="slider sm" type="range" min="0" max="6" step="1" bind:value={blur} /><em>{blur? `${blur}px`:'off'}</em></label>
-            <label><span>Pixelize</span><input class="slider sm" type="range" min="0" max="16" step="1" bind:value={pixelize} /><em>{pixelize||'off'}</em></label>
-            <label><span>Rotate</span><select bind:value={rotate} class="sel sm"><option value="0">0°</option><option value="90">90°</option><option value="180">180°</option><option value="270">270°</option></select></label>
-            <label><span>Sampling</span><select bind:value={filter} class="sel sm"><option value="linear">Linear</option><option value="nearest">Nearest</option></select></label>
-            <label class="check"><input type="checkbox" bind:checked={flipH}/> Flip H</label>
-            <label class="check"><input type="checkbox" bind:checked={flipV}/> Flip V</label>
-          </div>
-        </div>
-      {/if}
-      <button class="acc-head" onclick={()=>accOut=!accOut} aria-expanded={accOut}><span class="chev">{accOut?'▾':'▸'}</span> Output <span class="acc-hint">dither</span></button>
-      {#if accOut}
-        <div class="acc-body">
-          <div class="grid4">
-            <label><span>Dither</span><select bind:value={ditherMode} class="sel sm"><option value="none">Off</option><option value="bayer4">Bayer 4×4</option><option value="bayer8">Bayer 8×8</option><option value="floyd">Floyd-Steinberg</option><option value="atkinson">Atkinson</option><option value="sierra">Sierra</option><option value="stucki">Stucki</option><option value="jarvis">Jarvis</option></select></label>
-          </div>
-          <p class="acc-note">Dithering breaks color runs and is byte-adverse with compression — prefer shade blocks for the same tones.</p>
-        </div>
-      {/if}
+      </div>
     </div>
-    <details class="raw"><summary>Raw {renderMode==='ansi24'?'\\x04':'\\x03'} codes</summary><textarea id="ircArtRaw" readonly value={art} rows={Math.min(10, art.split('\n').length+1)}></textarea></details>
-    <div class="saveRow">
-      <input class="saveName" bind:value={saveName} placeholder="Name" aria-label="Save name" />
-      <button class="btn saveBtn" onclick={handleSave} disabled={saving || !art || overBudget}>{#if saving}Saving…{:else if saveOk}Saved ✓{:else if editId}Update{:else}Save{/if}</button>
-      {#if saveError}<span class="saveErr">{saveError}</span>{/if}
-      {#if overBudget}<span class="saveErr">Fit to 512 first</span>{/if}
-    </div>
-
+    <footer>
     <footer>
       {#if onBack}<button class="btn" onclick={onBack}>← Back</button>{/if}
       <div class="foot-left">
