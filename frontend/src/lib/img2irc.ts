@@ -1553,6 +1553,26 @@ export async function renderPixelsCore(
     for(let r=0;r<rows;r++){
       const tops: Array<[number,number,number,number]>=[], bots: Array<[number,number,number,number]>=[];
       for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
+      // Precompute per-cell cheap costs for dpSeg to avoid O(n·L·|G|·len) lutLookup
+      type CheapCell = { fgS:string, bgS:string, cost:number };
+      const preHalf: (CheapCell|null)[] = new Array(cols);
+      const preQuarter: (CheapCell|null)[] = new Array(cols);
+      const preBraille: (CheapCell|null)[] = new Array(cols);
+      for(let i=0;i<cols;i++){
+        const [r1,g1,b1,a1]=tops[i]??[0,0,0,255], [r2,g2,b2,a2]=bots[i]??[0,0,0,255];
+        const isEmptyH = (o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false) && !parseMatteHex((o as any).matte ?? null);
+        if(isEmptyH){ preHalf[i]=null; }
+        else {
+          const fgIdxH=toEmitIdx(lutLookup(r1,g1,b1,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching);
+          const bgIdxH=toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching);
+          preHalf[i]={fgS:String(fgIdxH), bgS:String(bgIdxH), cost:0};
+        }
+        const fgS_q=String(toEmitIdx(lutLookup(r1,g1,b1,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
+        const bgS_q=String(toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
+        preQuarter[i]={fgS:fgS_q, bgS:bgS_q, cost:0};
+        const codeB='\x03'+String(toEmitIdx(lutLookup((r1+r2)/2|0,(g1+g2)/2|0,(b1+b2)/2|0,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
+        preBraille[i]={fgS:'', bgS:'', cost:0}; (preBraille[i] as any).code=codeB;
+      }
       const cheapHalfCost=(pos:number,len:number):number=>{
         let cost=0, lastFg='',lastBg='',first=true;
         for(let i=0;i<len;i++){
@@ -1574,9 +1594,9 @@ export async function renderPixelsCore(
       const cheapQuarterCost=(pos:number,len:number):number=>{
         let cost=0, lastFg='',lastBg='',first=true;
         for(let i=0;i<len;i++){
-          const [r1,g1,b1]=tops[pos+i]??[0,0,0,255], [r2,g2,b2]=bots[pos+i]??[0,0,0,255];
-          const fgS=String(toEmitIdx(lutLookup(r1,g1,b1,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
-          const bgS=String(toEmitIdx(lutLookup(r2,g2,b2,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
+          const cell = preQuarter[pos+i];
+          if(!cell){ first=false; continue; }
+          const {fgS, bgS} = cell;
           const needFg=!first&&lastBg===bgS&&lastFg!==fgS, needFull=first||lastFg!==fgS||lastBg!==bgS;
           if(needFg){ cost+=o.viterbiW*(1+fgS.length); lastFg=fgS; }
           else if(needFull){ cost+=o.viterbiW*(2+fgS.length+bgS.length); lastFg=fgS; lastBg=bgS; }
@@ -1587,8 +1607,9 @@ export async function renderPixelsCore(
       const cheapBrailleCost=(pos:number,len:number):number=>{
         let cost=0, lastCode='',first=true;
         for(let i=0;i<len;i++){
-          const [r1,g1,b1,a1]=tops[pos+i]??[0,0,0,255], [r2,g2,b2]=bots[pos+i]??[0,0,0,255];
-          const code='\x03'+String(toEmitIdx(lutLookup((r1+r2)/2|0,(g1+g2)/2|0,(b1+b2)/2|0,palAuto,ngA,o.colorMatching).irc,'irc',palAuto,o.colorMatching));
+          const cell = preBraille[pos+i];
+          if(!cell){ first=false; continue; }
+          const code=(cell as any).code as string;
           if(first||lastCode!==code){ cost+=o.viterbiW*code.length; lastCode=code; }
           cost+=o.viterbiW*3; first=false;
         }
