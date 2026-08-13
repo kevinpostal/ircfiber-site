@@ -510,16 +510,16 @@
     if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
     let polls = 0;
-    function poll(): void {
+  function poll(): void {
       pinnedResnapTimer = null;
       if (!container) return;
       if (!cachedAtBottom) return;
-      if (container.scrollTop < prevScrollTop - 2) {
+      if (container.scrollTop < prevScrollTop) {
         cachedAtBottom = false;
         return;
       }
       const bottom = container.scrollHeight - container.clientHeight;
-      if (bottom - container.scrollTop > 4) {
+      if (bottom - container.scrollTop > 1) {
         container.scrollTop = container.scrollHeight;
       }
       polls += 1;
@@ -614,7 +614,7 @@
       const offsetHeight = container.clientHeight;
       const scrollPos = Math.ceil(container.scrollTop);
       const bottom = (scrollHeight - offsetHeight) + 1;
-      if ((bottom - scrollPos) > 4) {
+      if ((bottom - scrollPos) > 1) {
         container.scrollTop = scrollHeight;
       }
     });
@@ -736,9 +736,8 @@
       // do not run the scrolledUp direction check that would otherwise
       // clear the stick when scrollHeight grew under a pinned viewport.
       if (!isInitialSnap) {
-        const scrolledUp = container ? container.scrollTop < prevScrollTop - 2 : false;
+        const scrolledUp = container ? container.scrollTop < prevScrollTop : false;
         if (scrolledUp) { cachedAtBottom = false; } else {
-        maybeTrim();
         // Ensure trim has been applied to the DOM before measuring
         // scrollHeight. Without this, renderStart may have just been moved
         // (trimming 150 rows at top) but the DOM still contains the old
@@ -900,12 +899,12 @@
     // within the band does NOT re-stick (reading is never yanked).
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
     const distFromBottom = scrollHeight - scrollBottom;
-    const scrolledUp = scrollTop < prevTop - 2;
+    const scrolledUp = scrollTop < prevTop;
     const heightChangedWithoutScroll = scrollHeight !== prevHeight && scrollTop === prevTop;
     const atBottom = scrolledUp
       ? false
       : cachedAtBottom
-        ? heightChangedWithoutScroll ? true : distFromBottom <= 4
+        ? heightChangedWithoutScroll ? true : distFromBottom <= 1
         : distFromBottom <= STICK_BAND_PX;
     if (cachedAtBottom === atBottom) {
       // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
