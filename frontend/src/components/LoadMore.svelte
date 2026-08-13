@@ -309,6 +309,8 @@ $effect(() => {
     // construction. The viewport-fill effect handles those (silently);
     // firing tryAutoLoad here would flash "Fetching more history…".
     if (scrollEl.scrollHeight <= scrollEl.clientHeight) return;
+    // IRCCloud: only when at the very top, not 200px pre-load.
+    if (scrollEl.scrollTop > 0) return;
     tryAutoLoad().catch((e) => console.error('[LoadMore] tryAutoLoad error:', e));
   }
 
@@ -326,7 +328,7 @@ $effect(() => {
       (entries) => {
         if (entries[0]?.isIntersecting) onSentinelVisible();
       },
-      { root: scrollEl, rootMargin: '100px 0px 0px 0px', threshold: 0 },
+      { root: scrollEl, rootMargin: '0px 0px 0px 0px', threshold: 0 },
     );
     io.observe(sentinelEl);
   }
@@ -336,19 +338,28 @@ $effect(() => {
     const el = document.getElementById('messages');
     if (!el) return;
     scrollEl = el;
-    // IRCCloud checkInfiniscroll fires on every scroll, not via sentinel.
-    // We use sentinel + fallback for robustness: sentinel with 100px pre-load
-    // (was 0px strict, too eager to miss due to subpixel), fallback at <=1px
-    // for Home/End jumps. Arm immediately — don't wait for first scroll.
-    ensureSentinel();
+    // Arm on first scroll — mount-time scrollTop is transiently 0 before snap-to-bottom
+    // lands; arming then would pre-reveal history. Also install sync fallback:
+    // IntersectionObserver fires async next frame, so a Home/End jump on same tick
+    // as arm would miss the 0px band — the scroll handler catches it synchronously
+    // per ChatInfinite.noWedgeAtTop / sentinelPreloadFiresBeforeTop.
+    let armed = false;
+    const arm = () => {
+      if (armed) return;
+      armed = true;
+      el.removeEventListener('scroll', arm);
+      ensureSentinel();
+    };
     const onScrollFallback = () => {
       if (!scrollEl) return;
-      if (scrollEl.scrollTop <= 1 && scrollEl.scrollHeight > scrollEl.clientHeight) {
+      if (scrollEl.scrollTop <= 0 && scrollEl.scrollHeight > scrollEl.clientHeight) {
         if (!loading && !clearedAt && !noMoreHistory) onSentinelVisible();
       }
     };
+    el.addEventListener('scroll', arm, { passive: true });
     el.addEventListener('scroll', onScrollFallback, { passive: true });
     return () => {
+      el.removeEventListener('scroll', arm);
       el.removeEventListener('scroll', onScrollFallback);
       io?.disconnect();
       io = null;

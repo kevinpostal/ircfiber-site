@@ -124,6 +124,11 @@ export const ircState = $state({
   pulseBuffers: new Set<string>(),
 });
 
+// E2E hooks for load-more verification
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__fiberIrcState = ircState;
+}
+
 // IRCCloud-style previous-buffer tracking: the buffer that was active before
 // the current one. Used by archiveBuffer to select where focus goes.
 let previousBuffer: { networkId: string | null; bufferName: string | null } = { networkId: null, bufferName: null };
@@ -1314,10 +1319,11 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   ircState.processedMessages[key] = prependReprocess(existing, filtered);
   markNetworkSeen(networkId);
 }
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__fiberPrependMessages = prependMessages;
+}
 
 // Marks are sequence-prefixed (`<seq>|<msgid or t:ts>`) so every fetch or
-// in-memory reveal produces a UNIQUE mark even when boundary messages lack
-// msgids and share timestamps — the divider-scroll choreography keys off
 // "mark changed", and a stale-looking mark would strand the user at
 // scrollTop 0 where the browser fires no further scroll events.
 let backlogDividerSeq = 0;
