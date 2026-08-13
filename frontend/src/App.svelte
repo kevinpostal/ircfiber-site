@@ -754,12 +754,23 @@ let showNetworkForm: boolean = $state(false);
           // Merge older REST history without clobbering the new tail.
           if (msgs.length > 0) { queueHistory(msgs); queued = true; }
         }
-      }
       // Keep spinner until coalesced backfill flush (150ms debounce) completes
-      // so initial paint is single atomic update, not "older then recent" flash
-      // at /irc/Supernets/channel/superbowl. 180ms covers 150ms debounce +
-      // one rAF for MessageList windowing.
-      if (queued) await new Promise(r => setTimeout(r, 180));
+      // and MessageList has laid out (clientHeight > 0) and snapped to
+      // bottom — prevents subtle flash where flex container is 0-height
+      // before first paint at /irc/Supernets/channel/superbowl.
+      if (queued) {
+        await new Promise(r => setTimeout(r, 220));
+        // Extra rAF + layout poll: ensure #messages has been laid out
+        // (isBootLoading -> ChatArea mount is async; without this the
+        // first synchronous snap lands at scrollTop 0 and the rAF snap
+        // flashes from top to bottom).
+        for (let i = 0; i < 6; i++) {
+          const el = document.getElementById('messages') as HTMLDivElement | null;
+          if (el && el.clientHeight > 0 && el.scrollHeight > 0) break;
+          await new Promise(r => requestAnimationFrame(() => r(null)));
+        }
+        await new Promise(r => requestAnimationFrame(() => r(null)));
+      }
       backlogReady = true;  // IRCCloud backlog_complete equivalent
       performance.mark('backlog-ready');
     } catch (e) {
