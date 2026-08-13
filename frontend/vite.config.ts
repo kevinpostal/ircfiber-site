@@ -58,7 +58,7 @@ export default defineConfig({
   publicDir: '../public',
   build: {
     outDir: '../public/dist',
-    emptyOutDir: true,
+    emptyOutDir: false,
     copyPublicDir: false,
     manifest: true,
     // Vite 5+ puts assets under `assets/` (e.g. public/dist/assets/index-*.js)
