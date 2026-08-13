@@ -223,6 +223,7 @@
           (opts as any)._smartPaletteB = smartPalCache.B;
         }
         const _kHit=makeCacheKey();
+        const _hit=renderCache.get(_kHit);
         if(_hit){
           if(cur!==gen) return;
           art=_hit.art;
