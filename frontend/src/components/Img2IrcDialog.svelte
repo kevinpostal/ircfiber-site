@@ -525,9 +525,10 @@
                 <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i} title="{p.label}: {p.hint} — burst {p.bd}ms then {p.sd}ms">{p.label}</button>
               {/each}
             </div>
-        <div class="p-col right">
-          {#if hasAlpha}
-            <div class="p-row">
+          </div>
+          <div class="p-col right">
+            {#if hasAlpha}
+              <div class="p-row">
               <span class="p-label">Transparency</span>
               <div class="pill-group" role="radiogroup" aria-label="Transparency">
                 <button class="pill" class:on={!transparencyEnabled} onclick={()=>{transparencyEnabled=false; matteColor=null}} role="radio" aria-checked={!transparencyEnabled}>Off</button>
