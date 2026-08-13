@@ -128,7 +128,7 @@
   let lastFillScrollHeight = -1;
   let lastFillTime = 0;
   let silentFillIterations = 0;
-  const MAX_SILENT_FILLS = 3;
+  const MAX_SILENT_FILLS = 1;
   // Viewport auto-fill should NOT flash "Fetching more history…" — that
   // divider is for user-initiated loads when the window is already full
   // (scrollable) and the user scrolls to top / clicks Load more. For
@@ -206,10 +206,9 @@ $effect(() => {
         return; // no progress — stop (fix: now correctly tracked)
       }
       if (silentFillIterations >= MAX_SILENT_FILLS) return; // bounded per ChatInfinite.progressiveLoadTerminates
-      // 150ms debounce between silent fills + cap to 3 iterations (covers
-      // BATCH_SIZE=200 needing at most 2 fetches to overflow 800px at ~24px/row)
+      // IRCCloud 200ms debounce — single batch per viewport check, not 3×150ms eager
       const now = Date.now();
-      if (now - lastFillTime < 150) return;
+      if (now - lastFillTime < 200) return;
       lastFillTime = now;
       lastFillAttemptCount = messageCount;
       lastFillScrollHeight = scrollEl.scrollHeight;
@@ -294,11 +293,12 @@ $effect(() => {
 
   // IRCCloud BufferScrollView.checkInfiniscroll, redesigned as the
   // svelte-infinite pattern: an IntersectionObserver on a sentinel at the
-  // top of the scroll content with a 200px rootMargin pre-load buffer.
-  // The sentinel intersects up to 200px BEFORE the user reaches the top,
-  // so the previous batch is revealed/fetched while the user is still
-  // scrolling — no dead zone at the top and no reliance on scroll events
-  // firing at the exact boundary (which wedged at scrollTop 0).
+  // top of the scroll content. IRCCloud only fires when
+  // isScrolledToTop() (scrollTop <= 0) and !isFullyRendered() and
+  // !isScrolledToBottom(), not 200px pre-load. The 200px pre-load buffer
+  // felt eager — it fetched while the user was still 200px from the top,
+  // loading too many batches too quickly. Match IRCCloud: 0px margin,
+  // threshold 0, and fallback at scrollTop <= 0.
   let sentinelEl = $state<HTMLElement | null>(null);
   let io: IntersectionObserver | null = null;
 
@@ -309,12 +309,8 @@ $effect(() => {
     // construction. The viewport-fill effect handles those (silently);
     // firing tryAutoLoad here would flash "Fetching more history…".
     if (scrollEl.scrollHeight <= scrollEl.clientHeight) return;
-    // No loop protection needed (svelte-infinite's loop detection is for
-    // loaders whose appends can be shorter than the rootMargin): every
-    // successful reveal adds BATCH_SIZE rows (~5-10k px), moving the
-    // sentinel far out of the 200px band, and the fetch path sets
-    // `loading`/`noMoreHistory`. A re-entry therefore means the user
-    // really scrolled back up — fire again.
+    // IRCCloud: only when at the very top, not 200px pre-load.
+    if (scrollEl.scrollTop > 0) return;
     tryAutoLoad().catch((e) => console.error('[LoadMore] tryAutoLoad error:', e));
   }
 
@@ -332,12 +328,43 @@ $effect(() => {
       (entries) => {
         if (entries[0]?.isIntersecting) onSentinelVisible();
       },
-      { root: scrollEl, rootMargin: '200px 0px 0px 0px', threshold: 0 },
+      { root: scrollEl, rootMargin: '0px 0px 0px 0px', threshold: 0 },
     );
     io.observe(sentinelEl);
   }
 
   onMount(() => {
+    if (!onLoadMore && !onRevealFromMemory) return;
+    const el = document.getElementById('messages');
+    if (!el) return;
+    scrollEl = el;
+    // Arm on first scroll — mount-time scrollTop is transiently 0 before snap-to-bottom
+    // lands; arming then would pre-reveal history. Also install sync fallback:
+    // IntersectionObserver fires async next frame, so a Home/End jump on same tick
+    // as arm would miss the 0px band — the scroll handler catches it synchronously
+    // per ChatInfinite.noWedgeAtTop / sentinelPreloadFiresBeforeTop.
+    let armed = false;
+    const arm = () => {
+      if (armed) return;
+      armed = true;
+      el.removeEventListener('scroll', arm);
+      ensureSentinel();
+    };
+    const onScrollFallback = () => {
+      if (!scrollEl) return;
+      if (scrollEl.scrollTop <= 0 && scrollEl.scrollHeight > scrollEl.clientHeight) {
+        if (!loading && !clearedAt && !noMoreHistory) onSentinelVisible();
+      }
+    };
+    el.addEventListener('scroll', arm, { passive: true });
+    el.addEventListener('scroll', onScrollFallback, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', arm);
+      el.removeEventListener('scroll', onScrollFallback);
+      io?.disconnect();
+      io = null;
+    };
+  });
     if (!onLoadMore && !onRevealFromMemory) return;
     const el = document.getElementById('messages');
     if (!el) return;

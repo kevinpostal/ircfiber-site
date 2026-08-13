@@ -23,7 +23,7 @@ let totalBackfillQueued = 0;
 
 const MAX_BUFFER_SIZE = 200;
 const MAX_BACKFILL_SIZE = 400;
-const BACKFILL_DEBOUNCE_MS = 150;
+const BACKFILL_DEBOUNCE_MS = 200;
 
 export function setFlushFn(fn: FlushFn): void {
   flushFn = fn;

@@ -98,10 +98,9 @@
         beforeid: oldestEid ? String(oldestEid) : (oldestMsgid || undefined),
         beforeMsgid: oldestMsgid || undefined,
         before: oldestTs,
-        count: 150,
+        count: 100,
         ...(oldestMsgid ? { fetchFromUpstream: true, fetchCommand: 'BEFORE' as const, fetchRef: oldestMsgid } : {}),
       });
-
       const older = result.messages;
       if (older.length > 0) {
         const beforeLen = (ircState.messages[key] ?? []).length;
