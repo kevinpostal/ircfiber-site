@@ -712,41 +712,46 @@ let showNetworkForm: boolean = $state(false);
         fetchCommand: 'LATEST',
       });
       performance.mark('history-api-end');
+      // History merges now go through the backfill batcher (enqueueMessage
+      // with isBackfill=true) so a concurrent CHATHISTORY BATCH (also via
+      // the backfill queue, 0ms timer) coalesces into a single
+      // prependMessages() flush. Previously loadBufferHistory called
+      // setMessages/prependMessages directly while the CHATHISTORY BATCH
+      // arrived via the batcher 0ms later — two separate renders, visible
+      // as "IRC history then server messages" flicker. Coalescing makes the
+      // initial paint atomic.
+      const queueHistory = (list: IRCMessage[]) => {
+        for (const m of list) enqueueMessage(networkId, bufferName, m, true);
+      };
       if (isServerLog && existing.length > 0) {
         // Merge REST history with existing sync messages.  The sync provides
         // the most recent 50 messages; the REST provides up to 200.  Merge
         // older history before the sync snapshot, deduping by eid so recent
         // live events (arrived via batchAppendMessages while the REST call
         // was in flight) are not overwritten.
-        prependMessages(networkId, bufferName, msgs);
+        if (msgs.length > 0) queueHistory(msgs);
       } else if (hadCached) {
         // We already showed cached history (instant paint). REST is the
         // source of truth for older backlog, but it must NOT overwrite the
         // tail — the cached array may contain optimistic messages (label
         // without eid) that haven't been persisted to Redis yet. Replacing
         // via setMessages would flicker and make the user's recent sends
-        // disappear until the echo arrives. Merge via prependMessages
+        // disappear until the echo arrives. Merge via backfill queue
         // which dedups by eid/msgid and preserves the tail.
-        if (msgs.length > 0) {
-          prependMessages(networkId, bufferName, msgs);
-        }
+        if (msgs.length > 0) queueHistory(msgs);
         // If REST is empty (no history), keep the cached messages as-is —
         // don't clear the buffer.
       } else if (existing.length === 0) {
         const current = ircState.messages[key] ?? [];
         if (current.length === 0) {
-          // No cached and no sync arrived in the meantime — use REST
-          // only if it actually has messages; an empty REST must not
-          // clear a buffer that just received live events.
-          if (msgs.length > 0) {
-            setMessages(networkId, bufferName, msgs);
-          }
+          // No cached and no sync arrived in the meantime — use REST.
+          // Queue as backfill so a concurrent CHATHISTORY BATCH (0ms) merges
+          // atomically instead of flashing "REST then CHATHISTORY".
+          if (msgs.length > 0) queueHistory(msgs);
         } else {
           // A sync or live batch arrived while REST was in flight.
           // Merge older REST history without clobbering the new tail.
-          if (msgs.length > 0) {
-            prependMessages(networkId, bufferName, msgs);
-          }
+          if (msgs.length > 0) queueHistory(msgs);
         }
       }
       backlogReady = true;  // IRCCloud backlog_complete equivalent
