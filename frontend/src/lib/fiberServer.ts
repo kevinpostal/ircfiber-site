@@ -5,7 +5,7 @@ import type { Network } from '../types';
  * host === "irc.ircfiber.com" && systemManaged
  */
 export function isFiberServer(net: Pick<Network, 'host' | 'systemManaged'>): boolean {
-  return net.host === 'irc.ircfiber.com';
+  return net.host === 'irc.ircfiber.com' && !!net.systemManaged;
 }
 
 /**

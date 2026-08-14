@@ -27,16 +27,10 @@ function isTextParts(pathname: string, search: string, hash: string): boolean {
   return TEXT_URL_RE.test(p) || TEXT_URL_RE.test(s) || TEXT_URL_RE.test(h);
 }
 
-/**
- * Normalize a raw URL string to a canonical https text file URL if it looks like
- * a text/code file per extension. Returns null if not a text file.
- * Also handles our upload URLs which are always https://<host>/uploads/<id>.<ext>
- */
 export function normalizeTextUrl(rawUrl: string): string | null {
   let urlStr = rawUrl.trim();
   if (!urlStr) return null;
   if (!/^https?:\/\//i.test(urlStr) && !/^\/\//.test(urlStr)) {
-    // Try with https:// prepend (like autolinker does for bare domains)
     if (/^[a-z0-9.-]+\.[a-z]{2,}\//i.test(urlStr)) urlStr = 'https://' + urlStr;
     else return null;
   }
@@ -49,17 +43,15 @@ export function normalizeTextUrl(rawUrl: string): string | null {
     return null;
   }
   if (/^(javascript|vbscript|data):/i.test(u.protocol)) return null;
-  // Always allow our own upload URLs if they have a text-like extension
-  // Also allow any URL with a known text extension
+  // Only inline text snippets we have uploaded (under /uploads/).
+  // External URLs like https://www.elecrow.com/...2300mah.html must NOT
+  // be fetched and rendered inline — they are not our snippets.
+  if (!u.pathname.startsWith('/uploads/')) return null;
   const isLoopback = /^(localhost|127\.0\.0\.1|::1)$/i.test(u.hostname) || u.hostname.startsWith('127.');
   if (!isLoopback) u.protocol = 'https:';
   if (isTextParts(u.pathname, u.search, u.hash)) return u.href;
-  // Special: check for /uploads/<id> without extension? Try to allow if host is ours and path starts with /uploads/
-  if (u.pathname.startsWith('/uploads/')) {
-    // Our uploads are always with extension, but be permissive
-    return u.href;
-  }
-  return null;
+  // Our uploads are always with extension, but be permissive for /uploads/<id> without extension
+  return u.href;
 }
 
 function stripTrailingPunc(url: string): string {

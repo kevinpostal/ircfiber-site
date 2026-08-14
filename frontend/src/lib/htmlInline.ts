@@ -36,17 +36,17 @@ export function normalizeHtmlUrl(rawUrl: string): string | null {
   }
   if (/^(javascript|vbscript|data):/i.test(u.protocol)) return null;
 
+  // Only inline HTML snippets we have uploaded (under /uploads/).
+  // External URLs like https://www.elecrow.com/...html must NOT be inlined.
+  if (!u.pathname.startsWith('/uploads/')) return null;
   const isLoopback = /^(localhost|127\.0\.0\.1|::1)$/i.test(u.hostname) || u.hostname.startsWith('127.');
   if (!isLoopback) u.protocol = 'https:';
   if (isHtmlParts(u.pathname, u.search, u.hash)) return u.href;
-  // Also accept /uploads/ paths ending with html ext
-  if (u.pathname.startsWith('/uploads/') && HTML_EXT_RE.test(u.pathname)) return u.href;
   return null;
 }
 
 function stripTrailingPunc(url: string): string {
   return url.replace(/[.,;!?]+$/, '').replace(/[)]+$/, (m) => {
-    // Balance parentheses: if url has more '(' than ')', keep one
     const open = (url.match(/\(/g) || []).length;
     const close = (url.match(/\)/g) || []).length;
     return close > open ? m.slice(1) : m;
