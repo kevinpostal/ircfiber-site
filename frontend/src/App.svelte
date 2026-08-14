@@ -1400,7 +1400,8 @@ let showNetworkForm: boolean = $state(false);
     const netName = decodeURIComponent(m[1]);
     const type = m[2];
     const target = m[3] ? decodeURIComponent(m[3]) : '';
-    const net = ircState.networks.find(n => n.name === netName || n.name.toLowerCase() === netName.toLowerCase());
+    const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+    const net = ircState.networks.find(n => n.name === netName || n.name.toLowerCase() === netName.toLowerCase() || normalize(n.name) === normalize(netName));
     if (!net) {
       // Networks may still be loading from the initial sync. If we have
       // no networks yet, leave the URL alone so the sync handler's
