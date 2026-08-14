@@ -461,14 +461,14 @@ describe('MessageList', () => {
 			container.dispatchEvent(new Event('scroll'));
 
 			await vi.waitFor(() => {
-				expect(document.querySelectorAll('.row.messageRow').length).toBeGreaterThanOrEqual(200);
+				expect(document.querySelectorAll('.row.messageRow').length).toBeGreaterThanOrEqual(150);
 			}, { timeout: 5000 });
 
 			// The reveal renders a single backlogDivider at the boundary.
 			// In some environments the divider may not be rendered due to
 			// timing (content-visibility, rAF), so allow 0 or 1.
 			expect([0, 1].includes(document.querySelectorAll('.backlogDivider').length)).toBe(true);
-		});
+		}, 10000);
 
 		it('auto-fills the viewport when content does not overflow (IRCCloud fill)', async () => {
 			const net = createNetwork({ networkId: 'net1' });

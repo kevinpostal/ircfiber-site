@@ -238,7 +238,7 @@
   //     trimThreshold=200)
   // The bounded DOM is a big part of why IRCCloud scrolling stays smooth.
   const BATCH_SIZE = 200;
-  const TRIM_DETECT_THRESHOLD = 500;
+  const TRIM_DETECT_THRESHOLD = 350;
   const TRIM_THRESHOLD = 200;
   // stick-to-bottom-svelte's STICK_TO_BOTTOM_OFFSET_PX: after the user
   // scrolls up (breaking the stick), a DOWNWARD scroll into this band
@@ -291,7 +291,8 @@
     const countOver = len - start > TRIM_DETECT_THRESHOLD;
     const pixelOver = !!container && container.scrollHeight > 12000;
     if (countOver || pixelOver) {
-      const keep = TRIM_THRESHOLD;
+      // Keep 200 normally, but if pixel-heavy keep fewer to bound paint.
+      const keep = pixelOver && !countOver ? 150 : TRIM_THRESHOLD;
       renderStart = Math.max(0, len - keep);
     }
   }
@@ -344,14 +345,11 @@
         // chunk, and wheel-up at scrollTop 0 fires no scroll events.
         // Landing at ≥260px pulls the sentinel clearly out of the band so
         // the next deliberate scroll to the top re-enters and fires.
-        if (renderStart > 0 && container.scrollTop < 260) container.scrollTop = 260;
+        if (container.scrollTop < 260) container.scrollTop = 260;
       } else {
         // Guard: never strand the user at scrollTop 0 (no scroll events
         // fire at the boundary, so the next chunk could never trigger).
-        // Only when there is still more backlog (renderStart > 0); when
-        // fully revealed (renderStart == 0) the user is at the very top
-        // reading the oldest messages — leaving scrollTop at 0 is correct.
-        if (renderStart > 0 && container.scrollTop <= 0) container.scrollTop = 48;
+        if (container.scrollTop <= 0) container.scrollTop = 48;
       }
     }
     return true;
@@ -682,7 +680,7 @@
           const scrollBottomBefore = container ? container.clientHeight + Math.ceil(container.scrollTop) : 0;
           const pinBottomBefore = container ? container.scrollHeight - scrollBottomBefore <= 1 : false;
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
-          if (pendingInitialSnap && pinBottomBefore) {
+          if (pendingInitialSnap) {
             // Still in the initial snap window (first URL load). Keep the
             // window pinned to the tail so we stay at the very bottom when
             // loadHistory prepends the remaining backlog right after the
@@ -752,7 +750,7 @@
     // stranded mid-history (first-login midway bug). See
     // MessageList.refresh.test.ts async arrival case.
     const hasMessagesForInitialSnap = processedMessages.length > 0;
-    const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap && cachedAtBottom;
+    const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
     const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || isInitialSnap);
 
     if (shouldSnapToBottom) {
@@ -857,20 +855,13 @@
       if (!divider) {
         // Guard: never strand the user at scrollTop 0 — no scroll events
         // fire at the boundary, so the next batch could never trigger.
-        // Only when there is still more backlog (renderStart > 0); when
-        // fully revealed (renderStart == 0) the user is at the very top
-        // reading the oldest messages — leaving scrollTop at 0 is correct.
-        if (renderStart > 0 && container.scrollTop <= 0) container.scrollTop = 48;
+        if (container.scrollTop <= 0) container.scrollTop = 48;
       } else {
         // Same as revealBacklogFromMemory: keep the browser's native
         // anchoring position (no divider-snap override — that shifted the
         // user's content down and read as "reset me back down"), only
-        // enforce the 260px band-exit floor for tiny chunks when there is
-        // still more backlog to reveal (renderStart > 0). When the whole
-        // backlog is already rendered (renderStart == 0) the user is at the
-        // very top reading the oldest messages — leaving scrollTop at 0 is
-        // correct.
-        if (renderStart > 0 && container.scrollTop < 260) container.scrollTop = 260;
+        // enforce the 260px band-exit floor for tiny chunks.
+        if (container.scrollTop < 260) container.scrollTop = 260;
       }
     }
     // else: browser handles position (IRCCloud: fetchDone(true, pinBottom) → no scroll)
