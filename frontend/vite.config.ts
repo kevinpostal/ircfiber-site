@@ -29,7 +29,12 @@ const BACKEND_WS_URL =
 // first-match-wins picks the SigNoz target for SigNoz paths.
 const SIGNOZ_URL =
   process.env.VITE_SIGNOZ_URL || 'http://127.0.0.1:3301';
+// iCloud Mobile Documents causes bird sync to hang vite build
+// (public/dist and frontend/node_modules on iCloud). Use /tmp for
+// vite cache when cwd is inside Mobile Documents.
+const isICloud = process.cwd().includes('Mobile Documents');
 export default defineConfig({
+  cacheDir: isICloud ? '/tmp/vite-ircfiber' : undefined,
   assetsInclude: ['**/*.wasm'],
   plugins: [tailwindcss(), svelte({
     onwarn(warning, handler) {
