@@ -327,30 +327,17 @@
     // events to fire a second reveal from scrollTop 0.
     flushSync();
     if (atTop && !pinBottom) {
-      const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
-      if (divider) {
-        // The browser's native scroll anchoring (overflow-anchor is NOT
-        // disabled) already kept the boundary message at the top of the
-        // viewport when the chunk was prepended — scrollTop grew by the
-        // prepended height. Deliberately do NOT override it with a
-        // divider-position snap: that shifted the user's content down
-        // ~60px at every chunk boundary ("holding ArrowUp keeps resetting
-        // me back down"). The divider slides into view as the user scrolls
-        // up through the new batch.
-        //
-        // The 260px floor keeps the viewport OUT of LoadMore's 200px
-        // pre-load band (rootMargin): if the chunk is tiny (near memory
-        // exhaustion), the anchored scrollTop stays inside the band and
-        // the sentinel would keep intersecting — no IO transition, no next
-        // chunk, and wheel-up at scrollTop 0 fires no scroll events.
-        // Landing at ≥260px pulls the sentinel clearly out of the band so
-        // the next deliberate scroll to the top re-enters and fires.
-        if (container.scrollTop < 260) container.scrollTop = 260;
-      } else {
-        // Guard: never strand the user at scrollTop 0 (no scroll events
-        // fire at the boundary, so the next chunk could never trigger).
-        if (container.scrollTop <= 0) container.scrollTop = 48;
-      }
+      if (container.scrollTop < 260) container.scrollTop = 260;
+      prevScrollTop = container.scrollTop;
+      prevScrollHeight = container.scrollHeight;
+      cachedAtTop = true;
+      cachedAtBottom = false;
+      wasRecentlyAtBottom = false;
+    } else if (!atTop && !pinBottom) {
+      const delta = container.scrollHeight - oldScrollHeight;
+      if (delta !== 0) container.scrollTop = oldScrollTop + delta;
+      prevScrollTop = container.scrollTop;
+      prevScrollHeight = container.scrollHeight;
     }
     return true;
   }
@@ -639,6 +626,7 @@
     const key = bufferKey;
     const msgs = processedMessages;
     const isNewBuffer = key !== lastBufferKey;
+    const isHistoryPrependForSnap = (() => { const firstKeySnap = msgs.length ? itemKeyOf(msgs[0]) : ''; return firstKeySnap !== lastFirstProcessedKey; })();
     if (isNewBuffer) {
       pendingInitialSnap = true;
       initialSnapDone = false;
@@ -674,13 +662,16 @@
           cachedAtBottom = true;
           cachedAtTop = false;
         } else {
-          const oldScrollHeight = container ? container.scrollHeight : 0;
-          const oldScrollTop = container ? container.scrollTop : 0;
-          const atTopBefore = container ? container.scrollTop <= 0 : false;
-          const scrollBottomBefore = container ? container.clientHeight + Math.ceil(container.scrollTop) : 0;
-          const pinBottomBefore = container ? container.scrollHeight - scrollBottomBefore <= 1 : false;
+          const rawOldH = container ? container.scrollHeight : 0;
+          const rawOldTop = container ? container.scrollTop : 0;
+          const usePrev = prevScrollHeight !== 0 && prevScrollTop !== 0 && Math.abs(rawOldH - prevScrollHeight) > 500;
+          const oldScrollHeight = usePrev ? prevScrollHeight : rawOldH;
+          const oldScrollTop = usePrev ? prevScrollTop : rawOldTop;
+          const atTopBefore = oldScrollTop <= 0;
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
-          if (pendingInitialSnap) {
+          const scrollBottomBefore = container ? container.clientHeight + Math.ceil(oldScrollTop) : 0;
+          const pinBottomBefore = oldScrollHeight - scrollBottomBefore <= 1;
+          if (pendingInitialSnap || pinBottomBefore) {
             // Still in the initial snap window (first URL load). Keep the
             // window pinned to the tail so we stay at the very bottom when
             // loadHistory prepends the remaining backlog right after the
@@ -751,7 +742,8 @@
     // MessageList.refresh.test.ts async arrival case.
     const hasMessagesForInitialSnap = processedMessages.length > 0;
     const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || isInitialSnap);
+    const lastIsActionNotice = hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || (isInitialSnap && isHistoryPrependForSnap) || lastIsActionNotice);
 
     if (shouldSnapToBottom) {
       // For an initial buffer open we force the snap unconditionally —
@@ -954,7 +946,7 @@
         // force a user who scrolled up 50ms after sending back to bottom.
         if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
         if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
-        if (pendingInitialSnap) pendingInitialSnap = false;
+        if (pendingInitialSnap && distFromBottom > 1) pendingInitialSnap = false;
         // IRCCloud bufferMessage: while scrolled up, new messages buffer
         // instead of rendering — freeze the window's end where it is now.
         const all = processedMessages;
