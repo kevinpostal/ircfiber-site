@@ -2848,10 +2848,9 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     const modeStr = params[1];
     // Channel MODE events have a target starting with '#' or '&' AND at least
     // 3 params (mode + ≥1 target). Anything else is a user-mode change that
-    // doesn't affect the channel user list.
     const isChannelMode =
       params.length >= 3 &&
-      (target.startsWith('#') || target.startsWith('&'));
+      (target.startsWith('#') || target.startsWith('&') || target.startsWith('!') || target.startsWith('+'));
     if (isChannelMode) {
       const targets = params.slice(2);
       let adding = true;
@@ -2862,25 +2861,37 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
         if ('oOaAhvq'.includes(ch) && targetIdx < targets.length) {
           const targetNick = targets[targetIdx++];
           const member = buf.users.find(u => stripPrefix(u.nick) === targetNick);
-          if (member && adding) {
-            const prefixMap: Record<string, { prefix: string; category: ModeCategory }> = {
-              'q': { prefix: '~', category: 'OWNER' },
-              'a': { prefix: '&', category: 'ADMIN' },
-              'o': { prefix: '@', category: 'OP' },
-              'O': { prefix: '@', category: 'OPER' },
-              'h': { prefix: '%', category: 'HALFOP' },
-              'v': { prefix: '+', category: 'VOICED' },
-            };
-            const pm = prefixMap[ch];
-            if (pm) {
-              member.prefix = pm.prefix;
-              member.category = pm.category;
-              member.nick = pm.prefix + stripPrefix(member.nick);
-            }
+          const prefixMap: Record<string, { prefix: string; category: ModeCategory }> = {
+            'q': { prefix: '~', category: 'OWNER' },
+            'a': { prefix: '&', category: 'ADMIN' },
+            'o': { prefix: '@', category: 'OP' },
+            'O': { prefix: '@', category: 'OPER' },
+            'h': { prefix: '%', category: 'HALFOP' },
+            'v': { prefix: '+', category: 'VOICED' },
+          };
+          const pm = prefixMap[ch];
+          if (member && adding && pm) {
+            member.prefix = pm.prefix;
+            member.category = pm.category;
+            member.nick = pm.prefix + stripPrefix(member.nick);
           } else if (member && !adding) {
             member.prefix = '';
             member.category = 'MEMBER';
             member.nick = stripPrefix(member.nick);
+          } else if (!member && adding && pm) {
+            // MODE arrived before the user was in the list (or user joined via services). Add them so the new prefix is visible immediately.
+            buf.users.push({
+              nick: pm.prefix + targetNick,
+              prefix: pm.prefix,
+              category: pm.category,
+              ident: '',
+              realname: '',
+              isAway: false,
+              awayMessage: '',
+              lastSpoke: 0,
+              lastHighlighted: 0,
+              account: ''
+            });
           }
         }
       }
