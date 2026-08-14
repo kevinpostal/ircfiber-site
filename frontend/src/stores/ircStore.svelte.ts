@@ -136,6 +136,7 @@ export const ircState = $state({
 // E2E hooks for load-more verification
 if (typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__fiberIrcState = ircState;
+  (window as unknown as Record<string, unknown>).__fiberBatchAppendMessages = batchAppendMessages;
 }
 
 // IRCCloud-style previous-buffer tracking: the buffer that was active before

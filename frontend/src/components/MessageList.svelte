@@ -1548,10 +1548,14 @@
     .empty-channel { padding: 32px 16px; }
     .empty-headline { font-size: 16px; }
   }
-  /* Step 4b per-row: let browser skip offscreen rows. 40px is average row height; intrinsic size prevents scrollbar jitter. */
+  /* Step 4b per-row: isolate layout to let browser skip offscreen work.
+     content-visibility: auto removed — it caused scrollHeight estimation
+     (contain-intrinsic-size 48px) to break IRCCloud-parity scroll pinning
+     (maybeTrim pixel guard, dividerPos anchoring, MessageList.test.ts).
+     contain: layout alone still reduces style recalc without affecting
+     scroll metrics. Re-evaluate content-visibility only with a virtualizer
+     that measures intrinsic size per row. */
   :global(.messages .row) {
     contain: layout;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 48px;
   }
 </style>

@@ -46,8 +46,8 @@ History stages are single-pass string scans + JIT regex. Batching still copies e
 ## Fix that moves the needle (Step 4)
 
 - **4a Cap JS memory:** `MAX_JS_MESSAGES 5000` FIFO per buffer on `batchAppendMessages`/`setMessages`/`prependMessages`/`appendMessage`; eviction also slices `processedMessages` via `buildProcessedBuffer` tail / `appendToProcessed` keep. Bounds GC + cold `preprocessMessages` to ≤5k. `LoadMore` `beforeid` pagination (`ChatArea.svelte:handleLoadMore` → `prependMessages`) reloads evicted history.
-- **4b Harden window:** `content-visibility: auto` + `contain: layout paint` on `.messages`, per-row `contain: layout` to let browser skip offscreen layout. Window stays 200 rows; no new lib (`tanstack/virtual` deferred).
-- **4c Prepend cost:** capped N≤5k makes full `prependReprocess` ≤1 ms (see 5k cold above); optional head-group peeling reuses `appendToProcessed` trick but not required.
+- **4b Harden window:** `contain: layout paint` on `.messages` + per-row `contain: layout` (IRCCloud-parity 200-row window). `content-visibility: auto` evaluated but removed — its `contain-intrinsic-size` estimate broke `scrollHeight` anchoring for `maybeTrim` pixel guard and `dividerPos` (10 MessageList scroll-pin tests failed). Re-evaluate only with a virtualizer that measures per-row intrinsic size.
+- **4c Prepend cost:** capped N≤5k makes full `prependReprocess` ≤1 ms (bench 5k cold 1.03 ms median, re-run 0.93 ms window); optional head-group peeling reuses `appendToProcessed` trick but not required.
 - **4d Worker optional:** if cold 5k still janks, move `preprocessMessages` to dedicated Worker (`img2irc.worker.ts` pattern) — not shipped.
 
 Build/deploy: gateway-only `make frontend-build` → `make update-gateway` tar pipe to `/opt/ircfiber-src/public` + `docker build --target runtime-gateway`; no engine rebuild.
