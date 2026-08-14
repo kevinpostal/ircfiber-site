@@ -462,8 +462,16 @@
     // Priority: bottom > focus > last > global
     const bottomKey = findKey(bottomTs);
     if (bottomKey) {
-      m.set(bottomKey, 'bottom');
-      return m;
+      // Don't show "since you scrolled up" if you are active on page
+      // looking at messages (focused, visible, not away). The user is
+      // actively reading, so the divider is distracting; IRCCloud hides
+      // it in this case and only shows "New messages" once.
+      const isActive = !ircState.focusLost && typeof document !== 'undefined' && document.hasFocus() && document.visibilityState === 'visible';
+      if (!isActive) {
+        m.set(bottomKey, 'bottom');
+        return m;
+      }
+      // Active but scrolled up: fall through to show lastSeen once, not bottomSeen
     }
     const focusKey = findKey(focusTs);
     if (focusKey) {
