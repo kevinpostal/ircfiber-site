@@ -833,7 +833,7 @@
             if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 2) {
               doSnap();
             }
-            schedulePinnedResnap(25);
+            schedulePinnedResnap(40);
             requestAnimationFrame(() => { initialSnapDone = true; });
           });
         });
