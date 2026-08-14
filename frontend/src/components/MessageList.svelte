@@ -954,6 +954,7 @@
         // force a user who scrolled up 50ms after sending back to bottom.
         if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
         if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
+        if (pendingInitialSnap) pendingInitialSnap = false;
         // IRCCloud bufferMessage: while scrolled up, new messages buffer
         // instead of rendering — freeze the window's end where it is now.
         const all = processedMessages;
@@ -1003,6 +1004,7 @@
     const el = container;
     if (!el) return;
     const clearStickOnUserInput = () => {
+      if (pendingInitialSnap) pendingInitialSnap = false;
       if (!cachedAtBottom) return;
       cachedAtBottom = false;
       if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
