@@ -15,5 +15,5 @@
  * because that one is configuration, not per-environment.
  */
 
-export const TAILNET_SIGNOZ_URL = 'http://100.126.197.92:3003';
+export const TAILNET_SIGNOZ_URL = 'http://198.51.100.1:3003';
 export const TAILNET_SIGNOZ_LOGS_URL = `${TAILNET_SIGNOZ_URL}/logs`;

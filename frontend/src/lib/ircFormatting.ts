@@ -1,3 +1,4 @@
+// WASM evaluated 2026-08-13 — DOM-bound, not adopted; see frontend/wasm-message-history-report.md (Steps 1–2). Keep JIT regex + LRU memo; do not port parseIrcFormatting to WASM.
 // Extended mIRC color palette: codes 16-98 map to hex RGB
 const EXTENDED_COLORS: Record<number, string> = {
   16: '#470000', 17: '#472100', 18: '#474700', 19: '#324700', 20: '#004700',

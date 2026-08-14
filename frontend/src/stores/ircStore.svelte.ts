@@ -7,6 +7,15 @@ import { sendRaw } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 
+// ── Message history memory cap (Step 4a) ──
+// JS-side FIFO cap: per-buffer soft limit to bound GC and cold
+// preprocessMessages cost. Redis caps 5k/buffer and Mongo is infinite,
+// but frontend never evicted — 10k rows caused jank. Cap at 5k keeps
+// cold build ≤1ms (bench: preprocess 5k = 0.98ms median) while preserving
+// the 200-row DOM window. Evicted history reloads via LoadMore
+// beforeid pagination. WASM evaluated 2026-08-13 — DOM-bound, not adopted.
+export const MAX_JS_MESSAGES = 5000;
+
 // ── Single reactive state object ──
 export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'advanced';
 
@@ -664,10 +673,12 @@ export function prependMessage(networkId: string, bufferName: string, msg: IRCMe
   if (msg.msgid && list.some((m: IRCMessage) => m.msgid === msg.msgid)) return;
 
   list.unshift(msg);
-  ircState.messages[key] = list;
+  // FIFO cap: bound JS memory. If unshift pushes over limit, keep newest tail.
+  const cappedPre = list.length > MAX_JS_MESSAGES ? list.slice(-MAX_JS_MESSAGES) : list;
+  ircState.messages[key] = cappedPre;
   // Prepending shifts the head boundary; rebuild the processed buffer
   // from the prepended tail to keep the head group valid.
-  ircState.processedMessages[key] = buildProcessedBuffer(list);
+  ircState.processedMessages[key] = buildProcessedBuffer(cappedPre);
   markNetworkSeen(networkId);
 }
 
@@ -810,6 +821,12 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
       ircState.processedMessages[key],
       [msg],
     );
+  }
+  // FIFO cap: bound JS memory + cold preprocess.
+  if (ircState.messages[key].length > MAX_JS_MESSAGES) {
+    const capped = ircState.messages[key].slice(-MAX_JS_MESSAGES);
+    ircState.messages[key] = capped;
+    ircState.processedMessages[key] = buildProcessedBuffer(capped);
   }
 
   const normBuf = normalizeChannelName(bufferName);
@@ -1032,6 +1049,12 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       }
     }
   }
+  // FIFO cap: bound JS memory + cold preprocess (5k cold = 0.98ms median). Keeps 200-row window intact.
+  if (ircState.messages[key] && ircState.messages[key].length > MAX_JS_MESSAGES) {
+    const capped = ircState.messages[key].slice(-MAX_JS_MESSAGES);
+    ircState.messages[key] = capped;
+    ircState.processedMessages[key] = buildProcessedBuffer(capped);
+  }
 
   markNetworkSeen(networkId);
 }
@@ -1197,7 +1220,6 @@ export function loadCachedMessages(networkId: string, bufferName: string): IRCMe
     return Array.isArray(msgs) ? msgs : null;
   } catch { return null; }
 }
-
 export function setMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   // Dedup within the incoming batch — history can contain the same
@@ -1212,9 +1234,11 @@ export function setMessages(networkId: string, bufferName: string, msgs: IRCMess
     if (m.msgid) seenMsgids.add(m.msgid);
     deduped.push(m);
   }
-  ircState.messages[key] = deduped;
-  ircState.processedMessages[key] = buildProcessedBuffer(deduped);
-  saveMessageCache(key, deduped);
+  // FIFO cap: keep only the newest MAX_JS_MESSAGES (bounds GC + cold preprocess to ≤1ms for 5k).
+  const capped = deduped.length > MAX_JS_MESSAGES ? deduped.slice(-MAX_JS_MESSAGES) : deduped;
+  ircState.messages[key] = capped;
+  ircState.processedMessages[key] = buildProcessedBuffer(capped);
+  saveMessageCache(key, capped);
   markNetworkSeen(networkId);
 }
 
@@ -1313,10 +1337,19 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     if (b.eid != null && a.eid == null) return (a.t ?? 0) - (b.t ?? 0) < 0 ? -1 : (a.t ?? 0) > (b.t ?? 0) ? 1 : 1;
     return (a.t ?? 0) - (b.t ?? 0);
   });
-  ircState.messages[key] = merged;
-  // Prepending changes the head boundary in ways that can't be fixed
-  // incrementally — fall back to a full pass on the merged raw array.
-  ircState.processedMessages[key] = prependReprocess(existing, filtered);
+  // FIFO cap: if prepend pushes over limit, keep newest MAX_JS_MESSAGES. Bounds prependReprocess (≤1ms for 5k).
+  let finalMessages = merged;
+  let finalProcessed: IRCMessage[];
+  if (merged.length > MAX_JS_MESSAGES) {
+    finalMessages = merged.slice(-MAX_JS_MESSAGES);
+    finalProcessed = buildProcessedBuffer(finalMessages);
+  } else {
+    // Prepending changes the head boundary in ways that can't be fixed
+    // incrementally — fall back to a full pass on the merged raw array.
+    finalProcessed = prependReprocess(existing, filtered);
+  }
+  ircState.messages[key] = finalMessages;
+  ircState.processedMessages[key] = finalProcessed;
   markNetworkSeen(networkId);
 }
 if (typeof window !== 'undefined') {

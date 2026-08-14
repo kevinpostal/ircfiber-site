@@ -28,6 +28,7 @@
     loaded = true;
     errored = false;
     updateClosePos();
+    snapToBottomIfNeeded();
   }
   function onError(): void {
     errored = true;
@@ -37,6 +38,42 @@
     e.preventDefault();
     closed = true;
   }
+
+  function snapToBottomIfNeeded(): void {
+    // If the user is viewing the live tail (near bottom), keep them pinned
+    // to the true bottom after the image decodes and grows. The MessageList
+    // ResizeObserver already does this, but it can race with the image's
+    // onload (scrollHeight grows after the snap). We handle it here too so
+    // the preview is never left below the fold.
+    const c = document.getElementById('messages') as HTMLElement | null;
+    if (!c) return;
+    // Distance from bottom *before* we snap. After image load the distance
+    // is roughly the image height (~250px), so use a generous band (300px)
+    // rather than MessageList's 70px stick band – we want new-message
+    // images to stay visible even if the initial snap landed 250px above.
+    const dist = c.scrollHeight - c.clientHeight - c.scrollTop;
+    if (dist <= 300) {
+      requestAnimationFrame(() => {
+        c.scrollTop = c.scrollHeight;
+        requestAnimationFrame(() => {
+          c.scrollTop = c.scrollHeight;
+        });
+      });
+    }
+  }
+
+  // Cached image fix: if the image is already complete (from cache) when
+  $effect(() => {
+    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0 && !loaded && !errored) {
+      queueMicrotask(() => {
+        if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+          loaded = true;
+          updateClosePos();
+          snapToBottomIfNeeded();
+        }
+      });
+    }
+  });
 </script>
 
 {#if !closed && !errored}
@@ -50,8 +87,8 @@
         class="image"
         class:imageLoaded={loaded}
         class:imageRendered={loaded}
-        loading="lazy"
         referrerpolicy="no-referrer"
+        decoding="async"
         onload={onLoad}
         onerror={onError}
       />

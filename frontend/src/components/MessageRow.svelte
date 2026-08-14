@@ -1,3 +1,4 @@
+<!-- WASM evaluated 2026-08-13 — DOM-bound, not adopted; see frontend/wasm-message-history-report.md. Message history bottleneck is DOM/window, not per-row parse. -->
 <script lang="ts">
   import type { IRCMessage, Member } from '../types';
   import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel } from '../lib/utils';

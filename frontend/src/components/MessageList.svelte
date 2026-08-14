@@ -1426,6 +1426,8 @@
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
     transition: opacity 80ms ease;
+    /* Step 4b: harden window — keep 200-row DOM (renderStart/renderEndKey slice) but let browser skip offscreen layout. */
+    contain: layout paint;
   }
   .messages.hide-until-snap {
     opacity: 0;
@@ -1506,5 +1508,11 @@
   @media (max-width: 800px) {
     .empty-channel { padding: 32px 16px; }
     .empty-headline { font-size: 16px; }
+  }
+  /* Step 4b per-row: let browser skip offscreen rows. 40px is average row height; intrinsic size prevents scrollbar jitter. */
+  :global(.messages .row) {
+    contain: layout;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 48px;
   }
 </style>

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:local": "vite",
-    "dev:tailnet": "VITE_BACKEND_URL=https://ircfiber-ovh.tail544547.ts.net vite",
+    "dev:tailnet": "VITE_BACKEND_URL=https://vps-efb4b52d.tail544547.ts.net vite",
     "build": "vite build && node inject-manifest.js",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
