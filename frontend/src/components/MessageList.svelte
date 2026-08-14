@@ -339,7 +339,20 @@
     if (countOver || pixelOver) {
       // Keep 200 normally, but if pixel-heavy keep fewer to bound paint.
       const keep = pixelOver && !countOver ? 150 : TRIM_THRESHOLD;
-      renderStart = Math.max(0, len - keep);
+      const newStart = Math.max(0, len - keep);
+      if (newStart !== start) {
+        renderStart = newStart;
+        // If we trimmed while pinned at bottom, keep the viewport pinned.
+        // Without this, scrollTop stays at old bottom (too large) and gets
+        // clamped, but the 200ms resnap poll sees scrollTop < prevScrollTop
+        // and clears the bottom stick, leaving a visible "snap up".
+        if (cachedAtBottom && container) {
+          // Defer to next tick so DOM has updated scrollHeight
+          tick().then(() => {
+            if (container && cachedAtBottom) container.scrollTop = container.scrollHeight;
+          });
+        }
+      }
     }
   }
 
@@ -357,7 +370,7 @@
     // Live position reads (IRCCloud fetched() captures these before render;
     // the cached values can be stale when invoked from the loadMore click,
     // which scrolls to the top in the same tick).
-    const atTop = container.scrollTop <= 0;
+    const atTop = container.scrollTop <= 200;
     const scrollBottom = container.clientHeight + Math.ceil(container.scrollTop);
     const pinBottom = container.scrollHeight - scrollBottom <= 1;
 
@@ -788,7 +801,7 @@
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
           const scrollBottomBefore = container ? container.clientHeight + Math.ceil(oldScrollTop) : 0;
           const pinBottomBefore = oldScrollHeight - scrollBottomBefore <= 1;
-          if (pendingInitialSnap || pinBottomBefore) {
+          if ((pendingInitialSnap && cachedAtBottom) || pinBottomBefore) {
             // Still in the initial snap window (first URL load). Keep the
             // window pinned to the tail so we stay at the very bottom when
             // loadHistory prepends the remaining backlog right after the
@@ -859,14 +872,13 @@
     // MessageList.refresh.test.ts async arrival case.
     const hasMessagesForInitialSnap = processedMessages.length > 0;
     const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
-    const lastIsActionNotice = hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
-    // DOM at-bottom check: when the container is not scrollable (fits without overflow) or the live DOM
-    // is already at the very bottom, treat as pinned even if cachedAtBottom is stale. This fixes the
-    // "unread popup but no messages" bug where a stray 1px scroll cleared cachedAtBottom while the
-    // viewport had no scrollbar (sh <= ch), so new messages were buffered (renderEndKey frozen) forever
-    // with no scroll event to re-engage the stick. See e2e/irccloud-flood-verify.spec.js reproduction.
     const isDomAtBottom = !container || container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1;
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || isDomAtBottom || (isInitialSnap && isHistoryPrependForSnap) || lastIsActionNotice);
+    const isAtBottom = cachedAtBottom || isDomAtBottom;
+    // isHistoryPrependForSnap previously forced a snap even when reading.
+    // Gate on isAtBottom so only pinned fills snap; initial load isAtBottom true.
+    const historyPrependSnap = isInitialSnap && isHistoryPrependForSnap && isAtBottom;
+    const lastIsActionNotice = isAtBottom && hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap || lastIsActionNotice);
 
     if (shouldSnapToBottom) {
       // If DOM is at bottom but cached state is stale, correct it so future
@@ -1003,7 +1015,7 @@
         renderEndKey = '';
         maybeTrim();
       }
-      cachedAtTop = container.scrollTop <= 0;
+      cachedAtTop = container.scrollTop <= 200;
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
       scheduleScrollStateUpdate();
@@ -1021,7 +1033,10 @@
     prevScrollTop = scrollTop;
     prevScrollHeight = scrollHeight;
     // IRCCloud isScrolledToTop(): user is at the very top of the container.
-    cachedAtTop = scrollTop <= 0;
+    // Use 200px threshold to match LoadMore sentinel (200px rootMargin) and
+    // atTopBefore checks — history loads trigger at <=200, so reading at 150
+    // must be considered "at top" for anchoring.
+    cachedAtTop = scrollTop <= 200;
 
     // IRCCloud isScrolledToBottom(true): when already pinned, use a strict
     // 0px check — any intentional scroll-up (even 1px on a trackpad) must
@@ -1038,13 +1053,13 @@
     const heightChangedWithoutScroll = scrollHeight !== prevHeight && scrollTop === prevTop;
     // During the initial snap window (pendingInitialSnap), height growth
     // without scroll is expected as history fills in — don't treat the huge
-    // distFromBottom as leaving the bottom. The pendingInitialSnap snap will
-    // correct scrollTop on its tick. Without this guard, handleScroll would
-    // freeze renderEndKey to the old last key and new messages would stay
-    // hidden until the user manually scrolled away and back.
+    // distFromBottom as leaving the bottom. But only while still pinned at
+    // bottom (cachedAtBottom true) — when user is reading at top (cachedAtTop
+    // true, cachedAtBottom false) a height growth from "Fetching..." must
+    // NOT keep the bottom stick, otherwise ResizeObserver will yank to bottom.
     const atBottom = scrolledUp
       ? false
-      : pendingInitialSnap && heightChangedWithoutScroll
+      : pendingInitialSnap && heightChangedWithoutScroll && cachedAtBottom
         ? true
         : cachedAtBottom
           ? heightChangedWithoutScroll ? true : distFromBottom <= 1
