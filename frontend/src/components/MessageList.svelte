@@ -493,8 +493,23 @@
     }
     const lastKey = findKey(lastTs);
     if (lastKey) {
-      // Hide lastSeen when at the end (no next visible) — matches renderLastSeenDivider's hidden
       const lastMsg = messagesWithDates.find(item => item._key === lastKey)?.msg;
+      // Don't show "New messages" divider when you are actively at bottom
+      // and the new messages are yours. Typing 1 or 2 messages while pinned
+      // should not flash the divider – it is for unread messages from others
+      // while you were away/scrolled up. Matches IRCCloud's shouldShowSeen.
+      const isActiveNow = !ircState.focusLost && typeof document !== 'undefined' && document.hasFocus() && document.visibilityState === 'visible';
+      const isAtBottomNow = cachedAtBottom || (!container || container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1);
+      if (isActiveNow && isAtBottomNow) {
+        return m;
+      }
+      if (lastMsg) {
+        const curNick = activeNetwork?.currentNick || '';
+        if (curNick && stripPrefix(lastMsg.nick || '') === stripPrefix(curNick)) {
+          return m;
+        }
+      }
+      // Hide lastSeen when at the end (no next visible) — matches renderLastSeenDivider's hidden
       const isLastVisible = lastMsg && bufferMessages.length > 0 && (bufferMessages[bufferMessages.length - 1].eid === lastMsg.eid || bufferMessages[bufferMessages.length - 1].msgid === lastMsg.msgid);
       if (!isLastVisible) {
         const lastEid = lastMsg?.eid ?? lastMsg?.msgid ?? (lastMsg?.t ?? 0);
