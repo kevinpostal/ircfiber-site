@@ -878,7 +878,10 @@
     // Gate on isAtBottom so only pinned fills snap; initial load isAtBottom true.
     const historyPrependSnap = isInitialSnap && isHistoryPrependForSnap && isAtBottom;
     const lastIsActionNotice = isAtBottom && hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap || lastIsActionNotice);
+    // When a backlog divider is present and user is at top (reading history),
+    // never snap to bottom – preserve via newDivider branch (oldTop+delta).
+    // This fixes "scroll all the way to start without being forced to bottom".
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap || lastIsActionNotice) && !(newDivider && cachedAtTop);
 
     if (shouldSnapToBottom) {
       // If DOM is at bottom but cached state is stale, correct it so future
