@@ -40,7 +40,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap, setShowMemberPrefixes } from './stores/preferences.svelte';
+  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap, setShowMemberPrefixes } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -457,23 +457,24 @@ let showNetworkForm: boolean = $state(false);
   function handleVisibility(): void {
     if (document.hidden) {
       ircState.focusLost = true;
-      const key = `${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`;
-      const list = ircState.messages[key] ?? [];
-      if (list.length > 0) {
-        ircState.lastSeenMsgTime = list[list.length - 1].t ?? Date.now();
+      // IRCCloud lockFocusSeen: capture last message of active buffer at blur time,
+      // only if not already locked (preserves first blur marker until read).
+      const nid = ircState.activeBuffer.networkId;
+      const buf = ircState.activeBuffer.bufferName;
+      if (nid && buf && getFocusSeen(nid, buf) === null) {
+        const key = `${nid}:${buf}`;
+        const list = ircState.messages[key] ?? [];
+        const ts = list.length > 0 ? (list[list.length - 1].t ?? Date.now()) : Date.now();
+        setFocusSeen(nid, buf, ts);
+        // Also set global lastSeenMsgTime for chatter bar backward compat
+        ircState.lastSeenMsgTime = ts;
       }
     } else {
       ircState.focusLost = false;
-      // IRCCloud-style: track the last visible message when the tab
-      // regains focus so unread counts can be computed from this point.
-      const nid = ircState.activeBuffer.networkId;
-      const buf = ircState.activeBuffer.bufferName;
-      if (nid && buf) {
-        const list = ircState.messages[`${nid}:${buf}`] ?? [];
-        if (list.length > 0) {
-          setFocusSeen(nid, buf, list[list.length - 1].t ?? Date.now());
-        }
-      }
+      // Do NOT overwrite focusSeen on focus return — keep marker so
+      // "New messages since you tabbed out" divider stays visible until
+      // user scrolls to bottom and reads. IRCCloud unlockFocusSeen only
+      // on read/deselect, not on focus regain.
     }
   }
 

@@ -429,6 +429,12 @@ export function getFocusSeen(networkId: string, bufferName: string): number | nu
 export function setFocusSeen(networkId: string, bufferName: string, ts: number): void {
   focusSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] = ts;
 }
+export function clearFocusSeen(networkId: string, bufferName: string): void {
+  delete focusSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`];
+}
+export function clearBottomSeen(networkId: string, bufferName: string): void {
+  delete bottomSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`];
+}
 
 // ── Ignore map (3-level host→user→nick) ──
 let ignoreMap: IgnoreMap = parseIgnoreList(ignoreList);

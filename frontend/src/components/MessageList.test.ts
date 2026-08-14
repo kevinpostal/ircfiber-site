@@ -7,7 +7,7 @@ import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage, batchAppendMessages, prependMessages, updateChannelUsers } from '../stores/ircStore.svelte';
 import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
 import { stripPrefix } from '../lib/utils';
-import { clearedAtMap } from '../stores/preferences.svelte';
+import { clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
 import type { IRCMessage } from '../types';
 
 function resetState(): void {
@@ -22,6 +22,9 @@ function resetState(): void {
 	ircState.focusLost = false;
 	ircState.forceScrollToBottomNonce = 0;
 	Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
+	Object.keys(lastSeenMap).forEach((k) => delete (lastSeenMap as Record<string, unknown>)[k]);
+	Object.keys(focusSeenMap).forEach((k) => delete (focusSeenMap as Record<string, unknown>)[k]);
+	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
 }
 
 beforeEach(() => {
@@ -1561,3 +1564,4 @@ describe('MessageList', () => {
 		});
 	});
 });
+

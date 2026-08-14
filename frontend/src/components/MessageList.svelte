@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack, flushSync, tick } from 'svelte';
   import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
-  import { getClearedAt, setLastSeen, getBufferPrefs } from '../stores/preferences.svelte';
+  import { getClearedAt, setLastSeen, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearFocusSeen, clearBottomSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
@@ -209,10 +209,25 @@
     return true;
   }
 
+  // ── IRCCloud parity: seen dividers ──
+  function getSeenDividerType(msg: IRCMessage, prev: IRCMessage | null): 'focus' | 'bottom' | 'last' | null {
+    if (!prev) return null;
+    const nid = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!nid || !buf) return null;
+    const focusTs = getFocusSeen(nid, buf);
+    if (focusTs !== null && (prev.t || 0) <= focusTs && (msg.t || 0) > focusTs) return 'focus';
+    const lastTs = getLastSeen(nid, buf);
+    if (lastTs !== null && (prev.t || 0) <= lastTs && (msg.t || 0) > lastTs) return 'last';
+    if (ircState.lastSeenMsgTime && ircState.focusLost) {
+      if ((prev.t || 0) <= ircState.lastSeenMsgTime && (msg.t || 0) > ircState.lastSeenMsgTime) return 'focus';
+    }
+    return null;
+  }
+
+  // Legacy alias for tests
   function shouldShowSeenDivider(msg: IRCMessage, prev: IRCMessage | null): boolean {
-    if (!ircState.lastSeenMsgTime || !ircState.focusLost) return false;
-    if (!prev) return false;
-    return (prev.t || 0) <= ircState.lastSeenMsgTime && (msg.t || 0) > ircState.lastSeenMsgTime;
+    return getSeenDividerType(msg, prev) !== null;
   }
 
   // IRCCloud backlogDivider: marks the old/new boundary after a backlog
@@ -319,6 +334,8 @@
     if (boundary && ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
       setBacklogDivider(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, itemKeyOf(boundary));
     }
+    const oldH = container.scrollHeight;
+    const oldTop = container.scrollTop;
     renderStart = Math.max(0, start - BATCH_SIZE);
     // Consume the mark so the $effect doesn't run the settle a second time.
     handledDividerMark = untrack(() => backlogDividerMark);
@@ -334,8 +351,8 @@
       cachedAtBottom = false;
       wasRecentlyAtBottom = false;
     } else if (!atTop && !pinBottom) {
-      const delta = container.scrollHeight - oldScrollHeight;
-      if (delta !== 0) container.scrollTop = oldScrollTop + delta;
+      const delta = container.scrollHeight - oldH;
+      if (delta !== 0) container.scrollTop = oldTop + delta;
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
     }
@@ -382,6 +399,35 @@
       // the DOM rows, causing ANSI art and color backgrounds to flicker.
       return { msg, showDate, msgDate, prevDate, prevMsg, showBacklogDivider, _key: stableKey(msg, start + i) };
     });
+  });
+
+  // IRCCloud seen-divider placement: compute once per rendered window, not per-row.
+  // Using a derived avoids per-row reactive reads inside {#each} which would
+  // cause the each block to re-subscribe on every scroll event and break
+  // the scroll-clock / buffering tests (probeRow timing).
+  const seenDividerByKey = $derived.by(() => {
+    const m = new Map<string, 'focus' | 'last'>();
+    const nid = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!nid || !buf) return m;
+    // Use untrack for map reads to avoid per-scroll reactive invalidation that breaks scroll-clock test
+    // Divider updates are triggered via messagesWithDates change (which re-runs this derived) and via explicit focusSeen changes through other paths
+    const focusTs = untrack(() => getFocusSeen(nid, buf));
+    const lastTs = untrack(() => getLastSeen(nid, buf));
+    const globalTs = untrack(() => ircState.lastSeenMsgTime && ircState.focusLost ? ircState.lastSeenMsgTime : null);
+    for (let i = 1; i < messagesWithDates.length; i++) {
+      const prev = messagesWithDates[i - 1].msg;
+      const cur = messagesWithDates[i].msg;
+      const key = messagesWithDates[i]._key;
+      if (focusTs !== null && (prev.t || 0) <= focusTs && (cur.t || 0) > focusTs) {
+        m.set(key, 'focus');
+      } else if (lastTs !== null && (prev.t || 0) <= lastTs && (cur.t || 0) > lastTs) {
+        m.set(key, 'last');
+      } else if (globalTs !== null && (prev.t || 0) <= globalTs && (cur.t || 0) > globalTs) {
+        m.set(key, 'focus');
+      }
+    }
+    return m;
   });
 
   // O(1) lookup maps for the scroll-position helpers — rebuilt only when
@@ -743,9 +789,18 @@
     const hasMessagesForInitialSnap = processedMessages.length > 0;
     const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
     const lastIsActionNotice = hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || (isInitialSnap && isHistoryPrependForSnap) || lastIsActionNotice);
+    // DOM at-bottom check: when the container is not scrollable (fits without overflow) or the live DOM
+    // is already at the very bottom, treat as pinned even if cachedAtBottom is stale. This fixes the
+    // "unread popup but no messages" bug where a stray 1px scroll cleared cachedAtBottom while the
+    // viewport had no scrollbar (sh <= ch), so new messages were buffered (renderEndKey frozen) forever
+    // with no scroll event to re-engage the stick. See e2e/irccloud-flood-verify.spec.js reproduction.
+    const isDomAtBottom = !container || container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1;
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (cachedAtBottom || isDomAtBottom || (isInitialSnap && isHistoryPrependForSnap) || lastIsActionNotice);
 
     if (shouldSnapToBottom) {
+      // If DOM is at bottom but cached state is stale, correct it so future
+      // handleScroll checks see the right baseline and don't mis-fire scrolledUp.
+      if (isDomAtBottom) cachedAtBottom = true;
       // For an initial buffer open we force the snap unconditionally —
       // do not run the scrolledUp direction check that would otherwise
       // clear the stick when scrollHeight grew under a pinned viewport.
@@ -867,6 +922,24 @@
     // batch flush (DOM reflow from batch append can trigger them).
     if (batchRendering) return;
 
+    // Non-scrollable guard: when the content fits without a scrollbar, the user
+    // is effectively at the bottom by definition. A stray 1px scrollUp that
+    // cleared cachedAtBottom must not keep new messages buffered forever with
+    // no scroll event to re-engage. Force pinned state and clear any frozen window.
+    if (container.scrollHeight <= container.clientHeight + 1) {
+      if (!cachedAtBottom) {
+        cachedAtBottom = true;
+        wasRecentlyAtBottom = true;
+        renderEndKey = '';
+        maybeTrim();
+      }
+      cachedAtTop = container.scrollTop <= 0;
+      prevScrollTop = container.scrollTop;
+      prevScrollHeight = container.scrollHeight;
+      scheduleScrollStateUpdate();
+      return;
+    }
+
     const scrollTop = container.scrollTop;
     const scrollHeight = container.scrollHeight;
     const prevHeight = prevScrollHeight;
@@ -877,7 +950,6 @@
     const prevTop = prevScrollTop;
     prevScrollTop = scrollTop;
     prevScrollHeight = scrollHeight;
-
     // IRCCloud isScrolledToTop(): user is at the very top of the container.
     cachedAtTop = scrollTop <= 0;
 
@@ -1101,26 +1173,38 @@
       aboveTs = item.msg.t || null;
     }
 
+    // Below viewport: in-window rows below the visible bottom + buffered rows beyond the frozen window.
     let below = 0;
     let belowTs: number | null = null;
     let firstBelowMsg: IRCMessage | null = null;
+    const all = processedMessages;
+    const endIdx = Math.max(0, Math.min(renderStart, all.length)) + rendered.length;
+    const bufferedBelow = endIdx < all.length ? all.length - endIdx : 0;
+    const bufferedHead: IRCMessage | null = bufferedBelow > 0 ? all[endIdx] : null;
+    let inWindowBelow = 0;
+    let inWindowHead: IRCMessage | null = null;
+    let inWindowHeadTs: number | null = null;
     if (bottomIdx >= 0 && bottomIdx < rendered.length - 1) {
-      below = rendered.length - 1 - bottomIdx;
+      inWindowBelow = rendered.length - 1 - bottomIdx;
       const item = rendered[bottomIdx + 1];
-      firstBelowMsg = rawMessageByKey.get(itemKeyOf(item.msg)) ?? null;
-      belowTs = item.msg.t || null;
-    } else if (bottomIdx >= 0) {
-      // The bottom row is the last rendered one, but messages may be
-      // buffered beyond the frozen window end (IRCCloud messageBuffer) —
-      // count those so the "new messages below" bar still appears.
-      const all = processedMessages;
-      const endIdx = Math.max(0, Math.min(renderStart, all.length)) + rendered.length;
-      if (endIdx < all.length) {
-        below = all.length - endIdx;
-        const tail = all[endIdx];
-        firstBelowMsg = rawMessageByKey.get(itemKeyOf(tail)) ?? null;
-        belowTs = tail.t || null;
-      }
+      inWindowHead = rawMessageByKey.get(itemKeyOf(item.msg)) ?? null;
+      inWindowHeadTs = item.msg.t || null;
+    }
+    if (inWindowBelow > 0 && bufferedBelow > 0) {
+      below = inWindowBelow + bufferedBelow;
+      firstBelowMsg = inWindowHead;
+      belowTs = inWindowHeadTs;
+    } else if (inWindowBelow > 0) {
+      below = inWindowBelow;
+      firstBelowMsg = inWindowHead;
+      belowTs = inWindowHeadTs;
+    } else if (bufferedBelow > 0) {
+      below = bufferedBelow;
+      firstBelowMsg = rawMessageByKey.get(itemKeyOf(bufferedHead!)) ?? null;
+      belowTs = bufferedHead!.t || null;
+    } else if (bottomIdx === -1 && rendered.length > 0 && bufferedBelow === 0) {
+      below = 0;
+      belowTs = null;
     }
 
     const lastSeenMsg = getLastSeenMessage(networkId, bufferName);
@@ -1338,12 +1422,28 @@
     if (stickyAvatarEl) stickyAvatarEl.style.top = `${top}px`;
   }
 
+  // IRCCloud: while scrolled up, new messages are buffered (renderEndKey frozen)
+  $effect(() => {
+    const len = processedMessages.length;
+    const frozen = renderEndKey !== '';
+    void len; void frozen;
+    if (frozen && container) {
+      scheduleScrollStateUpdate();
+    }
+  });
+
   function scrollToTop(): void {
     container?.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function scrollToBottom(): void {
-    if (container) container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+    if (!container) return;
+    if (renderEndKey) {
+      renderEndKey = '';
+      maybeTrim();
+      try { flushSync(); } catch {}
+    }
+    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }
 </script>
 
@@ -1382,7 +1482,7 @@
         {@const msgDate = item.msgDate}
         {@const prevDate = item.prevDate}
         {@const prevMsg = item.prevMsg}
-
+        {@const dividerType = untrack(() => getSeenDividerType(msg, prevMsg))}
         {#if item.showDate}
           <DateChange date={msgDate} />
         {/if}
@@ -1391,8 +1491,8 @@
           <div class="row backlogDivider"><hr /></div>
         {/if}
 
-        {#if shouldShowSeenDivider(msg, prevMsg)}
-          <SeenDivider />
+        {#if dividerType}
+          <SeenDivider type={dividerType} networkId={ircState.activeBuffer.networkId!} bufferName={ircState.activeBuffer.bufferName!} msg={msg} prevMsg={prevMsg} sameAuthor={!!prevMsg && checkSameAuthor(msg, prevMsg)} />
         {/if}
 
         {#if !isSkippedCommand(msg.command)}

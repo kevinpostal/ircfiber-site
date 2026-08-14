@@ -1,6 +1,8 @@
-/* Chatter cells (unread bars) */
+/* Chatter cells (unread bars) — IRCCloud parity: .chattercell is visible
+   when rendered (MessageList uses {#if count>0}); .show is kept for
+   legacy callers that toggle via class. */
 .chattercell {
-  display: none;
+  display: flex;
   padding: 4px 12px;
   background: rgba(30,114,255,0.08);
   font-size: 12px;
@@ -31,7 +33,10 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  cursor: pointer;
+  flex: 1;
 }
+
 
 .extrasButton {
   font-weight: 600;
