@@ -72,6 +72,15 @@
   let clockTs = $state<number | null>(null);
 
   const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
+  // Don't show "No messages yet" until history has been loaded for this buffer.
+  // While ircState.messages[bufferKey] is undefined the REST/sync fetch is
+  // still in flight — showing the empty hint during this window causes a
+  // flash (empty text → messages) on every channel that has history, e.g.
+  // /irc/Super%20Nets/channel/superbowl. Once the buffer key exists (even
+  // as an empty array) we know the load completed and the empty hint is
+  // truthful. See App.svelte loadBufferHistory which ensures an empty
+  // array is written after a zero-result fetch so this flips to true.
+  const hasHistoryLoaded = $derived(ircState.messages[bufferKey] !== undefined);
 
   // Server log view needs raw (un-grouped) messages — preprocessing
   // merges consecutive 372/375 MOTD lines into MOTD_GROUP blocks that
@@ -999,7 +1008,15 @@
       if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
       if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     };
-    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) clearStickOnUserInput(); };
+    const onWheel = (e: WheelEvent) => {
+      if (!container) return;
+      const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
+      if (e.deltaY > 0 && atBottom) {
+        e.preventDefault();
+        return;
+      }
+      if (e.deltaY < 0) clearStickOnUserInput();
+    };
     const onPointerDown = () => clearStickOnUserInput();
     const onKeyDown = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -1007,7 +1024,7 @@
       if (SCROLL_KEYS.has(e.key)) clearStickOnUserInput();
     };
     el.addEventListener('scroll', handleScroll, { passive: true });
-    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('wheel', onWheel, { passive: false });
     el.addEventListener('pointerdown', onPointerDown, { passive: true });
     window.addEventListener('keydown', onKeyDown, { capture: true });
     return () => {
@@ -1344,7 +1361,9 @@
   <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
     <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
 
-    {#if messagesWithDates.length === 0 && !isServerBuffer}
+    {#if !hasHistoryLoaded && !isServerBuffer}
+        <div class="history-loading" role="status" aria-label="Loading history"></div>
+    {:else if messagesWithDates.length === 0 && !isServerBuffer}
         <div class="empty-channel" role="presentation">
           {#if ircState.activeBuffer.bufferName?.startsWith('#')}
             <p class="empty-headline">#{stripHash(ircState.activeBuffer.bufferName || '')}</p>
@@ -1417,13 +1436,13 @@
 <style>
   .messages-viewport {
     position: relative;
+    overscroll-behavior: none;
   }
   .messages {
     overflow-y: auto;
     overflow-x: hidden;
     flex: 1;
-    scroll-behavior: auto;
-    overscroll-behavior: contain;
+    overscroll-behavior: none;
     scrollbar-gutter: stable;
     transition: opacity 80ms ease;
     /* Step 4b: harden window — keep 200-row DOM (renderStart/renderEndKey slice) but let browser skip offscreen layout. */

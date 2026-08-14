@@ -119,7 +119,8 @@ describe('MessageList', () => {
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#chan';
-		// No messages — empty state should render
+		// Mark history as loaded empty (simulates REST returning 0 messages)
+		ircState.messages['net1:#chan'] = [];
 		flushSync();
 
 		render(MessageList, { props: {} });
@@ -130,12 +131,28 @@ describe('MessageList', () => {
 		expect(container?.textContent).toContain('No messages yet');
 	});
 
+	it('hides empty-channel hint while history is still loading', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		// No messages key at all — history fetch still in flight, don't flash empty
+		flushSync();
+
+		render(MessageList, { props: {} });
+
+		expect(document.querySelector('.empty-channel')).toBeNull();
+		expect(document.querySelector('.history-loading')).not.toBeNull();
+	});
+
 	it('shows different empty text for a DM with no messages', async () => {
 		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: 'Alice' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = 'Alice';
+		ircState.messages['net1:Alice'] = [];
 		flushSync();
 
 		render(MessageList, { props: {} });
@@ -144,7 +161,6 @@ describe('MessageList', () => {
 		expect(container).not.toBeNull();
 		expect(container?.textContent).toContain('No messages with Alice yet');
 	});
-
 	it('hides empty-channel hint when messages exist', async () => {
 		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: '#chan' }));

@@ -679,10 +679,9 @@ let showNetworkForm: boolean = $state(false);
   }
 
   async function loadBufferHistory(networkId: string, bufferName: string): Promise<void> {
+    const key = `${networkId}:${normalizeChannelName(bufferName)}`;
     try {
-      const key = `${networkId}:${normalizeChannelName(bufferName)}`;
       const existing = ircState.messages[key] ?? [];
-      const isServerLog = bufferName === '_server';
       // IRCCloud-style: if sync already delivered messages for this buffer,
       // skip the REST round-trip entirely — EXCEPT for the _server buffer
       // where the sync only includes the latest 50 messages, which causes
@@ -772,10 +771,27 @@ let showNetworkForm: boolean = $state(false);
         }
         await new Promise(r => requestAnimationFrame(() => r(null)));
       }
+      // Mark history as loaded even when REST returned no messages, so
+      // MessageList's hasHistoryLoaded (ircState.messages[key] !== undefined)
+      // flips true and the empty hint can render truthfully after load.
+      // Without this, a truly empty channel would stay undefined forever,
+      // hiding the empty hint, while a populated channel would correctly
+      // remain hidden during the fetch (no flash).
+      if (ircState.messages[key] === undefined) {
+        if (msgs.length === 0) {
+          setMessages(networkId, bufferName, []);
+        } else if (!queued) {
+          setMessages(networkId, bufferName, msgs);
+        }
+      }
       backlogReady = true;  // IRCCloud backlog_complete equivalent
       performance.mark('backlog-ready');
     } catch (e) {
       console.error('Failed to load history:', e);
+      // Ensure boot spinner doesn't hang forever and MessageList doesn't
+      // stay in indefinite loading state.
+      if (ircState.messages[key] === undefined) setMessages(networkId, bufferName, []);
+      backlogReady = true;
     }
   }
 
