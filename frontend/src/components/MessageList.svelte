@@ -1362,7 +1362,10 @@
     <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
 
     {#if !hasHistoryLoaded && !isServerBuffer}
-        <div class="history-loading" role="status" aria-label="Loading history"></div>
+        <div class="history-loading" role="status" aria-label="Loading history">
+          <div class="history-loading__spinner" aria-hidden="true"></div>
+          <p class="history-loading__text">Loading history…</p>
+        </div>
     {:else if messagesWithDates.length === 0 && !isServerBuffer}
         <div class="empty-channel" role="presentation">
           {#if ircState.activeBuffer.bufferName?.startsWith('#')}
@@ -1492,6 +1495,29 @@
     text-align: center;
     color: #8b949e;
     pointer-events: none;
+  }
+  .history-loading {
+    margin: auto;
+    padding: 64px 24px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: #8b949e;
+    pointer-events: none;
+  }
+  .history-loading__spinner {
+    width: 28px;
+    height: 28px;
+    border: 2.5px solid #21262d;
+    border-top-color: #58a6ff;
+    border-radius: 50%;
+    animation: msg-loading-spin 0.8s linear infinite;
+  }
+  .history-loading__text {
+    margin: 0;
+    font-size: 13px;
+    color: #8b949e;
   }
   .empty-loading {
     margin: auto;
