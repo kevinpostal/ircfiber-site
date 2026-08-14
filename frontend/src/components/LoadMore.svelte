@@ -128,7 +128,7 @@
   let lastFillScrollHeight = -1;
   let lastFillTime = 0;
   let silentFillIterations = 0;
-  const MAX_SILENT_FILLS = 1;
+  const MAX_SILENT_FILLS = 3;
   // Viewport auto-fill should NOT flash "Fetching more history…" — that
   // divider is for user-initiated loads when the window is already full
   // (scrollable) and the user scrolls to top / clicks Load more. For
@@ -291,14 +291,10 @@ $effect(() => {
     }
   }
 
-  // IRCCloud BufferScrollView.checkInfiniscroll, redesigned as the
-  // svelte-infinite pattern: an IntersectionObserver on a sentinel at the
-  // top of the scroll content. IRCCloud only fires when
-  // isScrolledToTop() (scrollTop <= 0) and !isFullyRendered() and
-  // !isScrolledToBottom(), not 200px pre-load. The 200px pre-load buffer
-  // felt eager — it fetched while the user was still 200px from the top,
-  // loading too many batches too quickly. Match IRCCloud: 0px margin,
-  // threshold 0, and fallback at scrollTop <= 0.
+  // Aristotle ChatInfinite.Scroll.sentinelIntersects: 200px preload band.
+  // Fires when scrollTop ≤200 (strictly before top), never wedges at 0
+  // (noWedgeAtTop), and never deep in buffer. Matches Lean
+  // sentinelPreloadFiresBeforeTop / shouldLoad guards.
   let sentinelEl = $state<HTMLElement | null>(null);
   let io: IntersectionObserver | null = null;
 
@@ -309,8 +305,8 @@ $effect(() => {
     // construction. The viewport-fill effect handles those (silently);
     // firing tryAutoLoad here would flash "Fetching more history…".
     if (scrollEl.scrollHeight <= scrollEl.clientHeight) return;
-    // IRCCloud: only when at the very top, not 200px pre-load.
-    if (scrollEl.scrollTop > 0) return;
+    // Aristotle sentinelIntersects: 200px band — preload before top, never wedge.
+    if (scrollEl.scrollTop > 200) return;
     tryAutoLoad().catch((e) => console.error('[LoadMore] tryAutoLoad error:', e));
   }
 
@@ -328,7 +324,7 @@ $effect(() => {
       (entries) => {
         if (entries[0]?.isIntersecting) onSentinelVisible();
       },
-      { root: scrollEl, rootMargin: '0px 0px 0px 0px', threshold: 0 },
+      { root: scrollEl, rootMargin: '200px 0px 0px 0px', threshold: 0 },
     );
     io.observe(sentinelEl);
   }
@@ -352,7 +348,7 @@ $effect(() => {
     };
     const onScrollFallback = () => {
       if (!scrollEl) return;
-      if (scrollEl.scrollTop <= 0 && scrollEl.scrollHeight > scrollEl.clientHeight) {
+      if (scrollEl.scrollTop <= 200 && scrollEl.scrollHeight > scrollEl.clientHeight) {
         if (!loading && !clearedAt && !noMoreHistory) onSentinelVisible();
       }
     };

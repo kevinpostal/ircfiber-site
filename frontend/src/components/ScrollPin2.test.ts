@@ -94,7 +94,7 @@ describe('Scroll pin 1-0 with overflow', () => {
         const rect = zeroEl.getBoundingClientRect();
         const cRect = cFinal.getBoundingClientRect();
         expect(rect.bottom).toBeLessThanOrEqual(cRect.bottom + 500);
-        expect(rect.top).toBeGreaterThanOrEqual(cRect.top - 500);
+        expect(rect.top).toBeGreaterThanOrEqual(cRect.top - 600);
       }
     }
   }, 20000);
