@@ -682,6 +682,7 @@ let showNetworkForm: boolean = $state(false);
     const key = `${networkId}:${normalizeChannelName(bufferName)}`;
     try {
       const existing = ircState.messages[key] ?? [];
+      const isServerLog = bufferName === '_server';
       // IRCCloud-style: if sync already delivered messages for this buffer,
       // skip the REST round-trip entirely — EXCEPT for the _server buffer
       // where the sync only includes the latest 50 messages, which causes
