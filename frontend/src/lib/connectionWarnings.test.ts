@@ -42,6 +42,48 @@ describe('connectionWarnings — connectionWarnings', () => {
     );
   });
 
+  // RFC 1918 172.16.0.0/12 covers 172.16.0.0 – 172.31.255.255. The old
+  // string-prefix version missed 172.30/172.31 (fixed 2026-08-14).
+  it('warns about RFC1918 172.16/12 lower bound', () => {
+    expect(connectionWarnings('172.16.0.1', 6667, false)).toContain(
+      'Your hostname looks invalid: 172.16.0.1',
+    );
+  });
+
+  it('warns about RFC1918 172.20/12 (old regex range)', () => {
+    expect(connectionWarnings('172.20.0.1', 6667, false)).toContain(
+      'Your hostname looks invalid: 172.20.0.1',
+    );
+  });
+
+  it('warns about RFC1918 172.30.x.x (regression: was missed)', () => {
+    expect(connectionWarnings('172.30.0.1', 6667, false)).toContain(
+      'Your hostname looks invalid: 172.30.0.1',
+    );
+  });
+
+  it('warns about RFC1918 172.31.x.x (regression: was missed)', () => {
+    expect(connectionWarnings('172.31.255.255', 6667, false)).toContain(
+      'Your hostname looks invalid: 172.31.255.255',
+    );
+  });
+
+  it('does not warn for 172.32.x.x (outside RFC 1918 /12)', () => {
+    const w = connectionWarnings('172.32.0.1', 6667, false);
+    expect(w.some((m) => m.includes('hostname looks invalid'))).toBe(false);
+  });
+
+  it('does not warn for 172.2.x.x (not a /12 octet; old regex exclusion kept)', () => {
+    const w = connectionWarnings('172.2.0.1', 6667, false);
+    expect(w.some((m) => m.includes('hostname looks invalid'))).toBe(false);
+  });
+
+  it('still flags an IP embedded in a hostname (127.0.0.1.nip.io)', () => {
+    expect(connectionWarnings('127.0.0.1.nip.io', 6667, false)).toContain(
+      'Your hostname looks invalid: 127.0.0.1.nip.io',
+    );
+  });
+
   it('warns about .local TLD', () => {
     expect(connectionWarnings('box.local', 6667, false)).toContain(
       'Your hostname looks invalid: box.local',

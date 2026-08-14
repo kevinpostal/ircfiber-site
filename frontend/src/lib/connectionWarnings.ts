@@ -139,6 +139,30 @@ function ordinalSuffix(n: number): string {
 }
 
 /**
+ * RFC 1918 private IPv4 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+ * plus loopback (127.0.0.0/8).
+ *
+ * Numeric check on the *leading* dotted quad of the host, so strings that
+ * embed an IP keep working ("127.0.0.1.nip.io" resolves to loopback and is
+ * still flagged, matching the old startsWith behaviour). The check covers
+ * the full 172.16/12 block — the old string-prefix version silently missed
+ * 172.30.0.0/16 and 172.31.0.0/16 (RFC 1918), verified as a counterexample
+ * in docs/aristotle/RequestProject/IrcFiber/Suspicious.lean and fixed here.
+ */
+function isLocalIpv4(host: string): boolean {
+  const m = /^(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})(?:[.:]|$)/.exec(host);
+  if (!m) return false;
+  const [a, b, c, d] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+  if (a > 255 || b > 255 || c > 255 || d > 255) return false;
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    a === 127
+  );
+}
+
+/**
  * Returns a list of inline warning strings to append to the banner.
  * Pass `sslOn=true` when SSL/TLS is enabled on this network so we can
  * warn about plaintext-port mismatches.
@@ -167,17 +191,9 @@ export function connectionWarnings(
     const lower = safeHost.toLowerCase();
     const looksLocal =
       lower === 'localhost' ||
-      lower === '127.0.0.1' ||
       lower === '0.0.0.0' ||
       lower === '::1' ||
-      lower.startsWith('127.') ||
-      lower.startsWith('192.168.') ||
-      lower.startsWith('10.') ||
-      lower.startsWith('172.16.') ||
-      lower.startsWith('172.17.') ||
-      lower.startsWith('172.18.') ||
-      lower.startsWith('172.19.') ||
-      lower.startsWith('172.2') && /^172\.2[0-9]\./.test(lower) ||
+      isLocalIpv4(lower) ||
       lower.endsWith('.local') ||
       lower.endsWith('.lan') ||
       lower.endsWith('.internal');
