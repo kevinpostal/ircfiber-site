@@ -424,12 +424,25 @@
     loaderState?.reset();
   });
 
+  $effect(() => {
+    // If history just loaded (hasHistoryLoaded true) and loader was in COMPLETE from earlier empty check, reset to READY
+    // This fixes the case where InfiniteLoader triggered with len 0 before history arrived (existing.length===0 -> complete)
+    // and then history arrived via App's loadHistory (150), but loader stayed COMPLETE and wouldn't trigger for top scroll.
+    void hasHistoryLoaded;
+    if (hasHistoryLoaded && loaderState?.status === 'COMPLETE') {
+      loaderState.reset();
+    }
+  });
+
   let infiniteLoading = $state(false);
   async function infiniteHandler() {
-    if (infiniteLoading) return;
+    if (infiniteLoading) {
+      return;
+    }
     infiniteLoading = true;
     // In-memory batches first (instant, no spinner) – preserves scroll via revealBacklogFromMemory's delta
-    if (revealBacklogFromMemory()) {
+    const revealed = revealBacklogFromMemory();
+    if (revealed) {
       loaderState?.loaded();
       infiniteLoading = false;
       return;
@@ -439,11 +452,17 @@
       infiniteLoading = false;
       return;
     }
+    // Don't trigger network load while initial history is still loading
+    if (!hasHistoryLoaded) {
+      loaderState?.loaded();
+      infiniteLoading = false;
+      return;
+    }
     try {
       const hasMore = await onLoadMore();
       if (hasMore) loaderState?.loaded();
       else loaderState?.complete();
-    } catch {
+    } catch (e) {
       loaderState?.error();
     } finally {
       infiniteLoading = false;
