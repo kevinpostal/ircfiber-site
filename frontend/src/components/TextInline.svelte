@@ -265,6 +265,7 @@
         <span class="details" style="display:flex; align-items:center; gap:6px; flex:1;">
           <label for="inline-edit-name" style="font-size:12px; color:#b0b0b0; white-space:nowrap;">Name</label>
           <input id="inline-edit-name" class="input nameInput" style="flex:1; max-width:200px; background:#2a2c2f; color:#e6e6e6; border:1px solid #4a4d50; border-radius:3px; padding:3px 6px; font-size:13px;" placeholder="e.g. index.html" title="Name for referencing" bind:value={editFilename} />
+          <span class="detectedLang" style="font-size:11px; color:#8b949e; white-space:nowrap; background:#1a1d23; border:1px solid #2a2d33; border-radius:3px; padding:2px 6px;" title="Detected from extension">{editHlLang?.name ?? hlLang?.name ?? 'Plain Text'}</span>
           <button type="button" class="action" style="background:#4c83e8; color:#fff; border:1px solid #4c83e8; border-radius:3px; padding:3px 10px; font-size:12px; cursor:pointer;" onclick={saveEdit} disabled={editSaving}>{editSaving ? 'Saving...' : 'Save'}</button>
           <button type="button" class="cancel" style="background:#45484c; color:#fff; border:1px solid #2c2f35; border-radius:3px; padding:3px 10px; font-size:12px; cursor:pointer;" onclick={cancelEdit}>Cancel</button>
         </span>
