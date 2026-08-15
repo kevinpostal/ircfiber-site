@@ -41,6 +41,15 @@ const COLOR_NAMES: Record<number, string> = {
 export function parseIrcFormatting(text: string): string {
   if (!text) return '';
 
+  // Detect art-like messages (many color codes) at parse time so we can
+  // preserve every space as &nbsp; for column alignment. Normal chat keeps
+  // single spaces as ` ` (breakable) for natural word wrapping.
+  // This mirrors IRCCloud which renders all spaces in mosaic art as &nbsp;,
+  // keeping columns aligned even when the browser would otherwise collapse
+  // or break at a plain space. See MessageRow.containsBlockArt heuristic.
+  const colorCodeCount = (text.match(/\x03|\x04/g) || []).length;
+  const isArtLike = colorCodeCount >= 6 && text.length >= 30;
+
   let i = 0;
   let out = '';
   let bold = false, italic = false, underline = false, reverse = false;
@@ -103,7 +112,7 @@ export function parseIrcFormatting(text: string): string {
       const prevIsSpace = i > 0 && text.charCodeAt(i - 1) === 0x20;
       const isConsecutive = nextIsSpace || prevIsSpace;
       const hasBg = bg !== null || hexBg !== null;
-      if (isConsecutive || hasBg) out += '&nbsp;';
+      if (isConsecutive || hasBg || isArtLike) out += '&nbsp;';
       else out += ' ';
     } else out += c;
   }

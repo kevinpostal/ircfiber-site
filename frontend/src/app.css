@@ -97,9 +97,16 @@ body.ascii-compact .row.messageRow {
 }
 /* Consecutive bot/block-art rows share an author, so hide the repeated
    avatar/nick. With line-height: 16px the content boxes stack edge-to-edge,
-   keeping colored background fills continuous; no negative margin needed. */
+   keeping colored background fills continuous; no negative margin needed.
+   IRCCloud nests the avatar inside authorWrap so hiding authorWrap hides
+   the avatar too. Our avatar is a sibling of authorWrap, so we must hide
+   it explicitly. */
 .row.messageRow.bot.sameAuthor .authorWrap,
 .row.messageRow.blockArt.sameAuthor .authorWrap {
+  display: none;
+}
+.row.messageRow.bot.sameAuthor .avatar,
+.row.messageRow.blockArt.sameAuthor .avatar {
   display: none;
 }
 .row.messageRow.status {
@@ -244,6 +251,10 @@ body.ascii-compact .row.messageRow {
 .irccolor.color-11.irccolor-bg.bg-11 { color: cyan !important; }
 .irccolor.silver.irccolor-bg.bg-silver,
 .irccolor.color-15.irccolor-bg.bg-15 { color: silver !important; }
+.irccolor.magenta.irccolor-bg.bg-magenta,
+.irccolor.color-13.irccolor-bg.bg-13 { color: rgb(255, 0, 255) !important; }
+.irccolor.grey.irccolor-bg.bg-grey,
+.irccolor.color-14.irccolor-bg.bg-14 { color: grey !important; }
 /* Links inside solid blocks must also be invisible — they otherwise
    pick up the global link blue via .row.messageRow .content a. The
    groupedLines rule sets them to inherit, but add explicit
@@ -259,6 +270,10 @@ body.ascii-compact .row.messageRow {
 .irccolor.color-11.irccolor-bg.bg-11 a { color: cyan !important; }
 .irccolor.silver.irccolor-bg.bg-silver a,
 .irccolor.color-15.irccolor-bg.bg-15 a { color: silver !important; }
+.irccolor.magenta.irccolor-bg.bg-magenta a,
+.irccolor.color-13.irccolor-bg.bg-13 a { color: rgb(255, 0, 255) !important; }
+.irccolor.grey.irccolor-bg.bg-grey a,
+.irccolor.color-14.irccolor-bg.bg-14 a { color: grey !important; }
 
 /* ─── ACTION (/me) message — IRCCloud parity ───────────────────────────
    IRCCloud renders an ACTION as a `.row.messageRow.me` with everything
