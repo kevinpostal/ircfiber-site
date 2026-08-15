@@ -414,12 +414,24 @@ final class SessionManager {
 
     /// Destroys a session by ID.
     /// If Redis is configured, also removes the Redis record.
+    /// SLA: frees the cross-thread ManualEvent to avoid eventfd leak
+    /// (90 fds in 3h → 1078). The drainer waits at most 5s before
+    /// checking alive, so freeing after remove is safe.
     void destroySession(UUID sessionId) {
+        shared(ManualEvent)* notifyToFree = null;
         synchronized (m_mutex) {
             if (auto p = sessionId in sessions) {
                 p.isActive = false;
+                notifyToFree = p.outboundNotify;
+                p.outboundNotify = null;
                 sessions.remove(sessionId);
             }
+        }
+        if (notifyToFree !is null) {
+            try {
+                import core.memory : GC;
+                GC.free(cast(void*)notifyToFree);
+            } catch (Exception) {}
         }
         // Remove from Redis regardless of in-memory state
         removeFromRedis(sessionId);
