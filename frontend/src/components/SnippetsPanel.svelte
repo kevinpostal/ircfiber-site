@@ -286,11 +286,11 @@
             {/if}
           </h1>
           {#if editingId === entry.id}
-            <div class="editor editing" style="height: {Math.min(Math.max(editBody.split('\n').length, 1), MAX_VISIBLE_LINES) * LINE_HEIGHT}px;">
+            <div class="editor editing" style="height: {Math.min(Math.max(editBody.split('\n').length, 1), MAX_VISIBLE_LINES) * LINE_HEIGHT + 28}px; min-height: 44px;">
               <CodeEditor bind:value={editBody} language={editSyntax} />
             </div>
           {:else}
-            <div class="editor" class:noGutter={gutterHidden[entry.id]} style="height: {editorHeight(entry)}px;">
+            <div class="editor" class:noGutter={gutterHidden[entry.id]} style="height: {editorHeight(entry) + 28}px; min-height: 44px;">
               <div class="editorScroll">
                 {#if !gutterHidden[entry.id]}
                   <div class="gutter" aria-hidden="true">

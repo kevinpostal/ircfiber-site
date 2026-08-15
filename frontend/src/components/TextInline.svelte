@@ -284,11 +284,11 @@
     {#if editError}<p class="userError" style="color:#f85149; font-size:12px; margin:4px 0;">{editError}</p>{/if}
     {#if editing}
       {@const editLines = editValue.split('\n').length}
-      <div class="editor editing" style="height: {Math.min(Math.max(editLines,1),12)*16}px;">
+      <div class="editor editing" style="height: {Math.min(Math.max(editLines,1),12)*16 + 28}px; min-height: 44px;">
         <CodeEditor bind:value={editValue} language={hlLang?.name?.toLowerCase() ?? 'text'} />
       </div>
     {:else}
-      <div class="editor" style="height: {Math.min(lineCount, 12) * 16}px;">
+      <div class="editor" style="height: {Math.min(Math.max(lineCount,1),12)*16 + 28}px; min-height: 44px;">
         <div class="editorScroll">
           {#if !gutterHidden}
             <div class="gutter" aria-hidden="true">
