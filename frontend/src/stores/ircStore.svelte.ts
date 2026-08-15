@@ -15,6 +15,27 @@ import { recentHighlightersCache } from '../lib/tabCompletion';
 // the 200-row DOM window. Evicted history reloads via LoadMore
 // beforeid pagination. WASM evaluated 2026-08-13 — DOM-bound, not adopted.
 export const MAX_JS_MESSAGES = 5000;
+// ── Not-in-channel dedup (404 ERR_CANNOTSENDTOCHAN) ───────────────────
+// "No external channel messages (#chan)" floods when the user is not joined
+// and keeps typing. We flip isJoined=false on the first 404 and suppress
+// subsequent 404s for the same buffer for 30s (show once instead of spamming).
+const NOT_IN_CHANNEL_COOLDOWN_MS = 30_000;
+const lastNotInChannelAt = new Map<string, number>();
+export function shouldSuppressNotInChannel(networkId: string, bufferName: string): boolean {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const last = lastNotInChannelAt.get(key);
+  if (last !== undefined && Date.now() - last < NOT_IN_CHANNEL_COOLDOWN_MS) return true;
+  lastNotInChannelAt.set(key, Date.now());
+  return false;
+}
+export function clearNotInChannelDedup(networkId: string, bufferName: string): void {
+  lastNotInChannelAt.delete(`${networkId}:${normalizeChannelName(bufferName)}`);
+}
+function isNotInChannelText(text: string): boolean {
+  const t = (text || '').toLowerCase();
+  return t.includes('no external') || t.includes('not on channel') || t.includes('cannot send to channel') || t.includes("you're not on that channel") || t.includes('you are not on that channel');
+}
+
 
 // ── Single reactive state object ──
 export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'advanced';
@@ -2673,8 +2694,36 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     // W7-T01: clear the pendingJoins dedup so future URL navigations to
     // this channel can re-issue JOIN if the user later parts.
     clearJoinPending(networkId, normalized);
+    clearNotInChannelDedup(networkId, normalized);
     // W1-T06: track user-initiated JOIN (existing buffer path)
     recordJoin(networkId, normalized);
+  } else if (cmd === '404') {
+    // ERR_CANNOTSENDTOCHAN — "No external channel messages" etc.
+    // This is the spam the user reported on #superbowl. The engine forwards
+    // it as a normal 404 event; we detect the not-in-channel phrasing and
+    // flip isJoined=false so the BufferHeader's Rejoin/Archive banner
+    // appears at the top. The message itself is deduped in messageHandler
+    // (show once per 30s). Moderated (+m) channels also use 404 but say
+    // "You need voice" — we only flip when the text matches not-in-channel.
+    const text = (params && params.length >= 2 ? params[params.length - 1] : '') || '';
+    // params for 404 is [yourNick, #channel, reason]; the channel is
+    // params[1]. We already resolved bufferName→normalized, but verify
+    // the param channel matches before flipping (defense-in-depth).
+    const targetChan = params && params.length >= 2 ? normalizeChannelName(params[1] || '') : normalized;
+    if (targetChan !== normalized) {
+      // Channel mismatch — don't flip a different buffer. Still allow the
+      // message to be appended (messageHandler will route by event.channel).
+    } else if (isNotInChannelText(text)) {
+      if (buf.isJoined) {
+        buf.isJoined = false;
+        buf.joinInFlight = false;
+        buf.pendingIsJoined = undefined;
+        buf.pendingConfirmations = undefined;
+        buf.joinError = null;
+        clearJoinPending(networkId, normalized);
+        clearActiveJoin(networkId, normalized);
+      }
+    }
   } else if (
     cmd === '471' || cmd === '473' || cmd === '474' ||
     cmd === '475' || cmd === '477' || cmd === '405' ||

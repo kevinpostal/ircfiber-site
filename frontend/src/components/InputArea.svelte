@@ -133,14 +133,23 @@
   let tabCycleIndex = $state(-1);
 
   const activeNetwork = $derived(getActiveNetwork());
+  const activeBufferObj = $derived(getActiveBufferObj());
+  const isChannel = $derived(ircState.activeBuffer.bufferName?.startsWith('#') ?? false);
+  const isJoined = $derived(activeBufferObj?.isJoined === true);
+  const isJoining = $derived(!!activeBufferObj?.joinInFlight);
+  const notJoinedPlaceholder = $derived.by(() => {
+    if (!isChannel) return 'Type a message...';
+    if (isJoined || isJoining) return 'Type a message...';
+    const chan = ircState.activeBuffer.bufferName || 'this channel';
+    return `You're not in ${chan} — Rejoin to send messages`;
+  });
+  const inputDisabled = $derived(isChannel && !isJoined && !isJoining);
   const myNick = $derived.by(() => {
     const net = ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId);
     return net?.currentNick || net?.nick || '';
   });
   const avatarColor = $derived(getAvatarColor(myNick));
   const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
-
-  // ── Typing indicators (IRCCloud-style) ──
   // The store's getTypersForBuffer() expires entries 6.5s after the
   // last TAGMSG, but a $derived only re-runs when its reactive inputs
   // mutate. In a quiet channel nothing does after the final TAGMSG, so
@@ -187,6 +196,7 @@
   let wasTyping = $state(false);
 
   function sendTypingActive(): void {
+    if (inputDisabled) return;
     const netId = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
     if (!netId || !buf || buf.startsWith('_')) return;
@@ -543,6 +553,13 @@
 
     const networkId = ircState.activeBuffer.networkId;
     const target = ircState.activeBuffer.bufferName || '';
+
+    // Guard: not joined channel — don't spam 404s. Trigger Rejoin instead.
+    // Slash commands (e.g. /join, /part) are allowed even when not joined.
+    if (!text.startsWith('/') && isChannel && !isJoined && !isJoining) {
+      initiateRejoin(networkId, target, { allowReconnect: true });
+      return;
+    }
 
     // Edit message path (Ctrl/Cmd+Up)
     if (editTarget) {
@@ -952,11 +969,12 @@
             bind:value={inputValue}
             id="compose-input"
             name="text"
-            placeholder="Type a message..."
+            placeholder={notJoinedPlaceholder}
             autocomplete="off"
             rows="1"
             aria-label="Message input"
             spellcheck="true"
+            disabled={inputDisabled}
             onkeydown={handleKeyDown}
             oninput={handleInput}
             onpaste={handlePaste}

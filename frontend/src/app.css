@@ -506,3 +506,23 @@ textarea.message-input {
 .seendivider {
   transition: opacity 200ms ease;
 }
+/* ─── Server disconnect divider — IRCCloud parity ───────────────────────
+   Minimal visual split for DISCONNECT / DISCONNECTED (socket_closed).
+   Mirrors IRCCloud's `<div class="row part type_socket_closed userParent"><hr>`
+   — pure 1px hairline, no text, no vertical padding beyond the hairline's
+   margins. Reuses the same border token as the grouped disco dividers. */
+.row.part.type_socket_closed {
+  display: flex;
+  align-items: center;
+  min-height: 1px;
+  padding: 6px 16px 6px 68px;
+}
+.row.part.type_socket_closed hr {
+  flex: 1;
+  display: block;
+  height: 1px;
+  border: none;
+  border-top: 1px solid var(--border, #2f3336);
+  margin: 0;
+  background: transparent;
+}

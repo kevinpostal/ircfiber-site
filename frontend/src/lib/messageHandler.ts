@@ -1,7 +1,7 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus, FailInfo } from '../types';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
-         setTempUnavailable, clearTempUnavailable, markNetworkSeen } from '../stores/ircStore.svelte';
+         setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
@@ -490,12 +490,23 @@ export function processIrcEvent(
       });
     }
   }
+  // ── 404 spam guard ────────────────────────────────────────────────
+  // "No external channel messages (#superbowl)" floods when the user is
+  // not in the channel and keeps hitting Enter. updateChannelUsers has
+  // already flipped isJoined=false so the header shows Rejoin/Archive,
+  // but we still need to suppress duplicate chat rows — show once per
+  // 30s instead of one per keystroke (user request: show message once).
+  if (cmd === '404') {
+    const t = (msg.text || '').toLowerCase();
+    const isSpam = t.includes('no external') || t.includes('not on channel') || t.includes('cannot send to channel');
+    if (isSpam && shouldSuppressNotInChannel(networkId, channel)) {
+      return result;
+    }
+  }
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {
     if (isBackfill) {
       // CHATHISTORY replay: batch via the backfill queue so it's prepended
-      // at the top without incrementing unread or firing notifications.
-      // The 0ms batcher coalesces the 50-100 replay burst into one
       // prependMessages() call, matching sync/REST history paths which
       // never count as unread. Previously this went through the live
       // batcher (enqueueMessage → batchAppendMessages) which always

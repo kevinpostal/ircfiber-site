@@ -429,7 +429,8 @@ export function getIrcCloudTypeClass(cmd: string, params?: string[], type?: stri
     case 'TOPIC': return 'type_topic_change';
     case 'KICK': return 'type_kick';
     case 'INVITE': return 'type_invite';
-    case 'DISCONNECT': return 'type_quit_server';
+    case 'DISCONNECT': return 'type_socket_closed';
+    case 'DISCONNECTED': return 'type_socket_closed';
     case 'ERROR': return 'type_error';
     case 'CONNECT': return 'type_connecting_finished';
     case 'MODE':

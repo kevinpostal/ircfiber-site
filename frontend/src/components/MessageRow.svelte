@@ -28,8 +28,9 @@
 
   const cmd = $derived(msg.command);
   const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
-  const isLifecycle = $derived(['CONNECT', 'DISCONNECT'].includes(cmd));
-  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
+  const isLifecycle = $derived(['CONNECT', 'DISCONNECT', 'DISCONNECTED'].includes(cmd));
+  const isDisconnectDivider = $derived(cmd === 'DISCONNECT' || cmd === 'DISCONNECTED');
+  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','DISCONNECTED','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
   const isAction = $derived(msg.type === 'action');
   // Server-log progress entries from the engine carry a `phase` tag. We
   // expose both a boolean (for styling) and the raw phase (for the
@@ -544,6 +545,17 @@
       </div>
     {/each}
   {/if}
+{:else if isDisconnectDivider}
+  <!-- IRCCloud parity: minimal server-disconnect divider — <div class="row part type_socket_closed userParent"><hr> -->
+  <div
+    class="row part {typeClass} userParent"
+    data-time={msg.t}
+    data-name={nick || undefined}
+    data-msgid={msg.msgid || undefined}
+    data-eid={msg.eid || undefined}
+  >
+    <hr />
+  </div>
 {:else}
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
@@ -564,7 +576,7 @@
       </span>
     {/if}
     <span class="g">&nbsp;</span>
-    {#if cmd === 'DISCONNECT' || cmd === 'CONNECT'}
+    {#if cmd === 'CONNECT'}
       <hr class="reconnect-hr" />
     {/if}
     <span class="message">
