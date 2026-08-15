@@ -1991,7 +1991,7 @@ final class RESTAPI {
             "id": Json(r.id), "name": Json(r.name), "syntax": Json(r.syntax),
             "lines": Json(r.lines), "body": Json(r.content),
             "createdAt": Json(r.createdAt), "buffer": Json(r.buffer),
-            "networkId": Json(r.networkId),
+            "networkId": Json(r.networkId), "userId": Json(r.userId),
         ]);
     }
 

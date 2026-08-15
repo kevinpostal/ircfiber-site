@@ -63,6 +63,7 @@ export function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
 }
 
 export interface MeResponse {
+  id: string;
   username: string;
   email: string;
   pinnedChannels?: string[];
@@ -436,10 +437,9 @@ export async function editUpload(id: string, data: { content: string; filename: 
   if (!r.ok) throw new Error('Failed to edit');
   return r.json();
 }
-
 export interface PasteEntry {
   id: string; name: string; syntax: string; lines: number;
-  body: string; createdAt: number; buffer: string; networkId: string;
+  body: string; createdAt: number; buffer: string; networkId: string; userId: string;
 }
 
 export async function fetchPastebinsOffset(offset = 0, limit = 25): Promise<{ entries: PasteEntry[]; total: number }> {

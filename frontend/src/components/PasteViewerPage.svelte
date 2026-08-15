@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchPastebinById, deletePastebin, updatePastebin, pastebinRawUrl, type PasteEntry } from '../stores/api';
+  import { fetchPastebinById, deletePastebin, updatePastebin, pastebinRawUrl, type PasteEntry, fetchMe } from '../stores/api';
   import CodeEditor from './CodeEditor.svelte';
   import { getPastebinIdFromUrl, navigateBackFromPastebin } from '../lib/routing';
 
@@ -48,11 +48,13 @@
   let editError = $state<string | null>(null);
   let gutterHidden = $state(false);
   let confirmDelete = $state(false);
+  let meId: string | null = $state(null);
 
   let lineCount = $derived(entry ? (entry.lines ?? entry.body.split('\n').length) : 0);
   let syntaxLabel = $derived(entry?.syntax ?? 'text');
   let dateStr = $derived(entry ? new Date(entry.createdAt).toLocaleString() : '');
   let dateIso = $derived(entry ? new Date(entry.createdAt).toISOString() : '');
+  let isOwner = $derived(entry ? meId !== null && entry.userId === meId : false);
 
   async function load() {
     if (!id) { loading = false; error = 'Missing id'; return; }
@@ -71,7 +73,8 @@
     }
   }
 
-  onMount(() => {
+  onMount(async () => {
+    try { const me = await fetchMe(); meId = me.id; } catch {}
     void load();
   });
 
@@ -86,8 +89,8 @@
   }
 
   function startEdit() {
+    if (!isOwner) return;
     if (!entry) return;
-    editFilename = entry.name;
     editLang = entry.syntax;
     editContent = entry.body;
     editError = null;
@@ -101,6 +104,7 @@
 
   async function saveEdit(e: SubmitEvent) {
     e.preventDefault();
+    if (!isOwner) return;
     if (!entry) return;
     saving = true;
     editError = null;
@@ -116,6 +120,7 @@
   }
 
   async function doDelete() {
+    if (!isOwner) return;
     if (!entry) return;
     try {
       await deletePastebin(entry.id);
@@ -148,28 +153,31 @@
               <span class="modes"><a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer">raw</a> | <button class="link linesButton" onclick={()=>gutterHidden=!gutterHidden}>line numbers</button></span>
             </span>
             {#if editing}
-              <form class="editForm" onsubmit={saveEdit}>
-                <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" />
-                <select bind:value={editLang} aria-label="Language">
-                  {#each LANGUAGES as L}<option value={L}>{L === 'text' ? 'Plain Text' : L}</option>{/each}
-                </select>
-                <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
-                <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
-              </form>
+              {#if isOwner}
+                <form class="editForm" onsubmit={saveEdit}>
+                  <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" />
+                  <select bind:value={editLang} aria-label="Language">
+                    {#each LANGUAGES as L}<option value={L}>{L === 'text' ? 'Plain Text' : L}</option>{/each}
+                  </select>
+                  <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
+                  <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
+                </form>
+              {/if}
               {#if editError}<p class="userError editError">{editError}</p>{/if}
-              {#if confirmDelete}
+              {#if isOwner && confirmDelete}
                 <span class="confirm">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> / <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></span>
               {/if}
             {:else}
-              <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> • <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
-              {#if confirmDelete}
+              {#if isOwner}
+                <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> • <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
+              {/if}
+              {#if isOwner && confirmDelete}
                 <span class="confirm">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> / <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></span>
               {/if}
               {#if editError}<p class="userError editError">{editError}</p>{/if}
             {/if}
-          </h1>
           <div class="editor ace_editor ace-twilight ace_dark">
-            {#if editing}
+            {#if editing && isOwner}
               <CodeEditor bind:value={editContent} language={editLang} showGutter={!gutterHidden} twilight />
             {:else}
               <CodeEditor value={entry.body} language={entry.syntax} readonly showGutter={!gutterHidden} twilight />

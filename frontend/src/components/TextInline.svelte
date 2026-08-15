@@ -1,9 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import Highlight from 'svelte-highlight';
   import 'svelte-highlight/styles/atom-one-dark.css';
   import CodeEditor from './CodeEditor.svelte';
-  import { fetchUploadsOffset, editUpload } from '../stores/api';
-  import plaintext from 'svelte-highlight/languages/plaintext';
+  import { fetchUploadsOffset, editUpload, fetchMe } from '../stores/api';
   import python from 'svelte-highlight/languages/python';
   import javascript from 'svelte-highlight/languages/javascript';
   import typescript from 'svelte-highlight/languages/typescript';
@@ -60,6 +60,10 @@
   let uploadName = $state<string | null>(null);
   let uploadIdForEdit = $state<string | null>(null);
   let editSaving = $state(false);
+  let meId: string | null = $state(null);
+  let pasteOwnerId: string | null = $state(null);
+  let isPasteOwner = $derived(pastebinIdForInline ? meId !== null && pasteOwnerId !== null && meId === pasteOwnerId : false);
+  let canEdit = $derived(pastebinIdForInline ? isPasteOwner : uploadIdForEdit !== null);
 
   function detectLang(u: string): any {
     const pathname = (() => { try { return new URL(u).pathname.toLowerCase(); } catch { return u.toLowerCase(); } })();
@@ -98,6 +102,9 @@
     if (name) return detectLang(name);
     return hlLang;
   });
+  onMount(async () => {
+    try { const me = await fetchMe(); meId = me.id; } catch {}
+  });
   $effect(() => {
     hlLang = detectLang(url);
     void load();
@@ -105,6 +112,8 @@
 
   async function load() {
     try {
+      pastebinIdForInline = null;
+      pasteOwnerId = null;
       // Pastebin inline: viewer URL (/?/pastebin=ID) or raw API (/api/pastebins/ID/raw)
       let pasteId: string | null = null;
       try {
@@ -126,9 +135,9 @@
         const { fetchPastebinById } = await import('../stores/api');
         const rec = await fetchPastebinById(pasteId);
         const text = rec.body ?? '';
-        const truncated = text.length > 50000 ? text.slice(0, 50000) + '\n\n… truncated …' : text;
         code = truncated;
         uploadName = rec.name;
+        pasteOwnerId = (rec as any).userId ?? null;
         // pick highlight based on syntax
         try {
           const lang = (rec.syntax || 'text').toLowerCase();
@@ -183,8 +192,8 @@
   }
 
   function startEdit() {
+    if (!canEdit) return;
     if (code === null) return;
-    editValue = code;
     const urlName = (()=>{ try{ return new URL(url).pathname.split('/').pop() ?? url; }catch{ return url.split('/').pop() ?? url; }})();
     editFilename = uploadName ?? localName ?? urlName;
     editError = null;
@@ -202,8 +211,7 @@
       return;
     }
     // Pastebin inline edit
-    if (pastebinIdForInline) {
-      editSaving = true;
+    if (pastebinIdForInline && isPasteOwner) {
       try {
         const { updatePastebin } = await import('../stores/api');
         // Need to determine syntax from editValue? Use current hlLang or keep original
@@ -283,8 +291,10 @@
           <span class="modes">{#if pastebinIdForInline}<a target="_blank" rel="noreferrer" href={pasteViewerHref}>view</a> • <a target="_blank" rel="noreferrer" href={pasteRawHref}>raw</a>{:else}<a target="_blank" rel="noreferrer" href={pasteRawHref}>raw</a>{/if} | <button class="link linesButton" onclick={() => gutterHidden = !gutterHidden}>line numbers</button> </span>
         </span>
         <span class="actions">
-          <button class="link editButton" onclick={startEdit}>edit</button>
-          •
+          {#if canEdit}
+            <button class="link editButton" onclick={startEdit}>edit</button>
+            •
+          {/if}
           <button class="link closeButton" onclick={onClose}>close</button>
         </span>
       {/if}
