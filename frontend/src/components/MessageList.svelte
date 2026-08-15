@@ -1629,6 +1629,22 @@
       <InfiniteLoader {loaderState} triggerLoad={infiniteHandler} intersectionOptions={infiniteOptions}>
         {#snippet children()}
         {/snippet}
+        {#snippet loading()}
+          <div class="history-loading" role="status" aria-label="Loading history">
+            <div class="history-loading__spinner" aria-hidden="true"></div>
+            <p class="history-loading__text">Loading history…</p>
+          </div>
+        {/snippet}
+        {#snippet noData()}
+        {/snippet}
+        {#snippet noResults()}
+        {/snippet}
+        {#snippet error(load)}
+          <div class="history-loading" role="alert">
+            <p class="history-loading__text">Failed to load history</p>
+            <button class="history-loading__retry" onclick={load}>Retry</button>
+          </div>
+        {/snippet}
       </InfiniteLoader>
     {:else}
       <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />

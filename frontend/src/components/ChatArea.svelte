@@ -107,23 +107,24 @@
         prependMessages(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, older);
         const afterLen = (ircState.messages[key] ?? []).length;
         if (afterLen > beforeLen) {
-          // Success — new messages were added. Advance the pinning
-          // cursor to the oldest message in the API response so the
-          // next call jumps strictly past already-loaded messages.
           if (isPhantom && result.earliest_ts > 0) {
             phantomCursors.set(key, result.earliest_ts);
           }
           return true;
         }
-        // All 150 were duplicates — cursor is stuck. Jump the pinning
-        // cursor to the API response's earliest_ts so the next call
-        // requests messages STRICTLY older than anything we've seen.
         if (isPhantom && result.earliest_ts > 0) {
           phantomCursors.set(key, result.earliest_ts);
-          // Return true so LoadMore doesn't count this as a failed load
-          // (the cursor IS advancing, just not via new messages yet).
           return true;
         }
+      }
+      // No new messages in this batch, but API indicates more history exists (e.g. dedup gap or upstream)
+      // Keep loader in READY, not COMPLETE, so user can keep scrolling.
+      // Complete only when truly no more (backlog_size 0 and no earliest cursor).
+      if (result.backlog_size > existing.length || result.earliest_ts > 0 || result.earliest_eid > 0) {
+        if (result.earliest_ts > 0) phantomCursors.set(key, result.earliest_ts);
+        // If we got 0 messages but API says more, treat as hasMore to avoid premature "No more data"
+        // The next call will advance the cursor via phantomCursors
+        return true;
       }
     } catch (e) {
       console.error('[handleLoadMore] Failed to load more history:', e);
