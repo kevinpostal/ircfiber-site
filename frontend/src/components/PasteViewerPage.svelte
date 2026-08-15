@@ -181,6 +181,12 @@
                 <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
               </form>
             {/if}
+            {#if isOwner && confirmDelete && !editing}
+              <span class="confirm"><span class="explanation">Are you sure?</span><button type="button" class="delete" onclick={doDelete}><span>Yup, trash it</span></button><button type="button" class="cancel" onclick={()=>confirmDelete=false}><span>Cancel</span></button></span>
+            {/if}
+            {#if !editing && isOwner}
+              <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> • <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
+            {/if}
             {#if editError}<p class="userError editError" style="display:block;">{editError}</p>{/if}
           </h1>
           <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="height: {Math.max(lineCount,1)*16}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em;">
@@ -207,25 +213,23 @@
   .filesHeader h1 { font-size: 18px; font-weight: 600; color: #c9d1d9; }
   .closeBtn { padding: 6px 12px; border: 1px solid #2a2d33; border-radius: 4px; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .userError { color: #f85149; font-size: 13px; margin-top: 10px; padding: 0 16px; }
-  /* screenshot header: dark bar 26px, name white, meta #999, links muted */
-  .paste .header { display: block; background: #2a2a2a; border-bottom: 1px solid #333; padding: 4px 8px; margin: 0; font-size: 12px; color: #999; line-height: 18px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-  .paste .header .details { display: inline; font-size: 12px; }
-  .paste .header .details .name { font-weight: 700; color: #F8F8F8; margin-right: 8px; font-size: 12px; }
-  .paste .header .details .info { color: #999; margin-right: 8px; font-size: 11px; }
+  /* header: details left, edit/delete right */
+  .paste .header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; background: #2a2a2a; border-bottom: 1px solid #333; padding: 4px 8px; margin: 0; font-size: 12px; color: #999; line-height: 18px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  .paste .header .details { display: inline; font-size: 12px; flex: 1 1 auto; min-width: 0; }
   .paste .header .details .date { color: #999; text-decoration: none; margin-right: 8px; font-size: 11px; }
   .paste .header .details .date:hover { color: #CDA869; text-decoration: underline; }
   .paste .header .details .modes { color: #666; font-size: 11px; }
   .paste .header .details .modes a,
   .paste .header .details .modes button.link { color: #999; text-decoration: none; font-size: 11px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; font: inherit; line-height: inherit; appearance: none; -webkit-appearance: none; }
+  .paste .header .actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; font-size: 11px; color: #999; }
   .paste .header .actions .link { color: #999; background: none; border: none; cursor: pointer; padding: 0; font-size: 11px; }
   .paste .header .actions .link:hover { color: #F8F8F8; text-decoration: underline; }
   .paste .header .actions .deleteButton { color: #CF6A4C; }
-  .paste .header .confirm { display: inline; margin-left: 12px; font-size: 11px; color: #CF6A4C; }
+  .paste .header .confirm { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 11px; color: #CF6A4C; }
   .paste .header .confirm .explanation { margin-right: 6px; }
   .paste .header .confirm button.delete { color: #CF6A4C; background: none; border: none; cursor: pointer; text-decoration: underline; }
   .paste .header .confirm button.cancel { color: #999; background: none; border: none; cursor: pointer; margin-left: 6px; }
-  .paste .header .editForm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0 0; margin-top: 4px; }
-  .paste .header .editForm .input { padding: 4px 6px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 3px; color: #c9d1d9; font-size: 12px; }
+  .paste .header .editForm { flex: 0 0 100%; width: 100%; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0 0; margin-top: 4px; }
   .paste .header .editForm select { padding: 4px 6px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 3px; color: #c9d1d9; font-size: 12px; max-width: 160px; }
   .editor { position: relative; border: none; overflow: visible; display: block; background: #141414; }
   .editor :global(.codeEditor) { display: flex; height: auto; min-height: 0; }

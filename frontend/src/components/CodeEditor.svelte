@@ -163,6 +163,7 @@
     flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
+    padding: 6px;
   }
   .hlLayer {
     position: absolute;
