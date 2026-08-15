@@ -133,11 +133,9 @@
 
 <svelte:window onkeydown={(e)=>{ if(e.key==='Escape') { if(editing) cancelEdit(); else handleClose(); } }} />
 
-<div id="pasteViewerPage" class="mainContainerPaste" onclick={(e)=>{ if(e.target===e.currentTarget) handleClose(); }} role="presentation">
-  <div class="mainContentPaste">
+<div id="pasteViewerPage" class="mainContainer mainContainerPaste mainContainerFull" onclick={(e)=>{ if(e.target===e.currentTarget) handleClose(); }} role="presentation">
+  <div class="mainContent mainContentPaste">
     <div class="pasteContainer">
-      <!-- tiny branding for public view -->
-      <div class="branding"><a href="/" class="brand">IRC Fiber</a><span class="tag"> — snippet</span><a href="/" class="brandHome">home</a></div>
       {#if loading}
         <p class="loadingProgress">Loading…</p>
       {:else if error || !entry}
@@ -170,7 +168,7 @@
             <div class="confirmBar">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> <span style="color:#3a3d44;">/</span> <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></div>
           {/if}
           {#if editError}<p class="userError editError">{editError}</p>{/if}
-          <div class="editor ace_editor ace-twilight ace_dark">
+          <div class="editor ace_editor ace-twilight ace_dark" style="height: {Math.max(lineCount,1)*16}px">
             {#if editing && isOwner}
               <CodeEditor bind:value={editContent} language={editLang} showGutter={!gutterHidden} twilight />
             {:else}
@@ -182,24 +180,37 @@
       {/if}
     </div>
   </div>
+  <div id="pasteSidebar">
+    <p><span class="irc">IRC</span><span class="cloud">Fiber</span> is a modern, always-connected IRC client that works on mobile and the web.</p>
+    <p>You can make text snippets automatically when sending multi-line text. They’re embedded in your chat and sent to others as a link.</p>
+    <p><a href="/">Create your own snippet</a> — just paste multi-line text in any channel.</p>
+    <p style="margin-top:12px; font-size:11px; color:#6e7681;"><a href="/" style="color:#58a6ff;">← Back to IRC Fiber</a></p>
+  </div>
 </div>
 <style>
-  #pasteViewerPage { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: #141414; }
-  #pasteViewerPage .mainContentPaste { flex: 1; overflow: hidden; display: flex; flex-direction: column; padding: 0; min-height: 0; }
-  .pasteContainer { background: #141414; border: none; border-radius: 0; width: 100%; max-width: none; height: 100%; padding: 0; box-shadow: none; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  #pasteViewerPage { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: #141414; overflow: auto; }
+  .mainContainerPaste { display: flex; flex-direction: row; background: #141414; max-width: 1280px; margin: 0 auto; width: 100%; min-height: 100%; }
+  .mainContentPaste { flex: 1; padding: 10px; min-width: 0; }
+  .pasteContainer { background: transparent; border: none; border-radius: 0; width: 100%; max-width: none; padding: 0; box-shadow: none; display: block; }
+  .paste { display: block; background: #141414; }
   .branding { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: #8b949e; padding: 10px 16px; background: #0f1115; border-bottom: 1px solid #2a2d33; flex: 0 0 auto; }
   .branding .brand { font-weight: 700; color: #58a6ff; text-decoration: none; font-size: 13px; }
   .branding .brand:hover { text-decoration: underline; }
   .branding .tag { color: #6e7681; }
   .branding .brandHome { margin-left: auto; color: #8b949e; text-decoration: none; border: 1px solid #2a2d33; border-radius: 4px; padding: 2px 6px; background: #161a22; }
   .branding .brandHome:hover { color: #c9d1d9; border-color: #3a3d44; }
-  .paste { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; padding: 0 16px 16px; }
+  .paste { display: block; background: #141414; padding: 0; }
+  #pasteSidebar { width: 180px; background: #1a1d23; padding: 10px; margin: 10px; flex: 0 0 180px; font-size: 13px; line-height: 1.4; color: #8b949e; border-left: 1px solid #2a2d33; }
+  #pasteSidebar .irc { color: #58a6ff; font-weight: 700; }
+  #pasteSidebar .cloud { color: #c9d1d9; font-weight: 700; }
+  #pasteSidebar a { color: #58a6ff; text-decoration: none; }
+  #pasteSidebar a:hover { text-decoration: underline; }
   .loadingProgress { color: #8b949e; padding: 12px; }
   .filesHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 12px 16px; }
   .filesHeader h1 { font-size: 18px; font-weight: 600; color: #c9d1d9; }
   .closeBtn { padding: 6px 12px; border: 1px solid #2a2d33; border-radius: 4px; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .userError { color: #f85149; font-size: 13px; margin-top: 10px; padding: 0 16px; }
-  .paste .header { display: flex; align-items: center; justify-content: flex-start; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #2a2d33; padding: 10px 0; margin-bottom: 12px; font-size: 14px; flex: 0 0 auto; }
+  .paste .header { display: block; background: #1e1e1e; border: 1px solid #2a2d33; border-bottom: none; padding: 5px 4px 3px; margin: 0; font-size: 13px; }
   .header .actions { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-left: 12px; }
   .header .actions .link { color: #8b949e; padding: 2px 6px; border-radius: 3px; }
   .header .actions .link:hover { color: #c9d1d9; background: #1a1d23; text-decoration: none; }
@@ -223,6 +234,6 @@
   .editForm button.action { padding: 6px 12px; border-radius: 4px; border: 1px solid #1f6feb; background: #1f6feb; color: white; cursor: pointer; }
   .editForm button.cancel { padding: 6px 12px; border-radius: 4px; border: 1px solid #2a2d33; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .confirm { font-size: 12px; color: #f85149; margin-left: 8px; }
-  .editor { border: 1px solid #2a2d33; border-radius: 4px; overflow: hidden; display: flex; flex: 1 1 auto; min-height: 0; }
+  .editor { border: 1px solid #2a2d33; border-top: none; overflow: hidden; display: block; }
   .editor :global(.codeEditor) { flex: 1; min-height: 0; }
 </style>
