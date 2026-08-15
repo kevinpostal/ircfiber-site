@@ -152,29 +152,24 @@
               <a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer" class="date" title={dateIso}>{dateStr}</a>
               <span class="modes"><a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer">raw</a> | <button class="link linesButton" onclick={()=>gutterHidden=!gutterHidden}>line numbers</button></span>
             </span>
-            <span class="header-right">
-              {#if editing}
-                {#if isOwner}
-                  <form class="editForm" onsubmit={saveEdit}>
-                    <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" />
-                    <select bind:value={editLang} aria-label="Language">
-                      {#each LANGUAGES as L}<option value={L}>{L === 'text' ? 'Plain Text' : L}</option>{/each}
-                    </select>
-                    <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
-                    <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
-                  </form>
-                {/if}
-              {:else}
-                {#if isOwner}
-                  <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> • <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
-                {/if}
-              {/if}
-              {#if isOwner && confirmDelete}
-                <span class="confirm">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> / <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></span>
-              {/if}
-            </span>
+            {#if !editing && isOwner}
+              <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> <span style="color:#3a3d44;">•</span> <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
+            {/if}
           </h1>
-          {#if editError}<p class="userError editError" style="text-align:right; margin:4px 0 0;">{editError}</p>{/if}
+          {#if editing && isOwner}
+            <form class="editForm" onsubmit={saveEdit}>
+              <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" />
+              <select bind:value={editLang} aria-label="Language">
+                {#each LANGUAGES as L}<option value={L}>{L === 'text' ? 'Plain Text' : L}</option>{/each}
+              </select>
+              <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
+              <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
+            </form>
+          {/if}
+          {#if isOwner && confirmDelete}
+            <div class="confirmBar">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> <span style="color:#3a3d44;">/</span> <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></div>
+          {/if}
+          {#if editError}<p class="userError editError">{editError}</p>{/if}
           <div class="editor ace_editor ace-twilight ace_dark">
             {#if editing && isOwner}
               <CodeEditor bind:value={editContent} language={editLang} showGutter={!gutterHidden} twilight />
@@ -204,8 +199,14 @@
   .filesHeader h1 { font-size: 18px; font-weight: 600; color: #c9d1d9; }
   .closeBtn { padding: 6px 12px; border: 1px solid #2a2d33; border-radius: 4px; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .userError { color: #f85149; font-size: 13px; margin-top: 10px; padding: 0 16px; }
-  .paste .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #2a2d33; padding: 10px 0; margin-bottom: 12px; font-size: 14px; flex: 0 0 auto; }
-  .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .paste .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #2a2d33; padding: 10px 0; margin-bottom: 12px; font-size: 14px; flex: 0 0 auto; }
+  .header .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .header .actions .link { color: #8b949e; padding: 2px 6px; border-radius: 3px; }
+  .header .actions .link:hover { color: #c9d1d9; background: #1a1d23; text-decoration: none; }
+  .header .actions .editButton { color: #58a6ff; }
+  .header .actions .deleteButton { color: #f85149; }
+  .confirmBar { background: #1a1d23; border: 1px solid #2a2d33; border-radius: 6px; padding: 8px 12px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f85149; }
+  .editForm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #0f1115; border: 1px solid #2a2d33; border-radius: 6px; margin: 0 0 12px; }
   .paste .details { display: flex; flex-direction: column; gap: 4px; }
   .paste .name { font-weight: 700; font-size: 16px; color: #c9d1d9; }
   .paste .info { font-size: 12px; color: #8b949e; }
@@ -217,7 +218,6 @@
   .paste .actions { font-size: 12px; color: #8b949e; }
   .link { background: none; border: none; color: #58a6ff; cursor: pointer; padding: 0; font-size: inherit; }
   .link:hover { text-decoration: underline; }
-  .editForm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
   .editForm .input { padding: 6px 8px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 4px; color: #c9d1d9; font-size: 13px; }
   .editForm select { padding: 6px 8px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 4px; color: #c9d1d9; font-size: 13px; max-width: 160px; }
   .editForm button.action { padding: 6px 12px; border-radius: 4px; border: 1px solid #1f6feb; background: #1f6feb; color: white; cursor: pointer; }
