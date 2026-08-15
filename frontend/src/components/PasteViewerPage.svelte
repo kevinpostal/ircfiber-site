@@ -168,12 +168,13 @@
             <span class="details">
               {#if !editing}<span class="name">{entry.name || 'Untitled'}</span>{/if}
               <span class="info"><span class="syntax">{syntaxLabel}</span> • <span class="lines">{lineCount} lines</span></span>
-              <a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer" class="date" title={dateTitle}>{dateRel}</a>
+              <span class="date" title={dateTitle}>{dateRel}</span>
               <span class="modes"><a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer">raw</a> | <button class="link linesButton" onclick={()=>gutterHidden=!gutterHidden}>line numbers</button></span>
             </span>
             {#if editing && isOwner}
               <form class="editForm" onsubmit={saveEdit}>
-                <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" name="name" />
+                <label class="fieldLabel" for="pasteFilename">Filename</label>
+                <input id="pasteFilename" class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" name="name" />
                 <select bind:value={editLang} aria-label="Language" name="aceMode">
                   {#each LANGUAGES as L}<option value={L}>{SYNTAX_LABEL[L] ?? L}</option>{/each}
                 </select>
@@ -189,7 +190,7 @@
             {/if}
             {#if editError}<p class="userError editError" style="display:block;">{editError}</p>{/if}
           </h1>
-          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="height: {Math.max(lineCount,1)*16}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
+          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="position: relative; height: {Math.max(lineCount,1)*16}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
             <div class="editorToolbar">
               <button class="copyButton" onclick={copyCode} aria-label="Copy code" title={copied ? 'Copied!' : 'Copy'}>
                 {#if copied}
@@ -222,11 +223,14 @@
   /* header: details left, edit/delete right */
   .paste .header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; background: #2a2a2a; border-bottom: 1px solid #333; padding: 4px 8px; margin: 0; font-size: 12px; color: #999; line-height: 18px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
   .paste .header .details { display: inline; font-size: 12px; flex: 1 1 auto; min-width: 0; }
-  .paste .header .details .date { color: #999; text-decoration: none; margin-right: 8px; font-size: 11px; }
-  .paste .header .details .date:hover { color: #CDA869; text-decoration: underline; }
+  .paste .header .details .name { color: #e6e6e6; font-weight: 700; margin-right: 8px; font-size: 12px; }
+  .paste .header .details .date { color: #f2f2f2; text-decoration: none; margin-right: 8px; font-size: 11px; }
   .paste .header .details .modes { color: #666; font-size: 11px; }
-  .paste .header .details .modes a,
+  .paste .header .details .modes a { color: #58a6ff; text-decoration: none; }
+  .paste .header .details .modes a:hover { color: #58a6ff; text-decoration: underline; }
   .paste .header .details .modes button.link { color: #999; text-decoration: none; font-size: 11px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; font: inherit; line-height: inherit; appearance: none; -webkit-appearance: none; }
+  .paste .header .details .modes button.linesButton { color: #f2f2f2; }
+  .paste .header .details .modes button.linesButton:hover { color: #fff; text-decoration: underline; }
   .paste .header .actions { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex: 0 0 auto; font-size: 11px; color: #999; }
   .paste .header .actions .link { color: #999; background: none; border: none; cursor: pointer; padding: 0; font-size: 11px; }
   .paste .header .actions .link:hover { color: #F8F8F8; text-decoration: underline; }
@@ -236,6 +240,7 @@
   .paste .header .confirm button.delete { color: #CF6A4C; background: none; border: none; cursor: pointer; text-decoration: underline; }
   .paste .header .confirm button.cancel { color: #999; background: none; border: none; cursor: pointer; margin-left: 6px; }
   .paste .header .editForm { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 0; margin: 0 0 0 8px; flex: 0 1 auto; }
+  .paste .header .editForm .fieldLabel { font-size: 11px; color: #999; white-space: nowrap; margin-right: -2px; }
   .paste .header .editForm .input { padding: 2px 6px; background: #1a1a1a; border: 1px solid #333; border-radius: 3px; color: #F8F8F8; font-size: 12px; min-width: 100px; max-width: 160px; flex: 1 1 120px; }
   .paste .header .editForm select { padding: 4px 6px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 3px; color: #c9d1d9; font-size: 12px; max-width: 160px; }
   .paste .header .editForm button.action { padding: 4px 10px; border-radius: 3px; border: 1px solid #1f6feb; background: #1f6feb; color: white; cursor: pointer; font-size: 12px; }
