@@ -124,6 +124,8 @@ const isBootLoading: boolean = $derived(
 let showNetworkForm: boolean = $state(false);
   let showJoinModal: boolean = $state(false);
   let joinModalNetworkId: string | null = $state(null);
+  $effect(() => { (window as any).__channelMenu = channelMenu; (window as any).__editNetworkId = editNetworkId; (window as any).__showNetworkForm = showNetworkForm; });
+  $effect(() => { (window as any).__showNetworkForm = showNetworkForm; (window as any).__editNetworkId = editNetworkId; (window as any).__networkFormMode = networkFormMode; });
   let channelSwitcherOpen: boolean = $state(false);
   let networkFormMode: 'add' | 'edit' = $state('add');
   let localMsgIdCounter = 0;
@@ -1591,8 +1593,10 @@ let showNetworkForm: boolean = $state(false);
 {/if}
 
 {#if channelMenu}
-  {@const menuNetwork = ircState.networks.find(n => n.networkId === channelMenu?.networkId)}
-  {@const menuBuf = menuNetwork?.buffers.find(b => b.name === channelMenu?.bufferName) ?? (channelMenu?.bufferName === '_server' && menuNetwork ? { name: '_server', type: 'server' as const, isJoined: true, unreadCount: 0, highlight: false, isPinned: false, isArchived: false, topic: '', topicSetBy: '', topicSetAt: 0, users: [], lastSeenMsgTime: null, firstUnseenMsgIndex: null } as any : null)}
+  {@const capturedNetworkId = channelMenu.networkId}
+  {@const capturedBufferName = channelMenu.bufferName}
+  {@const menuNetwork = ircState.networks.find(n => n.networkId === capturedNetworkId)}
+  {@const menuBuf = menuNetwork?.buffers.find(b => b.name === capturedBufferName) ?? (capturedBufferName === '_server' && menuNetwork ? { name: '_server', type: 'server' as const, isJoined: true, unreadCount: 0, highlight: false, isPinned: false, isArchived: false, topic: '', topicSetBy: '', topicSetAt: 0, users: [], lastSeenMsgTime: null, firstUnseenMsgIndex: null } as any : null)}
   {#if menuNetwork && menuBuf}
     {#if menuBuf.name === '_server'}
       <ServerLogContextMenu
@@ -1602,7 +1606,7 @@ let showNetworkForm: boolean = $state(false);
         buf={menuBuf}
         onClose={closeChannelMenu}
         onJoinChannel={() => { const nid = channelMenu?.networkId; joinModalNetworkId = nid ?? null; showJoinModal = true; closeChannelMenu(); }}
-        onEditNetwork={() => { const nid = channelMenu?.networkId; networkFormMode = 'edit'; editNetworkId = nid ?? null; showNetworkForm = true; closeChannelMenu(); }}
+        onEditNetwork={() => { (window as any).__testChannelMenuAtClick = channelMenu ? {networkId: channelMenu.networkId, bufferName: channelMenu.bufferName} : null; const nid = channelMenu?.networkId; (window as any).__testNidAtClick = nid; networkFormMode = 'edit'; editNetworkId = nid ?? null; showNetworkForm = true; closeChannelMenu(); }}
       />
     {:else}
       <ChannelContextMenu

@@ -115,12 +115,13 @@
     await disconnectNetwork(networkId);
   }
   function clickJoin(): void {
-    onClose();
     onJoinChannel();
+    onClose();
   }
   function clickEdit(): void {
-    onClose();
+    (window as any).__clickEditCalled = true;
     onEditNetwork();
+    onClose();
   }
   function clickIdentify(): void {
     if (!networkId) return;
