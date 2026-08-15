@@ -874,29 +874,63 @@
     else tick().then(doScroll);
   }
 
-  // indicator appears below, stealing flex space), snap back to bottom
-  // if the user was pinned there — otherwise they see the viewport drift
-  // up with no scroll event to correct it.
+  // Keep pinned viewport at the true bottom when late layout grows the
+  // content (image decode, text-wrap fetch, member enrichment). The old
+  // ResizeObserver on the viewport itself never fired for scrollHeight
+  // growth (overflow content doesn't resize the viewport), so page-load
+  // with image previews left the viewport ~250 px short. We now:
+  //  (a) capture `load` events from <img> (bubbles in capture phase)
+  //  (b) ResizeObserve every .directEmbedWrap / .editor that appears
+  //  (c) keep the viewport RO as a fallback for window resizes.
   $effect(() => {
     if (isServerBuffer) return;
     const el = container;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
+    const snapIfPinned = () => {
       if (!container) return;
       if (!cachedAtBottom) return;
-      // Don't use stale prevScrollTop — RO fires async after programmatic
-      // snaps; the last scroll event's prevScrollTop is stale. Just check
-      // live distance from bottom per ChatInfinite.anchorFromBottom.
       const scrollHeight = container.scrollHeight;
       const offsetHeight = container.clientHeight;
       const scrollPos = Math.ceil(container.scrollTop);
       const bottom = (scrollHeight - offsetHeight) + 1;
       if ((bottom - scrollPos) > 1) {
         container.scrollTop = scrollHeight;
+        // Schedule a second rAF to catch the frame after the RO's
+        // async callback when the image's display:inline-block hasn't
+        // flushed yet (preload snap vs onLoad race).
+        requestAnimationFrame(() => {
+          if (!container || !cachedAtBottom) return;
+          const h2 = container.scrollHeight;
+          const off2 = container.clientHeight;
+          const pos2 = Math.ceil(container.scrollTop);
+          if ((h2 - off2 + 1 - pos2) > 1) container.scrollTop = h2;
+        });
       }
-    });
+    };
+    const ro = new ResizeObserver(() => snapIfPinned());
     ro.observe(el);
-    return () => ro.disconnect();
+    const mo = new MutationObserver(() => {
+      // Re-observe any new embed/editor nodes and snap after their
+      // initial zero-height → image-height transition.
+      el.querySelectorAll('.directEmbedWrap, .editor').forEach((n) => {
+        try { ro.observe(n as Element); } catch {}
+      });
+      snapIfPinned();
+    });
+    mo.observe(el, { childList: true, subtree: true });
+    // Initial observe of embeds already in DOM (page-load history)
+    el.querySelectorAll('.directEmbedWrap, .editor').forEach((n) => {
+      try { ro.observe(n as Element); } catch {}
+    });
+    const onLoadCapture = () => snapIfPinned();
+    el.addEventListener('load', onLoadCapture, true);
+    el.addEventListener('error', onLoadCapture, true);
+    return () => {
+      el.removeEventListener('load', onLoadCapture, true);
+      el.removeEventListener('error', onLoadCapture, true);
+      mo.disconnect();
+      ro.disconnect();
+    };
   });
 
   $effect(() => {

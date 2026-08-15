@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { tick, onMount } from 'svelte';
   import Highlight from 'svelte-highlight';
   import 'svelte-highlight/styles/atom-one-dark.css';
   import CodeEditor from './CodeEditor.svelte';
@@ -136,7 +136,9 @@
         const { fetchPastebinById } = await import('../stores/api');
         const rec = await fetchPastebinById(pasteId);
         const text = rec.body ?? '';
-        code = truncated;
+        const truncatedPaste = text.length > 50000 ? text.slice(0, 50000) + '\n\n… truncated …' : text;
+        code = truncatedPaste;
+        void afterCodeLoaded();
         uploadName = rec.name;
         pasteOwnerId = (rec as any).userId ?? null;
         // pick highlight based on syntax
@@ -173,6 +175,7 @@
       const text = await res.text();
       const truncated = text.length > 50000 ? text.slice(0, 50000) + '\n\n… truncated …' : text;
       code = truncated;
+      void afterCodeLoaded();
       try {
         const uPath = (()=>{ try{ return new URL(url, location.origin).pathname; } catch { return url; } })();
         const r2 = await fetchUploadsOffset(0, 100);
@@ -186,6 +189,20 @@
       console.warn('TextInline failed to load', url, e);
       errored = true;
     }
+  }
+  function snapToBottomIfNeeded(): void {
+    const c = document.getElementById('messages') as HTMLElement | null;
+    if (!c) return;
+    const dist = c.scrollHeight - c.clientHeight - c.scrollTop;
+    if (dist <= 300) {
+      c.scrollTop = c.scrollHeight;
+      requestAnimationFrame(() => { if (c) c.scrollTop = c.scrollHeight; });
+    }
+  }
+  async function afterCodeLoaded(): Promise<void> {
+    await tick();
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    snapToBottomIfNeeded();
   }
   function onClose(e: MouseEvent) {
     e.preventDefault();

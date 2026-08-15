@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   interface Props {
     url: string;
   }
@@ -23,11 +24,17 @@
       closeLeft = imgEl.clientWidth;
     });
   }
-
-  function onLoad(): void {
+  async function onLoad(): Promise<void> {
     loaded = true;
     errored = false;
     updateClosePos();
+    // Wait for Svelte to flush the `loaded` → `imageRendered` class change
+    // (display:none → inline-block) before measuring scrollHeight. Without
+    // this, snapToBottomIfNeeded reads the old scrollHeight and lands 250px
+    // short — the page-load image previews stay below the fold.
+    await tick();
+    // One more frame so the browser has computed the new image layout.
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
     snapToBottomIfNeeded();
   }
   function onError(): void {
@@ -42,9 +49,10 @@
   function snapToBottomIfNeeded(): void {
     // If the user is viewing the live tail (near bottom), keep them pinned
     // to the true bottom after the image decodes and grows. The MessageList
-    // ResizeObserver already does this, but it can race with the image's
-    // onload (scrollHeight grows after the snap). We handle it here too so
-    // the preview is never left below the fold.
+    // observer already does this, but it can race with the image's
+    // onload (scrollHeight grows async). We handle it here too so
+    // the preview is never left below the fold, especially on page load
+    // where the initial snap lands before images decode.
     const c = document.getElementById('messages') as HTMLElement | null;
     if (!c) return;
     // Distance from bottom *before* we snap. After image load the distance
@@ -53,7 +61,9 @@
     // images to stay visible even if the initial snap landed 250px above.
     const dist = c.scrollHeight - c.clientHeight - c.scrollTop;
     if (dist <= 300) {
+      c.scrollTop = c.scrollHeight;
       requestAnimationFrame(() => {
+        if (!c) return;
         c.scrollTop = c.scrollHeight;
         requestAnimationFrame(() => {
           c.scrollTop = c.scrollHeight;
@@ -65,10 +75,12 @@
   // Cached image fix: if the image is already complete (from cache) when
   $effect(() => {
     if (imgEl && imgEl.complete && imgEl.naturalWidth > 0 && !loaded && !errored) {
-      queueMicrotask(() => {
+      queueMicrotask(async () => {
         if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
           loaded = true;
           updateClosePos();
+          await tick();
+          await new Promise<void>((r) => requestAnimationFrame(() => r()));
           snapToBottomIfNeeded();
         }
       });
