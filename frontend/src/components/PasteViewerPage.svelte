@@ -199,8 +199,8 @@
   .filesHeader h1 { font-size: 18px; font-weight: 600; color: #c9d1d9; }
   .closeBtn { padding: 6px 12px; border: 1px solid #2a2d33; border-radius: 4px; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .userError { color: #f85149; font-size: 13px; margin-top: 10px; padding: 0 16px; }
-  .paste .header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #2a2d33; padding: 10px 0; margin-bottom: 12px; font-size: 14px; flex: 0 0 auto; }
-  .header .actions { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .paste .header { display: flex; align-items: center; justify-content: flex-start; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #2a2d33; padding: 10px 0; margin-bottom: 12px; font-size: 14px; flex: 0 0 auto; }
+  .header .actions { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-left: 12px; }
   .header .actions .link { color: #8b949e; padding: 2px 6px; border-radius: 3px; }
   .header .actions .link:hover { color: #c9d1d9; background: #1a1d23; text-decoration: none; }
   .header .actions .editButton { color: #58a6ff; }

@@ -25,5 +25,5 @@ block body
       div.initial-loader__text Connecting...
 
 block scripts
-  link(rel="stylesheet", href="/public/dist/assets/main-Ch3pGK2L.css")
-  script(type="module", src="/public/dist/assets/main-cuPnvy88.js")
+  link(rel="stylesheet", href="/public/dist/assets/main-DbNoCXF8.css")
+  script(type="module", src="/public/dist/assets/main-Da-q-bRf.js")
