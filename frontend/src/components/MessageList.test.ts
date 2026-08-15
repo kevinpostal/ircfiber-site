@@ -1,6 +1,18 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render } from 'vitest-browser-svelte';
+vi.mock('svelte-infinite', () => ({
+  InfiniteLoader: class MockInfiniteLoader {},
+  LoaderState: class MockLoaderState {
+    status = 'READY';
+    isFirstLoad = true;
+    loaded() { this.status = 'READY'; this.isFirstLoad = false; }
+    complete() { this.status = 'COMPLETE'; this.isFirstLoad = false; }
+    reset() { this.status = 'READY'; this.isFirstLoad = true; }
+    error() { this.status = 'ERROR'; }
+  },
+  STATUS: { READY: 'READY', LOADING: 'LOADING', COMPLETE: 'COMPLETE', ERROR: 'ERROR' }
+}));
 import { page, userEvent } from 'vitest/browser';
+import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';

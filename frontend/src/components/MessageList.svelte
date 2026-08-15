@@ -424,14 +424,19 @@
     loaderState?.reset();
   });
 
+  let infiniteLoading = $state(false);
   async function infiniteHandler() {
+    if (infiniteLoading) return;
+    infiniteLoading = true;
     // In-memory batches first (instant, no spinner) – preserves scroll via revealBacklogFromMemory's delta
     if (revealBacklogFromMemory()) {
       loaderState?.loaded();
+      infiniteLoading = false;
       return;
     }
     if (!onLoadMore) {
       loaderState?.complete();
+      infiniteLoading = false;
       return;
     }
     try {
@@ -440,9 +445,10 @@
       else loaderState?.complete();
     } catch {
       loaderState?.error();
+    } finally {
+      infiniteLoading = false;
     }
   }
-
   // Pre-compute date separators over the rendered window
   const messagesWithDates = $derived.by(() => {
     const all = processedMessages;
