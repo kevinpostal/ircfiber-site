@@ -166,7 +166,7 @@
         <div class="paste">
           <h1 class="header">
             <span class="details">
-              <span class="name">{entry.name || 'Untitled'}</span>
+              {#if !editing}<span class="name">{entry.name || 'Untitled'}</span>{/if}
               <span class="info"><span class="syntax">{syntaxLabel}</span> • <span class="lines">{lineCount} lines</span></span>
               <a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer" class="date" title={dateTitle}>{dateRel}</a>
               <span class="modes"><a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer">raw</a> | <button class="link linesButton" onclick={()=>gutterHidden=!gutterHidden}>line numbers</button></span>
@@ -189,9 +189,15 @@
             {/if}
             {#if editError}<p class="userError editError" style="display:block;">{editError}</p>{/if}
           </h1>
-          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="height: {Math.max(lineCount,1)*16}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em;">
+          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="height: {Math.max(lineCount,1)*16}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
             <div class="editorToolbar">
-              <button class="copyButton" onclick={copyCode} aria-label="Copy code">{copied ? 'Copied!' : 'Copy'}</button>
+              <button class="copyButton" onclick={copyCode} aria-label="Copy code" title={copied ? 'Copied!' : 'Copy'}>
+                {#if copied}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>
+                {:else}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v3"/></svg>
+                {/if}
+              </button>
             </div>
             <span class="langtag">{syntaxLabel}</span>
             {#if editing && isOwner}
@@ -229,13 +235,18 @@
   .paste .header .confirm .explanation { margin-right: 6px; }
   .paste .header .confirm button.delete { color: #CF6A4C; background: none; border: none; cursor: pointer; text-decoration: underline; }
   .paste .header .confirm button.cancel { color: #999; background: none; border: none; cursor: pointer; margin-left: 6px; }
-  .paste .header .editForm { flex: 0 0 100%; width: 100%; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0 0; margin-top: 4px; }
+  .paste .header .editForm { display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 0; margin: 0 0 0 8px; flex: 0 1 auto; }
+  .paste .header .editForm .input { padding: 2px 6px; background: #1a1a1a; border: 1px solid #333; border-radius: 3px; color: #F8F8F8; font-size: 12px; min-width: 100px; max-width: 160px; flex: 1 1 120px; }
   .paste .header .editForm select { padding: 4px 6px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 3px; color: #c9d1d9; font-size: 12px; max-width: 160px; }
-  .editor { position: relative; border: none; overflow: visible; display: block; background: #141414; }
+  .paste .header .editForm button.action { padding: 4px 10px; border-radius: 3px; border: 1px solid #1f6feb; background: #1f6feb; color: white; cursor: pointer; font-size: 12px; }
+  .paste .header .editForm button.cancel { padding: 4px 10px; border-radius: 3px; border: 1px solid #2a2d33; background: #161a22; color: #c9d1d9; cursor: pointer; font-size: 12px; }
+  .paste .header .userError { color: #f85149; font-size: 12px; margin: 4px 0 0; padding: 0; }
+  .editor { position: relative; border: none; overflow: visible; display: block; background: #141414; margin-top: 1px; }
   .editor :global(.codeEditor) { display: flex; height: auto; min-height: 0; }
-  .editorToolbar { position: absolute; top: 6px; right: 8px; z-index: 5; display: flex; align-items: center; }
-  .copyButton { padding: 5px 10px; font-size: 12px; line-height: 1; font-family: inherit; color: #c9d1d9; background: #2a2a2a; border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; cursor: pointer; }
-  .copyButton:hover { color: #fff; background: #333; border-color: rgba(255,255,255,0.22); }
-  .copyButton:active { transform: scale(0.98); }
+  .editorToolbar { position: absolute; top: 8px; right: 8px; z-index: 5; display: flex; align-items: center; }
+  .copyButton { width: var(--copy-size, 2.5em); height: var(--copy-size, 2.5em); display: inline-flex; align-items: center; justify-content: center; padding: 0; font-size: 12px; line-height: 1; color: var(--copy-color, #fff); background: var(--copy-background, rgba(255,255,255,0.1)); border: 1px solid transparent; border-radius: var(--copy-border-radius, 8px); cursor: pointer; }
+  .copyButton:hover { background: rgba(255,255,255,0.16); }
+  .copyButton:active { transform: scale(0.96); }
+  .copyButton svg { width: 14px; height: 14px; }
   .langtag { position: absolute; bottom: 8px; right: 8px; z-index: 5; padding: 0 2px; font-size: 11px; line-height: 1; font-family: inherit; color: rgba(255,255,255,0.35); background: transparent; border: none; text-transform: lowercase; pointer-events: none; letter-spacing: 0.02em; }
 </style>
