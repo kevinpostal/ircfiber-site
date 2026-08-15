@@ -12,15 +12,33 @@
 }
 
 /* Typing indicator — full-width bar above the input row */
+/* Typing indicator — smart overlay above the input. Previously it was
+   `flex: 0 0 100%` inside the input flex row, so every appearance grew
+   the input by ~20px and shrank the chat viewport via flex, causing the
+   bottom of the last message to be clipped until the next scroll resnap.
+   Now it is `position: absolute` with `bottom:100%` so it floats without
+   affecting layout, and `:has(.typingcell)` adds scroll-padding so the
+   last message stays fully visible above it. Matches IRCCloud's thin strip
+   above the input (inputInfo pattern) and never cuts off a row. */
 .bufferinputcell .typingcell {
-  flex: 0 0 100%;
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 4px 6px 4px;
+  padding: 6px 12px;
   font-size: 13px;
   color: #8b949e;
   line-height: 1;
+  background: #2a2d33;
+  border-top: 1px solid #1a1c20;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 5;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .bufferinputcell .typing-dots {
