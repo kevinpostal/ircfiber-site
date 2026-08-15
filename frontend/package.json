@@ -44,6 +44,7 @@
     "highlight.js": "^11.11.1",
     "jpeg-js": "^0.4.4",
     "svelte-dnd-action": "^0.9.55",
-    "svelte-highlight": "^7.16.2"
+    "svelte-highlight": "^7.16.2",
+    "svelte-infinite": "^0.5.2"
   }
 }

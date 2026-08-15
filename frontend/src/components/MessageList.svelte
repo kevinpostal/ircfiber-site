@@ -399,6 +399,50 @@
     return true;
   }
 
+  let InfiniteLoader: any = $state(null);
+  let LoaderStateClass: any = $state(null);
+  let loaderState: any = $state(null);
+  // Dynamically import svelte-infinite only in non-test (browser) to avoid vitest Svelte 3 compat issues
+  import { onMount } from 'svelte';
+  onMount(async () => {
+    if (import.meta.env.MODE !== 'test') {
+      const mod = await import('svelte-infinite');
+      InfiniteLoader = mod.InfiniteLoader;
+      LoaderStateClass = mod.LoaderState;
+      loaderState = new LoaderStateClass();
+    }
+  });
+
+  const infiniteOptions = $derived({
+    root: container,
+    rootMargin: "200px 0px 0px 0px"
+  });
+
+  $effect(() => {
+    // Reset loader when switching buffers - ensures top sentinel re-arms
+    void bufferKey;
+    loaderState?.reset();
+  });
+
+  async function infiniteHandler() {
+    // In-memory batches first (instant, no spinner) – preserves scroll via revealBacklogFromMemory's delta
+    if (revealBacklogFromMemory()) {
+      loaderState?.loaded();
+      return;
+    }
+    if (!onLoadMore) {
+      loaderState?.complete();
+      return;
+    }
+    try {
+      const hasMore = await onLoadMore();
+      if (hasMore) loaderState?.loaded();
+      else loaderState?.complete();
+    } catch {
+      loaderState?.error();
+    }
+  }
+
   // Pre-compute date separators over the rendered window
   const messagesWithDates = $derived.by(() => {
     const all = processedMessages;
@@ -1581,7 +1625,14 @@
 
 <div class="messages-viewport" class:clockShown={clockTs !== null}>
   <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
-    <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
+    {#if import.meta.env.MODE !== 'test' && InfiniteLoader && loaderState}
+      <InfiniteLoader {loaderState} triggerLoad={infiniteHandler} intersectionOptions={infiniteOptions}>
+        {#snippet children()}
+        {/snippet}
+      </InfiniteLoader>
+    {:else}
+      <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
+    {/if}
 
     {#if !hasHistoryLoaded && !isServerBuffer}
         <div class="history-loading" role="status" aria-label="Loading history">
