@@ -4,6 +4,7 @@
   import 'svelte-highlight/styles/atom-one-dark.css';
   import CodeEditor from './CodeEditor.svelte';
   import { fetchUploadsOffset, editUpload, fetchMe } from '../stores/api';
+  import plaintext from 'svelte-highlight/languages/plaintext';
   import python from 'svelte-highlight/languages/python';
   import javascript from 'svelte-highlight/languages/javascript';
   import typescript from 'svelte-highlight/languages/typescript';
