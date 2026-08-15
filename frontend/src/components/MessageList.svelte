@@ -823,6 +823,16 @@
             // initial sync. Without this, the idx>0 path would keep the
             // viewport anchored mid-history (Super%20Nets first load).
             renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+            // If we were physically at bottom before the prepend (pinBottomBefore),
+            // keep pinned at bottom even if shouldSnap is false due to
+            // isAtBottom being stale. This fixes double-load flash where
+            // second history batch arrives while still at bottom but
+            // cachedAtBottom was cleared by a stray scroll event.
+            if (pinBottomBefore && container) {
+              tick().then(() => {
+                if (container) container.scrollTop = container.scrollHeight;
+              });
+            }
           } else if (idx > 0) {
             const start = untrack(() => renderStart);
             if (start > 0) renderStart = start + idx;
