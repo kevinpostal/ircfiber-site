@@ -18,7 +18,7 @@ import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiHostDeleteNetwork, apiAssignmentDelete, apiRouting,
     apiFiberConfig, apiFiberConfigSet,
     apiMullvadStatus, apiNetworkEgressSet,
-    apiUsersList, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete,
+    apiUsersList, apiUsersBulkDelete, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete,
     apiResetPassword,
     apiSessions, apiSessionsClear, apiSessionsClearUser, apiSessionsClearOne,
     apiUploadsList, apiUploadDelete;
@@ -101,6 +101,8 @@ final class AdminController {
         router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
         router.post("/api/admin/networks/:id/egress", &adminWrap!apiNetworkEgressSetRoute);
 
+        router.post("/api/admin/users", &adminWrap!apiUserCreateRoute);
+        router.post("/api/admin/users/bulk-delete", &adminWrap!apiUsersBulkDeleteRoute);
         router.get("/api/admin/users", &adminWrap!apiUsersListRoute);
         router.get("/api/admin/users/:id", &adminWrap!apiUserDetailRoute);
         router.post("/api/admin/users/:id", &adminWrap!apiUserUpdateRoute);
@@ -212,6 +214,8 @@ private:
     void apiMullvadStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadStatus(req, res); }
     void apiNetworkEgressSetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNetworkEgressSet(req, res, redis, serverRegistry); }
     void apiUsersListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUsersList(req, res); }
+    void apiUserCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUserCreate(req, res); }
+    void apiUsersBulkDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUsersBulkDelete(req, res, redis, serverRegistry); }
     void apiUserDetailRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiUserDetail(req, res, redis);
     }

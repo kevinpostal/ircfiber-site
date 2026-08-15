@@ -958,6 +958,119 @@ package void apiUserDelete(HTTPServerRequest req, HTTPServerResponse res,
     jsonOk(res, data);
 }
 
+/// POST /api/admin/users/bulk-delete — delete multiple users by IDs.
+/// Body: {ids: string[]} . Skips invalid IDs and the acting admin's own ID.
+package void apiUsersBulkDelete(HTTPServerRequest req, HTTPServerResponse res,
+                          RedisStorage redis, ServerRegistry serverRegistry) {
+    import std.uuid : parseUUID;
+    import std.file : remove;
+    import std.path : buildPath;
+    import ircfiber.upload.local : uploadDir;
+    import ircfiber.storage.buffer : BufferManager;
+    import ircfiber.models.user : User;
+
+    auto body = readJsonBody(req);
+    Json idsJson;
+    try idsJson = body["ids"];
+    catch (Exception) { jsonError(res, 400, "Missing ids array"); return; }
+    if (idsJson.type != Json.Type.array) { jsonError(res, 400, "ids must be an array"); return; }
+    if (idsJson.length == 0) { jsonError(res, 400, "No users selected"); return; }
+    if (idsJson.length > 100) { jsonError(res, 400, "Too many users selected (max 100)"); return; }
+
+    User currentUser;
+    try currentUser = req.context["user"].get!User;
+    catch (Exception) {}
+    string currentId = currentUser.id != UUID.init ? currentUser.id.toString() : "";
+
+    auto userRepo = new UserRepository();
+    auto db = redis.getDb();
+    auto netRepo = new NetworkRepository();
+    auto bufferManager = new BufferManager(redis);
+
+    int deleted;
+    string[] skipped;
+    string[] errors;
+    foreach (idJson; idsJson) {
+        string idStr;
+        try idStr = idJson.get!string.strip();
+        catch (Exception) { skipped ~= idJson.toString(); continue; }
+        if (idStr.length == 0) { skipped ~= idStr; continue; }
+        if (idStr == currentId) { skipped ~= idStr ~ " (self)"; continue; }
+        UUID id;
+        try id = parseUUID(idStr);
+        catch (Exception) { skipped ~= idStr ~ " (invalid)"; continue; }
+        auto user = userRepo.findById(id);
+        if (user.username.length == 0) { skipped ~= idStr ~ " (not found)"; continue; }
+        // Safety: prevent deleting last admin — check if target is sole admin and we would leave zero admins
+        if (user.roles.canFind("admin")) {
+            auto all = userRepo.findAll(1000, 0);
+            int adminCount;
+            foreach (u; all) if (u.roles.canFind("admin")) adminCount++;
+            if (adminCount <= 1) { errors ~= user.username ~ " is last admin — skipped"; continue; }
+        }
+        logWarn("Admin bulk-deleting user: %s (id=%s)", user.username, id);
+        // Reuse single-delete cleanup inline (networks, sessions, prefs, uploads, user)
+        try {
+            auto networks = netRepo.findByUserId(id);
+            foreach (net; networks) {
+                auto netId = net.id.toString();
+                auto serverId = serverRegistry.getServerForNetwork(netId);
+                auto msg = ControlMessage("removeNetwork", netId);
+                msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+                if (serverId.length > 0) {
+                    redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+                    try { bufferManager.clearNetworkBuffers(serverId, netId); } catch (Exception) {}
+                } else {
+                    redis.lpush(RedisKeys.control_legacy(), msg.toJson().toString());
+                    try { bufferManager.clearNetworkBuffers(netId); } catch (Exception) {}
+                }
+                netRepo.deleteById(net.id);
+                if (serverId.length > 0) db.del(RedisKeys.state(serverId, netId));
+                db.del(RedisKeys.state_legacy(netId));
+                db.hdel(RedisKeys.networkAssignments(), netId);
+                db.del(RedisKeys.networkFail(netId));
+            }
+            // sessions
+            try {
+                auto store = new RedisSessionStore(redis);
+                const targetUid = id.toString();
+                foreach (sid; store.listAllSessionIds()) {
+                    const fields = store.getSessionFields(sid);
+                    if (fields is null) continue;
+                    auto uidPtr = "sessionUserId" in fields;
+                    if (uidPtr) {
+                        if (stripJsonStr(*uidPtr) == targetUid) store.destroy(sid);
+                    }
+                }
+            } catch (Exception) {}
+            try { db.del("prefs:" ~ id.toString()); } catch (Exception) {}
+            try {
+                auto uploadRepo = new UploadRepository();
+                auto uploads = uploadRepo.listAllByUser(id.toString());
+                foreach (upload; uploads) {
+                    auto url = upload.directUrl.strip;
+                    auto prefixPos = url.indexOf("/uploads/");
+                    if (prefixPos != -1) {
+                        auto filename = url[prefixPos + "/uploads/".length .. $];
+                        if (filename.length > 0) try remove(buildPath(uploadDir(), filename)); catch (Exception) {}
+                    }
+                    try uploadRepo.hardDelete(id.toString(), upload.id); catch (Exception) {}
+                }
+            } catch (Exception) {}
+            userRepo.deleteById(id);
+            deleted++;
+        } catch (Exception e) {
+            logWarn("Bulk delete failed for %s: %s", idStr, e.msg);
+            errors ~= idStr ~ ": " ~ e.msg;
+        }
+    }
+    Json data = Json.emptyObject;
+    data["deleted"] = Json(cast(long) deleted);
+    data["skipped"] = jsonArray(skipped);
+    data["errors"] = jsonArray(errors);
+    jsonOk(res, data);
+}
+
 /// POST /api/admin/users/:id/reset-password
 package void apiResetPassword(HTTPServerRequest req, HTTPServerResponse res) {
     import std.uuid : parseUUID;
