@@ -91,6 +91,13 @@
   let pastebinIdForInline: string | null = $state(null);
   let pasteRawHref = $derived(pastebinIdForInline ? `/api/pastebins/${pastebinIdForInline}/raw` : displayUrl);
   let pasteViewerHref = $derived(pastebinIdForInline ? `/?/pastebin=${pastebinIdForInline}` : displayUrl);
+  // edit-time highlight derived from filename input (so changing extension updates realtime)
+  let editHlLang: any = $derived.by(() => {
+    if (!editing) return hlLang;
+    const name = editFilename.trim() || uploadName || '';
+    if (name) return detectLang(name);
+    return hlLang;
+  });
   $effect(() => {
     hlLang = detectLang(url);
     void load();
@@ -285,7 +292,7 @@
     {#if editing}
       {@const editLines = editValue.split('\n').length}
       <div class="editor editing" style="height: {Math.min(Math.max(editLines,1),12)*16 + 28}px; min-height: 44px;">
-        <CodeEditor bind:value={editValue} language={hlLang?.name?.toLowerCase() ?? 'text'} />
+        <CodeEditor bind:value={editValue} language={editHlLang?.name?.toLowerCase() ?? hlLang?.name?.toLowerCase() ?? 'text'} />
       </div>
     {:else}
       <div class="editor" style="height: {Math.min(Math.max(lineCount,1),12)*16 + 28}px; min-height: 44px;">
