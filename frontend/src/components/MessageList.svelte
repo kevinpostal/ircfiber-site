@@ -1555,24 +1555,12 @@
       aboveUnseenHighlights = 0;
     }
 
-    // IRCCloud parity: if user scrolled up even a tiny amount (cachedAtBottom false)
-    // but probe still returns the last row as bottom (no full row hidden),
-    // synthesize a single hidden-row so the lower chattercell appears
-    // immediately with "1 unread" — matches IRCCloud's instant ↓ bar.
-    if (!cachedAtBottom && !firstBelowMsg && rendered.length > 0) {
-      const lastItem = rendered[rendered.length - 1];
-      const synthMsg = rawMessageByKey.get(itemKeyOf(lastItem.msg)) ?? null;
-      if (synthMsg) {
-        firstBelowMsg = synthMsg;
-        belowTs = synthMsg.t || null;
-        below = bufferedBelow > 0 ? bufferedBelow + 1 : 1;
-      } else if (bufferedHead) {
-        firstBelowMsg = rawMessageByKey.get(itemKeyOf(bufferedHead!)) ?? null;
-        belowTs = bufferedHead!.t || null;
-        below = bufferedBelow > 0 ? bufferedBelow : 1;
-      }
-    }
-
+    // Removed synthetic "instant ↓ bar" that forced `below=1` on any tiny scroll.
+    // Previously `if (!cachedAtBottom && !firstBelowMsg)` always synthesized 1
+    // hidden row even when `bufferedBelow==0` and no unread existed, so
+    // scrolling up 1px while fully read showed "1 unread". Now we only show
+    // the lower bar when there is a genuinely hidden row (inWindowBelow or
+    // bufferedBelow). Tiny scroll with no fully-hidden row correctly shows 0.
     const bottomSeenMsg = firstBelowMsg;
     if (bottomSeenMsg) {
       updateBottomSeen(networkId, bufferName, bottomSeenMsg);
