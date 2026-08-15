@@ -201,14 +201,18 @@
   .closeBtn { padding: 6px 12px; border: 1px solid #2a2d33; border-radius: 4px; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .userError { color: #f85149; font-size: 13px; margin-top: 10px; padding: 0 16px; }
   .paste .header { display: block; background: #1e1e1e; border: 1px solid #2a2d33; border-bottom: none; padding: 5px 4px 3px; margin: 0; font-size: 13px; }
-  .header .actions { display: flex; align-items: center; gap: 6px; font-size: 12px; margin-left: 12px; }
+  .paste .header .actions { display: inline; margin-left: 12px; font-size: 12px; }
   .header .actions .link { color: #8b949e; padding: 2px 6px; border-radius: 3px; }
   .header .actions .link:hover { color: #c9d1d9; background: #1a1d23; text-decoration: none; }
   .header .actions .editButton { color: #58a6ff; }
   .header .actions .deleteButton { color: #f85149; }
   .confirmBar { background: #1a1d23; border: 1px solid #2a2d33; border-radius: 6px; padding: 8px 12px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f85149; }
   .editForm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #0f1115; border: 1px solid #2a2d33; border-radius: 6px; margin: 0 0 12px; }
-  .paste .details { display: flex; flex-direction: column; gap: 4px; }
+  .paste .details { display: inline; font-size: 13px; }
+  .paste .details .name { margin-right: 6px; }
+  .paste .details .info { margin-right: 6px; }
+  .paste .details .date { margin-right: 6px; }
+  .paste .header .actions { display: inline; margin-left: 12px; font-size: 12px; }
   .paste .name { font-weight: 700; font-size: 16px; color: #c9d1d9; }
   .paste .info { font-size: 12px; color: #8b949e; }
   .paste .date { font-size: 12px; color: #58a6ff; text-decoration: none; }
