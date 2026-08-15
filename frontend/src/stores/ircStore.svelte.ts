@@ -1329,14 +1329,19 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     }
   }
 
-  // Sort by eid when available (strict total order per ChatInfinite.Ordered),
-  // fallback to t for legacy. Sorting by t alone interleaved pages with
-  // equal timestamps and broke noGaps / Ordered.prependDedup.
+  // Sort by TIMESTAMP first: chat order must be chronological. Eids are
+  // NOT guaranteed monotonic with time (an engine eid-counter reset can
+  // stamp low eids on recent messages), so sorting by eid scrambles the
+  // conversation once older history is prepended. Tie-break equal
+  // timestamps by eid, then msgid, so pages with shared timestamps stay
+  // deterministic. For eid-monotonic channels this yields the same order
+  // as the old eid sort.
   const merged = [...filtered, ...existing].sort((a, b) => {
+    const ta = a.t ?? 0;
+    const tb = b.t ?? 0;
+    if (ta !== tb) return ta - tb;
     if (a.eid != null && b.eid != null) return a.eid - b.eid;
-    if (a.eid != null && b.eid == null) return (a.t ?? 0) - (b.t ?? 0) < 0 ? -1 : (a.t ?? 0) > (b.t ?? 0) ? 1 : -1;
-    if (b.eid != null && a.eid == null) return (a.t ?? 0) - (b.t ?? 0) < 0 ? -1 : (a.t ?? 0) > (b.t ?? 0) ? 1 : 1;
-    return (a.t ?? 0) - (b.t ?? 0);
+    return (a.msgid ?? '').localeCompare(b.msgid ?? '');
   });
   // FIFO cap: if prepend pushes over limit, keep newest MAX_JS_MESSAGES. Bounds prependReprocess (≤1ms for 5k).
   let finalMessages = merged;

@@ -24,7 +24,7 @@ describe('history anchor clean', () => {
     const initial:any[]=[]; for(let i=0;i<600;i++) initial.push(createMessage({ text:`msg-${i}`, t: now-(600-i)*1000, msgid:`m-${i}`, eid:1000+i, nick:'user' }));
     const net=createNetwork({networkId:netId}); net.buffers.push(createBuffer({name:buf, type:'channel'})); ircState.networks.push(net); ircState.activeBuffer.networkId=netId; ircState.activeBuffer.bufferName=buf;
     ircState.messages[`${netId}:${buf}`]=initial; flushSync();
-    const onLoadMore=vi.fn(async()=>{ const ex=ircState.messages[`${netId}:${buf}`]??[]; const oldest:any=ex[0]; if(!oldest||oldest.eid<=0) return false; const older:any[]=[]; for(let i=0;i<100;i++){const eid=oldest.eid-100+i; older.push(createMessage({text:`older-${eid}`, t: now-(1000-eid)*1000, msgid:`m-${eid}`, eid, nick:'user'}));} prependMessages(netId,buf,older); return true; });
+    const onLoadMore=vi.fn(async()=>{ const ex=ircState.messages[`${netId}:${buf}`]??[]; const oldest:any=ex[0]; if(!oldest||oldest.eid<=0) return false; const older:any[]=[]; const oldestT=oldest.t??now; for(let i=0;i<100;i++){const eid=oldest.eid-100+i; older.push(createMessage({text:`older-${eid}`, t: oldestT-(100-i)*1000, msgid:`m-${eid}`, eid, nick:'user'}));} prependMessages(netId,buf,older); return true; });
     render(MessageList,{props:{onLoadMore} as any}); flushSync();
     await new Promise(r=>requestAnimationFrame(r)); await new Promise(r=>setTimeout(r,200));
     const c=document.getElementById('messages') as HTMLDivElement; c.style.height='400px'; c.style.overflowY='auto';

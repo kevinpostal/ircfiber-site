@@ -22,8 +22,8 @@ function resetState() {
 
 beforeEach(() => resetState());
 
-describe('continuous scroll anchoring', () => {
-  it('keeps the reading position stable across multiple backlog reveals when scrolling up', async () => {
+describe('top-of-backlog scroll behavior', () => {
+  it('keeps the messages being read in view and in order across backlog reveals', async () => {
     const net = createNetwork({ networkId: 'net1' });
     net.buffers.push(createBuffer({ name: '#chan', type: 'channel' }));
     ircState.networks.push(net);
@@ -31,7 +31,7 @@ describe('continuous scroll anchoring', () => {
     ircState.activeBuffer.bufferName = '#chan';
 
     const now = Date.now();
-    const total = 600;
+    const total = 1000;
     const seed: ReturnType<typeof createMessage>[] = [];
     for (let i = 0; i < total; i++) {
       seed.push(createMessage({ text: `msg-${i}`, t: now - (total - i) * 1000, msgid: `m-${i}`, nick: `user${i % 3}` }));
@@ -39,7 +39,22 @@ describe('continuous scroll anchoring', () => {
     ircState.messages['net1:#chan'] = seed;
     flushSync();
 
-    render(MessageList, { props: {} });
+    // Network path: each load-more call prepends an older batch (200 msgs).
+    let nextEid = -1;
+    const onLoadMore = async () => {
+      const existing = ircState.messages['net1:#chan'] ?? [];
+      const minT = existing.length ? Math.min(...existing.map((m) => m.t || 0)) : now;
+      if (minT <= now - 60 * 60 * 1000) return false; // exhaust after 1h of backlog
+      const older = [];
+      for (let i = 0; i < 200; i++) {
+        const t = minT - (200 - i) * 1000;
+        older.push(createMessage({ text: `older-${t}`, t, msgid: `o-${t}`, nick: `user${i % 3}` }));
+      }
+      prependMessages('net1', '#chan', older);
+      return true;
+    };
+
+    render(MessageList, { props: { onLoadMore } });
     flushSync();
     await new Promise((r) => requestAnimationFrame(r));
     await new Promise((r) => setTimeout(r, 50));
@@ -52,100 +67,48 @@ describe('continuous scroll anchoring', () => {
     c.style.overflowY = 'auto';
     await new Promise((r) => requestAnimationFrame(r));
 
-    // Scroll to the middle so we are reading history, not at top nor bottom
-    // Use the rendered window's middle: scroll to 800px from top
-    c.scrollTop = 800;
+    // Park at the top (the reading position) and trigger the in-memory
+    // reveal chain. The first reveal runs synchronously in the dispatch;
+    // the rest fire via the IntersectionObserver on later frames. Capture
+    // the anchor (the message being read) after the synchronous reveal —
+    // every subsequent reveal must keep it exactly in place: older chat
+    // loads above while the reading position is preserved.
+    c.scrollTop = 0;
     c.dispatchEvent(new Event('scroll'));
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise((r) => requestAnimationFrame(r));
+    await new Promise((r) => setTimeout(r, 30));
 
-    // Find the first fully visible message row and record its position and key
-    const getFirstVisible = () => {
+    const anchorBefore = (() => {
       const rows = Array.from(document.querySelectorAll('.row.messageRow')) as HTMLElement[];
       const viewportTop = c!.getBoundingClientRect().top;
-      for (const row of rows) {
-        const rect = row.getBoundingClientRect();
-        if (rect.top >= viewportTop - 5 && rect.top < viewportTop + 200) {
-          return row;
-        }
-      }
-      return rows[0] ?? null;
-    };
-
-    const firstBefore = getFirstVisible();
-    expect(firstBefore).not.toBeNull();
-    const keyBefore = firstBefore!.dataset.msgid || firstBefore!.textContent?.trim().slice(0, 30) || '';
-    const topBefore = firstBefore!.getBoundingClientRect().top;
+      return rows.find((r) => {
+        const rect = r.getBoundingClientRect();
+        return rect.top >= viewportTop - 5 && rect.top < viewportTop + 200;
+      }) ?? rows[0] ?? null;
+    })();
+    expect(anchorBefore).not.toBeNull();
+    const anchorKey = anchorBefore!.dataset.msgid || anchorBefore!.textContent?.trim().slice(0, 30) || '';
+    const anchorTopBefore = anchorBefore!.getBoundingClientRect().top;
     const scrollTopBefore = c.scrollTop;
     const scrollHeightBefore = c.scrollHeight;
 
-    // Trigger a backlog reveal by scrolling to the very top (0)
-    // This should invoke revealBacklogFromMemory via the LoadMore sentinel
-    // or via the handleScroll path. We directly set scrollTop 0 and dispatch.
-    c.scrollTop = 0;
-    c.dispatchEvent(new Event('scroll'));
-    // Allow the reveal to happen: it does renderStart -=200 and flushSync,
-    // then sets scrollTop to 260 or via delta compensation.
-    await new Promise((r) => requestAnimationFrame(r));
-    await new Promise((r) => setTimeout(r, 100));
+    // Let the rest of the reveal chain settle.
+    await new Promise((r) => setTimeout(r, 600));
     await new Promise((r) => requestAnimationFrame(r));
 
-    // After reveal, the previously visible message should still be at
-    // approximately the same viewport position (within 3px), and scrollTop
-    // should have increased by roughly the height of the newly revealed
-    // batch, not jumped to 0 or to bottom.
-    const firstAfter = document.querySelector(`[data-msgid="${keyBefore}"]`) as HTMLElement | null
-      ?? Array.from(document.querySelectorAll('.row.messageRow')).find(r => (r as HTMLElement).dataset.msgid === keyBefore) as HTMLElement | null
-      ?? getFirstVisible();
-
-    // Fallback: find by text if msgid not in DOM dataset
-    let anchorAfter: HTMLElement | null = null;
-    if (!firstAfter || !firstAfter.dataset.msgid) {
-      const rows = Array.from(document.querySelectorAll('.row.messageRow')) as HTMLElement[];
-      anchorAfter = rows.find(r => r.textContent?.includes(keyBefore) || r.textContent?.includes(firstBefore!.textContent?.trim().slice(0, 10) || '')) ?? null;
-    } else {
-      anchorAfter = firstAfter;
+    // The anchor message must still be on screen at the same viewport
+    // position (within a few px) — the messages being read stay in view
+    // and in order across the history loads.
+    const anchorAfter = Array.from(document.querySelectorAll('.row.messageRow'))
+      .find((r) => (r as HTMLElement).dataset.msgid === anchorKey || (r as HTMLElement).textContent?.includes(anchorKey.slice(0, 20) || '')) as HTMLElement | null;
+    expect(anchorAfter, 'anchor message left the viewport after the reveal chain').not.toBeNull();
+    if (anchorAfter) {
+      const anchorTopAfter = anchorAfter.getBoundingClientRect().top;
+      expect(Math.abs(anchorTopAfter - anchorTopBefore)).toBeLessThan(3);
     }
-
-    // If we couldn't find the exact anchor, at least ensure we didn't jump to top or bottom
-    if (!anchorAfter) {
-      // Ensure we are still not at top (0) and not at bottom
-      expect(c.scrollTop).toBeGreaterThan(10);
-      expect(c.scrollTop).toBeLessThan(c.scrollHeight - c.clientHeight - 10);
-      return;
-    }
-
-    const topAfter = anchorAfter.getBoundingClientRect().top;
-    const scrollTopAfter = c.scrollTop;
-    const scrollHeightAfter = c.scrollHeight;
-
-    // The anchor's viewport top should be stable within a few pixels
-    // (browser anchoring + our delta compensation should keep it)
-    expect(Math.abs(topAfter - topBefore)).toBeLessThan(8000);
-
-    // ScrollTop should have grown by approximately the height of the
-    // revealed batch (not reset to 0 or to bottom)
-    expect(scrollTopAfter).toBeGreaterThan(10);
-    expect(scrollHeightAfter).toBeGreaterThan(scrollHeightBefore);
-
-    // Do a second consecutive reveal to ensure continuous flow
-    const secondAnchorKey = anchorAfter.dataset.msgid || anchorAfter.textContent?.trim().slice(0, 30) || '';
-    const secondTopBefore = anchorAfter.getBoundingClientRect().top;
-    const secondScrollTopBefore = c.scrollTop;
-
-    c.scrollTop = 0;
-    c.dispatchEvent(new Event('scroll'));
-    await new Promise((r) => requestAnimationFrame(r));
-    await new Promise((r) => setTimeout(r, 100));
-    await new Promise((r) => requestAnimationFrame(r));
-
-    const secondAnchorAfter = document.querySelector(`[data-msgid="${secondAnchorKey}"]`) as HTMLElement | null;
-    if (secondAnchorAfter) {
-      const secondTopAfter = secondAnchorAfter.getBoundingClientRect().top;
-      expect(Math.abs(secondTopAfter - secondTopBefore)).toBeLessThan(8000);
-      expect(c.scrollTop).toBeGreaterThan(10);
-    } else {
-      // If anchor not found, at least ensure we are still reading mid-history
-      expect(c.scrollTop).toBeGreaterThan(10);
-    }
+    // The viewport advanced by the revealed height and is not at the bottom.
+    expect(c.scrollTop).toBeGreaterThanOrEqual(scrollTopBefore);
+    expect(c.scrollHeight).toBeGreaterThanOrEqual(scrollHeightBefore);
+    expect(c.scrollHeight - c.scrollTop - c.clientHeight).toBeGreaterThan(10);
   });
 });

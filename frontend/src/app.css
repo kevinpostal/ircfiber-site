@@ -69,9 +69,19 @@ body.ascii-compact .row.messageRow {
   font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   line-height: 16px;
   padding: 0 118px 0 68px;
-  /* Block art can be 20-100 lines × 10 spans/line. content-visibility
-     skips off-screen art during scroll, intrinsic-size avoids scrollbar
-     jitter. */
+}
+/* ANSI-art rows (blockArt / bot) can be 20-100 lines × 10 spans/line.
+   content-visibility skips off-screen art during scroll, intrinsic-size
+   avoids scrollbar jitter. Plain text rows (type_buffer_msg) must NOT
+   skip rendering: a skipped row reports the 300px intrinsic fallback
+   instead of its real height, inflating scrollHeight by thousands of
+   phantom pixels. The history-loading scroll math measures prepend
+   deltas from scrollHeight (revealBacklogFromMemory oldTop+delta, the
+   backlog-divider anchor), so phantom rows make it over-compensate and
+   yank the viewport to the bottom every time the user scrolls up to load
+   chat history. */
+.row.messageRow.bot,
+.row.messageRow.blockArt {
   content-visibility: auto;
   contain-intrinsic-size: 1px 300px;
 }

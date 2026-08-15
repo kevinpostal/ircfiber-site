@@ -4,6 +4,7 @@
   import ConnectionStatus from './ConnectionStatus.svelte';
   import { ircState, prependMessages } from '../stores/ircStore.svelte';
   import { loadHistoryWithMeta } from '../stores/api';
+  import { captureScrollAnchor } from '../lib/scrollAnchor';
   import type { IRCMessage, Member } from '../types';
 
   interface Props {
@@ -46,10 +47,20 @@
       return false;
     }
 
-    // IRCCloud-style: eid is the primary cursor. Take the oldest
-    // message by index (oldest-first) and use its eid. If the oldest
-    // lacks an eid (legacy), fall back to msgid or timestamp.
-    const first = existing[0];
+    // IRCCloud-style: eid is the primary cursor, but the cursor message
+    // must be the OLDEST BY TIMESTAMP, not the array head. The store is
+    // sorted by eid, and eids are not guaranteed monotonic with time: an
+    // engine eid-counter reset leaves low-eid messages with recent
+    // timestamps at the head (SuperNets #superbowl had eid 1961 @15min ago
+    // sorted before eid 1991 @1.6h ago). Cursing on the head then makes
+    // the backend return messages that are already visible; they all dedup,
+    // nothing prepends, the DOM never changes, and the top sentinel never
+    // re-fires — history loading silently stops with older chat still
+    // available. The min-t message is the true pagination boundary.
+    let first = existing[0];
+    for (const m of existing) {
+      if ((m.t ?? 0) < (first?.t ?? 0)) first = m;
+    }
     let oldestEid = first?.eid;
     let oldestMsgid = oldestEid ? undefined : first?.msgid;
     let oldestTs = first?.t;
@@ -104,6 +115,10 @@
       const older = result.messages;
       if (older.length > 0) {
         const beforeLen = (ircState.messages[key] ?? []).length;
+        // Capture the row the user is reading BEFORE the prepend so
+        // MessageList can keep it exactly in view (anchor-based
+        // compensation, immune to divider/intrinsic-size measurement).
+        captureScrollAnchor(document.getElementById('messages'));
         prependMessages(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, older);
         const afterLen = (ircState.messages[key] ?? []).length;
         if (afterLen > beforeLen) {

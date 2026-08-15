@@ -14,6 +14,7 @@
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
   import { dividerPos as sharedDividerPos } from '../lib/scroll';
+  import { captureScrollAnchor, takeScrollAnchor } from '../lib/scrollAnchor';
   import type { IRCMessage, Member, Network } from '../types';
 
   interface Props {
@@ -380,6 +381,11 @@
     }
     const oldH = container.scrollHeight;
     const oldTop = container.scrollTop;
+    // Anchor = the first message row visible in the viewport (the message
+    // the user is reading); its displacement after the render is the real
+    // reveal height. The compensation is deferred to the next frame so the
+    // loader indicator settles first (see preserveReadingPosition).
+    captureScrollAnchor(container);
     renderStart = Math.max(0, start - BATCH_SIZE);
     // Consume the mark so the $effect doesn't run the settle a second time.
     handledDividerMark = untrack(() => backlogDividerMark);
@@ -389,7 +395,17 @@
     flushSync();
     if (!pinBottom) {
       const delta = container.scrollHeight - oldH;
-      if (delta !== 0) container.scrollTop = oldTop + delta;
+      // Keep the messages being read in view: shift scrollTop by the
+      // anchor row's ACTUAL displacement (dividers/date rows included).
+      // At the top the browser's native anchoring does not apply, so this
+      // manual compensation is what keeps the reading position stable
+      // while older chat loads above.
+      if (atTop) {
+        preserveReadingPosition(container, oldTop);
+      } else if (delta !== 0) {
+        // Mid-list reveals (rare): anchor to the batch boundary.
+        container.scrollTop = oldTop + delta;
+      }
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
       cachedAtTop = container.scrollTop <= 200;
@@ -440,28 +456,52 @@
       return;
     }
     infiniteLoading = true;
-    // In-memory batches first (instant, no spinner) – preserves scroll via revealBacklogFromMemory's delta
-    const revealed = revealBacklogFromMemory();
-    if (revealed) {
-      loaderState?.loaded();
-      infiniteLoading = false;
-      return;
-    }
-    if (!onLoadMore) {
-      loaderState?.complete();
-      infiniteLoading = false;
-      return;
-    }
-    // Don't trigger network load while initial history is still loading
-    if (!hasHistoryLoaded) {
-      loaderState?.loaded();
-      infiniteLoading = false;
-      return;
-    }
     try {
-      const hasMore = await onLoadMore();
-      if (hasMore) loaderState?.loaded();
-      else loaderState?.complete();
+      // In-memory batches first (instant, no spinner) — reveal ALL
+      // remaining in-memory batches while the user stays at the top, then
+      // fall through to the network. (A single reveal consumed the whole
+      // trigger and returned, so a trimmed window — e.g. renderStart=50
+      // from maybeTrim during a flood — was revealed and then loading
+      // stopped because the sentinel never re-fires at scrollTop=0.)
+      let revealGuard = 0;
+      while (container && container.scrollTop <= 200) {
+        if (!revealBacklogFromMemory()) break;
+        revealGuard++;
+        if (revealGuard >= 20) break;
+      }
+      if (!onLoadMore) {
+        loaderState?.complete();
+        return;
+      }
+      // Don't trigger network load while initial history is still loading
+      if (!hasHistoryLoaded) {
+        loaderState?.loaded();
+        return;
+      }
+      let batches = 0;
+      let completed = false;
+      const MAX_BATCHES_PER_TRIGGER = 3;
+      while (batches < MAX_BATCHES_PER_TRIGGER) {
+        const hasMore = await onLoadMore();
+        if (!hasMore) {
+          loaderState?.complete();
+          completed = true;
+          break;
+        }
+        loaderState?.loaded();
+        batches++;
+        if (!container || container.scrollTop > 200) break;
+        if (batches < MAX_BATCHES_PER_TRIGGER) {
+          await new Promise((r) => setTimeout(r, 350));
+        }
+      }
+      if (!completed && container && container.scrollTop <= 200 && !isServerBuffer) {
+        setTimeout(() => {
+          if (container && container.scrollTop <= 200 && !infiniteLoading && !isServerBuffer) {
+            void infiniteHandler();
+          }
+        }, 500);
+      }
     } catch (e) {
       loaderState?.error();
     } finally {
@@ -665,6 +705,29 @@
   }
 
   let lastFirstProcessedKey = '';
+
+  // Preserve the reading position across a history prepend: shift scrollTop
+  // by the captured anchor row's ACTUAL displacement (captured by
+  // handleLoadMore right before the store mutation). Only applies when the
+  // user has not scrolled since the last scroll event — otherwise the
+  // browser's own anchoring already adjusted.
+  function preserveReadingPosition(c: HTMLDivElement | null, expectedScrollTop: number): void {
+    if (!c || c.scrollTop !== expectedScrollTop) return;
+    const anchor = takeScrollAnchor();
+    if (!anchor) return;
+    // Defer to the next frame: the fetch indicator (loading row) is removed
+    // when the loader settles, and its removal shifts the content — the
+    // final anchor displacement must include it for the reading position
+    // to be preserved exactly.
+    requestAnimationFrame(() => {
+      if (!c || c.scrollTop !== expectedScrollTop) return; // user scrolled
+      const rows = Array.from(c.querySelectorAll('.row.messageRow')) as HTMLElement[];
+      const match = rows.find((r) => (r.dataset.msgid || 't:' + r.dataset.time) === anchor.msgid);
+      if (!match) return;
+      const displacement = match.getBoundingClientRect().top - anchor.top;
+      if (displacement !== 0) c.scrollTop = expectedScrollTop + displacement;
+    });
+  }
 
   // ── Message entrance animation ───────────────────────────────────────
   // Tracks which message keys should get the .messageEntrance class.
@@ -1033,6 +1096,24 @@
             schedulePinnedResnap();
           });
         }
+      } else if (cachedAtTop && container && container.scrollHeight - container.scrollTop - container.clientHeight > STICK_BAND_PX) {
+        // The user has scrolled UP to read older history inside the
+        // initial-snap window (first 5s after opening the buffer): never
+        // force the viewport back to the bottom. That unconditional pin is
+        // what made the scrollbar jump down right after a history load
+        // ("it keeps forcing the scroll bar down each time it loads
+        // messages"). The viewport stays where the user put it.
+        // On a short log the pinned-bottom position can sit inside the
+        // 200px at-top band, so cachedAtTop alone cannot distinguish
+        // "pinned at the bottom" from "scrolled up to read history".
+        // Use the physical distance from the bottom: pinned = within the
+        // stick band (<=70px, e.g. the just-appended row's height);
+        // scrolled up to read older chat = far from the bottom. Only the
+        // latter skips the unconditional initial-snap pin — and still
+        // preserves the reading position across the prepend.
+        pendingInitialSnap = false;
+        initialSnapDone = true;
+        preserveReadingPosition(container, prevScrollTop);
       } else {
         // Initial snap for a freshly-opened buffer (refresh): unconditional.
         renderEndKey = '';
@@ -1075,15 +1156,14 @@
         pendingInitialSnap = false;
       }
     } else if (newDivider && cachedAtTop) {
-      // Aristotle Scroll.prependCompensate — preserve anchorFromBottom exactly.
-      const oldH = prevScrollHeight !== 0 ? prevScrollHeight : container.scrollHeight;
-      const oldTop = prevScrollTop;
-      const delta = container.scrollHeight - oldH;
-      if (delta !== 0) {
-        container.scrollTop = oldTop + delta;
-      } else if (container.scrollTop <= 0) {
-        container.scrollTop = 48;
-      }
+      // Keep the messages being read in view: shift scrollTop by the
+      // anchor row's ACTUAL displacement (captured by handleLoadMore right
+      // before the prepend). The browser's native anchoring does not apply
+      // at scrollTop=0, and scrollHeight deltas are unreliable (art rows
+      // report intrinsic sizes), so the anchor displacement is the exact
+      // compensation — the same messages stay on screen while older chat
+      // loads above them.
+      preserveReadingPosition(container, prevScrollTop);
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
       cachedAtTop = container.scrollTop <= 200;
@@ -1655,9 +1735,9 @@
         {#snippet children()}
         {/snippet}
         {#snippet loading()}
-          <div class="history-loading" role="status" aria-label="Loading history">
-            <div class="history-loading__spinner" aria-hidden="true"></div>
-            <p class="history-loading__text">Loading history…</p>
+          <div class="row fetch" role="status" aria-label="Loading history">
+            <hr />
+            <h4 class="divider-text-wrapper"><span class="divider-text">Fetching more history…</span></h4>
           </div>
         {/snippet}
         {#snippet noData()}
@@ -1665,8 +1745,8 @@
         {#snippet noResults()}
         {/snippet}
         {#snippet error(load)}
-          <div class="history-loading" role="alert">
-            <p class="history-loading__text">Failed to load history</p>
+          <div class="row fetch" role="alert">
+            <p class="divider-text">Failed to load history</p>
             <button class="history-loading__retry" onclick={load}>Retry</button>
           </div>
         {/snippet}
@@ -1802,6 +1882,44 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .stickyAvatar { transition: none; }
+  }
+  /* Collapse the svelte-infinite loader's empty intersection target to a
+     1px sentinel (IRCCloud parity): the library's default padding-block
+     leaves a permanent ~64px empty band above the first message. The
+     fetch/error rows render with their own styles when active. */
+  :global(.messages-viewport .messages .infinite-loader-wrapper .infinite-intersection-target) {
+    min-height: 1px;
+    padding-block: 0;
+    display: block;
+  }
+  /* IRCCloud fetch divider: line with centered text chip (matches the
+     LoadMore component's row.fetch). */
+  .row.fetch {
+    position: relative;
+    text-align: center;
+    padding: 8px 0;
+    margin: 0;
+  }
+  .row.fetch hr {
+    border: none;
+    border-top: 1px solid var(--accent, #1e72ff);
+    margin: 0;
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    top: 50%;
+  }
+  .row.fetch .history-loading__retry {
+    position: relative;
+    z-index: 1;
+    background: var(--chat-bg, #0e131a);
+    border: 1px solid var(--accent, #1e72ff);
+    color: var(--accent, #1e72ff);
+    border-radius: 4px;
+    padding: 2px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    margin-left: 6px;
   }
   .empty-channel {
     margin: auto;
