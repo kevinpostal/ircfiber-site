@@ -8,15 +8,17 @@
   interface Props {
     onClose: () => void;
     onSendRaw?: (...args: any[]) => any;
+    networkId?: string | null;
   }
-  let { onClose, onSendRaw = sendRaw }: Props = $props();
+  let { onClose, onSendRaw = sendRaw, networkId = null }: Props = $props();
 
   let channel = $state('');
   let key = $state('');
   let showKey = $state(false);
   let inputEl: HTMLInputElement | null = $state(null);
 
-  const network = $derived(getActiveNetwork());
+  const resolvedNetworkId = $derived(networkId ?? ircState.activeBuffer.networkId);
+  const network = $derived(ircState.networks.find(n => n.networkId === resolvedNetworkId) ?? getActiveNetwork());
   const networkLabel = $derived(network ? `${network.name} (${network.host}:${network.port})` : '');
 
   $effect(() => {
@@ -27,8 +29,9 @@
 
   function handleSubmit(e?: Event): void {
     e?.preventDefault();
-    if (!channel || !ircState.activeBuffer.networkId) return;
-    const networkId = ircState.activeBuffer.networkId;
+    const targetNetworkId = resolvedNetworkId;
+    if (!channel || !targetNetworkId) return;
+    const networkId = targetNetworkId;
     const chan = ensureChannelPrefix(channel);
     const net = ircState.networks.find(n => n.networkId === networkId);
     if (net && !net.connected) {

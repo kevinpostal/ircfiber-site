@@ -64,38 +64,76 @@
     }
   });
 
-  // Smart edge-detection positioning
+  // Smart edge-detection positioning with viewport clamping and 0-height guard
   $effect(() => {
     if (!menuEl) return;
-    const height = menuEl.offsetHeight;
-    const width = menuEl.offsetWidth;
-    const windowHeight = window.innerHeight;
-    const windowWidth = window.innerWidth;
-    const bottomPad = 25;
+    const doPosition = () => {
+      const height = menuEl.offsetHeight;
+      const width = menuEl.offsetWidth;
+      if (height === 0 || width === 0) {
+        requestAnimationFrame(doPosition);
+        return;
+      }
+      const windowHeight = window.innerHeight;
+      const windowWidth = window.innerWidth;
+      const bottomPad = 25;
+      const rightPad = 10;
 
-    menuEl.classList.remove('contextMenu__top', 'contextMenu__bottom', 'contextMenu__left', 'contextMenu__right');
+      menuEl.classList.remove('contextMenu__top', 'contextMenu__bottom', 'contextMenu__left', 'contextMenu__right');
 
-    const maxY = windowHeight - height - bottomPad;
-    if (y > maxY) {
-      menuEl.classList.add('contextMenu__bottom');
-      menuEl.style.top = 'auto';
-      menuEl.style.bottom = (windowHeight - y) + 'px';
-    } else {
-      menuEl.classList.add('contextMenu__top');
-      menuEl.style.top = y + 'px';
-      menuEl.style.bottom = 'auto';
-    }
+      let clampedY = y;
+      if (clampedY < bottomPad) clampedY = bottomPad;
+      const maxY = windowHeight - height - bottomPad;
+      if (clampedY > maxY) {
+        if (y - height - bottomPad >= bottomPad) {
+          menuEl.classList.add('contextMenu__bottom');
+          menuEl.style.top = 'auto';
+          menuEl.style.bottom = (windowHeight - y) + 'px';
+          const flippedTop = y - height;
+          if (flippedTop < bottomPad) {
+            menuEl.style.bottom = 'auto';
+            menuEl.style.top = bottomPad + 'px';
+            menuEl.classList.remove('contextMenu__bottom');
+            menuEl.classList.add('contextMenu__top');
+          }
+        } else {
+          menuEl.classList.add('contextMenu__top');
+          menuEl.style.top = Math.max(bottomPad, maxY) + 'px';
+          menuEl.style.bottom = 'auto';
+        }
+      } else {
+        menuEl.classList.add('contextMenu__top');
+        menuEl.style.top = clampedY + 'px';
+        menuEl.style.bottom = 'auto';
+      }
 
-    const maxX = windowWidth - width - 10;
-    if (x > maxX) {
-      menuEl.classList.add('contextMenu__right');
-      menuEl.style.left = 'auto';
-      menuEl.style.right = (windowWidth - x) + 'px';
-    } else {
-      menuEl.classList.add('contextMenu__left');
-      menuEl.style.left = x + 'px';
-      menuEl.style.right = 'auto';
-    }
+      let clampedX = x;
+      if (clampedX < rightPad) clampedX = rightPad;
+      const maxX = windowWidth - width - rightPad;
+      if (clampedX > maxX) {
+        if (x - width >= rightPad) {
+          menuEl.classList.add('contextMenu__right');
+          menuEl.style.left = 'auto';
+          menuEl.style.right = (windowWidth - x) + 'px';
+          const flippedLeft = x - width;
+          if (flippedLeft < rightPad) {
+            menuEl.style.right = 'auto';
+            menuEl.style.left = rightPad + 'px';
+            menuEl.classList.remove('contextMenu__right');
+            menuEl.classList.add('contextMenu__left');
+          }
+        } else {
+          menuEl.classList.add('contextMenu__left');
+          menuEl.style.left = Math.max(rightPad, maxX) + 'px';
+          menuEl.style.right = 'auto';
+        }
+      } else {
+        menuEl.classList.add('contextMenu__left');
+        menuEl.style.left = clampedX + 'px';
+        menuEl.style.right = 'auto';
+      }
+    };
+    doPosition();
   });
 
   function doWhois(): void {
@@ -225,7 +263,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div bind:this={menuEl} id="memberContextMenu" class="contextMenu userPopup"
      onkeydown={(e) => { if (e.key === 'Escape') close(); }}>
-  <div class="contextMenu__wrap" style="max-height: none;">
+  <div class="contextMenu__wrap">
     <div class="userContext">
       <h3 class="title">
         <span class="avatar letterAvatar" style:background-color={avatarColor}>

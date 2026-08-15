@@ -123,11 +123,12 @@ const isBootLoading: boolean = $derived(
 
 let showNetworkForm: boolean = $state(false);
   let showJoinModal: boolean = $state(false);
+  let joinModalNetworkId: string | null = $state(null);
   let channelSwitcherOpen: boolean = $state(false);
   let networkFormMode: 'add' | 'edit' = $state('add');
   let localMsgIdCounter = 0;
   let editNetworkId: string | null = $state(null);
-  let channelMenu: { x: number; y: number } | null = $state(null);
+  let channelMenu: { x: number; y: number; networkId: string; bufferName: string } | null = $state(null);
 
   let userPopup: { nick: string; member?: Member | null; x: number; y: number } | null = $state(null);
 
@@ -1508,8 +1509,10 @@ let showNetworkForm: boolean = $state(false);
   }
 
   function openChannelMenu(e?: MouseEvent): void {
+    const fallbackNetworkId = ircState.activeBuffer.networkId ?? '';
+    const fallbackBufferName = ircState.activeBuffer.bufferName ?? '_server';
     if (!e) {
-      channelMenu = { x: 240, y: 80 };
+      channelMenu = { x: 240, y: 80, networkId: fallbackNetworkId, bufferName: fallbackBufferName };
       return;
     }
     const btn = e.currentTarget as HTMLElement | null;
@@ -1518,14 +1521,26 @@ let showNetworkForm: boolean = $state(false);
       channelMenu = {
         x: rect.left + rect.width,
         y: rect.top + rect.height + 9,
+        networkId: fallbackNetworkId,
+        bufferName: fallbackBufferName,
       };
     } else {
-      channelMenu = { x: e.clientX, y: e.clientY };
+      channelMenu = { x: e.clientX, y: e.clientY, networkId: fallbackNetworkId, bufferName: fallbackBufferName };
     }
   }
   function openNetworkOptions(networkId: string, e: MouseEvent): void {
-    navigateToBuffer(networkId, '_server');
-    openChannelMenu(e);
+    const btn = e.currentTarget as HTMLElement | null;
+    if (btn) {
+      const rect = btn.getBoundingClientRect();
+      channelMenu = {
+        x: rect.left + rect.width,
+        y: rect.top + rect.height + 9,
+        networkId,
+        bufferName: '_server',
+      };
+    } else {
+      channelMenu = { x: e.clientX, y: e.clientY, networkId, bufferName: '_server' };
+    }
   }
   function closeChannelMenu(): void {
     channelMenu = null;
@@ -1563,9 +1578,9 @@ let showNetworkForm: boolean = $state(false);
 {/if}
 
 {#if showJoinModal}
-  <div class="overlay-backdrop" onclick={() => showJoinModal = false} role="presentation"></div>
+  <div class="overlay-backdrop" onclick={() => { showJoinModal = false; joinModalNetworkId = null; }} role="presentation"></div>
   <div class="overlay-panel centered" role="dialog" aria-modal="true" aria-label="Join a channel">
-    <JoinModal onClose={() => showJoinModal = false} />
+    <JoinModal networkId={joinModalNetworkId} onClose={() => { showJoinModal = false; joinModalNetworkId = null; }} />
   </div>
 {/if}
 
@@ -1576,24 +1591,25 @@ let showNetworkForm: boolean = $state(false);
 {/if}
 
 {#if channelMenu}
-  {@const activeBuf = getActiveBufferObj()}
-  {#if activeBuf}
-    {#if activeBuf.name === '_server'}
+  {@const menuNetwork = ircState.networks.find(n => n.networkId === channelMenu?.networkId)}
+  {@const menuBuf = menuNetwork?.buffers.find(b => b.name === channelMenu?.bufferName) ?? (channelMenu?.bufferName === '_server' && menuNetwork ? { name: '_server', type: 'server' as const, isJoined: true, unreadCount: 0, highlight: false, isPinned: false, isArchived: false, topic: '', topicSetBy: '', topicSetAt: 0, users: [], lastSeenMsgTime: null, firstUnseenMsgIndex: null } as any : null)}
+  {#if menuNetwork && menuBuf}
+    {#if menuBuf.name === '_server'}
       <ServerLogContextMenu
         x={channelMenu.x}
         y={channelMenu.y}
         anchorRight={true}
-        buf={activeBuf}
+        buf={menuBuf}
         onClose={closeChannelMenu}
-        onJoinChannel={() => { closeChannelMenu(); showJoinModal = true; }}
-        onEditNetwork={() => { closeChannelMenu(); networkFormMode = 'edit'; editNetworkId = ircState.activeBuffer.networkId; showNetworkForm = true; }}
+        onJoinChannel={() => { const nid = channelMenu?.networkId; joinModalNetworkId = nid ?? null; showJoinModal = true; closeChannelMenu(); }}
+        onEditNetwork={() => { const nid = channelMenu?.networkId; networkFormMode = 'edit'; editNetworkId = nid ?? null; showNetworkForm = true; closeChannelMenu(); }}
       />
     {:else}
       <ChannelContextMenu
         x={channelMenu.x}
         y={channelMenu.y}
         anchorRight={true}
-        buf={activeBuf}
+        buf={menuBuf}
         onClose={closeChannelMenu}
         onToggleMembers={toggleMemberPanel}
         memberPanelOpen={memberPanelOpen}
@@ -1656,7 +1672,7 @@ let showNetworkForm: boolean = $state(false);
     <Sidebar onSwitchBuffer={navigateToBuffer}
              onAddNetwork={() => { networkFormMode = 'add'; showNetworkForm = true; }}
              onNetworkOptions={openNetworkOptions}
-             onJoinChannel={(networkId) => { showJoinModal = true; }} />
+             onJoinChannel={(networkId) => { joinModalNetworkId = networkId; showJoinModal = true; }} />
   </aside>
   {/if}
 </div>

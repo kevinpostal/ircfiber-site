@@ -1555,6 +1555,24 @@
       aboveUnseenHighlights = 0;
     }
 
+    // IRCCloud parity: if user scrolled up even a tiny amount (cachedAtBottom false)
+    // but probe still returns the last row as bottom (no full row hidden),
+    // synthesize a single hidden-row so the lower chattercell appears
+    // immediately with "1 unread" — matches IRCCloud's instant ↓ bar.
+    if (!cachedAtBottom && !firstBelowMsg && rendered.length > 0) {
+      const lastItem = rendered[rendered.length - 1];
+      const synthMsg = rawMessageByKey.get(itemKeyOf(lastItem.msg)) ?? null;
+      if (synthMsg) {
+        firstBelowMsg = synthMsg;
+        belowTs = synthMsg.t || null;
+        below = bufferedBelow > 0 ? bufferedBelow + 1 : 1;
+      } else if (bufferedHead) {
+        firstBelowMsg = rawMessageByKey.get(itemKeyOf(bufferedHead!)) ?? null;
+        belowTs = bufferedHead!.t || null;
+        below = bufferedBelow > 0 ? bufferedBelow : 1;
+      }
+    }
+
     const bottomSeenMsg = firstBelowMsg;
     if (bottomSeenMsg) {
       updateBottomSeen(networkId, bufferName, bottomSeenMsg);
@@ -1563,9 +1581,11 @@
         belowUnseenCount = totalBelow;
         belowUnseenTimestamp = bottomSeenMsg.t || null;
       } else {
-        const important = countImportantMessagesBetween(networkId, bufferName, bottomSeenMsg);
-        belowUnseenCount = important > 0 ? important : totalBelow;
-        belowUnseenTimestamp = bottomSeenMsg.t || null;
+        // Use actual hidden count (below) for correct multi-message tally.
+        // Previous important/total logic was off by one and stuck at 1 when
+        // multiple new messages arrived while scrolled up (tiny scroll case).
+        belowUnseenCount = below;
+        belowUnseenTimestamp = belowTs ?? bottomSeenMsg.t ?? null;
       }
       belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, bottomSeenMsg);
     } else {

@@ -159,7 +159,7 @@ export function getMsgDate(msg: IRCMessage): string {
   return ts ? ts.split('T')[0] : '';
 }
 
-/** Short relative time span used in chatter bars (e.g. "a day", "an hour", "just now").
+/** Short relative time span used in chatter bars (e.g. "a day", "an hour", "less than a minute").
  *  Omits "ago" so it reads naturally as "a day of unread messages". */
 export function formatShortRelativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -186,7 +186,7 @@ export function formatShortRelativeTime(ts: number): string {
   if (hours === 1 || minutes >= 45) return 'about an hour';
   if (minutes >= 2) return `${minutes} minutes`;
   if (minutes === 1) return 'about a minute';
-  return 'just now';
+  return 'less than a minute';
 }
 
 export function isJoinPartLike(cmd: string): boolean {

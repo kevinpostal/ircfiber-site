@@ -30,40 +30,61 @@
 
   $effect(() => {
     if (!menuEl) return;
-    const height = menuEl.offsetHeight;
-    const width = menuEl.offsetWidth;
-    const windowHeight = window.innerHeight;
-    const windowWidth = window.innerWidth;
-    const bottomPad = 25;
+    const doPosition = () => {
+      const height = menuEl.offsetHeight;
+      const width = menuEl.offsetWidth;
+      if (height === 0 || width === 0) {
+        requestAnimationFrame(doPosition);
+        return;
+      }
+      const windowHeight = window.innerHeight;
+      const windowWidth = window.innerWidth;
+      const bottomPad = 25;
+      const rightPad = 10;
 
-    menuEl.classList.remove('contextMenu__top', 'contextMenu__bottom', 'contextMenu__left', 'contextMenu__right');
+      menuEl.classList.remove('contextMenu__top', 'contextMenu__bottom', 'contextMenu__left', 'contextMenu__right');
 
-    // Vertical: open below the anchor by default; flip above if it would
-    // extend past the bottom of the viewport.
-    if (y + height + bottomPad < windowHeight) {
-      menuEl.classList.add('contextMenu__top');
-      menuEl.style.top = y + 'px';
-      menuEl.style.bottom = 'auto';
-    } else {
-      menuEl.classList.add('contextMenu__bottom');
-      menuEl.style.top = 'auto';
-      menuEl.style.bottom = (windowHeight - y) + 'px';
-    }
+      let clampedY = y;
+      if (clampedY < bottomPad) clampedY = bottomPad;
+      if (clampedY + height + bottomPad > windowHeight) {
+        if (y - height - bottomPad >= bottomPad) {
+          menuEl.classList.add('contextMenu__bottom');
+          menuEl.style.top = 'auto';
+          menuEl.style.bottom = (windowHeight - y) + 'px';
+          const flippedTop = y - height;
+          if (flippedTop < bottomPad) {
+            menuEl.style.bottom = 'auto';
+            menuEl.style.top = bottomPad + 'px';
+            menuEl.classList.remove('contextMenu__bottom');
+            menuEl.classList.add('contextMenu__top');
+          }
+        } else {
+          menuEl.classList.add('contextMenu__top');
+          menuEl.style.top = Math.max(bottomPad, windowHeight - height - bottomPad) + 'px';
+          menuEl.style.bottom = 'auto';
+        }
+      } else {
+        menuEl.classList.add('contextMenu__top');
+        menuEl.style.top = clampedY + 'px';
+        menuEl.style.bottom = 'auto';
+      }
 
-    // Horizontal: extend to the right from the anchor point (left edge at x)
-    // by default. If that would overflow the right viewport edge AND the
-    // anchor is far enough from the left edge, flip to extending left
-    // (right edge at x) instead.
-    const rightOverflow = x + width > windowWidth;
-    if (rightOverflow && x >= width) {
-      menuEl.classList.add('contextMenu__right');
-      menuEl.style.left = 'auto';
-      menuEl.style.right = (windowWidth - x) + 'px';
-    } else {
-      menuEl.classList.add('contextMenu__left');
-      menuEl.style.left = x + 'px';
-      menuEl.style.right = 'auto';
-    }
+      let clampedX = x;
+      if (clampedX < rightPad) clampedX = rightPad;
+      const rightOverflow = clampedX + width > windowWidth - rightPad;
+      if (rightOverflow && clampedX >= width) {
+        menuEl.classList.add('contextMenu__right');
+        menuEl.style.left = 'auto';
+        menuEl.style.right = (windowWidth - clampedX) + 'px';
+      } else {
+        const maxLeft = windowWidth - width - rightPad;
+        const finalLeft = Math.max(rightPad, Math.min(clampedX, maxLeft));
+        menuEl.classList.add('contextMenu__left');
+        menuEl.style.left = finalLeft + 'px';
+        menuEl.style.right = 'auto';
+      }
+    };
+    doPosition();
   });
 
   function clickOutside(e: MouseEvent): void {
@@ -179,7 +200,7 @@
      style:display="block"
      bind:this={menuEl}
      role="menu">
-  <div class="contextMenu__wrap" style:max-height="none">
+  <div class="contextMenu__wrap">
     <ul class="actions" style="">
       <li class="reconnect" class:inactive={!isInactive} aria-disabled={!isInactive} style:display={isInactive ? '' : 'none'}>
         <button class="contextMenu__item reconnect" class:contextMenu__item--disabled={!isInactive} disabled={!isInactive} onclick={clickReconnect}>Reconnect</button>
