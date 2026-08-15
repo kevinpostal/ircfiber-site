@@ -4,6 +4,20 @@
   import CodeEditor from './CodeEditor.svelte';
   import { getPastebinIdFromUrl, navigateBackFromPastebin } from '../lib/routing';
 
+  function relTime(iso: string): string {
+    const d = new Date(iso).getTime();
+    const now = Date.now();
+    const s = Math.floor((now - d)/1000);
+    if (s < 60) return 'less than a minute ago';
+    if (s < 3600) return Math.floor(s/60) + ' minutes ago';
+    if (s < 86400) return Math.floor(s/3600) + ' hours ago';
+    const days = Math.floor(s/86400);
+    if (days === 1) return 'a day ago';
+    if (days < 7) return days + ' days ago';
+    if (days < 30) return Math.floor(days/7) + ' weeks ago';
+    return new Date(iso).toLocaleDateString();
+  }
+  const SYNTAX_LABEL: Record<string,string> = { text:'Plain Text', html:'HTML', javascript:'JavaScript', typescript:'Typescript', c_cpp:'C and C++', csharp:'C#', golang:'Go', python:'Python', ruby:'Ruby', rust:'Rust', java:'Java', json:'JSON', css:'CSS', xml:'XML', yaml:'YAML', sh:'SH', sql:'SQL' };
   const LANGUAGES = [
     'text','abap','abc','actionscript','ada','alda','apache_conf','apex','aql',
     'asciidoc','asl','assembly_arm32','assembly_x86','astro','autohotkey',
@@ -26,8 +40,6 @@
     'scala','scheme','scrypt','scss','sh','sjs','slim','smarty','smithy',
     'snippets','soy-template','space','sparql','sql','sqlserver','stylus',
     'svg','swift','tcl','terraform','tex','textile','toml','tsx','turtle','twig',
-    'typescript','vala','vbscript','velocity','verilog','vhdl','visualforce',
-    'vue','wollok','xml','xquery','yaml','zeek','zig',
   ] as const;
 
   interface Props {
@@ -49,13 +61,13 @@
   let gutterHidden = $state(false);
   let confirmDelete = $state(false);
   let meId: string | null = $state(null);
-
+  let copied = $state(false);
   let lineCount = $derived(entry ? (entry.lines ?? entry.body.split('\n').length) : 0);
-  let syntaxLabel = $derived(entry?.syntax ?? 'text');
-  let dateStr = $derived(entry ? new Date(entry.createdAt).toLocaleString() : '');
+  let syntaxLabel = $derived(entry ? (SYNTAX_LABEL[entry.syntax] ?? entry.syntax) : 'text');
   let dateIso = $derived(entry ? new Date(entry.createdAt).toISOString() : '');
-  let isOwner = $derived(entry ? meId !== null && entry.userId === meId : false);
-
+  let dateRel  = $derived(entry ? relTime(typeof entry.createdAt === 'string' ? entry.createdAt : new Date(entry.createdAt as any).toISOString()) : '');
+  let dateTitle = $derived(entry ? new Date(entry.createdAt as any).toLocaleString() : '');
+  let isOwner = $derived(entry ? meId !== null && (entry as any).userId === meId : false);
   async function load() {
     if (!id) { loading = false; error = 'Missing id'; return; }
     loading = true;
@@ -129,11 +141,20 @@
       editError = err?.message ?? 'Delete failed';
     }
   }
+
+  async function copyCode() {
+    const text = editing ? editContent : entry?.body ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+      setTimeout(()=> copied = false, 1500);
+    } catch {}
+  }
 </script>
 
 <svelte:window onkeydown={(e)=>{ if(e.key==='Escape') { if(editing) cancelEdit(); else handleClose(); } }} />
 
-<div id="pasteViewerPage" class="mainContainer mainContainerPaste mainContainerFull" onclick={(e)=>{ if(e.target===e.currentTarget) handleClose(); }} role="presentation">
+<div id="pasteViewerPage" class="mainContainer mainContainerPaste mainContainerFull irccloud pastebin theme-midnight" onclick={(e)=>{ if(e.target===e.currentTarget) handleClose(); }} role="presentation">
   <div class="mainContent mainContentPaste">
     <div class="pasteContainer">
       {#if loading}
@@ -147,87 +168,70 @@
             <span class="details">
               <span class="name">{entry.name || 'Untitled'}</span>
               <span class="info"><span class="syntax">{syntaxLabel}</span> • <span class="lines">{lineCount} lines</span></span>
-              <a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer" class="date" title={dateIso}>{dateStr}</a>
+              <a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer" class="date" title={dateTitle}>{dateRel}</a>
               <span class="modes"><a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer">raw</a> | <button class="link linesButton" onclick={()=>gutterHidden=!gutterHidden}>line numbers</button></span>
             </span>
-            {#if !editing && isOwner}
-              <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> <span style="color:#3a3d44;">•</span> <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
+            {#if editing && isOwner}
+              <form class="editForm" onsubmit={saveEdit}>
+                <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" name="name" />
+                <select bind:value={editLang} aria-label="Language" name="aceMode">
+                  {#each LANGUAGES as L}<option value={L}>{SYNTAX_LABEL[L] ?? L}</option>{/each}
+                </select>
+                <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
+                <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
+              </form>
             {/if}
+            {#if editError}<p class="userError editError" style="display:block;">{editError}</p>{/if}
           </h1>
-          {#if editing && isOwner}
-            <form class="editForm" onsubmit={saveEdit}>
-              <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" />
-              <select bind:value={editLang} aria-label="Language">
-                {#each LANGUAGES as L}<option value={L}>{L === 'text' ? 'Plain Text' : L}</option>{/each}
-              </select>
-              <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
-              <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
-            </form>
-          {/if}
-          {#if isOwner && confirmDelete}
-            <div class="confirmBar">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> <span style="color:#3a3d44;">/</span> <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></div>
-          {/if}
-          {#if editError}<p class="userError editError">{editError}</p>{/if}
-          <div class="editor ace_editor ace-twilight ace_dark" style="height: {Math.max(lineCount,1)*16}px">
+          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="height: {Math.max(lineCount,1)*16}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em;">
+            <div class="editorToolbar">
+              <button class="copyButton" onclick={copyCode} aria-label="Copy code">{copied ? 'Copied!' : 'Copy'}</button>
+            </div>
+            <span class="langtag">{syntaxLabel}</span>
             {#if editing && isOwner}
               <CodeEditor bind:value={editContent} language={editLang} showGutter={!gutterHidden} twilight />
             {:else}
               <CodeEditor value={entry.body} language={entry.syntax} readonly showGutter={!gutterHidden} twilight />
             {/if}
           </div>
-          {#if editError && !editing}<p class="userError editError">{editError}</p>{/if}
         </div>
       {/if}
     </div>
   </div>
 </div>
 <style>
-  #pasteViewerPage { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; background: #141414; overflow: hidden; width: 100vw; height: 100vh; }
-  .mainContainerPaste { display: block; background: #141414; width: 100%; height: 100%; max-width: none; margin: 0; padding: 0; overflow: auto; }
-  .mainContentPaste { padding: 0; min-width: 0; background: #141414; }
-  .pasteContainer { background: #141414; border: none; border-radius: 0; width: 100%; max-width: none; padding: 0; box-shadow: none; display: block; min-height: 100%; }
-  .paste { display: block; background: #141414; min-height: 100%; padding: 0; }
-  .branding { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: #8b949e; padding: 10px 16px; background: #0f1115; border-bottom: 1px solid #2a2d33; flex: 0 0 auto; }
-  .branding .brand { font-weight: 700; color: #58a6ff; text-decoration: none; font-size: 13px; }
-  .branding .brand:hover { text-decoration: underline; }
-  .branding .tag { color: #6e7681; }
-  .branding .brandHome { margin-left: auto; color: #8b949e; text-decoration: none; border: 1px solid #2a2d33; border-radius: 4px; padding: 2px 6px; background: #161a22; }
-  .branding .brandHome:hover { color: #c9d1d9; border-color: #3a3d44; }
-
-
-  .loadingProgress { color: #8b949e; padding: 12px; }
+  #pasteViewerPage { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; background: #141414; overflow: hidden; width: 100vw; height: 100vh; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  .mainContainerPaste { display: block; background: #141414; width: 100%; height: 100%; max-width: none; margin: 0; padding: .7em; overflow: auto; box-sizing: border-box; }
+  .mainContentPaste { padding: 0; min-width: 0; background: #141414; border: 1px solid #2a2d33; border-radius: 4px; }
   .filesHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 12px 16px; }
   .filesHeader h1 { font-size: 18px; font-weight: 600; color: #c9d1d9; }
   .closeBtn { padding: 6px 12px; border: 1px solid #2a2d33; border-radius: 4px; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .userError { color: #f85149; font-size: 13px; margin-top: 10px; padding: 0 16px; }
-  .paste .header { display: block; background: #1e1e1e; border: 1px solid #2a2d33; border-bottom: none; padding: 5px 4px 3px; margin: 0; font-size: 13px; }
-  .paste .header .actions { display: inline; margin-left: 12px; font-size: 12px; }
-  .header .actions .link { color: #8b949e; padding: 2px 6px; border-radius: 3px; }
-  .header .actions .link:hover { color: #c9d1d9; background: #1a1d23; text-decoration: none; }
-  .header .actions .editButton { color: #58a6ff; }
-  .header .actions .deleteButton { color: #f85149; }
-  .confirmBar { background: #1a1d23; border: 1px solid #2a2d33; border-radius: 6px; padding: 8px 12px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #f85149; }
-  .editForm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: #0f1115; border: 1px solid #2a2d33; border-radius: 6px; margin: 0 0 12px; }
-  .paste .details { display: inline; font-size: 13px; }
-  .paste .details .name { margin-right: 6px; }
-  .paste .details .info { margin-right: 6px; }
-  .paste .details .date { margin-right: 6px; }
-  .paste .header .actions { display: inline; margin-left: 12px; font-size: 12px; }
-  .paste .name { font-weight: 700; font-size: 16px; color: #c9d1d9; }
-  .paste .info { font-size: 12px; color: #8b949e; }
-  .paste .date { font-size: 12px; color: #58a6ff; text-decoration: none; }
-  .paste .date:hover { text-decoration: underline; }
-  .paste .modes { font-size: 12px; color: #8b949e; }
-  .paste .modes a { color: #58a6ff; text-decoration: none; }
-  .paste .modes a:hover { text-decoration: underline; }
-  .paste .actions { font-size: 12px; color: #8b949e; }
-  .link { background: none; border: none; color: #58a6ff; cursor: pointer; padding: 0; font-size: inherit; }
-  .link:hover { text-decoration: underline; }
-  .editForm .input { padding: 6px 8px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 4px; color: #c9d1d9; font-size: 13px; }
-  .editForm select { padding: 6px 8px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 4px; color: #c9d1d9; font-size: 13px; max-width: 160px; }
-  .editForm button.action { padding: 6px 12px; border-radius: 4px; border: 1px solid #1f6feb; background: #1f6feb; color: white; cursor: pointer; }
-  .editForm button.cancel { padding: 6px 12px; border-radius: 4px; border: 1px solid #2a2d33; background: #161a22; color: #c9d1d9; cursor: pointer; }
-  .confirm { font-size: 12px; color: #f85149; margin-left: 8px; }
-  .editor { border: 1px solid #2a2d33; border-top: none; overflow: hidden; display: block; background: #141414; }
-  .editor :global(.codeEditor) { flex: 1; min-height: 0; }
+  /* screenshot header: dark bar 26px, name white, meta #999, links muted */
+  .paste .header { display: block; background: #2a2a2a; border-bottom: 1px solid #333; padding: 4px 8px; margin: 0; font-size: 12px; color: #999; line-height: 18px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  .paste .header .details { display: inline; font-size: 12px; }
+  .paste .header .details .name { font-weight: 700; color: #F8F8F8; margin-right: 8px; font-size: 12px; }
+  .paste .header .details .info { color: #999; margin-right: 8px; font-size: 11px; }
+  .paste .header .details .date { color: #999; text-decoration: none; margin-right: 8px; font-size: 11px; }
+  .paste .header .details .date:hover { color: #CDA869; text-decoration: underline; }
+  .paste .header .details .modes { color: #666; font-size: 11px; }
+  .paste .header .details .modes a,
+  .paste .header .details .modes button.link { color: #999; text-decoration: none; font-size: 11px; background: none; border: none; padding: 0; margin: 0; cursor: pointer; font: inherit; line-height: inherit; appearance: none; -webkit-appearance: none; }
+  .paste .header .actions .link { color: #999; background: none; border: none; cursor: pointer; padding: 0; font-size: 11px; }
+  .paste .header .actions .link:hover { color: #F8F8F8; text-decoration: underline; }
+  .paste .header .actions .deleteButton { color: #CF6A4C; }
+  .paste .header .confirm { display: inline; margin-left: 12px; font-size: 11px; color: #CF6A4C; }
+  .paste .header .confirm .explanation { margin-right: 6px; }
+  .paste .header .confirm button.delete { color: #CF6A4C; background: none; border: none; cursor: pointer; text-decoration: underline; }
+  .paste .header .confirm button.cancel { color: #999; background: none; border: none; cursor: pointer; margin-left: 6px; }
+  .paste .header .editForm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0 0; margin-top: 4px; }
+  .paste .header .editForm .input { padding: 4px 6px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 3px; color: #c9d1d9; font-size: 12px; }
+  .paste .header .editForm select { padding: 4px 6px; background: #0d1117; border: 1px solid #2a2d33; border-radius: 3px; color: #c9d1d9; font-size: 12px; max-width: 160px; }
+  .editor { position: relative; border: none; overflow: visible; display: block; background: #141414; }
+  .editor :global(.codeEditor) { display: flex; height: auto; min-height: 0; }
+  .editorToolbar { position: absolute; top: 6px; right: 8px; z-index: 5; display: flex; align-items: center; }
+  .copyButton { padding: 5px 10px; font-size: 12px; line-height: 1; font-family: inherit; color: #c9d1d9; background: #2a2a2a; border: 1px solid rgba(255,255,255,0.14); border-radius: 6px; cursor: pointer; }
+  .copyButton:hover { color: #fff; background: #333; border-color: rgba(255,255,255,0.22); }
+  .copyButton:active { transform: scale(0.98); }
+  .langtag { position: absolute; bottom: 8px; right: 8px; z-index: 5; padding: 0 2px; font-size: 11px; line-height: 1; font-family: inherit; color: rgba(255,255,255,0.35); background: transparent; border: none; text-transform: lowercase; pointer-events: none; letter-spacing: 0.02em; }
 </style>

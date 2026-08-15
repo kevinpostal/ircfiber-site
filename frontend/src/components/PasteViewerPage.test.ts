@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 
 describe('PasteViewerPage', () => {
-  it('renders full-page viewer with branding and public access', async () => {
+  it('renders full-page viewer with twilight theme and ace editor', async () => {
     const { container } = render(PasteViewerPage, { props: { id: '8df764c9-3f89-4cd7-bd22-26b48a1dc6cc' } });
     await new Promise(r => setTimeout(r, 300));
     let tries = 0;
@@ -37,14 +37,15 @@ describe('PasteViewerPage', () => {
       tries++;
     }
     expect(container.querySelector('#pasteViewerPage')).toBeTruthy();
-    expect(container.querySelector('.branding')).toBeTruthy();
-    expect(container.querySelector('.branding .brand')?.textContent).toContain('IRC Fiber');
+    // irccloud parity: theme-midnight / twilight, not dawn branding
+    expect(container.querySelector('#pasteViewerPage')?.classList.contains('theme-midnight')).toBe(true);
     const page = container.querySelector('#pasteViewerPage') as HTMLElement;
     expect(page).toBeTruthy();
     if (page) expect(getComputedStyle(page).position).toBe('fixed');
     const editor = container.querySelector('.editor') as HTMLElement;
     expect(editor).toBeTruthy();
-    expect(getComputedStyle(editor).display).toBe('flex');
+    expect(editor.classList.contains('ace-twilight')).toBe(true);
+    expect(editor.classList.contains('ace_dark')).toBe(true);
   });
 
   it('shows 1-line snippet without clipping', async () => {

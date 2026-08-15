@@ -46,20 +46,20 @@ const cssReplacement = `link(rel="stylesheet", href="/public/dist/${jsFile.repla
 // Actually, use the actual CSS files from the manifest entry
 // For the first CSS file
 if (cssFiles.length > 0) {
-  const newCssHref = `/public/dist/${cssFiles[0]}`;
+  const newCssHref = `/public/dist/${cssFiles[0]}?v=2`;
   dt = dt.replace(cssPattern, `link(rel="stylesheet", href="${newCssHref}")`);
   console.log(`inject-manifest: CSS → ${newCssHref}`);
 } else {
   // Fallback: guess the CSS path from the JS path
   const guessedCss = jsFile.replace(/\.js$/, '.css');
-  const newCssHref = `/public/dist/${guessedCss}`;
+  const newCssHref = `/public/dist/${guessedCss}?v=2`;
   dt = dt.replace(cssPattern, `link(rel="stylesheet", href="${newCssHref}")`);
   console.log(`inject-manifest: CSS → ${newCssHref} (guessed, no css entry in manifest)`);
 }
 
 // Replace JS script
 const jsPattern = /script\(type="module",\s*src="\/public\/dist\/[^"]*"\)/;
-const newJsHref = `/public/dist/${jsFile}`;
+const newJsHref = `/public/dist/${jsFile}?v=2`;
 dt = dt.replace(jsPattern, `script(type="module", src="${newJsHref}")`);
 console.log(`inject-manifest: JS  → ${newJsHref}`);
 

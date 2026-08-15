@@ -137,19 +137,23 @@
   .gutter,
   .hlLayer,
   .editLayer {
-    font-family: 'Hack', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: 13px;
-    line-height: 1.4;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Source Code Pro', 'source-code-pro', 'Hack', monospace;
+    font-size: 12px;
+    line-height: 16px;
   }
   .gutter {
     flex: 0 0 auto;
-    min-width: 3.2em;
+    width: var(--gutter-width, 41px);
+    min-width: var(--gutter-width, 41px);
     margin: 0;
-    padding: 12px 8px 12px 12px;
+    padding-left: var(--padding-left, 0);
+    padding-right: var(--padding-right, 6px);
+    padding-top: 0;
+    padding-bottom: 0;
     text-align: right;
-    color: #5c6370;
+    color: var(--line-number-color, #5c6370);
     background: #21252b;
-    border-right: 1px solid #2c313a;
+    border-right: 1px solid var(--border-color, #2c313a);
     user-select: none;
     overflow: hidden;
     white-space: pre;
@@ -164,7 +168,7 @@
     position: absolute;
     inset: 0;
     margin: 0;
-    padding: 12px 14px;
+    padding: 0 4px;
     background: transparent;
     color: #abb2bf;
     overflow: hidden;
@@ -175,9 +179,9 @@
   }
   .hlLayer code {
     background: transparent;
-    font-family: 'Hack', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: 13px !important;
-    line-height: 1.4 !important;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Source Code Pro', 'source-code-pro', 'Hack', monospace;
+    font-size: 12px !important;
+    line-height: 16px !important;
     white-space: inherit;
     letter-spacing: normal;
     word-spacing: normal;
@@ -188,11 +192,11 @@
     inset: 0;
     display: block;
     box-sizing: border-box;
-    padding: 12px 14px !important;
+    padding: 0 4px !important;
     margin: 0;
-    font-family: 'Hack', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: 13px !important;
-    line-height: 1.4 !important;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Source Code Pro', 'source-code-pro', 'Hack', monospace;
+    font-size: 12px !important;
+    line-height: 16px !important;
     background: transparent !important;
     color: transparent !important;
     caret-color: #e6e6e6;
@@ -234,20 +238,19 @@
   .editLayer::-moz-selection {
     background: rgba(88, 166, 255, 0.3);
   }
-  /* readonly: hide textarea overlay, make hlLayer selectable + scrollable */
+  /* readonly: no textarea, hlLayer flows naturally; outer .editor height drives page scroll */
+  .codeEditor.readonly { overflow: visible; height: auto; min-height: 0; flex: none; display: flex; align-items: flex-start; }
+  .codeEditor.readonly .gutter { overflow: visible; height: auto; }
+  .codeEditor.readonly .editorWrap { overflow: visible; height: auto; flex: 1 1 auto; display: block; }
   .codeEditor.readonly .hlLayer {
     position: relative;
+    inset: auto;
     pointer-events: auto;
     user-select: text;
-    overflow: auto;
+    overflow: visible;
   }
-  .codeEditor.readonly .editorWrap { overflow: auto; }
-  .codeEditor.readonly .hlLayer::-webkit-scrollbar { width: 10px; height: 10px; }
-  .codeEditor.readonly .hlLayer::-webkit-scrollbar-track { background: #1e1e1e; }
-  .codeEditor.readonly .hlLayer::-webkit-scrollbar-thumb { background: #4d5867; border-radius: 5px; border: 2px solid #1e1e1e; }
-  /* twilight theme — matches SnippetsPanel / IRCCloud ace-twilight */
   .codeEditor.twilight { background: #141414; }
-  .codeEditor.twilight .gutter { background: #232323; color: #E2E2E2; border-right-color: #1a1a1a; }
+  .codeEditor.twilight .gutter { background: #232323; color: var(--line-number-color, #E2E2E2); border-right-color: var(--border-color, #232323); }
   .codeEditor.twilight .hlLayer { color: #F8F8F8; }
   .codeEditor.twilight :global(.hljs) { background: #141414; color: #F8F8F8; }
   .codeEditor.twilight :global(.hljs-keyword),
@@ -262,11 +265,18 @@
   .codeEditor.twilight :global(.hljs-name) { color: #AC885B; }
   .codeEditor.twilight :global(.hljs-attr) { color: #7587A6; }
   .codeEditor.twilight :global(.hljs-attribute) { color: #9B859D; }
-  .codeEditor.twilight :global(.hljs-title) { color: #AC885B; }
+  .codeEditor.twilight :global(.hljs-title),
+  .codeEditor.twilight :global(.hljs-title\.function),
+  .codeEditor.twilight :global(.hljs-title\.class) { color: #AC885B; }
   .codeEditor.twilight :global(.hljs-built_in) { color: #9B859D; }
   .codeEditor.twilight :global(.hljs-number),
-  .codeEditor.twilight :global(.hljs-literal) { color: #CF6A4C; }
+  .codeEditor.twilight :global(.hljs-literal),
+  .codeEditor.twilight :global(.hljs-constant) { color: #CF6A4C; }
   .codeEditor.twilight :global(.hljs-type) { color: #9B859D; }
   .codeEditor.twilight :global(.hljs-selector-class),
-  .codeEditor.twilight :global(.hljs-selector-id) { color: #F9EE98; }
+  .codeEditor.twilight :global(.hljs-selector-id),
+  .codeEditor.twilight :global(.hljs-storage) { color: #F9EE98; }
+  .codeEditor.twilight :global(.hljs-support),
+  .codeEditor.twilight :global(.hljs-support\.function) { color: #DAD085; }
+  .codeEditor.twilight :global(.hljs-support\.constant) { color: #CF6A4C; }
 </style>
