@@ -1688,6 +1688,8 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       // mask it for security (returning empty string on edits). Preserve
       // what the user already set locally.
       if (net.saslPassword) existing.saslPassword = net.saslPassword;
+      if (net.autoJoinChannels !== undefined) existing.autoJoinChannels = net.autoJoinChannels;
+      if (net.autoJoinDelaySeconds !== undefined) existing.autoJoinDelaySeconds = net.autoJoinDelaySeconds;
       existing.status = net.status;
       // systemManaged is a server-side flag we don't expect to change
       // during a session; only adopt it from sync if we don't have a
