@@ -147,10 +147,10 @@ final class RESTAPI {
         router.post("/api/uploads/:id/edit", &editUpload);
         router.get("/api/pastebins", &getPastebins);
         router.post("/api/pastebins", &createPastebin);
+        router.get("/api/pastebins/:id/raw", &getPastebinRaw);
+        router.get("/api/pastebins/:id", &getPastebinById);
         router.put("/api/pastebins/:id", &updatePastebin);
         router.delete_("/api/pastebins/:id", &deletePastebin);
-        router.get("/api/pastebins/:id/raw", &getPastebinRaw);
-        // IRC Art saves
         router.get("/api/img2irc-saves", &getIrcArtSaves);
         router.post("/api/img2irc-saves", &createIrcArtSave);
         router.get("/api/img2irc-saves/:id", &getIrcArtSave);
@@ -2076,12 +2076,16 @@ final class RESTAPI {
             res.writeJsonBody(Json(["error": Json("not found")]));
         }
     }
+    private void getPastebinById(HTTPServerRequest req, HTTPServerResponse res) {
+        // Public viewer (branded) — no auth required, allow sharing via link.
+        auto rec = pastebinRepo.getByIdPublic(req.params["id"]);
+        if (rec.id.length == 0) { res.statusCode = 404; res.writeJsonBody(Json(["error": Json("not found")])); return; }
+        res.writeJsonBody(pasteToJson(rec));
+    }
+
 
     private void getPastebinRaw(HTTPServerRequest req, HTTPServerResponse res) {
-        requireAuth(req, res);
-        if (res.headerWritten) return;
-        auto user = req.context["user"].get!User;
-        auto rec = pastebinRepo.getById(user.id.toString(), req.params["id"]);
+        auto rec = pastebinRepo.getByIdPublic(req.params["id"]);
         if (rec.id.length == 0) {
             res.statusCode = 404;
             res.writeBody("not found", "text/plain; charset=utf-8");
@@ -2089,7 +2093,6 @@ final class RESTAPI {
         }
         res.writeBody(rec.content, "text/plain; charset=utf-8");
     }
-
     private Json ircArtToJson(const ref Img2IrcSaveRecord r) {
         return Json([
             "id": Json(r.id), "name": Json(r.name),

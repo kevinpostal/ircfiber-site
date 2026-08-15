@@ -30,6 +30,30 @@ function isTextParts(pathname: string, search: string, hash: string): boolean {
 export function normalizeTextUrl(rawUrl: string): string | null {
   let urlStr = rawUrl.trim();
   if (!urlStr) return null;
+  // Pastebin viewer URLs: http(s)://host/?/pastebin=ID and raw API URLs
+  // Use URL with base to handle both absolute and relative forms.
+  try {
+    const pu = new URL(urlStr, 'https://ircfiber.com');
+    // viewer: /?/pastebin=ID  (search starts with ?/pastebin=)
+    if (pu.search.startsWith('?/pastebin=')) {
+      const m = pu.search.match(/^\?\/pastebin=([^&]+)/);
+      if (m) {
+        const id = decodeURIComponent(m[1]);
+        if (id.length >= 8) {
+          const isLoopback = /^(localhost|127\.0\.0\.1|::1)$/i.test(pu.hostname) || pu.hostname.startsWith('127.');
+          const proto = isLoopback ? pu.protocol : 'https:';
+          // normalize host: keep original host/port for loopback, force https for prod
+          const host = pu.host; // includes port if present
+          return `${proto}//${host}/?/pastebin=${encodeURIComponent(id)}`;
+        }
+      }
+    }
+    if (/^\/api\/pastebins\/[^\/]+\/raw$/i.test(pu.pathname)) {
+      const isLoopback = /^(localhost|127\.0\.0\.1|::1)$/i.test(pu.hostname) || pu.hostname.startsWith('127.');
+      if (!isLoopback) pu.protocol = 'https:';
+      return pu.href;
+    }
+  } catch {}
   if (!/^https?:\/\//i.test(urlStr) && !/^\/\//.test(urlStr)) {
     if (/^[a-z0-9.-]+\.[a-z]{2,}\//i.test(urlStr)) urlStr = 'https://' + urlStr;
     else return null;
@@ -53,7 +77,6 @@ export function normalizeTextUrl(rawUrl: string): string | null {
   // Our uploads are always with extension, but be permissive for /uploads/<id> without extension
   return u.href;
 }
-
 function stripTrailingPunc(url: string): string {
   return url.replace(/[.,;!?]+$/, '').replace(/[)]+$/, (m) => {
     // Balance parentheses: if url has more '(' than ')', keep one

@@ -6,8 +6,11 @@
     value: string;
     language?: string;
     oninput?: (v: string) => void;
+    readonly?: boolean;
+    showGutter?: boolean;
+    twilight?: boolean;
   }
-  let { value = $bindable(''), language = 'text', oninput }: Props = $props();
+  let { value = $bindable(''), language = 'text', oninput, readonly = false, showGutter = true, twilight = false }: Props = $props();
 
   const HLJS_MAP: Record<string, string> = {
     text: 'plaintext',
@@ -102,11 +105,11 @@
     oninput?.(value);
   }
 </script>
-
-<div class="codeEditor">
-  <pre bind:this={gutterEl} class="gutter" aria-hidden="true">{gutterText}</pre>
-  <div class="editorWrap">
-    <pre bind:this={hlEl} class="hlLayer" aria-hidden="true"><code>{@html highlightedHtml}</code></pre>
+<div class="codeEditor" class:readonly class:twilight>
+  {#if showGutter}<pre bind:this={gutterEl} class="gutter" aria-hidden="true">{gutterText}</pre>{/if}
+  <div class="editorWrap" class:readonly>
+    <pre bind:this={hlEl} class="hlLayer" class:readonly aria-hidden="true"><code>{@html highlightedHtml}</code></pre>
+    {#if !readonly}
     <textarea
       bind:this={editorEl}
       bind:value
@@ -118,6 +121,7 @@
       spellcheck="false"
       aria-label="Code editor"
     ></textarea>
+    {/if}
   </div>
 </div>
 
@@ -230,4 +234,39 @@
   .editLayer::-moz-selection {
     background: rgba(88, 166, 255, 0.3);
   }
+  /* readonly: hide textarea overlay, make hlLayer selectable + scrollable */
+  .codeEditor.readonly .hlLayer {
+    position: relative;
+    pointer-events: auto;
+    user-select: text;
+    overflow: auto;
+  }
+  .codeEditor.readonly .editorWrap { overflow: auto; }
+  .codeEditor.readonly .hlLayer::-webkit-scrollbar { width: 10px; height: 10px; }
+  .codeEditor.readonly .hlLayer::-webkit-scrollbar-track { background: #1e1e1e; }
+  .codeEditor.readonly .hlLayer::-webkit-scrollbar-thumb { background: #4d5867; border-radius: 5px; border: 2px solid #1e1e1e; }
+  /* twilight theme — matches SnippetsPanel / IRCCloud ace-twilight */
+  .codeEditor.twilight { background: #141414; }
+  .codeEditor.twilight .gutter { background: #232323; color: #E2E2E2; border-right-color: #1a1a1a; }
+  .codeEditor.twilight .hlLayer { color: #F8F8F8; }
+  .codeEditor.twilight :global(.hljs) { background: #141414; color: #F8F8F8; }
+  .codeEditor.twilight :global(.hljs-keyword),
+  .codeEditor.twilight :global(.hljs-meta),
+  .codeEditor.twilight :global(.hljs-selector-tag) { color: #CDA869; }
+  .codeEditor.twilight :global(.hljs-string) { color: #8F9D6A; }
+  .codeEditor.twilight :global(.hljs-regexp) { color: #E9C062; }
+  .codeEditor.twilight :global(.hljs-comment) { color: #5F5A60; font-style: italic; }
+  .codeEditor.twilight :global(.hljs-variable),
+  .codeEditor.twilight :global(.hljs-template-variable) { color: #7587A6; }
+  .codeEditor.twilight :global(.hljs-tag),
+  .codeEditor.twilight :global(.hljs-name) { color: #AC885B; }
+  .codeEditor.twilight :global(.hljs-attr) { color: #7587A6; }
+  .codeEditor.twilight :global(.hljs-attribute) { color: #9B859D; }
+  .codeEditor.twilight :global(.hljs-title) { color: #AC885B; }
+  .codeEditor.twilight :global(.hljs-built_in) { color: #9B859D; }
+  .codeEditor.twilight :global(.hljs-number),
+  .codeEditor.twilight :global(.hljs-literal) { color: #CF6A4C; }
+  .codeEditor.twilight :global(.hljs-type) { color: #9B859D; }
+  .codeEditor.twilight :global(.hljs-selector-class),
+  .codeEditor.twilight :global(.hljs-selector-id) { color: #F9EE98; }
 </style>

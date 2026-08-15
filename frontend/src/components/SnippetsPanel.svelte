@@ -42,8 +42,8 @@
   import toml from 'svelte-highlight/languages/toml';
   import { fetchPastebinsOffset, updatePastebin, deletePastebin, pastebinRawUrl, type PasteEntry } from '../stores/api';
   import { ACE_MODES, aceModeLabel } from '../lib/aceModes';
+  import { navigateToPastebin } from '../lib/routing';
   import CodeEditor from './CodeEditor.svelte';
-
   interface Props {
     onClose: () => void;
   }
@@ -273,6 +273,8 @@
                 </span>
               {:else}
                 <span class="actions">
+                  <button class="link viewButton" onclick={() => navigateToPastebin(entry.id)}>view</button>
+                  •
                   <button class="link editButton" onclick={() => startEdit(entry)}>edit</button>
                   •
                   <button class="link deleteButton" onclick={() => { confirmingId = entry.id; editError = null; }}>delete</button>

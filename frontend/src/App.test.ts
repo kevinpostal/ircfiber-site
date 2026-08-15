@@ -51,6 +51,8 @@ vi.mock('/src/stores/api', () => ({
   unarchiveChannel: vi.fn(async () => undefined),
   deletePastebin: vi.fn(async () => undefined),
   fetchPastebinsOffset: vi.fn(async () => ({ entries: [], total: 0 })),
+  fetchPastebinById: vi.fn(async () => ({ id: 'x', name: 'test', syntax: 'text', lines: 1, body: 'hi', createdAt: Date.now(), buffer: '', networkId: '' })),
+  pastebinUrl: vi.fn((id: string) => `/?/pastebin=${id}`),
   updatePastebin: vi.fn(async () => undefined),
   pastebinRawUrl: vi.fn((id: string) => `/pastebin/${id}/raw`),
   updateMembersCollapsed: vi.fn(async () => undefined),

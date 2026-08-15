@@ -110,16 +110,14 @@
     sendNext();
   }
 
-  // "Post snippet" — host the text file like an image (via /api/upload),
-  // preserving the selected language for inline highlighting. Falls back to
-  // showing an error if the upload fails. Mirrors image upload flow.
+  // "Post snippet" — create a pastebin via POST /api/pastebins and share the
+  // viewer URL (/?/pastebin=<id>) in the channel. Falls back to error.
   async function postSnippet(e: Event) {
     e.preventDefault();
     if (posting) return;
     posting = true;
     error = null;
     try {
-      // Use the current filename or default to snippet.<ext> based on lang
       const extForLang: Record<string, string> = {
         python: 'py', javascript: 'js', typescript: 'ts', bash: 'sh', json: 'json',
         yaml: 'yaml', markdown: 'md', sql: 'sql', xml: 'xml', css: 'css', scss: 'scss',
@@ -132,19 +130,18 @@
       };
       const ext = extForLang[lang] ?? (lang === 'text' ? 'txt' : lang);
       const filename = (name?.trim() || initialFilename?.trim() || `snippet.${ext}`).replace(/[^a-zA-Z0-9._-]/g, '_');
-      const blob = new Blob([editor], { type: 'text/plain' });
-      const file = new File([blob], filename, { type: 'text/plain' });
-      // Use the same upload path as images — POST /api/upload
-      const { uploadFile } = await import('../lib/upload');
-      const handle = uploadFile(file, { filename, networkId, buffer: target });
-      const result = await handle.promise;
-      const url = result.url;
+      const { createPastebin } = await import('../stores/api');
+      const rec = await createPastebin({ name: filename, body: editor, syntax: lang, networkId, buffer: target });
+      const viewerPath = `/?/pastebin=${encodeURIComponent(rec.id)}`;
+      const url = `${window.location.origin}${viewerPath}`;
+      const rawUrl = `${window.location.origin}/api/pastebins/${encodeURIComponent(rec.id)}/raw`;
+      // Prefer viewer URL; raw is available via the header's raw link.
       const finalText = message ? `${message} ${url}` : url;
       oncloseCb?.();
       sendMessage(networkId, target, finalText);
       onsentCb?.();
     } catch (e) {
-      error = (e as Error).message || 'Failed to upload snippet';
+      error = (e as Error).message || 'Failed to create snippet';
       posting = false;
     }
   }

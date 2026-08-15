@@ -88,6 +88,9 @@
   }
 
   let hlLang: any = $state(plaintext);
+  let pastebinIdForInline: string | null = $state(null);
+  let pasteRawHref = $derived(pastebinIdForInline ? `/api/pastebins/${pastebinIdForInline}/raw` : displayUrl);
+  let pasteViewerHref = $derived(pastebinIdForInline ? `/?/pastebin=${pastebinIdForInline}` : displayUrl);
   $effect(() => {
     hlLang = detectLang(url);
     void load();
@@ -95,6 +98,54 @@
 
   async function load() {
     try {
+      // Pastebin inline: viewer URL (/?/pastebin=ID) or raw API (/api/pastebins/ID/raw)
+      let pasteId: string | null = null;
+      try {
+        const u = new URL(url, location.origin);
+        if (u.search.startsWith('?/pastebin=')) {
+          const m = u.search.match(/^\?\/pastebin=([^&]+)/);
+          if (m) pasteId = decodeURIComponent(m[1]);
+        } else if (/^\/api\/pastebins\/[^\/]+\/raw\/?$/i.test(u.pathname)) {
+          const m = u.pathname.match(/^\/api\/pastebins\/([^\/]+)\/raw\/?$/i);
+          if (m) pasteId = decodeURIComponent(m[1]);
+        } else if (/^\/api\/pastebins\/[^\/]+$/i.test(u.pathname) && !u.pathname.endsWith('/raw')) {
+          // direct JSON GET without /raw might be used; treat as pastebin as well
+          const m = u.pathname.match(/^\/api\/pastebins\/([^\/]+)\/?$/i);
+          if (m && u.pathname.includes('/api/pastebins/')) pasteId = decodeURIComponent(m[1]);
+        }
+      } catch {}
+      if (pasteId) {
+        pastebinIdForInline = pasteId;
+        const { fetchPastebinById } = await import('../stores/api');
+        const rec = await fetchPastebinById(pasteId);
+        const text = rec.body ?? '';
+        const truncated = text.length > 50000 ? text.slice(0, 50000) + '\n\n… truncated …' : text;
+        code = truncated;
+        uploadName = rec.name;
+        // pick highlight based on syntax
+        try {
+          const lang = (rec.syntax || 'text').toLowerCase();
+          const syntaxMap: Record<string, any> = {
+            txt: plaintext, text: plaintext, log: plaintext,
+            md: markdown, markdown,
+            json, js: javascript, jsx: javascript, mjs: javascript, cjs: javascript,
+            ts: typescript, tsx: typescript, mts: typescript, cts: typescript,
+            py: python, python,
+            java, c: cpp, h: cpp, cc: cpp, cpp, cxx: cpp, hpp: cpp,
+            cs: csharp, csharp,
+            go, rs: rust, rust, php, rb: ruby, ruby, sh: bash, bash, zsh: bash,
+            yaml, yml: yaml,
+            xml, html: xml, htm: xml,
+            css, scss, less,
+            sql, toml, ini,
+            lua, perl, powershell, r: rlang, graphql, protobuf, twig, verilog, vhdl, zig,
+            swift, kotlin, dart,
+            dockerfile, makefile, nginx,
+          };
+          hlLang = syntaxMap[lang] ?? detectLang(rec.name || `file.${lang}`);
+        } catch {}
+        return;
+      }
       let fetchUrl = url;
       try {
         const u = new URL(url, location.origin);
@@ -119,7 +170,6 @@
       errored = true;
     }
   }
-
   function onClose(e: MouseEvent) {
     e.preventDefault();
     closed = true;
@@ -143,6 +193,34 @@
     if (!editFilename.trim()) {
       editError = 'Name cannot be empty';
       return;
+    }
+    // Pastebin inline edit
+    if (pastebinIdForInline) {
+      editSaving = true;
+      try {
+        const { updatePastebin } = await import('../stores/api');
+        // Need to determine syntax from editValue? Use current hlLang or keep original
+        // For simplicity keep original syntax (from paste record) if available, else detect
+        // We can re-detect via editFilename extension or keep 'text'
+        let newSyntax = 'text';
+        try {
+          const ext = editFilename.split('.').pop()?.toLowerCase() ?? '';
+          const map: Record<string,string> = { py:'python', js:'javascript', ts:'typescript', sh:'bash', json:'json', yaml:'yaml', md:'markdown', html:'xml', css:'css', sql:'sql' };
+          newSyntax = map[ext] ?? 'text';
+        } catch {}
+        await updatePastebin(pastebinIdForInline, { name: editFilename.trim(), syntax: newSyntax, body: editValue });
+        uploadName = editFilename.trim();
+        localName = editFilename.trim();
+        code = editValue;
+        editing = false;
+        editError = null;
+        return;
+      } catch (err: any) {
+        editError = err?.message ?? 'Failed to save';
+        return;
+      } finally {
+        editSaving = false;
+      }
     }
     const uploadId: string | null = uploadIdForEdit;
     if (uploadId) {
@@ -188,9 +266,13 @@
         </span>
       {:else}
         <span class="details">
-          <span class="name">{filename}</span>
+          {#if pastebinIdForInline}
+            <a href={pasteViewerHref} class="name" style="color:#c9d1d9; text-decoration:none; font-weight:700;">{filename}</a>
+          {:else}
+            <span class="name">{filename}</span>
+          {/if}
           <span class="info"><span class="syntax">{syntaxName}</span> • <span class="lines">{lineCount} {lineCount === 1 ? 'line' : 'lines'}</span> </span>
-          <span class="modes"><a target="_blank" rel="noreferrer" href={displayUrl}>raw</a> | <button class="link linesButton" onclick={() => gutterHidden = !gutterHidden}>line numbers</button> </span>
+          <span class="modes">{#if pastebinIdForInline}<a target="_blank" rel="noreferrer" href={pasteViewerHref}>view</a> • <a target="_blank" rel="noreferrer" href={pasteRawHref}>raw</a>{:else}<a target="_blank" rel="noreferrer" href={pasteRawHref}>raw</a>{/if} | <button class="link linesButton" onclick={() => gutterHidden = !gutterHidden}>line numbers</button> </span>
         </span>
         <span class="actions">
           <button class="link editButton" onclick={startEdit}>edit</button>

@@ -471,17 +471,21 @@ export async function updatePastebin(id: string, data: { name: string; syntax: s
   if (!r.ok) throw new Error('Failed to update pastebin');
   return r.json();
 }
-
-
 export async function deletePastebin(id: string): Promise<void> {
   const r = await fetch(`${API_BASE}/pastebins/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!r.ok) throw new Error('Delete failed');
 }
 
+export async function fetchPastebinById(id: string): Promise<PasteEntry> {
+  const r = await fetch(`${API_BASE}/pastebins/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error(r.status === 404 ? 'Not found' : 'Failed to fetch paste');
+  return await r.json();
+}
+export function pastebinUrl(id: string): string { return `/?/pastebin=${encodeURIComponent(id)}`; }
+
 export function pastebinRawUrl(id: string): string {
   return `${API_BASE}/pastebins/${encodeURIComponent(id)}/raw`;
 }
-
 export interface ArchiveNamesResponse {
   archives: Record<string, string[]>;
 }

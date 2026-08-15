@@ -75,3 +75,12 @@ export function isFileViewerUrl(): boolean {
 export function navigateBackFromFileViewer(): void {
   history.back();
 }
+export function navigateToPastebin(id: string): void {
+  history.pushState({ pastebinView: true, id }, '', `/?/pastebin=${encodeURIComponent(id)}`);
+}
+export function getPastebinIdFromUrl(): string | null {
+  const m = window.location.search.match(/^\?\/pastebin=([^&]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+export function isPastebinUrl(): boolean { return /^\?\/pastebin=/.test(window.location.search); }
+export function navigateBackFromPastebin(): void { history.back(); }
