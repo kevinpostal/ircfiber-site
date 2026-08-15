@@ -348,9 +348,23 @@
         // clamped, but the 200ms resnap poll sees scrollTop < prevScrollTop
         // and clears the bottom stick, leaving a visible "snap up".
         if (cachedAtBottom && container) {
-          // Defer to next tick so DOM has updated scrollHeight
+          // Defer to next tick + rAF so DOM has updated scrollHeight
+          // and layout has flushed, then force to true bottom and
+          // schedule the resnap poll to catch late image/decode growth.
           tick().then(() => {
-            if (container && cachedAtBottom) container.scrollTop = container.scrollHeight;
+            if (container && cachedAtBottom) {
+              container.scrollTop = container.scrollHeight;
+              prevScrollTop = container.scrollTop;
+              prevScrollHeight = container.scrollHeight;
+              requestAnimationFrame(() => {
+                if (container && cachedAtBottom) {
+                  container.scrollTop = container.scrollHeight;
+                  prevScrollTop = container.scrollTop;
+                  prevScrollHeight = container.scrollHeight;
+                  schedulePinnedResnap();
+                }
+              });
+            }
           });
         }
       }
@@ -789,12 +803,21 @@
       if (!container) return;
       if (!cachedAtBottom) return;
       if (container.scrollTop < prevScrollTop) {
-        cachedAtBottom = false;
-        return;
+        // Trim reduces scrollHeight and clamps scrollTop down — this is
+        // not a user scroll-up. Only clear the stick if height didn't shrink.
+        if (container.scrollHeight >= prevScrollHeight) {
+          cachedAtBottom = false;
+          return;
+        }
+        // Programmatic trim: update baseline and keep polling
+        prevScrollTop = container.scrollTop;
+        prevScrollHeight = container.scrollHeight;
       }
       const bottom = container.scrollHeight - container.clientHeight;
       if (bottom - container.scrollTop > 1) {
         container.scrollTop = container.scrollHeight;
+        prevScrollTop = container.scrollTop;
+        prevScrollHeight = container.scrollHeight;
       }
       polls += 1;
       if (polls < maxPolls) pinnedResnapTimer = setTimeout(poll, 200);
@@ -827,8 +850,7 @@
   function snapToBottom(c: HTMLDivElement): void {
     renderEndKey = '';
     if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
-    // Do NOT clear pinnedResnapTimer here - let late layout polls complete even during rapid typing
-    // if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
+    if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     let didFlush = true;
     try { flushSync(); } catch { didFlush = false; }
     const msgs = untrack(() => processedMessages);
@@ -844,31 +866,13 @@
       prevScrollTop = c.scrollTop;
       prevScrollHeight = c.scrollHeight;
       requestAnimationFrame(() => {
-        c.scrollTop = c.scrollHeight;
-        prevScrollTop = c.scrollTop;
-        prevScrollHeight = c.scrollHeight;
-      });
-      let polls = 0;
-      function poll(): void {
-        if (!container) return;
-        const msgs2 = untrack(() => processedMessages);
-        if (msgs2.length > 0) {
-          renderStart = Math.max(0, msgs2.length - BATCH_SIZE);
+        if (cachedAtBottom && c) {
+          c.scrollTop = c.scrollHeight;
+          prevScrollTop = c.scrollTop;
+          prevScrollHeight = c.scrollHeight;
         }
-        container.scrollTop = container.scrollHeight;
-        void container.scrollHeight;
-        container.scrollTop = container.scrollHeight;
-        cachedAtBottom = true;
-        polls++;
-        if (polls < 3) {
-          pendingPollTimer = setTimeout(poll, 200);
-        } else {
-          pendingPollTimer = null;
-        }
-      }
-      requestAnimationFrame(() => {
-        if (!pendingPollTimer) pendingPollTimer = setTimeout(poll, 200);
       });
+      schedulePinnedResnap(3);
     };
     if (didFlush) doScroll();
     else tick().then(doScroll);
@@ -888,7 +892,7 @@
     if (!el) return;
     const snapIfPinned = () => {
       if (!container) return;
-      if (!cachedAtBottom) return;
+      if (!cachedAtBottom || container.scrollTop < prevScrollTop - 1) return;
       const scrollHeight = container.scrollHeight;
       const offsetHeight = container.clientHeight;
       const scrollPos = Math.ceil(container.scrollTop);
@@ -1039,8 +1043,17 @@
             else tick().then(doDelta);
           }
         }
-        lastFirstProcessedKey = firstKey;
+      } else {
+        // Append-only burst: head unchanged, tail grew. Keep window bounded
+        // so 1000-msg burst stays at 150-250 DOM rows instead of 350+ before
+        // maybeTrim. Only while pinned and not frozen (reading history).
+        const start = untrack(() => renderStart);
+        const neededStart = Math.max(0, msgs.length - BATCH_SIZE);
+        if (neededStart > start && cachedAtBottom && !renderEndKey) {
+          renderStart = neededStart;
+        }
       }
+      lastFirstProcessedKey = firstKey;
     }
 
     if (!container) return;
@@ -1260,7 +1273,7 @@
     // within the band does NOT re-stick (reading is never yanked).
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
     const distFromBottom = scrollHeight - scrollBottom;
-    const scrolledUp = scrollTop < prevTop;
+    const scrolledUp = scrollTop < prevTop && scrollHeight >= prevHeight;
     const heightChangedWithoutScroll = scrollHeight !== prevHeight && scrollTop === prevTop;
     // During the initial snap window (pendingInitialSnap), height growth
     // without scroll is expected as history fills in — don't treat the huge
@@ -1270,11 +1283,13 @@
     // NOT keep the bottom stick, otherwise ResizeObserver will yank to bottom.
     const atBottom = scrolledUp
       ? false
-      : pendingInitialSnap && heightChangedWithoutScroll && cachedAtBottom
+      : scrollHeight < prevHeight && cachedAtBottom
         ? true
-        : cachedAtBottom
-          ? heightChangedWithoutScroll ? true : distFromBottom <= 1
-          : distFromBottom <= STICK_BAND_PX;
+        : pendingInitialSnap && heightChangedWithoutScroll && cachedAtBottom && !cachedAtTop
+          ? true
+          : cachedAtBottom
+            ? heightChangedWithoutScroll ? true : distFromBottom <= 1
+            : distFromBottom <= STICK_BAND_PX;
     if (cachedAtBottom === atBottom) {
       // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
       scheduleScrollStateUpdate();
@@ -1302,7 +1317,26 @@
         // the next message.
         if (container.scrollHeight - container.clientHeight - container.scrollTop > 0) {
           container.scrollTop = container.scrollHeight;
+          prevScrollTop = container.scrollTop;
+          prevScrollHeight = container.scrollHeight;
         }
+        // Force true bottom after trim's DOM update (tick+rAF) and schedule resnap
+        // to catch any late layout growth — fixes 25px short after return
+        tick().then(() => {
+          if (container && cachedAtBottom) {
+            container.scrollTop = container.scrollHeight;
+            prevScrollTop = container.scrollTop;
+            prevScrollHeight = container.scrollHeight;
+            requestAnimationFrame(() => {
+              if (container && cachedAtBottom) {
+                container.scrollTop = container.scrollHeight;
+                prevScrollTop = container.scrollTop;
+                prevScrollHeight = container.scrollHeight;
+                schedulePinnedResnap();
+              }
+            });
+          }
+        });
       } else {
         // Just left bottom — 100ms grace period for autogrow-input only
         if (recentlyScrolledTimeout) clearTimeout(recentlyScrolledTimeout);

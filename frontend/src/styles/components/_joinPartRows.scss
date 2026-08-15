@@ -226,6 +226,19 @@
   box-shadow: inset 5px 0 0 0 #1e72ff;
 }
 
+/* IRCCloud parity: hovering the timestamp adds a blue left accent.
+   JS adds .timestampHighlight on mouseenter span.date → closest .row.
+   The :has() fallback covers browsers where JS is delayed or for
+   future pure-CSS paths; both converge on the same visual. */
+.row.messageRow.timestampHighlight {
+  box-shadow: inset 5px 0 0 0 #1e72ff;
+}
+.row.messageRow:has(.date:hover),
+.row.messageRow:has(.timestamp:hover) {
+  box-shadow: inset 5px 0 0 0 #1e72ff;
+}
+
+
 .row.messageRow.action {
   font-style: italic;
   color: var(--text-secondary);

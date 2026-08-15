@@ -82,7 +82,10 @@
     );
   });
   let expanded = $state(false);
+  let tsHover = $state(false);
   const pendingState = $derived((msg as any).pendingState as string | undefined);
+  function tsEnter(e: MouseEvent): void { (e.currentTarget as HTMLElement).closest('.row')?.classList.add('timestampHighlight'); }
+  function tsLeave(e: MouseEvent): void { (e.currentTarget as HTMLElement).closest('.row')?.classList.remove('timestampHighlight'); }
   function handleFailedRetry(): void {
     if ((msg as any).pendingState !== 'failed' || !msg.label) return;
     const networkId = getActiveNetwork()?.networkId;
@@ -522,7 +525,7 @@
           {@html msg.sentences || ''}
         </span></span>
     </span>
-    <span class="date"><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
+    <span class="date" onmouseenter={tsEnter} onmouseleave={tsLeave}><span class="timestamp" title={fullTitle}>{timeStr}</span></span>
   </div>
   {#if expanded}
     {#each events.slice(1) as evt, i (evt.msgid || evt.id || evt.t + ':' + i || i)}
@@ -537,7 +540,7 @@
         <span class="message">
           <span class="content">{@html r.html}</span>
         </span>
-        <span class="date"><span class="timestamp" title={r.fullTitle}>{r.timeStr}</span></span>
+        <span class="date" onmouseenter={tsEnter} onmouseleave={tsLeave}><span class="timestamp" title={r.fullTitle}>{r.timeStr}</span></span>
       </div>
     {/each}
   {/if}
@@ -545,7 +548,7 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {pendingState ?? ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {tsHover ? 'timestampHighlight' : ''} {pendingState ?? ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
@@ -627,6 +630,6 @@
         {/if}
       {/if}
     </span>
-    <span class="date"><span class="timestamp" title={fullTitle} role={pendingState === 'failed' ? 'button' : undefined} tabindex={pendingState === 'failed' ? 0 : undefined} onclick={pendingState === 'failed' ? handleFailedRetry : undefined} onkeydown={pendingState === 'failed' ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleFailedRetry(); } } : undefined}>{timeStr}</span></span>
+    <span class="date" onmouseenter={() => tsHover = true} onmouseleave={() => tsHover = false}><span class="timestamp" title={fullTitle} role={pendingState === 'failed' ? 'button' : undefined} tabindex={pendingState === 'failed' ? 0 : undefined} onclick={pendingState === 'failed' ? handleFailedRetry : undefined} onkeydown={pendingState === 'failed' ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleFailedRetry(); } } : undefined}>{timeStr}</span></span>
   </div>
 {/if}
