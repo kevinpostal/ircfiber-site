@@ -188,11 +188,11 @@
   </div>
 </div>
 <style>
-  #pasteViewerPage { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: #141414; overflow: auto; }
-  .mainContainerPaste { display: flex; flex-direction: row; background: #141414; max-width: 1280px; margin: 0 auto; width: 100%; min-height: 100%; }
-  .mainContentPaste { flex: 1; padding: 10px; min-width: 0; }
-  .pasteContainer { background: transparent; border: none; border-radius: 0; width: 100%; max-width: none; padding: 0; box-shadow: none; display: block; }
-  .paste { display: block; background: #141414; }
+  #pasteViewerPage { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; background: #141414; overflow: hidden; width: 100vw; height: 100vh; }
+  .mainContainerPaste { display: flex; flex-direction: row; background: #141414; width: 100%; height: 100%; max-width: none; margin: 0; padding: 0; overflow: hidden; }
+  .mainContentPaste { flex: 1; padding: 0; min-width: 0; overflow: auto; background: #141414; }
+  .pasteContainer { background: #141414; border: none; border-radius: 0; width: 100%; max-width: none; padding: 0; box-shadow: none; display: block; min-height: 100%; }
+  .paste { display: block; background: #141414; min-height: 100%; }
   .branding { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: #8b949e; padding: 10px 16px; background: #0f1115; border-bottom: 1px solid #2a2d33; flex: 0 0 auto; }
   .branding .brand { font-weight: 700; color: #58a6ff; text-decoration: none; font-size: 13px; }
   .branding .brand:hover { text-decoration: underline; }
@@ -234,6 +234,6 @@
   .editForm button.action { padding: 6px 12px; border-radius: 4px; border: 1px solid #1f6feb; background: #1f6feb; color: white; cursor: pointer; }
   .editForm button.cancel { padding: 6px 12px; border-radius: 4px; border: 1px solid #2a2d33; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .confirm { font-size: 12px; color: #f85149; margin-left: 8px; }
-  .editor { border: 1px solid #2a2d33; border-top: none; overflow: hidden; display: block; }
+  .editor { border: 1px solid #2a2d33; border-top: none; overflow: hidden; display: block; background: #141414; }
   .editor :global(.codeEditor) { flex: 1; min-height: 0; }
 </style>

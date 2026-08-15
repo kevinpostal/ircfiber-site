@@ -1602,7 +1602,7 @@ let showNetworkForm: boolean = $state(false);
   {/if}
 {/if}
 
-<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || fileViewerId !== null || pasteViewerId !== null || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
+<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
   <div class="main-area">
     {#if pasteViewerId !== null}
       <PasteViewerPage id={pasteViewerId} onClose={() => { syncViewers(); navigateBackFromPastebin(); }} />
@@ -1651,7 +1651,7 @@ let showNetworkForm: boolean = $state(false);
   {#if isNarrow && (sidebarDrawerOpen || mobileMembersOpen)}
     <div class="drawer-backdrop" onclick={closeDrawers} role="presentation"></div>
   {/if}
-  {#if !isBootLoading}
+  {#if !isBootLoading && fileViewerId === null && pasteViewerId === null}
   <aside id="sidebar">
     <Sidebar onSwitchBuffer={navigateToBuffer}
              onAddNetwork={() => { networkFormMode = 'add'; showNetworkForm = true; }}
