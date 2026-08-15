@@ -152,30 +152,29 @@
               <a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer" class="date" title={dateIso}>{dateStr}</a>
               <span class="modes"><a href={pastebinRawUrl(entry.id)} target="_blank" rel="noreferrer">raw</a> | <button class="link linesButton" onclick={()=>gutterHidden=!gutterHidden}>line numbers</button></span>
             </span>
-            {#if editing}
-              {#if isOwner}
-                <form class="editForm" onsubmit={saveEdit}>
-                  <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" />
-                  <select bind:value={editLang} aria-label="Language">
-                    {#each LANGUAGES as L}<option value={L}>{L === 'text' ? 'Plain Text' : L}</option>{/each}
-                  </select>
-                  <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
-                  <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
-                </form>
-              {/if}
-              {#if editError}<p class="userError editError">{editError}</p>{/if}
-              {#if isOwner && confirmDelete}
-                <span class="confirm">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> / <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></span>
-              {/if}
-            {:else}
-              {#if isOwner}
-                <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> • <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
+            <span class="header-right">
+              {#if editing}
+                {#if isOwner}
+                  <form class="editForm" onsubmit={saveEdit}>
+                    <input class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" />
+                    <select bind:value={editLang} aria-label="Language">
+                      {#each LANGUAGES as L}<option value={L}>{L === 'text' ? 'Plain Text' : L}</option>{/each}
+                    </select>
+                    <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>
+                    <button type="button" class="cancel" onclick={cancelEdit}>Cancel</button>
+                  </form>
+                {/if}
+              {:else}
+                {#if isOwner}
+                  <span class="actions"><button class="link editButton" onclick={startEdit}>edit</button> • <button class="link deleteButton" onclick={()=>confirmDelete=true}>delete</button></span>
+                {/if}
               {/if}
               {#if isOwner && confirmDelete}
                 <span class="confirm">Are you sure? <button class="link deleteConfirm" onclick={doDelete}>Yup, trash it</button> / <button class="link" onclick={()=>confirmDelete=false}>Cancel</button></span>
               {/if}
-              {#if editError}<p class="userError editError">{editError}</p>{/if}
-            {/if}
+            </span>
+          </h1>
+          {#if editError}<p class="userError editError" style="text-align:right; margin:4px 0 0;">{editError}</p>{/if}
           <div class="editor ace_editor ace-twilight ace_dark">
             {#if editing && isOwner}
               <CodeEditor bind:value={editContent} language={editLang} showGutter={!gutterHidden} twilight />
@@ -206,6 +205,7 @@
   .closeBtn { padding: 6px 12px; border: 1px solid #2a2d33; border-radius: 4px; background: #161a22; color: #c9d1d9; cursor: pointer; }
   .userError { color: #f85149; font-size: 13px; margin-top: 10px; padding: 0 16px; }
   .paste .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid #2a2d33; padding: 10px 0; margin-bottom: 12px; font-size: 14px; flex: 0 0 auto; }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .paste .details { display: flex; flex-direction: column; gap: 4px; }
   .paste .name { font-weight: 700; font-size: 16px; color: #c9d1d9; }
   .paste .info { font-size: 12px; color: #8b949e; }
