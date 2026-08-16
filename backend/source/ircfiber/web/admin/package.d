@@ -96,8 +96,8 @@ final class AdminController {
         router.post("/api/admin/servers/:id/config", &adminWrap!apiEngineConfigRoute);
         router.post("/api/admin/servers/host/:host/disconnect/:networkId", &adminWrap!apiHostDisconnectRoute);
         router.post("/api/admin/servers/host/:host/reconnect/:networkId", &adminWrap!apiHostReconnectRoute);
+        router.post("/api/admin/servers/host/:host/delete-network/:networkId", &adminWrap!apiHostDeleteNetworkRoute);
         router.get("/api/admin/config/fiber", &adminWrap!apiFiberConfigRoute);
-        router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
         router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
         router.post("/api/admin/networks/:id/egress", &adminWrap!apiNetworkEgressSetRoute);
 
