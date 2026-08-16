@@ -73,6 +73,33 @@ export interface MeResponse {
   inactiveCollapsed?: Record<string, boolean>;
   networkOrder?: string[];
   bufferPrefs?: Record<string, Record<string, boolean>>;
+  showMemberPrefixes?: boolean;
+  desktopNotifications?: boolean;
+  notificationSound?: boolean;
+  autoDismissNotifs?: boolean;
+  muteAll?: boolean;
+  prefVersion?: number;
+}
+
+export interface NotificationPrefs {
+  desktopNotifications: boolean;
+  notificationSound: boolean;
+  autoDismissNotifs: boolean;
+  muteAll: boolean;
+}
+
+export async function updateNotificationPrefs(patch: Partial<NotificationPrefs>): Promise<number> {
+  const r = await fetch(`${API_BASE}/me/notification-prefs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw new Error(txt || 'Update notification prefs failed');
+  }
+  const j = await r.json().catch(() => ({})) as Record<string, unknown>;
+  return typeof j.prefVersion === 'number' ? j.prefVersion : 0;
 }
 
 export async function fetchMe(): Promise<MeResponse> {

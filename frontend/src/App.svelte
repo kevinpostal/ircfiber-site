@@ -40,7 +40,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap, setShowMemberPrefixes } from './stores/preferences.svelte';
+  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -979,6 +979,25 @@ let showNetworkForm: boolean = $state(false);
       const ts = (lastSeen as Record<string, unknown>)[bufName];
       if (typeof ts !== 'number') continue;
       const key = `${cid}:${normalizeChannelName(bufName)}`;
+      const current = lastSeenMap[key];
+      // Don't let heartbeat clear unread that the user hasn't actually seen.
+      // If the buffer has unread and the new ts would mark the last message as read,
+      // only allow it when the buffer is the active one and the document is visible
+      // (user is actually looking) — otherwise it's a cross-device sync that hasn't
+      // been seen on this device yet and would cause the "flash then clear" bug.
+      const net = ircState.networks.find(n => n.networkId === cid);
+      const buf = net?.buffers.find(b => normalizeChannelName(b.name) === normalizeChannelName(bufName));
+      if (buf && (buf.unreadCount ?? 0) > 0) {
+        const isActive = ircState.activeBuffer.networkId === cid && normalizeChannelName(ircState.activeBuffer.bufferName) === normalizeChannelName(bufName);
+        if (!isActive || (typeof document !== 'undefined' && document.hidden)) {
+          const msgs = ircState.messages[key] ?? [];
+          const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
+          const lastTime = (lastMsg as any)?.t ?? 0;
+          if (lastTime > (current ?? 0) && ts >= lastTime) {
+            continue;
+          }
+        }
+      }
       lastSeenMap[key] = ts;
     }
   }
@@ -1117,6 +1136,15 @@ let showNetworkForm: boolean = $state(false);
     if (typeof user.showMemberPrefixes === 'boolean') {
       setShowMemberPrefixes(user.showMemberPrefixes as boolean);
     }
+    // Global notification prefs — additive boot seed, authoritative via applyServerNotificationPrefs
+    const notifPatch: Record<string, boolean> = {};
+    if (typeof user.desktopNotifications === 'boolean') notifPatch.desktopNotifications = user.desktopNotifications as boolean;
+    if (typeof user.notificationSound === 'boolean') notifPatch.notificationSound = user.notificationSound as boolean;
+    if (typeof user.autoDismissNotifs === 'boolean') notifPatch.autoDismissNotifs = user.autoDismissNotifs as boolean;
+    if (typeof user.muteAll === 'boolean') notifPatch.muteAll = user.muteAll as boolean;
+    if (Object.keys(notifPatch).length > 0) {
+      applyServerNotificationPrefs(notifPatch, serverPrefVersion);
+    }
   }
 
   function handlePrefUpdate(data: Record<string, unknown>): void {
@@ -1252,6 +1280,16 @@ let showNetworkForm: boolean = $state(false);
     } else if (key === 'showMemberPrefixes') {
       const v = data.value as boolean;
       if (typeof v === 'boolean') setShowMemberPrefixes(v);
+    } else if (key === 'notificationPrefs') {
+      const v = data.value as Record<string, boolean>;
+      if (v && typeof v === 'object') {
+        applyServerNotificationPrefs(v, updatePrefVersion || (typeof data.prefVersion === 'number' ? data.prefVersion as number : 0));
+      }
+    } else if (key === 'desktopNotifications' || key === 'notificationSound' || key === 'autoDismissNotifs' || key === 'muteAll') {
+      const v = data.value as boolean;
+      if (typeof v === 'boolean') {
+        applyServerNotificationPrefs({ [key]: v } as Record<string, boolean>, updatePrefVersion);
+      }
     }
   }
 

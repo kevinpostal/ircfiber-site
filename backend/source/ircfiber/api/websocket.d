@@ -392,6 +392,10 @@ final class WebSocketGateway {
         msg["bufferPrefs"] = bp;
 
         msg["showMemberPrefixes"] = Json(prefs.showMemberPrefixes);
+        msg["desktopNotifications"] = Json(prefs.desktopNotifications);
+        msg["notificationSound"] = Json(prefs.notificationSound);
+        msg["autoDismissNotifs"] = Json(prefs.autoDismissNotifs);
+        msg["muteAll"] = Json(prefs.muteAll);
 
         // Monotonic counter incremented by every prefsRepo.save(). The
         // frontend's mergePreferences() uses this as a last-write-wins

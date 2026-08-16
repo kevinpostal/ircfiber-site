@@ -1,18 +1,75 @@
 <script lang="ts">
-  import { globalPrefs, highlightWords } from '../stores/preferences.svelte';
+  import { globalPrefs, highlightWords, setGlobalNotifPref } from '../stores/preferences.svelte';
   import SettingsSection from './SettingsSection.svelte';
+  import { isSupported, shouldRequest, requestPermission, resetNotificationState } from '../lib/notifications';
+
+  let permissionHint = $state('');
+  let notSupportedHint = $state('');
+
+  // Show hint if notifications are not supported in this browser
+  $effect(() => {
+    if (!isSupported()) {
+      notSupportedHint = 'Notifications not supported in this browser';
+    } else {
+      notSupportedHint = '';
+    }
+  });
+
+  function onDesktopToggle(): void {
+    setGlobalNotifPref('desktopNotifications', globalPrefs.desktopNotifications);
+    if (globalPrefs.desktopNotifications) {
+      permissionHint = '';
+      if (shouldRequest()) {
+        requestPermission().then((granted) => {
+          if (!granted) {
+            globalPrefs.desktopNotifications = false;
+            setGlobalNotifPref('desktopNotifications', false);
+            permissionHint = 'Permission denied — enable in browser settings';
+          }
+        });
+      } else if (!isSupported()) {
+        notSupportedHint = 'Notifications not supported in this browser';
+      } else if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+        globalPrefs.desktopNotifications = false;
+        setGlobalNotifPref('desktopNotifications', false);
+        permissionHint = 'Permission denied — enable in browser settings';
+      }
+    } else {
+      resetNotificationState();
+      permissionHint = '';
+    }
+  }
+
+  function onSoundToggle(): void {
+    setGlobalNotifPref('notificationSound', globalPrefs.notificationSound);
+  }
+  function onAutoDismissToggle(): void {
+    setGlobalNotifPref('autoDismissNotifs', globalPrefs.autoDismissNotifs);
+  }
+  function onMuteAllToggle(): void {
+    setGlobalNotifPref('muteAll', globalPrefs.muteAll);
+  }
 </script>
 
 <SettingsSection heading="Alerts">
   <div class="settings-rows">
-    <div class="settings-row">
+    <div class="settings-row" class:muted-overwrite={globalPrefs.muteAll} style:opacity={globalPrefs.muteAll ? '0.6' : undefined} aria-disabled={globalPrefs.muteAll}>
       <div class="settings-label">
         <span class="settings-label-text">Desktop notifications</span>
         <span class="settings-label-desc">Show popup notifications when you receive highlights or private messages</span>
+        {#if globalPrefs.muteAll}
+          <span class="settings-label-desc" style="color: var(--fiber-amber, #f59e0b);">Muted — unmute in Muting to re-enable</span>
+        {/if}
+        {#if permissionHint}
+          <span class="settings-label-desc" style="color: var(--fiber-amber, #f59e0b);">{permissionHint}</span>
+        {/if}
+        {#if notSupportedHint && !globalPrefs.muteAll}
+          <span class="settings-label-desc" style="color: var(--fiber-amber, #f59e0b);">{notSupportedHint}</span>
+        {/if}
       </div>
       <div class="settings-control">
         <label class="toggle-switch">
-          <input type="checkbox" bind:checked={globalPrefs.desktopNotifications} />
+          <input type="checkbox" bind:checked={globalPrefs.desktopNotifications} onchange={onDesktopToggle} disabled={globalPrefs.muteAll} />
           <span class="toggle-slider"></span>
         </label>
       </div>
@@ -24,7 +81,7 @@
       </div>
       <div class="settings-control">
         <label class="toggle-switch">
-          <input type="checkbox" bind:checked={globalPrefs.notificationSound} />
+          <input type="checkbox" bind:checked={globalPrefs.notificationSound} onchange={onSoundToggle} />
           <span class="toggle-slider"></span>
         </label>
       </div>
@@ -36,7 +93,7 @@
       </div>
       <div class="settings-control">
         <label class="toggle-switch">
-          <input type="checkbox" bind:checked={globalPrefs.autoDismissNotifs} />
+          <input type="checkbox" bind:checked={globalPrefs.autoDismissNotifs} onchange={onAutoDismissToggle} />
           <span class="toggle-slider"></span>
         </label>
       </div>
@@ -53,7 +110,7 @@
       </div>
       <div class="settings-control">
         <label class="toggle-switch">
-          <input type="checkbox" bind:checked={globalPrefs.muteAll} />
+          <input type="checkbox" bind:checked={globalPrefs.muteAll} onchange={onMuteAllToggle} />
           <span class="toggle-slider"></span>
         </label>
       </div>

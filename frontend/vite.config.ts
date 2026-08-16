@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { playwright } from '@vitest/browser-playwright';
 import tailwindcss from '@tailwindcss/vite';
+import { createLogger } from 'vite';
 
 // Backend URL for the dev server's API + WS proxy. Override via env vars
 // to point at a non-local backend (e.g. the tailnet gateway or Python gateway):
@@ -12,6 +13,33 @@ import tailwindcss from '@tailwindcss/vite';
 //   VITE_BACKEND_URL=http://192.168.1.50:8090 npm run dev
 //                        # → arbitrary HTTP backend
 //   VITE_API_BACKEND=http://127.0.0.1:8001 npm run dev  # Python gateway (Step 3)
+// Suppress noisy vite http/ws proxy errors for /api/events?since= XHR fallback
+// (vibe.d Keep-Alive race + HMR WS close). The browser's fetch/XHR
+// fallback retries via maxEidTracker, so ECONNRESET/socket hang up is
+// expected and not a real error. Filter here instead of in proxy
+// configure because vite adds its error listener *after* configure.
+const _origConsoleError = console.error.bind(console);
+// @ts-ignore - patch to suppress expected proxy hang ups
+(console as any).error = (...args: any[]) => {
+  const first = String(args[0] ?? '');
+  if (first.includes('http proxy error') && (first.includes('socket hang up') || first.includes('ECONNRESET') || first.includes('ECONNREFUSED') || first.includes('read ECONNRESET'))) return;
+  if (first.includes('ws proxy error') || first.includes('ws proxy socket error')) {
+    if (first.includes('ECONNRESET') || first.includes('socket hang up') || first.includes('EPIPE') || first.includes('hang up')) return;
+  }
+  _origConsoleError(...args);
+};
+
+const _viteLogger = createLogger();
+const _origViteError = _viteLogger.error.bind(_viteLogger);
+_viteLogger.error = (msg: string, opts?: any) => {
+  const m = String(msg ?? '');
+  if (m.includes('http proxy error') && (m.includes('socket hang up') || m.includes('ECONNRESET') || m.includes('ECONNREFUSED') || m.includes('read ECONNRESET'))) return;
+  if (m.includes('ws proxy error') || m.includes('ws proxy socket error')) {
+    if (m.includes('ECONNRESET') || m.includes('socket hang up') || m.includes('EPIPE') || m.includes('hang up')) return;
+  }
+  _origViteError(msg, opts);
+};
+
 const BACKEND_URL =
   process.env.VITE_API_BACKEND || process.env.VITE_BACKEND_URL || 'http://127.0.0.1:8090';
 // WS target defaults to the same host with the ws/wss scheme, unless overridden.
@@ -34,6 +62,7 @@ const SIGNOZ_URL =
 // vite cache when cwd is inside Mobile Documents.
 const isICloud = process.cwd().includes('Mobile Documents');
 export default defineConfig({
+  customLogger: _viteLogger,
   cacheDir: isICloud ? '/tmp/vite-ircfiber' : undefined,
   assetsInclude: ['**/*.wasm'],
   plugins: [tailwindcss(), svelte({
@@ -105,12 +134,65 @@ export default defineConfig({
         // by the OS but Node.js's built-in CA bundle may not include the
         // intermediate. In production the gateway handles TLS directly.
         secure: false,
+        // Fix socket hang up on /api/events?since= XHR fallback polling:
+        // vibe.d gateway sends `Keep-Alive: timeout=10` and closes idle
+        // sockets. Vite's http-proxy reuses sockets (keep-alive) and hits
+        // ECONNRESET when it tries to reuse a closed one. Force
+        // `Connection: close` so each poll gets a fresh socket, matching
+        // production (Caddy → gateway, no keep-alive reuse). Also bump
+        // timeouts to avoid vite's default 2m cut on slow Redis lrange.
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy) => {
+          // Remove vite's default error logger (which prints
+          // `[vite] http proxy error: ... socket hang up`) and
+          // install our own that silently handles the expected
+          // keep-alive race. The browser's XHR fallback retries
+          // via maxEidTracker, so a 502 is safe.
+          proxy.removeAllListeners('error');
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('Connection', 'close');
+          });
+          proxy.on('error', (err, _req, res) => {
+            const msg = String((err as any)?.message ?? '');
+            const code = (err as NodeJS.ErrnoException)?.code ?? '';
+            const isHangUp = msg.includes('socket hang up') || msg.includes('ECONNRESET') || code === 'ECONNRESET' || code === 'ECONNREFUSED' || msg.includes('hang up');
+            if (isHangUp) {
+              if (res && !res.headersSent) {
+                try { (res as import('http').ServerResponse).writeHead(502); } catch {}
+                try { res.end(JSON.stringify({ error: 'proxy hang up suppressed' })); } catch {}
+              }
+              return;
+            }
+            // For unexpected errors, still log once
+            console.error('[vite] http proxy error (api):', err);
+            if (res && !res.headersSent) {
+              try { (res as import('http').ServerResponse).writeHead(502); } catch {}
+              try { res.end(); } catch {}
+            }
+          });
+        },
       },
       '/ws': {
         target: BACKEND_WS_URL,
         ws: true,
         changeOrigin: true,
         secure: false,
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy) => {
+          proxy.removeAllListeners('error');
+          proxy.on('error', (err, _req, socket) => {
+            const msg = String((err as any)?.message ?? '');
+            const code = (err as NodeJS.ErrnoException)?.code ?? '';
+            const isHangUp = msg.includes('socket hang up') || msg.includes('ECONNRESET') || code === 'ECONNRESET' || msg.includes('hang up');
+            if (isHangUp) {
+              try { (socket as any)?.end?.(); } catch {}
+              return;
+            }
+            console.error('[vite] ws proxy error:', err);
+          });
+        },
       },
       '/login': {
         target: BACKEND_URL,

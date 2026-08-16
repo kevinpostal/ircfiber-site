@@ -5,6 +5,7 @@ import { normalizeChannelName } from '../lib/utils';
 import { parseIgnoreList } from '../lib/ignore';
 import type { IgnoreMap } from '../lib/ignore';
 
+
 /** TTL for localStorage-backed caches. Anything older than this on
  *  read is dropped and the default value is returned. Prevents stale
  *  unread/highlight/lastSeen maps from years-old sessions from
@@ -99,10 +100,45 @@ export const DEFAULT_PREFS: GlobalPrefs = {
 		xhrFallback: { enabled: true },
 	},
 };
-
 export const globalPrefs = $state<GlobalPrefs>(
   mergeDefaults(getStorageItem('ircfiber:globalPrefs', {}), DEFAULT_PREFS)
 );
+
+// ── Global notification prefs cross-device helpers ──
+// Flat bools keep prefVersion fan-out uniform (one counter for all prefs).
+// Server is source of truth after first sync; localStorage remains instant
+// cross-tab path via `storage` event. Toggles are low frequency — no debounce
+// needed for server call. Mirrors `setShowMemberPrefixes` / `updateShowMemberPrefixes`.
+export function setGlobalNotifPref<K extends keyof Pick<GlobalPrefs, 'desktopNotifications' | 'notificationSound' | 'autoDismissNotifs' | 'muteAll'>>(
+  key: K,
+  value: GlobalPrefs[K],
+): void {
+  (globalPrefs as unknown as Record<string, unknown>)[key] = value;
+  setStorageItem('ircfiber:globalPrefs', globalPrefs);
+  // Fire-and-forget cross-device sync — import lazily to avoid circular deps at top level.
+  import('./api').then(({ updateNotificationPrefs }) => {
+    updateNotificationPrefs({ [key]: value } as Record<string, boolean>).catch((e) => console.warn('[prefs] updateNotificationPrefs failed', e));
+  }).catch(() => {});
+}
+
+let _lastNotifPrefVersion = 0;
+export function applyServerNotificationPrefs(
+  p: Partial<Pick<GlobalPrefs, 'desktopNotifications' | 'notificationSound' | 'autoDismissNotifs' | 'muteAll'>>,
+  prefVersion: number,
+): void {
+  if (typeof prefVersion === 'number' && prefVersion > 0 && prefVersion <= _lastNotifPrefVersion) return;
+  if (typeof prefVersion === 'number' && prefVersion > _lastNotifPrefVersion) _lastNotifPrefVersion = prefVersion;
+  let changed = false;
+  for (const k of ['desktopNotifications', 'notificationSound', 'autoDismissNotifs', 'muteAll'] as const) {
+    if (p[k] !== undefined && typeof p[k] === 'boolean') {
+      (globalPrefs as unknown as Record<string, unknown>)[k] = p[k];
+      changed = true;
+    }
+  }
+  if (changed) setStorageItem('ircfiber:globalPrefs', globalPrefs);
+}
+
+export function getLastNotifPrefVersion(): number { return _lastNotifPrefVersion; }
 function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): GlobalPrefs {
   const out = { ...defaults, ...saved } as GlobalPrefs;
   // Clamp scroll preset to valid range

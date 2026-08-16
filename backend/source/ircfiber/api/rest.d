@@ -121,6 +121,7 @@ final class RESTAPI {
         router.post("/api/me/inactive-collapsed", &updateInactiveCollapsed);
         router.post("/api/me/network-order", &updateNetworkOrder);
         router.post("/api/me/show-member-prefixes", &updateShowMemberPrefixes);
+        router.post("/api/me/notification-prefs", &updateNotificationPrefs);
         router.get("/api/ping", &ping);
         router.get("/health", &healthCheck);
         router.get("/api/health", &healthCheck);
@@ -1115,7 +1116,6 @@ final class RESTAPI {
         
         res.writeJsonBody(Json(["status": Json("ok")]));
     }
-
     private void getMe(HTTPServerRequest req, HTTPServerResponse res) {
         requireAuth(req, res);
         if (res.headerWritten) return;
@@ -1146,6 +1146,10 @@ final class RESTAPI {
             "networkOrder": serializeToJson(prefs.networkOrder),
             "bufferPrefs": bp,
             "showMemberPrefixes": Json(prefs.showMemberPrefixes),
+            "desktopNotifications": Json(prefs.desktopNotifications),
+            "notificationSound": Json(prefs.notificationSound),
+            "autoDismissNotifs": Json(prefs.autoDismissNotifs),
+            "muteAll": Json(prefs.muteAll),
             // Monotonic counter incremented by every prefsRepo.save().
             // Lets the frontend decide whether to trust this stat_user
             // payload or skip the merge in favour of its locally-tracked
@@ -1466,11 +1470,7 @@ final class RESTAPI {
         res.writeVoidBody();
     }
 
-    /// Replaces the user's sidebar network order with `order` (array of
-    /// networkIds, top-to-bottom). Mirrors IRCCloud's `reorder-connections`
-    /// stream message body — the full ordered list is sent on every change
-    /// rather than a (from, to) delta, which is simpler and matches the
-    /// jQuery UI Sortable's `update` callback semantics.
+    /// Updates `showMemberPrefixes` pref (whether to show @/+/% in member list).
     private void updateShowMemberPrefixes(HTTPServerRequest req, HTTPServerResponse res) {
         requireAuth(req, res);
         if (res.headerWritten) return;
@@ -1502,10 +1502,62 @@ final class RESTAPI {
         res.writeVoidBody();
     }
 
+    private void updateNotificationPrefs(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+
+        auto user = req.context["user"].get!User;
+        auto bodyJson = req.json;
+        if (bodyJson.type != Json.Type.object) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("body must be object")]));
+            return;
+        }
+        auto prefs = prefsRepo.load(user.id);
+        bool any = false;
+        if (auto v = "desktopNotifications" in bodyJson) {
+            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("desktopNotifications must be boolean")])); return; }
+            prefs.desktopNotifications = v.get!bool; any = true;
+        }
+        if (auto v = "notificationSound" in bodyJson) {
+            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("notificationSound must be boolean")])); return; }
+            prefs.notificationSound = v.get!bool; any = true;
+        }
+        if (auto v = "autoDismissNotifs" in bodyJson) {
+            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("autoDismissNotifs must be boolean")])); return; }
+            prefs.autoDismissNotifs = v.get!bool; any = true;
+        }
+        if (auto v = "muteAll" in bodyJson) {
+            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("muteAll must be boolean")])); return; }
+            prefs.muteAll = v.get!bool; any = true;
+        }
+        if (!any) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("no notification pref provided")]));
+            return;
+        }
+        auto newVersion = prefsRepo.save(user.id, prefs);
+        auto val = Json.emptyObject;
+        val["desktopNotifications"] = Json(prefs.desktopNotifications);
+        val["notificationSound"] = Json(prefs.notificationSound);
+        val["autoDismissNotifs"] = Json(prefs.autoDismissNotifs);
+        val["muteAll"] = Json(prefs.muteAll);
+        broadcastPrefUpdate(user.id.toString(), "notificationPrefs", val, newVersion);
+        // Also broadcast granular keys for forward-compat fallback (plan Step 2 fallback branch)
+        broadcastPrefUpdate(user.id.toString(), "desktopNotifications", Json(prefs.desktopNotifications), newVersion);
+        broadcastPrefUpdate(user.id.toString(), "muteAll", Json(prefs.muteAll), newVersion);
+        res.writeJsonBody(Json(["prefVersion": Json(newVersion)]));
+    }
+
+    /// Replaces the user's sidebar network order with `order` (array of
+    /// networkIds, top-to-bottom). Mirrors IRCCloud's `reorder-connections`
     /// stream message body — the full ordered list is sent on every change
     /// rather than a (from, to) delta, which is simpler and matches the
     /// jQuery UI Sortable's `update` callback semantics.
     private void updateNetworkOrder(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+
 
         auto user = req.context["user"].get!User;
         const bodyJson = req.json;

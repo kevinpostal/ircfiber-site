@@ -1,8 +1,9 @@
 <script lang="ts">
   import { ircState, getActiveNetwork, markUserDisconnected, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { reconnectNetwork, disconnectNetwork, updateCollapsed, clearBacklog as apiClearBacklog } from '../stores/api';
-  import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt, setStorageItem } from '../stores/preferences.svelte';
+  import { reconnectNetwork, disconnectNetwork, updateCollapsed, updateBufferPrefs, clearBacklog as apiClearBacklog } from '../stores/api';
+  import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt, setStorageItem, globalPrefs, unreadMap, highlightMap } from '../stores/preferences.svelte';
+  import { normalizeChannelName } from '../lib/utils';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { isFiberServer } from '../lib/fiberServer';
@@ -185,13 +186,41 @@
     showUnread: prefs.showUnread ?? true,
     markAsRead: prefs.markAsRead ?? true,
     mute: prefs.mute ?? false,
+    notifyAll: prefs.notifyAll ?? false,
     collapseDisconnects: prefs.collapseDisconnects ?? true,
     formatColor: prefs.formatColor ?? true,
   });
+  $effect(() => {
+    toggles.showUnread = prefs.showUnread ?? true;
+    toggles.markAsRead = prefs.markAsRead ?? true;
+    toggles.mute = prefs.mute ?? false;
+    toggles.notifyAll = prefs.notifyAll ?? false;
+    toggles.collapseDisconnects = prefs.collapseDisconnects ?? true;
+    toggles.formatColor = prefs.formatColor ?? true;
+  });
+  const notifMode = $derived(toggles.mute ? 'muted' : toggles.notifyAll ? 'all' : 'mentions');
+  function setNotifMode(mode: 'mentions' | 'all' | 'muted'): void {
+    if (globalPrefs.muteAll) return;
+    const nextMute = mode === 'muted';
+    const nextNotifyAll = mode === 'all';
+    toggles.mute = nextMute;
+    toggles.notifyAll = nextNotifyAll;
+    setBufferPref(networkId, '_server', 'mute', nextMute);
+    setBufferPref(networkId, '_server', 'notifyAll', nextNotifyAll);
+    if (nextMute) {
+      const mapKey = `${networkId}:${normalizeChannelName('_server')}`;
+      delete unreadMap[mapKey];
+      delete highlightMap[mapKey];
+    }
+    updateBufferPrefs(networkId, '_server', { mute: nextMute, notifyAll: nextNotifyAll })
+      .catch((err) => console.error('Failed to sync buffer prefs:', err));
+  }
   function toggle(key: keyof typeof toggles): void {
     (toggles as Record<string, boolean>)[key] = !(toggles as Record<string, boolean>)[key];
     // Persist per-buffer so the setting survives a page refresh
     setBufferPref(networkId, '_server', key, toggles[key]);
+    updateBufferPrefs(networkId, '_server', { [key]: toggles[key] })
+      .catch((err) => console.error('Failed to sync buffer prefs:', err));
   }
 </script>
 
@@ -252,9 +281,23 @@
           {#if toggles.markAsRead}<i class="fa fa-check"></i>{/if}Mark as read automatically
         </button>
       </li>
-      <li class="muteNotifications" class:enabled={toggles.mute}>
-        <button class="contextMenu__item muteNotifications" aria-pressed={toggles.mute} onclick={() => toggle('mute')}>
-          {#if toggles.mute}<i class="fa fa-check"></i>{/if}Mute notifications
+      <li class="contextMenu__header" style="padding: 6px 12px 2px; font-size: 11px; color: #ccc; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;">Notifications</li>
+      {#if globalPrefs.muteAll}
+        <li style="padding: 0 12px 4px; font-size: 11px; color: #fbbf24; white-space: nowrap;">Muted globally — disable Mute all in Settings → Alerts</li>
+      {/if}
+      <li class:enabled={notifMode === 'mentions'} aria-disabled={globalPrefs.muteAll}>
+        <button class="contextMenu__item notifMentions" class:contextMenu__item--disabled={globalPrefs.muteAll} disabled={globalPrefs.muteAll} aria-pressed={notifMode === 'mentions'} onclick={() => setNotifMode('mentions')}>
+          {#if notifMode === 'mentions'}<i class="fa fa-check"></i>{/if}Mentions only
+        </button>
+      </li>
+      <li class:enabled={notifMode === 'all'} aria-disabled={globalPrefs.muteAll}>
+        <button class="contextMenu__item notifAll" class:contextMenu__item--disabled={globalPrefs.muteAll} disabled={globalPrefs.muteAll} aria-pressed={notifMode === 'all'} onclick={() => setNotifMode('all')}>
+          {#if notifMode === 'all'}<i class="fa fa-check"></i>{/if}All messages
+        </button>
+      </li>
+      <li class:enabled={notifMode === 'muted'} aria-disabled={globalPrefs.muteAll}>
+        <button class="contextMenu__item notifMuted" class:contextMenu__item--disabled={globalPrefs.muteAll} disabled={globalPrefs.muteAll} aria-pressed={notifMode === 'muted'} onclick={() => setNotifMode('muted')}>
+          {#if notifMode === 'muted'}<i class="fa fa-check"></i>{/if}Muted
         </button>
       </li>
       <li class="collapseDisconnects" class:enabled={toggles.collapseDisconnects}>
