@@ -47,8 +47,13 @@ struct HostNetworkInfo {
     bool isBanned;
     /// Whether the network is disabled.
     bool disabled;
+    /// Active Mullvad egress label for live connection ("" = direct).
+    string activeEgressLabel;
+    /// Proxy host that won (e.g. "tailscale-mullvad-de:1055").
+    string activeEgressHost;
+    /// Resolved Tailnet IP of active proxy.
+    string activeEgressIp;
 }
-
 /// Enriched assignment record shown in the Network Assignments table.
 struct AssignmentRow {
     /// Network id as string.
@@ -67,8 +72,13 @@ struct AssignmentRow {
     string nick;          // current IRC nick as reported by the engine; "" if disconnected / unknown
     /// Mullvad egress selection: "" = random, else label like "se"/"us"
     string egressNodeId;
+    /// Active egress that won for the live connection ("" = direct, else label).
+    string activeEgressLabel;
+    /// Proxy host that won (e.g. "tailscale-mullvad-de:1055").
+    string activeEgressHost;
+    /// Resolved Tailnet IP of active proxy (e.g. "100.117.47.8").
+    string activeEgressIp;
 }
-
 /// Network state helper — reads the latest engine snapshot from Redis for
 /// a given network ID. Falls back from the server-aware key to the legacy key.
 NetworkStateSnapshot loadNetworkSnapshot(RedisStorage redis, string networkId) {
@@ -142,7 +152,7 @@ package void adminDashboard(HTTPServerRequest, HTTPServerResponse res,
 
 /// Servers & Routing page — engines + assignments + host routing.
 package void adminServers(HTTPServerRequest req, HTTPServerResponse res,
-                          RedisStorage, ServerRegistry serverRegistry) {
+                          RedisStorage redis, ServerRegistry serverRegistry) {
     auto allServers = serverRegistry.getAllServers();
     auto healthyServers = serverRegistry.getHealthyServers();
     auto hostSummary = serverRegistry.getHostConnectionSummary();
@@ -194,6 +204,12 @@ package void adminServers(HTTPServerRequest req, HTTPServerResponse res,
                 }
             } catch (Exception) {}
         }
+        try {
+            const snap = loadNetworkSnapshot(redis, a.networkId);
+            row.activeEgressLabel = snap.activeEgressLabel;
+            row.activeEgressHost = snap.activeEgressHost;
+            row.activeEgressIp = snap.activeEgressIp;
+        } catch (Exception) {}
         assignments ~= row;
     }
 
@@ -241,17 +257,15 @@ package void adminHostDetail(HTTPServerRequest req, HTTPServerResponse res,
         info.connected = snapshot.connected;
         info.status = snapshot.status.length > 0 ? snapshot.status : (snapshot.connected ? "connected" : "offline");
         info.nick = snapshot.currentNick.length > 0 ? snapshot.currentNick : nw.config.nick;
-
-        try {
-            info.isBanned = redis.getDb().exists(RedisKeys.bannedNetwork(netId));
-        } catch (Exception) {}
-
+        info.activeEgressLabel = snapshot.activeEgressLabel;
+        info.activeEgressHost = snapshot.activeEgressHost;
+        info.activeEgressIp = snapshot.activeEgressIp;
         info.disabled = nw.config.disabled;
         connections ~= info;
     }
 
     int[string] serverCounts;
-    int liveCount;
+    int liveCount = 0;
     foreach (c; connections) {
         auto sc = c.serverId in serverCounts;
         if (sc) (*sc)++;

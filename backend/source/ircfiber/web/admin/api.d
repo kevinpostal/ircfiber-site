@@ -219,10 +219,12 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
                     }
                 } catch (Exception) {}
             }
+            row.activeEgressLabel = snap.activeEgressLabel;
+            row.activeEgressHost = snap.activeEgressHost;
+            row.activeEgressIp = snap.activeEgressIp;
         } catch (Exception) {}
         assignments ~= row;
     }
-
     Json data = Json.emptyObject;
     Json[] engArr;
     foreach (s; allServers) {
@@ -230,7 +232,6 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         foreach (h; healthyServers) if (h.serverId == s.serverId) { healthy = true; break; }
         Json e = Json.emptyObject;
         e["serverId"] = Json(s.serverId);
-        e["bindAddress"] = Json(s.bindAddress);
         e["port"] = Json(s.port);
         e["priority"] = Json(s.priority);
         e["maxConnections"] = Json(s.maxConnections);
@@ -253,8 +254,6 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         h["serverIds"] = jsonArray(hcs.serverIds);
         hostArr ~= h;
     }
-    data["hosts"] = Json(hostArr);
-
     Json[] assignArr;
     foreach (a; assignments) {
         Json j = Json.emptyObject;
@@ -266,6 +265,9 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         j["username"] = Json(a.username);
         j["nick"] = Json(a.nick);
         j["egressNodeId"] = Json(a.egressNodeId);
+        j["activeEgressLabel"] = Json(a.activeEgressLabel);
+        j["activeEgressHost"] = Json(a.activeEgressHost);
+        j["activeEgressIp"] = Json(a.activeEgressIp);
         assignArr ~= j;
     }
     data["assignments"] = Json(assignArr);
@@ -1292,12 +1294,19 @@ package void apiMullvadStatus(HTTPServerRequest, HTTPServerResponse res) {
             auto dash = host.lastIndexOf("-");
             if (dash >= 0 && dash+1 < host.length) label = host[dash+1 .. $].toLower();
             else { auto dot = host.indexOf("."); if (dot > 0) label = host[0 .. dot].toLower(); }
+            string resolvedIp = "";
+            try {
+                import std.socket : getAddress;
+                auto addrs = getAddress(host);
+                if (addrs.length > 0) resolvedIp = addrs[0].toAddrString();
+            } catch (Exception) {}
             Json o = Json.emptyObject;
             o["id"] = Json(label);
             o["label"] = Json(label);
             o["host"] = Json(host);
             o["port"] = Json(port);
             o["socksUrl"] = Json("socks5://" ~ host ~ ":" ~ port.to!string);
+            o["ip"] = Json(resolvedIp);
             pool ~= o;
         }
     }

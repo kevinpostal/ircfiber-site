@@ -1,6 +1,6 @@
 doctype html
 html(lang="en")
-  - import std.uni : toLower;
+  - import std.uni : toLower, toUpper;
   head
     meta(charset="utf-8")
     meta(name="viewport", content="width=device-width, initial-scale=1")
@@ -220,8 +220,8 @@ html(lang="en")
                 th Network
                 th Owner
                 th Assigned Server
+                th Active Egress
                 th(style="text-align:right") Actions
-            tbody
               - foreach (a; assignments)
                 tr
                   td
@@ -238,13 +238,27 @@ html(lang="en")
                       span(style="color:var(--adm-muted); font-size:12px") orphan
                   td
                     span.adm-badge.adm-badge-blue #{a.serverId}
+                  td
+                    - if (a.activeEgressLabel.length > 0)
+                      span.adm-badge.adm-badge-green(title=a.activeEgressHost ~ (a.activeEgressIp.length > 0 ? " / " ~ a.activeEgressIp : ""))
+                        | #{a.activeEgressLabel.toUpper()}
+                      br
+                      span.adm-mono(style="font-size:10px") #{a.activeEgressHost}
+                      - if (a.activeEgressIp.length > 0)
+                        br
+                        span.adm-mono(style="font-size:10px") #{a.activeEgressIp}
+                    - else
+                      span(style="color:var(--adm-muted); font-size:11px")
+                        | direct
+                      br
+                      span.adm-mono(style="font-size:10px")
+                        | OVH
                   td(style="text-align:right; white-space:nowrap")
                     form(method="POST", action="/admin/servers/assignments/#{a.networkId}/reassign", style="display:inline", onsubmit="return confirm('Reassign network #{label} from #{a.serverId} to a different engine?')")
                       button.adm-btn.adm-btn-sm(type="submit", style="background:var(--adm-surface); border:1px solid var(--adm-border); color:var(--adm-text); margin-right:4px") Reassign
                     form(method="POST", action="/admin/servers/assignments/#{a.networkId}/remove", style="display:inline", onsubmit="return admRemoveAssignment(event)")
                       button.adm-btn.adm-btn-danger.adm-btn-sm(type="submit") Remove
         - else
-          div(style="text-align:center; padding:40px; color:var(--adm-muted)") No networks assigned yet. Engines may be starting up.
 
     script.
       // In-place Remove for the Network Assignments table. Posts via fetch

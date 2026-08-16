@@ -42,6 +42,9 @@
     username: string;
     nick: string;
     egressNodeId: string;
+    activeEgressLabel: string;
+    activeEgressHost: string;
+    activeEgressIp: string;
   }
 
   interface MullvadNode {
@@ -50,8 +53,8 @@
     host: string;
     port: number;
     socksUrl: string;
+    ip: string;
   }
-
   interface ServersResponse {
     engines: Engine[];
     hosts: HostEntry[];
@@ -409,7 +412,8 @@
             <th class="py-2 text-left font-semibold">IRC Nick</th>
             <th class="py-2 text-left font-semibold">Owner</th>
             <th class="py-2 text-left font-semibold">Server</th>
-            <th class="py-2 text-left font-semibold">Egress</th>
+            <th class="py-2 text-left font-semibold">Pinned Egress</th>
+            <th class="py-2 text-left font-semibold">Active Egress</th>
             <th class="py-2 text-right font-semibold">Actions</th>
           </tr>
         </thead>
@@ -449,9 +453,31 @@
                 >
                   <option value="">Random</option>
                   {#each mullvadPool as n (n.id)}
-                    <option value={n.id}>{n.label.toUpperCase()} — {n.host}</option>
+                    <option value={n.id}>{n.label.toUpperCase()} — {n.host}{n.ip ? ' ('+n.ip+')' : ''}</option>
                   {/each}
                 </select>
+              </td>
+              <td class="py-2">
+                {#if a.activeEgressLabel}
+                  <div class="flex flex-col gap-0.5" title="{a.activeEgressHost}{a.activeEgressIp ? ' / ' + a.activeEgressIp : ''}">
+                    <span class="inline-flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[11px] font-semibold text-success border border-success/20">
+                      <span class="h-2 w-2 rounded-full bg-success"></span>
+                      {a.activeEgressLabel.toUpperCase()}
+                    </span>
+                    <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressHost}</span>
+                    {#if a.activeEgressIp}
+                      <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressIp}</span>
+                    {/if}
+                  </div>
+                {:else if a.activeEgressHost === '' && a.activeEgressLabel === ''}
+                  <span class="inline-flex items-center gap-1 rounded bg-border px-1.5 py-0.5 text-[11px] font-medium text-muted border border-border">
+                    <span class="h-2 w-2 rounded-full bg-muted"></span>
+                    direct
+                  </span>
+                  <div class="font-mono text-[10px] text-muted">OVH</div>
+                {:else}
+                  <span class="text-[11px] text-muted">—</span>
+                {/if}
               </td>
               <td class="py-2 text-right whitespace-nowrap">
                 {#if a.networkHost}

@@ -1,9 +1,9 @@
 doctype html
 html(lang="en")
+  - import std.uni : toUpper, toLower;
   head
     meta(charset="utf-8")
     meta(name="viewport", content="width=device-width, initial-scale=1")
-    title IRC Fiber — #{host}
     style.
       :root {
         --adm-bg: #0a0e14; --adm-surface: #11161d; --adm-border: #1c2430;
@@ -111,8 +111,8 @@ html(lang="en")
                 th Nick
                 th Status
                 th Engine
+                th Egress
                 th Actions
-            tbody
               - foreach (c; connections)
                 tr
                   td
@@ -151,6 +151,22 @@ html(lang="en")
                       a.adm-link(href="/admin/servers") #{c.serverId}
                     - else
                       span.adm-dim unassigned
+                  td
+                    - if (c.activeEgressLabel.length > 0)
+                      span.adm-badge.adm-badge-green(title=c.activeEgressHost ~ (c.activeEgressIp.length > 0 ? " / " ~ c.activeEgressIp : ""))
+                        | #{c.activeEgressLabel.toUpper()}
+                      br
+                      span.adm-mono(style="font-size:10px") #{c.activeEgressHost}
+                      - if (c.activeEgressIp.length > 0)
+                        br
+                        span.adm-mono(style="font-size:10px") #{c.activeEgressIp}
+                    - else if (c.connected)
+                      span.adm-badge(style="background:rgba(148,163,184,0.12); color:#94a3b8")
+                        | direct
+                      br
+                      span.adm-mono(style="font-size:10px") OVH
+                    - else
+                      span.adm-dim —
                   td
                     form(method="POST", action="/admin/servers/host/#{host}/delete-network/#{c.networkId}", style="display:inline", onsubmit="return confirm('Permanently delete network #{c.networkName} for #{c.username}? This cannot be undone.')")
                       button.adm-btn.adm-btn-danger.adm-btn-sm(type="submit", style="padding:2px 8px; font-size:10px; cursor:pointer") Delete
