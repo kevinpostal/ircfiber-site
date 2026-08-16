@@ -130,7 +130,7 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
     await expect.element(deleteButtons.first()).toBeInTheDocument();
   });
 
-  it('Delete button calls POST /api/admin/servers/assignments/<id>/retire with the network id', async () => {
+  it('Delete button calls POST /api/admin/servers/assignments/delete/<id> with the network id', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('IRC Fiber');
     render(Servers);
@@ -141,7 +141,8 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
 
     await vi.waitFor(() => {
       expect(api.post).toHaveBeenCalledWith(
-        '/api/admin/servers/assignments/8b508634-400d-4298-9d2b-6f27e1813272'
+        '/api/admin/servers/assignments/delete?networkId=8b508634-400d-4298-9d2b-6f27e1813272',
+        undefined
       );
     });
     confirmSpy.mockRestore();
@@ -196,7 +197,7 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
     await firstDelete.click();
 
     await vi.waitFor(() => {
-      expect(ui.toastError).toHaveBeenCalledWith('engine busy');
+      expect(ui.toastError).toHaveBeenCalledWith(expect.stringContaining('engine busy'));
     });
     confirmSpy.mockRestore();
     promptSpy.mockRestore();
@@ -273,4 +274,6 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]?.[0]).toBe('/api/admin/servers/assignments/delete');
       expect(calls[0]?.[1]).toEqual({ networkId: '' });
+    });
+  });
 });

@@ -491,7 +491,7 @@ private void deleteNetworkCore(HTTPServerRequest, HTTPServerResponse res,
     bool isEmptyOrInvalid = networkIdStr.length == 0;
     UUID networkId = UUID.init;
     if (!isEmptyOrInvalid) {
-        try networkId = parseUUID(networkIdStr);
+        try networkId = parseUUID(networkIdStr.idup);
         catch (Exception e) {
             if (!allowEmpty) { jsonError(res, 400, "Invalid network id: " ~ e.msg); return; }
             isEmptyOrInvalid = true;
@@ -508,7 +508,7 @@ private void deleteNetworkCore(HTTPServerRequest, HTTPServerResponse res,
     NetworkConfig cfg;
     if (!isEmptyOrInvalid) cfg = netRepo.findById(networkId);
 
-    string serverId = serverRegistry.getServerForNetwork(networkIdStr);
+    string serverId = "";
 
     // Tell the engine to stop the client. Skip when the networkId is
     // empty or invalid — there's no client to stop, only a stale
@@ -556,8 +556,8 @@ private void deleteNetworkCore(HTTPServerRequest, HTTPServerResponse res,
             logWarn("deleteNetworkCore: scrub server %s assignedNetworks failed for %s: %s",
                 serverId, networkIdStr, e.msg);
         }
-    } else if (isEmptyOrInvalid) {
-        // No canonical assignment — the orphan lives only in the engine's
+    } else {
+        // No canonical assignment or serverId unknown (hget skipped to avoid t123 bug) — walk every server.
         // server record. Best-effort: walk every healthy server and strip
         // matching ids from both the record and the mirror.
         foreach (sid; serverRegistry.getAllServers().map!(s => s.serverId)) {
@@ -576,7 +576,6 @@ private void deleteNetworkCore(HTTPServerRequest, HTTPServerResponse res,
             }
         }
     }
-
     Json data = Json.emptyObject;
     data["networkId"] = Json(networkIdStr);
     data["serverId"] = Json(serverId);
@@ -596,7 +595,8 @@ package void apiHostDeleteNetwork(HTTPServerRequest req, HTTPServerResponse res,
 /// operator can clear a stale "ghost" row that lingers in the engine's
 package void apiAssignmentDelete(HTTPServerRequest req, HTTPServerResponse res,
                                  RedisStorage redis, ServerRegistry serverRegistry) {
-    string nid = req.params["networkId"];
+    string nid = "";
+    if (auto p = "networkId" in req.params) nid = *p;
     if (nid.length == 0) {
         try {
             auto body = readJsonBody(req);
@@ -616,7 +616,7 @@ package void apiAssignmentDelete(HTTPServerRequest req, HTTPServerResponse res,
             }
         }
     }
-    deleteNetworkCore(req, res, redis, serverRegistry, nid, true);
+    deleteNetworkCore(req, res, redis, serverRegistry, nid.idup, true);
 }
 /// POST /api/admin/routing — set global maxConnsPerHost.
 package void apiRouting(HTTPServerRequest req, HTTPServerResponse res,

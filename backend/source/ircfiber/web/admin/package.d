@@ -93,7 +93,6 @@ final class AdminController {
         router.post("/api/admin/servers/assignments/delete-network/:networkId", &adminWrap!apiAssignmentDeleteRoute);
         router.delete_("/api/admin/servers/assignments/:networkId", &adminWrap!apiAssignmentDeleteRoute);
         router.post("/api/admin/servers/assignments/delete", &adminWrap!apiAssignmentDeleteRoute);
-        router.post("/api/admin/servers/assignments/:networkId/remove", &adminWrap!apiRemoveAssignmentRoute);
         router.post("/api/admin/servers/:id/config", &adminWrap!apiEngineConfigRoute);
         router.post("/api/admin/servers/host/:host/disconnect/:networkId", &adminWrap!apiHostDisconnectRoute);
         router.post("/api/admin/servers/host/:host/reconnect/:networkId", &adminWrap!apiHostReconnectRoute);

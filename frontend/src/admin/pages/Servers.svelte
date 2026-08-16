@@ -199,13 +199,17 @@
       return;
     }
     try {
-      const res = await api.post<{ networkId: string; serverId: string; scrubbed: boolean }>(
-        `/api/admin/servers/assignments/delete`,
-        { networkId } as any
-      );
+      const url = networkId
+        ? `/api/admin/servers/assignments/delete?networkId=${encodeURIComponent(networkId)}`
+        : `/api/admin/servers/assignments/delete`;
+      const body = networkId ? undefined : ({ networkId } as any);
+      const res = await api.post<{ networkId: string; serverId: string; scrubbed: boolean }>(url, body as any);
       toastSuccess(`Deleted ${label}${res.serverId ? ` (was on ${res.serverId})` : ''}`);
       await fetchData();
     } catch (e) {
+      toastError(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   async function saveRouting() {
     const form = document.getElementById('routing-form') as HTMLFormElement;
