@@ -880,10 +880,10 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   const pending: IRCMessage[] = [];
   const newForProcessed: IRCMessage[] = [];
   let addedUnread = 0;
-  let hasHighlight = false;
+  let addedHighlights = 0;
   let hasChat = false;
   let replacedEdit = false;
-
+  const netForBatchHl = ircState.networks.find(n => n.networkId === networkId) ?? null;
   for (const msg of msgs) {
     if (msg.label && ircState.optimisticMessages.has(msg.label)) {
       ircState.optimisticMessages.delete(msg.label);
@@ -996,7 +996,11 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
         const normBuf = normalizeChannelName(bufferName);
         const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
         if (!isActive || ircState.focusLost) addedUnread++;
-        if (msg.highlight) hasHighlight = true;
+        const isHl = !!msg.highlight || (netForBatchHl ? checkHighlight(msg, netForBatchHl) : false);
+        if (isHl) {
+          addedHighlights++;
+          msg.highlight = true;
+        }
       }
     }
   }
@@ -1035,38 +1039,45 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   // Respect per-buffer mute / showUnread: muted buffers never accumulate
   // unread or highlight counts, matching the expectation that "mute all
   // notifications" on a channel hides the sidebar badge.
-  if ((addedUnread > 0 || hasHighlight) && shouldTrackUnread(networkId, bufferName)) {
+  if ((addedUnread > 0 || addedHighlights > 0) && shouldTrackUnread(networkId, bufferName)) {
     const net = ircState.networks.find(n => n.networkId === networkId);
     const buf = net?.buffers.find(b => b.name === normalizeChannelName(bufferName));
     if (addedUnread > 0) {
       unreadMap[key] = (unreadMap[key] ?? 0) + addedUnread;
       if (buf) buf.unreadCount = (buf.unreadCount ?? 0) + addedUnread;
     }
-    if (hasHighlight) {
+    if (addedHighlights > 0) {
       highlightMap[key] = true;
       if (buf) {
         buf.highlight = true;
-        buf.highlightCount = (buf.highlightCount ?? 0) + 1;
+        buf.highlightCount = (buf.highlightCount ?? 0) + addedHighlights;
       }
     }
-    // Badge pulse: mark the buffer for a brief scale animation on the
-    // sidebar badge. Auto-clears after 300ms.
-    if (net && buf && (addedUnread > 0 || hasHighlight)) {
+    if (net && buf && (addedUnread > 0 || addedHighlights > 0)) {
       ircState.pulseBuffers.add(key);
       setTimeout(() => ircState.pulseBuffers.delete(key), 300);
     }
+    for (const m of pending) if (m.highlight && m.nick) recordHighlight(networkId, bufferName, m.nick);
   }
 
-  // Per-message processing for things that can't be batched (highlight
-  // tag check uses regex on message text + nick).
+  // Fallback highlight check for messages where network was not available during aggregation.
   if (pending.length > 0 && hasChat) {
     const net = ircState.networks.find(n => n.networkId === networkId);
     if (net) {
       for (const msg of pending) {
         const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
-        if (isChatMessage && checkHighlight(msg, net)) {
+        if (isChatMessage && !msg.highlight && checkHighlight(msg, net)) {
           msg.highlight = true;
           if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
+          if (shouldTrackUnread(networkId, bufferName)) {
+            const k = `${networkId}:${normalizeChannelName(bufferName)}`;
+            const b = net.buffers.find(bb => bb.name === normalizeChannelName(bufferName));
+            if (b) b.highlight = true;
+            highlightMap[k] = true;
+            if (b) b.highlightCount = (b.highlightCount ?? 0) + 1;
+          }
+        } else if (isChatMessage && msg.highlight && msg.nick) {
+          // Already counted above, just ensure recent highlighters.
         }
       }
     }
