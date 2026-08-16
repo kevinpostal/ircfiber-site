@@ -583,7 +583,6 @@ private void deleteNetworkCore(HTTPServerRequest, HTTPServerResponse res,
     data["scrubbed"] = Json(true);
     jsonOk(res, data);
 }
-
 /// POST /api/admin/servers/host/:host/delete-network/:networkId
 package void apiHostDeleteNetwork(HTTPServerRequest req, HTTPServerResponse res,
                                   RedisStorage redis, ServerRegistry serverRegistry) {
@@ -595,16 +594,33 @@ package void apiHostDeleteNetwork(HTTPServerRequest req, HTTPServerResponse res,
 /// directly from the main #/servers assignment table — no host detail
 /// navigation required. Also handles the empty/invalid-id case so an
 /// operator can clear a stale "ghost" row that lingers in the engine's
-/// assignedNetworks array without a corresponding Mongo record.
 package void apiAssignmentDelete(HTTPServerRequest req, HTTPServerResponse res,
                                  RedisStorage redis, ServerRegistry serverRegistry) {
-    deleteNetworkCore(req, res, redis, serverRegistry, req.params["networkId"], true);
+    string nid = req.params["networkId"];
+    if (nid.length == 0) {
+        try {
+            auto body = readJsonBody(req);
+            if (body.type == Json.Type.object) {
+                if (body["networkId"].type == Json.Type.string) nid = body["networkId"].get!string;
+                else if (body["networkId"].type != Json.Type.undefined) nid = body["networkId"].toString();
+                if (nid.length == 0 && body["networkIdStr"].type == Json.Type.string) nid = body["networkIdStr"].get!string;
+                if (nid.length == 0 && body["id"].type == Json.Type.string) nid = body["id"].get!string;
+            }
+        } catch (Exception) {}
+        if (nid.length == 0) {
+            auto q = "networkId" in req.query;
+            if (q) nid = *q;
+            else {
+                auto q2 = "id" in req.query;
+                if (q2) nid = *q2;
+            }
+        }
+    }
+    deleteNetworkCore(req, res, redis, serverRegistry, nid, true);
 }
-
 /// POST /api/admin/routing — set global maxConnsPerHost.
 package void apiRouting(HTTPServerRequest req, HTTPServerResponse res,
                        ServerRegistry serverRegistry) {
-    import std.conv : to;
     auto body = readJsonBody(req);
     try {
         auto maxConns = body["maxConnsPerHost"].get!int;

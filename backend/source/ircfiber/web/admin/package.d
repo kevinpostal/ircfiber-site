@@ -90,14 +90,14 @@ final class AdminController {
         router.get("/api/admin/servers", &adminWrap!apiServersRoute);
         router.get("/api/admin/servers/host/:host", &adminWrap!apiServerHostRoute);
         router.post("/api/admin/servers/:id/reassign", &adminWrap!apiReassignServerRoute);
-        router.post("/api/admin/servers/assignments/:networkId/reassign", &adminWrap!apiReassignAssignmentRoute);
+        router.post("/api/admin/servers/assignments/delete-network/:networkId", &adminWrap!apiAssignmentDeleteRoute);
+        router.delete_("/api/admin/servers/assignments/:networkId", &adminWrap!apiAssignmentDeleteRoute);
+        router.post("/api/admin/servers/assignments/delete", &adminWrap!apiAssignmentDeleteRoute);
         router.post("/api/admin/servers/assignments/:networkId/remove", &adminWrap!apiRemoveAssignmentRoute);
-        router.post("/api/admin/servers/assignments/:networkId/delete", &adminWrap!apiAssignmentDeleteRoute);
         router.post("/api/admin/servers/:id/config", &adminWrap!apiEngineConfigRoute);
         router.post("/api/admin/servers/host/:host/disconnect/:networkId", &adminWrap!apiHostDisconnectRoute);
         router.post("/api/admin/servers/host/:host/reconnect/:networkId", &adminWrap!apiHostReconnectRoute);
         router.post("/api/admin/servers/host/:host/delete-network/:networkId", &adminWrap!apiHostDeleteNetworkRoute);
-        router.get("/api/admin/config/fiber", &adminWrap!apiFiberConfigRoute);
         router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
         router.post("/api/admin/networks/:id/egress", &adminWrap!apiNetworkEgressSetRoute);
 

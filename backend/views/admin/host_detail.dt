@@ -160,13 +160,11 @@ html(lang="en")
                       - if (c.activeEgressIp.length > 0)
                         br
                         span.adm-mono(style="font-size:10px") #{c.activeEgressIp}
-                    - else if (c.connected)
+                    - else
                       span.adm-badge(style="background:rgba(148,163,184,0.12); color:#94a3b8")
                         | direct
                       br
                       span.adm-mono(style="font-size:10px") OVH
-                    - else
-                      span.adm-dim —
                   td
                     form(method="POST", action="/admin/servers/host/#{host}/delete-network/#{c.networkId}", style="display:inline", onsubmit="return confirm('Permanently delete network #{c.networkName} for #{c.username}? This cannot be undone.')")
                       button.adm-btn.adm-btn-danger.adm-btn-sm(type="submit", style="padding:2px 8px; font-size:10px; cursor:pointer") Delete

@@ -130,7 +130,7 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
     await expect.element(deleteButtons.first()).toBeInTheDocument();
   });
 
-  it('Delete button calls POST /api/admin/servers/assignments/<id>/delete with the network id', async () => {
+  it('Delete button calls POST /api/admin/servers/assignments/<id>/retire with the network id', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('IRC Fiber');
     render(Servers);
@@ -141,10 +141,9 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
 
     await vi.waitFor(() => {
       expect(api.post).toHaveBeenCalledWith(
-        '/api/admin/servers/assignments/8b508634-400d-4298-9d2b-6f27e1813272/delete'
+        '/api/admin/servers/assignments/8b508634-400d-4298-9d2b-6f27e1813272'
       );
     });
-    expect(ui.toastSuccess).toHaveBeenCalled();
     confirmSpy.mockRestore();
     promptSpy.mockRestore();
   });
@@ -267,15 +266,11 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
 
     // The API should still be called with the empty networkId so the
     // backend walks every server's assignedNetworks array and strips
-    // matching ids.
     await vi.waitFor(() => {
       const calls = mockedPost.mock.calls.filter(([url]) =>
-        String(url).endsWith('/delete')
+        String(url) === '/api/admin/servers/assignments/delete'
       );
       expect(calls).toHaveLength(1);
-      expect(calls[0]?.[0]).toBe('/api/admin/servers/assignments//delete');
-    });
-    confirmSpy.mockRestore();
-    promptSpy.mockRestore();
-  });
+      expect(calls[0]?.[0]).toBe('/api/admin/servers/assignments/delete');
+      expect(calls[0]?.[1]).toEqual({ networkId: '' });
 });

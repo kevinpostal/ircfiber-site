@@ -200,14 +200,12 @@
     }
     try {
       const res = await api.post<{ networkId: string; serverId: string; scrubbed: boolean }>(
-        `/api/admin/servers/assignments/${encodeURIComponent(networkId)}/delete`
+        `/api/admin/servers/assignments/delete`,
+        { networkId } as any
       );
       toastSuccess(`Deleted ${label}${res.serverId ? ` (was on ${res.serverId})` : ''}`);
       await fetchData();
     } catch (e) {
-      toastError(e instanceof ApiError ? e.message : (e as Error).message);
-    }
-  }
 
   async function saveRouting() {
     const form = document.getElementById('routing-form') as HTMLFormElement;
@@ -469,14 +467,12 @@
                       <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressIp}</span>
                     {/if}
                   </div>
-                {:else if a.activeEgressHost === '' && a.activeEgressLabel === ''}
-                  <span class="inline-flex items-center gap-1 rounded bg-border px-1.5 py-0.5 text-[11px] font-medium text-muted border border-border">
+                {:else}
+                  <span class="inline-flex items-center gap-1 rounded bg-border px-1.5 py-0.5 text-[11px] font-medium text-muted border border-border" title="Direct — no Mullvad SOCKS, OVH IP">
                     <span class="h-2 w-2 rounded-full bg-muted"></span>
                     direct
                   </span>
                   <div class="font-mono text-[10px] text-muted">OVH</div>
-                {:else}
-                  <span class="text-[11px] text-muted">—</span>
                 {/if}
               </td>
               <td class="py-2 text-right whitespace-nowrap">
