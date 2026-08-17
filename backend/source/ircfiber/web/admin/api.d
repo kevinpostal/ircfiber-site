@@ -1320,7 +1320,7 @@ package void apiMullvadStatus(HTTPServerRequest, HTTPServerResponse res) {
             o["id"] = Json(label);
             o["label"] = Json(label);
             o["host"] = Json(host);
-            o["port"] = Json(port);
+            o["port"] = Json(cast(int)port);
             o["socksUrl"] = Json("socks5://" ~ host ~ ":" ~ port.to!string);
             o["ip"] = Json(resolvedIp);
             pool ~= o;
