@@ -34,14 +34,11 @@ package bool isAjax(HTTPServerRequest req) {
     return req.headers.get("X-Requested-With", "") == "fetch";
 }
 
-/// Writes a JSON envelope `{ok:true,data:...}` with 200 status.
 package void jsonOk(HTTPServerResponse res, Json data) {
-    import std.string : replace;
-    res.headers["Content-Type"] = "application/json; charset=utf-8";
     auto payload = Json.emptyObject;
     payload["ok"] = Json(true);
     payload["data"] = data;
-    res.writeBody(payload.toString());
+    res.writeJsonBody(payload);
 }
 
 /// Writes a JSON envelope `{ok:false,error:"..."}` and the given status code.
