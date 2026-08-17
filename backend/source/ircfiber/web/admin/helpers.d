@@ -40,8 +40,9 @@ package void jsonOk(HTTPServerResponse res, Json data) {
     payload["data"] = data;
     auto bodyStr = payload.toString();
     res.headers["Content-Type"] = "application/json; charset=utf-8";
-    res.headers["Content-Length"] = bodyStr.length.to!string;
+    res.headers["Transfer-Encoding"] = "chunked";
     res.bodyWriter.write(bodyStr);
+    res.finalize();
 }
 
 /// Writes a JSON envelope `{ok:false,error:"..."}` and the given status code.
