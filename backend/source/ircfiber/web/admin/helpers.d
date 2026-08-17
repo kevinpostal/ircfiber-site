@@ -38,7 +38,10 @@ package void jsonOk(HTTPServerResponse res, Json data) {
     auto payload = Json.emptyObject;
     payload["ok"] = Json(true);
     payload["data"] = data;
-    res.writeJsonBody(payload);
+    auto bodyStr = payload.toString();
+    res.headers["Content-Type"] = "application/json; charset=utf-8";
+    res.headers["Content-Length"] = bodyStr.length.to!string;
+    res.bodyWriter.write(bodyStr);
 }
 
 /// Writes a JSON envelope `{ok:false,error:"..."}` and the given status code.
