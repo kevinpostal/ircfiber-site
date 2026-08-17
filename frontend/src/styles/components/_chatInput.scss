@@ -22,23 +22,26 @@
    above the input (inputInfo pattern) and never cuts off a row. */
 .bufferinputcell .typingcell {
   position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  display: flex;
+  bottom: calc(100% + 4px);
+  left: 12px;
+  right: auto;
+  max-width: min(70%, 360px);
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  font-size: 13px;
+  padding: 4px 8px;
+  font-size: 11px;
   color: #8b949e;
   line-height: 1;
-  background: #2a2d33;
-  border-top: 1px solid #1a1c20;
-  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.15);
+  background: rgba(42, 45, 51, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   z-index: 5;
   pointer-events: none;
   white-space: nowrap;
   overflow: hidden;
+  backdrop-filter: blur(4px);
 }
 
 .bufferinputcell .typing-dots {

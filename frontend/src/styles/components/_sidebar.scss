@@ -313,15 +313,13 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   overflow: hidden;
 }
 
-/* Smart typing overlay — prevent cut-off without layout shift.
-   Typing bar is `position:absolute; bottom:100%` so it doesn't grow the
-   input and shrink the viewport. `padding-bottom` caused scrollHeight to
-   jump 28px on every show/hide, triggering ResizeObserver resnap and a
-   visible flicker of the last row. Use only `scroll-padding-bottom`
-   (affects snap position, not layout) so the last message stays above
-   the overlay without any height change. */
+/* Smart typing overlay — pill above input, not a full-width bar.
+   Previously a full-width solid bar at bottom:100% covered the last
+   message row. Now a compact pill (max 70% width, offset 4px above
+   input) only covers the left corner. Keep a small scroll-padding so
+   snap leaves a gap when at bottom; no layout shift. */
 .chat-body:has(.typingcell) .messages {
-  scroll-padding-bottom: 28px;
+  scroll-padding-bottom: 12px;
 }
 
 .channel-name {

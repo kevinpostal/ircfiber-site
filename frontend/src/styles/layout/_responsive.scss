@@ -317,11 +317,11 @@
     border-color: #1e72ff;
     box-shadow: 0 0 0 3px rgba(30,114,255,0.12), 0 1px 3px rgba(0,0,0,0.35);
   }
-  /* Typing + time — typing stays above pill, time hidden on phones */
+  /* Typing indicator stays as pill on mobile too */
   .bufferinputcell .typingcell {
-    font-size: 12px;
-    padding: 0 4px 6px 4px;
-    order: -1;
+    font-size: 11px;
+    left: 8px;
+    max-width: min(85%, 280px);
   }
   .bufferinputcell .timestampcell { display: none; }
   .bufferinputcell .timecell { display: none; }
