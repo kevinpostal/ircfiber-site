@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack, flushSync, tick } from 'svelte';
-  import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider } from '../stores/ircStore.svelte';
+  import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer } from '../stores/ircStore.svelte';
   import { getClearedAt, setLastSeen, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearFocusSeen, clearBottomSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
@@ -935,6 +935,46 @@
       mo.disconnect();
       ro.disconnect();
     };
+  });
+
+  // ── Typing indicator push: smartly keep most recent message visible ──
+  // The typing indicator now occupies layout space (flex row above the
+  // input, ~28px) and shrinks the messages viewport via flex. When the
+  // user is pinned at the bottom, the viewport shrink must keep the
+  // last message fully visible — not clipped by the new row. The
+  // ResizeObserver above already handles container-height shrinks in many
+  // cases, but the typing row lives outside the observed container
+  // (.bufferinputcell), so we explicitly re-snap here when typing appears.
+  // Only when pinned; reading history (scrolled up) is never yanked.
+  const isTypingActive = $derived.by(() => {
+    void ircState.typingVersion;
+    const netId = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!netId || !buf) return false;
+    return getTypersForBuffer(netId, buf).length > 0;
+  });
+  $effect(() => {
+    void isTypingActive;
+    if (isServerBuffer) return;
+    if (!container) return;
+    if (!cachedAtBottom) return;
+    // DOM has just updated with the typing row; wait a tick for flex
+    // layout to settle, then snap to true bottom.
+    tick().then(() => {
+      if (!container || !cachedAtBottom) return;
+      container.scrollTop = container.scrollHeight;
+      void container.scrollHeight;
+      container.scrollTop = container.scrollHeight;
+      prevScrollTop = container.scrollTop;
+      prevScrollHeight = container.scrollHeight;
+      requestAnimationFrame(() => {
+        if (container && cachedAtBottom) {
+          container.scrollTop = container.scrollHeight;
+          prevScrollTop = container.scrollTop;
+          prevScrollHeight = container.scrollHeight;
+        }
+      });
+    });
   });
 
   $effect(() => {

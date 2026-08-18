@@ -11,24 +11,35 @@
   flex-wrap: wrap;
 }
 
-/* Typing indicator — full-width bar above the input row */
-/* Typing indicator — smart overlay above the input. Previously it was
-   `flex: 0 0 100%` inside the input flex row, so every appearance grew
-   the input by ~20px and shrank the chat viewport via flex, causing the
-   bottom of the last message to be clipped until the next scroll resnap.
-   Now it is `position: absolute` with `bottom:100%` so it floats without
-   affecting layout, and `:has(.typingcell)` adds scroll-padding so the
-   last message stays fully visible above it. Matches IRCCloud's thin strip
-   above the input (inputInfo pattern) and never cuts off a row. */
+/* Typing indicator — flex row above the input that pushes messages up.
+   Previously it was `position: absolute` floating over the messages viewport,
+   so the last message rendered behind the pill and was clipped until a
+   scroll resnap. Now it is a `flex: 0 0 100%` row inside the wrapped
+   .bufferinputcell (order -1) so it occupies layout space directly above
+   the input and shrinks the messages viewport via flex — no overlay, no
+   occlusion. The pill visuals live in .typing-pill inside the row so the
+   row itself can be 100% wide while the pill stays content-sized
+   (max 70%). See InputArea.svelte .typingcell > .typing-pill. */
 .bufferinputcell .typingcell {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  left: 12px;
-  right: auto;
-  max-width: min(70%, 360px);
+  flex: 0 0 100%;
+  order: -1;
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  padding: 0 0 6px 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  pointer-events: none;
+  overflow: visible;
+}
+.bufferinputcell .typing-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: min(70%, 360px);
   padding: 4px 8px;
   font-size: 11px;
   color: #8b949e;
@@ -37,8 +48,6 @@
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  z-index: 5;
-  pointer-events: none;
   white-space: nowrap;
   overflow: hidden;
   backdrop-filter: blur(4px);

@@ -313,15 +313,11 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   overflow: hidden;
 }
 
-/* Smart typing overlay — pill above input, not a full-width bar.
-   Previously a full-width solid bar at bottom:100% covered the last
-   message row. Now a compact pill (max 70% width, offset 4px above
-   input) only covers the left corner. Keep a small scroll-padding so
-   snap leaves a gap when at bottom; no layout shift. */
-.chat-body:has(.typingcell) .messages {
-  scroll-padding-bottom: 12px;
-}
-
+/* Typing indicator now lives as a flex row inside .bufferinputcell (order -1,
+   flex 0 0 100%) so it occupies layout space above the input and shrinks
+   the messages viewport via flex — no overlay, no occlusion. The old
+   `scroll-padding-bottom: 12px` hack for the absolute pill is no longer
+   needed and is removed so the viewport uses its natural bottom snap. */
 .channel-name {
   font-size: 1.125rem;
   font-weight: 600;

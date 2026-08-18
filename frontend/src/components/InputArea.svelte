@@ -937,8 +937,10 @@
 <div class="bufferinputcell">
   {#if typingText}
     <div class="typingcell">
-      <span class="typing-dots"><i></i><i></i><i></i></span>
-      <span class="typing-label">{typingText}</span>
+      <div class="typing-pill">
+        <span class="typing-dots"><i></i><i></i><i></i></span>
+        <span class="typing-label">{typingText}</span>
+      </div>
     </div>
   {/if}
   {#if tabPopup}
