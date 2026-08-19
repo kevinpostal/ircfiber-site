@@ -13,7 +13,7 @@
   import ScrollClock from './ScrollClock.svelte';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
-  import { dividerPos as sharedDividerPos } from '../lib/scroll';
+  import { dividerPos as sharedDividerPos, animateScrollTo } from '../lib/scroll';
   import { captureScrollAnchor, takeScrollAnchor } from '../lib/scrollAnchor';
   import type { IRCMessage, Member, Network } from '../types';
 
@@ -382,10 +382,10 @@
     const start = untrack(() => renderStart);
     if (start <= 0 || !container) return false;
 
-    // Live position reads (IRCCloud fetched() captures these before render;
-    // the cached values can be stale when invoked from the loadMore click,
-    // which scrolls to the top in the same tick).
-    const atTop = container.scrollTop <= 200;
+    // IRCCloud checkInfiniscroll: isScrolledToTop() is scrollTop===0 exact, not <=200.
+    // Only fire when truly at top (0), not 200px before. Prevents eager
+    // 3×200 pre-load that hid the continuous-scroll feel.
+    const atTop = container.scrollTop <= 0;
     const scrollBottom = container.clientHeight + Math.ceil(container.scrollTop);
     const pinBottom = container.scrollHeight - scrollBottom <= 1;
 
@@ -395,34 +395,50 @@
     }
     const oldH = container.scrollHeight;
     const oldTop = container.scrollTop;
-    // Anchor = the first message row visible in the viewport (the message
-    // the user is reading); its displacement after the render is the real
-    // reveal height. The compensation is deferred to the next frame so the
-    // loader indicator settles first (see preserveReadingPosition).
     captureScrollAnchor(container);
-    renderStart = Math.max(0, start - BATCH_SIZE);
+    const anchorBefore = takeScrollAnchor();
+    const calc = Math.max(0, start - BATCH_SIZE);
+    windowRevealInProgress = true;
+    renderStart = calc;
     // Consume the mark so the $effect doesn't run the settle a second time.
     handledDividerMark = untrack(() => backlogDividerMark);
 
     // Render synchronously, then settle — no rAF gap for queued wheel
     // events to fire a second reveal from scrollTop 0.
     flushSync();
+    windowRevealInProgress = false;
     if (!pinBottom) {
-      const delta = container.scrollHeight - oldH;
-      // Keep the messages being read in view: shift scrollTop by the
-      // anchor row's ACTUAL displacement (dividers/date rows included).
-      // At the top the browser's native anchoring does not apply, so this
-      // manual compensation is what keeps the reading position stable
-      // while older chat loads above.
-      if (atTop) {
+      // IRCCloud fetched() half-way scroll: divider at 152px from top (min 48), not exact anchor.
+      // This makes the user feel constantly scrolling up – each wheel-up reveals a new batch
+      // and the scrollbar stays in the middle, not wedged at 0. Matches
+      // common-5650bddb.js: var a=Math.round(r.position().top);this.scrollTo(a-31),this.scrollTo(Math.max(a-152,48),{animate:!0})
+      const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
+      if (divider) {
+        const a = Math.round(dividerPos(divider));
+        // First, jump to a-31 (like IRCCloud's immediate scrollTo), then animate to max(a-152,48)
+        container.scrollTop = a - 31;
+        const target = Math.max(a - 152, 48);
+        animateScrollTo(container, target, 100);
+      } else if (atTop && anchorBefore) {
+        // Fallback when divider not yet rendered (rare): exact anchor
+        const rows = Array.from(container.querySelectorAll('.row.messageRow')) as HTMLElement[];
+        const match = rows.find((r) => (r.dataset.msgid || 't:' + r.dataset.time) === anchorBefore.msgid);
+        if (match) {
+          const displacement = match.getBoundingClientRect().top - anchorBefore.top;
+          if (displacement !== 0) container.scrollTop = oldTop + displacement;
+        } else {
+          const delta = container.scrollHeight - oldH;
+          if (delta !== 0) container.scrollTop = oldTop + delta;
+        }
+      } else if (atTop) {
         preserveReadingPosition(container, oldTop);
-      } else if (delta !== 0) {
-        // Mid-list reveals (rare): anchor to the batch boundary.
-        container.scrollTop = oldTop + delta;
+      } else {
+        const delta = container.scrollHeight - oldH;
+        if (delta !== 0) container.scrollTop = oldTop + delta;
       }
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
-      cachedAtTop = container.scrollTop <= 200;
+      cachedAtTop = container.scrollTop <= 0;
       cachedAtBottom = false;
       wasRecentlyAtBottom = false;
     }
@@ -719,6 +735,8 @@
   }
 
   let lastFirstProcessedKey = '';
+  let lastProcessedLength = 0;
+  let windowRevealInProgress = false;
 
   // Preserve the reading position across a history prepend: shift scrollTop
   // by the captured anchor row's ACTUAL displacement (captured by
@@ -978,6 +996,7 @@
   });
 
   $effect(() => {
+    if (windowRevealInProgress) return;
     const key = bufferKey;
     const msgs = processedMessages;
     const isNewBuffer = key !== lastBufferKey;
@@ -1002,6 +1021,7 @@
       renderEndKey = '';
       clockTs = null;
       lastFirstProcessedKey = msgs.length ? itemKeyOf(msgs[0]) : '';
+      lastProcessedLength = msgs.length;
     } else {
       const firstKey = msgs.length ? itemKeyOf(msgs[0]) : '';
       if (firstKey !== lastFirstProcessedKey) {
@@ -1022,7 +1042,7 @@
           const usePrev = prevScrollHeight !== 0 && prevScrollTop !== 0 && Math.abs(rawOldH - prevScrollHeight) > 500;
           const oldScrollHeight = usePrev ? prevScrollHeight : rawOldH;
           const oldScrollTop = usePrev ? prevScrollTop : rawOldTop;
-          const atTopBefore = oldScrollTop <= 200;
+          const atTopBefore = oldScrollTop <= 0;
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
           const scrollBottomBefore = container ? container.clientHeight + Math.ceil(oldScrollTop) : 0;
           const pinBottomBefore = oldScrollHeight - scrollBottomBefore <= 1;
@@ -1087,13 +1107,17 @@
         // Append-only burst: head unchanged, tail grew. Keep window bounded
         // so 1000-msg burst stays at 150-250 DOM rows instead of 350+ before
         // maybeTrim. Only while pinned and not frozen (reading history).
+        // Guard on length increase: window reveals (renderStart moved via
+        // revealBacklogFromMemory) do not increase len but would otherwise
+        // satisfy neededStart>start and be yanked back to tail.
         const start = untrack(() => renderStart);
         const neededStart = Math.max(0, msgs.length - BATCH_SIZE);
-        if (neededStart > start && cachedAtBottom && !renderEndKey) {
+        if (neededStart > start && cachedAtBottom && !renderEndKey && msgs.length > lastProcessedLength && !windowRevealInProgress) {
           renderStart = neededStart;
         }
       }
       lastFirstProcessedKey = firstKey;
+      lastProcessedLength = msgs.length;
     }
 
     if (!container) return;
@@ -1121,7 +1145,7 @@
     // isHistoryPrependForSnap previously forced a snap even when reading.
     // Gate on isAtBottom so only pinned fills snap; initial load isAtBottom true.
     const historyPrependSnap = isInitialSnap && isHistoryPrependForSnap && isAtBottom;
-    const lastIsActionNotice = isAtBottom && hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
+    const lastIsActionNotice = hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
     // When a backlog divider is present and user is at top (reading history),
     // never snap to bottom – preserve via newDivider branch (oldTop+delta).
     // This fixes "scroll all the way to start without being forced to bottom".
@@ -1243,17 +1267,22 @@
         pendingInitialSnap = false;
       }
     } else if (newDivider && cachedAtTop) {
-      // Keep the messages being read in view: shift scrollTop by the
-      // anchor row's ACTUAL displacement (captured by handleLoadMore right
-      // before the prepend). The browser's native anchoring does not apply
-      // at scrollTop=0, and scrollHeight deltas are unreliable (art rows
-      // report intrinsic sizes), so the anchor displacement is the exact
-      // compensation — the same messages stay on screen while older chat
-      // loads above them.
-      preserveReadingPosition(container, prevScrollTop);
+      // IRCCloud fetched() half-way scroll: divider at 152px from top (min 48), not exact anchor.
+      // This is the "constantly scrolling up" feel – each top-hit leaves 152px of older history
+      // visible above the divider, so the next wheel-up immediately hits top again.
+      // Matches common-5650bddb.js: var a=Math.round(r.position().top);this.scrollTo(a-31),this.scrollTo(Math.max(a-152,48),{animate:!0})
+      const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
+      if (divider) {
+        const a = Math.round(dividerPos(divider));
+        container.scrollTop = a - 31;
+        const target = Math.max(a - 152, 48);
+        animateScrollTo(container, target, 100);
+      } else {
+        preserveReadingPosition(container, prevScrollTop);
+      }
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
-      cachedAtTop = container.scrollTop <= 200;
+      cachedAtTop = container.scrollTop <= 0;
       cachedAtBottom = false;
       wasRecentlyAtBottom = false;
     }
@@ -1279,7 +1308,7 @@
         renderEndKey = '';
         maybeTrim();
       }
-      cachedAtTop = container.scrollTop <= 200;
+      cachedAtTop = container.scrollTop <= 0;
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
       scheduleScrollStateUpdate();
@@ -1297,11 +1326,10 @@
     prevScrollTop = scrollTop;
     prevScrollHeight = scrollHeight;
     // IRCCloud isScrolledToTop(): user is at the very top of the container.
-    // Use 200px threshold to match LoadMore sentinel (200px rootMargin) and
-    // atTopBefore checks — history loads trigger at <=200, so reading at 150
-    // must be considered "at top" for anchoring.
-    cachedAtTop = scrollTop <= 200;
-
+    // IRCCloud checks scrollTop===0 exact, not a 200px band. Only fire
+    // when truly at top (0), not 200px before, to get the single-batch
+    // per top-hit cadence.
+    cachedAtTop = scrollTop <= 0;
     // IRCCloud isScrolledToBottom(true): when already pinned, use a strict
     // 0px check — any intentional scroll-up (even 1px on a trackpad) must
     // clear cachedAtBottom immediately, otherwise the ResizeObserver and
@@ -1327,7 +1355,7 @@
         ? true
         : pendingInitialSnap && heightChangedWithoutScroll && cachedAtBottom && !cachedAtTop
           ? true
-          : cachedAtBottom
+          : cachedAtBottom && !cachedAtTop
             ? heightChangedWithoutScroll ? true : distFromBottom <= 1
             : distFromBottom <= STICK_BAND_PX;
     if (cachedAtBottom === atBottom) {

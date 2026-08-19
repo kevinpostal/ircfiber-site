@@ -128,7 +128,7 @@
   let lastFillScrollHeight = -1;
   let lastFillTime = 0;
   let silentFillIterations = 0;
-  const MAX_SILENT_FILLS = 3;
+  const MAX_SILENT_FILLS = 1;
   // Viewport auto-fill should NOT flash "Fetching more history…" — that
   // divider is for user-initiated loads when the window is already full
   // (scrollable) and the user scrolls to top / clicks Load more. For
@@ -305,8 +305,10 @@ $effect(() => {
     // construction. The viewport-fill effect handles those (silently);
     // firing tryAutoLoad here would flash "Fetching more history…".
     if (scrollEl.scrollHeight <= scrollEl.clientHeight) return;
-    // Aristotle sentinelIntersects: 200px band — preload before top, never wedge.
-    if (scrollEl.scrollTop > 200) return;
+    // IRCCloud checkInfiniscroll: isScrolledToTop() is scrollTop===0 exact.
+    // Only fire when truly at top (0), not 200px before. Prevents eager
+    // 3×200 pre-load that hid the continuous-scroll feel.
+    if (scrollEl.scrollTop > 0) return;
     tryAutoLoad().catch((e) => console.error('[LoadMore] tryAutoLoad error:', e));
   }
 
@@ -324,7 +326,7 @@ $effect(() => {
       (entries) => {
         if (entries[0]?.isIntersecting) onSentinelVisible();
       },
-      { root: scrollEl, rootMargin: '200px 0px 0px 0px', threshold: 0 },
+      { root: scrollEl, rootMargin: '0px 0px 0px 0px', threshold: 0 },
     );
     io.observe(sentinelEl);
   }
@@ -348,7 +350,7 @@ $effect(() => {
     };
     const onScrollFallback = () => {
       if (!scrollEl) return;
-      if (scrollEl.scrollTop <= 200 && scrollEl.scrollHeight > scrollEl.clientHeight) {
+      if (scrollEl.scrollTop <= 0 && scrollEl.scrollHeight > scrollEl.clientHeight) {
         if (!loading && !clearedAt && !noMoreHistory) onSentinelVisible();
       }
     };

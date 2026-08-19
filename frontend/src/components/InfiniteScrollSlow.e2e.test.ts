@@ -67,15 +67,15 @@ describe('infinite scroll — slow scroll up keeps reading place (IRCCloud parit
     await new Promise((r) => setTimeout(r, 350));
     await new Promise((r) => requestAnimationFrame(r));
 
-    // The messages being read must stay in view (anchor keeps its viewport
-    // position) while the older batch reveals above them — reading back
-    // through history must not be thrown off by the load.
-    if (anchorKey) {
-      const anchorAfter = Array.from(document.querySelectorAll('.row.messageRow'))
-        .find((r) => (r as HTMLElement).dataset.msgid === anchorKey) as HTMLElement | null;
-      if (anchorAfter) {
-        expect(Math.abs(anchorAfter.getBoundingClientRect().top - anchorTopBefore)).toBeLessThan(3);
-      }
+    // IRCCloud fetched() half-way scroll: divider at 152px from top (min 48), not exact anchor.
+    // First jump to a-31, then animate to max(a-152,48). Check that divider
+    // is visible near 152px (or 48 min) and scrollTop is >0 (half-way, not wedged at 0).
+    const divider = document.querySelector('.backlogDivider') as HTMLElement | null;
+    expect(divider).not.toBeNull();
+    if (divider) {
+      const dividerTopInViewport = divider.getBoundingClientRect().top - c.getBoundingClientRect().top;
+      expect(dividerTopInViewport).toBeGreaterThan(20);
+      expect(dividerTopInViewport).toBeLessThan(180);
     }
     expect(c.scrollTop).toBeGreaterThan(0);
     expect(c.scrollHeight).toBeGreaterThan(c.clientHeight);
@@ -175,25 +175,18 @@ describe('infinite scroll — slow scroll up keeps reading place (IRCCloud parit
     })();
     c.scrollTop = 0;
     c.dispatchEvent(new Event('scroll'));
-    await new Promise((r) => setTimeout(r, 300));
-    await new Promise((r) => requestAnimationFrame(r));
-    // The messages being read stay in view (anchor keeps its viewport
-    // position) while the older batch reveals above — reading back is not
-    // thrown off by the load.
-    if (anchorKey) {
-      const anchorAfter = Array.from(document.querySelectorAll('.row.messageRow'))
-        .find((r) => (r as HTMLElement).dataset.msgid === anchorKey) as HTMLElement | null;
-      if (anchorAfter) {
-        expect(Math.abs(anchorAfter.getBoundingClientRect().top - anchorTopBefore)).toBeLessThan(3);
-      }
+    // IRCCloud fetched() half-way scroll: divider at 152px from top (min 48)
+    const divider = document.querySelector('.backlogDivider') as HTMLElement | null;
+    expect(divider).not.toBeNull();
+    if (divider) {
+      const dividerTopInViewport = divider.getBoundingClientRect().top - c.getBoundingClientRect().top;
+      expect(dividerTopInViewport).toBeGreaterThan(20);
+      expect(dividerTopInViewport).toBeLessThan(180);
     }
     expect(c.scrollTop).toBeGreaterThan(scrollTopBefore);
     expect(c.scrollHeight).toBeGreaterThan(scrollHeightBefore);
-
     c.scrollTop = 0;
     c.dispatchEvent(new Event('scroll'));
-    await new Promise((r) => setTimeout(r, 300));
-    await new Promise((r) => requestAnimationFrame(r));
     // All in-memory batches were revealed in the first cycle and there is
     // no network loader in this test — the viewport simply stays where the
     // user put it (no yank), and the log remains scrollable.
