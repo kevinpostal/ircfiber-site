@@ -489,7 +489,10 @@
   .connectionStatus {
     /* Container carries the top + bottom hairlines + the 2px left
        state edge. The inner button does the rest. No tinted
-       background — the headline copy is the entire visible surface. */
+       background — the headline copy is the entire visible surface.
+       Monospace matches the timeline so the two surfaces read as one
+       real-time log. */
+    font-family: var(--font-mono-fiber, var(--font-mono, monospace));
     border-top: 1px solid var(--fiber-line);
     border-bottom: 1px solid var(--fiber-line);
     border-left: 2px solid var(--fiber-line);
@@ -539,7 +542,7 @@
   /* ── Headline ──────────────────────────────────────────────────── */
   .connectionStatus__headline {
     display: block;
-    font-weight: 500;
+    font-weight: 400;
     color: inherit;
     overflow: hidden;
     text-overflow: ellipsis;

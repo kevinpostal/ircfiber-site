@@ -474,16 +474,10 @@
       {@const kind = getStatusKind(attempt)}
       {@const glyph = getStatusGlyph(attempt)}
 
-      <!-- ── Connection / disconnect header (IRCCloud parity + fiber brand) ──
-           Layout matches the homepage's `.status-pill` / `.kicker` aesthetic:
-             · A leading vertical fiber-strand bar (2px wide, status color,
-               with a soft glow that pulses for pending connections — the
-               same `box-shadow + keyframes` trick the homepage uses on the
-               "all systems operational" LED in the topbar)
-             · The caret and glyph use cyan / status colors so the status
-               state reads at a glance
-             · The label uses Space Grotesk (--font-display) to tie back to
-               the homepage's brand font; host + time stay in mono -->
+      <!-- ── Connection / disconnect header (clean minimal) ─────────────
+           A single monospace line: caret + status glyph + label + host +
+           time. Status is conveyed by the glyph colour and the label
+           colour only — no bar, no glow, no display font. -->
       <div
         class="head"
         class:head--success={kind === 'success'}
@@ -498,7 +492,6 @@
         aria-expanded={!collapsed}
         data-testid="server-log-attempt"
       >
-        <span class="head-strand" aria-hidden="true"></span>
         <span class="caret" aria-hidden="true">{collapsed ? '▶' : '▼'}</span>
         <span class="glyph" aria-hidden="true">{glyph}</span>
         <span class="label">{headerLabel}</span>
@@ -696,35 +689,26 @@
 
 <style>
   /* ──────────────────────────────────────────────────────────────────
-   * Server log — fiber brand restyle
+   * Server log — quiet terminal restyle
    * ──────────────────────────────────────────────────────────────────
-   * Visual language lifted from the homepage marketing site (ircfiber.com):
-   *   · Hairline 1px borders in --fiber-line instead of heavy dusk-blue
-   *     tinted backgrounds — the homepage favors restraint over fill
-   *   · Cyan accent (--fiber-blue) for active / pending state, instead
-   *     of the IRCCloud dusk blue that read as "IRC client" not "Fiber"
-   *   · Space Grotesk (--font-display) for the channel / network label
-   *     so the server log reads as part of the same product surface as
-   *     the landing page
-   *   · A leading 2px "fiber-strand" bar on each card with a soft glow
-   *     that pulses for pending connections — mirrors the homepage's
-   *     `.status-pill .led` element at the top of the marketing page
-   *   · Welcome / MOTD rows get a 2px cyan left-edge accent strip
-   *     instead of the heavy IRCCloud #1d4063 / #1a3b5b fills
-   * ────────────────────────────────────────────────────────────────── */
+   * Clean, minimal, monospace. No glow, no pulse animation, no display
+   * font, no recessed "paper" surfaces, no pill chips. A single cyan
+   * accent marks the live/pending state; amber appears only on failures;
+   * the rest of the log is a neutral monospace stream separated by
+   * hairline rules — the way a real-time IRC log reads. */
 
   .serverLogTimeline {
     padding: 0;
     contain: content;
+    font-family: var(--font-mono-fiber, var(--font-mono, monospace));
   }
 
-  /* ── Header (one-line) ──────────────────────────────────────────── */
+  /* ── Header (one line) ──────────────────────────────────────────── */
   .head {
-    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 14px 6px 18px; /* extra left padding for the strand bar */
+    padding: 6px 12px;
     min-height: 26px;
     line-height: 22px;
     font-size: 12px;
@@ -736,59 +720,9 @@
     transition: background-color 120ms ease;
   }
   .head:hover { background: rgba(255, 255, 255, 0.02); }
-  .head.expanded {
-    background: linear-gradient(
-      90deg,
-      var(--fiber-blue-soft, rgba(103, 232, 249, 0.04)) 0%,
-      transparent 60%
-    );
-    border-bottom-color: var(--fiber-line-2, #232c38);
-  }
   .head:focus-visible {
     outline: 2px solid var(--fiber-blue, #67e8f9);
     outline-offset: -2px;
-  }
-
-  /* Leading vertical "fiber strand" — the brand accent bar on the left
-     edge of every card. Color follows status; pending connections pulse
-     with a soft cyan glow like the LED on the homepage topbar. */
-  .head .head-strand {
-    position: absolute;
-    left: 0;
-    top: 4px;
-    bottom: 4px;
-    width: 2px;
-    border-radius: 1px;
-    background: var(--strand-color, var(--fiber-line, #1a212b));
-    box-shadow: 0 0 6px var(--strand-glow, transparent);
-    transition: background-color 150ms ease, box-shadow 150ms ease;
-  }
-  .head--success .head-strand {
-    --strand-color: var(--fiber-signal, #34d399);
-    --strand-glow: rgba(52, 211, 153, 0.45);
-  }
-  .head--error .head-strand {
-    --strand-color: var(--fiber-amber, #fbbf24);
-    --strand-glow: rgba(251, 191, 36, 0.45);
-  }
-  .head--disconnected .head-strand {
-    --strand-color: var(--fiber-mist, #4d5867);
-    --strand-glow: transparent;
-  }
-  .head--pending .head-strand {
-    --strand-color: var(--fiber-blue, #67e8f9);
-    --strand-glow: var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
-    animation: head-strand-pulse 2.4s ease-in-out infinite;
-  }
-  @keyframes head-strand-pulse {
-    0%, 100% {
-      box-shadow: 0 0 6px var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
-      opacity: 1;
-    }
-    50% {
-      box-shadow: 0 0 14px var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
-      opacity: 0.7;
-    }
   }
 
   .head .caret {
@@ -800,14 +734,14 @@
     transition: color 120ms ease;
   }
   .head:hover .caret { color: var(--fiber-fog, #8b96a4); }
-  .head.expanded .caret { color: var(--fiber-blue, #67e8f9); }
 
+  /* Status glyph — the only color in the header, kept to a single
+     character so the state reads at a glance without a bar or glow. */
   .head .glyph {
     flex-shrink: 0;
     width: 14px;
     text-align: center;
     font-weight: 600;
-    font-family: var(--font-mono-fiber, monospace);
   }
   .head--success .glyph      { color: var(--fiber-signal, #34d399); }
   .head--error .glyph        { color: var(--fiber-amber,  #fbbf24); }
@@ -817,7 +751,6 @@
   .head .label {
     flex-shrink: 0;
     font-weight: 500;
-    font-family: var(--font-display, var(--font-sans, sans-serif));
     letter-spacing: -0.005em;
   }
   .head--success .label      { color: var(--fiber-snow, #ecf2f8); }
@@ -832,21 +765,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     color: var(--fiber-fog, #8b96a4);
-    font-family: var(--font-mono-fiber, monospace);
     font-size: 11.5px;
   }
   .head:hover .host { color: var(--fiber-cloud, #c8d2dd); }
-  .head.expanded .host { color: var(--fiber-blue-hi, #a5f3fc); }
 
   .head .time {
     flex-shrink: 0;
     margin-left: auto;
     color: var(--fiber-mist, #4d5867);
     font-size: 11px;
-    font-family: var(--font-mono-fiber, monospace);
     font-variant-numeric: tabular-nums;
   }
-  .head.expanded .time { color: var(--fiber-fog, #8b96a4); }
 
   /* ── Rows: plain IRC chat style ─────────────────────────────────── */
   .row {
@@ -857,7 +786,6 @@
     min-height: 18px;
     line-height: 18px;
     font-size: 12px;
-    font-family: var(--font-mono-fiber, monospace);
     font-variant-ligatures: none;
     background: transparent;
     color: var(--fiber-cloud, #c8d2dd);
@@ -888,27 +816,20 @@
     text-transform: lowercase;
     letter-spacing: 0.02em;
   }
-  .row-text {
-    color: var(--fiber-cloud, #c8d2dd);
-  }
+  .row-text { color: var(--fiber-cloud, #c8d2dd); }
 
-  /* ── Typographic status prefix (W4-T01 Refactor C) ──────────────
-   *  Replaces the cyan-chip `.row-tag` for status / notice rows. IRCCloud
-   *  uses an inline mono prefix (no chip, no background) so the eye reads
-   *  the type token as typography, not as a badge. Inherits the row's
-   *  monospace family so prefix + body align in the column.
-   */
+  /* Typographic status prefix — inline mono, no chip, no background. */
   .row-type-prefix {
     display: inline;
     margin-right: 8px;
     color: var(--fiber-blue, #67e8f9);
     font-weight: 600;
-    font-family: var(--font-mono-fiber, monospace);
     font-variant-numeric: tabular-nums;
   }
   .row-type-prefix--notice { letter-spacing: 0.08em; }
 
-  /* ── Cyan left-edge accent strip (welcome banner + MOTD) ────────── */
+  /* Left-edge accent — kept only so welcome/MOTD rows can hide it;
+     those rows render with padding only (IRCCloud parity). */
   .row-accent {
     position: absolute;
     left: 0;
@@ -917,18 +838,10 @@
     width: 2px;
     border-radius: 1px;
     background: var(--fiber-blue, #67e8f9);
-    box-shadow: 0 0 6px var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
   }
   .row-accent--cyan { background: var(--fiber-blue, #67e8f9); }
 
-  /* ── Welcome banner (001-004) ───────────────────────────────────── */
-  /* W4-T01 Refactor B: IRCCloud parity. IRCCloud renders .type_info_response
-   * with `padding:10px` and NO cyan stripe, NO cyan-soft background.
-   * Fiber used to give these a 4px/12px padding + soft cyan fill + left
-   * stripe, which read as "loud card" instead of "quiet info line".
-   * Drop the cyan stripe + bg, keep the welcome-segment token coloring
-   * (those are typographic — they stay).
-   */
+  /* ── Welcome banner (001-004) — padding only, typographic tokens ── */
   .row--info {
     position: relative;
     background: transparent;
@@ -939,49 +852,24 @@
   .row--info .row-accent { display: none; }
   .row--info .row-content { color: var(--fiber-cloud, #c8d2dd); }
 
-  /* Welcome-banner segments. The plain text (prose around the
-     tokens) stays in fiber-cloud at the default weight; the typed
-     tokens get a colour + font that signals "this is a name / host /
-     version / mode table". Each segment inherits `font-family: var
-     (--font-mono-fiber)` from `.row` so monospace aligns across the
-     whole banner — only the colour and weight differ. */
   .welcome-seg { white-space: pre; }
-  .welcome-seg--plain {
-    color: var(--fiber-cloud, #c8d2dd);
-  }
-  /* Network name ("ircfiber") + your nick ("Zod") — cyan + bold so the
-     "this is you, this is your network" tokens pop. */
+  .welcome-seg--plain { color: var(--fiber-cloud, #c8d2dd); }
+  /* The two tokens that matter — your network and your nick — carry
+     the single cyan accent; everything else stays neutral. */
   .welcome-seg--network,
   .welcome-seg--nick {
     color: var(--fiber-blue, #67e8f9);
     font-weight: 600;
   }
-  /* Hostname + version — snow + amber, mono. The amber version catches
-     the eye without being aggressive. */
-  .welcome-seg--host {
-    color: var(--fiber-snow, #ecf2f8);
-    font-weight: 500;
-  }
-  .welcome-seg--version {
-    color: var(--fiber-amber, #fbbf24);
-    font-weight: 500;
-  }
-  /* Created-on date — mono cloud so the full date reads as a single
-     token but in the same brightness as the surrounding prose. */
-  .welcome-seg--date {
-    color: var(--fiber-cloud, #c8d2dd);
-  }
-  /* Mode tables (umodes / cmodes) — dim fog so they read as metadata
-     rather than primary content. */
+  .welcome-seg--host { color: var(--fiber-snow, #ecf2f8); }
+  .welcome-seg--version { color: var(--fiber-fog, #8b96a4); }
+  .welcome-seg--date { color: var(--fiber-cloud, #c8d2dd); }
   .welcome-seg--mode-table {
-    color: var(--fiber-fog, #8b96a4);
+    color: var(--fiber-mist, #4d5867);
     letter-spacing: 0.04em;
   }
-  /* Modes-with-prefix set — cyan-tinted so the "this is what you can
-     set as a channel op" set reads as the most actionable piece. */
   .welcome-seg--mode-prefix {
-    color: var(--fiber-blue, #67e8f9);
-    font-weight: 500;
+    color: var(--fiber-fog, #8b96a4);
     letter-spacing: 0.04em;
   }
 
@@ -990,14 +878,11 @@
     padding: 2px 12px 2px 12px;
     align-items: baseline;
   }
-  /* Small RPL number kicker on the left, same visual language as the
-     homepage's `.kicker` — uppercase, letter-spaced, monospace. */
   .row--stat .row-cmd {
     flex-shrink: 0;
     width: 30px;
     margin-right: 12px;
     color: var(--fiber-mist, #4d5867);
-    font-family: var(--font-mono-fiber, monospace);
     font-size: 10px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -1011,58 +896,32 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* ── ISUPPORT list (005) ────────────────────────────────────────── */
-  /* ── ISUPPORT (005) row wrapper ────────────────────────────────────
-   *
-   *  The 005 tokens are now rendered by `<ServerFeaturesPanel>`, which
-   *  owns its own internal styles for categorisation, badges, and
-   *  the detail drawer. The row here is just a thin frame that
-   *  prevents the panel from inheriting the timeline `.row` flex
-   *  layout (which would break its grid).
-   */
-   .isupport-frame {
-     display: block;
-     padding: 2px 0;
-   }
-
-  /* ── Notices list (server NOTICEs + CAP LS) ────────────────────── */
-  .notice-seg { white-space: pre; }
-  .notice-seg--plain {
-    color: var(--fiber-cloud, #c8d2dd);
+  /* ── ISUPPORT (005) row wrapper ─────────────────────────────────── */
+  .isupport-frame {
+    display: block;
+    padding: 2px 0;
   }
-  /* "***" leading marker on a server notice — cyan-bold label. */
+
+  /* ── Notices (server NOTICEs + CAP LS) ──────────────────────────── */
+  .notice-seg { white-space: pre; }
+  .notice-seg--plain { color: var(--fiber-cloud, #c8d2dd); }
   .notice-seg--notice-label {
     color: var(--fiber-blue, #67e8f9);
     font-weight: 700;
     letter-spacing: 0.08em;
     margin-right: 8px;
   }
-  /* Bare CAP name (no =) — cyan tag. */
+  /* Bare CAP name — plain cyan text, no chip. */
   .notice-seg--cap-tag {
     color: var(--fiber-blue, #67e8f9);
-    font-family: var(--font-mono-fiber, monospace);
     font-size: 11.5px;
-    padding: 1px 5px;
     margin-right: 4px;
-    background: rgba(103, 232, 249, 0.08);
-    border: 1px solid rgba(103, 232, 249, 0.16);
-    border-radius: 3px;
     white-space: nowrap;
   }
-  /* CAP key=value split — key cyan-bold, value amber. */
-  .notice-seg--cap-key {
-    color: var(--fiber-blue, #67e8f9);
-    font-weight: 500;
-  }
-  .notice-seg--cap-value {
-    color: var(--fiber-amber, #fbbf24);
-    font-family: var(--font-mono-fiber, monospace);
-  }
+  .notice-seg--cap-key { color: var(--fiber-blue, #67e8f9); font-weight: 500; }
+  .notice-seg--cap-value { color: var(--fiber-cloud, #c8d2dd); }
 
-  /* ── MOTD block ─────────────────────────────────────────────────── */
-  /* W4-T01 Refactor B: IRCCloud parity. Same treatment as .row--info —
-   * drop the cyan stripe + soft bg, keep the inner `.motd-body` / banner /
-   * footer typography that gives MOTD its visual identity. */
+  /* ── MOTD block — padding only, flat body ───────────────────────── */
   .row--motd {
     position: relative;
     background: transparent;
@@ -1073,11 +932,10 @@
   .row--motd .row-accent { display: none; }
   .motd-body {
     display: block;
-    padding: 4px 14px 10px 0;
+    padding: 4px 0 10px 0;
   }
 
-  /* Banner row: kicker "MOTD" + title + line count. Mirrors the
-     homepage's `.kicker` style (uppercase monospace, leading rule). */
+  /* Banner row: kicker "MOTD" + title + line count. */
   .motd-banner {
     display: flex;
     align-items: baseline;
@@ -1086,103 +944,55 @@
     padding-bottom: 10px;
     border-bottom: 1px solid var(--fiber-line, #1a212b);
   }
-  .motd-banner::before {
-    /* Leading fiber-brand fiber-strand rule, mirrors the homepage's
-       `.kicker::before` element that fires before every section label. */
-    content: "";
-     width: 24px;
-     height: 1px;
-     background: var(--fiber-blue, #67e8f9);
-     box-shadow: 0 0 10px var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
-    flex-shrink: 0;
-    align-self: center;
-  }
   .motd-kicker {
     color: var(--fiber-blue, #67e8f9);
     font-weight: 600;
     font-size: 10px;
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    font-family: var(--font-mono-fiber, monospace);
   }
   .motd-title {
     color: var(--fiber-snow, #ecf2f8);
     font-weight: 500;
     font-size: 12.5px;
     letter-spacing: -0.01em;
-    font-family: var(--font-sans, sans-serif);
   }
   .motd-meta {
     margin-left: auto;
     color: var(--fiber-mist, #4d5867);
     font-size: 10px;
-    font-family: var(--font-mono-fiber, monospace);
     letter-spacing: 0.04em;
   }
 
-  /* The body — fiber-paper on a deeper ink bg, hairline border, with
-     a subtle inner shadow so the ASCII art block sits as a recessed
-     surface inside the larger card. */
+  /* The body — flat monospace stream, no recessed surface. */
   .motd-groupedLines {
-    padding: 8px 10px;
-    border-radius: 4px;
-    background-color: var(--fiber-paper, #0e131a);
-    border: 1px solid var(--fiber-line, #1a212b);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
-    font-family: var(--font-mono-fiber, monospace);
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
     font-size: 12.5px;
     line-height: 1.55;
     color: var(--fiber-cloud, #c8d2dd);
-    /* Long MOTDs scroll horizontally instead of wrapping mid-art. */
     overflow-x: auto;
     white-space: pre;
   }
-  /* Custom scrollbar that matches the fiber palette — visible but
-     understated so it doesn't fight with the ASCII art. */
-  .motd-groupedLines::-webkit-scrollbar { height: 6px; }
-  .motd-groupedLines::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .motd-groupedLines::-webkit-scrollbar-thumb {
-    background: var(--fiber-line-2, #232c38);
-    border-radius: 3px;
-  }
-  .motd-groupedLines::-webkit-scrollbar-thumb:hover {
-    background: var(--fiber-mist, #4d5867);
-  }
 
-  /* Per-line classification styling — the bulk of the visual hierarchy.
-     Each kind reads differently:
-       · separator   :  IRC ":- ... -" banner line → dim, italic, no leading dash
-       · closing     :  "End of MOTD command"        → bold cyan, sits in footer
-       · art         :  ASCII art rows               → dim, no leading dash indent
-       · section     :  "Welcome to ...", "Rules:"   → bold cyan heading
-       · list        :  "1. Be respectful ..."       → indented numbered column
-       · command     :  "/msg NickServ HELP"         → cyan slash, dim context
-       · body        :  normal weight, fiber-cloud text
-       · empty       :  collapsed half-line so the panel breathes */
   .motd-groupedLines .groupedLines__line {
     min-height: 0;
     color: var(--fiber-cloud, #c8d2dd);
   }
-
-  /* h2 wrapper for the first line (separator, banner) — bigger, dim */
   .motd-groupedLines h2.groupedLines__line {
     margin: 0;
     font-weight: 500;
     font-size: 12.5px;
     color: var(--fiber-mist, #4d5867);
   }
-
-  /* Separator lines (:- ... -) — dim italic, reads as decoration */
   .motd-groupedLines .groupedLines__line--separator {
     color: var(--fiber-mist, #4d5867);
     font-style: italic;
     padding: 2px 0;
   }
-
-  /* ASCII art — dim, slightly faded so the eye reads it as decoration
-     and not as content. */
   .motd-groupedLines .groupedLines__line--art {
     color: var(--fiber-fog, #8b96a4);
     font-weight: 500;
@@ -1193,41 +1003,28 @@
   .motd-groupedLines .groupedLines__line--art :global(.irccolor-bg) {
     color: inherit;
   }
-
-  /* Section headers — bold cyan, sans-serif so they read as headings. */
   .motd-groupedLines .groupedLines__line--section {
     color: var(--fiber-blue, #67e8f9);
     font-weight: 600;
-    font-family: var(--font-sans, sans-serif);
     font-size: 12.5px;
     letter-spacing: -0.005em;
     margin-top: 2px;
   }
-
-  /* Numbered list items — add a left indent so the digit column aligns */
   .motd-groupedLines .groupedLines__line--list {
     color: var(--fiber-cloud, #c8d2dd);
     padding-left: 1.5em;
   }
-
-  /* Slash commands — cyan slash, dim command name */
   .motd-groupedLines .groupedLines__line--command {
     color: var(--fiber-fog, #8b96a4);
     padding-left: 1.5em;
   }
-
-  /* Body lines — default fiber-cloud */
   .motd-groupedLines .groupedLines__line--body {
     color: var(--fiber-cloud, #c8d2dd);
   }
-
-  /* Empty lines — collapse to half line-height for breathing room */
   .motd-groupedLines .groupedLines__line--empty {
     height: 0.55em;
     min-height: 0;
   }
-
-  /* mIRC color spans inside MOTD — fiber-cloud by default. */
   .motd-groupedLines .groupedLines__line :global(b),
   .motd-groupedLines .groupedLines__line :global(strong) {
     font-weight: 600;
@@ -1238,8 +1035,6 @@
     white-space: pre;
   }
 
-  /* Closing "End of MOTD command" footer — dim rule on each side,
-     centered, hairline above. Mirrors the homepage's `.kicker` pattern. */
   .motd-footer {
     display: flex;
     align-items: center;
@@ -1254,17 +1049,13 @@
   }
   .motd-footer-text {
     color: var(--fiber-mist, #4d5867);
-    font-family: var(--font-mono-fiber, monospace);
     font-size: 10px;
     letter-spacing: 0.16em;
     text-transform: uppercase;
     white-space: nowrap;
   }
 
-  /* ── ISUPPORT row wrapper ────────────────────────────────────────── */
-  /* The new <ServerFeaturesPanel> handles its own header / collapse;
-     this row is just the outer frame that prevents the panel from
-     inheriting the timeline `.row` flex / 1-line-height.            */
+  /* ── ISUPPORT row wrapper ───────────────────────────────────────── */
   .row--isupport {
     padding: 2px 12px 2px 14px;
     background: transparent;
@@ -1272,7 +1063,7 @@
     border-bottom: 1px solid var(--fiber-line, #1a212b);
   }
 
-  /* ── NOTICEs collapsible row ─────────────────────────────────────── */
+  /* ── NOTICEs collapsible row ────────────────────────────────────── */
   .row--notices {
     padding: 2px 12px 2px 26px;
     background: transparent;
@@ -1297,12 +1088,10 @@
     color: var(--fiber-fog, #8b96a4);
     font-size: 11px;
     margin-left: 6px;
-    font-family: var(--font-mono-fiber, monospace);
   }
   .notices-text {
     margin: 6px 0 0;
     padding: 4px 0 0;
-    font-family: var(--font-mono-fiber, monospace);
     font-size: 11.5px;
     color: var(--fiber-cloud, #c8d2dd);
     white-space: pre-wrap;
@@ -1313,7 +1102,6 @@
     margin: 6px 0 0;
     padding: 4px 0 0;
     color: var(--fiber-fog, #8b96a4);
-    font-family: var(--font-mono-fiber, monospace);
     font-size: 11.5px;
   }
   .notices-item {
@@ -1326,25 +1114,10 @@
     padding: 40px 24px;
     text-align: center;
     font-size: 13px;
-    font-family: var(--font-mono-fiber, monospace);
     letter-spacing: 0.04em;
   }
 
-  /* ── W4-T01: connection-events <details> wrap ─────────────────────
-   *  Wraps every per-attempt detail row (phases + welcome + motd +
-   *  numerics + isupport + notices) under a single <summary> so the
-   *  user can collapse the entire detail stream to one line. The
-   *  `<summary>` reads "Connection events (N)" — N is the count of
-   *  nested rows computed in the template. Native browser toggle on
-   *  click; the open state is bound to the global `serverlogCollapseEvents`
-   *  pref via `bind:open` + local $state mirror + $effect.
-   *
-   *  The block has no chrome — just a hairline divider between the
-   *  per-attempt header above and the wrapped detail rows. The cyan
-   *  marker on the summary is the only color signal; it matches the
-   *  existing `.row-cmd` / `.motd-kicker` cyan treatment so the user
-   *  learns one color = "section heading".
-   */
+  /* ── connection-events <details> wrap ───────────────────────────── */
   .connection-events {
     margin: 0;
     padding: 0;
@@ -1358,7 +1131,6 @@
     gap: 8px;
     padding: 6px 14px;
     color: var(--fiber-mist, #4d5867);
-    font-family: var(--font-mono-fiber, monospace);
     font-size: 11px;
     letter-spacing: 0.04em;
     user-select: none;
@@ -1369,9 +1141,6 @@
     color: var(--fiber-cloud, #c8d2dd);
     background: rgba(255, 255, 255, 0.02);
   }
-  /* The disclosure triangle — cyan dot to match the rest of the
-     section-marker language; hidden on webkit so we get one consistent
-     shape across browsers (the ::marker is the fallback for firefox). */
   .connection-events > summary.connection-events-summary::-webkit-details-marker {
     display: none;
   }
@@ -1387,15 +1156,9 @@
   .connection-events[open] > summary.connection-events-summary::before {
     transform: rotate(90deg);
   }
-  /* The body has no padding of its own — each nested row carries its
-     own padding so the cyan stripe / numeric kicker / etc. align in
-     their own columns. */
   .connection-events-body {
     display: block;
   }
-  /* Hide the global [open] marker on the OUTER connection-events
-     <details> so it doesn't render its own default triangle alongside
-     the ::before above. */
   .connection-events > summary.connection-events-summary {
     list-style: none;
   }
