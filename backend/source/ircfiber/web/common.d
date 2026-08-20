@@ -20,8 +20,6 @@ void persistSessionCookie(scope HTTPServerResponse res, string sessionId) @safe 
             c.expires = Clock.currTime(UTC()) + ttl.seconds;
             c.httpOnly = true;
             c.secure = true;
-            c.sameSite = c.sameSite; // preserve existing (vibe defaults to Strict, we want Lax below)
-            // Enterprise: Lax allows top-level navigation, blocks CSRF POST
             import vibe.http.common : Cookie;
             c.sameSite = Cookie.SameSite.lax;
             c.path = "/";
@@ -46,9 +44,7 @@ void persistSessionCookie(scope HTTPServerResponse res, string sessionId) @safe 
 void refreshSessionCookie(scope HTTPServerRequest req, scope HTTPServerResponse res) @safe {
     try {
         if (!req.session) return;
-        auto sid = req.session.get("sessionUserId", "");
-        if (sid.length == 0) return; // not authenticated
-        // Re-issue cookie with fresh TTL — sliding browser expiry
+        if (!req.session.isKeySet("sessionUserId")) return;
         persistSessionCookie(res, req.session.id);
     } catch (Exception) {}
 }

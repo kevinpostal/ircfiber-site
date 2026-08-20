@@ -227,13 +227,10 @@ void main() {
     auto tracedRouter = delegate(HTTPServerRequest req, HTTPServerResponse res) {
         resetFiberCtx();
         req.context["resourceId"] = resourceId();
+        // Enterprise: sliding window — refresh browser cookie before handler writes headers
+        try { import ircfiber.web.common : refreshSessionCookie; refreshSessionCookie(req, res); } catch (Exception) {}
         if (!isTracingEnabled()) {
             router.handleRequest(req, res);
-            // Enterprise: sliding cookie refresh — keep browser Max-Age in sync with Redis TTL
-            try {
-                import ircfiber.web.common : refreshSessionCookie;
-                refreshSessionCookie(req, res);
-            } catch (Exception) {}
             return;
         }
         // Skip tracing for health check endpoints — they fire every 30s
@@ -243,10 +240,6 @@ void main() {
         auto path = req.requestPath.toString();
         if (path == "/health" || path == "/api/health" || path.startsWith("/health/")) {
             router.handleRequest(req, res);
-            try {
-                import ircfiber.web.common : refreshSessionCookie;
-                refreshSessionCookie(req, res);
-            } catch (Exception) {}
             return;
         }
         withSpan("http.request", [
@@ -260,11 +253,6 @@ void main() {
             }
             try {
                 router.handleRequest(req, res);
-                // Enterprise: sliding cookie refresh (inside traced path)
-                try {
-                    import ircfiber.web.common : refreshSessionCookie;
-                    refreshSessionCookie(req, res);
-                } catch (Exception) {}
                 auto sc = res.statusCode;
                 s.attr("http.status_code", to!string(sc));
                 // Only 5xx is a server error for SLI purposes.
