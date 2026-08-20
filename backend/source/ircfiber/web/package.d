@@ -23,7 +23,7 @@ import ircfiber.db.network : NetworkRepository;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.default_network : ensureDefaultFiberNetwork;
 import ircfiber.models.user : User;
-import ircfiber.web.common : getClientIp;
+import ircfiber.web.common : getClientIp, persistSessionCookie;
 
     // Captures client IP, User-Agent, createdAt, and lastAccess on
     // the active session. Mirrors the helper in AdminController so
@@ -208,9 +208,9 @@ final class WebController {
                 }
 
                 if (!req.session) req.session = res.startSession();
+                persistSessionCookie(res, req.session.id);
                 req.session.set("sessionUserId", user.id.toString());
                 captureSessionMeta(req);
-                limitUserSessions(redis, user.id.toString(), req.session.id);
                 res.redirect("/");
             } else {
                 authError = "Incorrect username or password. Please try again.";
@@ -299,9 +299,9 @@ final class WebController {
         }
 
         if (!req.session) req.session = res.startSession();
+        persistSessionCookie(res, req.session.id);
         req.session.set("sessionUserId", u.id.toString());
         captureSessionMeta(req);
-        limitUserSessions(redis, u.id.toString(), req.session.id);
         res.redirect("/");
     }
 

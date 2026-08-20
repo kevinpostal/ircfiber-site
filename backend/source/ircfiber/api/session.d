@@ -24,8 +24,18 @@ import ircfiber.models.user : User;
 import ircfiber.models.network : Network;
 
 package enum WS_SESSION_KEY_PREFIX = "ws_session:";
-package enum JWT_TTL_SECONDS = 14 * 24 * 60 * 60; // 14 days
-private enum WS_SESSION_TTL_SECONDS = 14 * 24 * 60 * 60;
+package enum JWT_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days — matches RedisSessionStore.TTL_SECONDS
+private enum WS_SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
+
+/// Returns JWT TTL from centralized config (single source of truth)
+long getJwtTtlSeconds() @trusted {
+    import ircfiber.storage.session : getSessionTtlSeconds;
+    return getSessionTtlSeconds();
+}
+long getWsSessionTtlSeconds() @trusted {
+    import ircfiber.storage.session : getSessionTtlSeconds;
+    return getSessionTtlSeconds();
+}
 private __gshared string _jwtHeaderB64;
 private string jwtHeaderB64() {
     if (_jwtHeaderB64.length == 0) {
@@ -467,7 +477,7 @@ final class SessionManager {
         if (redis is null) return;
         try {
             auto j = serializeSessionForRedis(session);
-            redis.setJson(wsSessionKey(session.id), j, WS_SESSION_TTL_SECONDS);
+            redis.setJson(wsSessionKey(session.id), j, getWsSessionTtlSeconds());
         } catch (Exception e) {
             logWarn("SessionManager: failed to persist session %s: %s", session.id, e.msg);
         }

@@ -11,7 +11,7 @@ import vibe.core.log : logInfo, logWarn, logError;
 import ircfiber.auth : verifyPassword, hashPassword, isAdmin, requireAuth;
 import ircfiber.db.user : UserRepository;
 import ircfiber.models.user : User;
-import ircfiber.web.common : getClientIp;
+import ircfiber.web.common : getClientIp, persistSessionCookie;
 import ircfiber.web.admin.helpers : captureSessionMeta, stripJsonStr;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.storage.session : limitUserSessions;
@@ -59,6 +59,7 @@ package void adminLoginPost(HTTPServerRequest req, HTTPServerResponse res, Redis
             repo.update(user);
 
             if (!req.session) req.session = res.startSession();
+            persistSessionCookie(res, req.session.id);
             req.session.set("sessionUserId", user.id.toString());
             captureSessionMeta(req);
             limitUserSessions(redis, user.id.toString(), req.session.id);

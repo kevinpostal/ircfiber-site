@@ -14,6 +14,55 @@ import ircfiber.storage.redis : RedisStorage;
 enum SESSION_KEY_PREFIX = "session:";
 package enum MAX_SESSIONS_PER_USER = 10;
 
+// ── Enterprise session TTL config ─────────────────────────────────────
+// Single source of truth for all session lifetimes (Redis, cookie, JWT).
+// Env var IRCFIBER_SESSION_TTL_DAYS overrides the default.
+// Validation is fail-secure: invalid/missing → default 90d, out-of-range → clamped.
+private __gshared long _cachedTtlSeconds = 0;
+private __gshared bool _ttlLogged = false;
+private Mutex _ttlMutex;
+shared static this() { _ttlMutex = new Mutex(); }
+
+/// Returns validated session TTL in seconds. Caches after first read.
+/// Default 90 days (7776000s), min 7 days, max 365 days.
+/// Env: IRCFIBER_SESSION_TTL_DAYS (integer days)
+long getSessionTtlSeconds() @trusted {
+    synchronized (_ttlMutex) {
+        if (_cachedTtlSeconds != 0) return _cachedTtlSeconds;
+        import std.process : environment;
+        import std.conv : to, ConvException;
+        long days = 90;
+        auto envVal = environment.get("IRCFIBER_SESSION_TTL_DAYS", "");
+        if (envVal.length > 0) {
+            try {
+                days = envVal.to!long;
+                if (days < 7) {
+                    logWarn("IRCFIBER_SESSION_TTL_DAYS=%s below minimum 7, clamping to 7", envVal);
+                    days = 7;
+                } else if (days > 365) {
+                    logWarn("IRCFIBER_SESSION_TTL_DAYS=%s above maximum 365, clamping to 365", envVal);
+                    days = 365;
+                }
+                if (!_ttlLogged) logInfo("Session TTL configured: %s days (%s seconds) from IRCFIBER_SESSION_TTL_DAYS", days, days*24*60*60);
+            } catch (ConvException) {
+                logWarn("Invalid IRCFIBER_SESSION_TTL_DAYS='%s', using default 90 days", envVal);
+                days = 90;
+            } catch (Exception e) {
+                logWarn("Error reading IRCFIBER_SESSION_TTL_DAYS: %s, using default 90 days", e.msg);
+                days = 90;
+            }
+        } else {
+            if (!_ttlLogged) logInfo("Session TTL: 90 days (default, set IRCFIBER_SESSION_TTL_DAYS to override 7-365)");
+        }
+        _ttlLogged = true;
+        _cachedTtlSeconds = days * 24 * 60 * 60;
+        return _cachedTtlSeconds;
+    }
+}
+
+/// For testing: reset cached TTL (allows env change in tests)
+void resetSessionTtlCache() @trusted { synchronized (_ttlMutex) { _cachedTtlSeconds = 0; _ttlLogged = false; } }
+
 /// Redis-backed session store with channel-level locking and drain support.
 ///
 /// Channel-level lock: per-session Mutex so concurrent fibers serialize
@@ -28,7 +77,7 @@ final class RedisSessionStore : SessionStore {
     private {
         RedisStorage redis;
         alias KEY_PREFIX = SESSION_KEY_PREFIX;
-        enum TTL_SECONDS = 14 * 24 * 60 * 60; // 14 days
+        enum TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days — deprecated, use getSessionTtlSeconds()
 
         // Channel-level locks: one Mutex per session id.
         // Lazily populated — avoid allocating mutexes for unused sessions.
@@ -104,7 +153,7 @@ final class RedisSessionStore : SessionStore {
         try {
             auto db = redis.getDb();
             db.hset(keyFor(s.id), "_created", "1");
-            db.expire(keyFor(s.id), TTL_SECONDS);
+            db.expire(keyFor(s.id), getSessionTtlSeconds());
         } catch (Exception e) {
             logWarn("RedisSessionStore create failed: %s", e.msg);
         }
@@ -117,7 +166,7 @@ final class RedisSessionStore : SessionStore {
         try {
             auto db = redis.getDb();
             if (db.exists(keyFor(id))) {
-                db.expire(keyFor(id), TTL_SECONDS);
+                db.expire(keyFor(id), getSessionTtlSeconds());
                 return createSessionInstance(id);
             }
         } catch (Exception e) {
@@ -140,18 +189,21 @@ final class RedisSessionStore : SessionStore {
                 stored = () @trusted { return serializeToJson(value).toString(); }();
             }
             db.hset(keyFor(id), name, stored);
-            db.expire(keyFor(id), TTL_SECONDS);
+            db.expire(keyFor(id), getSessionTtlSeconds());
         } catch (Exception e) {
             logWarn("RedisSessionStore set failed: %s", e.msg);
         }
     }
 
-    /// Retrieves a session value.
+    /// Retrieves a session value. Refreshes TTL on hit so active sessions
+    /// slide forward (otherwise a daily user would still expire after TTL).
     Variant get(string id, string name, lazy Variant defaultVal) @trusted {
         try {
             auto db = redis.getDb();
             auto val = db.hget(keyFor(id), name);
             if (val.length > 0) {
+                try db.expire(keyFor(id), getSessionTtlSeconds());
+                catch (Exception) {}
                 auto j = () @trusted { return parseJson(val); }();
                 return Variant(j);
             }
