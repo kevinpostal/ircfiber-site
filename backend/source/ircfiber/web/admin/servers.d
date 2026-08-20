@@ -187,7 +187,7 @@ package void adminServers(HTTPServerRequest req, HTTPServerResponse res,
         row.serverId  = a.serverId;
         if (netRepo) {
             try {
-                auto netId = parseUUID(a.networkId);
+                auto netId = parseUUID(a.networkId.idup);
                 auto nw = netRepo.findByIdWithUser(netId);
                 if (nw.config.id != UUID.init) {
                     row.networkName = nw.config.name.length > 0 ? nw.config.name : nw.config.host;

@@ -185,7 +185,7 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         row.serverId = a.serverId;
         if (netRepo) {
             try {
-                auto netId = parseUUID(a.networkId);
+                auto netId = parseUUID(a.networkId.idup);
                 auto nw = netRepo.findByIdWithUser(netId);
                 if (nw.config.id != UUID.init) {
                     row.networkName = nw.config.name.length > 0 ? nw.config.name : nw.config.host;
@@ -212,7 +212,7 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
                 row.nick = snap.currentNick;
             } else if (netRepo) {
                 try {
-                    auto netId = parseUUID(a.networkId);
+                    auto netId = parseUUID(a.networkId.idup);
                     const nw = netRepo.findByIdWithUser(netId);
                     if (nw.config.id != UUID.init && nw.config.nick.length > 0) {
                         row.nick = nw.config.nick;
