@@ -1,5 +1,6 @@
 <!-- WASM evaluated 2026-08-13 — DOM-bound, not adopted; see frontend/wasm-message-history-report.md. Message history bottleneck is DOM/window, not per-row parse. -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import type { IRCMessage, Member } from '../types';
   import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
@@ -416,7 +417,22 @@
     return expanded.length === 1 ? expanded[0] : null;
   }
   function toggleExpand(): void {
-    expanded = !expanded;
+    const willExpand = !expanded;
+    // If the user was pinned at the bottom before expanding, keep the
+    // viewport pinned after the grouped rows render. Without this the
+    // newly-expanded rows land below the fold and the user must manually
+    // scroll to see them (bug: fa-square-plus grouping at bottom).
+    const scroller = document.getElementById('messages') as HTMLDivElement | null;
+    const wasAtBottom = !!(scroller && scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 1);
+    expanded = willExpand;
+    if (willExpand && wasAtBottom && scroller) {
+      tick().then(() => {
+        scroller.scrollTop = scroller.scrollHeight;
+        requestAnimationFrame(() => {
+          scroller.scrollTop = scroller.scrollHeight;
+        });
+      });
+    }
   }
 
   // Map the engine's phase taxonomy to human-readable labels for the
