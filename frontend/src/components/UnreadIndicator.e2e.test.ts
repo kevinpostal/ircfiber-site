@@ -5,7 +5,7 @@ import { page } from 'vitest/browser';
 import Sidebar from './Sidebar.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 import { ircState, setActiveBuffer, appendMessage, batchAppendMessages } from '../stores/ircStore.svelte';
-import { collapsedMap } from '../stores/preferences.svelte';
+import { collapsedMap, lastSeenMap, bottomSeenMap, unreadMap, highlightMap } from '../stores/preferences.svelte';
 
 function setupNet(netId = 'net1', chan = '#general') {
   const net = createNetwork({ networkId: netId, name: 'TestNet', nick: 'me', currentNick: 'me' });
@@ -24,6 +24,10 @@ describe('Unread indicator — full e2e suite', () => {
     ircState.focusLost = false;
     ircState.pulseBuffers.clear();
     for (const k of Object.keys(collapsedMap)) delete collapsedMap[k];
+    for (const k of Object.keys(lastSeenMap)) delete lastSeenMap[k];
+    for (const k of Object.keys(bottomSeenMap)) delete bottomSeenMap[k];
+    for (const k of Object.keys(unreadMap)) delete (unreadMap as Record<string, unknown>)[k];
+    for (const k of Object.keys(highlightMap)) delete (highlightMap as Record<string, unknown>)[k];
     localStorage.clear();
   });
 

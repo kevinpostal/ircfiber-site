@@ -1036,13 +1036,24 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
       hasChat = true;
       const track = shouldTrackUnread(networkId, bufferName);
       if (track) {
-        const normBuf = normalizeChannelName(bufferName);
-        const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-        if (!isActive || ircState.focusLost) addedUnread++;
-        const isHl = !!msg.highlight || (netForBatchHl ? checkHighlight(msg, netForBatchHl) : false);
-        if (isHl) {
-          addedHighlights++;
-          msg.highlight = true;
+        // Only count messages newer than lastSeen — history replay
+        // (e.g. 200 REST rows whose t ≤ lastSeen) must not bump the
+        // sidebar badge. Without this, a refresh on
+        // /irc/IRC%20Fiber/channel/testing replayed the whole backlog
+        // through the live batch path and flashed a bunch of badges
+        // that the next sync/heartbeat immediately cleared.
+        if (!isMessageUnseen(msg, networkId, bufferName)) {
+          // Already seen — still maybe highlight? IRCCloud only
+          // highlights unseen, so skip.
+        } else {
+          const normBuf = normalizeChannelName(bufferName);
+          const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
+          if (!isActive || ircState.focusLost) addedUnread++;
+          const isHl = !!msg.highlight || (netForBatchHl ? checkHighlight(msg, netForBatchHl) : false);
+          if (isHl) {
+            addedHighlights++;
+            msg.highlight = true;
+          }
         }
       }
     }
@@ -1204,6 +1215,13 @@ function shouldTrackUnread(networkId: string, bufferName: string): boolean {
 
 export function incrementUnread(networkId: string, bufferName: string, msg: IRCMessage): void {
   if (!shouldTrackUnread(networkId, bufferName)) return;
+  // Don't count messages the user has already seen (history replay,
+  // sync backfill, or a live event whose timestamp is ≤ lastSeen).
+  // Without this, a refresh that replays 200 history messages that are
+  // all older than lastSeen would inflate every channel's badge and
+  // cause the "flash then clear" flicker reported on
+  // /irc/IRC%20Fiber/channel/testing.
+  if (!isMessageUnseen(msg, networkId, bufferName)) return;
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net || bufferName === '_server') return;
@@ -1580,6 +1598,72 @@ export function updateBottomSeen(networkId: string, bufferName: string, msg: IRC
     return true;
   }
   return false;
+}
+
+// ── Stale-unread reconciliation (refresh flicker fix) ───────────────
+// On a hard refresh the client restores `unreadMap`/`highlightMap` from
+// localStorage BEFORE the sync payload and message history arrive.  That
+// persisted map can be stale — e.g. a badge for #testing that was read
+// on another device, or a channel whose entire backlog is older than
+// lastSeen.  Without reconciliation the sidebar flashes a bunch of badges
+// on first paint and then clears them when the next heartbeat or sync
+// overwrites the counts (the exact flicker reported on
+// /irc/IRC%20Fiber/channel/testing).
+//
+// Call after messages and lastSeen are both populated (i.e. at the end
+// of `updateNetworkFromSync` and after `setMessages` for sync-provided
+// history).  It walks every buffer, computes the true unseen count from
+// `lastSeen + messages`, and syncs `unreadMap` / `highlightMap` /
+// `buf.unreadCount` to that truth.  This is a single batched correction
+// before the browser paints, so no intermediate "badges then no badges"
+// frame is ever visible.
+export function reconcileUnreadState(): void {
+  for (const net of ircState.networks) {
+    for (const buf of net.buffers) {
+      if (buf.name === '_server') continue;
+      const key = `${net.networkId}:${buf.name}`;
+      const lastSeen = getLastSeen(net.networkId, buf.name);
+      const msgs = ircState.messages[key];
+      // No messages yet — nothing to reconcile; keep whatever unreadMap
+      // has until history arrives.  Once history arrives this function
+      // will run again via the next sync path.
+      if (!msgs || msgs.length === 0) continue;
+      // Never visited on this device — unread is local-only.  Don't
+      // synthesize a badge from old history; unread should only count
+      // messages that arrived *after* the user first saw the channel.
+      // Inflating here would flash badges for every never-visited
+      // channel on the first refresh.
+      if (lastSeen === null) continue;
+      let trueUnread = 0;
+      let trueHighlights = 0;
+      for (const m of msgs) {
+        const isChat = m.command === 'PRIVMSG' || (m.command === 'NOTICE' && !!m.nick);
+        if (!isChat) continue;
+        if ((m.t ?? 0) <= lastSeen) continue;
+        if (!shouldTrackUnread(net.networkId, buf.name)) continue;
+        trueUnread++;
+        if (m.highlight || checkHighlight(m, net)) trueHighlights++;
+      }
+      const prevUnread = unreadMap[key] ?? 0;
+      const prevHighlight = highlightMap[key] ?? false;
+      const shouldHaveHighlight = trueHighlights > 0;
+      // Sync buf fields
+      buf.unreadCount = trueUnread;
+      (buf as unknown as Record<string, unknown>).highlightCount = trueHighlights;
+      buf.highlight = shouldHaveHighlight;
+      // Sync maps — delete zero entries so Sidebar + title don't render 0 badges
+      if (trueUnread === 0) {
+        if (prevUnread !== 0) delete unreadMap[key];
+      } else {
+        if (prevUnread !== trueUnread) unreadMap[key] = trueUnread;
+      }
+      if (!shouldHaveHighlight) {
+        if (prevHighlight) delete highlightMap[key];
+      } else {
+        if (!prevHighlight) highlightMap[key] = true;
+      }
+    }
+  }
 }
 
 function normalizeUser(user: string | Member): Member {
@@ -2539,6 +2623,13 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
   for (const net of ircState.networks) {
     sortBuffers(net);
   }
+
+  // Reconcile any stale localStorage unread/highlight that predated the
+  // message history.  This runs synchronously in the same tick as the
+  // sync, so the Sidebar never paints an intermediate "badges on then
+  // badges off" frame — the correction is atomic with the network list
+  // update that caused the flash on /irc/IRC%20Fiber/channel/testing.
+  reconcileUnreadState();
 }
 
 export function handleConnect(cmd: string, networkId: string, text?: string): void {

@@ -2,19 +2,20 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
 import NotificationBadge from './NotificationBadge.svelte';
-import { unreadMap, highlightMap } from '../stores/preferences.svelte';
+import { unreadMap, highlightMap, lastSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
 import { ircState, setActiveBuffer, appendMessage, getTotalUnread, getHasHighlight } from '../stores/ircStore.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 
 beforeEach(() => {
   Object.keys(unreadMap).forEach((k) => delete (unreadMap as Record<string, unknown>)[k]);
   Object.keys(highlightMap).forEach((k) => delete (highlightMap as Record<string, unknown>)[k]);
+  for (const k of Object.keys(lastSeenMap)) delete (lastSeenMap as Record<string, unknown>)[k];
+  for (const k of Object.keys(bottomSeenMap)) delete (bottomSeenMap as Record<string, unknown>)[k];
   ircState.networks.length = 0;
   ircState.activeBuffer.networkId = null;
   ircState.activeBuffer.bufferName = null;
   ircState.focusLost = false;
 });
-
 describe('NotificationBadge', () => {
   it('updates document.title with unread count', async () => {
     unreadMap['net1:#chan'] = 3;
