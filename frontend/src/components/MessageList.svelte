@@ -1166,11 +1166,8 @@
     // to decide whether to buffer incoming messages while reading. wasRecently (100ms grace)
     // is only for textarea autogrow, not for message pin. Using wasRecently here caused
     // "if a new message comes in it forces it to bottom" — any message arriving within
-    // 100ms of scrolling up was considered pinned via wasRecently and snapped. See
-    // bufferscrollview.js flushBuffer vs shouldPinBottom.
-    const isAtBottomStrict = cachedAtBottom || isDomAtBottom;
+    const isAtBottomStrict = untrack(() => cachedAtBottom) || isDomAtBottom;
     const isAtBottom = isAtBottomStrict;
-    // isHistoryPrependForSnap previously forced a snap even when reading.
     // Gate on isAtBottom so only pinned fills snap; initial load isAtBottom true.
     const historyPrependSnap = isInitialSnap && isHistoryPrependForSnap && isAtBottom;
     // When a backlog divider is present and user is at top (reading history),
@@ -1190,12 +1187,10 @@
       // do not run the scrolledUp direction check that would otherwise
       // clear the stick when scrollHeight grew under a pinned viewport.
       if (!isInitialSnap) {
-        const scrolledUp = container ? container.scrollTop < prevScrollTop : false;
-        if (scrolledUp) { cachedAtBottom = false; wasRecentlyAtBottom = false; if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; } } else {
-          renderEndKey = '';
+        if (scrolledUp) { untrack(() => { cachedAtBottom = false; wasRecentlyAtBottom = false; if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; } }); } else {
+          untrack(() => { renderEndKey = ''; });
           wasRecentlyAtBottom = true;
           if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; }
-          tick().then(() => {
             if (!container) return;
             // Entrance animation: detect which messages are new since the last
             // time we were at the bottom. Only the batch head (firstAuthor or
