@@ -545,8 +545,7 @@
             Connection events ({connectionEventsCount})
           </summary>
 
-          <div class="connection-events-body" hidden="until-found" onbeforematch={() => { if (!eventsOpen) setServerlogCollapseEvents(true); }}>
-            <!-- Phase events as one-line rows -->
+          <div class="connection-events-body">
             {#each attempt.phases as msg, pi (pi)}
               <div class="row" class:row--last={pi === attempt.phases.length - 1} data-testid="phase-row">
                 <span class="row-prefix">→</span>
@@ -660,7 +659,7 @@
                      each capability name is a cyan tag, spaces between them
                      are thin separators, key=value pairs get key/value split. -->
             {#if attempt.notices.length > 0}
-              <div class="row row--notices" hidden="until-found" onbeforematch={() => { if (!eventsOpen) setServerlogCollapseEvents(true); }}>
+              <div class="row row--notices">
                 <details class="notices-details">
                   <summary class="row-content">
                     <span class="row-tag">NOTICE</span>
