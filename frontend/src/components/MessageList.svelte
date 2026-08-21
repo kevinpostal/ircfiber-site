@@ -1538,6 +1538,25 @@
     };
   });
 
+  // When a new message arrives while scrolled up, the ChatterBar below
+  // should appear even though the user hasn't scrolled. Previously
+  // updateChatterCounts was only called on scroll (handleScroll →
+  // scheduleScrollStateUpdate), so new messages while scrolled up never
+  // triggered the bar until the next scroll. This effect watches for new
+  // messages and for bottomSeen changes and schedules an update when not
+  // at bottom, matching IRCCloud's LowerChatterBarView.update on new
+  // message while scrolled up.
+  $effect(() => {
+    void processedMessages.length;
+    const nid = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    void (nid && buf ? getBottomSeen(nid, buf) : null);
+    const atBottom = cachedAtBottom;
+    if (!atBottom) {
+      scheduleScrollStateUpdate();
+    }
+  });
+
   // ── Row-at-point lookups (IRCCloud BufferLogContainerView.getRowAtPosition) ──
   // IRCCloud resolves the rows at the top/bottom of the viewport with an
   // elementFromPoint hit test — O(1) per scroll event. Iterating every row
