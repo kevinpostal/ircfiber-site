@@ -1989,15 +1989,61 @@
   });
 
   function scrollToTop(): void {
+    // Clicking the "N unread above" bar means you are going to see those
+    // messages, so mark them as read immediately (don't wait for the smooth
+    // scroll to finish and handleScroll to fire). This prevents the bar
+    // from staying visible after you clicked it and it scrolled to top.
+    const nid = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (nid && buf) {
+      aboveUnseenCount = 0;
+      aboveUnseenTimestamp = null;
+      aboveUnseenHighlights = 0;
+    }
     container?.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function scrollToBottom(): void {
     if (!container) return;
+    // Clicking the "N unread below" bar (e.g. "1 unread (less than a minute)")
+    // should immediately mark those new messages as read and hide the bar.
+    // Previously it only scrolled, and relied on handleScroll's atBottom
+    // detection after the smooth scroll finished (rAF + 200ms), so the bar
+    // stayed visible for a moment after you clicked and it scrolled.
+    const nid = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (nid && buf) {
+      const list = ircState.messages[`${nid}:${buf}`] ?? [];
+      if (list.length > 0) {
+        const last = list[list.length - 1];
+        if (last.t) {
+          setLastSeen(nid, buf, last.t);
+          clearBottomSeen(nid, buf);
+          // Also clear the buffer's lastSeen for consistency
+          const net = getActiveNetwork();
+          const b = net?.buffers.find(x => x.name === buf);
+          if (b) {
+            b.lastSeen = last.t;
+            b.bottomSeen = last.t;
+          }
+        }
+      }
+      belowUnseenCount = 0;
+      belowUnseenTimestamp = null;
+      belowUnseenHighlights = 0;
+      // Also clear the divider's bottomSeen so it doesn't reappear
+      // on the next updateChatterCounts tick before handleScroll clears.
+    }
     if (renderEndKey) {
       renderEndKey = '';
       maybeTrim();
       try { flushSync(); } catch {}
+    }
+    cachedAtBottom = true;
+    wasRecentlyAtBottom = true;
+    if (recentlyScrolledTimeout) {
+      clearTimeout(recentlyScrolledTimeout);
+      recentlyScrolledTimeout = null;
     }
     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }
