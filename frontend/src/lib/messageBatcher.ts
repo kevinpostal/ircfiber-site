@@ -72,6 +72,18 @@ export function enqueueMessage(networkId: string, bufferName: string, msg: IRCMe
   }
 }
 
+function compareBatch(a: IRCMessage, b: IRCMessage): number {
+  const ta = (a.t ?? 0) as number;
+  const tb = (b.t ?? 0) as number;
+  if (ta !== tb) return ta - tb;
+  const ea = a.eid;
+  const eb = b.eid;
+  if (ea != null && eb != null) return ea - eb;
+  if (ea != null) return -1;
+  if (eb != null) return 1;
+  return (a.msgid ?? '').localeCompare(b.msgid ?? '');
+}
+
 function flushAll(): void {
   if (flushTimeout !== null) {
     clearTimeout(flushTimeout);
@@ -88,6 +100,7 @@ function flushAll(): void {
     totalQueued = 0;
     for (const [key, msgs] of snapshot) {
       if (msgs.length > 0) {
+        if (msgs.length > 1) msgs.sort(compareBatch);
         const idx = key.indexOf(':');
         const networkId = key.slice(0, idx);
         const bufferName = key.slice(idx + 1);
@@ -105,6 +118,7 @@ function flushAll(): void {
     totalBackfillQueued = 0;
     for (const [key, msgs] of snapshot) {
       if (msgs.length > 0) {
+        if (msgs.length > 1) msgs.sort(compareBatch);
         const idx = key.indexOf(':');
         const networkId = key.slice(0, idx);
         const bufferName = key.slice(idx + 1);

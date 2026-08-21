@@ -1141,7 +1141,7 @@
     const hasMessagesForInitialSnap = processedMessages.length > 0;
     const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
     const isDomAtBottom = !container || container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1;
-    const isAtBottom = cachedAtBottom || isDomAtBottom;
+    const isAtBottom = cachedAtBottom || wasRecentlyAtBottom || isDomAtBottom;
     // isHistoryPrependForSnap previously forced a snap even when reading.
     // Gate on isAtBottom so only pinned fills snap; initial load isAtBottom true.
     const historyPrependSnap = isInitialSnap && isHistoryPrependForSnap && isAtBottom;
@@ -1160,8 +1160,10 @@
       // clear the stick when scrollHeight grew under a pinned viewport.
       if (!isInitialSnap) {
         const scrolledUp = container ? container.scrollTop < prevScrollTop : false;
-        if (scrolledUp) { cachedAtBottom = false; } else {
+        if (scrolledUp) { cachedAtBottom = false; wasRecentlyAtBottom = false; if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; } } else {
           renderEndKey = '';
+          wasRecentlyAtBottom = true;
+          if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; }
           tick().then(() => {
             if (!container) return;
             // Entrance animation: detect which messages are new since the last

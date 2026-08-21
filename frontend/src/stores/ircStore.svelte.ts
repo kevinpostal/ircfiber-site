@@ -833,6 +833,29 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     }
   }
 
+  // Sorted insert for burst determinism: if the new msg is older than the
+  // tail (e.g. WS batch delivered out-of-order), insert at the correct
+  // position rather than blindly pushing. In the common case tail is
+  // newest, so this is a single comparison + push.
+  if (list.length > 0) {
+    const tail = list[list.length - 1];
+    if (compareMessages(tail, msg) > 0) {
+      // Out-of-order — find insertion point (binary-ish linear scan from tail
+      // is cheap because burst reorders are local and the buffer is capped).
+      let idx = list.length - 1;
+      while (idx > 0 && compareMessages(list[idx - 1], msg) > 0) idx--;
+      list.splice(idx, 0, msg);
+      ircState.messages[key] = list;
+      ircState.processedMessages[key] = buildProcessedBuffer(list);
+      const normBuf2 = normalizeChannelName(bufferName);
+      const isActive2 = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf2;
+      const isChatMessage2 = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
+      const isUnread2 = isChatMessage2 && (!isActive2 || ircState.focusLost);
+      if (isUnread2) incrementUnread(networkId, bufferName, msg);
+      markNetworkSeen(networkId);
+      return;
+    }
+  }
   list.push(msg);
   ircState.messages[key] = list;
 
@@ -866,7 +889,27 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
 // of one per message. The batcher already collects messages over 200ms,
 // but the per-message state assignment still caused N reactive ticks per
 // flush. This eliminates the jitter when a large backlog arrives.
+// Burst-order guard: live messages that arrive in the same millisecond
+// (ascii art pasted as 10 PRIVMSGs with identical server-time) must
+// render in eid order, not arrival order. History (REST + prependMessages)
+// already sorts by t→eid; the live path was trusting arrival order, which
+// races under WS batching. One shared comparator keeps every insertion
+// deterministic.
+function compareMessages(a: IRCMessage, b: IRCMessage): number {
+  const ta = a.t ?? 0;
+  const tb = b.t ?? 0;
+  if (ta !== tb) return ta - tb;
+  if (a.eid != null && b.eid != null) return a.eid - b.eid;
+  if (a.eid != null) return -1;
+  if (b.eid != null) return 1;
+  return (a.msgid ?? '').localeCompare(b.msgid ?? '');
+}
+
 export function batchAppendMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
+  // Deterministic burst order: ascii art lines share the same t, so
+  // arrival order must not decide render order. Sort once so the
+  // pending list and processed buffer are always t→eid stable.
+  if (msgs.length > 1) msgs = [...msgs].sort(compareMessages);
   if (msgs.length === 0) return;
 
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
@@ -1005,9 +1048,46 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     }
   }
 
+  // If the sorted burst is older than the tail (out-of-order WS delivery),
+  // merge-sort the tail instead of appending — keeps ascii art line order
+  // stable even when the gateway batch raced. Common case is already sorted,
+  // so this is a single comparison.
+  if (pending.length > 0 && list.length > pending.length) {
+    const tailBeforeBatch = list[list.length - pending.length - 1];
+    if (tailBeforeBatch && compareMessages(tailBeforeBatch, pending[0]) > 0) {
+      // pending was interleaved — re-sort the whole window. Pending is
+      // sorted and the existing prefix is sorted, so a full sort is just
+      // the burst reorder fix; cost is O(N log N) but N≤5k and this path
+      // fires rarely (only on genuine out-of-order delivery).
+      const merged = [...list];
+      merged.sort(compareMessages);
+      // Dedup again by eid/msgid after the sort (reorder could expose dups
+      // that the earlier within-batch dedup missed due to insertion order).
+      const seen2 = new Set<number>();
+      const msgids2 = new Set<string>();
+      const dedupedMerged: IRCMessage[] = [];
+      for (const m of merged) {
+        if ((m.eid != null && seen2.has(m.eid)) || (m.msgid && msgids2.has(m.msgid))) continue;
+        if (m.eid != null) seen2.add(m.eid);
+        if (m.msgid) msgids2.add(m.msgid);
+        dedupedMerged.push(m);
+      }
+      list.length = 0;
+      list.push(...dedupedMerged);
+      // Rebuild pending/newForProcessed to match the deduped sorted tail
+      pending.length = 0;
+      newForProcessed.length = 0;
+      for (const m of dedupedMerged.slice(-dedupedMerged.length)) {
+        // we don't need to recompute pending perfectly — the incremental
+        // path below will be replaced by a full rebuild when list was
+        // re-sorted.
+      }
+      // Force full rebuild in the processed step below
+      replacedEdit = true;
+    }
+  }
   // Single state assignment triggers one reactive update for the batch
   ircState.messages[key] = list;
-
   // Edit replacement: the message text changed in-place — rebuild the
   // processed cache entirely since the existing grouping may need to
   // reflect the updated text.

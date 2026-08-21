@@ -1096,6 +1096,9 @@ describe('updateChannelUsers', () => {
 	it('batchAppendMessages dedupes duplicates WITHIN the batch (O(1) per-message)', () => {
 		// Same scenario as above, but for the WS hot path. The set-based
 		// dedup keeps the per-message cost O(1) instead of O(n).
+		// Burst-order guard: the live path now sorts by t→eid so ascii art
+		// pasted as 10 lines with identical t renders deterministically.
+		// An older batch (50,60) appended after 100 is merged chronologically.
 		const key = 'net1:#chan';
 		ircState.messages[key] = [
 			{ command: 'PRIVMSG', text: 'a', eid: 100, t: 100 },
@@ -1108,7 +1111,7 @@ describe('updateChannelUsers', () => {
 		]);
 
 		const eids = ircState.messages[key].map((m) => m.eid);
-		expect(eids).toEqual([100, 50, 60]);
+		expect(eids).toEqual([50, 60, 100]);
 	});
 
 	it('prependMessages preserves older entries without msgid (optimistic messages)', () => {
