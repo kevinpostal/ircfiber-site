@@ -197,6 +197,10 @@
   }
   function requestBanList(): void {
     if (!networkId || !buf.name) return;
+    // Track that the user explicitly requested the ban list for this channel,
+    // so the 367/368 reply will actually show the overlay. Without this, a
+    // 368 replayed from history on refresh would also pop the dialog.
+    ircState.pendingBanList.set(`${networkId}:${buf.name}`, { networkId, ts: Date.now() });
     sendRaw(networkId, 'MODE ' + buf.name + ' +b');
     onClose();
   }

@@ -233,7 +233,6 @@
         >
           <summary
             class="server-features-panel__cat-head"
-            onclick={() => toggleCategory(group.category.id)}
             aria-expanded={!isCollapsed}
             aria-controls={`server-features-panel-cat-body-${group.category.id}`}
           >

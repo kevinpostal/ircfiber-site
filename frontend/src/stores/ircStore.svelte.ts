@@ -112,10 +112,8 @@ export const ircState = $state({
   // but those should NOT pop up the WHOIS overlay or inline block.
   // We store the originating buffer so the inline WHOIS_GROUP can be
   // appended to the right channel/query (IRCCloud shows WHOIS where you
-  // typed /whois, not always in the active buffer at response time).
   pendingWhois: new Map<string, { networkId: string; bufferName: string; ts: number }>(),
-  // was the earliest rendered message before the last backlog fetch. The
-  // divider row renders immediately above it (BufferLogView.renderBacklogDivider).
+  pendingBanList: new Map<string, { networkId: string; ts: number }>(),
   // Only one divider exists per buffer at a time; cleared on buffer switch
   // (IRCCloud re-renders the log fresh on select).
   backlogDivider: {} as Record<string, string>,
@@ -713,7 +711,7 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     if (idx >= 0) {
       const optimistic = list[idx];
       list[idx] = msg;
-      ircState.messages[key] = list;
+      ircState.messages[key] = [...list];
       // Swap the stale optimistic entry for the server echo in O(n) —
       // no full preprocessMessages call. The old code rebuilt the entire
       // processed cache on every echo, which made typing 10 messages in a
@@ -722,7 +720,7 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
       const replaced = ircState.processedMessages[key]
         ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
         : null;
-      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
+      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
       return;
     }
   }
@@ -735,11 +733,11 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     if (idx >= 0) {
       const optimistic = list[idx];
       list[idx] = msg;
-      ircState.messages[key] = list;
+      ircState.messages[key] = [...list];
       const replaced = ircState.processedMessages[key]
         ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
         : null;
-      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
+      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
       return;
     }
   }
@@ -768,11 +766,11 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
           // row, causing a visible flicker + double entrance animation.
           if (!msg.label) msg.label = optLabel;
           list[idx] = msg;
-          ircState.messages[key] = list;
+          ircState.messages[key] = [...list];
           const replaced = ircState.processedMessages[key]
             ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
             : null;
-          ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
+          ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
           return;
         }
       }
@@ -802,11 +800,11 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
         if (!msg.label && existing.label) msg.label = existing.label;
         if (existing.label) ircState.optimisticMessages.delete(existing.label);
         list[i] = msg;
-        ircState.messages[key] = list;
+        ircState.messages[key] = [...list];
         const replaced = ircState.processedMessages[key]
           ? replaceInProcessedBuffer(ircState.processedMessages[key], optimistic, msg)
           : null;
-        ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
+        ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
         return;
       }
     }
@@ -826,9 +824,9 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
       if (!msg.label && cand.label) msg.label = cand.label;
       if (cand.label) ircState.optimisticMessages.delete(cand.label);
       list[i] = msg;
-      ircState.messages[key] = list;
+      ircState.messages[key] = [...list];
       const replaced = ircState.processedMessages[key] ? replaceInProcessedBuffer(ircState.processedMessages[key], cand, msg) : null;
-      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer(list);
+      ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
       return;
     }
   }
@@ -842,11 +840,9 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     if (compareMessages(tail, msg) > 0) {
       // Out-of-order — find insertion point (binary-ish linear scan from tail
       // is cheap because burst reorders are local and the buffer is capped).
-      let idx = list.length - 1;
-      while (idx > 0 && compareMessages(list[idx - 1], msg) > 0) idx--;
       list.splice(idx, 0, msg);
-      ircState.messages[key] = list;
-      ircState.processedMessages[key] = buildProcessedBuffer(list);
+      ircState.messages[key] = [...list];
+      ircState.processedMessages[key] = buildProcessedBuffer([...list]);
       const normBuf2 = normalizeChannelName(bufferName);
       const isActive2 = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf2;
       const isChatMessage2 = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
@@ -857,8 +853,7 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     }
   }
   list.push(msg);
-  ircState.messages[key] = list;
-
+  ircState.messages[key] = [...list];
   // Incremental preprocessing: only regroup the new tail (and the
   // previous tail group, if any, in case it merges with the new message).
   if (ircState.processedMessages[key]) {
@@ -1098,12 +1093,12 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     }
   }
   // Single state assignment triggers one reactive update for the batch
-  ircState.messages[key] = list;
+  ircState.messages[key] = [...list];
   // Edit replacement: the message text changed in-place — rebuild the
   // processed cache entirely since the existing grouping may need to
   // reflect the updated text.
   if (replacedEdit) {
-    ircState.processedMessages[key] = buildProcessedBuffer(list);
+    ircState.processedMessages[key] = buildProcessedBuffer([...list]);
   }
 
   // Incremental preprocessing: only regroup the new tail (and the
@@ -1120,7 +1115,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     } else {
       // Cold start: build the cache from the current raw list.  This
       // is the only place we pay O(buffer size) once.
-      ircState.processedMessages[key] = buildProcessedBuffer(list);
+      ircState.processedMessages[key] = buildProcessedBuffer([...list]);
     }
   }
 

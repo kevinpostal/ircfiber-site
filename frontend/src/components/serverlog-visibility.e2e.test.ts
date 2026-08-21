@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { tick } from 'svelte';
 import ServerLogTimeline from './ServerLogTimeline.svelte';
+import ServerFeaturesPanel from './ServerFeaturesPanel.svelte';
 import { ircState } from '../stores/ircStore.svelte';
 import { serverlogCollapsedMap, setServerlogCollapseEvents, getServerlogCollapseEvents } from '../stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
@@ -12,7 +13,7 @@ beforeEach(() => {
   ircState.activeBuffer.bufferName = null;
   for (const k of Object.keys(serverlogCollapsedMap)) delete (serverlogCollapsedMap as any)[k];
   localStorage.clear();
-  setServerlogCollapseEvents(false); // ensure expanded by default for test
+  setServerlogCollapseEvents(false);
 });
 
 function setupServerBuffer(connected = true) {
@@ -36,25 +37,18 @@ describe('Server Log visibility — htmlcat regression', () => {
       createMessage({ command: '376', text: 'End of /MOTD command', t: now - 1000, nick: 'server', channel: '_server' }),
       createMessage({ command: 'NOTICE', text: '*** Looking up your hostname', t: now - 500, nick: 'server', channel: '_server' }),
     ];
-
-    // Ensure expanded
     setServerlogCollapseEvents(false);
     render(ServerLogTimeline, { props: { messages: msgs, network } } as any);
     await tick();
-    // Wait for effects
     await new Promise((r) => setTimeout(r, 100));
-
-    // Check welcome is visible
     const welcomeSegs = document.querySelectorAll('.welcome-seg');
     expect(welcomeSegs.length).toBeGreaterThan(0);
-    // Check MOTD is visible
     const motd = document.querySelector('.motd-body');
     expect(motd).toBeTruthy();
     if (motd) {
       expect(getComputedStyle(motd as HTMLElement).display).not.toBe('none');
       expect(motd.textContent).toContain('MOTD');
     }
-    // Check connection events are visible (details open)
     const details = document.querySelector('details.connection-events') as HTMLDetailsElement | null;
     expect(details).toBeTruthy();
     if (details) {
@@ -66,7 +60,6 @@ describe('Server Log visibility — htmlcat regression', () => {
         expect(body.textContent).toContain('Welcome');
       }
     }
-    // Check that welcome row is visible
     const welcomeRow = document.querySelector('.row--info') as HTMLElement | null;
     expect(welcomeRow).toBeTruthy();
     if (welcomeRow) {
@@ -115,9 +108,7 @@ describe('Server Log visibility — htmlcat regression', () => {
     const msgs: any[] = [
       createMessage({ command: '001', text: 'Welcome', t: now - 1000, nick: 'server', channel: '_server' }),
     ];
-    // First, test expanded: no hidden clone should be visible, body should be visible
     setServerlogCollapseEvents(false);
-    // Ensure per-attempt not collapsed
     for (const k of Object.keys(serverlogCollapsedMap)) delete (serverlogCollapsedMap as any)[k];
     render(ServerLogTimeline, { props: { messages: msgs, network } } as any);
     await tick();
@@ -128,20 +119,13 @@ describe('Server Log visibility — htmlcat regression', () => {
       expect(getComputedStyle(body).display).not.toBe('none');
     }
     const hiddenClone = document.querySelector('[data-testid="server-log-hidden-search"]');
-    // When expanded, hidden clone should not be present (it's in {:else} branch)
     expect(hiddenClone).toBeNull();
-
-    // Now test collapsed: set per-attempt collapsed
     document.body.innerHTML = '';
     ircState.networks.length = 0;
     const net2 = setupServerBuffer(true);
-    // Force per-attempt collapsed by setting map
-    // We need to know the key: it will be generated from attempt, we can just set all to true
-    // Render again with collapsed
     const msgs2 = [...msgs];
     render(ServerLogTimeline, { props: { messages: msgs2, network: net2 } } as any);
     await tick();
-    // Manually collapse via map
     const head = document.querySelector('[data-testid="server-log-attempt"]') as HTMLElement | null;
     if (head) {
       head.click();
@@ -150,6 +134,32 @@ describe('Server Log visibility — htmlcat regression', () => {
       if (hiddenAfter) {
         expect(hiddenAfter.getAttribute('hidden')).toBe('until-found');
       }
+    }
+  });
+});
+
+describe('Server Features drawer', () => {
+  it('clicking a feature row opens IsupportDetailDrawer', async () => {
+    const isupport = { NETWORK: 'TestNet', CHANTYPES: '#', NICKLEN: '30', CHANLIMIT: '#:10', PREFIX: '(ov)@+' };
+    render(ServerFeaturesPanel, { props: { isupport } } as any);
+    await tick();
+    const rowBtn = document.querySelector('button.server-features-panel__row-btn') as HTMLButtonElement | null;
+    expect(rowBtn).toBeTruthy();
+    if (!rowBtn) return;
+    rowBtn.click();
+    await tick();
+    await new Promise((r) => setTimeout(r, 100));
+    const drawer = document.querySelector('[data-testid="isupport-detail"]') as HTMLElement | null;
+    expect(drawer).toBeTruthy();
+    if (drawer) {
+      expect(getComputedStyle(drawer).display).not.toBe('none');
+      expect(drawer.textContent).toContain('TestNet');
+    }
+    const backdrop = document.querySelector('[data-testid="isupport-detail-backdrop"]') as HTMLElement | null;
+    if (backdrop) {
+      backdrop.click();
+      await tick();
+      expect(document.querySelector('[data-testid="isupport-detail"]')).toBeNull();
     }
   });
 });

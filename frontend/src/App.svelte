@@ -1459,10 +1459,22 @@ let showNetworkForm: boolean = $state(false);
       }
     }
     if (result.banListData) {
-      ircState.overlay.type = 'banlist';
-      ircState.overlay.data = result.banListData as BanListData;
+      const d = result.banListData as BanListData;
+      const key = `${d.networkId}:${d.channel}`;
+      const pending = ircState.pendingBanList.get(key);
+      // Only show the overlay if the user explicitly requested this ban list
+      // (via the context menu or /banlist). Otherwise this 368 is from
+      // history replay on refresh and should not pop a dialog.
+      // Expire the pending entry after 30s or after use.
+      const isRecent = pending ? Date.now() - pending.ts < 30_000 : false;
+      if (pending && isRecent) {
+        ircState.pendingBanList.delete(key);
+        ircState.overlay.type = 'banlist';
+        ircState.overlay.data = d;
+      } else if (pending) {
+        ircState.pendingBanList.delete(key);
+      }
     }
-  }
 
   function checkRoute(): void {
     syncViewers();

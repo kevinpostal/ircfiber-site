@@ -176,6 +176,8 @@ registerSlash(['kickban', 'kb'], (args, networkId, target) => {
 registerSlash(['banlist', 'bans'], (args, networkId, target) => {
   const chan = args[0] ? normalizeChannelName(args[0]) : target;
   if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
+  // Track pending so the 368 reply actually shows the overlay (see App.svelte)
+  ircState.pendingBanList.set(`${networkId}:${chan}`, { networkId, ts: Date.now() });
   sendRaw(networkId, 'MODE ' + chan + ' +b');
 });
 
