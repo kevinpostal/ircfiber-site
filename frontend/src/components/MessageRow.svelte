@@ -382,7 +382,7 @@
     } else {
       inner += renderText(msg.text || '');
     }
-    return `<span class="content">${inner}</span>`;
+    return `<span translate="no" class="content">${inner}</span>`;
   }
 
   interface BanModeInfo {
@@ -534,7 +534,7 @@
   >
     <span class="g">&nbsp;</span>
     <span class="message">
-      <span class="content"><span class="collapseWidget" aria-label="User activity">
+      <span translate="no" class="content"><span class="collapseWidget" aria-label="User activity">
           <i class="fa-regular fa-square-minus collapseIcon"></i>
           <i class="fa-regular fa-square-plus expandIcon"></i>
           <i class="fa-solid fa-angle-right collapsedIcon"></i>
@@ -555,7 +555,7 @@
       >
         <span class="g">&nbsp;</span>
         <span class="message">
-          <span class="content">{@html r.html}</span>
+          <span translate="no" class="content">{@html r.html}</span>
         </span>
         <span class="date" onmouseenter={tsEnter} onmouseleave={tsLeave}><span class="timestamp" title={r.fullTitle}>{r.timeStr}</span></span>
       </div>
@@ -609,7 +609,7 @@
         {@const member = findMemberForNick(nick)}
         {@const sensibleRealname = getSensibleRealname(member?.realname || networkRealname)}
         {@const botFlag = isBotNick(nick, member, msg.prefix)}
-        <span class="authorWrap">
+        <span translate="no" class="authorWrap">
           <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
           <span role="button" tabindex="0" class="buffer bufferLink author {colorCls} user hasUserParent link"
@@ -642,7 +642,7 @@
           `white-space: pre-wrap` line wraps correctly and matches the
           existing IRCCloud CSS selectors (e.g. `div.messageRow .content`).
         -->
-        <span class="content">
+        <span translate="no" class="content">
           <span class="avatar letterAvatar hasUserParent {colorCls}">
             <span role="presentation">{initial}</span>
           </span><span class="me_prefix">&mdash;</span>&nbsp;{#if modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}<!-- svelte-ignore a11y_click_events_have_key_events
@@ -650,7 +650,7 @@
                 title={authorTitle} onclick={handleNickClick}>{nick}</span>&nbsp;{#if botFlag}<span class="author-bot"><span title="">BOT</span>&nbsp;</span>&nbsp;{/if}<LongMessageContent text={actionText} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}
         </span>
       {:else if chatContent}
-        <span class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}</span>
+        <span translate="no" class="content">{@html chatContent.prefix}<LongMessageContent text={chatContent.text} render={renderText} isBlockArt={isBlockArt} />{#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}<span class="inlineEmbeds">{#each youtubeIds as vid (vid)}<YoutubeEmbed id={vid} />{/each}{#each imageUrls as imgUrl (imgUrl)}<ImageInline url={imgUrl} />{/each}{#each textUrls as turl (turl)}<TextInline url={turl} />{/each}</span>{/if}</span>
       {:else}
         {@html getContentHTML()}
         {#if youtubeIds.length > 0 || imageUrls.length > 0 || textUrls.length > 0}

@@ -219,14 +219,19 @@
     >
       {#each groups as group (group.category.id)}
         {@const isCollapsed = !!collapsed[group.category.id]}
-        <article
+        <details
           class="server-features-panel__cat"
           class:server-features-panel__cat--collapsed={isCollapsed}
           data-testid="server-features-panel-cat"
           data-category={group.category.id}
+          open={!isCollapsed}
+          ontoggle={(e) => {
+            const shouldOpen = (e.currentTarget as HTMLDetailsElement).open;
+            if (shouldOpen === !isCollapsed) return;
+            toggleCategory(group.category.id);
+          }}
         >
-          <button
-            type="button"
+          <summary
             class="server-features-panel__cat-head"
             onclick={() => toggleCategory(group.category.id)}
             aria-expanded={!isCollapsed}
@@ -241,10 +246,10 @@
             <span class="server-features-panel__cat-count" aria-label={`${group.features.length} features`}>
               {group.features.length}
             </span>
-          </button>
+          </summary>
 
           {#if !isCollapsed}
-            <ul
+          <ul
               class="server-features-panel__rows"
               id={`server-features-panel-cat-body-${group.category.id}`}
               data-testid="server-features-panel-rows"
@@ -278,7 +283,7 @@
               {/each}
             </ul>
           {/if}
-        </article>
+        </details>
       {/each}
     </div>
   {/if}

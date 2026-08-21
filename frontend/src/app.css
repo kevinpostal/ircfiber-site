@@ -1,3 +1,65 @@
+:root{color-scheme:dark; accent-color:var(--fiber-blue, #1e72ff)}
+html{scroll-behavior:smooth}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; scroll-behavior:auto !important}
+}
+
+/* ── Modern CSS globals (htmlcat adoption T2) ───────────────────────────── */
+/* Low-specificity reset for lists with classes */
+:where(ul,ol)[class]{margin:0;padding:0}
+/* Anchor scroll offset for fixed BufferHeader */
+[id]{scroll-margin-block-start:6rem}
+:target{outline:2px solid var(--fiber-blue, #1e72ff); outline-offset:2px}
+/* ::selection with color-mix + fallback */
+::selection{background:#4937c7; color:#fff}
+@supports (background: color-mix(in oklch, red 50%, blue)){
+  ::selection{background:color-mix(in oklch, var(--fiber-blue, #1e72ff) 70%, #4937c7); color:#fff}
+}
+/* ::marker styling with fallback */
+li::marker{color:rebeccapurple}
+@supports (color: color-mix(in oklch, red 50%, blue)){
+  li::marker{color:color-mix(in oklch, var(--fiber-blue, #1e72ff) 70%, rebeccapurple)}
+}
+/* text-wrap with @supports gate */
+@supports (text-wrap: balance){
+  h1,h2,h3{text-wrap:balance}
+}
+@supports (text-wrap: pretty){
+  p{text-wrap:pretty}
+}
+@supports not (text-wrap: balance){
+  h1,h2,h3{overflow-wrap:break-word}
+}
+/* Focus rings via color-mix with fallback */
+.focus-ring{outline:2px solid rgba(30,114,255,0.55); outline-offset:2px}
+.focus-ring:focus-visible{outline:2px solid rgba(30,114,255,0.55)}
+@supports (color: color-mix(in oklch, red 50%, transparent)){
+  .focus-ring{outline-color:color-mix(in oklch, var(--fiber-blue, #1e72ff) 55%, transparent)}
+  .focus-ring:focus-visible{outline-color:color-mix(in oklch, var(--fiber-blue, #1e72ff) 55%, transparent)}
+}
+dialog:focus{outline:2px solid rgba(30,114,255,0.55)}
+@supports (color: color-mix(in oklch, red 50%, transparent)){
+  dialog:focus{outline-color:color-mix(in oklch, var(--fiber-blue, #1e72ff) 55%, transparent)}
+}
+/* hide-scrollbars utility */
+.scroller{overflow:auto; scrollbar-width:none}
+.scroller::-webkit-scrollbar{display:none}
+.memberList, #sidebar, #flat-members, .uploads-panel .uploads-list, .uploadsPanel, .uploadsPanel .uploads-list{
+  scrollbar-width:none
+}
+.memberList::-webkit-scrollbar, #sidebar::-webkit-scrollbar, #flat-members::-webkit-scrollbar, .uploads-panel .uploads-list::-webkit-scrollbar, .uploadsPanel::-webkit-scrollbar, .uploadsPanel .uploads-list::-webkit-scrollbar{display:none}
+/* container queries — chat area + sidebar */
+.chat-area, .chat-column, main.chat-container{container-type:inline-size; container-name:chat}
+#sidebar{container-type:inline-size; container-name:sidebar}
+@container chat (max-width: 40rem){
+  .row.messageRow{padding:0 12px 0 44px}
+  .row.messageRow .avatar, .row.messageRow .letterAvatar{width:24px;height:24px}
+}
+@container sidebar (max-width: 16rem){
+  .sidebar-brand .brand-text{font-size:14px}
+}
+
 /* Svelte mount point */
 #app {
   display: contents;
@@ -526,3 +588,14 @@ textarea.message-input {
   margin: 0;
   background: transparent;
 }
+
+/* ── Behavior CSS (view transitions, :has, inert, highlights) ──── */
+html:has(dialog[open]) { overflow: hidden; }
+form:has(:invalid) { border-color: crimson; }
+.row.messageRow:has(.mention) { background: color-mix(in oklch, var(--fiber-amber, #f59e0b) 12%, transparent); }
+.buffer:has(.unread-badge), .buffer:has(.unread), .sidebar-buffer:has(.unread-badge) { font-weight: 600; }
+::highlight(mention) { background: gold; color: inherit; }
+::view-transition-group(root) { animation-duration: .2s; }
+@media (prefers-reduced-motion: reduce) { ::view-transition-group(root) { animation-duration: 0s; } }
+[inert] { pointer-events: none; }
+[hidden="until-found"] { content-visibility: hidden; }

@@ -14,18 +14,21 @@
     anchorRight?: boolean;
     anchorBottom?: boolean;
     buf: Buffer;
+    networkId?: string;
     onClose: () => void;
     onToggleMembers: () => void;
     memberPanelOpen: boolean;
   }
-  let { x, y, anchorRight = false, anchorBottom = false, buf, onClose, onToggleMembers, memberPanelOpen }: Props = $props();
+  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onToggleMembers, memberPanelOpen }: Props = $props();
 
-  const network = $derived(getActiveNetwork());
+  const network = $derived(
+    propNetworkId ? (ircState.networks.find((n) => n.networkId === propNetworkId) ?? getActiveNetwork()) : getActiveNetwork()
+  );
   const isChannel = $derived(buf.name?.startsWith('#') ?? false);
   const isArchived = $derived(!!archivedMap[`${network?.networkId}:${buf.name}`]);
   const isActive = $derived(buf.isJoined !== false && (network?.connected ?? false));
   const isConnected = $derived(network?.connected ?? false);
-  const networkId = $derived(network?.networkId ?? '');
+  const networkId = $derived(propNetworkId ?? network?.networkId ?? '');
   const isPinned = $derived(pinnedMap[`${networkId}:${buf.name}`] === true);
 
   let menuEl: HTMLDivElement;

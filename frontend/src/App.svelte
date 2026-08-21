@@ -54,6 +54,28 @@
   import ChannelSwitcher from './components/ChannelSwitcher.svelte';
   import LoadingSkeleton from './components/LoadingSkeleton.svelte';
   import LoginPage from './components/LoginPage.svelte';
+import Dialog from './components/Dialog.svelte';
+
+function withViewTransition(fn: () => void): void {
+  try {
+    const isTestEnv = typeof window !== 'undefined' && (
+      (window as unknown as Record<string, unknown>).__vitest !== undefined ||
+      (window as unknown as Record<string, unknown>).__playwright !== undefined ||
+      (typeof navigator !== 'undefined' && (navigator as unknown as { webdriver?: boolean }).webdriver === true)
+    );
+    if (isTestEnv) { fn(); return; }
+  } catch {}
+  const doc = document as unknown as { startViewTransition?: (cb: () => void) => { finished: Promise<void>; ready: Promise<void> } };
+  if (doc.startViewTransition) {
+    try {
+      const vt = doc.startViewTransition(fn);
+      vt?.finished?.catch(() => {});
+      vt?.ready?.catch(() => {});
+      return;
+    } catch {}
+  }
+  fn();
+}
 
 // IRCCloud-style: cache network IDs + names so we can eager-load message
 // history from the URL before the WebSocket opens.  Stored as an array of
@@ -190,6 +212,16 @@ let showNetworkForm: boolean = $state(false);
     sidebarDrawerOpen = false;
     mobileMembersOpen = false;
   }
+
+  const hasOpenDialog = $derived(!!ircState.overlay.type || showNetworkForm || showJoinModal || !!uploadState.dialog || !!userPopup || !!channelMenu);
+  let wrapEl: HTMLDivElement | null = $state(null);
+  $effect(() => {
+    if (!wrapEl) return;
+    const el = wrapEl as unknown as { inert?: boolean };
+    try { el.inert = hasOpenDialog; } catch {}
+    if (hasOpenDialog) wrapEl.setAttribute('inert', '');
+    else wrapEl.removeAttribute('inert');
+  });
 
   function toggleMemberPanel(): void {
     if (isNarrow) {
@@ -639,6 +671,7 @@ let showNetworkForm: boolean = $state(false);
   }
 
   function switchToBuffer(networkId: string, bufferName: string): void {
+    withViewTransition(() => {
       const isSameBuffer =
       ircState.activeBuffer.networkId === networkId &&
       ircState.activeBuffer.bufferName === normalizeChannelName(bufferName);
@@ -656,6 +689,7 @@ let showNetworkForm: boolean = $state(false);
         void loadBufferHistory(networkId, bufferName);
       }
     }
+    });
   }
 
   // W7-T01: when the user navigates to a channel URL (or picks an inactive
@@ -1608,21 +1642,13 @@ let showNetworkForm: boolean = $state(false);
   <ChannelSwitcher onClose={() => channelSwitcherOpen = false} scope="all" />
 {/if}
 
-{#if showNetworkForm}
-  <div class="overlay-backdrop" onclick={() => showNetworkForm = false} role="presentation"></div>
-  <div class="overlay-panel centered network-form-panel" role="dialog" aria-modal="true"
-       aria-label={networkFormMode === 'add' ? 'Join a new network' : 'Edit network'}>
-    <button class="overlay-close" onclick={() => showNetworkForm = false} aria-label="Close">&times;</button>
-    <NetworkForm mode={networkFormMode} networkId={editNetworkId} onClose={() => showNetworkForm = false} />
-  </div>
-{/if}
+<Dialog open={showNetworkForm} onClose={() => showNetworkForm = false} label={networkFormMode === 'add' ? 'Join a new network' : 'Edit network'} centered class="overlay-panel network-form-panel">
+  <NetworkForm mode={networkFormMode} networkId={editNetworkId} onClose={() => showNetworkForm = false} />
+</Dialog>
 
-{#if showJoinModal}
-  <div class="overlay-backdrop" onclick={() => { showJoinModal = false; joinModalNetworkId = null; }} role="presentation"></div>
-  <div class="overlay-panel centered" role="dialog" aria-modal="true" aria-label="Join a channel">
-    <JoinModal networkId={joinModalNetworkId} onClose={() => { showJoinModal = false; joinModalNetworkId = null; }} />
-  </div>
-{/if}
+<Dialog open={showJoinModal} onClose={() => { showJoinModal = false; joinModalNetworkId = null; }} label="Join a channel" centered class="overlay-panel">
+  <JoinModal networkId={joinModalNetworkId} onClose={() => { showJoinModal = false; joinModalNetworkId = null; }} />
+</Dialog>
 
 {#if uploadState.dialog}
   <UploadDialog
@@ -1642,6 +1668,7 @@ let showNetworkForm: boolean = $state(false);
         y={channelMenu.y}
         anchorRight={true}
         buf={menuBuf}
+        networkId={capturedNetworkId}
         onClose={closeChannelMenu}
         onJoinChannel={() => { const nid = channelMenu?.networkId; joinModalNetworkId = nid ?? null; showJoinModal = true; closeChannelMenu(); }}
         onEditNetwork={() => { (window as any).__testChannelMenuAtClick = channelMenu ? {networkId: channelMenu.networkId, bufferName: channelMenu.bufferName} : null; const nid = channelMenu?.networkId; (window as any).__testNidAtClick = nid; networkFormMode = 'edit'; editNetworkId = nid ?? null; showNetworkForm = true; closeChannelMenu(); }}
@@ -1652,6 +1679,7 @@ let showNetworkForm: boolean = $state(false);
         y={channelMenu.y}
         anchorRight={true}
         buf={menuBuf}
+        networkId={capturedNetworkId}
         onClose={closeChannelMenu}
         onToggleMembers={toggleMemberPanel}
         memberPanelOpen={memberPanelOpen}
@@ -1660,7 +1688,7 @@ let showNetworkForm: boolean = $state(false);
   {/if}
 {/if}
 
-<div id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
+<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
   <div class="main-area">
     {#if pasteViewerId !== null}
       <PasteViewerPage id={pasteViewerId} onClose={() => { syncViewers(); navigateBackFromPastebin(); }} />

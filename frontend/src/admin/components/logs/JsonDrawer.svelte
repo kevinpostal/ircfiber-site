@@ -27,6 +27,7 @@
    * `window.innerHeight` -- guarded with `typeof window` so the module
    * can be imported by node-side tests without throwing.
    */
+  import Dialog from '../../../components/Dialog.svelte';
   import type { LogRow } from '../../stores/logsStore';
   import { TAILNET_SIGNOZ_LOGS_URL } from '../../lib/signozUrl';
 
@@ -99,19 +100,13 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#if row}
-  <div
-    class="fixed inset-0 z-40 bg-black/30"
-    onclick={onClose}
-    role="presentation"
-    data-testid="json-drawer-backdrop"
-  ></div>
+<Dialog open={!!row} onClose={onClose} label="Log details" class="json-drawer-dialog overflow-auto rounded-lg border border-border bg-surface p-4 shadow-2xl" hideClose>
+  {#if row}
   <div
     role="dialog"
     aria-modal="true"
     aria-labelledby="json-drawer-title"
     data-testid="json-drawer"
-    class="overflow-auto rounded-lg border border-border bg-surface p-4 shadow-2xl"
     style={drawerStyle}
   >
     <div class="mb-2 flex items-center justify-between">
@@ -140,4 +135,8 @@
       >View in full SigNoz</a>
     </div>
   </div>
+  {/if}
+</Dialog>
+{#if row}
+<div data-testid="json-drawer-backdrop" aria-hidden="true" onclick={onClose} style="position:fixed;inset:0;background:rgba(0,0,0,0.35)"></div>
 {/if}

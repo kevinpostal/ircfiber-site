@@ -491,6 +491,7 @@
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const fake = { preventDefault() {} } as unknown as MouseEvent; toggleAttempt(attempt, fake); } }}
         aria-expanded={!collapsed}
         data-testid="server-log-attempt"
+        onbeforematch={() => { if (collapsed) { const key = getCollapsedKey(attempt); if (key) { serverlogCollapsedMap[key] = false; updateServerlogCollapsed(network?.networkId ?? "", key, false); } } }}
       >
         <span class="caret" aria-hidden="true">{collapsed ? '▶' : '▼'}</span>
         <span class="glyph" aria-hidden="true">{glyph}</span>
@@ -544,7 +545,7 @@
             Connection events ({connectionEventsCount})
           </summary>
 
-          <div class="connection-events-body">
+          <div class="connection-events-body" hidden="until-found" onbeforematch={() => { if (!eventsOpen) setServerlogCollapseEvents(true); }}>
             <!-- Phase events as one-line rows -->
             {#each attempt.phases as msg, pi (pi)}
               <div class="row" class:row--last={pi === attempt.phases.length - 1} data-testid="phase-row">
@@ -659,7 +660,7 @@
                      each capability name is a cyan tag, spaces between them
                      are thin separators, key=value pairs get key/value split. -->
             {#if attempt.notices.length > 0}
-              <div class="row row--notices">
+              <div class="row row--notices" hidden="until-found" onbeforematch={() => { if (!eventsOpen) setServerlogCollapseEvents(true); }}>
                 <details class="notices-details">
                   <summary class="row-content">
                     <span class="row-tag">NOTICE</span>
@@ -682,6 +683,15 @@
             {/if}
           </div>
         </details>
+      {:else}
+        <div hidden="until-found" onbeforematch={() => { const key = getCollapsedKey(attempt); if (key) { serverlogCollapsedMap[key] = false; updateServerlogCollapsed(network?.networkId ?? "", key, false); } }}
+             data-testid="server-log-hidden-search" aria-hidden="true">
+          {#each attempt.phases as m}<span>{m.text} </span>{/each}
+          {#each attempt.welcome as m}<span>{numericBody(m)} </span>{/each}
+          {#each attempt.motd as m}<span>{numericBody(m)} </span>{/each}
+          {#each attempt.numeric as m}<span>{numericBody(m)} </span>{/each}
+          {#each attempt.notices as m}<span>{m.text} </span>{/each}
+        </div>
       {/if}
     {/each}
   {/if}

@@ -4,6 +4,7 @@
   import { ignoreList } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { deleteNetwork } from '../stores/api';
+import Dialog from './Dialog.svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import type { WhoisData, BanListData, ChannelDeleteConfirmData, SetTopicData, InviteData, IgnoreListData } from '../types';
 
@@ -222,10 +223,15 @@
 
 </script>
 
-{#if ircState.overlay.type}
-  <div class="overlay-backdrop" onclick={close} role="presentation"></div>
-  <div class="overlay-panel" class:topic-prompt={ircState.overlay.type === 'set_topic'} class:invite-prompt={ircState.overlay.type === 'invite'} class:centered={ircState.overlay.type === 'channel_delete_confirm' || ircState.overlay.type === 'set_topic' || ircState.overlay.type === 'invite'} role="dialog" aria-modal="true">
-    <button class="overlay-close" class:hidden={ircState.overlay.type === 'channel_delete_confirm' || ircState.overlay.type === 'set_topic' || ircState.overlay.type === 'invite'} onclick={close} aria-label="Close">&times;</button>
+<Dialog
+  open={!!ircState.overlay.type}
+  onClose={close}
+  label={ircState.overlay.type ? String(ircState.overlay.type) : undefined}
+  centered={ircState.overlay.type === 'channel_delete_confirm' || ircState.overlay.type === 'set_topic' || ircState.overlay.type === 'invite'}
+  class={"overlay-panel " + (ircState.overlay.type === 'set_topic' ? 'topic-prompt' : '') + " " + (ircState.overlay.type === 'invite' ? 'invite-prompt' : '')}
+  hideClose={ircState.overlay.type === 'channel_delete_confirm' || ircState.overlay.type === 'set_topic' || ircState.overlay.type === 'invite'}
+>
+  <div class="overlay-content">
 
     {#if ircState.overlay.type === 'whois' && ircState.overlay.data}
       {@const w = ircState.overlay.data as WhoisData}
@@ -462,4 +468,4 @@
       </div>
     {/if}
   </div>
-{/if}
+</Dialog>

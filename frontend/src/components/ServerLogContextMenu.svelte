@@ -13,14 +13,17 @@
     anchorRight?: boolean;
     anchorBottom?: boolean;
     buf: Buffer;
+    networkId?: string;
     onClose: () => void;
     onJoinChannel: (e?: MouseEvent) => void;
     onEditNetwork: () => void;
   }
-  let { x, y, anchorRight = false, anchorBottom = false, buf, onClose, onJoinChannel, onEditNetwork }: Props = $props();
+  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onJoinChannel, onEditNetwork }: Props = $props();
 
-  const network = $derived(getActiveNetwork());
-  const networkId = $derived(network?.networkId ?? '');
+  const network = $derived(
+    propNetworkId ? (ircState.networks.find((n) => n.networkId === propNetworkId) ?? getActiveNetwork()) : getActiveNetwork()
+  );
+  const networkId = $derived(propNetworkId ?? network?.networkId ?? '');
   const isConnected = $derived(network?.connected ?? false);
   const isCollapsed = $derived(network ? (collapsedMap[network.networkId] ?? false) : false);
   const isInactive = $derived(!isConnected);

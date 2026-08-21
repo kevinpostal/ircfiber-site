@@ -8,6 +8,7 @@
    * Bound from parent: <FilterCheatsheet bind:open={showCheatsheet} onClose={...} />
    */
   import { tick } from 'svelte';
+import Dialog from '../../../components/Dialog.svelte';
 
   interface Props {
     open?: boolean;
@@ -69,18 +70,11 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if open}
+<Dialog open={open} onClose={close} label="SigNoz filter syntax" class="w-full max-w-2xl rounded-lg border border-border bg-surface p-6 shadow-2xl" hideClose>
+  <div class="filter-cheatsheet-backdrop" onclick={onBackdropClick} style="position:fixed;inset:0" aria-hidden="true"></div>
   <div
-    class="filter-cheatsheet-backdrop fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-    onclick={onBackdropClick}
-    role="presentation"
-  >
-    <div
-      class="w-full max-w-2xl rounded-lg border border-border bg-surface p-6 shadow-2xl"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="filter-cheatsheet-title"
       data-testid="filter-cheatsheet-dialog"
+      aria-labelledby="filter-cheatsheet-title"
     >
       <h2
         id="filter-cheatsheet-title"
@@ -141,6 +135,5 @@
           SigNoz docs >
         </a>
       </div>
-    </div>
   </div>
-{/if}
+</Dialog>
