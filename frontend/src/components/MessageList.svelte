@@ -29,8 +29,8 @@
   // Cached: only re-read from DOM on real (non-programmatic) scroll events.
   // This prevents the stale-read race where we snap to bottom because the
   // browser hasn't fired the scroll event yet when a new message arrives.
-  let cachedAtBottom = true;
-  let wasRecentlyAtBottom = true;
+  let cachedAtBottom = $state(true);
+  let wasRecentlyAtBottom = $state(true);
   let recentlyScrolledTimeout: ReturnType<typeof setTimeout> | null = null;
   // Pending unconditional snap for a freshly-opened buffer. Set when the
   // bufferKey changes but the container is not yet bound (first mount
@@ -617,21 +617,34 @@
     // guard that hid bottomSeen when focused caused the divider to flicker
     // between bottom and last as focus/visibility toggled, and as new messages
     // arrived within the 30s tick interval.
-    const bottomKey = findKey(bottomTs);
-    if (bottomKey) {
-      // Don't show "since you scrolled up" if the first new message after
-      // you scrolled up is your own (you typed it while scrolled up).
-      // You already saw your own message (it was echoed at top of input),
-      // so showing "New messages since you scrolled up" for your own
-      // message is noisy. Matches IRCCloud's shouldShowSeen for lastSeen.
-      const bottomMsg = messagesWithDates.find(item => item._key === bottomKey)?.msg ?? null;
-      const curNick = activeNetwork?.currentNick || '';
-      const isOwnFirst = !!bottomMsg && !!curNick && stripPrefix(bottomMsg.nick || '') === stripPrefix(curNick);
-      if (!isOwnFirst) {
-        m.set(bottomKey, 'bottom');
-        return m;
+    let bottomKey: string | null = null;
+    if (!cachedAtBottom && bottomTs !== null) {
+      for (let i = 1; i < messagesWithDates.length; i++) {
+        const prev = messagesWithDates[i - 1].msg;
+        const cur = messagesWithDates[i].msg;
+        if ((prev.t || 0) <= bottomTs && (cur.t || 0) > bottomTs) {
+          const curNickLower = stripPrefix(cur.nick || '').toLowerCase();
+          const myNickLower = (activeNetwork?.currentNick || '').toLowerCase();
+          if (curNickLower === myNickLower && myNickLower !== '') {
+            // First new after you scrolled up is your own — look for next
+            // non-own new message; don't show divider for your own echo.
+            for (let j = i + 1; j < messagesWithDates.length; j++) {
+              const nxt = messagesWithDates[j].msg;
+              if (stripPrefix(nxt.nick || '').toLowerCase() !== myNickLower) {
+                bottomKey = messagesWithDates[j]._key;
+                break;
+              }
+            }
+          } else {
+            bottomKey = messagesWithDates[i]._key;
+          }
+          break;
+        }
       }
-      // Own message first — fall through to check focus/last divider
+    }
+    if (bottomKey) {
+      m.set(bottomKey, 'bottom');
+      return m;
     }
     const focusKey = findKey(focusTs);
     if (focusKey) {
