@@ -289,6 +289,131 @@ function mentionTextSegment(segment: string, pattern: RegExp): string {
   }
   return result || segment;
 }
+function colorTextSegment(segment: string, pattern: RegExp): string {
+  pattern.lastIndex = 0;
+  let result = '';
+  let lastIdx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(segment)) !== null) {
+    if (m.index > lastIdx) {
+      result += segment.slice(lastIdx, m.index);
+    }
+    const nick = m[1];
+    const colorIndex = hashStr(nick) % 27;
+    result += `<span class="buffer bufferLink c${colorIndex} user link">${nick}</span>`;
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < segment.length) {
+    result += segment.slice(lastIdx);
+  }
+  return result || segment;
+}
+
+export function colorNicksWithPattern(text: string, pattern: RegExp): string {
+  if (!text) return text;
+  return _colorNicksImpl(text, pattern);
+}
+
+function _colorNicksImpl(text: string, nickPattern: RegExp): string {
+  const TAG_RE = /<[^>]+>/g;
+  let result = '';
+  let lastIdx = 0;
+  let insideAnchor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TAG_RE.exec(text)) !== null) {
+    if (m.index > lastIdx) {
+      const segment = text.slice(lastIdx, m.index);
+      if (insideAnchor === 0) {
+        result += colorTextSegment(segment, nickPattern);
+      } else {
+        result += segment;
+      }
+    }
+    const tag = m[0].toLowerCase();
+    if (tag.startsWith('</a')) {
+      insideAnchor--;
+    } else if (tag.startsWith('<a ') || tag === '<a>') {
+      insideAnchor++;
+    }
+    result += m[0];
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) {
+    const segment = text.slice(lastIdx);
+    if (insideAnchor === 0) {
+      result += colorTextSegment(segment, nickPattern);
+    } else {
+      result += segment;
+    }
+  }
+  return result;
+}
+
+export function wrapNicksWithHighlight(text: string, allPattern: RegExp, highlightSet: Set<string>): string {
+  if (!text) return text;
+  return _wrapNicksImpl(text, allPattern, highlightSet);
+}
+
+function _wrapNicksImpl(text: string, nickPattern: RegExp, highlightSet: Set<string>): string {
+  const TAG_RE = /<[^>]+>/g;
+  let result = '';
+  let lastIdx = 0;
+  let insideAnchor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TAG_RE.exec(text)) !== null) {
+    if (m.index > lastIdx) {
+      const segment = text.slice(lastIdx, m.index);
+      if (insideAnchor === 0) {
+        result += wrapTextSegment(segment, nickPattern, highlightSet);
+      } else {
+        result += segment;
+      }
+    }
+    const tag = m[0].toLowerCase();
+    if (tag.startsWith('</a')) {
+      insideAnchor--;
+    } else if (tag.startsWith('<a ') || tag === '<a>') {
+      insideAnchor++;
+    }
+    result += m[0];
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) {
+    const segment = text.slice(lastIdx);
+    if (insideAnchor === 0) {
+      result += wrapTextSegment(segment, nickPattern, highlightSet);
+    } else {
+      result += segment;
+    }
+  }
+  return result;
+}
+
+function wrapTextSegment(segment: string, pattern: RegExp, highlightSet: Set<string>): string {
+  pattern.lastIndex = 0;
+  let result = '';
+  let lastIdx = 0;
+  let m: RegExpExecArray | null;
+  while ((m = pattern.exec(segment)) !== null) {
+    if (m.index > lastIdx) {
+      result += segment.slice(lastIdx, m.index);
+    }
+    const nick = m[1];
+    const lower = nick.toLowerCase();
+    const colorIndex = hashStr(nick) % 27;
+    if (highlightSet.has(lower)) {
+      result += `<span class="buffer bufferLink mention c${colorIndex} user link">${nick}</span>`;
+    } else {
+      result += `<span class="buffer bufferLink c${colorIndex} user link">${nick}</span>`;
+    }
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < segment.length) {
+    result += segment.slice(lastIdx);
+  }
+  return result || segment;
+}
+
 
 function hashStr(s: string): number {
   let hash = 0;

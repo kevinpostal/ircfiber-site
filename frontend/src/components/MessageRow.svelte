@@ -4,10 +4,10 @@
   import type { IRCMessage, Member } from '../types';
   import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { autolinkHtml, mentionNicksWithPattern } from '../lib/autolinker';
+  import { autolinkHtml, wrapNicksWithHighlight } from '../lib/autolinker';
   import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
   import { sendMessage } from '../stores/wsConnection.svelte.ts';
-  import { globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
+  import { globalPrefs, getBufferPrefs, highlightWords } from '../stores/preferences.svelte';
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
   import YoutubeEmbed from './YoutubeEmbed.svelte';
@@ -24,7 +24,6 @@
     onNickClick?: (nick: string, event: MouseEvent, member?: Member | null) => void;
     memberByNick?: Map<string, Member>;
   }
-
   let { msg, isHighlight = false, isSameAuthor = false, isEntrance = false, onNickClick, memberByNick = new Map() }: Props = $props();
 
   const cmd = $derived(msg.command);
@@ -72,17 +71,27 @@
   const isBot = $derived(isBotNick(nick, findMemberForNick(nick), msg.prefix));
   const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));
 
-  const nickPattern = $derived.by(() => {
-    if (!memberByNick || memberByNick.size === 0) return null;
-    const sorted = [...memberByNick.keys()]
-      .map(n => n.toLowerCase())
-      .sort((a, b) => b.length - a.length);
+  const allNicksPattern = $derived.by(() => {
+    const candidates = new Set<string>();
+    for (const n of memberByNick.keys()) candidates.add(n.toLowerCase());
+    if (myNick) candidates.add(myNick.toLowerCase());
+    for (const w of highlightWords) if (w) candidates.add(w.toLowerCase());
+    if (candidates.size === 0) return null;
+    const sorted = [...candidates].sort((a, b) => b.length - a.length);
     const escaped = sorted.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
     return new RegExp(
       `(?<=^|[^a-zA-Z0-9_\\\\[\\]\\\\{}])(${escaped.join('|')})(?=$|[^a-zA-Z0-9_\\\\[\\]\\\\{}])`,
       'gi'
     );
   });
+  const highlightSet = $derived.by(() => {
+    const s = new Set<string>();
+    if (myNick) s.add(myNick.toLowerCase());
+    for (const w of highlightWords) if (w) s.add(w.toLowerCase());
+    return s;
+  });
+  // Back-compat alias for tests that import nickPattern (none, but keep)
+  const nickPattern = $derived(allNicksPattern);
   let expanded = $state(false);
   let tsHover = $state(false);
   const pendingState = $derived((msg as any).pendingState as string | undefined);
@@ -219,8 +228,8 @@
   function formatTextUncached(text: string): string {
     let html = autolinkHtml(parseIrcFormatting(text));
     const isChat = cmd === 'PRIVMSG' || (cmd === 'NOTICE' && !!nick);
-    if (isChat && nickPattern) {
-      html = mentionNicksWithPattern(html, nickPattern);
+    if (isChat && allNicksPattern) {
+      html = wrapNicksWithHighlight(html, allNicksPattern, highlightSet);
     }
     return html;
   }

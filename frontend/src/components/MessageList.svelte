@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack, flushSync, tick } from 'svelte';
   import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer } from '../stores/ircStore.svelte';
-  import { getClearedAt, setLastSeen, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearFocusSeen, clearBottomSeen } from '../stores/preferences.svelte';
+  import { getClearedAt, setLastSeen, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearFocusSeen, clearBottomSeen, setBottomSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
@@ -612,18 +612,15 @@
       return null;
     };
     // Priority: bottom > focus > last > global
+    // IRCCloud always shows "New messages since you scrolled up" when scrolled
+    // up, regardless of whether the window is focused. The previous `isActive`
+    // guard that hid bottomSeen when focused caused the divider to flicker
+    // between bottom and last as focus/visibility toggled, and as new messages
+    // arrived within the 30s tick interval.
     const bottomKey = findKey(bottomTs);
     if (bottomKey) {
-      // Don't show "since you scrolled up" if you are active on page
-      // looking at messages (focused, visible, not away). The user is
-      // actively reading, so the divider is distracting; IRCCloud hides
-      // it in this case and only shows "New messages" once.
-      const isActive = !ircState.focusLost && typeof document !== 'undefined' && document.hasFocus() && document.visibilityState === 'visible';
-      if (!isActive) {
-        m.set(bottomKey, 'bottom');
-        return m;
-      }
-      // Active but scrolled up: fall through to show lastSeen once, not bottomSeen
+      m.set(bottomKey, 'bottom');
+      return m;
     }
     const focusKey = findKey(focusTs);
     if (focusKey) {
@@ -1141,16 +1138,26 @@
     const hasMessagesForInitialSnap = processedMessages.length > 0;
     const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
     const isDomAtBottom = !container || container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1;
-    const isAtBottom = cachedAtBottom || wasRecentlyAtBottom || isDomAtBottom;
+    // IRCCloud BufferScrollView.flushBuffer uses strict isScrolledToBottom() (1px, no wasRecently)
+    // to decide whether to buffer incoming messages while reading. wasRecently (100ms grace)
+    // is only for textarea autogrow, not for message pin. Using wasRecently here caused
+    // "if a new message comes in it forces it to bottom" — any message arriving within
+    // 100ms of scrolling up was considered pinned via wasRecently and snapped. See
+    // bufferscrollview.js flushBuffer vs shouldPinBottom.
+    const isAtBottomStrict = cachedAtBottom || isDomAtBottom;
+    const isAtBottom = isAtBottomStrict;
     // isHistoryPrependForSnap previously forced a snap even when reading.
     // Gate on isAtBottom so only pinned fills snap; initial load isAtBottom true.
     const historyPrependSnap = isInitialSnap && isHistoryPrependForSnap && isAtBottom;
-    const lastIsActionNotice = hasMessagesForInitialSnap && (() => { const m = processedMessages[processedMessages.length - 1]; return (m as unknown as { type?: string }).type === 'action' || m.command === 'NOTICE'; })();
     // When a backlog divider is present and user is at top (reading history),
     // never snap to bottom – preserve via newDivider branch (oldTop+delta).
     // This fixes "scroll all the way to start without being forced to bottom".
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap || lastIsActionNotice) && !(newDivider && cachedAtTop);
-
+    // NOTE: previously `lastIsActionNotice` forced a snap for any trailing
+    // ACTION/NOTICE even while scrolled up reading history ("if a new message
+    // comes in it forces it to bottom"). IRCCloud's BufferLogView.renderMessage
+    // still respects shouldPinBottom for NOTICEs/actions — they buffer when
+    // scrolled up. So we do NOT auto-pin on message type; only on pin state.
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap) && !(newDivider && cachedAtTop);
     if (shouldSnapToBottom) {
       // If DOM is at bottom but cached state is stale, correct it so future
       // handleScroll checks see the right baseline and don't mis-fire scrolledUp.
@@ -1344,6 +1351,7 @@
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
     const distFromBottom = scrollHeight - scrollBottom;
     const scrolledUp = scrollTop < prevTop && scrollHeight >= prevHeight;
+    const scrolledDown = scrollTop > prevTop && scrollHeight >= prevHeight;
     const heightChangedWithoutScroll = scrollHeight !== prevHeight && scrollTop === prevTop;
     // During the initial snap window (pendingInitialSnap), height growth
     // without scroll is expected as history fills in — don't treat the huge
@@ -1351,6 +1359,11 @@
     // bottom (cachedAtBottom true) — when user is reading at top (cachedAtTop
     // true, cachedAtBottom false) a height growth from "Fetching..." must
     // NOT keep the bottom stick, otherwise ResizeObserver will yank to bottom.
+    // IRCCloud BufferScrollView.shouldPinBottom() is strict 1px (no band);
+    // our STICK_BAND_PX 70px re-engages only on an actual DOWNWARD scroll
+    // into the band — a stopped position within the band does NOT re-stick
+    // (reading 50px up is never yanked back). See bufferscrollview.js
+    // shouldPinBottom + ChatInfinite.atBottomStickiness.
     const atBottom = scrolledUp
       ? false
       : scrollHeight < prevHeight && cachedAtBottom
@@ -1359,7 +1372,7 @@
           ? true
           : cachedAtBottom && !cachedAtTop
             ? heightChangedWithoutScroll ? true : distFromBottom <= 1
-            : distFromBottom <= STICK_BAND_PX;
+            : scrolledDown ? distFromBottom <= STICK_BAND_PX : false;
     if (cachedAtBottom === atBottom) {
       // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
       scheduleScrollStateUpdate();
@@ -1377,6 +1390,14 @@
         // messages and trims the DOM back to 200 rows.
         renderEndKey = '';
         maybeTrim();
+        // Unlock bottomSeen — user has returned to live stream, so the
+        // "New messages since you scrolled up" divider should disappear.
+        // Mirrors BufferScrollView.unlockBottomSeen / buf.js unlockBottomSeen.
+        {
+          const nid = ircState.activeBuffer.networkId;
+          const buf = ircState.activeBuffer.bufferName;
+          if (nid && buf) clearBottomSeen(nid, buf);
+        }
         // Band re-engagement: the stick was broken (user scrolled up) and
         // they scrolled back DOWN into the near-bottom band — that means
         // "return to the live stream", so snap to the bottom NOW. This
@@ -1423,6 +1444,20 @@
         // instead of rendering — freeze the window's end where it is now.
         const all = processedMessages;
         renderEndKey = all.length ? itemKeyOf(all[all.length - 1]) : '';
+        // Lock bottomSeen to the last message at the moment you scrolled up.
+        // Mirrors buf.js lockBottomSeen() which sets bottomSeen = getLastMessage().
+        // This divider stays fixed until you return to bottom (unlock above),
+        // so it doesn't creep forward with each new message and flicker.
+        {
+          const nid = ircState.activeBuffer.networkId;
+          const buf = ircState.activeBuffer.bufferName;
+          if (nid && buf) {
+            const list = ircState.messages[`${nid}:${buf}`] ?? [];
+            const last = list[list.length - 1];
+            if (last?.t) setBottomSeen(nid, buf, last.t);
+            else if (all.length && all[all.length - 1]?.t) setBottomSeen(nid, buf, all[all.length - 1].t!);
+          }
+        }
       }
 
       scheduleScrollStateUpdate();
@@ -1469,8 +1504,10 @@
     if (!el) return;
     const clearStickOnUserInput = () => {
       if (pendingInitialSnap) pendingInitialSnap = false;
-      if (!cachedAtBottom) return;
+      if (!cachedAtBottom && !wasRecentlyAtBottom) return;
       cachedAtBottom = false;
+      wasRecentlyAtBottom = false;
+      if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; }
       if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
       if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
     };
@@ -1631,24 +1668,52 @@
     // scrolling up 1px while fully read showed "1 unread". Now we only show
     // the lower bar when there is a genuinely hidden row (inWindowBelow or
     // bufferedBelow). Tiny scroll with no fully-hidden row correctly shows 0.
-    const bottomSeenMsg = firstBelowMsg;
-    if (bottomSeenMsg) {
-      updateBottomSeen(networkId, bufferName, bottomSeenMsg);
-      const totalBelow = countMessagesBetween(networkId, bufferName, bottomSeenMsg);
-      if (totalBelow > 100) {
-        belowUnseenCount = totalBelow;
-        belowUnseenTimestamp = bottomSeenMsg.t || null;
-      } else {
-        // Use actual hidden count (below) for correct multi-message tally.
-        // Previous important/total logic was off by one and stuck at 1 when
-        // multiple new messages arrived while scrolled up (tiny scroll case).
-        belowUnseenCount = below;
-        belowUnseenTimestamp = belowTs ?? bottomSeenMsg.t ?? null;
+    // IRCCloud LowerChatterBar counts messages *since you scrolled up* (locked
+    // bottomSeen), not total hidden below viewport. Using firstBelow (dynamic
+    // with scroll position) caused the count to flicker as you scrolled and
+    // as new messages arrived. We now use the locked bottomSeen timestamp
+    // set in handleScroll when you left bottom; it stays fixed until you
+    // return to bottom (clearBottomSeen), so the divider and bar are stable.
+    const lockedBottomTs = getBottomSeen(networkId, bufferName);
+    // Only show "unread below" when you are actually scrolled up (not at bottom).
+    // When you are at bottom (looking), you have seen the latest, so the bar
+    // should be hidden even if bottomSeen was locked 5 minutes ago before a
+    // refresh. The lock is cleared in handleScroll when you return to bottom,
+    // but updateChatterCounts can run one rAF before that clear, so we gate
+    // on cachedAtBottom here too to avoid a one-frame flicker.
+    if (lockedBottomTs !== null && !cachedAtBottom) {
+      const list = ircState.messages[`${networkId}:${bufferName}`] ?? [];
+      let lockedMsg: IRCMessage | null = null;
+      for (let i = list.length - 1; i >= 0; i--) {
+        if ((list[i].t || 0) === lockedBottomTs) { lockedMsg = list[i]; break; }
       }
-      belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, bottomSeenMsg);
+      // Fallback: if timestamp not found (clock skew), use firstBelow as before
+      if (!lockedMsg) lockedMsg = firstBelowMsg;
+      if (lockedMsg) {
+        const totalBelow = countMessagesBetween(networkId, bufferName, lockedMsg);
+        if (totalBelow > 100) {
+          belowUnseenCount = totalBelow;
+          belowUnseenTimestamp = lockedMsg.t || null;
+        } else {
+          // For <=100, show total new messages (or important if any) — stable
+          // count of messages that arrived after you scrolled up, not total
+          // hidden old backlog which fluctuates with scroll position.
+          const important = countImportantMessagesBetween(networkId, bufferName, lockedMsg);
+          belowUnseenCount = totalBelow;
+          // Keep timestamp of locked point for relative time
+          belowUnseenTimestamp = lockedMsg.t || null;
+          // If you want to show important count instead, use:
+          // belowUnseenCount = important > 0 ? important : totalBelow;
+        }
+        belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, lockedMsg);
+      } else {
+        belowUnseenCount = 0;
+        belowUnseenTimestamp = null;
+        belowUnseenHighlights = 0;
+      }
     } else {
-      belowUnseenCount = below;
-      belowUnseenTimestamp = belowTs;
+      belowUnseenCount = 0;
+      belowUnseenTimestamp = null;
       belowUnseenHighlights = 0;
     }
   }

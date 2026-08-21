@@ -673,25 +673,24 @@ let showNetworkForm: boolean = $state(false);
   function switchToBuffer(networkId: string, bufferName: string): void {
     withViewTransition(() => {
       const isSameBuffer =
-      ircState.activeBuffer.networkId === networkId &&
-      ircState.activeBuffer.bufferName === normalizeChannelName(bufferName);
-    setActiveBuffer(networkId, bufferName);
-    requestSwitchBuffer(networkId, bufferName);
-    updateRoute(networkId, bufferName);
-    setLastSeen(networkId, bufferName, Date.now());
-    maybeAutoJoinChannel(networkId, bufferName);
-    if (!isSameBuffer) {
-      // IRCCloud-style: skip the REST round-trip during boot — the sync
-      // message will deliver messages via WebSocket.  After sync arrives
-      // (or for explicit user-initiated switches), loadBufferHistory
-      // will only fetch if messages are missing.
-      if (syncReceived) {
-        void loadBufferHistory(networkId, bufferName);
+        ircState.activeBuffer.networkId === networkId &&
+        ircState.activeBuffer.bufferName === normalizeChannelName(bufferName);
+      setActiveBuffer(networkId, bufferName);
+      requestSwitchBuffer(networkId, bufferName);
+      updateRoute(networkId, bufferName);
+      setLastSeen(networkId, bufferName, Date.now());
+      maybeAutoJoinChannel(networkId, bufferName);
+      if (!isSameBuffer) {
+        // IRCCloud-style: skip the REST round-trip during boot — the sync
+        // message will deliver messages via WebSocket.  After sync arrives
+        // (or for explicit user-initiated switches), loadBufferHistory
+        // will only fetch if messages are missing.
+        if (syncReceived) {
+          void loadBufferHistory(networkId, bufferName);
+        }
       }
-    }
     });
   }
-
   // W7-T01: when the user navigates to a channel URL (or picks an inactive
   // channel from the sidebar) that they're not currently joined to, issue a
   // JOIN automatically. Improves on IRCCloud (which never auto-joins from

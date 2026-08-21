@@ -54,10 +54,10 @@
   function loadCollapsed(): boolean {
     try {
       const raw = localStorage.getItem('ircfiber:serverFeaturesCollapsed');
-      if (raw === null) return false;
+      if (raw === null) return true;
       return JSON.parse(raw) === true;
     } catch {
-      return false;
+      return true;
     }
   }
   function saveCollapsed(v: boolean): void {
@@ -67,7 +67,7 @@
       /* storage unavailable — collapse state just won't persist */
     }
   }
-  let panelCollapsed = $state<boolean>(loadCollapsed());
+  let panelCollapsed = $state<boolean>(dense ? true : loadCollapsed());
   $effect(() => {
     saveCollapsed(panelCollapsed);
   });

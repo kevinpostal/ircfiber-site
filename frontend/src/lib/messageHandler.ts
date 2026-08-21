@@ -468,7 +468,7 @@ export function processIrcEvent(
   // We trigger for private NOTICEs (target is not a channel), from a
   // non-server nick, with non-empty text, not self-echo, not CTCP, and
   // not a "***" server lookup notice (those live in ServerLogTimeline).
-  if (cmd === 'NOTICE' && msg.nick && msg.text) {
+  if (cmd === 'NOTICE' && msg.nick && msg.text && !isBackfill) {
     const target = (msg.params && msg.params[0]) || '';
     const isChannelTarget = target.length > 0 && ['#', '&', '+', '!'].includes(target[0]);
     const isServerNick = msg.nick.includes('.');

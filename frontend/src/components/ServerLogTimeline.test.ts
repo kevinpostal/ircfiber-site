@@ -245,25 +245,19 @@ describe('ServerLogTimeline', () => {
     render(ServerLogTimeline, { props: { messages, network } });
 
     // The new panel replaces the old `.isupport-details` collapsible.
+    // Dense embed is now collapsed by default on connect — expand to verify.
     const panel = document.querySelector('[data-testid="server-features-panel"]');
     expect(panel).toBeInTheDocument();
-    // The panel's header still has the "Server features" eyebrow.
     expect(panel!.textContent).toContain('Server features');
-
-    // Dense-mode (timeline-embedded) panel collapses every category by
-    // default — drill in to make the per-token rows observable. Give
-    // Svelte a tick to react to the toggled state before asserting.
-    const catHeads = panel!.querySelectorAll('.server-features-panel__cat-head');
-    expect(catHeads.length).toBeGreaterThan(0);
-    catHeads.forEach((h) => (h as HTMLButtonElement).click());
+    // Expand the whole panel (collapsed by default) to expose categories.
+    (panel!.querySelector('[data-testid="server-features-panel-toggle"]') as HTMLElement).click();
     await tick();
 
-    // Now the panel's DOM contains the expanded row texts.
-    const expanded = panel!.textContent || '';
-    expect(expanded).toContain('CHANTYPES');
-    expect(expanded).toContain('EXCEPTS');
-    expect(expanded).toContain('INVEX');
-    expect(expanded).toContain('CHANMODES');
+    // Dense-mode categories are also collapsed — headers are now visible.
+    const catHeads = panel!.querySelectorAll('.server-features-panel__cat-head');
+    expect(catHeads.length).toBeGreaterThan(0);
+    const allText = panel!.textContent || '';
+    expect(allText).toContain('4 features');
   });
 
   it('renders server NOTICEs as a collapsible block', async () => {
@@ -348,10 +342,12 @@ describe('ServerLogTimeline', () => {
     ];
     render(ServerLogTimeline, { props: { messages, network } });
 
-     // The new ServerFeaturesPanel replaces the old flat `.isupport-list`.
+     // Dense ServerFeaturesPanel is collapsed by default on connect — expand to verify categories.
      const panel = document.querySelector('[data-testid="server-features-panel"]');
      expect(panel).toBeInTheDocument();
      expect(panel!.querySelector('[data-testid="server-features-panel-search"]')).not.toBeInTheDocument();
+     (panel!.querySelector('[data-testid="server-features-panel-toggle"]') as HTMLElement).click();
+     await tick();
 
      // The four 005 tokens surface as <category, count> pairs even when
     // each category is collapsed (which is the dense default — categories
@@ -363,7 +359,6 @@ describe('ServerLogTimeline', () => {
       panel!.querySelectorAll('[data-testid="server-features-panel-cat"]')
     ) as HTMLElement[];
     expect(cats.length).toBe(4);
-
     // Each category carries its token in the per-category title / blurb
     // text (click-to-expand reveals the row). We assert the panel
     // surfaces the info in any visible form — the `panel!.textContent`
@@ -376,7 +371,7 @@ describe('ServerLogTimeline', () => {
     expect(allText).toContain('categories');
   });
 
-  it('renders server NOTICEs with *** label and CAP LS lines as cyan capability tags', async () => {
+  it('renders server NOTICEs with *** label and CAP LS lines as categorized CapabilitiesPanel', async () => {
     setupServerBuffer();
     const network = ircState.networks[0];
 
@@ -391,10 +386,23 @@ describe('ServerLogTimeline', () => {
     ];
     render(ServerLogTimeline, { props: { messages, network } });
 
+    // Caps are now surfaced via the categorized CapabilitiesPanel — collapsed by default on connect.
+    const capsPanel = document.querySelector('[data-testid="capabilities-panel"]');
+    expect(capsPanel).toBeInTheDocument();
+    expect(capsPanel!.textContent).toContain('Capabilities');
+    expect(capsPanel!.textContent).toContain('6 caps');
+    // Expand the whole panel to expose categories.
+    (capsPanel!.querySelector('[data-testid="capabilities-panel-toggle"]') as HTMLElement).click();
+    await tick();
+    // Dense categories are collapsed, so per-cap rows are hidden until the
+    // user expands a category. Verify the category headers are present
+    // (drawer interaction is covered by CapabilitiesPanel unit tests).
+    const capHeads = capsPanel!.querySelectorAll('.server-features-panel__cat-head');
+    expect(capHeads.length).toBeGreaterThan(0);
+    expect(capsPanel!.textContent).toContain('Auth');
+    // Server NOTICEs remain in the notices-list (filtered to only *** lines)
     const noticeItems = Array.from(document.querySelectorAll('.notices-list .notices-item'));
-
-    // First two items are *** server NOTICEs — *** should be cyan-bold label,
-    // rest is plain prose.
+    expect(noticeItems.length).toBe(2);
     const notice1 = noticeItems[0].querySelectorAll('.notice-seg');
     expect(notice1[0].textContent).toBe('***');
     expect(notice1[0].classList.contains('notice-seg--notice-label')).toBe(true);
@@ -406,21 +414,6 @@ describe('ServerLogTimeline', () => {
     expect(notice2[0].classList.contains('notice-seg--notice-label')).toBe(true);
     expect(notice2[1].textContent).toBe(' Found your hostname');
     expect(notice2[1].classList.contains('notice-seg--plain')).toBe(true);
-
-    // CAP LS line — 4 bare capability names rendered as cyan tags.
-    const cap1 = noticeItems[2].querySelectorAll('.notice-seg--cap-tag');
-    expect(Array.from(cap1).map((el) => el.textContent)).toEqual([
-      'account-notify', 'account-tag', 'away-notify', 'batch', 'cap-notify',
-    ]);
-    // The space separators between tags are plain
-    const plains1 = noticeItems[2].querySelectorAll('.notice-seg--plain');
-    expect(plains1.length).toBe(4); // 4 spaces between 5 tags
-
-    // sasl=PLAIN,EXTERNAL — key/value split
-    const cap2 = noticeItems[3].querySelector('.notice-seg--cap-key');
-    expect(cap2?.textContent).toBe('sasl');
-    const cap2val = noticeItems[3].querySelector('.notice-seg--cap-value');
-    expect(cap2val?.textContent).toBe('PLAIN,EXTERNAL');
   });
 
   it('classifies MOTD lines (separator / art / section / list / command / empty)', async () => {

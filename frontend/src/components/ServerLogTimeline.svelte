@@ -22,7 +22,9 @@
   import { updateServerlogCollapsed } from '../stores/api';
   import { ircState } from '../stores/ircStore.svelte';
   import ServerFeaturesPanel from './ServerFeaturesPanel.svelte';
+  import CapabilitiesPanel from './CapabilitiesPanel.svelte';
   import { isupportFromMessages } from '../lib/isupportCategorize';
+  import { capsFromNoticeMessages } from '../lib/capCategorize';
 
   interface Props {
     messages: IRCMessage[];
@@ -342,7 +344,27 @@
     });
     return segs;
   }
-  // IRC MOTDs follow a few well-defined conventions that the raw text
+
+  // ── JSON notice helpers ──────────────────────────────────────────
+  // Some engines dump isupport / caps as raw JSON blobs into the
+  // notice stream (e.g. {"AWAYLEN":"390",...}). Those blobs are huge,
+  // single-line, and would overflow as a single cap-tag nowrap span.
+  // Detect them, pretty-print with 2-space indent, and render in a
+  // scrollable <pre> so they wrap instead of getting cut off.
+  function isJsonNotice(text: string): boolean {
+    const t = text.trim();
+    return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
+  }
+  function tryFormatJson(text: string): string | null {
+    const t = text.trim();
+    if (!isJsonNotice(t)) return null;
+    try {
+      const obj = JSON.parse(t);
+      return JSON.stringify(obj, null, 2);
+    } catch {
+      return null;
+    }
+  }
   // stream makes obvious once you look at it:
   //   · ":- irc.example.org Message of the day -" — opening / closing
   //     separator (RPL_MOTDSTART, IRC § 4.3 / RFC 1459 § 4.4.1)
@@ -521,13 +543,24 @@
         {@const isupportMap = (syncedIsupport && Object.keys(syncedIsupport).length > 0)
           ? syncedIsupport
           : bufferedIsupport}
+        {@const capsMapEarly = capsFromNoticeMessages(attempt.notices)}
+        {@const hasCapsEarly = Object.keys(capsMapEarly).length > 0}
+        {@const serverNoticesEarly = attempt.notices.filter((msg) => {
+          const t = (msg.text ?? '').trim();
+          if (!t) return false;
+          if (/^\*+\s/.test(t)) return true;
+          const one = capsFromNoticeMessages([msg]);
+          return Object.keys(one).length === 0;
+        })}
+        {@const hasServerNoticesEarly = serverNoticesEarly.length > 0}
         {@const connectionEventsCount =
           attempt.phases.length +
           attempt.welcome.length +
           attempt.motd.length +
           attempt.numeric.length +
           (Object.keys(isupportMap).length > 0 ? 1 : 0) +
-          (attempt.notices.length > 0 ? 1 : 0)}
+          (hasCapsEarly ? 1 : 0) +
+          (hasServerNoticesEarly ? 1 : (attempt.notices.length > 0 && hasCapsEarly ? 1 : 0))}
         <details
           class="connection-events"
           open={eventsOpen}
@@ -651,29 +684,66 @@
               </div>
             {/if}
 
-            <!-- Raw server NOTICEs as collapsible block. parseNoticeOrCapLine
-                 splits the two shapes that arrive here:
-                   · "*** Looking up your hostname…" — the *** is a cyan-bold
-                     label, the rest is plain prose.
-                   · CAP LS responses like "account-notify account-tag …" —
-                     each capability name is a cyan tag, spaces between them
-                     are thin separators, key=value pairs get key/value split. -->
-            {#if attempt.notices.length > 0}
+            <!-- CAP LS / IRCv3 capabilities — categorized, clickable. -->
+            {#if hasCapsEarly}
+              <div class="row row--caps" data-testid="row-caps">
+                <div class="isupport-frame">
+                  <CapabilitiesPanel
+                    caps={capsMapEarly}
+                    dense={true}
+                    titleFallback="This server"
+                  />
+                </div>
+              </div>
+            {/if}
+
+            {#if hasServerNoticesEarly}
               <div class="row row--notices">
                 <details class="notices-details">
                   <summary class="row-content">
                     <span class="row-tag">NOTICE</span>
-                    <span class="notices-summary">{attempt.notices.length} message{attempt.notices.length === 1 ? '' : 's'}</span>
+                    <span class="notices-summary">{serverNoticesEarly.length} message{serverNoticesEarly.length === 1 ? '' : 's'}</span>
+                  </summary>
+                  <ul class="notices-list">
+                    {#each serverNoticesEarly as msg, ni (ni)}
+                      {#if msg.text}
+                        {@const formatted = tryFormatJson(msg.text)}
+                        {#if formatted}
+                          <li class="notices-item"><pre class="notice-json" data-testid="notice-json">{formatted}</pre></li>
+                        {:else}
+                          {@const segs = parseNoticeOrCapLine(msg.text)}
+                          <li class="notices-item">
+                            {#each segs as seg, si (si)}
+                              <span class="notice-seg notice-seg--{seg.kind}">{seg.text}</span>
+                            {/each}
+                          </li>
+                        {/if}
+                      {/if}
+                    {/each}
+                  </ul>
+                </details>
+              </div>
+            {:else if attempt.notices.length > 0 && hasCapsEarly}
+              <div class="row row--notices">
+                <details class="notices-details">
+                  <summary class="row-content">
+                    <span class="row-tag">NOTICE</span>
+                    <span class="notices-summary">raw CAP wire ({attempt.notices.length} line{attempt.notices.length === 1 ? '' : 's'})</span>
                   </summary>
                   <ul class="notices-list">
                     {#each attempt.notices as msg, ni (ni)}
                       {#if msg.text}
-                        {@const segs = parseNoticeOrCapLine(msg.text)}
-                        <li class="notices-item">
-                          {#each segs as seg, si (si)}
-                            <span class="notice-seg notice-seg--{seg.kind}">{seg.text}</span>
-                          {/each}
-                        </li>
+                        {@const formatted2 = tryFormatJson(msg.text)}
+                        {#if formatted2}
+                          <li class="notices-item"><pre class="notice-json" data-testid="notice-json">{formatted2}</pre></li>
+                        {:else}
+                          {@const segs2 = parseNoticeOrCapLine(msg.text)}
+                          <li class="notices-item">
+                            {#each segs2 as seg, si (si)}
+                              <span class="notice-seg notice-seg--{seg.kind}">{seg.text}</span>
+                            {/each}
+                          </li>
+                        {/if}
                       {/if}
                     {/each}
                   </ul>
@@ -891,28 +961,9 @@
     flex-shrink: 0;
     width: 30px;
     margin-right: 12px;
-    color: var(--fiber-mist, #4d5867);
-    font-size: 10px;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    text-align: right;
   }
-  .stat-seg { white-space: pre; }
-  .stat-seg--plain { color: var(--fiber-cloud, #c8d2dd); }
-  .stat-seg--number {
-    color: var(--fiber-blue, #67e8f9);
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  /* ── ISUPPORT (005) row wrapper ─────────────────────────────────── */
-  .isupport-frame {
-    display: block;
-    padding: 2px 0;
-  }
-
   /* ── Notices (server NOTICEs + CAP LS) ──────────────────────────── */
-  .notice-seg { white-space: pre; }
+  .notice-seg { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
   .notice-seg--plain { color: var(--fiber-cloud, #c8d2dd); }
   .notice-seg--notice-label {
     color: var(--fiber-blue, #67e8f9);
@@ -920,15 +971,33 @@
     letter-spacing: 0.08em;
     margin-right: 8px;
   }
-  /* Bare CAP name — plain cyan text, no chip. */
+  /* Bare CAP name — plain cyan text, no chip. Allow wrapping. */
   .notice-seg--cap-tag {
     color: var(--fiber-blue, #67e8f9);
     font-size: 11.5px;
     margin-right: 4px;
-    white-space: nowrap;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .notice-seg--cap-key { color: var(--fiber-blue, #67e8f9); font-weight: 500; }
-  .notice-seg--cap-value { color: var(--fiber-cloud, #c8d2dd); }
+  .notice-seg--cap-value { color: var(--fiber-cloud, #c8d2dd); overflow-wrap: anywhere; }
+  .notice-json {
+    display: block;
+    margin: 6px 0 2px;
+    padding: 10px 12px;
+    background: #0b0f14;
+    border: 1px solid #1e2835;
+    border-radius: 6px;
+    font: 11px/1.5 ui-monospace, monospace;
+    color: #a8b5c6;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    max-height: 260px;
+    overflow: auto;
+  }
+  .notices-item { padding: 1px 0; overflow-wrap: anywhere; word-break: break-word; }
+
 
   /* ── MOTD block — padding only, flat body ───────────────────────── */
   .row--motd {
@@ -1064,14 +1133,14 @@
     white-space: nowrap;
   }
 
-  /* ── ISUPPORT row wrapper ───────────────────────────────────────── */
-  .row--isupport {
+  /* ── ISUPPORT / CAPS row wrappers — full-bleed block panels ───────── */
+  .row--isupport,
+  .row--caps {
     padding: 2px 12px 2px 14px;
     background: transparent;
     display: block;
     border-bottom: 1px solid var(--fiber-line, #1a212b);
   }
-
   /* ── NOTICEs collapsible row ────────────────────────────────────── */
   .row--notices {
     padding: 2px 12px 2px 26px;

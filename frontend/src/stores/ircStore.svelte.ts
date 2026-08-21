@@ -1180,13 +1180,22 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
 
 export function checkHighlight(msg: IRCMessage, net: Network): boolean {
   if (!msg.text || !msg.nick) return false;
-  const text = msg.text.toLowerCase();
-  const myNick = (net.currentNick || net.nick || '').toLowerCase();
+  const text = msg.text;
+  const myNick = (net.currentNick || net.nick || '').trim();
 
-  if (myNick && text.includes(myNick)) return true;
+  const hasWord = (haystack: string, needle: string): boolean => {
+    if (!needle) return false;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Same boundary as autolinker: not part of larger nick word
+    const re = new RegExp(`(?<=^|[^a-zA-Z0-9_\\[\\]{}])${escaped}(?=$|[^a-zA-Z0-9_\\[\\]{}])`, 'i');
+    return re.test(haystack);
+  };
+
+  if (myNick && hasWord(text, myNick)) return true;
 
   for (const word of highlightWords) {
-    if (text.includes(word.toLowerCase())) return true;
+    const w = word.trim();
+    if (w && hasWord(text, w)) return true;
   }
 
   return false;

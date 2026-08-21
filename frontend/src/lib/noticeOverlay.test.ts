@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { noticeState, addNotice, dismissAll } from '../stores/noticeOverlay.svelte';
+import { noticeState, addNotice, dismissAll, _clearDismissedForTest } from '../stores/noticeOverlay.svelte';
 import { ircState } from '../stores/ircStore.svelte';
 import { processIrcEvent, type AccumState } from './messageHandler';
 
 describe('noticeOverlay', () => {
   beforeEach(() => {
     dismissAll();
+    _clearDismissedForTest();
     ircState.networks = [
       {
         networkId: 'net1',
@@ -85,11 +86,46 @@ describe('noticeOverlay', () => {
     dismissAll();
     expect(noticeState.entries.length).toBe(0);
   });
-
   it('dedups rapid duplicate', () => {
     const t = Date.now();
     addNotice({ nick: 'NickServ', networkId: 'net1', networkName: 'SuperNETs', text: 'dup', t });
     addNotice({ nick: 'NickServ', networkId: 'net1', networkName: 'SuperNETs', text: 'dup', t: t + 100 });
+    expect(noticeState.entries.length).toBe(1);
+  });
+
+  it('does not re-add after dismiss (persisted across refresh)', () => {
+    const t = Date.now();
+    addNotice({ nick: 'EliManning', networkId: 'net1', networkName: 'SuperNETs', text: '[#superbowl] JOIN #5000 NOW', t });
+    expect(noticeState.entries.length).toBe(1);
+    dismissAll();
+    expect(noticeState.entries.length).toBe(0);
+    // Same notice with new t should be suppressed via dismissedSet
+    addNotice({ nick: 'EliManning', networkId: 'net1', networkName: 'SuperNETs', text: '[#superbowl] JOIN #5000 NOW', t: t + 10000 });
+    expect(noticeState.entries.length).toBe(0);
+    // Different text should still show
+    addNotice({ nick: 'EliManning', networkId: 'net1', networkName: 'SuperNETs', text: '[#other] JOIN #5000 NOW', t: t + 10000 });
+    expect(noticeState.entries.length).toBe(1);
+  });
+
+  it('ignores backfill NOTICE (CHATHISTORY replay on refresh)', () => {
+    const data: Record<string, unknown> = {
+      command: 'NOTICE',
+      nick: 'EliManning',
+      text: '[#superbowl] JOIN #5000 NOW',
+      params: ['Zod32', '[#superbowl] JOIN #5000 NOW'],
+      prefix: 'EliManning!u@h',
+      channel: '_server',
+      nid: 'net1',
+      network: 'SuperNETs',
+      t: Date.now(),
+      batch: 'chathistory',
+      tags: { batch: 'chathistory' },
+    };
+    processIrcEvent(data, { value: 0 }, mkAccum(), { switchToBuffer: () => {} }, () => {});
+    expect(noticeState.entries.length).toBe(0);
+    // Same notice as live (no batch) should show
+    const live = { ...data, batch: undefined, tags: {} as any };
+    processIrcEvent(live, { value: 0 }, mkAccum(), { switchToBuffer: () => {} }, () => {});
     expect(noticeState.entries.length).toBe(1);
   });
 });
