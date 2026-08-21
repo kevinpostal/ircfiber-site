@@ -619,8 +619,19 @@
     // arrived within the 30s tick interval.
     const bottomKey = findKey(bottomTs);
     if (bottomKey) {
-      m.set(bottomKey, 'bottom');
-      return m;
+      // Don't show "since you scrolled up" if the first new message after
+      // you scrolled up is your own (you typed it while scrolled up).
+      // You already saw your own message (it was echoed at top of input),
+      // so showing "New messages since you scrolled up" for your own
+      // message is noisy. Matches IRCCloud's shouldShowSeen for lastSeen.
+      const bottomMsg = messagesWithDates.find(item => item._key === bottomKey)?.msg ?? null;
+      const curNick = activeNetwork?.currentNick || '';
+      const isOwnFirst = !!bottomMsg && !!curNick && stripPrefix(bottomMsg.nick || '') === stripPrefix(curNick);
+      if (!isOwnFirst) {
+        m.set(bottomKey, 'bottom');
+        return m;
+      }
+      // Own message first — fall through to check focus/last divider
     }
     const focusKey = findKey(focusTs);
     if (focusKey) {
@@ -1709,22 +1720,47 @@
       // Fallback: if timestamp not found (clock skew), use firstBelow as before
       if (!lockedMsg) lockedMsg = firstBelowMsg;
       if (lockedMsg) {
-        const totalBelow = countMessagesBetween(networkId, bufferName, lockedMsg);
-        if (totalBelow > 100) {
-          belowUnseenCount = totalBelow;
-          belowUnseenTimestamp = lockedMsg.t || null;
+        // Count only messages not from self — you already saw your own
+        // echo (it was typed at top of input), so it shouldn't trigger
+        // "New messages since you scrolled up" or the ChatterBar.
+        const myNickLower = (activeNetwork?.currentNick || '').toLowerCase();
+        const listForCount = ircState.messages[`${networkId}:${bufferName}`] ?? [];
+        const startIdx = listForCount.findIndex(m => m === lockedMsg);
+        let filteredTotal = 0;
+        let filteredImportant = 0;
+        if (startIdx >= 0) {
+          for (let i = startIdx + 1; i < listForCount.length; i++) {
+            const m = listForCount[i];
+            if (!m.text || !m.nick) continue;
+            if (stripPrefix(m.nick).toLowerCase() === myNickLower) continue;
+            const isChat = m.command === 'PRIVMSG' || (m.command === 'NOTICE' && !!m.nick);
+            if (!isChat) continue;
+            // Also check if message is actually unseen (t > lastSeen) — but
+            // new messages since lock are all t > lockedMsg.t, and lockedMsg.t
+            // is at or before lastSeen? For now, count all not-from-self after lock.
+            filteredTotal++;
+            // isImportantMessage is not exported, use countImportant logic inline
+            if (m.command === 'PRIVMSG' || m.type === 'action') filteredImportant++;
+          }
         } else {
-          // For <=100, show total new messages (or important if any) — stable
-          // count of messages that arrived after you scrolled up, not total
-          // hidden old backlog which fluctuates with scroll position.
-          const important = countImportantMessagesBetween(networkId, bufferName, lockedMsg);
-          belowUnseenCount = totalBelow;
-          // Keep timestamp of locked point for relative time
-          belowUnseenTimestamp = lockedMsg.t || null;
-          // If you want to show important count instead, use:
-          // belowUnseenCount = important > 0 ? important : totalBelow;
+          // Fallback: use original counts if lockedMsg not found in list
+          filteredTotal = countMessagesBetween(networkId, bufferName, lockedMsg);
+          filteredImportant = countImportantMessagesBetween(networkId, bufferName, lockedMsg);
         }
-        belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, lockedMsg);
+        if (filteredTotal === 0) {
+          belowUnseenCount = 0;
+          belowUnseenTimestamp = null;
+          belowUnseenHighlights = 0;
+        } else if (filteredTotal > 100) {
+          belowUnseenCount = filteredTotal;
+          belowUnseenTimestamp = lockedMsg.t || null;
+          belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, lockedMsg);
+        } else {
+          // For <=100, show filtered total (or important if you prefer)
+          belowUnseenCount = filteredTotal;
+          belowUnseenTimestamp = lockedMsg.t || null;
+          belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, lockedMsg);
+        }
       } else {
         belowUnseenCount = 0;
         belowUnseenTimestamp = null;
