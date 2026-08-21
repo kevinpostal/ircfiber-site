@@ -64,7 +64,7 @@ function withViewTransition(fn: () => void): void {
       (typeof navigator !== 'undefined' && (navigator as unknown as { webdriver?: boolean }).webdriver === true)
     );
     if (isTestEnv) { fn(); return; }
-  } catch {}
+  } catch (_e) {}
   const doc = document as unknown as { startViewTransition?: (cb: () => void) => { finished: Promise<void>; ready: Promise<void> } };
   if (doc.startViewTransition) {
     try {
@@ -72,7 +72,7 @@ function withViewTransition(fn: () => void): void {
       vt?.finished?.catch(() => {});
       vt?.ready?.catch(() => {});
       return;
-    } catch {}
+    } catch (_e) {}
   }
   fn();
 }
@@ -92,7 +92,7 @@ function readCachedNetworks(): CachedNetwork[] {
 }
 function writeCachedNetworks(networks: { networkId: string; name: string }[]): void {
   const data = networks.map(n => ({ networkId: n.networkId, name: n.name }));
-  try { localStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(data)); } catch {}
+  try { localStorage.setItem(NETWORK_CACHE_KEY, JSON.stringify(data)); } catch (_e) {}
 }
 
 // Read once at module load — synchronous localStorage, < 0.1 ms.
@@ -218,7 +218,7 @@ let showNetworkForm: boolean = $state(false);
   $effect(() => {
     if (!wrapEl) return;
     const el = wrapEl as unknown as { inert?: boolean };
-    try { el.inert = hasOpenDialog; } catch {}
+    try { el.inert = hasOpenDialog; } catch (_e) {}
     if (hasOpenDialog) wrapEl.setAttribute('inert', '');
     else wrapEl.removeAttribute('inert');
   });
@@ -1475,6 +1475,7 @@ let showNetworkForm: boolean = $state(false);
         ircState.pendingBanList.delete(key);
       }
     }
+  }
 
   function checkRoute(): void {
     syncViewers();
