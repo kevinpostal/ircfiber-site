@@ -1375,6 +1375,12 @@ export function setMessages(networkId: string, bufferName: string, msgs: IRCMess
   ircState.processedMessages[key] = buildProcessedBuffer(capped);
   saveMessageCache(key, capped);
   markNetworkSeen(networkId);
+  // History just arrived (sync or REST). Reconcile the badge for this
+  // buffer so stale localStorage unread that survived the boot sync
+  // (where msgs were empty) is cleared without waiting for the next
+  // periodic sync ~10s later — the exact "flash on then off after a
+  // few seconds" reported on /irc/IRC%20Fiber/channel/testing.
+  reconcileUnreadForBuffer(networkId, bufferName);
 }
 
 export function pruneMessagesBefore(networkId: string, bufferName: string, beforeTs: number): void {
@@ -1491,9 +1497,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   ircState.messages[key] = finalMessages;
   ircState.processedMessages[key] = finalProcessed;
   markNetworkSeen(networkId);
-}
-if (typeof window !== 'undefined') {
-  (window as unknown as Record<string, unknown>).__fiberPrependMessages = prependMessages;
+  reconcileUnreadForBuffer(networkId, bufferName);
 }
 
 // Marks are sequence-prefixed (`<seq>|<msgid or t:ts>`) so every fetch or
@@ -1628,10 +1632,20 @@ export function reconcileUnreadState(): void {
       const key = `${net.networkId}:${buf.name}`;
       const lastSeen = getLastSeen(net.networkId, buf.name);
       const msgs = ircState.messages[key];
-      // No messages yet — nothing to reconcile; keep whatever unreadMap
-      // has until history arrives.  Once history arrives this function
-      // will run again via the next sync path.
-      if (!msgs || msgs.length === 0) continue;
+      // No messages yet — can't validate stale localStorage badge.
+      // Treat as 0 unread (can't be unread without messages) so the
+      // stale badge restored from localStorage doesn't flash on for a
+      // few seconds after reload until history arrives. The next reconcile
+      // after history lands (via setMessages/prependMessages) will compute
+      // the true count and show the badge only if there is real unread.
+      if (!msgs || msgs.length === 0) {
+        buf.unreadCount = 0;
+        (buf as unknown as Record<string, unknown>).highlightCount = 0;
+        buf.highlight = false;
+        if (unreadMap[key] !== undefined) delete unreadMap[key];
+        if (highlightMap[key]) delete highlightMap[key];
+        continue;
+      }
       // Never visited on this device — unread is local-only.  Don't
       // synthesize a badge from old history; unread should only count
       // messages that arrived *after* the user first saw the channel.
@@ -1642,7 +1656,6 @@ export function reconcileUnreadState(): void {
       let trueHighlights = 0;
       for (const m of msgs) {
         const isChat = m.command === 'PRIVMSG' || (m.command === 'NOTICE' && !!m.nick);
-        if (!isChat) continue;
         if ((m.t ?? 0) <= lastSeen) continue;
         if (!shouldTrackUnread(net.networkId, buf.name)) continue;
         trueUnread++;
@@ -1667,6 +1680,66 @@ export function reconcileUnreadState(): void {
         if (!prevHighlight) highlightMap[key] = true;
       }
     }
+  }
+}
+
+/** Targeted reconcile for a single buffer — called right after its
+ *  history arrives (setMessages / prependMessages) so the stale badge
+ *  doesn't linger until the next 10s periodic sync. */
+export function reconcileUnreadForBuffer(networkId: string, bufferName: string): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  const buf = net.buffers.find(b => normalizeChannelName(b.name) === normalizeChannelName(bufferName));
+  if (!buf || buf.name === '_server') return;
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  // Use the canonical buf.name for the messages key — it was normalized
+  // on arrival via setMessages/prependMessages.
+  const msgKey = `${networkId}:${buf.name}`;
+  const lastSeen = getLastSeen(networkId, buf.name);
+  const msgs = ircState.messages[msgKey] ?? ircState.messages[key];
+  if (!msgs || msgs.length === 0) {
+    buf.unreadCount = 0;
+    (buf as unknown as Record<string, unknown>).highlightCount = 0;
+    buf.highlight = false;
+    if (unreadMap[key] !== undefined) delete unreadMap[key];
+    // Also clear normalized variant if different
+    if (msgKey !== key && unreadMap[msgKey] !== undefined) delete unreadMap[msgKey];
+    if (highlightMap[key]) delete highlightMap[key];
+    if (msgKey !== key && highlightMap[msgKey]) delete highlightMap[msgKey];
+    return;
+  }
+  if (lastSeen === null) return;
+  let trueUnread = 0;
+  let trueHighlights = 0;
+  for (const m of msgs) {
+    const isChat = m.command === 'PRIVMSG' || (m.command === 'NOTICE' && !!m.nick);
+    if (!isChat) continue;
+    if ((m.t ?? 0) <= lastSeen) continue;
+    if (!shouldTrackUnread(networkId, buf.name)) continue;
+    trueUnread++;
+    if (m.highlight || checkHighlight(m, net)) trueHighlights++;
+  }
+  const prevUnread = unreadMap[key] ?? unreadMap[msgKey] ?? 0;
+  const prevHighlight = highlightMap[key] ?? highlightMap[msgKey] ?? false;
+  const shouldHaveHighlight = trueHighlights > 0;
+  buf.unreadCount = trueUnread;
+  (buf as unknown as Record<string, unknown>).highlightCount = trueHighlights;
+  buf.highlight = shouldHaveHighlight;
+  if (trueUnread === 0) {
+    if (prevUnread !== 0) {
+      delete unreadMap[key];
+      if (msgKey !== key) delete unreadMap[msgKey];
+    }
+  } else {
+    if (prevUnread !== trueUnread) unreadMap[key] = trueUnread;
+  }
+  if (!shouldHaveHighlight) {
+    if (prevHighlight) {
+      delete highlightMap[key];
+      if (msgKey !== key) delete highlightMap[msgKey];
+    }
+  } else {
+    if (!prevHighlight) highlightMap[key] = true;
   }
 }
 

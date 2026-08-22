@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   interface Props {
     open: boolean;
     onClose: () => void;
@@ -10,14 +11,21 @@
   }
   let { open, onClose, label, centered = false, class: klass = '', hideClose = false, children }: Props = $props();
   let dialogEl: HTMLDialogElement | null = $state(null);
+  // Svelte 5: effect that both reads and writes the same signal loops
+  // (effect_update_depth_exceeded). showModal/close mutate the native
+  // <dialog>.open but must not re-trigger the effect via the `open` prop
+  // that the parent writes in onClose. Use untrack for the DOM mutation
+  // and only depend on `open` + `dialogEl` intentionally.
   $effect(() => {
+    const shouldOpen = open;
     const el = dialogEl;
     if (!el) return;
-    if (open) {
-      if (!el.open) try { el.showModal(); } catch {}
-    } else {
-      if (el.open) el.close();
-    }
+    if (!shouldOpen) return;
+    untrack(() => {
+      if (!el.open) {
+        try { el.showModal(); } catch {}
+      }
+    });
   });
   function handleClose(){ onClose(); }
   function handleBackdrop(e: MouseEvent){ if(e.target===dialogEl) onClose(); }
