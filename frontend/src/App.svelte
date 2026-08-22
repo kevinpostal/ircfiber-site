@@ -464,6 +464,11 @@ let showNetworkForm: boolean = $state(false);
   }
 
   onMount(() => {
+    // E2E hook: let Playwright inject a fake NOTICE/PRIVMSG and verify the overlay+batcher pipeline.
+    // Mirrors __fiberAddNotice (NoticeOverlay) and __fiberIrcState (ircStore) for e2e.
+    if (typeof window !== 'undefined') {
+      (window as unknown as Record<string, unknown>).__fiberProcessIrcEvent = (data: Record<string, unknown>) => processEvent(data);
+    }
     // Set up IRCCloud-style message batcher (200ms flush)
     setFlushFn((networkId, bufferName, msgs) => {
       batchAppendMessages(networkId, bufferName, msgs);

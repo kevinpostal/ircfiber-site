@@ -159,8 +159,8 @@ export default defineConfig({
             const isHangUp = msg.includes('socket hang up') || msg.includes('ECONNRESET') || code === 'ECONNRESET' || code === 'ECONNREFUSED' || msg.includes('hang up');
             if (isHangUp) {
               if (res && !res.headersSent) {
-                try { (res as import('http').ServerResponse).writeHead(502); } catch {}
-                try { res.end(JSON.stringify({ error: 'proxy hang up suppressed' })); } catch {}
+                try { (res as import('http').ServerResponse).writeHead(200, { 'Content-Type': 'application/json' }); } catch {}
+                try { res.end('[]'); } catch {}
               }
               return;
             }

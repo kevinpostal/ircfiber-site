@@ -18,6 +18,11 @@ export function getSlashHandler(name: string): SlashHandler | undefined {
   return commands.get(name.toLowerCase());
 }
 
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__fiberSlashGetHandler = getSlashHandler;
+  (window as unknown as Record<string, unknown>).__fiberSlashCommands = commands;
+}
+
 // ── All commands ──
 
 registerSlash(['nick'], (args, networkId, _target, net) => {
@@ -317,4 +322,27 @@ registerSlash(['unhighlight', 'unhilight', 'dehighlight', 'dehilight'], (args) =
 registerSlash(['notice'], (args, networkId) => {
   if (args.length < 2) throw new Error('Usage: /notice <target> <message>');
   sendRaw(networkId, 'NOTICE ' + args[0] + ' :' + args.slice(1).join(' '));
+});
+
+registerSlash(['ns', 'nickserv'], (args, networkId) => {
+  if (args.length === 0) throw new Error('Usage: /ns <command> — NickServ help: /ns help');
+  // Common shorthand: /ns help / /ns identify / /ns register
+  // Maps to PRIVMSG NickServ so the reply comes back as NOTICE (overlay).
+  // IRCCloud parity: /ns is an alias for /msg NickServ.
+  sendRaw(networkId, 'PRIVMSG NickServ :' + args.join(' '));
+});
+
+registerSlash(['cs', 'chanserv'], (args, networkId) => {
+  if (args.length === 0) throw new Error('Usage: /cs <command> — ChanServ help: /cs help');
+  sendRaw(networkId, 'PRIVMSG ChanServ :' + args.join(' '));
+});
+
+registerSlash(['hs', 'hostserv'], (args, networkId) => {
+  if (args.length === 0) throw new Error('Usage: /hs <command> — HostServ help: /hs help');
+  sendRaw(networkId, 'PRIVMSG HostServ :' + args.join(' '));
+});
+
+registerSlash(['ms', 'memoserv'], (args, networkId) => {
+  if (args.length === 0) throw new Error('Usage: /ms <command> — MemoServ help: /ms help');
+  sendRaw(networkId, 'PRIVMSG MemoServ :' + args.join(' '));
 });

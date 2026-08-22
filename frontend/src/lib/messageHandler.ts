@@ -477,7 +477,9 @@ export function processIrcEvent(
     const isSelfEcho = msg.selfEcho || !!(data.se as string | undefined);
     const isCtcp = msg.text.charCodeAt(0) === 0x01;
     const trimmed = msg.text.trim();
-    const isStarNoise = trimmed.startsWith('***') || trimmed.startsWith('* *');
+    // Only suppress "***" noise from server hostnames (irc.example.org) — not from services.
+    // NickServ/ChanServ HELP often starts with "***" and must still show in the overlay.
+    const isStarNoise = isServerNick && (trimmed.startsWith('***') || trimmed.startsWith('* *'));
     const targetMismatch = !!target && target !== '*' && !!curNick && target.toLowerCase() !== curNick.toLowerCase() && target.toLowerCase() !== (net.nick || '').toLowerCase();
     if (!isChannelTarget && !isServerNick && !isSelf && !isSelfEcho && !isCtcp && !isStarNoise && !targetMismatch) {
       addNotice({

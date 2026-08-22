@@ -61,22 +61,26 @@
     <button type="button" class="close" onclick={dismissAll} aria-label="Close notices"><span>Close</span></button>
     <div class="overlaycontents" onclick={handleOverlayClick} role="presentation">
       {#each noticeState.entries as entry, i (entry.id)}
+        {@const prev = i > 0 ? noticeState.entries[i - 1] : null}
+        {@const showHead = !prev || prev.nick.toLowerCase() !== entry.nick.toLowerCase() || prev.networkId !== entry.networkId}
         <div class="overlay_type_notice" data-idx={i}>
-          <div class="overlayHead">
-            Notice:
-            <span
-              role="button"
-              tabindex="0"
-              aria-controls="memberContextMenu"
-              aria-haspopup="true"
-              class="buffer bufferLink user link"
-              title={entry.nick}
-              data-name={entry.nick}
-              onclick={() => handleNickClick(entry.nick, entry.networkId)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleNickClick(entry.nick, entry.networkId); } }}
-            >{entry.nick}</span>
-            <span class="notice-network"> ({entry.networkName})</span>
-          </div>
+          {#if showHead}
+            <div class="overlayHead">
+              Notice:
+              <span
+                role="button"
+                tabindex="0"
+                aria-controls="memberContextMenu"
+                aria-haspopup="true"
+                class="buffer bufferLink user link"
+                title={entry.nick}
+                data-name={entry.nick}
+                onclick={() => handleNickClick(entry.nick, entry.networkId)}
+                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleNickClick(entry.nick, entry.networkId); } }}
+              >{entry.nick}</span>
+              <span class="notice-network"> ({entry.networkName})</span>
+            </div>
+          {/if}
           <div class="overlay">{@html renderNotice(entry.text)}</div>
         </div>
       {/each}
