@@ -38,19 +38,29 @@ LocalUploadResult saveUpload(string filename, string mime, const(ubyte)[] data, 
     // Preserve original extension
     auto ext = extension(filename).strip;
     if (ext.length == 0) {
-        // Guess extension from MIME type for common types
+        // Guess extension from MIME type for common types (preserve universal binary support)
         import std.string : toLower;
         auto lowerMime = mime.toLower();
         if (mime == "image/png") ext = ".png";
         else if (mime == "image/jpeg" || mime == "image/jpg") ext = ".jpg";
         else if (mime == "image/gif") ext = ".gif";
         else if (mime == "image/webp") ext = ".webp";
-        else if (lowerMime == "text/html" || lowerMime == "application/xhtml+xml") ext = ".html"; // preserve html ext so serveUpload can emit text/html
+        else if (mime == "image/svg+xml") ext = ".svg";
+        else if (lowerMime == "text/html" || lowerMime == "application/xhtml+xml") ext = ".html";
         else if (mime == "text/plain") ext = ".txt";
         else if (mime == "application/json") ext = ".json";
         else if (mime == "text/x-python" || mime == "application/x-python") ext = ".py";
         else if (mime == "application/javascript" || mime == "text/javascript") ext = ".js";
+        else if (lowerMime == "application/pdf") ext = ".pdf";
+        else if (lowerMime == "application/zip" || lowerMime == "application/x-zip-compressed") ext = ".zip";
+        else if (lowerMime == "application/gzip" || lowerMime == "application/x-gzip") ext = ".gz";
+        else if (lowerMime == "video/mp4") ext = ".mp4";
+        else if (lowerMime == "video/webm") ext = ".webm";
+        else if (lowerMime == "audio/mpeg" || lowerMime == "audio/mp3") ext = ".mp3";
+        else if (lowerMime == "audio/ogg") ext = ".ogg";
         else if (mime.startsWith("text/")) ext = ".txt";
+        else if (mime.startsWith("video/")) ext = ".mp4";
+        else if (mime.startsWith("audio/")) ext = ".mp3";
         else {
             auto lower = filename.toLower();
             if (lower == "dockerfile" || lower == "makefile" || lower == "gemfile" || lower == "rakefile") ext = "";

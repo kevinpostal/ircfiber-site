@@ -74,8 +74,7 @@ export function normalizeTextUrl(rawUrl: string): string | null {
   const isLoopback = /^(localhost|127\.0\.0\.1|::1)$/i.test(u.hostname) || u.hostname.startsWith('127.');
   if (!isLoopback) u.protocol = 'https:';
   if (isTextParts(u.pathname, u.search, u.hash)) return u.href;
-  // Our uploads are always with extension, but be permissive for /uploads/<id> without extension
-  return u.href;
+  return null;
 }
 function stripTrailingPunc(url: string): string {
   return url.replace(/[.,;!?]+$/, '').replace(/[)]+$/, (m) => {

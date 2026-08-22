@@ -18,6 +18,40 @@
     return /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i.test(filename);
   }
 
+  // Smart stock thumbnail: detect file kind from ext + mime (IRCCloud parity)
+  type StockKind = 'pdf' | 'archive' | 'video' | 'audio' | 'document' | 'spreadsheet' | 'presentation' | 'generic';
+  interface StockMeta { kind: StockKind; ext: string; label: string; icon: string; bg: string; fg: string; }
+
+  function getStockMeta(filename: string, type?: string): StockMeta {
+    const lower = filename.toLowerCase();
+    const dot = lower.lastIndexOf('.');
+    const ext = dot > 0 && dot < lower.length - 1 ? lower.slice(dot + 1).toLowerCase() : '';
+    const mime = (type || '').toLowerCase();
+    // pdf
+    if (ext === 'pdf' || mime === 'application/pdf') return { kind: 'pdf', ext: 'PDF', label: 'PDF Document', icon: 'fa-file-pdf', bg: '#dc2626', fg: '#fff' };
+    // archive
+    if (['zip','tar','gz','tgz','bz2','xz','7z','rar','iso','dmg','pkg','zst'].includes(ext) || mime.includes('zip') || mime.includes('tar') || mime.includes('gzip') || mime.includes('compressed') || mime === 'application/x-7z-compressed' || mime === 'application/vnd.rar')
+      return { kind: 'archive', ext: ext.toUpperCase() || 'ZIP', label: 'Archive', icon: 'fa-file-zipper', bg: '#d97706', fg: '#fff' };
+    // video
+    if (mime.startsWith('video/') || ['mp4','mov','webm','avi','mkv','m4v','flv','wmv','3gp','mpg','mpeg'].includes(ext))
+      return { kind: 'video', ext: ext.toUpperCase() || 'VID', label: 'Video', icon: 'fa-file-video', bg: '#7c3aed', fg: '#fff' };
+    // audio
+    if (mime.startsWith('audio/') || ['mp3','wav','flac','ogg','oga','aac','m4a','wma','opus','mid','midi','aiff'].includes(ext))
+      return { kind: 'audio', ext: ext.toUpperCase() || 'AUD', label: 'Audio', icon: 'fa-file-audio', bg: '#059669', fg: '#fff' };
+    // document
+    if (['doc','docx','odt','rtf','pages'].includes(ext) || mime === 'application/msword' || mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+      return { kind: 'document', ext: ext.toUpperCase(), label: 'Document', icon: 'fa-file-word', bg: '#2563eb', fg: '#fff' };
+    // spreadsheet
+    if (['xls','xlsx','ods','csv'].includes(ext) || mime.includes('spreadsheet') || mime === 'text/csv')
+      return { kind: 'spreadsheet', ext: ext.toUpperCase(), label: 'Spreadsheet', icon: 'fa-file-excel', bg: '#16a34a', fg: '#fff' };
+    // presentation
+    if (['ppt','pptx','odp','key'].includes(ext) || mime.includes('presentation'))
+      return { kind: 'presentation', ext: ext.toUpperCase(), label: 'Presentation', icon: 'fa-file-powerpoint', bg: '#ea580c', fg: '#fff' };
+    return { kind: 'generic', ext: ext ? ext.toUpperCase() : 'FILE', label: mime ? mime.split('/').pop()?.toUpperCase() || 'File' : 'File', icon: 'fa-file', bg: '#4b5563', fg: '#fff' };
+  }
+
+  let imgLoadFailed = $state(false);
+
   // Text preview state — loaded via File.text() once per file so we don't
   // re-fetch a blob: URL on every render (Svelte {#await fetch(...)} re-creates
   // the promise and flashes). $effect tracks the active file identity.
@@ -69,6 +103,14 @@
     if (!d) return;
     messageInput = d.message;
     if (d.uploads.length === 1) filenameInput = d.uploads[0].filename;
+  });
+
+  // reset image error when switching files
+  $effect(() => {
+    // track previewUrl as trigger
+    const d = uploadState.dialog;
+    const url = d?.uploads[0]?.previewUrl;
+    if (url) imgLoadFailed = false;
   });
 
   function handleSubmit(e: Event): void {
@@ -138,10 +180,22 @@
                   {/if}
                 </span>
               </span>
-            {:else}
+            {:else if isImg && !imgLoadFailed}
               <span class="previewWrapper">
                 <span class="localPreview localImagePreview">
-                  <img class="unknownFilePreview" src={u.previewUrl} alt={u.filename} />
+                  <img class="unknownFilePreview" src={u.previewUrl} alt={u.filename} onerror={() => imgLoadFailed = true} />
+                </span>
+              </span>
+            {:else}
+              {@const meta = getStockMeta(u.filename, (u.file as File)?.type)}
+              <span class="previewWrapper">
+                <span class="localPreview stockPreview stockPreview--{meta.kind}">
+                  <span class="stockThumb" style="--stock-bg: {meta.bg}; --stock-fg: {meta.fg}">
+                    <i class="fa-solid {meta.icon} stockThumbIcon" aria-hidden="true"></i>
+                    <span class="stockThumbExt">{meta.ext}</span>
+                  </span>
+                  <span class="stockThumbName" title={u.filename}>{u.filename}</span>
+                  <span class="stockThumbMeta">{meta.label} • {formatSize(u.size)}</span>
                 </span>
               </span>
             {/if}
@@ -200,3 +254,76 @@
     />
   {/if}
 {/if}
+<style>
+  .stockPreview {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 18px 16px 14px;
+    background: #0d1117;
+    border: 1px solid #2c2f35;
+    border-radius: 8px;
+    min-height: 160px;
+    justify-content: center;
+  }
+  .stockThumb {
+    position: relative;
+    width: 88px;
+    height: 88px;
+    border-radius: 10px;
+    background: var(--stock-bg);
+    color: var(--stock-fg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+  }
+  .stockThumbIcon {
+    font-size: 38px;
+    line-height: 1;
+    filter: drop-shadow(0 1px 1px rgba(0,0,0,0.2));
+  }
+  .stockThumbExt {
+    position: absolute;
+    bottom: -6px;
+    right: -6px;
+    background: #1a1d21;
+    color: #d1d5db;
+    border: 1px solid #2c2f35;
+    font-family: 'Hack', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    padding: 2px 5px;
+    border-radius: 4px;
+    line-height: 1;
+    max-width: 52px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .stockThumbName {
+    font-size: 13px;
+    font-weight: 600;
+    color: #d1d5db;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 8px;
+    box-sizing: border-box;
+  }
+  .stockThumbMeta {
+    font-size: 12px;
+    color: #8b949e;
+  }
+  .stockPreview--pdf .stockThumb { background: #dc2626; }
+  .stockPreview--archive .stockThumb { background: #d97706; }
+  .stockPreview--video .stockThumb { background: #7c3aed; }
+  .stockPreview--audio .stockThumb { background: #059669; }
+  .stockPreview--document .stockThumb { background: #2563eb; }
+  .stockPreview--spreadsheet .stockThumb { background: #16a34a; }
+  .stockPreview--presentation .stockThumb { background: #ea580c; }
+  .stockPreview--generic .stockThumb { background: #4b5563; }
+</style>

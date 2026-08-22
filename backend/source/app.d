@@ -137,7 +137,7 @@ void main() {
     settings.port = cast(ushort) environment.get("IRCFIBER_HTTP_PORT", "8090").to!int;
     settings.bindAddresses = ["0.0.0.0", "::1"];
     settings.serverString = "IRC-Fiber-Gateway/0.3";
-    settings.maxRequestSize = 210 * 1024 * 1024; // allow 200MB uploads + multipart overhead
+    settings.maxRequestSize = 60 * 1024 * 1024; // allow 50MB uploads + multipart overhead (10MB headroom)
     settings.sessionStore = new RedisSessionStore(sessionRedis);
     // Force Secure flag on session cookies. The gateway receives
     // plain HTTP from Caddy, but the browser connects via HTTPS

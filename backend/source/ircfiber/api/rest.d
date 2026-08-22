@@ -1768,37 +1768,15 @@ final class RESTAPI {
         }
     }
 
-    /// Max accepted upload size: 200MB.
-    enum MAX_UPLOAD_BYTES = 200L * 1024 * 1024;
+    /// Max accepted upload size: 50MB (IRCCloud parity: universal binary support, capped at 50MB).
+    enum MAX_UPLOAD_BYTES = 50L * 1024 * 1024;
 
     /// Returns null if acceptable, else a user-presentable rejection reason.
+    /// Universal file support: any MIME/binary is accepted; only size is enforced.
+    /// (Previously restricted to images + text only.)
     package static string validateUpload(string mime, long size, string filename = "") @safe {
-        import std.algorithm.searching : startsWith;
-        import std.string : toLower;
-        auto lowerMime = mime.toLower();
-        bool isImage = lowerMime.startsWith("image/");
-        bool isText = lowerMime.startsWith("text/") ||
-            lowerMime == "text/html" || lowerMime == "application/xhtml+xml" ||
-            lowerMime == "application/json" || lowerMime == "application/javascript" ||
-            lowerMime == "application/xml" || lowerMime == "application/x-javascript" ||
-            lowerMime == "application/x-python" || lowerMime == "text/x-python" ||
-            lowerMime == "application/x-sh" || lowerMime == "text/x-sh";
-        if (!isImage && !isText && filename.length > 0) {
-            import std.path : extension;
-            auto ext = extension(filename).toLower();
-            // Common text/code extensions — matches frontend/textFiles.ts
-            immutable string[] textExts = [".txt",".md",".json",".js",".ts",".py",".java",".c",".cpp",".h",".go",".rs",".php",".rb",".sh",".yaml",".yml",".xml",".html",".htm",".xhtml",".css",".sql",".toml",".ini",".log",".csv"];
-            foreach (e; textExts) if (ext == e) { isText = true; break; }
-            // Also allow Dockerfile, Makefile without extension
-            if (!isText) {
-                import std.path : baseName;
-                auto base = baseName(filename).toLower();
-                if (base == "dockerfile" || base == "makefile" || base == "gemfile" || base == "rakefile") isText = true;
-            }
-        }
-        if (!isImage && !isText) return "Only images and text files are supported";
         if (size <= 0) return "Empty file";
-        if (size > MAX_UPLOAD_BYTES) return "File too large (max 200 MB)";
+        if (size > MAX_UPLOAD_BYTES) return "File too large (max 50 MB)";
         return null;
     }
 
@@ -2207,8 +2185,7 @@ final class RESTAPI {
             if (auto pf = "original" in req.files) {
                 import vibe.core.file : readFile;
                 auto data = cast(const(ubyte)[])readFile(pf.tempPath);
-                originalSize = cast(long)data.length;
-                if (originalSize > MAX_UPLOAD_BYTES) { res.statusCode = 413; res.writeJsonBody(Json(["error": Json("File too large (max 200 MB)")])); return; }
+                if (originalSize > MAX_UPLOAD_BYTES) { res.statusCode = 413; res.writeJsonBody(Json(["error": Json("File too large (max 50 MB)")])); return; }
                 originalFilename = pf.filename.name.length ? pf.filename.name : req.form.get("originalFilename", "image.png");
                 originalMime = pf.headers.get("Content-Type", "image/png");
                 try { auto up = saveIrcArtOriginal(originalFilename, originalMime, data, baseUrl); originalUrl = up.url; } catch (LocalUploadException e) { res.statusCode = 502; res.writeJsonBody(Json(["error": Json(e.msg)])); return; }
@@ -2432,7 +2409,7 @@ final class RESTAPI {
     }
 }
 
-@("validateUpload accepts images and text files under the size cap")
+@("validateUpload accepts any mime under 50MB (universal)")
 unittest {
     assert(RESTAPI.validateUpload("image/png", 1024) is null);
     assert(RESTAPI.validateUpload("image/jpeg", 32 * 1024 * 1024) is null);
@@ -2440,15 +2417,18 @@ unittest {
     assert(RESTAPI.validateUpload("text/x-python", 1024, "script.py") is null);
     assert(RESTAPI.validateUpload("application/json", 1024) is null);
     assert(RESTAPI.validateUpload("", 1024, "notes.txt") is null);
+    assert(RESTAPI.validateUpload("application/pdf", 10) is null);
+    assert(RESTAPI.validateUpload("video/mp4", 10) is null);
+    assert(RESTAPI.validateUpload("application/zip", 10, "archive.zip") is null);
+    assert(RESTAPI.validateUpload("application/octet-stream", 10, "blob.bin") is null);
+    assert(RESTAPI.validateUpload("", 10) is null);
 }
 
-@("validateUpload rejects non-images/non-text and oversize files")
+@("validateUpload rejects empty and oversize files (50MB cap)")
 unittest {
-    assert(RESTAPI.validateUpload("application/pdf", 10) !is null);
-    assert(RESTAPI.validateUpload("video/mp4", 10) !is null);
-    assert(RESTAPI.validateUpload("", 10) !is null);
-    assert(RESTAPI.validateUpload("", 10, "photo.jpg") !is null); // empty mime + image ext without mime should still be rejected (needs image/ mime)
-    assert(RESTAPI.validateUpload("image/png", 201 * 1024 * 1024) !is null);
+    assert(RESTAPI.validateUpload("image/png", 0) !is null);
+    assert(RESTAPI.validateUpload("application/pdf", 51 * 1024 * 1024) !is null);
+    assert(RESTAPI.validateUpload("image/png", 51 * 1024 * 1024) !is null);
 }
 
 // Regression: refresh on a low-volume channel like /irc/SuperNets/channel/zod

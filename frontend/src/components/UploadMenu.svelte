@@ -116,7 +116,6 @@
     bind:this={fileInput}
     type="file"
     class="hidden"
-    accept="image/*,text/*,.txt,.md,.json,.js,.ts,.jsx,.tsx,.py,.rb,.java,.c,.cpp,.h,.go,.rs,.php,.sh,.yaml,.yml,.xml,.html,.css,.sql,.dockerfile,.makefile,.ini,.conf,.toml,.log,.csv"
     multiple
     onchange={onFilePicked}
     aria-hidden="true"

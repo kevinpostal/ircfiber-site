@@ -20,11 +20,17 @@ describe('validateFile', () => {
   it('returns null for an acceptable image', () => {
     expect(validateFile({ name: 'a.png', type: 'image/png', size: 1000 })).toBeNull();
   });
-  it('rejects oversize and non-image files with reasons', () => {
+  it('accepts any binary format (universal 50MB)', () => {
+    expect(validateFile({ name: 'a.pdf', type: 'application/pdf', size: 10 })).toBeNull();
+    expect(validateFile({ name: 'a.zip', type: 'application/zip', size: 10 })).toBeNull();
+    expect(validateFile({ name: 'a.mp4', type: 'video/mp4', size: 10 })).toBeNull();
+    expect(validateFile({ name: 'a.bin', type: 'application/octet-stream', size: 10 })).toBeNull();
+  });
+  it('rejects oversize and empty files', () => {
     expect(validateFile({ name: 'a.png', type: 'image/png', size: MAX_UPLOAD_BYTES + 1 }))
       .toMatch(/too large/i);
-    expect(validateFile({ name: 'a.mp4', type: 'video/mp4', size: 10 }))
-      .toMatch(/only images/i);
+    expect(validateFile({ name: 'a.bin', type: 'application/octet-stream', size: 0 }))
+      .toMatch(/empty/i);
   });
 });
 

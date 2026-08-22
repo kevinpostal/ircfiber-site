@@ -30,6 +30,7 @@ export function setDeps(overrides: Partial<UploadFlowDeps>): void {
 
 interface PendingUpload extends ActiveUpload { handle: UploadHandle; }
 const handles = new Map<number, UploadHandle>();
+let pendingDialogOpts: { networkId: string; buffer: string } | null = null;
 
 export async function startUploads(
   files: File[] | Blob[],
@@ -105,6 +106,7 @@ export async function startUploads(
   if (opts.immediate) {
     void finalizeAndSend(uploads, '', opts);
   } else {
+    pendingDialogOpts = { networkId: opts.networkId, buffer: opts.buffer };
     uploadState.dialog = {
       mode: uploads.length === 1 ? 'single' : 'batch',
       uploads,
@@ -118,6 +120,8 @@ export function confirmDialog(data: { filename?: string; message: string }): voi
   const dialog = uploadState.dialog;
   if (!dialog) return;
   uploadState.dialog = null;
+  const opts = pendingDialogOpts;
+  pendingDialogOpts = null;
 
   if (data.filename && dialog.uploads.length === 1) dialog.uploads[0].filename = data.filename;
 
@@ -139,7 +143,23 @@ export function confirmDialog(data: { filename?: string; message: string }): voi
     }
 
     const text = joinMessageLink(data.message, urls.join(' '));
-    deps.setInputText(text);
+    // IRCCloud parity: confirming the dialog immediately posts the file link to the
+    // originating buffer (auto-send), not just fills the compose box. Fallback to
+    // filling the input if we have no buffer context (e.g. dialog opened from bare UI).
+    if (opts?.networkId && opts?.buffer) {
+      const label = generateLabel();
+      const key = `${opts.networkId}:${opts.buffer}`;
+      const optimistic: IRCMessage = { timestamp: new Date().toISOString(), t: Date.now(), nick: '', text, command: 'PRIVMSG', label };
+      ircState.optimisticMessages.set(label, optimistic);
+      const list = ircState.messages[key] ?? [];
+      list.push(optimistic);
+      ircState.messages[key] = list;
+      deps.send(opts.networkId, opts.buffer, text, label);
+      // also populate the compose for edit/recall parity
+      deps.setInputText('');
+    } else {
+      deps.setInputText(text);
+    }
   })();
 }
 
@@ -147,6 +167,7 @@ export function cancelDialog(): void {
   const dialog = uploadState.dialog;
   if (!dialog) return;
   uploadState.dialog = null;
+  pendingDialogOpts = null;
   for (const u of dialog.uploads) {
     handles.get(u.id)?.abort();
     handles.delete(u.id);

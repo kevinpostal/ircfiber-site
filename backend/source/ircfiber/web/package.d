@@ -487,8 +487,8 @@ final class WebController {
             bool isDownload = ("download" in req.query) !is null;
             bool isHtml = endsWith(rel, ".html") || endsWith(rel, ".htm") || endsWith(rel, ".xhtml");
 
-            // Serve known image AND text/code types (uploads now include
-            // hosted text snippets — see RESTAPI.validateUpload).
+            // Serve known image/text/code types plus universal binary types (50MB any-format).
+            // Unknown extensions fall through to application/octet-stream (downloadable binary) instead of 403.
             string mime = "application/octet-stream";
             if (endsWith(rel, ".png"))       mime = "image/png";
             else if (endsWith(rel, ".jpg")
@@ -497,6 +497,9 @@ final class WebController {
             else if (endsWith(rel, ".webp")) mime = "image/webp";
             else if (endsWith(rel, ".svg"))  mime = "image/svg+xml";
             else if (endsWith(rel, ".avif")) mime = "image/avif";
+            else if (endsWith(rel, ".bmp")) mime = "image/bmp";
+            else if (endsWith(rel, ".ico")) mime = "image/x-icon";
+            else if (endsWith(rel, ".tiff") || endsWith(rel, ".tif")) mime = "image/tiff";
             else if (endsWith(rel, ".txt") || endsWith(rel, ".text") || endsWith(rel, ".log")) mime = "text/plain";
             else if (endsWith(rel, ".md") || endsWith(rel, ".markdown")) mime = "text/markdown";
             else if (endsWith(rel, ".py")) mime = "text/x-python";
@@ -514,10 +517,32 @@ final class WebController {
             else if (endsWith(rel, ".toml")) mime = "text/x-toml";
             else if (endsWith(rel, ".ini") || endsWith(rel, ".conf") || endsWith(rel, ".cfg")) mime = "text/plain";
             else if (endsWith(rel, ".csv")) mime = "text/csv";
+            else if (endsWith(rel, ".pdf")) mime = "application/pdf";
+            else if (endsWith(rel, ".zip")) mime = "application/zip";
+            else if (endsWith(rel, ".tar")) mime = "application/x-tar";
+            else if (endsWith(rel, ".gz") || endsWith(rel, ".tgz")) mime = "application/gzip";
+            else if (endsWith(rel, ".bz2")) mime = "application/x-bzip2";
+            else if (endsWith(rel, ".xz")) mime = "application/x-xz";
+            else if (endsWith(rel, ".7z")) mime = "application/x-7z-compressed";
+            else if (endsWith(rel, ".rar")) mime = "application/vnd.rar";
+            else if (endsWith(rel, ".mp4") || endsWith(rel, ".m4v")) mime = "video/mp4";
+            else if (endsWith(rel, ".webm")) mime = "video/webm";
+            else if (endsWith(rel, ".mov")) mime = "video/quicktime";
+            else if (endsWith(rel, ".avi")) mime = "video/x-msvideo";
+            else if (endsWith(rel, ".mkv")) mime = "video/x-matroska";
+            else if (endsWith(rel, ".mp3")) mime = "audio/mpeg";
+            else if (endsWith(rel, ".wav")) mime = "audio/wav";
+            else if (endsWith(rel, ".ogg") || endsWith(rel, ".oga")) mime = "audio/ogg";
+            else if (endsWith(rel, ".flac")) mime = "audio/flac";
+            else if (endsWith(rel, ".aac")) mime = "audio/aac";
+            else if (endsWith(rel, ".woff")) mime = "font/woff";
+            else if (endsWith(rel, ".woff2")) mime = "font/woff2";
+            else if (endsWith(rel, ".ttf")) mime = "font/ttf";
+            else if (endsWith(rel, ".otf")) mime = "font/otf";
+            else if (endsWith(rel, ".exe") || endsWith(rel, ".dll") || endsWith(rel, ".so") || endsWith(rel, ".dylib") || endsWith(rel, ".bin")) mime = "application/octet-stream";
             else {
-                // Unrecognized file — refuse to serve
-                res.statusCode = 403;
-                return;
+                // Universal fallback: serve as binary download (IRCCloud parity — any file type)
+                mime = "application/octet-stream";
             }
 
             if (isDownload) {

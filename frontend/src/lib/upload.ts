@@ -1,4 +1,4 @@
-export const MAX_UPLOAD_BYTES = 200 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 export const MAX_UPLOAD_BATCH = 10;
 const FILE_BLACKLIST = new Set(['.DS_Store']);
 
@@ -28,13 +28,13 @@ export function isUploadableText(mime: string, filename = ""): boolean {
   return false;
 }
 
-export function isUploadableFile(mime: string, filename = ""): boolean {
-  return isUploadableImage(mime) || isUploadableText(mime, filename);
+// Universal: any file is uploadable (IRCCloud parity — 50MB any binary). Keep image/text helpers for snippet routing, but all files pass.
+export function isUploadableFile(_mime: string, _filename = ""): boolean {
+  return true;
 }
 export function validateFile(file: FileLike): string | null {
-  if (!isUploadableFile(file.type, file.name)) return 'Only images and text files are supported';
-  if (file.size > MAX_UPLOAD_BYTES) return 'File too large (max 200 MB)';
   if (file.size <= 0) return 'Empty file';
+  if (file.size > MAX_UPLOAD_BYTES) return 'File too large (max 50 MB)';
   return null;
 }
 
