@@ -1,7 +1,8 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus, FailInfo } from '../types';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
-         setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel } from '../stores/ircStore.svelte';
+         setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
+         checkHighlight } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
@@ -531,6 +532,10 @@ export function processIrcEvent(
     const isActiveBuffer = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === channel;
     const documentHidden = typeof document !== 'undefined' && document.hidden;
     const buf = net.buffers.find(b => b.name === channel);
+    // Ensure highlight is computed before notify check (batch sets it async, but notify is sync)
+    if (!msg.highlight && (msg.command === 'PRIVMSG' || msg.command === 'NOTICE' || msg.type === 'action') && msg.nick) {
+      if (checkHighlight(msg, net)) msg.highlight = true;
+    }
 
     if (!isBackfill && shouldNotifyForMessage({
       networkId,

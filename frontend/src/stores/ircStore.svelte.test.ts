@@ -114,7 +114,7 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
 	startXHRFallback: vi.fn(),
 	stopXHRFallback: vi.fn(),
 }));
-import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel } from './preferences.svelte';
+import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel, bufferPrefsMap } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
 import { buildProcessedBuffer } from '../lib/messageBuilder';
 
@@ -131,6 +131,7 @@ beforeEach(() => {
 	Object.keys(highlightMap).forEach((k) => delete (highlightMap as Record<string, unknown>)[k]);
 	Object.keys(lastSeenMap).forEach((k) => delete (lastSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
+	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
 	Object.keys(hiddenChannelsMap).forEach((k) => delete (hiddenChannelsMap as Record<string, unknown>)[k]);
 	highlightWords.length = 0;
 });
@@ -274,6 +275,7 @@ describe('appendMessage', () => {
 		const buf = createBuffer({ name: '#chan', unreadCount: 0 });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
+		bufferPrefsMap['net1:#chan'] = { notifyAll: true };
 
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#other';
@@ -343,6 +345,7 @@ describe('appendMessage', () => {
 		const buf = createBuffer({ name: '#chan', unreadCount: 0 });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
+		bufferPrefsMap['net1:#chan'] = { notifyAll: true };
 
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#chan';

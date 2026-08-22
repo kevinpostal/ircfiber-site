@@ -845,7 +845,7 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
       ircState.processedMessages[key] = buildProcessedBuffer([...list]);
       const normBuf2 = normalizeChannelName(bufferName);
       const isActive2 = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf2;
-      const isChatMessage2 = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
+      const isChatMessage2 = msg.command === 'PRIVMSG' || msg.type === 'action';
       const isUnread2 = isChatMessage2 && (!isActive2 || ircState.focusLost);
       if (isUnread2) incrementUnread(networkId, bufferName, msg);
       markNetworkSeen(networkId);
@@ -871,7 +871,7 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
 
   const normBuf = normalizeChannelName(bufferName);
   const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-  const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
+  const isChatMessage = msg.command === 'PRIVMSG' || msg.type === 'action';
   const isUnread = isChatMessage && (!isActive || ircState.focusLost);
   if (isUnread) {
     incrementUnread(networkId, bufferName, msg);
@@ -1026,7 +1026,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     // mutation. Without this, 50 incoming messages trigger 50 separate
     // Svelte reactive ticks on the Sidebar's buffer items, which is
     // most of the perceived "line by line trickle" delay.
-    const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
+    const isChatMessage = msg.command === 'PRIVMSG' || msg.type === 'action';
     if (isChatMessage) {
       hasChat = true;
       const track = shouldTrackUnread(networkId, bufferName);
@@ -1041,13 +1041,15 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
           // Already seen — still maybe highlight? IRCCloud only
           // highlights unseen, so skip.
         } else {
-          const normBuf = normalizeChannelName(bufferName);
-          const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-          if (!isActive || ircState.focusLost) addedUnread++;
           const isHl = !!msg.highlight || (netForBatchHl ? checkHighlight(msg, netForBatchHl) : false);
-          if (isHl) {
-            addedHighlights++;
-            msg.highlight = true;
+          if (isHl) msg.highlight = true;
+          if (!shouldCountUnreadForMessage(networkId, bufferName, isHl)) {
+            // Mentions-only channel: non-highlight messages don't bump badge
+          } else {
+            const normBuf = normalizeChannelName(bufferName);
+            const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
+            if (!isActive || ircState.focusLost) addedUnread++;
+            if (isHl) addedHighlights++;
           }
         }
       }
@@ -1151,7 +1153,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     const net = ircState.networks.find(n => n.networkId === networkId);
     if (net) {
       for (const msg of pending) {
-        const isChatMessage = msg.command === 'PRIVMSG' || (msg.command === 'NOTICE' && !!msg.nick);
+        const isChatMessage = msg.command === 'PRIVMSG' || msg.type === 'action';
         if (isChatMessage && !msg.highlight && checkHighlight(msg, net)) {
           msg.highlight = true;
           if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
@@ -1210,14 +1212,33 @@ export function recordHighlight(networkId: string, bufferName: string, nick: str
   recentHighlightersCache.set(key, filtered.slice(0, 10));
 }
 
-function shouldTrackUnread(networkId: string, bufferName: string): boolean {
+export function shouldTrackUnread(networkId: string, bufferName: string): boolean {
   const prefs = getBufferPrefs(networkId, bufferName);
   if (prefs.mute) return false;
   if (prefs.showUnread === false) return false;
   return true;
 }
 
+/** Mentions-only gating for unread counts.
+ *  When notifyAll is false (default = mentions only) the sidebar badge
+ *  should only increment for highlighted messages. This fixes the bug
+ *  where channels with "Mentions only" still flashed a blue unread
+ *  count for every normal PRIVMSG.
+ *  mute / showUnread are handled by shouldTrackUnread before this is called.
+ */
+export function shouldCountUnreadForMessage(networkId: string, bufferName: string, isHighlight: boolean): boolean {
+  const prefs = getBufferPrefs(networkId, bufferName);
+  // Only suppress non-highlights when the user has explicitly chosen "Mentions only"
+  // (notifyAll === false). If the pref is unset (undefined) we preserve the legacy
+  // behavior of counting every message as unread so existing channels and tests that
+  // never set the pref continue to show a badge for all messages.
+  if (prefs.notifyAll === false) return isHighlight;
+  return true;
+}
+
 export function incrementUnread(networkId: string, bufferName: string, msg: IRCMessage): void {
+  // IRCCloud parity: only PRIVMSG counts for unread (NOTICE from NickServ etc. ignored)
+  if (msg.command !== 'PRIVMSG' && msg.type !== 'action') return;
   if (!shouldTrackUnread(networkId, bufferName)) return;
   // Don't count messages the user has already seen (history replay,
   // sync backfill, or a live event whose timestamp is ≤ lastSeen).
@@ -1230,13 +1251,16 @@ export function incrementUnread(networkId: string, bufferName: string, msg: IRCM
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net || bufferName === '_server') return;
 
+  const isHighlight = !!msg.highlight || checkHighlight(msg, net);
+  if (!shouldCountUnreadForMessage(networkId, bufferName, isHighlight)) return;
+
   unreadMap[key] = (unreadMap[key] ?? 0) + 1;
   const buf = net.buffers.find(b => b.name === normalizeChannelName(bufferName));
   if (buf) {
     buf.unreadCount = (buf.unreadCount ?? 0) + 1;
   }
 
-  if (checkHighlight(msg, net)) {
+  if (isHighlight) {
     highlightMap[key] = true;
     if (buf) {
       buf.highlight = true;
@@ -1655,11 +1679,14 @@ export function reconcileUnreadState(): void {
       let trueUnread = 0;
       let trueHighlights = 0;
       for (const m of msgs) {
-        const isChat = m.command === 'PRIVMSG' || (m.command === 'NOTICE' && !!m.nick);
+        const isChat = m.command === 'PRIVMSG' || m.type === 'action';
+        if (!isChat) continue;
         if ((m.t ?? 0) <= lastSeen) continue;
         if (!shouldTrackUnread(net.networkId, buf.name)) continue;
+        const isHl = !!(m.highlight || checkHighlight(m, net));
+        if (!shouldCountUnreadForMessage(net.networkId, buf.name, isHl)) continue;
         trueUnread++;
-        if (m.highlight || checkHighlight(m, net)) trueHighlights++;
+        if (isHl) trueHighlights++;
       }
       const prevUnread = unreadMap[key] ?? 0;
       const prevHighlight = highlightMap[key] ?? false;
@@ -1712,12 +1739,14 @@ export function reconcileUnreadForBuffer(networkId: string, bufferName: string):
   let trueUnread = 0;
   let trueHighlights = 0;
   for (const m of msgs) {
-    const isChat = m.command === 'PRIVMSG' || (m.command === 'NOTICE' && !!m.nick);
+    const isChat = m.command === 'PRIVMSG' || m.type === 'action';
     if (!isChat) continue;
     if ((m.t ?? 0) <= lastSeen) continue;
     if (!shouldTrackUnread(networkId, buf.name)) continue;
+    const isHl = !!(m.highlight || checkHighlight(m, net));
+    if (!shouldCountUnreadForMessage(networkId, buf.name, isHl)) continue;
     trueUnread++;
-    if (m.highlight || checkHighlight(m, net)) trueHighlights++;
+    if (isHl) trueHighlights++;
   }
   const prevUnread = unreadMap[key] ?? unreadMap[msgKey] ?? 0;
   const prevHighlight = highlightMap[key] ?? highlightMap[msgKey] ?? false;

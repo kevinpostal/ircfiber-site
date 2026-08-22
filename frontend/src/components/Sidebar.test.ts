@@ -6,7 +6,7 @@ import { flushSync } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 import { ircState, setActiveBuffer, appendMessage, updateChannelUsers, updateNetworkFromSync } from '../stores/ircStore.svelte';
-import { archivedMap, pinnedMap, networkOrder, collapsedMap, conversationsCollapsedMap } from '../stores/preferences.svelte';
+import { archivedMap, pinnedMap, networkOrder, collapsedMap, conversationsCollapsedMap, bufferPrefsMap } from '../stores/preferences.svelte';
 
 function resetState(): void {
 	ircState.networks.length = 0;
@@ -16,6 +16,7 @@ function resetState(): void {
 	Object.keys(archivedMap).forEach((k) => delete (archivedMap as Record<string, unknown>)[k]);
 	Object.keys(collapsedMap).forEach((k) => delete (collapsedMap as Record<string, unknown>)[k]);
 	Object.keys(conversationsCollapsedMap).forEach((k) => delete (conversationsCollapsedMap as Record<string, unknown>)[k]);
+	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
   networkOrder.length = 0;
   // Clear any leftover DOM from a previous render — otherwise `dragging`
   // and other state left on stale `.network-list-items` containers
@@ -208,6 +209,7 @@ describe('Sidebar', () => {
     const buf = createBuffer({ name: '#general', unreadCount: 0 });
     net.buffers.push(buf);
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#general'] = { notifyAll: true };
 
     // Active buffer is somewhere else
     ircState.activeBuffer.networkId = 'net1';
@@ -236,6 +238,7 @@ describe('Sidebar', () => {
     const buf = createBuffer({ name: '#general', unreadCount: 0 });
     net.buffers.push(buf);
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#general'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#other';
@@ -258,6 +261,7 @@ describe('Sidebar', () => {
     const buf = createBuffer({ name: '#general', unreadCount: 0 });
     net.buffers.push(buf);
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#general'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#other';
@@ -285,6 +289,9 @@ describe('Sidebar', () => {
     const chan3 = createBuffer({ name: '#chan3', unreadCount: 0 });
     net.buffers.push(chan1, chan2, chan3);
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#chan1'] = { notifyAll: true };
+    bufferPrefsMap['net1:#chan2'] = { notifyAll: true };
+    bufferPrefsMap['net1:#chan3'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#active';
@@ -338,6 +345,7 @@ describe('Sidebar', () => {
     const buf = createBuffer({ name: '#general', unreadCount: 0 });
     net.buffers.push(buf);
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#general'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#general';

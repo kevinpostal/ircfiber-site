@@ -5,12 +5,13 @@ import { page } from 'vitest/browser';
 import Sidebar from './Sidebar.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 import { ircState, setActiveBuffer, appendMessage, batchAppendMessages } from '../stores/ircStore.svelte';
-import { collapsedMap, lastSeenMap, bottomSeenMap, unreadMap, highlightMap } from '../stores/preferences.svelte';
+import { collapsedMap, lastSeenMap, bottomSeenMap, unreadMap, highlightMap, bufferPrefsMap } from '../stores/preferences.svelte';
 
 function setupNet(netId = 'net1', chan = '#general') {
   const net = createNetwork({ networkId: netId, name: 'TestNet', nick: 'me', currentNick: 'me' });
   net.buffers.push(createBuffer({ name: chan, unreadCount: 0, highlightCount: 0, highlight: false }));
   ircState.networks.push(net);
+  bufferPrefsMap[`${netId}:${chan}`] = { notifyAll: true };
   return net;
 }
 
@@ -28,6 +29,7 @@ describe('Unread indicator — full e2e suite', () => {
     for (const k of Object.keys(bottomSeenMap)) delete bottomSeenMap[k];
     for (const k of Object.keys(unreadMap)) delete (unreadMap as Record<string, unknown>)[k];
     for (const k of Object.keys(highlightMap)) delete (highlightMap as Record<string, unknown>)[k];
+    for (const k of Object.keys(bufferPrefsMap)) delete (bufferPrefsMap as Record<string, unknown>)[k];
     localStorage.clear();
   });
 
@@ -85,6 +87,7 @@ describe('Unread indicator — full e2e suite', () => {
     const net = createNetwork({ networkId: 'net1', name: 'TestNet', nick: 'me', currentNick: 'me' });
     net.buffers.push(createBuffer({ name: '#general', unreadCount: 0, highlight: false, highlightCount: 0 }));
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#general'] = { notifyAll: true };
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn(), onNetworkOptions: vi.fn() } });
     // 2 of 3 messages mention me → 2 highlights
     batchAppendMessages('net1', '#general', [
@@ -105,6 +108,9 @@ describe('Unread indicator — full e2e suite', () => {
     net.buffers.push(createBuffer({ name: '#b', unreadCount: 0 }));
     net.buffers.push(createBuffer({ name: '#c', unreadCount: 0 }));
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#a'] = { notifyAll: true };
+    bufferPrefsMap['net1:#b'] = { notifyAll: true };
+    bufferPrefsMap['net1:#c'] = { notifyAll: true };
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn(), onNetworkOptions: vi.fn() } });
     appendMessage('net1', '#a', createMessage({ text: '1' }));
     appendMessage('net1', '#a', createMessage({ text: '2' }));

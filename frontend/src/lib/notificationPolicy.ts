@@ -15,7 +15,11 @@ export interface NotifyPolicyInput {
 }
 
 export function isChatMessage(msg: IRCMessage): boolean {
-  return msg.command === 'PRIVMSG' || msg.command === 'NOTICE' || msg.type === 'action';
+  // IRCCloud parity: only PRIVMSG (including CTCP ACTION which is PRIVMSG with type 'action')
+  // counts as chat for desktop notifications / unread. NOTICE (including NickServ,
+  // ChanServ, MemoServ) is a service notice and must NOT trigger desktop
+  // notifications or unread badges — it is shown in the notice overlay / server log.
+  return msg.command === 'PRIVMSG' || msg.type === 'action';
 }
 
 export function shouldNotifyForMessage(input: NotifyPolicyInput): boolean {

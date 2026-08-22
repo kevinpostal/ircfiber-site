@@ -33,8 +33,8 @@ describe('isChatMessage', () => {
     expect(isChatMessage(makeMsg({ command: 'PRIVMSG' }))).toBe(true);
   });
 
-  it('returns true for NOTICE', () => {
-    expect(isChatMessage(makeMsg({ command: 'NOTICE' }))).toBe(true);
+  it('returns false for NOTICE (IRCCloud parity: NickServ etc. must not notify)', () => {
+    expect(isChatMessage(makeMsg({ command: 'NOTICE' }))).toBe(false);
   });
 
   it('returns true for actions', () => {
@@ -57,6 +57,10 @@ describe('shouldNotifyForMessage', () => {
 
   it('notifies on all query messages', () => {
     expect(shouldNotifyForMessage(baseInput({ bufferType: 'query', bufferName: 'alice' }))).toBe(true);
+  });
+
+  it('does NOT notify for NOTICE in query (NickServ spam)', () => {
+    expect(shouldNotifyForMessage(baseInput({ bufferType: 'query', bufferName: 'NickServ', msg: makeMsg({ command: 'NOTICE', nick: 'NickServ', text: 'You are now identified' }) }))).toBe(false);
   });
 
   it('does not notify for non-highlight, non-notifyAll channel messages', () => {
