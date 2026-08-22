@@ -1012,7 +1012,8 @@ export async function renderPixelsCore(
     const pal=getMidgardPalette(o);
     const smart24 = (o as any).midgardMode==='smart' && (o as any)._smartPaletteA && o.renderMode==='ansi24';
     const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
-    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24 || isTrueColor);
+    // Truecolor with small w and large image: use greedy for speed (Viterbi 60*39*64= 9M, ~1.8s, would lock UI)
+    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24 || (isTrueColor && (o.viterbiW>1 || cols*rows<=1200)));
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -1031,6 +1032,16 @@ export async function renderPixelsCore(
           // Adaptive S: 120 cols → 12 states (vs 16) to keep 144 vs 256 states manageable
           const sSize = cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
+          S = top;
+        } else if(isTrueColor){
+          const sSize = cols >= 100 ? 6 : 8;
+          // Truecolor: use smaller palette for speed (was 12, now 8/6 to keep 60*64=3840 < 65536 and 60*36=2160 for WASM)
+          let truePal2 = (o as any)._truePalette as number[] | undefined;
+          if(!truePal2){
+            truePal2 = smartPaletteA(d, pW, pH, 8, o.colorMatching);
+            (o as any)._truePalette = truePal2;
+          }
+          const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
           S = top;
         } else {
           const sSize = cols >= 100 ? 10 : 12;
@@ -1062,7 +1073,7 @@ export async function renderPixelsCore(
         const cellGlyph: GlyphInfo[][] = new Array(M);
         const cellIsEmpty: boolean[] = new Array(M);
         let _tc = _perf();
-        const effPal = smart24 ? ((o as any)._smartPaletteA as number[]) : pal;
+        const effPal = isTrueColor ? ((o as any)._truePalette as number[] || pal) : smart24 ? ((o as any)._smartPaletteA as number[]) : pal;
         const _rowPalOkLab = o.colorMatching==='oklab' ? getPalOkLab(effPal) : null;
         // Try batched WASM path — one crossing per row instead of M*S
         let usedBatch = false;
@@ -1136,7 +1147,7 @@ export async function renderPixelsCore(
           } else {
             const g=cellGlyph[0][s];
             const [f,b]=states[s];
-            if(smart24){
+            if(smart24 || isTrueColor){
               dp[s]=g.err + o.viterbiW*(g.bytes + 14);
             } else {
               const fgM=_palToIrcEff ? _palToIrcEff[f & 255] : f, bgM=_palToIrcEff ? _palToIrcEff[b & 255] : b;
@@ -1170,7 +1181,7 @@ export async function renderPixelsCore(
             const [f,b]=states[s];
             const g=cellGlyph[i][s];
             if(isFirstNonEmpty){
-              if(smart24){
+              if(smart24 || isTrueColor){
                 nd[s]=g.err + o.viterbiW*(g.bytes + 14);
               } else {
                 const fgM=_palToIrcEff ? _palToIrcEff[f & 255] : f, bgM=_palToIrcEff ? _palToIrcEff[b & 255] : b;
@@ -1178,7 +1189,7 @@ export async function renderPixelsCore(
                 nd[s]=g.err + o.viterbiW*(g.bytes + pc);
               }
               back[i][s]=s;
-            } else if(smart24){
+            } else if(smart24 || isTrueColor){
               const candStay=bMinCost.get(b)!.cost + o.viterbiW*7;
               const candSwitch=gmin + o.viterbiW*14;
               let best=dp[s];
@@ -1217,7 +1228,7 @@ export async function renderPixelsCore(
           const [fRaw,bRaw]=states[sIdx];
           const g=cellGlyph[c][sIdx];
           const glyph=g.glyph;
-          if(smart24){
+          if(smart24 || isTrueColor){
             const fHex=toHex6((effPal[fRaw]>>16)&255,(effPal[fRaw]>>8)&255,effPal[fRaw]&255);
             const bHex=toHex6((effPal[bRaw]>>16)&255,(effPal[bRaw]>>8)&255,effPal[bRaw]&255);
             if(glyph===' '){
@@ -1340,6 +1351,16 @@ export async function renderPixelsCore(
           const sSize = cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
+        } else if(isTrueColor){
+          const sSize = cols >= 100 ? 6 : 8;
+          // Truecolor: use smaller palette for speed (was 12, now 8/6 to keep 60*64=3840 < 65536 and 60*36=2160 for WASM)
+          let truePal2 = (o as any)._truePalette as number[] | undefined;
+          if(!truePal2){
+            truePal2 = smartPaletteA(d, pW, pH, 8, o.colorMatching);
+            (o as any)._truePalette = truePal2;
+          }
+          const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
+          S = top;
         } else {
           const sSize = cols >= 100 ? 10 : 12;
           const tops: Array<[number,number,number,number]> = cellInfos.map(ci=>[ci.fg[0],ci.fg[1],ci.fg[2],255]);
@@ -1430,7 +1451,7 @@ export async function renderPixelsCore(
           } else {
             const g=cellGlyph[0][s];
             const [f,b]=states[s];
-            if(smart24){
+            if(smart24 || isTrueColor){
               dp[s]=g.err + o.viterbiW*(g.bytes + 14);
             } else {
               const fgM=_palToIrcEff ? _palToIrcEff[f & 255] : f, bgM=_palToIrcEff ? _palToIrcEff[b & 255] : b;
@@ -1462,7 +1483,7 @@ export async function renderPixelsCore(
             const [f,b]=states[s];
             const g=cellGlyph[i][s];
             if(isFirstNonEmpty){
-              if(smart24){
+              if(smart24 || isTrueColor){
                 nd[s]=g.err + o.viterbiW*(g.bytes + 14);
               } else {
                 const fgM=_palToIrcEff ? _palToIrcEff[f & 255] : f, bgM=_palToIrcEff ? _palToIrcEff[b & 255] : b;
@@ -1470,7 +1491,7 @@ export async function renderPixelsCore(
                 nd[s]=g.err + o.viterbiW*(g.bytes + pc);
               }
               back[i][s]=s;
-            } else if(smart24){
+            } else if(smart24 || isTrueColor){
               const candStay=bMinCost.get(b)!.cost + o.viterbiW*7;
               const candSwitch=gmin + o.viterbiW*14;
               let best=dp[s];
@@ -1508,7 +1529,7 @@ export async function renderPixelsCore(
           const [fRaw,bRaw]=states[sIdx];
           const g=cellGlyph[c][sIdx];
           const glyph=g.glyph;
-          if(smart24){
+          if(smart24 || isTrueColor){
             const fHex=toHex6((effPal[fRaw]>>16)&255,(effPal[fRaw]>>8)&255,effPal[fRaw]&255);
             const bHex=toHex6((effPal[bRaw]>>16)&255,(effPal[bRaw]>>8)&255,effPal[bRaw]&255);
             if(glyph===' '){
@@ -1609,12 +1630,12 @@ export async function renderPixelsCore(
     }
   } else if(pm==='auto'){
     // Segmentation.lean §2.3 — mixed-geometry row DP (dpSeg optimal), cheap w for DP to avoid O(n²·K) blowup
-    const GEOS: PixelMode[] = ['half','quarter','braille','polygon'];
+    const isTrueColorAuto = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
+    const GEOS: PixelMode[] = isTrueColorAuto && o.viterbiW<=0.5 ? ['braille'] : ['half','quarter','braille','polygon'];
     const capL = 12;
     const palAuto = getMidgardPalette(o);
     const ngA = o.nograyscale;
     for(let r=0;r<rows;r++){
-      _checkAbort(); await _maybeYield(r);
       const tops: Array<[number,number,number,number]>=[], bots: Array<[number,number,number,number]>=[];
       for(let c=0;c<cols;c++){ tops.push(pxAt(c,r*2)); bots.push(pxAt(c,r*2+1)); }
       // Precompute per-cell half costs (greedy palette) — always needed
