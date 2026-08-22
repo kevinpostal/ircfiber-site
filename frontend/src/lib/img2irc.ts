@@ -129,8 +129,11 @@ export interface Img2IrcOptions {
   _smartPaletteB?: number[];
   /** debug only, not serialized — canvas resize ms from caller */
   _debugResizeMs?: number;
+  // Glyph catalog — optional alphabet filtering
+  glyphAlphabet?: string;
+  // Auto compression geometries (for pixelMode auto with viterbi)
+  autoGeometries?: PixelMode[];
 }
-
 export function getMidgardPalette(o: Img2IrcOptions): number[] {
   if(o.midgardMode==='smart'){
     if(o.renderMode==='irc' || o.renderMode==='ansi') return IRC99;
@@ -1628,10 +1631,8 @@ export async function renderPixelsCore(
         lines.push(ln);
       }
     }
-  } else if(pm==='auto'){
-    // Segmentation.lean §2.3 — mixed-geometry row DP (dpSeg optimal), cheap w for DP to avoid O(n²·K) blowup
     const isTrueColorAuto = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
-    const GEOS: PixelMode[] = isTrueColorAuto && o.viterbiW<=0.5 ? ['braille'] : ['half','quarter','braille','polygon'];
+    const GEOS: PixelMode[] = o.autoGeometries && o.autoGeometries.length ? o.autoGeometries : (isTrueColorAuto && o.viterbiW<=0.5 ? ['braille'] : ['half','quarter','braille','polygon']);
     const capL = 12;
     const palAuto = getMidgardPalette(o);
     const ngA = o.nograyscale;
@@ -2004,7 +2005,11 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
   else if(pm==='quarter'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows*2;}
   else if(pm==='half'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
   else if(pm==='polygon'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows;}
-  else if(pm==='auto'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
+  else if(pm==='auto'){
+    const _isBrailleOnly = o.autoGeometries && (o.autoGeometries as string[]).length===1 && (o.autoGeometries as string[])[0]==='braille';
+    if(_isBrailleOnly){ cols=w; pW=cols*2; rows=Math.max(1,Math.round(w*asp*0.45)); if(o.height)rows=o.height; pH=rows*4; }
+    else { cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2; }
+  }
   else {cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows;}
   if(rows>120){rows=120;pH=pm==='braille'?480:pm==='quarter'?240:pm==='half'?240:pm==='polygon'?120:pm==='auto'?240:120;}
   // Handle 90/270 rotate by swapping dimensions so the art isn't clipped
@@ -2193,7 +2198,11 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
   else if(pm==='quarter'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows*2;}
   else if(pm==='half'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
   else if(pm==='polygon'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows;}
-  else if(pm==='auto'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
+  else if(pm==='auto'){
+    const _isBrailleOnly = o.autoGeometries && (o.autoGeometries as string[]).length===1 && (o.autoGeometries as string[])[0]==='braille';
+    if(_isBrailleOnly){ cols=w; pW=cols*2; rows=Math.max(1,Math.round(w*asp*0.45)); if(o.height)rows=o.height; pH=rows*4; }
+    else { cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2; }
+  }
   else {cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows;}
   if(rows>120){rows=120;pH=pm==='braille'?480:pm==='quarter'?240:pm==='half'?240:pm==='polygon'?120:pm==='auto'?240:120;}
   const isRot90 = o.rotate===90 || o.rotate===270;

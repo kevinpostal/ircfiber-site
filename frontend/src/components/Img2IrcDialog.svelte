@@ -20,6 +20,7 @@
   let grayscale=$state(false), invert=$state(false), sepia=$state(false), normalize=$state(false), nograyscale=$state(false), flipH=$state(false), flipV=$state(false);
   let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('oklab');
   let viterbiW=$state(0);
+  let autoGeometries=$state<PixelMode[]>(['half','quarter','braille','polygon']);
   let rotate=$state('0');
   let filter=$state('linear');
   let scrollPreset=$state(globalPrefs.defaultScrollPreset ?? 2);
@@ -161,13 +162,13 @@
   let renderCache=new Map<string,{art:string,html:string}>();
   let _lastFile: File|Blob|null=null;
   function makeCacheKeyForOpts(o:any, alpha:boolean):string{
-    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}|${o.glyphAlphabet ?? ''}`;
+    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}|${o.glyphAlphabet ?? ''}|${(o.autoGeometries??[]).join(',')}`;
   }
   function makeCacheKey():string{
     let glyphAlphabet: string | undefined;
     try{ glyphAlphabet=collectGlyphOpts().glyphAlphabet; }catch{ glyphAlphabet=glyphInclude||glyphExclude||glyphIncludeRanges||glyphExcludeRanges ? 'invalid' : undefined; }
     // keep key small and stable — order matters
-    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet}, hasAlpha);
+    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, autoGeometries}, hasAlpha);
   }
   $effect(()=>{ // clear cache when file changes
     void file;
@@ -274,7 +275,7 @@
       await convert(my, mySignal);
     }, 70);
   }
-  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void transparencyEnabled; void matteColor; void glyphPreset; void glyphGroups; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; void glyphFind; void file; untrack(()=>schedule()); });
+  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void autoGeometries; void transparencyEnabled; void matteColor; void glyphPreset; void glyphGroups; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; void glyphFind; void file; untrack(()=>schedule()); });
   let _lastHasAlpha: boolean | null = null;
   async function convert(expected=gen, signal?: AbortSignal){
     const cur=expected;
@@ -313,7 +314,7 @@
       try{
         let glyphAlphabet: string | undefined;
         try{ const g=collectGlyphOpts(); glyphAlphabet=g.glyphAlphabet; error=null; }catch(e:any){ error=e?.message ?? String(e); glyphError=e?.message ?? String(e); loading=false; isConverting=false; return; }
-        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any;
+        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any;
         if(midgardMode==='smart' && smartPalCache){
           (opts as any)._smartPaletteA = smartPalCache.A;
           (opts as any)._smartPaletteB = smartPalCache.B;
@@ -520,7 +521,7 @@
     try{
       let glyphAlphabet: string | undefined;
       try{ glyphAlphabet=collectGlyphOpts().glyphAlphabet; }catch{ glyphAlphabet=undefined; }
-      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any);
+      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any);
       let thumb: Blob|null=null;
       const isDummyFile = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
       if(!isDummyFile){ try{ thumb=await makeThumbnailBlob(); } catch (e) {} }
@@ -540,7 +541,7 @@
     pixelMode='half';
     midgardMode='xterm256';
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
-    grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; scrollPreset=2;
+    grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; autoGeometries=['half','quarter','braille','polygon']; scrollPreset=2;
     accTone=false; accFx=false; accOut=false; accScroll=false;
     accGlyphs=false; glyphPreset='default'; glyphGroups=['default']; glyphInclude=''; glyphExclude=''; glyphIncludeRanges=''; glyphExcludeRanges=''; glyphFind=''; glyphError=null;
     transparencyEnabled = hasAlpha; matteColor = null;
@@ -714,6 +715,15 @@
                 <button class="pill" class:on={glyphPreset==='all'} onclick={()=>{glyphPreset='all'; glyphGroups=glyphGroupsAll.map(g=>g.name);}} role="radio" aria-checked={glyphPreset==='all'}>All</button>
               </div>
               <label class="check"><input type="checkbox" checked={pixelMode==='braille'} onchange={(e)=>pixelMode=(e.currentTarget.checked?'braille':'half')} /> Use Braille output <span class="p-hint" title={HELP.braille}>ⓘ</span></label>
+              {#if pixelMode==='auto' && viterbiW>0}
+                <div class="auto-geometries" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; padding:4px 8px; border:1px solid #343a47; border-radius:6px;">
+                  <span style="font-size:0.8rem; color:var(--text-muted, #888); align-self:center;">Auto:</span>
+                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('half')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('half')) autoGeometries=[...autoGeometries,'half']; } else { autoGeometries=autoGeometries.filter(x=>x!=='half'); if(autoGeometries.length===0) autoGeometries=['half']; } }} /> Half</label>
+                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('quarter')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('quarter')) autoGeometries=[...autoGeometries,'quarter']; } else { autoGeometries=autoGeometries.filter(x=>x!=='quarter'); if(autoGeometries.length===0) autoGeometries=['quarter']; } }} /> Quarter</label>
+                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('braille')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('braille')) autoGeometries=[...autoGeometries,'braille']; } else { autoGeometries=autoGeometries.filter(x=>x!=='braille'); if(autoGeometries.length===0) autoGeometries=['braille']; } }} /> Braille</label>
+                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('polygon')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('polygon')) autoGeometries=[...autoGeometries,'polygon']; } else { autoGeometries=autoGeometries.filter(x=>x!=='polygon'); if(autoGeometries.length===0) autoGeometries=['polygon']; } }} /> Polygon</label>
+                </div>
+              {/if}
               <div class="glyph-find-row" class:hidden={pixelMode==='braille'}>
                 <input class="field sm" placeholder="Find a group (blocks, legacy, box…)" bind:value={glyphFind} aria-label="Find a group" />
               </div>
