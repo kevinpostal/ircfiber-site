@@ -182,7 +182,7 @@
     // nick/avatar are visible (bug: "grouped under the action/me which
     // does not have the nick and avatar correct").
     if (msg.type === 'action') return false;
-    if (msg.command !== 'PRIVMSG') return false;
+    if (msg.command !== 'PRIVMSG' && msg.command !== 'NOTICE') return false;
     const nick = stripPrefix(msg.nick || '');
     if (!nick) return false;
     let prev: IRCMessage | null = null;
@@ -193,7 +193,7 @@
       for (let j = index - 1; j >= 0; j--) {
         const cand = prevOrMessages[j];
         if (cand.type === 'action') return false;
-        if (cand.command === 'PRIVMSG' && cand.type !== 'action') { prev = cand; break; }
+        if ((cand.command === 'PRIVMSG' || cand.command === 'NOTICE') && cand.type !== 'action') { prev = cand; break; }
         if (JOIN_PART_COMMANDS.has(cand.command)) continue;
         if (cand.command === 'MOTD_GROUP' || /^\d{3}$/.test(cand.command)) continue;
         continue;
@@ -203,7 +203,7 @@
       prev = prevOrMessages as IRCMessage | null;
       if (!prev) return false;
       if (prev.type === 'action') return false;
-      if (prev.command !== 'PRIVMSG') return false;
+      if (prev.command !== 'PRIVMSG' && prev.command !== 'NOTICE') return false;
     }
     const prevNick = stripPrefix(prev.nick || '');
     if (!prevNick || prevNick !== nick) return false;
