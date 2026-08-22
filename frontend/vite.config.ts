@@ -194,6 +194,16 @@ export default defineConfig({
           });
         },
       },
+      '/admin/login': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: false,
+      },
+      '/admin/logout': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: false,
+      },
       '/login': {
         target: BACKEND_URL,
         changeOrigin: true,
