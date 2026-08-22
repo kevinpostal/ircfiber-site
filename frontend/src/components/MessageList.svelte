@@ -1016,6 +1016,17 @@
     });
   });
 
+  // ── ENTERPRISE INVARIANT: windowing $effect ───────────────────────────
+  // This effect is the sole writer of renderStart/renderEndKey/cachedAtBottom/
+  // wasRecentlyAtBottom during normal message flow. Svelte 5 tracks any $state
+  // read inside $effect — a direct read + write of the same signal re-queues
+  // the effect synchronously and hits effect_update_depth_exceeded at 10k+ msgs
+  // (batch.js:1043, MessageList:1194). Every read of those four signals inside
+  // this effect MUST be via untrack(() => signal); writes MUST be via
+  // untrack(()=>{ signal = ... }) so the write does not re-trigger via a
+  // tracked read. The only intentional triggers are bufferKey and
+  // processedMessages (read outside untrack). Guard enforced by
+  // frontend/scripts/check-effect-loops.mjs in CI. See skill://svelte5-effect-loop-discipline
   $effect(() => {
     if (windowRevealInProgress) return;
     const key = bufferKey;
@@ -1026,8 +1037,8 @@
       pendingInitialSnap = true;
       initialSnapDone = false;
       lastBufferKey = key;
-      cachedAtBottom = true;
-      wasRecentlyAtBottom = true;
+      untrack(() => { cachedAtBottom = true; });
+      untrack(() => { wasRecentlyAtBottom = true; });
       cachedAtTop = false;
       prevScrollHeight = 0;
       prevScrollTop = 0;
@@ -1038,8 +1049,8 @@
       if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
       if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
       // IRCCloud BufferLogView.render: open with the last batchSize=200.
-      renderStart = Math.max(0, msgs.length - BATCH_SIZE);
-      renderEndKey = '';
+      untrack(() => { renderStart = Math.max(0, msgs.length - BATCH_SIZE); });
+      untrack(() => { renderEndKey = ''; });
       clockTs = null;
       lastFirstProcessedKey = msgs.length ? itemKeyOf(msgs[0]) : '';
       lastProcessedLength = msgs.length;
@@ -1048,14 +1059,14 @@
       if (firstKey !== lastFirstProcessedKey) {
         if (lastFirstProcessedKey === '') {
           // Buffer content arrived (initial history load): window the tail.
-          renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+          untrack(() => { renderStart = Math.max(0, msgs.length - BATCH_SIZE); });
           // Cold-start: messages arrived after the buffer was already active
           // but empty (first URL load, no cache). The initial mount's
           // pendingInitialSnap was already consumed for the empty state, so
           // force a new one to ensure we land at the very bottom.
           pendingInitialSnap = true;
           initialSnapDone = false;
-          cachedAtBottom = true;
+          untrack(() => { cachedAtBottom = true; });
           cachedAtTop = false;
         } else {
           const rawOldH = container ? container.scrollHeight : 0;
@@ -1067,13 +1078,13 @@
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
           const scrollBottomBefore = container ? container.clientHeight + Math.ceil(oldScrollTop) : 0;
           const pinBottomBefore = oldScrollHeight - scrollBottomBefore <= 1;
-          if ((pendingInitialSnap && cachedAtBottom) || pinBottomBefore) {
+          if ((pendingInitialSnap && untrack(() => cachedAtBottom)) || pinBottomBefore) {
             // Still in the initial snap window (first URL load). Keep the
             // window pinned to the tail so we stay at the very bottom when
             // loadHistory prepends the remaining backlog right after the
             // initial sync. Without this, the idx>0 path would keep the
             // viewport anchored mid-history (Super%20Nets first load).
-            renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+            untrack(() => { renderStart = Math.max(0, msgs.length - BATCH_SIZE); });
             // If we were physically at bottom before the prepend (pinBottomBefore),
             // keep pinned at bottom even if shouldSnap is false due to
             // isAtBottom being stale. This fixes double-load flash where
@@ -1086,7 +1097,7 @@
             }
           } else if (idx > 0) {
             const start = untrack(() => renderStart);
-            if (start > 0) renderStart = start + idx;
+            if (start > 0) untrack(() => { renderStart = start + idx; });
             // start==0 (fully rendered, at top of backlog): keep renderStart 0
             // so the new older rows become visible above the divider.
             // The mid-buffer anchor below keeps the viewport stable if the
@@ -1133,8 +1144,8 @@
         // satisfy neededStart>start and be yanked back to tail.
         const start = untrack(() => renderStart);
         const neededStart = Math.max(0, msgs.length - BATCH_SIZE);
-        if (neededStart > start && cachedAtBottom && !renderEndKey && msgs.length > lastProcessedLength && !windowRevealInProgress) {
-          renderStart = neededStart;
+        if (neededStart > start && untrack(() => cachedAtBottom) && !untrack(() => renderEndKey) && msgs.length > lastProcessedLength && !windowRevealInProgress) {
+          untrack(() => { renderStart = neededStart; });
         }
       }
       lastFirstProcessedKey = firstKey;
@@ -1142,7 +1153,7 @@
     }
 
     if (!container) return;
-    const mark = backlogDividerMark;
+    const mark = untrack(() => backlogDividerMark);
     const newDivider = mark !== '' && mark !== handledDividerMark;
     handledDividerMark = mark;
 
@@ -1185,15 +1196,15 @@
     if (shouldSnapToBottom) {
       // If DOM is at bottom but cached state is stale, correct it so future
       // handleScroll checks see the right baseline and don't mis-fire scrolledUp.
-      if (isDomAtBottom) cachedAtBottom = true;
+      if (isDomAtBottom) untrack(() => { cachedAtBottom = true; });
       // For an initial buffer open we force the snap unconditionally —
       // do not run the scrolledUp direction check that would otherwise
       // clear the stick when scrollHeight grew under a pinned viewport.
       if (!isInitialSnap) {
         const scrolledUp = container ? container.scrollTop < prevScrollTop : false;
         if (scrolledUp) { untrack(() => { cachedAtBottom = false; wasRecentlyAtBottom = false; }); if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; } } else {
-          untrack(() => renderEndKey = '');
-          wasRecentlyAtBottom = true;
+          untrack(() => { renderEndKey = ''; });
+          untrack(() => { wasRecentlyAtBottom = true; });
           if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; }
           tick().then(() => {
             if (!container) return;
@@ -1260,7 +1271,7 @@
         preserveReadingPosition(container, prevScrollTop);
       } else {
         // Initial snap for a freshly-opened buffer (refresh): unconditional.
-        renderEndKey = '';
+        untrack(() => { renderEndKey = ''; });
         maybeTrim();
         tick().then(() => {
           if (!container) return;
