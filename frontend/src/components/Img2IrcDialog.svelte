@@ -1,7 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, getLastTimings, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode, serializeImg2IrcOptions } from '../lib/img2irc';
+  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, getLastTimings, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode, serializeImg2IrcOptions, glyphsToTable, collectGlyphAlphabet } from '../lib/img2irc';
+  import { GlyphCatalog } from '../lib/glyphCatalog';
+  import { HELP } from '../lib/helpText';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import { globalPrefs } from '../stores/preferences.svelte';
@@ -35,7 +37,8 @@
   });
   let dither=$derived(ditherMode !== 'none');
   // Viterbi compression only for paletted modes + smart truecolor; truecolor greedy
-  let compressionDisabled=$derived(renderMode==='ansi24' && midgardMode!=='smart');
+  // Viterbi compression for all modes including truecolor (quantized palette)
+  let compressionDisabled=$derived(false);
   let accTone=$state(false);
   let accFx=$state(false);
   let accOut=$state(false);
@@ -85,12 +88,67 @@
     else if(midgardMode==='16'){ renderMode='irc'; }
     else if(midgardMode==='smart'){ renderMode='ansi24'; }
   });
+  // Glyph catalog load + hydrate
+  $effect(()=>{
+    const url = (()=>{ try{ const u=new URL(window.location.href); return u.searchParams.get('glyphs'); }catch{return null;}})() || '/glyphs.json';
+    const c=new GlyphCatalog();
+    glyphCatalog=c;
+    c.load(url).then(gs=>{ untrack(()=>{ glyphGroupsAll=gs; }); }).catch(()=>{ untrack(()=>{ glyphGroupsAll=[]; }); });
+      if(!initialParams || !(initialParams as any).glyphAlphabet){
+        try{
+          const raw=localStorage.getItem('ircfiber:glyphGroups');
+          if(raw){ const j=JSON.parse(raw); if(j.groups) glyphGroups=j.groups; if(j.preset) glyphPreset=j.preset; if(j.include) glyphInclude=j.include; if(j.exclude) glyphExclude=j.exclude; if(j.includeRanges) glyphIncludeRanges=j.includeRanges; if(j.excludeRanges) glyphExcludeRanges=j.excludeRanges; if(j.glyphPreset) glyphPreset=j.glyphPreset; }
+        }catch{}
+      } else {
+        const p=initialParams as any;
+        if(p.glyphAlphabet) { /* handled via glyphGroups */ }
+        if(p.glyphInclude) glyphInclude=p.glyphInclude;
+        if(p.glyphExclude) glyphExclude=p.glyphExclude;
+        if(p.glyphIncludeRanges) glyphIncludeRanges=(p.glyphIncludeRanges as string[]).join('\n');
+        if(p.glyphExcludeRanges) glyphExcludeRanges=(p.glyphExcludeRanges as string[]).join('\n');
+      }
+  });
+  function persistGlyphs(){
+    try{ localStorage.setItem('ircfiber:glyphGroups', JSON.stringify({groups:glyphGroups, preset:glyphPreset, include:glyphInclude, exclude:glyphExclude, includeRanges:glyphIncludeRanges, excludeRanges:glyphExcludeRanges})); } catch (e) {}
+  }
+  $effect(()=>{ void glyphGroups; void glyphPreset; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; persistGlyphs(); });
+  const filteredGlyphGroups=$derived(glyphFind.trim() ? glyphGroupsAll.filter(g=>g.name.toLowerCase().includes(glyphFind.toLowerCase())) : []);
+  function collectGlyphOpts(): { glyphAlphabet?: string } {
+    glyphError=null;
+    if(pixelMode==='braille') return {};
+    try{
+      const incR = glyphIncludeRanges.split('\n').map(s=>s.trim()).filter(Boolean);
+      const excR = glyphExcludeRanges.split('\n').map(s=>s.trim()).filter(Boolean);
+      for(const r of [...incR, ...excR]) if(!/^[0-9a-f]{1,6}-[0-9a-f]{1,6}$/i.test(r)) throw new Error(`Invalid Unicode range "${r}"; use hexadecimal START-END`);
+      let baseChars: string | undefined;
+      if(glyphCatalog && glyphGroups.length){
+        baseChars=glyphCatalog.characters(glyphGroups);
+      } else if(glyphPreset==='all' && glyphCatalog) baseChars=glyphCatalog.characters(glyphGroupsAll.map(g=>g.name));
+      else if(glyphPreset==='smooth') baseChars=glyphCatalog?.characters(['smooth']) ?? undefined;
+      else if(glyphPreset==='default') baseChars=glyphCatalog?.characters(['default']) ?? undefined;
+      let alphabet = collectGlyphAlphabet({ glyphGroupsChars: baseChars, glyphInclude: glyphInclude || undefined, glyphExclude: glyphExclude || undefined, glyphIncludeRanges: incR.length?incR:undefined, glyphExcludeRanges: excR.length?excR:undefined });
+      if(alphabet) return { glyphAlphabet: alphabet };
+      return {};
+    }catch(e:any){ glyphError=e?.message ?? String(e); throw e; }
+  }
   let art=$state(initialArt ?? ''), htmlPreview=$state(initialArt ? initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('') : ''), loading=$state(initialArt ? false : true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
   let saving=$state(false), saveError=$state<string|null>(null), saveOk=$state(false), saveName=$state((initialName ?? filename.replace(/\.[^.]+$/,'')) || 'IRC Art');
   let hasAlpha=$state(false);
   // Transparency.lean: bleeds_iff_empty — transparency is opt-in, switchable via opaque/matte escape hatches
   let transparencyEnabled=$state(false); // user toggle, auto-synced to hasAlpha when image loads
   let matteColor=$state<string | null>(null); // null = bleed (naked space, cheapest, trimmed) | hex = matte opaque (renderCellMatte)
+  // Glyph catalog (Step 1)
+  let glyphPreset=$state<'default'|'smooth'|'all'>('default');
+  let glyphFind=$state('');
+  let glyphGroups=$state<string[]>(['default']);
+  let glyphInclude=$state('');
+  let glyphExclude=$state('');
+  let glyphIncludeRanges=$state('');
+  let glyphExcludeRanges=$state('');
+  let glyphCatalog=$state<GlyphCatalog|null>(null);
+  let glyphGroupsAll=$state<Array<{name:string; characters:string; count:number}>>([]);
+  let glyphError=$state<string|null>(null);
+  let accGlyphs=$state(false);
   let isDummyFile=$derived((file as File)?.name==='dummy.png');
   let gen=0;
   let abortCtrl: AbortController | null = null;
@@ -103,11 +161,13 @@
   let renderCache=new Map<string,{art:string,html:string}>();
   let _lastFile: File|Blob|null=null;
   function makeCacheKeyForOpts(o:any, alpha:boolean):string{
-    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}`;
+    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}|${o.glyphAlphabet ?? ''}`;
   }
   function makeCacheKey():string{
+    let glyphAlphabet: string | undefined;
+    try{ glyphAlphabet=collectGlyphOpts().glyphAlphabet; }catch{ glyphAlphabet=glyphInclude||glyphExclude||glyphIncludeRanges||glyphExcludeRanges ? 'invalid' : undefined; }
     // keep key small and stable — order matters
-    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null}, hasAlpha);
+    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet}, hasAlpha);
   }
   $effect(()=>{ // clear cache when file changes
     void file;
@@ -125,9 +185,9 @@
     return () => {
       if (debounce) { clearTimeout(debounce); debounce = null; }
       if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
-      try { abortCtrl?.abort(); } catch {}
+      try { abortCtrl?.abort(); } catch (e) {}
       abortCtrl = null;
-      try { _worker?.terminate(); } catch {}
+      try { _worker?.terminate(); } catch (e) {}
       _worker = null;
       gen++;
     };
@@ -136,7 +196,7 @@
     if (_worker) return _worker;
     try {
       _worker = new Worker(new URL('../lib/img2irc.worker.ts', import.meta.url), { type: 'module' });
-      _worker.onerror = () => { try { _worker?.terminate(); } catch {}; _worker = null; };
+      _worker.onerror = () => { try { _worker?.terminate(); } catch (e) {}; _worker = null; };
     } catch { _worker = null; }
     return _worker;
   }
@@ -155,7 +215,7 @@
     const _tWStart = performance.now();
     try {
       bitmap = await createImageBitmap(img);
-      if (expectedGen !== gen || signal?.aborted) { try { bitmap.close(); } catch {} return null; }
+      if (expectedGen !== gen || signal?.aborted) { try { bitmap.close(); } catch (e) {} return null; }
       const id = Math.random();
       const res = await new Promise<{ art: string; paletteA?: number[]; paletteB?: number[] }>((resolve, reject) => {
         if (signal?.aborted) { reject(new DOMException('Aborted','AbortError')); return; }
@@ -164,15 +224,15 @@
           if (d.id !== id) return;
           if (handler) w.removeEventListener('message', handler as any);
           if (timer) clearTimeout(timer);
-          if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch {}
+          if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch (e) {}
           if (d.ok) resolve({ art: d.result, paletteA: d.paletteA, paletteB: d.paletteB });
           else reject(new Error(d.error));
         };
         abortHandler = () => {
-          if (handler) try { w.removeEventListener('message', handler as any); } catch {}
+          if (handler) try { w.removeEventListener('message', handler as any); } catch (e) {}
           if (timer) clearTimeout(timer);
           // Terminate the worker that is stuck on stale work so next convert gets fresh worker
-          try { w.terminate(); } catch {} _worker = null;
+          try { w.terminate(); } catch (e) {} _worker = null;
           reject(new DOMException('Aborted','AbortError'));
         };
         if (signal) signal.addEventListener('abort', abortHandler, { once: true });
@@ -181,16 +241,16 @@
         bitmap = null;
         timer = setTimeout(() => {
           if (handler) w.removeEventListener('message', handler as any);
-          if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch {}
+          if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch (e) {}
           reject(new Error('worker timeout'));
         }, 15000);
       });
       return res;
     } catch { return null; } finally {
       if (timer) clearTimeout(timer);
-      if (handler) { try { w.removeEventListener('message', handler as any); } catch {} }
-      if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch {}
-      if (bitmap) { try { bitmap.close(); } catch {} }
+      if (handler) { try { w.removeEventListener('message', handler as any); } catch (e) {} }
+      if (abortHandler && signal) try { signal.removeEventListener('abort', abortHandler); } catch (e) {}
+      if (bitmap) { try { bitmap.close(); } catch (e) {} }
     }
   }
   let fitBusy=$state(false);
@@ -200,10 +260,10 @@
     if(fitting) return;
     if(settleTimer){ clearTimeout(settleTimer); settleTimer=null; }
     // Abort any in-flight conversion so rapid slider drags don't queue stale heavy work (UI lockup)
-    try { abortCtrl?.abort(); } catch {}
+    try { abortCtrl?.abort(); } catch (e) {}
     abortCtrl = new AbortController();
     // If a worker is busy with stale work, terminate it so the next convert gets a fresh worker immediately
-    if (_worker) { try { _worker.terminate(); } catch {} _worker = null; }
+    if (_worker) { try { _worker.terminate(); } catch (e) {} _worker = null; }
     const my=++gen;
     const mySignal = abortCtrl.signal;
     if(debounce) clearTimeout(debounce);
@@ -214,7 +274,7 @@
       await convert(my, mySignal);
     }, 70);
   }
-  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void transparencyEnabled; void matteColor; void file; untrack(()=>schedule()); });
+  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void transparencyEnabled; void matteColor; void glyphPreset; void glyphGroups; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; void glyphFind; void file; untrack(()=>schedule()); });
   let _lastHasAlpha: boolean | null = null;
   async function convert(expected=gen, signal?: AbortSignal){
     const cur=expected;
@@ -248,10 +308,12 @@
         const hasSavedTransparency = !!(initialParams && (initialParams as any).alphaMode != null);
         if(hasSavedTransparency){ _lastHasAlpha = found; }
         else if(_lastHasAlpha !== found){ transparencyEnabled = found; if(!found) matteColor=null; _lastHasAlpha = found; }
-      } catch {}
-      if(signal?.aborted || cur!==gen) { try{ revokeImageUrl(img); }catch{} return; }
+      } catch (e) {}
+      if(signal?.aborted || cur!==gen) { try{ revokeImageUrl(img); } catch (e) {} return; }
       try{
-        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null } as const;
+        let glyphAlphabet: string | undefined;
+        try{ const g=collectGlyphOpts(); glyphAlphabet=g.glyphAlphabet; error=null; }catch(e:any){ error=e?.message ?? String(e); glyphError=e?.message ?? String(e); loading=false; isConverting=false; return; }
+        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any;
         if(midgardMode==='smart' && smartPalCache){
           (opts as any)._smartPaletteA = smartPalCache.A;
           (opts as any)._smartPaletteB = smartPalCache.B;
@@ -288,8 +350,8 @@
         if(cur!==gen || signal?.aborted) return;
         art=res;
         htmlPreview=res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
-        try{ lastTimings = getLastTimings(); } catch {}
-        try{ const k2=makeCacheKey(); if(!renderCache.has(k2)){ if(renderCache.size>=24){ const f=renderCache.keys().next().value; if(f) renderCache.delete(f); } renderCache.set(k2,{art:res, html:htmlPreview}); } }catch{}
+        try{ lastTimings = getLastTimings(); } catch (e) {}
+        try{ const k2=makeCacheKey(); if(!renderCache.has(k2)){ if(renderCache.size>=24){ const f=renderCache.keys().next().value; if(f) renderCache.delete(f); } renderCache.set(k2,{art:res, html:htmlPreview}); } } catch (e) {}
         // Background precache for instant preset switching — single-axis variations, idle-yielded, cancellable via gen
         void precachePresets(file, opts, cur, hasAlpha);
       } finally { revokeImageUrl(img); }
@@ -303,7 +365,7 @@
   async function precachePresets(baseFile: File|Blob, baseOpts: any, curGen: number, baseHasAlpha: boolean) {
     try {
       if (typeof navigator !== 'undefined' && (navigator as any).deviceMemory && (navigator as any).deviceMemory < 4) return;
-    } catch {}
+    } catch (e) {}
     const presets: any[] = [];
     const mids: MidgardColorMode[] = ['xterm256','16','truecolor','smart'];
     for (const m of mids) if (m !== baseOpts.midgardMode) {
@@ -343,10 +405,10 @@
           const html = res.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('');
           const k = makeCacheKeyForOpts(preset, baseHasAlpha);
           if (!renderCache.has(k) && renderCache.size < 24) renderCache.set(k, {art: res, html});
-        } catch {}
+        } catch (e) {}
       }
-    } catch {} finally {
-      if (pImg) try{ revokeImageUrl(pImg); }catch{}
+    } catch (e) {} finally {
+      if (pImg) try{ revokeImageUrl(pImg); } catch (e) {}
     }
   }
 
@@ -456,10 +518,12 @@
     if(!art || saving || overBudget) return;
     saving=true; saveError=null; saveOk=false;
     try{
-      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null } as any);
+      let glyphAlphabet: string | undefined;
+      try{ glyphAlphabet=collectGlyphOpts().glyphAlphabet; }catch{ glyphAlphabet=undefined; }
+      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any);
       let thumb: Blob|null=null;
       const isDummyFile = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
-      if(!isDummyFile){ try{ thumb=await makeThumbnailBlob(); } catch {} }
+      if(!isDummyFile){ try{ thumb=await makeThumbnailBlob(); } catch (e) {} }
       if(editId){
         await updateIrcArtSave(editId, { name: saveName, art, params, thumbnailBlob: thumb ?? undefined });
       } else {
@@ -478,6 +542,7 @@
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
     grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; scrollPreset=2;
     accTone=false; accFx=false; accOut=false; accScroll=false;
+    accGlyphs=false; glyphPreset='default'; glyphGroups=['default']; glyphInclude=''; glyphExclude=''; glyphIncludeRanges=''; glyphExcludeRanges=''; glyphFind=''; glyphError=null;
     transparencyEnabled = hasAlpha; matteColor = null;
   }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
@@ -559,7 +624,7 @@
           </div>
           <div class="p-group">
             <span class="p-label">Compression</span>
-            <label class="field comp-field" title={compressionDisabled ? 'Compression N/A for True-Color — use 256/16/Smart' : 'Viterbi w≈2–4 sweet spot'}>
+            <label class="field comp-field" title={'Viterbi w≈2–4 sweet spot'}>
               <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={compressionDisabled} />
               <b class:off={viterbiW===0 || compressionDisabled}>{compressionDisabled?'—':viterbiW===0?'off':viterbiW}</b>
             </label>
@@ -638,6 +703,42 @@
                   {/each}
                 </div>
               </div>
+            </div>
+          {/if}
+          <button class="acc-head" onclick={()=>accGlyphs=!accGlyphs} aria-expanded={accGlyphs}><span class="chev">{accGlyphs?'▾':'▸'}</span> Glyphs <span class="acc-hint">{glyphPreset} · {pixelMode==='braille' ? 'braille' : (glyphGroups.length ? glyphGroups.join(', ') : 'default')}</span></button>
+          {#if accGlyphs}
+            <div class="acc-body glyphs-panel">
+              <div class="pill-group sm" role="radiogroup" aria-label="Glyph preset">
+                <button class="pill" class:on={glyphPreset==='default'} onclick={()=>{glyphPreset='default'; glyphGroups=['default'];}} role="radio" aria-checked={glyphPreset==='default'}>Default</button>
+                <button class="pill" class:on={glyphPreset==='smooth'} onclick={()=>{glyphPreset='smooth'; glyphGroups=['smooth'];}} role="radio" aria-checked={glyphPreset==='smooth'}>Smooth</button>
+                <button class="pill" class:on={glyphPreset==='all'} onclick={()=>{glyphPreset='all'; glyphGroups=glyphGroupsAll.map(g=>g.name);}} role="radio" aria-checked={glyphPreset==='all'}>All</button>
+              </div>
+              <label class="check"><input type="checkbox" checked={pixelMode==='braille'} onchange={(e)=>pixelMode=(e.currentTarget.checked?'braille':'half')} /> Use Braille output <span class="p-hint" title={HELP.braille}>ⓘ</span></label>
+              <div class="glyph-find-row" class:hidden={pixelMode==='braille'}>
+                <input class="field sm" placeholder="Find a group (blocks, legacy, box…)" bind:value={glyphFind} aria-label="Find a group" />
+              </div>
+              {#if !['braille'].includes(pixelMode) && (glyphFind.trim() || glyphPreset==='all')}
+                <div class="glyph-groups" style="max-height:18rem; overflow:auto; border:1px solid #343a47; border-radius:6px; padding:4px;">
+                  {#each (glyphFind.trim() ? filteredGlyphGroups : glyphGroupsAll) as g (g.name)}
+                    <label class="glyph-row" style="display:flex; align-items:center; gap:8px; padding:4px 8px; border-radius:4px;" style:background={glyphGroups.includes(g.name) ? 'rgba(0,0,0,0.06)' : 'transparent'}>
+                      <input type="checkbox" checked={glyphGroups.includes(g.name)} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!glyphGroups.includes(g.name)) glyphGroups=[...glyphGroups,g.name]; } else { glyphGroups=glyphGroups.filter(x=>x!==g.name); }}} aria-label={g.name} />
+                      <span style="flex:1; font-size:0.85rem;">{g.name}</span>
+                      <span class="muted" style="font-size:0.75rem; color:var(--text-muted, #888);">{g.count}</span>
+                      <span style="font-size:0.75rem; opacity:0.6; max-width:6rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{g.characters.slice(0,12)}</span>
+                    </label>
+                  {/each}
+                </div>
+              {/if}
+              <details class="control-panel glyph-advanced" style="margin-top:8px;">
+                <summary>Advanced glyph filtering</summary>
+                <div style="display:grid; gap:8px; margin-top:8px;">
+                  <label class="field sm"><span>Include characters <span class="info-button" title={HELP.glyphInclude}>ⓘ</span></span><input type="text" bind:value={glyphInclude} placeholder="@#%" /></label>
+                  <label class="field sm"><span>Exclude characters <span class="info-button" title={HELP.glyphExclude}>ⓘ</span></span><input type="text" bind:value={glyphExclude} placeholder="" /></label>
+                  <label class="field sm"><span>Include Unicode ranges <span class="info-button" title={HELP.glyphIncludeRanges}>ⓘ</span></span><textarea rows="3" bind:value={glyphIncludeRanges} placeholder="2600-26FF"></textarea></label>
+                  <label class="field sm"><span>Exclude Unicode ranges <span class="info-button" title={HELP.glyphExcludeRanges}>ⓘ</span></span><textarea rows="3" bind:value={glyphExcludeRanges} placeholder="4DC0-4DFF"></textarea></label>
+                  {#if glyphError}<span class="saveErr" role="alert">{glyphError}</span>{/if}
+                </div>
+              </details>
             </div>
           {/if}
         </div>

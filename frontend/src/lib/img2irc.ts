@@ -95,6 +95,7 @@ export const ANSI16: number[] = [
 /** mIRC 16 — first 16 of IRC99, what IRC clients actually display for \x0300-\x0315 */
 export const IRC16: number[] = IRC99.slice(0, 16);
 export const XTERM256: number[] = (()=>{ const pal:number[]=[]; const ANSI_16=[[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]]; for(const c of ANSI_16) pal.push((c[0]<<16)|(c[1]<<8)|c[2]); const levels=[0,95,135,175,215,255]; for(let r=0;r<6;r++) for(let g=0;g<6;g++) for(let b=0;b<6;b++) pal.push((levels[r]<<16)|(levels[g]<<8)|levels[b]); for(let i=0;i<24;i++){const v=8+i*10; pal.push((v<<16)|(v<<8)|v);} return pal; })();
+export type RenderMode = 'irc' | 'ansi' | 'ansi24';
 export type PixelMode = 'half' | 'full' | 'quarter' | 'braille' | 'polygon' | 'auto';
 export type SamplingFilter = 'nearest' | 'linear';
 export type DitherMode = 'none' | 'bayer4' | 'bayer8' | 'floyd' | 'atkinson' | 'sierra' | 'stucki' | 'jarvis';
@@ -508,12 +509,61 @@ const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number, mask?:bigint
   {ch:'◥', ct:0.8125, cb:0.3125, bytes:3, mask:0x80c0e0f0f8fcfeffn},
   {ch:'◣', ct:0.1875, cb:0.6875, bytes:3, mask:0x7f3f1f0f07030100n},
 ];
+export { GLYPHS };
+const _glyphCache = new Map<string, typeof GLYPHS>();
+export function glyphsToTable(chars: string): typeof GLYPHS {
+  if (!chars) return GLYPHS;
+  const hit = _glyphCache.get(chars);
+  if (hit) return hit;
+  const out: typeof GLYPHS = [];
+  const seen = new Set<string>();
+  const byCh = new Map<string, typeof GLYPHS[number]>();
+  for (const g of GLYPHS) byCh.set(g.ch, g);
+  const sp = byCh.get(' ');
+  if (sp) { out.push(sp); seen.add(' '); }
+  for (const ch of chars) {
+    if (seen.has(ch)) continue;
+    seen.add(ch);
+    const known = byCh.get(ch);
+    if (known) out.push(known);
+    else out.push({ ch, ct: 0, cb: 1, bytes: 1 });
+  }
+  if (out.length <= 1) return GLYPHS;
+  if (_glyphCache.size >= 8) { const k = _glyphCache.keys().next().value as string; _glyphCache.delete(k); }
+  _glyphCache.set(chars, out);
+  return out;
+}
+export function getFilteredGlyphs(o: Img2IrcOptions): typeof GLYPHS | null {
+  if (o.glyphAlphabet != null) return glyphsToTable(o.glyphAlphabet);
+  return null;
+}
+export function collectGlyphAlphabet(opts: { glyphAlphabet?: string; glyphGroupsChars?: string; glyphInclude?: string; glyphExclude?: string; glyphIncludeRanges?: string[]; glyphExcludeRanges?: string[] }): string | undefined {
+  let base = opts.glyphGroupsChars ?? opts.glyphAlphabet;
+  if (base == null) return undefined;
+  let chars = base;
+  if (opts.glyphInclude || opts.glyphExclude) {
+    const incSet = opts.glyphInclude ? new Set([...opts.glyphInclude]) : null;
+    const excSet = opts.glyphExclude ? new Set([...opts.glyphExclude]) : null;
+    let f=''; for (const ch of chars){ if(incSet && !incSet.has(ch)) continue; if(excSet && excSet.has(ch)) continue; f+=ch; } chars=f;
+    if (incSet && chars.length===0) chars=opts.glyphInclude!;
+  }
+  const incR = opts.glyphIncludeRanges ?? []; const excR = opts.glyphExcludeRanges ?? [];
+  if (incR.length || excR.length){
+    const parseOne=(t:string)=>{ const m=t.match(/^([0-9a-f]{1,6})-([0-9a-f]{1,6})$/i); if(!m) throw new Error(`Invalid Unicode range "${t}"; use hexadecimal START-END`); const s=parseInt(m[1],16), e=parseInt(m[2],16); if(s>e) throw new Error(`Invalid Unicode range "${t}"; use hexadecimal START-END`); return [s,e] as [number,number]; };
+    const incRanges=incR.map(parseOne); const excRanges=excR.map(parseOne);
+    let out=''; for(const ch of chars){ const cp=ch.codePointAt(0)!; if(incRanges.length){ let ok=false; for(const [s,e] of incRanges) if(cp>=s&&cp<=e){ok=true;break;} if(!ok) continue; } if(excRanges.length){ let bad=false; for(const [s,e] of excRanges) if(cp>=s&&cp<=e){bad=true;break;} if(bad) continue; } out+=ch; } chars=out;
+  }
+  return chars || undefined;
+}
 const GLYPH_BYTES_HALF=3, GLYPH_BYTES_SPACE=1;
 export function bestGlyphForState(
   r1:number,g1:number,b1:number, r2:number,g2:number,b2:number,
-  f:number,b:number, pal:number[], mode:ColorMatching, w:number, palOkLab?: number[][] | null
+  f:number,b:number, pal:number[], mode:ColorMatching, w:number, palOkLab?: number[][] | null, glyphs?: typeof GLYPHS
 ):{err:number, bytes:number, glyph:string}{
+  const table = glyphs ?? GLYPHS;
+  const useWasm = !glyphs;
   // WASM fast path — pick best glyph index via wasm (8× fewer cbrt), then compute err/bytes from GLYPHS table
+  if (useWasm) {
   const ws = hasWasmSync() ? (getWasmSync() as unknown as Record<string,unknown>) : null;
   if (ws && typeof ws['best_glyph_for_state'] === 'function') {
     try {
@@ -548,6 +598,7 @@ export function bestGlyphForState(
       }
     } catch { _wasmMisses++; }
   } else if (ws) { _wasmMisses++; }
+  }
   let bestErr=1e18, bestB=GLYPH_BYTES_HALF, bestG='▀';
   const fRgb=(pal[f]>>16)&255, fG2=(pal[f]>>8)&255, fB2=pal[f]&255;
   const bRgb=(pal[b]>>16)&255, bG2=(pal[b]>>8)&255, bB2=pal[b]&255;
@@ -559,7 +610,7 @@ export function bestGlyphForState(
       fOk = srgbToOkLab(fRgb,fG2,fB2); bOk = srgbToOkLab(bRgb,bG2,bB2);
     }
   }
-  for(const g of GLYPHS){
+  for(const g of table){
     const ct=g.ct, cb=g.cb;
     let tR:number,tG:number,tB:number, boR:number,boG:number,boB:number;
     if(mode==='oklab' && fOk && bOk){
@@ -889,6 +940,8 @@ export async function renderPixelsCore(
   // Ensure WASM is loaded before Viterbi/nearest hot loops — await the preload started at top
   try { await _wasmPreload; } catch {}
   _timings['wasmPreload'] = _perf() - _t; _t = _perf();
+  const _activeGlyphs = getFilteredGlyphs(o) ?? GLYPHS;
+  const _useCustomGlyphs = _activeGlyphs !== GLYPHS;
   const pxAt=(x:number,y:number):[number,number,number,number]=>{
     if(x<0||y<0||x>=pW||y>=pH)return[0,0,0,0];
     const i=(y*pW+x)*4;return[d[i],d[i+1],d[i+2],d[i+3]];
@@ -958,7 +1011,8 @@ export async function renderPixelsCore(
   } else if(pm==='half'){
     const pal=getMidgardPalette(o);
     const smart24 = (o as any).midgardMode==='smart' && (o as any)._smartPaletteA && o.renderMode==='ansi24';
-    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24);
+    const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
+    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -1012,7 +1066,7 @@ export async function renderPixelsCore(
         const _rowPalOkLab = o.colorMatching==='oklab' ? getPalOkLab(effPal) : null;
         // Try batched WASM path — one crossing per row instead of M*S
         let usedBatch = false;
-        if (hasWasmSync() && states.length > 0 && M * states.length <= 65536) {
+        if (!_useCustomGlyphs && hasWasmSync() && states.length > 0 && M * states.length <= 65536) {
           const r1Arr = new Uint8Array(M), g1Arr = new Uint8Array(M), b1Arr = new Uint8Array(M);
           const r2Arr = new Uint8Array(M), g2Arr = new Uint8Array(M), b2Arr = new Uint8Array(M);
           for(let i=0;i<M;i++){
@@ -1064,7 +1118,7 @@ export async function renderPixelsCore(
             const rowGlyphs: GlyphInfo[] = new Array(states.length);
             for(let s=0;s<states.length;s++){
               const [f,b]=states[s];
-              rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW, _rowPalOkLab);
+              rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW, _rowPalOkLab, _useCustomGlyphs ? _activeGlyphs : undefined);
             }
             cellGlyph[i]=rowGlyphs;
           }
