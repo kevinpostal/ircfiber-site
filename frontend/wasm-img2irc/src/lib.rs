@@ -660,7 +660,107 @@ pub fn batch_row_palette(
     out_len
 }
 #[wasm_bindgen]
-pub fn has_simd() -> bool { true }
+pub fn batch_best_glyph_custom(
+    r1: &[u8], g1: &[u8], b1: &[u8],
+    r2: &[u8], g2: &[u8], b2: &[u8],
+    states_f: &[u32], states_b: &[u32],
+    palette: &[u32],
+    mode: u8,
+    w: f32,
+    glyph_ct: &[f32], glyph_cb: &[f32], glyph_bytes: &[u8],
+    out_glyph: &mut [u8],
+    out_err: &mut [f32],
+    out_bytes: &mut [u8],
+) -> usize {
+    let m = r1.len().min(g1.len()).min(b1.len()).min(r2.len()).min(g2.len()).min(b2.len());
+    let s_len = states_f.len().min(states_b.len());
+    let g_len = glyph_ct.len().min(glyph_cb.len()).min(glyph_bytes.len());
+    if m==0 || s_len==0 || g_len==0 || out_glyph.len() < m*s_len || out_err.len() < m*s_len || out_bytes.len() < m*s_len { return 0; }
+    if palette.is_empty() { return 0; }
+    let (pal_rgb, pal_oklab) = PAL_CACHE.with(|cache| {
+        let mut c = cache.borrow_mut();
+        let need = match c.as_ref() {
+            Some((cp,_,_)) => cp.len()!=palette.len() || !cp.iter().zip(palette.iter()).all(|(a,b)| a==b),
+            None => true,
+        };
+        if need {
+            let rgb: Vec<(u8,u8,u8)> = palette.iter().map(|&c| (((c>>16)&255) as u8, ((c>>8)&255) as u8, (c&255) as u8)).collect();
+            let oklab: Vec<[f32;3]> = if mode==2 { rgb.iter().map(|&(cr,cg,cb)| srgb_to_oklab_inner(cr,cg,cb)).collect() } else { Vec::new() };
+            *c = Some((palette.to_vec(), rgb.clone(), oklab.clone()));
+            (rgb, oklab)
+        } else {
+            let (_, rgb, oklab) = c.as_ref().unwrap();
+            (rgb.clone(), oklab.clone())
+        }
+    });
+    let pal_lab: Vec<[f32;3]> = if mode==1 {
+        pal_rgb.iter().map(|&(cr,cg,cb)| srgb_to_lab_inner(cr,cg,cb)).collect()
+    } else { Vec::new() };
+    for i in 0..m {
+        let rr1=r1[i]; let gg1=g1[i]; let bb1=b1[i];
+        let rr2=r2[i]; let gg2=g2[i]; let bb2=b2[i];
+        let pix1_ok = if mode==2 { srgb_to_oklab_inner(rr1,gg1,bb1) } else { [0.0,0.0,0.0] };
+        let pix2_ok = if mode==2 { srgb_to_oklab_inner(rr2,gg2,bb2) } else { [0.0,0.0,0.0] };
+        let pix1_lab = if mode==1 { srgb_to_lab_inner(rr1,gg1,bb1) } else { [0.0,0.0,0.0] };
+        let pix2_lab = if mode==1 { srgb_to_lab_inner(rr2,gg2,bb2) } else { [0.0,0.0,0.0] };
+        for s in 0..s_len {
+            let f_idx = states_f[s] as usize;
+            let b_idx = states_b[s] as usize;
+            if f_idx >= pal_rgb.len() || b_idx >= pal_rgb.len() { out_glyph[i*s_len+s]=0; out_err[i*s_len+s]=0.0; out_bytes[i*s_len+s]=1; continue; }
+            let (f_r,f_g,f_b) = pal_rgb[f_idx];
+            let (b_r,b_g,b_b) = pal_rgb[b_idx];
+            let f_ok = if mode==2 { pal_oklab[f_idx] } else { [0.0,0.0,0.0] };
+            let b_ok = if mode==2 { pal_oklab[b_idx] } else { [0.0,0.0,0.0] };
+            let f_lab = if mode==1 { pal_lab[f_idx] } else { [0.0,0.0,0.0] };
+            let b_lab = if mode==1 { pal_lab[b_idx] } else { [0.0,0.0,0.0] };
+            let mut best_idx=0usize; let mut best_cost=f32::INFINITY; let mut best_err=0.0;
+            for g_idx in 0..g_len {
+                let ct = glyph_ct[g_idx]; let cb = glyph_cb[g_idx]; let bytes = glyph_bytes[g_idx] as f32;
+                let e = if mode==2 {
+                    let lt = f_ok[0]*ct + b_ok[0]*(1.0-ct);
+                    let at = f_ok[1]*ct + b_ok[1]*(1.0-ct);
+                    let bt = f_ok[2]*ct + b_ok[2]*(1.0-ct);
+                    let dl = pix1_ok[0]-lt; let da = pix1_ok[1]-at; let db = pix1_ok[2]-bt;
+                    let e1 = (dl*dl+da*da+db*db)*85000.0;
+                    let lb = f_ok[0]*cb + b_ok[0]*(1.0-cb);
+                    let ab = f_ok[1]*cb + b_ok[1]*(1.0-cb);
+                    let bb_ = f_ok[2]*cb + b_ok[2]*(1.0-cb);
+                    let dl2 = pix2_ok[0]-lb; let da2 = pix2_ok[1]-ab; let db2 = pix2_ok[2]-bb_;
+                    let e2 = (dl2*dl2+da2*da2+db2*db2)*85000.0;
+                    e1+e2
+                } else if mode==1 {
+                    let lt = f_lab[0]*ct + b_lab[0]*(1.0-ct);
+                    let at = f_lab[1]*ct + b_lab[1]*(1.0-ct);
+                    let bt = f_lab[2]*ct + b_lab[2]*(1.0-ct);
+                    let dl1 = pix1_lab[0]-lt; let da1 = pix1_lab[1]-at; let db1 = pix1_lab[2]-bt;
+                    let e1 = dl1*dl1+da1*da1+db1*db1;
+                    let lb = f_lab[0]*cb + b_lab[0]*(1.0-cb);
+                    let ab = f_lab[1]*cb + b_lab[1]*(1.0-cb);
+                    let bb_ = f_lab[2]*cb + b_lab[2]*(1.0-cb);
+                    let dl2 = pix2_lab[0]-lb; let da2 = pix2_lab[1]-ab; let db2 = pix2_lab[2]-bb_;
+                    let e2 = dl2*dl2+da2*da2+db2*db2;
+                    e1+e2
+                } else {
+                    let t_r = ((f_r as f32)*ct + (b_r as f32)*(1.0-ct)).round() as u8;
+                    let t_g = ((f_g as f32)*ct + (b_g as f32)*(1.0-ct)).round() as u8;
+                    let t_b = ((f_b as f32)*ct + (b_b as f32)*(1.0-ct)).round() as u8;
+                    let bo_r = ((f_r as f32)*cb + (b_r as f32)*(1.0-cb)).round() as u8;
+                    let bo_g = ((f_g as f32)*cb + (b_g as f32)*(1.0-cb)).round() as u8;
+                    let bo_b = ((f_b as f32)*cb + (b_b as f32)*(1.0-cb)).round() as u8;
+                    color_dist2_u8(rr1,gg1,bb1,t_r,t_g,t_b,mode) + color_dist2_u8(rr2,gg2,bb2,bo_r,bo_g,bo_b,mode)
+                };
+                let cost = e + w * bytes;
+                if cost < best_cost { best_cost=cost; best_idx=g_idx; best_err=e; }
+            }
+            out_glyph[i*s_len+s]=best_idx as u8;
+            out_err[i*s_len+s]=best_err;
+            out_bytes[i*s_len+s]=glyph_bytes[best_idx];
+        }
+    }
+    m*s_len
+}
+ #[wasm_bindgen]
+ pub fn has_simd() -> bool { true }
 
 #[wasm_bindgen]
 pub fn alpha_blend(f_r: u8, f_g: u8, f_b: u8, b_r: u8, b_g: u8, b_b: u8, t: f32) -> Vec<u8> {

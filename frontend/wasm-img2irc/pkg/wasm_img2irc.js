@@ -64,6 +64,61 @@ export function batch_best_glyph(r1, g1, b1, r2, g2, b2, states_f, states_b, pal
 }
 
 /**
+ * @param {Uint8Array} r1
+ * @param {Uint8Array} g1
+ * @param {Uint8Array} b1
+ * @param {Uint8Array} r2
+ * @param {Uint8Array} g2
+ * @param {Uint8Array} b2
+ * @param {Uint32Array} states_f
+ * @param {Uint32Array} states_b
+ * @param {Uint32Array} palette
+ * @param {number} mode
+ * @param {number} w
+ * @param {Float32Array} glyph_ct
+ * @param {Float32Array} glyph_cb
+ * @param {Uint8Array} glyph_bytes
+ * @param {Uint8Array} out_glyph
+ * @param {Float32Array} out_err
+ * @param {Uint8Array} out_bytes
+ * @returns {number}
+ */
+export function batch_best_glyph_custom(r1, g1, b1, r2, g2, b2, states_f, states_b, palette, mode, w, glyph_ct, glyph_cb, glyph_bytes, out_glyph, out_err, out_bytes) {
+    const ptr0 = passArray8ToWasm0(r1, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(g1, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(b1, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(r2, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray8ToWasm0(g2, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passArray8ToWasm0(b2, wasm.__wbindgen_malloc);
+    const len5 = WASM_VECTOR_LEN;
+    const ptr6 = passArray32ToWasm0(states_f, wasm.__wbindgen_malloc);
+    const len6 = WASM_VECTOR_LEN;
+    const ptr7 = passArray32ToWasm0(states_b, wasm.__wbindgen_malloc);
+    const len7 = WASM_VECTOR_LEN;
+    const ptr8 = passArray32ToWasm0(palette, wasm.__wbindgen_malloc);
+    const len8 = WASM_VECTOR_LEN;
+    const ptr9 = passArrayF32ToWasm0(glyph_ct, wasm.__wbindgen_malloc);
+    const len9 = WASM_VECTOR_LEN;
+    const ptr10 = passArrayF32ToWasm0(glyph_cb, wasm.__wbindgen_malloc);
+    const len10 = WASM_VECTOR_LEN;
+    const ptr11 = passArray8ToWasm0(glyph_bytes, wasm.__wbindgen_malloc);
+    const len11 = WASM_VECTOR_LEN;
+    var ptr12 = passArray8ToWasm0(out_glyph, wasm.__wbindgen_malloc);
+    var len12 = WASM_VECTOR_LEN;
+    var ptr13 = passArrayF32ToWasm0(out_err, wasm.__wbindgen_malloc);
+    var len13 = WASM_VECTOR_LEN;
+    var ptr14 = passArray8ToWasm0(out_bytes, wasm.__wbindgen_malloc);
+    var len14 = WASM_VECTOR_LEN;
+    const ret = wasm.batch_best_glyph_custom(ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, mode, w, ptr9, len9, ptr10, len10, ptr11, len11, ptr12, len12, out_glyph, ptr13, len13, out_err, ptr14, len14, out_bytes);
+    return ret >>> 0;
+}
+
+/**
  * @param {BigUint64Array} masks
  * @param {Uint32Array} states_f
  * @param {Uint32Array} states_b

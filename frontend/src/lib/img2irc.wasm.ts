@@ -134,6 +134,26 @@ export function tryWasmBatchBestGlyphSync(
     return typeof n === 'number' && n>0 ? n : null;
   } catch { return null; }
 }
+export function tryWasmBatchBestGlyphCustomSync(
+  r1: Uint8Array, g1: Uint8Array, b1: Uint8Array,
+  r2: Uint8Array, g2: Uint8Array, b2: Uint8Array,
+  statesF: Uint32Array, statesB: Uint32Array,
+  palette: number[] | Uint32Array,
+  mode: string,
+  w: number,
+  glyphCt: Float32Array, glyphCb: Float32Array, glyphBytes: Uint8Array,
+  outGlyph: Uint8Array,
+  outErr: Float32Array,
+  outBytes: Uint8Array
+): number | null {
+  if (!wasm?.batch_best_glyph_custom) return null;
+  try {
+    const u32 = palette instanceof Uint32Array ? palette : new Uint32Array(palette);
+    const m = modeToU8(mode);
+    const n = (wasm.batch_best_glyph_custom as (r1:Uint8Array,g1:Uint8Array,b1:Uint8Array,r2:Uint8Array,g2:Uint8Array,b2:Uint8Array,sf:Uint32Array,sb:Uint32Array,p:Uint32Array,mode:number,w:number,ct:Float32Array,cb:Float32Array,bytes:Uint8Array,og:Uint8Array,oe:Float32Array,ob:Uint8Array)=>number)(r1,g1,b1,r2,g2,b2,statesF,statesB,u32,m,w,glyphCt,glyphCb,glyphBytes,outGlyph,outErr,outBytes);
+    return typeof n === 'number' && n>0 ? n : null;
+  } catch { return null; }
+}
 
 export function tryWasmBatchRowPaletteSync(
   rTops: Uint8Array, gTops: Uint8Array, bTops: Uint8Array,

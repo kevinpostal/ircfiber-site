@@ -263,8 +263,6 @@
     // Abort any in-flight conversion so rapid slider drags don't queue stale heavy work (UI lockup)
     try { abortCtrl?.abort(); } catch (e) {}
     abortCtrl = new AbortController();
-    // If a worker is busy with stale work, terminate it so the next convert gets a fresh worker immediately
-    if (_worker) { try { _worker.terminate(); } catch (e) {} _worker = null; }
     const my=++gen;
     const mySignal = abortCtrl.signal;
     if(debounce) clearTimeout(debounce);

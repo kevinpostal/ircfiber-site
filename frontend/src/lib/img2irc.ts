@@ -26,7 +26,7 @@
  *    (clampLeft_uniform_first_cell) vs const pad (constPadLeft_uniform_first_cell_iff). Margins tile with parity
  *    (margins_add, rightMargin_sub_leftMargin, margins_balanced_iff). See UNIFORM_EDGE_LEFT.md & UniformHead.lean.
  */
-import { getWasm, hasWasmSync, getWasmSync, preloadWasm, tryWasmBatchBestGlyphSync, tryWasmBatchRowPaletteSync, tryWasmBatchNearestSync, tryWasmBatchBestGlyphPolygonSync } from './img2irc.wasm';
+import { getWasm, hasWasmSync, getWasmSync, preloadWasm, tryWasmBatchBestGlyphSync, tryWasmBatchBestGlyphCustomSync, tryWasmBatchRowPaletteSync, tryWasmBatchNearestSync, tryWasmBatchBestGlyphPolygonSync } from './img2irc.wasm';
 import { dpSeg } from './segmentation';
 import { safeTrim as uniformSafeTrim } from './uniform';
 if (typeof window !== 'undefined') try { preloadWasm(); } catch {}
@@ -1018,7 +1018,8 @@ export async function renderPixelsCore(
     const totalCells = cols*rows;
     const glyphCount = _activeGlyphs.length;
     const thresh = hasWasmSync() ? 5000 : 1200;
-    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= 32 && (smart24 || !is24 || isTrueColor);
+    const glyphThresh = 32;
+    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= glyphThresh && (smart24 || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -1120,8 +1121,47 @@ export async function renderPixelsCore(
           } else {
             _wasmMisses++;
           }
-        }
-        if (!usedBatch) {
+        } else if (_useCustomGlyphs && hasWasmSync() && states.length > 0 && M * states.length <= 65536) {
+          const r1Arr = new Uint8Array(M), g1Arr = new Uint8Array(M), b1Arr = new Uint8Array(M);
+          const r2Arr = new Uint8Array(M), g2Arr = new Uint8Array(M), b2Arr = new Uint8Array(M);
+          for(let i=0;i<M;i++){
+            let [r1,g1,b1,a1]=tops[i]; let [r2,g2,b2,a2]=bots[i];
+            const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            const matteRgb = parseMatteHex((o as any).matte ?? null);
+            const isEmpty = isEmptyTrans && !matteRgb;
+            cellIsEmpty[i]=isEmpty;
+            if(isEmptyTrans && matteRgb){ r1=matteRgb[0]; g1=matteRgb[1]; b1=matteRgb[2]; r2=matteRgb[0]; g2=matteRgb[1]; b2=matteRgb[2]; }
+            r1Arr[i]=r1; g1Arr[i]=g1; b1Arr[i]=b1;
+            r2Arr[i]=r2; g2Arr[i]=g2; b2Arr[i]=b2;
+            if(isEmpty) cellGlyph[i]=[];
+          }
+          const Slen = states.length;
+          const statesF = new Uint32Array(Slen), statesB = new Uint32Array(Slen);
+          for(let s=0;s<Slen;s++){ statesF[s]=states[s][0]; statesB[s]=states[s][1]; }
+          const gLen = _activeGlyphs.length;
+          const glyphCt = new Float32Array(gLen), glyphCb = new Float32Array(gLen), glyphBytes = new Uint8Array(gLen);
+          for(let g=0; g<gLen; g++){ glyphCt[g]=_activeGlyphs[g].ct as number; glyphCb[g]=_activeGlyphs[g].cb as number; glyphBytes[g]=_activeGlyphs[g].bytes as number; }
+          const outGlyph = new Uint8Array(M * Slen);
+          const outErr = new Float32Array(M * Slen);
+          const outBytes = new Uint8Array(M * Slen);
+          const n = tryWasmBatchBestGlyphCustomSync(r1Arr,g1Arr,b1Arr,r2Arr,g2Arr,b2Arr,statesF,statesB,effPal,o.colorMatching,o.viterbiW,glyphCt,glyphCb,glyphBytes,outGlyph,outErr,outBytes);
+          if (n === M * Slen) {
+            _wasmHits += n;
+            for(let i=0;i<M;i++){
+              if(cellIsEmpty[i]) continue;
+              const rowGlyphs: GlyphInfo[] = new Array(Slen);
+              for(let s=0;s<Slen;s++){
+                const idx = i*Slen + s;
+                const gIdx = outGlyph[idx];
+                const g = _activeGlyphs[gIdx] ?? _activeGlyphs[0];
+                rowGlyphs[s]={err: outErr[idx], bytes: outBytes[idx] || g.bytes, glyph: g.ch};
+              }
+              cellGlyph[i]=rowGlyphs;
+            }
+            usedBatch = true;
+          } else {
+            _wasmMisses++;
+          }
           for(let i=0;i<M;i++){
             let [r1,g1,b1,a1]=tops[i]; let [r2,g2,b2,a2]=bots[i];
             const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
@@ -1340,7 +1380,8 @@ export async function renderPixelsCore(
     const totalCells = cols*rows;
     const glyphCount = _activeGlyphs.length;
     const thresh = hasWasmSync() ? 5000 : 1200;
-    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= 32 && (smart24 as boolean || !is24 || isTrueColor);
+    const glyphThresh = 32;
+    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= glyphThresh && (smart24 as boolean || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
