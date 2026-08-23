@@ -253,8 +253,8 @@
   }
   .codeEditor.twilight { background: #141414; }
   .codeEditor.twilight .gutter { background: #232323; color: var(--line-number-color, #E2E2E2); border-right-color: var(--border-color, #232323); }
-  .codeEditor.twilight :global(.hljs) { background: #141414; color: #F8F8F8; }
-  .codeEditor.twilight :global(.hljs-keyword),
+  .codeEditor.twilight .hlLayer { color: #ffffff; }
+  .codeEditor.twilight :global(.hljs) { background: #141414; color: #ffffff; }
   .codeEditor.twilight :global(.hljs-meta),
   .codeEditor.twilight :global(.hljs-selector-tag) { color: #CDA869; }
   .codeEditor.twilight :global(.hljs-string) { color: #8F9D6A; }
