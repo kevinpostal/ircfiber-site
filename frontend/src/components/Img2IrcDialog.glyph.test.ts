@@ -69,13 +69,15 @@ describe('Img2IrcDialog glyph selection', () => {
     await expect.element(halfRadio).toHaveAttribute('aria-checked', 'true');
     await expect.poll(() => getArt().length > 0, { timeout: 5000 }).toBe(true);
     const before = getArt();
-    const braille = page.getByTestId('braille-toggle');
+    const braille = page.getByRole('radio', { name: 'Braille' });
     await expect.element(braille).toBeInTheDocument();
     await braille.click();
+    await expect.element(braille).toHaveAttribute('aria-checked', 'true');
     await expect.poll(() => getArt() !== before, { timeout: 8000 }).toBe(true);
     const after = getArt();
     expect(after).toMatch(/[\u2800-\u28FF]/);
-    await braille.click();
+    await halfRadio.click();
+    await expect.element(halfRadio).toHaveAttribute('aria-checked', 'true');
     await expect.poll(() => getArt() !== after, { timeout: 8000 }).toBe(true);
   }, 20000);
 });

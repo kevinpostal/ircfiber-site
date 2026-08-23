@@ -836,15 +836,11 @@
         />
       {/if}
         </div>
-        <!-- Glyphs — braille exclusive + 9 BlockKinds (full/half/quarter/eighth/triangle/corner/geometric/box/legacy) -->
+        <!-- Glyphs — 9 BlockKinds (full/half/quarter/eighth/triangle/corner/geometric/box/legacy) -->
         <div class="glyph-groups" data-testid="glyph-groups" style="margin:12px 0; padding:10px; border:1px solid var(--border,#333); border-radius:8px;">
-          <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
-            <label style="display:flex; align-items:center; gap:6px; font-size:13px;"><input type="checkbox" bind:checked={glyphBraille} data-testid="braille-toggle" /> Braille</label>
-            <span style="font-size:11px; color:var(--text-muted,#888);">when checked, blocks disabled (braille exclusive)</span>
-          </div>
           <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px;">
             {#each BLOCK_KINDS as kind}
-              <label style="display:flex; align-items:center; gap:6px; font-size:12px; opacity:{glyphBraille?0.4:1}"><input type="checkbox" checked={glyphBlocks.includes(kind)} disabled={glyphBraille} onchange={(e)=>toggleBlock(kind, (e.target as HTMLInputElement).checked)} data-testid={`block-${kind}`} /> {kind}</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:12px;"><input type="checkbox" checked={glyphBlocks.includes(kind)} onchange={(e)=>toggleBlock(kind, (e.target as HTMLInputElement).checked)} data-testid={`block-${kind}`} /> {kind}</label>
             {/each}
           </div>
         </div>
