@@ -159,33 +159,29 @@
       let baseChars: string | undefined;
       if(glyphCatalog){
         if(glyphBraille){
-          baseChars=glyphCatalog.characters(['braille']);
+          // braille group exists in glyphs.json as "braille" 256
+          try{ baseChars=glyphCatalog.characters(['braille']); }catch{ baseChars='⠀⠁⠂⠃⠄⠅⠆⠇⠈⠉⠊⠋⠌⠍⠎⠏⠐⠑⠒⠓⠔⠕⠖⠗⠘⠙⠚⠛⠜⠝⠞⠟⠠⠡⠢⠣⠤⠥⠦⠧⠨⠩⠪⠫⠬⠭⠮⠯⠰⠱⠲⠳⠴⠵⠶⠷⠸⠹⠺⠻⠼⠽⠾⠿⡀⡁⡂⡃⡄⡅⡆⡇⡈⡉⡊⡋⡌⡍⡎⡏⡐⡑⡒⡓⡔⡕⡖⡗⡘⡙⡚⡛⡜⡝⡞⡟⡠⡡⡢⡣⡤⡥⡦⡧⡨⡩⡪⡫⡬⡭⡮⡯⡰⡱⡲⡳⡴⡵⡶⡷⡸⡹⡺⡻⡼⡽⡾⡿⢀⢁⢂⢃⢄⢅⢆⢇⢈⢉⢊⢋⢌⢍⢎⢏⢐⢑⢒⢓⢔⢕⢖⢗⢘⢙⢚⢛⢜⢝⢞⢟⢠⢡⢢⢣⢤⢥⢦⢧⢨⢩⢪⢫⢬⢭⢮⢯⢰⢱⢲⢳⢴⢵⢶⢷⢸⢹⢺⢻⢼⢽⢾⢿⣀⣁⣂⣃⣄⣅⣆⣇⣈⣉⣊⣋⣌⣍⣎⣏⣐⣑⣒⣓⣔⣕⣖⣗⣘⣙⣚⣛⣜⣝⣞⣟⣠⣡⣢⣣⣤⣥⣦⣧⣨⣩⣪⣫⣬⣭⣮⣯⣰⣱⣲⣳⣴⣵⣶⣷⣸⣹⣺⣻⣼⣽⣾⣿'; }
         } else if(glyphBlocks.length){
-          const direct=glyphCatalog.characters(glyphBlocks);
-          if(direct && direct.length){
-            baseChars=direct;
-          } else {
-            // Fallback: filter all available chars by BlockKind codepoint ranges
-            const ranges=glyphBlocks.flatMap(k=> blockKindRanges(k));
-            const allChars=glyphGroupsAll.map(g=>g.characters).join('');
-            if(allChars){
-              let filtered='';
-              const seen=new Set<string>();
-              for(const ch of allChars){
-                const cp=ch.codePointAt(0)!;
-                if(ranges.some(([lo,hi])=> cp>=lo && cp<=hi)){
-                  if(!seen.has(ch)){ seen.add(ch); filtered+=ch; }
-                }
-              }
-              baseChars=filtered || glyphCatalog.characters(['default']);
-            } else {
-              baseChars=glyphCatalog.characters(['default']);
+          // Directly generate from BlockKind codepoint ranges (no catalog dependency)
+          const ranges=glyphBlocks.flatMap(k=> blockKindRanges(k));
+          let filtered='';
+          const seen=new Set<string>();
+          for(const [lo,hi] of ranges){
+            for(let cp=lo; cp<=hi; cp++){
+              if(cp>=0xD800 && cp<=0xDFFF) continue;
+              const ch=String.fromCodePoint(cp);
+              if(!seen.has(ch)){ seen.add(ch); filtered+=ch; }
             }
           }
+          // Always include space for empty cells
+          if(!filtered.includes(' ')) filtered=' '+filtered;
+          baseChars=filtered;
+          if(!baseChars || baseChars.length<2){
+            try{ baseChars=glyphCatalog.characters(['default']); }catch{ baseChars=' ▀▄█'; }
+          }
         } else {
-          baseChars=glyphCatalog.characters(['default']);
+          try{ baseChars=glyphCatalog.characters(['default']); }catch{ baseChars=' ▀▄█'; }
         }
-      }
       let alphabet = collectGlyphAlphabet({ glyphGroupsChars: baseChars, glyphInclude: glyphInclude || undefined, glyphExclude: glyphExclude || undefined, glyphIncludeRanges: incR.length?incR:undefined, glyphExcludeRanges: excR.length?excR:undefined });
       if(alphabet) return { glyphAlphabet: alphabet };
       return {};
