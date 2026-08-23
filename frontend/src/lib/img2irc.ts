@@ -96,7 +96,7 @@ export const ANSI16: number[] = [
 export const IRC16: number[] = IRC99.slice(0, 16);
 export const XTERM256: number[] = (()=>{ const pal:number[]=[]; const ANSI_16=[[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]]; for(const c of ANSI_16) pal.push((c[0]<<16)|(c[1]<<8)|c[2]); const levels=[0,95,135,175,215,255]; for(let r=0;r<6;r++) for(let g=0;g<6;g++) for(let b=0;b<6;b++) pal.push((levels[r]<<16)|(levels[g]<<8)|levels[b]); for(let i=0;i<24;i++){const v=8+i*10; pal.push((v<<16)|(v<<8)|v);} return pal; })();
 export type RenderMode = 'irc' | 'ansi' | 'ansi24';
-export type PixelMode = 'half' | 'full' | 'quarter' | 'braille' | 'polygon' | 'auto';
+export type PixelMode = 'half' | 'full' | 'quarter' | 'braille' | 'polygon' | 'auto' | 'smart';
 export type SamplingFilter = 'nearest' | 'linear';
 export type DitherMode = 'none' | 'bayer4' | 'bayer8' | 'floyd' | 'atkinson' | 'sierra' | 'stucki' | 'jarvis';
 export type ColorMatching = 'rgb' | 'lab' | 'oklab';
@@ -131,6 +131,9 @@ export interface Img2IrcOptions {
   _debugResizeMs?: number;
   // Glyph catalog — optional alphabet filtering
   glyphAlphabet?: string;
+  // Smart detail — offline Aristotle-derived glyph alphabet (per-image)
+  smartGlyphAlphabet?: string;
+  smartGlyphSpec?: { alphabet: string; glyphs: Array<{ch:string, ct:number, cb:number, bytes:number}>; reason: string };
   // Auto compression geometries (for pixelMode auto with viterbi)
   autoGeometries?: PixelMode[];
 }
@@ -537,6 +540,8 @@ export function glyphsToTable(chars: string): typeof GLYPHS {
   return out;
 }
 export function getFilteredGlyphs(o: Img2IrcOptions): typeof GLYPHS | null {
+  if (o.pixelMode==='smart' && (o as any).smartGlyphAlphabet) return glyphsToTable((o as any).smartGlyphAlphabet);
+  if (o.pixelMode==='smart' && (o as any).smartGlyphSpec) return glyphsToTable((o as any).smartGlyphSpec.alphabet);
   if (o.glyphAlphabet != null) return glyphsToTable(o.glyphAlphabet);
   return null;
 }
@@ -945,6 +950,7 @@ export async function renderPixelsCore(
   _timings['wasmPreload'] = _perf() - _t; _t = _perf();
   const _activeGlyphs = getFilteredGlyphs(o) ?? GLYPHS;
   const _useCustomGlyphs = _activeGlyphs !== GLYPHS;
+  if(pm==='smart') pm = 'half' as PixelMode;
   const pxAt=(x:number,y:number):[number,number,number,number]=>{
     if(x<0||y<0||x>=pW||y>=pH)return[0,0,0,0];
     const i=(y*pW+x)*4;return[d[i],d[i+1],d[i+2],d[i+3]];
@@ -2057,7 +2063,7 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
   let pW:number,pH:number,cols:number,rows:number;
   if(pm==='braille'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.45));if(o.height)rows=o.height;pH=rows*4;}
   else if(pm==='quarter'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows*2;}
-  else if(pm==='half'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
+  else if(pm==='half' || pm==='smart'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
   else if(pm==='polygon'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows;}
   else if(pm==='auto'){
     const _isBrailleOnly = o.autoGeometries && (o.autoGeometries as string[]).length===1 && (o.autoGeometries as string[])[0]==='braille';
@@ -2065,7 +2071,7 @@ export async function imageToIrcArt(img:HTMLImageElement, opts:Partial<Img2IrcOp
     else { cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2; }
   }
   else {cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows;}
-  if(rows>120){rows=120;pH=pm==='braille'?480:pm==='quarter'?240:pm==='half'?240:pm==='polygon'?120:pm==='auto'?240:120;}
+  if(rows>120){rows=120;pH=pm==='braille'?480:pm==='quarter'?240:pm==='half'?240:pm==='polygon'?120:pm==='auto'?240:pm==='smart'?240:120;}
   // Handle 90/270 rotate by swapping dimensions so the art isn't clipped
   const isRot90 = o.rotate===90 || o.rotate===270;
   if(isRot90){
@@ -2250,7 +2256,7 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
   let pW:number,pH:number,cols:number,rows:number;
   if(pm==='braille'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.45));if(o.height)rows=o.height;pH=rows*4;}
   else if(pm==='quarter'){cols=w;pW=cols*2;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows*2;}
-  else if(pm==='half'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
+  else if(pm==='half' || pm==='smart'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2;}
   else if(pm==='polygon'){cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows;}
   else if(pm==='auto'){
     const _isBrailleOnly = o.autoGeometries && (o.autoGeometries as string[]).length===1 && (o.autoGeometries as string[])[0]==='braille';
@@ -2258,7 +2264,7 @@ export async function imageToIrcArtFromBitmap(bitmap: ImageBitmap, opts: Partial
     else { cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.9));if(o.height)rows=o.height;pH=rows*2; }
   }
   else {cols=w;pW=cols;rows=Math.max(1,Math.round(w*asp*0.5));if(o.height)rows=o.height;pH=rows;}
-  if(rows>120){rows=120;pH=pm==='braille'?480:pm==='quarter'?240:pm==='half'?240:pm==='polygon'?120:pm==='auto'?240:120;}
+  if(rows>120){rows=120;pH=pm==='braille'?480:pm==='quarter'?240:pm==='half'?240:pm==='polygon'?120:pm==='auto'?240:pm==='smart'?240:120;}
   const isRot90 = o.rotate===90 || o.rotate===270;
   if(isRot90){ const tmpCols=cols; cols=rows; rows=tmpCols; const tmpW=pW; pW=pH; pH=tmpW; }
   let eW=pW,eH=pH;
@@ -2326,10 +2332,18 @@ export function estimatePackedMessages(art: string, C = IRC_SAFE_PAYLOAD, rowsPe
 }
 export function serializeImg2IrcOptions(o: Img2IrcOptions): Record<string, unknown> {
   const { _smartPaletteA, _smartPaletteB, ...rest } = o as any;
-  return { ...rest };
+  const out: Record<string, unknown> = { ...rest };
+  if((o as any).pixelMode==='smart' && (o as any).smartGlyphAlphabet) (out as any).smartGlyphAlphabet = (o as any).smartGlyphAlphabet;
+  if((o as any).pixelMode==='smart' && (o as any).smartGlyphSpec) (out as any).smartGlyphAlphabet = (o as any).smartGlyphSpec.alphabet;
+  else if((o as any).glyphAlphabet != null) (out as any).glyphAlphabet = (o as any).glyphAlphabet;
+  return out;
 }
 export function deserializeImg2IrcOptions(j: Record<string, unknown>): Partial<Img2IrcOptions> {
   const clone = { ...j } as any;
   delete clone._smartPaletteA; delete clone._smartPaletteB;
+  if(clone.midgardMode==='smart' && clone.pixelMode!=='smart'){
+    clone.pixelMode='smart';
+    clone.midgardMode='xterm256';
+  }
   return clone;
 }

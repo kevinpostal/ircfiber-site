@@ -1,7 +1,9 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, getLastTimings, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, type RenderMode, type PixelMode, type DitherMode, type ColorMatching, type MidgardColorMode, serializeImg2IrcOptions, glyphsToTable, collectGlyphAlphabet } from '../lib/img2irc';
+  import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, getLastTimings, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, serializeImg2IrcOptions, glyphsToTable, collectGlyphAlphabet } from '../lib/img2irc';
+  import type { RenderMode, PixelMode, DitherMode, ColorMatching, MidgardColorMode } from '../lib/img2irc';
+  import { selectGlyphsForImage } from '../lib/aristotleGlyphs';
   import { GlyphCatalog } from '../lib/glyphCatalog';
   import { HELP } from '../lib/helpText';
   import { sendMessage } from '../stores/wsConnection.svelte';
@@ -40,13 +42,15 @@
   });
   let dither=$derived(ditherMode !== 'none');
   // Viterbi for all modes including truecolor (quantized palette) — enterprise, WASM where it helps
-  let compressionDisabled=$derived(false);
+  let compressionDisabled=$derived(pixelMode==='smart');
   let accTone=$state(false);
   let accFx=$state(false);
   let accOut=$state(false);
   let accScroll=$state(false);
   let showAdvanced=$state(false);
   let _initApplied=$state(false);
+  // Smart migration: saved midgardMode==='smart' → pixelMode smart
+  let prevMidgard: MidgardColorMode | null = null;
   $effect(()=>{
     if(_initApplied || !initialParams) return;
     _initApplied=true;
@@ -54,10 +58,15 @@
     if(p.width!=null) width=p.width;
     if(p.renderMode) renderMode=p.renderMode;
     if(p.pixelMode){
-      if(['half','full','quarter','braille','polygon','auto'].includes(p.pixelMode)) pixelMode=p.pixelMode;
+      if(['half','full','quarter','braille','polygon','auto','smart'].includes(p.pixelMode)) pixelMode=p.pixelMode as PixelMode;
       else pixelMode='half';
     }
-    if(p.midgardMode) midgardMode=p.midgardMode;
+    // Migration: stale midgardMode smart → pixelMode smart
+    if(p.midgardMode==='smart' && pixelMode!=='smart'){
+      prevMidgard = midgardMode;
+      pixelMode='smart';
+      midgardMode='xterm256';
+    } else if(p.midgardMode) midgardMode=p.midgardMode;
     if(p.filter) filter=p.filter;
     if(p.brightness!=null) brightness=p.brightness;
     if(p.contrast!=null) contrast=p.contrast;
@@ -88,7 +97,8 @@
     if(midgardMode==='truecolor'){ renderMode='ansi24'; }
     else if(midgardMode==='xterm256'){ renderMode='ansi'; }
     else if(midgardMode==='16'){ renderMode='irc'; }
-    else if(midgardMode==='smart'){ renderMode='ansi24'; }
+    // legacy smart palette — now handled via pixelMode smart migration above
+    else if((midgardMode as string)==='smart'){ renderMode='ansi24'; midgardMode='xterm256'; if(pixelMode!=='smart') pixelMode='smart'; }
   });
   // Glyph catalog load + hydrate
   $effect(()=>{
@@ -135,6 +145,9 @@
   }
   let art=$state(initialArt ?? ''), htmlPreview=$state(initialArt ? initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('') : ''), loading=$state(initialArt ? false : true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
   let saving=$state(false), saveError=$state<string|null>(null), saveOk=$state(false), saveName=$state((initialName ?? filename.replace(/\.[^.]+$/,'')) || 'IRC Art');
+  // Smart detail offline glyph alphabet (per-image, cached)
+  let smartGlyphAlphabet=$state<string|undefined>(undefined);
+  let smartGlyphCache=new Map<string,string>();
   let hasAlpha=$state(false);
   // Transparency.lean: bleeds_iff_empty — transparency is opt-in, switchable via opaque/matte escape hatches
   let transparencyEnabled=$state(false); // user toggle, auto-synced to hasAlpha when image loads
@@ -163,13 +176,14 @@
   let renderCache=new Map<string,{art:string,html:string}>();
   let _lastFile: File|Blob|null=null;
   function makeCacheKeyForOpts(o:any, alpha:boolean):string{
-    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}|${o.glyphAlphabet ?? ''}|${(o.autoGeometries??[]).join(',')}`;
+    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}|${o.glyphAlphabet ?? ''}|${o.smartGlyphAlphabet ?? ''}|${(o.autoGeometries??[]).join(',')}`;
   }
   function makeCacheKey():string{
     let glyphAlphabet: string | undefined;
     try{ glyphAlphabet=collectGlyphOpts().glyphAlphabet; }catch{ glyphAlphabet=glyphInclude||glyphExclude||glyphIncludeRanges||glyphExcludeRanges ? 'invalid' : undefined; }
+    let smartAlpha = pixelMode==='smart' ? smartGlyphAlphabet : undefined;
     // keep key small and stable — order matters
-    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, autoGeometries}, hasAlpha);
+    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, smartGlyphAlphabet: smartAlpha, autoGeometries}, hasAlpha);
   }
   $effect(()=>{ // clear cache when file changes
     void file;
@@ -275,6 +289,24 @@
     }, 70);
   }
   $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void autoGeometries; void transparencyEnabled; void matteColor; void glyphPreset; void glyphGroups; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; void glyphFind; void file; untrack(()=>schedule()); });
+  $effect(()=>{ // restore prior midgard when leaving Smart detail
+    void pixelMode;
+    if(pixelMode!=='smart' && prevMidgard){
+      midgardMode=prevMidgard;
+      prevMidgard=null;
+    } else if(pixelMode==='smart' && midgardMode!=='xterm256' && prevMidgard==null){
+      prevMidgard=midgardMode;
+      midgardMode='xterm256';
+    }
+  });
+  // Smart auto-fit: when Smart detail and overBudget, auto-trigger smartCompress debounced
+  $effect(()=>{
+    void pixelMode; void hardStats.longest; void art;
+    if(pixelMode==='smart' && art && hardStats.longest>IRC_HARD_LIMIT && !fitting && !fitBusy){
+      if(settleTimer) clearTimeout(settleTimer);
+      settleTimer=setTimeout(()=>{ void smartCompress(); }, 120);
+    }
+  });
   let _lastHasAlpha: boolean | null = null;
   async function convert(expected=gen, signal?: AbortSignal){
     const cur=expected;
@@ -308,12 +340,35 @@
         const hasSavedTransparency = !!(initialParams && (initialParams as any).alphaMode != null);
         if(hasSavedTransparency){ _lastHasAlpha = found; }
         else if(_lastHasAlpha !== found){ transparencyEnabled = found; if(!found) matteColor=null; _lastHasAlpha = found; }
+        // Smart detail: compute offline alphabet via Aristotle-derived heuristic (no network)
+        if(pixelMode==='smart'){
+          const cacheKey = `${file instanceof File ? file.name : 'blob'}|${width}|${colorMatching}`;
+          let cached = smartGlyphCache.get(cacheKey);
+          if(cached){ smartGlyphAlphabet=cached; }
+          else {
+            try{
+              // sample slightly larger for smart histogram
+              const sc=document.createElement('canvas'); sc.width=Math.min(80, img.naturalWidth); sc.height=Math.min(80, img.naturalHeight);
+              const sctx=sc.getContext('2d')!; sctx.drawImage(img,0,0,sc.width,sc.height);
+              const sid=sctx.getImageData(0,0,sc.width,sc.height);
+              const spec=selectGlyphsForImage(sid.data, sc.width, sc.height, { cols: width, budgetBytes: IRC_HARD_LIMIT, colorMode: colorMatching });
+              smartGlyphAlphabet=spec.alphabet;
+              if(smartGlyphCache.size>=12){ const k=smartGlyphCache.keys().next().value as string; smartGlyphCache.delete(k); }
+              smartGlyphCache.set(cacheKey, spec.alphabet);
+            } catch {}
+          }
+        } else {
+          smartGlyphAlphabet=undefined;
+        }
       } catch (e) {}
       if(signal?.aborted || cur!==gen) { try{ revokeImageUrl(img); } catch (e) {} return; }
       try{
         let glyphAlphabet: string | undefined;
-        try{ const g=collectGlyphOpts(); glyphAlphabet=g.glyphAlphabet; error=null; }catch(e:any){ error=e?.message ?? String(e); glyphError=e?.message ?? String(e); loading=false; isConverting=false; return; }
-        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any;
+        try{
+          if(pixelMode==='smart' && smartGlyphAlphabet){ glyphAlphabet=smartGlyphAlphabet; error=null; }
+          else { const g=collectGlyphOpts(); glyphAlphabet=g.glyphAlphabet; error=null; }
+        }catch(e:any){ error=e?.message ?? String(e); glyphError=e?.message ?? String(e); loading=false; isConverting=false; return; }
+        const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, smartGlyphAlphabet } as any;
         if(midgardMode==='smart' && smartPalCache){
           (opts as any)._smartPaletteA = smartPalCache.A;
           (opts as any)._smartPaletteB = smartPalCache.B;
@@ -321,7 +376,6 @@
         const _kHit=makeCacheKey();
         const _hit=renderCache.get(_kHit);
         if(_hit){
-          if(cur!==gen || signal?.aborted) return;
           art=_hit.art;
           htmlPreview=_hit.html;
           if(cur===gen){ loading=false; isConverting=false; }
@@ -367,13 +421,13 @@
       if (typeof navigator !== 'undefined' && (navigator as any).deviceMemory && (navigator as any).deviceMemory < 4) return;
     } catch (e) {}
     const presets: any[] = [];
-    const mids: MidgardColorMode[] = ['xterm256','16','truecolor','smart'];
+    const mids: MidgardColorMode[] = ['xterm256','16','truecolor'];
     for (const m of mids) if (m !== baseOpts.midgardMode) {
-      const rm: RenderMode = m==='truecolor' ? 'ansi24' : m==='smart' ? 'ansi24' : m==='16' ? 'irc' : 'ansi';
+      const rm: RenderMode = m==='truecolor' ? 'ansi24' : m==='16' ? 'irc' : 'ansi';
       presets.push({...baseOpts, midgardMode: m, renderMode: rm});
     }
     for (const cm of ['rgb','lab','oklab'] as ColorMatching[]) if (cm !== baseOpts.colorMatching) presets.push({...baseOpts, colorMatching: cm});
-    for (const pm of ['half','polygon','quarter','braille','full'] as PixelMode[]) if (pm !== baseOpts.pixelMode) presets.push({...baseOpts, pixelMode: pm});
+    for (const pm of ['half','polygon','quarter','braille','full','auto'] as PixelMode[]) if (pm !== baseOpts.pixelMode && pm!=='smart') presets.push({...baseOpts, pixelMode: pm});
     for (const w of [60,80,100,120]) if (w !== baseOpts.width) presets.push({...baseOpts, width: w});
     const toCache = presets.slice(0, 16);
     let pImg: HTMLImageElement | null = null;
@@ -423,6 +477,11 @@
 
   async function smartFit(){
     if(!art || fitBusy) return;
+    // Smart detail 4-stage auto-fit: glyph pruning → bisection → width → palette
+    if(pixelMode==='smart'){
+      await smartCompress();
+      return;
+    }
     try{
       let steps=0;
       while(steps++ < 14){
@@ -442,6 +501,80 @@
         if(my!==gen) return;
       }
     } finally { fitting=false; fitBusy=false; }
+  }
+  async function smartCompress(){
+    if(!art || fitBusy) return;
+    fitting=true; fitBusy=true;
+    try{
+      let steps=0;
+      while(steps++ < 14){
+        const longest=estimateLineLengths(art, IRC_HARD_LIMIT).longest;
+        if(longest<=IRC_HARD_LIMIT) break;
+        // 1. Glyph pruning first — remove most expensive 3-byte glyphs with minimal coverage gap
+        if(pixelMode==='smart' && smartGlyphAlphabet && smartGlyphAlphabet.length>14){
+          // Rank by bytes (3 vs 1) then coverage distance to 0.5 (least useful first)
+          const pruned = pruneSmartAlphabet(smartGlyphAlphabet);
+          if(pruned && pruned!==smartGlyphAlphabet){
+            smartGlyphAlphabet=pruned;
+            // cache the pruned version
+            try{ const k=`${file instanceof File ? file.name : 'blob'}|${width}|${colorMatching}`; if(smartGlyphCache.size>=12){ const kk=smartGlyphCache.keys().next().value as string; smartGlyphCache.delete(kk);} smartGlyphCache.set(k, pruned); } catch {}
+            await new Promise(r=>setTimeout(r, 30));
+            let my=++gen; await convert(my); if(my!==gen) return;
+            if(estimateLineLengths(art, IRC_HARD_LIMIT).longest<=IRC_HARD_LIMIT) break;
+            continue;
+          }
+        }
+        // 2. Viterbi bisection (0..6, fits_upward_closed, start w=2)
+        const viterbiCapable = true; // smart always capable (uses half geometry)
+        if(viterbiCapable && viterbiW < 6){
+          const ok = await bisectViterbiW();
+          if(ok) continue;
+        }
+        // 3. Width shrink by 4 down to MIN_IRC_WIDTH=10 (prioritize before palette)
+        if(width > MIN_IRC_WIDTH + 4){
+          width=Math.max(MIN_IRC_WIDTH, width-4);
+          await new Promise(r=>setTimeout(r, 30));
+          let my=++gen; await convert(my); if(my!==gen) return;
+          continue;
+        }
+        // 4. Palette downgrade: smart (xterm256) → 16
+        if(midgardMode==='xterm256'){
+          midgardMode='16';
+          await new Promise(r=>setTimeout(r, 30));
+          let my=++gen; await convert(my); if(my!==gen) return;
+          continue;
+        }
+        if(width > MIN_IRC_WIDTH){
+          width=MIN_IRC_WIDTH;
+          await new Promise(r=>setTimeout(r, 30));
+          let my=++gen; await convert(my); if(my!==gen) return;
+          continue;
+        }
+        // 5. Final guard — minimal glycps [' ','▀'] already tried via pruning, still over 512
+        error="Image too detailed for 512B at 10 cols";
+        break;
+      }
+    } finally { fitting=false; fitBusy=false; }
+  }
+  function pruneSmartAlphabet(alpha: string): string | null {
+    if(alpha.length<=14) return null;
+    // Keep ' ' mandatory, drop highest-cost 3-byte glyphs with minimal Δcoverage to 1-byte alternatives
+    // Dominance order: 3-byte glyphs with coverage close to 1-byte ramp are dominated
+    const oneByteChs = new Set([' ', '=', 'Q', 'B', '*', 'g', 'F']);
+    // candidates to drop: 3-byte glyphs sorted by bytes then distance to nearest 1-byte coverage
+    const threeByte = [...alpha].filter(ch => !oneByteChs.has(ch));
+    if(threeByte.length===0) return null;
+    // Prefer dropping dominated polygon glyphs first (◤◢◥◣), then ░▓█, then ▌▐, then ▒, then half-blocks
+    const dropPriority = ['◤','◢','◥','◣','░','▓','█','▌','▐','▒','▄','▀'];
+    for(const ch of dropPriority){
+      if(threeByte.includes(ch) && alpha.includes(ch)){
+        const next = [...alpha].filter(c=>c!==ch).join('');
+        if(next.length>=2) return next;
+      }
+    }
+    // fallback: drop last 3-byte
+    const next=[...alpha].filter(c=>c!==threeByte[threeByte.length-1]).join('');
+    return next.length>=2 ? next : null;
   }
   // LambdaPareto.lean IrcRD.fits_upward_closed / msgCount_antitone:
   // Feasible set {λ | longest(λ) ≤ 512} is upward-closed because B (bytes) is
@@ -467,7 +600,7 @@
     return found;
   }
   function pickFitStep(): (()=>void)|null{
-    const viterbiCapable = midgardMode!=='truecolor';
+    const viterbiCapable = midgardMode!=='truecolor' && pixelMode!=='smart';
     if(viterbiCapable && viterbiW < 6) return ()=>{ viterbiW=Math.min(6, Math.round((viterbiW+0.5)*2)/2); };
     if(width > MIN_IRC_WIDTH + 4) return ()=>{ width=Math.max(MIN_IRC_WIDTH, width-4); };
     if(midgardMode==='smart') return ()=>{ midgardMode='xterm256'; };
@@ -520,8 +653,8 @@
     try{
       let glyphAlphabet: string | undefined;
       try{ glyphAlphabet=collectGlyphOpts().glyphAlphabet; }catch{ glyphAlphabet=undefined; }
-      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet } as any);
-      let thumb: Blob|null=null;
+      const smartAlpha = pixelMode==='smart' ? smartGlyphAlphabet : undefined;
+      const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, smartGlyphAlphabet: smartAlpha } as any);
       const isDummyFile = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
       if(!isDummyFile){ try{ thumb=await makeThumbnailBlob(); } catch (e) {} }
       if(editId){
@@ -544,6 +677,7 @@
     accTone=false; accFx=false; accOut=false; accScroll=false;
     accGlyphs=false; glyphPreset='default'; glyphGroups=['default']; glyphInclude=''; glyphExclude=''; glyphIncludeRanges=''; glyphExcludeRanges=''; glyphFind=''; glyphError=null;
     transparencyEnabled = hasAlpha; matteColor = null;
+    smartGlyphAlphabet=undefined; smartGlyphCache.clear();
   }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
   function handleOverlayClick(e:MouseEvent){ if(e.target===e.currentTarget) onClose(); }
@@ -552,7 +686,6 @@
     { v:'xterm256', label:'ANSI 256', sub:'xterm' },
     { v:'16', label:'16 colors', sub:'mIRC' },
     { v:'truecolor', label:'True-Color', sub:'24-bit' },
-    { v:'smart', label:'Smart', sub:'auto' },
   ];
   const pixelOpts: Array<{v:PixelMode,label:string,glyph:string,hint?:string}> = [
     { v:'auto', label:'Auto', glyph:'◈', hint:'mixed per Lean §2.3' },
@@ -561,6 +694,7 @@
     { v:'quarter', label:'Quarter', glyph:'▖' },
     { v:'braille', label:'Braille', glyph:'⣿' },
     { v:'full', label:'Full', glyph:'█' },
+    { v:'smart', label:'Smart', glyph:'✦', hint:'Aristotle glyphs + 512B auto-fit' },
   ];
 </script>
 
@@ -624,8 +758,8 @@
           </div>
           <div class="p-group">
             <span class="p-label">Compression</span>
-            <label class="field comp-field" title={'Viterbi w≈2–4 sweet spot'}>
-              <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} />
+            <label class="field comp-field" title={pixelMode==='smart' ? 'Auto-tuned for 512B in Smart detail' : 'Viterbi w≈2–4 sweet spot'}>
+              <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={compressionDisabled} />
               <b class:off={viterbiW===0}>{viterbiW===0?'off':viterbiW}</b>
             </label>
           </div>
@@ -735,9 +869,9 @@
         </div>
         <div class="leftActions">
           <input class="saveName" data-testid="left-save-input" bind:value={saveName} placeholder="Name" aria-label="Save name" />
-          <button class="btn saveBtn" data-testid="left-save" onclick={handleSave} disabled={saving || !art || overBudget}>{#if saving}Saving…{:else if saveOk}Saved ✓{:else if editId}Update{:else}Save{/if}</button>
+          <button class="btn saveBtn" data-testid="left-save" onclick={handleSave} disabled={saving || !art || overBudget || (pixelMode==='smart' && fitBusy)}>{#if saving}Saving…{:else if saveOk}Saved ✓{:else if editId}Update{:else}Save{/if}</button>
           {#if saveError}<span class="saveErr">{saveError}</span>{/if}
-          {#if overBudget}<span class="saveErr">Fit to 512 first</span>{/if}
+          {#if overBudget}<span class="saveErr">{pixelMode==='smart' ? 'Smart fitting to 512B…' : 'Fit to 512 first'}</span>{/if}
           <div class="sendRow">
             <button class="btn" data-testid="left-copy" onclick={copy} disabled={!art||loading}>{copied?'Copied!':'Copy'}</button>
             <button class="btn primary" data-testid="left-send" onclick={send} disabled={!art||loading||sending||!activeTarget}>
@@ -751,7 +885,7 @@
           <div class="budget" data-testid="budget" class:over={overBudget} class:softWarn={safeOver && !overBudget}>
             <div class="budget-track"><div class="budget-fill" style="width:{pct}%"></div></div>
             <span class="budget-label" class:warn={overBudget}>{hardStats.longest} / {IRC_HARD_LIMIT}<span class="safe"> · {stats.lines} lines · {width} cols</span></span>
-            {#if isConverting}<span class="pulse">● updating</span>{:else if overBudget}<button class="link" onclick={smartFit} disabled={fitBusy}>⚡ Fit to 512</button>{:else}<span class="ok">✓</span>{/if}
+            {#if isConverting}<span class="pulse">● updating</span>{:else if pixelMode==='smart' && overBudget && fitBusy}<span class="pulse">Smart fitting to 512B…</span>{:else if overBudget}<button class="link" onclick={smartFit} disabled={fitBusy}>⚡ Fit to 512</button>{:else}<span class="ok">✓</span>{/if}
           </div>
         {/if}
         <div class="previewWrap" class:converting={isConverting}>
