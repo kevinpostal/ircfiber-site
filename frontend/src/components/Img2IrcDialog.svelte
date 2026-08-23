@@ -180,12 +180,13 @@
             try{ baseChars=glyphCatalog.characters(['default']); }catch{ baseChars=' ▀▄█'; }
           }
         } else {
-          try{ baseChars=glyphCatalog.characters(['default']); }catch{ baseChars=' ▀▄█'; }
+          try{ baseChars=glyphCatalog.characters(['default']); } catch (e) { baseChars=' ▀▄█'; }
         }
+      }
       let alphabet = collectGlyphAlphabet({ glyphGroupsChars: baseChars, glyphInclude: glyphInclude || undefined, glyphExclude: glyphExclude || undefined, glyphIncludeRanges: incR.length?incR:undefined, glyphExcludeRanges: excR.length?excR:undefined });
       if(alphabet) return { glyphAlphabet: alphabet };
       return {};
-    }catch(e:any){ glyphError=e?.message ?? String(e); throw e; }
+    } catch (e) { glyphError = e instanceof Error ? e.message : String(e); throw e; }
   }
   let art=$state(initialArt ?? ''), htmlPreview=$state(initialArt ? initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('') : ''), loading=$state(initialArt ? false : true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
   let saving=$state(false), saveError=$state<string|null>(null), saveOk=$state(false), saveName=$state((initialName ?? filename.replace(/\.[^.]+$/,'')) || 'IRC Art');
