@@ -13,16 +13,16 @@
   let { file, filename, onClose, onBack, initialParams, initialName, editId, onSaved, initialArt, thumbnailUrl }: Props = $props();
 
   let width=$state(DEFAULT_IRC_WIDTH);
-  let renderMode=$state<RenderMode>('ansi');
+  let renderMode=$state<RenderMode>('irc');
   let pixelMode=$state<PixelMode>('half');
   let midgardMode=$state<MidgardColorMode>('xterm256');
   let brightness=$state(0), contrast=$state(0), saturation=$state(0), hue=$state(0), gamma=$state(0), blur=$state(0), pixelize=$state(0);
   let grayscale=$state(false), invert=$state(false), sepia=$state(false), normalize=$state(false), nograyscale=$state(false), flipH=$state(false), flipV=$state(false);
-  let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('oklab');
+  let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('hsv');
   let viterbiW=$state(0);
   let autoGeometries=$state<PixelMode[]>(['half','quarter','braille','polygon']);
   let rotate=$state('0');
-  let filter=$state('linear');
+  let filter=$state('nearest');
   let scrollPreset=$state(globalPrefs.defaultScrollPreset ?? 2);
   const SCROLL_PRESETS = [
     { label: 'Instant', bd: 0, sd: 0, hint: '0ms · instant' },

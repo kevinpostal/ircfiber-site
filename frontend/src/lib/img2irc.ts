@@ -148,7 +148,7 @@ export function getMidgardPalette(o: Img2IrcOptions): number[] {
   return IRC99;
 }
 
-export const DEFAULT_IRC_WIDTH = 60;
+export const DEFAULT_IRC_WIDTH = 80;
 export const MIN_IRC_WIDTH = 10;
 export const MAX_IRC_WIDTH = 120;
 /** RFC 2812 hard limit 512 incl. prefix+CRLF — soft, many bouncers/servers allow more. */
@@ -156,10 +156,10 @@ export const IRC_HARD_LIMIT = 512;
 /** Safe payload that fits everywhere — leaves ~112 for PRIVMSG prefix/tags. Soft limit. */
 export const IRC_SAFE_PAYLOAD = 400;
 const DEFAULTS: Img2ircOptions = {
-  width: 60, renderMode: 'ansi', pixelMode: 'half', filter: 'linear',
+  width: 80, renderMode: 'irc', pixelMode: 'half', filter: 'nearest',
   brightness: 0, contrast: 0, gamma: 0, saturation: 0, hue: 0,
   invert: false, grayscale: false, sepia: false, normalize: false, dither: false,
-  ditherMode: 'none', colorMatching: 'oklab',
+  ditherMode: 'none', colorMatching: 'hsv',
   midgardMode: 'xterm256',
   alphaMode: 'opaque', alphaThreshold: 128, trimTransparent: false, smartEdges: true, background: '#000000', matte: null,
 };
