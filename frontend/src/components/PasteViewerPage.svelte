@@ -190,7 +190,7 @@
             {/if}
             {#if editError}<p class="userError editError" style="display:block;">{editError}</p>{/if}
           </h1>
-          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="position: relative; height: {Math.max(lineCount,1)*16}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
+          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="position: relative; height: {Math.max(lineCount,1)*20 + 32}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
             <div class="editorToolbar">
               <button class="copyButton" onclick={copyCode} aria-label="Copy code" title={copied ? 'Copied!' : 'Copy'}>
                 {#if copied}
@@ -204,7 +204,7 @@
             {#if editing && isOwner}
               <CodeEditor bind:value={editContent} language={editLang} showGutter={!gutterHidden} twilight />
             {:else}
-              <CodeEditor value={entry.body} language={entry.syntax} readonly showGutter={!gutterHidden} twilight />
+              <CodeEditor value={entry.body + '\n '} language={entry.syntax} readonly showGutter={!gutterHidden} twilight />
             {/if}
           </div>
         </div>
@@ -213,8 +213,8 @@
   </div>
 </div>
 <style>
-  #pasteViewerPage { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; background: #141414; overflow: hidden; width: 100vw; height: 100vh; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
-  .mainContainerPaste { display: block; background: #141414; width: 100%; height: 100%; max-width: none; margin: 0; padding: .7em; overflow: auto; box-sizing: border-box; }
+  #pasteViewerPage { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; background: #141414; overflow: auto; width: 100vw; height: 100vh; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+  .mainContainerPaste { display: block; background: #141414; width: 100%; min-height: 100%; max-width: none; margin: 0; padding: .7em; overflow: visible; box-sizing: border-box; }
   .mainContentPaste { padding: 0; min-width: 0; background: #141414; border: 1px solid #2a2d33; border-radius: 4px; }
   .filesHeader { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 12px 16px; }
   .filesHeader h1 { font-size: 18px; font-weight: 600; color: #c9d1d9; }

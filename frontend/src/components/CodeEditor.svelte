@@ -137,9 +137,9 @@
   .gutter,
   .hlLayer,
   .editLayer {
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Source Code Pro', 'source-code-pro', 'Hack', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px;
-    line-height: 16px;
+    line-height: 20px;
   }
   .gutter {
     flex: 0 0 auto;
@@ -180,9 +180,9 @@
   }
   .hlLayer code {
     background: transparent;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Source Code Pro', 'source-code-pro', 'Hack', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px !important;
-    line-height: 16px !important;
+    line-height: 20px !important;
     white-space: inherit;
     letter-spacing: normal;
     word-spacing: normal;
@@ -195,9 +195,9 @@
     box-sizing: border-box;
     padding: 0 4px !important;
     margin: 0;
-    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'Source Code Pro', 'source-code-pro', 'Hack', monospace;
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px !important;
-    line-height: 16px !important;
+    line-height: 20px !important;
     background: transparent !important;
     color: transparent !important;
     caret-color: #e6e6e6;
@@ -241,18 +241,18 @@
   }
   /* readonly: no textarea, hlLayer flows naturally; outer .editor height drives page scroll */
   .codeEditor.readonly { overflow: visible; height: auto; min-height: 0; flex: none; display: flex; align-items: flex-start; }
-  .codeEditor.readonly .gutter { overflow: visible; height: auto; }
-  .codeEditor.readonly .editorWrap { overflow: visible; height: auto; flex: 1 1 auto; display: block; }
+  .codeEditor.readonly .gutter { overflow: visible; height: auto; padding: 6px 6px 6px 0; }
+  .codeEditor.readonly .editorWrap { overflow: visible; height: auto; flex: 1 1 auto; display: block; padding: 0; }
   .codeEditor.readonly .hlLayer {
     position: relative;
     inset: auto;
     pointer-events: auto;
     user-select: text;
     overflow: visible;
+    padding: 6px 4px;
   }
   .codeEditor.twilight { background: #141414; }
   .codeEditor.twilight .gutter { background: #232323; color: var(--line-number-color, #E2E2E2); border-right-color: var(--border-color, #232323); }
-  .codeEditor.twilight .hlLayer { color: #F8F8F8; }
   .codeEditor.twilight :global(.hljs) { background: #141414; color: #F8F8F8; }
   .codeEditor.twilight :global(.hljs-keyword),
   .codeEditor.twilight :global(.hljs-meta),
