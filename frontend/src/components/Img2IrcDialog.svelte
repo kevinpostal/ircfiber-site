@@ -37,8 +37,7 @@
     if (v !== globalPrefs.defaultScrollPreset) globalPrefs.defaultScrollPreset = v;
   });
   let dither=$derived(ditherMode !== 'none');
-  // Viterbi compression only for paletted modes + smart truecolor; truecolor greedy
-  // Viterbi compression for all modes including truecolor (quantized palette)
+  // Viterbi for all modes including truecolor (quantized palette) — enterprise, WASM where it helps
   let compressionDisabled=$derived(false);
   let accTone=$state(false);
   let accFx=$state(false);
@@ -624,8 +623,8 @@
           <div class="p-group">
             <span class="p-label">Compression</span>
             <label class="field comp-field" title={'Viterbi w≈2–4 sweet spot'}>
-              <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} disabled={compressionDisabled} />
-              <b class:off={viterbiW===0 || compressionDisabled}>{compressionDisabled?'—':viterbiW===0?'off':viterbiW}</b>
+              <input class="slider comp" type="range" min="0" max="6" step="0.5" bind:value={viterbiW} />
+              <b class:off={viterbiW===0}>{viterbiW===0?'off':viterbiW}</b>
             </label>
           </div>
         <div class="p-group actions span-2">
