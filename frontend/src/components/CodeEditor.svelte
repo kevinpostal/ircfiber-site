@@ -137,7 +137,7 @@
   .gutter,
   .hlLayer,
   .editLayer {
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-family: Hack, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px;
     line-height: 20px;
   }
@@ -180,7 +180,7 @@
   }
   .hlLayer code {
     background: transparent;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-family: Hack, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px !important;
     line-height: 20px !important;
     white-space: inherit;
@@ -195,7 +195,7 @@
     box-sizing: border-box;
     padding: 0 4px !important;
     margin: 0;
-    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+    font-family: Hack, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
     font-size: 12px !important;
     line-height: 20px !important;
     background: transparent !important;
