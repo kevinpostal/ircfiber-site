@@ -1,11 +1,14 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import { proxiedImageUrl } from '../lib/imageInline';
   interface Props {
     url: string;
   }
   let { url }: Props = $props();
   // For our own /uploads URLs, use pathname so vite proxy handles http://127.0.0.1:8090 and we avoid https loopback cert failures.
-  let displayUrl = $derived((()=>{ try{ const u=new URL(url, location.origin); if(u.pathname.startsWith('/uploads/')) return u.pathname+u.search+u.hash; }catch{} return url; })());
+  // External images are proxied via /api/image-proxy to avoid leaking client IP.
+  let imgSrc = $derived((()=>{ try{ const u=new URL(url, location.origin); if(u.pathname.startsWith('/uploads/')) return u.pathname+u.search+u.hash; }catch{} return proxiedImageUrl(url); })());
+  let linkHref = $derived(url);
 
   let closed = $state(false);
   let loaded = $state(false);
@@ -90,12 +93,11 @@
 
 {#if !closed && !errored}
   <span class="directEmbedWrap imageWrap" data-image-url={url}>
-    <a href={displayUrl} target="_blank" rel="noreferrer" class="imageLink" tabindex="-1">
+    <a href={linkHref} target="_blank" rel="noreferrer" class="imageLink" tabindex="-1">
       <!-- svelte-ignore a11y_missing_attribute -->
       <img
         bind:this={imgEl}
-        src={displayUrl}
-        alt=""
+        src={imgSrc}
         class="image"
         class:imageLoaded={loaded}
         class:imageRendered={loaded}

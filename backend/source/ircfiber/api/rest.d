@@ -28,6 +28,7 @@ import std.file : remove, readText, exists;
 import std.path : buildPath;
 import std.string : strip, indexOf, lastIndexOf;
 import ircfiber.auth : requireAuth;
+import ircfiber.api.image_proxy : handleImageProxy;
 import ircfiber.build_version : GIT_HASH, GIT_SHORT, GIT_DESCRIBE, GIT_BRANCH, BUILD_TIME, BUILD_HOST, VERSION, GIT_MESSAGE, GIT_COMMIT_URL;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
@@ -99,6 +100,7 @@ final class RESTAPI {
 
     /// Registers REST routes on the given router.
     void registerRoutes(URLRouter router) {
+        router.get("/api/image-proxy", &handleImageProxy);
         router.get("/api/networks", &getNetworks);
         router.post("/api/networks", &createNetwork);
         router.put("/api/networks/:id", &updateNetwork);

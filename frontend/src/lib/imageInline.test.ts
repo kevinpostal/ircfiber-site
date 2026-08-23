@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeImageUrl, extractImageUrlsFromText, IMAGE_EXT_RE } from './imageInline';
+import { normalizeImageUrl, extractImageUrlsFromText, proxiedImageUrl, IMAGE_EXT_RE } from './imageInline';
 
 describe('IMAGE_EXT_RE', () => {
   it('matches jpg/jpeg/gif/png/webp', () => {
@@ -87,5 +87,27 @@ describe('extractImageUrlsFromText', () => {
     expect(
       extractImageUrlsFromText('https://youtu.be/sHuu-kKD0Lc and https://example.com/cat.png')
     ).toEqual(['https://example.com/cat.png']);
+  });
+});
+
+describe('proxiedImageUrl', () => {
+  it('proxies external https url', () => {
+    expect(proxiedImageUrl('https://example.com/a.jpg')).toBe(
+      '/api/image-proxy?url=https%3A%2F%2Fexample.com%2Fa.jpg'
+    );
+  });
+  it('keeps /uploads direct', () => {
+    expect(proxiedImageUrl('/uploads/abc.jpg')).toBe('/uploads/abc.jpg');
+  });
+  it('handles absolute uploads with host via pathname', () => {
+    expect(proxiedImageUrl('http://127.0.0.1:8090/uploads/x.jpg')).toBe('/uploads/x.jpg');
+  });
+  it('proxies external http url', () => {
+    expect(proxiedImageUrl('http://example.com/b.png')).toBe(
+      '/api/image-proxy?url=http%3A%2F%2Fexample.com%2Fb.png'
+    );
+  });
+  it('preserves query and hash for uploads', () => {
+    expect(proxiedImageUrl('/uploads/x.jpg?foo=1#bar')).toBe('/uploads/x.jpg?foo=1#bar');
   });
 });

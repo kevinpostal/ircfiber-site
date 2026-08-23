@@ -418,6 +418,7 @@
           else { const g=collectGlyphOpts(); glyphAlphabet=g.glyphAlphabet; error=null; }
         }catch(e:any){ error=e?.message ?? String(e); glyphError=e?.message ?? String(e); loading=false; isConverting=false; return; }
         const opts={ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, smartGlyphAlphabet } as any;
+        console.log('[convert] pixelMode', pixelMode, 'opts.pm', opts.pixelMode, 'glyphAlphabet', glyphAlphabet?.slice(0,30));
         if(midgardMode==='smart' && smartPalCache){
           (opts as any)._smartPaletteA = smartPalCache.A;
           (opts as any)._smartPaletteB = smartPalCache.B;

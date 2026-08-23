@@ -126,6 +126,15 @@ export default defineConfig({
       '/api/v5/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false },
       '/signoz/':  { target: SIGNOZ_URL, changeOrigin: true, secure: false, ws: true },
 
+      // --- Image proxy: keep-alive for throughput (bypasses /api Connection: close) ---
+      '/api/image-proxy': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: false,
+        timeout: 15000,
+        proxyTimeout: 15000,
+      },
+
       // --- Existing rules (unchanged) ---
       '/api': {
         target: BACKEND_URL,

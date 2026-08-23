@@ -154,4 +154,11 @@ export function extractImageUrlsFromText(text: string): string[] {
   }
   return out;
 }
+export function proxiedImageUrl(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl, typeof location !== 'undefined' ? location.origin : 'http://localhost');
+    if (u.pathname.startsWith('/uploads/')) return u.pathname + u.search + u.hash;
+  } catch {}
+  return `/api/image-proxy?url=${encodeURIComponent(rawUrl)}`;
+}
 export { IMAGE_EXT_RE };
