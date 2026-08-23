@@ -1381,8 +1381,13 @@ export async function renderPixelsCore(
       _timings['viterbi_dp'] = _tDP;
       _timings['viterbi_S'] = _maxS;
     } else {
+      const hasHalf = _activeGlyphs.some(g=>g.ch==='▀');
+      const hasFull = _activeGlyphs.some(g=>g.ch==='█');
+      const hasSpace = _activeGlyphs.some(g=>g.ch===' ');
+      const brailleFallback = _activeGlyphs.find(g=>{ const cp=g.ch.codePointAt(0)!; return cp>=0x2800 && cp<=0x28FF; })?.ch;
+      const triangleFallback = _activeGlyphs.find(g=>['▲','▶','▼','◀','◤','◥','◢','◣'].includes(g.ch))?.ch;
       for(let r=0;r<rows;r++){
-      _checkAbort(); await _maybeYield(r);
+        _checkAbort(); await _maybeYield(r);
         let ln='',lastFg='',lastBg='',first=true;
         for(let c=0;c<cols;c++){
           const[r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
@@ -1393,24 +1398,25 @@ export async function renderPixelsCore(
             const fg=toHex6(r1,g1,b1), bg=toHex6(r2,g2,b2);
             if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)){const c='\x04'+bg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▄';}
             else if((o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){const c='\x04'+fg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▀';}
-            else if(fg===bg){const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
-            else {const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+='▀';}
+            else if(fg===bg){
+              if(triangleFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=triangleFallback;}
+              else if(hasFull){const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
+              else if(brailleFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=brailleFallback;}
+              else {const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
+            }
+            else {const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;} if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }}
           } else if(is16){
             const fg=nearestIndex(r1,g1,b1,pal, o.colorMatching), bg=nearestIndex(r2,g2,b2,pal, o.colorMatching);
             if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)||(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){
               const u=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?bg:fg; const cd='\x03'+u; if(first||lastFg!==String(u)||lastBg!==''){ln+=cd;lastFg=String(u);lastBg='';}ln+=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?'▄':'▀';
-            } else if(fg===bg){
-              const need=first || lastBg!==String(bg);
-              if(need){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
-              ln+=' ';
+              if(triangleFallback){ const cd='\x03'+fg+','+fg; if(first||lastFg!==String(fg)||lastBg!==String(fg)){ln+=cd;lastFg=String(fg);lastBg=String(fg);} ln+=triangleFallback; }
+              else if(hasFull){ const cd='\x03'+fg+','+fg; if(first||lastFg!==String(fg)||lastBg!==String(fg)){ln+=cd;lastFg=String(fg);lastBg=String(fg);} ln+='█'; }
+              else if(brailleFallback){ const cd='\x03'+fg+','+bg; if(first||lastFg!==String(fg)||lastBg!==String(bg)){ln+=cd;lastFg=String(fg);lastBg=String(bg);} ln+=brailleFallback; }
+              else { const need=first || lastBg!==String(bg); if(need){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); } ln+=' '; }
             } else {
               const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
-              if(needFgOnly){
-                const cd='\x03'+fg; ln+=cd; lastFg=String(fg);
-              } else if(first||lastFg!==String(fg)||lastBg!==String(bg)){
-                const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg);
-              }
-              ln+='▀';
+              if(needFgOnly){ const cd='\x03'+fg; ln+=cd; lastFg=String(fg); }
+              if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }
             }
           } else {
             const l1=lutLookup(r1,g1,b1,pal,ng, o.colorMatching), l2=lutLookup(r2,g2,b2,pal,ng, o.colorMatching);
@@ -1418,17 +1424,15 @@ export async function renderPixelsCore(
             if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)||(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){
               const u=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?bg:fg; const cd='\x03'+u; if(first||lastFg!==String(u)||lastBg!==''){ln+=cd;lastFg=String(u);lastBg='';}ln+=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)?'▄':'▀';
             } else if(fg===bg){
-              const need=first || lastBg!==String(bg);
-              if(need){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
-              ln+=' ';
+              if(triangleFallback){ const cd='\x03'+fg+','+fg; if(first||lastFg!==String(fg)||lastBg!==String(fg)){ln+=cd;lastFg=String(fg);lastBg=String(fg);} ln+=triangleFallback; }
+              else if(hasFull){ const cd='\x03'+fg+','+fg; if(first||lastFg!==String(fg)||lastBg!==String(fg)){ln+=cd;lastFg=String(fg);lastBg=String(fg);} ln+='█'; }
+              else if(brailleFallback){ const cd='\x03'+fg+','+bg; if(first||lastFg!==String(fg)||lastBg!==String(bg)){ln+=cd;lastFg=String(fg);lastBg=String(bg);} ln+=brailleFallback; }
+              else if(hasSpace){ const need=first || lastBg!==String(bg); if(need){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); } ln+=' '; }
             } else {
               const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
-              if(needFgOnly){
-                const cd='\x03'+fg; ln+=cd; lastFg=String(fg);
-              } else if(first||lastFg!==String(fg)||lastBg!==String(bg)){
-                const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg);
-              }
-              ln+='▀';
+              if(needFgOnly){ const cd='\x03'+fg; ln+=cd; lastFg=String(fg); }
+              else if(first||lastFg!==String(fg)||lastBg!==String(bg)){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
+              if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }
             }
           }
           first=false;
