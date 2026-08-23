@@ -1017,7 +1017,8 @@ export async function renderPixelsCore(
     const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
     const totalCells = cols*rows;
     const glyphCount = _activeGlyphs.length;
-    const thresh = hasWasmSync() ? 5000 : 1200;
+    const baseThresh = hasWasmSync() ? 5000 : 1200;
+    const thresh = isTrueColor ? 5000 : baseThresh;
     const glyphThresh = hasWasmSync() ? 128 : 32;
     const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= glyphThresh && (smart24 || !is24 || isTrueColor);
     if(useViterbi){
@@ -1037,7 +1038,7 @@ export async function renderPixelsCore(
           const fullA = (o as any)._smartPaletteA as number[];
           const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
-          S = top;
+          S = top.length<=1 ? [fullA[0], fullA[1] ?? fullA[0]] : top;
         } else if(isTrueColor){
           const sSize = cols >= 100 ? 4 : 6;
           // Truecolor: use smaller palette for speed (was 12, now 8/6 to keep 60*64=3840 < 65536 and 60*36=2160 for WASM)
@@ -1047,7 +1048,7 @@ export async function renderPixelsCore(
             (o as any)._truePalette = truePal2;
           }
           const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
-          S = top;
+          S = top.length<=1 ? [truePal2[0], truePal2[1] ?? truePal2[0]] : top;
         } else {
           const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
           let usedRowPalBatch = false;
@@ -1067,6 +1068,7 @@ export async function renderPixelsCore(
           }
           if (!usedRowPalBatch) {
             S = rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,sSize);
+            if(S.length<=1) S=[pal[0], pal[1] ?? pal[0]];
           }
         }
         _tRowPal += _perf() - _tr;
@@ -1162,7 +1164,8 @@ export async function renderPixelsCore(
           } else {
             _wasmMisses++;
           }
-          for(let i=0;i<M;i++){
+        if (!usedBatch) {
+          if(M===40)          for(let i=0;i<M;i++){
             let [r1,g1,b1,a1]=tops[i]; let [r2,g2,b2,a2]=bots[i];
             const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
             const matteRgb = parseMatteHex((o as any).matte ?? null);
@@ -1177,6 +1180,7 @@ export async function renderPixelsCore(
             }
             cellGlyph[i]=rowGlyphs;
           }
+        }
         }
         _tCellGlyph += _perf() - _tc;
         const INF=1e18;
@@ -1379,7 +1383,8 @@ export async function renderPixelsCore(
     const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
     const totalCells = cols*rows;
     const glyphCount = _activeGlyphs.length;
-    const thresh = hasWasmSync() ? 5000 : 1200;
+    const baseThresh = hasWasmSync() ? 5000 : 1200;
+    const thresh = isTrueColor ? 5000 : baseThresh;
     const glyphThresh = hasWasmSync() ? 128 : 32;
     const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= glyphThresh && (smart24 as boolean || !is24 || isTrueColor);
     if(useViterbi){
@@ -1399,7 +1404,7 @@ export async function renderPixelsCore(
           const fullA = (o as unknown as Record<string,unknown>)._smartPaletteA as number[];
           const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
-          S = top;
+          S = top.length<=1 ? [fullA[0], fullA[1] ?? fullA[0]] : top;
         } else if(isTrueColor){
           const sSize = cols >= 100 ? 4 : 6;
           // Truecolor: use smaller palette for speed (was 12, now 8/6 to keep 60*64=3840 < 65536 and 60*36=2160 for WASM)
@@ -1409,7 +1414,7 @@ export async function renderPixelsCore(
             (o as any)._truePalette = truePal2;
           }
           const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
-          S = top;
+          S = top.length<=1 ? [truePal2[0], truePal2[1] ?? truePal2[0]] : top;
         } else {
           const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
           const tops: Array<[number,number,number,number]> = cellInfos.map(ci=>[ci.fg[0],ci.fg[1],ci.fg[2],255]);
@@ -1431,6 +1436,7 @@ export async function renderPixelsCore(
           }
           if (!_haveS) {
             S = rowPaletteForViterbi(tops,bots,pal,ng,o.colorMatching,sSize);
+            if(S.length<=1) S=[pal[0], pal[1] ?? pal[0]];
           }
         }
         _tRowPal += _perf() - _tr;
