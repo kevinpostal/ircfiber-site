@@ -1686,7 +1686,7 @@ export async function renderPixelsCore(
       }
     }
     const isTrueColorAuto = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
-    const GEOS: PixelMode[] = o.autoGeometries && o.autoGeometries.length ? o.autoGeometries : (isTrueColorAuto && o.viterbiW<=0.5 ? ['braille'] : ['half','quarter','braille','polygon']);
+    const GEOS: PixelMode[] = o.autoGeometries && o.autoGeometries.length ? o.autoGeometries : ['half'];
     const capL = 12;
     const palAuto = getMidgardPalette(o);
     const ngA = o.nograyscale;
