@@ -41,6 +41,7 @@ export interface VersionResponse {
   version: string;
   message?: string;
   commitUrl?: string;
+  versionScheme?: number;
 }
 
 export const version = writable<VersionResponse | null>(null);

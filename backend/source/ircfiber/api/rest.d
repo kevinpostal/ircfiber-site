@@ -2329,6 +2329,7 @@ final class RESTAPI {
         result["version"] = Json(VERSION);
         result["message"] = Json(GIT_MESSAGE);
         result["commitUrl"] = Json(GIT_COMMIT_URL);
+        result["versionScheme"] = Json(2);
         res.writeJsonBody(result);
     }
 

@@ -35,22 +35,33 @@
     <div class="text-sm text-danger">Failed to load version: {error}</div>
   {:else if data}
     {@const sync = (() => {
-      const commits = new Set([data.gateway.commit, BUILD_INFO.commit, ...data.engines.map(e => e.gitHash)].filter(c => c && c !== 'unknown'));
-      const allSync = commits.size === 1;
+      const siteSync = data.gateway.commit !== 'unknown' && BUILD_INFO.commit !== 'unknown' && data.gateway.commit === BUILD_INFO.commit;
+      const filteredEngineHashes = data.engines.map(e => e.gitHash).filter(c => c && c !== 'unknown');
+      const engineSync = data.engines.length === 0 || new Set(filteredEngineHashes).size === 1;
+      const allSync = siteSync && engineSync;
       const times = [
         { name: 'Gateway', time: data.gateway.builtAt, commit: data.gateway.short },
         { name: 'Frontend', time: BUILD_INFO.builtAt, commit: BUILD_INFO.short },
         ...data.engines.map(e => ({ name: e.serverId, time: e.buildTime, commit: e.gitShort }))
       ].filter(t => t.time && t.time !== 'unknown').sort((a,b) => new Date(b.time).getTime() - new Date(a.time).getTime());
       const mostRecent = times[0] ?? null;
-      return { allSync, commits: [...commits], mostRecent };
+      return { siteSync, engineSync, allSync, mostRecent };
     })()}
     <div class="space-y-6">
       {#if sync}
-        {#if sync.allSync}
-          <div class="rounded-md bg-success/10 px-3 py-2 text-xs font-medium text-success">✓ All services in sync at <span class="font-mono">{sync.commits[0]?.slice(0,7) ?? '—'}</span> — gateway, frontend and {data.engines.length} engine(s) same commit. Most recent build: {sync.mostRecent?.name} {sync.mostRecent?.commit?.slice(0,7)} at {fmtTime(sync.mostRecent?.time)}</div>
+        {#if sync.siteSync}
+          <div class="rounded-md bg-success/10 px-3 py-2 text-xs font-medium text-success">✓ Site in sync — gateway {data.gateway.short} == frontend {BUILD_INFO.short} {#if sync.mostRecent}· Most recent: {sync.mostRecent.name} {sync.mostRecent.commit?.slice(0,7)} at {fmtTime(sync.mostRecent.time)}{/if}</div>
+        {:else if data.gateway.commit === 'unknown' || BUILD_INFO.commit === 'unknown'}
+          <div class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">Site commit unknown — gateway {data.gateway.short} · frontend {BUILD_INFO.short}</div>
         {:else}
-          <div class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">⚠ Services out of sync — most recent: <span class="font-mono font-medium">{sync.mostRecent?.name} {sync.mostRecent?.commit?.slice(0,7)}</span> built {fmtTime(sync.mostRecent?.time)}<div class="mt-1 text-[11px]">Gateway {data.gateway.short} · Frontend {BUILD_INFO.short} · Engines {data.engines.map(e=>e.gitShort || '—').join(', ') || 'none'}</div></div>
+          <div class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">⚠ Site drift — gateway {data.gateway.short} ≠ frontend {BUILD_INFO.short}<div class="mt-1 text-[11px]">Gateway {data.gateway.short} · Frontend {BUILD_INFO.short}</div></div>
+        {/if}
+        {#if data.engines.length > 0}
+          {#if sync.engineSync}
+            <div class="rounded-md bg-success/10 px-3 py-2 text-xs font-medium text-success">✓ Engines in sync at <span class="font-mono">{data.engines[0].gitShort?.slice(0,7) ?? '—'}</span> — {data.engines.length} engine(s) same commit</div>
+          {:else}
+            <div class="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">⚠ Engines out of sync — {data.engines.map(e=>e.gitShort || '—').join(', ')}<div class="mt-1 text-[11px]">Engines differ — not compared to site (expected after split)</div></div>
+          {/if}
         {/if}
       {/if}
       <div class="grid gap-4 md:grid-cols-2">
@@ -104,7 +115,7 @@
                 </div>
                 <div class="text-xs">
                   {#if eng.gitShort && data.gateway.short && eng.gitShort !== data.gateway.short}
-                    <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">drift vs gateway</span>
+                    <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800">drift vs site (info)</span>
                   {:else if eng.gitShort === data.gateway.short}
                     <span class="rounded bg-success/10 px-1.5 py-0.5 text-success">in sync</span>
                   {/if}
