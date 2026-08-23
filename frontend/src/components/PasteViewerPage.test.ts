@@ -61,6 +61,44 @@ describe('PasteViewerPage', () => {
     expect(editor?.style.height).toBe('44px');
   });
 
+  it('syntax highlight updates in real-time when language select changes (arrow keys)', async () => {
+    const jsBody = 'const x = 1;';
+    const jsPaste = { ...mockPaste, body: jsBody, content: jsBody, syntax: 'text', lines: 1, id: 'real-time-test' };
+    // Make isOwner true by stubbing /api/me
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (typeof url === 'string' && url.includes('/api/me')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ id: 'owner-id', username: 'owner' }) } as Response);
+      }
+      if (typeof url === 'string' && url.includes('/api/pastebins/')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ...jsPaste, userId: 'owner-id' }), text: () => Promise.resolve(jsPaste.body) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}), text: () => Promise.resolve('') } as Response);
+    }));
+    const { container } = render(PasteViewerPage, { props: { id: 'real-time-test' } });
+    await new Promise(r => setTimeout(r, 500));
+    // Wait for owner to be detected and edit button to appear
+    let tries=0;
+    while (!container.querySelector('.editButton') && tries<20) { await new Promise(r=>setTimeout(r,100)); tries++; }
+    const editBtn = container.querySelector('.editButton') as HTMLElement;
+    expect(editBtn).toBeTruthy();
+    editBtn.click();
+    await new Promise(r=>setTimeout(r,300));
+    const select = container.querySelector('select[name="aceMode"]') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    expect(select.value).toBe('text');
+    // Change via input event (simulates arrow key navigation)
+    select.value = 'javascript';
+    select.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r=>setTimeout(r,200));
+    expect(select.value).toBe('javascript');
+    // Check that CodeEditor's highlighted HTML now contains javascript highlighting (e.g., hljs-keyword for 'const')
+    const hl = container.querySelector('.hlLayer code');
+    expect(hl).toBeTruthy();
+    // For text, 'const' should not be highlighted; for javascript it should be
+    // After switching to javascript, the html should contain hljs-keyword
+    expect(hl?.innerHTML).toContain('hljs-keyword');
+  });
+
   it('paste viewer scrolls vertically for long content (500 lines)', async () => {
     const longBody = Array.from({ length: 500 }, (_, i) => `Line ${String(i + 1).padStart(3, '0')} Lorem ipsum dolor sit amet consectetur`).join('\n');
     const longPaste = { ...mockPaste, lines: 500, body: longBody, content: longBody };

@@ -175,7 +175,7 @@
               <form class="editForm" onsubmit={saveEdit}>
                 <label class="fieldLabel" for="pasteFilename">Filename</label>
                 <input id="pasteFilename" class="input nameInput" bind:value={editFilename} placeholder="e.g. index.html" name="name" />
-                <select bind:value={editLang} aria-label="Language" name="aceMode">
+                <select bind:value={editLang} oninput={(e)=> editLang = (e.currentTarget as HTMLSelectElement).value } onchange={(e)=> editLang = (e.currentTarget as HTMLSelectElement).value } aria-label="Language" name="aceMode">
                   {#each LANGUAGES as L}<option value={L}>{SYNTAX_LABEL[L] ?? L}</option>{/each}
                 </select>
                 <button type="submit" class="action" disabled={saving}>{saving?'Saving…':'Save'}</button>

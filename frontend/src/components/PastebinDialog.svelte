@@ -160,7 +160,7 @@
         <h1 id="pastebinTitle" tabindex="0">Text snippet</h1>
         <span class="pastebinSelect">
           <label for="aceMode">Syntax</label>
-          <select id="aceMode" name="aceMode" bind:value={lang} aria-label="Language">
+          <select id="aceMode" name="aceMode" bind:value={lang} oninput={(e)=> lang = (e.currentTarget as HTMLSelectElement).value } onchange={(e)=> lang = (e.currentTarget as HTMLSelectElement).value } aria-label="Language">
             {#each LANGUAGES as L}
               <option value={L}>{L === 'text' ? 'Plain Text' : L}</option>
             {/each}
