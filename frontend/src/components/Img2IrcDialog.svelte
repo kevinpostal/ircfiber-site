@@ -703,51 +703,6 @@
               </div>
             </div>
           {/if}
-          <button class="acc-head" onclick={()=>accGlyphs=!accGlyphs} aria-expanded={accGlyphs}><span class="chev">{accGlyphs?'▾':'▸'}</span> Glyphs <span class="acc-hint">{glyphPreset} · {pixelMode==='braille' ? 'braille' : (glyphGroups.length ? glyphGroups.join(', ') : 'default')}</span></button>
-          {#if accGlyphs}
-            <div class="acc-body glyphs-panel">
-              <div class="pill-group sm" role="radiogroup" aria-label="Glyph preset">
-                <button class="pill" class:on={glyphPreset==='default'} onclick={()=>{glyphPreset='default'; glyphGroups=['default'];}} role="radio" aria-checked={glyphPreset==='default'}>Default</button>
-                <button class="pill" class:on={glyphPreset==='smooth'} onclick={()=>{glyphPreset='smooth'; glyphGroups=['smooth'];}} role="radio" aria-checked={glyphPreset==='smooth'}>Smooth</button>
-                <button class="pill" class:on={glyphPreset==='all'} onclick={()=>{glyphPreset='all'; glyphGroups=glyphGroupsAll.map(g=>g.name);}} role="radio" aria-checked={glyphPreset==='all'}>All</button>
-              </div>
-              <label class="check"><input type="checkbox" checked={pixelMode==='braille'} onchange={(e)=>pixelMode=(e.currentTarget.checked?'braille':'half')} /> Use Braille output <span class="p-hint" title={HELP.braille}>ⓘ</span></label>
-              {#if pixelMode==='auto' && viterbiW>0}
-                <div class="auto-geometries" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; padding:4px 8px; border:1px solid #343a47; border-radius:6px;">
-                  <span style="font-size:0.8rem; color:var(--text-muted, #888); align-self:center;">Auto:</span>
-                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('half')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('half')) autoGeometries=[...autoGeometries,'half']; } else { autoGeometries=autoGeometries.filter(x=>x!=='half'); if(autoGeometries.length===0) autoGeometries=['half']; } }} /> Half</label>
-                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('quarter')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('quarter')) autoGeometries=[...autoGeometries,'quarter']; } else { autoGeometries=autoGeometries.filter(x=>x!=='quarter'); if(autoGeometries.length===0) autoGeometries=['quarter']; } }} /> Quarter</label>
-                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('braille')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('braille')) autoGeometries=[...autoGeometries,'braille']; } else { autoGeometries=autoGeometries.filter(x=>x!=='braille'); if(autoGeometries.length===0) autoGeometries=['braille']; } }} /> Braille</label>
-                  <label class="check"><input type="checkbox" checked={autoGeometries.includes('polygon')} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!autoGeometries.includes('polygon')) autoGeometries=[...autoGeometries,'polygon']; } else { autoGeometries=autoGeometries.filter(x=>x!=='polygon'); if(autoGeometries.length===0) autoGeometries=['polygon']; } }} /> Polygon</label>
-                </div>
-              {/if}
-              <div class="glyph-find-row" class:hidden={pixelMode==='braille'}>
-                <input class="field sm" placeholder="Find a group (blocks, legacy, box…)" bind:value={glyphFind} aria-label="Find a group" />
-              </div>
-              {#if !['braille'].includes(pixelMode) && (glyphFind.trim() || glyphPreset==='all')}
-                <div class="glyph-groups" style="max-height:18rem; overflow:auto; border:1px solid #343a47; border-radius:6px; padding:4px;">
-                  {#each (glyphFind.trim() ? filteredGlyphGroups : glyphGroupsAll) as g (g.name)}
-                    <label class="glyph-row" style="display:flex; align-items:center; gap:8px; padding:4px 8px; border-radius:4px;" style:background={glyphGroups.includes(g.name) ? 'rgba(0,0,0,0.06)' : 'transparent'}>
-                      <input type="checkbox" checked={glyphGroups.includes(g.name)} onchange={(e)=>{ const on=e.currentTarget.checked; if(on){ if(!glyphGroups.includes(g.name)) glyphGroups=[...glyphGroups,g.name]; } else { glyphGroups=glyphGroups.filter(x=>x!==g.name); }}} aria-label={g.name} />
-                      <span style="flex:1; font-size:0.85rem;">{g.name}</span>
-                      <span class="muted" style="font-size:0.75rem; color:var(--text-muted, #888);">{g.count}</span>
-                      <span style="font-size:0.75rem; opacity:0.6; max-width:6rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{g.characters.slice(0,12)}</span>
-                    </label>
-                  {/each}
-                </div>
-              {/if}
-              <details class="control-panel glyph-advanced" style="margin-top:8px;">
-                <summary>Advanced glyph filtering</summary>
-                <div style="display:grid; gap:8px; margin-top:8px;">
-                  <label class="field sm"><span>Include characters <span class="info-button" title={HELP.glyphInclude}>ⓘ</span></span><input type="text" bind:value={glyphInclude} placeholder="@#%" /></label>
-                  <label class="field sm"><span>Exclude characters <span class="info-button" title={HELP.glyphExclude}>ⓘ</span></span><input type="text" bind:value={glyphExclude} placeholder="" /></label>
-                  <label class="field sm"><span>Include Unicode ranges <span class="info-button" title={HELP.glyphIncludeRanges}>ⓘ</span></span><textarea rows="3" bind:value={glyphIncludeRanges} placeholder="2600-26FF"></textarea></label>
-                  <label class="field sm"><span>Exclude Unicode ranges <span class="info-button" title={HELP.glyphExcludeRanges}>ⓘ</span></span><textarea rows="3" bind:value={glyphExcludeRanges} placeholder="4DC0-4DFF"></textarea></label>
-                  {#if glyphError}<span class="saveErr" role="alert">{glyphError}</span>{/if}
-                </div>
-              </details>
-            </div>
-          {/if}
         </div>
         <details class="raw"><summary>Raw {renderMode==='ansi24'?'\x04':'\x03'} codes</summary><textarea id="ircArtRaw" readonly value={art} rows={Math.min(10, art.split('\n').length+1)}></textarea></details>
         </div>
