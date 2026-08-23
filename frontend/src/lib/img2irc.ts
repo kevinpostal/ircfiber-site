@@ -1015,8 +1015,8 @@ export async function renderPixelsCore(
     const pal=getMidgardPalette(o);
     const smart24 = (o as any).midgardMode==='smart' && (o as any)._smartPaletteA && o.renderMode==='ansi24';
     const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
-    // Truecolor with small w and large image: use greedy for speed (Viterbi 60*39*64= 9M, ~1.8s, would lock UI)
-    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24 || (isTrueColor && (o.viterbiW>1 || cols*rows<=1200)));
+    // Truecolor large image with small w: use greedy for speed (Viterbi 120x79*36= 2M, 5s, would lock UI)
+    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24 || (isTrueColor && (o.viterbiW>1 || cols*rows<=800)));
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -1037,7 +1037,7 @@ export async function renderPixelsCore(
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
         } else if(isTrueColor){
-          const sSize = cols >= 100 ? 6 : 8;
+          const sSize = cols >= 100 ? 4 : 6;
           // Truecolor: use smaller palette for speed (was 12, now 8/6 to keep 60*64=3840 < 65536 and 60*36=2160 for WASM)
           let truePal2 = (o as any)._truePalette as number[] | undefined;
           if(!truePal2){
@@ -1355,7 +1355,7 @@ export async function renderPixelsCore(
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
         } else if(isTrueColor){
-          const sSize = cols >= 100 ? 6 : 8;
+          const sSize = cols >= 100 ? 4 : 6;
           // Truecolor: use smaller palette for speed (was 12, now 8/6 to keep 60*64=3840 < 65536 and 60*36=2160 for WASM)
           let truePal2 = (o as any)._truePalette as number[] | undefined;
           if(!truePal2){
