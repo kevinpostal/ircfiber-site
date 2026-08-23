@@ -1015,8 +1015,8 @@ export async function renderPixelsCore(
     const pal=getMidgardPalette(o);
     const smart24 = (o as any).midgardMode==='smart' && (o as any)._smartPaletteA && o.renderMode==='ansi24';
     const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
-    // Truecolor large image with small w: use greedy for speed (Viterbi 120x79*36= 2M, 5s, would lock UI)
-    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 || !is24 || (isTrueColor && (o.viterbiW>1 || cols*rows<=800)));
+    const totalCells = cols*rows;
+    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= (o.viterbiW>1 ? 2000 : 1200) && (smart24 || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -1032,8 +1032,7 @@ export async function renderPixelsCore(
           S = (o as any)._smartPaletteB as number[];
         } else if(smart24){
           const fullA = (o as any)._smartPaletteA as number[];
-          // Adaptive S: 120 cols → 12 states (vs 16) to keep 144 vs 256 states manageable
-          const sSize = cols >= 100 ? 12 : 16;
+          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
         } else if(isTrueColor){
@@ -1047,7 +1046,7 @@ export async function renderPixelsCore(
           const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
           S = top;
         } else {
-          const sSize = cols >= 100 ? 10 : 12;
+          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
           let usedRowPalBatch = false;
           if (hasWasmSync() && tops.length === cols && bots.length === cols) {
             const rTops = new Uint8Array(cols), gTops = new Uint8Array(cols), bTops = new Uint8Array(cols);
@@ -1335,7 +1334,9 @@ export async function renderPixelsCore(
   } else if(pm==='polygon'){
     const pal=getMidgardPalette(o);
     const smart24 = (o as unknown as Record<string,unknown>).midgardMode==='smart' && (o as unknown as Record<string,unknown>)._smartPaletteA && o.renderMode==='ansi24';
-    const useViterbi = o.viterbiW>0 && cols>1 && (smart24 as boolean || !is24);
+    const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
+    const totalCells = cols*rows;
+    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= (o.viterbiW>1 ? 2000 : 1200) && (smart24 as boolean || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -1351,7 +1352,7 @@ export async function renderPixelsCore(
           S = (o as unknown as Record<string,unknown>)._smartPaletteB as number[];
         } else if(smart24){
           const fullA = (o as unknown as Record<string,unknown>)._smartPaletteA as number[];
-          const sSize = cols >= 100 ? 12 : 16;
+          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
         } else if(isTrueColor){
@@ -1365,7 +1366,7 @@ export async function renderPixelsCore(
           const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
           S = top;
         } else {
-          const sSize = cols >= 100 ? 10 : 12;
+          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
           const tops: Array<[number,number,number,number]> = cellInfos.map(ci=>[ci.fg[0],ci.fg[1],ci.fg[2],255]);
           const bots: Array<[number,number,number,number]> = cellInfos.map(ci=>[ci.bg[0],ci.bg[1],ci.bg[2],255]);
           let _haveS=false;
