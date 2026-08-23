@@ -1018,7 +1018,7 @@ export async function renderPixelsCore(
     const totalCells = cols*rows;
     const glyphCount = _activeGlyphs.length;
     const thresh = hasWasmSync() ? 5000 : 1200;
-    const glyphThresh = 32;
+    const glyphThresh = hasWasmSync() ? 128 : 32;
     const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= glyphThresh && (smart24 || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
@@ -1035,7 +1035,7 @@ export async function renderPixelsCore(
           S = (o as any)._smartPaletteB as number[];
         } else if(smart24){
           const fullA = (o as any)._smartPaletteA as number[];
-          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
+          const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
         } else if(isTrueColor){
@@ -1049,7 +1049,7 @@ export async function renderPixelsCore(
           const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
           S = top;
         } else {
-          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
+          const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
           let usedRowPalBatch = false;
           if (hasWasmSync() && tops.length === cols && bots.length === cols) {
             const rTops = new Uint8Array(cols), gTops = new Uint8Array(cols), bTops = new Uint8Array(cols);
@@ -1380,7 +1380,7 @@ export async function renderPixelsCore(
     const totalCells = cols*rows;
     const glyphCount = _activeGlyphs.length;
     const thresh = hasWasmSync() ? 5000 : 1200;
-    const glyphThresh = 32;
+    const glyphThresh = hasWasmSync() ? 128 : 32;
     const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= thresh && glyphCount <= glyphThresh && (smart24 as boolean || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
@@ -1397,7 +1397,7 @@ export async function renderPixelsCore(
           S = (o as unknown as Record<string,unknown>)._smartPaletteB as number[];
         } else if(smart24){
           const fullA = (o as unknown as Record<string,unknown>)._smartPaletteA as number[];
-          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
+          const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 12 : 16;
           const top = rankSmartPaletteA(d, pW, pH, fullA, Math.min(sSize, fullA.length), o.colorMatching);
           S = top;
         } else if(isTrueColor){
@@ -1411,7 +1411,7 @@ export async function renderPixelsCore(
           const top = rankSmartPaletteA(d, pW, pH, truePal2, Math.min(sSize, truePal2.length), o.colorMatching);
           S = top;
         } else {
-          const sSize = totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
+          const sSize = glyphCount > 32 ? 4 : totalCells > 1200 ? 6 : cols >= 100 ? 10 : 12;
           const tops: Array<[number,number,number,number]> = cellInfos.map(ci=>[ci.fg[0],ci.fg[1],ci.fg[2],255]);
           const bots: Array<[number,number,number,number]> = cellInfos.map(ci=>[ci.bg[0],ci.bg[1],ci.bg[2],255]);
           let _haveS=false;
