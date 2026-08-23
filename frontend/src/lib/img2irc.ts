@@ -1165,7 +1165,7 @@ export async function renderPixelsCore(
             _wasmMisses++;
           }
         if (!usedBatch) {
-          if(M===40)          for(let i=0;i<M;i++){
+          for(let i=0;i<M;i++){
             let [r1,g1,b1,a1]=tops[i]; let [r2,g2,b2,a2]=bots[i];
             const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
             const matteRgb = parseMatteHex((o as any).matte ?? null);
@@ -1190,7 +1190,7 @@ export async function renderPixelsCore(
         const _palToIrcEff: Uint8Array | null = smart24 ? null : (o.renderMode==='ansi' ? getPalToIrc(effPal, o.colorMatching) : null);
         const firstNonEmpty = cellIsEmpty.findIndex(v => !v);
         for(let s=0;s<states.length;s++){
-          if(cellIsEmpty[0]){
+          if(cellIsEmpty[0] || !cellGlyph[0] || !cellGlyph[0][s]){
             dp[s]=0;
           } else {
             const g=cellGlyph[0][s];
@@ -1227,6 +1227,7 @@ export async function renderPixelsCore(
           const nd=new Array(states.length).fill(INF);
           for(let s=0;s<states.length;s++){
             const [f,b]=states[s];
+            if(!cellGlyph[i] || !cellGlyph[i][s]) { nd[s]=INF; continue; }
             const g=cellGlyph[i][s];
             if(isFirstNonEmpty){
               if(smart24 || isTrueColor){
@@ -1501,7 +1502,7 @@ export async function renderPixelsCore(
         const _palToIrcEff: Uint8Array | null = smart24 ? null : (o.renderMode==='ansi' ? getPalToIrc(effPal, o.colorMatching) : null);
         const firstNonEmpty = cellIsEmpty.findIndex(v => !v);
         for(let s=0;s<states.length;s++){
-          if(cellIsEmpty[0]){
+          if(cellIsEmpty[0] || !cellGlyph[0] || !cellGlyph[0][s]){
             dp[s]=0;
           } else {
             const g=cellGlyph[0][s];
@@ -1536,6 +1537,7 @@ export async function renderPixelsCore(
           const nd=new Array(states.length).fill(INF);
           for(let s=0;s<states.length;s++){
             const [f,b]=states[s];
+            if(!cellGlyph[i] || !cellGlyph[i][s]) { nd[s]=INF; continue; }
             const g=cellGlyph[i][s];
             if(isFirstNonEmpty){
               if(smart24 || isTrueColor){
