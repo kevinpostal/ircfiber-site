@@ -137,8 +137,8 @@
   .gutter,
   .hlLayer,
   .editLayer {
-    font-family: Hack, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: 12px;
+    font-family: Hack, monospace;
+    font-size: 14px;
     line-height: 20px;
   }
   .gutter {
@@ -180,8 +180,8 @@
   }
   .hlLayer code {
     background: transparent;
-    font-family: Hack, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: 12px !important;
+    font-family: Hack, monospace;
+    font-size: 14px !important;
     line-height: 20px !important;
     white-space: inherit;
     letter-spacing: normal;
@@ -195,8 +195,8 @@
     box-sizing: border-box;
     padding: 0 4px !important;
     margin: 0;
-    font-family: Hack, ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-    font-size: 12px !important;
+    font-family: Hack, monospace;
+    font-size: 14px !important;
     line-height: 20px !important;
     background: transparent !important;
     color: transparent !important;
