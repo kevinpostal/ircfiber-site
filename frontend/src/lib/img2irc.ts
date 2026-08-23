@@ -1016,7 +1016,7 @@ export async function renderPixelsCore(
     const smart24 = (o as any).midgardMode==='smart' && (o as any)._smartPaletteA && o.renderMode==='ansi24';
     const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
     const totalCells = cols*rows;
-    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= (o.viterbiW>1 ? 2000 : 1200) && (smart24 || !is24 || isTrueColor);
+    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= 5000 && (smart24 || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
@@ -1336,7 +1336,7 @@ export async function renderPixelsCore(
     const smart24 = (o as unknown as Record<string,unknown>).midgardMode==='smart' && (o as unknown as Record<string,unknown>)._smartPaletteA && o.renderMode==='ansi24';
     const isTrueColor = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
     const totalCells = cols*rows;
-    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= (o.viterbiW>1 ? 2000 : 1200) && (smart24 as boolean || !is24 || isTrueColor);
+    const useViterbi = o.viterbiW>0 && cols>1 && totalCells <= 5000 && (smart24 as boolean || !is24 || isTrueColor);
     if(useViterbi){
       const _tViterbi = _perf();
       let _tRowPal=0, _tCellGlyph=0, _tDP=0;
