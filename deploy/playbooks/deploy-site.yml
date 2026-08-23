@@ -19,7 +19,7 @@
       ansible.builtin.assert:
         that: ircfiber_engine_id is not defined
         fail_msg: "Site deploy must not have ircfiber_engine_id — would touch engine"
-    - name: rsync site source → {{ src_root }} (submodule-aware)
+    - name: rsync site source → {{ src_root }} (duplicated common)
       become: false
       ansible.posix.synchronize:
         src: "{{ playbook_dir }}/../../"
@@ -33,10 +33,6 @@
           - "--exclude=.dub"
           - "--exclude=frontend/node_modules"
           - "--exclude=.worktrees"
-    - name: Update common submodule on host
-      ansible.builtin.command: git -C {{ src_root }} submodule update --init --recursive
-      changed_when: false
-      failed_when: false
     - name: Build gateway image (site only)
       ansible.builtin.shell: |
         DOCKER_BUILDKIT=1 docker build           --target runtime-gateway           --build-arg GIT_HASH={{ lookup('pipe', 'git -C ' + playbook_dir + '/../../ rev-parse HEAD') | default('unknown') }}           -t kevindpostal/irc-fiber-gateway:0.3.0           -f {{ src_root }}/Containerfile.site           {{ src_root }} 2>&1
