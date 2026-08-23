@@ -1385,12 +1385,7 @@ export async function renderPixelsCore(
       const hasFull = _activeGlyphs.some(g=>g.ch==='█');
       const hasSpace = _activeGlyphs.some(g=>g.ch===' ');
       const brailleFallback = _activeGlyphs.find(g=>{ const cp=g.ch.codePointAt(0)!; return cp>=0x2800 && cp<=0x28FF; })?.ch;
-      const triangleFallback = _activeGlyphs.find(g=>['▲','▶','▼','◀'].includes(g.ch))?.ch;
-      const quarterFallback = _activeGlyphs.find(g=>['▖','▗','▘','▙','▚','▛','▜','▝','▞','▟'].includes(g.ch))?.ch;
-      const eighthFallback = _activeGlyphs.find(g=>['▁','▂','▃','▅','▆','▇','▔','▏','▎','▍','▋','▊','▉'].includes(g.ch))?.ch;
-      const cornerFallback = _activeGlyphs.find(g=>['◢','◣','◤','◥'].includes(g.ch))?.ch;
-      const geometricFallback = _activeGlyphs.find(g=>['■','□','▢','▣','▤','▥','▦','▧','▨','▩','▪','▫','▬','▭','▮','▯','▲','△'].includes(g.ch))?.ch;
-      const boxFallback = _activeGlyphs.find(g=>['─','━','│','┃','┄','┅','┆','┇','┈','┉','┊','┋','┌','┍','┎','┏','┐','┑','┒','┓','└','┕','┖','┗','┘','┙','┚','┛','├','┝','┞','┟','┠','┡','┢','┣','┤','┥','┦','┧','┨','┩','┪','┫','┬','┭','┮','┯','┰','┱','┲','┳','┴','┵','┶','┷','┸','┹','┺','┻','╭','╮','╯','╰'].includes(g.ch))?.ch;
+      const triangleFallback = _activeGlyphs.find(g=>['▲','▶','▼','◀','◤','◥','◢','◣'].includes(g.ch))?.ch;
       for(let r=0;r<rows;r++){
         _checkAbort(); await _maybeYield(r);
         let ln='',lastFg='',lastBg='',first=true;
@@ -1405,16 +1400,11 @@ export async function renderPixelsCore(
             else if((o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){const c='\x04'+fg; if(first||lastFg!==c.slice(1)||lastBg!==''){ln+=c;lastFg=c.slice(1);lastBg='';}ln+='▀';}
             else if(fg===bg){
               if(triangleFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=triangleFallback;}
-              else if(quarterFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=quarterFallback;}
-              else if(eighthFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=eighthFallback;}
-              else if(cornerFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=cornerFallback;}
-              else if(geometricFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=geometricFallback;}
-              else if(boxFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=boxFallback;}
               else if(hasFull){const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
               else if(brailleFallback){const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;}ln+=brailleFallback;}
               else {const c='\x04'+fg; if(first||lastFg!==fg||lastBg!==''){ln+=c;lastFg=fg;lastBg='';}ln+='█';}
             }
-            else {const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;} if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else if(quarterFallback) ln+=quarterFallback; else if(eighthFallback) ln+=eighthFallback; else if(cornerFallback) ln+=cornerFallback; else if(geometricFallback) ln+=geometricFallback; else if(boxFallback) ln+=boxFallback; else if(hasFull) ln+='█'; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }}
+            else {const c='\x04'+fg+','+bg; if(first||lastFg!==fg||lastBg!==bg){ln+=c;lastFg=fg;lastBg=bg;} if(o.viterbiW >=2 && hasSpace) ln+=' '; else if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else if(quarterFallback) ln+=quarterFallback; else if(eighthFallback) ln+=eighthFallback; else if(cornerFallback) ln+=cornerFallback; else if(geometricFallback) ln+=geometricFallback; else if(boxFallback) ln+=boxFallback; else if(hasFull) ln+='█'; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }}
           } else if(is16){
             const fg=nearestIndex(r1,g1,b1,pal, o.colorMatching), bg=nearestIndex(r2,g2,b2,pal, o.colorMatching);
             if((o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false)||(o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false)){
@@ -1426,7 +1416,7 @@ export async function renderPixelsCore(
             } else {
               const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
               if(needFgOnly){ const cd='\x03'+fg; ln+=cd; lastFg=String(fg); }
-              if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else if(quarterFallback) ln+=quarterFallback; else if(eighthFallback) ln+=eighthFallback; else if(cornerFallback) ln+=cornerFallback; else if(geometricFallback) ln+=geometricFallback; else if(boxFallback) ln+=boxFallback; else if(hasFull) ln+='█'; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }
+              if(o.viterbiW >=2 && hasSpace) ln+=' '; else if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else if(quarterFallback) ln+=quarterFallback; else if(eighthFallback) ln+=eighthFallback; else if(cornerFallback) ln+=cornerFallback; else if(geometricFallback) ln+=geometricFallback; else if(boxFallback) ln+=boxFallback; else if(hasFull) ln+='█'; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }
             }
           } else {
             const l1=lutLookup(r1,g1,b1,pal,ng, o.colorMatching), l2=lutLookup(r2,g2,b2,pal,ng, o.colorMatching);
@@ -1442,7 +1432,7 @@ export async function renderPixelsCore(
               const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
               if(needFgOnly){ const cd='\x03'+fg; ln+=cd; lastFg=String(fg); }
               else if(first||lastFg!==String(fg)||lastBg!==String(bg)){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
-              if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else if(quarterFallback) ln+=quarterFallback; else if(eighthFallback) ln+=eighthFallback; else if(cornerFallback) ln+=cornerFallback; else if(geometricFallback) ln+=geometricFallback; else if(boxFallback) ln+=boxFallback; else if(hasFull) ln+='█'; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }
+              if(o.viterbiW >=2 && hasSpace) ln+=' '; else if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else if(quarterFallback) ln+=quarterFallback; else if(eighthFallback) ln+=eighthFallback; else if(cornerFallback) ln+=cornerFallback; else if(geometricFallback) ln+=geometricFallback; else if(boxFallback) ln+=boxFallback; else if(hasFull) ln+='█'; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }
             }
           }
           first=false;
