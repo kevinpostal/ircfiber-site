@@ -58,7 +58,7 @@ describe('PasteViewerPage', () => {
     }
     const editor = container.querySelector('.editor') as HTMLElement;
     expect(editor).toBeTruthy();
-    expect(editor?.style.height).toBe('52px');
+    expect(editor?.style.height).toBe('44px');
   });
 
   it('paste viewer scrolls vertically for long content (500 lines)', async () => {

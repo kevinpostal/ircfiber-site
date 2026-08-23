@@ -139,7 +139,9 @@
   .editLayer {
     font-family: Hack, monospace;
     font-size: 14px;
-    line-height: 20px;
+    line-height: 16px;
+    font-variant-ligatures: no-common-ligatures;
+    word-break: break-word;
   }
   .gutter {
     flex: 0 0 auto;
@@ -182,11 +184,13 @@
     background: transparent;
     font-family: Hack, monospace;
     font-size: 14px !important;
-    line-height: 20px !important;
+    line-height: 16px !important;
     white-space: inherit;
     letter-spacing: normal;
     word-spacing: normal;
     tab-size: 4;
+    font-variant-ligatures: no-common-ligatures;
+    word-break: break-word;
   }
   .editLayer {
     position: absolute;
@@ -197,7 +201,7 @@
     margin: 0;
     font-family: Hack, monospace;
     font-size: 14px !important;
-    line-height: 20px !important;
+    line-height: 16px !important;
     background: transparent !important;
     color: transparent !important;
     caret-color: #e6e6e6;
@@ -216,6 +220,8 @@
     letter-spacing: normal;
     word-spacing: normal;
     tab-size: 4;
+    font-variant-ligatures: no-common-ligatures;
+    word-break: break-word;
   }
   .editLayer::-webkit-scrollbar {
     width: 10px;
@@ -253,8 +259,8 @@
   }
   .codeEditor.twilight { background: #141414; }
   .codeEditor.twilight .gutter { background: #232323; color: var(--line-number-color, #E2E2E2); border-right-color: var(--border-color, #232323); }
-  .codeEditor.twilight .hlLayer { color: #ffffff; }
-  .codeEditor.twilight :global(.hljs) { background: #141414; color: #ffffff; }
+  .codeEditor.twilight .hlLayer { color: #f8f8f8; }
+  .codeEditor.twilight :global(.hljs) { background: #141414; color: #f8f8f8; }
   .codeEditor.twilight :global(.hljs-meta),
   .codeEditor.twilight :global(.hljs-selector-tag) { color: #CDA869; }
   .codeEditor.twilight :global(.hljs-string) { color: #8F9D6A; }

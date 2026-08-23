@@ -190,7 +190,7 @@
             {/if}
             {#if editError}<p class="userError editError" style="display:block;">{editError}</p>{/if}
           </h1>
-          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="position: relative; height: {Math.max(lineCount,1)*20 + 32}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
+          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="position: relative; height: {Math.max(lineCount,1)*16 + 28}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
             <div class="editorToolbar">
               <button class="copyButton" onclick={copyCode} aria-label="Copy code" title={copied ? 'Copied!' : 'Copy'}>
                 {#if copied}
