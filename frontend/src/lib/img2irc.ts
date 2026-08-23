@@ -727,7 +727,7 @@ export async function probePolygonGlyphs(): Promise<boolean> {
     if(typeof document==='undefined') return true;
     const c=document.createElement('canvas'); c.width=64; c.height=32;
     const ctx=c.getContext('2d'); if(!ctx) return true;
-    ctx.font='16px "DejaVu Sans Mono", monospace';
+    ctx.font='16px "Iosevka Fixed Extended", "DejaVu Sans Mono", monospace';
     const m1=ctx.measureText('◤◥');
     const m2=ctx.measureText('◣◢');
     const m3=ctx.measureText('▀');

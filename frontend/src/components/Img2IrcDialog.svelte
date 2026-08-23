@@ -23,6 +23,8 @@
   let autoGeometries=$state<PixelMode[]>(['half','quarter','braille','polygon']);
   let rotate=$state('0');
   let filter=$state('nearest');
+  let fontKey=$state('local:iosevka-fixed-extended');
+  let accFont=$state(false);
   let scrollPreset=$state(globalPrefs.defaultScrollPreset ?? 2);
   const SCROLL_PRESETS = [
     { label: 'Instant', bd: 0, sd: 0, hint: '0ms · instant' },
@@ -661,6 +663,31 @@
                 <label class="check"><input type="checkbox" bind:checked={sepia}/> Sepia</label>
                 <label class="check" title="Skip near-gray palette entries for richer color"><input type="checkbox" bind:checked={nograyscale}/> No gray</label>
               </div>
+            </div>
+          {/if}
+          <button class="acc-head" onclick={()=>accFont=!accFont} aria-expanded={accFont}><span class="chev">{accFont?'▾':'▸'}</span> Font <span class="acc-hint">{fontKey.replace('local:','')} · {glyphPreset} 67</span></button>
+          {#if accFont}
+            <div class="acc-body">
+              <label class="field sm" style="display:flex; flex-direction:column; gap:6px;">
+                <span>Font for auto <span class="info-button" title="Monospace used to measure glyph ink coverage">ⓘ</span></span>
+                <select class="sel" bind:value={fontKey} aria-label="Font">
+                  <option value="local:iosevka-fixed-extended">Iosevka Fixed Extended — 67 default (irc.graphics)</option>
+                  <option value="local:cascadia">Cascadia Code</option>
+                  <option value="local:iosevka-fixed">Iosevka Fixed</option>
+                  <option value="local:unifont">GNU Unifont</option>
+                </select>
+                <span class="p-hint" style="font-size:10px; color:var(--text-muted,#888);">Auto uses 67 default glyphs (U+2580 block + ASCII) rasterized at 16px with this font — mIRC-safe via CP1252/DejaVu.</span>
+              </label>
+              <details class="control-panel glyph-advanced" style="margin-top:8px;">
+                <summary>Advanced glyph filtering</summary>
+                <div style="display:grid; gap:8px; margin-top:8px;">
+                  <label class="field sm"><span>Include characters <span class="info-button" title={HELP.glyphInclude}>ⓘ</span></span><input type="text" bind:value={glyphInclude} placeholder="@#%" /></label>
+                  <label class="field sm"><span>Exclude characters <span class="info-button" title={HELP.glyphExclude}>ⓘ</span></span><input type="text" bind:value={glyphExclude} placeholder="" /></label>
+                  <label class="field sm"><span>Include Unicode ranges <span class="info-button" title={HELP.glyphIncludeRanges}>ⓘ</span></span><textarea rows="3" bind:value={glyphIncludeRanges} placeholder="2600-26FF"></textarea></label>
+                  <label class="field sm"><span>Exclude Unicode ranges <span class="info-button" title={HELP.glyphExcludeRanges}>ⓘ</span></span><textarea rows="3" bind:value={glyphExcludeRanges} placeholder="4DC0-4DFF"></textarea></label>
+                  {#if glyphError}<span class="saveErr" role="alert">{glyphError}</span>{/if}
+                </div>
+              </details>
             </div>
           {/if}
           <button class="acc-head" onclick={()=>accFx=!accFx} aria-expanded={accFx}><span class="chev">{accFx?'▾':'▸'}</span> Transform <span class="acc-hint">blur · pixelize · rotate · flip · sampling</span></button>
