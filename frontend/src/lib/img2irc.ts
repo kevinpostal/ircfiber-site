@@ -536,8 +536,15 @@ const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number, mask?:bigint
   {ch:'►', ct:0.5, cb:0.5, bytes:3, mask:0x183c7e18183c7e18n},
   {ch:'▼', ct:0.5, cb:0.5, bytes:3, mask:0x18183c7e7e3c2418n},
   {ch:'◄', ct:0.5, cb:0.5, bytes:3, mask:0x18183c7e7e3c1818n},
+  {ch:'⣿', ct:1.0, cb:1.0, bytes:3, mask:0xffffffffffffffffn}, // braille full (U+28FF) — solid fill for compressed auto
 ];
 export { GLYPHS };
+// Universal subset — renders correctly in stock mIRC/HexChat/weechat/Textual default monospaced fonts.
+// Block Elements U+2580 upper half, U+2584 lower half, U+2588 full, U+258C/U+2590 left/right halves, plus shades U+2591-2593, space and braille full U+28FF (⣿) for compressed auto.
+// Exotic (braille U+2800, geometric U+25A0, triangles U+25B2, quarter U+2596, eighth U+2581, corner U+25E2, box U+2500) excluded — require non-stock fonts.
+// Auto uses only this set when no custom glyphAlphabet is set (see getFilteredGlyphs); explicit half/quarter/etc still allow exotic via BlockKind.
+export const UNIVERSAL_SET = new Set([' ', '▀','▄','█','▌','▐','░','▒','▓','⣿']);
+export const UNIVERSAL_GLYPHS = GLYPHS.filter(g=> UNIVERSAL_SET.has(g.ch));
 const _glyphCache = new Map<string, typeof GLYPHS>();
 export function glyphsToTable(chars: string): typeof GLYPHS {
   if (!chars) return GLYPHS;
@@ -565,6 +572,8 @@ export function getFilteredGlyphs(o: Img2IrcOptions): typeof GLYPHS | null {
   if (o.pixelMode==='smart' && (o as any).smartGlyphAlphabet) return glyphsToTable((o as any).smartGlyphAlphabet);
   if (o.pixelMode==='smart' && (o as any).smartGlyphSpec) return glyphsToTable((o as any).smartGlyphSpec.alphabet);
   if (o.glyphAlphabet != null) return glyphsToTable(o.glyphAlphabet);
+  // Auto without custom alphabet → universal only (all-clients compatible). Custom glyphAlphabet wins when explicitly set.
+  if (o.pixelMode==='auto' && !o.glyphAlphabet) return UNIVERSAL_GLYPHS;
   return null;
 }
 export function collectGlyphAlphabet(opts: { glyphAlphabet?: string; glyphGroupsChars?: string; glyphInclude?: string; glyphExclude?: string; glyphIncludeRanges?: string[]; glyphExcludeRanges?: string[] }): string | undefined {
@@ -970,8 +979,28 @@ export async function renderPixelsCore(
   // Ensure WASM is loaded before Viterbi/nearest hot loops — await the preload started at top
   try { await _wasmPreload; } catch {}
   _timings['wasmPreload'] = _perf() - _t; _t = _perf();
-  const _activeGlyphs = getFilteredGlyphs(o) ?? GLYPHS;
+  let _activeGlyphs = getFilteredGlyphs(o) ?? GLYPHS;
+  // Bare auto without custom glyphAlphabet → universal only (defensive: getFilteredGlyphs already does this, but handle direct calls)
+  if (pm==='auto' && _activeGlyphs === GLYPHS && !(o as any).glyphAlphabet) _activeGlyphs = UNIVERSAL_GLYPHS;
+  // Auto + compress (viterbiW>0): smartly compress with just ⣿ (braille full) + space — avoids ▃/🬼 fragmentation
+  if (pm==='auto' && (o as any).viterbiW>0) {
+    const bf = GLYPHS.find(g=>g.ch==='⣿');
+    const sp = GLYPHS.find(g=>g.ch===' ');
+    if (bf && sp) _activeGlyphs = [sp, bf];
+  }
   const _useCustomGlyphs = _activeGlyphs !== GLYPHS;
+  // Pre-render leak check: auto must be subset of UNIVERSAL_SET (or [space,⣿] for compressed)
+  if (pm==='auto') {
+    const allowed = _activeGlyphs.every(g=> UNIVERSAL_SET.has(g.ch));
+    if (!allowed) {
+      console.warn('[img2irc] leak check: _activeGlyphs contains non-universal for auto, sanitizing', _activeGlyphs.map(g=>g.ch).join(''));
+      // sanitize to universal
+      const filtered = _activeGlyphs.filter(g=> UNIVERSAL_SET.has(g.ch));
+      if (filtered.length>0) _activeGlyphs = filtered as typeof GLYPHS;
+      else _activeGlyphs = UNIVERSAL_GLYPHS;
+    }
+    // also ensure compressed auto GEOS will be braille-only (checked later via GEOS)
+  }
   if(pm==='smart') pm = 'half' as PixelMode;
   const pxAt=(x:number,y:number):[number,number,number,number]=>{
     if(x<0||y<0||x>=pW||y>=pH)return[0,0,0,0];
@@ -1859,8 +1888,9 @@ export async function renderPixelsCore(
         lines.push(ln);
       }
     }
+  } else if(pm==='auto') {
     const isTrueColorAuto = (o as any).midgardMode==='truecolor' && o.renderMode==='ansi24';
-    const GEOS: PixelMode[] = o.autoGeometries && o.autoGeometries.length ? o.autoGeometries : ['half'];
+    const GEOS: PixelMode[] = o.viterbiW>0 ? ['braille'] : (o.autoGeometries && o.autoGeometries.length ? o.autoGeometries : ['half']);
     const capL = 12;
     const palAuto = getMidgardPalette(o);
     const ngA = o.nograyscale;
@@ -1972,7 +2002,7 @@ export async function renderPixelsCore(
         const rowPalOkLab = o.colorMatching==='oklab' ? getPalOkLab(effPal) : null;
         // try batched WASM for segment (same as half row batch) — one crossing per segment instead of M·S
         let usedBatch=false;
-        if(hasWasmSync() && states.length>0 && M*states.length<=65536){
+        if(!_useCustomGlyphs && hasWasmSync() && states.length>0 && M*states.length<=65536){
           const r1Arr=new Uint8Array(M), g1Arr=new Uint8Array(M), b1Arr=new Uint8Array(M);
           const r2Arr=new Uint8Array(M), g2Arr=new Uint8Array(M), b2Arr=new Uint8Array(M);
           const isEmptyBatch=new Array(M).fill(false);
@@ -2006,6 +2036,41 @@ export async function renderPixelsCore(
             }
             usedBatch=true;
           } else { _wasmMisses++; }
+        } else if(_useCustomGlyphs && hasWasmSync() && states.length>0 && M*states.length<=65536){
+          const r1Arr=new Uint8Array(M), g1Arr=new Uint8Array(M), b1Arr=new Uint8Array(M);
+          const r2Arr=new Uint8Array(M), g2Arr=new Uint8Array(M), b2Arr=new Uint8Array(M);
+          const isEmptyBatch2=new Array(M).fill(false);
+          for(let i=0;i<M;i++){
+            let [r1,g1,b1,a1]=sTops[i]; let [r2,g2,b2,a2]=sBots[i];
+            const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+            const matteRgb = parseMatteHex((o as any).matte ?? null);
+            const isEmpty = isEmptyTrans && !matteRgb;
+            isEmptyBatch2[i]=isEmpty;
+            if(isEmptyTrans && matteRgb){ r1=matteRgb[0]; g1=matteRgb[1]; b1=matteRgb[2]; r2=matteRgb[0]; g2=matteRgb[1]; b2=matteRgb[2]; }
+            r1Arr[i]=r1; g1Arr[i]=g1; b1Arr[i]=b1; r2Arr[i]=r2; g2Arr[i]=g2; b2Arr[i]=b2;
+            if(isEmpty) cellIsEmpty[i]=true;
+          }
+          const Slen2=states.length;
+          const statesF2=new Uint32Array(Slen2), statesB2=new Uint32Array(Slen2);
+          for(let s=0;s<Slen2;s++){ statesF2[s]=states[s][0]; statesB2[s]=states[s][1]; }
+          const gLen = _activeGlyphs.length;
+          const glyphCt = new Float32Array(gLen), glyphCb = new Float32Array(gLen), glyphBytes = new Uint8Array(gLen);
+          for(let g=0; g<gLen; g++){ glyphCt[g]=_activeGlyphs[g].ct as number; glyphCb[g]=_activeGlyphs[g].cb as number; glyphBytes[g]=_activeGlyphs[g].bytes as number; }
+          const outGlyph2=new Uint8Array(M*Slen2), outErr2=new Float32Array(M*Slen2), outBytes2=new Uint8Array(M*Slen2);
+          const n2=tryWasmBatchBestGlyphCustomSync(r1Arr,g1Arr,b1Arr,r2Arr,g2Arr,b2Arr,statesF2,statesB2,effPal,o.colorMatching,o.viterbiW,glyphCt,glyphCb,glyphBytes,outGlyph2,outErr2,outBytes2);
+          if(n2===M*Slen2){
+            _wasmHits+=n2;
+            for(let i=0;i<M;i++){
+              if(isEmptyBatch2[i]){ cellGlyph[i]=[]; cellIsEmpty[i]=true; continue; }
+              const rowGlyphs: GI[]=new Array(Slen2);
+              for(let s=0;s<Slen2;s++){
+                const idx=i*Slen2+s; const gIdx=outGlyph2[idx]; const g=_activeGlyphs[gIdx]??_activeGlyphs[0];
+                rowGlyphs[s]={err: outErr2[idx], bytes: outBytes2[idx]||g.bytes, glyph: g.ch};
+              }
+              cellGlyph[i]=rowGlyphs; cellIsEmpty[i]=false;
+            }
+            usedBatch=true;
+          } else { _wasmMisses++; }
         }
         if(!usedBatch){
           for(let i=0;i<M;i++){
@@ -2015,7 +2080,7 @@ export async function renderPixelsCore(
             const isEmpty = isEmptyTrans && !matteRgb;
             cellIsEmpty[i]=isEmpty; if(isEmpty){ cellGlyph[i]=[]; continue; }
             const rowGlyphs: GI[]=new Array(states.length);
-            for(let s=0;s<states.length;s++){ const [f,b]=states[s]; rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW,rowPalOkLab); }
+            for(let s=0;s<states.length;s++){ const [f,b]=states[s]; rowGlyphs[s]=bestGlyphForState(r1,g1,b1,r2,g2,b2,f,b,effPal,o.colorMatching,o.viterbiW,rowPalOkLab, _useCustomGlyphs ? _activeGlyphs : undefined); }
             cellGlyph[i]=rowGlyphs;
           }
         }
@@ -2183,6 +2248,23 @@ export async function renderPixelsCore(
     const stripped = last.replace(/[\x03\x04\x0f0-9,a-fA-F]/g,'').trim();
     if(stripped === '' && !last.includes('\x03') && !last.includes('\x04')){ lines.pop(); continue; }
     break;
+  }
+  // Post-render leak check: auto must not emit exotic glyphs (▃,🬼,◤,B,*,etc) — sanitize if needed
+  if (pm==='auto') {
+    // Strip IRC codes first, then test remaining visible chars against the actual allowed glyphs for this render
+    const visible = lines.join('\n').replace(/\x03\d{1,2}(?:,\d{1,2})?/g,'').replace(/\x04[0-9a-fA-F]{6}(?:,[0-9a-fA-F]{6})?/g,'').replace(/\x0f/g,'');
+    const allowedSet = new Set(_activeGlyphs.map(g=>g.ch));
+    allowedSet.add('\n');
+    const leaks = [...new Set([...visible].filter(ch=> !allowedSet.has(ch)))];
+    if (leaks.length) {
+      console.warn('[img2irc] leak check: auto emitted exotic', leaks.join(''), '— sanitizing to', _activeGlyphs[_activeGlyphs.length-1]?.ch || '⣿');
+      const fallback = _activeGlyphs.find(g=>g.ch==='⣿')?.ch || _activeGlyphs.find(g=>g.ch==='█')?.ch || '⣿';
+      const leakSet = new Set(leaks);
+      for(let i=0;i<lines.length;i++){
+        let out=''; for(const ch of lines[i]){ if(leakSet.has(ch)) out+=fallback; else out+=ch; }
+        lines[i]=out;
+      }
+    }
   }
   _timings['total'] = _perf() - _tStart;
   _lastTimings = { ..._timings };
