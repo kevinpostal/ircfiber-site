@@ -143,6 +143,8 @@
     font-variant-ligatures: no-common-ligatures;
     word-break: break-word;
   }
+  .gutter { cursor: default; }
+  .hlLayer, .editLayer, .hlLayer code { cursor: text; }
   .gutter {
     flex: 0 0 auto;
     width: var(--gutter-width, 41px);
