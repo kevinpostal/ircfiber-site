@@ -29,7 +29,8 @@
 import { getWasm, hasWasmSync, getWasmSync, preloadWasm, tryWasmBatchBestGlyphSync, tryWasmBatchBestGlyphCustomSync, tryWasmBatchRowPaletteSync, tryWasmBatchNearestSync, tryWasmBatchBestGlyphPolygonSync } from './img2irc.wasm';
 import { dpSeg } from './segmentation';
 import { safeTrim as uniformSafeTrim } from './uniform';
-if (typeof window !== 'undefined') try { preloadWasm(); } catch {}
+import { blockKindRanges } from './blockKind';
+import type { BlockKind } from './blockKind';
 const _perf = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
 const _shouldLog = () => typeof window !== 'undefined' && ( (window as any).__IMG2IRC_PERF || localStorage.getItem('img2irc:perf') || location.search.includes('perf=1') );
 // dev-only WASM hit counters — exposed via window.__IMG2IRC_WASM_STATS when img2irc:wasmStats set
@@ -96,7 +97,7 @@ export const ANSI16: number[] = [
 export const IRC16: number[] = IRC99.slice(0, 16);
 export const XTERM256: number[] = (()=>{ const pal:number[]=[]; const ANSI_16=[[0,0,0],[170,0,0],[0,170,0],[170,85,0],[0,0,170],[170,0,170],[0,170,170],[170,170,170],[85,85,85],[255,85,85],[85,255,85],[255,255,85],[85,85,255],[255,85,255],[85,255,255],[255,255,255]]; for(const c of ANSI_16) pal.push((c[0]<<16)|(c[1]<<8)|c[2]); const levels=[0,95,135,175,215,255]; for(let r=0;r<6;r++) for(let g=0;g<6;g++) for(let b=0;b<6;b++) pal.push((levels[r]<<16)|(levels[g]<<8)|levels[b]); for(let i=0;i<24;i++){const v=8+i*10; pal.push((v<<16)|(v<<8)|v);} return pal; })();
 export type RenderMode = 'irc' | 'ansi' | 'ansi24';
-export type PixelMode = 'half' | 'full' | 'quarter' | 'braille' | 'polygon' | 'auto' | 'smart';
+export type PixelMode = 'half' | 'full' | 'quarter' | 'braille' | 'polygon' | 'auto' | 'smart' | 'eighth' | 'triangle';
 export type SamplingFilter = 'nearest' | 'linear';
 export type DitherMode = 'none' | 'bayer4' | 'bayer8' | 'floyd' | 'atkinson' | 'sierra' | 'stucki' | 'jarvis';
 export type ColorMatching = 'rgb' | 'lab' | 'oklab';
@@ -514,6 +515,27 @@ const GLYPHS: Array<{ch:string, ct:number, cb:number, bytes:number, mask?:bigint
   {ch:'◢', ct:0.1875, cb:0.6875, bytes:3, mask:0xfefcf8f0e0c08000n},
   {ch:'◥', ct:0.8125, cb:0.3125, bytes:3, mask:0x80c0e0f0f8fcfeffn},
   {ch:'◣', ct:0.1875, cb:0.6875, bytes:3, mask:0x7f3f1f0f07030100n},
+  // Eighth blocks — horizontal lower/upper eighths (ct/cb from fraction f, top/bottom split at 0.5)
+  {ch:'▁', ct:0.0,   cb:0.25,  bytes:3}, // 1/8 lower
+  {ch:'▂', ct:0.0,   cb:0.5,   bytes:3}, // 2/8 lower
+  {ch:'▃', ct:0.0,   cb:0.75,  bytes:3}, // 3/8 lower
+  {ch:'▅', ct:0.25,  cb:1.0,   bytes:3}, // 5/8 lower
+  {ch:'▆', ct:0.5,   cb:1.0,   bytes:3}, // 6/8 lower
+  {ch:'▇', ct:0.75,  cb:1.0,   bytes:3}, // 7/8 lower
+  {ch:'▔', ct:0.25,  cb:0.0,   bytes:3}, // 1/8 upper
+  // Eighth vertical: left/right eighths (ct==cb==f)
+  {ch:'▏', ct:0.125, cb:0.125, bytes:3},
+  {ch:'▎', ct:0.25,  cb:0.25,  bytes:3},
+  {ch:'▍', ct:0.375, cb:0.375, bytes:3},
+  {ch:'▋', ct:0.625, cb:0.625, bytes:3},
+  {ch:'▊', ct:0.75,  cb:0.75,  bytes:3},
+  {ch:'▉', ct:0.875, cb:0.875, bytes:3},
+  {ch:'▕', ct:0.125, cb:0.125, bytes:3}, // right 1/8 (mirror, same coverage; fg/bg swap gives complement)
+  // Triangle blocks — centered triangles (approx 0.5 coverage both halves, mask distinguishes)
+  {ch:'▲', ct:0.5, cb:0.5, bytes:3, mask:0x18243c7e7e3c1818n},
+  {ch:'►', ct:0.5, cb:0.5, bytes:3, mask:0x183c7e18183c7e18n},
+  {ch:'▼', ct:0.5, cb:0.5, bytes:3, mask:0x18183c7e7e3c2418n},
+  {ch:'◄', ct:0.5, cb:0.5, bytes:3, mask:0x18183c7e7e3c1818n},
 ];
 export { GLYPHS };
 const _glyphCache = new Map<string, typeof GLYPHS>();
@@ -957,15 +979,45 @@ export async function renderPixelsCore(
   };
   const is24=o.renderMode==='ansi24' || o.midgardMode==='truecolor', ng=o.nograyscale;
   const is16=o.midgardMode==='16';
+  const blockKind = pm as unknown as BlockKind;
   const lines:string[]=[];
   if(pm==='braille'){
     const palB=getMidgardPalette(o);
+    // Viterbi-aware quantization for truecolor: when w>0, limit to small palette so adjacent cells share codes (400→183)
+    let quantPal: number[] | null = null;
+    if(o.viterbiW>0 && is24){
+      const sSize = cols >= 100 ? 4 : 6;
+      let truePal = (o as unknown as Record<string, unknown>)._truePalette as number[] | undefined;
+      if(!truePal){ truePal = smartPaletteA(d, pW, pH, 8, o.colorMatching); (o as unknown as Record<string, unknown>)._truePalette = truePal; }
+      const rankedIdx = rankSmartPaletteA(d, pW, pH, truePal, Math.min(sSize, truePal.length), o.colorMatching);
+      const ranked = rankedIdx.map(i=> truePal[i]);
+      quantPal = ranked.length <= 1 ? [truePal[0], truePal[1] ?? truePal[0]] : ranked;
+    }
     const POS:Array<[number,number,number]>=[[0,0,0x01],[0,1,0x02],[0,2,0x04],[1,0,0x08],[1,1,0x10],[1,2,0x20],[0,3,0x40],[1,3,0x80]];
     for(let r=0;r<rows;r++){let ln='',lastCode='',first=true;
       _checkAbort(); await _maybeYield(r);
       for(let c=0;c<cols;c++){let br=0x2800,sR=0,sG=0,sB=0,sN=0;
         for(const[dx,dy,bit]of POS){const x=c*2+dx,y=r*4+dy;const[rr,gg,bb,aa]=pxAt(x,y);if((o.alphaMode==='transparent' ? aa < o.alphaThreshold : false))continue;if(luma(rr,gg,bb)>127){br|=bit;sR+=rr;sG+=gg;sB+=bb;sN++;}}
-        const code=is16? '\x03'+String(nearestIndex(sR/sN|0,sG/sN|0,sB/sN|0,palB, o.colorMatching)) : is24? '\x04'+toHex6(sR/sN|0,sG/sN|0,sB/sN|0) : '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).ansi : lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).irc, o.renderMode, palB, o.colorMatching));
+        let code: string;
+        if(is16){
+          code = '\x03'+String(nearestIndex(sR/sN|0,sG/sN|0,sB/sN|0,palB, o.colorMatching));
+        } else if(is24){
+          if(quantPal){
+            const qr = sR/sN|0, qg = sG/sN|0, qb = sB/sN|0;
+            let best = 0, bestD = Infinity;
+            for(let i=0;i<quantPal.length;i++){
+              const pr = (quantPal[i]>>16)&255, pg=(quantPal[i]>>8)&255, pb=quantPal[i]&255;
+              const d2 = colorDist2(qr,qg,qb, pr,pg,pb, o.colorMatching);
+              if(d2 < bestD){ bestD=d2; best=i; }
+            }
+            const chosen = quantPal[best];
+            code = '\x04'+toHex6((chosen>>16)&255,(chosen>>8)&255,chosen&255);
+          } else {
+            code = '\x04'+toHex6(sR/sN|0,sG/sN|0,sB/sN|0);
+          }
+        } else {
+          code = '\x03'+String(toEmitIdx(o.renderMode==='ansi'? lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).ansi : lutLookup(sR/sN|0,sG/sN|0,sB/sN|0,palB,ng, o.colorMatching).irc, o.renderMode, palB, o.colorMatching));
+        }
         if(first||lastCode!==code){ln+=code;lastCode=code;}
         ln+=String.fromCharCode(br);first=false;
       }
@@ -1383,6 +1435,118 @@ export async function renderPixelsCore(
         }
         lines.push(ln);
       }
+    }
+  } else if(blockKind==='eighth') {
+    const pal=getMidgardPalette(o);
+    const blockKindRangesEighth = blockKindRanges('eighth');
+    const baseEighth = _activeGlyphs !== GLYPHS ? _activeGlyphs : GLYPHS;
+    let allowedEighth = baseEighth.filter(g=>{ const cp=g.ch.codePointAt(0)!; return blockKindRangesEighth.some(([s,e])=>cp>=s&&cp<=e); });
+    if(allowedEighth.length===0) allowedEighth = GLYPHS.filter(g=>{ const cp=g.ch.codePointAt(0)!; return blockKindRangesEighth.some(([s,e])=>cp>=s&&cp<=e); });
+    if(allowedEighth.length===0) allowedEighth = baseEighth;
+    const spaceGlyph = GLYPHS.find(g=>g.ch===' ')!;
+    if(!allowedEighth.some(g=>g.ch===' ')) allowedEighth = [spaceGlyph, ...allowedEighth];
+    const palOkLabEighth = o.colorMatching==='oklab' ? getPalOkLab(pal) : null;
+    for(let r=0;r<rows;r++){let ln='',lastFg='',lastBg='',first=true; _checkAbort(); await _maybeYield(r);
+      for(let c=0;c<cols;c++){
+        const [r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
+        const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+        const matteRgb=parseMatteHex((o as any).matte ?? null);
+        if(isEmptyTrans){ if(matteRgb){ const matteIdx=nearestIndex(matteRgb[0],matteRgb[1],matteRgb[2], pal, o.colorMatching); const matteStr=String(matteIdx); const need=first||lastBg!==matteStr; if(need){ const cd='\x03'+matteStr+','+matteStr; if(is24){ const hex=toHex6(matteRgb[0],matteRgb[1],matteRgb[2]); const cd2='\x04'+hex+','+hex; if(first||lastFg!==hex||lastBg!==hex){ln+=cd2;lastFg=hex;lastBg=hex;}} else {ln+=cd;lastFg=matteStr;lastBg=matteStr;}} ln+=' '; first=false; continue; } else { ln+=' ';first=false;continue; }}
+        if(is24){
+          const fgHex=toHex6(r1,g1,b1), bgHex=toHex6(r2,g2,b2);
+          const fR=r1, fG=g1, fB=b1, bR=r2, bG=g2, bB=b2;
+          let bestG=allowedEighth[0], bestCost=Infinity, bestFgHex=fgHex, bestBgHex=bgHex;
+          for(const g of allowedEighth){
+            for(const swap of [false,true]){
+              const fr=swap?bR:fR, fg=swap?bG:fG, fb=swap?bB:fB, br=swap?fR:bR, bg=swap?fG:bG, bb=swap?fB:bB;
+              const tR=Math.round(fr*g.ct+br*(1-g.ct)), tG=Math.round(fg*g.ct+bg*(1-g.ct)), tB=Math.round(fb*g.ct+bb*(1-g.ct));
+              const boR=Math.round(fr*g.cb+br*(1-g.cb)), boG=Math.round(fg*g.cb+bg*(1-g.cb)), boB=Math.round(fb*g.cb+bb*(1-g.cb));
+              const e=colorDist2(r1,g1,b1,tR,tG,tB,o.colorMatching)+colorDist2(r2,g2,b2,boR,boG,boB,o.colorMatching);
+              const cost=e+o.viterbiW*g.bytes;
+              if(cost<bestCost){bestCost=cost; bestG=g; bestFgHex=swap?bgHex:fgHex; bestBgHex=swap?fgHex:bgHex;}
+            }
+          }
+          if(bestG.ch===' '){ const need=first||lastBg!==bestBgHex; if(need){ const cd='\x04'+bestFgHex+','+bestBgHex; ln+=cd; lastFg=bestFgHex; lastBg=bestBgHex; } ln+=' '; }
+          else { const needFull=first||lastFg!==bestFgHex||lastBg!==bestBgHex; const needFgOnly=!first&&lastBg===bestBgHex&&lastFg!==bestFgHex; if(needFgOnly){ const cd='\x04'+bestFgHex; ln+=cd; lastFg=bestFgHex; } else if(needFull){ const cd='\x04'+bestFgHex+','+bestBgHex; ln+=cd; lastFg=bestFgHex; lastBg=bestBgHex; } ln+=bestG.ch; }
+        } else if(is16){
+          const fg=nearestIndex(r1,g1,b1,pal,o.colorMatching), bg=nearestIndex(r2,g2,b2,pal,o.colorMatching);
+          const resA=bestGlyphForState(r1,g1,b1,r2,g2,b2,fg,bg,pal,o.colorMatching,o.viterbiW,palOkLabEighth,allowedEighth);
+          const resB=bestGlyphForState(r1,g1,b1,r2,g2,b2,bg,fg,pal,o.colorMatching,o.viterbiW,palOkLabEighth,allowedEighth);
+          const best=resA.err+o.viterbiW*resA.bytes <= resB.err+o.viterbiW*resB.bytes ? resA : resB;
+          const useSwap = best===resB;
+          const fStr=String(useSwap?bg:fg), bStr=String(useSwap?fg:bg);
+          if(best.glyph===' '){ const need=first||lastBg!==bStr; if(need){ const cd='\x03'+fStr+','+bStr; ln+=cd; lastFg=fStr; lastBg=bStr; } ln+=' '; }
+          else { const needFull=first||lastFg!==fStr||lastBg!==bStr; const needFgOnly=!first&&lastBg===bStr&&lastFg!==fStr; if(needFgOnly){ const cd='\x03'+fStr; ln+=cd; lastFg=fStr; } else if(needFull){ const cd='\x03'+fStr+','+bStr; ln+=cd; lastFg=fStr; lastBg=bStr; } ln+=best.glyph; }
+        } else {
+          const l1=lutLookup(r1,g1,b1,pal,ng,o.colorMatching), l2=lutLookup(r2,g2,b2,pal,ng,o.colorMatching);
+          const fgRaw=o.renderMode==='ansi'?l1.ansi:l1.irc, fg=toEmitIdx(fgRaw,o.renderMode,pal,o.colorMatching), bgRaw=o.renderMode==='ansi'?l2.ansi:l2.irc, bg=toEmitIdx(bgRaw,o.renderMode,pal,o.colorMatching);
+          const resA=bestGlyphForState(r1,g1,b1,r2,g2,b2,fg,bg,pal,o.colorMatching,o.viterbiW,palOkLabEighth,allowedEighth);
+          const resB=bestGlyphForState(r1,g1,b1,r2,g2,b2,bg,fg,pal,o.colorMatching,o.viterbiW,palOkLabEighth,allowedEighth);
+          const best=resA.err+o.viterbiW*resA.bytes <= resB.err+o.viterbiW*resB.bytes ? resA : resB;
+          const useSwap=best===resB;
+          const fS=String(useSwap?bg:fg), bS=String(useSwap?fg:bg);
+          if(best.glyph===' '){ const need=first||lastBg!==bS; if(need){ const cd='\x03'+fS+','+bS; ln+=cd; lastFg=fS; lastBg=bS; } ln+=' '; }
+          else { const needFull=first||lastFg!==fS||lastBg!==bS; const needFgOnly=!first&&lastBg===bS&&lastFg!==fS; if(needFgOnly){ const cd='\x03'+fS; ln+=cd; lastFg=fS; } else if(needFull){ const cd='\x03'+fS+','+bS; ln+=cd; lastFg=fS; lastBg=bS; } ln+=best.glyph; }
+        }
+        first=false;
+      }
+      lines.push(ln);
+    }
+  } else if(blockKind==='triangle') {
+    const pal=getMidgardPalette(o);
+    const blockKindRangesTriangle = blockKindRanges('triangle');
+    const baseTri = _activeGlyphs !== GLYPHS ? _activeGlyphs : GLYPHS;
+    let allowedTri = baseTri.filter(g=>{ const cp=g.ch.codePointAt(0)!; return blockKindRangesTriangle.some(([s,e])=>cp>=s&&cp<=e); });
+    if(allowedTri.length===0) allowedTri = GLYPHS.filter(g=>{ const cp=g.ch.codePointAt(0)!; return blockKindRangesTriangle.some(([s,e])=>cp>=s&&cp<=e); });
+    if(allowedTri.length===0) allowedTri = baseTri;
+    const spaceGlyphTri = GLYPHS.find(g=>g.ch===' ')!;
+    if(!allowedTri.some(g=>g.ch===' ')) allowedTri = [spaceGlyphTri, ...allowedTri];
+    const palOkLabTri = o.colorMatching==='oklab' ? getPalOkLab(pal) : null;
+    for(let r=0;r<rows;r++){let ln='',lastFg='',lastBg='',first=true; _checkAbort(); await _maybeYield(r);
+      for(let c=0;c<cols;c++){
+        const [r1,g1,b1,a1]=pxAt(c,r*2), [r2,g2,b2,a2]=pxAt(c,r*2+1);
+        const isEmptyTrans=(o.alphaMode==='transparent' ? a1 < o.alphaThreshold : false) && (o.alphaMode==='transparent' ? a2 < o.alphaThreshold : false);
+        const matteRgb=parseMatteHex((o as any).matte ?? null);
+        if(isEmptyTrans){ if(matteRgb){ const matteIdx=nearestIndex(matteRgb[0],matteRgb[1],matteRgb[2], pal, o.colorMatching); const matteStr=String(matteIdx); const need=first||lastBg!==matteStr; if(need){ const cd='\x03'+matteStr+','+matteStr; if(is24){ const hex=toHex6(matteRgb[0],matteRgb[1],matteRgb[2]); const cd2='\x04'+hex+','+hex; if(first||lastFg!==hex||lastBg!==hex){ln+=cd2;lastFg=hex;lastBg=hex;}} else {ln+=cd;lastFg=matteStr;lastBg=matteStr;}} ln+=' '; first=false; continue; } else { ln+=' ';first=false;continue; }}
+        if(is24){
+          const fgHex=toHex6(r1,g1,b1), bgHex=toHex6(r2,g2,b2);
+          const fR=r1, fG=g1, fB=b1, bR=r2, bG=g2, bB=b2;
+          let bestG=allowedTri[0], bestCost=Infinity, bestFgHex=fgHex, bestBgHex=bgHex;
+          for(const g of allowedTri){
+            for(const swap of [false,true]){
+              const fr=swap?bR:fR, fg=swap?bG:fG, fb=swap?bB:fB, br=swap?fR:bR, bg=swap?fG:bG, bb=swap?fB:bB;
+              const tR=Math.round(fr*g.ct+br*(1-g.ct)), tG=Math.round(fg*g.ct+bg*(1-g.ct)), tB=Math.round(fb*g.ct+bb*(1-g.ct));
+              const boR=Math.round(fr*g.cb+br*(1-g.cb)), boG=Math.round(fg*g.cb+bg*(1-g.cb)), boB=Math.round(fb*g.cb+bb*(1-g.cb));
+              const e=colorDist2(r1,g1,b1,tR,tG,tB,o.colorMatching)+colorDist2(r2,g2,b2,boR,boG,boB,o.colorMatching);
+              const cost=e+o.viterbiW*g.bytes;
+              if(cost<bestCost){bestCost=cost; bestG=g; bestFgHex=swap?bgHex:fgHex; bestBgHex=swap?fgHex:bgHex;}
+            }
+          }
+          if(bestG.ch===' '){ const need=first||lastBg!==bestBgHex; if(need){ const cd='\x04'+bestFgHex+','+bestBgHex; ln+=cd; lastFg=bestFgHex; lastBg=bestBgHex; } ln+=' '; }
+          else { const needFull=first||lastFg!==bestFgHex||lastBg!==bestBgHex; const needFgOnly=!first&&lastBg===bestBgHex&&lastFg!==bestFgHex; if(needFgOnly){ const cd='\x04'+bestFgHex; ln+=cd; lastFg=bestFgHex; } else if(needFull){ const cd='\x04'+bestFgHex+','+bestBgHex; ln+=cd; lastFg=bestFgHex; lastBg=bestBgHex; } ln+=bestG.ch; }
+        } else if(is16){
+          const fg=nearestIndex(r1,g1,b1,pal,o.colorMatching), bg=nearestIndex(r2,g2,b2,pal,o.colorMatching);
+          const resA=bestGlyphForState(r1,g1,b1,r2,g2,b2,fg,bg,pal,o.colorMatching,o.viterbiW,palOkLabTri,allowedTri);
+          const resB=bestGlyphForState(r1,g1,b1,r2,g2,b2,bg,fg,pal,o.colorMatching,o.viterbiW,palOkLabTri,allowedTri);
+          const best=resA.err+o.viterbiW*resA.bytes <= resB.err+o.viterbiW*resB.bytes ? resA : resB;
+          const useSwap = best===resB;
+          const fStr=String(useSwap?bg:fg), bStr=String(useSwap?fg:bg);
+          if(best.glyph===' '){ const need=first||lastBg!==bStr; if(need){ const cd='\x03'+fStr+','+bStr; ln+=cd; lastFg=fStr; lastBg=bStr; } ln+=' '; }
+          else { const needFull=first||lastFg!==fStr||lastBg!==bStr; const needFgOnly=!first&&lastBg===bStr&&lastFg!==fStr; if(needFgOnly){ const cd='\x03'+fStr; ln+=cd; lastFg=fStr; } else if(needFull){ const cd='\x03'+fStr+','+bStr; ln+=cd; lastFg=fStr; lastBg=bStr; } ln+=best.glyph; }
+        } else {
+          const l1=lutLookup(r1,g1,b1,pal,ng,o.colorMatching), l2=lutLookup(r2,g2,b2,pal,ng,o.colorMatching);
+          const fgRaw=o.renderMode==='ansi'?l1.ansi:l1.irc, fg=toEmitIdx(fgRaw,o.renderMode,pal,o.colorMatching), bgRaw=o.renderMode==='ansi'?l2.ansi:l2.irc, bg=toEmitIdx(bgRaw,o.renderMode,pal,o.colorMatching);
+          const resA=bestGlyphForState(r1,g1,b1,r2,g2,b2,fg,bg,pal,o.colorMatching,o.viterbiW,palOkLabTri,allowedTri);
+          const resB=bestGlyphForState(r1,g1,b1,r2,g2,b2,bg,fg,pal,o.colorMatching,o.viterbiW,palOkLabTri,allowedTri);
+          const best=resA.err+o.viterbiW*resA.bytes <= resB.err+o.viterbiW*resB.bytes ? resA : resB;
+          const useSwap=best===resB;
+          const fS=String(useSwap?bg:fg), bS=String(useSwap?fg:bg);
+          if(best.glyph===' '){ const need=first||lastBg!==bS; if(need){ const cd='\x03'+fS+','+bS; ln+=cd; lastFg=fS; lastBg=bS; } ln+=' '; }
+          else { const needFull=first||lastFg!==fS||lastBg!==bS; const needFgOnly=!first&&lastBg===bS&&lastFg!==fS; if(needFgOnly){ const cd='\x03'+fS; ln+=cd; lastFg=fS; } else if(needFull){ const cd='\x03'+fS+','+bS; ln+=cd; lastFg=fS; lastBg=bS; } ln+=best.glyph; }
+        }
+        first=false;
+      }
+      lines.push(ln);
     }
   } else if(pm==='polygon'){
     const pal=getMidgardPalette(o);

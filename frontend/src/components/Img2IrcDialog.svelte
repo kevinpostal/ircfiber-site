@@ -3,6 +3,8 @@
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { imageToIrcArt, loadImageFromFile, revokeImageUrl, clearColorLut, estimateLineLengths, getLastTimings, DEFAULT_IRC_WIDTH, MIN_IRC_WIDTH, MAX_IRC_WIDTH, IRC_HARD_LIMIT, IRC_SAFE_PAYLOAD, serializeImg2IrcOptions, glyphsToTable, collectGlyphAlphabet } from '../lib/img2irc';
   import type { RenderMode, PixelMode, DitherMode, ColorMatching, MidgardColorMode } from '../lib/img2irc';
+  import type { BlockKind } from '../lib/blockKind';
+  import { blockKindRanges } from '../lib/blockKind';
   import { selectGlyphsForImage } from '../lib/aristotleGlyphs';
   import { GlyphCatalog } from '../lib/glyphCatalog';
   import { HELP } from '../lib/helpText';
@@ -20,7 +22,7 @@
   let midgardMode=$state<MidgardColorMode>('xterm256');
   let brightness=$state(0), contrast=$state(0), saturation=$state(0), hue=$state(0), gamma=$state(0), blur=$state(0), pixelize=$state(0);
   let grayscale=$state(false), invert=$state(false), sepia=$state(false), normalize=$state(false), nograyscale=$state(false), flipH=$state(false), flipV=$state(false);
-  let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('hsv');
+  let ditherMode=$state<DitherMode>('none'), colorMatching=$state<ColorMatching>('oklab');
   let viterbiW=$state(0);
   let autoGeometries=$state<PixelMode[]>(['half','quarter','braille','polygon']);
   let rotate=$state('0');
@@ -109,22 +111,44 @@
       if(!initialParams || !(initialParams as any).glyphAlphabet){
         try{
           const raw=localStorage.getItem('ircfiber:glyphGroups');
-          if(raw){ const j=JSON.parse(raw); if(j.groups) glyphGroups=j.groups; if(j.preset) glyphPreset=j.preset; if(j.include) glyphInclude=j.include; if(j.exclude) glyphExclude=j.exclude; if(j.includeRanges) glyphIncludeRanges=j.includeRanges; if(j.excludeRanges) glyphExcludeRanges=j.excludeRanges; if(j.glyphPreset) glyphPreset=j.glyphPreset; }
+          if(raw){
+            const j=JSON.parse(raw);
+            // new schema: braille + blocks
+            if(typeof j.braille==='boolean') glyphBraille=j.braille;
+            if(Array.isArray(j.blocks)) glyphBlocks=j.blocks.filter((k:string)=> (BLOCK_KINDS as string[]).includes(k)) as BlockKind[];
+            // legacy schema migration
+            if(j.groups && Array.isArray(j.blocks)===false){
+              const g=j.groups as string[];
+              if(g.includes('braille')) glyphBraille=true;
+              else if(g.length){
+                const mapped = g.filter((n:string)=> (BLOCK_KINDS as string[]).includes(n)) as BlockKind[];
+                if(mapped.length) glyphBlocks=mapped;
+              }
+            }
+            if(j.preset==='all') glyphBlocks=[...BLOCK_KINDS];
+            else if(j.preset==='smooth') glyphBlocks=['full','half','quarter','eighth'] as BlockKind[];
+            if(j.include) glyphInclude=j.include;
+            if(j.exclude) glyphExclude=j.exclude;
+            if(j.includeRanges) glyphIncludeRanges=j.includeRanges;
+            if(j.excludeRanges) glyphExcludeRanges=j.excludeRanges;
+          }
         }catch{}
       } else {
         const p=initialParams as any;
-        if(p.glyphAlphabet) { /* handled via glyphGroups */ }
+        if(p.glyphAlphabet) { /* handled via blocks */ }
         if(p.glyphInclude) glyphInclude=p.glyphInclude;
         if(p.glyphExclude) glyphExclude=p.glyphExclude;
         if(p.glyphIncludeRanges) glyphIncludeRanges=(p.glyphIncludeRanges as string[]).join('\n');
         if(p.glyphExcludeRanges) glyphExcludeRanges=(p.glyphExcludeRanges as string[]).join('\n');
+        if(p.glyphBraille!=null) glyphBraille=!!p.glyphBraille;
+        if(Array.isArray(p.glyphBlocks)) glyphBlocks=p.glyphBlocks.filter((k:string)=>(BLOCK_KINDS as string[]).includes(k)) as BlockKind[];
       }
   });
   function persistGlyphs(){
-    try{ localStorage.setItem('ircfiber:glyphGroups', JSON.stringify({groups:glyphGroups, preset:glyphPreset, include:glyphInclude, exclude:glyphExclude, includeRanges:glyphIncludeRanges, excludeRanges:glyphExcludeRanges})); } catch (e) {}
+    try{ localStorage.setItem('ircfiber:glyphGroups', JSON.stringify({braille:glyphBraille, blocks:glyphBlocks, include:glyphInclude, exclude:glyphExclude, includeRanges:glyphIncludeRanges, excludeRanges:glyphExcludeRanges})); } catch (e) {}
   }
-  $effect(()=>{ void glyphGroups; void glyphPreset; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; persistGlyphs(); });
-  const filteredGlyphGroups=$derived(glyphFind.trim() ? glyphGroupsAll.filter(g=>g.name.toLowerCase().includes(glyphFind.toLowerCase())) : []);
+  $effect(()=>{ void glyphBraille; void glyphBlocks; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; persistGlyphs(); });
+  const filteredGlyphGroups=$derived(glyphGroupsAll.filter(g=>false));
   function collectGlyphOpts(): { glyphAlphabet?: string } {
     glyphError=null;
     if(pixelMode==='braille') return {};
@@ -133,11 +157,35 @@
       const excR = glyphExcludeRanges.split('\n').map(s=>s.trim()).filter(Boolean);
       for(const r of [...incR, ...excR]) if(!/^[0-9a-f]{1,6}-[0-9a-f]{1,6}$/i.test(r)) throw new Error(`Invalid Unicode range "${r}"; use hexadecimal START-END`);
       let baseChars: string | undefined;
-      if(glyphCatalog && glyphGroups.length){
-        baseChars=glyphCatalog.characters(glyphGroups);
-      } else if(glyphPreset==='all' && glyphCatalog) baseChars=glyphCatalog.characters(glyphGroupsAll.map(g=>g.name));
-      else if(glyphPreset==='smooth') baseChars=glyphCatalog?.characters(['smooth']) ?? undefined;
-      else if(glyphPreset==='default') baseChars=glyphCatalog?.characters(['default']) ?? undefined;
+      if(glyphCatalog){
+        if(glyphBraille){
+          baseChars=glyphCatalog.characters(['braille']);
+        } else if(glyphBlocks.length){
+          const direct=glyphCatalog.characters(glyphBlocks);
+          if(direct && direct.length){
+            baseChars=direct;
+          } else {
+            // Fallback: filter all available chars by BlockKind codepoint ranges
+            const ranges=glyphBlocks.flatMap(k=> blockKindRanges(k));
+            const allChars=glyphGroupsAll.map(g=>g.characters).join('');
+            if(allChars){
+              let filtered='';
+              const seen=new Set<string>();
+              for(const ch of allChars){
+                const cp=ch.codePointAt(0)!;
+                if(ranges.some(([lo,hi])=> cp>=lo && cp<=hi)){
+                  if(!seen.has(ch)){ seen.add(ch); filtered+=ch; }
+                }
+              }
+              baseChars=filtered || glyphCatalog.characters(['default']);
+            } else {
+              baseChars=glyphCatalog.characters(['default']);
+            }
+          }
+        } else {
+          baseChars=glyphCatalog.characters(['default']);
+        }
+      }
       let alphabet = collectGlyphAlphabet({ glyphGroupsChars: baseChars, glyphInclude: glyphInclude || undefined, glyphExclude: glyphExclude || undefined, glyphIncludeRanges: incR.length?incR:undefined, glyphExcludeRanges: excR.length?excR:undefined });
       if(alphabet) return { glyphAlphabet: alphabet };
       return {};
@@ -152,10 +200,10 @@
   // Transparency.lean: bleeds_iff_empty — transparency is opt-in, switchable via opaque/matte escape hatches
   let transparencyEnabled=$state(false); // user toggle, auto-synced to hasAlpha when image loads
   let matteColor=$state<string | null>(null); // null = bleed (naked space, cheapest, trimmed) | hex = matte opaque (renderCellMatte)
-  // Glyph catalog (Step 1)
-  let glyphPreset=$state<'default'|'smooth'|'all'>('default');
-  let glyphFind=$state('');
-  let glyphGroups=$state<string[]>(['default']);
+  // Glyph catalog — braille toggle + 9 BlockKinds (full/half/quarter/eighth/triangle/corner/geometric/box/legacy)
+  let glyphBraille=$state(false);
+  let glyphBlocks=$state<BlockKind[]>([]);
+  const BLOCK_KINDS: BlockKind[] = ['full','half','quarter','eighth','triangle','corner','geometric','box','legacy'];
   let glyphInclude=$state('');
   let glyphExclude=$state('');
   let glyphIncludeRanges=$state('');
@@ -164,6 +212,10 @@
   let glyphGroupsAll=$state<Array<{name:string; characters:string; count:number}>>([]);
   let glyphError=$state<string|null>(null);
   let accGlyphs=$state(false);
+  // Legacy compat — keep for migration (removed UI, still parsed from localStorage)
+  let glyphPreset: 'default'|'smooth'|'all' = 'default';
+  let glyphFind = '';
+  let glyphGroups: string[] = ['default'];
   let isDummyFile=$derived((file as File)?.name==='dummy.png');
   let gen=0;
   let abortCtrl: AbortController | null = null;
@@ -176,14 +228,14 @@
   let renderCache=new Map<string,{art:string,html:string}>();
   let _lastFile: File|Blob|null=null;
   function makeCacheKeyForOpts(o:any, alpha:boolean):string{
-    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}|${o.glyphAlphabet ?? ''}|${o.smartGlyphAlphabet ?? ''}|${(o.autoGeometries??[]).join(',')}`;
+    return `${o.width}|${o.renderMode}|${o.pixelMode}|${o.midgardMode}|${o.filter}|${o.brightness}|${o.contrast}|${o.saturation}|${o.hue}|${o.gamma}|${o.blur}|${o.pixelize}|${o.grayscale?1:0}|${o.invert?1:0}|${o.sepia?1:0}|${o.normalize?1:0}|${o.dither?1:0}|${o.ditherMode}|${o.colorMatching}|${o.nograyscale?1:0}|${o.flipH?1:0}|${o.flipV?1:0}|${o.rotate}|${o.viterbiW}|${alpha?1:0}|${o.matte??'null'}|${o.glyphAlphabet ?? ''}|${o.smartGlyphAlphabet ?? ''}|${(o.autoGeometries??[]).join(',')}|${o.glyphBraille?1:0}|${(o.glyphBlocks??[]).join(',')}`;
   }
   function makeCacheKey():string{
     let glyphAlphabet: string | undefined;
     try{ glyphAlphabet=collectGlyphOpts().glyphAlphabet; }catch{ glyphAlphabet=glyphInclude||glyphExclude||glyphIncludeRanges||glyphExcludeRanges ? 'invalid' : undefined; }
     let smartAlpha = pixelMode==='smart' ? smartGlyphAlphabet : undefined;
     // keep key small and stable — order matters
-    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, smartGlyphAlphabet: smartAlpha, autoGeometries}, hasAlpha);
+    return makeCacheKeyForOpts({width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, comic: false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, smartGlyphAlphabet: smartAlpha, autoGeometries, glyphBraille, glyphBlocks}, hasAlpha);
   }
   $effect(()=>{ // clear cache when file changes
     void file;
@@ -288,7 +340,7 @@
       await convert(my, mySignal);
     }, 70);
   }
-  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void autoGeometries; void transparencyEnabled; void matteColor; void glyphPreset; void glyphGroups; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; void glyphFind; void file; untrack(()=>schedule()); });
+  $effect(()=>{ void width; void renderMode; void pixelMode; void midgardMode; void brightness; void contrast; void saturation; void hue; void gamma; void blur; void pixelize; void grayscale; void invert; void sepia; void normalize; void ditherMode; void colorMatching; void nograyscale; void flipH; void flipV; void rotate; void filter; void viterbiW; void autoGeometries; void transparencyEnabled; void matteColor; void glyphBraille; void glyphBlocks; void glyphInclude; void glyphExclude; void glyphIncludeRanges; void glyphExcludeRanges; void file; untrack(()=>schedule()); });
   $effect(()=>{ // restore prior midgard when leaving Smart detail
     void pixelMode;
     if(pixelMode!=='smart' && prevMidgard){
@@ -675,9 +727,16 @@
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
     grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; autoGeometries=['half','quarter','braille','polygon']; scrollPreset=2;
     accTone=false; accFx=false; accOut=false; accScroll=false;
-    accGlyphs=false; glyphPreset='default'; glyphGroups=['default']; glyphInclude=''; glyphExclude=''; glyphIncludeRanges=''; glyphExcludeRanges=''; glyphFind=''; glyphError=null;
+    accGlyphs=false; glyphBraille=false; glyphBlocks=[]; glyphInclude=''; glyphExclude=''; glyphIncludeRanges=''; glyphExcludeRanges=''; glyphError=null;
     transparencyEnabled = hasAlpha; matteColor = null;
     smartGlyphAlphabet=undefined; smartGlyphCache.clear();
+  }
+  function toggleBlock(k: BlockKind, checked: boolean){
+    if(checked){
+      if(!glyphBlocks.includes(k)) glyphBlocks=[...glyphBlocks, k];
+    } else {
+      glyphBlocks=glyphBlocks.filter(v=>v!==k);
+    }
   }
   function handleKey(e:KeyboardEvent){ if(e.key==='Escape') onClose(); }
   function handleOverlayClick(e:MouseEvent){ if(e.target===e.currentTarget) onClose(); }
@@ -779,6 +838,18 @@
         />
       {/if}
         </div>
+        <!-- Glyphs — braille exclusive + 9 BlockKinds (full/half/quarter/eighth/triangle/corner/geometric/box/legacy) -->
+        <div class="glyph-groups" data-testid="glyph-groups" style="margin:12px 0; padding:10px; border:1px solid var(--border,#333); border-radius:8px;">
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+            <label style="display:flex; align-items:center; gap:6px; font-size:13px;"><input type="checkbox" bind:checked={glyphBraille} data-testid="braille-toggle" /> Braille</label>
+            <span style="font-size:11px; color:var(--text-muted,#888);">when checked, blocks disabled (braille exclusive)</span>
+          </div>
+          <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:6px;">
+            {#each BLOCK_KINDS as kind}
+              <label style="display:flex; align-items:center; gap:6px; font-size:12px; opacity:{glyphBraille?0.4:1}"><input type="checkbox" checked={glyphBlocks.includes(kind)} disabled={glyphBraille} onchange={(e)=>toggleBlock(kind, (e.target as HTMLInputElement).checked)} data-testid={`block-${kind}`} /> {kind}</label>
+            {/each}
+          </div>
+        </div>
         <!-- Advanced — inside leftScroll, scrolls with controls -->
         <div class="accordion">
           <button class="acc-head" onclick={()=>accTone=!accTone} aria-expanded={accTone}><span class="chev">{accTone?'▾':'▸'}</span> Normalize <span class="acc-hint">brightness · contrast · saturation · gamma</span></button>
@@ -799,7 +870,7 @@
               </div>
             </div>
           {/if}
-          <button class="acc-head" onclick={()=>accFont=!accFont} aria-expanded={accFont}><span class="chev">{accFont?'▾':'▸'}</span> Font <span class="acc-hint">{fontKey.replace('local:','')} · {glyphPreset} 67</span></button>
+          <button class="acc-head" onclick={()=>accFont=!accFont} aria-expanded={accFont}><span class="chev">{accFont?'▾':'▸'}</span> Font <span class="acc-hint">{fontKey.replace('local:','')}</span></button>
           {#if accFont}
             <div class="acc-body">
               <label class="field sm" style="display:flex; flex-direction:column; gap:6px;">
