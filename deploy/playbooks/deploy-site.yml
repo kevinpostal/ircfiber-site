@@ -1,0 +1,51 @@
+---
+# Site deploy — gateway + frontend only, never touches engine
+# Replaces deploy-update.yml builder aggregate. Site owns /opt/ircfiber-site
+# Usage: ansible-playbook deploy/playbooks/deploy-site.yml -l vps-efb4b52d
+- name: Deploy site
+  hosts: "{{ target | default('ircfiber_gw') }}"
+  become: true
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/all.yml"
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  vars:
+    src_root: /opt/ircfiber-site
+    builder_image: ircfiber-builder-site
+    host_bin_dir: /opt/ircfiber/bin
+    ldc_version: "1.41.0"
+  tasks:
+    - name: Preflight — site must not define engine id
+      ansible.builtin.assert:
+        that: ircfiber_engine_id is not defined
+        fail_msg: "Site deploy must not have ircfiber_engine_id — would touch engine"
+    - name: rsync site source → {{ src_root }} (submodule-aware)
+      become: false
+      ansible.posix.synchronize:
+        src: "{{ playbook_dir }}/../../"
+        dest: "{{ src_root }}"
+        delete: true
+        checksum: true
+        rsync_opts:
+          - "--omit-dir-times"
+          - "--exclude=.git"
+          - "--exclude=node_modules"
+          - "--exclude=.dub"
+          - "--exclude=frontend/node_modules"
+          - "--exclude=.worktrees"
+    - name: Update common submodule on host
+      ansible.builtin.command: git -C {{ src_root }} submodule update --init --recursive
+      changed_when: false
+      failed_when: false
+    - name: Build gateway image (site only)
+      ansible.builtin.shell: |
+        DOCKER_BUILDKIT=1 docker build           --target runtime-gateway           --build-arg GIT_HASH={{ lookup('pipe', 'git -C ' + playbook_dir + '/../../ rev-parse HEAD') | default('unknown') }}           -t kevindpostal/irc-fiber-gateway:0.3.0           -f {{ src_root }}/Containerfile.site           {{ src_root }} 2>&1
+      args:
+        executable: /bin/bash
+      timeout: 1800
+    - name: Recreate gateway container
+      ansible.builtin.shell: |
+        docker stop ircfiber-gateway 2>/dev/null || true
+        docker rm ircfiber-gateway 2>/dev/null || true
+        docker run -d --name ircfiber-gateway --restart unless-stopped --network ircfiber_net --network ircfiber_logging -v ircfiber_uploads:/app/uploads -v ircfiber_logs:/var/log/irc-fiber --env-file /etc/ircfiber/gateway/env -p 8090:8090 kevindpostal/irc-fiber-gateway:0.3.0 /app/irc-fiber
+      changed_when: true
