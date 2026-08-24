@@ -7,7 +7,7 @@
   become: true
   gather_facts: false
   vars_files:
-    - "{{ playbook_dir }}/../inventories/production/group_vars/all.yml"
+    - "{{ playbook_dir }}/../inventories/production/group_vars/all/vars.yml"
     - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
   vars:
     src_root: /opt/ircfiber-site
@@ -19,6 +19,15 @@
       ansible.builtin.assert:
         that: src_root == "/opt/ircfiber-site"
         fail_msg: "Site deploy src_root must be /opt/ircfiber-site"
+    - name: Ensure {{ src_root }} ownership (fix 501 rsync set-times)
+      ansible.builtin.file:
+        path: "{{ src_root }}"
+        state: directory
+        owner: deploy
+        group: deploy
+        mode: "0755"
+        recurse: true
+      become: true
     - name: rsync site source → {{ src_root }} (duplicated common)
       become: false
       ansible.posix.synchronize:
@@ -28,6 +37,7 @@
         checksum: true
         rsync_opts:
           - "--omit-dir-times"
+          - "--no-perms"
           - "--exclude=.git"
           - "--exclude=node_modules"
           - "--exclude=.dub"

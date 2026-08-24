@@ -3,6 +3,7 @@ module ircfiber.api.image_proxy;
 import std.algorithm : canFind, startsWith, endsWith;
 import std.array : replicate;
 import std.conv : to;
+import std.random : choice;
 import std.string : toLower, strip, indexOf, lastIndexOf;
 import core.time : seconds, Duration;
 import core.sync.mutex : Mutex;
@@ -319,12 +320,16 @@ void handleImageProxy(HTTPServerRequest req, HTTPServerResponse res) {
         // buffer for caching while streaming
         ubyte[] cacheAccum;
         bool cacheAccumEnabled = true;
-
         try {
             requestHTTP(fetchUrl,
                 (scope HTTPClientRequest r) {
                     r.method = HTTPMethod.GET;
-                    r.headers["User-Agent"] = "IRC-Fiber-ImageProxy/1.0";
+                    string[] user_agent_list = [
+                          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+                          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+                          "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+                    ];
+                    r.headers["User-Agent"] = choice(user_agent_list);
                     r.headers["Accept"] = "image/*,*/*;q=0.8";
                     r.headers["Accept-Encoding"] = "identity";
                     r.headers["Connection"] = "keep-alive";

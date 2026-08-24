@@ -9,6 +9,11 @@
 </div>
 
 <style>
+  .row.dateChange {
+    contain: layout paint;
+    content-visibility: auto;
+    contain-intrinsic-size: 0 29px;
+  }
   /* IRCCloud date rows scroll with the log — the floating date pinned to
      the top of the viewport is the ScrollClock overlay, not a sticky row.
      (Sticky here caused a doubled date bar while scrolled up.) */
@@ -23,6 +28,7 @@
     color: #e6e6e6;
     background: #333;
     box-shadow: inset 0 -3px 0 #4d4d4d, inset 0 -4px 0 #262626, inset 0 -1px 0 #262626;
+    contain: layout paint;
   }
   .relTime {
     font-family: Hack, monospace;

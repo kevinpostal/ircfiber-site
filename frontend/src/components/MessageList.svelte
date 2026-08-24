@@ -14,7 +14,7 @@
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
   import { dividerPos as sharedDividerPos, animateScrollTo, cancelScrollAnimation } from '../lib/scroll';
-  import { captureScrollAnchor, takeScrollAnchor } from '../lib/scrollAnchor';
+  import { captureScrollAnchor, takeScrollAnchor, consumeScrollAnchor } from '../lib/scrollAnchor';
   import type { IRCMessage, Member, Network } from '../types';
 
   interface Props {
@@ -411,7 +411,6 @@
     const oldH = container.scrollHeight;
     const oldTop = container.scrollTop;
     captureScrollAnchor(container);
-    const anchorBefore = takeScrollAnchor();
     const calc = Math.max(0, start - BATCH_SIZE);
     windowRevealInProgress = true;
     renderStart = calc;
@@ -483,7 +482,11 @@
   });
 
   let infiniteLoading = $state(false);
+  let lastInfiniteLoadAt = 0;
   async function infiniteHandler() {
+    const now = Date.now();
+    if (now - lastInfiniteLoadAt < 500) return;
+    lastInfiniteLoadAt = now;
     if (infiniteLoading) {
       return;
     }
@@ -2229,11 +2232,15 @@
      layout push — keep it non-affecting. */
   .backlogDivider {
     margin: 0;
+    contain: layout paint;
+    content-visibility: auto;
+    contain-intrinsic-size: 0 21px;
   }
   .backlogDivider hr {
     margin: 20px 0;
     border: none;
     border-top: 1px solid #1e72ff;
+    contain: layout paint;
   }
   .stickyAvatar {
     position: absolute;
