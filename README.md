@@ -15,6 +15,8 @@
 [![Hits](https://hits.dwyl.com/kevinpostal/ircfiber-site.svg)](https://hits.dwyl.com/kevinpostal/ircfiber-site)
 ![Ansible](https://img.shields.io/badge/Ansible-decoupled-E00)
 
+<p align="center"><a href="https://skillicons.dev"><img src="https://skillicons.dev/icons?i=py,django,js,ts,react,go,docker,postgres,redis&perline=8" alt="Skills" /></a></p>
+
 ## Why this matters for hiring
 
 At **National Services Group** I built `Django`/`DRF` gateways for 6 brands (50K+ users) and at **Walmart** I worked on `OPUS` (millions). This gateway is the same pattern in `D` — replace `vibe.d` with `Django`, keep the contract:
