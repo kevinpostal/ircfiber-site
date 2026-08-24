@@ -19,6 +19,24 @@
     ircfiber_gateway_image_full: "irc-fiber-gateway:latest"
     ircfiber_admin_password_reset: "{{ vault_ircfiber_admin_password | default('') }}"
   tasks:
+    - name: Discover this host's Tailscale IPv4 address
+      ansible.builtin.command: tailscale ip -4
+      register: tailscale_ip_raw
+      changed_when: false
+      failed_when: tailscale_ip_raw.rc != 0
+      check_mode: false
+
+    - name: Set host_tailscale_ip fact
+      ansible.builtin.set_fact:
+        host_tailscale_ip: "{{ tailscale_ip_raw.stdout | trim | split('\n') | first | trim }}"
+
+    - name: Resolve backend Tailscale IP (where mongo & redis live)
+      ansible.builtin.set_fact:
+        backend_tailscale_ip: >-
+          {{ hostvars[groups['ircfiber_backend'][0]]['backend_tailscale_ip']
+             | default(hostvars[groups['ircfiber_backend'][0]]['host_tailscale_ip']
+                | default(host_tailscale_ip)) }}
+
     - name: Ensure ircfiber config dir exists (for env)
       ansible.builtin.file:
         path: /etc/ircfiber/gateway
