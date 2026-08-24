@@ -12,6 +12,7 @@
 ![Vite](https://img.shields.io/badge/Vite-6-646CFF)
 ![D vibe.d](https://img.shields.io/badge/D-vibe.d-8B0000)
 ![Docker](https://img.shields.io/badge/Docker-BuildKit-2496ED)
+[![Hits](https://hits.dwyl.com/kevinpostal/ircfiber-site.svg)](https://hits.dwyl.com/kevinpostal/ircfiber-site)
 ![Ansible](https://img.shields.io/badge/Ansible-decoupled-E00)
 
 ## Why this matters for hiring
