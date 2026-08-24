@@ -284,7 +284,6 @@
   .artPreviewWrap{margin-top:8px;cursor:pointer;min-width:0}
   .artPreview{background:#000;border:1px solid #1e232b;border-radius:6px;padding:10px 12px;overflow:auto;font:11px/1.25 "Hack",monospace;max-height:220px}
   .artPreview.full{max-height:none}
-  .more{font-size:10px;color:#58a6ff;margin-top:4px}
   .fileActions{display:flex;gap:6px;flex-wrap:wrap}
   .actionBtn{background:#1a1f29;color:#c9d1d9;border:1px solid #232a36;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer}
   .actionBtn:hover{background:#232a36}

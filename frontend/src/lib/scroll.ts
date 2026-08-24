@@ -52,6 +52,11 @@ export function smoothScrollBy(container: HTMLElement, delta: number, duration =
 }
 
 export function dividerPos(container: HTMLElement, divider: HTMLElement): number {
+  // IRCCloud uses jQuery r.position().top which is offsetTop relative to
+  // the scroll container (offsetParent). Use offsetTop when available;
+  // fallback to boundingRect for detached/transformed cases.
+  const offset = (divider as HTMLElement).offsetTop;
+  if (offset && container.contains(divider)) return Math.round(offset);
   return Math.round(
     divider.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop,
   );

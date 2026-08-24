@@ -411,26 +411,26 @@
     white-space: pre;
     letter-spacing: normal;
   }
-  .textWrap.paste .editor .hljs {
+  .textWrap.paste .editor :global(.hljs) {
     background: #141414;
     color: #F8F8F8;
     padding: 0;
   }
-  .textWrap.paste .editor .hljs-keyword,
-  .textWrap.paste .editor .hljs-meta { color: #CDA869; }
-  .textWrap.paste .editor .hljs-string { color: #8F9D6A; }
-  .textWrap.paste .editor .hljs-regexp { color: #E9C062; }
-  .textWrap.paste .editor .hljs-comment { color: #5F5A60; font-style: italic; }
-  .textWrap.paste .editor .hljs-variable { color: #7587A6; }
-  .textWrap.paste .editor .hljs-tag,
-  .textWrap.paste .editor .hljs-name { color: #AC885B; }
-  .textWrap.paste .editor .hljs-attr { color: #7587A6; }
-  .textWrap.paste .editor .hljs-attribute { color: #9B859D; }
-  .textWrap.paste .editor .hljs-title { color: #AC885B; }
-  .textWrap.paste .editor .hljs-built_in { color: #9B859D; }
-  .textWrap.paste .editor .hljs-number,
-  .textWrap.paste .editor .hljs-literal { color: #CF6A4C; }
-  .textWrap.paste .editor .hljs-type { color: #9B859D; }
-  .textWrap.paste .editor .hljs-selector-class,
-  .textWrap.paste .editor .hljs-selector-id { color: #F9EE98; }
+  .textWrap.paste .editor :global(.hljs-keyword),
+  .textWrap.paste .editor :global(.hljs-meta) { color: #CDA869; }
+  .textWrap.paste .editor :global(.hljs-string) { color: #8F9D6A; }
+  .textWrap.paste .editor :global(.hljs-regexp) { color: #E9C062; }
+  .textWrap.paste .editor :global(.hljs-comment) { color: #5F5A60; font-style: italic; }
+  .textWrap.paste .editor :global(.hljs-variable) { color: #7587A6; }
+  .textWrap.paste .editor :global(.hljs-tag),
+  .textWrap.paste .editor :global(.hljs-name) { color: #AC885B; }
+  .textWrap.paste .editor :global(.hljs-attr) { color: #7587A6; }
+  .textWrap.paste .editor :global(.hljs-attribute) { color: #9B859D; }
+  .textWrap.paste .editor :global(.hljs-title) { color: #AC885B; }
+  .textWrap.paste .editor :global(.hljs-built_in) { color: #9B859D; }
+  .textWrap.paste .editor :global(.hljs-number),
+  .textWrap.paste .editor :global(.hljs-literal) { color: #CF6A4C; }
+  .textWrap.paste .editor :global(.hljs-type) { color: #9B859D; }
+  .textWrap.paste .editor :global(.hljs-selector-class),
+  .textWrap.paste .editor :global(.hljs-selector-id) { color: #F9EE98; }
 </style>

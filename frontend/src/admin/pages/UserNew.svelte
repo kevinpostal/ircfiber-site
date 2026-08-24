@@ -14,6 +14,11 @@
   let password = $state('');
   let submitting = $state(false);
   let error = $state<string | null>(null);
+  let usernameInput: HTMLInputElement | undefined = $state(undefined);
+
+  onMount(() => {
+    usernameInput?.focus();
+  });
 
   async function handleSubmit(e: Event) {
     e.preventDefault();
@@ -39,18 +44,18 @@
 <Card class="max-w-lg">
   <form onsubmit={handleSubmit} class="space-y-4">
     <div>
-      <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Username</label>
-      <input type="text" bind:value={username} required autofocus
+      <label for="username" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Username</label>
+      <input id="username" bind:this={usernameInput} type="text" bind:value={username} required
         class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
     </div>
     <div>
-      <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Email</label>
-      <input type="email" bind:value={email} required
+      <label for="email" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Email</label>
+      <input id="email" type="email" bind:value={email} required
         class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
     </div>
     <div>
-      <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Password</label>
-      <input type="password" bind:value={password} required
+      <label for="password" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Password</label>
+      <input id="password" type="password" bind:value={password} required
         class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
     </div>
     <div class="flex items-center gap-2 pt-2">

@@ -14,7 +14,7 @@
 
   let loading = $state(false);
   let fetchFailed = $state(false);
-  let noMoreHistory = $state(true); // start hidden to avoid flash — probe will show if needed
+  let noMoreHistory = $state(false); // start visible for large buffers; probe/silent-fill will hide if needed
   // $state so the viewport-fill effect re-runs once onMount assigns it.
   let scrollEl = $state<HTMLElement | null>(null);
   let consecutiveEmptyLoads = 0;

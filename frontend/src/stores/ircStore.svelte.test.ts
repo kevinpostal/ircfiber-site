@@ -37,7 +37,7 @@ import {
 	isUserDisconnected,
 	initiateRejoin,
 	resetPendingState,
-	clearPendingNickChanges,
+	clearPendingNickChanges, clearPendingMemberRemovals,
 	applyRetryStatus,
 	applyFail,
 } from './ircStore.svelte';
@@ -1671,6 +1671,7 @@ describe('self-nick presence in member list (W8-T01)', () => {
 });
 
 describe('phantom buffers (URL nav auto-create)', () => {
+  beforeEach(() => clearPendingMemberRemovals());
 	it('setActiveBuffer auto-create marks channel buffers as isPhantom', () => {
 		const net = createNetwork();
 		ircState.networks.push(net);

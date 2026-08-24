@@ -581,7 +581,6 @@
   .editFormFull .form {
     margin: 0;
   }
-  .editFormFull .buttons,
   .editFormFull .editActions {
     display: flex;
     gap: 8px;

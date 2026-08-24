@@ -208,8 +208,8 @@
 >
   <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
     <div class="md:col-span-2">
-      <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Collection</label>
-      <select bind:value={qCollection} class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none">
+      <label for="qCollection" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Collection</label>
+      <select id="qCollection" bind:value={qCollection} class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none">
         <option value="">— select —</option>
         {#each sortedCollections as c}
           <option value={c.name}>{c.name}</option>
@@ -217,17 +217,17 @@
       </select>
     </div>
     <div>
-      <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Limit</label>
-      <input type="number" bind:value={qLimit} min="1" max={MONGO_LIMITS.maxLimit} class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
+      <label for="qLimit" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Limit</label>
+      <input id="qLimit" type="number" bind:value={qLimit} min="1" max={MONGO_LIMITS.maxLimit} class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
     </div>
     <div>
-      <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Max time (ms)</label>
-      <input type="number" bind:value={qMaxTimeMs} min="1" max={MONGO_LIMITS.maxTimeMs} class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
+      <label for="qMaxTimeMs" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Max time (ms)</label>
+      <input id="qMaxTimeMs" type="number" bind:value={qMaxTimeMs} min="1" max={MONGO_LIMITS.maxTimeMs} class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
     </div>
   </div>
   <div class="mt-3">
-    <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Filter (JSON)</label>
-    <textarea bind:value={qFilter} rows="3" class="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs text-text focus:border-primary focus:outline-none"></textarea>
+    <label for="qFilter" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Filter (JSON)</label>
+    <textarea id="qFilter" bind:value={qFilter} rows="3" class="w-full rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs text-text focus:border-primary focus:outline-none"></textarea>
     <div class="mt-1 text-xs">
       {#if safetyCheck.ok}
         <span class="text-success">✓ Filter looks safe</span>

@@ -849,6 +849,8 @@ let showNetworkForm: boolean = $state(false);
     }
   }
 
+  // Debug: expose ircState for member list inspection
+  if (typeof window !== 'undefined') (window as any).ircState = ircState;
   function handleWsMessage(data: unknown): void {
     if (Array.isArray(data)) {
       for (const item of data) processEvent(item as Record<string, unknown>);

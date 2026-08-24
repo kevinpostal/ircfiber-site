@@ -85,10 +85,9 @@
   });
 
   // svelte-ignore non_reactive_update — bind:this targets, not user state
-  let editorEl: HTMLTextAreaElement | undefined;
-  let hlEl: HTMLPreElement | undefined;
-  let gutterEl: HTMLPreElement | undefined;
-
+  let editorEl: HTMLTextAreaElement | undefined = $state(undefined);
+  let hlEl: HTMLPreElement | undefined = $state(undefined);
+  let gutterEl: HTMLPreElement | undefined = $state(undefined);
   function syncScroll(): void {
     if (!editorEl) return;
     const top = editorEl.scrollTop;

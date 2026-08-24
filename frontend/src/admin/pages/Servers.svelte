@@ -322,19 +322,19 @@
             onsubmit={(e) => { e.preventDefault(); saveConfig(engine.serverId); }}
           >
             <div>
-              <label class="block text-muted">Priority</label>
-              <input type="number" name="priority" value={engine.priority}
+              <label for="priority" class="block text-muted">Priority</label>
+              <input id="priority" type="number" name="priority" value={engine.priority}
                 class="mt-0.5 w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-text" />
             </div>
             <div>
-              <label class="block text-muted">Engine Cap</label>
-              <input type="number" name="maxConnections" value={engine.maxConnections} min="0"
+              <label for="maxConnections" class="block text-muted">Engine Cap</label>
+              <input id="maxConnections" type="number" name="maxConnections" value={engine.maxConnections} min="0"
                 class="mt-0.5 w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-text" />
               <div class="text-[10px] text-muted">0 = unlimited</div>
             </div>
             <div>
-              <label class="block text-muted">Fallback</label>
-              <select name="fallbackOnly"
+              <label for="fallbackOnly" class="block text-muted">Fallback</label>
+              <select id="fallbackOnly" name="fallbackOnly"
                 class="mt-0.5 rounded border border-border bg-surface px-2 py-1 text-xs text-text">
                 <option value="false" selected={!engine.fallbackOnly}>No</option>
                 <option value="true" selected={engine.fallbackOnly}>Yes</option>
@@ -357,8 +357,8 @@
 <Card title="Host Connection Routing" subtitle="Per-host capacity across engines">
   {#snippet actions()}
     <form id="routing-form" class="flex items-center gap-2 text-xs" onsubmit={(e) => { e.preventDefault(); saveRouting(); }}>
-      <label class="text-muted">Cap:</label>
-      <input type="number" name="maxConnsPerHost" value={data?.maxConnsPerHost ?? 5}
+      <label for="maxConnsPerHost" class="text-muted">Cap:</label>
+      <input id="maxConnsPerHost" type="number" name="maxConnsPerHost" value={data?.maxConnsPerHost ?? 5}
         class="w-16 rounded border border-border bg-surface px-2 py-1 text-center text-xs text-text" />
       <button type="submit" class="rounded bg-primary px-2 py-1 text-xs font-semibold text-primary-fg hover:bg-primary/90">
         Set

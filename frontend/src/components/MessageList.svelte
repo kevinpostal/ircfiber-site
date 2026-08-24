@@ -13,7 +13,7 @@
   import ScrollClock from './ScrollClock.svelte';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
-  import { dividerPos as sharedDividerPos, animateScrollTo } from '../lib/scroll';
+  import { dividerPos as sharedDividerPos, animateScrollTo, cancelScrollAnimation } from '../lib/scroll';
   import { captureScrollAnchor, takeScrollAnchor } from '../lib/scrollAnchor';
   import type { IRCMessage, Member, Network } from '../types';
 
@@ -143,14 +143,16 @@
       if (!clearedAt) {
         const jpFiltered = filterJoinPart(cached);
         const awayFiltered = filterAway(jpFiltered);
-        perfMeasure(`processedMessages len=${awayFiltered.length} (cache hit)`, t0);
-        return awayFiltered;
+        const skippedFiltered = awayFiltered.filter(m => !isSkippedCommand(m.command));
+        perfMeasure(`processedMessages len=${skippedFiltered.length} (cache hit)`, t0);
+        return skippedFiltered;
       }
       const filtered = cached.filter(m => (m.t || 0) > clearedAt);
       const jpFiltered = filterJoinPart(filtered);
       const awayFiltered = filterAway(jpFiltered);
-      perfMeasure(`processedMessages len=${awayFiltered.length} (cache hit, cleared)`, t0);
-      return awayFiltered;
+      const skippedFiltered = awayFiltered.filter(m => !isSkippedCommand(m.command));
+      perfMeasure(`processedMessages len=${skippedFiltered.length} (cache hit, cleared)`, t0);
+      return skippedFiltered;
     }
     // Fallback: cold start / cache miss.  We can't write to the cache
     // from inside a $derived (Svelte 5 forbids state mutation in derived
@@ -169,8 +171,9 @@
     const result = preprocessMessages(noEmpty);
     const jpFiltered = filterJoinPart(result);
     const awayFiltered = filterAway(jpFiltered);
-    perfMeasure(`processedMessages len=${awayFiltered.length} (cold)`, t0);
-    return awayFiltered;
+    const skippedFiltered = awayFiltered.filter(m => !isSkippedCommand(m.command));
+    perfMeasure(`processedMessages len=${skippedFiltered.length} (cold)`, t0);
+    return skippedFiltered;
   });
 
   function checkSameAuthor(msg: IRCMessage, prev: IRCMessage | null): boolean;
@@ -281,11 +284,9 @@
   const BATCH_SIZE = 200;
   const TRIM_DETECT_THRESHOLD = 350;
   const TRIM_THRESHOLD = 200;
-  // stick-to-bottom-svelte's STICK_TO_BOTTOM_OFFSET_PX: after the user
-  // scrolls up (breaking the stick), a DOWNWARD scroll into this band
-  // re-engages the bottom-stick. A stopped position within the band does
-  // NOT re-engage — reading 50px up is never yanked.
-  const STICK_BAND_PX = 70;
+  // IRCCloud parity: stick is strict 1px, no 70px band. Keep constant for
+  // CSS scroll-snap but don't use for logic — logic uses 1px like IRCCloud.
+  const STICK_BAND_PX = 1;
   let renderStart = $state(0);
   // IRCCloud BufferLogView.lastSeenEid — track the eid for which the
   // "New messages" divider was last rendered, per buffer, to avoid
@@ -327,16 +328,25 @@
     });
     return m;
   });
-
-  // IRCCloud BufferLogView.checkTrim — only while scrolled to the bottom.
-  // Pixel-aware for ANSI art: one blockArt row can be 20-100 visual lines
-  // (thousands of spans) so count alone under-trims. Also trim when
+  // Helper: are we reading history (far from bottom, not latched)? If so, never snap to bottom.
+  // IRCCloud: reading iff not pinned and not at exact bottom (1px). No 70/200 invention.
+  function isReadingHistory(): boolean {
+    if (pendingInitialSnap) return false;
+    if (!container) return false;
+    const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
+    return !cachedAtBottom && dist > 1;
+  }
   // scrollHeight exceeds ~12k px (roughly 200 normal rows).
   function maybeTrim(): void {
+    if (isReadingHistory()) return;
+    if (container) {
+      const isDomAtBottom = container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1;
+      if (!cachedAtBottom && !isDomAtBottom) return;
+    } else if (!cachedAtBottom) return;
     const len = processedMessages.length;
     const start = untrack(() => renderStart);
     const countOver = len - start > TRIM_DETECT_THRESHOLD;
-    const pixelOver = !!container && container.scrollHeight > 12000;
+    const pixelOver = !!container && container.scrollHeight > Math.max(20000, container.clientHeight * 30);
     if (countOver || pixelOver) {
       // Keep 200 normally, but if pixel-heavy keep fewer to bound paint.
       const keep = pixelOver && !countOver ? 150 : TRIM_THRESHOLD;
@@ -348,6 +358,7 @@
         // clamped, but the 200ms resnap poll sees scrollTop < prevScrollTop
         // and clears the bottom stick, leaving a visible "snap up".
         if (cachedAtBottom && container) {
+          if (isReadingHistory()) return;
           // Defer to next tick + rAF so DOM has updated scrollHeight
           // and layout has flushed, then force to true bottom and
           // schedule the resnap poll to catch late image/decode growth.
@@ -385,7 +396,8 @@
     // IRCCloud checkInfiniscroll: isScrolledToTop() is scrollTop===0 exact, not <=200.
     // Only fire when truly at top (0), not 200px before. Prevents eager
     // 3×200 pre-load that hid the continuous-scroll feel.
-    const atTop = container.scrollTop <= 0;
+    const atTop = container.scrollTop === 0;
+    if (!atTop) return false;
     const scrollBottom = container.clientHeight + Math.ceil(container.scrollTop);
     const pinBottom = container.scrollHeight - scrollBottom <= 1;
 
@@ -419,26 +431,13 @@
         container.scrollTop = a - 31;
         const target = Math.max(a - 152, 48);
         animateScrollTo(container, target, 100);
-      } else if (atTop && anchorBefore) {
-        // Fallback when divider not yet rendered (rare): exact anchor
-        const rows = Array.from(container.querySelectorAll('.row.messageRow')) as HTMLElement[];
-        const match = rows.find((r) => (r.dataset.msgid || 't:' + r.dataset.time) === anchorBefore.msgid);
-        if (match) {
-          const displacement = match.getBoundingClientRect().top - anchorBefore.top;
-          if (displacement !== 0) container.scrollTop = oldTop + displacement;
-        } else {
-          const delta = container.scrollHeight - oldH;
-          if (delta !== 0) container.scrollTop = oldTop + delta;
-        }
-      } else if (atTop) {
-        preserveReadingPosition(container, oldTop);
       } else {
         const delta = container.scrollHeight - oldH;
         if (delta !== 0) container.scrollTop = oldTop + delta;
       }
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
-      cachedAtTop = container.scrollTop <= 0;
+      cachedAtTop = container.scrollTop === 0;
       cachedAtBottom = false;
       wasRecentlyAtBottom = false;
     }
@@ -494,10 +493,16 @@
       // from maybeTrim during a flood — was revealed and then loading
       // stopped because the sentinel never re-fires at scrollTop=0.)
       let revealGuard = 0;
-      while (container && container.scrollTop <= 200) {
+      while (container && container.scrollTop === 0) {
         if (!revealBacklogFromMemory()) break;
         revealGuard++;
         if (revealGuard >= 20) break;
+      }
+      // IRCCloud isFirstMessageRendered guard: only hit network when all memory rendered
+      const isFirstMessageRendered = untrack(() => renderStart) === 0;
+      if (!isFirstMessageRendered) {
+        loaderState?.loaded();
+        return;
       }
       if (!onLoadMore) {
         loaderState?.complete();
@@ -520,14 +525,14 @@
         }
         loaderState?.loaded();
         batches++;
-        if (!container || container.scrollTop > 200) break;
+        if (!container || container.scrollTop !== 0) break;
         if (batches < MAX_BATCHES_PER_TRIGGER) {
-          await new Promise((r) => setTimeout(r, 350));
+          await new Promise((r) => setTimeout(r, 200));
         }
       }
-      if (!completed && container && container.scrollTop <= 200 && !isServerBuffer) {
+      if (!completed && container && container.scrollTop === 0 && !isServerBuffer) {
         setTimeout(() => {
-          if (container && container.scrollTop <= 200 && !infiniteLoading && !isServerBuffer) {
+          if (container && container.scrollTop === 0 && !infiniteLoading && !isServerBuffer) {
             void infiniteHandler();
           }
         }, 500);
@@ -841,6 +846,7 @@
       pinnedResnapTimer = null;
       if (!container) return;
       if (!cachedAtBottom) return;
+      if (isReadingHistory()) return;
       if (container.scrollTop < prevScrollTop) {
         // Trim reduces scrollHeight and clamps scrollTop down — this is
         // not a user scroll-up. Only clear the stick if height didn't shrink.
@@ -931,6 +937,7 @@
     if (!el) return;
     const snapIfPinned = () => {
       if (!container) return;
+      if (isReadingHistory()) return;
       if (!cachedAtBottom || container.scrollTop < prevScrollTop - 1) return;
       const scrollHeight = container.scrollHeight;
       const offsetHeight = container.clientHeight;
@@ -1069,16 +1076,13 @@
           untrack(() => { cachedAtBottom = true; });
           cachedAtTop = false;
         } else {
-          const rawOldH = container ? container.scrollHeight : 0;
-          const rawOldTop = container ? container.scrollTop : 0;
-          const usePrev = prevScrollHeight !== 0 && prevScrollTop !== 0 && Math.abs(rawOldH - prevScrollHeight) > 500;
-          const oldScrollHeight = usePrev ? prevScrollHeight : rawOldH;
-          const oldScrollTop = usePrev ? prevScrollTop : rawOldTop;
-          const atTopBefore = oldScrollTop <= 0;
+          const oldScrollHeight = container ? container.scrollHeight : 0;
+          const oldScrollTop = container ? container.scrollTop : 0;
+          const atTopBefore = oldScrollTop === 0;
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
           const scrollBottomBefore = container ? container.clientHeight + Math.ceil(oldScrollTop) : 0;
           const pinBottomBefore = oldScrollHeight - scrollBottomBefore <= 1;
-          if ((pendingInitialSnap && untrack(() => cachedAtBottom)) || pinBottomBefore) {
+          if (((pendingInitialSnap && untrack(() => cachedAtBottom)) || pinBottomBefore) && !isReadingHistory()) {
             // Still in the initial snap window (first URL load). Keep the
             // window pinned to the tail so we stay at the very bottom when
             // loadHistory prepends the remaining backlog right after the
@@ -1144,7 +1148,7 @@
         // satisfy neededStart>start and be yanked back to tail.
         const start = untrack(() => renderStart);
         const neededStart = Math.max(0, msgs.length - BATCH_SIZE);
-        if (neededStart > start && untrack(() => cachedAtBottom) && !untrack(() => renderEndKey) && msgs.length > lastProcessedLength && !windowRevealInProgress) {
+        if (neededStart > start && untrack(() => cachedAtBottom) && !untrack(() => renderEndKey) && msgs.length > lastProcessedLength && !windowRevealInProgress && !isReadingHistory()) {
           untrack(() => { renderStart = neededStart; });
         }
       }
@@ -1172,7 +1176,7 @@
     // MessageList.refresh.test.ts async arrival case.
     const hasMessagesForInitialSnap = processedMessages.length > 0;
     const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
-    const isDomAtBottom = !container || container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1;
+    const isDomAtBottom = !container || container.scrollHeight <= container.clientHeight + 1 || container.scrollHeight - (container.clientHeight + Math.ceil(container.scrollTop)) <= 1;
     // IRCCloud BufferScrollView.flushBuffer uses strict isScrolledToBottom() (1px, no wasRecently)
     // to decide whether to buffer incoming messages while reading. wasRecently (100ms grace)
     // is only for textarea autogrow, not for message pin. Using wasRecently here caused
@@ -1192,7 +1196,7 @@
     // comes in it forces it to bottom"). IRCCloud's BufferLogView.renderMessage
     // still respects shouldPinBottom for NOTICEs/actions — they buffer when
     // scrolled up. So we do NOT auto-pin on message type; only on pin state.
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap) && !(newDivider && cachedAtTop);
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap) && !(newDivider && cachedAtTop) && !isReadingHistory();
     if (shouldSnapToBottom) {
       // If DOM is at bottom but cached state is stale, correct it so future
       // handleScroll checks see the right baseline and don't mis-fire scrolledUp.
@@ -1373,7 +1377,7 @@
     // IRCCloud checks scrollTop===0 exact, not a 200px band. Only fire
     // when truly at top (0), not 200px before, to get the single-batch
     // per top-hit cadence.
-    cachedAtTop = scrollTop <= 0;
+    cachedAtTop = scrollTop === 0;
     // IRCCloud isScrolledToBottom(true): when already pinned, use a strict
     // 0px check — any intentional scroll-up (even 1px on a trackpad) must
     // clear cachedAtBottom immediately, otherwise the ResizeObserver and
@@ -1385,29 +1389,20 @@
     // within the band does NOT re-stick (reading is never yanked).
     const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
     const distFromBottom = scrollHeight - scrollBottom;
-    const scrolledUp = scrollTop < prevTop && scrollHeight >= prevHeight;
-    const scrolledDown = scrollTop > prevTop && scrollHeight >= prevHeight;
-    const heightChangedWithoutScroll = scrollHeight !== prevHeight && scrollTop === prevTop;
-    // During the initial snap window (pendingInitialSnap), height growth
-    // without scroll is expected as history fills in — don't treat the huge
-    // distFromBottom as leaving the bottom. But only while still pinned at
-    // bottom (cachedAtBottom true) — when user is reading at top (cachedAtTop
-    // true, cachedAtBottom false) a height growth from "Fetching..." must
-    // NOT keep the bottom stick, otherwise ResizeObserver will yank to bottom.
-    // IRCCloud BufferScrollView.shouldPinBottom() is strict 1px (no band);
-    // our STICK_BAND_PX 70px re-engages only on an actual DOWNWARD scroll
-    // into the band — a stopped position within the band does NOT re-stick
-    // (reading 50px up is never yanked back). See bufferscrollview.js
-    // shouldPinBottom + ChatInfinite.atBottomStickiness.
+    const scrolledUp = scrollTop < prevTop;
+    const scrolledDown = scrollTop > prevTop;
+    const heightChangedWithoutScroll = Math.abs(scrollTop - prevTop) <= 1 && scrollHeight !== prevHeight;
+    // IRCCloud strict: atBottom iff dist <=1, regardless of direction except scrolledUp forces false.
+    // pendingInitialSnap window still allows height growth without leaving bottom.
     const atBottom = scrolledUp
       ? false
       : scrollHeight < prevHeight && cachedAtBottom
         ? true
-        : pendingInitialSnap && heightChangedWithoutScroll && cachedAtBottom && !cachedAtTop
+        : pendingInitialSnap && heightChangedWithoutScroll && cachedAtBottom && !cachedAtTop && !isReadingHistory()
           ? true
           : cachedAtBottom && !cachedAtTop
             ? heightChangedWithoutScroll ? true : distFromBottom <= 1
-            : scrolledDown ? distFromBottom <= STICK_BAND_PX : false;
+            : distFromBottom <= 1;
     if (cachedAtBottom === atBottom) {
       // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
       scheduleScrollStateUpdate();
@@ -1441,7 +1436,7 @@
         // misread as pinned-drift by the poll/RO and re-yanked, and its
         // stale baseline would misfire the effect's scrolledUp check on
         // the next message.
-        if (container.scrollHeight - container.clientHeight - container.scrollTop > 0) {
+        if (!isReadingHistory() && container.scrollHeight - container.clientHeight - container.scrollTop > 0) {
           container.scrollTop = container.scrollHeight;
           prevScrollTop = container.scrollTop;
           prevScrollHeight = container.scrollHeight;
@@ -1539,6 +1534,8 @@
     if (!el) return;
     const clearStickOnUserInput = () => {
       if (pendingInitialSnap) pendingInitialSnap = false;
+      // Fast-scroll: cancel half-way animation so user's momentum isn't fighting rAF
+      try { cancelScrollAnimation(); } catch {}
       if (!cachedAtBottom && !wasRecentlyAtBottom) return;
       cachedAtBottom = false;
       wasRecentlyAtBottom = false;
@@ -1548,6 +1545,7 @@
     };
     const onWheel = (e: WheelEvent) => {
       if (!container) return;
+      try { cancelScrollAnimation(); } catch {}
       const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
       if (e.deltaY > 0 && atBottom) {
         e.preventDefault();
@@ -1555,11 +1553,40 @@
       }
       if (e.deltaY < 0) clearStickOnUserInput();
     };
-    const onPointerDown = () => clearStickOnUserInput();
+    const onPointerDown = () => {
+      try { cancelScrollAnimation(); } catch {}
+      clearStickOnUserInput();
+    };
     const onKeyDown = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || (t as HTMLElement).isContentEditable)) return;
-      if (SCROLL_KEYS.has(e.key)) clearStickOnUserInput();
+      if (!SCROLL_KEYS.has(e.key) || !container) return;
+      // Fast-scroll: cancel half-way animation so user's momentum isn't fighting rAF
+      try { cancelScrollAnimation(); } catch {}
+      // "press up 1 time goes up by 1 each time, not snap back" match IRCCloud.
+      clearStickOnUserInput();
+      let delta = 0;
+      let absolute: number | null = null;
+      const line = 40; // ~1 row, matches IRCCloud native line scroll
+      if (e.key === 'ArrowUp') delta = -line;
+      else if (e.key === 'ArrowDown') delta = line;
+      else if (e.key === 'PageUp') delta = -Math.max(100, container.clientHeight * 0.9);
+      else if (e.key === 'PageDown') delta = Math.max(100, container.clientHeight * 0.9);
+      else if (e.key === 'Home') absolute = 0;
+      else if (e.key === 'End') absolute = container.scrollHeight;
+      else if (e.key === ' ' || e.key === 'Spacebar') delta = e.shiftKey ? -Math.max(100, container.clientHeight * 0.9) : Math.max(100, container.clientHeight * 0.9);
+      if (absolute !== null) {
+        e.preventDefault();
+        container.scrollTop = absolute;
+        container.dispatchEvent(new Event('scroll'));
+      } else if (delta !== 0) {
+        e.preventDefault();
+        const next = Math.max(0, Math.min(container.scrollHeight - container.clientHeight, container.scrollTop + delta));
+        if (next !== container.scrollTop) {
+          container.scrollTop = next;
+          container.dispatchEvent(new Event('scroll'));
+        }
+      }
     };
     el.addEventListener('scroll', handleScroll, { passive: true });
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -2065,21 +2092,18 @@
 {/if}
 
 <div class="messages-viewport" class:clockShown={clockTs !== null}>
-  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll}>
+  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll} tabindex="0">
     {#if import.meta.env.MODE !== 'test' && InfiniteLoader && loaderState}
       <InfiniteLoader {loaderState} triggerLoad={infiniteHandler} intersectionOptions={infiniteOptions}>
-        {#snippet children()}
-        {/snippet}
+        {#snippet children()}<!-- children rendered via store -->{/snippet}
         {#snippet loading()}
           <div class="row fetch" role="status" aria-label="Loading history">
             <hr />
             <h4 class="divider-text-wrapper"><span class="divider-text">Fetching more history…</span></h4>
           </div>
         {/snippet}
-        {#snippet noData()}
-        {/snippet}
-        {#snippet noResults()}
-        {/snippet}
+        {#snippet noData()}<!-- no more history -->{/snippet}
+        {#snippet noResults()}<!-- no results -->{/snippet}
         {#snippet error(load)}
           <div class="row fetch" role="alert">
             <p class="divider-text">Failed to load history</p>

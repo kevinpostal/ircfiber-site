@@ -204,18 +204,18 @@
   <Card title="Edit User" subtitle="Update email and roles">
     <form onsubmit={saveUser} class="space-y-3">
       <div>
-        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Username</label>
-        <input type="text" value={user.username} disabled
+        <label for="editUsername" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Username</label>
+        <input id="editUsername" type="text" value={user.username} disabled
           class="w-full rounded-md border border-border bg-surface/50 px-3 py-2 text-sm text-muted" />
       </div>
       <div>
-        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Email</label>
-        <input type="email" bind:value={editEmail} required
+        <label for="editEmail" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Email</label>
+        <input id="editEmail" type="email" bind:value={editEmail} required
           class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
       </div>
       <div>
-        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Roles (comma-separated)</label>
-        <input type="text" bind:value={editRoles}
+        <label for="editRoles" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Roles (comma-separated)</label>
+        <input id="editRoles" type="text" bind:value={editRoles}
           class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
         <div class="mt-1 flex flex-wrap gap-1">
           {#each user.roles as role}
@@ -338,8 +338,8 @@
     {/if}
     <form onsubmit={resetPassword} class="flex items-end gap-3">
       <div class="flex-1">
-        <label class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">New Password</label>
-        <input type="password" bind:value={newPass} placeholder="Leave blank for 'changeme123'"
+        <label for="newPass" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">New Password</label>
+        <input id="newPass" type="password" bind:value={newPass} placeholder="Leave blank for 'changeme123'"
           class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
       </div>
       <button type="submit" disabled={resetting}

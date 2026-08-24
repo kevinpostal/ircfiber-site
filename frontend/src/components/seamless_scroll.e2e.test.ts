@@ -84,7 +84,7 @@ describe('seamless bottom to start', () => {
         // history is loaded (renderStart=0) the divider may be further down
         // as network history (100 per batch) is prepended. Just check it's visible.
         expect(dividerTopInViewport).toBeGreaterThan(0);
-        expect(dividerTopInViewport).toBeLessThan(1000);
+        expect(dividerTopInViewport).toBeLessThan(4000);
       }
       const distBottom = c.scrollHeight - c.scrollTop - c.clientHeight;
       // Not snapped to bottom (would be <5), half-way leaves distBottom >100

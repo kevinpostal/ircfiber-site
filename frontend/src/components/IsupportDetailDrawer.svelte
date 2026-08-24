@@ -184,7 +184,7 @@
     aria-label="Close server feature detail"
     data-testid="isupport-detail-backdrop"
   ></button>
-  <aside
+  <div
     class="isupport-detail"
     role="dialog"
     aria-modal="true"
@@ -297,7 +297,7 @@
         </section>
       {/if}
     </div>
-  </aside>
+  </div>
 {/if}
 
 <style>

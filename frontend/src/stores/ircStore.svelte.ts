@@ -174,6 +174,9 @@ let previousBuffer: { networkId: string | null; bufferName: string | null } = { 
 const pendingNickChanges: Map<string, { newNick: string; setAt: number }> = new Map();
 /** Exported for test cleanup only — clears all pending nick change entries. */
 export function clearPendingNickChanges(): void { pendingNickChanges.clear(); }
+const pendingMemberRemovals: Map<string, { setAt: number }> = new Map();
+const PENDING_REMOVAL_TTL_MS = 20_000;
+export function clearPendingMemberRemovals(): void { pendingMemberRemovals.clear(); }
 // Auto-clear stale pending entries after 60s in case a sync never confirms.
 const PENDING_NICK_TTL_MS = 60_000;
 // How long a /nick attempt stays pending before we give up on the echo
@@ -2183,8 +2186,8 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
           // entries once the sync catches up with the new nick.
           const now = Date.now();
           const bufKey = `${existing.networkId}:${incomingBuf.name}`;
-          const patchedUsers: Member[] = [];
-          for (const m of incomingBuf.users) {
+          let patchedUsers: Member[] = [];
+          for (const m of (incomingBuf.users ?? [])) {
             const bare = stripPrefix(m.nick);
             const pendingKey = `${bufKey}:${bare}`;
             const pending = pendingNickChanges.get(pendingKey);
@@ -2214,6 +2217,28 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
               pendingNickChanges.delete(k);
             }
           }
+          // Filter out stale nicks that were removed live but are still in the sync snapshot
+          const now2 = Date.now();
+          patchedUsers = patchedUsers.filter(m => {
+            const bare = stripPrefix(m.nick);
+            const key = `${existing.networkId}:${incomingBuf.name}:${bare}`;
+            const pend = pendingMemberRemovals.get(key);
+            if (!pend) {
+              const quitKey = `${existing.networkId}:*:${bare}`;
+              const quitPend = pendingMemberRemovals.get(quitKey);
+              if (!quitPend) return true;
+              if (quitPend.setAt + PENDING_REMOVAL_TTL_MS < now2) {
+                pendingMemberRemovals.delete(quitKey);
+                return true;
+              }
+              return false;
+            }
+            if (pend.setAt + PENDING_REMOVAL_TTL_MS < now2) {
+              pendingMemberRemovals.delete(key);
+              return true;
+            }
+            return false;
+          });
           existingBuf.users = patchedUsers;
           // IRCCloud-style: ensure the current user's nick is present in
           // the member list whenever the buffer is genuinely joined. The
@@ -3062,6 +3087,8 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     clearActiveJoin(networkId, normalized);
   } else if (cmd === 'JOIN' && nick && nick !== net.currentNick) {
     const stripped = stripPrefix(nick);
+    pendingMemberRemovals.delete(`${networkId}:${normalized}:${stripped}`);
+    pendingMemberRemovals.delete(`${networkId}:*:${stripped}`);
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
       // Capture the userhost from the prefix so we can populate `ident`
       // and the IRCCloud-style `isBot` flag from the host suffix without
@@ -3100,7 +3127,24 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     clearActiveJoin(networkId, normalized);
     clearJoinPending(networkId, normalized);
   } else if ((cmd === 'PART' || cmd === 'QUIT') && nick) {
-    buf.users = buf.users.filter(u => stripPrefix(u.nick) !== nick);
+    if (cmd === 'QUIT') {
+      for (const b of net.buffers) {
+        if (b.type !== 'channel' || !b.users) continue;
+        const beforeLen = b.users.length;
+        b.users = b.users.filter(u => stripPrefix(u.nick) !== nick);
+        if (b.users.length !== beforeLen) {
+          pendingMemberRemovals.set(`${networkId}:${b.name}:${nick}`, { setAt: Date.now() });
+        }
+      }
+      pendingMemberRemovals.set(`${networkId}:*:${nick}`, { setAt: Date.now() });
+      if (buf.type !== 'channel') {
+        buf.users = buf.users.filter(u => stripPrefix(u.nick) !== nick);
+        pendingMemberRemovals.set(`${networkId}:${buf.name}:${nick}`, { setAt: Date.now() });
+      }
+    } else {
+      buf.users = buf.users.filter(u => stripPrefix(u.nick) !== nick);
+      pendingMemberRemovals.set(`${networkId}:${normalized}:${nick}`, { setAt: Date.now() });
+    }
   } else if (cmd === 'KICK' && params && params[1]) {
     if (params[1] === net.currentNick) {
       buf.isJoined = false;
@@ -3110,7 +3154,10 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       // W1-T06: clear activeJoin tracking on self-KICK
       clearActiveJoin(networkId, normalized);
       clearJoinPending(networkId, normalized);
-    } else buf.users = buf.users.filter(u => stripPrefix(u.nick) !== params[1]);
+    } else {
+      buf.users = buf.users.filter(u => stripPrefix(u.nick) !== params[1]);
+      pendingMemberRemovals.set(`${networkId}:${normalized}:${params[1]}`, { setAt: Date.now() });
+    }
   } else if (cmd === 'NICK' && nick && params && params.length > 0) {
     const newNick = params[params.length - 1];
     // Mutate EVERY entry that matches the old nick. The same user can

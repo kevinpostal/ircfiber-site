@@ -84,7 +84,7 @@
     aria-label="Close capability detail"
     data-testid="cap-detail-backdrop"
   ></button>
-  <aside
+  <div
     class="isupport-detail"
     role="dialog"
     aria-modal="true"
@@ -185,7 +185,7 @@
         </section>
       {/if}
     </div>
-  </aside>
+  </div>
 {/if}
 
 <style>

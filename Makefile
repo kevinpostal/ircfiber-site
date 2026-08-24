@@ -22,8 +22,17 @@
 .DELETE_ON_ERROR:
 .DEFAULT_GOAL := help
 
+# Adaptive SITE/ENGINE dirs — works from root (site/Makefile.site exists) and from site/ (Makefile.site in .)
+ifeq ($(wildcard site/Makefile.site),site/Makefile.site)
 SITE_DIR    := site
 ENGINE_DIR  := engine
+else ifeq ($(wildcard Makefile.site),Makefile.site)
+SITE_DIR    := .
+ENGINE_DIR  := ../engine
+else
+SITE_DIR    := site
+ENGINE_DIR  := engine
+endif
 SITE_MAKE   := $(MAKE) -C $(SITE_DIR) -f Makefile.site
 ENGINE_MAKE := $(MAKE) -C $(ENGINE_DIR) -f Makefile.engine
 

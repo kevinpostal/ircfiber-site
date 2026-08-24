@@ -1,6 +1,6 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   /**
-   * LoginPage — IRCCloud-style in-app authentication overlay.
    *
    * Renders as a centered modal on top of a dimmed backdrop, with the
    * full Svelte SPA shell visible behind it. Mirrors IRCCloud's
@@ -30,7 +30,11 @@
   let password = $state('');
   let error = $state('');
   let busy = $state(false);
+  let usernameEl: HTMLInputElement | undefined = $state(undefined);
 
+  onMount(() => {
+    usernameEl?.focus();
+  });
   // Toggle modes and reset transient state so a failed submit on one
   // form doesn't carry an error into the other.
   function setMode(next: Mode): void {
@@ -134,13 +138,13 @@
         <div class="noauth-field">
           <label for="noauth-username">Username</label>
           <input
+            bind:this={usernameEl}
             id="noauth-username"
             type="text"
             name="username"
             placeholder="you"
             bind:value={username}
             required
-            autofocus
             autocomplete="username"
             spellcheck="false"
             disabled={busy}

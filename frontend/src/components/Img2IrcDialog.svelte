@@ -1006,17 +1006,10 @@
   .primary-main{flex:0 1 auto;min-width:0;display:flex;flex-direction:column;gap:10px;width:100%}
   .primaryThumb{width:96px;height:96px;object-fit:cover;border-radius:6px;border:1px solid #1e232b;background:#010409;flex-shrink:0;align-self:flex-start}
   .p-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;align-items:start;align-content:start}
-  .p-grid.two-col-main{grid-template-columns:1.1fr 0.9fr}
   .p-group{display:flex;flex-direction:column;gap:6px;justify-content:flex-start;align-self:start}
   .p-group.span-2{grid-column:span 2}
   .p-group.actions{flex-direction:row;flex-wrap:wrap;gap:6px;align-items:center}
   .p-group.actions .btn-ghost,.p-group.actions .btn-fit{flex:1 1 auto}
-  .p-col.left{display:flex;flex-direction:column;gap:12px}
-  .p-col.right{display:flex;flex-direction:column;gap:12px;border-left:1px solid #1e232b;padding-left:16px}
-  .p-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  .p-row.split{flex-wrap:wrap}
-  .p-row.scroll-row{gap:10px 12px}
-  .scroll-group{ gap:8px }
   .scroll-card{background:#0a0c0f;border:1px solid #1e232b;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
   .scroll-head{display:flex;align-items:center;gap:10px}
   .scroll{flex:1;min-width:0}
@@ -1050,7 +1043,6 @@
   .budget.over .budget-fill{background:#d29922}
   .budget.softWarn .budget-fill{background:#c9a84c}
   .budget-label{color:#7d8590;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:11px}
-  .perf{font-size:10px;color:#8b949e;background:#141821;border:1px solid #232a36;border-radius:999px;padding:2px 6px;white-space:nowrap;font-variant-numeric:tabular-nums}
   .budget-label.warn{color:#d29922}
   .budget .safe{color:#4d555f}
   .budget .ok{color:#3fb950;font-size:11px}
@@ -1063,8 +1055,6 @@
   .artWrap{display:flex;align-items:safe center;justify-content:safe center;min-height:100%;min-width:max-content;padding:14px;box-sizing:border-box}
   .art{display:inline-block;font:11px/11px "Hack","SF Mono",Menlo,Consolas,monospace;white-space:pre;text-align:left;max-width:100%}
   .msg,.err{color:#7d8590;padding:24px;font-size:12px;text-align:center} .err{color:#ff7b72}
-  .msg.updating{display:flex;align-items:center;justify-content:center;gap:8px;color:#58a6ff;font-size:11px}
-  .spinner{width:12px;height:12px;border:1.5px solid rgba(88,166,255,.3);border-top-color:#58a6ff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
   .acc-head{width:100%;display:flex;align-items:center;gap:8px;padding:9px 16px;background:0;border:0;border-bottom:1px solid #1a1f29;color:#9aa4b2;font-size:11px;font-weight:500;cursor:pointer;text-align:left;transition:background .12s}
   .acc-head:hover{background:#11151c;color:#c9d1d9}
   .acc-head[aria-expanded="true"]{color:#e6edf3;background:#11151c;border-bottom-color:#1e232b}
@@ -1079,13 +1069,11 @@
   .grid4{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
   .grid4 label{font-size:11px;color:#9aa4b2;display:flex;gap:6px;align-items:center;white-space:nowrap}
   .grid4 label span{min-width:52px;color:#7d8590;font-size:11px}
-  .grid4 em{font-style:normal;color:#4d555f;min-width:34px;font-size:10px;font-variant-numeric:tabular-nums}
-  .grid4 label.check{cursor:pointer;user-select:none}
-  .grid4 input[type=checkbox], .tone-checks input[type=checkbox]{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:4px;border:1.5px solid #232a36;background:#141821;display:inline-grid;place-content:center;cursor:pointer;flex-shrink:0;transition:all .14s}
-  .grid4 input[type=checkbox]:hover, .tone-checks input[type=checkbox]:hover{border-color:#2d3648;background:#1a1f29}
-  .grid4 input[type=checkbox]:checked, .tone-checks input[type=checkbox]:checked{background:#e6edf3;border-color:#e6edf3}
-  .grid4 input[type=checkbox]::before, .tone-checks input[type=checkbox]::before{content:"";width:7px;height:4px;border:solid #0f1115;border-width:0 0 1.8px 1.8px;transform:rotate(-45deg) scale(0);transition:transform .12s}
-  .grid4 input[type=checkbox]:checked::before, .tone-checks input[type=checkbox]:checked::before{transform:rotate(-45deg) scale(1)}
+  .tone-checks input[type=checkbox]{-webkit-appearance:none;appearance:none;width:15px;height:15px;border-radius:4px;border:1.5px solid #232a36;background:#141821;display:inline-grid;place-content:center;cursor:pointer;flex-shrink:0;transition:all .14s}
+  .tone-checks input[type=checkbox]:hover{border-color:#2d3648;background:#1a1f29}
+  .tone-checks input[type=checkbox]:checked{background:#e6edf3;border-color:#e6edf3}
+  .tone-checks input[type=checkbox]::before{content:"";width:7px;height:4px;border:solid #0f1115;border-width:0 0 1.8px 1.8px;transform:rotate(-45deg) scale(0);transition:transform .12s}
+  .tone-checks input[type=checkbox]:checked::before{transform:rotate(-45deg) scale(1)}
   .acc-note{margin:10px 0 0;font-size:10px;color:#4d555f;line-height:1.4}
   .sel{background:#141821;color:#c9d1d9;border:1px solid #232a36;border-radius:7px;padding:4px 8px;font-size:11px;cursor:pointer}
   .sel.sm{padding:3px 6px}
