@@ -103,7 +103,7 @@ ircfiber_repo_root: "{{ playbook_dir }}/../.."
 ircfiber_build_target: "release"
 
 # Gateway image (D / full app)
-ircfiber_gateway_containerfile: "Containerfile"
+ircfiber_gateway_containerfile: "Containerfile.site"
 ircfiber_gateway_build_args:
   LDC_VERSION: "1.41.0"
   TARGETARCH: "{{ 'amd64' if ansible_architecture == 'x86_64' else ('arm64' if ansible_architecture == 'aarch64' else ansible_architecture) }}"
@@ -113,7 +113,7 @@ ircfiber_gateway_image_name: >-
 ircfiber_gateway_image_full: "{{ ircfiber_gateway_image_name }}:{{ docker_image_tag }}"
 
 # Engine image (D — same Containerfile as gateway, builds both binaries)
-ircfiber_engine_containerfile: "Containerfile"
+ircfiber_engine_containerfile: "Containerfile.site"
 ircfiber_engine_build_args:
   TARGETARCH: "{{ 'amd64' if ansible_architecture == 'x86_64' else ('arm64' if ansible_architecture == 'aarch64' else ansible_architecture) }}"
 ircfiber_engine_image_name: >-
