@@ -15,10 +15,10 @@
     host_bin_dir: /opt/ircfiber/bin
     ldc_version: "1.41.0"
   tasks:
-    - name: Preflight — site must not define engine id
+    - name: Preflight — site must not define engine id (single-host allowed)
       ansible.builtin.assert:
-        that: ircfiber_engine_id is not defined
-        fail_msg: "Site deploy must not have ircfiber_engine_id — would touch engine"
+        that: src_root == "/opt/ircfiber-site"
+        fail_msg: "Site deploy src_root must be /opt/ircfiber-site"
     - name: rsync site source → {{ src_root }} (duplicated common)
       become: false
       ansible.posix.synchronize:
@@ -35,7 +35,7 @@
           - "--exclude=.worktrees"
     - name: Build gateway image (site only)
       ansible.builtin.shell: |
-        DOCKER_BUILDKIT=1 docker build           --target runtime-gateway           --build-arg GIT_HASH={{ lookup('pipe', 'git -C ' + playbook_dir + '/../../ rev-parse HEAD') | default('unknown') }}           -t kevindpostal/irc-fiber-gateway:0.3.0           -f {{ src_root }}/Containerfile.site           {{ src_root }} 2>&1
+        DOCKER_BUILDKIT=1 docker build           --target runtime-gateway           --build-arg GIT_HASH={{ lookup('pipe', 'git -C ' + playbook_dir + '/../../ rev-parse HEAD') | default('unknown') }}           --build-arg GIT_SHORT={{ lookup('pipe', 'git -C ' + playbook_dir + '/../../ rev-parse --short HEAD') | default('unknown') }}           --build-arg GIT_DESCRIBE={{ lookup('pipe', 'git -C ' + playbook_dir + '/../../ describe --always --long') | default('unknown') }}           --build-arg GIT_BRANCH={{ lookup('pipe', 'git -C ' + playbook_dir + '/../../ rev-parse --abbrev-ref HEAD') | default('unknown') }}           -t kevindpostal/irc-fiber-gateway:0.3.0           -f {{ src_root }}/Containerfile.site           {{ src_root }} 2>&1
       args:
         executable: /bin/bash
       timeout: 1800
