@@ -393,10 +393,13 @@
     const start = untrack(() => renderStart);
     if (start <= 0 || !container) return false;
 
-    // IRCCloud checkInfiniscroll: isScrolledToTop() is scrollTop===0 exact, not <=200.
-    // Only fire when truly at top (0), not 200px before. Prevents eager
-    // 3×200 pre-load that hid the continuous-scroll feel.
-    const atTop = container.scrollTop === 0;
+    // IRCCloud checkInfiniscroll: isScrolledToTop() is scrollTop===0 exact in spec,
+    // but browsers round sub-pixel scrollTop (0.5-1px) and momentum can hover
+    // at 1px. Tolerate <=1 so history actually reveals — otherwise user
+    // scrolls up and sees nothing while e2e (which sets scrollTop=0 exactly)
+    // passes. Production InfiniteLoader fires at 200px rootMargin but
+    // reveal still gates on top, so exact 0 would wedge at 1px.
+    const atTop = container.scrollTop <= 1;
     if (!atTop) return false;
     const scrollBottom = container.clientHeight + Math.ceil(container.scrollTop);
     const pinBottom = container.scrollHeight - scrollBottom <= 1;
@@ -437,7 +440,7 @@
       }
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
-      cachedAtTop = container.scrollTop === 0;
+      cachedAtTop = container.scrollTop <= 1;
       cachedAtBottom = false;
       wasRecentlyAtBottom = false;
     }
@@ -493,7 +496,7 @@
       // from maybeTrim during a flood — was revealed and then loading
       // stopped because the sentinel never re-fires at scrollTop=0.)
       let revealGuard = 0;
-      while (container && container.scrollTop === 0) {
+      while (container && container.scrollTop <= 1) {
         if (!revealBacklogFromMemory()) break;
         revealGuard++;
         if (revealGuard >= 20) break;
@@ -525,14 +528,14 @@
         }
         loaderState?.loaded();
         batches++;
-        if (!container || container.scrollTop !== 0) break;
+        if (!container || container.scrollTop > 1) break;
         if (batches < MAX_BATCHES_PER_TRIGGER) {
           await new Promise((r) => setTimeout(r, 200));
         }
       }
-      if (!completed && container && container.scrollTop === 0 && !isServerBuffer) {
+      if (!completed && container && container.scrollTop <= 1 && !isServerBuffer) {
         setTimeout(() => {
-          if (container && container.scrollTop === 0 && !infiniteLoading && !isServerBuffer) {
+          if (container && container.scrollTop <= 1 && !infiniteLoading && !isServerBuffer) {
             void infiniteHandler();
           }
         }, 500);
@@ -1330,7 +1333,7 @@
       }
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
-      cachedAtTop = container.scrollTop <= 0;
+      cachedAtTop = container.scrollTop <= 1;
       cachedAtBottom = false;
       wasRecentlyAtBottom = false;
     }
@@ -1356,7 +1359,7 @@
         renderEndKey = '';
         maybeTrim();
       }
-      cachedAtTop = container.scrollTop <= 0;
+      cachedAtTop = container.scrollTop <= 1;
       prevScrollTop = container.scrollTop;
       prevScrollHeight = container.scrollHeight;
       scheduleScrollStateUpdate();
@@ -1376,8 +1379,8 @@
     // IRCCloud isScrolledToTop(): user is at the very top of the container.
     // IRCCloud checks scrollTop===0 exact, not a 200px band. Only fire
     // when truly at top (0), not 200px before, to get the single-batch
-    // per top-hit cadence.
-    cachedAtTop = scrollTop === 0;
+    // per top-hit cadence. Tolerate <=1 for sub-pixel.
+    cachedAtTop = scrollTop <= 1;
     // IRCCloud isScrolledToBottom(true): when already pinned, use a strict
     // 0px check — any intentional scroll-up (even 1px on a trackpad) must
     // clear cachedAtBottom immediately, otherwise the ResizeObserver and
@@ -1491,6 +1494,15 @@
       }
 
       scheduleScrollStateUpdate();
+    }
+
+    // Fast-scroll to top fallback: InfiniteLoader sentinel (200px rootMargin)
+    // can miss momentum scrolls that slam to 0 without an intersection
+    // callback (observer throttled, sentinel 1px). HandleScroll is the only
+    // reliable signal — if we are at top and in-memory batches remain,
+    // kick infiniteHandler directly.
+    if (scrollTop <= 1 && untrack(() => renderStart) > 0 && hasHistoryLoaded && !infiniteLoading) {
+      void infiniteHandler();
     }
 
     // Infinite scroll is triggered by LoadMore's top sentinel
