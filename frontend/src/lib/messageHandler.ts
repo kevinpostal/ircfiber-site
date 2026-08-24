@@ -2,8 +2,8 @@ import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
-         checkHighlight } from '../stores/ircStore.svelte';
-import { isIgnored, globalPrefs, getBufferPrefs } from '../stores/preferences.svelte';
+         checkHighlight, isMessageUnseen } from '../stores/ircStore.svelte';
+import { isIgnored, globalPrefs, getBufferPrefs, getLastSeen } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
 import { shouldNotifyForMessage, getNotificationTitle } from './notificationPolicy';
@@ -536,8 +536,21 @@ export function processIrcEvent(
     if (!msg.highlight && (msg.command === 'PRIVMSG' || msg.command === 'NOTICE' || msg.type === 'action') && msg.nick) {
       if (checkHighlight(msg, net)) msg.highlight = true;
     }
+    // Gate desktop notifications on unseen + recency to avoid history-replay spam
+    // on gateway restart. Without this, a WS reconnect with `since=0` (maxEid
+    // reset on refresh) replays 200 history PRIVMSGs as live events (no
+    // batch=chathistory tag) and each highlight would re-fire a desktop
+    // notification — the exact "notifications again after reboot" bug.
+    // isMessageUnseen (t > lastSeen) suppresses already-seen history; the
+    // age guard suppresses old backlog for never-visited buffers where
+    // lastSeen is null (otherwise every historic highlight would notify).
+    const lastSeenTs = getLastSeen(networkId, channel);
+    const msgTs = msg.t ?? 0;
+    const isUnseen = isMessageUnseen(msg, networkId, channel);
+    const isRecent = msgTs !== 0 && Date.now() - msgTs < 60_000;
+    const shouldGateNotify = !isBackfill && isUnseen && (lastSeenTs !== null || isRecent);
 
-    if (!isBackfill && shouldNotifyForMessage({
+    if (shouldGateNotify && shouldNotifyForMessage({
       networkId,
       bufferName: channel,
       bufferType: buf?.type,
