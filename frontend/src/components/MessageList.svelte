@@ -482,11 +482,7 @@
   });
 
   let infiniteLoading = $state(false);
-  let lastInfiniteLoadAt = 0;
   async function infiniteHandler() {
-    const now = Date.now();
-    if (now - lastInfiniteLoadAt < 500) return;
-    lastInfiniteLoadAt = now;
     if (infiniteLoading) {
       return;
     }
