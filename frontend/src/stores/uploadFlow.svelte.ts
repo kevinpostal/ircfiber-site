@@ -175,6 +175,28 @@ export function cancelDialog(): void {
   }
 }
 
+// Abort a single upload without closing the whole dialog — used when
+// converting an image to IRC art. The base image should be saved to
+// img2irc storage (so the user can re-edit), but NOT appear in the
+// regular file manager (UploadPanel). Aborting the regular /api/upload
+// prevents an UploadRecord from being created, keeping the two
+// collections cleanly separated.
+export function abortSingleUpload(id: number): void {
+  const h = handles.get(id);
+  if (h) { try { h.abort(); } catch {} handles.delete(id); }
+  removeUpload(id);
+  if (uploadState.dialog) {
+    uploadState.dialog.uploads = uploadState.dialog.uploads.filter(u => u.id !== id);
+    if (uploadState.dialog.uploads.length === 0) {
+      uploadState.dialog = null;
+      pendingDialogOpts = null;
+    }
+  } else {
+    // also clean from active list if dialog already closed
+    // removeUpload already did
+  }
+}
+
 async function finalizeAndSend(
   uploads: ActiveUpload[],
   message: string,

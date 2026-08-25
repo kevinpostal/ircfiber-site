@@ -2,6 +2,7 @@
   import { uploadState } from '../stores/uploadStore.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import Img2IrcDialog from './Img2IrcDialog.svelte';
+  import { abortSingleUpload } from '../stores/uploadFlow.svelte';
 
   interface Props {
     onConfirm: (data: { filename?: string; message: string }) => void;
@@ -12,6 +13,8 @@
   let filenameInput = $state('');
   let messageInput = $state('');
   let showIrcConvert = $state(false);
+  let convertFile: File | null = $state(null);
+  let convertFilename: string = $state('');
 
   function isImageFile(filename: string, type?: string): boolean {
     if (type && /^image\//i.test(type)) return true;
@@ -142,6 +145,17 @@
   }
 
   function handleConvertToIrc(): void {
+    const u = activeUpload();
+    if (u?.file) {
+      convertFile = u.file as File;
+      convertFilename = u.filename;
+      // Keep IRC art source separate from regular file uploads:
+      // abort the /api/upload so no UploadRecord is created and the
+      // image doesn't appear in the file manager. The original is
+      // still saved to img2irc storage via createIrcArtSave (so the
+      // user can re-edit), keeping the two collections distinct.
+      try { abortSingleUpload(u.id); } catch {}
+    }
     showIrcConvert = true;
   }
 </script>
@@ -243,16 +257,14 @@
   </div>
 {/if}
 
-{#if showIrcConvert && uploadState.dialog}
-  {@const u = activeUpload()}
-  {#if u?.file}
-    <Img2IrcDialog
-      file={u.file as File}
-      filename={u.filename}
-      onClose={() => { showIrcConvert = false; onCancel(); }}
-      onBack={() => { showIrcConvert = false; }}
-    />
-  {/if}
+{#if showIrcConvert && convertFile}
+  <Img2IrcDialog
+    file={convertFile}
+    filename={convertFilename}
+    onClose={() => { showIrcConvert = false; convertFile = null; onCancel(); }}
+    onBack={() => { showIrcConvert = false; convertFile = null; }}
+    onSaved={() => { showIrcConvert = false; convertFile = null; }}
+  />
 {/if}
 <style>
   .stockPreview {
