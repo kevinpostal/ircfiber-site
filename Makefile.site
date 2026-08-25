@@ -1698,7 +1698,10 @@ _target      = $(or $(TARGET),vps-efb4b52d)
 _target_ssh   = $(or $(TARGET_SSH),$(shell grep -m1 'ansible_host=' deploy/inventories/production/hosts.ini 2>/dev/null | sed -E 's/.*ansible_host=([^ ]+).*/\1/'),15.204.93.54)
 _playbook    = cd deploy && ansible-playbook -l $(_target) $(_vault_arg)
 
-update: version frontend-build build build-engine ## Deploy > Build frontend + gateway + engine, handoff-deploy (zero disconnect for engines)
+update: ## Deploy > DEPRECATED — use update-gateway-bluegreen (site only, gateway blue/green)
+	@echo "✗ update is deprecated for site — use 'make update-gateway-bluegreen' (blue/green, gateway only) or 'make -C ../engine update' for engine" >&2; exit 1
+
+_update_impl: version frontend-build build build-engine ## Deploy > Build frontend + gateway + engine, handoff-deploy (zero disconnect for engines)
 	@printf '\n%b\n' "$(_BCn)$(K)$(B)  Deploy → $(_target)  $(R)"
 	@$(_playbook) playbooks/deploy-update.yml $(if $(SKIP_MIGRATE),-e skip_migrate=true)
 	@printf '\n%b\n' "$(_BCn)$(K)$(B)  Gateway frontend rebuild (ensure version + dist in sync)  $(R)"
@@ -1738,15 +1741,24 @@ endif
 	@ssh -i ~/.ssh/id_ed25519_ircfiber -o StrictHostKeyChecking=no deploy@$(_target_ssh) "mkdir -p /opt/ircfiber /opt/ircfiber-src && echo $$(./scripts/engine-fingerprint.sh) > /opt/ircfiber/.engine-deploy-hash && cp /opt/ircfiber/.engine-deploy-hash /opt/ircfiber-src/.engine-deploy-hash && echo $$(git rev-parse HEAD) > /opt/ircfiber/.frontend-deploy-hash && cp /opt/ircfiber/.frontend-deploy-hash /opt/ircfiber-src/.frontend-deploy-hash && echo $$(git rev-parse --short HEAD):$$(date +%Y%m%d-%H%M%S) > /opt/ircfiber/.deploy-hash && cp /opt/ircfiber/.deploy-hash /opt/ircfiber-src/.deploy-hash && cat /opt/ircfiber/.engine-deploy-hash /opt/ircfiber/.frontend-deploy-hash" 2>&1 | tail -5 || true
 	@printf '%b\n' "$(BG)$(OK) Deploy hashes recorded$(R)"
 # Alias: fast path is the default
-update-fast: update ## Deploy > Force hot path (same as `make update`)
+update-fast: ## Deploy > DEPRECATED — use update-gateway-bluegreen
+	@echo "✗ update-fast is deprecated — use 'make update-gateway-bluegreen'" >&2; exit 1
+
+_update-fast_impl: _update_impl ## Deploy > Force hot path (same as `make update`)
 
 # Full docker image rebuild: builds Containerfile from scratch on the target
 # (or via registry), recreates gateway + engine containers.
-update-full: ## Deploy > Full docker image rebuild + container recreate
+update-full: ## Deploy > DEPRECATED — use update-gateway-bluegreen
+	@echo "✗ update-full is deprecated — use 'make update-gateway-bluegreen'" >&2; exit 1
+
+_update-full_impl: ## Deploy > Full docker image rebuild + container recreate
 	@printf '\n%b\n' "$(_BC)$(K)$(B)  Full image rebuild → $(_target)  $(R)"
 	@$(_playbook) playbooks/deploy.yml $(if $(SKIP_MIGRATE),-e skip_migrate=true)
 
-deploy: update-full ## Deploy > Alias for update-full
+deploy: ## Deploy > DEPRECATED — use update-gateway-bluegreen
+	@echo "✗ deploy is deprecated — use 'make update-gateway-bluegreen'" >&2; exit 1
+
+_deploy_impl: _update-full_impl ## Deploy > Alias for update-full
 #
 # Persistent gateway-only deploy — rebuilds the gateway image on the target
 # and recreates the gateway container WITHOUT touching the engine (no IRC
