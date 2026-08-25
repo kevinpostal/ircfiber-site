@@ -132,6 +132,7 @@ AR := →
 .PHONY: cross-linux-x64 cross-linux-arm64 cross-linux-armv7
 .PHONY: verify precommit ci install-env
 .PHONY: gateway-fix-assets fix-gateway-assets update-frontend
+.PHONY: update deploy update-full update-fast _update_impl _deploy_impl _update-full_impl _update-fast_impl
 .PHONY: sync-db-to-tailnet sync-mongo-to-tailnet sync-redis-to-tailnet
 # Primary workflows — decoupled: engine stays up across gateway restarts.
 # Engine = IRC daemon, holds TCP/TLS + JOIN state. Gateway = vibe.d REST+WS.
