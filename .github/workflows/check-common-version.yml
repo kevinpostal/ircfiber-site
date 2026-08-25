@@ -1,0 +1,24 @@
+name: Check common version
+
+on:
+  push:
+    paths:
+      - 'common/**'
+      - 'backend/dub.sdl'
+      - 'engine/engine/dub.sdl'
+  pull_request:
+    paths:
+      - 'common/**'
+      - 'backend/dub.sdl'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check common versions in sync
+        run: ./scripts/check-common-version.sh
+      - name: Verify dub can resolve irc-fiber-common
+        run: |
+          dub add-local ../common 0.3.0 2>&1 | head -n 20
+          dub --root=backend describe 2>&1 | head -n 20
