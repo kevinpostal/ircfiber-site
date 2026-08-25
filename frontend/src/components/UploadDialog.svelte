@@ -2,7 +2,7 @@
   import { uploadState } from '../stores/uploadStore.svelte';
   import { ircState } from '../stores/ircStore.svelte';
   import Img2IrcDialog from './Img2IrcDialog.svelte';
-  import { abortSingleUpload } from '../stores/uploadFlow.svelte';
+  import { abortSingleUpload, abortUploadRequest } from '../stores/uploadFlow.svelte';
 
   interface Props {
     onConfirm: (data: { filename?: string; message: string }) => void;
@@ -149,12 +149,14 @@
     if (u?.file) {
       convertFile = u.file as File;
       convertFilename = u.filename;
-      // Keep IRC art source separate from regular file uploads:
-      // abort the /api/upload so no UploadRecord is created and the
-      // image doesn't appear in the file manager. The original is
-      // still saved to img2irc storage via createIrcArtSave (so the
-      // user can re-edit), keeping the two collections distinct.
-      try { abortSingleUpload(u.id); } catch {}
+      try { abortUploadRequest(u.id); } catch {}
+    } else {
+      const fallback = uploadState.active[0];
+      if (fallback?.file) {
+        convertFile = fallback.file as File;
+        convertFilename = fallback.filename;
+        try { abortUploadRequest(fallback.id); } catch {}
+      }
     }
     showIrcConvert = true;
   }
@@ -162,7 +164,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if uploadState.dialog}
+{#if uploadState.dialog && !showIrcConvert}
   <div id="fileUploadContainer" class="uploadDialog" style="display: block;">
     <h1 class="heading" tabindex="0">
       Upload a file to {ircState.activeBuffer.bufferName || 'this buffer'}

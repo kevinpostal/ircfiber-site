@@ -181,6 +181,11 @@ export function cancelDialog(): void {
 // regular file manager (UploadPanel). Aborting the regular /api/upload
 // prevents an UploadRecord from being created, keeping the two
 // collections cleanly separated.
+export function abortUploadRequest(id: number): void {
+  const h = handles.get(id);
+  if (h) { try { h.abort(); } catch {} handles.delete(id); }
+}
+
 export function abortSingleUpload(id: number): void {
   const h = handles.get(id);
   if (h) { try { h.abort(); } catch {} handles.delete(id); }
