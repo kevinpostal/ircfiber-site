@@ -706,6 +706,7 @@
       const smartAlpha = pixelMode==='smart' ? smartGlyphAlphabet : undefined;
       const params=serializeImg2IrcOptions({ width, renderMode, pixelMode, midgardMode, filter: filter as any, brightness, contrast, saturation, hue, gamma: gamma||0, blur, pixelize, grayscale, invert, sepia, normalize, dither, ditherMode, colorMatching, nograyscale, flipH, flipV, rotate: Number(rotate), viterbiW, autoGeometries, comic:false, alphaMode: transparencyEnabled?'transparent':'opaque' as const, alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', matte: transparencyEnabled ? matteColor : null, glyphAlphabet, smartGlyphAlphabet: smartAlpha } as any);
       const isDummyFile = (()=>{ try{ const f=file as File; return f && f.name==='dummy.png'; } catch{ return false; }})();
+      let thumb: Blob | null = null;
       if(!isDummyFile){ try{ thumb=await makeThumbnailBlob(); } catch (e) {} }
       if(editId){
         await updateIrcArtSave(editId, { name: saveName, art, params, thumbnailBlob: thumb ?? undefined });
