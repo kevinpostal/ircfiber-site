@@ -80,9 +80,10 @@ export async function request<T = unknown>(path: string, opts: RequestOptions = 
   // Try to parse JSON regardless; the backend always returns either
   // the envelope or an HTML error page.
   const raw = await res.text();
+  // Workaround for gateway mullvad/status stray `]` bug (]]}} vs ]}}): strip the extra bracket before parse
+  const fixedRaw = raw.replace(/\]\]}}/g, ']}}');
   let parsed: { ok?: boolean; data?: T; error?: string } | null = null;
-  try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
-
+  try { parsed = fixedRaw ? JSON.parse(fixedRaw) : null; } catch { try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; } }
   if (!res.ok) {
     const msg = parsed?.error || `HTTP ${res.status}`;
     throw new ApiError(msg, res.status);

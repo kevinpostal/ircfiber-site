@@ -1,12 +1,41 @@
 ---
-# Deploy pre-built New Relic-style SigNoz dashboards.
-# Usage:
+# Deploy pre-built New Relic-style SigNoz dashboards to k3s Signoz.
+#
+# Target: k3s single-node ubuntu-docker via Tailscale MagicDNS
+#   https://signoz.ubuntu-docker.tail544547.ts.net (Traefik Ingress → signoz:8080)
+#   Do NOT target 100.126.197.92:3003 — that is the stale local docker Signoz on colima.
+#   K8s-internal alt: http://signoz.signoz.svc.cluster.local:8080 (ClusterIP, no TLS, kubectl exec only)
+#
+# Usage (from site/deploy/):
+#   # API-key path (preferred — create key in SigNoz UI → Settings → API Keys):
+#   ansible-playbook playbooks/signoz_dashboards.yml -e vault_signoz_api_key=YOUR_KEY
+#   # Password path (fallback — vault_signoz_admin_password in vault.yml):
 #   ansible-playbook playbooks/signoz_dashboards.yml
-#   -e 'vault_signoz_admin_password=YOUR_PASSWORD'
+#   # Ad-hoc password override:
+#   ansible-playbook playbooks/signoz_dashboards.yml -e 'vault_signoz_admin_password=YOUR_PASSWORD'
+#   # Custom endpoint (e.g. in-cluster debug):
+#   ansible-playbook playbooks/signoz_dashboards.yml -e signoz_api_url=http://signoz.signoz.svc.cluster.local:8080
+#
+# Manual import (if vault key missing — curl from controller via Tailscale):
+#   JWT=$(curl -sk https://signoz.ubuntu-docker.tail544547.ts.net/api/v2/sessions/email_password \
+#     -H 'Content-Type: application/json' \
+#     -d '{"email":"kevindpostal@gmail.com","password":"YOUR_PASSWORD","orgId":"019f1235-79b1-787f-b4a9-370824295f2f"}' | jq -r .data.accessToken)
+#   curl -k https://signoz.ubuntu-docker.tail544547.ts.net/api/v1/dashboards \
+#     -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' \
+#     --data @roles/signoz_dashboards/files/01_overview.json
+#   # Or import all three in a loop:
+#   for f in roles/signoz_dashboards/files/*.json; do
+#     curl -k https://signoz.ubuntu-docker.tail544547.ts.net/api/v1/dashboards \
+#       -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' --data @"$f"
+#   done
+#   # Idempotent update: GET /api/v1/dashboards → title→id map, then PUT /api/v1/dashboards/<id>
+#
+# UI: https://signoz.ubuntu-docker.tail544547.ts.net/dashboard
+#     (login with kevindpostal@gmail.com / vault_signoz_admin_password)
 
-- name: Deploy New Relic-style SigNoz dashboards
-  hosts: ircfiber-ovh-1
-  become: true
+- name: Deploy New Relic-style SigNoz dashboards (k3s)
+  hosts: localhost
+  connection: local
   gather_facts: false
   roles:
     - role: signoz_dashboards

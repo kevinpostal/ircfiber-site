@@ -1,0 +1,33 @@
+# OTel collector ingress for production VPS (ircfiber-prod-1 at 47.236.247.169, Tailscale 100.94.72.103)
+# Exposes OTLP HTTP 4318 (and 4317 via TCP if needed) for ircfiber gateway/engine on VPS and local colima.
+# Uses Traefik web,websecure with TLS (same as signoz UI). For VPS, use https://otel.ubuntu-docker.tail544547.ts.net
+# For k8s-internal, keep using http://signoz-otel-collector.signoz.svc.cluster.local:4318 (ClusterIP, no TLS, fastest).
+# This Ingress is HTTP only (4318). For gRPC 4317, add Traefik IngressRouteTCP if needed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: signoz-otel-collector
+  namespace: signoz
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    # Uncomment if you add cert-manager ClusterIssuer letsencrypt-prod:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: otel.ubuntu-docker.tail544547.ts.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: signoz-otel-collector
+                port:
+                  number: 4318
+  tls:
+    - hosts:
+        - otel.ubuntu-docker.tail544547.ts.net
+      # secretName will be auto-created by Traefik with default cert if not using cert-manager
+      # secretName: otel-ubuntu-docker-tls

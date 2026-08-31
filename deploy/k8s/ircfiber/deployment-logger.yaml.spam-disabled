@@ -1,0 +1,111 @@
+# Demo ircfiber gateway/engine OTeL wiring — single-node ircfiber namespace
+# This Deployment proves cross-namespace access: ircfiber -> signoz-otel-collector.signoz.svc.cluster.local:4318
+# Real D gateway (site/backend) and engine (engine/engine) would use same env:
+#   IRCFIBER_OTEL_ENABLED=1
+#   IRCFIBER_OTEL_ENDPOINT=http://signoz-otel-collector.signoz.svc.cluster.local:4318
+#   OTEL_RESOURCE_ATTRIBUTES=k8s.cluster.name=ubuntu-docker,service.name=ircfiber-gateway
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ircfiber-logger
+  namespace: ircfiber
+  labels:
+    app: ircfiber-logger
+    app.kubernetes.io/part-of: ircfiber
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ircfiber-logger
+  template:
+    metadata:
+      labels:
+        app: ircfiber-logger
+        app.kubernetes.io/part-of: ircfiber
+    spec:
+      containers:
+        - name: logger
+          image: curlimages/curl:8.11.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "ircfiber logger -> signoz-otel-collector.signoz:4318 (OTLP logs) every 15s"
+              while true; do
+                TS=$(date +%s)
+                TSNANO="${TS}000000000"
+                BODY="ircfiber live log $(date -u +%Y-%m-%dT%H:%M:%SZ) host=ircfiber-logger"
+                cat > /tmp/payload.json <<EOF
+              {"resourceLogs":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"ircfiber-gateway"}},{"key":"k8s.namespace.name","value":{"stringValue":"ircfiber"}},{"key":"k8s.cluster.name","value":{"stringValue":"ubuntu-docker"}}]},"scopeLogs":[{"scope":{"name":"ircfiber"},"logRecords":[{"timeUnixNano":"$TSNANO","body":{"stringValue":"$BODY"},"severityText":"INFO","attributes":[{"key":"test.live","value":{"stringValue":"ircfiber"}}]}]}]}]}
+              EOF
+                curl -s -X POST http://signoz-otel-collector.signoz.svc.cluster.local:4318/v1/logs -H "Content-Type: application/json" -d @/tmp/payload.json | head -c 100
+                echo " sent $BODY"
+                sleep 15
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          env:
+            - name: IRCFIBER_OTEL_ENABLED
+              value: "1"
+            - name: IRCFIBER_OTEL_ENDPOINT
+              value: "http://signoz-otel-collector.signoz.svc.cluster.local:4318"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "k8s.cluster.name=ubuntu-docker,service.name=ircfiber-gateway"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ircfiber-engine-logger
+  namespace: ircfiber
+  labels:
+    app: ircfiber-engine
+    app.kubernetes.io/part-of: ircfiber
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ircfiber-engine
+  template:
+    metadata:
+      labels:
+        app: ircfiber-engine
+        app.kubernetes.io/part-of: ircfiber
+    spec:
+      containers:
+        - name: logger
+          image: curlimages/curl:8.11.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "ircfiber-engine -> signoz traces every 30s"
+              while true; do
+                TS=$(date +%s)
+                TSNANO="${TS}000000000"
+                TSNANO2="$((TS+1))000000000"
+                TRACEID=$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 32)
+                SPANID=$(cat /proc/sys/kernel/random/uuid | tr -d '-' | head -c 16)
+                cat > /tmp/trace.json <<EOF
+              {"resourceSpans":[{"resource":{"attributes":[{"key":"service.name","value":{"stringValue":"ircfiber-engine"}},{"key":"k8s.cluster.name","value":{"stringValue":"ubuntu-docker"}}]},"scopeSpans":[{"scope":{},"spans":[{"traceId":"$TRACEID","spanId":"$SPANID","name":"irc.Join","kind":1,"startTimeUnixNano":"$TSNANO","endTimeUnixNano":"$TSNANO2","attributes":[{"key":"irc.channel","value":{"stringValue":"#superbowl"}}]}]}]}]}
+              EOF
+                curl -s -X POST http://signoz-otel-collector.signoz.svc.cluster.local:4318/v1/traces -H "Content-Type: application/json" -d @/tmp/trace.json | head -c 100
+                echo " trace $TRACEID"
+                sleep 30
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 64Mi
+          env:
+            - name: IRCFIBER_OTEL_ENABLED
+              value: "1"
+            - name: IRCFIBER_OTEL_ENDPOINT
+              value: "http://signoz-otel-collector.signoz.svc.cluster.local:4318"

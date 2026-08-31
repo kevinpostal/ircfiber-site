@@ -1,0 +1,449 @@
+# Mullvad SOCKS sidecars for k8s (k8s-only, OVH sidecars mirror prod 6-pool)
+# Each pod runs tailscale/tailscale:stable in userspace (TS_USERSPACE=true)
+# — no TUN, no NET_ADMIN, no hostPath — avoids DinD cni0 wedge.
+# Engine reaches them via Kubernetes DNS: tailscale-mullvad-<name>:1055
+# Pool env on engine/gateway: socks5://tailscale-mullvad-de:1055,...,us:1055 (6)
+# Secrets: tailscale-authkey (TS_AUTHKEY) — reusable authkey with tag:ircfiber (non-ephemeral, 90d)
+# Deploy: kubectl apply -f mullvad-sidecars.yaml
+# Verify: kubectl get pods -n ircfiber -l component=mullvad-sidecar; kubectl logs -n ircfiber -l app=tailscale-mullvad-de
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tailscale-authkey
+  namespace: ircfiber
+type: Opaque
+stringData:
+  TS_AUTHKEY: tskey-auth-REPLACE-ME
+# --- de (de-ber-wg-003) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale-mullvad-de
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-de
+    component: mullvad-sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tailscale-mullvad-de
+  template:
+    metadata:
+      labels:
+        app: tailscale-mullvad-de
+        component: mullvad-sidecar
+    spec:
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:stable
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: tailscale-authkey
+                  key: TS_AUTHKEY
+            - name: TS_HOSTNAME
+              value: k8s-mullvad-de
+            - name: TS_EXTRA_ARGS
+              value: --exit-node=100.117.47.8 --exit-node-allow-lan-access --accept-dns=false --accept-routes
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_SOCKS5_SERVER
+              value: ":1055"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+          ports:
+            - containerPort: 1055
+              name: socks
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tailscale-mullvad-de
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-de
+spec:
+  selector:
+    app: tailscale-mullvad-de
+  ports:
+    - name: socks
+      port: 1055
+      targetPort: 1055
+      protocol: TCP
+---
+# --- ch (ch-zrh-wg-503) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale-mullvad-ch
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-ch
+    component: mullvad-sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tailscale-mullvad-ch
+  template:
+    metadata:
+      labels:
+        app: tailscale-mullvad-ch
+        component: mullvad-sidecar
+    spec:
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:stable
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: tailscale-authkey
+                  key: TS_AUTHKEY
+            - name: TS_HOSTNAME
+              value: k8s-mullvad-ch
+            - name: TS_EXTRA_ARGS
+              value: --exit-node=100.104.110.13 --exit-node-allow-lan-access --accept-dns=false --accept-routes
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_SOCKS5_SERVER
+              value: ":1055"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+          ports:
+            - containerPort: 1055
+              name: socks
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tailscale-mullvad-ch
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-ch
+spec:
+  selector:
+    app: tailscale-mullvad-ch
+  ports:
+    - name: socks
+      port: 1055
+      targetPort: 1055
+---
+# --- nl (nl-ams-wg-201) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale-mullvad-nl
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-nl
+    component: mullvad-sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tailscale-mullvad-nl
+  template:
+    metadata:
+      labels:
+        app: tailscale-mullvad-nl
+        component: mullvad-sidecar
+    spec:
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:stable
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: tailscale-authkey
+                  key: TS_AUTHKEY
+            - name: TS_HOSTNAME
+              value: k8s-mullvad-nl
+            - name: TS_EXTRA_ARGS
+              value: --exit-node=100.123.199.85 --exit-node-allow-lan-access --accept-dns=false --accept-routes
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_SOCKS5_SERVER
+              value: ":1055"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+          ports:
+            - containerPort: 1055
+              name: socks
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tailscale-mullvad-nl
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-nl
+spec:
+  selector:
+    app: tailscale-mullvad-nl
+  ports:
+    - name: socks
+      port: 1055
+      targetPort: 1055
+---
+# --- se (se-sto-wg-201) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale-mullvad-se
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-se
+    component: mullvad-sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tailscale-mullvad-se
+  template:
+    metadata:
+      labels:
+        app: tailscale-mullvad-se
+        component: mullvad-sidecar
+    spec:
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:stable
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: tailscale-authkey
+                  key: TS_AUTHKEY
+            - name: TS_HOSTNAME
+              value: k8s-mullvad-se
+            - name: TS_EXTRA_ARGS
+              value: --exit-node=100.84.2.120 --exit-node-allow-lan-access --accept-dns=false --accept-routes
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_SOCKS5_SERVER
+              value: ":1055"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+          ports:
+            - containerPort: 1055
+              name: socks
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tailscale-mullvad-se
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-se
+spec:
+  selector:
+    app: tailscale-mullvad-se
+  ports:
+    - name: socks
+      port: 1055
+      targetPort: 1055
+---
+# --- gb (gb-lon-wg-001) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale-mullvad-gb
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-gb
+    component: mullvad-sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tailscale-mullvad-gb
+  template:
+    metadata:
+      labels:
+        app: tailscale-mullvad-gb
+        component: mullvad-sidecar
+    spec:
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:stable
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: tailscale-authkey
+                  key: TS_AUTHKEY
+            - name: TS_HOSTNAME
+              value: k8s-mullvad-gb
+            - name: TS_EXTRA_ARGS
+              value: --exit-node=100.68.61.54 --exit-node-allow-lan-access --accept-dns=false --accept-routes
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_SOCKS5_SERVER
+              value: ":1055"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+          ports:
+            - containerPort: 1055
+              name: socks
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tailscale-mullvad-gb
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-gb
+spec:
+  selector:
+    app: tailscale-mullvad-gb
+  ports:
+    - name: socks
+      port: 1055
+      targetPort: 1055
+---
+# --- us (us-atl-wg-001) ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale-mullvad-us
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-us
+    component: mullvad-sidecar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tailscale-mullvad-us
+  template:
+    metadata:
+      labels:
+        app: tailscale-mullvad-us
+        component: mullvad-sidecar
+    spec:
+      containers:
+        - name: tailscale
+          image: tailscale/tailscale:stable
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: tailscale-authkey
+                  key: TS_AUTHKEY
+            - name: TS_HOSTNAME
+              value: k8s-mullvad-us
+            - name: TS_EXTRA_ARGS
+              value: --exit-node=100.126.111.61 --exit-node-allow-lan-access --accept-dns=false --accept-routes
+            - name: TS_KUBE_SECRET
+              value: ""
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_SOCKS5_SERVER
+              value: ":1055"
+            - name: TS_STATE_DIR
+              value: /var/lib/tailscale
+          ports:
+            - containerPort: 1055
+              name: socks
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: state
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tailscale-mullvad-us
+  namespace: ircfiber
+  labels:
+    app: tailscale-mullvad-us
+spec:
+  selector:
+    app: tailscale-mullvad-us
+  ports:
+    - name: socks
+      port: 1055
+      targetPort: 1055

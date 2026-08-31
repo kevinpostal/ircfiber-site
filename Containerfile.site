@@ -69,6 +69,7 @@ WORKDIR /build
 # to force a clean rebuild of the dub steps.
 # ============================================================================
 FROM base AS builder-common
+ARG CACHE_BUST
 ARG GIT_HASH=unknown
 ARG GIT_SHORT=unknown
 ARG GIT_DESCRIBE=unknown
@@ -127,6 +128,7 @@ RUN --mount=type=cache,target=/build/.dub,sharing=locked \
 # Stage: builder-backend — gateway binary only (irc-fiber + irc-fiber-gateway)
 # ============================================================================
 FROM builder-common AS builder-backend
+ARG CACHE_BUST
 
 COPY <<EOF ./backend/source/.cache_bust_$CACHE_BUST
 bust=$CACHE_BUST

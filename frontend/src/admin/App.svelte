@@ -23,6 +23,7 @@
   import RedisMonitor from './pages/RedisMonitor.svelte';
   import Logs from './pages/Logs.svelte';
   import Version from './pages/Version.svelte';
+  import Mullvad from './pages/Mullvad.svelte';
   import ToastViewport from './components/ToastViewport.svelte';
   import { current, onChange, navigate, match } from './lib/router';
   import { adminUser, loadMe } from './stores/auth';
@@ -45,8 +46,8 @@
     const hostMatch = match('/servers/host/:host', path);
     if (hostMatch) return { kind: 'servers-host', host: hostMatch.host } as const;
     if (match('/servers', path)) return { kind: 'servers' } as const;
+    if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
     if (match('/sessions', path)) return { kind: 'sessions' } as const;
-    if (match('/logs', path)) return { kind: 'logs' } as const;
     if (match('/users/new', path)) return { kind: 'users-new' } as const;
     const usersMatch = match('/users/:id', path);
     if (usersMatch) return { kind: 'users-detail', userId: usersMatch.id } as const;
@@ -74,6 +75,8 @@
         <ServerHost host={page.host} />
       {:else if page?.kind === 'servers'}
         <Servers />
+      {:else if page?.kind === 'mullvad'}
+        <Mullvad />
       {:else if page?.kind === 'sessions'}
         <Sessions />
       {:else if page?.kind === 'logs'}

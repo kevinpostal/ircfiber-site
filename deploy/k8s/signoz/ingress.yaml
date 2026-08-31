@@ -1,0 +1,46 @@
+# SigNoz Traefik Ingress fallback — Rancher-friendly
+# Applied only if Helm chart did not create Ingress or host is misconfigured.
+# Mirrors irc3 Ingress (traefik.io/ingress-controller, web/websecure + TLS).
+# Host is Tailscale MagicDNS: signoz.ubuntu-docker.tail544547.ts.net
+# If chart Ingress already exists (helm template shows ingress), this file is a fallback
+# and `kubectl apply -f ingress.yaml` is idempotent.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: signoz
+  namespace: signoz
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    # If cluster has cert-manager ClusterIssuer letsencrypt-prod, uncomment:
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: signoz.ubuntu-docker.tail544547.ts.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: signoz
+                port:
+                  number: 8080
+    # Optional second host mirroring irc3 dual-host pattern (Tailscale MagicDNS alias):
+    # - host: ubuntu-docker.tail544547.ts.net
+    #   http:
+    #     paths:
+    #       - path: /
+    #         pathType: Prefix
+    #         backend:
+    #           service:
+    #             name: signoz
+    #             port:
+    #               number: 8080
+  # TLS uses Traefik default cert (no ClusterIssuer on ubuntu-docker; `kubectl get clusterissuer` → none).
+  # For public TLS, add:
+  # tls:
+  #   - hosts:
+  #       - signoz.ubuntu-docker.tail544547.ts.net
+  #     secretName: signoz-tls

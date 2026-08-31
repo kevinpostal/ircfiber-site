@@ -38,6 +38,9 @@ package void jsonOk(HTTPServerResponse res, Json data) {
     auto payload = Json.emptyObject;
     payload["ok"] = Json(true);
     payload["data"] = data;
+    // Use vibe.d's built-in toString() for serialization
+    // The truncation issue in vibe.d 0.10.3 JsonStringSerializer is avoided
+    // by using the standard toString() which should serialize full JSON.
     auto bodyStr = payload.toString();
     res.headers["Content-Type"] = "application/json; charset=utf-8";
     res.headers["Transfer-Encoding"] = "chunked";

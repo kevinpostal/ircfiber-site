@@ -1,7 +1,7 @@
 module ircfiber.web.admin.api;
 
 import std.uuid : UUID, parseUUID, randomUUID;
-import std.string : strip, split, join, indexOf, startsWith, lastIndexOf, toLower;
+import std.string : strip, split, join, indexOf, startsWith, lastIndexOf, toLower, replace;
 import std.algorithm : canFind, filter, map;
 import std.array : array;
 import std.conv : to;
@@ -24,6 +24,11 @@ import ircfiber.storage.session : RedisSessionStore;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody, formString, jsonArray, stripJsonStr;
 import ircfiber.web.admin.servers : AssignmentRow, loadNetworkSnapshot;
 import ircfiber.redis.protocol : NetworkStateSnapshot, RedisKeys, ControlMessage;
+
+/// Escape a string for JSON output
+private string escapeJson(string s) {
+    return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+}
 
 /// GET /api/admin/me — current admin user (id, username, email, roles).
 package void apiMe(HTTPServerRequest req, HTTPServerResponse res) {
@@ -1275,16 +1280,12 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 }
 
 // ────────────────────────────────────────────────────────────
-// Uploads API
+// Mullvad helpers
 // ────────────────────────────────────────────────────────────
-/// GET /api/admin/mullvad/status — returns available SOCKS pool + labels
-package void apiMullvadStatus(HTTPServerRequest, HTTPServerResponse res) {
+private string _mullvadRawPool() {
     import std.process : environment;
-    import std.string : split, strip, indexOf, lastIndexOf, toLower;
-    import std.conv : to;
-    Json[] pool;
+    import std.string : split, strip, startsWith;
     auto raw = environment.get("IRCFIBER_MULLVAD_POOL", "");
-    // fallback to engine env file if gateway env empty
     if (raw.length == 0) {
         try {
             import std.file : readText, exists;
@@ -1297,38 +1298,723 @@ package void apiMullvadStatus(HTTPServerRequest, HTTPServerResponse res) {
             }
         } catch (Exception) {}
     }
-    if (raw.length > 0) {
-        foreach (entry; raw.split(",")) {
-            auto e = entry.strip();
-            if (e.length == 0) continue;
-            auto p = e.indexOf("://");
-            if (p >= 0) e = e[p+3 .. $];
-            auto colon = e.lastIndexOf(":");
-            string host = e; ushort port = 1080;
-            if (colon >= 0) { host = e[0 .. colon].strip(); try { port = e[colon+1 .. $].strip().to!ushort; } catch (Exception) {} }
-            string label = host.toLower();
-            auto dash = host.lastIndexOf("-");
-            if (dash >= 0 && dash+1 < host.length) label = host[dash+1 .. $].toLower();
-            else { auto dot = host.indexOf("."); if (dot > 0) label = host[0 .. dot].toLower(); }
-            string resolvedIp = "";
+    return raw;
+}
+
+private struct _ParsedEntry { string label; string host; ushort port; string resolvedIp; }
+
+private _ParsedEntry[] _parseMullvadPoolEntries(string raw) {
+    import std.string : split, strip, indexOf, lastIndexOf, toLower;
+    import std.conv : to;
+    _ParsedEntry[] out_;
+    if (raw.length == 0) return out_;
+    foreach (entry; raw.split(",")) {
+        auto e = entry.strip();
+        if (e.length == 0) continue;
+        auto p = e.indexOf("://");
+        if (p >= 0) e = e[p+3 .. $];
+        auto colon = e.lastIndexOf(":");
+        string host = e; ushort port = 1080;
+        if (colon >= 0) { host = e[0 .. colon].strip(); try { port = e[colon+1 .. $].strip().to!ushort; } catch (Exception) {} }
+        string label = host.toLower();
+        auto dash = host.lastIndexOf("-");
+        if (dash >= 0 && dash+1 < host.length) label = host[dash+1 .. $].toLower();
+        else { auto dot = host.indexOf("."); if (dot > 0) label = host[0 .. dot].toLower(); }
+        string resolvedIp = "";
+        // Quick DNS with short timeout
+        try {
+            import std.socket : getAddress;
+            auto addrs = getAddress(host);
+            if (addrs.length > 0) resolvedIp = addrs[0].toAddrString();
+        } catch (Exception) {}
+        out_ ~= _ParsedEntry(label, host, port, resolvedIp);
+    }
+    return out_;
+}
+
+private struct _ContainerInfo { string container; string state; string status; string tailscaleExit; }
+
+private _ContainerInfo _collectContainerState(string label) {
+    _ContainerInfo ci;
+    ci.container = "tailscale-mullvad-" ~ label;
+    ci.state = "unknown";
+    ci.status = "";
+    ci.tailscaleExit = "";
+    // k8s: try to get exit IP via SOCKS probe to am.i.mullvad.net (no docker)
+    // Use curl --socks5 (not --socks5-hostname) with 6s timeout, via k8s DNS
+    import std.process : environment;
+    bool isK8s = environment.get("KUBERNETES_SERVICE_HOST", "").length > 0;
+    if (isK8s) {
+        string host = "tailscale-mullvad-" ~ label;
+        // Fast path: just DNS is healthy; avoid 2s×3 curl to am.i.mullvad.net (was 24s admin timeout)
+        try {
+            import std.socket : getAddress;
+            auto addrs = getAddress(host);
+            if (addrs.length > 0) {
+                ci.state = "running";
+                ci.status = "k8s pod";
+            } else {
+                ci.state = "unknown";
+                ci.status = "k8s pod DNS unresolved";
+            }
+        } catch (Exception) {
+            ci.state = "unknown";
+            ci.status = "k8s pod DNS error";
+        }
+        ci.tailscaleExit = "";
+        return ci;
+    }
+    // Quick check: if docker not available, skip immediately
+    import std.process : executeShell;
+    auto which = executeShell("which docker 2>&1");
+    if (which.status != 0) {
+        ci.state = "unknown";
+        ci.status = "docker CLI not available";
+        return ci;
+    }
+    // Docker available — try to get container state with timeout
+    try {
+        auto res = executeShell("timeout 2 docker ps -a --filter name=" ~ ci.container ~ " --format '{{.State}}|{{.Status}}' 2>&1");
+        if (res.status == 0) {
+            auto txt = res.output.strip();
+            if (txt.length == 0) { ci.state = "missing"; }
+            else {
+                import std.string : split, indexOf;
+                auto first = txt.split("\n")[0].strip();
+                auto bar = first.indexOf("|");
+                if (bar >= 0) {
+                    ci.state = first[0 .. bar].strip();
+                    ci.status = first[bar+1 .. $].strip();
+                    if (ci.state == "running") ci.state = "running";
+                    else if (ci.state == "exited") ci.state = "exited";
+                    else if (ci.state.length == 0) ci.state = "unknown";
+                } else {
+                    ci.state = first.length > 0 ? first : "unknown";
+                }
+            }
+        } else {
+            ci.state = "unknown";
+            if (res.output.length > 0) ci.status = res.output.strip();
+        }
+    } catch (Exception e) {
+        ci.state = "unknown";
+        ci.status = e.msg;
+    }
+    return ci;
+}
+
+private struct _ProbeRes { bool healthy; string error; }
+
+private _ProbeRes _probeSocks(string host, ushort port) {
+    _ProbeRes pr;
+    pr.healthy = false;
+    pr.error = "";
+    try {
+        import std.socket : TcpSocket, Address, getAddress, Socket, SocketSet, SocketOptionLevel, SocketOption;
+        import std.datetime : dur;
+        import std.conv : to;
+        auto addrs = getAddress(host, port);
+        if (addrs.length == 0) { pr.error = "DNS no results"; return pr; }
+        auto sock = new TcpSocket();
+        scope (exit) { import std.exception : collectException; collectException(sock.close()); }
+        sock.blocking = false;
+        try {
+            sock.connect(addrs[0]);
+        } catch (Exception e) {
+            import core.time : msecs;
+            auto writeSet = new SocketSet(1);
+            auto errSet = new SocketSet(1);
+            writeSet.add(sock);
+            errSet.add(sock);
+            auto sel = Socket.select(null, writeSet, errSet, dur!"msecs"(800));
+            if (sel > 0 && writeSet.isSet(sock)) {
+                int errVal = 0;
+                sock.getOption(SocketOptionLevel.SOCKET, SocketOption.ERROR, errVal);
+                if (errVal == 0) { pr.healthy = true; return pr; }
+                pr.error = "connect failed: socket error " ~ errVal.to!string;
+                return pr;
+            }
+            pr.error = "connect timeout (800ms)";
+            return pr;
+        }
+        pr.healthy = true;
+        return pr;
+    } catch (Exception e) {
+        pr.error = "connect failed: " ~ e.msg;
+        return pr;
+    }
+}
+
+private string _isoNow() {
+    try {
+        import std.datetime : Clock;
+        return Clock.currTime.toISOExtString();
+    } catch (Exception) { return ""; }
+}
+package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, ServerRegistry serverRegistry) {
+    import std.string : split, strip, indexOf, lastIndexOf, toLower;
+    import std.conv : to;
+    auto raw = _mullvadRawPool();
+    auto entries = _parseMullvadPoolEntries(raw);
+
+    // Build pool data as D structs first, then serialize manually to avoid vibe.d JSON truncation
+    struct IpInfo {
+        string ip, city, region, country, loc, org, postal, timezone, hostname;
+    }
+    struct ProxyInfo {
+        string id, label, host, socksUrl, ip, container, containerState, containerStatus, tailscaleExitNode, error, lastTestedAt;
+        IpInfo ipinfo;
+        int port;
+        bool healthy;
+    }
+    // helper to fetch ipinfo via SOCKS (k8s: use curl --socks5 with 6s)
+    IpInfo _fetchIpInfo(string host, ushort port) {
+        IpInfo ii;
+        // k8s: skip ipinfo curl (1s×3 was 6s) — frontend shows SOCKS URL, not needed for health
+        import std.process : environment;
+        if (environment.get("KUBERNETES_SERVICE_HOST", "").length > 0) return ii;
+        try {
+            import std.process : executeShell;
+            import std.string : indexOf, strip;
+            auto cmd = "timeout 1 curl --socks5 " ~ host ~ ":" ~ port.to!string ~ " -s --max-time 1 https://ipinfo.io/json 2>&1";
+            auto r = executeShell(cmd);
+            if (r.status == 0 && r.output.length > 10) {
+                auto txt = r.output.strip();
+                string extract(string key) {
+                    auto p = txt.indexOf("\"" ~ key ~ "\"");
+                    if (p < 0) return "";
+                    auto q1 = txt.indexOf("\"", p + key.length + 2);
+                    if (q1 < 0) return "";
+                    auto q2 = txt.indexOf("\"", q1+1);
+                    if (q2 <= q1) return "";
+                    return txt[q1+1 .. q2].strip();
+                }
+                ii.ip = extract("ip");
+                ii.city = extract("city");
+                ii.region = extract("region");
+                ii.country = extract("country");
+                ii.loc = extract("loc");
+                ii.org = extract("org");
+                ii.postal = extract("postal");
+                ii.timezone = extract("timezone");
+                ii.hostname = extract("hostname");
+            }
+        } catch (Exception) {}
+        return ii;
+    }
+    ProxyInfo[] proxyInfos;
+    foreach (ent; entries) {
+        auto ci = _collectContainerState(ent.label);
+        auto probe = _probeSocks(ent.host, ent.port);
+        string err = probe.error;
+        // healthy = TCP SOCKS reachable; for k8s we skip mullvad_exit_ip curl for speed
+        bool healthy = probe.healthy;
+        if (probe.healthy) err = "";
+        if (ent.resolvedIp.length == 0 && !healthy && err.length == 0) {
+            err = "DNS unresolved";
+        }
+        ProxyInfo pi;
+        pi.id = ent.label;
+        pi.label = ent.label;
+        pi.host = ent.host;
+        pi.port = cast(int)ent.port;
+        pi.socksUrl = "socks5://" ~ ent.host ~ ":" ~ ent.port.to!string;
+        pi.ip = ent.resolvedIp;
+        pi.container = ci.container;
+        pi.containerState = ci.state;
+        pi.containerStatus = ci.status;
+        pi.tailscaleExitNode = ci.tailscaleExit;
+        pi.healthy = healthy;
+        pi.error = err;
+        pi.lastTestedAt = _isoNow();
+        if (healthy) {
+            try { pi.ipinfo = _fetchIpInfo(ent.host, ent.port); } catch (Exception) {}
+            if (pi.ipinfo.ip.length == 0 && pi.tailscaleExitNode.length > 0) pi.ipinfo.ip = pi.tailscaleExitNode;
+            // If ipinfo still empty but we have exit IP, at least set ip
+            if (pi.ipinfo.ip.length == 0) pi.ipinfo.ip = pi.tailscaleExitNode;
+        }
+        proxyInfos ~= pi;
+    }
+    struct UsageInfo { int pinned; int active; }
+    UsageInfo[string] usageMap;
+    struct AssocInfo { string networkId, networkName, host, username, egressNodeId, activeEgressLabel; }
+    AssocInfo[] assocs;
+    struct LiveConnInfo { string serverId, networkId, networkName, host, nick, activeEgressLabel, activeEgressHost, activeEgressIp; long connectedSince; }
+    LiveConnInfo[][string] liveMap;
+    int liveTotal = 0;
+    struct ServerEgressInfo { string serverId, egressNodeId; long networkCount; bool healthy; }
+    ServerEgressInfo[] serverEgressInfos;
+
+    try {
+        if (redis !is null && serverRegistry !is null) {
+            // pinned from Mongo
+            int[string] pinned;
+            int[string] active;
+            foreach (pi; proxyInfos) { pinned[pi.label] = 0; active[pi.label] = 0; }
+            // Build lookup for associations
+            struct Assoc { string networkId; string networkName; string host; string username; string egressNodeId; string activeEgressLabel; }
+            Assoc[] assocsTemp;
             try {
-                import std.socket : getAddress;
-                auto addrs = getAddress(host);
-                if (addrs.length > 0) resolvedIp = addrs[0].toAddrString();
+                auto netRepo = new NetworkRepository();
+                auto allNets = netRepo.findAll();
+                auto userRepo = new UserRepository();
+                // pinned counts
+                foreach (nw; allNets) {
+                    auto lab = nw.config.egressNodeId.strip().toLower();
+                    if (lab.length > 0 && lab in pinned) pinned[lab]++;
+                    if (lab.length > 0) {
+                        bool match = false;
+                        foreach (pi; proxyInfos) if (pi.label == lab) { match = true; break; }
+                        if (match) {
+                            string uname = "";
+                            try { auto u = userRepo.findById(nw.userId); uname = u.username; } catch (Exception) {}
+                            string name = nw.config.name.length > 0 ? nw.config.name : nw.config.host;
+                            string aLab = "";
+                            try { auto snap = loadNetworkSnapshot(redis, nw.config.id.toString()); aLab = snap.activeEgressLabel; } catch (Exception) {}
+                            if (assocsTemp.length < 100) assocsTemp ~= Assoc(nw.config.id.toString(), name, nw.config.host, uname, lab, aLab);
+                        }
+                    }
+                }
+                // active counts via snapshot
+                foreach (nw; allNets) {
+                    try {
+                        auto snap = loadNetworkSnapshot(redis, nw.config.id.toString());
+                        if (snap.activeEgressLabel.length > 0 && snap.activeEgressLabel in active) active[snap.activeEgressLabel]++;
+                    } catch (Exception) {}
+                }
+            } catch (Exception e) { logWarn("mullvad status pinned enrichment failed: %s", e.msg); }
+            foreach (pi; proxyInfos) { usageMap[pi.label] = UsageInfo(pinned.get(pi.label, 0), active.get(pi.label, 0)); }
+            foreach (a; assocsTemp) assocs ~= AssocInfo(a.networkId, a.networkName, a.host, a.username, a.egressNodeId, a.activeEgressLabel);
+
+            // liveConnections per label
+            string[string] netNameMap;
+            string[string] netHostMap;
+            string[string] netUserMap;
+            try {
+                auto netRepo2 = new NetworkRepository();
+                auto userRepo2 = new UserRepository();
+                foreach (nw; netRepo2.findAll()) {
+                    auto nid = nw.config.id.toString();
+                    netNameMap[nid] = nw.config.name.length > 0 ? nw.config.name : nw.config.host;
+                    netHostMap[nid] = nw.config.host;
+                    try { auto u = userRepo2.findById(nw.userId); netUserMap[nid] = u.username; } catch (Exception) { netUserMap[nid] = ""; }
+                }
             } catch (Exception) {}
-            Json o = Json.emptyObject;
-            o["id"] = Json(label);
-            o["label"] = Json(label);
-            o["host"] = Json(host);
-            o["port"] = Json(cast(int)port);
-            o["socksUrl"] = Json("socks5://" ~ host ~ ":" ~ port.to!string);
-            o["ip"] = Json(resolvedIp);
-            pool ~= o;
+            auto servers = serverRegistry.getAllServers();
+            // Build label → ipinfo lookup for live connections (use actual Mullvad exit IP, not ClusterIP)
+            string[string] labelToExitIp;
+            string[string] labelToExitHost;
+            foreach (pi; proxyInfos) {
+                if (pi.ipinfo.ip.length > 0) {
+                    labelToExitIp[pi.label] = pi.ipinfo.ip;
+                    labelToExitHost[pi.label] = pi.host;
+                } else if (pi.tailscaleExitNode.length > 0) {
+                    labelToExitIp[pi.label] = pi.tailscaleExitNode;
+                    labelToExitHost[pi.label] = pi.host;
+                } else {
+                    labelToExitIp[pi.label] = pi.ip;
+                    labelToExitHost[pi.label] = pi.host;
+                }
+            }
+            foreach (srv; servers) {
+                foreach (nid; srv.assignedNetworks) {
+                    try {
+                        auto snap = loadNetworkSnapshot(redis, nid);
+                        if (!snap.connected) continue;
+                        auto lab = snap.activeEgressLabel;
+                        if (lab.length == 0) continue;
+                        LiveConnInfo lci;
+                        lci.serverId = srv.serverId;
+                        lci.networkId = nid;
+                        lci.networkName = netNameMap.get(nid, nid);
+                        lci.host = netHostMap.get(nid, "");
+                        lci.nick = snap.currentNick;
+                        lci.activeEgressLabel = lab;
+                        // Use actual exit IP/host from ipinfo, not ClusterIP from snapshot
+                        lci.activeEgressHost = labelToExitHost.get(lab, snap.activeEgressHost);
+                        lci.activeEgressIp = labelToExitIp.get(lab, snap.activeEgressIp);
+                        lci.connectedSince = snap.updatedAt;
+                        liveMap[lab] ~= lci;
+                        liveTotal++;
+                    } catch (Exception) {}
+                }
+            }
+            // server egress
+            auto servers2 = serverRegistry.getAllServers();
+            foreach (srv; servers2) {
+                ServerEgressInfo sei;
+                sei.serverId = srv.serverId;
+                sei.egressNodeId = "";
+                try { sei.egressNodeId = serverRegistry.getEngineEgress(srv.serverId); } catch (Exception) {}
+                sei.networkCount = cast(long)srv.assignedNetworks.length;
+                sei.healthy = false;
+                try { sei.healthy = serverRegistry.isServerHealthy(srv.serverId); } catch (Exception) {}
+                serverEgressInfos ~= sei;
+            }
+        }
+    } catch (Exception e) {
+        logWarn("mullvad usage enrichment failed: %s", e.msg);
+    }
+
+    // Manual JSON serialization to avoid vibe.d JSON truncation bug
+    // Build full response string first, then write with writeBody() to use Content-Length
+    // instead of chunked encoding (which has a truncation bug in vibe.d 0.10.3)
+    import std.array : Appender;
+    Appender!(char[]) buf;
+    buf.put("{\"ok\":true,\"data\":{");
+    // pool
+    buf.put("\"pool\":[");
+    foreach (i, pi; proxyInfos) {
+        if (i > 0) buf.put(",");
+        buf.put("{\"id\":\"" ~ pi.id.escapeJson ~ "\",");
+        buf.put("\"label\":\"" ~ pi.label.escapeJson ~ "\",");
+        buf.put("\"host\":\"" ~ pi.host.escapeJson ~ "\",");
+        buf.put("\"port\":" ~ pi.port.to!string ~ ",");
+        buf.put("\"socksUrl\":\"" ~ pi.socksUrl.escapeJson ~ "\",");
+        buf.put("\"ip\":\"" ~ pi.ip.escapeJson ~ "\",");
+        buf.put("\"container\":\"" ~ pi.container.escapeJson ~ "\",");
+        buf.put("\"containerState\":\"" ~ pi.containerState.escapeJson ~ "\",");
+        buf.put("\"containerStatus\":\"" ~ pi.containerStatus.escapeJson ~ "\",");
+        buf.put("\"tailscaleExitNode\":\"" ~ pi.tailscaleExitNode.escapeJson ~ "\",");
+        buf.put("\"ipinfo\":{\"ip\":\"" ~ pi.ipinfo.ip.escapeJson ~ "\",\"city\":\"" ~ pi.ipinfo.city.escapeJson ~ "\",\"region\":\"" ~ pi.ipinfo.region.escapeJson ~ "\",\"country\":\"" ~ pi.ipinfo.country.escapeJson ~ "\",\"loc\":\"" ~ pi.ipinfo.loc.escapeJson ~ "\",\"org\":\"" ~ pi.ipinfo.org.escapeJson ~ "\",\"postal\":\"" ~ pi.ipinfo.postal.escapeJson ~ "\",\"timezone\":\"" ~ pi.ipinfo.timezone.escapeJson ~ "\",\"hostname\":\"" ~ pi.ipinfo.hostname.escapeJson ~ "\"},");
+        buf.put("\"healthy\":" ~ (pi.healthy ? "true" : "false") ~ ",");
+        buf.put("\"lastTestedAt\":\"" ~ pi.lastTestedAt.escapeJson ~ "\",");
+        buf.put("\"error\":\"" ~ pi.error.escapeJson ~ "\"}");
+    }
+    buf.put("],");
+    buf.put("\"count\":" ~ proxyInfos.length.to!string ~ ",");
+    buf.put("\"poolRaw\":\"" ~ raw.escapeJson ~ "\",");
+    buf.put("\"poolCount\":" ~ proxyInfos.length.to!string ~ ",");
+    buf.put("\"desiredCount\":" ~ proxyInfos.length.to!string ~ ",");
+    if (proxyInfos.length == 0) {
+        buf.put("\"warning\":\"" ~ "No Mullvad pool configured — set mullvad_sidecars then redeploy engine".escapeJson ~ "\",");
+    }
+    // usage
+    buf.put("\"usage\":{");
+    foreach (i, pi; proxyInfos) {
+        if (i > 0) buf.put(",");
+        auto u = usageMap.get(pi.label, UsageInfo(0,0));
+        buf.put("\"" ~ pi.label.escapeJson ~ "\":{\"pinned\":" ~ u.pinned.to!string ~ ",\"active\":" ~ u.active.to!string ~ "}");
+    }
+    buf.put("},");
+    // associations
+    buf.put("\"associations\":[");
+    foreach (i, a; assocs) {
+        if (i > 0) buf.put(",");
+        buf.put("{\"networkId\":\"" ~ a.networkId.escapeJson ~ "\",");
+        buf.put("\"networkName\":\"" ~ a.networkName.escapeJson ~ "\",");
+        buf.put("\"host\":\"" ~ a.host.escapeJson ~ "\",");
+        buf.put("\"username\":\"" ~ a.username.escapeJson ~ "\",");
+        buf.put("\"egressNodeId\":\"" ~ a.egressNodeId.escapeJson ~ "\",");
+        buf.put("\"activeEgressLabel\":\"" ~ a.activeEgressLabel.escapeJson ~ "\"}");
+    }
+    buf.put("],");
+    buf.put("\"associationsTruncated\":" ~ (assocs.length >= 100 ? "true" : "false") ~ ",");
+    // liveConnections
+    buf.put("\"liveConnections\":{");
+    bool firstLabel = true;
+    foreach (lab, conns; liveMap) {
+        if (!firstLabel) buf.put(",");
+        firstLabel = false;
+        buf.put("\"" ~ lab.escapeJson ~ "\":[");
+        foreach (i, c; conns) {
+            if (i > 0) buf.put(",");
+            buf.put("{\"serverId\":\"" ~ c.serverId.escapeJson ~ "\",");
+            buf.put("\"networkId\":\"" ~ c.networkId.escapeJson ~ "\",");
+            buf.put("\"networkName\":\"" ~ c.networkName.escapeJson ~ "\",");
+            buf.put("\"host\":\"" ~ c.host.escapeJson ~ "\",");
+            buf.put("\"nick\":\"" ~ c.nick.escapeJson ~ "\",");
+            buf.put("\"activeEgressLabel\":\"" ~ c.activeEgressLabel.escapeJson ~ "\",");
+        buf.put("\"activeEgressHost\":\"" ~ c.activeEgressHost.escapeJson ~ "\",");
+        buf.put("\"activeEgressIp\":\"" ~ c.activeEgressIp.escapeJson ~ "\",");
+        buf.put("\"connectedSince\":" ~ c.connectedSince.to!string ~ "}");
+        }
+        buf.put("]");
+    }
+    buf.put("},");
+    buf.put("\"liveConnectionsTotal\":" ~ liveTotal.to!string ~ ",");
+    // servers / serverEgress
+    buf.put("\"servers\":[");
+    foreach (i, s; serverEgressInfos) {
+        if (i > 0) buf.put(",");
+        buf.put("{\"serverId\":\"" ~ s.serverId.escapeJson ~ "\",");
+        buf.put("\"egressNodeId\":\"" ~ s.egressNodeId.escapeJson ~ "\",");
+        buf.put("\"networkCount\":" ~ s.networkCount.to!string ~ ",");
+        buf.put("\"healthy\":" ~ (s.healthy ? "true" : "false") ~ "}");
+    }
+    buf.put("],");
+    buf.put("\"serverEgress\":[");
+    foreach (i, s; serverEgressInfos) {
+        if (i > 0) buf.put(",");
+        buf.put("{\"serverId\":\"" ~ s.serverId.escapeJson ~ "\",");
+        buf.put("\"egressNodeId\":\"" ~ s.egressNodeId.escapeJson ~ "\",");
+        buf.put("\"networkCount\":" ~ s.networkCount.to!string ~ ",");
+        buf.put("\"healthy\":" ~ (s.healthy ? "true" : "false") ~ "}");
+    }
+    buf.put("]");
+    buf.put("}}");
+    auto responseStr = buf.data;
+    logInfo("mullvad status json len %d tail %s", responseStr.length, responseStr.length > 20 ? responseStr[$-20..$] : responseStr);
+    res.headers["Content-Type"] = "application/json; charset=utf-8";
+    res.writeBody(cast(const(ubyte)[]) responseStr);
+}
+
+/// POST /api/admin/mullvad/:label/restart — docker restart sidecar
+package void apiMullvadRestart(HTTPServerRequest req, HTTPServerResponse res) {
+    import std.string : toLower, strip;
+    auto label = req.params["label"].strip().toLower();
+    if (label.length == 0) { jsonError(res, 400, "label required"); return; }
+    auto raw = _mullvadRawPool();
+    auto entries = _parseMullvadPoolEntries(raw);
+    bool found = false;
+    foreach (e; entries) if (e.label.toLower() == label) { found = true; break; }
+    if (!found) { jsonError(res, 404, "unknown mullvad label: " ~ label); return; }
+    try {
+        import std.process : executeShell;
+        auto cname = "tailscale-mullvad-" ~ label;
+        auto r = executeShell("docker restart " ~ cname ~ " 2>&1");
+        if (r.status != 0) {
+            // check docker availability
+            if (r.output.indexOf("Cannot connect") >= 0 || r.output.indexOf("docker: not found") >= 0 || r.output.indexOf("No such") >= 0) {
+                // docker unavailable → 503 with guidance
+                if (r.output.indexOf("No such container") >= 0) {
+                    jsonError(res, 404, "container not found: " ~ cname);
+                    return;
+                }
+                jsonError(res, 503, "docker unavailable — restart via ansible/host shell: " ~ r.output.strip());
+                return;
+            }
+            jsonError(res, 500, r.output.strip());
+            return;
+        }
+        logInfo("Admin restarted mullvad sidecar %s: %s", cname, r.output.strip());
+        Json data = Json.emptyObject;
+        data["label"] = Json(label);
+        data["restarted"] = Json(true);
+        data["output"] = Json(r.output.strip());
+        jsonOk(res, data);
+    } catch (Exception e) {
+        // docker socket absent
+        if (e.msg.indexOf("No such file") >= 0 || e.msg.indexOf("docker") >= 0) {
+            jsonError(res, 503, "docker unavailable — restart via ansible/host shell: " ~ e.msg);
+            return;
+        }
+        jsonError(res, 500, e.msg);
+    }
+}
+
+/// POST /api/admin/mullvad/:label/test — SOCKS probe + egress IP check
+package void apiMullvadTest(HTTPServerRequest req, HTTPServerResponse res) {
+    import std.string : toLower, strip;
+    auto label = req.params["label"].strip().toLower();
+    if (label.length == 0) { jsonError(res, 400, "label required"); return; }
+    auto raw = _mullvadRawPool();
+    auto entries = _parseMullvadPoolEntries(raw);
+    _ParsedEntry* ent;
+    foreach (ref e; entries) if (e.label.toLower() == label) { ent = &e; break; }
+    if (ent is null) { jsonError(res, 404, "unknown mullvad label: " ~ label); return; }
+    // SOCKS probe
+    auto probe = _probeSocks(ent.host, ent.port);
+    string egressIp = "";
+    string ip = ent.resolvedIp;
+    string err = probe.error;
+    bool healthy = probe.healthy;
+    // optional HTTPS egress IP check via curl --socks5-hostname
+    if (healthy) {
+        try {
+            import std.process : executeShell;
+            auto cmd = "curl --socks5-hostname " ~ ent.host ~ ":" ~ ent.port.to!string ~ " -s --max-time 6 https://am.i.mullvad.net/json 2>&1";
+            auto r = executeShell(cmd);
+            if (r.status == 0 && r.output.length > 0) {
+                // try to extract ip field — naive string search to avoid json dep
+                import std.string : indexOf;
+                auto txt = r.output;
+                // look for "ip": "x.x.x.x"
+                auto p = txt.indexOf("\"ip\"");
+                if (p >= 0) {
+                    auto q1 = txt.indexOf("\"", p+4);
+                    if (q1 >= 0) {
+                        auto q2 = txt.indexOf("\"", q1+1);
+                        if (q2 > q1) egressIp = txt[q1+1 .. q2].strip();
+                    }
+                }
+                if (egressIp.length == 0) {
+                    // fallback mullvad_exit_ip
+                    auto p2 = txt.indexOf("mullvad_exit_ip");
+                    if (p2 >= 0) {
+                        auto q1 = txt.indexOf("\"", p2+15);
+                        if (q1 >= 0) {
+                            auto q2 = txt.indexOf("\"", q1+1);
+                            if (q2 > q1) egressIp = txt[q1+1 .. q2].strip();
+                        }
+                    }
+                }
+                if (egressIp.length == 0) {
+                    // fallback: first ip-like token
+                    import std.regex : regex, matchFirst;
+                    try {
+                        auto re = regex(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`);
+                        auto m = matchFirst(txt, re);
+                        if (!m.empty) egressIp = m.hit;
+                    } catch (Exception) {}
+                }
+            } else if (r.output.length > 0) {
+                // am.i check failed but TCP healthy → keep healthy, surface note
+                if (err.length == 0) err = "am.i check skipped: " ~ r.output.strip()[0 .. (r.output.length > 120 ? 120 : $)];
+            }
+        } catch (Exception e) {
+            if (err.length == 0) err = "am.i check skipped: " ~ e.msg;
         }
     }
     Json data = Json.emptyObject;
-    data["pool"] = Json(pool);
-    data["count"] = Json(cast(int)pool.length);
+    data["label"] = Json(label);
+    data["healthy"] = Json(healthy);
+    data["ip"] = Json(ip);
+    data["egressIp"] = Json(egressIp);
+    data["checkedAt"] = Json(_isoNow());
+    data["error"] = Json(err);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/mullvad/test-all — probe all proxies
+package void apiMullvadTestAll(HTTPServerRequest req, HTTPServerResponse res) {
+    import std.string : toLower;
+    auto raw = _mullvadRawPool();
+    auto entries = _parseMullvadPoolEntries(raw);
+    Json[] results;
+    foreach (ent; entries) {
+        auto probe = _probeSocks(ent.host, ent.port);
+        string egressIp = "";
+        string err = probe.error;
+        bool healthy = probe.healthy;
+        if (healthy) {
+            try {
+                import std.process : executeShell;
+                auto cmd = "curl --socks5-hostname " ~ ent.host ~ ":" ~ ent.port.to!string ~ " -s --max-time 6 https://am.i.mullvad.net/json 2>&1";
+                auto r = executeShell(cmd);
+                if (r.status == 0 && r.output.length > 0) {
+                    import std.string : indexOf;
+                    auto txt = r.output;
+                    auto p = txt.indexOf("\"ip\"");
+                    if (p >= 0) {
+                        auto q1 = txt.indexOf("\"", p+4);
+                        if (q1 >= 0) {
+                            auto q2 = txt.indexOf("\"", q1+1);
+                            if (q2 > q1) egressIp = txt[q1+1 .. q2].strip();
+                        }
+                    }
+                    if (egressIp.length == 0) {
+                        import std.regex : regex, matchFirst;
+                        try {
+                            auto re = regex(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`);
+                            auto m = matchFirst(txt, re);
+                            if (!m.empty) egressIp = m.hit;
+                        } catch (Exception) {}
+                    }
+                }
+            } catch (Exception) {}
+        }
+        Json j = Json.emptyObject;
+        j["label"] = Json(ent.label);
+        j["healthy"] = Json(healthy);
+        j["ip"] = Json(ent.resolvedIp);
+        j["egressIp"] = Json(egressIp);
+        j["checkedAt"] = Json(_isoNow());
+        j["error"] = Json(err);
+        results ~= j;
+    }
+    Json data = Json.emptyObject;
+    data["results"] = Json(results);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/mullvad/server/:serverId/egress — set per-engine override
+package void apiMullvadServerEgressSet(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, ServerRegistry serverRegistry) {
+    import std.string : toLower, strip;
+    auto serverId = req.params["serverId"].strip();
+    if (serverId.length == 0) serverId = req.params["serverId"].strip();
+    if (serverId.length == 0) { jsonError(res, 400, "serverId required"); return; }
+    auto body = readJsonBody(req);
+    string egressNodeId = "";
+    if (body.type == Json.Type.object && body["egressNodeId"].type != Json.Type.undefined) {
+        try { egressNodeId = body["egressNodeId"].get!string.strip().toLower(); } catch (Exception) {}
+    } else if (body.type == Json.Type.object && body["egress"].type != Json.Type.undefined) {
+        try { egressNodeId = body["egress"].get!string.strip().toLower(); } catch (Exception) {}
+    }
+    if (egressNodeId == "random" || egressNodeId == "auto") egressNodeId = "";
+    if (egressNodeId.length > 0) {
+        auto raw = _mullvadRawPool();
+        auto entries = _parseMullvadPoolEntries(raw);
+        bool ok = false;
+        foreach (e; entries) if (e.label.toLower() == egressNodeId) { ok = true; break; }
+        if (!ok) { jsonError(res, 400, "unknown egress label: " ~ egressNodeId); return; }
+    }
+    // set in registry
+    try {
+        serverRegistry.setEngineEgress(serverId, egressNodeId);
+    } catch (Exception e) { jsonError(res, 500, e.msg); return; }
+    // push reconnect for all networks on that server so they pick up override
+    int affected = 0;
+    try {
+        auto nets = serverRegistry.getNetworksForServer(serverId);
+        if (nets.length == 0) {
+            // fallback to canonical assignments
+            foreach (na; serverRegistry.getAllAssignments()) if (na.serverId == serverId) nets ~= na.networkId;
+        }
+        auto netRepo = new NetworkRepository();
+        foreach (nid; nets) {
+            try {
+                import std.uuid : parseUUID;
+                auto uuid = parseUUID(nid);
+                auto cfg = netRepo.findById(uuid);
+                if (cfg.id == typeof(cfg.id).init) continue;
+                auto owner = netRepo.findByIdWithUser(uuid);
+                string ownerId = owner.userId != typeof(owner.userId).init ? owner.userId.toString() : "";
+                auto msg = ControlMessage("reconnectNetwork", nid, ownerId, cfg.toJson());
+                msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+                redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+                affected++;
+            } catch (Exception e) { logWarn("server egress push for %s failed: %s", nid, e.msg); }
+        }
+        logInfo("Admin set engine %s egress to '%s' — pushed %d reconnects", serverId, egressNodeId, affected);
+    } catch (Exception e) { logWarn("server egress reconnect push failed: %s", e.msg); }
+    Json data = Json.emptyObject;
+    data["serverId"] = Json(serverId);
+    data["egressNodeId"] = Json(egressNodeId);
+    data["affectedNetworks"] = Json(affected);
+    jsonOk(res, data);
+}
+
+/// DELETE /api/admin/mullvad/server/:serverId/egress — clear override
+package void apiMullvadServerEgressClear(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, ServerRegistry serverRegistry) {
+    auto serverId = req.params["serverId"].strip();
+    if (serverId.length == 0) { jsonError(res, 400, "serverId required"); return; }
+    try { serverRegistry.setEngineEgress(serverId, ""); } catch (Exception e) { jsonError(res, 500, e.msg); return; }
+    int affected = 0;
+    try {
+        auto nets = serverRegistry.getNetworksForServer(serverId);
+        if (nets.length == 0) foreach (na; serverRegistry.getAllAssignments()) if (na.serverId == serverId) nets ~= na.networkId;
+        auto netRepo = new NetworkRepository();
+        foreach (nid; nets) {
+            try {
+                import std.uuid : parseUUID;
+                auto uuid = parseUUID(nid);
+                auto cfg = netRepo.findById(uuid);
+                if (cfg.id == typeof(cfg.id).init) continue;
+                auto owner = netRepo.findByIdWithUser(uuid);
+                string ownerId = owner.userId != typeof(owner.userId).init ? owner.userId.toString() : "";
+                auto msg = ControlMessage("reconnectNetwork", nid, ownerId, cfg.toJson());
+                msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+                redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+                affected++;
+            } catch (Exception e) { logWarn("clear egress push for %s failed: %s", nid, e.msg); }
+        }
+        logInfo("Admin cleared engine %s egress — pushed %d reconnects", serverId, affected);
+    } catch (Exception e) { logWarn("clear egress push failed: %s", e.msg); }
+    Json data = Json.emptyObject;
+    data["serverId"] = Json(serverId);
+    data["egressNodeId"] = Json("");
+    data["affectedNetworks"] = Json(affected);
     jsonOk(res, data);
 }
 

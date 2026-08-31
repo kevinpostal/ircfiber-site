@@ -1,0 +1,162 @@
+# SigNoz Helm values for k3s single-node (ubuntu@ubuntu-docker)
+# Chart: signoz/signoz 0.138.0 (app v0.138.0) — actual installed; pins ClickHouse 25.12.5, otel-collector v0.144.8
+# Original pin intended 0.131.0 (app v0.131.1) for ClickHouse 25.8 / otel 0.144.5, but chart forces 25.12.5 — accepted per plan fallback.
+# Matches site/deploy/roles/logging/defaults/main.yml signoz_version v0.131.1 / signoz_ingester_version v0.144.5
+# If any key does not exist in the chart's values.yaml, keep chart default and note deviation here.
+
+global:
+  # Only provisioner on ubuntu-docker is rancher.io/local-path (WaitForFirstConsumer)
+  storageClass: local-path
+  clusterName: ubuntu-docker
+
+# ---- ClickHouse (telemetry store) ----
+clickhouse:
+  enabled: true
+# Single replica — chart 0.138.0 requires ZooKeeper for ReplicatedMergeTree even with shardsCount:1.
+# Fallback pre-decided in plan: enable ZK single replica with 1Gi PVC (chart default).
+  # Original preference was cluster.enabled=false / zookeeper.enabled=false, but install failed with
+  # "Cannot use any of provided ZooKeeper nodes" (migrator 999). Enabled per plan fallback.
+  zookeeper:
+    enabled: true
+    replicaCount: 1
+    persistence:
+      enabled: true
+      storageClass: local-path
+      size: 5Gi
+  # Auth — DSN must be tcp://signoz:signoz123@clickhouse:9000 matching docker SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN
+  # Chart generates random admin password; we override via secret template? For now keep chart-generated password
+  # and document DSN. If chart supports clickhouse.auth.password, override to signoz123.
+  # Deviation: chart 0.131.0 does not expose clickhouse.auth.password directly; password is generated
+  # in ClickHouseInstallation users.admin/password. Chart default retained with note.
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 20Gi # covers ~30d of cluster logs; host has 934G free
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    requests:
+      cpu: 500m
+      memory: 4Gi
+    limits:
+      cpu: 2000m
+      memory: 8Gi
+# ---- SigNoz queryService + frontend (merged Deployment "signoz") ----
+signoz:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  # Indoor footprint ~1Gi vs host 125Gi — safe. Frontend merged into signoz on :8080.
+  env:
+    # JWT secret — reuse site/deploy/roles/logging/defaults/main.yml signoz_jwt_secret default
+    # Production should override via vault_signoz_jwt_secret.
+    SIGNOZ_JWT_SECRET: ircfiber-signoz-dev-jwt-secret-change-in-prod-9e3a7f2b
+    # Telemetry store DSN — chart sets internally from ClickHouseInstallation; keep provider=clickhouse.
+    signoz_telemetrystore_provider: clickhouse
+  ingress:
+    enabled: true
+    className: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
+      traefik.ingress.kubernetes.io/router.tls: "true"
+    hosts:
+      - host: signoz.ubuntu-docker.tail544547.ts.net
+        paths:
+          - path: /
+            pathType: Prefix
+            port: 8080
+    tls: []
+    # No cert-manager ClusterIssuer on ubuntu-docker (kubectl get clusterissuer → none); use Traefik default cert.
+    # If letsencrypt-prod ClusterIssuer appears, add annotation cert-manager.io/cluster-issuer: letsencrypt-prod.
+
+# ---- Otel Collector (k8s-infra) ----
+otelCollector:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 200Mi
+    limits:
+      cpu: 500m
+      memory: 500Mi
+  # Chart deploys otel-collector as Deployment (not DaemonSet). For single-node hostmetrics,
+  # we add hostmetrics receiver + resourcedetection processor per
+  # https://signoz.io/docs/infrastructure-monitoring/user-guides/hostmetrics/#configure-the-hostmetrics-receiver
+  # and https://signoz.io/docs/infrastructure-monitoring/user-guides/hostmetrics/#configure-the-processors
+  # Hostmetrics needs host filesystem mount /hostfs and OTEL_RESOURCE_ATTRIBUTES for k8s.cluster.name.
+  # Deviation: chart 0.138.0 has no DaemonSet mode; we use Deployment with hostfs mount for single-node.
+  # For multi-node, install signoz/k8s-infra Helm chart (recommended per SigNoz NOTES).
+  additionalEnvs:
+    OTEL_RESOURCE_ATTRIBUTES: "k8s.cluster.name=ubuntu-docker,host.name=ubuntu-docker"
+  extraVolumes:
+    - name: hostfs
+      hostPath:
+        path: /
+        type: Directory
+  extraVolumeMounts:
+    - name: hostfs
+      mountPath: /hostfs
+      readOnly: true
+  config:
+    receivers:
+      hostmetrics:
+        collection_interval: 60s
+        root_path: /hostfs
+        scrapers:
+          cpu: {}
+          disk: {}
+          load: {}
+          filesystem: {}
+          memory: {}
+          network: {}
+          paging: {}
+          process:
+            mute_process_name_error: true
+            mute_process_exe_error: true
+            mute_process_io_error: true
+            mute_process_user_error: true
+          processes: {}
+          system: {}
+    processors:
+      batch:
+        send_batch_size: 50000
+        timeout: 5s
+      resourcedetection:
+        detectors: [env, system]
+      k8sattributes:
+        extract:
+          metadata:
+            - k8s.pod.uid
+            - k8s.pod.name
+            - k8s.namespace.name
+            - k8s.node.name
+        pod_association:
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.ip
+          - sources:
+              - from: resource_attribute
+                name: k8s.pod.uid
+          - sources:
+              - from: connection
+        passthrough: false
+    service:
+      pipelines:
+        metrics:
+          receivers: [otlp, hostmetrics]
+          processors: [resourcedetection, batch]
+          exporters: [signozclickhousemetrics, signozmeter, metadataexporter]
+        traces:
+        logs:
+          receivers: [otlp, httplogreceiver/heroku, httplogreceiver/json]
+          processors: [k8sattributes, batch]
+          exporters: [clickhouselogsexporter, signozmeter, metadataexporter]
+
+# ---- Global env fallback (if chart ever templates global.env) ----
+# Some forks expose global.env.SIGNOZ_JWT_SECRET; we keep signoz.env above as authoritative.

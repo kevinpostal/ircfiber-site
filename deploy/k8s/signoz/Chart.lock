@@ -1,0 +1,14 @@
+# Helm Chart.lock (manual — records pin for site/deploy/k8s/signoz)
+# Generated per local://signoz-k8s-observability-plan.md Step 2
+# SigNoz chart version pinned to match docker pins unless chart forces newer.
+# Actual installed chart is 0.138.0 (app v0.138.0) — see values.yaml header.
+dependencies:
+  - name: signoz
+    repository: https://charts.signoz.io
+    version: 0.138.0
+    # Original pin: 0.131.0 (app v0.131.1) for clickhouse 25.8 / otel 0.144.5
+    # Chart 0.138.0 forces clickhouse 25.12.5 / otel 0.144.8 — accepted per plan fallback
+# To reproduce:
+# helm repo add signoz https://charts.signoz.io
+# helm repo update
+# helm search repo signoz/signoz --versions

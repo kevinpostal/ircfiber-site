@@ -1,0 +1,80 @@
+# IRC Fiber engine — k8s deployment for ubuntu-docker single-node
+# Build image: DOCKER_BUILDKIT=1 docker build -f ../engine/Containerfile.engine -t localhost:5000/ircfiber-engine:dev --target runtime-engine .. && docker push localhost:5000/ircfiber-engine:dev
+# Then apply: kubectl --context ubuntu-docker apply -f deployment-engine.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ircfiber-engine
+  namespace: ircfiber
+  labels:
+    app: ircfiber-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ircfiber-engine
+  template:
+    metadata:
+      labels:
+        app: ircfiber-engine
+    spec:
+      containers:
+        - name: engine
+          image: localhost:5000/ircfiber-engine:dev
+          imagePullPolicy: Always
+          command: ["/app/irc-fiber-engine"]
+          ports:
+            - containerPort: 8091
+              name: admin
+          env:
+            - name: IRCFIBER_REDIS_URL
+              value: "redis://redis.ircfiber.svc.cluster.local:6379"
+            - name: IRCFIBER_MONGO_URL
+              value: "mongodb://mongo.ircfiber.svc.cluster.local:27017/ircfiber"
+            - name: IRCFIBER_OTEL_ENABLED
+              value: "1"
+            - name: IRCFIBER_OTEL_ENDPOINT
+              value: "http://signoz-otel-collector.signoz.svc.cluster.local:4318"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "k8s.cluster.name=ubuntu-docker,service.name=ircfiber-engine"
+            - name: IRCFIBER_LOG_LEVEL
+              value: "info"
+            - name: IRCFIBER_SERVER_ID
+              value: "k8s-engine-1"
+            - name: IRCFIBER_BIND_ADDRESS
+            - name: IRCFIBER_MULLVAD_POOL
+              value: "socks5://host-mullvad-de:1080"
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/ircfiber-engine-healthcheck.sh"]
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/ircfiber-engine-healthcheck.sh"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          # No HTTP readiness — engine is IRC-only; pgrep check suffices
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ircfiber-engine
+  namespace: ircfiber
+spec:
+  selector:
+    app: ircfiber-engine
+  ports:
+    - name: admin
+      port: 8091
+      targetPort: 8091

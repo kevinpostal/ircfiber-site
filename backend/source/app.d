@@ -28,7 +28,7 @@ import ircfiber.web.admin : AdminController;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.user : UserRepository;
-import ircfiber.logging : logException;
+import ircfiber.logging : logException, configureLogging, setLoggingEnabled, isLoggingEnabled, flushAndSendLogs;
 import ircfiber.models.user : User;
 import ircfiber.auth : hashPassword;
 import ircfiber.redis.protocol : RedisKeys;
@@ -39,7 +39,6 @@ import ircfiber.observability : configureMetrics;
 import ircfiber.threadpool : initThreadPools, shutdownThreadPools,
     g_httpPool, g_ircPool, g_bgPool, g_stgPool;
 import ircfiber.db.redis_pool : initRedisPool, shutdownRedisPool;
-/// Global WebSocket gateway instance.
 __gshared WebSocketGateway g_wsGateway;
 
 void main() {
@@ -172,6 +171,7 @@ void main() {
     // Support both bare host and full /v1/traces path.
     string otelTracesEp;
     string otelMetricsEp;
+    string otelLogsEp;
     if (otelEnabled && otelEpRaw.length > 0) {
         // Normalize base: strip trailing slash.
         string base = otelEpRaw;
@@ -182,6 +182,8 @@ void main() {
         } else if (base.canFind("/v1/metrics")) {
             // User gave metrics endpoint, derive traces from it.
             otelTracesEp = base[0 .. base.lastIndexOf("/v1/")] ~ "/v1/traces";
+        } else if (base.canFind("/v1/logs")) {
+            otelTracesEp = base[0 .. base.lastIndexOf("/v1/")] ~ "/v1/traces";
         } else {
             otelTracesEp = base ~ "/v1/traces";
         }
@@ -189,20 +191,34 @@ void main() {
             otelMetricsEp = base;
         } else if (base.canFind("/v1/traces")) {
             otelMetricsEp = base[0 .. base.lastIndexOf("/v1/")] ~ "/v1/metrics";
+        } else if (base.canFind("/v1/logs")) {
+            otelMetricsEp = base[0 .. base.lastIndexOf("/v1/")] ~ "/v1/metrics";
         } else {
             otelMetricsEp = base ~ "/v1/metrics";
         }
+        if (base.canFind("/v1/logs")) {
+            otelLogsEp = base;
+        } else if (base.canFind("/v1/traces")) {
+            otelLogsEp = base[0 .. base.lastIndexOf("/v1/")] ~ "/v1/logs";
+        } else if (base.canFind("/v1/metrics")) {
+            otelLogsEp = base[0 .. base.lastIndexOf("/v1/")] ~ "/v1/logs";
+        } else {
+            otelLogsEp = base ~ "/v1/logs";
+        }
         configureTracing(otelTracesEp, "ircfiber-gateway", "0.3.0");
         configureMetrics(otelMetricsEp, "ircfiber-gateway", "0.3.0");
+        configureLogging(otelLogsEp, "ircfiber-gateway", "0.3.0");
         // Ensure flags are set (configure* sets them, but be explicit).
         setTracingEnabled(true);
         import ircfiber.observability : setMetricsEnabled;
         setMetricsEnabled(true);
-        logInfo("OTel enabled: traces=%s metrics=%s", otelTracesEp, otelMetricsEp);
+        setLoggingEnabled(true);
+        logInfo("OTel enabled: traces=%s metrics=%s logs=%s", otelTracesEp, otelMetricsEp, otelLogsEp);
     } else {
         setTracingEnabled(false);
         import ircfiber.observability : setMetricsEnabled;
         setMetricsEnabled(false);
+        setLoggingEnabled(false);
         logInfo("OTel disabled (IRCFIBER_OTEL_ENABLED=%s, endpoint='%s')",
             otelEnabled ? "1 (empty endpoint)" : "0", otelEpRaw);
     }
@@ -352,10 +368,18 @@ private void bgHeartbeatLoop() nothrow {
     }
 }
 
-/// OTel span flush — runs every 10s on the bg pool.
+/// OTel flush — spans + metrics + logs every 10s on the bg pool.
 private void bgOtelFlushTask() nothrow {
     while (true) {
-        try { sleep(10.seconds); flushAndSendSpans(); }
+        try {
+            sleep(10.seconds);
+            flushAndSendSpans();
+            try {
+                import ircfiber.observability : flushAndSendMetrics;
+                flushAndSendMetrics();
+            } catch (Exception) {}
+            try { flushAndSendLogs(); } catch (Exception) {}
+        }
         catch (Exception) { return; }
     }
 }

@@ -30,6 +30,7 @@
       label: 'Operations',
       items: [
         { label: 'Servers', path: '/servers', icon: '🖥️' },
+        { label: 'Mullvad', path: '/mullvad', icon: '🛡️' },
         { label: 'Sessions', path: '/sessions', icon: '🔑' },
         { label: 'Logs', path: '/logs', icon: '📜' },
       ],

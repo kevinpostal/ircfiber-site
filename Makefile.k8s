@@ -1,0 +1,361 @@
+# ============================================================================
+# IRC Fiber — Kubernetes dev (k3s ubuntu-docker + Tailscale + Mullvad)
+# ============================================================================
+# Single-node k3s on ubuntu-docker (Tailscale 100.94.116.56:6443).
+# Gateway + engine images built on the Mac, pushed via ssh-tunneled
+# registry (host.docker.internal:5000 → ubuntu-docker:5000), pulled on
+# the node as localhost:5000/... with imagePullPolicy Always.
+#
+# Usage from repo root (preferred):
+#   make k8s-help        # this file
+#   make k8s-up          # build → push → deploy (full cycle, ~60s)
+#   make k8s-push        # build + push only
+#   make k8s-deploy      # apply manifests + rollout
+#   make k8s-status      # pods + deployments + svc
+#   make k8s-logs        # tail gateway (or k8s-logs-engine)
+#   make k8s-verify      # mullvad + OTEL + gateway health via port-forward
+#
+# Usage from site/ directly:
+#   make -f Makefile.k8s <target>
+#
+# Prereqs:
+#   - kubectl context ubuntu-docker (KUBECONFIG=~/.kube/config or k3s-ubuntu.yaml)
+#   - ssh ubuntu@ubuntu-docker (Tailscale MagicDNS or 100.94.116.56)
+#   - docker + DOCKER_BUILDKIT=1, colima on Mac (native arm64)
+#   - mirrord (cargo install) for mirrord-* targets
+# ============================================================================
+
+.DELETE_ON_ERROR:
+.DEFAULT_GOAL := help
+
+# ----------------------------------------------------------------------------
+# Variables — all ?= so callers can override: make k8s-deploy KUBE_NS=ircfiber-dev
+# ----------------------------------------------------------------------------
+KUBE_CONTEXT     ?= ubuntu-docker
+KUBE_NS          ?= ircfiber
+KUBE_CONFIG      ?= $(HOME)/.kube/config
+REGISTRY_HOST    ?= host.docker.internal:5000
+REGISTRY_NODE    ?= localhost:5000
+REGISTRY_TAILSCALE ?= 100.94.116.56:5000
+GATEWAY_IMAGE    ?= $(REGISTRY_HOST)/ircfiber-gateway:dev
+GATEWAY_IMAGE_NODE ?= $(REGISTRY_NODE)/ircfiber-gateway:dev
+ENGINE_IMAGE     ?= $(REGISTRY_HOST)/ircfiber-engine:dev
+ENGINE_IMAGE_NODE ?= $(REGISTRY_NODE)/ircfiber-engine:dev
+MIRRORD_BIN      ?= $(HOME)/.local/bin/mirrord
+PF_PORT          ?= 18080
+
+# Colors (match site/Makefile.site)
+R  := \033[0m
+B  := \033[1m
+D  := \033[2m
+G  := \033[32m
+Y  := \033[33m
+C  := \033[36m
+BG := \033[92m
+OK := ✓
+WR := ⚠
+AR := →
+
+# ----------------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------------
+# Resolve site dir whether invoked as `make -f Makefile.k8s` (PWD=site) or
+# `make -C site -f Makefile.k8s` (also PWD=site) — source dir is always .
+SITE_DIR := $(CURDIR)
+ifeq ($(wildcard $(SITE_DIR)/Containerfile.site),)
+  SITE_DIR := .
+endif
+ENGINE_CTF := $(SITE_DIR)/../engine/Containerfile.engine
+K8S_DIR    := $(SITE_DIR)/deploy/k8s/ircfiber
+
+# kubectl wrapper — inject KUBECONFIG only if the default config lacks the context
+KUBECTL := kubectl --context $(KUBE_CONTEXT)
+ifneq ($(wildcard $(HOME)/.kube/config),)
+  KUBECTL := kubectl --context $(KUBE_CONTEXT)
+else ifneq ($(wildcard $(SITE_DIR)/../k3s-ubuntu.yaml),)
+  KUBECTL := KUBECONFIG=$(SITE_DIR)/../k3s-ubuntu.yaml kubectl --context default
+endif
+
+# ----------------------------------------------------------------------------
+# Help
+# ----------------------------------------------------------------------------
+.PHONY: help k8s-help
+help: ## K8s > Show this help
+	@printf '\n\033[1mIRC Fiber — k8s dev (Makefile.k8s)\033[0m \033[2m(context $(KUBE_CONTEXT) / ns $(KUBE_NS))\033[0m\n'
+	@printf '\033[2m============================================================\033[0m\n'
+	@printf '\n\033[1mQuick start\033[0m\n'
+	@printf '  \033[92mmake k8s-up\033[0m              build → push → deploy (full cycle)\n'
+	@printf '  \033[92mmake k8s-status\033[0m          pods + deployments + svc + registry\n'
+	@printf '  \033[92mmake k8s-logs\033[0m            tail gateway logs (k8s-logs-engine for engine)\n'
+	@printf '  \033[92mmake k8s-verify\033[0m          health + mullvad pool + OTEL via port-forward\n'
+	@printf '\n\033[1mTargets\033[0m\n'
+	@awk 'BEGIN{FS=":.*##[ \t]*K8s[ \t]*>[ \\t]*"} /^[a-zA-Z0-9_.-]+:.*##[ \\t]*K8s[ \\t]*>/{printf "  \033[92m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort -u
+	@printf '\n\033[2mRegistry: Mac $(REGISTRY_HOST) —(ssh -L 5000)→ ubuntu-docker:5000 —(node pull)→ $(REGISTRY_NODE)\033[0m\n'
+	@printf '\033[2mImages:   gateway $(GATEWAY_IMAGE_NODE)  engine $(ENGINE_IMAGE_NODE)  (imagePullPolicy Always in k8s)\033[0m\n'
+	@printf '\033[2mIngress:  https://ircfiber.ubuntu-docker.tail544547.ts.net  (traefik, ns $(KUBE_NS))\033[0m\n'
+	@printf '\033[2mOTEL:     signoz-otel-collector.signoz.svc.cluster.local:4318\033[0m\n'
+	@printf '\n'
+k8s-help: help
+
+# ----------------------------------------------------------------------------
+# Registry tunnel — Mac :5000 → ubuntu-docker:5000 (k3s registry)
+# ----------------------------------------------------------------------------
+.PHONY: k8s-tunnel k8s-tunnel-check k8s-registry k8s-registry-check
+
+k8s-tunnel: ## K8s > Ensure ssh -L 5000 → ubuntu-docker:5000 is up
+	@if command -v lsof >/dev/null 2>&1; then \
+		if lsof -i :5000 >/dev/null 2>&1; then \
+			printf '%b\n' "$(BG)$(OK) tunnel :5000 already listening$(R)"; \
+			lsof -i :5000 2>/dev/null | head -n 3 | sed 's/^/  /'; \
+		else \
+			printf '%b\n' "$(C)$(AR) ssh -L 5000:localhost:5000 ubuntu@ubuntu-docker$(R)"; \
+			ssh -f -N -L 5000:localhost:5000 -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=no -o ServerAliveInterval=30 ubuntu@ubuntu-docker; \
+			sleep 1; \
+			lsof -i :5000 2>/dev/null | head -n 3 | sed 's/^/  /' || true; \
+		fi; \
+	elif nc -z 127.0.0.1 5000 2>/dev/null; then \
+		printf '%b\n' "$(BG)$(OK) :5000 reachable (nc)$(R)"; \
+	else \
+		printf '%b\n' "$(C)$(AR) ssh -L 5000:localhost:5000 ubuntu@ubuntu-docker$(R)"; \
+		ssh -f -N -L 5000:localhost:5000 -o ExitOnForwardFailure=yes -o StrictHostKeyChecking=no -o ServerAliveInterval=30 ubuntu@ubuntu-docker; \
+		sleep 1; \
+	fi
+	@curl -s --max-time 3 http://$(REGISTRY_HOST)/v2/_catalog 2>&1 | head -c 200; echo
+	@printf '%b\n' "$(D)  verify: curl http://$(REGISTRY_HOST)/v2/_catalog  curl http://$(REGISTRY_TAILSCALE)/v2/_catalog$(R)"
+
+k8s-tunnel-check: ## K8s > Check tunnel without starting it
+	@printf '%b\n' "$(C)$(AR) checking :5000 tunnel$(R)"
+	@curl -s --max-time 3 http://$(REGISTRY_HOST)/v2/_catalog 2>&1 | head -c 300; echo
+	@curl -s --max-time 3 http://$(REGISTRY_TAILSCALE)/v2/_catalog 2>&1 | head -c 300; echo
+	@if command -v lsof >/dev/null 2>&1; then lsof -i :5000 2>/dev/null | head -n 5 || echo "(no lsof entry)"; else nc -z 127.0.0.1 5000 && echo "nc: :5000 open" || echo "nc: :5000 closed"; fi
+
+k8s-registry: k8s-tunnel ## K8s > Alias for k8s-tunnel
+k8s-registry-check: k8s-tunnel-check ## K8s > Alias for k8s-tunnel-check
+
+# ----------------------------------------------------------------------------
+# Build + push — DOCKER_BUILDKIT, multi-target, GIT_HASH passthrough
+# ----------------------------------------------------------------------------
+.PHONY: k8s-build k8s-build-gateway k8s-build-engine k8s-push k8s-push-gateway k8s-push-engine k8s-push-deploy k8s-up
+
+# Single place to compute git hash (site repo) — used as CACHE_BUST/GIT_HASH for Containerfile
+GIT_HASH  := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+GIT_SHORT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+k8s-build-gateway: ## K8s > Build gateway image → $(REGISTRY_HOST)/ircfiber-gateway:dev (no push)
+	@printf '\n\033[46m\033[30m\033[1m  k8s build gateway  \033[0m \033[2m$(GIT_SHORT) → $(GATEWAY_IMAGE) [linux/amd64]$(R)\n'
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 -f Containerfile.site -t $(GATEWAY_IMAGE) --target runtime-gateway \
+		--build-arg CACHE_BUST=$(GIT_HASH) --build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) .
+
+k8s-build-engine: ## K8s > Build engine image → $(REGISTRY_HOST)/ircfiber-engine:dev (no push)
+	@if [ ! -f "$(ENGINE_CTF)" ]; then \
+		printf '%b\n' "$(Y)$(WR) no $(ENGINE_CTF) — skipping engine build$(R)"; exit 0; \
+	fi
+	@printf '\n\033[46m\033[30m\033[1m  k8s build engine  \033[0m \033[2m$(GIT_SHORT) → $(ENGINE_IMAGE) [linux/amd64]$(R)\n'
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 -f $(ENGINE_CTF) -t $(ENGINE_IMAGE) --target runtime-engine \
+		--build-arg CACHE_BUST=$(GIT_HASH) --build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) \
+		$(SITE_DIR)/..
+
+k8s-build: k8s-build-gateway k8s-build-engine ## K8s > Build both images (no push)
+
+k8s-push-gateway: k8s-tunnel k8s-build-gateway ## K8s > Build + push gateway
+	@printf '%b\n' "$(C)$(AR) pushing $(GATEWAY_IMAGE)$(R)"
+	docker push $(GATEWAY_IMAGE)
+	@printf '%b\n' "$(C)$(AR) verifying via $(REGISTRY_TAILSCALE)$(R)"
+	@curl -s --max-time 5 http://$(REGISTRY_TAILSCALE)/v2/_catalog | grep -q ircfiber-gateway && printf '%b\n' "$(BG)$(OK) gateway in registry$(R)" || (printf '%b\n' "$(Y)$(WR) not in registry$(R)"; exit 1)
+
+k8s-push-engine: k8s-tunnel k8s-build-engine ## K8s > Build + push engine
+	@if [ ! -f "$(ENGINE_CTF)" ]; then printf '%b\n' "$(Y)$(WR) no engine Containerfile — skipping$(R)"; exit 0; fi
+	@printf '%b\n' "$(C)$(AR) pushing $(ENGINE_IMAGE)$(R)"
+	docker push $(ENGINE_IMAGE)
+	@curl -s --max-time 5 http://$(REGISTRY_TAILSCALE)/v2/_catalog | grep -q ircfiber-engine && printf '%b\n' "$(BG)$(OK) engine in registry$(R)" || printf '%b\n' "$(Y)$(WR) engine not in registry (check tunnel)$(R)"
+
+k8s-push: k8s-push-gateway k8s-push-engine ## K8s > Build + push gateway + engine
+	@printf '\n%b\n' "$(BG)$(OK) k8s-push done — $(GIT_SHORT)$(R)"
+
+# ----------------------------------------------------------------------------
+# Deploy — apply manifests, fix pullPolicy, rollout
+# ----------------------------------------------------------------------------
+.PHONY: k8s-deploy k8s-apply k8s-restart k8s-rollout k8s-redeploy
+
+k8s-apply: ## K8s > Apply namespace + networkpolicy + redis/mongo + mullvad sidecars + deployments
+	@printf '\n\033[42m\033[30m\033[1m  k8s deploy → ns $(KUBE_NS)  \033[0m\n'
+	$(KUBECTL) apply -f $(K8S_DIR)/namespace.yaml
+	$(KUBECTL) apply -f $(K8S_DIR)/networkpolicy.yaml
+	$(KUBECTL) apply -f $(K8S_DIR)/redis-mongo-dev.yaml
+	@if [ -f $(K8S_DIR)/mullvad-sidecars.yaml ]; then \
+		printf '%b\n' "$(C)$(AR) applying mullvad sidecars$(R)"; \
+		$(KUBECTL) apply -f $(K8S_DIR)/mullvad-sidecars.yaml; \
+	fi
+	@if [ -f $(K8S_DIR)/deployment-gateway.yaml ]; then \
+		printf '%b\n' "$(C)$(AR) applying gateway (prod→dev, Always)$(R)"; \
+		sed -e "s|localhost:5000/ircfiber-gateway:prod|$(REGISTRY_NODE)/ircfiber-gateway:dev|g" \
+		    -e "s|host.docker.internal:5000/ircfiber-gateway:dev|$(REGISTRY_NODE)/ircfiber-gateway:dev|g" \
+		    -e "s|imagePullPolicy:.*|imagePullPolicy: Always|g" \
+		    $(K8S_DIR)/deployment-gateway.yaml | $(KUBECTL) apply -f -; \
+	fi
+	@if [ -f $(K8S_DIR)/deployment-engine.yaml ]; then \
+		printf '%b\n' "$(C)$(AR) applying engine$(R)"; \
+		sed -e "s|localhost:5000/ircfiber-engine:prod|$(REGISTRY_NODE)/ircfiber-engine:dev|g" \
+		    -e "s|host.docker.internal:5000/ircfiber-engine:dev|$(REGISTRY_NODE)/ircfiber-engine:dev|g" \
+		    -e "s|imagePullPolicy:.*|imagePullPolicy: Always|g" \
+		    $(K8S_DIR)/deployment-engine.yaml | $(KUBECTL) apply -f -; \
+	fi
+	@printf '%b\n' "$(BG)$(OK) manifests applied — waiting for rollout$(R)"
+	@$(KUBECTL) rollout status deployment/ircfiber-gateway -n $(KUBE_NS) --timeout=90s || true
+	@$(KUBECTL) rollout status deployment/ircfiber-engine -n $(KUBE_NS) --timeout=90s || true
+	@$(KUBECTL) get pods -n $(KUBE_NS) -o wide
+
+k8s-deploy: k8s-apply ## K8s > Alias for k8s-apply
+k8s-redeploy: k8s-apply ## K8s > Alias for k8s-apply
+
+k8s-rollout: ## K8s > Rollout restart gateway + engine (no rebuild)
+	@printf '%b\n' "$(C)$(AR) rollout restart gateway + engine$(R)"
+	@$(KUBECTL) rollout restart deployment/ircfiber-gateway -n $(KUBE_NS) 2>/dev/null || true
+	@$(KUBECTL) rollout restart deployment/ircfiber-engine -n $(KUBE_NS) 2>/dev/null || true
+	@$(KUBECTL) rollout status deployment/ircfiber-gateway -n $(KUBE_NS) --timeout=60s || true
+	@$(KUBECTL) rollout status deployment/ircfiber-engine -n $(KUBE_NS) --timeout=60s || true
+
+k8s-restart: k8s-rollout ## K8s > Alias for k8s-rollout
+
+k8s-push-deploy: k8s-push k8s-apply ## K8s > Push + deploy (build → push → apply)
+k8s-up: k8s-push k8s-apply ## K8s > Full cycle: build → push → deploy (use for every D change)
+
+# ----------------------------------------------------------------------------
+# Observability — status, logs, shell, events, port-forward
+# ----------------------------------------------------------------------------
+.PHONY: k8s-status k8s-pods k8s-logs k8s-logs-gateway k8s-logs-engine k8s-shell k8s-shell-engine k8s-events k8s-describe k8s-port-forward
+
+k8s-status: ## K8s > Pods + deployments + svc + ingress + registry catalog
+	@printf '\n\033[1m k8s status \033[0m \033[2m$(KUBE_CONTEXT)/$(KUBE_NS)\033[0m\n'
+	@printf '\n\033[1m deployments\033[0m\n'
+	@$(KUBECTL) get deployments -n $(KUBE_NS) 2>&1 | sed 's/^/  /' || true
+	@printf '\n\033[1m pods\033[0m\n'
+	@$(KUBECTL) get pods -n $(KUBE_NS) -o wide 2>&1 | sed 's/^/  /' || true
+	@printf '\n\033[1m svc + ingress\033[0m\n'
+	@$(KUBECTL) get svc,ingress -n $(KUBE_NS) 2>&1 | sed 's/^/  /' || true
+	@printf '\n\033[1m images\033[0m\n'
+	@$(KUBECTL) get deployments -n $(KUBE_NS) -o jsonpath='{range .items[*]}{.metadata.name} -> {.spec.template.spec.containers[*].image} (pull={.spec.template.spec.containers[*].imagePullPolicy}){"\n"}{end}' 2>&1 | sed 's/^/  /' || true
+	@printf '\n\033[1m registry\033[0m \033[2m$(REGISTRY_HOST) + $(REGISTRY_TAILSCALE)\033[0m\n'
+	@printf '  host: '; curl -s --max-time 3 http://$(REGISTRY_HOST)/v2/_catalog 2>&1 | head -c 300; echo
+	@printf '  tailscale: '; curl -s --max-time 3 http://$(REGISTRY_TAILSCALE)/v2/_catalog 2>&1 | head -c 300; echo
+
+k8s-pods: ## K8s > List pods (wide)
+	@$(KUBECTL) get pods -n $(KUBE_NS) -o wide
+
+k8s-logs: ## K8s > Tail gateway logs
+	@$(KUBECTL) logs -f deployment/ircfiber-gateway -n $(KUBE_NS)
+
+k8s-logs-gateway: k8s-logs ## K8s > Alias: tail gateway
+
+k8s-logs-engine: ## K8s > Tail engine logs
+	@$(KUBECTL) logs -f deployment/ircfiber-engine -n $(KUBE_NS)
+
+k8s-shell: ## K8s > Shell into gateway pod
+	@$(KUBECTL) exec -it deployment/ircfiber-gateway -n $(KUBE_NS) -- sh
+
+k8s-shell-engine: ## K8s > Shell into engine pod
+	@$(KUBECTL) exec -it deployment/ircfiber-engine -n $(KUBE_NS) -- sh
+
+k8s-events: ## K8s > Recent events (sorted)
+	@$(KUBECTL) get events -n $(KUBE_NS) --sort-by=.lastTimestamp 2>&1 | tail -n 40
+
+k8s-describe: ## K8s > Describe gateway + engine pods
+	@$(KUBECTL) describe pods -n $(KUBE_NS) -l app=ircfiber-gateway 2>&1 | tail -n 60
+	@printf '\n--- engine ---\n'
+	@$(KUBECTL) describe pods -n $(KUBE_NS) -l app=ircfiber-engine 2>&1 | tail -n 60
+
+k8s-port-forward: ## K8s > Port-forward gateway :$(PF_PORT) → 8090 (foreground)
+	@printf '%b\n' "$(C)$(AR) kubectl port-forward svc/ircfiber-gateway $(PF_PORT):8090 -n $(KUBE_NS) (ctrl-c to stop)$(R)"
+	@$(KUBECTL) port-forward -n $(KUBE_NS) svc/ircfiber-gateway $(PF_PORT):8090
+
+# ----------------------------------------------------------------------------
+# Verify — gateway health + mullvad admin + OTEL hints
+# ----------------------------------------------------------------------------
+.PHONY: k8s-verify k8s-health k8s-mullvad
+
+k8s-health: ## K8s > Health check via port-forward (no auth)
+	@printf '%b\n' "$(C)$(AR) health via port-forward :$(PF_PORT)$(R)"
+	@$(KUBECTL) port-forward -n $(KUBE_NS) svc/ircfiber-gateway $(PF_PORT):8090 >/tmp/k8s-pf.log 2>&1 & echo $$! > /tmp/k8s-pf.pid; sleep 3; \
+		curl -s --max-time 5 http://127.0.0.1:$(PF_PORT)/health 2>&1 | head -c 500; echo; \
+		kill $$(cat /tmp/k8s-pf.pid) 2>/dev/null || true; rm -f /tmp/k8s-pf.pid /tmp/k8s-pf.log
+
+k8s-mullvad: ## K8s > Mullvad pool status via admin API (needs ADMIN creds)
+	@$(KUBECTL) port-forward -n $(KUBE_NS) svc/ircfiber-gateway $(PF_PORT):8090 >/tmp/k8s-pf.log 2>&1 & echo $$! > /tmp/k8s-pf.pid; sleep 3; \
+		curl -s -c /tmp/k8s-cookie.txt -d "username=admin&password=REDACTED" http://127.0.0.1:$(PF_PORT)/admin/login >/dev/null 2>&1; \
+		curl -s -b /tmp/k8s-cookie.txt http://127.0.0.1:$(PF_PORT)/api/admin/mullvad/status 2>&1 | head -c 1200; echo; \
+		kill $$(cat /tmp/k8s-pf.pid) 2>/dev/null || true; rm -f /tmp/k8s-pf.pid /tmp/k8s-cookie.txt /tmp/k8s-pf.log
+
+k8s-verify: ## K8s > Full verify: status + health + mullvad pool (admin/REDACTED)
+	@printf '\n\033[1m k8s verify \033[0m\n'
+	@$(MAKE) -f $(MAKEFILE_LIST) k8s-status --no-print-directory
+	@printf '\n\033[1m health\033[0m\n'
+	@$(MAKE) -f $(MAKEFILE_LIST) k8s-health --no-print-directory || true
+	@printf '\n\033[1m mullvad\033[0m \033[2m(admin/REDACTED)\033[0m\n'
+	@$(KUBECTL) port-forward -n $(KUBE_NS) svc/ircfiber-gateway $(PF_PORT):8090 >/tmp/k8s-pf.log 2>&1 & echo $$! > /tmp/k8s-pf.pid; sleep 3; \
+		curl -s -c /tmp/k8s-cookie.txt -d "username=admin&password=REDACTED" http://127.0.0.1:$(PF_PORT)/admin/login >/dev/null 2>&1; \
+		curl -s -b /tmp/k8s-cookie.txt http://127.0.0.1:$(PF_PORT)/api/admin/mullvad/status 2>&1 | python3 -m json.tool 2>&1 | head -n 60 || curl -s -b /tmp/k8s-cookie.txt http://127.0.0.1:$(PF_PORT)/api/admin/mullvad/status 2>&1 | head -c 1200; echo; \
+		kill $$(cat /tmp/k8s-pf.pid) 2>/dev/null || true; rm -f /tmp/k8s-pf.pid /tmp/k8s-cookie.txt /tmp/k8s-pf.log
+	@printf '\n\033[2m OTEL: kubectl logs -n $(KUBE_NS) -l app=ircfiber-gateway | signoz UI → Logs Explorer service.name=ircfiber-gateway\033[0m\n'
+
+# ----------------------------------------------------------------------------
+# Mullvad sidecars — isolated targets for pool ops
+# ----------------------------------------------------------------------------
+.PHONY: k8s-mullvad-apply k8s-mullvad-status k8s-mullvad-logs k8s-mullvad-restart
+
+k8s-mullvad-apply: ## K8s > Apply mullvad sidecars only
+	@$(KUBECTL) apply -f $(K8S_DIR)/mullvad-sidecars.yaml
+	@$(KUBECTL) get pods -n $(KUBE_NS) -l component=mullvad-sidecar -o wide
+
+k8s-mullvad-status: ## K8s > Show mullvad sidecar pods + svc
+	@$(KUBECTL) get pods,svc -n $(KUBE_NS) -l component=mullvad-sidecar 2>&1 | sed 's/^/  /' || $(KUBECTL) get pods,svc -n $(KUBE_NS) | grep mullvad | sed 's/^/  /' || true
+	@$(KUBECTL) get pods -n $(KUBE_NS) -l app=tailscale-mullvad-de -o wide 2>&1 | sed 's/^/  /' || true
+
+k8s-mullvad-logs: ## K8s > Logs from all mullvad sidecars
+	@$(KUBECTL) logs -n $(KUBE_NS) -l component=mullvad-sidecar --tail=80 2>&1 | tail -n 80 || $(KUBECTL) logs -n $(KUBE_NS) deployment/tailscale-mullvad-de --tail=40 2>&1 | tail -n 40
+
+k8s-mullvad-restart: ## K8s > Restart mullvad sidecars
+	@$(KUBECTL) rollout restart deployment/tailscale-mullvad-de deployment/tailscale-mullvad-ch deployment/tailscale-mullvad-nl -n $(KUBE_NS) 2>&1 || true
+	@$(KUBECTL) rollout status deployment/tailscale-mullvad-de -n $(KUBE_NS) --timeout=30s || true
+
+# ----------------------------------------------------------------------------
+# Mirrord — intercept gateway/engine with local binary (no image push)
+# ----------------------------------------------------------------------------
+.PHONY: mirrord-gateway mirrord-engine k8s-mirrord-gateway k8s-mirrord-engine
+
+mirrord-gateway: ## K8s > Mirrord intercept gateway (local ./backend/irc-fiber)
+	@if [ ! -x "$(MIRRORD_BIN)" ]; then printf '%b\n' "$(Y)$(WR) mirrord not found at $(MIRRORD_BIN) — cargo install mirrord — https://mirrord.dev$(R)"; exit 1; fi
+	@if [ ! -x ./backend/irc-fiber ]; then printf '%b\n' "$(Y)$(WR) ./backend/irc-fiber missing — run: make build  or  dub build --root=backend$(R)"; exit 1; fi
+	@printf '%b\n' "$(C)$(AR) mirrord gateway — local binary intercepts k8s traffic (ctrl-c to detach)$(R)"
+	$(MIRRORD_BIN) exec --target deployment/ircfiber-gateway -n $(KUBE_NS) --context $(KUBE_CONTEXT) -- ./backend/irc-fiber
+
+mirrord-engine: ## K8s > Mirrord intercept engine (local ../engine/irc-fiber-engine)
+	@if [ ! -x "$(MIRRORD_BIN)" ]; then printf '%b\n' "$(Y)$(WR) mirrord not found at $(MIRRORD_BIN)$(R)"; exit 1; fi
+	@if [ ! -x ../engine/irc-fiber-engine ]; then printf '%b\n' "$(Y)$(WR) ../engine/irc-fiber-engine missing — run: make -C ../engine build$(R)"; exit 1; fi
+	@printf '%b\n' "$(C)$(AR) mirrord engine — local binary intercepts k8s traffic$(R)"
+	$(MIRRORD_BIN) exec --target deployment/ircfiber-engine -n $(KUBE_NS) --context $(KUBE_CONTEXT) -- ../engine/irc-fiber-engine
+
+k8s-mirrord-gateway: mirrord-gateway ## K8s > Alias for mirrord-gateway
+k8s-mirrord-engine: mirrord-engine ## K8s > Alias for mirrord-engine
+
+# ----------------------------------------------------------------------------
+# Cleanup
+# ----------------------------------------------------------------------------
+.PHONY: k8s-down k8s-clean k8s-nuke k8s-delete-ns
+
+k8s-down: ## K8s > Delete gateway + engine deployments (keep ns + redis/mongo)
+	@printf '%b\n' "$(Y)$(WR) deleting gateway + engine deployments (ns $(KUBE_NS) kept)$(R)"
+	@$(KUBECTL) delete deployment ircfiber-gateway ircfiber-engine -n $(KUBE_NS) --ignore-not-found=true
+	@$(KUBECTL) get pods -n $(KUBE_NS)
+
+k8s-clean: ## K8s > Delete all ircfiber workload (gateway/engine/mullvad) — keep ns
+	@printf '%b\n' "$(Y)$(WR) deleting ircfiber workload (keep ns)$(R)"
+	@$(KUBECTL) delete deployment ircfiber-gateway ircfiber-engine tailscale-mullvad-de tailscale-mullvad-ch tailscale-mullvad-nl -n $(KUBE_NS) --ignore-not-found=true
+	@$(KUBECTL) delete svc ircfiber-gateway ircfiber-engine tailscale-mullvad-de tailscale-mullvad-ch tailscale-mullvad-nl -n $(KUBE_NS) --ignore-not-found=true || true
+	@$(KUBECTL) get pods -n $(KUBE_NS)
+
+k8s-nuke: ## K8s > Delete entire ns ircfiber (⚠ wipes redis/mongo data)
+	@printf '%b' "$(Y)$(WR) Delete namespace $(KUBE_NS) and ALL data? [y/N] $(R)"; \
+		read -r ans < /dev/tty; case "$$ans" in [Yy]* ) ;; *) printf '%b\n' "$(Y)aborted$(R)"; exit 1;; esac
+	@$(KUBECTL) delete namespace $(KUBE_NS) --ignore-not-found=true
+
+k8s-delete-ns: k8s-nuke ## K8s > Alias for k8s-nuke

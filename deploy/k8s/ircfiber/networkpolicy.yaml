@@ -1,0 +1,82 @@
+# NetworkPolicy: explicit allow ircfiber -> signoz OTLP (4317/4318) and vice versa
+# k3s default is allow-all (only cattle-fleet-local-system has default-allow-all), so this is documentary
+# but enforces grouping intent: ircfiber and signoz can access each other.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-signoz-otel
+  namespace: signoz
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: otel-collector
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ircfiber
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: irc3
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: irc3-dev
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-to-signoz
+  namespace: ircfiber
+spec:
+  podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 27017
+        - protocol: TCP
+          port: 1055
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: signoz
+      ports:
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+    - to:  # allow DNS
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:  # allow Tailscale control / DERP / SOCKS egress to internet
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+        - protocol: UDP
+          port: 41641
+        - protocol: TCP
+          port: 1055
+        - protocol: TCP
+          port: 6697
+        - protocol: TCP
+          port: 6667

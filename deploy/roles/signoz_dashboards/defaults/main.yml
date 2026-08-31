@@ -3,6 +3,28 @@
 # Pushes pre-built JSON dashboards via /api/v1/dashboards.
 # Idempotent: matches by title and re-creates on change.
 
+# --- Signoz endpoint ----------------------------------------------------------
+# K8s Signoz (k3s single-node ubuntu-docker, Traefik Ingress):
+#   https://signoz.ubuntu-docker.tail544547.ts.net  → signoz:8080 (Traefik TLS)
+#   http://signoz.signoz.svc.cluster.local:8080   → direct ClusterIP (k8s-internal only)
+#
+# STALE (do not use):
+#   http://100.126.197.92:3003  → old local docker Signoz on colima (mac dev)
+#   http://signoz:8080         → old docker-compose service name (colima)
+#
+# Ansible runs from the controller (mac) and reaches k3s via Tailscale MagicDNS,
+# so the Ingress URL is the default. For in-cluster curl (kubectl exec), use
+# http://signoz.signoz.svc.cluster.local:8080 or http://signoz-otel-collector.signoz:8080.
+signoz_api_url: "https://signoz.ubuntu-docker.tail544547.ts.net"
+# Tailscale MagicDNS uses Traefik default cert (self-signed) → curl -k / validate_certs: false
+signoz_api_validate_certs: false
+
+# Optional API-key auth (service-account key from SigNoz UI → Settings → API Keys).
+# If set, the role uses `Authorization: Bearer <key>` instead of password login.
+# Store in vault: vault_signoz_api_key in inventories/production/group_vars/all/vault.yml
+# If unset, falls back to email+password login via /api/v2/sessions/email_password.
+# vault_signoz_api_key: ""
+
 signoz_dashboards_container: "signoz-signoz"
 signoz_dashboards_dir: "/etc/ircfiber/signoz-dashboards"
 # Default org ID for the deployment (the root user's org from signoz_users)

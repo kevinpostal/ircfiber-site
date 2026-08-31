@@ -1,6 +1,12 @@
 ---
 # Push pre-built SigNoz dashboards to the running instance.
 # Re-runs are idempotent: by-title match → POST or PUT.
+#
+# Target: k3s Signoz at {{ signoz_api_url }} (default: https://signoz.ubuntu-docker.tail544547.ts.net)
+#   Do NOT point at 100.126.197.92:3003 — that is the stale local docker Signoz on colima.
+#   K8s-internal alt: http://signoz.signoz.svc.cluster.local:8080 (ClusterIP, no TLS).
+# Auth: prefers vault_signoz_api_key (Bearer) if set; else falls back to
+#        vault_signoz_admin_password + orgId → /api/v2/sessions/email_password → JWT.
 
 - name: Ensure dashboards dir on host
   ansible.builtin.file:
@@ -20,9 +26,11 @@
   with_fileglob:
     - "{{ role_path }}/files/*.json"
 
-- name: Get admin JWT for SigNoz
+# --- Auth: API key path (preferred) or password→JWT fallback -----------------
+
+- name: Get admin JWT for SigNoz (password login, skipped if API key is set)
   ansible.builtin.uri:
-    url: "http://100.126.197.92:3003/api/v2/sessions/email_password"
+    url: "{{ signoz_api_url }}/api/v2/sessions/email_password"
     method: POST
     body_format: json
     body:
@@ -30,28 +38,44 @@
       password: "{{ vault_signoz_admin_password }}"
       orgId: "{{ signoz_dashboards_org_id }}"
     status_code: 200
+    validate_certs: "{{ signoz_api_validate_certs }}"
   register: signoz_login
   no_log: true
-  delegate_to: ircfiber-ovh-1
-  when: vault_signoz_admin_password | default('') | length > 0
+  when:
+    - vault_signoz_admin_password | default('') | length > 0
+    - vault_signoz_api_key | default('') | length == 0
 
-- name: Set SigNoz JWT fact
+- name: Set SigNoz JWT fact (from password login)
   ansible.builtin.set_fact:
     signoz_jwt: "{{ signoz_login.json.data.accessToken }}"
+  when:
+    - signoz_login is defined
+    - signoz_login.json is defined
+    - signoz_login.json.data is defined
+
+- name: Set SigNoz auth header (API key preferred, JWT fallback)
+  ansible.builtin.set_fact:
+    signoz_auth_header: >-
+      Bearer {{ vault_signoz_api_key if (vault_signoz_api_key | default('') | length > 0) else signoz_jwt }}
+  when: >
+    (vault_signoz_api_key | default('') | length > 0) or
+    (signoz_jwt is defined and signoz_jwt | length > 0)
 
 - name: List existing dashboards
   ansible.builtin.uri:
-    url: "http://100.126.197.92:3003/api/v1/dashboards"
+    url: "{{ signoz_api_url }}/api/v1/dashboards"
     method: GET
     headers:
-      Authorization: "Bearer {{ signoz_jwt }}"
+      Authorization: "{{ signoz_auth_header }}"
     status_code: 200
+    validate_certs: "{{ signoz_api_validate_certs }}"
   register: existing_dashboards_resp
-  delegate_to: ircfiber-ovh-1
+  when: signoz_auth_header is defined
 
 - name: Build title → uuid lookup
   ansible.builtin.set_fact:
     dashboard_id_by_title: "{{ dict(existing_dashboards_resp.json.data | map(attribute='title') | zip(existing_dashboards_resp.json.data | map(attribute='id')) | list) }}"
+  when: existing_dashboards_resp is defined and existing_dashboards_resp.json.data is defined
 
 - name: Read each dashboard file
   ansible.builtin.slurp:
@@ -61,23 +85,24 @@
 
 - name: POST each new dashboard, PUT each updated
   ansible.builtin.uri:
-    url: "http://100.126.197.92:3003/api/v1/dashboards{% if dashboard_id_by_title[(dashboard_blobs.results[item.0].content | b64decode | from_json).title] is defined %}/{{ dashboard_id_by_title[(dashboard_blobs.results[item.0].content | b64decode | from_json).title] }}{% endif %}"
-    method: "{% if dashboard_id_by_title[(dashboard_blobs.results[item.0].content | b64decode | from_json).title] is defined %}PUT{% else %}POST{% endif %}"
+    url: "{{ signoz_api_url }}/api/v1/dashboards{% if dashboard_id_by_title is defined and dashboard_id_by_title[(dashboard_blobs.results[item.0].content | b64decode | from_json).title] is defined %}/{{ dashboard_id_by_title[(dashboard_blobs.results[item.0].content | b64decode | from_json).title] }}{% endif %}"
+    method: "{% if dashboard_id_by_title is defined and dashboard_id_by_title[(dashboard_blobs.results[item.0].content | b64decode | from_json).title] is defined %}PUT{% else %}POST{% endif %}"
     headers:
-      Authorization: "Bearer {{ signoz_jwt }}"
+      Authorization: "{{ signoz_auth_header }}"
       Content-Type: "application/json"
     body_format: json
     body: "{{ dashboard_blobs.results[item.0].content | b64decode | from_json }}"
     status_code: [200, 201]
-    validate_certs: false
+    validate_certs: "{{ signoz_api_validate_certs }}"
   loop: "{{ range(signoz_dashboards_files | length) | list }}"
   loop_control:
     label: "{{ signoz_dashboards_files[item] }}"
-  delegate_to: ircfiber-ovh-1
   register: dashboard_push_results
+  when: signoz_auth_header is defined
 
 - name: Dashboard push summary
   ansible.builtin.debug:
     msg: >-
-      Deployed {{ signoz_dashboards_files | length }} dashboards to SigNoz.
-      See https://100.126.197.92:3003/dashboards
+      Deployed {{ signoz_dashboards_files | length }} dashboards to SigNoz at {{ signoz_api_url }}.
+      See {{ signoz_api_url }}/dashboard
+      {% if signoz_auth_header is not defined %}(skipped push — set vault_signoz_api_key or vault_signoz_admin_password){% endif %}
