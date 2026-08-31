@@ -43,7 +43,7 @@ spec:
               value: "k8s-engine-1"
             - name: IRCFIBER_BIND_ADDRESS
             - name: IRCFIBER_MULLVAD_POOL
-              value: "socks5://host-mullvad-de:1080"
+              value: "socks5://tailscale-mullvad-de:1055,socks5://tailscale-mullvad-ch:1055,socks5://tailscale-mullvad-nl:1055,socks5://tailscale-mullvad-se:1055,socks5://tailscale-mullvad-gb:1055,socks5://tailscale-mullvad-us:1055"
           resources:
             requests:
               cpu: 200m
