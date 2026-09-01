@@ -142,32 +142,32 @@ GIT_HASH  := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 GIT_SHORT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 k8s-build-gateway: ## K8s > Build gateway image → $(REGISTRY_HOST)/ircfiber-gateway:dev (no push)
-	@printf '\n\033[46m\033[30m\033[1m  k8s build gateway  \033[0m \033[2m$(GIT_SHORT) → $(GATEWAY_IMAGE) [linux/amd64]$(R)\n'
-	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 -f Containerfile.site -t $(GATEWAY_IMAGE) --target runtime-gateway \
+	@printf '\n\033[46m\033[30m\033[1m  k8s build gateway  \033[0m \033[2m$(GIT_SHORT) → $(GATEWAY_IMAGE) [linux/amd64, no provenance]$(R)\n'
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --provenance=false --sbom=false -f Containerfile.site -t $(GATEWAY_IMAGE) --target runtime-gateway \
 		--build-arg CACHE_BUST=$(GIT_HASH) --build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) .
 
 k8s-build-engine: ## K8s > Build engine image → $(REGISTRY_HOST)/ircfiber-engine:dev (no push)
 	@if [ ! -f "$(ENGINE_CTF)" ]; then \
 		printf '%b\n' "$(Y)$(WR) no $(ENGINE_CTF) — skipping engine build$(R)"; exit 0; \
 	fi
-	@printf '\n\033[46m\033[30m\033[1m  k8s build engine  \033[0m \033[2m$(GIT_SHORT) → $(ENGINE_IMAGE) [linux/amd64]$(R)\n'
-	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 -f $(ENGINE_CTF) -t $(ENGINE_IMAGE) --target runtime-engine \
+	@printf '\n\033[46m\033[30m\033[1m  k8s build engine  \033[0m \033[2m$(GIT_SHORT) → $(ENGINE_IMAGE) [linux/amd64, no provenance]$(R)\n'
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --provenance=false --sbom=false -f $(ENGINE_CTF) -t $(ENGINE_IMAGE) --target runtime-engine \
 		--build-arg CACHE_BUST=$(GIT_HASH) --build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) \
 		$(SITE_DIR)/..
 
 k8s-build: k8s-build-gateway k8s-build-engine ## K8s > Build both images (no push)
 
 k8s-push-gateway: k8s-tunnel k8s-build-gateway ## K8s > Build + push gateway
-	@printf '%b\n' "$(C)$(AR) pushing $(GATEWAY_IMAGE)$(R)"
+	@printf '%b\n' "$(C)$(AR) pushing $(GATEWAY_IMAGE) [amd64, verifying manifest]$(R)"
 	docker push $(GATEWAY_IMAGE)
-	@printf '%b\n' "$(C)$(AR) verifying via $(REGISTRY_TAILSCALE)$(R)"
-	@curl -s --max-time 5 http://$(REGISTRY_TAILSCALE)/v2/_catalog | grep -q ircfiber-gateway && printf '%b\n' "$(BG)$(OK) gateway in registry$(R)" || (printf '%b\n' "$(Y)$(WR) not in registry$(R)"; exit 1)
+	@printf '%b\n' "$(C)$(AR) verifying arch via $(REGISTRY_TAILSCALE)$(R)"
+	@curl -s -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' http://$(REGISTRY_TAILSCALE)/v2/ircfiber-gateway/manifests/dev 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); m=d.get('manifests',[{}])[0] if 'manifests' in d else d; arch=(m.get('platform',{}) or {}).get('architecture','') or d.get('architecture',''); print('  arch='+arch); sys.exit(0 if arch=='amd64' else 1)" && printf '%b\n' "$(BG)$(OK) gateway amd64 in registry$(R)" || (printf '%b\n' "$(Y)$(WR) not amd64 — check --platform and --provenance$(R)"; curl -s -H 'Accept: application/vnd.oci.image.index.v1+json' http://$(REGISTRY_TAILSCALE)/v2/ircfiber-gateway/manifests/dev 2>&1 | python3 -m json.tool | head -n 20; exit 1)
 
 k8s-push-engine: k8s-tunnel k8s-build-engine ## K8s > Build + push engine
 	@if [ ! -f "$(ENGINE_CTF)" ]; then printf '%b\n' "$(Y)$(WR) no engine Containerfile — skipping$(R)"; exit 0; fi
-	@printf '%b\n' "$(C)$(AR) pushing $(ENGINE_IMAGE)$(R)"
+	@printf '%b\n' "$(C)$(AR) pushing $(ENGINE_IMAGE) [amd64, verifying manifest]$(R)"
 	docker push $(ENGINE_IMAGE)
-	@curl -s --max-time 5 http://$(REGISTRY_TAILSCALE)/v2/_catalog | grep -q ircfiber-engine && printf '%b\n' "$(BG)$(OK) engine in registry$(R)" || printf '%b\n' "$(Y)$(WR) engine not in registry (check tunnel)$(R)"
+	@curl -s -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' http://$(REGISTRY_TAILSCALE)/v2/ircfiber-engine/manifests/dev 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); m=d.get('manifests',[{}])[0] if 'manifests' in d else d; arch=(m.get('platform',{}) or {}).get('architecture','') or d.get('architecture',''); print('  arch='+arch); sys.exit(0 if arch=='amd64' else 1)" && printf '%b\n' "$(BG)$(OK) engine amd64 in registry$(R)" || printf '%b\n' "$(Y)$(WR) engine not amd64 — check --platform and --provenance$(R)"
 
 k8s-push: k8s-push-gateway k8s-push-engine ## K8s > Build + push gateway + engine
 	@printf '\n%b\n' "$(BG)$(OK) k8s-push done — $(GIT_SHORT)$(R)"
