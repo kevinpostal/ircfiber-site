@@ -1,58 +1,146 @@
-/* Chatter cells (unread bars) — IRCCloud parity: .chattercell is visible
-   when rendered (MessageList uses {#if count>0}); .show is kept for
-   legacy callers that toggle via class. */
+/* Chatter cells (unread bars) — IRCCloud parity
+   Source: curl https://www.irccloud.com/build/common-002a6024.css
+   Base: .extras{display:none;width:100%;height:25px;overflow:hidden}
+         .extras span.extrasBar{display:block;padding:0 5px;color:#002179;
+           background-color:#d9e7ff;border-bottom:1px solid #c0dbff;
+           font-size:14px;line-height:25px;font-weight:400}
+   Theme-dusk: color:#b0cce8;background-color:#28598a;border-bottom-color:#0b1a28
+   IRCCloud feel: solid 25px bar, muted, not translucent blue. The previous
+   rgba(30,114,255,0.08) was too faint/bright. */
 .chattercell {
-  display: flex;
-  padding: 4px 12px;
-  background: rgba(30,114,255,0.08);
-  font-size: 12px;
-  color: var(--text-secondary);
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  display: none;
+  width: 100%;
+  height: 25px;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 25px;
+  font-weight: 400;
 }
 
 .chattercell.show {
-  display: flex;
+  display: block;
 }
 
-.upperchattercell {
-  border-bottom: 1px solid var(--border);
-}
-
+.upperchattercell,
 .lowerchattercell {
-  border-top: 1px solid var(--border);
+  /* IRCCloud: bar itself carries the background, not the wrapper */
+  background: transparent;
+  border: none;
+}
+
+.extras {
+  width: 100%;
+  height: 25px;
+  overflow: hidden;
 }
 
 .extrasDismiss {
+  float: right;
+  display: inline-block;
+  margin: 2px 2px 0 10px;
+  padding: 0 5px;
+  border-radius: 3px;
+  color: #fff;
+  background-color: #9cc7ff;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
   cursor: pointer;
-  color: var(--link);
+}
+
+.extrasDismiss:focus,
+.extrasDismiss:hover {
+  background-color: #679fff;
 }
 
 .extrasBar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  display: block;
+  padding: 0 5px;
+  color: #002179;
+  background-color: #d9e7ff;
+  border-bottom: 1px solid #c0dbff;
+  font-size: 14px;
+  line-height: 25px;
+  font-weight: 400;
   cursor: pointer;
-  flex: 1;
+  /* Remove flex gap — IRCCloud is single block */
 }
 
+.extrasBar:focus,
+.extrasBar:hover {
+  background-color: #c0dbff;
+}
+
+/* Theme-dusk — IRCCloud parity */
+body.theme-dusk .extrasBar {
+  color: #b0cce8;
+  background-color: #28598a;
+  border-bottom-color: #0b1a28;
+}
+body.theme-dusk .extrasBar:focus,
+body.theme-dusk .extrasBar:hover {
+  background-color: #2e669e;
+}
+body.theme-dusk .extrasDismiss {
+  background-color: #3473b2;
+}
+body.theme-dusk .extrasDismiss:focus,
+body.theme-dusk .extrasDismiss:hover {
+  background-color: #3980c6;
+}
+
+/* Default dark (midnight/ash) — our app's base is #000 like midnight */
+.extrasBar {
+  /* Override light defaults for dark — midnight uses #262626-ish */
+  color: #8c8c8c;
+  background-color: #262626;
+  border-bottom-color: #000;
+}
+body.theme-dusk .extrasBar {
+  /* already defined above */
+}
+@media (prefers-color-scheme: dark) {
+  .extrasBar {
+    color: #b0cce8;
+    background-color: #28598a;
+  }
+}
+
+/* Dark override wins for our default dark app: use midnight-like grey on black */
+:root {
+  --chatter-bg: #262626;
+  --chatter-fg: #8c8c8c;
+  --chatter-border: #000;
+}
+.chattercell .extrasBar {
+  color: #8c8c8c;
+  background-color: #262626;
+  border-bottom: 1px solid #333;
+}
+body.theme-dusk .chattercell .extrasBar {
+  color: #b0cce8;
+  background-color: #28598a;
+  border-bottom-color: #0b1a28;
+}
 
 .extrasButton {
-  font-weight: 600;
-  color: var(--text-primary);
+  font-weight: 400;
+  color: inherit;
 }
 
 .extrasBadge {
   display: inline-block;
-  background: var(--accent);
+  background: #ff1f1a;
   color: #fff;
-  font-size: 10px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 8px;
-  min-width: 16px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
   text-align: center;
+  border-radius: 50%;
+  min-width: 18px;
 }
 
 /* Connection status cell.

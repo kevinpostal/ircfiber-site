@@ -1198,7 +1198,14 @@
     // comes in it forces it to bottom"). IRCCloud's BufferLogView.renderMessage
     // still respects shouldPinBottom for NOTICEs/actions — they buffer when
     // scrolled up. So we do NOT auto-pin on message type; only on pin state.
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap) && !(newDivider && cachedAtTop) && !isReadingHistory();
+    // IRCCloud BufferScrollView.onChange: if model.getBottomSeen() exists,
+    // force e=false (never snap while "New messages since you scrolled up"
+    // divider is visible, even if technically at bottom). This matches the
+    // buffered flushBuffer path where !bottomSeen && !pinned buffers.
+    const nidSnap = ircState.activeBuffer.networkId;
+    const bufSnap = ircState.activeBuffer.bufferName;
+    const hasBottomSeenNow = nidSnap && bufSnap ? getBottomSeen(nidSnap, bufSnap) !== null : false;
+    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap) && !(newDivider && cachedAtTop) && !isReadingHistory() && !hasBottomSeenNow;
     if (shouldSnapToBottom) {
       // If DOM is at bottom but cached state is stale, correct it so future
       // handleScroll checks see the right baseline and don't mis-fire scrolledUp.
@@ -1737,16 +1744,31 @@
     }
 
     const lastSeenMsg = getLastSeenMessage(networkId, bufferName);
+    // IRCCloud bufferAboveExtras.update: only show upper chatter when
+    // no lastSeen OR count>100 OR has important. Small counts without
+    // highlights are hidden and the divider alone signals unread.
     if (firstAboveMsg && isMessageUnseen(firstAboveMsg, networkId, bufferName) && lastSeenMsg) {
       const totalBetween = countMessagesBetween(networkId, bufferName, lastSeenMsg, firstAboveMsg);
-      if (totalBetween > 100) {
+      const important = countImportantMessagesBetween(networkId, bufferName, lastSeenMsg, firstAboveMsg);
+      const shouldShow = !lastSeenMsg || totalBetween > 100 || important > 0;
+      if (!shouldShow) {
+        aboveUnseenCount = 0;
+        aboveUnseenTimestamp = null;
+        aboveUnseenHighlights = 0;
+      } else if (totalBetween > 100) {
         aboveUnseenCount = totalBetween;
         aboveUnseenTimestamp = lastSeenMsg.t || null;
+        aboveUnseenHighlights = clearUnseenHighlightsAfter(networkId, bufferName, firstAboveMsg);
       } else {
-        const important = countImportantMessagesBetween(networkId, bufferName, lastSeenMsg, firstAboveMsg);
         aboveUnseenCount = important > 0 ? important : totalBetween;
         aboveUnseenTimestamp = lastSeenMsg.t || null;
+        aboveUnseenHighlights = clearUnseenHighlightsAfter(networkId, bufferName, firstAboveMsg);
       }
+    } else if (firstAboveMsg && isMessageUnseen(firstAboveMsg, networkId, bufferName) && !lastSeenMsg) {
+      // No lastSeen at all — show count (IRCCloud !n path)
+      const totalBetween = countMessagesBetween(networkId, bufferName, lastSeenMsg as any, firstAboveMsg);
+      aboveUnseenCount = totalBetween > 0 ? totalBetween : 1;
+      aboveUnseenTimestamp = firstAboveMsg.t || null;
       aboveUnseenHighlights = clearUnseenHighlightsAfter(networkId, bufferName, firstAboveMsg);
     } else {
       aboveUnseenCount = 0;
@@ -2235,8 +2257,15 @@
   .backlogDivider hr {
     margin: 20px 0;
     border: none;
-    border-top: 1px solid #1e72ff;
+    border-top: 1px solid #4d8ccb;
     contain: layout paint;
+  }
+  :global(body.theme-midnight) .backlogDivider hr,
+  :global(.backlogDivider) hr {
+    border-top-color: #4d4d4d;
+  }
+  :global(body.theme-dusk) .backlogDivider hr {
+    border-top-color: #4d8ccb;
   }
   .stickyAvatar {
     position: absolute;

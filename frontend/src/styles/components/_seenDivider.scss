@@ -1,13 +1,26 @@
-/* Seen dividers */
+/* Seen dividers — IRCCloud parity
+   Base: div.log div.seenDivider{padding-top:10px;padding-bottom:12px}
+   hr border #ccc light → #4d4d4d on midnight, #224d77 on dusk
+   text #aaa on #fff → #8c8c8c on #000 (midnight) / #4d8ccb on #11263b (dusk)
+   Verified via curl https://www.irccloud.com/build/common-002a6024.css
+   (bottomSeen/focusSeen/lastSeen). Muted grey, 12px, normal weight,
+   Title Case, no uppercase. The bright #1E72FF blue was the "blue bar"
+   complaint — IRCCloud is desaturated. */
 .row.seenDivider {
+  padding-top: 10px;
+  padding-bottom: 12px;
   text-align: center;
-  margin: 12px 0;
   position: relative;
+  user-select: none;
+}
+
+.row.seenDivider.hidden {
+  display: none;
 }
 
 .row.seenDivider hr {
   border: none;
-  border-top: 1px solid var(--accent);
+  border-top: 1px solid #4d4d4d;
   margin: 0;
   position: absolute;
   left: 16px;
@@ -15,19 +28,39 @@
   top: 50%;
 }
 
+/* Theme overrides — match IRCCloud */
+body.theme-dusk .row.seenDivider hr,
+body.theme-dusk div.log div.bottomSeen hr,
+body.theme-dusk div.log div.focusSeen hr,
+body.theme-dusk div.log div.lastSeen hr {
+  border-top-color: #224d77;
+}
+
 .divider-text-wrapper {
-  margin: 0;
+  width: 100%;
+  margin: -2px 0 0 0;
+  line-height: 0;
+  font-size: 12px;
+  text-align: center;
   position: relative;
   z-index: 1;
 }
 
 .divider-text {
   display: inline-block;
-  background: var(--chat-bg);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
+  background: var(--chat-bg, #000);
+  color: #8c8c8c;
+  font-size: 12px;
+  font-weight: 400;
   padding: 0 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+body.theme-dusk .divider-text,
+body.theme-dusk div.log div.bottomSeen span,
+body.theme-dusk div.log div.focusSeen span,
+body.theme-dusk div.log div.lastSeen .divider-text {
+  background-color: #11263b;
+  color: #4d8ccb;
 }

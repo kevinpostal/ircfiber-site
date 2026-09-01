@@ -444,37 +444,24 @@ body.mode-hidesymbol .mode_prefix.mode_pill   { display: inline; }
   text-decoration: none;
 }
 
-/* ─── Message entrance animation ──────────────────────────────────────
-   IRCCloud-style: new messages that land while pinned to the bottom get a
-   subtle slide-up + fade-in. Only the batch head (the first message in a
-   same-author group, or any non-grouped message) gets animated so the
-   user sees a clean "new line appears" feel rather than each line flickering
-   individually. The animation is 120ms — fast enough to not feel laggy,
-   slow enough to register as movement. */
+/* ─── Message entrance — IRCCloud parity: NO animation ───────────────
+   IRCCloud appends new rows instantly when pinned at the bottom. The previous
+   120ms slide-up + 100ms fade was the "blue bar feel is off" — it added
+   motion where IRCCloud is instant. See common-5650bddb.js renderMessage:
+   no transition, just push to DOM. Keep keyframes for legacy but disable
+   the application so arrival feels like IRCCloud: immediate, no lift. */
 @keyframes messageSlideIn {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 1; transform: none; }
+  to   { opacity: 1; transform: none; }
 }
-
 .row.messageRow.messageEntrance {
-  animation: messageSlideIn 120ms ease-out both;
+  animation: none;
 }
-
-/* Same-author continuation rows fade only (no vertical movement — the row
-   above already slid the group into view, so sliding each successor would
-   look like a staggered cascade rather than a fast fill). */
 .row.messageRow.messageEntrance.sameAuthor {
-  animation: messageEntranceFade 100ms ease-out both;
+  animation: none;
 }
-
 @keyframes messageEntranceFade {
-  from { opacity: 0.4; }
+  from { opacity: 1; }
   to   { opacity: 1; }
 }
 
