@@ -1,0 +1,132 @@
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongo-keyfile
+  namespace: ircfiber
+type: Opaque
+data:
+  keyfile: WmlCYlNlUUEwSTlacXZVWjFBVFN6ZXdCK1VCdUlNL0h4MmV6bi9jQk9WUVErWWpHdlNwSHhia2V0UFFXSm9scG9NblkyUEJGMko3UDNrckpsVkNaN1RvVlo5NHd3TE12RUs4VnVVeUZSK1ZyMUdYYzk5bU9aUk9MK1RYSFBXaU1WN1FUcjV4SjlQMGh5MWNSVzhpdzZLcTJNcXlrY215Rjh4aEczN3pVbEdONWY4M1N6dGtueVN1L0JFbkdjKzV1NFp0ZE5CVkFYRXhGN0pBcTFFT05nVGJoRW51TGZXVlFtK2ZRbngvcnJOb2NiNHBMWGg2VzMrcnVMRFJ0dlNNWDcvK1hLTU9PSWYzeUxROWpGV21HbGFGRGJuaEFzbVEvUzdSUzFha1lkTmdrbEVlUFRaQWIySDRSUzBubzJTOHV1YS9qOXZsU1JUcFlzZzFuSFJpei9qdjVwQUJpOVN4NlNoOGN5Y0syTEM5NVRMd2R4dEpKZG1NTlBVRXJPQXNUL3JKcnYzWnJlcDliZXFBcjI2bk5UZWF5RGpwZmdiZFZkT2duak41WDJHYjVzREdtemVkOG9TZEVMeUF1ZWFYeGJIaEVtZjB3eXlKaCszamM3QTFMekJSUjB5YndwYlhjNXhYZ0E2NGF0SjEvMnYrVVY3Z0w5L3NoRzFrY1lVQ0pHcVN2dGtqU3dtUElmUDREL0xTRnpXaitGZGJhdld0a1pwRjNNbTA3dVpZUEcwaTRrTjlYY0ZubXN1TTNJVm9xNWE2UVpxQ093Uis4bGJoRkxOMlUrS2FuRmFMdC96WE5iNkRKNk1lU09reURpaTFzRHNSb21TNEJnclcrbERDMGN5VU8wVTNLL0FTUlFCbUl2cUxKamtvNlJzM0F6NTZQalFDdTNNOE9Iazhnb3EvL3k1OWpDajdnYk81c0FQRS90cDVJZmVqS2QvdU9wMGJ5M2Rudld3ckpGM204YU1kUGNOdmVBN3lrRldWeERDVmhVcHVmOWtyU2lTOXYyNjFhdVNqRStyeDNYbjNUNDFQNkgyRW1keWZqMUZFNnhTMS85azN4V3VqYW9sYUFXNGRPMzdpR0ZEK3A3TWxTQ0xhRDlyRjdCdTZ1S0Z2bmZSTmxtaWJXWDNMbTk5M2liMEwxb1R4U3loNWRoeTNEQW84OS80TFBpOXExek9vb3NCMnNmdEhqOUxvQ3FHbGllaHAxbEtvaHg5Q1BScGtWTHJsUkNwQWkrTVltSXVXWWlSbERVVUEzWWpBQktXd1B1Wjl6VzU0UWhUMTFNSC9ESTZHRGpwRkFXWG92bTJnUFZ3KzNvWWNsbGZjaFhBZW1LUGZK
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-config
+  namespace: ircfiber
+data:
+  mongod.conf: |
+    storage:
+      dbPath: /data/db
+    systemLog:
+      destination: file
+      path: /var/log/mongodb/mongod.log
+      logAppend: true
+    net:
+      port: 27017
+      bindIp: 0.0.0.0
+      bindIpAll: false
+    processManagement:
+      fork: false
+      timeZoneInfo: /usr/share/zoneinfo
+    security:
+      authorization: enabled
+      keyFile: /etc/mongo-keyfile/keyfile
+    replication:
+      replSetName: rs0
+      oplogSizeMB: 1024
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: ircfiber
+  labels:
+    app: mongo
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: mongo
+  ports:
+    - port: 27017
+      name: mongo
+      protocol: TCP
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  namespace: ircfiber
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: mongo
+          image: mongo:7
+          command:
+            - mongod
+            - --config
+            - /etc/mongod/mongod.conf
+          ports:
+            - containerPort: 27017
+              name: mongo
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: mongo-config
+              mountPath: /etc/mongod/mongod.conf
+              subPath: mongod.conf
+            - name: mongo-keyfile
+              mountPath: /etc/mongo-keyfile
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 1Gi
+              cpu: 1000m
+          livenessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - db.adminCommand({ping:1}).ok
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - db.adminCommand({ping:1}).ok
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: mongo-config
+          configMap:
+            name: mongo-config
+        - name: mongo-keyfile
+          secret:
+            secretName: mongo-keyfile
+            defaultMode: 0o600
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 20Gi

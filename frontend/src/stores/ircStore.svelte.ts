@@ -1051,8 +1051,13 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
           } else {
             const normBuf = normalizeChannelName(bufferName);
             const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-            if (!isActive || ircState.focusLost) addedUnread++;
-            if (isHl) addedHighlights++;
+            if (!isActive || ircState.focusLost) {
+              addedUnread++;
+              if (isHl) addedHighlights++;
+            } else if (isHl) {
+              // Highlight while viewing — mark message but don't bump sidebar badge/pulse
+              // (matches single-message path's isUnread guard which suppresses both)
+            }
           }
         }
       }
@@ -1155,12 +1160,14 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   if (pending.length > 0 && hasChat) {
     const net = ircState.networks.find(n => n.networkId === networkId);
     if (net) {
+      const normBufFallback = normalizeChannelName(bufferName);
+      const isActiveFallback = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBufFallback;
       for (const msg of pending) {
         const isChatMessage = msg.command === 'PRIVMSG' || msg.type === 'action';
         if (isChatMessage && !msg.highlight && checkHighlight(msg, net)) {
           msg.highlight = true;
           if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
-          if (shouldTrackUnread(networkId, bufferName)) {
+          if (shouldTrackUnread(networkId, bufferName) && (!isActiveFallback || ircState.focusLost)) {
             const k = `${networkId}:${normalizeChannelName(bufferName)}`;
             const b = net.buffers.find(bb => bb.name === normalizeChannelName(bufferName));
             if (b) b.highlight = true;

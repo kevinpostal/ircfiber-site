@@ -1,0 +1,76 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-shake-config
+  namespace: ircfiber
+data:
+  shake.toml: |
+    [sync_reader]
+    address = "100.94.72.103:6379"
+    username = ""
+    password = ""
+    tls = false
+
+    [redis_writer]
+    address = "redis.ircfiber.svc.cluster.local:6379"
+    username = ""
+    password = ""
+    tls = false
+
+    [filter]
+    # Only replicate global convergence keys. Scrollback (scrollback:*, dedup:*,
+    # irc:state:*, irc:buffer:*, etc.) is per-engine ephemeral and rebuilds
+    # from Mongo/IRC — replicating it is wasteful and caused CrashLoopBackOff
+    # on full all-keys sync (1.37M docs -> OOM). With allowlist, initial sync
+    # is a few keys, not millions.
+    allow_keys = ["irc:servers", "irc:assignments", "irc:global_eid", "irc:protocol:version"]
+
+    [sync_writer]
+    address = "redis.ircfiber.svc.cluster.local:6379"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-shake
+  namespace: ircfiber
+  labels:
+    app: redis-shake
+  annotations:
+    ircfiber.io/paused-reason: "global keys currently per-cluster via OVH-direct IRCFIBER_REDIS_URL=100.94.72.103:6379; shake paused until full-sync OOM is fixed (allowlist above). Re-enable: kubectl scale deployment redis-shake --replicas 1 -n ircfiber"
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: redis-shake
+  template:
+    metadata:
+      labels:
+        app: redis-shake
+    spec:
+      containers:
+        - name: shake
+          image: redis/redis-shake:4
+          env:
+            - name: SYNC
+              value: "true"
+            - name: SHAKE_SRC_ADDRESS
+              value: "100.94.72.103:6379"
+            - name: SHAKE_DST_ADDRESS
+              value: "redis.ircfiber.svc.cluster.local:6379"
+          command: ["/app/redis-shake", "/app/shake.toml"]
+          volumeMounts:
+            - name: shake-config
+              mountPath: /app/shake.toml
+              subPath: shake.toml
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: shake-config
+          configMap:
+            name: redis-shake-config

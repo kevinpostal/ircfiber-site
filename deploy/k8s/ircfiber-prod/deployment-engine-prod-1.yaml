@@ -35,7 +35,7 @@ spec:
             - name: IRCFIBER_REDIS_URL
               value: "redis://100.94.72.103:6379/0"
             - name: IRCFIBER_MONGO_URL
-              value: "mongodb://ircfiber:jqgwEv3GJwwizulaj3Fnbd8imqcMH4Gh@100.94.72.103:27017/ircfiber"
+              value: "mongodb://ircfiber:jqgwEv3GJwwizulaj3Fnbd8imqcMH4Gh@mongo.ircfiber.svc.cluster.local:27017/ircfiber"
             - name: IRCFIBER_OTEL_ENABLED
               value: "1"
             - name: IRCFIBER_OTEL_ENDPOINT
@@ -49,7 +49,7 @@ spec:
             - name: IRCFIBER_BIND_ADDRESS
               value: "0.0.0.0"
             - name: IRCFIBER_MULLVAD_POOL
-              value: "socks5://tailscale-mullvad-de.ircfiber.svc.cluster.local:1055,socks5://tailscale-mullvad-ch.ircfiber.svc.cluster.local:1055,socks5://tailscale-mullvad-nl.ircfiber.svc.cluster.local:1055,socks5://tailscale-mullvad-se.ircfiber.svc.cluster.local:1055,socks5://tailscale-mullvad-gb.ircfiber.svc.cluster.local:1055,socks5://tailscale-mullvad-us.ircfiber.svc.cluster.local:1055"
+              value: "socks5://100.94.116.56:1080,socks5://100.94.116.56:1081,socks5://100.94.116.56:1082"
           resources:
             requests:
               cpu: 200m

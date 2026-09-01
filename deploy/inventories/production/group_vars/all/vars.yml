@@ -49,11 +49,15 @@ firewall_enabled: true
 firewall_allow_ssh_cidr: "0.0.0.0/0"
 # Whether to allow the engine admin port (8091) from the Tailscale subnet only.
 firewall_open_engine_admin: true
-
 # --- Mongo --------------------------------------------------------------------
 mongo_data_volume: "ircfiber_mongo_data"
 mongo_initdb_database: "ircfiber"
 mongo_port: 27017
+mongo_replica_init: true
+mongo_replica_members:
+  - host: "{{ host_tailscale_ip }}"
+    port: "{{ mongo_port }}"
+    priority: 10
 
 # --- Redis --------------------------------------------------------------------
 redis_data_volume: "ircfiber_redis_data"

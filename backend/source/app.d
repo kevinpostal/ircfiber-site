@@ -58,6 +58,9 @@ void main() {
     auto mongoSlash = mongoUrl.lastIndexOf("/");
     if (mongoSlash > "mongodb://".length) {
         mongoDbName = mongoUrl[mongoSlash + 1 .. $];
+        auto qIdx = mongoDbName.indexOf("?");
+        if (qIdx >= 0) mongoDbName = mongoDbName[0 .. qIdx];
+        if (mongoDbName.length == 0) mongoDbName = "ircfiber";
     }
     foreach (attempt; 0 .. 30) {
         try {

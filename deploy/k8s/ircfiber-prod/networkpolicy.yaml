@@ -24,6 +24,12 @@ spec:
         - port: 1055
           protocol: TCP
     - ports:
+        - port: 1080
+          protocol: TCP
+        - port: 1081
+          protocol: TCP
+        - port: 1082
+          protocol: TCP
         - port: 6379
           protocol: TCP
         - port: 27017

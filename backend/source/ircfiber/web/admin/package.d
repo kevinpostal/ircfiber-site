@@ -35,7 +35,7 @@ import ircfiber.web.admin.mongo : apiMongoStatus, apiMongoCollections,
     apiMongoCollectionDetail, apiMongoQuery;
 import ircfiber.web.admin.redis : apiRedisInfo, apiRedisSummary, apiRedisKeys,
     apiRedisKeyDetail, apiRedisSlowlog, apiRedisPubsub, apiRedisClients;
-
+import ircfiber.web.admin.replication : apiReplicationStatus;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -139,6 +139,9 @@ final class AdminController {
         router.get("/api/admin/redis/pubsub", &adminWrap!apiRedisPubsubRoute);
         router.get("/api/admin/redis/clients", &adminWrap!apiRedisClientsRoute);
 
+        // Replication monitor (Mongo rs0 + Redis global keys / shake)
+        router.get("/api/admin/replication", &adminWrap!apiReplicationStatusRoute);
+
         // Engine janitor control plane
         router.get("/api/admin/janitor/status", &adminWrap!apiJanitorStatusRoute);
         router.get("/api/admin/janitor/events", &adminWrap!apiJanitorEventsRoute);
@@ -147,7 +150,6 @@ final class AdminController {
     }
 
 private:
-    // ────────────────────────────────────────────────────────────
     // Wrapper — auth, admin role, session touch, then handler
     // ────────────────────────────────────────────────────────────
     template adminWrap(alias handler) {
@@ -263,6 +265,9 @@ private:
     void apiRedisSlowlogRoute(HTTPServerRequest req, HTTPServerResponse res) { apiRedisSlowlog(req, res, redis); }
     void apiRedisPubsubRoute(HTTPServerRequest req, HTTPServerResponse res) { apiRedisPubsub(req, res, redis); }
     void apiRedisClientsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiRedisClients(req, res, redis); }
+
+    // Replication (Mongo rs0 + Redis global keys)
+    void apiReplicationStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiReplicationStatus(req, res, redis); }
 
     // Janitor
     void apiJanitorStatusRoute(HTTPServerRequest req, HTTPServerResponse res) {

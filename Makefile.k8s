@@ -181,7 +181,14 @@ k8s-apply: ## K8s > Apply namespace + networkpolicy + redis/mongo + mullvad side
 	@printf '\n\033[42m\033[30m\033[1m  k8s deploy → ns $(KUBE_NS)  \033[0m\n'
 	$(KUBECTL) apply -f $(K8S_DIR)/namespace.yaml
 	$(KUBECTL) apply -f $(K8S_DIR)/networkpolicy.yaml
+	# redis-mongo-dev.yaml is for local `make debug` (ephemeral redis/mongo).
+	# For k8s prod we use mongo-stateful.yaml (hostNetwork, 20Gi PVC, keyFile, rs0)
+	# and the in-cluster redis from the same file. Apply both: dev redis + prod mongo.
 	$(KUBECTL) apply -f $(K8S_DIR)/redis-mongo-dev.yaml
+	@if [ -f $(K8S_DIR)/mongo-stateful.yaml ]; then \
+		printf '%b\n' "$(C)$(AR) applying mongo-stateful (hostNetwork rs0, local-path 20Gi)$(R)"; \
+		$(KUBECTL) apply -f $(K8S_DIR)/mongo-stateful.yaml; \
+	fi
 	@if [ -f $(K8S_DIR)/mullvad-sidecars.yaml ]; then \
 		printf '%b\n' "$(C)$(AR) applying mullvad sidecars$(R)"; \
 		$(KUBECTL) apply -f $(K8S_DIR)/mullvad-sidecars.yaml; \

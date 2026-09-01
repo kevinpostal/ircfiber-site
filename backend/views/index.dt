@@ -25,5 +25,9 @@ block body
       div.initial-loader__text Connecting...
 
 block scripts
-  link(rel="stylesheet", href="/public/dist/assets/main-M0pkqqrM.css?v=2")
-  script(type="module", src="/public/dist/assets/main-CYNYvgD6.js?v=2")
+  // Preload the critical CSS/JS so the browser can start fetching before parsing
+  link(rel="preload", href="/public/dist/assets/main-D2_A3OZi.css", as="style")
+  link(rel="modulepreload", href="/public/dist/assets/vendor-BE3lOQu5.js")
+  link(rel="modulepreload", href="/public/dist/assets/main-CKzhjNwH.js")
+  link(rel="stylesheet", href="/public/dist/assets/main-D2_A3OZi.css")
+  script(type="module", src="/public/dist/assets/main-CakNddvs.js")

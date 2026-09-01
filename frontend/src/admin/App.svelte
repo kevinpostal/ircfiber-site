@@ -21,6 +21,7 @@
   import Uploads from './pages/Uploads.svelte';
   import MongoMonitor from './pages/MongoMonitor.svelte';
   import RedisMonitor from './pages/RedisMonitor.svelte';
+  import Replication from './pages/Replication.svelte';
   import Logs from './pages/Logs.svelte';
   import Version from './pages/Version.svelte';
   import Mullvad from './pages/Mullvad.svelte';
@@ -47,6 +48,7 @@
     if (hostMatch) return { kind: 'servers-host', host: hostMatch.host } as const;
     if (match('/servers', path)) return { kind: 'servers' } as const;
     if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
+    if (match('/replication', path)) return { kind: 'replication' } as const;
     if (match('/sessions', path)) return { kind: 'sessions' } as const;
     if (match('/users/new', path)) return { kind: 'users-new' } as const;
     const usersMatch = match('/users/:id', path);
@@ -77,6 +79,8 @@
         <Servers />
       {:else if page?.kind === 'mullvad'}
         <Mullvad />
+      {:else if page?.kind === 'replication'}
+        <Replication />
       {:else if page?.kind === 'sessions'}
         <Sessions />
       {:else if page?.kind === 'logs'}

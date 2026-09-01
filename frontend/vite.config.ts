@@ -110,7 +110,29 @@ export default defineConfig({
         // Admin SPA — enterprise admin dashboard
         admin: 'admin.html',
       },
+      output: {
+        manualChunks(id) {
+          // Split heavy app panels - defer non-critical UI
+          if (id.includes('/components/UploadDialog') || id.includes('/components/UploadsPanel')) return 'chunk-upload';
+          if (id.includes('/components/SnippetsPanel') || id.includes('/components/IrcArtPanel')) return 'chunk-panels';
+          if (id.includes('/components/SettingsPage') || id.includes('/components/ShortcutsPage') || id.includes('/components/FileViewerPage') || id.includes('/components/PasteViewerPage') || id.includes('/components/WelcomePage')) return 'chunk-pages';
+          if (id.includes('/components/CodeEditor') || id.includes('wasm-img2irc')) return 'chunk-editor';
+          // Keep vendor as single chunk to avoid circular deps (svelte + highlights share graph)
+          if (id.includes('node_modules')) return 'vendor';
+          // Split heavy panels into separate chunks — loaded on demand
+          if (id.includes('/components/UploadDialog') || id.includes('/components/UploadsPanel')) return 'chunk-upload';
+          if (id.includes('/components/SnippetsPanel') || id.includes('/components/IrcArtPanel')) return 'chunk-panels';
+          if (id.includes('/components/SettingsPage') || id.includes('/components/ShortcutsPage') || id.includes('/components/FileViewerPage') || id.includes('/components/PasteViewerPage') || id.includes('/components/WelcomePage')) return 'chunk-pages';
+          if (id.includes('/components/CodeEditor') || id.includes('wasm-img2irc')) return 'chunk-editor';
+        },
+        chunkFileNames: 'assets/[name]-[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]',
+      },
     },
+    // Emit .gz and .br alongside each asset for backend precompressed serving
+    reportCompressedSize: true,
+    chunkSizeWarningLimit: 400,
   },
   server: {
     host: '0.0.0.0',

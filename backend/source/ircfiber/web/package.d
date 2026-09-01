@@ -343,14 +343,21 @@ final class WebController {
     private void serveDist(HTTPServerRequest req, HTTPServerResponse res) {
         try {
             auto pathStr = req.requestPath.toString();
-            // Strip the "/public/dist/" prefix
             auto rel = pathStr[("/public/dist/".length)..$];
-            // Strip any query string the framework may have left in
             auto qIdx = rel.indexOf('?');
             if (qIdx >= 0) rel = rel[0..qIdx];
             if (rel.length == 0 || rel.canFind("..")) {
                 res.statusCode = 400;
                 return;
+            }
+
+            // ETag / 304 — cheap revalidation for non-immutable assets
+            auto etag = "\"" ~ rel ~ "\"";
+            if (auto inm = req.headers.get("If-None-Match", "")) {
+                if (inm == etag || inm == "W/" ~ etag) {
+                    res.statusCode = 304;
+                    return;
+                }
             }
 
             auto fsPath = buildPath("public/dist", rel);
@@ -359,18 +366,46 @@ final class WebController {
                 return;
             }
 
+            // Serve precompressed .br / .gz when client supports it
+            auto acceptEnc = req.headers.get("Accept-Encoding", "");
+            bool wantsBr = acceptEnc.canFind("br");
+            bool wantsGz = acceptEnc.canFind("gzip");
+            string encPath;
+            string contentEnc;
+            if (wantsBr && exists(fsPath ~ ".br")) {
+                encPath = fsPath ~ ".br";
+                contentEnc = "br";
+            } else if (wantsGz && exists(fsPath ~ ".gz")) {
+                encPath = fsPath ~ ".gz";
+                contentEnc = "gzip";
+            }
+            string servePath = encPath.length ? encPath : fsPath;
+
             string mime = "application/octet-stream";
-            if (endsWith(rel, ".js"))      mime = "application/javascript";
+            if (endsWith(rel, ".js"))       mime = "application/javascript";
             else if (endsWith(rel, ".css")) mime = "text/css";
             else if (endsWith(rel, ".html")) mime = "text/html";
             else if (endsWith(rel, ".json")) mime = "application/json";
             else if (endsWith(rel, ".svg"))  mime = "image/svg+xml";
             else if (endsWith(rel, ".png"))  mime = "image/png";
+            else if (endsWith(rel, ".wasm")) mime = "application/wasm";
+            else if (endsWith(rel, ".woff2")) mime = "font/woff2";
+            else if (endsWith(rel, ".woff")) mime = "font/woff";
 
-            res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
-            res.headers["Pragma"] = "no-cache";
-            res.headers["Expires"] = "0";
-            res.writeBody(cast(const(ubyte)[])read(fsPath), mime);
+            // Hashed assets under public/dist/assets/* are content-addressed
+            bool isImmutable = rel.startsWith("assets/") && rel.canFind("-");
+            if (isImmutable) {
+                res.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+                // strip Pragma/Expires so caches honor immutable
+            } else {
+                res.headers["Cache-Control"] = "public, max-age=3600";
+            }
+            res.headers["ETag"] = etag;
+            res.headers["Vary"] = "Accept-Encoding";
+            if (contentEnc.length) res.headers["Content-Encoding"] = contentEnc;
+
+            // vibe.d will set Content-Length from body length
+            res.writeBody(cast(const(ubyte)[])read(servePath), mime);
         } catch (Exception e) {
             logWarn("Failed to serve dist asset: %s", e.msg);
             res.statusCode = 500;
@@ -383,7 +418,6 @@ final class WebController {
     private void serveAssets(HTTPServerRequest req, HTTPServerResponse res) {
         try {
             auto pathStr = req.requestPath.toString();
-            // Strip the "/assets/" prefix
             auto rel = pathStr[("/assets/".length)..$];
             auto qIdx = rel.indexOf('?');
             if (qIdx >= 0) rel = rel[0..qIdx];
@@ -392,24 +426,56 @@ final class WebController {
                 return;
             }
 
+            auto etag = "\"assets/" ~ rel ~ "\"";
+            if (auto inm = req.headers.get("If-None-Match", "")) {
+                if (inm == etag || inm == "W/" ~ etag) {
+                    res.statusCode = 304;
+                    return;
+                }
+            }
+
             auto fsPath = buildPath("public/dist/assets", rel);
             if (!exists(fsPath) || !isFile(fsPath)) {
                 res.statusCode = 404;
                 return;
             }
 
+            auto acceptEnc = req.headers.get("Accept-Encoding", "");
+            bool wantsBr = acceptEnc.canFind("br");
+            bool wantsGz = acceptEnc.canFind("gzip");
+            string encPath;
+            string contentEnc;
+            if (wantsBr && exists(fsPath ~ ".br")) {
+                encPath = fsPath ~ ".br";
+                contentEnc = "br";
+            } else if (wantsGz && exists(fsPath ~ ".gz")) {
+                encPath = fsPath ~ ".gz";
+                contentEnc = "gzip";
+            }
+            string servePath = encPath.length ? encPath : fsPath;
+
             string mime = "application/octet-stream";
-            if (endsWith(rel, ".js"))      mime = "application/javascript";
+            if (endsWith(rel, ".js"))       mime = "application/javascript";
             else if (endsWith(rel, ".css")) mime = "text/css";
             else if (endsWith(rel, ".html")) mime = "text/html";
             else if (endsWith(rel, ".json")) mime = "application/json";
             else if (endsWith(rel, ".svg"))  mime = "image/svg+xml";
             else if (endsWith(rel, ".png"))  mime = "image/png";
+            else if (endsWith(rel, ".wasm")) mime = "application/wasm";
+            else if (endsWith(rel, ".woff2")) mime = "font/woff2";
+            else if (endsWith(rel, ".woff")) mime = "font/woff";
 
-            res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
-            res.headers["Pragma"] = "no-cache";
-            res.headers["Expires"] = "0";
-            res.writeBody(cast(const(ubyte)[])read(fsPath), mime);
+            bool isImmutable = rel.canFind("-");
+            if (isImmutable) {
+                res.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+            } else {
+                res.headers["Cache-Control"] = "public, max-age=3600";
+            }
+            res.headers["ETag"] = etag;
+            res.headers["Vary"] = "Accept-Encoding";
+            if (contentEnc.length) res.headers["Content-Encoding"] = contentEnc;
+
+            res.writeBody(cast(const(ubyte)[])read(servePath), mime);
         } catch (Exception e) {
             logWarn("Failed to serve /assets/ asset: %s", e.msg);
             res.statusCode = 500;

@@ -138,7 +138,10 @@
   <!-- MongoDB summary card -->
   <Card title="MongoDB" subtitle="Connected via vibe.d">
     {#snippet actions()}
-      <a href="#/mongo" class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-text hover:border-primary/40">View monitor →</a>
+      <div class="flex gap-1">
+        <a href="#/mongo" class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-text hover:border-primary/40">View monitor →</a>
+        <a href="#/replication" class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-text hover:border-primary/40">Replication →</a>
+      </div>
     {/snippet}
     {#if !$mongoStatus}
       <div class="flex h-32 items-center justify-center">
@@ -163,7 +166,10 @@
   <!-- Redis summary card -->
   <Card title="Redis" subtitle="Sessions, buffers, routing">
     {#snippet actions()}
-      <a href="#/redis" class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-text hover:border-primary/40">View monitor →</a>
+      <div class="flex gap-1">
+        <a href="#/redis" class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-text hover:border-primary/40">View monitor →</a>
+        <a href="#/replication" class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-text hover:border-primary/40">Replication →</a>
+      </div>
     {/snippet}
     {#if !$redisSummary}
       <div class="flex h-32 items-center justify-center">

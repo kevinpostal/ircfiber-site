@@ -31,16 +31,16 @@ spec:
             - name: PORT
               value: "8090"
             - name: IRCFIBER_REDIS_URL
-              value: "redis://redis.ircfiber.svc.cluster.local:6379"
+              value: "redis://100.94.72.103:6379/0"
             - name: IRCFIBER_MONGO_URL
-              value: "mongodb://mongo.ircfiber.svc.cluster.local:27017/ircfiber"
+              value: "mongodb://ircfiber:jqgwEv3GJwwizulaj3Fnbd8imqcMH4Gh@100.94.72.103:27017/ircfiber?replicaSet=rs0&authSource=ircfiber"
             - name: IRCFIBER_OTEL_ENABLED
               value: "1"
             - name: IRCFIBER_OTEL_ENDPOINT
               value: "http://signoz-otel-collector.signoz.svc.cluster.local:4318"
             - name: OTEL_RESOURCE_ATTRIBUTES
             - name: IRCFIBER_MULLVAD_POOL
-              value: "socks5://tailscale-mullvad-de:1055,socks5://tailscale-mullvad-ch:1055,socks5://tailscale-mullvad-nl:1055,socks5://tailscale-mullvad-se:1055,socks5://tailscale-mullvad-gb:1055,socks5://tailscale-mullvad-us:1055"
+              value: "socks5://100.94.116.56:1080,socks5://100.94.116.56:1081,socks5://100.94.116.56:1082"
           resources:
             requests:
               cpu: 100m
@@ -67,6 +67,14 @@ spec:
       port: 8090
       targetPort: 8090
 ---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ircfiber-compress
+  namespace: ircfiber
+spec:
+  compress: {}
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -75,6 +83,7 @@ metadata:
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: ircfiber-ircfiber-compress@kubernetescrd
 spec:
   ingressClassName: traefik
   rules:
