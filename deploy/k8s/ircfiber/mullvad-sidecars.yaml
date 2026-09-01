@@ -6,15 +6,13 @@
 # Secrets: tailscale-authkey (TS_AUTHKEY) — reusable authkey with tag:ircfiber (non-ephemeral, 90d)
 # Deploy: kubectl apply -f mullvad-sidecars.yaml
 # Verify: kubectl get pods -n ircfiber -l component=mullvad-sidecar; kubectl logs -n ircfiber -l app=tailscale-mullvad-de
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: tailscale-authkey
-  namespace: ircfiber
-type: Opaque
-stringData:
-  TS_AUTHKEY: tskey-auth-REPLACE-ME
+# --- tailscale-authkey Secret ---
+# DO NOT commit the real TS_AUTHKEY — create it out-of-band:
+#   kubectl create secret generic tailscale-authkey -n ircfiber \
+#     --from-literal=TS_AUTHKEY='tskey-auth-...' --dry-run=client -o yaml | kubectl apply -f -
+# Or via Ansible vault: vault_tailscale_authkey in deploy/inventories/production/group_vars/vault.yml
+# The Secret manifest below is intentionally omitted from git; keep only the reference
+# via secretKeyRef in the Deployments that follow.
 # --- de (de-ber-wg-003) ---
 apiVersion: apps/v1
 kind: Deployment

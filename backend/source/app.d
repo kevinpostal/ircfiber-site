@@ -376,14 +376,14 @@ private void bgOtelFlushTask() nothrow {
     while (true) {
         try {
             sleep(10.seconds);
-            flushAndSendSpans();
+            try flushAndSendSpans(); catch (Throwable) {}
             try {
                 import ircfiber.observability : flushAndSendMetrics;
                 flushAndSendMetrics();
-            } catch (Exception) {}
-            try { flushAndSendLogs(); } catch (Exception) {}
+            } catch (Throwable) {}
+            try flushAndSendLogs(); catch (Throwable) {}
         }
-        catch (Exception) { return; }
+        catch (Throwable) { return; }
     }
 }
 

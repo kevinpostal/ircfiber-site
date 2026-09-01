@@ -35,11 +35,8 @@ ircfiber_use_lets_encrypt: true
 cloudflare_target_ip: "47.236.247.169"
 
 # --- Observability: Signoz OTel (production) ---------------------------------
-# Gateway/engine traces/logs/metrics -> k3s Signoz via Tailscale MagicDNS.
-# k3s collector is at otel.ubuntu-docker.tail544547.ts.net (Traefik 443, TLS) and
-# also at 100.94.116.56:4318 via NodePort/Tailscale IP. For k8s-internal pods
-# keep using http://signoz-otel-collector.signoz.svc.cluster.local:4318 (no TLS).
+# Gateway/engine traces/logs/metrics ship to the LOCAL signoz-ingester on
+# this host via the ircfiber_logging Docker bridge (not the k3s Tailscale IP).
 IRCFIBER_OTEL_ENABLED: "1"
-IRCFIBER_OTEL_ENDPOINT: "http://100.94.116.56:4318"
-OTEL_RESOURCE_ATTRIBUTES: "k8s.cluster.name=ubuntu-docker,service.name=ircfiber-gateway,deployment.environment=prod"
-# Alt via Ingress (TLS, needs DNS): "https://otel.ubuntu-docker.tail544547.ts.net"
+IRCFIBER_OTEL_ENDPOINT: "http://signoz-ingester:4318"
+OTEL_RESOURCE_ATTRIBUTES: "k8s.cluster.name=ircfiber-prod-1,service.name=ircfiber-gateway,deployment.environment=prod"
