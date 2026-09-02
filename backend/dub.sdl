@@ -53,3 +53,15 @@ configuration "gateway" {
 configuration "library" {
     targetType "library"
 }
+
+// Pure-code unit test for the bouncer wire helpers (no Redis/Mongo needed):
+//   dub --root=backend build --config=bnc-wire-test && ./backend/bnc-wire-test
+configuration "bnc-wire-test" {
+    targetType "executable"
+    targetName "bnc-wire-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/bnc/wire.d" "source/ircfiber/bnc/format.d"
+    mainSourceFile "tests/bnc_wire_test.d"
+    versions "VibeUseFibers"
+}

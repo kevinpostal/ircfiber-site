@@ -5,6 +5,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import { logScroll } from '../test/scroll';
 
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -58,7 +59,7 @@ describe('arrow 20', () => {
     const tops: number[] = [];
     for (let i = 0; i < 20; i++) {
       const beforeTop = c.scrollTop;
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       // MessageList handler already scrolls 40; do not add manual extra scroll
       await delay(20);
       await nextFrame();
@@ -79,7 +80,7 @@ describe('arrow 20', () => {
     const midTopBeforeReveal = c.scrollTop;
     c.scrollTop = 0;
     c.dispatchEvent(new Event('scroll'));
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    logScroll(document.getElementById('messages'), 'ArrowUp');
     await delay(150);
     await nextFrame();
     const afterRevealTop = c.scrollTop;

@@ -325,10 +325,12 @@ export interface Buffer {
    * orphan reconciliation.
    */
   syncMissedCount?: number;
-  unreadCount: number;
-  highlight: boolean;
-  /** Number of unseen mentions; drives the red sidebar badge (IRCCloud-style). */
-  highlightCount?: number;
+  /** IRCCloud `unseen`: an important message arrived after lastSeen. */
+  unseen: boolean;
+  /** Fiber addition: unseen important messages since lastSeen (IRCCloud has no count). */
+  unseenCount: number;
+  /** IRCCloud `unseenHighlights`: ascending `t` of highlightable unseen messages. */
+  unseenHighlights: number[];
   isPinned: boolean;
   isArchived: boolean;
   topic: string;

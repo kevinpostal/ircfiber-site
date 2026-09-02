@@ -59,6 +59,8 @@ describe('seamless bottom to start', () => {
     c.style.height = '400px';
     c.style.overflowY = 'auto';
     await new Promise(r => requestAnimationFrame(r));
+    // Let the container ResizeObserver re-pin (IRCCloud autogrow checkRecent) before scrolling.
+    await new Promise((r) => setTimeout(r, 150));
     await new Promise(r => setTimeout(r, 300));
     // Start at bottom (IRCCloud render shows last 200)
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight) <= 5).toBe(true);

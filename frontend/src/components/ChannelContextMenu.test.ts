@@ -172,6 +172,29 @@ describe('ChannelContextMenu', () => {
     expect(button.getAttribute('aria-pressed')).toBe('false');
   });
 
+  it('"Show unread count" defaults on, persists off, and is disabled while the indicator is off', async () => {
+    const network = createNetwork({ networkId: 'net1' });
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = network.networkId;
+    const buf = createBuffer({ name: '#chan' });
+    render(ChannelContextMenu, {
+      props: { x: 100, y: 100, buf, onClose: vi.fn(), onToggleMembers: vi.fn(), memberPanelOpen: false },
+    });
+
+    const count = page.getByRole('button', { name: /Show unread count/ }).element() as HTMLButtonElement;
+    expect(count.getAttribute('aria-pressed')).toBe('true');
+    expect(count.disabled).toBe(false);
+
+    await userEvent.click(count);
+    expect(count.getAttribute('aria-pressed')).toBe('false');
+    expect(bufferPrefsMap['net1:#chan']?.showUnreadCount).toBe(false);
+
+    // Turning the indicator off disables the count toggle (implied off).
+    const indicator = page.getByRole('button', { name: /Show unread message indicator/ }).element() as HTMLButtonElement;
+    await userEvent.click(indicator);
+    expect(count.disabled).toBe(true);
+  });
+
   it('Leave sends PART without removing the buffer', async () => {
     const network = createNetwork({ networkId: 'net1' });
     const serverBuf = createBuffer({ name: '_server', type: 'server' });

@@ -78,8 +78,6 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header.active.buffer,
 .network-header.selected .buffer,
 .network-header.active .buffer { color: #333 !important; background: #fff; border-left-color: #d9d9d9; }
-.network-header.unread .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
-.network-header.highlight .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
 .network-header.selected .buffer .fa-globe,
 .network-header.active .buffer .fa-globe,
 .network-header.selected .buffer .network-shield,
@@ -126,12 +124,12 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .buffer-item .buffer .label { padding: 0 7px; }
 .buffer-item:hover .buffer { background: #1a1a1a; color: #d9d9d9; }
 .buffer-item.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #d9d9d9; }
-.buffer-item.unread .buffer { color: #f2f2f2; font-weight: 600; border-left: 5px solid #1e72ff; }
+/* IRCCloud `.bufferList .unread span.buffer`: bold + 5px accent border.
+   `.ignoredUnread` (showUnread off) has no styling. Selected wins. */
+.buffer-item.unread .buffer { color: #f2f2f2; font-weight: 600; border: 5px solid #1e72ff; border-width: 0 0 0 5px; margin: 0 0 0 -5px; }
 .buffer-item.unread:hover .buffer { background: #1a1a1a; color: #f2f2f2; }
-.buffer-item.unread.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #d9d9d9; }
-.buffer-item.highlight .buffer { color: #f2f2f2; font-weight: 600; border-left: 5px solid #1e72ff; }
-.buffer-item.highlight.active .buffer { background: #fff; color: #333; border-radius: 0 4px 4px 0; border-left: 5px solid #ff7b72; }
-.buffer-item.highlight.active .buffer .unread__label { color: #333; }
+.buffer-item.unread.selected .buffer,
+.buffer-item.unread.active .buffer { background: #fff; color: #333; font-weight: 400; border-radius: 0 4px 4px 0; border-left: 5px solid #d9d9d9; }
 
 // W2-T01: in-flight JOIN — mirrors the .buffer-item.unread / .buffer-item.highlight
 // modifier vocabulary (opacity + italic). Driven by buf.joinInFlight at all four
@@ -141,26 +139,28 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 // network. In-network rows get a subtle tack so the duplication is legible.
 .pinned-indicator { margin-left: 6px; font-size: 10px; color: #8b949e; opacity: 0.7; flex-shrink: 0; }
 .buffer-item.active .pinned-indicator { color: #6e7681; }
-.network.connected .network-header.unread .buffer { color: #d9d9d9; font-weight: 400; border-left-color: #262626; }
-.network-header.unread .buffer .label { color: #d9d9d9; font-weight: 400; }
-.network-header.unread.selected .buffer .label,
-.network-header.unread.active .buffer .label { color: #333; }
 
-/* IRCCloud-style unread label */
-.unread__label { display: inline; font-size: 15px; }
-.buffer-unread {
-  display: inline-block;
-  background: #d0021b;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 16px;
-  min-width: 10px;
-  text-align: center;
-  padding: 0 5px;
-  border-radius: 8px;
-  float: right;
-  margin: 1px 8px 0 auto;
+/* IRCCloud-style unread label (screen-reader only, `.g`) */
+.g { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.unread__label { font-size: 15px; }
+
+/* IRCCloud badges: `.badge` (buffer row) and `.totalBadge` (collapsed
+   network header) are hidden until `.activeBadge` / `.activeTotalBadge`. */
+.bufferBadges { float: right; margin-top: -1px; }
+.bufferList span.badge, .bufferList span.totalBadge,
+.network-list span.badge, .network-list span.totalBadge {
+  display: none; margin: 0 5px 0 0; font-size: 11px; color: #fff; background-color: #ff1f1a;
+  border-radius: 9px; font-weight: 600; padding: 0 5px; min-width: 18px; height: 18px; line-height: 18px; text-align: center; box-sizing: border-box;
+}
+.bufferList .activeBadge span.badge,
+.network-list .activeBadge span.badge { display: inline-block; }
+.network-list span.totalBadge { position: absolute; top: 3px; right: 0; min-width: 15px; height: 15px; line-height: 15px; font-size: 10px; padding: 0 4px; }
+/* IRCCloud keeps the collapse button hidden until hover; the badge sits
+   where the button is, so hide the always-visible chevron while badged. */
+.network-list .connection.collapsed.activeTotalBadge:not(:hover) .collapseToggle button { visibility: hidden; }
+.network-list .connection.collapsed.activeTotalBadge span.totalBadge { display: inline-block; }
+.network-list .connection.totalUnread .collapseToggle {
+  border: 5px solid #56a4f7; border-width: 0 0 0 5px; margin-left: -5px; visibility: visible;
 }
 .network-status { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; }
 .network-status.disconnected { background: #f85149; }

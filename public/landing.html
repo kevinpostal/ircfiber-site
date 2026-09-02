@@ -926,6 +926,80 @@
     }
 
     /* ─────────────────────────────────────────────────────────────
+       bouncer (connect with another client)
+       ───────────────────────────────────────────────────────────── */
+    .bnc {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+      gap: var(--s-8);
+      align-items: center;
+    }
+    .bnc-copy h2 { margin: var(--s-4) 0 var(--s-4); }
+    .bnc-copy > p { font-size: 16px; line-height: 1.65; color: var(--fiber-fog); margin: 0 0 var(--s-6); }
+    .bnc-copy > p strong, .bnc-list strong { color: var(--fiber-snow); font-weight: 600; }
+    .bnc-list { list-style: none; margin: 0 0 var(--s-6); padding: 0; display: grid; gap: var(--s-3); }
+    .bnc-list li { display: flex; gap: 12px; font-size: 14.5px; line-height: 1.6; color: var(--fiber-fog); }
+    .bnc-list .tick { color: var(--fiber-signal); font-family: var(--font-mono); font-weight: 700; flex: 0 0 auto; padding-top: 1px; }
+    .bnc-clients {
+      display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center;
+      font-family: var(--font-mono); font-size: 11.5px; color: var(--fiber-fog);
+    }
+    .bnc-clients .lbl { color: var(--fiber-mist); text-transform: uppercase; letter-spacing: 0.12em; font-size: 10px; margin-right: 4px; }
+    .bnc-clients span:not(.lbl) { padding: 3px 8px; border: 1px solid var(--fiber-line); border-radius: 999px; background: var(--fiber-ink); }
+    .bnc-term {
+      background: var(--fiber-paper);
+      border: 1px solid var(--fiber-line);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 0 0 1px rgba(103, 232, 249, 0.04), 0 30px 80px rgba(0, 0, 0, 0.5), 0 0 60px rgba(103, 232, 249, 0.05);
+    }
+    .term-bar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 14px;
+      background: var(--fiber-void);
+      border-bottom: 1px solid var(--fiber-line);
+    }
+    .term-bar .d { width: 10px; height: 10px; border-radius: 50%; opacity: 0.85; }
+    .term-bar .d.r { background: var(--fiber-stop); }
+    .term-bar .d.y { background: var(--fiber-amber); }
+    .term-bar .d.g { background: var(--fiber-signal); }
+    .term-bar .title { margin-left: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--fiber-mist); letter-spacing: 0.04em; }
+    .term-body {
+      margin: 0;
+      padding: 16px 18px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: var(--fiber-snow);
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: hidden;
+    }
+    .term-body .c { color: var(--fiber-mist); font-style: italic; }
+    .term-body .p { color: var(--fiber-amber); }
+    .term-body .tok { color: var(--fiber-blue); }
+    .term-body .srv { color: var(--fiber-mist); }
+    .term-body .num { color: var(--fiber-fog); }
+    .term-body .chan { color: var(--fiber-blue); }
+    .term-body .nick { color: var(--fiber-amber); }
+    .term-body .me { color: var(--fiber-signal); }
+    .term-body .dim { color: var(--fiber-mist); }
+    .term-body .cursor::after { content: "▌"; color: var(--fiber-blue); animation: blink 1.05s steps(2, end) infinite; margin-left: 2px; }
+    .term-foot {
+      display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+      padding: 10px 14px;
+      border-top: 1px solid var(--fiber-line);
+      background: var(--fiber-void);
+      font-family: var(--font-mono); font-size: 11px; color: var(--fiber-fog);
+    }
+    .term-foot .led { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--fiber-signal); box-shadow: 0 0 8px var(--fiber-signal); margin-right: 6px; vertical-align: middle; }
+    .term-foot .mono { color: var(--fiber-snow); }
+    @media (max-width: 960px) {
+      .bnc { grid-template-columns: 1fr; gap: var(--s-7); }
+      .term-body { font-size: 12px; }
+    }
+
+    /* ─────────────────────────────────────────────────────────────
        pricing
        ───────────────────────────────────────────────────────────── */
     .pricing {
@@ -1099,6 +1173,8 @@
     .reveal-stagger.in > *:nth-child(4) { transition-delay: 180ms; }
     .reveal-stagger.in > *:nth-child(5) { transition-delay: 240ms; }
     .reveal-stagger.in > *:nth-child(6) { transition-delay: 300ms; }
+    .reveal-stagger.in > *:nth-child(7) { transition-delay: 360ms; }
+    .reveal-stagger.in > *:nth-child(8) { transition-delay: 420ms; }
 
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
@@ -1134,6 +1210,7 @@
         <a href="#preview">Preview</a>
         <a href="#features">Features</a>
         <a href="#how">How it works</a>
+        <a href="#bouncer">Bouncer</a>
         <a href="#faq">FAQ</a>
       </nav>
 
@@ -1198,7 +1275,7 @@
           </h1>
 
           <p class="hero-sub reveal">
-            A cloud-hosted bouncer that keeps you connected and your history searchable. Open IRC in any browser, on any device, pick up exactly where you left off — even after a week offline.
+            A cloud-hosted bouncer that keeps you connected and your history searchable. Open IRC in any browser, on any device — or point WeeChat, irssi, or mIRC at the built-in bouncer — and pick up exactly where you left off, even after a week offline.
           </p>
 
           <div class="hero-ctas reveal">
@@ -1337,6 +1414,20 @@
             <p>Themes: dark, midnight, compact, monospace, custom CSS. mIRC formatting with 16 base colors and hex RGB. Emoji picker, file uploads, pastebin.</p>
             <div class="ft-meta"><span class="dot"></span><span>themes</span><span>·</span><span>mirc</span></div>
           </div>
+
+          <div class="feature">
+            <div class="ft-num"><span class="accent">07</span> / bouncer</div>
+            <h3><span class="hash">#</span>bring-your-client</h3>
+            <p>Prefer a terminal? Generate a server password from any network's menu and connect WeeChat, irssi, HexChat, mIRC, or Textual to <span class="mono">bnc.ircfiber.com:7000</span>. Same connection, same channels — and it still shows up in the web app.</p>
+            <div class="ft-meta"><span class="dot"></span><span>tls</span><span>·</span><span>missed-message replay</span></div>
+          </div>
+
+          <div class="feature">
+            <div class="ft-num"><span class="accent">08</span> / protocol</div>
+            <h3><span class="hash">#</span>ircv3-native</h3>
+            <p>SASL PLAIN, EXTERNAL and SCRAM-SHA-256. server-time, chathistory, batch, echo-message, away-notify, extended-join — negotiated with the network and passed straight through to your own client.</p>
+            <div class="ft-meta"><span class="dot"></span><span>sasl</span><span>·</span><span>chathistory</span></div>
+          </div>
         </div>
       </div>
     </section>
@@ -1421,6 +1512,53 @@
 
     <div class="fiber-rule" aria-hidden="true"><div class="line"></div><div class="pulse"></div><div class="node"></div></div>
 
+    <section class="sec deep" id="bouncer">
+      <div class="container">
+        <div class="bnc">
+          <div class="bnc-copy reveal">
+            <span class="kicker amber">New · Bouncer</span>
+            <h2>Connect with another client.</h2>
+            <p>The web app is one way in — not the only one. Every network you add to IRC Fiber doubles as a personal BNC. Pick <strong>Connect with another client…</strong> from the network's menu, copy the generated server password, and any IRC client on earth attaches to the connection we already keep alive for you.</p>
+            <ul class="bnc-list">
+              <li><span class="tick">✓</span><div><strong>One connection, every client.</strong> Your desktop client, your phone, and the web app all share the same nick, channels, and scrollback — no second login on the network, no ghost nicks.</div></li>
+              <li><span class="tick">✓</span><div><strong>Instant burst.</strong> On attach you get the real 001–005 and a JOIN, topic, and member list for every channel you're in. Your client thinks it just connected.</div></li>
+              <li><span class="tick">✓</span><div><strong>Missed-message replay.</strong> Name the client in the password (<span class="mono">bnc@laptop:…</span>) and we track what it has seen; on reconnect the gap is replayed with IRCv3 <span class="mono">server-time</span> so timestamps stay honest.</div></li>
+              <li><span class="tick">✓</span><div><strong>Revoke in one click.</strong> Regenerate the password from the same dialog. Old passwords stop working immediately and attached clients are disconnected.</div></li>
+            </ul>
+            <div class="bnc-clients" aria-label="Works with">
+              <span class="lbl">works with</span>
+              <span>WeeChat</span><span>irssi</span><span>HexChat</span><span>mIRC</span><span>Textual</span><span>Halloy</span><span>Goguma</span><span>Colloquy</span><span>anything that speaks IRC</span>
+            </div>
+          </div>
+
+          <div class="bnc-term reveal" aria-label="Example: connecting a terminal IRC client to the IRC Fiber bouncer">
+            <div class="term-bar">
+              <span class="d r"></span><span class="d y"></span><span class="d g"></span>
+              <span class="title">weechat — bnc.ircfiber.com:7000</span>
+            </div>
+            <pre class="term-body"><span class="c">// paste from “Connect with another client…”</span>
+<span class="p">/server add</span> fiber bnc.ircfiber.com/7000 -ssl -password=<span class="tok">bnc@laptop:k7Qz…Rw</span>
+<span class="p">/connect</span> fiber
+
+<span class="srv">bnc.ircfiber.com</span> <span class="num">001</span> zodiac :Welcome to the IRC Fiber bouncer, zodiac
+<span class="srv">bnc.ircfiber.com</span> <span class="num">005</span> zodiac CHANTYPES=# NETWORK=Libera.Chat … :are supported by this server
+<span class="me">zodiac</span> joined <span class="chan">#ircfiber</span> <span class="dim">(topic: IRC that remembers everything)</span>
+<span class="me">zodiac</span> joined <span class="chan">#design</span> · <span class="chan">#svelte</span> · <span class="chan">#dlang</span>
+<span class="dim">@time=2026-09-02T14:03:11.412Z</span> <span class="chan">#design</span> &lt;<span class="nick">mara</span>&gt; did you see the new palette?
+<span class="dim">@time=2026-09-02T14:05:40.006Z</span> <span class="chan">#design</span> &lt;<span class="nick">mara</span>&gt; replaying what you missed ↑
+<span class="chan">#design</span> &lt;<span class="me">zodiac</span>&gt; just caught up, looks great<span class="cursor"></span></pre>
+            <div class="term-foot">
+              <span><span class="led"></span>TLS · Let's Encrypt</span>
+              <span>port 7000</span>
+              <span>password <span class="mono">bnc:&lt;token&gt;</span> or <span class="mono">bnc@&lt;client&gt;:&lt;token&gt;</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="fiber-rule" aria-hidden="true"><div class="line"></div><div class="pulse"></div><div class="node"></div></div>
+
     <section class="sec deep" id="pricing">
       <div class="container">
         <div class="sec-head center reveal">
@@ -1458,6 +1596,14 @@
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
                 <span>Export your data</span>
               </div>
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Bouncer for any IRC client</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px; font-size:14px; color:var(--fiber-snow);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--fiber-signal)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>IRCv3 + SASL on every network</span>
+              </div>
             </div>
             <a class="btn btn-primary" href="#cta" style="margin:0 auto;">Create account <span class="arrow">→</span></a>
           </div>
@@ -1486,7 +1632,7 @@
           </details>
           <details class="faq-item">
             <summary><span class="num">03</span>What if I already use a desktop client like WeeChat or HexChat?<span class="marker">+</span></summary>
-            <div class="ans">Keep using it. IRC Fiber's gateway exposes a standard bouncer protocol, so you can point WeeChat, HexChat, irssi, mIRC, or anything else at it and get the same always-on buffer state. The web app is the convenience layer; you're not locked into it.</div>
+            <div class="ans">Keep using it. Open a network's menu in the web app, choose <strong>Connect with another client…</strong>, and you get a server password. Point WeeChat, HexChat, irssi, mIRC, Textual — anything — at <code>bnc.ircfiber.com</code> port <code>7000</code> (TLS) with that password and it attaches to the same connection: same nick, same channels, and everything you type shows up in the web app too. Write the password as <code>bnc@laptop:&lt;token&gt;</code> and we replay whatever that client missed the next time it reconnects. The web app is the convenience layer; you're not locked into it.</div>
           </details>
           <details class="faq-item">
             <summary><span class="num">04</span>Can I add my own private IRC network?<span class="marker">+</span></summary>
@@ -1544,6 +1690,7 @@
             <li><a href="#features">Features</a></li>
             <li><a href="#preview">Preview</a></li>
             <li><a href="#how">How it works</a></li>
+            <li><a href="#bouncer">Bouncer</a></li>
             <li><a href="#faq">FAQ</a></li>
           </ul>
         </div>

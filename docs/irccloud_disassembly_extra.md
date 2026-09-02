@@ -89,7 +89,8 @@ loadOrRenderBacklog:function(){
 ```js
 loadBacklog:function(){this.isFetching()||(this.fetching=!0,this.model.loadBacklog(!0))}
 ```
-- Pacing: `renderFetching` + `setTimeout(model.loadBacklog,200)` via `113845` `renderFetchingDivider` chain; network deferred vs immediate.
+- Pacing: `renderFetching` + `setTimeout(model.loadBacklog,200)` via `113845` `renderFetchingDivider` chain; network deferred vs immediate. Network fetch is `GET backlog {bid, cid, num:150, beforeid:getEarliestEid()}` (`num:150`, corrected 2026-09-02 — not 200).
+- `fetched(e,t,i)`: `!selected → fetchDone()`; `!t → fetchDone(true,true)`; `!atTop → fetchDone(true, atBottom)`; `i || atBottom → fetchDone(true, atBottom)`; else `a=round(divider.position().top); scrollTo(a-31); scrollTo(max(a-152,48),{animate:true, afterAnimate: () => { e2=round(divider.position().top); scrollTo(max(e2-152,48)); fetchDone(true,false) }})`.
 
 ### fetched (a-31, max(a-152,48))
 - **Offset `1035737`** — `var a=Math.round(r.position().top);this.scrollTo(a-31),this.scrollTo(Math.max(a-152,48),{animate:!0,afterAnimate:_.bind(function(){var e=Math.round(r.position().top);this.scrollTo(Math.max(e-152,48)),this.fetchDone(!0,!1)},this)})`
@@ -152,7 +153,7 @@ bufferMessage:function(e){
 - **Offset `1039109` continuation** — `},scrollTo:function(e,t){... this.el.scrollTop=e ... animate ...}`
 ```js
 scrollTo:function(e,t){
-  if(t&&t.animate) this.$el.animate({scrollTop:e}, {duration:200, easing:"swing", complete:t.afterAnimate});
+  if(t&&t.animate) this.$el.animate({scrollTop:e}, {duration:100, queue:false, complete: function(){ t.afterAnimate && t.afterAnimate(); this.onScroll() }}); // duration 100 (corrected 2026-09-02; default "swing" easing)
   else this.el.scrollTop=e;
 }
 ```

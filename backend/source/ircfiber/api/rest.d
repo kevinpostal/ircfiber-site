@@ -114,6 +114,9 @@ final class RESTAPI {
         router.post("/api/networks/:id/disconnect", &disconnectNetwork);
         router.post("/api/networks/:id/reconnect", &reconnectNetwork);
         router.post("/api/networks/:id/buffers/clear", &clearNetworkBuffer);
+        router.get("/api/networks/:id/bouncer", &getBouncer);
+        router.post("/api/networks/:id/bouncer", &generateBouncer);
+        router.delete_("/api/networks/:id/bouncer", &revokeBouncer);
         router.get("/api/me", &getMe);
         router.post("/api/me/pins", &pinChannel);
         router.delete_("/api/me/pins/:network/:channel", &unpinChannel);
@@ -125,6 +128,7 @@ final class RESTAPI {
         router.post("/api/me/inactive-collapsed", &updateInactiveCollapsed);
         router.post("/api/me/network-order", &updateNetworkOrder);
         router.post("/api/me/show-member-prefixes", &updateShowMemberPrefixes);
+        router.post("/api/me/bnc-playback-lines", &updateBncPlaybackLines);
         router.post("/api/me/notification-prefs", &updateNotificationPrefs);
         router.get("/api/ping", &ping);
         router.get("/health", &healthCheck);
@@ -399,6 +403,9 @@ final class RESTAPI {
         networkRepo.deleteById(id);
         if (ownerId != UUID.init)
             redis.del(RedisKeys.userNetworks(ownerId.toString()));
+        // Drop any attached bouncer clients and their replay cursors.
+        redis.del(RedisKeys.bncSeen(id.toString()));
+        if (ownerId != UUID.init) publishBncRevoked(ownerId, id);
 
         // Clear scrollback buffers so a new network with the same name
         // doesn't inherit old server logs / messages.
@@ -409,6 +416,127 @@ final class RESTAPI {
         }
 
         res.writeJsonBody(Json(["status": Json("deleted")]));
+    }
+
+    // ── Bouncer ("Connect with another client…") ─────────────────────
+
+    /// Loads `:id` and checks the calling user owns it. Writes a 404/403
+    /// response and returns false when the caller must bail out.
+    private bool loadOwnedNetwork(HTTPServerRequest req, HTTPServerResponse res, out UUID id, out User user) {
+        requireAuth(req, res);
+        if (res.headerWritten) return false;
+        user = req.context["user"].get!User;
+        id = parseUUID(req.params["id"].idup);
+        const info = networkRepo.findByIdWithUser(id);
+        if (info.config.name.length == 0) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("Network not found")]));
+            return false;
+        }
+        if (info.userId != UUID.init && info.userId != user.id) {
+            res.statusCode = 403;
+            res.writeJsonBody(Json(["error": Json("Not your network")]));
+            return false;
+        }
+        return true;
+    }
+
+    /// Public bouncer endpoint description plus the network's password and
+    /// the caller's playback setting.
+    private Json bouncerJson(string token, UUID userId) {
+        import std.process : environment;
+        import ircfiber.db.preferences : BNC_PLAYBACK_MAX;
+        int playback = 0;
+        try playback = prefsRepo.load(userId).bncPlaybackLines; catch (Exception) {}
+        const host = environment.get("IRCFIBER_BNC_PUBLIC_HOST", "");
+        int port = 7000;
+        try port = environment.get("IRCFIBER_BNC_PUBLIC_PORT", "7000").to!int;
+        catch (Exception) {}
+        const tlsFlag = environment.get("IRCFIBER_BNC_PUBLIC_TLS", "1") == "1";
+        return Json([
+            "enabled": Json(host.length > 0),
+            "host": Json(host),
+            "port": Json(port),
+            "tls": Json(tlsFlag),
+            "password": token.length ? Json("bnc:" ~ token) : Json(null),
+            "playbackLines": Json(playback),
+            "playbackMax": Json(BNC_PLAYBACK_MAX)
+        ]);
+    }
+
+    /// POST /api/me/bnc-playback-lines {value:int} — lines per buffer the
+    /// bouncer replays on attach for clients without CHATHISTORY (0 = none).
+    private void updateBncPlaybackLines(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.db.preferences : clampBncPlaybackLines;
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto bodyJson = req.json;
+        auto v = "value" in bodyJson;
+        if (v is null || v.type != Json.Type.int_) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("value must be an integer")]));
+            return;
+        }
+        const value = clampBncPlaybackLines(cast(int) v.get!long);
+        auto prefs = prefsRepo.load(user.id);
+        prefs.bncPlaybackLines = value;
+        auto newVersion = prefsRepo.save(user.id, prefs);
+        broadcastPrefUpdate(user.id.toString(), "bncPlaybackLines", Json(value), newVersion);
+        res.writeJsonBody(Json(["value": Json(value)]));
+    }
+
+    /// Tells attached bouncer clients of this network to drop.
+    private void publishBncRevoked(UUID userId, UUID networkId) {
+        import ircfiber.bnc.control : publishBncRevoked;
+        publishBncRevoked(redis, userId.toString(), networkId.toString());
+    }
+
+    /// 48 lowercase hex chars from the kernel CSPRNG.
+    private static string generateBncToken() {
+        import std.stdio : File;
+        import std.digest : toHexString, LetterCase;
+        auto buf = new ubyte[24];
+        auto got = File("/dev/urandom", "rb").rawRead(buf);
+        if (got.length != buf.length) throw new Exception("short read from /dev/urandom");
+        return toHexString!(LetterCase.lower)(buf).idup;
+    }
+
+    /// GET /api/networks/:id/bouncer
+    private void getBouncer(HTTPServerRequest req, HTTPServerResponse res) {
+        UUID id; User user;
+        if (!loadOwnedNetwork(req, res, id, user)) return;
+        res.writeJsonBody(bouncerJson(networkRepo.getBncToken(id), user.id));
+    }
+
+    /// POST /api/networks/:id/bouncer — (re)generate. Clients attached with
+    /// the previous password are disconnected (IRCCloud semantics).
+    private void generateBouncer(HTTPServerRequest req, HTTPServerResponse res) {
+        UUID id; User user;
+        if (!loadOwnedNetwork(req, res, id, user)) return;
+        string token;
+        try token = generateBncToken();
+        catch (Exception e) {
+            logError("bnc token generation failed: %s", e.msg);
+            res.statusCode = 500;
+            res.writeJsonBody(Json(["error": Json("token generation failed")]));
+            return;
+        }
+        networkRepo.setBncToken(id, token);
+        redis.del(RedisKeys.bncSeen(id.toString()));
+        publishBncRevoked(user.id, id);
+        res.writeJsonBody(bouncerJson(token, user.id));
+    }
+
+    /// DELETE /api/networks/:id/bouncer
+    private void revokeBouncer(HTTPServerRequest req, HTTPServerResponse res) {
+        UUID id; User user;
+        if (!loadOwnedNetwork(req, res, id, user)) return;
+        networkRepo.setBncToken(id, "");
+        redis.del(RedisKeys.bncSeen(id.toString()));
+        publishBncRevoked(user.id, id);
+        res.statusCode = 204;
+        res.writeVoidBody();
     }
 
     private void disconnectNetwork(HTTPServerRequest req, HTTPServerResponse res) {
@@ -1162,6 +1290,7 @@ final class RESTAPI {
             "networkOrder": serializeToJson(prefs.networkOrder),
             "bufferPrefs": bp,
             "showMemberPrefixes": Json(prefs.showMemberPrefixes),
+            "bncPlaybackLines": Json(prefs.bncPlaybackLines),
             "desktopNotifications": Json(prefs.desktopNotifications),
             "notificationSound": Json(prefs.notificationSound),
             "autoDismissNotifs": Json(prefs.autoDismissNotifs),
@@ -1354,9 +1483,14 @@ final class RESTAPI {
             key = bodyJson["network"].get!string ~ ":" ~ bodyJson["eid"].get!string;
         } else if (auto m = "msgid" in bodyJson) {
             key = bodyJson["network"].get!string ~ ":msgid:" ~ bodyJson["msgid"].get!string;
+        } else if (auto i = "id" in bodyJson) {
+            // Synthetic/legacy attempts keyed by the event's random id — the
+            // same `<network>:id:<id>` shape `getServerLogCollapsedKey`
+            // uses client-side, so the pref round-trips across devices.
+            key = bodyJson["network"].get!string ~ ":id:" ~ bodyJson["id"].get!string;
         } else {
             res.statusCode = 400;
-            res.writeJsonBody(Json(["error": Json("eid or msgid required")]));
+            res.writeJsonBody(Json(["error": Json("eid, msgid or id required")]));
             return;
         }
         const collapsed = bodyJson["collapsed"].get!bool;

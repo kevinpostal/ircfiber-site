@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+# InspIRCd 4 oper classes/types/accounts — {{ ircd_server_name }}
+# Reference: https://docs.inspircd.org/4/configuration/#oper
+
+<class name="Shutdown"
+       commands="DIE RESTART REHASH LOADMODULE UNLOADMODULE RELOADMODULE GLOADMODULE GUNLOADMODULE GRELOADMODULE"
+       privs="users/auspex channels/auspex servers/auspex users/mass-message channels/high-join-limit users/flood/no-throttle users/flood/increased-buffers"
+       usermodes="*"
+       chanmodes="*"
+       snomasks="*">
+<class name="SACommands" commands="SAJOIN SAPART SANICK SAQUIT SATOPIC SAKICK SAMODE OJOIN">
+<class name="ServerLink" commands="CONNECT SQUIT RCONNECT RSQUIT MKPASSWD ALLTIME SWHOIS JUMPSERVER LOCKSERV UNLOCKSERV" usermodes="*" chanmodes="*" snomasks="*" privs="servers/auspex">
+<class name="BanControl" commands="KILL GLINE KLINE ZLINE QLINE ELINE TLINE RLINE CHECK NICKLOCK NICKUNLOCK SHUN CLONES CBAN CLOSE CLEARCHAN" usermodes="*" chanmodes="*">
+<class name="OperChat" commands="WALLOPS GLOBOPS" usermodes="*" chanmodes="*" privs="users/mass-message">
+<class name="HostCloak" commands="SETHOST SETIDENT SETIDLE CHGNAME CHGHOST CHGIDENT" usermodes="*" chanmodes="*" privs="users/auspex">
+
+<type name="NetAdmin"
+      classes="SACommands OperChat BanControl HostCloak Shutdown ServerLink"
+      vhost="{{ ircd_oper_vhost }}&netsuffix;"
+      modes="+s +cCqQ">
+
+# /OPER {{ ircd_oper_name }} <vault_ircd_oper_password>
+# Password is stored as InspIRCd hmac-sha256 (base64(salt)$base64(hmac)),
+# computed by the role from vault_ircd_oper_password.
+<oper name="{{ ircd_oper_name }}"
+      hash="hmac-sha256"
+      password="{{ ircd_oper_password_hash }}"
+      host="*@*"
+      sslonly="{{ 'yes' if ircd_oper_sslonly else 'no' }}"
+      type="NetAdmin">

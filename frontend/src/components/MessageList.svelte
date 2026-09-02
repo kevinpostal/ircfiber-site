@@ -1,20 +1,18 @@
 <script lang="ts">
-  import { untrack, flushSync, tick } from 'svelte';
-  import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer } from '../stores/ircStore.svelte';
-  import { getClearedAt, setLastSeen, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearFocusSeen, clearBottomSeen, setBottomSeen } from '../stores/preferences.svelte';
+  import { untrack, flushSync, tick, onMount, onDestroy } from 'svelte';
+  import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused } from '../stores/ircStore.svelte';
+  import { getClearedAt, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
   import ServerLogTimeline from './ServerLogTimeline.svelte';
 
   import SeenDivider from './SeenDivider.svelte';
-  import LoadMore from './LoadMore.svelte';
   import ChatterBar from './ChatterBar.svelte';
   import ScrollClock from './ScrollClock.svelte';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
   import { dividerPos as sharedDividerPos, animateScrollTo, cancelScrollAnimation } from '../lib/scroll';
-  import { captureScrollAnchor, takeScrollAnchor, consumeScrollAnchor } from '../lib/scrollAnchor';
   import type { IRCMessage, Member, Network } from '../types';
 
   interface Props {
@@ -25,33 +23,29 @@
 
   let container = $state(null) as HTMLDivElement | null;
 
-  // ── IRCCloud scroll state (matches BufferScrollView) ──
-  // Cached: only re-read from DOM on real (non-programmatic) scroll events.
-  // This prevents the stale-read race where we snap to bottom because the
-  // browser hasn't fired the scroll event yet when a new message arrives.
+  // ── IRCCloud BufferScrollView state (kiyR) ──
+  // `scrolledToBottom` is cached from the last scroll event so a content
+  // change can decide to pin from the pre-change position; the DOM is only
+  // re-read inside doScroll.
   let cachedAtBottom = $state(true);
-  let wasRecentlyAtBottom = $state(true);
+  let wasRecentlyAtBottom = true;
   let recentlyScrolledTimeout: ReturnType<typeof setTimeout> | null = null;
-  // Pending unconditional snap for a freshly-opened buffer. Set when the
-  // bufferKey changes but the container is not yet bound (first mount
-  // after a refresh) so the normal `if (!container) return` early-exit
-  // doesn't swallow the initial bottom snap. Cleared on the next run
-  // once the container exists and we have snapped.
-  let pendingInitialSnap = false;
-  let initialSnapDone = true;
-  // rAF coalescing for scroll auxiliary state (chatter counts, clock,
-  // sticky avatar) — mirrors IRCCloud's batchRendering flag that ignores
-  // scroll events during batch flush. Only the heavy getBoundingClientRect
-  // + elementsFromPoint work is deferred; cachedAtBottom/cachedAtTop
-  // tracking stays synchronous so infiniscroll doesn't miss the top.
-  let scrollRafPending = false;
+  let lastScrollTop = 0;
+  let lastScrollHeight = 0;
+  let resizing = false;
+  let resizingTimeout: ReturnType<typeof setTimeout> | null = null;
+  let batchRendering = false;
 
-  let aboveUnseenCount = $state(0);
-  let belowUnseenCount = $state(0);
-  let aboveUnseenTimestamp = $state<number | null>(null);
-  let belowUnseenTimestamp = $state<number | null>(null);
-  let aboveUnseenHighlights = $state(0);
-  let belowUnseenHighlights = $state(0);
+  // IRCCloud upper/lower chatter (9lob / wNhE). `true` count = more than
+  // 100 messages ("<time> of unread messages").
+  let aboveVisible = $state(false);
+  let aboveCount = $state<number | true>(0);
+  let aboveTime = $state<number | null>(null);
+  let aboveMentions = $state(0);
+  let belowVisible = $state(false);
+  let belowCount = $state<number | true>(0);
+  let belowTime = $state<number | null>(null);
+  let belowMentions = $state(0);
 
   let stickyNick = $state('');
   let stickyColor = $state('');
@@ -62,11 +56,6 @@
   // here so the `top` updates on every scroll event feel just as snappy
   // and aren't queued behind a Svelte microtask.
   let stickyAvatarEl = $state<HTMLDivElement | null>(null);
-  let batchRendering = false;
-  // IRCCloud-style: capture pinBottom BEFORE each reactive flush runs.
-  // Without this, cachedAtBottom can be stale by the time the $effect
-  // fires, causing an unnecessary scrollToBottom.
-  let pinBottomBeforeFlush = false;
 
   // IRCCloud ScrollClockView: timestamp of the message at the top of the
   // scroll; null hides the clock (at bottom / no upper message).
@@ -273,51 +262,32 @@
   // ── DOM windowing (IRCCloud BufferScrollView/BufferLogView) ──
   // IRCCloud never renders the whole buffer:
   //   - buffer open renders the last batchSize=200 messages
-  //     (BufferLogView.render → messages.last(batchSize))
   //   - scroll-to-top reveals the previous 200 from memory instantly
   //     (loadOrRenderBacklog → messages.filterBeforeEid(first, batchSize));
   //     the network is only hit when memory is fully rendered
   //   - while pinned at the bottom, the DOM is trimmed back to 200 rows
-  //     once more than 350 are rendered (checkTrim, trimDetectThreshold=350,
-  //     trimThreshold=200)
-  // The bounded DOM is a big part of why IRCCloud scrolling stays smooth.
+  //     once more than 350 trimmable rows are rendered (checkTrim,
+  //     trimDetectThreshold=350, trimThreshold=200)
   const BATCH_SIZE = 200;
   const TRIM_DETECT_THRESHOLD = 350;
   const TRIM_THRESHOLD = 200;
-  // IRCCloud parity: stick is strict 1px, no 70px band. Keep constant for
-  // CSS scroll-snap but don't use for logic — logic uses 1px like IRCCloud.
-  const STICK_BAND_PX = 1;
   let renderStart = $state(0);
   // IRCCloud BufferLogView.lastSeenEid — track the eid for which the
   // "New messages" divider was last rendered, per buffer, to avoid
-  // duplicate dividers for the same eid on re-render (postProcess
-  // lastSeenEid check). Plain object, not $state, to allow mutation
-  // during render without triggering Svelte reactivity.
+  // duplicate dividers for the same eid on re-render. Plain object, not
+  // $state, to allow mutation during render without triggering reactivity.
   let lastSeenEidMap: Record<string, string | number> = {};
 
   // IRCCloud BufferLogView.bufferMessage/checkFlush: while the user is
   // scrolled up reading, incoming messages are buffered and the DOM is NOT
   // touched — they flush when the user returns to the bottom. We freeze the
-  // window's end at the last rendered message when leaving the bottom, so
-  // realtime traffic causes zero layout work during a reading session.
+  // window's end at the last rendered message when leaving the bottom.
   let renderEndKey = $state('');
 
   function itemKeyOf(msg: IRCMessage): string {
     if (msg.label) return `l:${msg.label}`;
     if (msg.eid != null) return `e:${msg.eid}`;
     return msg.msgid || `t:${msg.t}`;
-  }
-
-  // Backstop against duplicate keys reaching the {#each}. The store is
-  // supposed to dedup by eid/msgid before messages land here, but if a
-  // message slips through with no eid AND no msgid AND the same `t` as
-  // another message, the bare `t:${t}` key would collide. The tiebreaker
-  // suffix is the message's absolute index in processedMessages so the key
-  // stays stable when the render window shifts (trim/reveal), letting Svelte
-  // reuse the DOM instead of recreating rows and flashing ANSI art.
-  function stableKey(msg: IRCMessage, absoluteIndex: number): string {
-    const base = itemKeyOf(msg);
-    return `${base}#${absoluteIndex}`;
   }
 
   const processedIndexByKey = $derived.by(() => {
@@ -328,223 +298,324 @@
     });
     return m;
   });
-  // Helper: are we reading history (far from bottom, not latched)? If so, never snap to bottom.
-  // IRCCloud: reading iff not pinned and not at exact bottom (1px). No 70/200 invention.
-  function isReadingHistory(): boolean {
-    if (pendingInitialSnap) return false;
-    if (!container) return false;
-    const dist = container.scrollHeight - container.scrollTop - container.clientHeight;
-    return !cachedAtBottom && dist > 1;
+
+  // ── Backlog fetch state (IRCCloud loadBacklog / fetched / fetchFailed) ──
+  let fetching = false;
+  // Last ChatArea.handleLoadMore result: true until a fetch returns false.
+  let hasMoreHistory = $state(true);
+  let showFetchRow = $state(false);
+  let showFetchFailedRow = $state(false);
+  let showLoadMoreRow = $state(false);
+  let windowRevealInProgress = false;
+  // Wall-clock time bottomSeen was locked (IRCCloud bottomSeen row
+  // `data-locked-time`) — the lower chatter shows this until it advances.
+  let bottomSeenLockedAt = 0;
+
+  // ── IRCCloud scroll predicates ──
+  function isScrolledToBottom(): boolean {
+    if (!container) return true;
+    return container.scrollHeight - (container.offsetHeight + Math.ceil(container.scrollTop)) <= 1;
   }
-  // scrollHeight exceeds ~12k px (roughly 200 normal rows).
-  function maybeTrim(): void {
-    if (isReadingHistory()) return;
-    if (container) {
-      const isDomAtBottom = container.scrollHeight <= container.clientHeight + 1 || Math.abs(container.scrollHeight - container.scrollTop - container.clientHeight) <= 1;
-      if (!cachedAtBottom && !isDomAtBottom) return;
-    } else if (!cachedAtBottom) return;
-    const len = processedMessages.length;
-    const start = untrack(() => renderStart);
-    const countOver = len - start > TRIM_DETECT_THRESHOLD;
-    const pixelOver = !!container && container.scrollHeight > Math.max(20000, container.clientHeight * 30);
-    if (countOver || pixelOver) {
-      // Keep 200 normally, but if pixel-heavy keep fewer to bound paint.
-      const keep = pixelOver && !countOver ? 150 : TRIM_THRESHOLD;
-      const newStart = Math.max(0, len - keep);
-      if (newStart !== start) {
-        renderStart = newStart;
-        // If we trimmed while pinned at bottom, keep the viewport pinned.
-        // Without this, scrollTop stays at old bottom (too large) and gets
-        // clamped, but the 200ms resnap poll sees scrollTop < prevScrollTop
-        // and clears the bottom stick, leaving a visible "snap up".
-        if (cachedAtBottom && container) {
-          if (isReadingHistory()) return;
-          // Defer to next tick + rAF so DOM has updated scrollHeight
-          // and layout has flushed, then force to true bottom and
-          // schedule the resnap poll to catch late image/decode growth.
-          tick().then(() => {
-            if (container && cachedAtBottom) {
-              container.scrollTop = container.scrollHeight;
-              prevScrollTop = container.scrollTop;
-              prevScrollHeight = container.scrollHeight;
-              requestAnimationFrame(() => {
-                if (container && cachedAtBottom) {
-                  container.scrollTop = container.scrollHeight;
-                  prevScrollTop = container.scrollTop;
-                  prevScrollHeight = container.scrollHeight;
-                  schedulePinnedResnap();
-                }
-              });
-            }
-          });
-        }
-      }
+  function isScrolledToTop(): boolean {
+    return !!container && container.scrollTop === 0;
+  }
+  function setScrolledToBottom(v: boolean): void {
+    if (cachedAtBottom !== v) cachedAtBottom = v;
+    if (v) {
+      wasRecentlyAtBottom = true;
+      if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; }
+    } else if (!recentlyScrolledTimeout) {
+      recentlyScrolledTimeout = setTimeout(() => {
+        wasRecentlyAtBottom = false;
+        recentlyScrolledTimeout = null;
+      }, 100);
     }
   }
+  // Only for window resize / composer autogrow (IRCCloud checkRecent:true).
+  function shouldPinBottom(): boolean {
+    return isScrolledToBottom() || wasRecentlyAtBottom;
+  }
 
-  // IRCCloud loadOrRenderBacklog (in-memory path): reveal the previous
-  // batch instantly with the backlogDivider + divider scroll. IRCCloud
-  // renders AND scrolls synchronously inside the same scroll event —
-  // crucial, because if the user is left parked at scrollTop 0 the browser
-  // fires no further scroll events on wheel-up and infiniscroll wedges
-  // until they scroll down and back up. Returns false when everything in
-  // memory is already rendered (caller falls through to the network).
+  // IRCCloud scrollTo(y, {animate, silent}): animated → jQuery animate
+  // (duration 100, swing) with onScroll() on complete; else direct set +
+  // synchronous onScroll(false) unless silent.
+  function scrollTo(y: number, opts: { animate?: boolean; silent?: boolean; afterAnimate?: () => void } = {}): void {
+    if (!container) return;
+    if (opts.animate) {
+      animateScrollTo(container, y, 100, () => {
+        opts.afterAnimate?.();
+        onScroll(false);
+      }, setResizing);
+      return;
+    }
+    container.scrollTop = y;
+    if (opts.silent) {
+      // Silent: no doScroll, but record the position so the native scroll
+      // event this write produces is deduped and the next user scroll is
+      // still detected as a change.
+      lastScrollTop = container.scrollTop;
+      lastScrollHeight = container.scrollHeight;
+      return;
+    }
+    onScroll(false);
+  }
+
+  export function scrollToBottom(opts: { silent?: boolean } = {}): void {
+    if (!container) return;
+    setScrolledToBottom(true);
+    const t = Math.ceil(container.scrollTop);
+    const s = container.scrollHeight - container.offsetHeight + 1;
+    if (s - t > 1) scrollTo(s, { silent: opts.silent });
+  }
+
+  export function scrollToTop(): void {
+    scrollTo(0);
+  }
+
+  // IRCCloud onScroll: ignore while resizing; dedupe no-op events.
+  function onScroll(userScrolled = false): void {
+    if (!container || resizing || batchRendering) return;
+    const { scrollTop, scrollHeight } = container;
+    if (scrollTop === lastScrollTop && scrollHeight === lastScrollHeight) return;
+    lastScrollTop = scrollTop;
+    lastScrollHeight = scrollHeight;
+    doScroll(userScrolled);
+  }
+
+  // IRCCloud setResizing: suppress scroll handling for 100 ms after the
+  // last resize/animation frame, then re-evaluate once.
+  function setResizing(): void {
+    resizing = true;
+    if (resizingTimeout) clearTimeout(resizingTimeout);
+    resizingTimeout = setTimeout(() => {
+      resizingTimeout = null;
+      resizing = false;
+      if (container) {
+        lastScrollTop = container.scrollTop;
+        lastScrollHeight = container.scrollHeight;
+      }
+      doScroll(false);
+    }, 100);
+  }
+
+  function lockBottomSeen(): void {
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (!networkId || !bufferName || bufferName === '_server') return;
+    if (getBottomSeen(networkId, bufferName) !== null) return;
+    const list = ircState.messages[`${networkId}:${bufferName}`] ?? [];
+    const last = list[list.length - 1];
+    if (!last?.t) return;
+    setBottomSeen(networkId, bufferName, last.t);
+    const buf = getActiveBufferObj();
+    if (buf) buf.bottomSeen = last.t;
+    bottomSeenLockedAt = Date.now();
+  }
+
+  function unlockBottomSeen(): boolean {
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (!networkId || !bufferName) return false;
+    const had = getBottomSeen(networkId, bufferName) !== null;
+    if (had) {
+      clearBottomSeen(networkId, bufferName);
+      const buf = getActiveBufferObj();
+      if (buf) buf.bottomSeen = null;
+    }
+    return had;
+  }
+
+  // IRCCloud buffer view doScroll: runs after every (deduped) scroll event.
+  function doScroll(userScrolled: boolean): void {
+    if (!container) return;
+    let atBottom = isScrolledToBottom();
+    if (atBottom) {
+      // IRCCloud flushBuffer → onChange(true): the newly rendered rows grow
+      // the content, so re-pin to the true bottom.
+      if (flushLiveBuffer()) scrollToBottom({ silent: true });
+      // bottomSeen existed → the divider is being dismissed by this scroll;
+      // IRCCloud reports atBottom=false to the read trigger for this pass.
+      if (unlockBottomSeen()) atBottom = false;
+    } else {
+      lockBottomSeen();
+      // IRCCloud bufferMessage: while scrolled up, incoming messages are
+      // buffered instead of rendered — freeze the window's end here.
+      if (untrack(() => renderEndKey) === '') {
+        const all = processedMessages;
+        if (all.length) renderEndKey = itemKeyOf(all[all.length - 1]);
+      }
+    }
+    setScrolledToBottom(isScrolledToBottom());
+    onScrollChange(atBottom, userScrolled);
+    checkInfiniscroll();
+  }
+
+  // IRCCloud BufferScrollView.onChange(e): after any content change decide
+  // whether to pin; bottomSeen (scrolled-up divider) always wins.
+  function onChange(e?: boolean): void {
+    if (!container || batchRendering) return;
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (networkId && bufferName && getBottomSeen(networkId, bufferName) !== null) e = false;
+    else if (e === undefined) e = cachedAtBottom;
+    if (e) scrollToBottom({ silent: true });
+    onScrollChange(!!e, false);
+    checkInfiniscroll();
+  }
+
+  // ── Infiniscroll (IRCCloud checkInfiniscroll / loadOrRenderBacklog) ──
+  function isFullyRendered(): boolean {
+    return untrack(() => renderStart) === 0 && !hasMoreHistory;
+  }
+
+  function checkInfiniscroll(): void {
+    if (isServerBuffer) return;
+    if (isScrolledToBottom() || isFullyRendered() || !isScrolledToTop()) return;
+    loadOrRenderBacklog();
+  }
+
+  function loadOrRenderBacklog(): void {
+    if (untrack(() => renderStart) > 0) revealBacklogFromMemory();
+    else loadBacklog();
+  }
+
+  // IRCCloud loadBacklog: render the fetch row, then hit the model after
+  // 200 ms so a scroll-wheel burst at the top only fires one request.
+  function loadBacklog(): void {
+    if (fetching || !onLoadMore || !hasHistoryLoaded) return;
+    fetching = true;
+    showFetchRow = true;
+    showLoadMoreRow = false;
+    showFetchFailedRow = false;
+    const key = bufferKey;
+    setTimeout(async () => {
+      if (key !== bufferKey) { fetching = false; showFetchRow = false; return; }
+      const atTop = isScrolledToTop();
+      const atBottom = isScrolledToBottom();
+      let ok: boolean;
+      try {
+        ok = await onLoadMore();
+      } catch {
+        fetchFailed();
+        return;
+      }
+      if (key !== bufferKey) { fetching = false; showFetchRow = false; return; }
+      hasMoreHistory = ok;
+      showFetchRow = false;
+      await tick();
+      fetched(atTop, atBottom);
+    }, 200);
+  }
+
+  // IRCCloud loadOrRenderBacklog in-memory path: reveal the previous batch
+  // synchronously inside the scroll event (parking the user at scrollTop 0
+  // would wedge infiniscroll: the browser fires no further scroll events).
   function revealBacklogFromMemory(): boolean {
     const start = untrack(() => renderStart);
     if (start <= 0 || !container) return false;
-
-    // IRCCloud checkInfiniscroll: isScrolledToTop() is scrollTop===0 exact in spec,
-    // but browsers round sub-pixel scrollTop (0.5-1px) and momentum can hover
-    // at 1px. Tolerate <=1 so history actually reveals — otherwise user
-    // scrolls up and sees nothing while e2e (which sets scrollTop=0 exactly)
-    // passes. Production InfiniteLoader fires at 200px rootMargin but
-    // reveal still gates on top, so exact 0 would wedge at 1px.
-    const atTop = container.scrollTop <= 1;
-    if (!atTop) return false;
-    const scrollBottom = container.clientHeight + Math.ceil(container.scrollTop);
-    const pinBottom = container.scrollHeight - scrollBottom <= 1;
-
+    const atTop = isScrolledToTop();
+    const atBottom = isScrolledToBottom();
     const boundary = processedMessages[start];
     if (boundary && ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) {
       setBacklogDivider(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, itemKeyOf(boundary));
     }
-    const oldH = container.scrollHeight;
-    const oldTop = container.scrollTop;
-    captureScrollAnchor(container);
-    const calc = Math.max(0, start - BATCH_SIZE);
     windowRevealInProgress = true;
-    renderStart = calc;
-    // Consume the mark so the $effect doesn't run the settle a second time.
-    handledDividerMark = untrack(() => backlogDividerMark);
-
-    // Render synchronously, then settle — no rAF gap for queued wheel
-    // events to fire a second reveal from scrollTop 0.
+    renderStart = Math.max(0, start - BATCH_SIZE);
     flushSync();
     windowRevealInProgress = false;
-    if (!pinBottom) {
-      // IRCCloud fetched() half-way scroll: divider at 152px from top (min 48), not exact anchor.
-      // This makes the user feel constantly scrolling up – each wheel-up reveals a new batch
-      // and the scrollbar stays in the middle, not wedged at 0. Matches
-      // common-5650bddb.js: var a=Math.round(r.position().top);this.scrollTo(a-31),this.scrollTo(Math.max(a-152,48),{animate:!0})
-      const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
-      if (divider) {
-        const a = Math.round(dividerPos(divider));
-        // First, jump to a-31 (like IRCCloud's immediate scrollTo), then animate to max(a-152,48)
-        container.scrollTop = a - 31;
-        const target = Math.max(a - 152, 48);
-        animateScrollTo(container, target, 100);
-      } else {
-        const delta = container.scrollHeight - oldH;
-        if (delta !== 0) container.scrollTop = oldTop + delta;
-      }
-      prevScrollTop = container.scrollTop;
-      prevScrollHeight = container.scrollHeight;
-      cachedAtTop = container.scrollTop <= 1;
-      cachedAtBottom = false;
-      wasRecentlyAtBottom = false;
-    }
+    fetched(atTop, atBottom);
     return true;
   }
 
-  let InfiniteLoader: any = $state(null);
-  let LoaderStateClass: any = $state(null);
-  let loaderState: any = $state(null);
-  // Dynamically import svelte-infinite only in non-test (browser) to avoid vitest Svelte 3 compat issues
-  import { onMount } from 'svelte';
-  onMount(async () => {
-    if (import.meta.env.MODE !== 'test') {
-      const mod = await import('svelte-infinite');
-      InfiniteLoader = mod.InfiniteLoader;
-      LoaderStateClass = mod.LoaderState;
-      loaderState = new LoaderStateClass();
-    }
-  });
-
-  const infiniteOptions = $derived({
-    root: container,
-    rootMargin: "200px 0px 0px 0px"
-  });
-
-  $effect(() => {
-    // Reset loader when switching buffers - ensures top sentinel re-arms
-    void bufferKey;
-    loaderState?.reset();
-  });
-
-  $effect(() => {
-    // If history just loaded (hasHistoryLoaded true) and loader was in COMPLETE from earlier empty check, reset to READY
-    // This fixes the case where InfiniteLoader triggered with len 0 before history arrived (existing.length===0 -> complete)
-    // and then history arrived via App's loadHistory (150), but loader stayed COMPLETE and wouldn't trigger for top scroll.
-    void hasHistoryLoaded;
-    if (hasHistoryLoaded && loaderState?.status === 'COMPLETE') {
-      loaderState.reset();
-    }
-  });
-
-  let infiniteLoading = $state(false);
-  async function infiniteHandler() {
-    if (infiniteLoading) {
-      return;
-    }
-    infiniteLoading = true;
-    try {
-      // In-memory batches first (instant, no spinner) — reveal ALL
-      // remaining in-memory batches while the user stays at the top, then
-      // fall through to the network. (A single reveal consumed the whole
-      // trigger and returned, so a trimmed window — e.g. renderStart=50
-      // from maybeTrim during a flood — was revealed and then loading
-      // stopped because the sentinel never re-fires at scrollTop=0.)
-      let revealGuard = 0;
-      while (container && container.scrollTop <= 1) {
-        if (!revealBacklogFromMemory()) break;
-        revealGuard++;
-        if (revealGuard >= 20) break;
-      }
-      // IRCCloud isFirstMessageRendered guard: only hit network when all memory rendered
-      const isFirstMessageRendered = untrack(() => renderStart) === 0;
-      if (!isFirstMessageRendered) {
-        loaderState?.loaded();
-        return;
-      }
-      if (!onLoadMore) {
-        loaderState?.complete();
-        return;
-      }
-      // Don't trigger network load while initial history is still loading
-      if (!hasHistoryLoaded) {
-        loaderState?.loaded();
-        return;
-      }
-      let batches = 0;
-      let completed = false;
-      const MAX_BATCHES_PER_TRIGGER = 3;
-      while (batches < MAX_BATCHES_PER_TRIGGER) {
-        const hasMore = await onLoadMore();
-        if (!hasMore) {
-          loaderState?.complete();
-          completed = true;
-          break;
-        }
-        loaderState?.loaded();
-        batches++;
-        if (!container || container.scrollTop > 1) break;
-        if (batches < MAX_BATCHES_PER_TRIGGER) {
-          await new Promise((r) => setTimeout(r, 200));
-        }
-      }
-      if (!completed && container && container.scrollTop <= 1 && !isServerBuffer) {
-        setTimeout(() => {
-          if (container && container.scrollTop <= 1 && !infiniteLoading && !isServerBuffer) {
-            void infiniteHandler();
-          }
-        }, 500);
-      }
-    } catch (e) {
-      loaderState?.error();
-    } finally {
-      infiniteLoading = false;
-    }
+  // IRCCloud fetched(e, t, i): place the viewport after a prepend.
+  //   not at top before → pin only if it was at bottom (browser anchoring
+  //   keeps the reading position otherwise); at bottom → pin; at top →
+  //   jump to divider-31 then animate to max(divider-152, 48) and settle.
+  function fetched(atTop: boolean, atBottom: boolean): void {
+    showLoadMoreRow = !isFullyRendered();
+    if (!container) { fetchDone(false); return; }
+    const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
+    if (!atTop) { fetchDone(atBottom); return; }
+    if (atBottom) { fetchDone(true); return; }
+    if (!divider) { fetchDone(false); return; }
+    const a = Math.round(dividerPos(divider));
+    container.scrollTop = a - 31;
+    lastScrollTop = container.scrollTop;
+    lastScrollHeight = container.scrollHeight;
+    animateScrollTo(container, Math.max(a - 152, 48), 100, () => {
+      if (!container) return;
+      const e = Math.round(dividerPos(divider));
+      container.scrollTop = Math.max(e - 152, 48);
+      lastScrollTop = container.scrollTop;
+      lastScrollHeight = container.scrollHeight;
+      fetchDone(false);
+    }, setResizing);
   }
+
+  function fetchDone(pin: boolean): void {
+    fetching = false;
+    onChange(pin);
+  }
+
+  function fetchFailed(): void {
+    fetching = false;
+    showFetchRow = false;
+    showLoadMoreRow = true;
+    showFetchFailedRow = true;
+  }
+
+  // IRCCloud clickLoadMore.
+  function clickLoadMore(): void {
+    if (!container) return;
+    container.scrollTop = 0;
+    lastScrollTop = 0;
+    lastScrollHeight = container.scrollHeight;
+    setScrolledToBottom(false);
+    loadOrRenderBacklog();
+  }
+
+  // IRCCloud checkTrim(force): only important/self rows count; above 350
+  // of them (while at bottom, or forced) trim so the last 200 remain,
+  // never cutting above the row currently at the top of the viewport.
+  function checkTrim(force: boolean): void {
+    const net = activeNetwork;
+    if (!net) return;
+    const all = processedMessages;
+    const start = untrack(() => renderStart);
+    const trimmable: number[] = [];
+    for (let i = start; i < all.length; i++) {
+      const m = all[i];
+      if (isImportantMessage(m, net) || isSelfMessage(m, net)) trimmable.push(i);
+    }
+    if (trimmable.length <= TRIM_DETECT_THRESHOLD) return;
+    if (!force && !cachedAtBottom) return;
+    let target = trimmable[trimmable.length - TRIM_THRESHOLD];
+    if (container) {
+      const topRow = probeRow(container.getBoundingClientRect(), 'top');
+      const topIdx = topRow ? (processedIndexByKey.get(rowKeyOf(topRow)) ?? -1) : -1;
+      if (topIdx >= 0 && topIdx < target) target = topIdx;
+    }
+    if (target > start) renderStart = target;
+  }
+
+  // IRCCloud flushBuffer at bottom: render everything buffered while the
+  // user was scrolled up. More than 350 buffered → only the last 200
+  // render (messageBufferTrim).
+  function flushLiveBuffer(): boolean {
+    const frozen = untrack(() => renderEndKey);
+    if (!frozen) return false;
+    const all = processedMessages;
+    let endIdx = -1;
+    for (let i = all.length - 1; i >= 0; i--) {
+      if (itemKeyOf(all[i]) === frozen) { endIdx = i; break; }
+    }
+    const buffered = endIdx >= 0 ? all.length - endIdx - 1 : 0;
+    batchRendering = true;
+    renderEndKey = '';
+    if (buffered > TRIM_DETECT_THRESHOLD) renderStart = Math.max(0, all.length - TRIM_THRESHOLD);
+    else checkTrim(false);
+    try { flushSync(); } catch {}
+    batchRendering = false;
+    return buffered > 0;
+  }
+
   // Pre-compute date separators over the rendered window
   const messagesWithDates = $derived.by(() => {
     const all = processedMessages;
@@ -570,6 +641,7 @@
     // several messages that share the boundary's `t`, so place the
     // divider on the first match only.
     let dividerPlaced = false;
+    const keyCounts = new Map<string, number>();
     return msgs.map((msg, i) => {
       const msgDate = getMsgDate(msg);
       const prevMsg = i > 0 ? msgs[i - 1] : null;
@@ -579,11 +651,15 @@
       const showBacklogDivider = !dividerPlaced && dividerMark !== '' && i > 0 &&
         itemKeyOf(msg) === dividerMark;
       if (showBacklogDivider) dividerPlaced = true;
-      // Use the absolute index in processedMessages as the tiebreaker so the
-      // key stays stable when the render window shifts (trim/reveal). Without
-      // this, every visible message gets a new key on trim and Svelte recreates
-      // the DOM rows, causing ANSI art and color backgrounds to flicker.
-      return { msg, showDate, msgDate, prevDate, prevMsg, showBacklogDivider, _key: stableKey(msg, start + i) };
+      // The key is the message identity; only genuine collisions (msgid-less
+      // rows sharing a timestamp) get an occurrence suffix. Keys must NOT
+      // depend on the row's index: a history prepend would re-key every
+      // row, Svelte would recreate the DOM, and the browser's scroll
+      // anchoring would lose the row it was holding in place.
+      const base = itemKeyOf(msg);
+      const seen = keyCounts.get(base) ?? 0;
+      keyCounts.set(base, seen + 1);
+      return { msg, showDate, msgDate, prevDate, prevMsg, showBacklogDivider, _key: seen === 0 ? base : `${base}#${seen}` };
     });
   });
 
@@ -697,12 +773,19 @@
   });
 
   // O(1) lookup maps for the scroll-position helpers — rebuilt only when
-  // messages change, never during scroll events.
+  // messages change, never during scroll events. Keyed by both the
+  // {#each} item key and the DOM row key (`data-msgid` / `t:<time>`) so a
+  // probed row resolves to its message whichever id it carries.
+  function rowKeyOfMsg(msg: IRCMessage): string {
+    return msg.msgid || `t:${msg.t}`;
+  }
   const renderedIndexByKey = $derived.by(() => {
     const m = new Map<string, number>();
     messagesWithDates.forEach((item, i) => {
       const k = itemKeyOf(item.msg);
       if (!m.has(k)) m.set(k, i);
+      const rk = rowKeyOfMsg(item.msg);
+      if (!m.has(rk)) m.set(rk, i);
     });
     return m;
   });
@@ -712,6 +795,8 @@
     for (const msg of ircState.messages[bufferKey] ?? []) {
       const k = itemKeyOf(msg);
       if (!m.has(k)) m.set(k, msg);
+      const rk = rowKeyOfMsg(msg);
+      if (!m.has(rk)) m.set(rk, msg);
     }
     return m;
   });
@@ -731,29 +816,9 @@
     return m;
   });
 
-  // ── Scroll position maintenance (matches IRCCloud) ──
-  // IRCCloud's fetched() flow (BufferScrollView.fetched):
-  //   - captures atTop + pinBottom BEFORE render
-  //   - renders fetched messages + backlogDivider at the boundary
-  //   - if pinBottom → scrollToBottom
-  //   - if atTop && divider → snap to (dividerPos - 31) so the divider
-  //     (and a sliver of the new batch) is visible; NO animated scroll —
-  //     the swing overrides the user's scroll-up input and reads as a
-  //     forced jump back down
-  //   - if neither → DO NOTHING (browser scroll anchoring keeps position)
-  // Landing at ≥48px pulls the user off scrollTop=0, so the next batch
-  // needs another deliberate scroll to the very top — that's IRCCloud's
-  // chunk-by-chunk paging feel.
-
-  // Track "at top" like we track "at bottom" — captured in handleScroll,
-  // used in $effect to decide if we should run the divider scroll after
-  // a backlog prepend.
-  let cachedAtTop = false;
-
   let lastBufferKey = '';
-  let prevScrollHeight = 0;
-  let prevScrollTop = 0;
-  let handledDividerMark = '';
+  let lastFirstProcessedKey = '';
+  let lastProcessedLength = 0;
 
   // Divider position in scroll-content coordinates (jQuery .position().top
   // equivalent for the scroll container).
@@ -762,125 +827,42 @@
     return sharedDividerPos(container, divider);
   }
 
-  let lastFirstProcessedKey = '';
-  let lastProcessedLength = 0;
-  let windowRevealInProgress = false;
-
-  // Preserve the reading position across a history prepend: shift scrollTop
-  // by the captured anchor row's ACTUAL displacement (captured by
-  // handleLoadMore right before the store mutation). Only applies when the
-  // user has not scrolled since the last scroll event — otherwise the
-  // browser's own anchoring already adjusted.
-  function preserveReadingPosition(c: HTMLDivElement | null, expectedScrollTop: number): void {
-    if (!c || c.scrollTop !== expectedScrollTop) return;
-    const anchor = takeScrollAnchor();
-    if (!anchor) return;
-    // Defer to the next frame: the fetch indicator (loading row) is removed
-    // when the loader settles, and its removal shifts the content — the
-    // final anchor displacement must include it for the reading position
-    // to be preserved exactly.
-    requestAnimationFrame(() => {
-      if (!c || c.scrollTop !== expectedScrollTop) return; // user scrolled
-      const rows = Array.from(c.querySelectorAll('.row.messageRow')) as HTMLElement[];
-      const match = rows.find((r) => (r.dataset.msgid || 't:' + r.dataset.time) === anchor.msgid);
-      if (!match) return;
-      const displacement = match.getBoundingClientRect().top - anchor.top;
-      if (displacement !== 0) c.scrollTop = expectedScrollTop + displacement;
-    });
-  }
-
   // ── Message entrance animation ───────────────────────────────────────
-  // Tracks which message keys should get the .messageEntrance class.
   // Only the batch head (firstAuthor rows or non-grouped messages) gets
   // the slide-in; same-author continuations get a subtler fade.
   let entranceKeys = $state(new Set<string>());
   let lastBottomKey = '';
 
-  function scheduleEntranceCleanup(): void {
-    setTimeout(() => {
-      entranceKeys = new Set();
-    }, 150);
-  }
-
-  // IRCCloud-style: when the scroll container shrinks (e.g. a typing
-  // Force-scroll trigger: when the user sends a message, InputArea
-  // increments forceScrollToBottomNonce (see ircStore.svelte). We
-  // always snap to the bottom in that case — even if the user scrolled
-  // up to inspect history. IRCCloud always shows you your own message
-  // after you hit Enter; we match that. Reads forceScrollToBottomNonce
-  // here so the effect re-runs whenever it changes; reads isServerBuffer
-  // first so server-log views (where the user owns their scroll position
-  // while inspecting connection history) are excluded.
-  //
-  // Singleton force-scroll: when the user sends a message (or navigates
-  // to a buffer), snap to the bottom immediately with a synchronous
-  // layout reflow so the clamp lands on the true scrollHeight. Then
-  // run a SINGLE short polling chain (3 × 200ms = 600ms) to catch any
-  // late-arriving content. A new nonce while polling cancels the old
-  // chain and starts a fresh one — critical for the rapid-typing case:
-  // typing 5-6 messages in a row MUST NOT start 5-6 overlapping chains,
-  // each doing flushSync + layout reflow + 10 polls (that was the
-  // source of the UI lag that made the user say "it lags and takes a
-  // while to show them").
-  let lastForceScrollNonce = 0;
-  let pendingPollTimer: ReturnType<typeof setTimeout> | null = null;
-
-  // ── Pinned re-snap settle chain ──────────────────────────────────
-  // Late layout can land AFTER the synchronous snap + single rAF:
-  //   - the 120ms messageEntrance slide-in (firstAuthor / action rows)
-  //   - image/embed decode after the row renders
-  //   - sync-driven member enrichment (WHOIS → realname on the next
-  //     sync) growing the author row — the author-realname span appears
-  //     after the message row was already snapped into view
-  // Each of these grows scrollHeight after the snap, leaving the
-  // viewport a few pixels short of the very bottom while the user is
-  // pinned ("the scrollbar isn't forced to the very bottom"). We run a
-  // short poll chain (4 × 200ms) that re-snaps while cachedAtBottom is
-  // still true, and cancels/restarts on every snap so a busy channel
-  // never stacks chains. Reading scrolled-up history is never forced —
-  // the poll bails the moment the user scrolls away.
-  let pinnedResnapTimer: ReturnType<typeof setTimeout> | null = null;
-  function schedulePinnedResnap(maxPolls: number = 8): void {
-    if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
-    if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
-    let polls = 0;
-  function poll(): void {
-      pinnedResnapTimer = null;
-      if (!container) return;
-      if (!cachedAtBottom) return;
-      if (isReadingHistory()) return;
-      if (container.scrollTop < prevScrollTop) {
-        // Trim reduces scrollHeight and clamps scrollTop down — this is
-        // not a user scroll-up. Only clear the stick if height didn't shrink.
-        if (container.scrollHeight >= prevScrollHeight) {
-          cachedAtBottom = false;
-          return;
+  function markEntrance(allMsgs: IRCMessage[]): void {
+    if (allMsgs.length === 0) return;
+    const lastKey = itemKeyOf(allMsgs[allMsgs.length - 1]);
+    if (lastKey === lastBottomKey) return;
+    if (lastBottomKey) {
+      let foundBoundary = false;
+      const newKeys = new Set<string>();
+      for (let i = allMsgs.length - 1; i >= 0; i--) {
+        const key = itemKeyOf(allMsgs[i]);
+        if (key === lastBottomKey) break;
+        const msg = allMsgs[i];
+        const isGroupHead = msg.command !== 'PRIVMSG' && msg.type !== 'action'
+          || (i > 0 && !checkSameAuthor(msg, allMsgs, i));
+        if (!foundBoundary || isGroupHead) {
+          newKeys.add(key);
+          foundBoundary = true;
         }
-        // Programmatic trim: update baseline and keep polling
-        prevScrollTop = container.scrollTop;
-        prevScrollHeight = container.scrollHeight;
       }
-      const bottom = container.scrollHeight - container.clientHeight;
-      if (bottom - container.scrollTop > 1) {
-        container.scrollTop = container.scrollHeight;
-        prevScrollTop = container.scrollTop;
-        prevScrollHeight = container.scrollHeight;
+      if (newKeys.size > 0) {
+        entranceKeys = newKeys;
+        setTimeout(() => { entranceKeys = new Set(); }, 150);
       }
-      polls += 1;
-      if (polls < maxPolls) pinnedResnapTimer = setTimeout(poll, 200);
     }
-    pinnedResnapTimer = setTimeout(poll, 200);
-  }
-  function ensurePinned(): void {
-    if (!container) return;
-    flushSync();
-    container.scrollTop = container.scrollHeight;
-    void container.scrollHeight;
-    container.scrollTop = container.scrollHeight;
-    cachedAtBottom = true;
-    schedulePinnedResnap();
+    lastBottomKey = lastKey;
   }
 
+  // Force-scroll trigger: when the user sends a message, InputArea
+  // increments forceScrollToBottomNonce. IRCCloud always shows you your
+  // own message after Enter, even if you had scrolled up.
+  let lastForceScrollNonce = 0;
   $effect(() => {
     if (isServerBuffer) {
       lastForceScrollNonce = ircState.forceScrollToBottomNonce;
@@ -888,112 +870,68 @@
     }
     const nonce = ircState.forceScrollToBottomNonce;
     if (nonce === lastForceScrollNonce) return;
-    if (!container) return;
     lastForceScrollNonce = nonce;
-    pendingInitialSnap = false;
-    initialSnapDone = true;
-    snapToBottom(container);
+    if (!container) return;
+    untrack(() => {
+      renderEndKey = '';
+      const msgs = processedMessages;
+      if (msgs.length > 0) renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+      try { flushSync(); } catch {}
+      unlockBottomSeen();
+      scrollToBottom();
+      onScroll(false);
+    });
   });
-  function snapToBottom(c: HTMLDivElement): void {
-    renderEndKey = '';
-    if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
-    if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
-    let didFlush = true;
-    try { flushSync(); } catch { didFlush = false; }
-    const msgs = untrack(() => processedMessages);
-    if (msgs.length > 0) {
-      renderStart = Math.max(0, msgs.length - BATCH_SIZE);
-    }
-    try { flushSync(); } catch { didFlush = false; }
-    const doScroll = () => {
-      c.scrollTop = c.scrollHeight;
-      void c.scrollHeight;
-      c.scrollTop = c.scrollHeight;
-      cachedAtBottom = true;
-      prevScrollTop = c.scrollTop;
-      prevScrollHeight = c.scrollHeight;
-      requestAnimationFrame(() => {
-        if (cachedAtBottom && c) {
-          c.scrollTop = c.scrollHeight;
-          prevScrollTop = c.scrollTop;
-          prevScrollHeight = c.scrollHeight;
-        }
-      });
-      schedulePinnedResnap(3);
-    };
-    if (didFlush) doScroll();
-    else tick().then(doScroll);
-  }
 
-  // Keep pinned viewport at the true bottom when late layout grows the
-  // content (image decode, text-wrap fetch, member enrichment). The old
-  // ResizeObserver on the viewport itself never fired for scrollHeight
-  // growth (overflow content doesn't resize the viewport), so page-load
-  // with image previews left the viewport ~250 px short. We now:
-  //  (a) capture `load` events from <img> (bubbles in capture phase)
-  //  (b) ResizeObserve every .directEmbedWrap / .editor that appears
-  //  (c) keep the viewport RO as a fallback for window resizes.
+  // Viewport/content resize (IRCCloud window resize + autogrowInput with
+  // checkRecent, and image/embed decode): re-pin while pinned.
   $effect(() => {
     if (isServerBuffer) return;
     const el = container;
     if (!el) return;
-    const snapIfPinned = () => {
-      if (!container) return;
-      if (isReadingHistory()) return;
-      if (!cachedAtBottom || container.scrollTop < prevScrollTop - 1) return;
-      const scrollHeight = container.scrollHeight;
-      const offsetHeight = container.clientHeight;
-      const scrollPos = Math.ceil(container.scrollTop);
-      const bottom = (scrollHeight - offsetHeight) + 1;
-      if ((bottom - scrollPos) > 1) {
-        container.scrollTop = scrollHeight;
-        // Schedule a second rAF to catch the frame after the RO's
-        // async callback when the image's display:inline-block hasn't
-        // flushed yet (preload snap vs onLoad race).
-        requestAnimationFrame(() => {
-          if (!container || !cachedAtBottom) return;
-          const h2 = container.scrollHeight;
-          const off2 = container.clientHeight;
-          const pos2 = Math.ceil(container.scrollTop);
-          if ((h2 - off2 + 1 - pos2) > 1) container.scrollTop = h2;
-        });
-      }
+    // Window resize (IRCCloud @538661): suppress scroll handling while
+    // the browser re-lays out, then re-pin with checkRecent.
+    const onWindowResize = () => { const pin = shouldPinBottom(); setResizing(); onChange(pin); };
+    // Container size change (composer autogrow / typing row — IRCCloud
+    // autogrowInput checkPinBottom({checkRecent:true})): re-pin only.
+    let lastHeight = el.clientHeight;
+    const onContainerResize = () => {
+      if (el.clientHeight === lastHeight) return;
+      lastHeight = el.clientHeight;
+      onChange(shouldPinBottom());
     };
-    const ro = new ResizeObserver(() => snapIfPinned());
+    const onContentGrowth = () => onChange(untrack(() => cachedAtBottom));
+    const ro = new ResizeObserver(onContainerResize);
     ro.observe(el);
-    const mo = new MutationObserver(() => {
-      // Re-observe any new embed/editor nodes and snap after their
-      // initial zero-height → image-height transition.
+    const embedRo = new ResizeObserver(onContentGrowth);
+    const observeEmbeds = () => {
       el.querySelectorAll('.directEmbedWrap, .editor').forEach((n) => {
-        try { ro.observe(n as Element); } catch {}
+        try { embedRo.observe(n as Element); } catch {}
       });
-      snapIfPinned();
+    };
+    // Late layout growth inside an already-rendered row (image decode,
+    // embed expansion, inline style changes) while pinned: re-pin once.
+    const mo = new MutationObserver((records) => {
+      observeEmbeds();
+      if (records.some(r => r.type === 'attributes')) onContentGrowth();
     });
-    mo.observe(el, { childList: true, subtree: true });
-    // Initial observe of embeds already in DOM (page-load history)
-    el.querySelectorAll('.directEmbedWrap, .editor').forEach((n) => {
-      try { ro.observe(n as Element); } catch {}
-    });
-    const onLoadCapture = () => snapIfPinned();
-    el.addEventListener('load', onLoadCapture, true);
-    el.addEventListener('error', onLoadCapture, true);
+    mo.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+    observeEmbeds();
+    el.addEventListener('load', onContentGrowth, true);
+    el.addEventListener('error', onContentGrowth, true);
+    window.addEventListener('resize', onWindowResize);
     return () => {
-      el.removeEventListener('load', onLoadCapture, true);
-      el.removeEventListener('error', onLoadCapture, true);
+      window.removeEventListener('resize', onWindowResize);
+      el.removeEventListener('load', onContentGrowth, true);
+      el.removeEventListener('error', onContentGrowth, true);
       mo.disconnect();
+      embedRo.disconnect();
       ro.disconnect();
     };
   });
 
-  // ── Typing indicator push: smartly keep most recent message visible ──
-  // The typing indicator now occupies layout space (flex row above the
-  // input, ~28px) and shrinks the messages viewport via flex. When the
-  // user is pinned at the bottom, the viewport shrink must keep the
-  // last message fully visible — not clipped by the new row. The
-  // ResizeObserver above already handles container-height shrinks in many
-  // cases, but the typing row lives outside the observed container
-  // (.bufferinputcell), so we explicitly re-snap here when typing appears.
-  // Only when pinned; reading history (scrolled up) is never yanked.
+  // Typing indicator row shrinks the viewport (it lives outside the
+  // observed container) — same re-pin rule as the composer autogrow.
   const isTypingActive = $derived.by(() => {
     void ircState.typingVersion;
     const netId = ircState.activeBuffer.networkId;
@@ -1003,638 +941,119 @@
   });
   $effect(() => {
     void isTypingActive;
-    if (isServerBuffer) return;
-    if (!container) return;
-    if (!cachedAtBottom) return;
-    // DOM has just updated with the typing row; wait a tick for flex
-    // layout to settle, then snap to true bottom.
-    tick().then(() => {
-      if (!container || !cachedAtBottom) return;
-      container.scrollTop = container.scrollHeight;
-      void container.scrollHeight;
-      container.scrollTop = container.scrollHeight;
-      prevScrollTop = container.scrollTop;
-      prevScrollHeight = container.scrollHeight;
-      requestAnimationFrame(() => {
-        if (container && cachedAtBottom) {
-          container.scrollTop = container.scrollHeight;
-          prevScrollTop = container.scrollTop;
-          prevScrollHeight = container.scrollHeight;
-        }
-      });
-    });
+    if (isServerBuffer || !container) return;
+    untrack(() => { const pin = shouldPinBottom(); tick().then(() => onChange(pin)); });
   });
 
-  // ── ENTERPRISE INVARIANT: windowing $effect ───────────────────────────
-  // This effect is the sole writer of renderStart/renderEndKey/cachedAtBottom/
-  // wasRecentlyAtBottom during normal message flow. Svelte 5 tracks any $state
-  // read inside $effect — a direct read + write of the same signal re-queues
-  // the effect synchronously and hits effect_update_depth_exceeded at 10k+ msgs
-  // (batch.js:1043, MessageList:1194). Every read of those four signals inside
-  // this effect MUST be via untrack(() => signal); writes MUST be via
-  // untrack(()=>{ signal = ... }) so the write does not re-trigger via a
-  // tracked read. The only intentional triggers are bufferKey and
-  // processedMessages (read outside untrack). Guard enforced by
-  // frontend/scripts/check-effect-loops.mjs in CI. See skill://svelte5-effect-loop-discipline
+  // ── Windowing effect ──────────────────────────────────────────────────
+  // Sole writer of renderStart/renderEndKey during normal message flow.
+  // Only bufferKey, processedMessages and container are tracked; every
+  // other signal is read through untrack so a write never re-queues the
+  // effect (frontend/scripts/check-effect-loops.mjs guards this).
   $effect(() => {
     if (windowRevealInProgress) return;
     const key = bufferKey;
     const msgs = processedMessages;
-    const isNewBuffer = key !== lastBufferKey;
-    const isHistoryPrependForSnap = (() => { const firstKeySnap = msgs.length ? itemKeyOf(msgs[0]) : ''; return firstKeySnap !== lastFirstProcessedKey; })();
-    if (isNewBuffer) {
-      pendingInitialSnap = true;
-      initialSnapDone = false;
-      lastBufferKey = key;
-      untrack(() => { cachedAtBottom = true; });
-      untrack(() => { wasRecentlyAtBottom = true; });
-      cachedAtTop = false;
-      prevScrollHeight = 0;
-      prevScrollTop = 0;
-      handledDividerMark = '';
-      // Cancel any in-flight re-snap chains from the previous
-      // buffer — it would otherwise keep polling the shared container
-      // while the new buffer's window is being established.
-      if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
-      if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
-      // IRCCloud BufferLogView.render: open with the last batchSize=200.
-      untrack(() => { renderStart = Math.max(0, msgs.length - BATCH_SIZE); });
-      untrack(() => { renderEndKey = ''; });
-      clockTs = null;
-      lastFirstProcessedKey = msgs.length ? itemKeyOf(msgs[0]) : '';
-      lastProcessedLength = msgs.length;
-    } else {
+    void container;
+    untrack(() => {
+      if (key !== lastBufferKey) {
+        // IRCCloud select(): render the last batchSize=200 and scroll to bottom.
+        lastBufferKey = key;
+        renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+        renderEndKey = '';
+        hasMoreHistory = true;
+        fetching = false;
+        showFetchRow = false;
+        showFetchFailedRow = false;
+        showLoadMoreRow = msgs.length > 0;
+        clockTs = null;
+        lastBottomKey = msgs.length ? itemKeyOf(msgs[msgs.length - 1]) : '';
+        lastFirstProcessedKey = msgs.length ? itemKeyOf(msgs[0]) : '';
+        lastProcessedLength = msgs.length;
+        setScrolledToBottom(true);
+        tick().then(() => {
+          if (!container || bufferKey !== key) return;
+          scrollToBottom({ silent: true });
+          lastScrollTop = container.scrollTop;
+          lastScrollHeight = container.scrollHeight;
+          doScroll(false);
+        });
+        return;
+      }
       const firstKey = msgs.length ? itemKeyOf(msgs[0]) : '';
       if (firstKey !== lastFirstProcessedKey) {
         if (lastFirstProcessedKey === '') {
-          // Buffer content arrived (initial history load): window the tail.
-          untrack(() => { renderStart = Math.max(0, msgs.length - BATCH_SIZE); });
-          // Cold-start: messages arrived after the buffer was already active
-          // but empty (first URL load, no cache). The initial mount's
-          // pendingInitialSnap was already consumed for the empty state, so
-          // force a new one to ensure we land at the very bottom.
-          pendingInitialSnap = true;
-          initialSnapDone = false;
-          untrack(() => { cachedAtBottom = true; });
-          cachedAtTop = false;
+          // Initial history arrival for an open buffer: window the tail
+          // and land at the bottom (IRCCloud initial backlog render).
+          renderStart = Math.max(0, msgs.length - BATCH_SIZE);
+          renderEndKey = '';
+          hasMoreHistory = true;
+          showLoadMoreRow = true;
+          lastBottomKey = itemKeyOf(msgs[msgs.length - 1]);
+          setScrolledToBottom(true);
+          tick().then(() => {
+            if (!container || bufferKey !== key) return;
+            scrollToBottom({ silent: true });
+            lastScrollTop = container.scrollTop;
+            lastScrollHeight = container.scrollHeight;
+            doScroll(false);
+          });
         } else {
-          const oldScrollHeight = container ? container.scrollHeight : 0;
-          const oldScrollTop = container ? container.scrollTop : 0;
-          const atTopBefore = oldScrollTop === 0;
+          // Older history prepended: keep the window on the same rows.
           const idx = msgs.findIndex(m => itemKeyOf(m) === lastFirstProcessedKey);
-          const scrollBottomBefore = container ? container.clientHeight + Math.ceil(oldScrollTop) : 0;
-          const pinBottomBefore = oldScrollHeight - scrollBottomBefore <= 1;
-          if (((pendingInitialSnap && untrack(() => cachedAtBottom)) || pinBottomBefore) && !isReadingHistory()) {
-            // Still in the initial snap window (first URL load). Keep the
-            // window pinned to the tail so we stay at the very bottom when
-            // loadHistory prepends the remaining backlog right after the
-            // initial sync. Without this, the idx>0 path would keep the
-            // viewport anchored mid-history (Super%20Nets first load).
-            untrack(() => { renderStart = Math.max(0, msgs.length - BATCH_SIZE); });
-            // If we were physically at bottom before the prepend (pinBottomBefore),
-            // keep pinned at bottom even if shouldSnap is false due to
-            // isAtBottom being stale. This fixes double-load flash where
-            // second history batch arrives while still at bottom but
-            // cachedAtBottom was cleared by a stray scroll event.
-            if (pinBottomBefore && container) {
-              tick().then(() => {
-                if (container) container.scrollTop = container.scrollHeight;
-              });
-            }
-          } else if (idx > 0) {
-            const start = untrack(() => renderStart);
-            if (start > 0) untrack(() => { renderStart = start + idx; });
-            // start==0 (fully rendered, at top of backlog): keep renderStart 0
-            // so the new older rows become visible above the divider.
-            // The mid-buffer anchor below keeps the viewport stable if the
-          } else if (idx < 0) {
-            // Head key vanished — the first processed row changed identity
-            // (e.g. a backlog fetch merged JOINs into the head
-            // JOINPART_GROUP, changing the group's first event and therefore
-            // its key; or an optimistic echo replaced the head in place).
-            // In every such case the old head is STILL the first processed
-            // entry — it merged or was replaced in place — so renderStart
-            // must stay put. NEVER reset to the tail here: that yanks the
-            // user from old history down to the newest messages ("scrolling
-            // up forces me back down").
-          }
-          // Anchor scroll after the window shift so the viewport stays on
-          // !pinBottom) we compensate manually with scrollTop += delta
-          // (IRCCloud fetched() does the same). If the browser's native
-          // scroll anchoring also adjusted scrollTop during the render,
-          // the write is idempotent (both shift by the same prepended
-          // height); if it didn't, this is the only compensation. delta is
-          // measured from the DOM after the render, so a re-keyed head
-          // group that merges without growing the row count (delta 0)
-          // needs no compensation.
-          if (container && !atTopBefore && !pinBottomBefore) {
-            const c = container;
-            const oldH = oldScrollHeight;
-            const oldTop = oldScrollTop;
-            let didFlush = true;
-            try { flushSync(); } catch { didFlush = false; }
-            const doDelta = () => {
-              const delta = c.scrollHeight - oldH;
-              if (delta !== 0) c.scrollTop = oldTop + delta;
-            };
-            if (didFlush) doDelta();
-            else tick().then(doDelta);
+          const start = renderStart;
+          if (idx > 0 && start > 0) renderStart = start + idx;
+          // Placement: our own fetch runs fetched() from loadBacklog; a
+          // prepend from elsewhere (CHATHISTORY backfill) applies the same
+          // rule from the last observed scroll position.
+          if (!fetching) {
+            const atTop = lastScrollTop === 0;
+            const atBottom = cachedAtBottom;
+            tick().then(() => { if (bufferKey === key) fetched(atTop, atBottom); });
           }
         }
+      } else if (msgs.length !== lastProcessedLength) {
+        // Live append (IRCCloud flushBuffer): while pinned the rows
+        // render now and the DOM is trimmed; while scrolled up they stay
+        // buffered behind renderEndKey and only the chatter updates.
+        if (cachedAtBottom && renderEndKey === '') {
+          markEntrance(msgs);
+          checkTrim(false);
+        } else if (!cachedAtBottom && renderEndKey === '' && lastProcessedLength > 0 && msgs.length > lastProcessedLength) {
+          // Scrolled up but no scroll event froze the window yet — freeze
+          // at the last row that was already rendered.
+          renderEndKey = itemKeyOf(msgs[lastProcessedLength - 1]);
+        }
+        tick().then(() => { if (bufferKey === key) onChange(); });
       } else {
-        // Append-only burst: head unchanged, tail grew. Keep window bounded
-        // so 1000-msg burst stays at 150-250 DOM rows instead of 350+ before
-        // maybeTrim. Only while pinned and not frozen (reading history).
-        // Guard on length increase: window reveals (renderStart moved via
-        // revealBacklogFromMemory) do not increase len but would otherwise
-        // satisfy neededStart>start and be yanked back to tail.
-        const start = untrack(() => renderStart);
-        const neededStart = Math.max(0, msgs.length - BATCH_SIZE);
-        if (neededStart > start && untrack(() => cachedAtBottom) && !untrack(() => renderEndKey) && msgs.length > lastProcessedLength && !windowRevealInProgress && !isReadingHistory()) {
-          untrack(() => { renderStart = neededStart; });
-        }
+        // In-place replacement (optimistic echo swap, edit): same rule.
+        tick().then(() => { if (bufferKey === key) onChange(); });
       }
       lastFirstProcessedKey = firstKey;
       lastProcessedLength = msgs.length;
-    }
-
-    if (!container) return;
-    const mark = untrack(() => backlogDividerMark);
-    const newDivider = mark !== '' && mark !== handledDividerMark;
-    handledDividerMark = mark;
-
-    // Refresh-not-at-bottom fix: a freshly-opened buffer (first mount
-    // after a page reload) must always land at the very bottom, even
-    // if a stray scroll event cleared cachedAtBottom between the
-    // renderStart assignment and this snap check.  pendingInitialSnap
-    // survives the `if (!container) return` gap on first mount and
-    // forces one unconditional snap. It is kept until we have messages
-    // to snap to — a buffer that mounts empty (pre-sync, e.g. first
-    // login with no cache) must NOT consume the flag with 0 messages,
-    // otherwise the subsequent sync-payload arrival runs as a normal
-    // pinned check and a scrollTop=0 event from the incoming
-    // scrollHeight growth can clear cachedAtBottom and leave the user
-    // stranded mid-history (first-login midway bug). See
-    // MessageList.refresh.test.ts async arrival case.
-    const hasMessagesForInitialSnap = processedMessages.length > 0;
-    const isInitialSnap = pendingInitialSnap && hasMessagesForInitialSnap;
-    const isDomAtBottom = !container || container.scrollHeight <= container.clientHeight + 1 || container.scrollHeight - (container.clientHeight + Math.ceil(container.scrollTop)) <= 1;
-    // IRCCloud BufferScrollView.flushBuffer uses strict isScrolledToBottom() (1px, no wasRecently)
-    // to decide whether to buffer incoming messages while reading. wasRecently (100ms grace)
-    // is only for textarea autogrow, not for message pin. Using wasRecently here caused
-    // "if a new message comes in it forces it to bottom" — any message arriving within
-    // 100ms of scrolling up was considered pinned via wasRecently and snapped. See
-    // bufferscrollview.js flushBuffer vs shouldPinBottom.
-    const isAtBottomStrict = untrack(() => cachedAtBottom) || isDomAtBottom;
-    const isAtBottom = isAtBottomStrict;
-    // isHistoryPrependForSnap previously forced a snap even when reading.
-    // Gate on isAtBottom so only pinned fills snap; initial load isAtBottom true.
-    const historyPrependSnap = isInitialSnap && isHistoryPrependForSnap && isAtBottom;
-    // When a backlog divider is present and user is at top (reading history),
-    // never snap to bottom – preserve via newDivider branch (oldTop+delta).
-    // This fixes "scroll all the way to start without being forced to bottom".
-    // NOTE: previously `lastIsActionNotice` forced a snap for any trailing
-    // ACTION/NOTICE even while scrolled up reading history ("if a new message
-    // comes in it forces it to bottom"). IRCCloud's BufferLogView.renderMessage
-    // still respects shouldPinBottom for NOTICEs/actions — they buffer when
-    // scrolled up. So we do NOT auto-pin on message type; only on pin state.
-    // IRCCloud BufferScrollView.onChange: if model.getBottomSeen() exists,
-    // force e=false (never snap while "New messages since you scrolled up"
-    // divider is visible, even if technically at bottom). This matches the
-    // buffered flushBuffer path where !bottomSeen && !pinned buffers.
-    const nidSnap = ircState.activeBuffer.networkId;
-    const bufSnap = ircState.activeBuffer.bufferName;
-    const hasBottomSeenNow = nidSnap && bufSnap ? getBottomSeen(nidSnap, bufSnap) !== null : false;
-    const shouldSnapToBottom = !isServerBuffer && hasMessagesForInitialSnap && (isAtBottom || historyPrependSnap) && !(newDivider && cachedAtTop) && !isReadingHistory() && !hasBottomSeenNow;
-    if (shouldSnapToBottom) {
-      // If DOM is at bottom but cached state is stale, correct it so future
-      // handleScroll checks see the right baseline and don't mis-fire scrolledUp.
-      if (isDomAtBottom) untrack(() => { cachedAtBottom = true; });
-      // For an initial buffer open we force the snap unconditionally —
-      // do not run the scrolledUp direction check that would otherwise
-      // clear the stick when scrollHeight grew under a pinned viewport.
-      if (!isInitialSnap) {
-        const scrolledUp = container ? container.scrollTop < prevScrollTop : false;
-        if (scrolledUp) { untrack(() => { cachedAtBottom = false; wasRecentlyAtBottom = false; }); if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; } } else {
-          untrack(() => { renderEndKey = ''; });
-          untrack(() => { wasRecentlyAtBottom = true; });
-          if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; }
-          tick().then(() => {
-            if (!container) return;
-            // Entrance animation: detect which messages are new since the last
-            // time we were at the bottom. Only the batch head (firstAuthor or
-            // non-grouped rows) gets the full slide-in; sameAuthor rows get a
-            // subtler fade via CSS (.messageEntrance.sameAuthor).
-            const allMsgs = processedMessages;
-            if (allMsgs.length > 0) {
-              const lastKey = itemKeyOf(allMsgs[allMsgs.length - 1]);
-              if (lastKey !== lastBottomKey) {
-                if (lastBottomKey) {
-                  let foundBoundary = false;
-                  let prevWasEntrance = false;
-                  const newKeys = new Set<string>();
-                  for (let i = allMsgs.length - 1; i >= 0; i--) {
-                    const key = itemKeyOf(allMsgs[i]);
-                    if (key === lastBottomKey) break;
-                    const msg = allMsgs[i];
-                    const isGroupHead = msg.command !== 'PRIVMSG' && msg.type !== 'action'
-                      || (i > 0 && !checkSameAuthor(msg, allMsgs, i));
-                    if (!foundBoundary || isGroupHead) {
-                      newKeys.add(key);
-                      foundBoundary = true;
-                    }
-                  }
-                  if (newKeys.size > 0) {
-                    entranceKeys = newKeys;
-                    scheduleEntranceCleanup();
-                  }
-                }
-                lastBottomKey = lastKey;
-              }
-            }
-            container.scrollTop = container.scrollHeight;
-            void container.scrollHeight;
-            container.scrollTop = container.scrollHeight;
-            cachedAtTop = false;
-            requestAnimationFrame(() => {
-              if (cachedAtBottom && container) {
-                container.scrollTop = container.scrollHeight;
-              }
-            });
-            schedulePinnedResnap();
-          });
-        }
-      } else if (cachedAtTop && container && container.scrollHeight - container.scrollTop - container.clientHeight > STICK_BAND_PX) {
-        // The user has scrolled UP to read older history inside the
-        // initial-snap window (first 5s after opening the buffer): never
-        // force the viewport back to the bottom. That unconditional pin is
-        // what made the scrollbar jump down right after a history load
-        // ("it keeps forcing the scroll bar down each time it loads
-        // messages"). The viewport stays where the user put it.
-        // On a short log the pinned-bottom position can sit inside the
-        // 200px at-top band, so cachedAtTop alone cannot distinguish
-        // "pinned at the bottom" from "scrolled up to read history".
-        // Use the physical distance from the bottom: pinned = within the
-        // stick band (<=70px, e.g. the just-appended row's height);
-        // scrolled up to read older chat = far from the bottom. Only the
-        // latter skips the unconditional initial-snap pin — and still
-        // preserves the reading position across the prepend.
-        pendingInitialSnap = false;
-        initialSnapDone = true;
-        preserveReadingPosition(container, prevScrollTop);
-      } else {
-        // Initial snap for a freshly-opened buffer (refresh): unconditional.
-        untrack(() => { renderEndKey = ''; });
-        maybeTrim();
-        tick().then(() => {
-          if (!container) return;
-          const allMsgs2 = processedMessages;
-          if (allMsgs2.length > 0) {
-            const lastKey2 = itemKeyOf(allMsgs2[allMsgs2.length - 1]);
-            if (lastKey2 !== lastBottomKey) {
-              lastBottomKey = lastKey2;
-            }
-          }
-          const doSnap = () => {
-            if (!container) return;
-            container.scrollTop = container.scrollHeight;
-            void container.scrollHeight;
-            container.scrollTop = container.scrollHeight;
-          };
-          doSnap();
-          cachedAtBottom = true;
-          cachedAtTop = false;
-          requestAnimationFrame(() => {
-            doSnap();
-            if (container && container.scrollHeight - container.clientHeight - container.scrollTop > 2) {
-              doSnap();
-            }
-            schedulePinnedResnap(40);
-            requestAnimationFrame(() => { initialSnapDone = true; });
-          });
-        });
-      }
-      // Clear pendingInitialSnap: keep it for 2s after an initial snap so
-      // rapid successive prepends (loadHistory right after sync) still see
-      // isInitialSnap true and stay pinned to bottom. Normal pinned snaps
-      // clear immediately.
-      if (isInitialSnap) {
-        setTimeout(() => { pendingInitialSnap = false; }, 5000);
-      } else if (hasMessagesForInitialSnap) {
-        pendingInitialSnap = false;
-      }
-    } else if (newDivider && cachedAtTop) {
-      // IRCCloud fetched() half-way scroll: divider at 152px from top (min 48), not exact anchor.
-      // This is the "constantly scrolling up" feel – each top-hit leaves 152px of older history
-      // visible above the divider, so the next wheel-up immediately hits top again.
-      // Matches common-5650bddb.js: var a=Math.round(r.position().top);this.scrollTo(a-31),this.scrollTo(Math.max(a-152,48),{animate:!0})
-      const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
-      if (divider) {
-        const a = Math.round(dividerPos(divider));
-        container.scrollTop = a - 31;
-        const target = Math.max(a - 152, 48);
-        animateScrollTo(container, target, 100);
-      } else {
-        preserveReadingPosition(container, prevScrollTop);
-      }
-      prevScrollTop = container.scrollTop;
-      prevScrollHeight = container.scrollHeight;
-      cachedAtTop = container.scrollTop <= 1;
-      cachedAtBottom = false;
-      wasRecentlyAtBottom = false;
-    }
-    // else: browser handles position (IRCCloud: fetchDone(true, pinBottom) → no scroll)
+    });
   });
 
-  // ── IRCCloud match: BufferScrollView.setScrolledToBottom(value)
-  // Updates the cached scroll position and manages the 100ms grace period.
-  function handleScroll(): void {
-    if (!container) return;
-    // IRCCloud batchRendering: ignore scroll events that fire during a
-    // batch flush (DOM reflow from batch append can trigger them).
-    if (batchRendering) return;
-
-    // Non-scrollable guard: when the content fits without a scrollbar, the user
-    // is effectively at the bottom by definition. A stray 1px scrollUp that
-    // cleared cachedAtBottom must not keep new messages buffered forever with
-    // no scroll event to re-engage. Force pinned state and clear any frozen window.
-    if (container.scrollHeight <= container.clientHeight + 1) {
-      if (!cachedAtBottom) {
-        cachedAtBottom = true;
-        wasRecentlyAtBottom = true;
-        renderEndKey = '';
-        maybeTrim();
-      }
-      cachedAtTop = container.scrollTop <= 1;
-      prevScrollTop = container.scrollTop;
-      prevScrollHeight = container.scrollHeight;
-      scheduleScrollStateUpdate();
-      return;
-    }
-
-    const scrollTop = container.scrollTop;
-    const scrollHeight = container.scrollHeight;
-    const prevHeight = prevScrollHeight;
-    if (prevScrollTop === scrollTop && prevHeight === scrollHeight) return;
-    // Capture the previous event's scrollTop BEFORE updating prevScrollTop —
-    // used to detect actual downward movement for the stick re-engagement
-    // band below (stick-to-bottom-svelte's isScrollingDown).
-    const prevTop = prevScrollTop;
-    prevScrollTop = scrollTop;
-    prevScrollHeight = scrollHeight;
-    // IRCCloud isScrolledToTop(): user is at the very top of the container.
-    // IRCCloud checks scrollTop===0 exact, not a 200px band. Only fire
-    // when truly at top (0), not 200px before, to get the single-batch
-    // per top-hit cadence. Tolerate <=1 for sub-pixel.
-    cachedAtTop = scrollTop <= 1;
-    // IRCCloud isScrolledToBottom(true): when already pinned, use a strict
-    // 0px check — any intentional scroll-up (even 1px on a trackpad) must
-    // clear cachedAtBottom immediately, otherwise the ResizeObserver and
-    // schedulePinnedResnap keep fighting the user. Per ChatInfinite.atBottomStickiness
-    // upward movement inside the 70px band must disengage — reading 50px up
-    // is never yanked back (Controller.lean atBottomStickiness.2).
-    // When NOT pinned (stick broken by a scroll-up), re-engage only on an
-    // actual DOWNWARD scroll into the near-bottom band — a stopped position
-    // within the band does NOT re-stick (reading is never yanked).
-    const scrollBottom = container.clientHeight + Math.ceil(scrollTop);
-    const distFromBottom = scrollHeight - scrollBottom;
-    const scrolledUp = scrollTop < prevTop;
-    const scrolledDown = scrollTop > prevTop;
-    const heightChangedWithoutScroll = Math.abs(scrollTop - prevTop) <= 1 && scrollHeight !== prevHeight;
-    // IRCCloud strict: atBottom iff dist <=1, regardless of direction except scrolledUp forces false.
-    // pendingInitialSnap window still allows height growth without leaving bottom.
-    const atBottom = scrolledUp
-      ? false
-      : scrollHeight < prevHeight && cachedAtBottom
-        ? true
-        : pendingInitialSnap && heightChangedWithoutScroll && cachedAtBottom && !cachedAtTop && !isReadingHistory()
-          ? true
-          : cachedAtBottom && !cachedAtTop
-            ? heightChangedWithoutScroll ? true : distFromBottom <= 1
-            : distFromBottom <= 1;
-    if (cachedAtBottom === atBottom) {
-      // Still at bottom or still not at bottom — just update auxiliary state (rAF-batched)
-      scheduleScrollStateUpdate();
-    } else {
-      cachedAtBottom = atBottom;
-
-      if (atBottom) {
-        // Just arrived at bottom
-        wasRecentlyAtBottom = true;
-        if (recentlyScrolledTimeout) {
-          clearTimeout(recentlyScrolledTimeout);
-          recentlyScrolledTimeout = null;
-        }
-        // IRCCloud checkFlush: returning to the bottom flushes buffered
-        // messages and trims the DOM back to 200 rows.
-        renderEndKey = '';
-        maybeTrim();
-        // Unlock bottomSeen — user has returned to live stream, so the
-        // "New messages since you scrolled up" divider should disappear.
-        // Mirrors BufferScrollView.unlockBottomSeen / buf.js unlockBottomSeen.
-        {
-          const nid = ircState.activeBuffer.networkId;
-          const buf = ircState.activeBuffer.bufferName;
-          if (nid && buf) clearBottomSeen(nid, buf);
-        }
-        // Band re-engagement: the stick was broken (user scrolled up) and
-        // they scrolled back DOWN into the near-bottom band — that means
-        // "return to the live stream", so snap to the bottom NOW. This
-        // keeps the latched state unambiguous ("latched" ≡ "at the
-        // bottom"); without the snap, a 30px-offset latch would be
-        // misread as pinned-drift by the poll/RO and re-yanked, and its
-        // stale baseline would misfire the effect's scrolledUp check on
-        // the next message.
-        if (!isReadingHistory() && container.scrollHeight - container.clientHeight - container.scrollTop > 0) {
-          container.scrollTop = container.scrollHeight;
-          prevScrollTop = container.scrollTop;
-          prevScrollHeight = container.scrollHeight;
-        }
-        // Force true bottom after trim's DOM update (tick+rAF) and schedule resnap
-        // to catch any late layout growth — fixes 25px short after return
-        tick().then(() => {
-          if (container && cachedAtBottom) {
-            container.scrollTop = container.scrollHeight;
-            prevScrollTop = container.scrollTop;
-            prevScrollHeight = container.scrollHeight;
-            requestAnimationFrame(() => {
-              if (container && cachedAtBottom) {
-                container.scrollTop = container.scrollHeight;
-                prevScrollTop = container.scrollTop;
-                prevScrollHeight = container.scrollHeight;
-                schedulePinnedResnap();
-              }
-            });
-          }
-        });
-      } else {
-        // Just left bottom — 100ms grace period for autogrow-input only
-        if (recentlyScrolledTimeout) clearTimeout(recentlyScrolledTimeout);
-        recentlyScrolledTimeout = setTimeout(() => {
-          wasRecentlyAtBottom = false;
-          recentlyScrolledTimeout = null;
-        }, 100);
-        // Leaving bottom: cancel any pending re-snap chain so we don't
-        // force a user who scrolled up 50ms after sending back to bottom.
-        if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
-        if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
-        if (pendingInitialSnap && distFromBottom > 1) pendingInitialSnap = false;
-        // IRCCloud bufferMessage: while scrolled up, new messages buffer
-        // instead of rendering — freeze the window's end where it is now.
-        const all = processedMessages;
-        renderEndKey = all.length ? itemKeyOf(all[all.length - 1]) : '';
-        // Lock bottomSeen to the last message at the moment you scrolled up.
-        // Mirrors buf.js lockBottomSeen() which sets bottomSeen = getLastMessage().
-        // This divider stays fixed until you return to bottom (unlock above),
-        // so it doesn't creep forward with each new message and flicker.
-        {
-          const nid = ircState.activeBuffer.networkId;
-          const buf = ircState.activeBuffer.bufferName;
-          if (nid && buf) {
-            const list = ircState.messages[`${nid}:${buf}`] ?? [];
-            const last = list[list.length - 1];
-            if (last?.t) setBottomSeen(nid, buf, last.t);
-            else if (all.length && all[all.length - 1]?.t) setBottomSeen(nid, buf, all[all.length - 1].t!);
-          }
-        }
-      }
-
-      scheduleScrollStateUpdate();
-    }
-
-    // Fast-scroll to top fallback: InfiniteLoader sentinel (200px rootMargin)
-    // can miss momentum scrolls that slam to 0 without an intersection
-    // callback (observer throttled, sentinel 1px). HandleScroll is the only
-    // reliable signal — if we are at top and in-memory batches remain,
-    // kick infiniteHandler directly.
-    if (scrollTop <= 1 && untrack(() => renderStart) > 0 && hasHistoryLoaded && !infiniteLoading) {
-      void infiniteHandler();
-    }
-
-    // Infinite scroll is triggered by LoadMore's top sentinel
-    // (IntersectionObserver with a 200px rootMargin pre-load buffer,
-    // svelte-infinite pattern) instead of a scrollTop===0 check here.
-    // The observer fires on layout, so it cannot wedge at scrollTop 0
-    // where no scroll events fire on wheel-up.
-  }
-
-  function scheduleScrollStateUpdate(): void {
-    if (import.meta.env.MODE === 'test') {
-      updateScrollState();
-      return;
-    }
-    if (scrollRafPending) return;
-    scrollRafPending = true;
-    requestAnimationFrame(() => {
-      scrollRafPending = false;
-      updateScrollState();
-    });
-  }
-
-  // Attach scroll listener as passive:true (IRCCloud parity) — Svelte's
-  // `onscroll` compiles to a non-passive addEventListener, so we wire it
-  // manually. rAF coalescing above ensures getBoundingClientRect work
-  // doesn't block the wheel.
-  //
-  // User scroll-INTENT pre-clear (stick-to-bottom-svelte handleWheel /
-  // handlePointerDown): the pinned-snap machinery (effect bottom branch,
-  // ResizeObserver, resnap polls) reads cachedAtBottom and yanks the
-  // viewport to the bottom. A message landing between the user's input
-  // (keydown/wheel) and the FIRST scroll event — which clears
-  // cachedAtBottom via the strict check — would snap them back down
-  // ("holding ArrowUp keeps resetting me back down"). Clear the stick at
-  // input time, before any scroll event fires. The near-bottom band
-  // re-engages it on the next downward scroll, so clearing on any wheel
-  // or scroll key is safe.
-  const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ', 'Spacebar']);
+  // Passive scroll listener (Svelte's onscroll compiles non-passive).
   $effect(() => {
     const el = container;
     if (!el) return;
-    const clearStickOnUserInput = () => {
-      if (pendingInitialSnap) pendingInitialSnap = false;
-      // Fast-scroll: cancel half-way animation so user's momentum isn't fighting rAF
-      try { cancelScrollAnimation(); } catch {}
-      if (!cachedAtBottom && !wasRecentlyAtBottom) return;
-      cachedAtBottom = false;
-      wasRecentlyAtBottom = false;
-      if (recentlyScrolledTimeout) { clearTimeout(recentlyScrolledTimeout); recentlyScrolledTimeout = null; }
-      if (pendingPollTimer) { clearTimeout(pendingPollTimer); pendingPollTimer = null; }
-      if (pinnedResnapTimer) { clearTimeout(pinnedResnapTimer); pinnedResnapTimer = null; }
-    };
-    const onWheel = (e: WheelEvent) => {
-      if (!container) return;
-      try { cancelScrollAnimation(); } catch {}
-      const atBottom = container.scrollHeight - container.clientHeight - container.scrollTop <= 1;
-      if (e.deltaY > 0 && atBottom) {
-        e.preventDefault();
-        return;
-      }
-      if (e.deltaY < 0) clearStickOnUserInput();
-    };
-    const onPointerDown = () => {
-      try { cancelScrollAnimation(); } catch {}
-      clearStickOnUserInput();
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || (t as HTMLElement).isContentEditable)) return;
-      if (!SCROLL_KEYS.has(e.key) || !container) return;
-      // Fast-scroll: cancel half-way animation so user's momentum isn't fighting rAF
-      try { cancelScrollAnimation(); } catch {}
-      // "press up 1 time goes up by 1 each time, not snap back" match IRCCloud.
-      clearStickOnUserInput();
-      let delta = 0;
-      let absolute: number | null = null;
-      const line = 40; // ~1 row, matches IRCCloud native line scroll
-      if (e.key === 'ArrowUp') delta = -line;
-      else if (e.key === 'ArrowDown') delta = line;
-      else if (e.key === 'PageUp') delta = -Math.max(100, container.clientHeight * 0.9);
-      else if (e.key === 'PageDown') delta = Math.max(100, container.clientHeight * 0.9);
-      else if (e.key === 'Home') absolute = 0;
-      else if (e.key === 'End') absolute = container.scrollHeight;
-      else if (e.key === ' ' || e.key === 'Spacebar') delta = e.shiftKey ? -Math.max(100, container.clientHeight * 0.9) : Math.max(100, container.clientHeight * 0.9);
-      if (absolute !== null) {
-        e.preventDefault();
-        container.scrollTop = absolute;
-        container.dispatchEvent(new Event('scroll'));
-      } else if (delta !== 0) {
-        e.preventDefault();
-        const next = Math.max(0, Math.min(container.scrollHeight - container.clientHeight, container.scrollTop + delta));
-        if (next !== container.scrollTop) {
-          container.scrollTop = next;
-          container.dispatchEvent(new Event('scroll'));
-        }
-      }
-    };
-    el.addEventListener('scroll', handleScroll, { passive: true });
-    el.addEventListener('wheel', onWheel, { passive: false });
-    el.addEventListener('pointerdown', onPointerDown, { passive: true });
-    window.addEventListener('keydown', onKeyDown, { capture: true });
-    return () => {
-      el.removeEventListener('scroll', handleScroll);
-      el.removeEventListener('wheel', onWheel);
-      el.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown, { capture: true } as EventListenerOptions);
-    };
+    const handler = () => onScroll(true);
+    el.addEventListener('scroll', handler, { passive: true });
+    return () => el.removeEventListener('scroll', handler);
   });
 
-  // When a new message arrives while scrolled up, the ChatterBar below
-  // should appear even though the user hasn't scrolled. Previously
-  // updateChatterCounts was only called on scroll (handleScroll →
-  // scheduleScrollStateUpdate), so new messages while scrolled up never
-  // triggered the bar until the next scroll. This effect watches for new
-  // messages and for bottomSeen changes and schedules an update when not
-  // at bottom, matching IRCCloud's LowerChatterBarView.update on new
-  // message while scrolled up.
-  $effect(() => {
-    void processedMessages.length;
-    const nid = ircState.activeBuffer.networkId;
-    const buf = ircState.activeBuffer.bufferName;
-    void (nid && buf ? getBottomSeen(nid, buf) : null);
-    const atBottom = cachedAtBottom;
-    if (!atBottom) {
-      scheduleScrollStateUpdate();
-    }
+  onMount(() => {
+    ircState.scrollChangeHook = (userScrolled: boolean) => {
+      if (!container) return;
+      onScrollChange(isScrolledToBottom(), userScrolled);
+    };
+  });
+  onDestroy(() => {
+    ircState.scrollChangeHook = null;
+    if (resizingTimeout) clearTimeout(resizingTimeout);
+    if (recentlyScrolledTimeout) clearTimeout(recentlyScrolledTimeout);
+    cancelScrollAnimation();
   });
 
   // ── Row-at-point lookups (IRCCloud BufferLogContainerView.getRowAtPosition) ──
@@ -1667,21 +1086,10 @@
     return row.dataset.msgid || `t:${row.dataset.time}`;
   }
 
-  function updateScrollState(): void {
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const topRow = probeRow(rect, 'top');
-    const bottomRow = probeRow(rect, 'bottom');
-    updateChatterCounts(topRow, bottomRow);
-    updateReadTracking(rect, bottomRow);
-    updateStickyAvatar(topRow, rect);
-    updateScrollClock(topRow);
-  }
-
   // IRCCloud BufferScrollView.updateClock / ScrollClockView.update:
   // show the clock with the upper message's time while scrolled up.
   function updateScrollClock(topRow: HTMLElement | null): void {
-    if (pendingInitialSnap || cachedAtBottom || !topRow) {
+    if (cachedAtBottom || !topRow) {
       clockTs = null;
       return;
     }
@@ -1689,207 +1097,135 @@
     clockTs = Number.isFinite(t) ? t : null;
   }
 
-  function updateChatterCounts(topRow: HTMLElement | null, bottomRow: HTMLElement | null): void {
-    const { networkId, bufferName } = ircState.activeBuffer;
-    if (!networkId || !bufferName) return;
-    const rendered = messagesWithDates;
-
-    const topIdx = topRow ? (renderedIndexByKey.get(rowKeyOf(topRow)) ?? -1) : -1;
-    const bottomIdx = bottomRow ? (renderedIndexByKey.get(rowKeyOf(bottomRow)) ?? -1) : -1;
-
-    // The top/bottom probed rows are partially visible; everything before/
-    // after them in the rendered window is fully out of the viewport.
-    let above = 0;
-    let aboveTs: number | null = null;
-    let firstAboveMsg: IRCMessage | null = null;
-    if (topIdx > 0) {
-      above = topIdx;
-      const item = rendered[0];
-      firstAboveMsg = rawMessageByKey.get(itemKeyOf(item.msg)) ?? null;
-      aboveTs = item.msg.t || null;
-    }
-
-    // Below viewport: in-window rows below the visible bottom + buffered rows beyond the frozen window.
-    let below = 0;
-    let belowTs: number | null = null;
-    let firstBelowMsg: IRCMessage | null = null;
-    const all = processedMessages;
-    const endIdx = Math.max(0, Math.min(renderStart, all.length)) + rendered.length;
-    const bufferedBelow = endIdx < all.length ? all.length - endIdx : 0;
-    const bufferedHead: IRCMessage | null = bufferedBelow > 0 ? all[endIdx] : null;
-    let inWindowBelow = 0;
-    let inWindowHead: IRCMessage | null = null;
-    let inWindowHeadTs: number | null = null;
-    if (bottomIdx >= 0 && bottomIdx < rendered.length - 1) {
-      inWindowBelow = rendered.length - 1 - bottomIdx;
-      const item = rendered[bottomIdx + 1];
-      inWindowHead = rawMessageByKey.get(itemKeyOf(item.msg)) ?? null;
-      inWindowHeadTs = item.msg.t || null;
-    }
-    if (inWindowBelow > 0 && bufferedBelow > 0) {
-      below = inWindowBelow + bufferedBelow;
-      firstBelowMsg = inWindowHead;
-      belowTs = inWindowHeadTs;
-    } else if (inWindowBelow > 0) {
-      below = inWindowBelow;
-      firstBelowMsg = inWindowHead;
-      belowTs = inWindowHeadTs;
-    } else if (bufferedBelow > 0) {
-      below = bufferedBelow;
-      firstBelowMsg = rawMessageByKey.get(itemKeyOf(bufferedHead!)) ?? null;
-      belowTs = bufferedHead!.t || null;
-    } else if (bottomIdx === -1 && rendered.length > 0 && bufferedBelow === 0) {
-      below = 0;
-      belowTs = null;
-    }
-
-    const lastSeenMsg = getLastSeenMessage(networkId, bufferName);
-    // IRCCloud bufferAboveExtras.update: only show upper chatter when
-    // no lastSeen OR count>100 OR has important. Small counts without
-    // highlights are hidden and the divider alone signals unread.
-    if (firstAboveMsg && isMessageUnseen(firstAboveMsg, networkId, bufferName) && lastSeenMsg) {
-      const totalBetween = countMessagesBetween(networkId, bufferName, lastSeenMsg, firstAboveMsg);
-      const important = countImportantMessagesBetween(networkId, bufferName, lastSeenMsg, firstAboveMsg);
-      const shouldShow = !lastSeenMsg || totalBetween > 100 || important > 0;
-      if (!shouldShow) {
-        aboveUnseenCount = 0;
-        aboveUnseenTimestamp = null;
-        aboveUnseenHighlights = 0;
-      } else if (totalBetween > 100) {
-        aboveUnseenCount = totalBetween;
-        aboveUnseenTimestamp = lastSeenMsg.t || null;
-        aboveUnseenHighlights = clearUnseenHighlightsAfter(networkId, bufferName, firstAboveMsg);
-      } else {
-        aboveUnseenCount = important > 0 ? important : totalBetween;
-        aboveUnseenTimestamp = lastSeenMsg.t || null;
-        aboveUnseenHighlights = clearUnseenHighlightsAfter(networkId, bufferName, firstAboveMsg);
-      }
-    } else if (firstAboveMsg && isMessageUnseen(firstAboveMsg, networkId, bufferName) && !lastSeenMsg) {
-      // No lastSeen at all — show count (IRCCloud !n path)
-      const totalBetween = countMessagesBetween(networkId, bufferName, lastSeenMsg as any, firstAboveMsg);
-      aboveUnseenCount = totalBetween > 0 ? totalBetween : 1;
-      aboveUnseenTimestamp = firstAboveMsg.t || null;
-      aboveUnseenHighlights = clearUnseenHighlightsAfter(networkId, bufferName, firstAboveMsg);
-    } else {
-      aboveUnseenCount = 0;
-      aboveUnseenTimestamp = null;
-      aboveUnseenHighlights = 0;
-    }
-
-    // Removed synthetic "instant ↓ bar" that forced `below=1` on any tiny scroll.
-    // Previously `if (!cachedAtBottom && !firstBelowMsg)` always synthesized 1
-    // hidden row even when `bufferedBelow==0` and no unread existed, so
-    // scrolling up 1px while fully read showed "1 unread". Now we only show
-    // the lower bar when there is a genuinely hidden row (inWindowBelow or
-    // bufferedBelow). Tiny scroll with no fully-hidden row correctly shows 0.
-    // IRCCloud LowerChatterBar counts messages *since you scrolled up* (locked
-    // bottomSeen), not total hidden below viewport. Using firstBelow (dynamic
-    // with scroll position) caused the count to flicker as you scrolled and
-    // as new messages arrived. We now use the locked bottomSeen timestamp
-    // set in handleScroll when you left bottom; it stays fixed until you
-    // return to bottom (clearBottomSeen), so the divider and bar are stable.
-    const lockedBottomTs = getBottomSeen(networkId, bufferName);
-    // Only show "unread below" when you are actually scrolled up (not at bottom).
-    // When you are at bottom (looking), you have seen the latest, so the bar
-    // should be hidden even if bottomSeen was locked 5 minutes ago before a
-    // refresh. The lock is cleared in handleScroll when you return to bottom,
-    // but updateChatterCounts can run one rAF before that clear, so we gate
-    // on cachedAtBottom here too to avoid a one-frame flicker.
-    if (lockedBottomTs !== null && !cachedAtBottom) {
-      const list = ircState.messages[`${networkId}:${bufferName}`] ?? [];
-      let lockedMsg: IRCMessage | null = null;
-      for (let i = list.length - 1; i >= 0; i--) {
-        if ((list[i].t || 0) === lockedBottomTs) { lockedMsg = list[i]; break; }
-      }
-      // Fallback: if timestamp not found (clock skew), use firstBelow as before
-      if (!lockedMsg) lockedMsg = firstBelowMsg;
-      if (lockedMsg) {
-        // Count only messages not from self — you already saw your own
-        // echo (it was typed at top of input), so it shouldn't trigger
-        // "New messages since you scrolled up" or the ChatterBar.
-        const myNickLower = (activeNetwork?.currentNick || '').toLowerCase();
-        const listForCount = ircState.messages[`${networkId}:${bufferName}`] ?? [];
-        const startIdx = listForCount.findIndex(m => m === lockedMsg);
-        let filteredTotal = 0;
-        let filteredImportant = 0;
-        if (startIdx >= 0) {
-          for (let i = startIdx + 1; i < listForCount.length; i++) {
-            const m = listForCount[i];
-            if (!m.text || !m.nick) continue;
-            if (stripPrefix(m.nick).toLowerCase() === myNickLower) continue;
-            const isChat = m.command === 'PRIVMSG' || (m.command === 'NOTICE' && !!m.nick);
-            if (!isChat) continue;
-            // Also check if message is actually unseen (t > lastSeen) — but
-            // new messages since lock are all t > lockedMsg.t, and lockedMsg.t
-            // is at or before lastSeen? For now, count all not-from-self after lock.
-            filteredTotal++;
-            // isImportantMessage is not exported, use countImportant logic inline
-            if (m.command === 'PRIVMSG' || m.type === 'action') filteredImportant++;
-          }
-        } else {
-          // Fallback: use original counts if lockedMsg not found in list
-          filteredTotal = countMessagesBetween(networkId, bufferName, lockedMsg);
-          filteredImportant = countImportantMessagesBetween(networkId, bufferName, lockedMsg);
-        }
-        if (filteredTotal === 0) {
-          belowUnseenCount = 0;
-          belowUnseenTimestamp = null;
-          belowUnseenHighlights = 0;
-        } else if (filteredTotal > 100) {
-          belowUnseenCount = filteredTotal;
-          belowUnseenTimestamp = lockedMsg.t || null;
-          belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, lockedMsg);
-        } else {
-          // For <=100, show filtered total (or important if you prefer)
-          belowUnseenCount = filteredTotal;
-          belowUnseenTimestamp = lockedMsg.t || null;
-          belowUnseenHighlights = unseenHighlightCountAfter(networkId, bufferName, lockedMsg);
-        }
-      } else {
-        belowUnseenCount = 0;
-        belowUnseenTimestamp = null;
-        belowUnseenHighlights = 0;
-      }
-    } else {
-      belowUnseenCount = 0;
-      belowUnseenTimestamp = null;
-      belowUnseenHighlights = 0;
-    }
+  function rowMessage(row: HTMLElement | null): IRCMessage | null {
+    if (!row) return null;
+    return rawMessageByKey.get(rowKeyOf(row)) ?? null;
   }
 
-  function updateReadTracking(rect: DOMRect, bottomRow: HTMLElement | null): void {
+  // IRCCloud upperChatter.update(m) (9lob): returns null (no row), true
+  // (bar shown) or false (hidden — the caller may mark the buffer read).
+  function upperUpdate(m: IRCMessage | null): boolean | null {
     const { networkId, bufferName } = ircState.activeBuffer;
-    if (!networkId || !bufferName || !bottomRow) return;
-    // Only update lastSeen when actually at the bottom (have read the latest).
-    // Updating on every scroll while scrolled up would move the "New messages"
-    // divider as you scroll, causing it to follow you instead of staying at
-    // the original unread point (IRCCloud: setLastSeen only on read/deselect,
-    // not on every scroll). Matches BufferView.showSeenMarker priority.
-    if (!cachedAtBottom) return;
-    const rendered = messagesWithDates;
-    let idx = renderedIndexByKey.get(rowKeyOf(bottomRow)) ?? -1;
-    if (idx < 0) return;
-    // Last FULLY visible row: if the bottom row is cut off, step back one
-    // (IRCCloud getRowAtBottomOfScroll half-height rule).
-    const rowRect = bottomRow.getBoundingClientRect();
-    if (rowRect.bottom > rect.bottom + 1) idx -= 1;
-    const item = rendered[idx];
-    if (!item) return;
-    const raw = rawMessageByKey.get(itemKeyOf(item.msg));
-    // Only mark as read if the bottom visible is the actual last message in the buffer
-    // (i.e., you are at the true bottom, not just at the bottom of the windowed view)
-    const all = ircState.messages[`${networkId}:${bufferName}`] ?? [];
-    if (all.length > 0 && raw && (all[all.length - 1].eid !== raw.eid && all[all.length - 1].msgid !== raw.msgid)) {
-      // Bottom visible is not the true last message (windowed view), don't update lastSeen
-      // This prevents lastSeen from moving when you are at the bottom of the windowed view
-      // but not at the true bottom of the buffer (e.g., when renderStart > 0 and you are at bottom of window)
+    if (!m || !networkId || !bufferName) return null;
+    if (isMessageUnseen(m, networkId, bufferName)) {
+      aboveMentions = clearUnseenHighlightsAfter(networkId, bufferName, m.t ?? 0);
+      if (getLastSeen(networkId, bufferName) !== null) {
+        const n = getLastSeenMessage(networkId, bufferName);
+        const show = !n || countMessagesBetween(networkId, bufferName, n, m) > 100 || countImportantMessagesBetween(networkId, bufferName, n, m) > 0;
+        if (show) {
+          aboveCount = true;
+          aboveTime = getLastSeen(networkId, bufferName);
+          aboveVisible = true;
+          return true;
+        }
+      }
+    }
+    aboveVisible = false;
+    aboveCount = 0;
+    aboveTime = null;
+    return false;
+  }
+
+  // IRCCloud lowerChatter.update(m, bottomSeenRow) (wNhE).
+  function lowerUpdate(m: IRCMessage | null): boolean {
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (!m || !networkId || !bufferName) return false;
+    const advanced = updateBottomSeen(networkId, bufferName, m.t ?? 0);
+    const n = getBottomSeen(networkId, bufferName);
+    if (n === null) {
+      belowVisible = false;
+      belowCount = 0;
+      belowMentions = 0;
+      belowTime = null;
+      return false;
+    }
+    belowMentions = unseenHighlightCountAfter(networkId, bufferName, n);
+    const list = ircState.messages[`${networkId}:${bufferName}`] ?? [];
+    let nMsg: IRCMessage | null = null;
+    for (let i = list.length - 1; i >= 0; i--) {
+      if ((list[i].t ?? 0) <= n) { nMsg = list[i]; break; }
+    }
+    const count: number | true = countMessagesBetween(networkId, bufferName, nMsg) > 100 ? true : countImportantMessagesBetween(networkId, bufferName, nMsg);
+    belowTime = !advanced && bottomSeenLockedAt ? bottomSeenLockedAt : Date.now();
+    belowCount = count;
+    belowVisible = count === true || count > 0 || belowMentions > 0;
+    return advanced;
+  }
+
+  function rowElementFor(msg: IRCMessage): HTMLElement | null {
+    if (!container) return null;
+    const rows = container.querySelectorAll<HTMLElement>('.row.messageRow');
+    const key = rowKeyOfMsg(msg);
+    for (const r of rows) if (rowKeyOf(r) === key) return r;
+    return null;
+  }
+
+  // IRCCloud buffer view onScrollChange(atBottom, userScrolled): the read
+  // trigger. Runs after every scroll event and content change.
+  function onScrollChange(atBottom: boolean, userScrolled: boolean): void {
+    if (!container || isServerBuffer) return;
+    const rect = container.getBoundingClientRect();
+    const topRow = probeRow(rect, 'top');
+    let bottomRow = probeRow(rect, 'bottom');
+    if (bottomRow && bottomRow.getBoundingClientRect().bottom > rect.bottom + 1) {
+      // Last FULLY visible row (IRCCloud getRowAtBottomOfScroll).
+      let prev = bottomRow.previousElementSibling as HTMLElement | null;
+      while (prev && !prev.classList.contains('messageRow')) prev = prev.previousElementSibling as HTMLElement | null;
+      if (prev) bottomRow = prev;
+    }
+    if (!fetching) {
+      const { networkId, bufferName } = ircState.activeBuffer;
+      const top = rowMessage(topRow);
+      if (upperUpdate(top) === false && (userScrolled || isSessionFocused()) && networkId && bufferName) {
+        readBuffer(networkId, bufferName);
+      }
+      lowerUpdate(rowMessage(bottomRow));
+    }
+    updateStickyAvatar(topRow, rect);
+    updateScrollClock(topRow);
+    void atBottom;
+  }
+
+  // Upper bar click: scroll to the last-read message if rendered, else
+  // page in more backlog (IRCCloud upperChatter click).
+  function onUpperClick(): void {
+    if (!container) return;
+    const { networkId, bufferName } = ircState.activeBuffer;
+    const lastSeenMsg = networkId && bufferName ? getLastSeenMessage(networkId, bufferName) : null;
+    const key = lastSeenMsg ? itemKeyOf(lastSeenMsg) : '';
+    const idx = key ? (renderedIndexByKey.get(key) ?? -1) : -1;
+    if (idx >= 0) {
+      const row = rowElementFor(messagesWithDates[idx].msg);
+      scrollTo(row ? Math.max(0, dividerPos(row) - 48) : 0, { animate: true });
       return;
     }
-    if (raw?.t) {
-      setLastSeen(networkId, bufferName, raw.t);
-    }
+    scrollToTop();
+    setScrolledToBottom(false);
+    loadOrRenderBacklog();
   }
 
+  function onUpperDismiss(): void {
+    const { networkId, bufferName } = ircState.activeBuffer;
+    if (networkId && bufferName) readBuffer(networkId, bufferName);
+    onScrollChange(isScrolledToBottom(), false);
+  }
+
+  // Lower bar click: render buffered messages, then jump to the
+  // bottomSeen divider (alt → very bottom).
+  function onLowerClick(e?: MouseEvent): void {
+    if (!container) return;
+    flushLiveBuffer();
+    const { networkId, bufferName } = ircState.activeBuffer;
+    const n = networkId && bufferName ? getBottomSeen(networkId, bufferName) : null;
+    if (!e?.altKey && n !== null) {
+      const divider = container.querySelector('.row.seenDivider.bottomSeen') as HTMLElement | null;
+      if (divider) {
+        scrollTo(Math.max(0, dividerPos(divider) - 48), { animate: true });
+        return;
+      }
+    }
+    scrollToBottom();
+  }
   function updateStickyAvatar(topRow: HTMLElement | null, rect: DOMRect): void {
     if (!container) return;
     // IRCCloud setStickyAuthor logic (bufferlogcontainerview.js):
@@ -2048,104 +1384,30 @@
     // svelte-ignore non_reactive_update
     if (stickyAvatarEl) stickyAvatarEl.style.top = `${top}px`;
   }
-
-  // IRCCloud: while scrolled up, new messages are buffered (renderEndKey frozen)
-  $effect(() => {
-    const len = processedMessages.length;
-    const frozen = renderEndKey !== '';
-    void len; void frozen;
-    if (frozen && container) {
-      scheduleScrollStateUpdate();
-    }
-  });
-
-  function scrollToTop(): void {
-    // Clicking the "N unread above" bar means you are going to see those
-    // messages, so mark them as read immediately (don't wait for the smooth
-    // scroll to finish and handleScroll to fire). This prevents the bar
-    // from staying visible after you clicked it and it scrolled to top.
-    const nid = ircState.activeBuffer.networkId;
-    const buf = ircState.activeBuffer.bufferName;
-    if (nid && buf) {
-      aboveUnseenCount = 0;
-      aboveUnseenTimestamp = null;
-      aboveUnseenHighlights = 0;
-    }
-    container?.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-
-  function scrollToBottom(): void {
-    if (!container) return;
-    // Clicking the "N unread below" bar (e.g. "1 unread (less than a minute)")
-    // should immediately mark those new messages as read and hide the bar.
-    // Previously it only scrolled, and relied on handleScroll's atBottom
-    // detection after the smooth scroll finished (rAF + 200ms), so the bar
-    // stayed visible for a moment after you clicked and it scrolled.
-    const nid = ircState.activeBuffer.networkId;
-    const buf = ircState.activeBuffer.bufferName;
-    if (nid && buf) {
-      const list = ircState.messages[`${nid}:${buf}`] ?? [];
-      if (list.length > 0) {
-        const last = list[list.length - 1];
-        if (last.t) {
-          setLastSeen(nid, buf, last.t);
-          clearBottomSeen(nid, buf);
-          // Also clear the buffer's lastSeen for consistency
-          const net = getActiveNetwork();
-          const b = net?.buffers.find(x => x.name === buf);
-          if (b) {
-            b.lastSeen = last.t;
-            b.bottomSeen = last.t;
-          }
-        }
-      }
-      belowUnseenCount = 0;
-      belowUnseenTimestamp = null;
-      belowUnseenHighlights = 0;
-      // Also clear the divider's bottomSeen so it doesn't reappear
-      // on the next updateChatterCounts tick before handleScroll clears.
-    }
-    if (renderEndKey) {
-      renderEndKey = '';
-      maybeTrim();
-      try { flushSync(); } catch {}
-    }
-    cachedAtBottom = true;
-    wasRecentlyAtBottom = true;
-    if (recentlyScrolledTimeout) {
-      clearTimeout(recentlyScrolledTimeout);
-      recentlyScrolledTimeout = null;
-    }
-    container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-  }
 </script>
 
-{#if aboveUnseenCount > 0}
-  <ChatterBar position="above" count={aboveUnseenCount} timestamp={aboveUnseenTimestamp} mentions={aboveUnseenHighlights} onClick={scrollToTop} />
+{#if aboveVisible}
+  <ChatterBar position="above" count={aboveCount === true ? 101 : aboveCount} timestamp={aboveTime} mentions={aboveMentions} onClick={onUpperClick} onDismiss={onUpperDismiss} />
 {/if}
 
 <div class="messages-viewport" class:clockShown={clockTs !== null}>
-  <div class="messages" id="messages" bind:this={container} onscroll={handleScroll} tabindex="0">
-    {#if import.meta.env.MODE !== 'test' && InfiniteLoader && loaderState}
-      <InfiniteLoader {loaderState} triggerLoad={infiniteHandler} intersectionOptions={infiniteOptions}>
-        {#snippet children()}<!-- children rendered via store -->{/snippet}
-        {#snippet loading()}
-          <div class="row fetch" role="status" aria-label="Loading history">
-            <hr />
-            <h4 class="divider-text-wrapper"><span class="divider-text">Fetching more history…</span></h4>
-          </div>
-        {/snippet}
-        {#snippet noData()}<!-- no more history -->{/snippet}
-        {#snippet noResults()}<!-- no results -->{/snippet}
-        {#snippet error(load)}
-          <div class="row fetch" role="alert">
-            <p class="divider-text">Failed to load history</p>
-            <button class="history-loading__retry" onclick={load}>Retry</button>
-          </div>
-        {/snippet}
-      </InfiniteLoader>
-    {:else}
-      <LoadMore {onLoadMore} onRevealFromMemory={revealBacklogFromMemory} />
+  <div class="messages" id="messages" bind:this={container}>
+    {#if !isServerBuffer && hasHistoryLoaded}
+      {#if showFetchRow}
+        <div class="row fetch" class:initialFetch={processedMessages.length === 0} role="status" aria-label="Loading history">
+          <hr />
+          <h4 class="divider-text-wrapper"><span class="divider-text">{processedMessages.length === 0 ? 'Fetching history…' : 'Fetching more history…'}</span></h4>
+        </div>
+      {/if}
+      {#if showFetchFailedRow}
+        <div class="row fetch fetchFailed" role="alert">
+          <hr />
+          <h4 class="divider-text-wrapper"><span class="divider-text">Fetching failed</span></h4>
+        </div>
+      {/if}
+      {#if showLoadMoreRow && !showFetchRow}
+        <div class="row loadMore"><button class="loadMore__button" tabindex="-1" type="button" onclick={clickLoadMore}><span>Load more backlog…</span></button></div>
+      {/if}
     {/if}
 
     {#if !hasHistoryLoaded && !isServerBuffer}
@@ -2219,8 +1481,8 @@
   <ScrollClock ts={clockTs} />
 </div>
 
-{#if belowUnseenCount > 0}
-  <ChatterBar position="below" count={belowUnseenCount} timestamp={belowUnseenTimestamp} mentions={belowUnseenHighlights} onClick={scrollToBottom} />
+{#if belowVisible}
+  <ChatterBar position="below" count={belowCount === true ? 101 : belowCount} timestamp={belowTime} mentions={belowMentions} onClick={onLowerClick} />
 {/if}
 
 <style>
@@ -2237,9 +1499,6 @@
     transition: opacity 80ms ease;
     /* Step 4b: harden window — keep 200-row DOM (renderStart/renderEndKey slice) but let browser skip offscreen layout. */
     contain: layout paint;
-  }
-  .messages.hide-until-snap {
-    opacity: 0;
   }
   /* IRCCloud .clockShown: original IRCCloud pads loadMore/fetch by 30px so
      the floating clock doesn't cover them. That padding changes
@@ -2287,15 +1546,22 @@
   @media (prefers-reduced-motion: reduce) {
     .stickyAvatar { transition: none; }
   }
-  /* Collapse the svelte-infinite loader's empty intersection target to a
-     1px sentinel (IRCCloud parity): the library's default padding-block
-     leaves a permanent ~64px empty band above the first message. The
-     fetch/error rows render with their own styles when active. */
-  :global(.messages-viewport .messages .infinite-loader-wrapper .infinite-intersection-target) {
-    min-height: 1px;
-    padding-block: 0;
-    display: block;
+  /* IRCCloud .row.loadMore: "Load more backlog…" button at the top of the
+     log whenever older history exists and no fetch is in flight. */
+  .row.loadMore {
+    text-align: center;
+    padding: 6px 0;
+    margin: 0;
   }
+  .row.loadMore .loadMore__button {
+    background: none;
+    border: none;
+    color: var(--accent, #1e72ff);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 8px;
+  }
+  .row.loadMore .loadMore__button:hover { text-decoration: underline; }
   /* IRCCloud fetch divider: line with centered text chip (matches the
      LoadMore component's row.fetch). */
   .row.fetch {

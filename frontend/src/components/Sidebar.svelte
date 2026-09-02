@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { ircState } from '../stores/ircStore.svelte';
+  import { ircState, isTrackingUnread, showsUnreadCount } from '../stores/ircStore.svelte';
+  import SidebarIndicators from './SidebarIndicators.svelte';
   import { isFiberServerDown as isServerDown } from '../lib/fiberServer';
-  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem, getBufferPrefs } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
   import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder } from '../stores/api';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
@@ -9,12 +10,7 @@
   import AccountMenu from './AccountMenu.svelte';
   import StaleIndicator from './StaleIndicator.svelte';
 
-  function canShowUnread(networkId: string, bufferName: string): boolean {
-    const p = getBufferPrefs(networkId, bufferName);
-    if (p.mute) return false;
-    if (p.showUnread === false) return false;
-    return true;
-  }
+  let sidebarEl: HTMLDivElement | undefined = $state();
 
   interface Props {
     onSwitchBuffer: (networkId: string, bufferName: string) => void;
@@ -137,7 +133,35 @@
   }
 </script>
 
-<div class="network-list" id="networks">
+{#snippet bufferRow(net: Network, buf: Buffer, extraClasses: string)}
+  {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
+  {@const tracking = isTrackingUnread(net.networkId, buf.name)}
+  {@const badgeCount = buf.unseenHighlights.length > 0 ? buf.unseenHighlights.length : (buf.unseen && showsUnreadCount(net.networkId, buf.name) ? buf.unseenCount : 0)}
+  <li role="presentation"
+      class="buffer buffer-item {extraClasses}"
+      class:active={isActive}
+      class:selected={isActive}
+      class:unread={tracking && buf.unseen}
+      class:ignoredUnread={!tracking && buf.unseen}
+      class:activeBadge={badgeCount > 0}
+      class:secret={buf.modeFlags?.secret}
+      class:private={buf.modeFlags?.private}
+      class:moderated={buf.modeFlags?.moderated}
+      class:inviteOnly={buf.modeFlags?.inviteOnly}
+      class:password={buf.modeFlags?.password}
+      class:buffer-item--joining={buf.joinInFlight}
+      data-buffer-key="{net.networkId}:{buf.name}"
+      onclick={() => onSwitchBuffer(net.networkId, buf.name)}>
+    <span class="buffer" role="tab" tabindex="0" aria-selected={isActive ? 'true' : 'false'}>
+      <div class="bufferBadges"><span class="badge" class:badge--mention={buf.unseenHighlights.length > 0}>{badgeCount > 0 ? (badgeCount > 99 ? '99+' : badgeCount) : ''}</span></div>
+      <span class="g unread__label">unread</span>
+      <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
+      {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
+    </span>
+  </li>
+{/snippet}
+
+<div class="network-list" id="networks" bind:this={sidebarEl}>
   <div class="sidebar-brand">
     <span class="brand-mark" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke-linecap="round">
@@ -156,23 +180,7 @@
       <h2><i class="fa fa-thumb-tack"></i>Pinned</h2>
       <ul class="pinnedBufferList">
         {#each uniquePinned(pinned) as p (p.networkId + ':' + p.buffer.name)}
-          {@const isActive = p.networkId === ircState.activeBuffer.networkId && p.buffer.name === ircState.activeBuffer.bufferName}
-          <li role="presentation"
-              class="buffer channel buffer-item"
-              class:active={isActive}
-              class:unread={p.buffer.unreadCount > 0 && canShowUnread(p.networkId, p.buffer.name)}
-              class:highlight={p.buffer.highlight && canShowUnread(p.networkId, p.buffer.name)}
-              class:buffer-item--joining={p.buffer.joinInFlight}
-              onclick={() => onSwitchBuffer(p.networkId, p.buffer.name)}>
-            <span class="buffer" role="tab" tabindex="0">
-              <span class="label buffer-name">{(p.buffer.type === 'query' ? '' : '#') + stripHash(p.buffer.name)}</span>
-              {#if p.buffer.unreadCount > 0 && canShowUnread(p.networkId, p.buffer.name)}
-                <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${p.networkId}:${normalizeChannelName(p.buffer.name)}`)}>{p.buffer.unreadCount}</span>
-              {:else if (p.buffer.highlightCount ?? 0) > 0 && canShowUnread(p.networkId, p.buffer.name)}
-                <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${p.networkId}:${normalizeChannelName(p.buffer.name)}`)}>{p.buffer.highlightCount}</span>
-              {/if}
-            </span>
-          </li>
+          {@render bufferRow(p.network, p.buffer, 'channel')}
         {/each}
       </ul>
     </ul>
@@ -208,13 +216,15 @@
     {#each dragList as item (item.id)}
       {@const net = item.net}
       {@const isActiveNet = ircState.activeBuffer.networkId === net.networkId && ircState.activeBuffer.bufferName === '_server'}
-      {@const totalNetUnread = net.buffers.reduce((sum, b) => sum + (b.unreadCount || 0), 0)}
-      {@const totalNetHighlights = net.buffers.reduce((sum, b) => sum + (b.highlightCount ?? 0), 0)}
-      <div class="network connection" class:connected={net.connected} class:disconnected={!net.connected}>
+      {@const collapsed = !!collapsedMap[net.networkId]}
+      {@const totalUnread = collapsed && net.buffers.some(b => b.name !== '_server' && b.unseen && isTrackingUnread(net.networkId, b.name))}
+      {@const totalHighlights = net.buffers.reduce((s, b) => s + ((b.name !== '_server' && b.unseen) ? b.unseenHighlights.length : 0), 0)}
+      {@const totalBadge = totalHighlights > 0 ? totalHighlights : net.buffers.reduce((s, b) => s + ((b.name !== '_server' && b.unseen && showsUnreadCount(net.networkId, b.name)) ? b.unseenCount : 0), 0)}
+      <div class="network connection" class:connected={net.connected} class:disconnected={!net.connected}
+           class:collapsed class:totalUnread class:activeTotalBadge={totalBadge > 0}
+           data-network-id={net.networkId}>
         <div class="network-header buffer"
             class:active={isActiveNet}
-            class:unread={totalNetUnread > 0}
-            class:highlight={totalNetHighlights > 0}
             class:collapsed={collapsedMap[net.networkId]}
             role="button"
             tabindex="0"
@@ -232,14 +242,10 @@
               <span class="system-badge" title="Provisioned by IRC Fiber — cannot be removed">system</span>
             {/if}
             <StaleIndicator lastSeenAt={net.lastSeenAt} />
-            {#if totalNetUnread > 0}
-              <span class="unread buffer-unread" data-testid="network-unread">{totalNetUnread}</span>
-            {:else if totalNetHighlights > 0}
-              <span class="unread buffer-unread" data-testid="network-unread">{totalNetHighlights}</span>
-            {/if}
             <button class="bufferOptions" type="button" title="Options" aria-label="Options" aria-expanded="false" aria-haspopup="true" onclick={(e) => { e.stopPropagation(); onNetworkOptions(net.networkId, e); }}><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1A1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8.92 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
           </span>
           <span class="collapseToggle">
+            <span class="totalBadge" class:badge--mention={totalHighlights > 0}>{totalBadge > 0 ? (totalBadge > 99 ? '99+' : totalBadge) : ''}</span>
             {#if dragActive}
               <span class="drag-handle" aria-hidden="true" title="Drag to reorder">
                 <i class="fa fa-grip-lines"></i>
@@ -258,29 +264,7 @@
           {@const currentConversations = uniqueBuffersByName(net.buffers.filter(b => activeFilter(b) && b.type === 'query' && !b.name.startsWith('#')))}
           <ul class="buffers channels network-buffers">
             {#each currentChannels as buf (net.networkId + ':' + buf.name)}
-              {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
-              <li class="buffer channel buffer-item"
-                  class:active={isActive}
-                  class:unread={buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
-                  class:highlight={buf.highlight && canShowUnread(net.networkId, buf.name)}
-                  class:secret={buf.modeFlags?.secret}
-                  class:private={buf.modeFlags?.private}
-                  class:moderated={buf.modeFlags?.moderated}
-                  class:inviteOnly={buf.modeFlags?.inviteOnly}
-                  class:password={buf.modeFlags?.password}
-                  class:buffer-item--joining={buf.joinInFlight}
-                  onclick={() => onSwitchBuffer(net.networkId, buf.name)}
-                  role="presentation">
-                <span class="buffer" role="tab" tabindex="0">
-                  <span class="label buffer-name">{'#' + stripHash(buf.name)}</span>
-                  {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
-                  {#if buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
-                    <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
-                  {:else if (buf.highlightCount ?? 0) > 0 && canShowUnread(net.networkId, buf.name)}
-                    <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.highlightCount}</span>
-                  {/if}
-                </span>
-              </li>
+              {@render bufferRow(net, buf, 'channel')}
             {/each}
           </ul>
           {@const inactive = net.buffers.filter(b => b.name !== '_server' && b.isJoined === false && !archivedMap[`${net.networkId}:${b.name}`] && !hiddenChannelsMap[`${net.networkId}:${b.name}`])}
@@ -302,22 +286,7 @@
             {#if !inactiveIsCollapsed}
               <ul class="buffers inactive-channels">
                 {#each uniqueBuffersByName(inactive) as buf (net.networkId + ':' + buf.name)}
-                  {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
-                  <li class="buffer channel buffer-item inactive"
-                      class:active={isActive}
-                      class:buffer-item--joining={buf.joinInFlight}
-                      onclick={() => onSwitchBuffer(net.networkId, buf.name)}
-                      role="presentation">
-                    <span class="buffer" role="tab" tabindex="0">
-                      <span class="label buffer-name">{(buf.type === 'query' ? '' : '#') + stripHash(buf.name)}</span>
-                      {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
-                      {#if buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
-                        <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
-                      {:else if (buf.highlightCount ?? 0) > 0 && canShowUnread(net.networkId, buf.name)}
-                        <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.highlightCount}</span>
-                      {/if}
-                    </span>
-                  </li>
+                  {@render bufferRow(net, buf, 'channel inactive')}
                 {/each}
               </ul>
             {/if}
@@ -340,23 +309,7 @@
             {#if !convCollapsed}
               <ul class="buffers conversations">
                 {#each currentConversations as buf (net.networkId + ':' + buf.name)}
-                  {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
-                  <li class="buffer conversation buffer-item"
-                      class:active={isActive}
-                      class:unread={buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
-                      class:highlight={buf.highlight && canShowUnread(net.networkId, buf.name)}
-                      onclick={() => onSwitchBuffer(net.networkId, buf.name)}
-                      role="presentation">
-                    <span class="buffer" role="tab" tabindex="0">
-                      <span class="label buffer-name">{buf.name}</span>
-                      {#if pinnedMap[`${net.networkId}:${buf.name}`]}<i class="fa fa-thumb-tack pinned-indicator" aria-hidden="true" title="Pinned"></i>{/if}
-                      {#if buf.unreadCount > 0 && canShowUnread(net.networkId, buf.name)}
-                        <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.unreadCount}</span>
-                      {:else if (buf.highlightCount ?? 0) > 0 && canShowUnread(net.networkId, buf.name)}
-                        <span class="unread buffer-unread" class:pulse={ircState.pulseBuffers.has(`${net.networkId}:${normalizeChannelName(buf.name)}`)}>{buf.highlightCount}</span>
-                      {/if}
-                    </span>
-                  </li>
+                  {@render bufferRow(net, buf, 'conversation')}
                 {/each}
               </ul>
             {/if}
@@ -401,6 +354,7 @@
     {/each}
   </div>
 </div>
+<SidebarIndicators {sidebarEl} {onSwitchBuffer} />
 <div class="addNetworkButtonContainer">
   <button class="addNetworkButton" class:addNetworkButton--selected={ircState.networks.length === 0} id="add-network-btn" type="button" onclick={onAddNetwork}>
     <i class="fa fa-plus-circle"></i>

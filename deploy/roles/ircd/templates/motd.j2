@@ -8,13 +8,17 @@
 
 Welcome to {{ ircd_network_name }}!
 
-{{ ircd_server_name }}
-Enterprise-grade IRC services for the IRC Fiber community.
+{{ ircd_server_name }} — InspIRCd with Anope services.
+Enterprise-grade IRC for the IRC Fiber community.
 
 For support, contact: {{ ircd_admins[0].email if ircd_admins | length > 0 else 'admin@ircfiber.com' }}
 
 Register your nickname with NickServ to protect it:
+    /msg NickServ REGISTER <password> [email]
     /msg NickServ HELP
+
+Register a channel you founded:
+    /msg ChanServ REGISTER #channel
 
 To join a channel:
     /join #channelname

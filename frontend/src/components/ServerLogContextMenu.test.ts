@@ -16,6 +16,7 @@ vi.mock('/src/stores/api', () => ({
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   updateCollapsed: vi.fn(async () => undefined),
+  updateBufferPrefs: vi.fn(async () => undefined),
   clearBacklog: vi.fn(async () => undefined),
   // ircStore imports this for the WebSocket-sync message normalization
   // path. The tests in this file don't exercise that path, so a
@@ -185,6 +186,20 @@ describe('ServerLogContextMenu', () => {
     });
     await userEvent.click(page.getByRole('button', { name: 'Edit…' }));
     expect(onEditNetwork).toHaveBeenCalled();
+  });
+
+  it('Connect with another client… calls onBouncer then onClose', async () => {
+    setupConnectedNetwork();
+    const buf = ircState.networks[0].buffers[0];
+    const onBouncer = vi.fn();
+    const onClose = vi.fn();
+    render(ServerLogContextMenu, {
+      props: { x: 100, y: 100, buf, onClose, onJoinChannel: vi.fn(), onEditNetwork: vi.fn(), onBouncer },
+    });
+    await expect.element(page.getByRole('button', { name: 'Connect with another client…' })).toBeInTheDocument();
+    await userEvent.click(page.getByRole('button', { name: 'Connect with another client…' }));
+    expect(onBouncer).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
   });
 
   it('Join a channel… calls onJoinChannel', async () => {

@@ -34,6 +34,7 @@
         { label: 'Mullvad', path: '/mullvad', icon: '🛡️' },
         { label: 'Replication', path: '/replication', icon: '🔗' },
         { label: 'Sessions', path: '/sessions', icon: '🔑' },
+        { label: 'Bouncer', path: '/bouncer', icon: '🔌' },
         { label: 'Logs', path: '/logs', icon: '📜' },
       ],
     },

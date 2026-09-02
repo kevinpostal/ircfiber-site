@@ -2,8 +2,8 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import {
 	clearedAtMap,
-	unreadMap,
-	highlightMap,
+	unseenMap,
+	unseenHighlightsMap,
 	archivedMap,
 	pinnedMap,
 	hiddenChannelsMap,
@@ -32,8 +32,8 @@ import {
 
 function resetPreferenceState(): void {
 	Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
-	Object.keys(unreadMap).forEach((k) => delete (unreadMap as Record<string, unknown>)[k]);
-	Object.keys(highlightMap).forEach((k) => delete (highlightMap as Record<string, unknown>)[k]);
+	Object.keys(unseenMap).forEach((k) => delete (unseenMap as Record<string, unknown>)[k]);
+	Object.keys(unseenHighlightsMap).forEach((k) => delete (unseenHighlightsMap as Record<string, unknown>)[k]);
 	Object.keys(archivedMap).forEach((k) => delete (archivedMap as Record<string, unknown>)[k]);
 	Object.keys(pinnedMap).forEach((k) => delete (pinnedMap as Record<string, unknown>)[k]);
 	Object.keys(hiddenChannelsMap).forEach((k) => delete (hiddenChannelsMap as Record<string, unknown>)[k]);
@@ -188,21 +188,21 @@ describe('cross-tab sync (storage event)', () => {
 		expect(bufferPrefsMap['net1:#chan']).toBeUndefined();
 	});
 
-	it('updates unreadMap when "ircfiber:unread" changes in another tab', () => {
-		fireStorageEvent('ircfiber:unread', JSON.stringify({ 'net1:#chan': 5 }));
+	it('updates unseenMap when "ircfiber:unseen" changes in another tab', () => {
+		fireStorageEvent('ircfiber:unseen', JSON.stringify({ 'net1:#chan': 3 }));
 		flushSync();
 
-		expect(unreadMap['net1:#chan']).toBe(5);
+		expect(unseenMap['net1:#chan']).toBe(3);
 	});
 
-	it('updates highlightMap when "ircfiber:highlight" changes in another tab', () => {
+	it('updates unseenHighlightsMap when "ircfiber:unseenHighlights" changes in another tab', () => {
 		fireStorageEvent(
-			'ircfiber:highlight',
-			JSON.stringify({ 'net1:#chan': true })
+			'ircfiber:unseenHighlights',
+			JSON.stringify({ 'net1:#chan': [1000, 2000] })
 		);
 		flushSync();
 
-		expect(highlightMap['net1:#chan']).toBe(true);
+		expect(unseenHighlightsMap['net1:#chan']).toEqual([1000, 2000]);
 	});
 
 	it('updates pinnedMap when "ircfiber:pinned" changes in another tab', () => {
@@ -366,8 +366,8 @@ describe('cross-tab sync (storage event)', () => {
 		document.body.innerHTML = '<div id="wrap"></div>';
 
 		fireStorageEvent(
-			'ircfiber:unread',
-			JSON.stringify({ 'net1:#chan': 5 })
+			'ircfiber:unseen',
+			JSON.stringify({ 'net1:#chan': 3 })
 		);
 		flushSync();
 
@@ -426,10 +426,9 @@ describe('networkOrder', () => {
 // All Wave 1/2 protocol changes gate behind these booleans. Most still
 // default OFF for safe rollout; usePrefVersion flips ON in Wave 2.
 describe('featureFlags (W0-T01)', () => {
-	it('DEFAULT_PREFS includes all 6 flags with usePrefVersion ON', () => {
+	it('DEFAULT_PREFS includes all 5 flags with usePrefVersion ON', () => {
 		expect(DEFAULT_PREFS.featureFlags).toBeDefined();
 		expect(DEFAULT_PREFS.featureFlags.usePrefVersion).toBe(true);
-		expect(DEFAULT_PREFS.featureFlags.heartbeat.enabled).toBe(true);
 		expect(DEFAULT_PREFS.featureFlags.editMessage.enabled).toBe(true);
 		expect(DEFAULT_PREFS.featureFlags.buffersToDelete.enabled).toBe(true);
 		expect(DEFAULT_PREFS.featureFlags.idleEvents.enabled).toBe(true);
@@ -438,7 +437,6 @@ describe('featureFlags (W0-T01)', () => {
 
 	it('globalPrefs initializes with all flags enabled (fresh state)', () => {
 		expect(globalPrefs.featureFlags.usePrefVersion).toBe(true);
-		expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(true);
 		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(true);
 		expect(globalPrefs.featureFlags.buffersToDelete.enabled).toBe(true);
 		expect(globalPrefs.featureFlags.idleEvents.enabled).toBe(true);
@@ -457,7 +455,6 @@ describe('featureFlags (W0-T01)', () => {
 		const parsed = JSON.parse(raw as string);
 		expect(parsed.featureFlags.usePrefVersion).toBe(false);
 		// Untouched nested flags are now ON by default
-		expect(parsed.featureFlags.heartbeat.enabled).toBe(true);
 		expect(parsed.featureFlags.editMessage.enabled).toBe(true);
 		expect(parsed.featureFlags.buffersToDelete.enabled).toBe(true);
 		expect(parsed.featureFlags.idleEvents.enabled).toBe(true);
@@ -476,7 +473,6 @@ describe('featureFlags (W0-T01)', () => {
 		expect(raw).toBeTruthy();
 		const parsed = JSON.parse(raw as string);
 		expect(parsed.featureFlags.usePrefVersion).toBe(false);
-		expect(parsed.featureFlags.heartbeat.enabled).toBe(true);
 		expect(parsed.featureFlags.editMessage.enabled).toBe(true);
 
 		window.localStorage.removeItem('ircfiber:globalPrefs');
@@ -492,7 +488,6 @@ describe('featureFlags (W0-T01)', () => {
 			JSON.stringify({
 				featureFlags: {
 					usePrefVersion: true,
-					heartbeat: { enabled: true },
 					editMessage: { enabled: false },
 					buffersToDelete: { enabled: false },
 					idleEvents: { enabled: true },
@@ -503,7 +498,6 @@ describe('featureFlags (W0-T01)', () => {
 		flushSync();
 
 		expect(globalPrefs.featureFlags.usePrefVersion).toBe(true);
-		expect(globalPrefs.featureFlags.heartbeat.enabled).toBe(true);
 		expect(globalPrefs.featureFlags.idleEvents.enabled).toBe(true);
 		expect(globalPrefs.featureFlags.editMessage.enabled).toBe(false);
 	});
@@ -527,7 +521,6 @@ describe('featureFlags (W0-T01)', () => {
 			featureFlags: {
 				...DEFAULT_PREFS.featureFlags,
 				...saved.featureFlags,
-				heartbeat: { ...DEFAULT_PREFS.featureFlags.heartbeat, ...(saved.featureFlags.heartbeat ?? {}) },
 				editMessage: { ...DEFAULT_PREFS.featureFlags.editMessage, ...(saved.featureFlags.editMessage ?? {}) },
 				buffersToDelete: { ...DEFAULT_PREFS.featureFlags.buffersToDelete, ...(saved.featureFlags.buffersToDelete ?? {}) },
 				idleEvents: { ...DEFAULT_PREFS.featureFlags.idleEvents, ...(saved.featureFlags.idleEvents ?? {}) },
@@ -535,7 +528,6 @@ describe('featureFlags (W0-T01)', () => {
 			},
 		};
 		expect(merged.featureFlags.usePrefVersion).toBe(true);
-		expect(merged.featureFlags.heartbeat.enabled).toBe(true);
 		expect(merged.featureFlags.editMessage.enabled).toBe(true);
 		expect(merged.featureFlags.buffersToDelete.enabled).toBe(true);
 		expect(merged.featureFlags.idleEvents.enabled).toBe(true);

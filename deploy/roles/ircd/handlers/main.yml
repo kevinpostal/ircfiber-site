@@ -1,6 +1,18 @@
 ---
-- name: Restart ircd
+# Config-only changes are applied with a rehash (SIGHUP) so connected
+# clients — including every engine-multiplexed platform user — stay up.
+# Module load/unload still needs `make deploy-restart COMP=ircd`.
+- name: Rehash ircd
+  ansible.builtin.command:
+    argv:
+      - docker
+      - kill
+      - --signal=HUP
+      - "{{ ircd_container_name }}"
+  changed_when: true
+
+- name: Restart services
   community.docker.docker_container:
-    name: "{{ ircd_container_name }}"
+    name: "{{ ircd_services_container_name }}"
     state: started
     restart: true

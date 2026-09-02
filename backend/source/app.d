@@ -157,6 +157,11 @@ void main() {
     auto restApi = new RESTAPI(bufferManager, redis, sessionManager);
     restApi.registerRoutes(router);
 
+    // Bouncer listener ("Connect with another client…"). No-op unless
+    // IRCFIBER_BNC_PORT is set (prod: the dedicated ircfiber-bnc container).
+    import ircfiber.bnc.listener : startBncListener;
+    startBncListener(redis);
+
     auto adminController = new AdminController(redis);
     adminController.registerRoutes(router);
     router.get("/ws", handleWebSockets((scope socket) nothrow {

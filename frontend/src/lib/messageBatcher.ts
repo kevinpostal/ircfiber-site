@@ -3,10 +3,11 @@ import type { IRCMessage } from '../types';
 /**
  * Message batcher — mixed strategy.
  *
- * Live chat: "as fast as possible" — 0ms fixed deadline, no extension,
- * so a 100-message burst coalesces in ~4ms and renders as one block.
+ * Live chat: IRCCloud `checkFlush` cadence — flush at once when idle,
+ * otherwise every 200 ms while a burst is in flight, so a 100-message
+ * burst renders as a few blocks instead of a hundred reactive ticks.
  *
- * Backfill/history: debounced 150ms with extension — REST 200 + CHATHISTORY
+ * Backfill/history: debounced 200ms with extension — REST 150 + CHATHISTORY
  * 100 that land 30ms apart coalesce into a single prependMessages() flush
  * instead of two renders ("IRC history then server messages" flicker at
  * /irc/Supernets/channel/superbowl). Cap raised to 400 so 300 fits.
@@ -67,8 +68,19 @@ export function enqueueMessage(networkId: string, bufferName: string, msg: IRCMe
     flushAll();
     return;
   }
-  if (flushTimeout === null) {
-    flushTimeout = setTimeout(flushAll, 0);
+  checkFlush();
+}
+
+// IRCCloud BufferLogView.checkFlush: flush immediately when the last flush
+// was more than bufferFlushTimeout (200 ms) ago, otherwise re-check in
+// 200 ms so a burst renders in ≤5 batches/s instead of one per message.
+const FLUSH_INTERVAL_MS = 200;
+let lastFlush = 0;
+function checkFlush(): void {
+  if (!lastFlush || Date.now() - lastFlush >= FLUSH_INTERVAL_MS) {
+    flushAll();
+  } else if (flushTimeout === null) {
+    flushTimeout = setTimeout(checkFlush, FLUSH_INTERVAL_MS);
   }
 }
 
@@ -85,6 +97,7 @@ function compareBatch(a: IRCMessage, b: IRCMessage): number {
 }
 
 function flushAll(): void {
+  lastFlush = Date.now();
   if (flushTimeout !== null) {
     clearTimeout(flushTimeout);
     flushTimeout = null;

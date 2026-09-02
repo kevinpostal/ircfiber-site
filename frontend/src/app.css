@@ -514,18 +514,6 @@ textarea.message-input {
   transition: box-shadow 150ms ease, border-color 150ms ease;
 }
 
-/* ─── Sidebar unread badge pulse ──────────────────────────────────────
-   When a new unread arrives, the badge briefly scales up then settles.
-   The `.pulse` class is added via JS and removed after the animation. */
-@keyframes badgePulse {
-  0%   { transform: scale(1); }
-  50%  { transform: scale(1.25); }
-  100% { transform: scale(1); }
-}
-.unread.buffer-unread.pulse {
-  animation: badgePulse 250ms ease-out;
-}
-
 /* ─── ChatterBar slide-in ─────────────────────────────────────────────
    The "N unread messages above/below" bar slides in from its edge. */
 @keyframes chatterSlideDown {
@@ -580,7 +568,6 @@ textarea.message-input {
 html:has(dialog[open]) { overflow: hidden; }
 form:has(:invalid) { border-color: crimson; }
 .row.messageRow:has(.mention) { background: color-mix(in oklch, var(--fiber-amber, #f59e0b) 12%, transparent); }
-.buffer:has(.unread-badge), .buffer:has(.unread), .sidebar-buffer:has(.unread-badge) { font-weight: 600; }
 ::highlight(mention) { background: gold; color: inherit; }
 ::view-transition-group(root) { animation-duration: .2s; }
 @media (prefers-reduced-motion: reduce) { ::view-transition-group(root) { animation-duration: 0s; } }

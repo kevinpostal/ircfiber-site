@@ -1,41 +1,95 @@
 ---
-# IRC Fiber — IRC daemon (Ergo) defaults
+# IRC Fiber — IRC daemon (InspIRCd 4 + Anope 2 services) defaults
+#
+# Images, container names, ports and volumes live in
+# inventories/production/group_vars/all/vars.yml.
 
 # Container restart
 ircd_restart_policy: "unless-stopped"
 
-# Data persistence (ports and image defined in group_vars/all.yml)
-ircd_data_mount: "/ircd-data"
+# Host-side config dirs. The InspIRCd dir is bind-mounted over
+# /inspircd/conf/ and must be writable by uid 10000 (the image entrypoint
+# writes cert.pem/key.pem/dhparams.pem there on first boot). The Anope dir
+# holds the rendered config files that are bind-mounted individually into
+# /anope/conf/ (the image ships the *.example.conf includes there).
+ircd_conf_dir: "/etc/ircfiber/ircd"
+ircd_services_conf_dir: "/etc/ircfiber/services"
+ircd_container_uid: 10000
 
-# Network
+# Docker network aliases. The engine dials irc.ircfiber.com; on the host
+# it must resolve to the container (not the public hairpin), so the
+# server name is an alias on ircfiber_net. Anope dials the `ircd` alias.
 ircd_ircfiber_net_alias: "ircd"
+ircd_ircfiber_net_aliases:
+  - "{{ ircd_ircfiber_net_alias }}"
+  - "{{ ircd_server_name }}"
+ircd_services_net_alias: "services"
 
 # Server identity
 ircd_server_name: "irc.ircfiber.com"
+ircd_server_description: "IRC Fiber"
+ircd_server_id: "1FB"
+ircd_net_suffix: ".ircfiber.com"
 ircd_network_name: "IRC Fiber"
 ircd_admins:
   - name: "IRC Fiber Admin"
-    email: "[email protected]"
+    email: "admin@ircfiber.com"
 
-# Registration
+# Services pseudo-server (Anope). Must not collide with any real server.
+ircd_services_name: "services.ircfiber.com"
+ircd_services_description: "IRC Fiber Services"
+# Server-to-server port InspIRCd listens on for the Anope link. Never
+# published to the host; reachable only on the Docker network.
+ircd_link_port: 7000
+
+# Trusted subnet: IRC Fiber engine containers multiplex every platform
+# user through a handful of IPs here, so it gets no clone limits, no DNS
+# lookups and no throttling.
+ircd_trusted_subnet: "{{ docker_ircfiber_subnet }}"
+ircd_engine_class_limit: 20000
+
+# Registration / auth
 ircd_allow_registration: true
 ircd_require_sasl: false
 
 # Limits
 ircd_max_channels_per_account: 100
-ircd_max_nicks_per_account: 5
-ircd_message_max_length: 4096
 ircd_ip_limits_connections: 5
-ircd_ip_limits_duration: 10m
+ircd_public_class_limit: 5000
+ircd_nicklen: 32
+ircd_identlen: 20
+ircd_channellen: 64
+ircd_awaylen: 390
+ircd_kicklen: 390
+ircd_topiclen: 390
+ircd_softlimit: 20000
 
-# Oper
+# Oper (IRCd oper + Anope "Services Root"). Password from vault.
 ircd_oper_name: "admin"
 ircd_oper_vhost: "staff"
+ircd_oper_sslonly: true
 
-# Default channel users auto-join on connect
+# Host cloaking
+ircd_cloak_prefix: "ircfiber"
+ircd_cloak_suffix: "ip"
+
+# Channels every user auto-joins on connect (conn_join). Empty = none.
 ircd_default_channels: []
 #  - "#ircfiber"
-#  - "#general"
+#  - "#welcome"
 
-# Logging
-ircd_log_level: "info"
+# Channels created at boot and kept open when empty (+P). These are the
+# engine's DEFAULT_FIBER_CHANNELS, so the auto-join never 403s.
+ircd_permanent_channels:
+  - channel: "#ircfiber"
+    modes: "nt"
+    topic: "Welcome to IRC Fiber — https://ircfiber.com"
+  - channel: "#welcome"
+    modes: "nt"
+    topic: "New here? Say hi. /msg NickServ HELP to register your nick."
+
+# Logging (InspIRCd log level: error | warning | normal | debug)
+ircd_log_level: "normal"
+
+# Anope: registered nicks expire after this long without identifying.
+ircd_services_nick_expire: "90d"

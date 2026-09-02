@@ -190,7 +190,7 @@
             autoJoinDelaySeconds: (result.autoJoinDelaySeconds as number) ?? 0,
             buffers: [{
               name: '_server', type: 'server' as const, isJoined: true,
-              unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+              unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
               topic: '', topicSetBy: '', topicSetAt: 0, users: [],
               lastSeenMsgTime: null, firstUnseenMsgIndex: null,
               lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},

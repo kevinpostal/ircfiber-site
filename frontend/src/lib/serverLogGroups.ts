@@ -53,6 +53,9 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   // Ban list (367 = RPL_BANLIST, 368 = RPL_ENDOFBANLIST) — consumed by the
   // ban-list overlay; 368 is "End of Channel Ban List" noise.
   if (cmd === '367' || cmd === '368') return 'skip';
+  // ISON replies (303): bouncer clients poll their notify list every
+  // 30 s; one numeric row per poll would drown the timeline.
+  if (cmd === '303') return 'skip';
   if (/^\d{3}$/.test(cmd)) return 'numeric';
   return 'notice';
 }
@@ -65,6 +68,26 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
  * connection into two cards.
  */
 const START_PHASES = new Set(['queued', 'resolving']);
+
+/**
+ * Phases that belong to one physical connect. When a `connecting` event
+ * arrives and the current attempt already has one of these, a NEW attempt
+ * has started (the engine restarted, or the previous connection dropped
+ * without a DISCONNECTED event — e.g. SIGTERM) and the card must split;
+ * otherwise `connecting` simply continues the `queued` card.
+ */
+const CONNECT_BODY_PHASES = new Set([
+  'connecting', 'dns', 'attempt', 'attempt_fail', 'tcp_open', 'tls', 'tls_done',
+  'registering', 'sasl_start', 'sasl_done', 'sasl_fail', 'welcome',
+]);
+
+function isStartPhase(msg: IRCMessage, current: ServerLogAttempt | null): boolean {
+  if (!msg.phase) return false;
+  if (START_PHASES.has(msg.phase)) return true;
+  if (msg.phase !== 'connecting') return false;
+  if (!current) return true;
+  return current.phases.some((p) => !!p.phase && CONNECT_BODY_PHASES.has(p.phase));
+}
 
 /**
  * Phases / commands that mark the END of an attempt. After this we close
@@ -203,7 +226,7 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
     // Phase event with a START phase opens a new attempt AND is
     // included in the timeline (the user wants to see "Connecting…"
     // appear in the card, not just in the header).
-    if (kind === 'phase' && msg.phase && START_PHASES.has(msg.phase)) {
+    if (kind === 'phase' && msg.phase && isStartPhase(msg, current)) {
       // Fix: duplicate START events for the same physical connect
       // produce two cards. The frontend's synthetic `queued` (BufferHeader)
       // and the engine's control-plane `queued` (consumer.d reconnectNetwork)
@@ -212,8 +235,11 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
       // the old logic pushed the first attempt and opened a second one,
       // giving the user two "Connecting..." cards for one click.
       // If there's already an in-flight pending attempt, merge the new
-      // START into it instead of splitting.
-      if (current && current.end === null && current.status === 'pending') {
+      // START into it instead of splitting. A `connecting` that follows a
+      // completed connect body is a real new attempt (isStartPhase) and
+      // must NOT merge — otherwise the previous card swallows the new
+      // connection's phases and the timeline stops being live.
+      if (current && current.end === null && current.status === 'pending' && msg.phase !== 'connecting') {
         current.phases.push(msg);
         continue;
       }
@@ -258,9 +284,15 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
       // "Connecting…" card. The old attempt may already have been changed
       // from 'success' to 'disconnected' by a DISCONNECTED lifecycle event
       // before this START_PHASES event arrives.
-      for (const a of attempts) {
-        if (a.status !== 'pending' && a !== current) {
-          a.status = 'superseded';
+      // A split forced by a bare `connecting` (no queued/resolving marker)
+      // keeps the previous card visible: that is the "connection dropped
+      // without a DISCONNECTED event" case and hiding the old card would
+      // erase the only evidence of the drop.
+      if (START_PHASES.has(msg.phase)) {
+        for (const a of attempts) {
+          if (a.status !== 'pending' && a !== current) {
+            a.status = 'superseded';
+          }
         }
       }
       current.phases.push(msg);
@@ -390,6 +422,9 @@ export function phaseToLabel(p: string): string {
     case 'queued':       return 'queued';
     case 'resolving':    return 'dns';
     case 'connecting':   return 'connect';
+    case 'dns':          return 'dns';
+    case 'attempt':      return 'try';
+    case 'attempt_fail': return 'fail';
     case 'tcp_open':     return 'tcp';
     case 'tls':          return 'tls';
     case 'tls_done':     return 'tls ✓';
@@ -434,6 +469,20 @@ export function attemptDuration(a: ServerLogAttempt): number | null {
 /**
  * Compact human-readable duration string ("1.2s", "342ms").
  */
+/**
+ * Offset of a row from the start of its attempt, rendered as a compact
+ * `+1.2s` / `+34s` / `+2m05s` label so the timeline reads like a real-time
+ * log ("how long did each step take?"). Empty when either timestamp is
+ * missing (legacy scrollback without `t`).
+ */
+export function relativeOffset(startT: number | undefined, t: number | undefined): string {
+  if (!startT || !t) return '';
+  const ms = Math.max(0, t - startT);
+  if (ms < 100) return '+0.0s';
+  if (ms < 60_000) return `+${(ms / 1000).toFixed(1)}s`;
+  return `+${formatDuration(ms)}`;
+}
+
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;

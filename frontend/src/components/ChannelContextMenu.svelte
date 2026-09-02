@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, unarchiveBuffer, initiateRejoin, pruneMessagesBefore, clearMessageCache, clearUnseenHighlightsUntil } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt, unreadMap, highlightMap, globalPrefs } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt, globalPrefs } from '../stores/preferences.svelte';
   import { pinChannel, unpinChannel, updateBufferPrefs, clearBacklog as apiClearBacklog } from '../stores/api';
   import { normalizeChannelName } from '../lib/utils';
   import type { Buffer, IgnoreListData } from '../types';
@@ -219,6 +219,7 @@
   const toggles = $state({
     showMembers: memberPanelOpen,
     showUnread: prefs.showUnread ?? true,
+    showUnreadCount: prefs.showUnreadCount ?? true,
     markAsRead: prefs.markAsRead ?? true,
     notifyAll: prefs.notifyAll ?? false,
     mute: prefs.mute ?? false,
@@ -240,6 +241,7 @@
   // Without this, toggles would stay stuck at the mount-time snapshot.
   $effect(() => {
     toggles.showUnread = prefs.showUnread ?? true;
+    toggles.showUnreadCount = prefs.showUnreadCount ?? true;
     toggles.markAsRead = prefs.markAsRead ?? true;
     toggles.notifyAll = prefs.notifyAll ?? false;
     toggles.mute = prefs.mute ?? false;
@@ -264,14 +266,7 @@
     toggles.notifyAll = nextNotifyAll;
     setBufferPref(networkId, buf.name, 'mute', nextMute);
     setBufferPref(networkId, buf.name, 'notifyAll', nextNotifyAll);
-    if (nextMute) {
-      const mapKey = `${networkId}:${normalizeChannelName(buf.name)}`;
-      delete unreadMap[mapKey];
-      delete highlightMap[mapKey];
-      buf.unreadCount = 0;
-      buf.highlight = false;
-      (buf as unknown as Record<string, unknown>).highlightCount = 0;
-    }
+    if (nextMute) clearUnseenHighlightsUntil(networkId, buf.name, Infinity);
     updateBufferPrefs(networkId, buf.name, { mute: nextMute, notifyAll: nextNotifyAll })
       .catch((err) => console.error('Failed to sync buffer prefs:', err));
   }
@@ -302,14 +297,10 @@
       } else {
         // Persist all other toggles per-buffer so they survive a refresh
         setBufferPref(networkId, buf.name, key, toggles[key]);
-        if ((key === 'mute' && toggles[key] === true) || (key === 'showUnread' && toggles[key] === false)) {
-          const mapKey = `${networkId}:${normalizeChannelName(buf.name)}`;
-          delete unreadMap[mapKey];
-          delete highlightMap[mapKey];
-          buf.unreadCount = 0;
-          buf.highlight = false;
-          (buf as unknown as Record<string, unknown>).highlightCount = 0;
-        }
+        // Muting suppresses highlights (IRCCloud shouldMuteNotifications);
+        // `unseen` is untouched. showUnread=false only changes the class
+        // rendered (ignoredUnread), so nothing to clear there.
+        if (key === 'mute' && toggles[key] === true) clearUnseenHighlightsUntil(networkId, buf.name, Infinity);
         // Sync to server for cross-device realtime propagation
         updateBufferPrefs(networkId, buf.name, { [key]: toggles[key] })
           .catch((err) => console.error('Failed to sync buffer prefs:', err));
@@ -376,6 +367,11 @@
       <li class="trackUnread" class:enabled={toggles.showUnread}>
         <button class="contextMenu__item unread" aria-pressed={toggles.showUnread} onclick={() => toggle('showUnread')}>
           {#if toggles.showUnread}<i class="fa fa-check"></i>{/if}Show unread message indicator
+        </button>
+      </li>
+      <li class="showUnreadCount" class:enabled={toggles.showUnreadCount && toggles.showUnread} aria-disabled={!toggles.showUnread}>
+        <button class="contextMenu__item unreadCount" class:contextMenu__item--disabled={!toggles.showUnread} disabled={!toggles.showUnread} aria-pressed={toggles.showUnreadCount} onclick={() => toggle('showUnreadCount')}>
+          {#if toggles.showUnreadCount && toggles.showUnread}<i class="fa fa-check"></i>{/if}Show unread count
         </button>
       </li>
       <li class="markAsReadOnSelect" class:enabled={toggles.markAsRead}>

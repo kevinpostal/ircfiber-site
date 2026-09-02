@@ -1,0 +1,195 @@
+/*
+ * {{ ansible_managed }}
+ * Anope 2.0 services — {{ ircd_services_name }} for {{ ircd_network_name }}
+ *
+ * Mounted at /anope/conf/services.conf. The *.example.conf includes ship
+ * with the anope/anope image in the same directory; nickserv.conf is our
+ * own (rendered) copy because Anope takes the first module block by
+ * name, so example values cannot be overridden after an include.
+ */
+
+define
+{
+	name = "services.host"
+	value = "{{ ircd_services_name }}"
+}
+
+define
+{
+	name = "services.name"
+	value = "{{ ircd_services_name }}"
+}
+
+/* Uplink: InspIRCd container via its Docker network alias. */
+uplink
+{
+	host = "{{ ircd_ircfiber_net_alias }}"
+	ipv6 = no
+	ssl = no
+	port = {{ ircd_link_port }}
+	password = "{{ vault_ircd_services_link_password }}"
+}
+
+serverinfo
+{
+	name = "services.name"
+	description = "{{ ircd_services_description }}"
+	pid = "/tmp/services.pid"
+	motd = "conf/services.motd"
+}
+
+/* Protocol: InspIRCd 4 speaks the 1205 (v3) link protocol to Anope 2.0. */
+module
+{
+	name = "inspircd3"
+	use_server_side_mlock = yes
+	use_server_side_topiclock = yes
+}
+
+networkinfo
+{
+	networkname = "{{ ircd_network_name }}"
+	nicklen = {{ ircd_nicklen }}
+	userlen = {{ ircd_identlen }}
+	hostlen = 64
+	chanlen = {{ ircd_channellen }}
+	modelistsize = 100
+	vhost_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
+	allow_undotted_vhosts = false
+	disallow_start_or_end = ".-"
+}
+
+options
+{
+	casemap = "ascii"
+	seed = {{ (vault_ircd_cloak_key | hash('sha256'))[:7] | int(base=16) }}
+	strictpasswords = yes
+	badpasslimit = 5
+	badpasstimeout = 1h
+	updatetimeout = 5m
+	expiretimeout = 30m
+	readtimeout = 5s
+	warningtimeout = 4h
+	timeoutcheck = 3s
+	retrywait = 30s
+	hideprivilegedcommands = yes
+	hideregisteredcommands = yes
+	languages = "ca_ES.UTF-8 de_DE.UTF-8 el_GR.UTF-8 es_ES.UTF-8 fr_FR.UTF-8 hu_HU.UTF-8 it_IT.UTF-8 nl_NL.UTF-8 pl_PL.UTF-8 pt_PT.UTF-8 ru_RU.UTF-8 tr_TR.UTF-8"
+}
+
+/* Pseudo-clients. BotServ is intentionally not loaded. */
+include { type = "file"; name = "chanserv.example.conf" }
+include { type = "file"; name = "global.example.conf" }
+include { type = "file"; name = "hostserv.example.conf" }
+include { type = "file"; name = "memoserv.example.conf" }
+include { type = "file"; name = "nickserv.conf" }
+
+/*
+ * os_session MUST be declared before operserv.example.conf (first block by
+ * name wins). Every IRC Fiber user reaches this network through the engine
+ * containers, so all of them share one or two source IPs; the example's
+ * defaultsessionlimit = 5 made OperServ kill every 6th user right after
+ * RPL_WELCOME ("Session limit exceeded", 2026-09-02). 0 = unlimited.
+ */
+module
+{
+	name = "os_session"
+	defaultsessionlimit = 0
+	maxsessionlimit = 100000
+	exceptionexpiry = 1d
+	sessionlimitexceeded = "The session limit for your IP %IP% has been exceeded."
+	sessionlimitdetailsloc = "Please contact staff on #ircfiber."
+}
+include { type = "file"; name = "operserv.example.conf" }
+
+/* Logging: services.log under /anope/logs plus globops for admin actions. */
+log
+{
+	target = "services.log"
+	bot = "Global"
+	logage = 7
+	admin = "*"
+	override = "chanserv/* nickserv/* memoserv/set ~botserv/set botserv/*"
+	commands = "~operserv/* *"
+	servers = "*"
+	users = "connect disconnect nick"
+	other = "*"
+	rawio = no
+	debug = no
+}
+
+log
+{
+	target = "globops"
+	admin = "global/* operserv/chankill operserv/mode operserv/kick operserv/akill operserv/s*line operserv/noop operserv/jupe operserv/oline operserv/set operserv/svsnick operserv/svsjoin operserv/svspart nickserv/getpass */drop"
+	servers = "squit"
+	users = "oper"
+	other = "expire/* bados akill/*"
+}
+
+/* Oper access */
+opertype
+{
+	name = "Helper"
+	commands = "hostserv/*"
+}
+
+opertype
+{
+	name = "Services Operator"
+	inherits = "Helper"
+	commands = "chanserv/list chanserv/suspend chanserv/topic memoserv/staff nickserv/list nickserv/suspend operserv/mode operserv/chankill operserv/akill operserv/session operserv/modinfo operserv/sqline operserv/oper operserv/kick operserv/ignore operserv/snline"
+	privs = "chanserv/auspex chanserv/no-register-limit memoserv/* nickserv/auspex nickserv/confirm"
+}
+
+opertype
+{
+	name = "Services Administrator"
+	inherits = "Services Operator"
+	commands = "botserv/* chanserv/access/list chanserv/drop chanserv/getkey chanserv/saset/noexpire memoserv/sendall nickserv/saset/* nickserv/getemail operserv/news operserv/jupe operserv/svs operserv/stats operserv/oline operserv/noop operserv/forbid global/*"
+	privs = "*"
+}
+
+opertype
+{
+	name = "Services Root"
+	commands = "*"
+	privs = "*"
+}
+
+/*
+ * The IRCd oper account doubles as Services Root: register the nick
+ * "{{ ircd_oper_name }}" with NickServ, identify, then /OPER on the IRCd.
+ */
+oper
+{
+	name = "{{ ircd_oper_name }}"
+	type = "Services Root"
+	require_oper = yes
+}
+
+/* No mailer in the container: registration does not require email confirmation. */
+mail
+{
+	usemail = no
+	sendmailpath = "/usr/sbin/sendmail -t"
+	sendfrom = "{{ ircd_admins[0].email }}"
+	delay = 5m
+}
+
+/* Database: flat file on the /data volume (image symlinks /anope/data/anope.db there). */
+module
+{
+	name = "db_flatfile"
+	/* Relative to /anope/data; anope.db there is a symlink to /data/anope.db (volume). */
+	database = "anope.db"
+	keepbackups = 3
+	fork = no
+}
+
+/* Password hashing: bcrypt for new passwords, sha256 accepted for legacy. */
+module { name = "enc_bcrypt" }
+module { name = "enc_sha256" }
+
+/* Extras: help + m_sasl (IRCv3 SASL PLAIN via InspIRCd's sasl module). */
+include { type = "file"; name = "modules.example.conf" }

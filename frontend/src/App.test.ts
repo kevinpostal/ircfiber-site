@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
-import { ircState, updateChannelUsers, activeJoinList } from './stores/ircStore.svelte';
+import { ircState, updateChannelUsers, activeJoinList, setLastSeenMessage, dirtySeenEids } from './stores/ircStore.svelte';
 import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap, pinnedMap, lastSeenMap, globalPrefs } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 
@@ -83,6 +83,12 @@ vi.mock('/src/stores/api', () => ({
   // path. The tests in this file don't drive the WebSocket sync payload,
   // so a pass-through stub is fine.
   normalizeMessage: vi.fn((m: unknown) => m),
+  fetchBouncer: vi.fn(async () => ({})),
+  generateBouncerPassword: vi.fn(async () => ({})),
+  revokeBouncerPassword: vi.fn(async () => undefined),
+  // Remaining api surface (dialogs/panels imported by App) — inert stubs.
+  updateBncPlaybackLines: vi.fn(async () => undefined),
+  updateNotificationPrefs: vi.fn(async () => undefined),
 }));
 
 import { connectWebSocket, disconnectWebSocket, sendRaw, sendMessage, sendJson, requestSync, requestSwitchBuffer } from '/src/stores/wsConnection.svelte.ts';
@@ -97,6 +103,7 @@ beforeEach(() => {
   ircState.contextMenu = { visible: false, x: 0, y: 0, actions: [] };
   ircState.showSettings = false;
   ircState.showShortcuts = false;
+  for (const k of Object.keys(dirtySeenEids)) delete dirtySeenEids[k];
   history.replaceState({}, '', '/');
 
   // App.svelte's checkAuth() calls raw fetch('/api/me') at boot — not the
@@ -764,224 +771,118 @@ describe('App', () => {
     });
   });
 
-  describe('heartbeat_echo wire (W1-T03)', () => {
-    // The engine publishes ONE heartbeat_echo event per network per 30s
-    // (batched, NOT one per buffer). Wire shape:
-    //   { type: "heartbeat_echo", cid, bid: [name, ...], ts, lastSeen: { name: ts, ... } }
-    // The frontend handler must merge every (cid, bid) pair into lastSeenMap
-    // in a single batched $state mutation so the sidebar's unread counters
-    // don't flicker per-entry.
-
+  describe('heartbeat_echo wire (IRCCloud)', () => {
+    // The gateway fans out `{ type: "heartbeat_echo", seenEids: { cid: { bid: t } } }`
+    // for every changed field after a heartbeat from any of the user's
+    // sessions. The handler applies each entry advance-only.
     afterEach(() => {
       for (const k of Object.keys(lastSeenMap)) delete lastSeenMap[k];
-      // Reset the feature flag back to default OFF so unrelated tests stay clean.
-      globalPrefs.featureFlags.heartbeat.enabled = false;
     });
 
-    it('updates lastSeenMap for every bid[] entry atomically', async () => {
-      // Enable the feature flag locally so the handler runs.
-      globalPrefs.featureFlags.heartbeat.enabled = true;
-
+    async function openSocket(): Promise<(d: unknown) => void> {
       render(App);
-
-      const wsMock = connectWebSocket as unknown as {
-        mock: { calls: Array<Array<(d: unknown) => void>> };
-      };
-      await vi.waitFor(() => {
-        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
-      });
+      const wsMock = connectWebSocket as unknown as { mock: { calls: Array<Array<(d: unknown) => void>> } };
+      await vi.waitFor(() => { expect(wsMock.mock.calls.length).toBeGreaterThan(0); });
       const onMessage = wsMock.mock.calls[0]?.[0];
       expect(onMessage).toBeDefined();
+      return onMessage!;
+    }
 
-      // Server sends a SINGLE heartbeat_echo for the whole network, with
-      // bid[] listing all 3 active buffers and per-buffer lastSeen timestamps.
-      onMessage!({
+    it('applies every seenEids entry', async () => {
+      const onMessage = await openSocket();
+      onMessage({
         type: 'heartbeat_echo',
-        cid: 'net1',
-        bid: ['#chan1', '#chan2', '#chan3'],
-        ts: 1700000000000,
-        lastSeen: {
-          '#chan1': 1700000001000,
-          '#chan2': 1700000002000,
-          '#chan3': 1700000003000,
-        },
+        seenEids: { net1: { '#chan1': 1700000001000, '#chan2': 1700000002000 }, net2: { '#general': 1700000021000 } },
       });
       flushSync();
-
-      // All three (networkId, bufferName) pairs must be present in the
-      // store keyed by the same `${cid}:${bid}` convention used by
-      // setLastSeen / getLastSeen / localStorage roundtrip.
       expect(lastSeenMap['net1:#chan1']).toBe(1700000001000);
       expect(lastSeenMap['net1:#chan2']).toBe(1700000002000);
-      expect(lastSeenMap['net1:#chan3']).toBe(1700000003000);
-    });
-
-    it('does NOT touch lastSeenMap when feature flag is OFF', async () => {
-      globalPrefs.featureFlags.heartbeat.enabled = false;
-
-      render(App);
-
-      const wsMock = connectWebSocket as unknown as {
-        mock: { calls: Array<Array<(d: unknown) => void>> };
-      };
-      await vi.waitFor(() => {
-        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
-      });
-      const onMessage = wsMock.mock.calls[0]?.[0];
-      expect(onMessage).toBeDefined();
-
-      onMessage!({
-        type: 'heartbeat_echo',
-        cid: 'net1',
-        bid: ['#chan1', '#chan2'],
-        ts: 1700000000000,
-        lastSeen: { '#chan1': 1700000001000, '#chan2': 1700000002000 },
-      });
-      flushSync();
-
-      expect(lastSeenMap['net1:#chan1']).toBeUndefined();
-      expect(lastSeenMap['net1:#chan2']).toBeUndefined();
-    });
-
-    it('handles two consecutive heartbeats for different networks without leaking state', async () => {
-      globalPrefs.featureFlags.heartbeat.enabled = true;
-
-      render(App);
-
-      const wsMock = connectWebSocket as unknown as {
-        mock: { calls: Array<Array<(d: unknown) => void>> };
-      };
-      await vi.waitFor(() => {
-        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
-      });
-      const onMessage = wsMock.mock.calls[0]?.[0];
-      expect(onMessage).toBeDefined();
-
-      // Two networks, each sends its own batched heartbeat. The keys must
-      // be namespaced per-network so net1 and net2 with the same channel
-      // name don't collide.
-      onMessage!({
-        type: 'heartbeat_echo',
-        cid: 'net1',
-        bid: ['#general'],
-        ts: 1700000010000,
-        lastSeen: { '#general': 1700000011000 },
-      });
-      onMessage!({
-        type: 'heartbeat_echo',
-        cid: 'net2',
-        bid: ['#general'],
-        ts: 1700000020000,
-        lastSeen: { '#general': 1700000021000 },
-      });
-      flushSync();
-
-      expect(lastSeenMap['net1:#general']).toBe(1700000011000);
       expect(lastSeenMap['net2:#general']).toBe(1700000021000);
+    });
+
+    it('is advance-only: an older echo never moves lastSeen backwards', async () => {
+      lastSeenMap['net1:#chan1'] = 1700000005000;
+      const onMessage = await openSocket();
+      onMessage({ type: 'heartbeat_echo', seenEids: { net1: { '#chan1': 1700000001000 } } });
+      flushSync();
+      expect(lastSeenMap['net1:#chan1']).toBe(1700000005000);
+      onMessage({ type: 'heartbeat_echo', seenEids: { net1: { '#chan1': 1700000009000 } } });
+      flushSync();
+      expect(lastSeenMap['net1:#chan1']).toBe(1700000009000);
+    });
+
+    it('clears a buffer\'s unseen state when the echo covers its last message', async () => {
+      const net = createNetwork({ networkId: 'net1' });
+      net.buffers.push(createBuffer({ name: '#chan1', unseen: true, unseenHighlights: [1000] }));
+      ircState.networks.push(net);
+      ircState.messages['net1:#chan1'] = [createMessage({ t: 1000, nick: 'alice', text: 'hi' })];
+      const onMessage = await openSocket();
+      onMessage({ type: 'heartbeat_echo', seenEids: { net1: { '#chan1': 1000 } } });
+      flushSync();
+      const buf = ircState.networks.find(n => n.networkId === 'net1')?.buffers.find(b => b.name === '#chan1');
+      expect(buf?.unseen).toBe(false);
+      expect(buf?.unseenHighlights).toEqual([]);
     });
   });
 
-  describe('heartbeat send (W2-T01)', () => {
-    // The frontend sends a periodic heartbeat to the server (every 10s)
-    // containing per-network per-buffer lastSeen timestamps. Wire shape:
-    //   { type: 'heartbeat', seenEids: { networkId: { bufName: ts, ... }, ... } }
-    // The timer lifecycle is gated by globalPrefs.featureFlags.heartbeat.enabled.
-    //
-    // Since these tests run in the browser (vitest browser mode), vi.useFakeTimers
-    // does not reliably control setInterval. Instead we verify the timer lifecycle
-    // via the side effects on sendJson (mocked) and lastSeenMap (reactive).
-
-    afterEach(() => {
-      globalPrefs.featureFlags.heartbeat.enabled = false;
-    });
-
-    it('sends { type: "heartbeat", seenEids } with per-network nested structure', async () => {
-      // Populate lastSeenMap with some data that exercises the nesting
-      lastSeenMap['net1:#chan1'] = 1700000001000;
-      lastSeenMap['net1:#chan2'] = 1700000002000;
-      lastSeenMap['net2:#general'] = 1700000011000;
-
-      globalPrefs.featureFlags.heartbeat.enabled = true;
-
-      render(App);
-
-      // Give the WS mock's onOpen time to settle and start the interval.
-      // The real browser interval fires after 10s — we can't wait that long.
-      // Instead verify the heartbeat was NOT sent yet (timer not fired),
-      // then verify the payload structure by checking the key property
-      // that the heartbeat *would* use if it fired: seenEids built from
-      // lastSeenMap must have the right per-network nesting.
-      //
-      // sendJson should NOT have been called yet (interval hasn't fired).
-      expect(sendJson).not.toHaveBeenCalled();
-
-      // Verify the payload shape by building the same structure the
-      // interval callback would. This tests the payload logic directly.
-      const seenEids: Record<string, Record<string, number>> = {};
-      for (const [key, ts] of Object.entries(lastSeenMap)) {
-        const [networkId, ...bufParts] = key.split(':');
-        const bufferName = bufParts.join(':');
-        if (!networkId || !bufferName) continue;
-        if (!seenEids[networkId]) seenEids[networkId] = {};
-        seenEids[networkId][bufferName] = ts;
-      }
-      expect(seenEids).toEqual({
-        net1: { '#chan1': 1700000001000, '#chan2': 1700000002000 },
-        net2: { '#general': 1700000011000 },
-      });
-    });
-
-    it('does NOT send heartbeat when flag is OFF', async () => {
-      globalPrefs.featureFlags.heartbeat.enabled = false;
-
-      render(App);
-
-      // Wait a frame to let any effects run
-      await vi.waitFor(() => {
-        expect(sendJson).not.toHaveBeenCalled();
-      }, { timeout: 200, interval: 20 });
-    });
-
-    it('stops heartbeat timer after WS disconnects (verify via clearInterval)', async () => {
-      globalPrefs.featureFlags.heartbeat.enabled = true;
-
-      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
-
-      render(App);
-
-      // Simulate disconnect — the $effect should call stopHeartbeatTimer()
+  describe('heartbeat send (IRCCloud sendState)', () => {
+    // Every 2 s after the socket opens, dirty `seenEids` (buffers whose
+    // lastSeen changed since the previous send) go out as
+    //   { cmd: 'heartbeat', seenEids: { networkId: { bufName: t } } }
+    // and the dirty map is cleared. Nothing is sent when nothing changed.
+    beforeEach(() => {
       ircState.wsConnected = false;
-      flushSync();
-
-      // Verify clearInterval was called (the $effect stops the timer)
-      expect(clearIntervalSpy).toHaveBeenCalled();
+    });
+    afterEach(() => {
+      for (const k of Object.keys(lastSeenMap)) delete lastSeenMap[k];
+      for (const k of Object.keys(dirtySeenEids)) delete dirtySeenEids[k];
     });
 
-    it('starts heartbeat when feature flag toggled ON mid-session', async () => {
-      globalPrefs.featureFlags.heartbeat.enabled = false;
-
+    it('sends only the dirty entries within ~2 s of a setLastSeenMessage', { timeout: 8000 }, async () => {
+      const net = createNetwork({ networkId: 'net1' });
+      net.buffers.push(createBuffer({ name: '#chan1' }), createBuffer({ name: '#chan2' }));
+      ircState.networks.push(net);
+      lastSeenMap['net1:#chan2'] = 1700000002000; // not dirty — must not be sent
       render(App);
-
-      // Reset mocks so we only count calls after the toggle
+      await vi.waitFor(() => { expect(ircState.wsConnected).toBe(true); });
       vi.mocked(sendJson).mockClear();
 
-      // Toggle the flag ON mid-session
-      globalPrefs.featureFlags.heartbeat.enabled = true;
-      flushSync();
-
-      // The $effect should have started the timer. We can't easily
-      // test setInterval in browser mode, but we can verify the
-      // $effect ran by checking that a subsequent disconnect
-      // calls clearInterval (proving an interval existed).
-      const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval');
-      ircState.wsConnected = false;
-      flushSync();
-      expect(clearIntervalSpy).toHaveBeenCalled();
+      setLastSeenMessage('net1', '#chan1', 1700000001000);
+      await vi.waitFor(() => {
+        expect(vi.mocked(sendJson).mock.calls.some(c => (c[0] as { cmd?: string }).cmd === 'heartbeat')).toBe(true);
+      }, { timeout: 4000, interval: 50 });
+      const call = vi.mocked(sendJson).mock.calls.find(c => (c[0] as { cmd?: string }).cmd === 'heartbeat')!;
+      expect(call[0]).toEqual({ cmd: 'heartbeat', seenEids: { net1: { '#chan1': 1700000001000 } } });
+      expect(Object.keys(dirtySeenEids)).toEqual([]);
     });
 
-    it('populates lastSeenMap when switchToBuffer is called', async () => {
-      globalPrefs.featureFlags.heartbeat.enabled = true;
+    it('does not send a heartbeat when nothing is dirty', { timeout: 8000 }, async () => {
+      render(App);
+      await vi.waitFor(() => { expect(ircState.wsConnected).toBe(true); });
+      vi.mocked(sendJson).mockClear();
+      // Real clock on purpose: the 2 s cadence lives in App's setTimeout
+      // chain and vitest browser mode cannot fake it reliably.
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 2300);
+      await promise;
+      expect(vi.mocked(sendJson).mock.calls.some(c => (c[0] as { cmd?: string }).cmd === 'heartbeat')).toBe(false);
+    });
 
+    it('stops the send loop after the WS closes', async () => {
+      render(App);
+      await vi.waitFor(() => { expect(ircState.wsConnected).toBe(true); });
+      const wsMock = connectWebSocket as unknown as { mock: { calls: Array<Array<() => void>> } };
+      const onClose = wsMock.mock.calls[0]?.[2];
+      expect(onClose).toBeDefined();
+      const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+      onClose!();
+      flushSync();
+      expect(ircState.wsConnected).toBe(false);
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+      clearTimeoutSpy.mockRestore();
+    });
+
+    it('switchToBuffer does NOT mark the buffer read (IRCCloud select never reads)', async () => {
       const net = createNetwork({ networkId: 'net1' });
       net.buffers.push(createBuffer({ name: '#chan' }));
       ircState.networks.push(net);
@@ -990,14 +891,10 @@ describe('App', () => {
       flushSync();
 
       render(App);
-
-      // The mock fires sync during render, which calls
-      // selectLastActiveBuffer → switchToBuffer internally.
-      // switchToBuffer now calls setLastSeen.
-      await vi.waitFor(() => {
-        const lastSeen = lastSeenMap['net1:#chan'];
-        expect(lastSeen).toBeGreaterThan(0);
-      }, { timeout: 500, interval: 50 });
+      await vi.waitFor(() => { expect(ircState.wsConnected).toBe(true); });
+      // selectLastActiveBuffer → switchToBuffer ran synchronously inside the
+      // mocked sync; a read marker would already be present here.
+      expect(lastSeenMap['net1:#chan']).toBeUndefined();
     });
   });
 

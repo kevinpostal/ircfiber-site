@@ -291,7 +291,7 @@ export default defineConfig({
             'src/**/*.svelte.{test,spec}.{ts,js}',
           ],
           exclude: ['src/lib/**/*.{test,spec}.{ts,js}'],
-          setupFiles: ['vitest-browser-svelte'],
+          setupFiles: ['vitest-browser-svelte', './src/test/setup.client.ts'],
         },
       },
     ],

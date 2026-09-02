@@ -5,6 +5,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import { logScroll } from '../test/scroll';
 
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -92,7 +93,7 @@ describe('arrow keys and snap', () => {
     // slowly arrow up 5 times — each ArrowUp should clear stick and scroll 40-80px, staying not at bottom
     for (let i = 0; i < 5; i++) {
       const beforeTop = c.scrollTop;
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       c.scrollTop = Math.max(0, c.scrollTop - 80);
       c.dispatchEvent(new Event('scroll'));
       await delay(80);
@@ -105,7 +106,7 @@ describe('arrow keys and snap', () => {
     }
     const midTop = c.scrollTop;
     for (let i = 0; i < 3; i++) {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       await delay(30);
     }
     // handler now scrolls 40 per press, so mid has moved up ~120

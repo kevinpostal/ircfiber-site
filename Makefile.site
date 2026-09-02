@@ -1805,6 +1805,9 @@ update-gateway-bluegreen: version frontend-build ## Deploy > Blue/green gateway 
 	@rsync -avz --checksum --delete --exclude=node_modules --exclude=.vite --exclude=".vite*" --exclude=dist --exclude=".turbo" --exclude="* 2" --exclude="* 2/**" -e "ssh -o StrictHostKeyChecking=no" frontend/ deploy@$(_target_ssh):/opt/ircfiber-src/frontend/ 2>&1 | tail -5
 	@rm -rf public/dist/.vite* 2>/dev/null; find public/dist -depth -name "* 2*" -exec rm -rf {} + 2>/dev/null || true; chmod -R a+rX public/dist 2>/dev/null || true
 	@tar cz --no-xattrs --exclude=".vite*" --exclude="* 2*" --exclude="* 2/*" --format=ustar -C public dist 2>&1 | ssh -F /dev/null -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_ircfiber -o StrictHostKeyChecking=no deploy@$(_target_ssh) 'sudo sh -c "rm -rf /opt/ircfiber-src/public/dist && mkdir -p /opt/ircfiber-src/public && tar xzf - --no-same-owner -C /opt/ircfiber-src/public && sudo rm -rf /opt/ircfiber-src/public/dist/.vite* /opt/ircfiber-src/frontend/.vite* 2>/dev/null; sudo find /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend -depth -name \"* 2*\" -exec rm -rf {} + 2>/dev/null || true; sudo chmod -R a+rX /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend 2>/dev/null || true; echo public-synced"' 2>&1 | tail -5
+	@# Everything in public/ except dist (landing.html, favicons, fonts, style.css)
+	@# is COPY'd into the image too; the tar above only ships dist/.
+	@rsync -avz --checksum --exclude=dist --exclude=.nosync --exclude=.DS_Store --exclude="* 2" --exclude="* 2.*" --exclude="* 2/**" -e "ssh -o StrictHostKeyChecking=no" public/ deploy@$(_target_ssh):/opt/ircfiber-src/public/ 2>&1 | tail -3
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" backend/ deploy@$(_target_ssh):/opt/ircfiber-src/backend/ 2>&1 | tail -5
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" common/ deploy@$(_target_ssh):/opt/ircfiber-src/common/ 2>&1 | tail -5
 	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile deploy@$(_target_ssh):/opt/ircfiber-src/Containerfile 2>&1 | tail -5
@@ -1900,7 +1903,7 @@ gateway-fix-assets: version frontend-build ## Deploy > Fix live css/js 404 — r
 				set -e; \
 				docker stop ircfiber-gateway 2>/dev/null || true; \
 				docker rm ircfiber-gateway 2>/dev/null || true; \
-				docker run -d --name ircfiber-gateway --restart unless-stopped --network ircfiber_net -v ircfiber_uploads:/app/uploads -v ircfiber_logs:/var/log/irc-fiber --env-file /etc/ircfiber/gateway/env kevindpostal/irc-fiber-gateway:0.3.0 /app/irc-fiber >/dev/null; \
+				docker run -d --name ircfiber-gateway --restart unless-stopped --ulimit nofile=65536:65536 --security-opt no-new-privileges:true --network ircfiber_net -v ircfiber_uploads:/app/uploads -v ircfiber_logs:/var/log/irc-fiber --env-file /etc/ircfiber/gateway/env kevindpostal/irc-fiber-gateway:0.3.0 /app/irc-fiber >/dev/null; \
 				docker network connect ircfiber_logging ircfiber-gateway 2>/dev/null || true; \
 				echo "gateway recreated via docker run"; \
 				docker ps --format "{{.Names}} {{.Status}}" | grep gateway'; \
@@ -2119,14 +2122,15 @@ deploy-signoz-alerts: ## SigNoz > Push alert rules + notification channel (idemp
 
 deploy-signoz: deploy-signoz-dashboards deploy-signoz-alerts ## SigNoz > Push both dashboards + alerts
 
-# ── IRC daemon (Ergo) deploy ────────────────────────────────────────────────────
-# Deploys an Ergo IRC daemon to OVH for product support + testing.
-# Requires vault_ircd_oper_password to be set in vault.yml first.
+# ── IRC daemon (InspIRCd + Anope) deploy ────────────────────────────────────────
+# Deploys InspIRCd 4 + Anope 2 services to OVH (irc.ircfiber.com).
+# Requires vault_ircd_oper_password, vault_ircd_services_link_password and
+# vault_ircd_cloak_key in vault.yml first.
 #
 # Usage:
 #   make deploy-ircd
 #   make deploy-ircd TARGET=ircfiber-ovh-1
-deploy-ircd: ## IRCd > Deploy Ergo IRC daemon to OVH (ports 6667 + 6697)
+deploy-ircd: ## IRCd > Deploy InspIRCd + Anope services to OVH (ports 6667 + 6697)
 	@printf '\n%b\n' "$(_BCn)$(K)$(B)  Deploy IRCd → $(_target)  $(R)"
 	@$(_playbook) playbooks/ircd.yml
 

@@ -5,6 +5,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import { logScroll } from '../test/scroll';
 
 function delay(ms:number){ return new Promise(r=>setTimeout(r,ms)); }
 function nextFrame(){ return new Promise(r=>requestAnimationFrame(()=>r())); }
@@ -47,7 +48,7 @@ describe('fast scroll up to load more', ()=>{
     await nextFrame(); await delay(300);
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight)<=5).toBe(true);
     const startH=c.scrollHeight;
-    window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true, cancelable:true}));
+    logScroll(document.getElementById('messages'), 'ArrowUp');
     c.scrollTop = Math.max(0, c.scrollTop - 100);
     c.dispatchEvent(new Event('scroll'));
     await delay(80); await nextFrame();
@@ -84,7 +85,7 @@ describe('fast scroll up to load more', ()=>{
     await nextFrame(); await delay(300);
     const tops:number[]=[c.scrollTop];
     for(let i=0;i<8;i++){
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true, cancelable:true}));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       await delay(18); await nextFrame();
       const cur=c.scrollTop;
       tops.push(cur);

@@ -1,16 +1,18 @@
 ---
-# IRC Fiber — Deploy IRC daemon (Ergo)
+# IRC Fiber — Deploy IRC daemon (InspIRCd 4) + services (Anope 2)
 #
 # Standalone playbook. Run from the deploy/ directory:
 #
 #   ansible-playbook playbooks/ircd.yml -l ircfiber-ovh-1
 #
 # Sets up:
-#   - Ergo IRC daemon container (ircfiber-ircd)
-#   - Ports 6667 (plain) and 6697 (TLS) exposed
-#   - Persistent data volume for accounts + channels
-#   - NickServ, ChanServ, HostServ, MemoServ built-in services
-#   - Admin oper account from vault
+#   - InspIRCd 4 container (ircfiber-ircd), aliases ircd + irc.ircfiber.com
+#   - Ports 6667 (plain) and 6697 (TLS) exposed; 7000 (server links) internal
+#   - Anope 2 services container (ircfiber-services): NickServ, ChanServ,
+#     HostServ, MemoServ, OperServ, Global + SASL PLAIN
+#   - Persistent volumes: ircfiber_inspircd_data (xlines, permchannels),
+#     ircfiber_services_data (Anope flatfile DB)
+#   - Admin oper account from vault (IRCd oper + Anope Services Root)
 #   - Cloudflare DNS A record for irc.ircfiber.com
 #   - UFW firewall rules for IRC ports
 #
@@ -22,12 +24,14 @@
   vars_files:
     - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
   tasks:
-    - name: Assert vault_ircd_oper_password is set
+    - name: Assert IRCd vault secrets are set
       ansible.builtin.assert:
         that:
           - vault_ircd_oper_password is defined
           - vault_ircd_oper_password | length > 0
-        fail_msg: "vault_ircd_oper_password must be set in vault.yml"
+          - vault_ircd_services_link_password is defined
+          - vault_ircd_cloak_key is defined
+        fail_msg: "vault_ircd_oper_password, vault_ircd_services_link_password and vault_ircd_cloak_key must be set in vault.yml"
 
 - name: Manage Cloudflare DNS for irc.ircfiber.com
   hosts: ircfiber_backend

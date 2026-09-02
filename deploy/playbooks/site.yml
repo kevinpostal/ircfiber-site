@@ -158,7 +158,7 @@
   roles:
     - role: engine
 
-- name: Deploy IRC daemon (Ergo)
+- name: Deploy IRC daemon (InspIRCd + Anope services)
   hosts: ircfiber_backend
   become: true
   gather_facts: true

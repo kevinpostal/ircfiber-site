@@ -1,0 +1,142 @@
+# {{ ansible_managed }}
+# InspIRCd 4 modules — {{ ircd_server_name }}
+# Reference: https://docs.inspircd.org/4/modules/
+
+#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  CORE-ISH  -#-#-#-#-#-#-#-#-#-#-#-#-#-#
+
+<module name="cap">
+<module name="account">
+# alias is loaded by &dir.example;/services/anope.example.conf
+<module name="services">
+<module name="password_hash">
+<module name="sha2">
+<module name="conn_umodes">
+
+#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  IRCv3  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
+
+<module name="ircv3">
+<ircv3 accountnotify="yes"
+       awaynotify="yes"
+       extendedjoin="yes"
+       noimplicitnames="yes"
+       standardreplies="yes">
+<module name="ircv3_accounttag">
+<module name="ircv3_batch">
+<module name="ircv3_capnotify">
+<module name="ircv3_chghost">
+<module name="ircv3_ctctags">
+<module name="ircv3_echomessage">
+<module name="ircv3_invitenotify">
+<module name="ircv3_labeledresponse">
+<module name="ircv3_msgid">
+<module name="ircv3_servertime">
+<module name="monitor">
+<monitor maxentries="64">
+<module name="multiprefix">
+<module name="uhnames">
+<module name="setname">
+
+#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  TLS  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
+
+<module name="ssl_gnutls">
+<sslprofile name="main"
+            provider="gnutls"
+            cafile=""
+            certfile="cert.pem"
+            crlfile=""
+            dhfile="dhparams.pem"
+            hash="sha256"
+            keyfile="key.pem"
+            mindhbits="2048"
+            outrecsize="2048"
+            priority="NORMAL"
+            requestclientcert="yes"
+            strictpriority="no">
+<module name="sslinfo">
+<sslinfo hash="sha256" localsecure="no" operonly="no" welcomemsg="no">
+<module name="sslmodes">
+
+#-#-#-#-#-#-#-#-#-#-#-#-#  SERVICES / SASL  -#-#-#-#-#-#-#-#-#-#-#-#-#-#
+
+<module name="spanningtree">
+
+# Incoming link from Anope (container alias "{{ ircd_services_net_alias }}").
+<link name="{{ ircd_services_name }}"
+      ipaddr="{{ ircd_services_net_alias }}"
+      port="{{ ircd_link_port }}"
+      allowmask="{{ ircd_trusted_subnet }}"
+      hidden="no"
+      sendpass="{{ vault_ircd_services_link_password }}"
+      recvpass="{{ vault_ircd_services_link_password }}">
+
+<services server="{{ ircd_services_name }}" silent="yes">
+
+<module name="sasl">
+<sasl target="{{ ircd_services_name }}" requiressl="no">
+
+#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  HOST CLOAKING  -#-#-#-#-#-#-#-#-#-#-#-#-#
+
+<module name="cloak">
+<module name="cloak_sha256">
+<cloak method="hmac-sha256"
+       key="{{ vault_ircd_cloak_key }}"
+       prefix="{{ ircd_cloak_prefix }}"
+       suffix="{{ ircd_cloak_suffix }}">
+<module name="chghost">
+<module name="chgident">
+<module name="chgname">
+<module name="sethost">
+<module name="setident">
+
+#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  CHANNELS  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
+
+<module name="permchannels">
+<permchanneldb filename="/inspircd/data/permchannels.conf"
+               listmodes="yes"
+               saveperiod="5s"
+               operonly="yes">
+<include file="/inspircd/data/permchannels.conf" missingokay="yes">
+{% for ch in ircd_permanent_channels %}
+<permchannels channel="{{ ch.channel }}" modes="{{ ch.modes | default('nt') }}P" topic="{{ ch.topic | default('') }}">
+{% endfor %}
+
+{% if ircd_default_channels | length > 0 %}
+<module name="conn_join">
+<autojoin channel="{{ ircd_default_channels | join(',') }}">
+{% endif %}
+
+<module name="chanhistory">
+<chanhistory maxlines="50" maxduration="1w" prefixmsg="yes">
+<module name="autoop">
+<module name="banexception">
+<module name="blockcolor">
+<module name="botmode">
+<module name="inviteexception">
+<module name="knock">
+<module name="namedmodes">
+<module name="remove">
+<module name="silence">
+<module name="noctcp">
+<module name="nonotice">
+<module name="opmoderated">
+<module name="delayjoin">
+# Required by Anope's inspircd3 protocol module.
+<module name="hidechans">
+
+#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  OPER TOOLS  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
+
+<module name="opermodes">
+<module name="check">
+<module name="globops">
+<module name="swhois">
+<module name="tline">
+<module name="cban">
+<module name="clearchan">
+<module name="sajoin">
+<module name="sakick">
+<module name="samode">
+<module name="sanick">
+<module name="sapart">
+<module name="saquit">
+<module name="satopic">
+<module name="xline_db">

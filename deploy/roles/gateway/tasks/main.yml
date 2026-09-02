@@ -1,5 +1,6 @@
 ---
 - name: Discover this host's Tailscale IPv4 address
+  tags: [always]
   ansible.builtin.command: tailscale ip -4
   register: tailscale_ip_raw
   changed_when: false
@@ -7,10 +8,12 @@
   check_mode: false
 
 - name: Set host_tailscale_ip fact
+  tags: [always]
   ansible.builtin.set_fact:
     host_tailscale_ip: "{{ tailscale_ip_raw.stdout | trim | split('\n') | first | trim }}"
 
 - name: Resolve backend Tailscale IP (where mongo & redis live)
+  tags: [always]
   ansible.builtin.set_fact:
     backend_tailscale_ip: >-
       {{ hostvars[groups['ircfiber_backend'][0]]['backend_tailscale_ip']
@@ -18,6 +21,7 @@
             | default(host_tailscale_ip)) }}
 
 - name: Pull irc-fiber image (registry configured)
+  tags: [gateway, bnc]
   community.docker.docker_image:
     name: "{{ ircfiber_gateway_image_full }}"
     source: pull
@@ -28,6 +32,7 @@
   # is needed here.
 
 - name: Ensure ircfiber config dir exists
+  tags: [always]
   ansible.builtin.file:
     path: /etc/ircfiber/gateway
     state: directory
@@ -36,6 +41,7 @@
     mode: "0750"
 
 - name: Render gateway env file
+  tags: [always]
   ansible.builtin.template:
     src: env.j2
     dest: /etc/ircfiber/gateway/env
@@ -45,6 +51,7 @@
   notify: Restart gateway replicas
 
 - name: Ensure uploads & logs volumes exist
+  tags: [always]
   community.docker.docker_volume:
     name: "{{ item }}"
     state: present
@@ -53,6 +60,7 @@
     - "{{ gateway_logs_volume }}"
 
 - name: Resolve the ircfiber network name
+  tags: [always]
   ansible.builtin.set_fact:
     ircfiber_networks_for_gateway:
       - name: "{{ docker_ircfiber_network }}"
@@ -61,6 +69,7 @@
       - name: ircfiber_logging
 
 - name: Set facts for gateway replica deployment
+  tags: [always]
   ansible.builtin.set_fact:
     _gw_container_names: "{{ ['ircfiber-gateway'] if (gateway_replica_count | int) == 1 else (range(gateway_replica_count | int) | map('regex_replace', '^', 'ircfiber-gateway-') | list) }}"
 
@@ -70,11 +79,13 @@
 # never compares values, which is how the gateway got stuck with a stale
 # MONGO_URL after a vault rotation on 2026-07-04 (real outage).
 - name: Slurp gateway env file from target
+  tags: [always]
   ansible.builtin.slurp:
     src: /etc/ircfiber/gateway/env
   register: _gateway_env_raw
 
 - name: Parse gateway env into a dict
+  tags: [always]
   vars:
     _raw_lines: "{{ (_gateway_env_raw.content | b64decode).split('\n') | reject('match', '^\\s*#') | map('trim') | reject('equalto', '') | list }}"
     _pairs: "{{ _raw_lines | map('split', '=', 1) | list }}"
@@ -82,6 +93,7 @@
     _gateway_env: "{{ dict(_pairs) }}"
 
 - name: Run ircfiber-gateway replicas
+  tags: [gateway]
   community.docker.docker_container:
     name: "{{ item }}"
     image: "{{ ircfiber_gateway_image_full }}"
@@ -108,3 +120,41 @@
       com.ircfiber.component: "gateway"
       com.ircfiber.version: "{{ ircfiber_version }}"
   loop: "{{ _gw_container_names }}"
+
+# Bouncer listener: same image, dedicated container so the public TCP
+# port is independent of the HTTP gateway replicas (not part of blue/green).
+# TLS uses the LE cert Caddy obtained for bnc_public_host; the Caddy data
+# volume is mounted read-only and the cert is re-read per connection.
+- name: Run ircfiber-bnc
+  tags: [bnc]
+  community.docker.docker_container:
+    name: "{{ bnc_container_name }}"
+    image: "{{ ircfiber_gateway_image_full }}"
+    state: started
+    restart_policy: unless-stopped
+    command: ["/app/irc-fiber"]
+    networks: "{{ ircfiber_networks_for_gateway }}"
+    networks_cli_compatible: true
+    env: "{{ _gateway_env | combine({'IRCFIBER_BNC_PORT': bnc_public_port | string, 'IRCFIBER_BNC_TLS_CERT': bnc_tls_cert_path, 'IRCFIBER_BNC_TLS_KEY': bnc_tls_key_path}) }}"
+    published_ports:
+      - "{{ bnc_public_port }}:{{ bnc_public_port }}"
+    volumes:
+      - "{{ gateway_uploads_volume }}:/app/uploads"
+      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+      - "{{ caddy_data_volume }}:/caddy-data:ro"
+    security_opts:
+      - "no-new-privileges:true"
+    ulimits:
+      - "nofile:65536:65536"
+    healthcheck:
+      # The runtime image has curl but no nc; the bnc process also serves
+      # HTTP on the internal gateway port.
+      test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
+      interval: "{{ gateway_healthcheck_interval }}"
+      timeout: "{{ gateway_healthcheck_timeout }}"
+      retries: "{{ gateway_healthcheck_retries }}"
+      start_period: "{{ gateway_healthcheck_start_period }}"
+    labels:
+      com.ircfiber.component: "bnc"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+  when: bnc_enabled | default(false) | bool

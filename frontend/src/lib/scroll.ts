@@ -1,10 +1,6 @@
 /**
- * Shared scroll helpers — mirrors IRCCloud's animateScrollTo (swing 100ms).
- * Extracted from MessageList.svelte:412-426 so InputArea/App can reuse
- * the same easing without duplicating the rAF loop.
- * Cancellable per ChatInfinite.naivePrependFlickers: a prepend arriving
- * mid-animation must cancel the eased steps or its compensated scrollTop
- * is overwritten next frame.
+ * Shared scroll helpers — mirrors IRCCloud's `scrollTo(y, {animate:true})`
+ * (jQuery animate, duration 100, "swing" easing, afterAnimate callback).
  */
 
 let activeRaf: number | null = null;
@@ -21,6 +17,7 @@ export function animateScrollTo(
   target: number,
   duration = 100,
   afterAnimate?: () => void,
+  onFrame?: () => void,
 ): void {
   cancelScrollAnimation();
   if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
@@ -34,6 +31,7 @@ export function animateScrollTo(
     const t = Math.min((now - startTime) / duration, 1);
     const eased = 0.5 - Math.cos(Math.PI * t) / 2; // jQuery "swing"
     container.scrollTop = start + (target - start) * eased;
+    onFrame?.();
     if (t < 1) activeRaf = requestAnimationFrame(step);
     else {
       activeRaf = null;
@@ -41,14 +39,6 @@ export function animateScrollTo(
     }
   }
   activeRaf = requestAnimationFrame(step);
-}
-
-export function smoothScrollBy(container: HTMLElement, delta: number, duration = 100): void {
-  if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-    container.scrollTop += delta;
-    return;
-  }
-  animateScrollTo(container, container.scrollTop + delta, duration);
 }
 
 export function dividerPos(container: HTMLElement, divider: HTMLElement): number {

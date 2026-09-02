@@ -44,12 +44,16 @@ vault_aws_secret_key: ""
 vault_cloudflare_api_token: "REPLACE-WITH-CF-API-TOKEN"
 vault_cloudflare_account_id: "REPLACE-WITH-CF-ACCOUNT-ID"
 
-# --- IRCd (Ergo) oper account ------------------------------------------------
-# Password for the admin oper account on the IRC daemon.
-# The password hash is generated during deploy via:
-#   docker run --rm ergochat/ergo:stable genpasswd <password>
-# Change this before first deploy.
+# --- IRCd (InspIRCd + Anope) ----------------------------------------------------
+# Oper password: /OPER admin <password> on the IRCd; the same nick, once
+# registered with NickServ, is Anope "Services Root". The role renders it
+# as an InspIRCd hmac-sha256 hash (roles/ircd/files/inspircd_hmac.py).
 vault_ircd_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
+# Shared secret for the InspIRCd <-> Anope server link (>= 16 chars).
+vault_ircd_services_link_password: "REPLACE-WITH-RANDOM-32-CHARS"
+# Host-cloak HMAC key (>= 30 chars). Changing it invalidates existing
+# cloak-based channel bans.
+vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"
 
 # --- Cloudflare Tunnel (cloudflared) -----------------------------------------
 # Token for a named tunnel created in Cloudflare Zero Trust dashboard:

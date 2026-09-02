@@ -1,16 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-vi.mock('svelte-infinite', () => ({
-  InfiniteLoader: class MockInfiniteLoader {},
-  LoaderState: class MockLoaderState {
-    status = 'READY';
-    isFirstLoad = true;
-    loaded() { this.status = 'READY'; this.isFirstLoad = false; }
-    complete() { this.status = 'COMPLETE'; this.isFirstLoad = false; }
-    reset() { this.status = 'READY'; this.isFirstLoad = true; }
-    error() { this.status = 'ERROR'; }
-  },
-  STATUS: { READY: 'READY', LOADING: 'LOADING', COMPLETE: 'COMPLETE', ERROR: 'ERROR' }
-}));
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import { flushSync, tick } from 'svelte';

@@ -14,6 +14,11 @@ caddy_config_dir: /etc/ircfiber/caddy
 # at a working tailscaled.sock). No browser cert warning, no manual trust.
 # Example: caddy_extra_serve_hosts: ["ircfiber-prod-1.tail544547.ts.net"]
 caddy_extra_serve_hosts: []  # yamllint disable-line rule:line-length
+# Subset of served hosts that are NOT behind Cloudflare and therefore need a
+# real Let's Encrypt certificate instead of the internal CA used for the
+# tunnel origin (e.g. bnc.<domain>, whose cert the ircfiber-bnc container
+# reads from the Caddy data volume). Requires ircfiber_use_lets_encrypt.
+caddy_acme_hosts: []
 # Path on the HOST where tailscaled exposes its local API socket. Caddy
 # uses this to fetch TLS certificates for *.ts.net hostnames via Tailscale's
 # built-in ACME flow. Bind-mounted into the Caddy container at the same

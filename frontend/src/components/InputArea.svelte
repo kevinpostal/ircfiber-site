@@ -6,7 +6,6 @@
   import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
   import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix } from '../lib/utils';
-  import { smoothScrollBy } from '../lib/scroll';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
   import { pastebinStore, closeFromFile } from '../stores/pastebinStore.svelte';
@@ -119,12 +118,6 @@
       return h;
     }
     return history;
-  }
-  function scrollMessagesBy(delta: number): boolean {
-    const container = document.getElementById('messages') as HTMLElement | null;
-    if (!container || container.scrollHeight <= container.clientHeight) return false;
-    smoothScrollBy(container, delta, 100);
-    return true;
   }
   let isTabbing = $state(false);
   // Tracks whether we're in that mode so subsequent Tabs cycle regardless
@@ -389,11 +382,6 @@
         requestAnimationFrame(() => {
           if (textarea) textarea.selectionStart = textarea.selectionEnd = inputValue.length;
         });
-      } else {
-        if (scrollMessagesBy(-120)) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
       }
       return;
     }
@@ -406,17 +394,41 @@
         e.preventDefault();
         e.stopPropagation();
         inputValue = entry;
-      } else {
-        if (scrollMessagesBy(120)) {
-          e.preventDefault();
-          e.stopPropagation();
-        }
       }
       return;
     }
 
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') {
       getCurrentHistory().resetIndex();
+    }
+
+    // IRCCloud BufferView.inputKey: PageUp/PageDown page the log; End/Home
+    // with an empty composer jump to the bottom/top. Skipped with
+    // meta/ctrl so browser shortcuts keep working.
+    if (!e.metaKey && !e.ctrlKey) {
+      const log = document.getElementById('messages') as HTMLElement | null;
+      if (log) {
+        if (e.key === 'PageUp') {
+          e.preventDefault();
+          if (log.scrollTop !== 0) log.scrollTop -= log.offsetHeight;
+          return;
+        }
+        if (e.key === 'PageDown') {
+          e.preventDefault();
+          if (log.scrollHeight - (log.offsetHeight + Math.ceil(log.scrollTop)) > 1) log.scrollTop += log.offsetHeight;
+          return;
+        }
+        if (e.key === 'End' && inputValue === '') {
+          e.preventDefault();
+          log.scrollTop = log.scrollHeight;
+          return;
+        }
+        if (e.key === 'Home' && inputValue === '') {
+          e.preventDefault();
+          log.scrollTop = 0;
+          return;
+        }
+      }
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -602,7 +614,7 @@
           if (net && !net.buffers.some(b => b.name === chan)) {
             net.buffers.push({
               name: chan, type: 'channel', isJoined: false,
-              unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+              unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
               topic: '', topicSetBy: '', topicSetAt: 0, users: [],
               lastSeenMsgTime: Date.now(), firstUnseenMsgIndex: null,
               lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},

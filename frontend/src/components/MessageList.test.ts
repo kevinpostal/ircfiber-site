@@ -1,16 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-vi.mock('svelte-infinite', () => ({
-  InfiniteLoader: class MockInfiniteLoader {},
-  LoaderState: class MockLoaderState {
-    status = 'READY';
-    isFirstLoad = true;
-    loaded() { this.status = 'READY'; this.isFirstLoad = false; }
-    complete() { this.status = 'COMPLETE'; this.isFirstLoad = false; }
-    reset() { this.status = 'READY'; this.isFirstLoad = true; }
-    error() { this.status = 'ERROR'; }
-  },
-  STATUS: { READY: 'READY', LOADING: 'LOADING', COMPLETE: 'COMPLETE', ERROR: 'ERROR' }
-}));
 import { page, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
@@ -21,6 +9,7 @@ import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
 import { stripPrefix } from '../lib/utils';
 import { clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
 import type { IRCMessage } from '../types';
+import { logScroll } from '../test/scroll';
 
 function resetState(): void {
 	ircState.networks.length = 0;
@@ -490,7 +479,7 @@ describe('MessageList', () => {
 			expect([0, 1].includes(document.querySelectorAll('.backlogDivider').length)).toBe(true);
 		}, 10000);
 
-		it('auto-fills the viewport when content does not overflow (IRCCloud fill)', async () => {
+		it('shows the "Load more backlog…" row when the log does not overflow (IRCCloud renderLoadMore)', async () => {
 			const net = createNetwork({ networkId: 'net1' });
 			net.buffers.push(createBuffer({ name: '#chan' }));
 			ircState.networks.push(net);
@@ -498,8 +487,8 @@ describe('MessageList', () => {
 			ircState.activeBuffer.bufferName = '#chan';
 
 			// A few messages only — the log can't overflow the viewport, so
-			// it's unscrollable and infiniscroll could never fire. The fill
-			// loop must fetch backlog without any user scroll.
+			// infiniscroll can never fire (isScrolledToBottom() is true). IRCCloud
+			// never auto-fills: it renders the loadMore row and the user clicks.
 			const now = Date.now();
 			ircState.messages['net1:#chan'] = [
 				createMessage({ text: 'one', t: now - 2000, msgid: 'fill-1' }),
@@ -507,12 +496,17 @@ describe('MessageList', () => {
 			];
 			flushSync();
 
-			const onLoadMore = vi.fn().mockResolvedValue(true);
+			const onLoadMore = vi.fn().mockResolvedValue(false);
 			render(MessageList, { props: { onLoadMore } });
-
-			// No scroll events — the fill check plus IRCCloud's 200ms fetch
-			// delay should trigger the load on its own.
-			await vi.waitFor(() => expect(onLoadMore).toHaveBeenCalled(), { timeout: 2000 });
+			flushSync();
+			await new Promise((r) => setTimeout(r, 300));
+			expect(onLoadMore).not.toHaveBeenCalled();
+			const btn = document.querySelector('.row.loadMore .loadMore__button') as HTMLButtonElement | null;
+			expect(btn).not.toBeNull();
+			btn!.click();
+			await vi.waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1), { timeout: 1500 });
+			// Fetch returned false → fully rendered → the row goes away.
+			await vi.waitFor(() => expect(document.querySelector('.row.loadMore')).toBeNull(), { timeout: 1500 });
 		});
 
 		it('never strands the user at scrollTop 0 across consecutive reveals', async () => {
@@ -1166,7 +1160,7 @@ describe('MessageList', () => {
 			// keydown and the first scroll event used to find cachedAtBottom
 			// still true and snap the viewport back to the bottom (holding
 			// ArrowUp "keeps resetting me back down").
-			window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+			logScroll(document.getElementById('messages'), 'ArrowUp');
 
 			appendMessage('net1', '#chan', {
 				command: 'PRIVMSG', nick: 'carol', text: 'lands right after the keydown', t: Date.now(), msgid: 'race-1',
@@ -1182,7 +1176,7 @@ describe('MessageList', () => {
 			expect(drift).toBeGreaterThan(10);
 		});
 
-		it('re-sticks when the user scrolls down near the bottom after reading up', async () => {
+		it('does NOT re-stick 30px from the bottom; only the exact bottom re-pins (IRCCloud 1px)', async () => {
 			const container = await setupScrollableChannel(40);
 			if (!container) return;
 
@@ -1192,10 +1186,9 @@ describe('MessageList', () => {
 			await new Promise((r) => setTimeout(r, 30));
 			expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeGreaterThan(50);
 
-			// Scroll back DOWN into the near-bottom band (30px from bottom).
-			// stick-to-bottom-svelte: a downward scroll within
-			// STICK_TO_BOTTOM_OFFSET_PX re-engages the stick; a stopped
-			// position does not (reading is never yanked).
+			// Scroll back down to 30px from the bottom. IRCCloud has no stick
+			// band: isScrolledToBottom() is a strict 1px check, so the incoming
+			// message stays buffered and the viewport is not moved.
 			container.scrollTop = container.scrollHeight - container.clientHeight - 30;
 			container.dispatchEvent(new Event('scroll'));
 			await new Promise((r) => setTimeout(r, 30));
@@ -1212,10 +1205,17 @@ describe('MessageList', () => {
 			});
 			flushSync();
 			await new Promise((r) => requestAnimationFrame(r));
-			await new Promise((r) => setTimeout(r, 400));
+			await new Promise((r) => setTimeout(r, 200));
 
-			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
-			expect(Math.abs(drift)).toBeLessThan(10);
+			expect(container.scrollHeight - container.clientHeight - container.scrollTop).toBeGreaterThan(20);
+			expect(container.querySelector('[data-msgid="restick-1"]')).toBeNull();
+
+			// Exact bottom: flush + pin.
+			container.scrollTop = container.scrollHeight;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 100));
+			expect(container.querySelector('[data-msgid="restick-1"]')).not.toBeNull();
+			expect(Math.abs(container.scrollHeight - container.clientHeight - container.scrollTop)).toBeLessThan(4);
 		});
 
 		it('snaps to the very bottom when a message from a NEW user arrives', async () => {
@@ -1477,10 +1477,12 @@ describe('MessageList', () => {
 			// Scroll to the top repeatedly so the in-memory reveal pages the
 			// WHOLE backlog into the DOM (renderStart → 0) — the state a user
 			// reaches by reading up through a long history.
+			// Each top hit costs the 100 ms half-way animation plus IRCCloud's
+			// 100 ms setResizing settle during which scroll events are ignored.
 			for (let r = 0; r < 4; r++) {
 				container.scrollTop = 0;
 				container.dispatchEvent(new Event('scroll'));
-				await new Promise((r2) => setTimeout(r2, 60));
+				await new Promise((r2) => setTimeout(r2, 260));
 			}
 			// After fully revealing the backlog (renderStart → 0) the viewport
 			// may be at 0 (correct per IRCCloud when at the very top) or at

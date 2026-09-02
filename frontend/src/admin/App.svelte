@@ -15,6 +15,7 @@
   import Servers from './pages/Servers.svelte';
   import ServerHost from './pages/ServerHost.svelte';
   import Sessions from './pages/Sessions.svelte';
+  import Bouncer from './pages/Bouncer.svelte';
   import Users from './pages/Users.svelte';
   import UserNew from './pages/UserNew.svelte';
   import UserDetail from './pages/UserDetail.svelte';
@@ -50,6 +51,7 @@
     if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
     if (match('/replication', path)) return { kind: 'replication' } as const;
     if (match('/sessions', path)) return { kind: 'sessions' } as const;
+    if (match('/bouncer', path)) return { kind: 'bouncer' } as const;
     if (match('/users/new', path)) return { kind: 'users-new' } as const;
     const usersMatch = match('/users/:id', path);
     if (usersMatch) return { kind: 'users-detail', userId: usersMatch.id } as const;
@@ -83,6 +85,8 @@
         <Replication />
       {:else if page?.kind === 'sessions'}
         <Sessions />
+      {:else if page?.kind === 'bouncer'}
+        <Bouncer />
       {:else if page?.kind === 'logs'}
         <Logs />
       {:else if page?.kind === 'users-new'}

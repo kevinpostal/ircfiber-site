@@ -791,3 +791,89 @@ describe('ServerLogTimeline', () => {
     expect(phaseRows[0].querySelector('.row-tag')).toBeNull();
   });
 });
+describe('ServerLogTimeline live connection flow', () => {
+  function setupConnectingBuffer(): void {
+    const network = createNetwork({ networkId: 'net1', name: 'TestNet', connected: false, connectionState: 'connecting', host: 'irc.test.com', port: 6697 });
+    network.buffers.push(createBuffer({ name: '_server' }));
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '_server';
+  }
+
+  it('shows +offsets per phase row and a live "in progress" row while an attempt is in flight', async () => {
+    setupConnectingBuffer();
+    const network = ircState.networks[0];
+    const start = Date.now() - 12_000;
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting to irc.test.com:6697 (TLS)...', t: start, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'NOTICE', text: 'Resolved irc.test.com → 2 addresses', t: start + 40, eid: 2, phase: 'dns' }),
+      createMessage({ command: 'NOTICE', text: 'Trying 1.2.3.4:6697 via direct (up to 10s)…', t: start + 41, eid: 3, phase: 'attempt' }),
+      createMessage({ command: 'NOTICE', text: '1.2.3.4 via direct: timed out after 10s (10s).', t: start + 10_050, eid: 4, phase: 'attempt_fail' }),
+      createMessage({ command: 'NOTICE', text: 'Trying [2001:db8::1]:6697 via direct (up to 10s)…', t: start + 10_051, eid: 5, phase: 'attempt' }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+    await tick();
+
+    const rows = document.querySelectorAll('[data-testid="phase-row"]');
+    expect(rows.length).toBe(5);
+    const offsets = [...document.querySelectorAll('[data-testid="phase-offset"]')].map((e) => e.textContent);
+    expect(offsets[0]).toBe('+0.0s');
+    expect(offsets[3]).toBe('+10.1s');
+    expect(rows[3].classList.contains('row--fail')).toBe(true);
+    expect(rows[3].textContent).toContain('fail');
+
+    const live = document.querySelector('[data-testid="phase-live"]');
+    expect(live).toBeInTheDocument();
+    expect(live!.textContent).toContain('Waiting for the TCP connection');
+    expect(live!.querySelector('[data-testid="live-elapsed"]')).toBeInTheDocument();
+    // Header carries a live elapsed counter (12 s since the attempt started).
+    const header = document.querySelector('[data-testid="server-log-attempt"]');
+    expect(header!.querySelector('[data-testid="live-elapsed"]')!.textContent).toMatch(/^1\d\.\ds$/);
+  });
+
+  it('does not render the live row once the attempt has ended', async () => {
+    setupConnectingBuffer();
+    const network = ircState.networks[0];
+    const messages = [
+      createMessage({ command: 'NOTICE', text: 'Connecting…', t: 1000, eid: 1, phase: 'connecting' }),
+      createMessage({ command: 'DISCONNECTED', text: 'Failed to connect: All connection attempts failed', t: 35_000, eid: 2 }),
+    ];
+    render(ServerLogTimeline, { props: { messages, network } });
+    await tick();
+    expect(document.querySelector('[data-testid="phase-live"]')).toBeNull();
+    expect(document.querySelector('[data-testid="live-elapsed"]')).toBeNull();
+    const header = document.querySelector('[data-testid="server-log-attempt"]');
+    expect(header!.classList.contains('head--disconnected')).toBe(true);
+  });
+});
+
+describe('ServerLogTimeline updates while an attempt is in flight', () => {
+  it('appends phase rows to the open card as they arrive (no stale memo)', async () => {
+    const network = createNetwork({ networkId: 'net1', name: 'TestNet', connected: false, connectionState: 'connecting', host: 'irc.test.com', port: 6697 });
+    network.buffers.push(createBuffer({ name: '_server' }));
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '_server';
+    const start = Date.now() - 2000;
+    const first = [
+      createMessage({ command: 'NOTICE', text: 'Connecting to irc.test.com:6697 (TLS)...', t: start, eid: 1, phase: 'connecting' }),
+    ];
+    const { rerender } = render(ServerLogTimeline, { props: { messages: first, network } });
+    await tick();
+    expect(document.querySelectorAll('[data-testid="phase-row"]').length).toBe(1);
+
+    const more = [
+      ...first,
+      createMessage({ command: 'NOTICE', text: 'Resolved irc.test.com → 1 address', t: start + 30, eid: 2, phase: 'dns' }),
+      createMessage({ command: 'NOTICE', text: 'TCP connection established', t: start + 400, eid: 3, phase: 'tcp_open' }),
+      createMessage({ command: 'NOTICE', text: 'Starting TLS handshake', t: start + 401, eid: 4, phase: 'tls' }),
+    ];
+    await rerender({ messages: more, network });
+    await tick();
+    const rows = document.querySelectorAll('[data-testid="phase-row"]');
+    expect(rows.length).toBe(4);
+    expect(rows[3].textContent).toContain('Starting TLS handshake');
+    expect(document.querySelector('[data-testid="phase-live"]')!.textContent).toContain('Waiting for the TLS handshake');
+    expect(document.querySelector('[data-testid="connection-events-summary"]')!.textContent).toContain('(4)');
+  });
+});

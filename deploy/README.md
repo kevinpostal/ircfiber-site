@@ -329,6 +329,23 @@ ansible-playbook playbooks/cloudflare.yml
 
 The role manages apex (`@`) and `www` records by default; override `cloudflare_record_prefixes` in `group_vars/all.yml` (or set `cloudflare_records` directly per host) to manage a different set. `cloudflare_proxied: true` flips CF into "orange cloud" mode (CF proxies traffic and terminates TLS at the edge); `false` keeps CF as authoritative DNS only.
 
+### Bouncer (`bnc.<domain>:7000`, "Connect with another client…")
+
+The gateway image also contains the IRCCloud-style bouncer listener; it only listens in a process that has `IRCFIBER_BNC_PORT` set, which the `gateway` role gives to the dedicated `ircfiber-bnc` container (`bnc_enabled`, `bnc_public_host`, `bnc_public_port` in `group_vars/all/vars.yml`). TLS terminates in that container using the Let's Encrypt cert Caddy obtains for `bnc_public_host`, read from the Caddy data volume on every connection, so renewals need no restart. Users generate their per-network password from the network menu (`bnc:<token>` / `bnc@<clientid>:<token>`).
+
+Enable it on a host by adding `bnc_public_host` to `caddy_extra_serve_hosts` and a **DNS-only** `bnc` A record to `cloudflare_records` (raw TCP cannot be orange-clouded — see `host_vars/ircfiber-prod-1.yml`), then run in this order:
+
+```bash
+ansible-playbook playbooks/cloudflare.yml   # bnc.<domain> A record
+ansible-playbook playbooks/caddy.yml        # obtains the LE cert; wait for
+#   docker exec ircfiber-caddy ls /data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/bnc.<domain>/
+ansible-playbook playbooks/firewall.yml     # opens firewall_extra_tcp_ports (7000)
+ansible-playbook playbooks/gateway.yml      # (re)creates ircfiber-bnc; not part of blue/green
+openssl s_client -connect bnc.<domain>:7000 -servername bnc.<domain> </dev/null | head
+```
+
+If Caddy stores the cert elsewhere, point `bnc_tls_cert_path` / `bnc_tls_key_path` at the discovered files in host_vars.
+
 ## Tailscale ACL recommendation
 
 In the Tailscale admin console → ACLs, restrict the `ircfiber` tag to:

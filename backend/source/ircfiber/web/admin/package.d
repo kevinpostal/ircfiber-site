@@ -36,6 +36,8 @@ import ircfiber.web.admin.mongo : apiMongoStatus, apiMongoCollections,
 import ircfiber.web.admin.redis : apiRedisInfo, apiRedisSummary, apiRedisKeys,
     apiRedisKeyDetail, apiRedisSlowlog, apiRedisPubsub, apiRedisClients;
 import ircfiber.web.admin.replication : apiReplicationStatus;
+import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
+    apiBncSeenClear, apiBncSeenForget;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -124,6 +126,13 @@ final class AdminController {
         router.get("/api/admin/uploads", &adminWrap!apiUploadsListRoute);
         router.post("/api/admin/uploads/:id/delete", &adminWrap!apiUploadDeleteRoute);
 
+        // Bouncer: attached clients + accounts with a bouncer password
+        router.get("/api/admin/bnc", &adminWrap!apiBncOverviewRoute);
+        router.post("/api/admin/bnc/clients/:sid/kick", &adminWrap!apiBncKickRoute);
+        router.post("/api/admin/bnc/networks/:id/revoke", &adminWrap!apiBncRevokeRoute);
+        router.post("/api/admin/bnc/networks/:id/seen/clear", &adminWrap!apiBncSeenClearRoute);
+        router.post("/api/admin/bnc/networks/:id/seen/:clientId/forget", &adminWrap!apiBncSeenForgetRoute);
+
         // Mongo monitor
         router.get("/api/admin/mongo/status", &adminWrap!apiMongoStatusRoute);
         router.get("/api/admin/mongo/collections", &adminWrap!apiMongoCollectionsRoute);
@@ -178,6 +187,11 @@ private:
 
     // JSON API handlers — bind storage objects to free functions
     void apiMeRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMe(req, res); }
+    void apiBncOverviewRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncOverview(req, res, redis); }
+    void apiBncKickRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncKick(req, res, redis); }
+    void apiBncRevokeRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncRevoke(req, res, redis); }
+    void apiBncSeenClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncSeenClear(req, res, redis); }
+    void apiBncSeenForgetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncSeenForget(req, res, redis); }
     void apiDashboardRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiDashboard(req, res, redis, serverRegistry);
     }

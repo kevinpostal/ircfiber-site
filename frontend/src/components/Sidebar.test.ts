@@ -5,7 +5,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
-import { ircState, setActiveBuffer, appendMessage, updateChannelUsers, updateNetworkFromSync } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, appendMessage, updateChannelUsers, updateNetworkFromSync, readBuffer } from '../stores/ircStore.svelte';
 import { archivedMap, pinnedMap, networkOrder, collapsedMap, conversationsCollapsedMap, bufferPrefsMap } from '../stores/preferences.svelte';
 
 function resetState(): void {
@@ -89,24 +89,32 @@ describe('Sidebar', () => {
 		expect(document.querySelector('.network-buffers')).not.toBeNull();
 	});
 
-	it('shows unread count badges', async () => {
+	it('shows the unread class (bold + border) and the unseen count badge', async () => {
 		const net = createNetwork({ networkId: 'net1' });
-		net.buffers.push(createBuffer({ name: '#general', unreadCount: 5 }));
+		net.buffers.push(createBuffer({ name: '#general', unseen: true, unseenCount: 4 }));
 		ircState.networks.push(net);
 
 		render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-		await expect.element(page.getByText('5').first()).toBeInTheDocument();
+		const item = document.querySelector('li.buffer-item[data-buffer-key="net1:#general"]');
+		expect(item?.classList.contains('unread')).toBe(true);
+		expect(item?.querySelector('.badge')?.textContent?.trim()).toBe('4');
+		expect(item?.classList.contains('activeBadge')).toBe(true);
+		expect(item?.querySelector('.badge')?.classList.contains('badge--mention')).toBe(false);
 	});
 
-	it('shows highlight indicators', async () => {
+	it('shows the red badge with the highlight count', async () => {
 		const net = createNetwork({ networkId: 'net1' });
-		net.buffers.push(createBuffer({ name: '#general', highlight: true }));
+		net.buffers.push(createBuffer({ name: '#general', unseen: true, unseenCount: 7, unseenHighlights: [1, 2] }));
 		ircState.networks.push(net);
 
 		render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-		expect(document.querySelector('.buffer-item.highlight')).toBeInTheDocument();
+		const item = document.querySelector('li.buffer-item[data-buffer-key="net1:#general"]');
+		expect(item?.classList.contains('activeBadge')).toBe(true);
+		// Mentions win over the plain count.
+		expect(item?.querySelector('.badge')?.textContent?.trim()).toBe('2');
+		expect(item?.querySelector('.badge')?.classList.contains('badge--mention')).toBe(true);
 	});
 
 	it('calls onAddNetwork when add button clicked', async () => {
@@ -179,39 +187,54 @@ describe('Sidebar', () => {
     expect(onSwitchBuffer).not.toHaveBeenCalled();
   });
 
-  it('shows no unread indicator for buffer with 0 unread', async () => {
+  it('shows no unread indicator for a buffer that is not unseen', async () => {
     const net = createNetwork({ networkId: 'net1' });
-    net.buffers.push(createBuffer({ name: '#general', unreadCount: 0 }));
+    net.buffers.push(createBuffer({ name: '#general' }));
     ircState.networks.push(net);
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
     const item = document.querySelector('.buffer-item');
     expect(item?.classList.contains('unread')).toBe(false);
-    expect(document.querySelector('.buffer-unread')).toBeNull();
+    expect(item?.classList.contains('activeBadge')).toBe(false);
   });
 
-  it('shows red unread badge with count when buffer has unread', async () => {
+  it('showUnread=false renders ignoredUnread instead of unread', async () => {
     const net = createNetwork({ networkId: 'net1' });
-    net.buffers.push(createBuffer({ name: '#general', unreadCount: 3 }));
+    net.buffers.push(createBuffer({ name: '#general', unseen: true }));
     ircState.networks.push(net);
+    bufferPrefsMap['net1:#general'] = { showUnread: false };
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
     const item = document.querySelector('.buffer-item');
-    expect(item?.classList.contains('unread')).toBe(true);
-    const badge = document.querySelector('.buffer-unread');
-    expect(badge?.textContent?.trim()).toBe('3');
+    expect(item?.classList.contains('unread')).toBe(false);
+    expect(item?.classList.contains('ignoredUnread')).toBe(true);
   });
 
-  it('reactive: increments unread count when message arrives in inactive buffer', async () => {
+  it('showUnreadCount=false keeps bold/border but drops the plain count; mentions still count', async () => {
     const net = createNetwork({ networkId: 'net1' });
-    const buf = createBuffer({ name: '#general', unreadCount: 0 });
-    net.buffers.push(buf);
+    net.buffers.push(createBuffer({ name: '#a', unseen: true, unseenCount: 5 }), createBuffer({ name: '#b', unseen: true, unseenCount: 5, unseenHighlights: [1] }));
     ircState.networks.push(net);
-    bufferPrefsMap['net1:#general'] = { notifyAll: true };
+    bufferPrefsMap['net1:#a'] = { showUnreadCount: false };
+    bufferPrefsMap['net1:#b'] = { showUnreadCount: false };
 
-    // Active buffer is somewhere else
+    render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+    const a = document.querySelector('[data-buffer-key="net1:#a"]')!;
+    expect(a.classList.contains('unread')).toBe(true);
+    expect(a.classList.contains('activeBadge')).toBe(false);
+    expect(a.querySelector('.badge')?.textContent?.trim()).toBe('');
+    const b = document.querySelector('[data-buffer-key="net1:#b"]')!;
+    expect(b.classList.contains('activeBadge')).toBe(true);
+    expect(b.querySelector('.badge')?.textContent?.trim()).toBe('1');
+  });
+
+  it('reactive: marks the row unread when a message arrives in an inactive buffer', async () => {
+    const net = createNetwork({ networkId: 'net1' });
+    net.buffers.push(createBuffer({ name: '#general' }));
+    ircState.networks.push(net);
+
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#other';
     ircState.focusLost = false;
@@ -219,133 +242,105 @@ describe('Sidebar', () => {
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-    // No indicator initially
     expect(document.querySelector('.buffer-item.unread')).toBeNull();
 
-    // Simulate a message arriving in #general while #other is active
-    appendMessage('net1', '#general', createMessage({ text: 'hello' }));
+    appendMessage('net1', '#general', createMessage({ text: 'hello', nick: 'alice' }));
     flushSync();
 
-    // Indicator should now show "1"
     const item = document.querySelector('.buffer-item.unread');
     expect(item).toBeTruthy();
-    const badge = document.querySelector('.buffer-unread');
-    expect(badge?.textContent?.trim()).toBe('1');
+    expect(item?.querySelector('.badge')?.textContent?.trim()).toBe('1');
   });
 
-  it('reactive: increments unread count for multiple messages', async () => {
+  it('reactive: several plain messages count up', async () => {
     const net = createNetwork({ networkId: 'net1' });
-    const buf = createBuffer({ name: '#general', unreadCount: 0 });
-    net.buffers.push(buf);
+    net.buffers.push(createBuffer({ name: '#general' }));
     ircState.networks.push(net);
-    bufferPrefsMap['net1:#general'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#other';
-    ircState.focusLost = false;
     flushSync();
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-    appendMessage('net1', '#general', createMessage({ text: 'msg1' }));
-    appendMessage('net1', '#general', createMessage({ text: 'msg2' }));
-    appendMessage('net1', '#general', createMessage({ text: 'msg3' }));
+    appendMessage('net1', '#general', createMessage({ text: 'msg1', nick: 'alice' }));
+    appendMessage('net1', '#general', createMessage({ text: 'msg2', nick: 'alice' }));
+    appendMessage('net1', '#general', createMessage({ text: 'msg3', nick: 'alice' }));
     flushSync();
 
-    const badge = document.querySelector('.buffer-unread');
-    expect(badge?.textContent?.trim()).toBe('3');
+    expect(document.querySelector('.buffer-item.unread')).toBeTruthy();
+    expect(document.querySelector('.buffer-item.unread .badge')?.textContent?.trim()).toBe('3');
   });
 
-  it('reactive: clears unread indicator when buffer becomes active', async () => {
+  it('reactive: selecting the buffer does NOT clear unread; marking it read does', async () => {
     const net = createNetwork({ networkId: 'net1' });
-    const buf = createBuffer({ name: '#general', unreadCount: 0 });
-    net.buffers.push(buf);
+    net.buffers.push(createBuffer({ name: '#general' }));
     ircState.networks.push(net);
-    bufferPrefsMap['net1:#general'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#other';
-    ircState.focusLost = false;
     flushSync();
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-    appendMessage('net1', '#general', createMessage({ text: 'hello' }));
+    appendMessage('net1', '#general', createMessage({ t: 1000, text: 'hello', nick: 'alice' }));
     flushSync();
-    expect(document.querySelector('.buffer-unread')?.textContent?.trim()).toBe('1');
+    expect(document.querySelector('.buffer-item.unread')).toBeTruthy();
 
-    // Switch to the buffer
     setActiveBuffer('net1', '#general');
     flushSync();
+    expect(document.querySelector('.buffer-item.unread')).toBeTruthy();
 
+    readBuffer('net1', '#general');
+    flushSync();
     expect(document.querySelector('.buffer-item.unread')).toBeNull();
-    expect(document.querySelector('.buffer-unread')).toBeNull();
   });
 
-  it('per-channel: unread counts are tracked independently per channel', async () => {
-    const net = createNetwork({ networkId: 'net1' });
-    const chan1 = createBuffer({ name: '#chan1', unreadCount: 0 });
-    const chan2 = createBuffer({ name: '#chan2', unreadCount: 0 });
-    const chan3 = createBuffer({ name: '#chan3', unreadCount: 0 });
-    net.buffers.push(chan1, chan2, chan3);
+  it('per-channel: unseen is tracked independently per channel', async () => {
+    const net = createNetwork({ networkId: 'net1', nick: 'me', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: '#chan1' }), createBuffer({ name: '#chan2' }), createBuffer({ name: '#chan3' }));
     ircState.networks.push(net);
-    bufferPrefsMap['net1:#chan1'] = { notifyAll: true };
-    bufferPrefsMap['net1:#chan2'] = { notifyAll: true };
-    bufferPrefsMap['net1:#chan3'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#active';
-    ircState.focusLost = false;
     flushSync();
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-    // Receive messages in different channels
-    appendMessage('net1', '#chan1', createMessage({ text: 'a1' }));
-    appendMessage('net1', '#chan1', createMessage({ text: 'a2' }));
-    appendMessage('net1', '#chan2', createMessage({ text: 'b1' }));
-    appendMessage('net1', '#chan3', createMessage({ text: 'c1' }));
-    appendMessage('net1', '#chan3', createMessage({ text: 'c2' }));
-    appendMessage('net1', '#chan3', createMessage({ text: 'c3' }));
+    appendMessage('net1', '#chan1', createMessage({ text: 'a1', nick: 'alice' }));
+    appendMessage('net1', '#chan3', createMessage({ text: 'me: c1', nick: 'alice' }));
+    appendMessage('net1', '#chan3', createMessage({ text: 'me: c2', nick: 'alice', t: Date.now() + 1 }));
     flushSync();
 
-    const items = document.querySelectorAll('.buffer-item.unread');
-    expect(items.length).toBe(3);
-
-    // Only count channel-level unread badges, not network-level totals
-    const badges = document.querySelectorAll('.network-buffers .buffer-unread');
-    const counts = Array.from(badges).map(b => b.textContent?.trim());
-    expect(counts.sort()).toEqual(['1', '2', '3']);
+    expect(document.querySelector('[data-buffer-key="net1:#chan1"] .badge')?.textContent?.trim()).toBe('1');
+    expect(document.querySelector('[data-buffer-key="net1:#chan2"]')?.classList.contains('unread')).toBe(false);
+    expect(document.querySelector('[data-buffer-key="net1:#chan3"] .badge')?.textContent?.trim()).toBe('2');
   });
 
-  it('shows highlight (orange) badge for highlighted messages', async () => {
+  it('shows the red badge for a mention', async () => {
     const net = createNetwork({ networkId: 'net1', nick: 'myuser', currentNick: 'myuser' });
-    const buf = createBuffer({ name: '#general', unreadCount: 0, highlight: false });
-    net.buffers.push(buf);
+    net.buffers.push(createBuffer({ name: '#general' }));
     ircState.networks.push(net);
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#other';
-    ircState.focusLost = false;
     flushSync();
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-    // Send a message mentioning myuser → should trigger highlight
     appendMessage('net1', '#general', createMessage({ text: 'hey myuser look at this', nick: 'other' }));
     flushSync();
 
-    const item = document.querySelector('.buffer-item.highlight');
+    const item = document.querySelector('.buffer-item.activeBadge');
     expect(item).toBeTruthy();
     expect(item?.classList.contains('unread')).toBe(true);
+    expect(item?.querySelector('.badge')?.textContent?.trim()).toBe('1');
   });
 
-  it('does NOT show indicator for messages in the currently active buffer', async () => {
+  it('marks the ACTIVE buffer unread too until the read trigger fires (IRCCloud)', async () => {
     const net = createNetwork({ networkId: 'net1' });
-    const buf = createBuffer({ name: '#general', unreadCount: 0 });
-    net.buffers.push(buf);
+    net.buffers.push(createBuffer({ name: '#general' }));
     ircState.networks.push(net);
-    bufferPrefsMap['net1:#general'] = { notifyAll: true };
 
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#general';
@@ -354,11 +349,13 @@ describe('Sidebar', () => {
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
-    appendMessage('net1', '#general', createMessage({ text: 'hello' }));
+    appendMessage('net1', '#general', createMessage({ text: 'hello', nick: 'alice' }));
     flushSync();
 
+    expect(document.querySelector('.buffer-item.unread')).toBeTruthy();
+    readBuffer('net1', '#general');
+    flushSync();
     expect(document.querySelector('.buffer-item.unread')).toBeNull();
-    expect(document.querySelector('.buffer-unread')).toBeNull();
   });
 
   describe('inactive channels (isJoined: false)', () => {
@@ -966,12 +963,12 @@ describe('Sidebar', () => {
       const net = createNetwork({ networkId: 'net1' });
       const buf = createBuffer({ name: '#gen' });
       buf.joinInFlight = true;
-      buf.highlight = true;
+      buf.unseen = true;
+      buf.unseenHighlights = [1];
       net.buffers.push(buf);
       ircState.networks.push(net);
       ircState.activeBuffer.networkId = 'net1';
-      ircState.activeBuffer.bufferName = '#other'; // inactive so highlight stays visible
-      ircState.focusLost = true;
+      ircState.activeBuffer.bufferName = '#other';
       flushSync();
 
       render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
@@ -979,7 +976,7 @@ describe('Sidebar', () => {
       const item = document.querySelector('.network-buffers .buffer-item');
       expect(item).toBeTruthy();
       expect(item?.classList.contains('buffer-item--joining')).toBe(true);
-      expect(item?.classList.contains('highlight')).toBe(true);
+      expect(item?.classList.contains('activeBadge')).toBe(true);
     });
 
     it('joined modifier does NOT bleed to conversation section', () => {

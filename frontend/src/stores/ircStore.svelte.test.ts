@@ -5,12 +5,15 @@ import {
 	getActiveNetwork,
 	getActiveBufferObj,
 	getIsServerBuffer,
-	getTotalUnread,
-	getHasHighlight,
+	getUnseenBuffers,
+	getUnseenMessageStats,
 	setActiveBuffer,
 	deleteBuffer,
 	appendMessage,
-	incrementUnread,
+	setLastSeenMessage,
+	dirtySeenEids,
+	readBuffer,
+	markAllAsRead,
 	checkHighlight,
 	setMessages,
 	prependMessages,
@@ -114,9 +117,15 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
 	startXHRFallback: vi.fn(),
 	stopXHRFallback: vi.fn(),
 }));
-import { unreadMap, highlightMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel, bufferPrefsMap } from './preferences.svelte';
+import { unseenMap, unseenHighlightsMap, highlightWords, lastSeenMap, bottomSeenMap, setLastSeen, getLastSeen, hiddenChannelsMap, hideChannel, bufferPrefsMap } from './preferences.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
 import { buildProcessedBuffer } from '../lib/messageBuilder';
+
+// $state proxies do not write through to the raw object pushed into
+// ircState.networks — always read buffer state back through the store.
+function liveBuf(networkId: string, name: string) {
+	return ircState.networks.find((n) => n.networkId === networkId)?.buffers.find((b) => b.name === name);
+}
 
 beforeEach(() => {
 	ircState.networks.length = 0;
@@ -127,8 +136,9 @@ beforeEach(() => {
 	clearPendingNickChanges();
 
 	// Reset preference-derived singletons that ircStore writes into
-	Object.keys(unreadMap).forEach((k) => delete (unreadMap as Record<string, unknown>)[k]);
-	Object.keys(highlightMap).forEach((k) => delete (highlightMap as Record<string, unknown>)[k]);
+	Object.keys(unseenMap).forEach((k) => delete (unseenMap as Record<string, unknown>)[k]);
+	Object.keys(unseenHighlightsMap).forEach((k) => delete (unseenHighlightsMap as Record<string, unknown>)[k]);
+	for (const k of Object.keys(dirtySeenEids)) delete dirtySeenEids[k];
 	Object.keys(lastSeenMap).forEach((k) => delete (lastSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
@@ -137,44 +147,42 @@ beforeEach(() => {
 });
 
 describe('setActiveBuffer', () => {
-	it('updates activeBuffer and clears unread', () => {
+	it('updates activeBuffer and leaves unseen state alone (IRCCloud select never marks read)', () => {
 		const net = createNetwork({ networkId: 'net1' });
-		const buf = createBuffer({ name: '#chan', unreadCount: 3, highlight: true });
+		const buf = createBuffer({ name: '#chan', unseen: true, unseenHighlights: [1000] });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
-
-		unreadMap['net1:#chan'] = 3;
-		highlightMap['net1:#chan'] = true;
+		ircState.messages['net1:#chan'] = [createMessage({ t: 1000 })];
 
 		setActiveBuffer('net1', '#chan');
 		flushSync();
 
 		expect(untrack(() => ircState.activeBuffer.networkId)).toBe('net1');
 		expect(untrack(() => ircState.activeBuffer.bufferName)).toBe('#chan');
-
-		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
-		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
-		expect(foundBuf?.unreadCount).toBe(0);
-		expect(foundBuf?.highlight).toBe(false);
-		expect(unreadMap['net1:#chan']).toBeUndefined();
-		expect(highlightMap['net1:#chan']).toBeUndefined();
+		expect(buf.unseen).toBe(true);
+		expect(buf.unseenHighlights).toEqual([1000]);
+		expect(lastSeenMap['net1:#chan']).toBeUndefined();
+		expect(bottomSeenMap['net1:#chan']).toBeUndefined();
 	});
 
-	it('sets lastSeen and bottomSeen to last message when switching', () => {
+	it('deselect marks the previous buffer read only with markAsRead pref', () => {
 		const net = createNetwork({ networkId: 'net1' });
-		const buf = createBuffer({ name: '#chan' });
-		net.buffers.push(buf);
+		net.buffers.push(createBuffer({ name: '#a', unseen: true }), createBuffer({ name: '#b' }));
 		ircState.networks.push(net);
+		ircState.messages['net1:#a'] = [createMessage({ t: 1000, nick: 'alice', text: 'x' })];
 
-		const msg1 = createMessage({ t: 1000 });
-		const msg2 = createMessage({ t: 2000 });
-		ircState.messages['net1:#chan'] = [msg1, msg2];
-
-		setActiveBuffer('net1', '#chan');
+		setActiveBuffer('net1', '#a');
+		setActiveBuffer('net1', '#b');
 		flushSync();
+		expect(liveBuf('net1', '#a')?.unseen).toBe(true);
+		expect(lastSeenMap['net1:#a']).toBeUndefined();
 
-		expect(lastSeenMap['net1:#chan']).toBe(2000);
-		expect(bottomSeenMap['net1:#chan']).toBe(2000);
+		bufferPrefsMap['net1:#a'] = { markAsRead: true };
+		setActiveBuffer('net1', '#a');
+		setActiveBuffer('net1', '#b');
+		flushSync();
+		expect(liveBuf('net1', '#a')?.unseen).toBe(false);
+		expect(lastSeenMap['net1:#a']).toBe(1000);
 	});
 });
 
@@ -270,24 +278,23 @@ describe('appendMessage', () => {
 		expect(list[0].text).toBe('hello world');
 	});
 
-	it('increments unread for inactive buffer', () => {
+	it('marks an inactive buffer unseen (no count) for an important message', () => {
 		const net = createNetwork({ networkId: 'net1' });
-		const buf = createBuffer({ name: '#chan', unreadCount: 0 });
+		const buf = createBuffer({ name: '#chan' });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
-		bufferPrefsMap['net1:#chan'] = { notifyAll: true };
 
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = '#other';
 
-		const msg = createMessage();
-		appendMessage('net1', '#chan', msg);
+		appendMessage('net1', '#chan', createMessage({ nick: 'alice', text: 'hi' }));
 		flushSync();
 
-		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
-		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
-		expect(foundBuf?.unreadCount).toBe(1);
-		expect(unreadMap['net1:#chan']).toBe(1);
+		const foundBuf = ircState.networks[0].buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.unseen).toBe(true);
+		expect(foundBuf?.unseenHighlights).toEqual([]);
+		expect(foundBuf?.unseenCount).toBe(1);
+		expect(unseenMap['net1:#chan']).toBe(1);
 	});
 
 	it('replaces optimistic message by label', () => {
@@ -316,12 +323,9 @@ describe('appendMessage', () => {
 		expect(untrack(() => ircState.messages['net1:#chan'])).toHaveLength(1);
 	});
 
-	it('does not increment unread for active buffer when tab has focus, even if message is after lastSeen', () => {
-		// Regression test for the multi-tab bug: when the user has multiple tabs
-		// open and sends a message, the echoed message must not be flagged as
-		// unread on the tab that is actively viewing the buffer.
+	it('marks the ACTIVE buffer unseen too — IRCCloud reads via the scroll trigger, not by suppressing unseen', () => {
 		const net = createNetwork({ networkId: 'net1' });
-		const buf = createBuffer({ name: '#chan', unreadCount: 0 });
+		const buf = createBuffer({ name: '#chan' });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
 
@@ -330,35 +334,116 @@ describe('appendMessage', () => {
 		ircState.focusLost = false;
 		setLastSeen('net1', '#chan', 5000);
 
-		const msg = createMessage({ t: 6000 });
-		appendMessage('net1', '#chan', msg);
+		appendMessage('net1', '#chan', createMessage({ t: 6000, nick: 'alice', text: 'yo' }));
 		flushSync();
 
-		expect(unreadMap['net1:#chan']).toBeUndefined();
-		expect(buf.unreadCount).toBe(0);
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(true);
 	});
 
-	it('increments unread for active buffer when tab has lost focus (backgrounded)', () => {
-		// If the user is on the buffer in tab A but has switched to another
-		// browser tab/window, new messages should still count as unread.
+	it('does not mark unseen for a message at or before lastSeen', () => {
 		const net = createNetwork({ networkId: 'net1' });
-		const buf = createBuffer({ name: '#chan', unreadCount: 0 });
+		const buf = createBuffer({ name: '#chan' });
 		net.buffers.push(buf);
 		ircState.networks.push(net);
-		bufferPrefsMap['net1:#chan'] = { notifyAll: true };
+		setLastSeen('net1', '#chan', 5000);
 
-		ircState.activeBuffer.networkId = 'net1';
-		ircState.activeBuffer.bufferName = '#chan';
-		ircState.focusLost = true;
-
-		const msg = createMessage({ t: Date.now() });
-		appendMessage('net1', '#chan', msg);
+		appendMessage('net1', '#chan', createMessage({ t: 4000, nick: 'alice', text: 'old' }));
 		flushSync();
 
-		const foundNet = ircState.networks.find((n) => n.networkId === 'net1');
-		const foundBuf = foundNet?.buffers.find((b) => b.name === '#chan');
-		expect(unreadMap['net1:#chan']).toBe(1);
-		expect(foundBuf?.unreadCount).toBe(1);
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(false);
+		expect(unseenMap['net1:#chan']).toBeUndefined();
+	});
+
+	it('a mention pushes its t into unseenHighlights', () => {
+		const net = createNetwork({ networkId: 'net1', nick: 'me', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan' });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		appendMessage('net1', '#chan', createMessage({ t: 7000, nick: 'alice', text: 'me: ping' }));
+		flushSync();
+
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(true);
+		expect(liveBuf('net1', '#chan')?.unseenHighlights).toEqual([7000]);
+		expect(unseenHighlightsMap['net1:#chan']).toEqual([7000]);
+	});
+
+	it('a query message is always highlightable', () => {
+		const net = createNetwork({ networkId: 'net1', nick: 'me', currentNick: 'me' });
+		const buf = createBuffer({ name: 'alice', type: 'query' });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		appendMessage('net1', 'alice', createMessage({ t: 7000, nick: 'alice', text: 'hello there' }));
+		flushSync();
+
+		expect(liveBuf('net1', 'alice')?.unseenHighlights).toEqual([7000]);
+	});
+
+	it('a muted buffer records unseen but no highlight', () => {
+		const net = createNetwork({ networkId: 'net1', nick: 'me', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan' });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+		bufferPrefsMap['net1:#chan'] = { mute: true };
+
+		appendMessage('net1', '#chan', createMessage({ t: 7000, nick: 'alice', text: 'me: ping' }));
+		flushSync();
+
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(true);
+		expect(liveBuf('net1', '#chan')?.unseenHighlights).toEqual([]);
+	});
+
+	it('a self message on a fully-read buffer advances lastSeen after boot (IRCCloud addMessage)', () => {
+		const net = createNetwork({ networkId: 'net1', nick: 'me', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan' });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+		ircState.bootComplete = true;
+		setLastSeen('net1', '#chan', 5000);
+
+		appendMessage('net1', '#chan', createMessage({ t: 6000, nick: 'me', text: 'mine' }));
+		flushSync();
+
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(false);
+		expect(getLastSeen('net1', '#chan')).toBe(6000);
+		ircState.bootComplete = false;
+	});
+
+	it('server notices (no nick) are not important', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: '#chan' });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		appendMessage('net1', '#chan', createMessage({ t: 6000, nick: '', command: 'NOTICE', text: '*** server notice' }));
+		flushSync();
+
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(false);
+	});
+
+	it('setLastSeenMessage clears unseen and highlights up to t', () => {
+		const net = createNetwork({ networkId: 'net1', nick: 'me', currentNick: 'me' });
+		const buf = createBuffer({ name: '#chan' });
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+		appendMessage('net1', '#chan', createMessage({ t: 1000, msgid: 'a', nick: 'alice', text: 'me: one' }));
+		appendMessage('net1', '#chan', createMessage({ t: 2000, msgid: 'b', nick: 'alice', text: 'me: two' }));
+		flushSync();
+		expect(liveBuf('net1', '#chan')?.unseenHighlights).toEqual([1000, 2000]);
+
+		expect(liveBuf('net1', '#chan')?.unseenCount).toBe(2);
+		setLastSeenMessage('net1', '#chan', 1000);
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(true);
+		expect(liveBuf('net1', '#chan')?.unseenCount).toBe(1);
+		expect(liveBuf('net1', '#chan')?.unseenHighlights).toEqual([2000]);
+		expect(dirtySeenEids['net1']['#chan']).toBe(1000);
+
+		setLastSeenMessage('net1', '#chan', 2000);
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(false);
+		expect(liveBuf('net1', '#chan')?.unseenHighlights).toEqual([]);
+		expect(unseenMap['net1:#chan']).toBeUndefined();
+		expect(unseenHighlightsMap['net1:#chan']).toBeUndefined();
 	});
 });
 
@@ -459,48 +544,50 @@ describe('updateNetworkFromSync', () => {
 		expect(bob.ident).toBe('bob_ident');
 	});
 
-	it('preserves local unreadCount when backend sync has 0', () => {
-		// Regression: the backend periodically syncs its buffer state which
-		// always has unreadCount: 0 for buffers the user is viewing. The
-		// sync used to clobber the local count, making the unread indicator
-		// disappear every few seconds even though the user hadn't read the
-		// messages.
+	it('adopts the server lastSeen only when it is newer (advance-only)', () => {
 		const existing = createNetwork({ networkId: 'net1' });
-		const buf = createBuffer({ name: '#chan', unreadCount: 5, highlight: true });
+		const buf = createBuffer({ name: '#chan', unseen: true });
 		existing.buffers.push(buf);
 		ircState.networks.push(existing);
+		ircState.messages['net1:#chan'] = [
+			createMessage({ t: 1000, nick: 'alice', text: 'one' }),
+			createMessage({ t: 3000, nick: 'alice', text: 'three' }),
+		];
+		setLastSeen('net1', '#chan', 2000);
 
-		const incoming = createNetwork({ networkId: 'net1' });
-		const incomingBuf = createBuffer({ name: '#chan', unreadCount: 0, highlight: false });
-		incoming.buffers.push(incomingBuf);
-		updateNetworkFromSync([incoming]);
+		// Older server value → ignored.
+		const older = createNetwork({ networkId: 'net1' });
+		older.buffers.push(createBuffer({ name: '#chan', lastSeen: 1500 }));
+		updateNetworkFromSync([older]);
 		flushSync();
+		expect(getLastSeen('net1', '#chan')).toBe(2000);
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(true);
 
-		const updated = ircState.networks.find((n) => n.networkId === 'net1');
-		const updatedBuf = updated?.buffers.find((b) => b.name === '#chan');
-		expect(updatedBuf?.unreadCount).toBe(5);
-		expect(updatedBuf?.highlight).toBe(true);
+		// Newer server value (read on another device) → adopted, unseen recomputed.
+		const newer = createNetwork({ networkId: 'net1' });
+		newer.buffers.push(createBuffer({ name: '#chan', lastSeen: 3000 }));
+		updateNetworkFromSync([newer]);
+		flushSync();
+		expect(getLastSeen('net1', '#chan')).toBe(3000);
+		expect(liveBuf('net1', '#chan')?.unseen).toBe(false);
 	});
 
-	it('adopts higher unreadCount from backend when local is lower', () => {
-		// If the backend reports more unread messages than we knew about
-		// (e.g. messages received on another device while we were offline),
-		// we should adopt the higher count.
+	it('sync never clobbers client-owned unseen state', () => {
 		const existing = createNetwork({ networkId: 'net1' });
-		const buf = createBuffer({ name: '#chan', unreadCount: 1, highlight: false });
+		const buf = createBuffer({ name: '#chan', unseen: true, unseenHighlights: [3000] });
 		existing.buffers.push(buf);
 		ircState.networks.push(existing);
+		ircState.messages['net1:#chan'] = [createMessage({ t: 3000, nick: 'alice', text: 'me: hi' })];
+		setLastSeen('net1', '#chan', 2000);
 
 		const incoming = createNetwork({ networkId: 'net1' });
-		const incomingBuf = createBuffer({ name: '#chan', unreadCount: 7, highlight: true });
-		incoming.buffers.push(incomingBuf);
+		incoming.buffers.push(createBuffer({ name: '#chan', lastSeen: null }));
 		updateNetworkFromSync([incoming]);
 		flushSync();
 
-		const updated = ircState.networks.find((n) => n.networkId === 'net1');
-		const updatedBuf = updated?.buffers.find((b) => b.name === '#chan');
-		expect(updatedBuf?.unreadCount).toBe(7);
-		expect(updatedBuf?.highlight).toBe(true);
+		const updatedBuf = ircState.networks[0].buffers.find((b) => b.name === '#chan');
+		expect(updatedBuf?.unseen).toBe(true);
+		expect(updatedBuf?.unseenHighlights).toEqual([3000]);
 	});
 
 	it('does not re-add a channel that the user previously deleted', () => {
@@ -1213,17 +1300,63 @@ describe('read tracking helpers', () => {
 		expect(countMessagesBetween('net1', '#chan', start, end)).toBe(2);
 	});
 
-	it('countImportantMessagesBetween skips status messages', () => {
+	it('countImportantMessagesBetween skips status messages and self messages', () => {
+		const net = createNetwork({ networkId: 'net1', nick: 'me', currentNick: 'me' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
 		ircState.messages['net1:#chan'] = [
-			createMessage({ msgid: 'a', t: 1000, command: 'PRIVMSG' }),
-			createMessage({ msgid: 'b', t: 2000, command: 'JOIN' }),
-			createMessage({ msgid: 'c', t: 3000, command: 'PRIVMSG' }),
-			createMessage({ msgid: 'd', t: 4000, command: 'PART' }),
+			createMessage({ msgid: 'a', t: 1000, command: 'PRIVMSG', nick: 'alice', text: 'a' }),
+			createMessage({ msgid: 'b', t: 2000, command: 'JOIN', nick: 'bob', text: '' }),
+			createMessage({ msgid: 'c', t: 3000, command: 'PRIVMSG', nick: 'alice', text: 'c' }),
+			createMessage({ msgid: 'd', t: 4000, command: 'PRIVMSG', nick: 'me', text: 'mine' }),
+			createMessage({ msgid: 'e', t: 5000, command: 'PART', nick: 'bob', text: '' }),
 		];
 		const start = ircState.messages['net1:#chan'][0];
-		const end = ircState.messages['net1:#chan'][3];
-		// Between a and d: only c is important (b=JOIN, d=PART are skipped)
+		const end = ircState.messages['net1:#chan'][4];
+		// After a through e: only c is important (b=JOIN, d=self, e=PART are skipped)
 		expect(countImportantMessagesBetween('net1', '#chan', start, end)).toBe(1);
+		// Open-ended (no end) counts through the tail.
+		expect(countImportantMessagesBetween('net1', '#chan', start)).toBe(1);
+	});
+
+	it('getUnseenBuffers / getUnseenMessageStats follow IRCCloud session.unseenBuffers', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(
+			createBuffer({ name: '_server', type: 'server', unseen: true }),
+			createBuffer({ name: '#a', unseen: true }),
+			createBuffer({ name: '#b', unseen: true, unseenHighlights: [1, 2] }),
+			createBuffer({ name: '#c', unseen: false }),
+		);
+		ircState.networks.push(net);
+		expect(getUnseenMessageStats()).toBe(2);
+		expect(getUnseenBuffers().map(x => x.buf.name)).toEqual(['#a', '#b']);
+
+		// showUnread=false drops a buffer unless it carries highlights.
+		bufferPrefsMap['net1:#a'] = { showUnread: false };
+		bufferPrefsMap['net1:#b'] = { showUnread: false };
+		expect(getUnseenBuffers().map(x => x.buf.name)).toEqual(['#b']);
+
+		liveBuf('net1', '#a')!.unseen = false;
+		liveBuf('net1', '#b')!.unseen = false;
+		expect(getUnseenMessageStats()).toBe(false);
+	});
+
+	it('readBuffer / markAllAsRead mark at focusSeen ?? bottomSeen ?? last message', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#a', unseen: true }), createBuffer({ name: '#b', unseen: true }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#a'] = [createMessage({ t: 1000, nick: 'x', text: 'a' }), createMessage({ t: 2000, nick: 'x', text: 'b' })];
+		ircState.messages['net1:#b'] = [createMessage({ t: 3000, nick: 'x', text: 'c' })];
+		bottomSeenMap['net1:#a'] = 1000;
+
+		readBuffer('net1', '#a');
+		expect(getLastSeen('net1', '#a')).toBe(1000);
+		expect(liveBuf('net1', '#a')?.unseen).toBe(true); // message at 2000 still important+unseen
+
+		markAllAsRead();
+		expect(getLastSeen('net1', '#a')).toBe(1000); // bottomSeen still locks the marker
+		expect(getLastSeen('net1', '#b')).toBe(3000);
+		expect(liveBuf('net1', '#b')?.unseen).toBe(false);
 	});
 });
 
@@ -1712,11 +1845,12 @@ describe('phantom buffers (URL nav auto-create)', () => {
 			name: '#autism',
 			isJoined: false,
 			isPhantom: true,
-			unreadCount: 2,
-			highlight: true,
+			unseen: true,
+			unseenHighlights: [1000],
 		});
 		existing.buffers.push(phantom);
 		ircState.networks.push(existing);
+		ircState.messages[`${existing.networkId}:#autism`] = [createMessage({ t: 1000, nick: 'alice', text: 'me: hi' })];
 
 		const incoming = createNetwork({ networkId: existing.networkId });
 		incoming.buffers.push(createBuffer({ name: '#autism', isJoined: true }));
@@ -1726,9 +1860,9 @@ describe('phantom buffers (URL nav auto-create)', () => {
 		const buf = ircState.networks.find((n) => n.networkId === existing.networkId)?.buffers.find((b) => b.name === '#autism');
 		expect(buf?.isJoined).toBe(true);
 		expect(buf?.isPhantom).toBe(false);
-		// Local unread/highlight must be preserved across the sync.
-		expect(buf?.unreadCount).toBe(2);
-		expect(buf?.highlight).toBe(true);
+		// Local unseen/highlight state is client-owned and survives the sync.
+		expect(buf?.unseen).toBe(true);
+		expect(buf?.unseenHighlights).toEqual([1000]);
 	});
 
 	it('sync updates isJoined for non-phantom buffers when no pending event change', () => {
@@ -1831,10 +1965,11 @@ describe('phantom buffers (URL nav auto-create)', () => {
 		// BOTH the active channel list and the "Inactive" section. Without
 		// dedup, the Sidebar renders two entries for the same channel.
 		const existing = createNetwork();
-		const phantom = createBuffer({ name: '#autism', isJoined: false, isPhantom: true, unreadCount: 0 });
-		const real = createBuffer({ name: '#autism', isJoined: true, unreadCount: 5, highlight: true });
+		const phantom = createBuffer({ name: '#autism', isJoined: false, isPhantom: true });
+		const real = createBuffer({ name: '#autism', isJoined: true, unseen: true, unseenHighlights: [1000] });
 		existing.buffers.push(phantom, real);
 		ircState.networks.push(existing);
+		ircState.messages[`${existing.networkId}:#autism`] = [createMessage({ t: 1000, nick: 'alice', text: 'me: hi' })];
 
 		const incoming = createNetwork({ networkId: existing.networkId });
 		incoming.buffers.push(createBuffer({ name: '#autism', isJoined: true }));
@@ -1844,11 +1979,11 @@ describe('phantom buffers (URL nav auto-create)', () => {
 		const net = ircState.networks.find((n) => n.networkId === existing.networkId)!;
 		const dups = net.buffers.filter((b) => b.name === '#autism');
 		expect(dups).toHaveLength(1);
-		// Should prefer the joined entry and keep the local unread/highlight.
+		// Should prefer the joined entry and keep the local unseen state.
 		expect(dups[0].isJoined).toBe(true);
 		expect(dups[0].isPhantom).toBe(false);
-		expect(dups[0].unreadCount).toBe(5);
-		expect(dups[0].highlight).toBe(true);
+		expect(dups[0].unseen).toBe(true);
+		expect(dups[0].unseenHighlights).toEqual([1000]);
 	});
 
 	it('preserves member lastSpoke and lastHighlighted across sync reload', () => {

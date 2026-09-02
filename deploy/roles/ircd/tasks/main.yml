@@ -1,100 +1,178 @@
 ---
-# IRC Fiber — Deploy Ergo IRC daemon
+# IRC Fiber — Deploy InspIRCd 4 + Anope 2 services
+#
+# Containers (both on {{ docker_ircfiber_network }}):
+#   ircfiber-ircd      inspircd/inspircd-docker  aliases: ircd, irc.ircfiber.com
+#                      ports 6667 (plain) / 6697 (TLS) published; 7000 (links) internal
+#   ircfiber-services  anope/anope               alias: services (links to ircd:7000)
 
-- name: Preflight — vault_ircd_oper_password must be set
+- name: Preflight — vault secrets must be set
   ansible.builtin.assert:
     that:
       - vault_ircd_oper_password is defined
       - vault_ircd_oper_password | length > 0
       - vault_ircd_oper_password != "REPLACE-WITH-STRONG-PASSWORD"
+      - vault_ircd_services_link_password is defined
+      - vault_ircd_services_link_password | length >= 16
+      - vault_ircd_cloak_key is defined
+      - vault_ircd_cloak_key | length >= 30
     fail_msg: |
-      vault_ircd_oper_password is missing or still a placeholder. Set it in
+      vault_ircd_oper_password, vault_ircd_services_link_password (>=16 chars)
+      and vault_ircd_cloak_key (>=30 chars) must be set in
       inventories/production/group_vars/vault.yml:
         ansible-vault edit inventories/production/group_vars/vault.yml
 
-- name: Ensure IRCd data volume exists
-  community.docker.docker_volume:
-    name: "{{ ircd_data_volume }}"
-    state: present
-
-- name: Pull ircd image
-  community.docker.docker_image:
-    name: "{{ ircd_image }}"
-    source: pull
-    state: present
-
-- name: Generate oper password hash via ergo genpasswd
-  # genpasswd reads the password from stdin (not a CLI arg) and outputs the
-  # bcrypt hash on stdout, e.g. "$2a$04$<salt>$<hash>"
-  ansible.builtin.shell: >
-    docker run --rm -i --entrypoint /ircd-bin/ergo
-    "{{ ircd_image }}"
-    genpasswd --quiet
-    <<< "{{ vault_ircd_oper_password }}"
-  args:
-    executable: /bin/bash
+# InspIRCd stores oper passwords as base64(salt)$base64(hmac-sha256).
+# Computed on the controller with the stdlib helper (deterministic salt →
+# stable config → no restart on every deploy).
+- name: Compute InspIRCd hmac-sha256 oper password hash
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/inspircd_hmac.py"
+  environment:
+    INSP_PASSWORD: "{{ vault_ircd_oper_password }}"
+    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_oper_name }}"
+  delegate_to: localhost
+  become: false
   register: ircd_oper_hash_raw
   changed_when: false
   no_log: true
 
 - name: Set oper password hash fact
   ansible.builtin.set_fact:
-    vault_ircd_oper_password_hash: "{{ ircd_oper_hash_raw.stdout | trim }}"
+    ircd_oper_password_hash: "{{ ircd_oper_hash_raw.stdout | trim }}"
   no_log: true
 
-- name: Ensure IRCd config dir exists
+- name: Ensure data volumes exist
+  community.docker.docker_volume:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - "{{ ircd_data_volume }}"
+    - "{{ ircd_services_data_volume }}"
+
+- name: Pull images
+  community.docker.docker_image:
+    name: "{{ item }}"
+    source: pull
+    state: present
+  loop:
+    - "{{ ircd_image }}"
+    - "{{ ircd_services_image }}"
+
+# The InspIRCd image runs as uid 10000 and its entrypoint writes the
+# self-signed cert/key/dhparams into the conf dir on first boot.
+- name: Ensure InspIRCd config dir exists (owned by container uid)
   ansible.builtin.file:
-    path: "/etc/ircfiber/ircd"
+    path: "{{ ircd_conf_dir }}"
+    state: directory
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0750"
+
+- name: Ensure Anope config dir exists
+  ansible.builtin.file:
+    path: "{{ ircd_services_conf_dir }}"
     state: directory
     owner: root
     group: root
     mode: "0755"
 
-- name: Render ircd.yaml
-  ansible.builtin.template:
-    src: ircd.yaml.j2
-    dest: "/etc/ircfiber/ircd/ircd.yaml"
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Restart ircd
+- name: Remove legacy Ergo config
+  ansible.builtin.file:
+    path: "{{ ircd_conf_dir }}/ircd.yaml"
+    state: absent
 
-- name: Render MOTD
+- name: Render InspIRCd config
   ansible.builtin.template:
-    src: motd.j2
-    dest: "/etc/ircfiber/ircd/motd"
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Restart ircd
+    src: "{{ item.src }}"
+    dest: "{{ ircd_conf_dir }}/{{ item.dest }}"
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0640"
+  loop:
+    - { src: inspircd.conf.j2, dest: inspircd.conf }
+    - { src: modules.conf.j2, dest: modules.conf }
+    - { src: opers.conf.j2, dest: opers.conf }
+    - { src: motd.j2, dest: motd }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Rehash ircd
 
-- name: Run ircfiber-ircd
+- name: Render Anope config
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ ircd_services_conf_dir }}/{{ item.dest }}"
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0640"
+  loop:
+    - { src: services.conf.j2, dest: services.conf }
+    - { src: nickserv.conf.j2, dest: nickserv.conf }
+    - { src: motd.j2, dest: services.motd }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Restart services
+
+- name: Run ircfiber-ircd (InspIRCd)
   community.docker.docker_container:
     name: "{{ ircd_container_name }}"
     image: "{{ ircd_image }}"
     state: started
     restart_policy: "{{ ircd_restart_policy }}"
-    # ghcr.io/ergochat/ergo entrypoint (/ircd-bin/run.sh) reads config from
-    # /ircd/ircd.yaml and generates self-signed TLS certs on first start.
-    # No custom command needed — run.sh handles everything.
     networks:
       - name: "{{ docker_ircfiber_network }}"
+        aliases: "{{ ircd_ircfiber_net_aliases }}"
     networks_cli_compatible: true
     ports:
       - "{{ ircd_port_plain }}:{{ ircd_port_plain }}"
       - "{{ ircd_port_tls }}:{{ ircd_port_tls }}"
     volumes:
-      - "{{ ircd_data_volume }}:{{ ircd_data_mount }}"
-      - "/etc/ircfiber/ircd/ircd.yaml:/ircd/ircd.yaml:ro"
-      - "/etc/ircfiber/ircd/motd:{{ ircd_data_mount }}/motd:ro"
+      - "{{ ircd_conf_dir }}:/inspircd/conf"
+      - "{{ ircd_data_volume }}:/inspircd/data"
+    env:
+      # Subject of the self-signed cert the entrypoint generates once.
+      INSP_TLS_CN: "{{ ircd_server_name }}"
+      INSP_TLS_MAIL: "{{ ircd_admins[0].email }}"
+      INSP_TLS_ORG: "{{ ircd_network_name }}"
+      INSP_TLS_UNIT: "Server Admins"
+      INSP_TLS_DURATION: "3650"
     healthcheck:
-      # Probe the IRC port to confirm the daemon is accepting connections
-      test: ["CMD-SHELL", "nc -w 3 127.0.0.1 {{ ircd_port_plain }} < /dev/null > /dev/null 2>&1 && exit 0 || exit 1"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 {{ ircd_port_plain }}"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 120s
     labels:
       com.ircfiber.component: "ircd"
       com.ircfiber.version: "{{ ircfiber_version }}"
       com.ircfiber.server_name: "{{ ircd_server_name }}"
+
+- name: Run ircfiber-services (Anope)
+  community.docker.docker_container:
+    name: "{{ ircd_services_container_name }}"
+    image: "{{ ircd_services_image }}"
+    state: started
+    restart_policy: "{{ ircd_restart_policy }}"
+    networks:
+      - name: "{{ docker_ircfiber_network }}"
+        aliases:
+          - "{{ ircd_services_net_alias }}"
+          - "{{ ircd_services_name }}"
+    networks_cli_compatible: true
+    volumes:
+      - "{{ ircd_services_data_volume }}:/data"
+      - "{{ ircd_services_conf_dir }}/services.conf:/anope/conf/services.conf:ro"
+      - "{{ ircd_services_conf_dir }}/nickserv.conf:/anope/conf/nickserv.conf:ro"
+      - "{{ ircd_services_conf_dir }}/services.motd:/anope/conf/services.motd:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep services >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      com.ircfiber.component: "services"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+      com.ircfiber.server_name: "{{ ircd_services_name }}"

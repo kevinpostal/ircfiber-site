@@ -19,7 +19,11 @@ docker_image_tag: "{{ ircfiber_version }}"
 ircfiber_domain: "ircfiber.com"
 # Email used by Caddy for Let's Encrypt ACME registration (only used when
 # ircfiber_use_lets_encrypt is true)
-ircfiber_acme_email: "[email protected]"
+# Left empty: the committed value was the literal "[email protected]" (a
+# Cloudflare email-obfuscation artifact), which rendered `tls [email protected]`
+# and crash-looped Caddy on 2026-09-02. Set a real address in host_vars/vault
+# to register the ACME account; Let's Encrypt works without one.
+ircfiber_acme_email: ""
 # When true, Caddy requests a real Let's Encrypt cert (requires DNS for
 # ircfiber_domain to point at the host's public IP and port 80/443 open).
 # When false, Caddy uses a local self-signed cert — convenient for the
@@ -49,6 +53,9 @@ firewall_enabled: true
 firewall_allow_ssh_cidr: "0.0.0.0/0"
 # Whether to allow the engine admin port (8091) from the Tailscale subnet only.
 firewall_open_engine_admin: true
+# Public bouncer port (bnc.<domain>:7000 TLS).
+firewall_extra_tcp_ports:
+  - 7000
 # --- Mongo --------------------------------------------------------------------
 mongo_data_volume: "ircfiber_mongo_data"
 mongo_initdb_database: "ircfiber"
@@ -85,6 +92,18 @@ gateway_backend_port: "{{ gateway_http_port }}"
 gateway_use_python: false
 gateway_python_host: "irc-fiber-api-py"
 gateway_python_port: 8000
+# --- Bouncer ("Connect with another client…") ---------------------------------
+# Dedicated container from the gateway image; only a process with
+# IRCFIBER_BNC_PORT set listens. TLS terminates in-process using the LE
+# cert Caddy obtains for bnc_public_host (mounted read-only from the Caddy
+# data volume). Add bnc_public_host to caddy_extra_serve_hosts and a
+# non-proxied Cloudflare A record for it (see host_vars).
+bnc_enabled: true
+bnc_public_host: "bnc.{{ ircfiber_domain }}"
+bnc_public_port: 7000
+bnc_container_name: "ircfiber-bnc"
+bnc_tls_cert_path: "/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{{ bnc_public_host }}/{{ bnc_public_host }}.crt"
+bnc_tls_key_path: "/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{{ bnc_public_host }}/{{ bnc_public_host }}.key"
 # --- Caddy --------------------------------------------------------------------
 caddy_data_volume: "ircfiber_caddy_data"
 caddy_config_volume: "ircfiber_caddy_config"
@@ -140,12 +159,19 @@ ircfiber_engine_log_level: "info"
 ircfiber_gateway_log_level: "info"
 ircfiber_admin_password: "{{ vault_ircfiber_admin_password }}"  # set in vault.yml — no default
 
-# --- IRCd (Ergo) defaults ------------------------------------------------------
+# --- IRCd (InspIRCd 4 + Anope 2 services) --------------------------------------
+# Pinned upstream images (multi-arch). Anope 2.0.x links to InspIRCd 4 via
+# its inspircd3 protocol module.
 ircd_port_plain: 6667
 ircd_port_tls: 6697
-ircd_image: "ghcr.io/ergochat/ergo:v2.18.0"
+ircd_image: "inspircd/inspircd-docker:4.11.0"
 ircd_container_name: "ircfiber-ircd"
-ircd_data_volume: "ircfiber_ircd_data"
+# /inspircd/data — xline.db, permchannels.conf. (The old Ergo volume
+# ircfiber_ircd_data is left in place untouched for rollback.)
+ircd_data_volume: "ircfiber_inspircd_data"
+ircd_services_image: "anope/anope:2.0.20"
+ircd_services_container_name: "ircfiber-services"
+ircd_services_data_volume: "ircfiber_services_data"
 
 # --- Cloudflare DNS ------------------------------------------------------------
 # Used by the `cloudflare` role to point DNS records at this host's public IP.

@@ -12,6 +12,9 @@ export function make_mock_api() {
     addNetwork: vi.fn(async () => undefined),
     updateNetwork: vi.fn(async () => undefined),
     deleteNetwork: vi.fn(async () => undefined),
+    fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, password: null })),
+    generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, password: 'bnc:token' })),
+    revokeBouncerPassword: vi.fn(async () => undefined),
     // See context-helpers.ts for the rationale.
     normalizeMessage: vi.fn((m: unknown) => m),
   };

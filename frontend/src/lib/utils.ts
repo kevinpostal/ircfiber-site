@@ -216,7 +216,9 @@ export function isSkippedCommand(cmd: string): boolean {
   // The engine also drops the same set at publish time (see the
   // `noPublishDuringRegistration` guard in source/ircfiber/irc/connection.d)
   // so this filter is defense-in-depth for older binaries / replays.
-  return ['315', '352', '332', '333', '353', '354', '366', '367', '368', '376', '422', 'PONG', 'TAGMSG', '311', '312', '313', '317', '318', '319', '330', '301', '671', '401', 'you_nickchange'].includes(cmd);
+  //   - MODE #chan / ISON probe replies (324, 329, 303) that every
+  //     bouncer client fires on attach; they carry no chat text.
+  return ['315', '352', '332', '333', '353', '354', '366', '367', '368', '376', '422', 'PONG', 'TAGMSG', '311', '312', '313', '317', '318', '319', '330', '301', '671', '401', '324', '329', '303', 'you_nickchange'].includes(cmd);
 }
 
 export function isDisconnectLike(cmd: string, text?: string): boolean {

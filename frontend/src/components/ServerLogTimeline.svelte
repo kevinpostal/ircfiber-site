@@ -6,11 +6,13 @@
     phaseToLabel,
     attemptDuration,
     formatDuration,
+    relativeOffset,
     numericBody,
     getServerLogCollapsedKey,
     type ServerLogKind,
     classifyServerLog,
   } from '../lib/serverLogGroups';
+  import LiveElapsed from './LiveElapsed.svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import {
     serverlogCollapsedMap,
@@ -116,18 +118,27 @@
     if (vis === _prevVisibleForAttempts && _prevAttempts) return _prevAttempts;
     _prevVisibleForAttempts = vis;
     const grouped = groupServerLog(vis);
-    if (_prevAttempts && grouped.length === _prevAttempts.length && grouped.every((a, i) => a.start.id === _prevAttempts![i].start.id && a.status === _prevAttempts![i].status && a.welcome.length === _prevAttempts![i].welcome.length && a.motd.length === _prevAttempts![i].motd.length)) {
+    // Structural equality guard. Every bucket length participates: the
+    // original check only compared welcome/motd, so a phase row arriving on
+    // an in-flight attempt (tcp → tls → register …) returned the stale
+    // array and the card sat on "Connection events (1)" until the attempt
+    // ended — the timeline was not live while connecting.
+    const same = (a: ServerLogAttempt, b: ServerLogAttempt): boolean =>
+      a.start.id === b.start.id && a.status === b.status && a.end === b.end &&
+      a.phases.length === b.phases.length && a.welcome.length === b.welcome.length &&
+      a.motd.length === b.motd.length && a.cap.length === b.cap.length &&
+      a.notices.length === b.notices.length && a.numeric.length === b.numeric.length;
+    if (_prevAttempts && grouped.length === _prevAttempts.length && grouped.every((a, i) => same(a, _prevAttempts![i]))) {
       return _prevAttempts;
     }
     _prevAttempts = grouped;
     return grouped;
   });
 
-  // Live ticker for pending duration — ticks 1s while a pending attempt exists
-  // Disabled to prevent 1Hz full re-render that disrupts reading. Duration
-  // for pending attempts now shows static "connecting…" without live count.
-  let liveNow = $state<number>(Date.now());
-  // was: $effect(() => { const hasPending = attempts.some(...); if (!hasPending) return; setInterval(...) })
+  // Live durations for in-flight attempts are rendered by <LiveElapsed>,
+  // which owns its own 1 Hz interval so only that text node re-renders —
+  // the earlier timeline-wide ticker was disabled because it re-rendered
+  // every row each second.
 
   // ── Helpers ──────────────────────────────────────────────────────
   function formatTime(ts: number | undefined): string {
@@ -456,9 +467,7 @@
       else delete data[key];
       localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
     } catch {}
-    const eid = a.start?.eid ? Number(a.start.eid) : undefined;
-    const msgid = (!a.start?.eid && a.start?.msgid) ? a.start.msgid : undefined;
-    void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, newVal).catch(() => {});
+    void updateServerlogCollapsed(network.networkId, a.start, newVal).catch(() => {});
   }
 
   // ── Collapse auto-close on disconnect / error ────────────────────
@@ -474,9 +483,7 @@
             data[key] = true;
             localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
           } catch {}
-          const eid = a.start?.eid ? Number(a.start.eid) : undefined;
-          const msgid = (!a.start?.eid && a.start?.msgid) ? a.start.msgid : undefined;
-          void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, true).catch(() => {});
+          void updateServerlogCollapsed(network.networkId, a.start, true).catch(() => {});
         }
       }
     }
@@ -491,8 +498,10 @@
       {@const collapsed = isCollapsed(attempt, i, attempts.length)}
       {@const headerLabel = getHeaderLabel(attempt)}
       {@const hostLabel = getHostLabel(attempt, network)}
-      {@const durationMs = attempt.status === 'pending' && attempt.start.t ? liveNow - attempt.start.t : attemptDuration(attempt)}
+      {@const durationMs = attemptDuration(attempt)}
       {@const durationLabel = durationMs != null && durationMs >= 0 ? formatDuration(durationMs) : ''}
+      {@const isLive = attempt.status === 'pending' && !!attempt.start.t && i === attempts.length - 1 && !network?.connected}
+      {@const lastPhase = attempt.phases.length ? attempt.phases[attempt.phases.length - 1] : null}
       {@const kind = getStatusKind(attempt)}
       {@const glyph = getStatusGlyph(attempt)}
 
@@ -513,7 +522,7 @@
         onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const fake = { preventDefault() {} } as unknown as MouseEvent; toggleAttempt(attempt, fake); } }}
         aria-expanded={!collapsed}
         data-testid="server-log-attempt"
-        onbeforematch={() => { if (collapsed) { const key = getCollapsedKey(attempt); if (key) { serverlogCollapsedMap[key] = false; updateServerlogCollapsed(network?.networkId ?? "", key, false); } } }}
+        onbeforematch={() => { if (collapsed) { const key = getCollapsedKey(attempt); if (key) { serverlogCollapsedMap[key] = false; if (network?.networkId) void updateServerlogCollapsed(network.networkId, attempt.start, false).catch(() => {}); } } }}
       >
         <span class="caret" aria-hidden="true">{collapsed ? '▶' : '▼'}</span>
         <span class="glyph" aria-hidden="true">{glyph}</span>
@@ -523,7 +532,9 @@
         {/if}
         <span class="time">
           {formatTime(attempt.start.t)}
-          {#if durationLabel && attempt.status !== 'pending'}
+          {#if isLive}
+            · <LiveElapsed since={attempt.start.t!} />
+          {:else if durationLabel && attempt.status !== 'pending'}
             · {durationLabel}
           {/if}
         </span>
@@ -580,14 +591,41 @@
 
           <div class="connection-events-body">
             {#each attempt.phases as msg, pi (pi)}
-              <div class="row" class:row--last={pi === attempt.phases.length - 1} data-testid="phase-row">
+              {@const offset = relativeOffset(attempt.start.t, msg.t)}
+              <div
+                class="row"
+                class:row--last={pi === attempt.phases.length - 1 && !isLive}
+                class:row--fail={msg.phase === 'attempt_fail' || msg.phase === 'error' || msg.command === 'DISCONNECTED' || msg.command === 'DISCONNECT'}
+                class:row--warn={msg.phase === 'warn'}
+                data-testid="phase-row"
+              >
                 <span class="row-prefix">→</span>
+                {#if offset}<span class="row-offset" data-testid="phase-offset">{offset}</span>{/if}
                 <span class="row-content">
                   <span class="row-type-prefix">{msg.phase ? phaseToLabel(msg.phase) : (msg.command ?? '').toLowerCase()}</span>
                   {#if msg.text}<span class="row-text">{msg.text}</span>{/if}
                 </span>
               </div>
             {/each}
+            {#if isLive}
+              <!-- In-flight step: what the engine is doing right now, with a
+                   live "for N s" so a silent connect/registration wait is
+                   visibly still in progress rather than stuck. -->
+              <div class="row row--last row--live" data-testid="phase-live">
+                <span class="row-prefix row-prefix--live" aria-hidden="true">⋯</span>
+                <span class="row-content">
+                  <span class="row-type-prefix">{lastPhase?.phase ? phaseToLabel(lastPhase.phase) : 'waiting'}</span>
+                  <span class="row-text">
+                    {lastPhase?.phase === 'connecting' ? 'Resolving and connecting'
+                      : lastPhase?.phase === 'dns' || lastPhase?.phase === 'attempt' ? 'Waiting for the TCP connection'
+                      : lastPhase?.phase === 'tls' ? 'Waiting for the TLS handshake'
+                      : lastPhase?.phase === 'registering' ? 'Waiting for the server to accept registration'
+                      : lastPhase?.phase === 'queued' ? 'Waiting for the next attempt'
+                      : 'In progress'} — <LiveElapsed since={lastPhase?.t ?? attempt.start.t!} />
+                  </span>
+                </span>
+              </div>
+            {/if}
 
             <!-- Welcome banner (001-004) — cyan-accent hairline border + structured
                  color so the network name, your nick, hostname, version, and
@@ -753,7 +791,7 @@
           </div>
         </details>
       {:else}
-        <div hidden="until-found" onbeforematch={() => { const key = getCollapsedKey(attempt); if (key) { serverlogCollapsedMap[key] = false; updateServerlogCollapsed(network?.networkId ?? "", key, false); } }}
+        <div hidden="until-found" onbeforematch={() => { const key = getCollapsedKey(attempt); if (key) { serverlogCollapsedMap[key] = false; if (network?.networkId) void updateServerlogCollapsed(network.networkId, attempt.start, false).catch(() => {}); } }}
              data-testid="server-log-hidden-search" aria-hidden="true">
           {#each attempt.phases as m}<span>{m.text} </span>{/each}
           {#each attempt.welcome as m}<span>{numericBody(m)} </span>{/each}
@@ -879,6 +917,19 @@
     text-align: right;
     padding-right: 4px;
   }
+  .row-offset {
+    flex-shrink: 0;
+    width: 52px;
+    color: var(--fiber-mist, #4d5867);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .row--fail .row-type-prefix { color: var(--fiber-red, #f87171); }
+  .row--warn .row-type-prefix { color: var(--fiber-amber, #fbbf24); }
+  .row--live .row-text { color: var(--fiber-mist, #8b97a5); font-style: italic; }
+  .row-prefix--live { animation: live-pulse 1.2s ease-in-out infinite; }
+  @keyframes live-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .row-prefix--live { animation: none; } }
   .row-content {
     flex: 1;
     min-width: 0;

@@ -74,23 +74,19 @@
     if ((status === 'disconnected' || status === 'error')
         && collapsedKey && network?.networkId
         && serverlogCollapsedMap[collapsedKey] !== true) {
-      const eid = attempt.start?.eid ? Number(attempt.start.eid) : undefined;
-      const msgid = (!attempt.start?.eid && attempt.start?.msgid) ? attempt.start.msgid : undefined;
       serverlogCollapsedMap[collapsedKey] = true;
       try {
         const data = JSON.parse(localStorage.getItem('ircfiber:serverlogCollapsed') || '{}');
         data[collapsedKey] = true;
         localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
       } catch {}
-      void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, true).catch(() => {});
+      void updateServerlogCollapsed(network.networkId, attempt.start, true).catch(() => {});
     }
   });
 
   function toggleExpanded(): void {
     if (!collapsedKey || !network?.networkId) return;
     const next = !expanded;
-    const eid = attempt.start?.eid ? Number(attempt.start.eid) : undefined;
-    const msgid = (!attempt.start?.eid && attempt.start?.msgid) ? attempt.start.msgid : undefined;
     // Update in-memory map + persist to localStorage immediately so a fast
     // page refresh (<500ms debounce) doesn't lose the collapse state.
     // The API call + pref_update WS event handles cross-tab/device sync.
@@ -101,7 +97,7 @@
       else delete data[collapsedKey];
       localStorage.setItem('ircfiber:serverlogCollapsed', JSON.stringify(data));
     } catch {}
-    void updateServerlogCollapsed(network.networkId, eid || undefined, msgid || undefined, !next).catch(() => {});
+    void updateServerlogCollapsed(network.networkId, attempt.start, !next).catch(() => {});
   }
 
   /** Dismiss (hide) this connection attempt card from the timeline. */

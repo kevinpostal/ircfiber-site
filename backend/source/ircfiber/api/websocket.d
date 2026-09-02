@@ -26,6 +26,8 @@ import ircfiber.auth : authenticateRequest;
 import ircfiber.db.user : UserRepository;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.preferences : PreferencesRepository, UserPreferences;
+import ircfiber.db.lastseen : LastSeenRepository;
+import ircfiber.models.network : normalizeChannelName;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.redis.protocol : RedisKeys, IRCCommand, NetworkStateSnapshot;
 import ircfiber.async : watchedRunTask;
@@ -392,6 +394,7 @@ final class WebSocketGateway {
         msg["bufferPrefs"] = bp;
 
         msg["showMemberPrefixes"] = Json(prefs.showMemberPrefixes);
+        msg["bncPlaybackLines"] = Json(prefs.bncPlaybackLines);
         msg["desktopNotifications"] = Json(prefs.desktopNotifications);
         msg["notificationSound"] = Json(prefs.notificationSound);
         msg["autoDismissNotifs"] = Json(prefs.autoDismissNotifs);
@@ -452,6 +455,17 @@ final class WebSocketGateway {
         // from the snapshot before the buffer list is populated.
         string[] buffersToDelete;
         const bool isResume = session.sinceEid > 0;
+
+        // Per-buffer last-seen persisted by the heartbeat (IRCCloud
+        // `last_seen_eid` on makebuffer). One HGETALL per dump; the field is
+        // `<networkId>:<normalized buffer name>` (same normalization as the
+        // scrollback keys: channels lowercased, queries verbatim).
+        auto lastSeen = (new LastSeenRepository(redis)).load(session.user.id);
+        Json lastSeenFor(string networkId, string bufferName) {
+            const key = networkId ~ ":" ~ normalizeChannelName(bufferName);
+            if (auto t = key in lastSeen) return Json(*t);
+            return Json(null);
+        }
 
         foreach (ref cfg; configs) {
             auto netObj = cfg.toJson();
@@ -579,8 +593,7 @@ final class WebSocketGateway {
                 serverBuf["name"] = Json("_server");
                 serverBuf["type"] = Json("server");
                 serverBuf["isJoined"] = Json(true);
-                serverBuf["unreadCount"] = Json(0);
-                serverBuf["highlight"] = Json(false);
+                serverBuf["lastSeen"] = Json(null);
                 serverBuf["topic"] = Json("");
                 serverBuf["users"] = Json.emptyArray;
                 buffers ~= serverBuf;
@@ -590,8 +603,7 @@ final class WebSocketGateway {
                     chan["name"] = Json(ch);
                     chan["type"] = Json("channel");
                     chan["isJoined"] = Json(false);
-                    chan["unreadCount"] = Json(0);
-                    chan["highlight"] = Json(false);
+                    chan["lastSeen"] = lastSeenFor(cfg.id.toString(), ch);
                     chan["topic"] = Json("");
                     chan["users"] = Json.emptyArray;
                     buffers ~= chan;
@@ -602,8 +614,7 @@ final class WebSocketGateway {
                         chan["name"] = Json(ch);
                         chan["type"] = Json("channel");
                         chan["isJoined"] = Json(false);
-                        chan["unreadCount"] = Json(0);
-                        chan["highlight"] = Json(false);
+                        chan["lastSeen"] = lastSeenFor(cfg.id.toString(), ch);
                         chan["topic"] = Json("");
                         chan["users"] = Json.emptyArray;
                         buffers ~= chan;
@@ -630,8 +641,7 @@ final class WebSocketGateway {
                 chan["name"] = buf["name"];
                 chan["type"] = buf["type"];
                 chan["isJoined"] = buf["isJoined"];
-                chan["unreadCount"] = Json(0);
-                chan["highlight"] = Json(false);
+                chan["lastSeen"] = lastSeenFor(cfg.id.toString(), buf["name"].get!string);
 
                 auto name = buf["name"].get!string;
                 if (buf["type"].get!string == "channel") {
@@ -750,8 +760,7 @@ final class WebSocketGateway {
                     chan["name"] = Json(chanName);
                     chan["type"] = Json("channel");
                     chan["isJoined"] = Json(false);
-                    chan["unreadCount"] = Json(0);
-                    chan["highlight"] = Json(false);
+                    chan["lastSeen"] = lastSeenFor(cfg.id.toString(), chanName);
                     chan["topic"] = Json("");
                     chan["users"] = Json.emptyArray;
                     netObj["buffers"] ~= chan;
@@ -777,8 +786,7 @@ final class WebSocketGateway {
                     chan["name"] = Json(chanName);
                     chan["type"] = Json("channel");
                     chan["isJoined"] = Json(false);
-                    chan["unreadCount"] = Json(0);
-                    chan["highlight"] = Json(false);
+                    chan["lastSeen"] = lastSeenFor(cfg.id.toString(), chanName);
                     chan["topic"] = Json("");
                     chan["users"] = Json.emptyArray;
                     netObj["buffers"] ~= chan;
@@ -850,26 +858,7 @@ final class WebSocketGateway {
     }
 
     private NetworkStateSnapshot loadStateSnapshot(string networkId) {
-        // Server-aware key first — skip legacy lookup entirely if we got data.
-        // Previously this always queried the legacy key even when the
-        // server-aware key succeeded, doubling Redis round trips per network.
-        auto serverId = serverRegistry.getServerForNetwork(networkId);
-
-        if (serverId.length > 0) {
-            auto fields = redis.hgetAll(RedisKeys.state(serverId, networkId));
-            if ("data" in fields) {
-                try { return NetworkStateSnapshot.fromJson(parseJsonString(fields["data"])); }
-                catch (Exception e) { logWarn("Failed to parse server-aware snapshot for %s", networkId); }
-            }
-        }
-
-        // Legacy fallback only when no server assignment or server key empty.
-        auto fields = redis.hgetAll(RedisKeys.state_legacy(networkId));
-        if ("data" in fields) {
-            try { return NetworkStateSnapshot.fromJson(parseJsonString(fields["data"])); }
-            catch (Exception e) { logWarn("Failed to parse legacy snapshot for %s", networkId); }
-        }
-        return NetworkStateSnapshot.init;
+        return loadNetworkStateSnapshot(redis, serverRegistry, networkId);
     }
 
     /**
@@ -1142,6 +1131,40 @@ final class WebSocketGateway {
                 return;
             }
 
+            // IRCCloud heartbeat: persist per-buffer last-seen (advance-only)
+            // and fan the changed entries out to every session of this
+            // user as `heartbeat_echo`. `selectedBuffer` is ignored — Fiber
+            // persists it through `cmd:"buffer"`.
+            if (cmd == "heartbeat") {
+                long[string] incoming;
+                if (auto se = "seenEids" in json) if (se.type == Json.Type.object) {
+                    foreach (string nid, nets; *se) if (nets.type == Json.Type.object) {
+                        foreach (string buf, v; nets) if (v.type == Json.Type.int_) {
+                            incoming[nid ~ ":" ~ buf] = v.get!long;
+                        }
+                    }
+                }
+                if (incoming.length) {
+                    auto changed = (new LastSeenRepository(redis)).merge(session.user.id, incoming);
+                    if (changed.length) {
+                        auto echo = Json.emptyObject;
+                        echo["type"] = Json("heartbeat_echo");
+                        auto seen = Json.emptyObject;
+                        foreach (field, t; changed) {
+                            const sep = field.indexOf(':');
+                            if (sep <= 0) continue;
+                            const nid = field[0 .. sep];
+                            const buf = field[sep + 1 .. $];
+                            if (seen[nid].type != Json.Type.object) seen[nid] = Json.emptyObject;
+                            seen[nid][buf] = Json(t);
+                        }
+                        echo["seenEids"] = seen;
+                        redis.publish(RedisKeys.events(session.user.id.toString()), echo.toString());
+                    }
+                }
+                return;
+            }
+
             if (json["network"].type == Json.Type.undefined) {
                 logWarn("Received '%s' command without 'network' field", cmd);
                 return;
@@ -1290,12 +1313,43 @@ final class WebSocketGateway {
 
     // NEW: Route command to correct server or legacy queue
     private void routeCommand(string networkId, string serverId, IRCCommand cmd) {
-        if (serverId.length > 0) {
-            redis.lpush(RedisKeys.cmd(serverId, networkId), cmd.toJson().toString());
-        } else {
-            // Legacy fallback
-            redis.lpush(RedisKeys.cmd_legacy(networkId), cmd.toJson().toString());
+        routeEngineCommand(redis, networkId, serverId, cmd);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers (WebSocket gateway + bouncer listener)
+// ---------------------------------------------------------------------------
+
+/// Loads the engine-published state snapshot for a network: server-aware
+/// key first, legacy key only when there is no assignment or the
+/// server-aware hash is empty.
+NetworkStateSnapshot loadNetworkStateSnapshot(RedisStorage redis, ServerRegistry registry, string networkId) {
+    auto serverId = registry.getServerForNetwork(networkId);
+
+    if (serverId.length > 0) {
+        auto fields = redis.hgetAll(RedisKeys.state(serverId, networkId));
+        if ("data" in fields) {
+            try { return NetworkStateSnapshot.fromJson(parseJsonString(fields["data"])); }
+            catch (Exception e) { logWarn("Failed to parse server-aware snapshot for %s", networkId); }
         }
+    }
+
+    auto fields = redis.hgetAll(RedisKeys.state_legacy(networkId));
+    if ("data" in fields) {
+        try { return NetworkStateSnapshot.fromJson(parseJsonString(fields["data"])); }
+        catch (Exception e) { logWarn("Failed to parse legacy snapshot for %s", networkId); }
+    }
+    return NetworkStateSnapshot.init;
+}
+
+/// Pushes a command onto the owning engine's queue (legacy queue when the
+/// network has no server assignment).
+void routeEngineCommand(RedisStorage redis, string networkId, string serverId, IRCCommand cmd) {
+    if (serverId.length > 0) {
+        redis.lpush(RedisKeys.cmd(serverId, networkId), cmd.toJson().toString());
+    } else {
+        redis.lpush(RedisKeys.cmd_legacy(networkId), cmd.toJson().toString());
     }
 }
 

@@ -194,7 +194,7 @@ describe('action snap', () => {
     const drift = c.scrollHeight - c.clientHeight - c.scrollTop;
     expect(drift).toBeLessThan(4);
   });
-  it('snaps for incoming action/notice even without forceScroll when scrolled up', async () => {
+  it('incoming action/notice while scrolled up buffers and never yanks (IRCCloud flushBuffer)', async () => {
     const net = createNetwork({ networkId: 'net1' });
     net.buffers.push(createBuffer({ name: '#chan' }));
     ircState.networks.push(net);
@@ -244,7 +244,17 @@ describe('action snap', () => {
     await new Promise((r) => requestAnimationFrame(r));
     await new Promise((r) => setTimeout(r, 100));
 
+    // IRCCloud BufferLogView.renderMessage respects shouldPinBottom for
+    // actions/notices too: the row stays buffered and the viewport stays put.
     const drift = c.scrollHeight - c.clientHeight - c.scrollTop;
-    expect(drift).toBeLessThan(4);
+    expect(drift).toBeGreaterThan(50);
+    expect(c.querySelector('[data-msgid="incoming-action-1"]')).toBeNull();
+
+    // Returning to the bottom flushes it and re-pins.
+    c.scrollTop = c.scrollHeight;
+    c.dispatchEvent(new Event('scroll'));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(c.querySelector('[data-msgid="incoming-action-1"]')).not.toBeNull();
+    expect(c.scrollHeight - c.clientHeight - c.scrollTop).toBeLessThan(4);
   });
 });

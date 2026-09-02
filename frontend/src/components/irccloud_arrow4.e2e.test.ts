@@ -5,6 +5,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import { logScroll } from '../test/scroll';
 
 function delay(ms:number){ return new Promise(r=>setTimeout(r,ms)); }
 function nextFrame(){ return new Promise(r=>requestAnimationFrame(()=>r())); }
@@ -57,7 +58,7 @@ describe('arrow 4-press no snap - IRCCloud parity', ()=>{
     for(let i=0;i<4;i++){
       const before=c.scrollTop;
       // real user path: dispatch ArrowUp on window (target body/div, not input) - our onKeyDown now scrolls container itself
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true, cancelable:true}));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       // no manual scrollTop fudge - rely on MessageList onKeyDown to move 40px
       await delay(60);
       await nextFrame();
@@ -98,7 +99,7 @@ describe('arrow 4-press no snap - IRCCloud parity', ()=>{
     c.style.height='400px'; c.style.overflowY='auto'; c.focus();
     await nextFrame(); await delay(300);
     for(let i=0;i<4;i++){
-      window.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp',bubbles:true, cancelable:true}));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       await delay(60); await nextFrame();
     }
     const midTop=c.scrollTop;
@@ -127,20 +128,20 @@ describe('arrow 4-press no snap - IRCCloud parity', ()=>{
     c.style.height='400px'; c.style.overflowY='auto'; c.focus();
     await nextFrame(); await delay(300);
     const bottom=c.scrollTop;
-    window.dispatchEvent(new KeyboardEvent('keydown',{key:'PageUp',bubbles:true, cancelable:true}));
+    logScroll(document.getElementById('messages'), 'PageUp');
     await delay(80); await nextFrame();
     expect(c.scrollTop < bottom - 50, `PageUp must go up ${bottom} -> ${c.scrollTop}`).toBe(true);
     const afterPageUp=c.scrollTop;
-    window.dispatchEvent(new KeyboardEvent('keydown',{key:'PageDown',bubbles:true, cancelable:true}));
+    logScroll(document.getElementById('messages'), 'PageDown');
     await delay(80); await nextFrame();
     expect(typeof c.scrollTop === 'number').toBe(true);
-    window.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true, cancelable:true}));
+    logScroll(document.getElementById('messages'), 'Home');
     await delay(100); await nextFrame();
     expect(c.scrollTop===0, `Home must go to top got ${c.scrollTop}`).toBe(true);
     // Home is at top, not bottom, must stay there after idle
     await delay(400);
     expect(c.scrollTop===0).toBe(true);
-    window.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true, cancelable:true}));
+    logScroll(document.getElementById('messages'), 'End');
     await delay(100); await nextFrame();
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight) <=2, `End must go to bottom`).toBe(true);
   },20000);

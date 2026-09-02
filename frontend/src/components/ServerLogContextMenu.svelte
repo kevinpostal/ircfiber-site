@@ -2,8 +2,7 @@
   import { ircState, getActiveNetwork, markUserDisconnected, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork, disconnectNetwork, updateCollapsed, updateBufferPrefs, clearBacklog as apiClearBacklog } from '../stores/api';
-  import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt, setStorageItem, globalPrefs, unreadMap, highlightMap } from '../stores/preferences.svelte';
-  import { normalizeChannelName } from '../lib/utils';
+  import { getBufferPrefs, setBufferPref, collapsedMap, setClearedAt, setStorageItem, globalPrefs } from '../stores/preferences.svelte';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { isFiberServer } from '../lib/fiberServer';
@@ -17,8 +16,9 @@
     onClose: () => void;
     onJoinChannel: (e?: MouseEvent) => void;
     onEditNetwork: () => void;
+    onBouncer?: () => void;
   }
-  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onJoinChannel, onEditNetwork }: Props = $props();
+  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onJoinChannel, onEditNetwork, onBouncer = () => {} }: Props = $props();
 
   const network = $derived(
     propNetworkId ? (ircState.networks.find((n) => n.networkId === propNetworkId) ?? getActiveNetwork()) : getActiveNetwork()
@@ -122,6 +122,10 @@
     onJoinChannel();
     onClose();
   }
+  function clickBouncer(): void {
+    onBouncer();
+    onClose();
+  }
   function clickEdit(): void {
     (window as any).__clickEditCalled = true;
     onEditNetwork();
@@ -210,11 +214,6 @@
     toggles.notifyAll = nextNotifyAll;
     setBufferPref(networkId, '_server', 'mute', nextMute);
     setBufferPref(networkId, '_server', 'notifyAll', nextNotifyAll);
-    if (nextMute) {
-      const mapKey = `${networkId}:${normalizeChannelName('_server')}`;
-      delete unreadMap[mapKey];
-      delete highlightMap[mapKey];
-    }
     updateBufferPrefs(networkId, '_server', { mute: nextMute, notifyAll: nextNotifyAll })
       .catch((err) => console.error('Failed to sync buffer prefs:', err));
   }
@@ -246,6 +245,9 @@
       </li>
       <li class="nickserv" class:inactive={!isConnected} aria-disabled={!isConnected} style:display={isConnected ? '' : 'none'}>
         <button class="contextMenu__item nickserv" class:contextMenu__item--disabled={!isConnected} disabled={!isConnected} onclick={clickIdentify}>Identify Nickname…</button>
+      </li>
+      <li class="bouncer">
+        <button class="contextMenu__item bouncer" onclick={clickBouncer}>Connect with another client…</button>
       </li>
       <li class="disconnect" class:inactive={isInactive || isFiber} aria-disabled={isInactive || isFiber} style:display={isInactive || isFiber ? 'none' : ''}>
         <button class="contextMenu__item disconnect" class:contextMenu__item--disabled={isInactive || isFiber} disabled={isInactive || isFiber} onclick={clickDisconnect}>Disconnect</button>

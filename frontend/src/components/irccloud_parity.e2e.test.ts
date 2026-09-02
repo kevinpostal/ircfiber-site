@@ -5,6 +5,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import { logScroll } from '../test/scroll';
 
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -53,7 +54,7 @@ describe('irccloud parity extensive', () => {
     await nextFrame(); await delay(200);
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight) <= 1, 'must start at bottom').toBe(true);
     const bottomTop = c.scrollTop;
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    logScroll(document.getElementById('messages'), 'ArrowUp');
     await delay(50); await nextFrame();
     const top1 = c.scrollTop;
     expect(top1 < bottomTop, '1x up must move up').toBe(true);
@@ -80,7 +81,7 @@ describe('irccloud parity extensive', () => {
     await nextFrame(); await delay(200);
     const start = c.scrollTop;
     for (let i = 0; i < 20; i++) {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       await delay(25);
     }
     await nextFrame(); await delay(100);
@@ -132,8 +133,8 @@ describe('irccloud parity extensive', () => {
     expect(c).not.toBeNull(); if (!c) return;
     c.style.height = '400px'; c.style.overflowY = 'auto';
     await nextFrame(); await delay(200);
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    logScroll(document.getElementById('messages'), 'ArrowUp');
+    logScroll(document.getElementById('messages'), 'ArrowUp');
     await delay(80); await nextFrame();
     const mid = c.scrollTop;
     expect(c.scrollHeight - mid - c.clientHeight > 20).toBe(true);

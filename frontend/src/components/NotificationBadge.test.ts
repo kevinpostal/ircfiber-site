@@ -1,104 +1,117 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
 import NotificationBadge from './NotificationBadge.svelte';
-import { unreadMap, highlightMap, lastSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, appendMessage, getTotalUnread, getHasHighlight } from '../stores/ircStore.svelte';
+import { unseenMap, unseenHighlightsMap, lastSeenMap, bottomSeenMap, bufferPrefsMap } from '../stores/preferences.svelte';
+import { ircState, appendMessage, readBuffer, getUnseenMessageStats } from '../stores/ircStore.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 
 beforeEach(() => {
-  Object.keys(unreadMap).forEach((k) => delete (unreadMap as Record<string, unknown>)[k]);
-  Object.keys(highlightMap).forEach((k) => delete (highlightMap as Record<string, unknown>)[k]);
+  for (const k of Object.keys(unseenMap)) delete (unseenMap as Record<string, unknown>)[k];
+  for (const k of Object.keys(unseenHighlightsMap)) delete (unseenHighlightsMap as Record<string, unknown>)[k];
   for (const k of Object.keys(lastSeenMap)) delete (lastSeenMap as Record<string, unknown>)[k];
   for (const k of Object.keys(bottomSeenMap)) delete (bottomSeenMap as Record<string, unknown>)[k];
+  for (const k of Object.keys(bufferPrefsMap)) delete (bufferPrefsMap as Record<string, unknown>)[k];
   ircState.networks.length = 0;
+  ircState.messages = {};
   ircState.activeBuffer.networkId = null;
   ircState.activeBuffer.bufferName = null;
   ircState.focusLost = false;
+  ircState.wsConnected = true;
+  ircState.me = { username: 'me', email: 'me@test' };
+  document.title = '';
 });
-describe('NotificationBadge', () => {
-  it('updates document.title with unread count', async () => {
-    unreadMap['net1:#chan'] = 3;
+
+function setup(): void {
+  const net = createNetwork({ networkId: 'net1', name: 'IRC Fiber', nick: 'me', currentNick: 'me' });
+  net.buffers.push(createBuffer({ name: '#testing' }), createBuffer({ name: '#dev' }), createBuffer({ name: 'alice', type: 'query' }));
+  ircState.networks.push(net);
+  ircState.activeBuffer.networkId = 'net1';
+  ircState.activeBuffer.bufferName = '#testing';
+}
+
+describe('NotificationBadge — IRCCloud title', () => {
+  it('base title is "IRC Fiber" with no buffer, "#chan | network" with one', async () => {
     render(NotificationBadge);
-    await expect.poll(() => document.title).toBe('(3) IRC Fiber');
+    await expect.poll(() => document.title).toBe('IRC Fiber');
+    setup();
+    flushSync();
+    await expect.poll(() => document.title).toBe('#testing | IRC Fiber');
   });
 
-  it('shows highlight in title', async () => {
-    unreadMap['net1:#chan'] = 5;
-    highlightMap['net1:#chan'] = true;
+  it('server log uses the connection name alone', async () => {
+    setup();
+    ircState.activeBuffer.bufferName = '_server';
     render(NotificationBadge);
-    await expect.poll(() => document.title).toBe('(5) IRC Fiber');
-  });
-
-  it('resets title when unread returns to zero', async () => {
-    unreadMap['net1:#chan'] = 2;
-    render(NotificationBadge);
-    await expect.poll(() => document.title).toBe('(2) IRC Fiber');
-    delete unreadMap['net1:#chan'];
     await expect.poll(() => document.title).toBe('IRC Fiber');
   });
 
-  it('reflects total unread count from per-channel message arrivals', async () => {
-    const net = createNetwork({ networkId: 'net1' });
-    net.buffers.push(createBuffer({ name: '#chan1', unreadCount: 0 }));
-    net.buffers.push(createBuffer({ name: '#chan2', unreadCount: 0 }));
-    net.buffers.push(createBuffer({ name: '#chan3', unreadCount: 0 }));
-    ircState.networks.push(net);
-
-    ircState.activeBuffer.networkId = 'net1';
-    ircState.activeBuffer.bufferName = '#active';
-    ircState.focusLost = false;
-
+  it('"* " prefix when another buffer is unseen, "+ " when the current one is', async () => {
+    setup();
     render(NotificationBadge);
-
-    appendMessage('net1', '#chan1', createMessage({ text: 'a' }));
-    appendMessage('net1', '#chan1', createMessage({ text: 'b' }));
-    appendMessage('net1', '#chan2', createMessage({ text: 'c' }));
+    appendMessage('net1', '#dev', createMessage({ text: 'hello', nick: 'bob' }));
     flushSync();
+    await expect.poll(() => document.title).toBe('* #testing | IRC Fiber');
 
-    expect(getTotalUnread()).toBe(3);
-    await expect.poll(() => document.title).toBe('(3) IRC Fiber');
+    readBuffer('net1', '#dev');
+    appendMessage('net1', '#testing', createMessage({ text: 'hello again', nick: 'bob' }));
+    flushSync();
+    await expect.poll(() => document.title).toBe('+ #testing | IRC Fiber');
   });
 
-  it('clears total unread when switching to a buffer with unread', async () => {
-    const net = createNetwork({ networkId: 'net1' });
-    net.buffers.push(createBuffer({ name: '#chan1', unreadCount: 0 }));
-    ircState.networks.push(net);
-
-    ircState.activeBuffer.networkId = 'net1';
-    ircState.activeBuffer.bufferName = '#other';
-    ircState.focusLost = false;
-
+  it('"(N) " prefix sums unseen highlights across buffers', async () => {
+    setup();
     render(NotificationBadge);
-
-    appendMessage('net1', '#chan1', createMessage({ text: 'hello' }));
+    appendMessage('net1', '#dev', createMessage({ t: 1000, text: 'me: ping', nick: 'bob' }));
+    appendMessage('net1', 'alice', createMessage({ t: 2000, text: 'psst', nick: 'alice' }));
     flushSync();
-    expect(getTotalUnread()).toBe(1);
-    await expect.poll(() => document.title).toBe('(1) IRC Fiber');
-
-    setActiveBuffer('net1', '#chan1');
-    flushSync();
-    expect(getTotalUnread()).toBe(0);
-    await expect.poll(() => document.title).toBe('IRC Fiber');
+    expect(getUnseenMessageStats()).toBe(2);
+    await expect.poll(() => document.title).toBe('(2) #testing | IRC Fiber');
   });
 
-  it('getHasHighlight is true when any buffer has a highlight', async () => {
-    const net = createNetwork({ networkId: 'net1', nick: 'myuser', currentNick: 'myuser' });
-    net.buffers.push(createBuffer({ name: '#chan1', unreadCount: 0 }));
-    ircState.networks.push(net);
-
-    ircState.activeBuffer.networkId = 'net1';
-    ircState.activeBuffer.bufferName = '#other';
-    ircState.focusLost = false;
-
+  it('returns to the base title once everything is read', async () => {
+    setup();
     render(NotificationBadge);
-
-    expect(getHasHighlight()).toBe(false);
-
-    // Message mentioning myuser → highlight
-    appendMessage('net1', '#chan1', createMessage({ text: 'hey myuser look', nick: 'alice' }));
+    appendMessage('net1', '#dev', createMessage({ t: 1000, text: 'me: ping', nick: 'bob' }));
     flushSync();
+    await expect.poll(() => document.title).toBe('(1) #testing | IRC Fiber');
+    readBuffer('net1', '#dev');
+    flushSync();
+    await expect.poll(() => document.title).toBe('#testing | IRC Fiber');
+  });
 
-    expect(getHasHighlight()).toBe(true);
+  it('"(Offline) " prefix while the stream is disconnected', async () => {
+    setup();
+    ircState.wsConnected = false;
+    render(NotificationBadge);
+    await expect.poll(() => document.title).toBe('(Offline) #testing | IRC Fiber');
+  });
+});
+
+describe('NotificationBadge — favicon', () => {
+  function iconHref(): string {
+    return (document.querySelector('link[rel="icon"]') as HTMLLinkElement | null)?.href ?? '';
+  }
+
+  it('renders a data: icon and changes it only when a highlight is unseen', async () => {
+    setup();
+    render(NotificationBadge);
+    await expect.poll(() => iconHref().startsWith('data:image/png')).toBe(true);
+    const plain = iconHref();
+
+    // Plain unseen message → no red dot (icon unchanged).
+    appendMessage('net1', '#dev', createMessage({ t: 1000, text: 'hello', nick: 'bob' }));
+    flushSync();
+    expect(getUnseenMessageStats()).toBe(0);
+    await expect.poll(() => iconHref()).toBe(plain);
+
+    // Highlight → dot drawn (icon differs).
+    appendMessage('net1', '#dev', createMessage({ t: 2000, text: 'me: ping', nick: 'bob' }));
+    flushSync();
+    await expect.poll(() => iconHref() !== plain).toBe(true);
+
+    readBuffer('net1', '#dev');
+    flushSync();
+    await expect.poll(() => iconHref()).toBe(plain);
   });
 });

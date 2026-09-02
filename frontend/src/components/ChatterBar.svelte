@@ -6,9 +6,10 @@
     count: number;
     timestamp?: number | null;
     mentions?: number;
-    onClick: () => void;
+    onClick: (e?: MouseEvent) => void;
+    onDismiss?: () => void;
   }
-  let { position, count, timestamp, mentions = 0, onClick }: Props = $props();
+  let { position, count, timestamp, mentions = 0, onClick, onDismiss }: Props = $props();
 
   const THRESHOLD = 100;
   // Live tick so "less than a minute" → "a minute ago" without needing a new message.
@@ -39,7 +40,7 @@
 <div class="chattercell show {position === 'above' ? 'upperchattercell' : 'lowerchattercell'}">
   <div class="extras {position === 'above' ? 'bufferAboveExtras' : 'bufferBelowExtras'}">
     <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <span class="extrasBar" role="button" tabindex="0" onclick={onClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}>
+    <span class="extrasBar" role="button" tabindex="0" onclick={(e) => onClick(e)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}>
       <span class="extrasButton">{position === 'above' ? '\u2191' : '\u2193'}</span>
       {#if mentions > 0}
         <span>
@@ -62,5 +63,14 @@
         </span>
       {/if}
     </span>
+    {#if onDismiss}
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <span class="extrasDismiss" role="button" tabindex="0" title="Mark as read (Esc)" onclick={onDismiss} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onDismiss(); } }}>Mark as read</span>
+    {/if}
   </div>
 </div>
+
+<style>
+  .extrasDismiss { margin-left: 10px; cursor: pointer; opacity: 0.8; font-size: 12px; }
+  .extrasDismiss:hover { text-decoration: underline; opacity: 1; }
+</style>

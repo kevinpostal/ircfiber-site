@@ -1,7 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
-import { unreadMap, highlightMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs } from './preferences.svelte';
+import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
@@ -99,6 +99,13 @@ export const ircState = $state({
   me: null as { username: string; email: string } | null,
   wsConnected: false,
   focusLost: false,
+  // IRCCloud `session.isInitialized()`: true once the first sync and the
+  // initial backlog have landed. Before that, self messages replayed from
+  // history must not advance lastSeen (addMessage rule).
+  bootComplete: false,
+  // Set by MessageList on mount; App's focus handler calls it so the
+  // read trigger re-evaluates after blur/focus (IRCCloud focusChange).
+  scrollChangeHook: null as ((userScrolled: boolean) => void) | null,
   lastSeenMsgTime: null as number | null,
   optimisticMessages: new Map<string, IRCMessage>(),
   overlay: { type: null, data: null } as OverlayState,
@@ -146,10 +153,6 @@ export const ircState = $state({
   // expireAt = serverTs + countdownMs (unix ms). The UI computes remaining
   // = max(0, expireAt - Date.now()).
   tempUnavailable: {} as Record<string, { expireAt: number }>,
-  // IRCCloud-style badge pulse: buffer keys that should briefly pulse their
-  // unread badge on the next render (set when unread count increments,
-  // auto-cleared after 300ms). The Sidebar reads this to add the .pulse class.
-  pulseBuffers: new Set<string>(),
 });
 
 // E2E hooks for load-more verification
@@ -259,12 +262,27 @@ export function getIsServerBuffer(): boolean {
   return ircState.activeBuffer.bufferName === '_server';
 }
 
-export function getTotalUnread(): number {
-  return Object.values(unreadMap).reduce((sum, n) => sum + (n || 0), 0);
+/** IRCCloud `session.unseenBuffers`: buffers that are unseen and either
+ *  tracked or carrying highlights. `_server` never participates. */
+export function getUnseenBuffers(): Array<{ net: Network; buf: Buffer }> {
+  const out: Array<{ net: Network; buf: Buffer }> = [];
+  for (const net of ircState.networks) {
+    for (const buf of net.buffers) {
+      if (buf.name === '_server' || !buf.unseen) continue;
+      if (isTrackingUnread(net.networkId, buf.name) || buf.unseenHighlights.length > 0) out.push({ net, buf });
+    }
+  }
+  return out;
 }
 
-export function getHasHighlight(): boolean {
-  return Object.values(highlightMap).some(v => v);
+/** IRCCloud `getUnseenMessageStats`: `false` when nothing is unseen, else
+ *  the total unseen highlight count (may be 0 → "* " title prefix). */
+export function getUnseenMessageStats(): number | false {
+  const bufs = getUnseenBuffers();
+  if (bufs.length === 0) return false;
+  let sum = 0;
+  for (const { buf } of bufs) sum += buf.unseenHighlights.length;
+  return sum;
 }
 
 // ── Actions ──
@@ -309,8 +327,13 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
     conversationsCollapsedMap[networkId] = false;
   }
   const key = `${networkId}:${bufferName}`;
-  delete unreadMap[key];
-  delete highlightMap[key];
+  // IRCCloud deselect(): only an explicit "mark as read on select" pref
+  // marks the buffer we are leaving as read. Selecting never marks read —
+  // that happens through the scroll trigger once the log is at bottom.
+  if (isBufferChange && prevNetworkId && prevBufferName && prevBufferName !== '_server'
+      && getBufferPrefs(prevNetworkId, prevBufferName).markAsRead === true) {
+    readBuffer(prevNetworkId, prevBufferName);
+  }
   // IRCCloud re-renders the log fresh on buffer select — no stale divider.
   delete ircState.backlogDivider[key];
   const net = ircState.networks.find(n => n.networkId === networkId);
@@ -330,14 +353,14 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
         type: isChannel ? 'channel' : 'query',
         isJoined: isChannel ? false : true,
         isPhantom: isChannel,
-        unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+        unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
         topic: '', topicSetBy: '', topicSetAt: 0, users: [],
         lastSeenMsgTime: null, firstUnseenMsgIndex: null,
       } as Buffer;
       net.buffers.push(buf);
       sortBuffers(net);
     } else {
-      buf.unreadCount = 0; buf.highlight = false; buf.highlightCount = 0;
+      // (unseen state is untouched — IRCCloud select() never marks read.)
       // If we found the buffer it's no longer a placeholder — the user
       // is actively looking at it, so future JOIN/PART events should
       // drive isJoined from here on.
@@ -345,22 +368,6 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
     }
   }
   ircState.lastSeenMsgTime = null;
-  ircState.focusLost = false;
-  // Mark all current messages as read when switching to a buffer
-  const msgs = ircState.messages[key] ?? [];
-  if (msgs.length > 0) {
-    const lastMsg = msgs[msgs.length - 1];
-    if (lastMsg.t) {
-      setLastSeen(networkId, bufferName, lastMsg.t);
-      setBottomSeen(networkId, bufferName, lastMsg.t);
-      // Also set per-buffer state on the Buffer object
-      const buf = net?.buffers.find(b => b.name === bufferName);
-      if (buf) {
-        buf.lastSeen = lastMsg.t;
-        buf.bottomSeen = lastMsg.t;
-      }
-    }
-  }
 }
 
 // Select the next buffer to focus after the current one is closed/deleted.
@@ -595,7 +602,7 @@ export function initiateRejoin(
   if (!buf) {
     buf = {
       name: normalized, type: 'channel', isJoined: false,
-      unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+      unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
       topic: '', topicSetBy: '', topicSetAt: 0, users: [],
       lastSeenMsgTime: null, firstUnseenMsgIndex: null,
       lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
@@ -841,16 +848,14 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
   if (list.length > 0) {
     const tail = list[list.length - 1];
     if (compareMessages(tail, msg) > 0) {
-      // Out-of-order — find insertion point (binary-ish linear scan from tail
-      // is cheap because burst reorders are local and the buffer is capped).
-      list.splice(idx, 0, msg);
+      // Out-of-order — linear scan from the tail is cheap because burst
+      // reorders are local and the buffer is capped.
+      let at = list.length - 1;
+      while (at > 0 && compareMessages(list[at - 1], msg) > 0) at--;
+      list.splice(at, 0, msg);
       ircState.messages[key] = [...list];
       ircState.processedMessages[key] = buildProcessedBuffer([...list]);
-      const normBuf2 = normalizeChannelName(bufferName);
-      const isActive2 = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf2;
-      const isChatMessage2 = msg.command === 'PRIVMSG' || msg.type === 'action';
-      const isUnread2 = isChatMessage2 && (!isActive2 || ircState.focusLost);
-      if (isUnread2) incrementUnread(networkId, bufferName, msg);
+      applyAddMessageUnseen(networkId, bufferName, [msg]);
       markNetworkSeen(networkId);
       return;
     }
@@ -872,13 +877,7 @@ export function appendMessage(networkId: string, bufferName: string, msg: IRCMes
     ircState.processedMessages[key] = buildProcessedBuffer(capped);
   }
 
-  const normBuf = normalizeChannelName(bufferName);
-  const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-  const isChatMessage = msg.command === 'PRIVMSG' || msg.type === 'action';
-  const isUnread = isChatMessage && (!isActive || ircState.focusLost);
-  if (isUnread) {
-    incrementUnread(networkId, bufferName, msg);
-  }
+  applyAddMessageUnseen(networkId, bufferName, [msg]);
   markNetworkSeen(networkId);
 }
 
@@ -920,11 +919,7 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
   }
   const pending: IRCMessage[] = [];
   const newForProcessed: IRCMessage[] = [];
-  let addedUnread = 0;
-  let addedHighlights = 0;
-  let hasChat = false;
   let replacedEdit = false;
-  const netForBatchHl = ircState.networks.find(n => n.networkId === networkId) ?? null;
   for (const msg of msgs) {
     if (msg.label && ircState.optimisticMessages.has(msg.label)) {
       ircState.optimisticMessages.delete(msg.label);
@@ -1025,43 +1020,8 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     list.push(msg);
     pending.push(msg);
     newForProcessed.push(msg);
-    // Aggregate unread + highlight for the batch instead of per-message
-    // mutation. Without this, 50 incoming messages trigger 50 separate
-    // Svelte reactive ticks on the Sidebar's buffer items, which is
-    // most of the perceived "line by line trickle" delay.
-    const isChatMessage = msg.command === 'PRIVMSG' || msg.type === 'action';
-    if (isChatMessage) {
-      hasChat = true;
-      const track = shouldTrackUnread(networkId, bufferName);
-      if (track) {
-        // Only count messages newer than lastSeen — history replay
-        // (e.g. 200 REST rows whose t ≤ lastSeen) must not bump the
-        // sidebar badge. Without this, a refresh on
-        // /irc/IRC%20Fiber/channel/testing replayed the whole backlog
-        // through the live batch path and flashed a bunch of badges
-        // that the next sync/heartbeat immediately cleared.
-        if (!isMessageUnseen(msg, networkId, bufferName)) {
-          // Already seen — still maybe highlight? IRCCloud only
-          // highlights unseen, so skip.
-        } else {
-          const isHl = !!msg.highlight || (netForBatchHl ? checkHighlight(msg, netForBatchHl) : false);
-          if (isHl) msg.highlight = true;
-          if (!shouldCountUnreadForMessage(networkId, bufferName, isHl)) {
-            // Mentions-only channel: non-highlight messages don't bump badge
-          } else {
-            const normBuf = normalizeChannelName(bufferName);
-            const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBuf;
-            if (!isActive || ircState.focusLost) {
-              addedUnread++;
-              if (isHl) addedHighlights++;
-            } else if (isHl) {
-              // Highlight while viewing — mark message but don't bump sidebar badge/pulse
-              // (matches single-message path's isUnread guard which suppresses both)
-            }
-          }
-        }
-      }
-    }
+    // Unseen/highlight state is applied once for the whole batch below
+    // (applyAddMessageUnseen) so the Sidebar sees a single reactive tick.
   }
 
   // If the sorted burst is older than the tail (out-of-order WS delivery),
@@ -1129,57 +1089,9 @@ export function batchAppendMessages(networkId: string, bufferName: string, msgs:
     }
   }
 
-  // Batch the unread-count updates: write unreadMap once and buf.unreadCount
-  // once instead of per-message. This is the single biggest win for
-  // perceived speed when 50+ messages arrive at once.
-  // Respect per-buffer mute / showUnread: muted buffers never accumulate
-  // unread or highlight counts, matching the expectation that "mute all
-  // notifications" on a channel hides the sidebar badge.
-  if ((addedUnread > 0 || addedHighlights > 0) && shouldTrackUnread(networkId, bufferName)) {
-    const net = ircState.networks.find(n => n.networkId === networkId);
-    const buf = net?.buffers.find(b => b.name === normalizeChannelName(bufferName));
-    if (addedUnread > 0) {
-      unreadMap[key] = (unreadMap[key] ?? 0) + addedUnread;
-      if (buf) buf.unreadCount = (buf.unreadCount ?? 0) + addedUnread;
-    }
-    if (addedHighlights > 0) {
-      highlightMap[key] = true;
-      if (buf) {
-        buf.highlight = true;
-        buf.highlightCount = (buf.highlightCount ?? 0) + addedHighlights;
-      }
-    }
-    if (net && buf && (addedUnread > 0 || addedHighlights > 0)) {
-      ircState.pulseBuffers.add(key);
-      setTimeout(() => ircState.pulseBuffers.delete(key), 300);
-    }
-    for (const m of pending) if (m.highlight && m.nick) recordHighlight(networkId, bufferName, m.nick);
-  }
-
-  // Fallback highlight check for messages where network was not available during aggregation.
-  if (pending.length > 0 && hasChat) {
-    const net = ircState.networks.find(n => n.networkId === networkId);
-    if (net) {
-      const normBufFallback = normalizeChannelName(bufferName);
-      const isActiveFallback = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === normBufFallback;
-      for (const msg of pending) {
-        const isChatMessage = msg.command === 'PRIVMSG' || msg.type === 'action';
-        if (isChatMessage && !msg.highlight && checkHighlight(msg, net)) {
-          msg.highlight = true;
-          if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
-          if (shouldTrackUnread(networkId, bufferName) && (!isActiveFallback || ircState.focusLost)) {
-            const k = `${networkId}:${normalizeChannelName(bufferName)}`;
-            const b = net.buffers.find(bb => bb.name === normalizeChannelName(bufferName));
-            if (b) b.highlight = true;
-            highlightMap[k] = true;
-            if (b) b.highlightCount = (b.highlightCount ?? 0) + 1;
-          }
-        } else if (isChatMessage && msg.highlight && msg.nick) {
-          // Already counted above, just ensure recent highlighters.
-        }
-      }
-    }
-  }
+  // IRCCloud addMessage applied once for the batch: one setUnseen with
+  // every highlight `t` so the Sidebar sees a single reactive tick.
+  if (pending.length > 0) applyAddMessageUnseen(networkId, bufferName, pending);
   // FIFO cap: bound JS memory + cold preprocess (5k cold = 0.98ms median). Keeps 200-row window intact.
   if (ircState.messages[key] && ircState.messages[key].length > MAX_JS_MESSAGES) {
     const capped = ircState.messages[key].slice(-MAX_JS_MESSAGES);
@@ -1222,67 +1134,230 @@ export function recordHighlight(networkId: string, bufferName: string, nick: str
   recentHighlightersCache.set(key, filtered.slice(0, 10));
 }
 
-export function shouldTrackUnread(networkId: string, bufferName: string): boolean {
-  const prefs = getBufferPrefs(networkId, bufferName);
-  if (prefs.mute) return false;
-  if (prefs.showUnread === false) return false;
-  return true;
+// ── IRCCloud unread model (Buffer.setUnseen / setLastSeen / read) ──
+
+function bufferKey(networkId: string, bufferName: string): string {
+  return `${networkId}:${normalizeChannelName(bufferName)}`;
 }
 
-/** Mentions-only gating for unread counts.
- *  When notifyAll is false (default = mentions only) the sidebar badge
- *  should only increment for highlighted messages. This fixes the bug
- *  where channels with "Mentions only" still flashed a blue unread
- *  count for every normal PRIVMSG.
- *  mute / showUnread are handled by shouldTrackUnread before this is called.
- */
-export function shouldCountUnreadForMessage(networkId: string, bufferName: string, isHighlight: boolean): boolean {
-  const prefs = getBufferPrefs(networkId, bufferName);
-  // Only suppress non-highlights when the user has explicitly chosen "Mentions only"
-  // (notifyAll === false). If the pref is unset (undefined) we preserve the legacy
-  // behavior of counting every message as unread so existing channels and tests that
-  // never set the pref continue to show a badge for all messages.
-  if (prefs.notifyAll === false) return isHighlight;
-  return true;
-}
-
-export function incrementUnread(networkId: string, bufferName: string, msg: IRCMessage): void {
-  // IRCCloud parity: only PRIVMSG counts for unread (NOTICE from NickServ etc. ignored)
-  if (msg.command !== 'PRIVMSG' && msg.type !== 'action') return;
-  if (!shouldTrackUnread(networkId, bufferName)) return;
-  // Don't count messages the user has already seen (history replay,
-  // sync backfill, or a live event whose timestamp is ≤ lastSeen).
-  // Without this, a refresh that replays 200 history messages that are
-  // all older than lastSeen would inflate every channel's badge and
-  // cause the "flash then clear" flicker reported on
-  // /irc/IRC%20Fiber/channel/testing.
-  if (!isMessageUnseen(msg, networkId, bufferName)) return;
-  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+function findBuffer(networkId: string, bufferName: string): { net: Network; buf: Buffer } | null {
   const net = ircState.networks.find(n => n.networkId === networkId);
-  if (!net || bufferName === '_server') return;
+  if (!net) return null;
+  const norm = normalizeChannelName(bufferName);
+  const buf = net.buffers.find(b => b.name === norm || b.name === bufferName);
+  return buf ? { net, buf } : null;
+}
 
-  const isHighlight = !!msg.highlight || checkHighlight(msg, net);
-  if (!shouldCountUnreadForMessage(networkId, bufferName, isHighlight)) return;
+/** IRCCloud `session.isFocused()`: window focus, mirrored into `focusLost`. */
+export function isSessionFocused(): boolean {
+  if (ircState.focusLost) return false;
+  return typeof document === 'undefined' || document.hasFocus();
+}
 
-  unreadMap[key] = (unreadMap[key] ?? 0) + 1;
-  const buf = net.buffers.find(b => b.name === normalizeChannelName(bufferName));
-  if (buf) {
-    buf.unreadCount = (buf.unreadCount ?? 0) + 1;
+export function isSelfMessage(msg: IRCMessage, net: Network): boolean {
+  if (msg.selfEcho) return true;
+  const me = (net.currentNick || net.nick || '').toLowerCase();
+  return !!me && (msg.nick ?? '').toLowerCase() === me;
+}
+
+/** IRCCloud `Message.isImportant()`: buffer_msg / me_msg / notice (from a
+ *  user) / invite / wallops, never self, never empty. */
+export function isImportantMessage(msg: IRCMessage, net: Network): boolean {
+  if (isSelfMessage(msg, net)) return false;
+  if (msg.command === 'PRIVMSG' || msg.type === 'action') return !!msg.text;
+  if (msg.command === 'NOTICE') return !!msg.nick && !!msg.text;
+  if (msg.command === 'INVITE' || msg.command === 'WALLOPS') return true;
+  return false;
+}
+
+export function isTrackingUnread(networkId: string, bufferName: string): boolean {
+  return getBufferPrefs(networkId, bufferName).showUnread !== false;
+}
+
+/** Fiber "Show unread count": plain-message count in the red badge.
+ *  Implies the indicator itself is on; mention counts are unaffected. */
+export function showsUnreadCount(networkId: string, bufferName: string): boolean {
+  const p = getBufferPrefs(networkId, bufferName);
+  return p.showUnread !== false && p.showUnreadCount !== false;
+}
+
+/** IRCCloud `Message.isHighlightable()`. */
+export function isHighlightableMessage(msg: IRCMessage, net: Network, buf: Buffer): boolean {
+  if (!isImportantMessage(msg, net)) return false;
+  const prefs = getBufferPrefs(net.networkId, buf.name);
+  if (prefs.mute) return false;
+  if (msg.highlight || checkHighlight(msg, net)) return true;
+  if (buf.type === 'query' && isTrackingUnread(net.networkId, buf.name) && msg.command !== 'NOTICE') return true;
+  return msg.command === 'INVITE' || msg.command === 'WALLOPS';
+}
+
+/** IRCCloud `Buffer.setUnseen(e, t)` with a count: `unseen = count > 0`
+ *  (the count is Fiber's addition — IRCCloud's badge only counts
+ *  mentions). Multiple highlight `t`s may be pushed at once (batch path). */
+export function setUnseen(networkId: string, bufferName: string, count: number, highlightTs?: number | number[]): void {
+  const found = findBuffer(networkId, bufferName);
+  if (!found) return;
+  const { buf } = found;
+  const key = bufferKey(networkId, bufferName);
+  const unseen = count > 0;
+  if (buf.unseen !== unseen) buf.unseen = unseen;
+  if (buf.unseenCount !== count) buf.unseenCount = count;
+  if (unseen) { if (unseenMap[key] !== count) unseenMap[key] = count; }
+  else if (key in unseenMap) delete unseenMap[key];
+  if (highlightTs === undefined) return;
+  const add = Array.isArray(highlightTs) ? highlightTs : [highlightTs];
+  if (add.length === 0) return;
+  const merged = new Set(buf.unseenHighlights);
+  for (const t of add) merged.add(t);
+  if (merged.size === buf.unseenHighlights.length) return;
+  const next = [...merged].sort((a, b) => a - b);
+  buf.unseenHighlights = next;
+  unseenHighlightsMap[key] = next;
+}
+
+function writeUnseenHighlights(networkId: string, bufferName: string, buf: Buffer, next: number[]): void {
+  if (next.length === buf.unseenHighlights.length) return;
+  const key = bufferKey(networkId, bufferName);
+  buf.unseenHighlights = next;
+  if (next.length === 0) { if (key in unseenHighlightsMap) delete unseenHighlightsMap[key]; }
+  else unseenHighlightsMap[key] = next;
+}
+
+/** Unseen important messages strictly after `t` (0 when none loaded). */
+export function countImportantMessagesAfter(networkId: string, bufferName: string, t: number): number {
+  const found = findBuffer(networkId, bufferName);
+  const list = ircState.messages[bufferKey(networkId, bufferName)] ?? [];
+  if (!found || list.length === 0) return 0;
+  let n = 0;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i];
+    if ((m.t ?? 0) <= t) break;
+    if (isImportantMessage(m, found.net)) n++;
   }
+  return n;
+}
 
-  if (isHighlight) {
-    highlightMap[key] = true;
-    if (buf) {
-      buf.highlight = true;
-      buf.highlightCount = (buf.highlightCount ?? 0) + 1;
+export function clearUnseenHighlightsUntil(networkId: string, bufferName: string, t: number): void {
+  const found = findBuffer(networkId, bufferName);
+  if (!found) return;
+  writeUnseenHighlights(networkId, bufferName, found.buf, found.buf.unseenHighlights.filter(h => h > t));
+}
+
+/** IRCCloud `clearUnseenHighlightsAfter(m)`: drop highlights at or below
+ *  the lowest seen marker (bottomSeen ?? focusSeen ?? last message) and
+ *  return how many highlights were at or below `t` before the drop. */
+export function clearUnseenHighlightsAfter(networkId: string, bufferName: string, t: number): number {
+  const found = findBuffer(networkId, bufferName);
+  if (!found) return 0;
+  const { buf } = found;
+  let count = 0;
+  for (const h of buf.unseenHighlights) if (h <= t) count++;
+  const list = ircState.messages[bufferKey(networkId, bufferName)] ?? [];
+  const lowest = getBottomSeen(networkId, bufferName) ?? getFocusSeen(networkId, bufferName) ?? (list.length ? (list[list.length - 1].t ?? 0) : null);
+  if (lowest !== null) writeUnseenHighlights(networkId, bufferName, buf, buf.unseenHighlights.filter(h => h > lowest));
+  return count;
+}
+
+export function unseenHighlightCount(networkId: string, bufferName: string): number {
+  return findBuffer(networkId, bufferName)?.buf.unseenHighlights.length ?? 0;
+}
+
+export function unseenHighlightCountAfter(networkId: string, bufferName: string, t: number): number {
+  const found = findBuffer(networkId, bufferName);
+  if (!found) return 0;
+  let n = 0;
+  for (const h of found.buf.unseenHighlights) if (h > t) n++;
+  return n;
+}
+
+// Per-buffer lastSeen values not yet sent to the gateway (IRCCloud
+// heartbeat `seenEids` dirty model). App.svelte drains this every 2 s.
+export const dirtySeenEids: Record<string, Record<string, number>> = {};
+export function markSeenEidDirty(networkId: string, bufferName: string, t: number): void {
+  const nets = dirtySeenEids[networkId] ?? (dirtySeenEids[networkId] = {});
+  nets[normalizeChannelName(bufferName)] = t;
+}
+
+/** IRCCloud `Buffer.setLastSeen(m)`. */
+export function setLastSeenMessage(networkId: string, bufferName: string, t: number): void {
+  clearUnseenHighlightsUntil(networkId, bufferName, t);
+  updateBottomSeen(networkId, bufferName, t);
+  setUnseen(networkId, bufferName, countImportantMessagesAfter(networkId, bufferName, t));
+  setLastSeen(networkId, bufferName, t);
+  const found = findBuffer(networkId, bufferName);
+  if (found) found.buf.lastSeen = t;
+  markSeenEidDirty(networkId, bufferName, t);
+}
+
+/** IRCCloud `Buffer.updateBottomSeen(m)`: only while focused and only
+ *  forward. When the old bottomSeen was the lastSeen the read marker
+ *  follows it; otherwise highlights above the old marker are cleared. */
+export function updateBottomSeen(networkId: string, bufferName: string, t: number): boolean {
+  if (!isSessionFocused()) return false;
+  const current = getBottomSeen(networkId, bufferName);
+  if (current === null || t <= current) return false;
+  setBottomSeen(networkId, bufferName, t);
+  const found = findBuffer(networkId, bufferName);
+  if (found) found.buf.bottomSeen = t;
+  if (getLastSeen(networkId, bufferName) === current) setLastSeenMessage(networkId, bufferName, t);
+  else clearUnseenHighlightsAfter(networkId, bufferName, current);
+  return true;
+}
+
+/** IRCCloud `Buffer.read()`: mark read at focusSeen ?? bottomSeen ?? last message. */
+export function readBuffer(networkId: string, bufferName: string): void {
+  const list = ircState.messages[bufferKey(networkId, bufferName)] ?? [];
+  const lastT = list.length ? (list[list.length - 1].t ?? null) : null;
+  const t = getFocusSeen(networkId, bufferName) ?? getBottomSeen(networkId, bufferName) ?? lastT;
+  if (t === null) return;
+  setLastSeenMessage(networkId, bufferName, t);
+}
+
+/** IRCCloud `session.markAllAsRead()`. */
+export function markAllAsRead(): void {
+  for (const net of ircState.networks) {
+    for (const buf of net.buffers) {
+      if (buf.name === '_server') continue;
+      readBuffer(net.networkId, buf.name);
     }
-    msg.highlight = true;
-    if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
   }
+}
 
-  // Badge pulse animation
-  ircState.pulseBuffers.add(key);
-  setTimeout(() => ircState.pulseBuffers.delete(key), 300);
+/** IRCCloud `Buffer.resetLastSeen()`: recompute unseen state from the
+ *  persisted lastSeen and the loaded messages. */
+export function resetLastSeen(networkId: string, bufferName: string): void {
+  const lastSeen = getLastSeen(networkId, bufferName);
+  if (lastSeen === null) return;
+  clearUnseenHighlightsUntil(networkId, bufferName, lastSeen);
+  setUnseen(networkId, bufferName, countImportantMessagesAfter(networkId, bufferName, lastSeen));
+}
+
+/** IRCCloud `Buffer.addMessage` unseen rule, applied to one or many freshly
+ *  appended messages. A self message on a buffer with nothing unseen
+ *  advances lastSeen (after boot); anything important flips unseen and
+ *  pushes its `t` when highlightable. */
+function applyAddMessageUnseen(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
+  if (bufferName === '_server') return;
+  const found = findBuffer(networkId, bufferName);
+  if (!found) return;
+  const { net, buf } = found;
+  let added = 0;
+  const highlights: number[] = [];
+  for (const msg of msgs) {
+    if (!isMessageUnseen(msg, networkId, bufferName)) continue;
+    if (ircState.bootComplete && !buf.unseen && added === 0 && isSelfMessage(msg, net)) {
+      if (msg.t) setLastSeenMessage(networkId, bufferName, msg.t);
+      continue;
+    }
+    if (!isImportantMessage(msg, net)) continue;
+    added++;
+    if (isHighlightableMessage(msg, net, buf)) {
+      msg.highlight = true;
+      if (msg.t) highlights.push(msg.t);
+      if (msg.nick) recordHighlight(networkId, bufferName, msg.nick);
+    }
+  }
+  if (added > 0) setUnseen(networkId, bufferName, buf.unseenCount + added, highlights);
 }
 // Each TAGMSG from a nick resets a 6.5s heartbeat. The UI reads the
 // timestamp and hides the indicator when the window expires. Entries
@@ -1573,213 +1648,70 @@ export function countMessagesBetween(networkId: string, bufferName: string, star
   return Math.max(0, endIdx - startIdx);
 }
 
-function isImportantMessage(msg: IRCMessage): boolean {
-  // Skip status/join/part/numeric replies — only count actual chat
-  if (msg.command === 'PRIVMSG' || msg.type === 'action') return true;
-  if (msg.command === 'JOIN' || msg.command === 'PART' || msg.command === 'QUIT') return false;
-  if (msg.command === 'NICK' || msg.command === 'CHGHOST') return false;
-  if (/^\d{3}$/.test(msg.command)) return false;
-  if (msg.command === 'MODE' || msg.command === 'TOPIC' || msg.command === 'KICK') return false;
-  if (msg.command === 'JOINPART_GROUP') return false;
-  return true;
-}
-
+/** IRCCloud `countImportantMessagesBetween(a, b)`: important messages
+ *  strictly after `startMsg` through `endMsg` (or the end of the buffer). */
 export function countImportantMessagesBetween(networkId: string, bufferName: string, startMsg?: IRCMessage | null, endMsg?: IRCMessage | null): number {
-  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
-  const list = ircState.messages[key] ?? [];
-  if (list.length === 0) return 0;
-  const startIdx = startMsg ? list.findIndex(m => sameMsg(m, startMsg)) : 0;
+  const found = findBuffer(networkId, bufferName);
+  const list = ircState.messages[bufferKey(networkId, bufferName)] ?? [];
+  if (!found || list.length === 0) return 0;
+  const startIdx = startMsg ? list.findIndex(m => sameMsg(m, startMsg)) : -1;
   const endIdx = endMsg ? list.findIndex(m => sameMsg(m, endMsg)) : list.length - 1;
-  if (startIdx < 0 || endIdx < 0) return 0;
+  if ((startMsg && startIdx < 0) || endIdx < 0) return 0;
   let count = 0;
   for (let i = startIdx + 1; i <= endIdx; i++) {
-    if (isImportantMessage(list[i])) count++;
+    if (isImportantMessage(list[i], found.net)) count++;
   }
   return count;
 }
 
-export function clearUnseenHighlightsAfter(networkId: string, bufferName: string, msg: IRCMessage): number {
-  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
-  const list = ircState.messages[key] ?? [];
-  const msgIdx = list.findIndex(m => sameMsg(m, msg));
-  if (msgIdx < 0) return 0;
-  let remainder = 0;
-  for (let i = msgIdx + 1; i < list.length; i++) {
-    if (list[i].highlight) remainder++;
+// ── Unseen reconciliation (IRCCloud end_of_backlog → resetLastSeen) ──
+// Persisted `unseen`/`unseenHighlights` are restored from localStorage
+// before the sync payload and history arrive and may be stale (read on
+// another device, backlog older than lastSeen). Once messages and
+// lastSeen are both present, recompute the truth in one pass so no
+// "badges then no badges" frame is ever painted.
+function reconcileBuffer(net: Network, buf: Buffer): void {
+  if (buf.name === '_server') return;
+  const key = bufferKey(net.networkId, buf.name);
+  const msgs = ircState.messages[key];
+  if (!msgs || msgs.length === 0) {
+    // Nothing loaded yet — a stale badge can't be validated, so hide it
+    // until history lands and the next reconcile recomputes it.
+    setUnseen(net.networkId, buf.name, 0);
+    writeUnseenHighlights(net.networkId, buf.name, buf, []);
+    return;
   }
-  // Only clear highlights for this buffer if nothing remains after the boundary
-  if (remainder === 0) {
-    delete highlightMap[key];
-    const net = ircState.networks.find(n => n.networkId === networkId);
-    if (net) {
-      const buf = net.buffers.find(b => b.name === normalizeChannelName(bufferName));
-      if (buf) buf.highlight = false;
+  const lastSeen = getLastSeen(net.networkId, buf.name);
+  // Never visited on this device — leave whatever live state accumulated.
+  if (lastSeen === null) return;
+  const highlights = new Set<number>();
+  for (const h of buf.unseenHighlights) if (h > lastSeen) highlights.add(h);
+  let count = 0;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if ((m.t ?? 0) <= lastSeen) break;
+    if (!isImportantMessage(m, net)) continue;
+    count++;
+    if (isHighlightableMessage(m, net, buf)) {
+      m.highlight = true;
+      if (m.t) highlights.add(m.t);
     }
   }
-  return remainder;
+  writeUnseenHighlights(net.networkId, buf.name, buf, [...highlights].sort((a, b) => a - b));
+  setUnseen(net.networkId, buf.name, count);
 }
 
-export function unseenHighlightCountAfter(networkId: string, bufferName: string, msg?: IRCMessage | null): number {
-  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
-  const list = ircState.messages[key] ?? [];
-  if (list.length === 0) return 0;
-  const startIdx = msg ? list.findIndex(m => sameMsg(m, msg)) : -1;
-  const start = startIdx >= 0 ? startIdx + 1 : 0;
-  let count = 0;
-  for (let i = start; i < list.length; i++) {
-    if (list[i].highlight) count++;
-  }
-  return count;
-}
-
-export function updateBottomSeen(networkId: string, bufferName: string, msg: IRCMessage): boolean {
-  const current = getBottomSeen(networkId, bufferName);
-  const ts = msg.t || 0;
-  if (current === null || ts > current) {
-    setBottomSeen(networkId, bufferName, ts);
-    return true;
-  }
-  return false;
-}
-
-// ── Stale-unread reconciliation (refresh flicker fix) ───────────────
-// On a hard refresh the client restores `unreadMap`/`highlightMap` from
-// localStorage BEFORE the sync payload and message history arrive.  That
-// persisted map can be stale — e.g. a badge for #testing that was read
-// on another device, or a channel whose entire backlog is older than
-// lastSeen.  Without reconciliation the sidebar flashes a bunch of badges
-// on first paint and then clears them when the next heartbeat or sync
-// overwrites the counts (the exact flicker reported on
-// /irc/IRC%20Fiber/channel/testing).
-//
-// Call after messages and lastSeen are both populated (i.e. at the end
-// of `updateNetworkFromSync` and after `setMessages` for sync-provided
-// history).  It walks every buffer, computes the true unseen count from
-// `lastSeen + messages`, and syncs `unreadMap` / `highlightMap` /
-// `buf.unreadCount` to that truth.  This is a single batched correction
-// before the browser paints, so no intermediate "badges then no badges"
-// frame is ever visible.
 export function reconcileUnreadState(): void {
   for (const net of ircState.networks) {
-    for (const buf of net.buffers) {
-      if (buf.name === '_server') continue;
-      const key = `${net.networkId}:${buf.name}`;
-      const lastSeen = getLastSeen(net.networkId, buf.name);
-      const msgs = ircState.messages[key];
-      // No messages yet — can't validate stale localStorage badge.
-      // Treat as 0 unread (can't be unread without messages) so the
-      // stale badge restored from localStorage doesn't flash on for a
-      // few seconds after reload until history arrives. The next reconcile
-      // after history lands (via setMessages/prependMessages) will compute
-      // the true count and show the badge only if there is real unread.
-      if (!msgs || msgs.length === 0) {
-        buf.unreadCount = 0;
-        (buf as unknown as Record<string, unknown>).highlightCount = 0;
-        buf.highlight = false;
-        if (unreadMap[key] !== undefined) delete unreadMap[key];
-        if (highlightMap[key]) delete highlightMap[key];
-        continue;
-      }
-      // Never visited on this device — unread is local-only.  Don't
-      // synthesize a badge from old history; unread should only count
-      // messages that arrived *after* the user first saw the channel.
-      // Inflating here would flash badges for every never-visited
-      // channel on the first refresh.
-      if (lastSeen === null) continue;
-      let trueUnread = 0;
-      let trueHighlights = 0;
-      for (const m of msgs) {
-        const isChat = m.command === 'PRIVMSG' || m.type === 'action';
-        if (!isChat) continue;
-        if ((m.t ?? 0) <= lastSeen) continue;
-        if (!shouldTrackUnread(net.networkId, buf.name)) continue;
-        const isHl = !!(m.highlight || checkHighlight(m, net));
-        if (!shouldCountUnreadForMessage(net.networkId, buf.name, isHl)) continue;
-        trueUnread++;
-        if (isHl) trueHighlights++;
-      }
-      const prevUnread = unreadMap[key] ?? 0;
-      const prevHighlight = highlightMap[key] ?? false;
-      const shouldHaveHighlight = trueHighlights > 0;
-      // Sync buf fields
-      buf.unreadCount = trueUnread;
-      (buf as unknown as Record<string, unknown>).highlightCount = trueHighlights;
-      buf.highlight = shouldHaveHighlight;
-      // Sync maps — delete zero entries so Sidebar + title don't render 0 badges
-      if (trueUnread === 0) {
-        if (prevUnread !== 0) delete unreadMap[key];
-      } else {
-        if (prevUnread !== trueUnread) unreadMap[key] = trueUnread;
-      }
-      if (!shouldHaveHighlight) {
-        if (prevHighlight) delete highlightMap[key];
-      } else {
-        if (!prevHighlight) highlightMap[key] = true;
-      }
-    }
+    for (const buf of net.buffers) reconcileBuffer(net, buf);
   }
 }
 
 /** Targeted reconcile for a single buffer — called right after its
- *  history arrives (setMessages / prependMessages) so the stale badge
- *  doesn't linger until the next 10s periodic sync. */
+ *  history arrives (setMessages / prependMessages). */
 export function reconcileUnreadForBuffer(networkId: string, bufferName: string): void {
-  const net = ircState.networks.find(n => n.networkId === networkId);
-  if (!net) return;
-  const buf = net.buffers.find(b => normalizeChannelName(b.name) === normalizeChannelName(bufferName));
-  if (!buf || buf.name === '_server') return;
-  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
-  // Use the canonical buf.name for the messages key — it was normalized
-  // on arrival via setMessages/prependMessages.
-  const msgKey = `${networkId}:${buf.name}`;
-  const lastSeen = getLastSeen(networkId, buf.name);
-  const msgs = ircState.messages[msgKey] ?? ircState.messages[key];
-  if (!msgs || msgs.length === 0) {
-    buf.unreadCount = 0;
-    (buf as unknown as Record<string, unknown>).highlightCount = 0;
-    buf.highlight = false;
-    if (unreadMap[key] !== undefined) delete unreadMap[key];
-    // Also clear normalized variant if different
-    if (msgKey !== key && unreadMap[msgKey] !== undefined) delete unreadMap[msgKey];
-    if (highlightMap[key]) delete highlightMap[key];
-    if (msgKey !== key && highlightMap[msgKey]) delete highlightMap[msgKey];
-    return;
-  }
-  if (lastSeen === null) return;
-  let trueUnread = 0;
-  let trueHighlights = 0;
-  for (const m of msgs) {
-    const isChat = m.command === 'PRIVMSG' || m.type === 'action';
-    if (!isChat) continue;
-    if ((m.t ?? 0) <= lastSeen) continue;
-    if (!shouldTrackUnread(networkId, buf.name)) continue;
-    const isHl = !!(m.highlight || checkHighlight(m, net));
-    if (!shouldCountUnreadForMessage(networkId, buf.name, isHl)) continue;
-    trueUnread++;
-    if (isHl) trueHighlights++;
-  }
-  const prevUnread = unreadMap[key] ?? unreadMap[msgKey] ?? 0;
-  const prevHighlight = highlightMap[key] ?? highlightMap[msgKey] ?? false;
-  const shouldHaveHighlight = trueHighlights > 0;
-  buf.unreadCount = trueUnread;
-  (buf as unknown as Record<string, unknown>).highlightCount = trueHighlights;
-  buf.highlight = shouldHaveHighlight;
-  if (trueUnread === 0) {
-    if (prevUnread !== 0) {
-      delete unreadMap[key];
-      if (msgKey !== key) delete unreadMap[msgKey];
-    }
-  } else {
-    if (prevUnread !== trueUnread) unreadMap[key] = trueUnread;
-  }
-  if (!shouldHaveHighlight) {
-    if (prevHighlight) {
-      delete highlightMap[key];
-      if (msgKey !== key) delete highlightMap[msgKey];
-    }
-  } else {
-    if (!prevHighlight) highlightMap[key] = true;
-  }
+  const found = findBuffer(networkId, bufferName);
+  if (found) reconcileBuffer(found.net, found.buf);
 }
 
 function normalizeUser(user: string | Member): Member {
@@ -1829,10 +1761,27 @@ export interface SyncNetwork extends Network {
   realnames?: Record<string, string>;
 }
 
+/** Sync payload buffer. `lastSeen` (inherited) carries the gateway-persisted
+ *  last-seen `t`, null when never marked. */
 export interface SyncBuffer extends Buffer {
   realnames?: Record<string, string>;
   accounts?: Record<string, string>;
   idents?: Record<string, string>;
+}
+
+/** Restore persisted unseen state onto a freshly synced buffer object and
+ *  apply the gateway's `lastSeen` advance-only (IRCCloud `makebuffer`). */
+function adoptSyncedUnseen(networkId: string, buf: Buffer, incoming: SyncBuffer): void {
+  const key = bufferKey(networkId, buf.name);
+  if (typeof buf.unseenCount !== 'number') buf.unseenCount = Number(unseenMap[key]) || 0;
+  if (typeof buf.unseen !== 'boolean') buf.unseen = buf.unseenCount > 0;
+  if (!Array.isArray(buf.unseenHighlights)) buf.unseenHighlights = [...(unseenHighlightsMap[key] ?? [])];
+  if (buf.lastSeen === undefined) buf.lastSeen = getLastSeen(networkId, buf.name);
+  if (buf.bottomSeen === undefined) buf.bottomSeen = getBottomSeen(networkId, buf.name);
+  const remote = incoming.lastSeen;
+  if (typeof remote === 'number' && buf.name !== '_server' && isMessageUnseen({ t: remote } as IRCMessage, networkId, buf.name)) {
+    setLastSeenMessage(networkId, buf.name, remote);
+  }
 }
 
 /**
@@ -2157,16 +2106,8 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
         }
         const existingBuf = existing.buffers.find(b => b.name === incomingBuf.name);
         if (existingBuf) {
-          // Preserve local unread/highlight state across syncs.
-          // The backend doesn't know the client-side "active buffer" or scroll
-          // position, so its unreadCount is stale and would clobber the
-          // local indicator every few seconds. Only adopt the backend's count
-          // if it's higher (the user truly has more unread messages than we
-          // knew about) or if we have no local state yet.
-          const localUnread = existingBuf.unreadCount ?? 0;
-          const localHighlight = existingBuf.highlight ?? false;
-          const remoteUnread = incomingBuf.unreadCount ?? 0;
-          const remoteHighlight = incomingBuf.highlight ?? false;
+          // Unseen/highlight state is client-owned; the sync only carries the
+          // server-persisted `lastSeen`, applied below (advance-only).
           // Copy incoming buffer properties.  For isJoined we use a
           // pending-change guard: after a live JOIN/PART/KICK event for self,
           // updateChannelUsers sets pendingIsJoined to the event direction.
@@ -2291,8 +2232,6 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
           existingBuf.isArchived = incomingBuf.isArchived;
           existingBuf.lastSeenMsgTime = incomingBuf.lastSeenMsgTime;
           existingBuf.firstUnseenMsgIndex = incomingBuf.firstUnseenMsgIndex;
-          existingBuf.unreadCount = Math.max(localUnread, remoteUnread);
-          existingBuf.highlight = localHighlight || remoteHighlight;
           const incomingJoined = incomingBuf.isJoined;
           const pending = existingBuf.pendingIsJoined;
           const joinInFlight = existingBuf.joinInFlight === true;
@@ -2346,12 +2285,10 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
             }
           }
 
-          // Keep the preferences-map (used by getTotalUnread / getHasHighlight
-          // for the title bar and favicon) in sync with the resolved value.
-          const mapKey = `${existing.networkId}:${incomingBuf.name}`;
-          unreadMap[mapKey] = existingBuf.unreadCount;
-          if (existingBuf.highlight) highlightMap[mapKey] = true;
-          else delete highlightMap[mapKey];
+          // Server-persisted last-seen is advance-only (IRCCloud makebuffer
+          // → setLastSeen only when the eid is unseen). Local-ahead state is
+          // already in the dirty map and goes out with the next heartbeat.
+          adoptSyncedUnseen(existing.networkId, existingBuf, incomingBuf as SyncBuffer);
           // W7-T02: the channel appeared in this sync — reset the missed-sync
           // counter so a fresh streak of misses starts from zero. (Only
           // runs for buffers that were already in existing.buffers; newly
@@ -2359,6 +2296,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
           // orphan loop below.)
           existingBuf.syncMissedCount = 0;
         } else {
+          adoptSyncedUnseen(existing.networkId, incomingBuf, incomingBuf as SyncBuffer);
           existing.buffers.push(incomingBuf);
         }
       }
@@ -2497,8 +2435,9 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
           const joined = buf.isJoined !== false ? buf : prev;
           const other = joined === buf ? prev : buf;
           const merged: Buffer = { ...other, ...joined };
-          merged.unreadCount = Math.max(other.unreadCount ?? 0, joined.unreadCount ?? 0);
-          merged.highlight = (other.highlight ?? false) || (joined.highlight ?? false);
+          merged.unseenCount = Math.max(other.unseenCount ?? 0, joined.unseenCount ?? 0);
+          merged.unseen = merged.unseenCount > 0;
+          merged.unseenHighlights = [...new Set([...(other.unseenHighlights ?? []), ...(joined.unseenHighlights ?? [])])].sort((a, b) => a - b);
           merged.isPhantom = false;
           Object.assign(other, merged);
           joined.isPhantom = false;
@@ -2511,6 +2450,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
         .filter(b => !hiddenChannelsMap[`${net.networkId}:${normalizeChannelName(b.name)}`])
         .map(b => {
           const buf = { ...b, name: normalizeChannelName(b.name) } as Buffer;
+          adoptSyncedUnseen(net.networkId, buf, b as SyncBuffer);
           if (buf.users && buf.users.length > 0 && typeof buf.users[0] === 'string') {
             buf.users = (buf.users as unknown as string[]).map(normalizeUser);
           }
@@ -2534,7 +2474,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       if (!net.buffers.some(b => b.name === '_server')) {
         net.buffers.unshift({
           name: '_server', type: 'server', isJoined: true,
-          unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+          unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
           topic: '', topicSetBy: '', topicSetAt: 0, users: [],
           lastSeenMsgTime: null, firstUnseenMsgIndex: null
         } as Buffer);
@@ -2645,7 +2585,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
             type: 'channel',
             isJoined: true,
             isPhantom: false,
-            unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+            unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
             topic: '', topicSetBy: '', topicSetAt: 0,
             users: memberUsers,
             lastSeenMsgTime: null, firstUnseenMsgIndex: null,
@@ -2900,7 +2840,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     }
     buf = {
       name: normalized, type: 'channel', isJoined: true,
-      unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+      unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
       topic: '', topicSetBy: '', topicSetAt: 0, users: [],
       lastSeenMsgTime: Date.now(), firstUnseenMsgIndex: null,
     };

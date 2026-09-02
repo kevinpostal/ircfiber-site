@@ -12,12 +12,21 @@ function makeMsg(text: string, t: number): IRCMessage {
   } as IRCMessage;
 }
 
-describe('messageBatcher — fastest-possible flush', () => {
+// IRCCloud BufferLogView.checkFlush: the first message after ≥200 ms of
+// quiet flushes immediately; anything arriving inside the next 200 ms is
+// held and flushed together on the 200 ms tick. The batcher is module
+// state, so every test starts by letting the previous cadence expire.
+describe('messageBatcher — IRCCloud checkFlush cadence', () => {
   let flushes: { networkId: string; bufferName: string; msgs: IRCMessage[] }[];
   let flush: (networkId: string, bufferName: string, msgs: IRCMessage[]) => void;
+  // Monotonic fake clock across tests: `lastFlush` is module state, so each
+  // test starts well past the previous test's last flush.
+  let clock = Date.now();
 
   beforeEach(() => {
     vi.useFakeTimers();
+    clock += 60_000;
+    vi.setSystemTime(clock);
     flushes = [];
     flush = vi.fn((networkId: string, bufferName: string, msgs: IRCMessage[]) => {
       flushes.push({ networkId, bufferName, msgs });
@@ -26,75 +35,74 @@ describe('messageBatcher — fastest-possible flush', () => {
   });
 
   afterEach(() => {
+    vi.advanceTimersByTime(1000);
+    clock += 1000;
     vi.useRealTimers();
   });
 
-  it('flushes a single message on the next macrotask (0ms debounce)', () => {
+  it('flushes the first message of a quiet buffer immediately', () => {
     enqueueMessage('net1', '#chan', makeMsg('hello', 1));
-    expect(flush).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(0);
     expect(flush).toHaveBeenCalledTimes(1);
     expect(flushes[0].msgs).toHaveLength(1);
   });
 
-  it('batches a burst of messages arriving in the same tick into one flush', () => {
-    for (let i = 0; i < 50; i++) {
+  it('holds a burst arriving within 200 ms and flushes it on the next tick', () => {
+    enqueueMessage('net1', '#chan', makeMsg('m0', 0));
+    expect(flush).toHaveBeenCalledTimes(1);
+    for (let i = 1; i < 50; i++) {
       enqueueMessage('net1', '#chan', makeMsg(`m${i}`, i));
     }
-    expect(flush).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(0);
     expect(flush).toHaveBeenCalledTimes(1);
-    expect(flushes[0].msgs).toHaveLength(50);
+    vi.advanceTimersByTime(199);
+    expect(flush).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(flushes[1].msgs).toHaveLength(49);
   });
 
-  it('each new tick gets its own batch (no extension on burst)', () => {
-    // With 0ms debounce, each message arriving in a new tick is its own
-    // batch. The timer doesn't extend — M2's arrival doesn't push M1's
-    // deadline forward.
-    enqueueMessage('net1', '#chan', makeMsg('m1', 1));
-    vi.advanceTimersByTime(0);
-    expect(flush).toHaveBeenCalledTimes(1);
-    expect(flushes[0].msgs.map((m) => m.text)).toEqual(['m1']);
+  it('a steady stream renders in ≤5 batches per second', () => {
+    // One message every 10 ms for one second → 1 immediate + 5 ticks.
+    for (let i = 0; i < 100; i++) {
+      enqueueMessage('net1', '#chan', makeMsg(`m${i}`, i));
+      vi.advanceTimersByTime(10);
+    }
+    // Drain the trailing tick.
+    vi.advanceTimersByTime(200);
+    expect(flush.mock.calls.length).toBeLessThanOrEqual(7);
+    const total = flushes.reduce((sum, f) => sum + f.msgs.length, 0);
+    expect(total).toBe(100);
+  });
 
+  it('a message after ≥200 ms of quiet flushes immediately again', () => {
+    enqueueMessage('net1', '#chan', makeMsg('m1', 1));
+    expect(flush).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(250);
     enqueueMessage('net1', '#chan', makeMsg('m2', 2));
-    vi.advanceTimersByTime(0);
     expect(flush).toHaveBeenCalledTimes(2);
     expect(flushes[1].msgs.map((m) => m.text)).toEqual(['m2']);
   });
 
-  it('1000 messages arriving in a single tick render in 5 cap-flushes of 200', () => {
+  it('1000 messages in one tick: cap flushes of 200 plus the tick flush', () => {
     for (let i = 0; i < 1000; i++) {
       enqueueMessage('net1', '#chan', makeMsg(`m${i}`, i));
     }
-    // The cap fires at the 200th message, then again at 400, 600, 800, 1000.
-    // All 1000 should be flushed in synchronous cap-triggers.
-    expect(flush).toHaveBeenCalledTimes(5);
-    const totalFlushed = flushes.reduce((sum, f) => sum + f.msgs.length, 0);
-    expect(totalFlushed).toBe(1000);
+    // 1 immediate, then the cap fires at every 200 queued.
+    vi.advanceTimersByTime(200);
+    const total = flushes.reduce((sum, f) => sum + f.msgs.length, 0);
+    expect(total).toBe(1000);
+    expect(flush.mock.calls.length).toBeLessThanOrEqual(7);
   });
 
-  it('groups messages per buffer — one flushFn call per affected buffer', () => {
-    for (let i = 0; i < 5; i++) {
+  it('groups messages per buffer — one flushFn call per affected buffer per flush', () => {
+    enqueueMessage('net1', '#chanA', makeMsg('a0', 0));
+    for (let i = 1; i < 5; i++) {
       enqueueMessage('net1', '#chanA', makeMsg(`a${i}`, i));
       enqueueMessage('net1', '#chanB', makeMsg(`b${i}`, i));
     }
-    vi.advanceTimersByTime(0);
-    expect(flush).toHaveBeenCalledTimes(2);
-    const total = flushes.reduce((sum, f) => sum + f.msgs.length, 0);
-    expect(total).toBe(10);
-  });
-
-  it('O(1) cap check: 500 messages flush via cap (200, 400) + trailing 100 on timer', () => {
-    for (let i = 0; i < 500; i++) {
-      enqueueMessage('net1', '#chan', makeMsg(`m${i}`, i));
-    }
-    // First 200 flush via cap, next 200 flush via cap, last 100 wait for timer.
-    expect(flush).toHaveBeenCalledTimes(2);
-    vi.advanceTimersByTime(0);
-    expect(flush).toHaveBeenCalledTimes(3);
-    const total = flushes.reduce((sum, f) => sum + f.msgs.length, 0);
-    expect(total).toBe(500);
+    vi.advanceTimersByTime(200);
+    const byBuffer = new Map<string, number>();
+    for (const f of flushes) byBuffer.set(f.bufferName, (byBuffer.get(f.bufferName) ?? 0) + f.msgs.length);
+    expect(byBuffer.get('#chanA')).toBe(5);
+    expect(byBuffer.get('#chanB')).toBe(4);
   });
 });

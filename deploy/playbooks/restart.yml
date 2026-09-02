@@ -5,7 +5,7 @@
 #   ansible-playbook playbooks/restart.yml -e components=mongo,redis,gateway
 #   ansible-playbook playbooks/restart.yml            # restart everything
 #
-# Valid components: caddy, cloudflared, gateway, engine, mongo, redis, holder
+# Valid components: caddy, cloudflared, gateway, engine, mongo, redis, holder, ircd, services
 
 - name: Restart irc-fiber components
   hosts: all
@@ -21,8 +21,8 @@
     - name: Validate component list
       ansible.builtin.assert:
         that:
-          - item in ['caddy', 'cloudflared', 'gateway', 'engine', 'holder', 'mongo', 'redis']
-        fail_msg: "Unknown component '{{ item }}'. Valid: caddy, cloudflared, gateway, engine, holder, mongo, redis"
+          - item in ['caddy', 'cloudflared', 'gateway', 'engine', 'holder', 'mongo', 'redis', 'ircd', 'services']
+        fail_msg: "Unknown component '{{ item }}'. Valid: caddy, cloudflared, gateway, engine, holder, mongo, redis, ircd, services"
       loop: "{{ components | split(',') | map('trim') | reject('equalto', '') | list }}"
 
     - name: Restart Caddy
@@ -100,6 +100,26 @@
         name: ircfiber-redis
         restart: true
       when: "'redis' in (components | split(',') | map('trim') | list)"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['ircfiber_backend'] | default([]) }}"
+      loop_control:
+        loop_var: item
+
+    - name: Restart IRCd (InspIRCd)
+      community.docker.docker_container:
+        name: ircfiber-ircd
+        restart: true
+      when: "'ircd' in (components | split(',') | map('trim') | list)"
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['ircfiber_backend'] | default([]) }}"
+      loop_control:
+        loop_var: item
+
+    - name: Restart services (Anope)
+      community.docker.docker_container:
+        name: ircfiber-services
+        restart: true
+      when: "'services' in (components | split(',') | map('trim') | list)"
       delegate_to: "{{ item }}"
       loop: "{{ groups['ircfiber_backend'] | default([]) }}"
       loop_control:

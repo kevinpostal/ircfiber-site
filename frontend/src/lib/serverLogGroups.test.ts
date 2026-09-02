@@ -6,6 +6,7 @@ import {
   attemptDuration,
   formatDuration,
   numericBody,
+  relativeOffset,
 } from './serverLogGroups';
 import type { IRCMessage } from '../types';
 
@@ -410,5 +411,54 @@ describe('numericBody', () => {
   });
   it('falls back to joining all params when no colon-prefixed tail', () => {
     expect(numericBody(m({ command: '005', text: '', params: ['nick', 'token1', 'token2'] }))).toBe('nick token1 token2');
+  });
+});
+describe('live connection flow (2026-09-02)', () => {
+  it('a bare `connecting` after a completed connect opens a new card (engine restart, no DISCONNECTED)', () => {
+    const messages = [
+      m({ phase: 'connecting', text: 'first connect', t: 1000 }),
+      m({ phase: 'tcp_open', text: 'tcp', t: 1100 }),
+      m({ phase: 'welcome', text: 'first welcome', t: 1500 }),
+      m({ command: '372', text: 'motd', t: 1600 }),
+      // Engine restarted: no DISCONNECTED was ever published for the old socket.
+      m({ phase: 'connecting', text: 'second connect', t: 5000 }),
+      m({ phase: 'dns', text: 'Resolved host → 1 address', t: 5010 }),
+      m({ phase: 'attempt', text: 'Trying 1.2.3.4:6697 via direct', t: 5011 }),
+      m({ phase: 'tcp_open', text: 'tcp again', t: 5100 }),
+    ];
+    const attempts = groupServerLog(messages);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0].status).toBe('success');
+    expect(attempts[0].phases.map((p) => p.phase)).toEqual(['connecting', 'tcp_open', 'welcome']);
+    expect(attempts[1].status).toBe('pending');
+    expect(attempts[1].phases.map((p) => p.phase)).toEqual(['connecting', 'dns', 'attempt', 'tcp_open']);
+  });
+
+  it('`queued` → `connecting` stays one card; per-address failures do not end the attempt', () => {
+    const messages = [
+      m({ phase: 'queued', text: 'Reconnect attempt scheduled in 5s', t: 1000 }),
+      m({ phase: 'connecting', text: 'Connecting to host', t: 6000 }),
+      m({ phase: 'dns', text: 'Resolved', t: 6010 }),
+      m({ phase: 'attempt', text: 'Trying a', t: 6011 }),
+      m({ phase: 'attempt_fail', text: 'a: timed out after 10s', t: 16011 }),
+      m({ phase: 'attempt', text: 'Trying b', t: 16012 }),
+    ];
+    const attempts = groupServerLog(messages);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].status).toBe('pending');
+    expect(attempts[0].phases).toHaveLength(6);
+  });
+
+  it('relativeOffset renders +s offsets from the attempt start', () => {
+    expect(relativeOffset(1000, 1000)).toBe('+0.0s');
+    expect(relativeOffset(1000, 3450)).toBe('+2.5s');
+    expect(relativeOffset(1000, 1000 + 125_000)).toBe('+2m05s');
+    expect(relativeOffset(undefined, 5)).toBe('');
+  });
+
+  it('phaseToLabel knows the connect-progress phases', () => {
+    expect(phaseToLabel('dns')).toBe('dns');
+    expect(phaseToLabel('attempt')).toBe('try');
+    expect(phaseToLabel('attempt_fail')).toBe('fail');
   });
 });

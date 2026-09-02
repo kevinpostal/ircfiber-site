@@ -167,15 +167,22 @@ export async function updateNetworkOrder(order: string[]): Promise<void> {
   if (!r.ok) throw new Error('Update network order failed');
 }
 
+/// Persist the collapsed state of a server-log connection card. The
+/// server keys the preference exactly like `getServerLogCollapsedKey`
+/// (`<net>:<eid>` / `<net>:msgid:<msgid>` / `<net>:id:<id>`), so pass the
+/// attempt's start message and let one place pick the identifier. Cards
+/// with no identifier at all stay localStorage-only instead of POSTing a
+/// request the server can only answer with 400.
 export async function updateServerlogCollapsed(
   networkId: string,
-  eid?: number,
-  msgid?: string,
-  collapsed?: boolean,
+  start: { eid?: number | string; msgid?: string; id?: string } | undefined,
+  collapsed: boolean,
 ): Promise<void> {
-  const body: Record<string, unknown> = { network: networkId, collapsed: !!collapsed };
-  if (eid != null) body.eid = String(eid);
-  else if (msgid) body.msgid = msgid;
+  const body: Record<string, unknown> = { network: networkId, collapsed };
+  if (start?.eid) body.eid = String(start.eid);
+  else if (start?.msgid) body.msgid = start.msgid;
+  else if (start?.id) body.id = start.id;
+  else return;
   const r = await fetch(`${API_BASE}/me/serverlog-collapsed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -346,6 +353,48 @@ export async function disconnectNetwork(networkId: string, reason: string = ''):
     body: JSON.stringify({ reason })
   });
   if (!r.ok) throw new Error('Disconnect failed');
+}
+
+/** GET/POST/DELETE /networks/:id/bouncer — "Connect with another client…". */
+export interface BouncerInfo {
+  enabled: boolean;
+  host: string;
+  port: number;
+  tls: boolean;
+  /** `bnc:<token>` or null when no password has been generated. */
+  password: string | null;
+  /** Lines per buffer replayed on attach for clients without CHATHISTORY (0 = none). */
+  playbackLines: number;
+  /** Server-side cap for `playbackLines`. */
+  playbackMax: number;
+}
+
+export async function fetchBouncer(networkId: string): Promise<BouncerInfo> {
+  const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/bouncer`);
+  if (!r.ok) throw new Error('Could not load bouncer settings');
+  return r.json();
+}
+
+export async function generateBouncerPassword(networkId: string): Promise<BouncerInfo> {
+  const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/bouncer`, { method: 'POST' });
+  if (!r.ok) throw new Error('Could not generate bouncer password');
+  return r.json();
+}
+
+/** POST /me/bnc-playback-lines — persists the bouncer playback size; returns the clamped value. */
+export async function updateBncPlaybackLines(value: number): Promise<number> {
+  const r = await fetch(`${API_BASE}/me/bnc-playback-lines`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ value }),
+  });
+  if (!r.ok) throw new Error('Could not save playback setting');
+  return (await r.json() as { value: number }).value;
+}
+
+export async function revokeBouncerPassword(networkId: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/bouncer`, { method: 'DELETE' });
+  if (!r.ok) throw new Error('Could not revoke bouncer password');
 }
 
 export async function joinChannel(networkId: string, channel: string, key?: string): Promise<void> {

@@ -1,8 +1,8 @@
 export function make_mock_preferences() {
   return {
     clearedAtMap: {} as Record<string, number>,
-    unreadMap: {} as Record<string, number>,
-    highlightMap: {} as Record<string, boolean>,
+    unseenMap: {} as Record<string, number>,
+    unseenHighlightsMap: {} as Record<string, number[]>,
     archivedMap: {} as Record<string, boolean>,
     ignoreList: [] as string[],
     highlightWords: [] as string[],

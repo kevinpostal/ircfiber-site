@@ -424,24 +424,29 @@ final class SessionManager {
 
     /// Destroys a session by ID.
     /// If Redis is configured, also removes the Redis record.
-    /// SLA: frees the cross-thread ManualEvent to avoid eventfd leak
-    /// (90 fds in 3h → 1078). The drainer waits at most 5s before
-    /// checking alive, so freeing after remove is safe.
+    ///
+    /// The outbound `ManualEvent` is NOT freed here: `drainOutboundLoop`
+    /// may be blocked inside `waitUninterruptible` on it (it captured the
+    /// pointer via `drainOutbound`). Freeing it out from under the waiter
+    /// (the previous `GC.free` "eventfd leak" fix) made the drainer lock
+    /// and unlock through a dangling `Mutex` pointer once the wait
+    /// returned — the uncaught `SyncError@(0)` that aborted the prod
+    /// gateway 16 times on 2026-09-02. Instead we emit the event so the
+    /// drainer wakes immediately, sees `alive == false`, exits and
+    /// releases its thread waiter (which is what frees the eventfd); the
+    /// event memory then becomes ordinary garbage.
     void destroySession(UUID sessionId) {
-        shared(ManualEvent)* notifyToFree = null;
+        shared(ManualEvent)* notify = null;
         synchronized (m_mutex) {
             if (auto p = sessionId in sessions) {
                 p.isActive = false;
-                notifyToFree = p.outboundNotify;
-                p.outboundNotify = null;
+                notify = p.outboundNotify;
                 sessions.remove(sessionId);
             }
         }
-        if (notifyToFree !is null) {
-            try {
-                import core.memory : GC;
-                GC.free(cast(void*)notifyToFree);
-            } catch (Exception) {}
+        if (notify !is null) {
+            try notify.emit();
+            catch (Exception) {}
         }
         // Remove from Redis regardless of in-memory state
         removeFromRedis(sessionId);

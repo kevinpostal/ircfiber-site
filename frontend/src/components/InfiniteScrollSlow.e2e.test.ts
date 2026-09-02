@@ -49,6 +49,8 @@ describe('infinite scroll — slow scroll up keeps reading place (IRCCloud parit
     c.style.height = '400px';
     c.style.overflowY = 'auto';
     await new Promise((r) => requestAnimationFrame(r));
+    // Let the container ResizeObserver re-pin (IRCCloud autogrow checkRecent) before scrolling.
+    await new Promise((r) => setTimeout(r, 150));
     expect(c.scrollHeight).toBeGreaterThan(c.clientHeight);
 
     const scrollHeightBefore = c.scrollHeight;
@@ -105,6 +107,8 @@ describe('infinite scroll — slow scroll up keeps reading place (IRCCloud parit
     c.style.height = '400px';
     c.style.overflowY = 'auto';
     await new Promise((r) => requestAnimationFrame(r));
+    // Let the container ResizeObserver re-pin (IRCCloud autogrow checkRecent) before scrolling.
+    await new Promise((r) => setTimeout(r, 150));
 
     c.scrollTop = 300;
     c.dispatchEvent(new Event('scroll'));
@@ -162,6 +166,8 @@ describe('infinite scroll — slow scroll up keeps reading place (IRCCloud parit
     c.style.height = '400px';
     c.style.overflowY = 'auto';
     await new Promise((r) => requestAnimationFrame(r));
+    // Let the container ResizeObserver re-pin (IRCCloud autogrow checkRecent) before scrolling.
+    await new Promise((r) => setTimeout(r, 150));
 
     const scrollHeightBefore = c.scrollHeight;
     const scrollTopBefore = c.scrollTop;

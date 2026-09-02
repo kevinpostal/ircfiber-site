@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { smoothScrollBy } from './lib/scroll';
   import Sidebar from './components/Sidebar.svelte';
   import ChatArea from './components/ChatArea.svelte';
   import MemberList from './components/MemberList.svelte';
   import BufferHeader from './components/BufferHeader.svelte';
   import NetworkForm from './components/NetworkForm.svelte';
   import JoinModal from './components/JoinModal.svelte';
+  import BouncerDialog from './components/BouncerDialog.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
   import ChannelContextMenu from './components/ChannelContextMenu.svelte';
   import ServerLogContextMenu from './components/ServerLogContextMenu.svelte';
@@ -24,7 +24,9 @@
     handleBuffersToDelete,
     isJoinPending, initiateRejoin,
     resetPendingState,
-    isUserDisconnected
+    isUserDisconnected,
+    isMessageUnseen, setLastSeenMessage, readBuffer, markAllAsRead,
+    isTrackingUnread, dirtySeenEids
   } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
@@ -40,7 +42,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, setLastSeen, bufferPrefsMap, conversationsCollapsedMap, lastSeenMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
+  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -143,9 +145,16 @@ const isBootLoading: boolean = $derived(
   (ircState.networks.length > 0 && (!syncReceived || !backlogReady))
 );
 
+// IRCCloud session.isInitialized(): once sync + backlog have landed.
+$effect(() => {
+  if (syncReceived && backlogReady) ircState.bootComplete = true;
+});
+
 let showNetworkForm: boolean = $state(false);
   let showJoinModal: boolean = $state(false);
   let joinModalNetworkId: string | null = $state(null);
+  let showBouncerDialog: boolean = $state(false);
+  let bouncerNetworkId: string | null = $state(null);
   $effect(() => { (window as any).__channelMenu = channelMenu; (window as any).__editNetworkId = editNetworkId; (window as any).__showNetworkForm = showNetworkForm; });
   $effect(() => { (window as any).__showNetworkForm = showNetworkForm; (window as any).__editNetworkId = editNetworkId; (window as any).__networkFormMode = networkFormMode; });
   let channelSwitcherOpen: boolean = $state(false);
@@ -213,7 +222,7 @@ let showNetworkForm: boolean = $state(false);
     mobileMembersOpen = false;
   }
 
-  const hasOpenDialog = $derived(!!ircState.overlay.type || showNetworkForm || showJoinModal || !!uploadState.dialog || !!userPopup || !!channelMenu);
+  const hasOpenDialog = $derived(!!ircState.overlay.type || showNetworkForm || showJoinModal || showBouncerDialog || !!uploadState.dialog || !!userPopup || !!channelMenu);
   let wrapEl: HTMLDivElement | null = $state(null);
   $effect(() => {
     if (!wrapEl) return;
@@ -347,17 +356,7 @@ let showNetworkForm: boolean = $state(false);
   });
 
   let syncInterval: ReturnType<typeof setInterval>;
-  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-
-  // Heartbeat timer lifecycle: start/stop based on feature flag + WS state.
-  // Runs as a $effect so toggling the flag mid-session restarts the timer.
-  $effect(() => {
-    if (globalPrefs.featureFlags.heartbeat.enabled && ircState.wsConnected) {
-      startHeartbeatTimer();
-    } else {
-      stopHeartbeatTimer();
-    }
-  });
+  let heartbeatTimeout: ReturnType<typeof setTimeout> | undefined;
 
   // ── Authentication gate ────────────────────────────────────────
   // IRCCloud boots the SPA unconditionally and overlays a centered
@@ -385,27 +384,25 @@ let showNetworkForm: boolean = $state(false);
     syncPasteViewer();
   }
 
-  function startHeartbeatTimer(): void {
-    if (!globalPrefs.featureFlags.heartbeat.enabled) return;
-    if (heartbeatTimer) return;
-    heartbeatTimer = setInterval(() => {
-      const seenEids: Record<string, Record<string, number>> = {};
-      for (const [key, ts] of Object.entries(lastSeenMap)) {
-        const [networkId, ...bufParts] = key.split(':');
-        const bufferName = bufParts.join(':');
-        if (!networkId || !bufferName) continue;
-        if (!seenEids[networkId]) seenEids[networkId] = {};
-        seenEids[networkId][bufferName] = ts;
-      }
-      sendJson({ type: 'heartbeat', seenEids });
-    }, 10000);
+  // IRCCloud heartbeat (rEXR): every 2 s, if any buffer's lastSeen changed
+  // since the last send, POST the dirty `seenEids` and clear them. Sent
+  // over the WS as `cmd:"heartbeat"`; the gateway persists and echoes.
+  function scheduleSendState(): void {
+    if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
+    heartbeatTimeout = setTimeout(sendState, 2000);
   }
 
-  function stopHeartbeatTimer(): void {
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = undefined;
+  function sendState(): void {
+    heartbeatTimeout = undefined;
+    if (Object.keys(dirtySeenEids).length > 0 && ircState.wsConnected) {
+      const seenEids: Record<string, Record<string, number>> = {};
+      for (const nid of Object.keys(dirtySeenEids)) {
+        seenEids[nid] = { ...dirtySeenEids[nid] };
+        delete dirtySeenEids[nid];
+      }
+      sendJson({ cmd: 'heartbeat', seenEids });
     }
+    scheduleSendState();
   }
 
   function startWebSocket(): void {
@@ -423,11 +420,11 @@ let showNetworkForm: boolean = $state(false);
         performance.mark('ws-open');
         if (syncInterval) clearInterval(syncInterval);
         syncInterval = setInterval(requestSync, 10000);
-        startHeartbeatTimer();
+        scheduleSendState();
       },
       () => {
         ircState.wsConnected = false;
-        stopHeartbeatTimer();
+        if (heartbeatTimeout) { clearTimeout(heartbeatTimeout); heartbeatTimeout = undefined; }
       }
     );
   }
@@ -485,6 +482,10 @@ let showNetworkForm: boolean = $state(false);
     window.addEventListener('popstate', checkRoute);
     document.addEventListener('keydown', handleGlobalKeyboard);
     document.addEventListener('click', handleDocumentClick);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('focus', handleWindowFocus);
+    setFocused(document.hasFocus());
 
     // Defer the WS connection until we know whether the visitor has a
     // valid session. /api/me is a single HTTP round-trip and runs in
@@ -499,33 +500,43 @@ let showNetworkForm: boolean = $state(false);
     disconnectWebSocket();
     window.removeEventListener('popstate', checkRoute);
     document.removeEventListener('visibilitychange', handleVisibility);
+    window.removeEventListener('blur', handleWindowBlur);
+    window.removeEventListener('focus', handleWindowFocus);
+    if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
     document.removeEventListener('keydown', handleGlobalKeyboard);
     document.removeEventListener('click', handleDocumentClick);
   });
 
   function handleVisibility(): void {
-    if (document.hidden) {
-      ircState.focusLost = true;
-      // IRCCloud lockFocusSeen: capture last message of active buffer at blur time,
-      // only if not already locked (preserves first blur marker until read).
-      const nid = ircState.activeBuffer.networkId;
-      const buf = ircState.activeBuffer.bufferName;
-      if (nid && buf && getFocusSeen(nid, buf) === null) {
-        const key = `${nid}:${buf}`;
-        const list = ircState.messages[key] ?? [];
-        const ts = list.length > 0 ? (list[list.length - 1].t ?? Date.now()) : Date.now();
-        setFocusSeen(nid, buf, ts);
-        // Also set global lastSeenMsgTime for chatter bar backward compat
-        ircState.lastSeenMsgTime = ts;
-      }
-    } else {
-      ircState.focusLost = false;
-      // Do NOT overwrite focusSeen on focus return — keep marker so
-      // "New messages since you tabbed out" divider stays visible until
-      // user scrolls to bottom and reads. IRCCloud unlockFocusSeen only
-      // on read/deselect, not on focus regain.
-    }
+    setFocused(!document.hidden && document.hasFocus());
   }
+
+  // IRCCloud session.setFocused + buffer view focusChange: on blur lock
+  // focusSeen (and drop bottomSeen when at bottom); on focus unlock it.
+  // The read trigger then re-evaluates with userScrolled=false.
+  function setFocused(focused: boolean): void {
+    ircState.focusLost = !focused;
+    const nid = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (nid && buf && buf !== '_server') {
+      if (focused) {
+        clearFocusSeen(nid, buf);
+      } else {
+        const container = document.getElementById('messages');
+        const atBottom = !!container && container.scrollHeight - (container.offsetHeight + Math.ceil(container.scrollTop)) <= 1;
+        if (atBottom) clearBottomSeen(nid, buf);
+        if (getFocusSeen(nid, buf) === null) {
+          const list = ircState.messages[`${nid}:${buf}`] ?? [];
+          const ts = list.length > 0 ? (list[list.length - 1].t ?? Date.now()) : Date.now();
+          setFocusSeen(nid, buf, ts);
+          ircState.lastSeenMsgTime = ts;
+        }
+      }
+    }
+    ircState.scrollChangeHook?.(false);
+  }
+  function handleWindowBlur(): void { setFocused(false); }
+  function handleWindowFocus(): void { setFocused(true); }
 
   function handleDocumentClick(e: MouseEvent): void {
     if (userPopup) {
@@ -541,35 +552,15 @@ let showNetworkForm: boolean = $state(false);
     // don't also switch buffers (plain Arrow is handled in InputArea with
     // stopPropagation, but Alt+Arrow bubbles — respect defaultPrevented).
     if (e.defaultPrevented) return;
-    // Plain ArrowUp/Down outside of inputs should scroll the message list,
-    // not switch channels. This covers the case where the user clicks outside
-    // the compose box (e.g. on the message list) and expects Up/Down to
-    // scroll the chat history.
-    // Svelte 5 strips the parens around `(ArrowUp || ArrowDown)` inside the
-    // `&&` chain, silently turning the guard into `... && ArrowUp || ArrowDown`
-    // — which matches ANY ArrowDown, preventDefault-ing it in every textarea
-    // (breaking the Down-arrow in the compose box and snippet editor) and
-    // switching buffers. Bind the key check to a const first so the emitted
-    // JS preserves grouping.
+    // Svelte 5 strips the parens around `(ArrowUp || ArrowDown)` inside an
+    // `&&` chain; bind the key check to a const so grouping is preserved.
+    // IRCCloud never scrolls the log from arrow keys (docKeyDown focuses the
+    // composer instead); only the Alt/Alt+Shift buffer navigation remains.
     const isArrowKey = e.key === 'ArrowUp' || e.key === 'ArrowDown';
-    if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && isArrowKey) {
-      const target = e.target as HTMLElement | null;
-      const isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as any).isContentEditable);
-      if (!isInput) {
-        if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts || ircState.overlay.type || showNetworkForm || showJoinModal || ircState.contextMenu.visible || !!userPopup) {
-          return;
-        }
-        const container = document.getElementById('messages') as HTMLElement | null;
-        if (container && container.scrollHeight > container.clientHeight) {
-          e.preventDefault();
-          smoothScrollBy(container, e.key === 'ArrowUp' ? -120 : 120, 100);
-          return;
-        }
-      }
-    }
-    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && isArrowKey) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && isArrowKey) {
       e.preventDefault();
-      switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
+      if (e.shiftKey) selectAdjacentUnreadBuffer(e.key === 'ArrowUp' ? -1 : 1);
+      else switchAdjacentBuffer(e.key === 'ArrowUp' ? -1 : 1);
       return;
     }
     // which would turn `(a||b) && c && d` into `a || b && c && d` (wrong
@@ -606,14 +597,24 @@ let showNetworkForm: boolean = $state(false);
         navigateBackFromShortcuts();
         return;
       }
-      if (ircState.overlay.type) { ircState.overlay.type = null; ircState.overlay.data = null; }
-      if (ircState.contextMenu.visible) { ircState.contextMenu.visible = false; }
-      if (showNetworkForm) { showNetworkForm = false; }
-      if (showJoinModal) { showJoinModal = false; }
-      if (uploadState.dialog) { cancelDialog(); }
-      if (uploadState.panelOpen) { uploadState.panelOpen = false; }
-      if (uploadState.pastebinPanelOpen) { uploadState.pastebinPanelOpen = false; }
-      if (userPopup) { userPopup = null; }
+      let closedSomething = false;
+      if (ircState.overlay.type) { ircState.overlay.type = null; ircState.overlay.data = null; closedSomething = true; }
+      if (ircState.contextMenu.visible) { ircState.contextMenu.visible = false; closedSomething = true; }
+      if (showNetworkForm) { showNetworkForm = false; closedSomething = true; }
+      if (showJoinModal) { showJoinModal = false; closedSomething = true; }
+      if (showBouncerDialog) { showBouncerDialog = false; bouncerNetworkId = null; closedSomething = true; }
+      if (uploadState.dialog) { cancelDialog(); closedSomething = true; }
+      if (uploadState.panelOpen) { uploadState.panelOpen = false; closedSomething = true; }
+      if (uploadState.pastebinPanelOpen) { uploadState.pastebinPanelOpen = false; closedSomething = true; }
+      if (userPopup) { userPopup = null; closedSomething = true; }
+      // IRCCloud docKeyDown: with nothing open, Esc marks the current
+      // buffer read; Shift+Esc marks every buffer read.
+      if (!closedSomething) {
+        if (e.shiftKey) markAllAsRead();
+        else if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName && ircState.activeBuffer.bufferName !== '_server') {
+          readBuffer(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName);
+        }
+      }
     }
     // IRCCloud parity: typing anywhere focuses the compose input
     // (http://127.0.0.1:8090/irc/Supernets/channel/superbowl). If the
@@ -638,7 +639,7 @@ let showNetworkForm: boolean = $state(false);
       if (isTypingTarget) return;
       // Don't steal when any modal/overlay is open
       if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts ||
-          ircState.overlay.type || showNetworkForm || showJoinModal ||
+          ircState.overlay.type || showNetworkForm || showJoinModal || showBouncerDialog ||
           ircState.contextMenu.visible || !!userPopup) return;
       if (ircState.activeBuffer.bufferName === '_server') return;
       const compose = document.getElementById('compose-input') as HTMLTextAreaElement | null;
@@ -662,6 +663,47 @@ let showNetworkForm: boolean = $state(false);
     switchToBuffer(target.networkId, target.bufferName);
   }
 
+  // IRCCloud selectPreviousUnreadBuffer / selectNextUnreadBuffer: walk the
+  // sidebar order (skipping children of collapsed networks) from the
+  // active buffer, wrapping, to the first buffer in `unseenBuffers`.
+  function selectAdjacentUnreadBuffer(direction: number): void {
+    const flat = computeSidebarOrder();
+    if (flat.length === 0) return;
+    const currentIdx = flat.findIndex(f =>
+      f.networkId === ircState.activeBuffer.networkId && f.bufferName === ircState.activeBuffer.bufferName
+    );
+    const start = currentIdx < 0 ? (direction > 0 ? -1 : flat.length) : currentIdx;
+    for (let step = 1; step <= flat.length; step++) {
+      const i = (start + direction * step + flat.length * step) % flat.length;
+      const cand = flat[i];
+      const net = ircState.networks.find(n => n.networkId === cand.networkId);
+      const buf = net?.buffers.find(b => b.name === cand.bufferName);
+      if (!buf || !buf.unseen) continue;
+      if (!isTrackingUnread(cand.networkId, cand.bufferName) && buf.unseenHighlights.length === 0) continue;
+      switchToBuffer(cand.networkId, cand.bufferName);
+      return;
+    }
+  }
+
+  function computeSidebarOrder(): { networkId: string; bufferName: string }[] {
+    const nets = [...ircState.networks].sort((a, b) => {
+      const ia = networkOrder.indexOf(a.networkId);
+      const ib = networkOrder.indexOf(b.networkId);
+      return (ia < 0 ? Number.MAX_SAFE_INTEGER : ia) - (ib < 0 ? Number.MAX_SAFE_INTEGER : ib);
+    });
+    const flat: { networkId: string; bufferName: string }[] = [];
+    for (const net of nets) {
+      flat.push({ networkId: net.networkId, bufferName: '_server' });
+      if (collapsedMap[net.networkId]) continue;
+      for (const buf of net.buffers) {
+        if (buf.name === '_server') continue;
+        if (hiddenChannelsMap[`${net.networkId}:${buf.name}`]) continue;
+        flat.push({ networkId: net.networkId, bufferName: buf.name });
+      }
+    }
+    return flat;
+  }
+
   function computeFlatBuffers(): { networkId: string; bufferName: string }[] {
     const flat: { networkId: string; bufferName: string }[] = [];
     for (const net of ircState.networks) {
@@ -683,7 +725,6 @@ let showNetworkForm: boolean = $state(false);
       setActiveBuffer(networkId, bufferName);
       requestSwitchBuffer(networkId, bufferName);
       updateRoute(networkId, bufferName);
-      setLastSeen(networkId, bufferName, Date.now());
       maybeAutoJoinChannel(networkId, bufferName);
       if (!isSameBuffer) {
         // IRCCloud-style: skip the REST round-trip during boot — the sync
@@ -904,7 +945,7 @@ let showNetworkForm: boolean = $state(false);
       } else if (obj.type === 'pref_update') {
         handlePrefUpdate(obj);
       } else if (obj.type === 'heartbeat_echo') {
-        handleHeartbeat(obj);
+        handleHeartbeatEcho(obj);
       } else if (obj.type === 'buffersToDelete') {
         if (globalPrefs.featureFlags.buffersToDelete.enabled) {
           handleBuffersToDelete(obj.bid as string[]);
@@ -965,7 +1006,7 @@ let showNetworkForm: boolean = $state(false);
       awayMessage: '',
       buffers: [{
         name: '_server', type: 'server' as const, isJoined: true,
-        unreadCount: 0, highlight: false, isPinned: false, isArchived: false,
+        unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
         topic: '', topicSetBy: '', topicSetAt: 0, users: [],
         lastSeenMsgTime: null, firstUnseenMsgIndex: null,
       }],
@@ -991,54 +1032,17 @@ let showNetworkForm: boolean = $state(false);
     }
   }
 
-  // W1-T03: handle heartbeat_echo — engine publishes ONE batched event
-  // per network per 30s with bid[] (buffer names) + lastSeen map. We merge
-  // every (cid, bid) pair into lastSeenMap in a single batched mutation so
-  // the sidebar's unread/highlight state doesn't flicker per-entry.
-  //
-  // Gated behind globalPrefs.featureFlags.heartbeat.enabled (W0-T01) so
-  // Wave 1 ships with this disabled. The engine still emits the events —
-  // they're just dropped at the handler — so flipping the flag live in
-  // the Settings UI takes effect on the next heartbeat tick.
-  function handleHeartbeat(obj: Record<string, unknown>): void {
-    if (!globalPrefs.featureFlags.heartbeat.enabled) return;
-    const cid = obj.cid;
-    const bid = obj.bid;
-    const lastSeen = obj.lastSeen;
-    if (typeof cid !== 'string' || !Array.isArray(bid) || !lastSeen || typeof lastSeen !== 'object') return;
-
-    // Collect every (cid:bid, ts) update first, then apply in one pass.
-    // Iterating Svelte 5's $state proxy keys in a tight loop and writing
-    // them back triggers N reactive notifications; doing it from a
-    // single pre-built key list keeps the notification count at one.
-    // (Svelte 5 batches consecutive writes within the same microtask,
-    // but the explicit single-pass loop is the contract this test pins.)
-    for (let i = 0; i < bid.length; i++) {
-      const bufName = bid[i];
-      if (typeof bufName !== 'string') continue;
-      const ts = (lastSeen as Record<string, unknown>)[bufName];
-      if (typeof ts !== 'number') continue;
-      const key = `${cid}:${normalizeChannelName(bufName)}`;
-      const current = lastSeenMap[key];
-      // Don't let heartbeat clear unread that the user hasn't actually seen.
-      // If the buffer has unread and the new ts would mark the last message as read,
-      // only allow it when the buffer is the active one and the document is visible
-      // (user is actually looking) — otherwise it's a cross-device sync that hasn't
-      // been seen on this device yet and would cause the "flash then clear" bug.
-      const net = ircState.networks.find(n => n.networkId === cid);
-      const buf = net?.buffers.find(b => normalizeChannelName(b.name) === normalizeChannelName(bufName));
-      if (buf && (buf.unreadCount ?? 0) > 0) {
-        const isActive = ircState.activeBuffer.networkId === cid && normalizeChannelName(ircState.activeBuffer.bufferName) === normalizeChannelName(bufName);
-        if (!isActive || (typeof document !== 'undefined' && document.hidden)) {
-          const msgs = ircState.messages[key] ?? [];
-          const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1] : null;
-          const lastTime = (lastMsg as any)?.t ?? 0;
-          if (lastTime > (current ?? 0) && ts >= lastTime) {
-            continue;
-          }
-        }
+  // IRCCloud heartbeat_echo: the gateway fans out every changed
+  // `seenEids[cid][bid]` to all of the user's sessions; apply advance-only.
+  function handleHeartbeatEcho(obj: Record<string, unknown>): void {
+    const seen = obj.seenEids;
+    if (!seen || typeof seen !== 'object') return;
+    for (const [nid, bufs] of Object.entries(seen as Record<string, unknown>)) {
+      if (!bufs || typeof bufs !== 'object') continue;
+      for (const [name, t] of Object.entries(bufs as Record<string, unknown>)) {
+        if (typeof t !== 'number') continue;
+        if (isMessageUnseen({ t } as IRCMessage, nid, name)) setLastSeenMessage(nid, name, t);
       }
-      lastSeenMap[key] = ts;
     }
   }
 
@@ -1669,6 +1673,10 @@ let showNetworkForm: boolean = $state(false);
   <JoinModal networkId={joinModalNetworkId} onClose={() => { showJoinModal = false; joinModalNetworkId = null; }} />
 </Dialog>
 
+<Dialog open={showBouncerDialog} onClose={() => { showBouncerDialog = false; bouncerNetworkId = null; }} label="Connect with another client" centered class="overlay-panel">
+  <BouncerDialog networkId={bouncerNetworkId} onClose={() => { showBouncerDialog = false; bouncerNetworkId = null; }} />
+</Dialog>
+
 {#if uploadState.dialog}
   <UploadDialog
     onConfirm={(data) => confirmDialog(data)}
@@ -1679,7 +1687,7 @@ let showNetworkForm: boolean = $state(false);
   {@const capturedNetworkId = channelMenu.networkId}
   {@const capturedBufferName = channelMenu.bufferName}
   {@const menuNetwork = ircState.networks.find(n => n.networkId === capturedNetworkId)}
-  {@const menuBuf = menuNetwork?.buffers.find(b => b.name === capturedBufferName) ?? (capturedBufferName === '_server' && menuNetwork ? { name: '_server', type: 'server' as const, isJoined: true, unreadCount: 0, highlight: false, isPinned: false, isArchived: false, topic: '', topicSetBy: '', topicSetAt: 0, users: [], lastSeenMsgTime: null, firstUnseenMsgIndex: null } as any : null)}
+  {@const menuBuf = menuNetwork?.buffers.find(b => b.name === capturedBufferName) ?? (capturedBufferName === '_server' && menuNetwork ? { name: '_server', type: 'server' as const, isJoined: true, unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false, topic: '', topicSetBy: '', topicSetAt: 0, users: [], lastSeenMsgTime: null, firstUnseenMsgIndex: null } as any : null)}
   {#if menuNetwork && menuBuf}
     {#if menuBuf.name === '_server'}
       <ServerLogContextMenu
@@ -1691,6 +1699,7 @@ let showNetworkForm: boolean = $state(false);
         onClose={closeChannelMenu}
         onJoinChannel={() => { const nid = channelMenu?.networkId; joinModalNetworkId = nid ?? null; showJoinModal = true; closeChannelMenu(); }}
         onEditNetwork={() => { (window as any).__testChannelMenuAtClick = channelMenu ? {networkId: channelMenu.networkId, bufferName: channelMenu.bufferName} : null; const nid = channelMenu?.networkId; (window as any).__testNidAtClick = nid; networkFormMode = 'edit'; editNetworkId = nid ?? null; showNetworkForm = true; closeChannelMenu(); }}
+        onBouncer={() => { bouncerNetworkId = channelMenu?.networkId ?? null; showBouncerDialog = true; closeChannelMenu(); }}
       />
     {:else}
       <ChannelContextMenu

@@ -4,7 +4,6 @@
   import ConnectionStatus from './ConnectionStatus.svelte';
   import { ircState, prependMessages } from '../stores/ircStore.svelte';
   import { loadHistoryWithMeta } from '../stores/api';
-  import { captureScrollAnchor } from '../lib/scrollAnchor';
   import type { IRCMessage, Member } from '../types';
 
   interface Props {
@@ -109,38 +108,20 @@
         beforeid: oldestEid ? String(oldestEid) : (oldestMsgid || undefined),
         beforeMsgid: oldestMsgid || undefined,
         before: oldestTs,
-        count: 100,
+        count: 150,
         ...(oldestMsgid ? { fetchFromUpstream: true, fetchCommand: 'BEFORE' as const, fetchRef: oldestMsgid } : {}),
       });
       const older = result.messages;
-      if (older.length > 0) {
-        const beforeLen = (ircState.messages[key] ?? []).length;
-        // Capture the row the user is reading BEFORE the prepend so
-        // MessageList can keep it exactly in view (anchor-based
-        // compensation, immune to divider/intrinsic-size measurement).
-        captureScrollAnchor(document.getElementById('messages'));
-        prependMessages(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, older);
-        const afterLen = (ircState.messages[key] ?? []).length;
-        if (afterLen > beforeLen) {
-          if (isPhantom && result.earliest_ts > 0) {
-            phantomCursors.set(key, result.earliest_ts);
-          }
-          return true;
-        }
-        if (isPhantom && result.earliest_ts > 0) {
-          phantomCursors.set(key, result.earliest_ts);
-          return true;
-        }
-      }
-      // No new messages in this batch, but API indicates more history exists (e.g. dedup gap or upstream)
-      // Keep loader in READY, not COMPLETE, so user can keep scrolling.
-      // Complete only when truly no more (backlog_size 0 and no earliest cursor).
-      if (result.backlog_size > existing.length || result.earliest_ts > 0 || result.earliest_eid > 0) {
-        if (result.earliest_ts > 0) phantomCursors.set(key, result.earliest_ts);
-        // If we got 0 messages but API says more, treat as hasMore to avoid premature "No more data"
-        // The next call will advance the cursor via phantomCursors
-        return true;
-      }
+      // IRCCloud has no retry loop: a fetch that adds nothing means the
+      // backlog is exhausted and the loadMore row goes away. The phantom
+      // cursor still advances so a later manual "Load more backlog…" click
+      // pages past a UUID-msgid head instead of re-fetching the same slice.
+      if (isPhantom && result.earliest_ts > 0) phantomCursors.set(key, result.earliest_ts);
+      if (older.length === 0) return false;
+      const beforeLen = (ircState.messages[key] ?? []).length;
+      prependMessages(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName, older);
+      const afterLen = (ircState.messages[key] ?? []).length;
+      return afterLen > beforeLen;
     } catch (e) {
       console.error('[handleLoadMore] Failed to load more history:', e);
     }

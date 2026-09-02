@@ -33,6 +33,9 @@ export function create_mock_api(overrides = {}) {
     addNetwork: vi.fn(async () => undefined),
     updateNetwork: vi.fn(async () => undefined),
     deleteNetwork: vi.fn(async () => undefined),
+    fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, password: null })),
+    generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, password: 'bnc:token' })),
+    revokeBouncerPassword: vi.fn(async () => undefined),
     // ircStore imports this for the WebSocket-sync message normalization
     // path. Default to a pass-through so consumers that don't drive the
     // sync path don't need to think about it; tests that exercise the

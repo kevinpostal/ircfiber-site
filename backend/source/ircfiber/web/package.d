@@ -456,10 +456,7 @@ final class WebController {
             }
             res.headers["ETag"] = etag;
             res.headers["Vary"] = "Accept-Encoding";
-            if (contentEnc.length) res.headers["Content-Encoding"] = contentEnc;
-
-            // vibe.d will set Content-Length from body length
-            res.writeBody(cast(const(ubyte)[])read(servePath), mime);
+            writePrecompressed(res, fsPath, servePath, mime, contentEnc);
         } catch (Exception e) {
             logWarn("Failed to serve dist asset: %s", e.msg);
             res.statusCode = 500;
@@ -527,13 +524,33 @@ final class WebController {
             }
             res.headers["ETag"] = etag;
             res.headers["Vary"] = "Accept-Encoding";
-            if (contentEnc.length) res.headers["Content-Encoding"] = contentEnc;
-
-            res.writeBody(cast(const(ubyte)[])read(servePath), mime);
+            writePrecompressed(res, fsPath, servePath, mime, contentEnc);
         } catch (Exception e) {
             logWarn("Failed to serve /assets/ asset: %s", e.msg);
             res.statusCode = 500;
         }
+    }
+
+    /// Writes an asset body, honouring a pre-compressed variant.
+    ///
+    /// `res.writeBody` goes through vibe's `bodyWriter`, which inspects
+    /// `Content-Encoding`: for `gzip` it wraps the writer in a gzip stream,
+    /// so handing it the pre-gzipped file gzipped it a *second* time
+    /// (verified on prod: 112424 bytes served for a 112385-byte .gz — any
+    /// gzip-only client got undecodable JS). For gzip we therefore feed the
+    /// uncompressed bytes and let vibe compress once. `br` is passed
+    /// through verbatim (vibe has no brotli codec; it logs "Unsupported
+    /// Content-Encoding" and writes the bytes unchanged). `writeRawBody`
+    /// would avoid both, but vibe-http 1.5.1's template does not compile
+    /// under current LDC scope checks.
+    private static void writePrecompressed(HTTPServerResponse res, string plainPath, string servePath, string mime, string contentEnc) {
+        if (contentEnc == "gzip") {
+            res.headers["Content-Encoding"] = "gzip";
+            res.writeBody(cast(const(ubyte)[]) read(plainPath), mime);
+            return;
+        }
+        if (contentEnc.length) res.headers["Content-Encoding"] = contentEnc;
+        res.writeBody(cast(const(ubyte)[]) read(servePath), mime);
     }
 
     /// GET /api/events — XHR fallback for event streaming.

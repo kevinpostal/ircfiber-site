@@ -66,6 +66,8 @@ describe('top-of-backlog scroll behavior', () => {
     c.style.height = '400px';
     c.style.overflowY = 'auto';
     await new Promise((r) => requestAnimationFrame(r));
+    // Let the container ResizeObserver re-pin (IRCCloud autogrow checkRecent) before scrolling.
+    await new Promise((r) => setTimeout(r, 150));
 
     // Park at the top (the reading position) and trigger the in-memory
     // reveal chain. The first reveal runs synchronously in the dispatch;

@@ -20,8 +20,6 @@ export interface FeatureFlag {
 export interface FeatureFlags {
   // W2-T03: prefVersion last-write-wins resolution. ON by default for Wave 2.
   usePrefVersion: boolean;
-  // W1-T03: heartbeat_echo wire protocol.
-  heartbeat: FeatureFlag;
   // W1-T04: edit-message wire protocol.
   editMessage: FeatureFlag;
   // W1-T06: buffersToDelete wire protocol.
@@ -93,7 +91,6 @@ export const DEFAULT_PREFS: GlobalPrefs = {
   defaultScrollPreset: 2,
   featureFlags: {
     usePrefVersion: true,
-    heartbeat: { enabled: true },
     editMessage: { enabled: true },
     buffersToDelete: { enabled: true },
 		idleEvents: { enabled: true },
@@ -157,7 +154,6 @@ function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): Glob
     out.featureFlags = {
       ...defaultsFf,
       ...savedFf,
-      heartbeat: { ...defaultsFf.heartbeat, ...(savedFf.heartbeat ?? {}) },
       editMessage: { ...defaultsFf.editMessage, ...(savedFf.editMessage ?? {}) },
       buffersToDelete: { ...defaultsFf.buffersToDelete, ...(savedFf.buffersToDelete ?? {}) },
 		idleEvents: { ...defaultsFf.idleEvents, ...(savedFf.idleEvents ?? {}) },
@@ -209,8 +205,10 @@ export function setStorageItem(key: string, value: unknown): void {
 
 // ── Persistence stores ──
 export const clearedAtMap = $state<Record<string, number>>(getStorageItem('ircfiber:clearedAt', {}));
-export const unreadMap = $state<Record<string, number>>(getStorageItem('ircfiber:unread', {}));
-export const highlightMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:highlight', {}));
+/** Unseen important-message count per buffer key (`nid:name`); absent = 0 (IRCCloud `unseen` = count > 0). */
+export const unseenMap = $state<Record<string, number>>(getStorageItem('ircfiber:unseen', {}));
+/** IRCCloud `unseenHighlights` per buffer key: ascending `t` of unseen highlightable messages. */
+export const unseenHighlightsMap = $state<Record<string, number[]>>(getStorageItem('ircfiber:unseenHighlights', {}));
 export const archivedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:archived', {}));
 export const pinnedMap = $state<Record<string, boolean>>(getStorageItem('ircfiber:pinned', {}));
 // Channels the user has explicitly deleted from the UI. Persists across
@@ -333,6 +331,8 @@ export function setShowMemberPrefixes(value: boolean): void {
 // Per-buffer channel preferences (showUnread, mute, formatColor, etc.)
 export interface BufferPrefs {
   showUnread?: boolean;
+  /** Red badge with the unseen message count (mentions always show theirs). Default true. */
+  showUnreadCount?: boolean;
   markAsRead?: boolean;
   mute?: boolean;
   notifyAll?: boolean;
@@ -408,8 +408,8 @@ export function flushPersist(): void {
 // Persist on change — $effect.root allows effects outside components
 $effect.root(() => {
   $effect(() => schedulePersistMap('ircfiber:clearedAt', clearedAtMap));
-  $effect(() => schedulePersistMap('ircfiber:unread', unreadMap));
-  $effect(() => schedulePersistMap('ircfiber:highlight', highlightMap));
+  $effect(() => schedulePersistMap('ircfiber:unseen', unseenMap));
+  $effect(() => schedulePersistMap('ircfiber:unseenHighlights', unseenHighlightsMap));
   $effect(() => schedulePersistMap('ircfiber:archived', archivedMap));
   $effect(() => schedulePersistMap('ircfiber:pinned', pinnedMap));
   $effect(() => {
@@ -550,8 +550,8 @@ if (typeof window !== 'undefined') {
 
     switch (e.key) {
       case 'ircfiber:clearedAt':        applyObject(clearedAtMap); break;
-      case 'ircfiber:unread':           applyObject(unreadMap); break;
-      case 'ircfiber:highlight':        applyObject(highlightMap); break;
+      case 'ircfiber:unseen':           applyObject(unseenMap); break;
+      case 'ircfiber:unseenHighlights': applyObject(unseenHighlightsMap); break;
       case 'ircfiber:archived':         applyObject(archivedMap); break;
       case 'ircfiber:pinned':           applyObject(pinnedMap); break;
       case 'ircfiber:hiddenChannels':   applyObject(hiddenChannelsMap); break;

@@ -219,7 +219,10 @@
         #  - data: URIs for inline images and font fallbacks
         #  - frame-ancestors 'none' so other sites cannot embed /admin
         #  - frame-src for YouTube inline previews (IRCCloud parity)
-        Content-Security-Policy "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' wss: https:; frame-src 'self' https://www.youtube.com https://youtube.com https://youtu.be https://www.youtube-nocookie.com https://m.youtube.com https://music.youtube.com; frame-ancestors 'none'"
+        # script-src allows static.cloudflareinsights.com: Cloudflare injects its
+        # Web Analytics beacon (beacon.min.js) into proxied HTML; without the
+        # allowance every page load logs a CSP violation in the console.
+        Content-Security-Policy "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; connect-src 'self' wss: https:; frame-src 'self' https://www.youtube.com https://youtube.com https://youtu.be https://www.youtube-nocookie.com https://m.youtube.com https://music.youtube.com; frame-ancestors 'none'"
     }
 
     log {
@@ -234,6 +237,9 @@
 {
     # Admin API on localhost only (operational access via `docker exec`)
     admin localhost:2019
+{% if (ircfiber_acme_email | default('')) | length > 0 and '@' in ircfiber_acme_email and '[' not in ircfiber_acme_email %}
+    email {{ ircfiber_acme_email }}
+{% endif %}
 {% if use_internal_ca %}
     local_certs
 {% endif %}
@@ -247,6 +253,7 @@
 {% endif %}
 }
 
+{% set acme_hosts = caddy_acme_hosts | default([]) %}
 {% for host in serve_hosts %}
 # Site block for {{ host }}
 {{ host }} {
@@ -254,6 +261,11 @@
     # Tailscale hostname → real cert via Tailscale cert manager.
     # No explicit tls needed — Caddy's Tailscale integration handles this
     # when the tailscaled.sock is mounted.
+{% elif host in acme_hosts %}
+    # Not behind Cloudflare (e.g. the bouncer host, whose cert is reused by
+    # the ircfiber-bnc container) → real Let's Encrypt cert via Caddy's
+    # default ACME issuer (no `tls` directive; the account email comes from
+    # the global `email` option when ircfiber_acme_email is set).
 {% else %}
     # Public domain — use internal CA for the tunnel origin connection.
     # The tunnel connects via HTTPS with "No TLS Verify" enabled.

@@ -1,0 +1,23 @@
+# signoz/k8s-infra Helm values for k3s single-node (ubuntu@ubuntu-docker), namespace k8s-infra.
+# Chart: signoz/k8s-infra 0.17.0 (otelcol-contrib 0.139.0) — installed release name `k8s-infra`.
+#
+# Apply:
+#   helm --kube-context ubuntu-docker -n k8s-infra upgrade --install k8s-infra signoz/k8s-infra \
+#     --version 0.17.0 -f site/deploy/k8s/signoz/k8s-infra-values.yaml
+#
+# The otel-agent DaemonSet exposes hostPort 4317/4318 on the node (100.94.116.56). Anything sent
+# there is forwarded to the SigNoz collector after k8sattributes/resourcedetection rewrite
+# k8s.cluster.name/host.name to ubuntu-docker — so it is for IN-CLUSTER telemetry only. OVH ships
+# to the collector's dedicated otlp/ovh receiver via svc:otel-collector (otel-collector.tail544547.ts.net:4319).
+clusterName: ubuntu-docker
+global:
+  clusterName: ubuntu-docker
+# MUST carry a scheme: the chart's exporter is `otlphttp`. The former value
+# `signoz-otel-collector.signoz.svc.cluster.local:4317` (no scheme, gRPC port) made every export fail
+# with `unsupported protocol scheme` → "sending queue is full" → all agent-received logs dropped.
+otelCollectorEndpoint: http://signoz-otel-collector.signoz.svc.cluster.local:4318
+otelInsecure: true
+presets:
+  hostMetrics:
+    # hostmetrics are scraped by the signoz chart's collector (see values.yaml) — avoid double series.
+    enabled: false

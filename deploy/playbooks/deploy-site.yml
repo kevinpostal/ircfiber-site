@@ -53,5 +53,5 @@
       ansible.builtin.shell: |
         docker stop ircfiber-gateway 2>/dev/null || true
         docker rm ircfiber-gateway 2>/dev/null || true
-        docker run -d --name ircfiber-gateway --restart unless-stopped --network ircfiber_net --network ircfiber_logging -v ircfiber_uploads:/app/uploads -v ircfiber_logs:/var/log/irc-fiber --env-file /etc/ircfiber/gateway/env -p 8090:8090 kevindpostal/irc-fiber-gateway:0.3.0 /app/irc-fiber
+        docker run -d --name ircfiber-gateway --restart unless-stopped --ulimit nofile=65536:65536 --security-opt no-new-privileges:true --network ircfiber_net --network ircfiber_logging -v ircfiber_uploads:/app/uploads -v ircfiber_logs:/var/log/irc-fiber --env-file /etc/ircfiber/gateway/env -p 8090:8090 kevindpostal/irc-fiber-gateway:0.3.0 /app/irc-fiber
       changed_when: true

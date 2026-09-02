@@ -28,7 +28,7 @@ describe('Sidebar duplicate key guard', () => {
 
 	it('renders without each_key_duplicate when buffers have duplicate names in one network', () => {
 		const net = createNetwork({ networkId: 'net1', name: 'Libera' });
-		const dup: Buffer = { name: '#general', type: 'channel', isJoined: true, unreadCount: 0, highlight: false, isPinned: false, isArchived: false, topic: '', topicSetBy: '', topicSetAt: 0, users: [], lastSeenMsgTime: null, firstUnseenMsgIndex: null };
+		const dup: Buffer = { name: '#general', type: 'channel', isJoined: true, unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false, topic: '', topicSetBy: '', topicSetAt: 0, users: [], lastSeenMsgTime: null, firstUnseenMsgIndex: null };
 		net.buffers.push(createBuffer({ name: '#general' }));
 		net.buffers.push({ ...dup });
 		ircState.networks.push(net);

@@ -5,6 +5,7 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import { logScroll } from '../test/scroll';
 
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -69,7 +70,7 @@ describe('arrow skip', () => {
     let prevNum = getTopVisibleNum(prevTopId);
     expect(prevTopId).not.toBeNull();
     for (let i = 0; i < 20; i++) {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+      logScroll(document.getElementById('messages'), 'ArrowUp');
       c.scrollTop = Math.max(0, c.scrollTop - 40);
       c.dispatchEvent(new Event('scroll'));
       await delay(60);
