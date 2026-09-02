@@ -259,6 +259,7 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         h["serverIds"] = jsonArray(hcs.serverIds);
         hostArr ~= h;
     }
+    data["hosts"] = Json(hostArr);
     Json[] assignArr;
     foreach (a; assignments) {
         Json j = Json.emptyObject;
