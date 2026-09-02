@@ -31,23 +31,23 @@ if (!entry) {
 
 let dt = readFileSync(dtPath, 'utf-8');
 
-// Helper to find manifest entry by file substring
-function findByFile(substr) {
-  return Object.values(manifest).find(v => v.file && v.file.includes(substr));
+// Helper to find manifest entry by file substring — must be the JS chunk, not the CSS asset
+function findJsByFile(substr) {
+  return Object.values(manifest).find(v => v.file && v.file.includes(substr) && v.file.endsWith('.js'));
 }
 
 const mainCss = (entry.css && entry.css[0]) ? `/public/dist/${entry.css[0]}` : null;
 const mainJs = `/public/dist/${entry.file}`;
 
-const vendor = findByFile('vendor');
+const vendor = findJsByFile('vendor');
 const vendorJs = vendor ? `/public/dist/${vendor.file}` : null;
 const vendorCss = vendor && vendor.css && vendor.css[0] ? `/public/dist/${vendor.css[0]}` : null;
 
-const chunkUpload = findByFile('chunk-upload');
+const chunkUpload = findJsByFile('chunk-upload');
 const chunkUploadJs = chunkUpload ? `/public/dist/${chunkUpload.file}` : null;
 const chunkUploadCss = chunkUpload && chunkUpload.css && chunkUpload.css[0] ? `/public/dist/${chunkUpload.css[0]}` : null;
 
-const chunkEditor = findByFile('chunk-editor');
+const chunkEditor = findJsByFile('chunk-editor');
 const chunkEditorJs = chunkEditor ? `/public/dist/${chunkEditor.file}` : null;
 const chunkEditorCss = chunkEditor && chunkEditor.css && chunkEditor.css[0] ? `/public/dist/${chunkEditor.css[0]}` : null;
 
