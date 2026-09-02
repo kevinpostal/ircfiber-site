@@ -74,7 +74,7 @@ signoz:
     # No cert-manager ClusterIssuer on ubuntu-docker (kubectl get clusterissuer → none); use Traefik default cert.
     # If letsencrypt-prod ClusterIssuer appears, add annotation cert-manager.io/cluster-issuer: letsencrypt-prod.
 
-# ---- Otel Collector (k8s-infra) ----
+# ---- Otel Collector (signoz chart) ----
 otelCollector:
   enabled: true
   replicaCount: 1
@@ -91,9 +91,13 @@ otelCollector:
   # and https://signoz.io/docs/infrastructure-monitoring/user-guides/hostmetrics/#configure-the-processors
   # Hostmetrics needs host filesystem mount /hostfs and OTEL_RESOURCE_ATTRIBUTES for k8s.cluster.name.
   # Deviation: chart 0.138.0 has no DaemonSet mode; we use Deployment with hostfs mount for single-node.
-  # For multi-node, install signoz/k8s-infra Helm chart (recommended per SigNoz NOTES).
+  # In-cluster pod logs/metrics come from the separate signoz/k8s-infra chart (namespace k8s-infra);
+  # its otel-agent MUST use otelCollectorEndpoint=http://signoz-otel-collector.signoz.svc.cluster.local:4318
+  # (otlphttp exporter — a scheme-less :4317 endpoint silently rejects every batch with "sending queue is full").
   additionalEnvs:
     OTEL_RESOURCE_ATTRIBUTES: "k8s.cluster.name=ubuntu-docker,host.name=ubuntu-docker"
+    LOW_CARDINAL_EXCEPTION_GROUPING: "false"
+    TENANT_ID: single-tenant
   extraVolumes:
     - name: hostfs
       hostPath:
@@ -103,8 +107,33 @@ otelCollector:
     - name: hostfs
       mountPath: /hostfs
       readOnly: true
+  # Dedicated OVH ingress ports. OVH (vps-efb4b52d) ships fluent-bit + engine/gateway OTLP over
+  # Tailscale to the operator-exposed Service (svc:otel-collector, 100.79.88.61 /
+  # otel-collector.tail544547.ts.net) on 4319 (http) / 4320 (grpc). These feed the */ovh pipelines
+  # below, which skip k8sattributes so OVH resource attrs (service.name, k8s.cluster.name=ovh-prod)
+  # are stored verbatim. Ingress into the collector pod is gated by NetworkPolicy allow-signoz-otel
+  # (site/deploy/k8s/ircfiber/networkpolicy.yaml) — keep it in sync when adding sources.
+  ports:
+    otlp-ovh-http:
+      enabled: true
+      containerPort: 4319
+      servicePort: 4319
+      nodePort: ""
+      protocol: TCP
+    otlp-ovh-grpc:
+      enabled: true
+      containerPort: 4320
+      servicePort: 4320
+      nodePort: ""
+      protocol: TCP
   config:
     receivers:
+      otlp/ovh:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4319
+          grpc:
+            endpoint: 0.0.0.0:4320
       hostmetrics:
         collection_interval: 60s
         root_path: /hostfs
@@ -127,8 +156,10 @@ otelCollector:
       batch:
         send_batch_size: 50000
         timeout: 5s
+      # k8scluster detector needs API access the collector-egress-allow NetworkPolicy blocks; env+system only.
       resourcedetection:
         detectors: [env, system]
+      # passthrough: without it, k8sattributes dropped every record lacking a k8s.pod.ip (all OVH logs).
       k8sattributes:
         extract:
           metadata:
@@ -145,7 +176,38 @@ otelCollector:
                 name: k8s.pod.uid
           - sources:
               - from: connection
-        passthrough: false
+        passthrough: true
+      # OVH fluent-bit docker logs arrive with an empty resource (fluent-bit classic config cannot
+      # set OTLP resource attrs). Promote the lua-derived container_name log attribute to
+      # service.name (container names == SDK service names: ircfiber-engine-ovh, ircfiber-gateway)
+      # and stamp cluster identity. `insert` never overwrites what the engine/gateway SDKs send.
+      transform/ovh:
+        error_mode: ignore
+        log_statements:
+          - context: log
+            statements:
+              - set(resource.attributes["service.name"], attributes["container_name"]) where resource.attributes["service.name"] == nil and attributes["container_name"] != nil
+      resource/ovh:
+        attributes:
+          - key: k8s.cluster.name
+            value: ovh-prod
+            action: insert
+          - key: host.name
+            value: ovh-prod
+            action: insert
+          - key: deployment.environment
+            value: production
+            action: insert
+          - key: service.name
+            value: ovh-docker
+            action: insert
+    exporters:
+      # Chart default; pinned because the pre-migration false wrote to the signoz_logs.logs VIEW and
+      # failed with NOT_IMPLEMENTED "Method write is not supported by storage View".
+      clickhouselogsexporter:
+        dsn: tcp://${env:CLICKHOUSE_USER}:${env:CLICKHOUSE_PASSWORD}@${env:CLICKHOUSE_HOST}:${env:CLICKHOUSE_PORT}/${env:CLICKHOUSE_LOG_DATABASE}
+        timeout: 10s
+        use_new_schema: true
     service:
       pipelines:
         metrics:
@@ -153,10 +215,26 @@ otelCollector:
           processors: [resourcedetection, batch]
           exporters: [signozclickhousemetrics, signozmeter, metadataexporter]
         traces:
+          receivers: [otlp, jaeger]
+          processors: [k8sattributes, signozspanmetrics/delta, batch]
+          exporters: [clickhousetraces, metadataexporter, signozmeter]
         logs:
           receivers: [otlp, httplogreceiver/heroku, httplogreceiver/json]
-          processors: [k8sattributes, batch]
+          processors: [batch]
           exporters: [clickhouselogsexporter, signozmeter, metadataexporter]
+        # OVH (ovh-prod) pipelines — no k8sattributes/resourcedetection so remote resource attrs survive.
+        logs/ovh:
+          receivers: [otlp/ovh]
+          processors: [transform/ovh, resource/ovh, batch]
+          exporters: [clickhouselogsexporter, signozmeter, metadataexporter]
+        traces/ovh:
+          receivers: [otlp/ovh]
+          processors: [signozspanmetrics/delta, batch]
+          exporters: [clickhousetraces, metadataexporter, signozmeter]
+        metrics/ovh:
+          receivers: [otlp/ovh]
+          processors: [batch]
+          exporters: [signozclickhousemetrics, signozmeter, metadataexporter]
 
 # ---- Global env fallback (if chart ever templates global.env) ----
 # Some forks expose global.env.SIGNOZ_JWT_SECRET; we keep signoz.env above as authoritative.

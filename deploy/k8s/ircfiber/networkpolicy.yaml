@@ -1,6 +1,8 @@
-# NetworkPolicy: explicit allow ircfiber -> signoz OTLP (4317/4318) and vice versa
-# k3s default is allow-all (only cattle-fleet-local-system has default-allow-all), so this is documentary
-# but enforces grouping intent: ircfiber and signoz can access each other.
+# NetworkPolicy: allow OTLP ingress into the SigNoz collector and ircfiber -> signoz egress.
+# k3s ENFORCES NetworkPolicy (kube-router netpol controller). Once any Ingress policy selects the
+# collector, every source not listed here is dropped — this bit us: k8s-infra otel-agent (hostPort 4318
+# used by OVH fluent-bit/engine) and the tailscale operator proxy (svc:otel-collector VIP) were blocked,
+# so OVH logs returned HTTP 200 at the agent but never reached ClickHouse.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -19,15 +21,92 @@ spec:
               kubernetes.io/metadata.name: ircfiber
         - namespaceSelector:
             matchLabels:
+              kubernetes.io/metadata.name: ircfiber-prod
+        - namespaceSelector:
+            matchLabels:
               kubernetes.io/metadata.name: irc3
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: irc3-dev
+        - namespaceSelector:  # signoz/k8s-infra chart otel-agent (hostPort 4318 on 100.94.116.56)
+            matchLabels:
+              kubernetes.io/metadata.name: k8s-infra
+        - namespaceSelector:  # tailscale operator proxy for svc:otel-collector (100.79.88.61)
+            matchLabels:
+              kubernetes.io/metadata.name: tailscale
+        - namespaceSelector:  # signoz self (query-service scraping, in-namespace tests)
+            matchLabels:
+              kubernetes.io/metadata.name: signoz
+        - ipBlock:            # node-SNAT'd NodePort / hostNetwork traffic (cni0 10.42.0.1)
+            cidr: 10.42.0.0/16
+        - ipBlock:            # tailnet peers (OVH 100.94.72.103 via NodePort / VIP)
+            cidr: 100.64.0.0/10
       ports:
         - protocol: TCP
           port: 4317
         - protocol: TCP
           port: 4318
+        - protocol: TCP
+          port: 4319   # otlp/ovh http  -> pipelines.logs/ovh
+        - protocol: TCP
+          port: 4320   # otlp/ovh grpc
+        - protocol: TCP
+          port: 8888   # collector self-metrics
+        - protocol: TCP
+          port: 13133  # health_check
+---
+# Collector egress. The signoz-otel-collector runs under OpAMP (--manager-config) and does NOT
+# start any receiver/exporter pipeline until it reaches the SigNoz OpAMP server (signoz:4320);
+# blocking 4320 leaves a "healthy" collector that listens on nothing (13133 only).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: collector-egress-allow
+  namespace: signoz
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: otel-collector
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: signoz
+      ports:
+        - protocol: TCP
+          port: 9000   # clickhouse native
+        - protocol: TCP
+          port: 8123   # clickhouse http
+        - protocol: TCP
+          port: 8080   # signoz query-service
+        - protocol: TCP
+          port: 8085
+        - protocol: TCP
+          port: 8888
+        - protocol: TCP
+          port: 4317
+        - protocol: TCP
+          port: 4318
+        - protocol: TCP
+          port: 4320   # signoz OpAMP server — REQUIRED, see above
+        - protocol: TCP
+          port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

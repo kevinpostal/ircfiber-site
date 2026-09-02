@@ -6,7 +6,7 @@
 - `ircfiber` namespace created (`kubernetes.io/metadata.name=ircfiber`, `project=ircfiber`); `signoz` labeled `project=observability`.
 - `irc3` / `irc3-dev` patched: `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector.signoz.svc.cluster.local:4318` (if irc3 image ignores it, it no-ops; logs still visible via synthetic).
 - `ircfiber` demo loggers (`ircfiber-logger` + `ircfiber-engine-logger`) — `curlimages/curl` loops posting OTLP `logs`/`traces` every 15s/30s with `service.name=ircfiber-gateway/engine`, `IRCFIBER_OTEL_ENABLED=1`, `IRCFIBER_OTEL_ENDPOINT=http://signoz-otel-collector.signoz.svc.cluster.local:4318`.
-- `NetworkPolicy` `allow-signoz-otel` (in `signoz`) ingress from `ircfiber,irc3,irc3-dev` on 4317/4318 + `allow-egress-to-signoz` (in `ircfiber`) egress to `signoz`.
+- `NetworkPolicy` `allow-signoz-otel` (in `signoz`) ingress to the collector on 4317/4318/4319/4320/8888/13133 from `ircfiber,ircfiber-prod,irc3,irc3-dev,k8s-infra,tailscale,signoz` + `10.42.0.0/16` + tailnet `100.64.0.0/10`; `collector-egress-allow` (in `signoz`) collector egress incl. `signoz:4320` (OpAMP — without it the collector starts NO pipelines); `allow-egress-to-signoz` (in `ircfiber`) egress to `signoz`. k3s (kube-router) ENFORCES these — a missing source silently drops OTLP.
 - Real gateway template `deployment-gateway.yaml` (needs `localhost:5000/ircfiber-gateway:prod` + redis/mongo). Same env as loggers.
 
 **Deploy:**

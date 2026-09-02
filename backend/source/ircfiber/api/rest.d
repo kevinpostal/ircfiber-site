@@ -34,6 +34,8 @@ import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.irc.server : ConnectionServer;
 import ircfiber.redis.protocol : RedisKeys, ControlMessage, NetworkStateSnapshot, IRCCommand;
+import ircfiber.logging : logJsonMap;
+import ircfiber.tracing : withSpan, Span;
 private string normalizeHost(string host) @safe pure {
     host = host.strip();
     auto schemeSep = host.indexOf("://");
@@ -994,16 +996,28 @@ final class RESTAPI {
 
         auto nid = parseUUID(req.params["network"]);
         auto bodyJson = req.json;
-        auto c = IRCCommand("join", bodyJson["channel"].get!string, "");
+        auto chan = bodyJson["channel"].get!string;
+        const user = req.context["user"].get!User;
+        auto c = IRCCommand("join", chan, "");
         c.timestampMs = Clock.currTime.toUnixTime!long * 1000;
         
-        // NEW: Route to assigned server
-        auto serverId = serverRegistry.getServerForNetwork(nid.toString());
-        if (serverId.length > 0) {
-            redis.lpush(RedisKeys.cmd(serverId, nid.toString()), c.toJson().toString());
-        } else {
-            redis.lpush(RedisKeys.cmd_legacy(nid.toString()), c.toJson().toString());
-        }
+        withSpan("http.join_channel", ["http.route": "/api/networks/:network/join", "channel": chan, "network": nid.toString()], (ref Span s) {
+            s.attr("user.id", user.id.toString());
+            // NEW: Route to assigned server
+            auto serverId = serverRegistry.getServerForNetwork(nid.toString());
+            if (serverId.length > 0) {
+                redis.lpush(RedisKeys.cmd(serverId, nid.toString()), c.toJson().toString());
+            } else {
+                redis.lpush(RedisKeys.cmd_legacy(nid.toString()), c.toJson().toString());
+            }
+            logJsonMap("info", "api", "POST /api/networks/:network/join", [
+                "channel": chan,
+                "network": nid.toString(),
+                "user": user.id.toString(),
+                "serverId": serverId
+            ]);
+            s.setStatusOk();
+        });
         
         res.writeJsonBody(Json(["status": Json("ok")]));
     }
