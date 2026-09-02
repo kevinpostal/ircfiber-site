@@ -2,10 +2,6 @@
 /**
  * Post-build script: reads Vite's manifest.json and injects the
  * content-hashed CSS/JS URLs into views/index.dt.
- *
- * This replaces the old manual `?v=N` cache-buster approach so that
- * every frontend rebuild produces unique URLs that naturally
- * invalidate the browser cache.
  */
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
@@ -17,10 +13,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 
 const manifestPath = resolve(projectRoot, 'public/dist/.vite/manifest.json');
-// Split-layout gateway: the gateway image builds /app/views from backend/views.
 const dtPath = resolve(projectRoot, 'backend/views/index.dt');
 
-// Read manifest
 let manifest;
 try {
   manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
@@ -35,54 +29,80 @@ if (!entry) {
   process.exit(1);
 }
 
-const jsFile = entry.file;
-const cssFiles = entry.css || [];
-
-// Read current index.dt
 let dt = readFileSync(dtPath, 'utf-8');
 
-// Replace CSS link + preloads
-const cssPattern = /link\(rel="stylesheet",\s*href="\/public\/dist\/[^"]*"\)/;
-const preloadCssPattern = /link\(rel="preload",\s*href="\/public\/dist\/[^"]*",\s*as="style"\)/;
-// Actually, use the actual CSS files from the manifest entry
-// For the first CSS file
-if (cssFiles.length > 0) {
-  const newCssHref = `/public/dist/${cssFiles[0]}`;
-  dt = dt.replace(cssPattern, `link(rel="stylesheet", href="${newCssHref}")`);
-  dt = dt.replace(preloadCssPattern, `link(rel="preload", href="${newCssHref}", as="style")`);
-  console.log(`inject-manifest: CSS → ${newCssHref}`);
-} else {
-  // Fallback: guess the CSS path from the JS path
-  const guessedCss = jsFile.replace(/\.js$/, '.css');
-  const newCssHref = `/public/dist/${guessedCss}`;
-  dt = dt.replace(cssPattern, `link(rel="stylesheet", href="${newCssHref}")`);
-  dt = dt.replace(preloadCssPattern, `link(rel="preload", href="${newCssHref}", as="style")`);
-  console.log(`inject-manifest: CSS → ${newCssHref} (guessed, no css entry in manifest)`);
+// Helper to find manifest entry by file substring
+function findByFile(substr) {
+  return Object.values(manifest).find(v => v.file && v.file.includes(substr));
 }
 
-// Replace JS script - remove ?v=2: hashes are content-addressed, immutable cache handles it
-const jsPattern = /script\(type="module",\s*src="\/public\/dist\/[^"]*"\)/;
-const newJsHref = `/public/dist/${jsFile}`;
-dt = dt.replace(jsPattern, `script(type="module", src="${newJsHref}")`);
-console.log(`inject-manifest: JS  → ${newJsHref}`);
+const mainCss = (entry.css && entry.css[0]) ? `/public/dist/${entry.css[0]}` : null;
+const mainJs = `/public/dist/${entry.file}`;
 
-// Also ensure vendor-svelte modulepreload is present (critical chunk)
-try {
-  const vendorEntry = Object.values(manifest).find(v => v.file && v.file.includes('vendor-svelte'));
-  if (vendorEntry) {
-    const vendorHref = `/public/dist/${vendorEntry.file}`;
-    if (!dt.includes(vendorHref)) {
-      // Insert after CSS preload
-      dt = dt.replace(
-        `link(rel="preload", href="/public/dist/${cssFiles[0] || ''}", as="style")`,
-        `link(rel="preload", href="/public/dist/${cssFiles[0] || ''}", as="style")\n  link(rel="modulepreload", href="${vendorHref}")`
-      );
-      console.log(`inject-manifest: vendor preload → ${vendorHref}`);
-    }
+const vendor = findByFile('vendor');
+const vendorJs = vendor ? `/public/dist/${vendor.file}` : null;
+const vendorCss = vendor && vendor.css && vendor.css[0] ? `/public/dist/${vendor.css[0]}` : null;
+
+const chunkUpload = findByFile('chunk-upload');
+const chunkUploadJs = chunkUpload ? `/public/dist/${chunkUpload.file}` : null;
+const chunkUploadCss = chunkUpload && chunkUpload.css && chunkUpload.css[0] ? `/public/dist/${chunkUpload.css[0]}` : null;
+
+const chunkEditor = findByFile('chunk-editor');
+const chunkEditorJs = chunkEditor ? `/public/dist/${chunkEditor.file}` : null;
+const chunkEditorCss = chunkEditor && chunkEditor.css && chunkEditor.css[0] ? `/public/dist/${chunkEditor.css[0]}` : null;
+
+// Build the new block scripts section
+let lines = [];
+lines.push('block scripts');
+lines.push('  // Preload the critical CSS/JS so the browser can start fetching before parsing');
+if (mainCss) {
+  lines.push(`  link(rel="preload", href="${mainCss}", as="style")`);
+  lines.push(`  link(rel="stylesheet", href="${mainCss}")`);
+}
+if (chunkUploadCss) {
+  lines.push(`  link(rel="preload", href="${chunkUploadCss}", as="style")`);
+  lines.push(`  link(rel="stylesheet", href="${chunkUploadCss}")`);
+}
+if (chunkEditorCss) {
+  lines.push(`  link(rel="preload", href="${chunkEditorCss}", as="style")`);
+  lines.push(`  link(rel="stylesheet", href="${chunkEditorCss}")`);
+}
+if (vendorCss && vendorCss !== mainCss) {
+  // vendor CSS is already often included via main, but ensure
+}
+if (vendorJs) lines.push(`  link(rel="modulepreload", href="${vendorJs}")`);
+if (chunkUploadJs) lines.push(`  link(rel="modulepreload", href="${chunkUploadJs}")`);
+if (chunkEditorJs) lines.push(`  link(rel="modulepreload", href="${chunkEditorJs}")`);
+lines.push(`  script(type="module", src="${mainJs}")`);
+
+const newBlock = lines.join('\n');
+
+// Replace the entire block scripts section (from "block scripts" to next "block" or EOF)
+const blockRegex = /block scripts[\s\S]*?(?=\nblock |\n*$)/;
+if (blockRegex.test(dt)) {
+  dt = dt.replace(blockRegex, newBlock + '\n');
+  console.log('inject-manifest: regenerated block scripts');
+} else {
+  // Fallback to old regex method
+  if (mainCss) {
+    const cssPattern = /link\(rel="stylesheet",\s*href="\/public\/dist\/[^"]*"\)/;
+    const preloadCssPattern = /link\(rel="preload",\s*href="\/public\/dist\/[^"]*",\s*as="style"\)/;
+    dt = dt.replace(cssPattern, `link(rel="stylesheet", href="${mainCss}")`);
+    dt = dt.replace(preloadCssPattern, `link(rel="preload", href="${mainCss}", as="style")`);
   }
-} catch {}
+  const jsPattern = /script\(type="module",\s*src="\/public\/dist\/[^"]*"\)/;
+  dt = dt.replace(jsPattern, `script(type="module", src="${mainJs}")`);
+}
 
-// Also emit .gz and .br for precompressed serving (backend serves them if Accept-Encoding matches)
+console.log(`inject-manifest: CSS → ${mainCss}`);
+if (chunkUploadCss) console.log(`inject-manifest: chunk-upload CSS → ${chunkUploadCss}`);
+if (chunkEditorCss) console.log(`inject-manifest: chunk-editor CSS → ${chunkEditorCss}`);
+console.log(`inject-manifest: JS  → ${mainJs}`);
+if (vendorJs) console.log(`inject-manifest: vendor → ${vendorJs}`);
+if (chunkUploadJs) console.log(`inject-manifest: chunk-upload → ${chunkUploadJs}`);
+if (chunkEditorJs) console.log(`inject-manifest: chunk-editor → ${chunkEditorJs}`);
+
+// Also emit .gz and .br for precompressed serving
 try {
   const assetsDir = resolve(projectRoot, 'public/dist/assets');
   for (const f of readdirSync(assetsDir)) {
@@ -90,7 +110,6 @@ try {
     const full = resolve(assetsDir, f);
     if (!existsSync(full)) continue;
     const data = readFileSync(full);
-    // Only compress text assets
     if (!/\.(js|css|svg|html|json|wasm)$/.test(f)) continue;
     const gzPath = full + '.gz';
     const brPath = full + '.br';
@@ -102,6 +121,5 @@ try {
   console.warn('inject-manifest: precompress skipped', e.message);
 }
 
-// Write updated index.dt
 writeFileSync(dtPath, dt, 'utf-8');
 console.log('inject-manifest: views/index.dt updated');
