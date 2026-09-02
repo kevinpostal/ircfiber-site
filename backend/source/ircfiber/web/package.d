@@ -90,6 +90,10 @@ final class WebController {
         router.get("/logout", &logout);
         router.get("/public/landing.html", &serveLanding);
         router.get("/app-screenshot.png", &serveAppScreenshot);
+        router.get("/glyphs.json", &serveGlyphs);
+        router.get("/figlet-fonts.json", &serveFigletFonts);
+        router.get("/fonts/*", &serveFonts);
+        router.get("/style.css", &serveStyle);
         router.get("/public/dist/*", &serveDist);
         // Vite 5+ outputs the Svelte bundle under public/dist/assets/
         // and the generated index.html references it as `/assets/*`
@@ -327,6 +331,56 @@ final class WebController {
         } catch (Exception e) {
             logWarn("Failed to serve app screenshot: %s", e.msg);
             res.statusCode = 500;
+        }
+    }
+
+    private void serveGlyphs(HTTPServerRequest, HTTPServerResponse res) {
+        try {
+            res.headers["Cache-Control"] = "public, max-age=86400";
+            res.writeBody(cast(const(ubyte)[])read("public/glyphs.json"), "application/json");
+        } catch (Exception e) {
+            logWarn("Failed to serve glyphs.json: %s", e.msg);
+            res.statusCode = 404;
+        }
+    }
+
+    private void serveFigletFonts(HTTPServerRequest, HTTPServerResponse res) {
+        try {
+            res.headers["Cache-Control"] = "public, max-age=86400";
+            res.writeBody(cast(const(ubyte)[])read("public/figlet-fonts.json"), "application/json");
+        } catch (Exception e) {
+            logWarn("Failed to serve figlet-fonts.json: %s", e.msg);
+            res.statusCode = 404;
+        }
+    }
+
+    private void serveFonts(HTTPServerRequest req, HTTPServerResponse res) {
+        try {
+            auto pathStr = req.requestPath.toString();
+            auto rel = pathStr[("/fonts/".length)..$];
+            if (rel.canFind("..")) { res.statusCode = 400; return; }
+            auto fsPath = buildPath("public/fonts", rel);
+            if (!exists(fsPath) || !isFile(fsPath)) { res.statusCode = 404; return; }
+            string mime = "application/octet-stream";
+            if (endsWith(rel, ".woff2")) mime = "font/woff2";
+            else if (endsWith(rel, ".woff")) mime = "font/woff";
+            else if (endsWith(rel, ".ttf")) mime = "font/ttf";
+            else if (endsWith(rel, ".otf")) mime = "font/otf";
+            res.headers["Cache-Control"] = "public, max-age=86400";
+            res.writeBody(cast(const(ubyte)[])read(fsPath), mime);
+        } catch (Exception e) {
+            logWarn("Failed to serve font: %s", e.msg);
+            res.statusCode = 500;
+        }
+    }
+
+    private void serveStyle(HTTPServerRequest, HTTPServerResponse res) {
+        try {
+            res.headers["Cache-Control"] = "public, max-age=3600";
+            res.writeBody(readText("public/style.css"), "text/css");
+        } catch (Exception e) {
+            logWarn("Failed to serve style.css: %s", e.msg);
+            res.statusCode = 404;
         }
     }
 
