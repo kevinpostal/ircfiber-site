@@ -3,7 +3,8 @@
    * AdminSidebar — nav links grouped by section.
    * Sections: Operations, People, Data.
    */
-  import { current, href } from '../lib/router';
+  import { onMount, onDestroy } from 'svelte';
+  import { current, onChange, href } from '../lib/router';
   import { sidebarCollapsed } from '../stores/ui';
   import { BUILD_INFO } from '../../lib/buildInfo';
 
@@ -52,8 +53,16 @@
     },
   ];
 
+  let currentPath = $state(current());
+  let stop: (() => void) | null = null;
+
+  onMount(() => {
+    stop = onChange((p) => { currentPath = p; });
+  });
+  onDestroy(() => stop?.());
+
   function isActive(path: string): boolean {
-    const cur = current();
+    const cur = currentPath;
     if (path === '/dashboard') return cur === '/' || cur === '/dashboard';
     return cur === path || cur.startsWith(path + '/');
   }
