@@ -1,0 +1,8 @@
+# Local build outputs — regenerated locally, never committed.
+# (Note: public/dist/ itself IS committed by convention; only the
+# vite cache dir below is excluded. Legacy .vitest-attachments PNGs
+# already tracked stay tracked; new test-run screenshots are ignored.)
+backend/irc-fiber
+*.a
+public/dist/.vite/
+frontend/.vitest-attachments/
