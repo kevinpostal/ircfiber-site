@@ -585,11 +585,27 @@ final class BncClient {
             dumpChannels(snap);
         }
 
-        sendHistory(serverId, snap);
+        auto historySeen = sendHistory(serverId, snap);
         liveReady = true;
         auto parked = pendingLive;
         pendingLive = null;
-        foreach (ev; parked) deliverLive(ev);
+        // Dedupe IRC live park (Redis events) vs MongoDB history (missed+playback).
+        // Both may contain the same eid/m during the attach window; without this
+        // the client renders every history row twice.
+        foreach (ev; parked) {
+            if (ev.type != Json.Type.object) continue;
+            string hkey;
+            if (ev["ch"].type == Json.Type.string) hkey = ev["ch"].get!string;
+            if (!hkey.length && ev["n"].type == Json.Type.string) hkey = ev["n"].get!string;
+            if (hkey.length) {
+                const dk = hkey.toLower() ~ "\0" ~ dedupeKey(ev);
+                if (dk in historySeen) continue;
+            }
+            // Also respect the cursor check inside deliverLive, but the
+            // historySeen filter covers the IRC-vs-Mongo overlap that the
+            // cursor alone misses (different codepaths, same eid).
+            deliverLive(ev);
+        }
         flushCursor(true);
 
         attachedAtMs = nowMs();
@@ -780,10 +796,13 @@ final class BncClient {
 
     /// Attach history: what a named client missed, merged with the
     /// playback buffer for clients that cannot page with CHATHISTORY.
-    private void sendHistory(string serverId, ref NetworkStateSnapshot snap) {
+    /// Returns the dedup keys that were actually sent so the live
+    /// `pendingLive` park (IRC history vs MongoDB history) can be
+    /// deduped against it.
+    private bool[string] sendHistory(string serverId, ref NetworkStateSnapshot snap) {
         auto rows = fetchMissed(serverId);
         if (!has("draft/chathistory") && serverId.length) rows ~= fetchPlayback(serverId, snap);
-        if (!rows.length) return;
+        if (!rows.length) return null;
 
         // Merge per buffer, dedupe, oldest first.
         Json[][string] groups;
@@ -806,6 +825,7 @@ final class BncClient {
             sort!((a, b) => rowTime(a) != rowTime(b) ? rowTime(a) < rowTime(b) : rowEid(a) < rowEid(b))(evs);
             sendHistoryBatch(target, evs);
         }
+        return seen;
     }
 
     /// Emits `evs` for `target` as a `chathistory` batch (plain lines
