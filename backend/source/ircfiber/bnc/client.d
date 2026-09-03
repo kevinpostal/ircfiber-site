@@ -773,18 +773,33 @@ final class BncClient {
     // flush when reconnecting within ~2s).
     bool hadPriorBncSeen = false;
 
+    // Effective cursor key: named clientid when present, else per-nick
+    // fallback so anonymous (`bnc:<token>` with no @clientid, e.g. Zodih4x)
+    // still gets missed-only on reconnect instead of full 408 replay.
+    // Nick is lower-cased (IRC nicks are case-insensitive).
+    private string cursorKey() {
+        if (clientId.length) return clientId;
+        try {
+            string n = currentNick.length ? currentNick : clientNick;
+            n = n.strip().toLower();
+            if (n.length && n != "*") return "anon:" ~ n;
+        } catch (Exception) {}
+        return "";
+    }
+
     Json[] fetchMissed(string serverId) {
         const globalEid = readGlobalEid();
         hadPriorBncSeen = false;
-        if (!clientId.length) { cursor = globalEid; return null; }
+        string ckey = cursorKey();
+        if (!ckey.length) { cursor = globalEid; return null; }
 
         string seenStr;
-        try seenStr = ctx.redis.getDb().hget!string(RedisKeys.bncSeen(networkId), clientId);
+        try seenStr = ctx.redis.getDb().hget!string(RedisKeys.bncSeen(networkId), ckey);
         catch (Exception) {}
         long seen = 0;
         if (seenStr.length) { try seen = seenStr.to!long; catch (Exception) seen = 0; }
         if (seen <= 0) {
-            // First connect of this clientid: nothing was ever delivered.
+            // First connect of this cursor key: nothing was ever delivered.
             cursor = globalEid;
             return null;
         }
@@ -885,12 +900,10 @@ final class BncClient {
         // same clientid got 590 total / 408 PRIVMSG twice). Missed (eid >
         // prior seen) already covers what arrived while away; playback rows
         // often lack eid (old backlog) so eid-filtering can't be trusted.
-        // Rule: named client with prior bncSeen gets missed-only; everyone
-        // else (first connect, anonymous) gets full playback. Anonymous has
-        // no cursor — use PASS bnc@clientid:token to avoid repeats.
+        // Rule: cursor key (clientid or anon:nick) with prior bncSeen gets
+        // missed-only; first connect gets full playback.
         if (!has("draft/chathistory") && serverId.length) {
-            try { logInfo("bnc: sendHistory client=%s hadPrior=%s cursor=%s", clientId, hadPriorBncSeen ? "yes" : "no", cursor.to!string); } catch (Exception) {}
-            if (!(clientId.length && hadPriorBncSeen)) {
+            if (!hadPriorBncSeen) {
                 rows ~= fetchPlayback(serverId, snap);
             }
         }
@@ -1095,16 +1108,18 @@ final class BncClient {
     }
 
     private void flushCursor(bool force) {
-        if (!clientId.length || !networkId.length) return;
+        if (!networkId.length) return;
+        string ckey = cursorKey();
+        if (!ckey.length) return;
         if (cursor <= flushedCursor) return;
         const now = nowMs();
         if (!force && now - lastFlushMs < CURSOR_FLUSH_MS) return;
         try {
-            ctx.redis.hset(RedisKeys.bncSeen(networkId), clientId, cursor.to!string);
+            ctx.redis.hset(RedisKeys.bncSeen(networkId), ckey, cursor.to!string);
             flushedCursor = cursor;
             lastFlushMs = now;
         } catch (Exception e) {
-            logWarn("bnc: cursor flush failed for %s/%s: %s", networkId, clientId, e.msg);
+            logWarn("bnc: cursor flush failed for %s/%s: %s", networkId, ckey, e.msg);
         }
     }
 
