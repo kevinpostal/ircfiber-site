@@ -141,6 +141,76 @@
     label: "{{ item.dest }}"
   notify: Restart services
 
+# Managed TLS: copy the Caddy-issued LE cert/key for {{ ircd_server_name }}
+# into the conf dir owned by the container uid. A direct volume mount is
+# not used because the image runs as uid 10000 and Caddy's key files are
+# root-owned; the host-side copy keeps the existing 0640/uid convention.
+# Fail fast with a clear message when Caddy has not issued the cert yet
+# (deploy the caddy role with the irc hostname in caddy_acme_hosts first).
+# The rendered sslprofile points at these files, so InspIRCd fails to boot
+# without them — this task must run before the container is (re)started.
+- name: Install LE TLS sync script
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/ircfiber-ircd-tls-sync
+    owner: root
+    group: root
+    mode: "0750"
+    content: |
+      #!/bin/sh
+      # Sync Caddy-issued LE cert/key into the InspIRCd conf dir.
+      # Prints CHANGED when files were installed, UNCHANGED otherwise.
+      set -eu
+      SRC_CRT="{{ ircd_le_cert_src }}"
+      SRC_KEY="{{ ircd_le_key_src }}"
+      DEST_CRT="{{ ircd_conf_dir }}/{{ ircd_tls_cert_file }}"
+      DEST_KEY="{{ ircd_conf_dir }}/{{ ircd_tls_key_file }}"
+      tmpd="$(mktemp -d)"
+      trap 'rm -rf "$tmpd"' EXIT
+      if ! docker run --rm \
+        -v "{{ caddy_data_volume }}:/caddy-data:ro" \
+        -v "$tmpd:/out" \
+        "{{ ircd_cert_sync_image }}" \
+        sh -c "test -f \"$SRC_CRT\" && test -f \"$SRC_KEY\" \
+          && cp \"$SRC_CRT\" /out/tls-cert.pem \
+          && cp \"$SRC_KEY\" /out/tls-key.pem"; then
+        echo "LE cert for {{ ircd_server_name }} not yet issued."
+        echo "Deploy the caddy role with '{{ ircd_server_name }}' in caddy_acme_hosts,"
+        echo "port 80 reachable, then re-run this playbook."
+        exit 1
+      fi
+      if [ -f "$DEST_CRT" ] && [ -f "$DEST_KEY" ] \
+        && cmp -s "$tmpd/tls-cert.pem" "$DEST_CRT" \
+        && cmp -s "$tmpd/tls-key.pem" "$DEST_KEY"; then
+        echo "UNCHANGED"
+      else
+        # NOTE: install -o/-g needs a resolvable username, and uid 10000
+        # exists only inside the container — so install as root, then
+        # chown with numeric IDs (chown accepts those unconditionally).
+        install -m 0640 "$tmpd/tls-cert.pem" "$DEST_CRT"
+        install -m 0640 "$tmpd/tls-key.pem" "$DEST_KEY"
+        chown "{{ ircd_container_uid }}:{{ ircd_container_uid }}" \
+          "$DEST_CRT" "$DEST_KEY"
+        echo "CHANGED"
+      fi
+  when: ircd_tls_mode == "letsencrypt"
+
+- name: Sync LE cert into ircd conf dir
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/ircfiber-ircd-tls-sync
+  register: ircd_tls_sync
+  changed_when: "'CHANGED' in ircd_tls_sync.stdout"
+  notify: Rehash ircd
+  when: ircd_tls_mode == "letsencrypt"
+
+- name: Daily LE cert renewal check
+  ansible.builtin.cron:
+    name: "ircfiber ircd TLS sync"
+    hour: "{{ ircd_tls_sync_cron_hour }}"
+    minute: "{{ ircd_tls_sync_cron_minute }}"
+    job: "/usr/local/sbin/ircfiber-ircd-tls-sync | grep -q CHANGED && docker kill --signal=HUP {{ ircd_container_name }} || true"
+  when: ircd_tls_mode == "letsencrypt"
+
 - name: Run ircfiber-ircd (InspIRCd)
   community.docker.docker_container:
     name: "{{ ircd_container_name }}"

@@ -42,11 +42,19 @@
 <sslprofile name="main"
             provider="gnutls"
             cafile=""
+{% if ircd_tls_mode == "letsencrypt" %}
+            certfile="{{ ircd_tls_cert_file }}"
+{% else %}
             certfile="cert.pem"
+{% endif %}
             crlfile=""
             dhfile="dhparams.pem"
             hash="sha256"
+{% if ircd_tls_mode == "letsencrypt" %}
+            keyfile="{{ ircd_tls_key_file }}"
+{% else %}
             keyfile="key.pem"
+{% endif %}
             mindhbits="2048"
             outrecsize="2048"
             priority="NORMAL:-VERS-TLS1.0:-VERS-TLS1.1"

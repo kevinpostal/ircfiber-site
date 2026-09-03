@@ -109,3 +109,25 @@ ircd_log_level: "normal"
 
 # Anope: registered nicks expire after this long without identifying.
 ircd_services_nick_expire: "90d"
+
+# Public TLS mode: "selfsigned" (image entrypoint generates cert.pem/key.pem,
+# current behavior) or "letsencrypt" (use the Caddy-issued LE cert for
+# {{ ircd_server_name }}, synced from the Caddy data volume into the conf
+# dir by the role; see tasks/main.yml). Opt in per host with
+# ircd_tls_mode: "letsencrypt" in host_vars once Caddy serves the irc
+# hostname via caddy_acme_hosts and port 80 is reachable for HTTP-01.
+ircd_tls_mode: "selfsigned"
+# Filenames inside {{ ircd_conf_dir }} for the synced LE cert/key.
+# (Relative names resolve against the InspIRCd conf dir, same as the
+# default cert.pem/key.pem.)
+ircd_tls_cert_file: "tls-cert.pem"
+ircd_tls_key_file: "tls-key.pem"
+# Source paths inside the Caddy data volume (same storage layout the
+# bnc_tls_cert_path pattern in group vars relies on).
+ircd_le_cert_src: "/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{{ ircd_server_name }}/{{ ircd_server_name }}.crt"
+ircd_le_key_src: "/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{{ ircd_server_name }}/{{ ircd_server_name }}.key"
+# Helper image for the one-shot sync container (both volumes mounted).
+ircd_cert_sync_image: "alpine:3.21"
+# Daily renewal check (cron on the host, runs as root).
+ircd_tls_sync_cron_hour: "3"
+ircd_tls_sync_cron_minute: "17"
