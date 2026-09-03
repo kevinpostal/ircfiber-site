@@ -66,7 +66,7 @@
 .network:last-child { margin-bottom: 0; }
 ul.buffers { list-style: none; padding: 0; margin: 0; }
 .network-header { display: block; position: relative; font-size: 15px; font-weight: 400; color: #d9d9d9; user-select: none; margin: 0; padding: 0; background: transparent; line-height: 18px; border-radius: 0; }
-.network-header.buffer { background: #333; border-radius: 0 4px 4px 0; margin-left: -5px; width: calc(100% + 5px); box-sizing: border-box; cursor: grab; outline: none; }
+.network-header.buffer { display: flex; align-items: center; background: #333; border-radius: 0 4px 4px 0; margin-left: -5px; width: calc(100% + 5px); box-sizing: border-box; cursor: grab; outline: none; }
 .network-header.buffer:active { cursor: grabbing; }
 .network-header.buffer:focus { outline: none; }
 .network-header .buffer { display: flex; align-items: center; padding: 3px 0 2px 12px; cursor: pointer; color: #999; line-height: 18px; border-left: 5px solid #262626; flex: 1; min-width: 0; }
@@ -155,12 +155,24 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .bufferList .activeBadge span.badge,
 .network-list .activeBadge span.badge { display: inline-block; }
 .network-list span.totalBadge { position: absolute; top: 3px; right: 0; min-width: 15px; height: 15px; line-height: 15px; font-size: 10px; padding: 0 4px; }
-/* IRCCloud keeps the collapse button hidden until hover; the badge sits
-   where the button is, so hide the always-visible chevron while badged. */
-.network-list .connection.collapsed.activeTotalBadge:not(:hover) .collapseToggle button { visibility: hidden; }
+/* Keep chevron visible when collapsed — badge sits to its left, not over it */
+.network-header .collapseToggle .totalBadge { position: static; top: auto; right: auto; min-width: 15px; height: 15px; line-height: 15px; font-size: 10px; padding: 0 4px; }
 .network-list .connection.collapsed.activeTotalBadge span.totalBadge { display: inline-block; }
-.network-list .connection.totalUnread .collapseToggle {
-  border: 5px solid #56a4f7; border-width: 0 0 0 5px; margin-left: -5px; visibility: visible;
+/* Unread indicator — small blue dot/bar between gear and chevron, not clipping */
+.network-header .collapseToggle .collapsedUnreadIndicator {
+  display: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #56a4f7;
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+.network-list .connection.totalUnread .collapsedUnreadIndicator {
+  display: block;
+}
+.network-list .connection.totalUnread.collapsed.activeTotalBadge .collapsedUnreadIndicator {
+  display: none;
 }
 .network-status { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; }
 .network-status.disconnected { background: #f85149; }
