@@ -1,7 +1,7 @@
 ---
 # Per-host overrides for ircfiber-prod-1
 # Tailscale MagicDNS hostname: ircfiber-prod-1.tail544547.ts.net
-# Public IPv4: 47.236.247.169 (per `tailscale netcheck`)
+# Public IPv4: 15.204.93.54 (per `tailscale netcheck`)
 #
 # This is the combined gateway + backend + engine host (single-VM deployment).
 
@@ -38,7 +38,7 @@ ircfiber_use_lets_encrypt: true
 # Public IP this host's records should resolve to. Discovered via
 # `tailscale netcheck`; override here if the host's public IP ever
 # changes (e.g. new VM, IP swap).
-cloudflare_target_ip: "47.236.247.169"
+cloudflare_target_ip: "15.204.93.54"
 
 # --- Observability: Signoz OTel (production) ---------------------------------
 # Fully centralized to k3s SigNoz (ubuntu-docker k3s cluster).

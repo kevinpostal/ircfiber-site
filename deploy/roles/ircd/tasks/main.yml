@@ -16,10 +16,14 @@
       - vault_ircd_services_link_password | length >= 16
       - vault_ircd_cloak_key is defined
       - vault_ircd_cloak_key | length >= 30
+      - vault_ircd_dashboard_password is defined
+      - vault_ircd_dashboard_password | length > 0
+      - vault_ircd_dashboard_password != "REPLACE-WITH-STRONG-PASSWORD"
     fail_msg: |
-      vault_ircd_oper_password, vault_ircd_services_link_password (>=16 chars)
-      and vault_ircd_cloak_key (>=30 chars) must be set in
-      inventories/production/group_vars/vault.yml:
+      vault_ircd_oper_password, vault_ircd_services_link_password (>=16 chars),
+      vault_ircd_cloak_key (>=30 chars) and vault_ircd_dashboard_password
+      (admin dashboard oper, used by the gateway IRCFIBER_IRCD_OPER_PASSWORD)
+      must be set in inventories/production/group_vars/vault.yml:
         ansible-vault edit inventories/production/group_vars/vault.yml
 
 # InspIRCd stores oper passwords as base64(salt)$base64(hmac-sha256).
@@ -42,6 +46,28 @@
 - name: Set oper password hash fact
   ansible.builtin.set_fact:
     ircd_oper_password_hash: "{{ ircd_oper_hash_raw.stdout | trim }}"
+  no_log: true
+
+# Dashboard oper (least-privilege class for the admin web UI). Separate
+# credential from the human admin oper so it can be rotated independently;
+# deterministic salt keeps the rendered config stable across deploys.
+- name: Compute InspIRCd hmac-sha256 dashboard oper password hash
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/inspircd_hmac.py"
+  environment:
+    INSP_PASSWORD: "{{ vault_ircd_dashboard_password }}"
+    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_dashboard_oper_name }}"
+  delegate_to: localhost
+  become: false
+  register: ircd_dashboard_oper_hash_raw
+  changed_when: false
+  no_log: true
+
+- name: Set dashboard oper password hash fact
+  ansible.builtin.set_fact:
+    ircd_dashboard_oper_hash: "{{ ircd_dashboard_oper_hash_raw.stdout | trim }}"
   no_log: true
 
 - name: Ensure data volumes exist

@@ -38,6 +38,8 @@ import ircfiber.web.admin.redis : apiRedisInfo, apiRedisSummary, apiRedisKeys,
 import ircfiber.web.admin.replication : apiReplicationStatus;
 import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
     apiBncSeenClear, apiBncSeenForget;
+import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
+    apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -156,6 +158,16 @@ final class AdminController {
         router.get("/api/admin/janitor/events", &adminWrap!apiJanitorEventsRoute);
         router.post("/api/admin/janitor/reap/:serverId", &adminWrap!apiJanitorReapRoute);
         router.post("/api/admin/janitor/cycle", &adminWrap!apiJanitorCycleRoute);
+
+        // IRCd (InspIRCd) management: overview, bans, rehash, config viewer
+        router.get("/api/admin/ircd/status", &adminWrap!apiIrcdStatusRoute);
+        router.get("/api/admin/ircd/channels", &adminWrap!apiIrcdChannelsRoute);
+        router.get("/api/admin/ircd/channel", &adminWrap!apiIrcdChannelRoute);
+        router.get("/api/admin/ircd/bans", &adminWrap!apiIrcdBansRoute);
+        router.post("/api/admin/ircd/bans", &adminWrap!apiIrcdBanAddRoute);
+        router.post("/api/admin/ircd/bans/delete", &adminWrap!apiIrcdBanDeleteRoute);
+        router.post("/api/admin/ircd/rehash", &adminWrap!apiIrcdRehashRoute);
+        router.get("/api/admin/ircd/config", &adminWrap!apiIrcdConfigRoute);
     }
 
 private:
@@ -192,6 +204,14 @@ private:
     void apiBncRevokeRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncRevoke(req, res, redis); }
     void apiBncSeenClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncSeenClear(req, res, redis); }
     void apiBncSeenForgetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncSeenForget(req, res, redis); }
+    void apiIrcdStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdStatus(req, res); }
+    void apiIrcdChannelsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdChannels(req, res); }
+    void apiIrcdChannelRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdChannel(req, res); }
+    void apiIrcdBansRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdBans(req, res); }
+    void apiIrcdBanAddRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdBanAdd(req, res); }
+    void apiIrcdBanDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdBanDelete(req, res); }
+    void apiIrcdRehashRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdRehash(req, res); }
+    void apiIrcdConfigRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfig(req, res); }
     void apiDashboardRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiDashboard(req, res, redis, serverRegistry);
     }

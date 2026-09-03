@@ -106,6 +106,9 @@
     volumes:
       - "{{ gateway_uploads_volume }}:/app/uploads"
       - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+      # Read-only mount of the rendered InspIRCd config for the admin
+      # dashboard's redacted config viewer (values never leave redacted).
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
     security_opts:
       - "no-new-privileges:true"
     ulimits:
@@ -142,6 +145,7 @@
       - "{{ gateway_uploads_volume }}:/app/uploads"
       - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
       - "{{ caddy_data_volume }}:/caddy-data:ro"
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
     security_opts:
       - "no-new-privileges:true"
     ulimits:

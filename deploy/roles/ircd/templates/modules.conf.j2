@@ -49,7 +49,7 @@
             keyfile="key.pem"
             mindhbits="2048"
             outrecsize="2048"
-            priority="NORMAL"
+            priority="NORMAL:-VERS-TLS1.0:-VERS-TLS1.1"
             requestclientcert="yes"
             strictpriority="no">
 <module name="sslinfo">
@@ -116,12 +116,86 @@
 <module name="namedmodes">
 <module name="remove">
 <module name="silence">
+<silence exemptuline="yes" maxentries="256">
 <module name="noctcp">
 <module name="nonotice">
 <module name="opmoderated">
 <module name="delayjoin">
 # Required by Anope's inspircd3 protocol module.
 <module name="hidechans">
+
+#-#-#-#-#-#-#-#-#-#-#  FLOOD & ABUSE PROTECTION  -#-#-#-#-#-#-#-#-#-#-#-#
+#
+# Mode-driven (+f/+j/+F/+E) and class-scoped protections. The
+# ircfiber-engine connect class sets useconnflood="no" + useconnectban="no"
+# with no clone limits, so multiplexed platform users behind
+# {{ ircd_trusted_subnet }} are never throttled here — these bite only
+# direct public connections in the "main" class.
+
+<module name="connflood">
+<module name="connectban">
+<connectban banmessage="Filtered for connection hammering; wait 64 seconds to retry"
+            bootwait="128"
+            duration="64"
+            ipv4cidr="32"
+            ipv6cidr="128"
+            splitwait="128"
+            threshold="32">
+<module name="messageflood">
+<messageflood notice="1.0" privmsg="1.0" tagmsg="0.2">
+<module name="joinflood">
+<joinflood bootwait="32s" duration="32s" splitwait="32s">
+<module name="nickflood">
+<nickflood duration="64s">
+<module name="repeat">
+<repeat maxbacklog="20" maxdistance="50" maxlines="20" maxtime="0" size="512">
+<module name="blockamsg">
+<blockamsg action="killopers" delay="3">
+<module name="shun">
+<shun affectopers="no"
+      allowconnect="no"
+      allowtags="no"
+      cleanedcommands="AWAY PART QUIT"
+      enabledcommands="ADMIN OPER PING PONG QUIT PART JOIN"
+      notifyuser="yes">
+<module name="timedbans">
+<timedbans sendnotice="yes">
+
+# Server-side ignore (+g): lets users require /ACCEPT before strangers
+# can message them. Off by default per user; no behavior change until set.
+<module name="callerid">
+<callerid cooldown="4m" maxaccepts="256" tracknick="yes">
+
+{% if ircd_enable_dnsbl %}
+# Opt-in DNSBL checks (off by default: adds connect latency and can false-
+# positive on shared/CGNAT ranges). The engine class keeps usednsbl="no";
+# enabling this flips the "main" class to usednsbl="yes".
+<module name="dnsbl">
+<dnsbl action="zline"
+       domain="dnsbl.dronebl.org"
+       duration="5m"
+       name="DroneBL"
+       reason="Listed in DroneBL"
+       records="3,5,6,7,8,9,10,11,13,14,15,16,17,19"
+       timeout="5s"
+       type="record">
+<dnsbl action="zline"
+       domain="rbl.efnetrbl.org"
+       duration="5m"
+       name="EFnet RBL"
+       reason="Listed in EFnet RBL"
+       records="1,2,3,4,5"
+       timeout="5s"
+       type="record">
+<dnsbl action="zline"
+       domain="torexit.dan.me.uk"
+       duration="5m"
+       name="TorExit"
+       reason="Tor exit relay"
+       records="100"
+       timeout="5s"
+       type="record">
+{% endif %}
 
 #-#-#-#-#-#-#-#-#-#-#-#-#-#-#  OPER TOOLS  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
 

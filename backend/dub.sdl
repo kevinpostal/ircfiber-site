@@ -65,3 +65,16 @@ configuration "bnc-wire-test" {
     mainSourceFile "tests/bnc_wire_test.d"
     versions "VibeUseFibers"
 }
+
+// Pure-code unit test for the IRCd admin parsing/redaction helpers
+// (no Redis/Mongo/IRCd needed):
+//   dub --root=backend build --config=ircd-test && ./backend/ircd-test
+configuration "ircd-test" {
+    targetType "executable"
+    targetName "ircd-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/web/admin/ircd.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d"
+    mainSourceFile "tests/ircd_test.d"
+    versions "VibeUseFibers"
+}

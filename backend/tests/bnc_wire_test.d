@@ -1,6 +1,7 @@
 module bnc_wire_test;
 
 import std.stdio : writeln, writefln;
+import std.conv : to;
 import std.string : indexOf, startsWith, endsWith;
 import std.algorithm : canFind;
 import vibe.data.json : Json, parseJsonString;
@@ -179,6 +180,45 @@ private void testGrouping() {
     check(bufferOrder(evs) == ["#a", "bob"], "bufferOrder first-seen");
 }
 
+private void testMissedRows() {
+    // msgid keys before eid: live + backfill copies share one key.
+    auto live = parseJsonString(`{"c":"PRIVMSG","ch":"#superbowl","n":"roarie","x":"hi","m":"AAA","eid":100,"t":1000}`);
+    auto backfill = parseJsonString(`{"c":"PRIVMSG","ch":"#superbowl","n":"roarie","x":"hi","m":"AAA","eid":200,"t":1000,"batch":"chathistory"}`);
+    check(bncRowKey(live) == "mAAA", "msgid wins over eid");
+    check(bncRowKey(live) == bncRowKey(backfill), "live and backfill share key");
+    auto noeid = parseJsonString(`{"c":"PRIVMSG","n":"b","x":"y","m":"BBB"}`);
+    check(bncRowKey(noeid) == "mBBB", "msgid without eid");
+    auto nomsg = parseJsonString(`{"c":"PRIVMSG","n":"b","x":"y","eid":7,"t":9}`);
+    check(bncRowKey(nomsg) == "e7", "eid fallback");
+    check(isBncChatRow(live), "PRIVMSG is chat");
+    check(isBncChatRow(parseJsonString(`{"c":"NOTICE","n":"b"}`)), "NOTICE is chat");
+    check(!isBncChatRow(parseJsonString(`{"c":"TAGMSG","n":"b"}`)), "TAGMSG not chat");
+    check(!isBncChatRow(parseJsonString(`{"c":"PRIVMSG","phase":"connecting"}`)), "phase rows not chat");
+    check(!isBncChatRow(parseJsonString(`{"c":"JOIN","n":"b"}`)), "JOIN not chat");
+
+    // Reconnect filter: seenTs = 1500 (cursor row timestamp). The page is
+    // what getAfterEidForNetwork returns, so the pre-away live row (eid <=
+    // cursor) is absent; only its backfill copy (fresh eid) shows up.
+    Json[] page = [
+        parseJsonString(`{"c":"PRIVMSG","ch":"#c","n":"a","x":"old live backfill","m":"M1","eid":201,"t":1000,"batch":"chathistory"}`),
+        parseJsonString(`{"c":"PRIVMSG","ch":"#c","n":"a","x":"missed live","m":"M2","eid":202,"t":2000}`),
+        parseJsonString(`{"c":"PRIVMSG","ch":"#c","n":"a","x":"missed live mistagged","m":"M3","eid":203,"t":2000,"batch":"chathistory"}`),
+        parseJsonString(`{"c":"PRIVMSG","ch":"#c","n":"a","x":"missed backfill copy","m":"M2","eid":204,"t":2000,"batch":"chathistory"}`),
+        parseJsonString(`{"c":"TAGMSG","ch":"#c","n":"a","eid":205,"t":2000}`),
+    ];
+    auto keep = filterMissedRows(page, 1500);
+    check(keep.length == 2, "missed set collapses to 2 unique: " ~ keep.length.to!string);
+    if (keep.length == 2) {
+        check(keep[0]["m"].get!string == "M2", "live copy kept first");
+        check(keep[1]["m"].get!string == "M3", "mis-tagged missed row kept");
+    }
+    // Unknown cursor timestamp: legacy skip-all-batched.
+    auto keepUnknown = filterMissedRows(page, -1);
+    check(keepUnknown.length == 1, "unknown seenTs keeps unbatched only: " ~ keepUnknown.length.to!string);
+    if (keepUnknown.length == 1)
+        check(keepUnknown[0]["m"].get!string == "M2", "legacy fallback row");
+}
+
 void main() {
     testParseBncPass();
     testParseClientLine();
@@ -187,6 +227,7 @@ void main() {
     testServerTime();
     testFormatEvent();
     testGrouping();
+    testMissedRows();
     if (failures) {
         writefln("bnc wire tests: %d FAILED", failures);
         import core.stdc.stdlib : exit;

@@ -5,6 +5,7 @@
 module ircfiber.bnc.wire;
 
 import std.string : indexOf, toUpper, split, strip, startsWith;
+import std.conv : to;
 import std.array : appender, Appender;
 import std.algorithm : canFind, max;
 import vibe.data.json : Json;
@@ -332,6 +333,60 @@ Json[][string] groupByBuffer(Json[] events) @safe {
         groups[key] ~= ev;
     }
     return groups;
+}
+
+/// Dedup key for a stored row. The server msgid (`m`) identifies one
+/// upstream message across every copy the engine stored (live + each
+/// `CHATHISTORY` backfill re-stores it with a fresh `eid`), so it must win
+/// over `eid` — keying on `eid` first replays every backfilled message
+/// twice (verified live: 200 playback rows, only 102 unique msgids).
+string bncRowKey(Json ev) @safe {
+    if (auto m = "m" in ev)
+        if (m.type == Json.Type.string && m.get!string.length)
+            return "m" ~ m.get!string;
+    if (auto e = "eid" in ev)
+        if (e.type == Json.Type.int_ && e.get!long > 0)
+            return "e" ~ e.get!long.to!string;
+    return "t" ~ ev["t"].toString() ~ "|" ~ ev["n"].toString() ~ "|" ~ ev["x"].toString();
+}
+
+/// True for a chat row the bouncer may replay (mirrors the Mongo
+/// `CHAT_PAYLOAD_RE` window: `PRIVMSG`/`NOTICE` outside any phase).
+bool isBncChatRow(Json ev) @safe {
+    if (ev.type != Json.Type.object) return false;
+    if (auto c = "c" in ev) {
+        if (c.type != Json.Type.string) return false;
+        const cmd = c.get!string;
+        if (cmd != "PRIVMSG" && cmd != "NOTICE") return false;
+    } else return false;
+    return ev["phase"].type == Json.Type.undefined;
+}
+
+/// Filters a `getAfterEidForNetwork` page down to what a reconnecting
+/// client actually missed. Backfill copies of messages the client already
+/// saw live carry fresh eids but old timestamps — those (and only those)
+/// are dropped via the `batch` + `seenTs` comparison, so genuinely missed
+/// rows are kept even when mis-tagged with a batch marker (stuck engine
+/// batch flag tagged every live row, and the old blanket `batch` skip
+/// then delivered zero missed messages). `seenTs < 0` means the cursor's
+/// timestamp is unknown: fall back to the old skip-all-batched behaviour.
+/// Same-msgid live+backfill copies of one missed message collapse to one.
+Json[] filterMissedRows(Json[] events, long seenTs) @safe {
+    Json[] keep;
+    bool[string] seenMsgid;
+    foreach (ref ev; events) {
+        if (!isBncChatRow(ev)) continue;
+        if (ev["batch"].type != Json.Type.undefined) {
+            if (seenTs < 0) continue;
+            const t = ev["t"].type == Json.Type.int_ ? ev["t"].get!long : 0;
+            if (t <= seenTs) continue;
+        }
+        const dk = bncRowKey(ev);
+        if (dk in seenMsgid) continue;
+        seenMsgid[dk] = true;
+        keep ~= ev;
+    }
+    return keep;
 }
 
 /// Buffer keys of `events` in first-seen order (AA iteration order is

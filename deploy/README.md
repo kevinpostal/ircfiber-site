@@ -316,7 +316,7 @@ ansible-vault edit inventories/production/group_vars/vault.yml
 $EDITOR inventories/production/group_vars/all.yml
 #   cloudflare_zone: "your-domain.com"
 $EDITOR inventories/production/host_vars/<hostname>.yml
-#   cloudflare_target_ip: "47.236.247.169"
+#   cloudflare_target_ip: "15.204.93.54"
 
 # 4. Make sure the zone's nameservers are delegated to Cloudflare
 #    (otherwise records created here won't resolve publicly).

@@ -31,6 +31,7 @@
       label: 'Operations',
       items: [
         { label: 'Servers', path: '/servers', icon: '🖥️' },
+        { label: 'IRCD', path: '/ircd', icon: '📡' },
         { label: 'Mullvad', path: '/mullvad', icon: '🛡️' },
         { label: 'Replication', path: '/replication', icon: '🔗' },
         { label: 'Sessions', path: '/sessions', icon: '🔑' },

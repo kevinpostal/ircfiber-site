@@ -44,7 +44,7 @@
   import { startOnlineChecker } from './lib/onlineChecker';
   import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
-  import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
+  import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
   import { isFiberServerDown } from './lib/fiberServer';
   import { enqueueMessage, setFlushFn, setBackfillFlushFn } from './lib/messageBatcher';
@@ -1507,7 +1507,7 @@ let showNetworkForm: boolean = $state(false);
       return;
     }
     let bufferName = '_server';
-    if (type === 'channel') bufferName = target.startsWith('#') ? target : '#' + target;
+    if (type === 'channel') bufferName = bufferNameFromChannelPart(target);
     else if (type === 'messages') bufferName = target;
     // to see that channel.  The engine sync + live IRC events are the only
     // authorities for isJoined — see the pendingIsJoined guard in

@@ -19,6 +19,7 @@
     '/': 'Dashboard',
     '/dashboard': 'Dashboard',
     '/servers': 'Servers & Routing',
+    '/ircd': 'IRCD',
     '/sessions': 'Sessions',
     '/users': 'Users',
     '/uploads': 'Uploads',

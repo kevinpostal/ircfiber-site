@@ -54,6 +54,12 @@ vault_ircd_services_link_password: "REPLACE-WITH-RANDOM-32-CHARS"
 # Host-cloak HMAC key (>= 30 chars). Changing it invalidates existing
 # cloak-based channel bans.
 vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"
+# Dashboard oper password: the admin web UI's IRCd control session logs in
+# as the least-privilege "dashboard" oper (REHASH + G/K/Z-LINE + STATS
+# only, host-locked to the Docker network). The gateway receives it as
+# IRCFIBER_IRCD_OPER_PASSWORD. Use a distinct random value — never reuse
+# the human admin oper password.
+vault_ircd_dashboard_password: "REPLACE-WITH-STRONG-PASSWORD"
 
 # --- Cloudflare Tunnel (cloudflared) -----------------------------------------
 # Token for a named tunnel created in Cloudflare Zero Trust dashboard:

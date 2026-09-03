@@ -19,6 +19,32 @@
       vhost="{{ ircd_oper_vhost }}&netsuffix;"
       modes="+s +cCqQ">
 
+# Least-privilege tiers for day-to-day staff (no oper accounts use these
+# yet — create <oper> entries of type GlobalOp/Helper as staff grows).
+<type name="GlobalOp"
+      classes="SACommands OperChat BanControl HostCloak ServerLink"
+      vhost="oper&netsuffix;">
+<type name="Helper"
+      classes="HostCloak"
+      vhost="helper&netsuffix;">
+
+# Dashboard: exactly what the admin web UI needs and nothing else —
+# REHASH plus G/K/Z-LINE management and the STATS letters that list
+# them. No Shutdown (DIE/RESTART), no SA* overrides, no host changes.
+# Usable only from the Docker network (host mask) over plaintext, since
+# the gateway connects to ircd:6667 without TLS on the trusted subnet.
+<class name="Dashboard"
+       commands="REHASH STATS GLINE KLINE ZLINE"
+       privs="servers/auspex">
+<type name="Dashboard"
+      classes="Dashboard"
+      vhost="dashboard&netsuffix;">
+<oper name="{{ ircd_dashboard_oper_name }}"
+      hash="hmac-sha256"
+      password="{{ ircd_dashboard_oper_hash }}"
+      host="*@{{ ircd_trusted_subnet }}"
+      type="Dashboard">
+
 # /OPER {{ ircd_oper_name }} <vault_ircd_oper_password>
 # Password is stored as InspIRCd hmac-sha256 (base64(salt)$base64(hmac)),
 # computed by the role from vault_ircd_oper_password.

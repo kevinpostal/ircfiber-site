@@ -2,6 +2,26 @@ import { ircState } from '../stores/ircStore.svelte';
 
 export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'advanced';
 
+/**
+ * Encode a channel buffer name for the `/channel/<part>` URL segment.
+ * The full name is preserved (`##test` stays `##test`, percent-encoded)
+ * so the URL → buffer round-trip is lossless. Legacy URLs stored the
+ * name with one `#` stripped (`/channel/test`); the reader below still
+ * accepts those.
+ */
+export function channelUrlPart(bufferName: string): string {
+  return encodeURIComponent(bufferName);
+}
+
+/**
+ * Decode a `/channel/<part>` URL segment back to a buffer name.
+ * New URLs decode to the full name (`#test`, `##test`, `&foo`) and are
+ * kept as-is; legacy segments without a prefix (`test`) get `#`.
+ */
+export function bufferNameFromChannelPart(target: string): string {
+  return /^[#&+!]/.test(target) ? target : '#' + target;
+}
+
 export function updateRoute(networkId: string, bufferName: string): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
@@ -9,7 +29,7 @@ export function updateRoute(networkId: string, bufferName: string): void {
   if (bufferName === '_server') {
     path = '/irc/' + encodeURIComponent(net.name);
   } else if (bufferName.startsWith('#')) {
-    path = '/irc/' + encodeURIComponent(net.name) + '/channel/' + encodeURIComponent(bufferName.substring(1));
+    path = '/irc/' + encodeURIComponent(net.name) + '/channel/' + channelUrlPart(bufferName);
   } else {
     path = '/irc/' + encodeURIComponent(net.name) + '/messages/' + encodeURIComponent(bufferName);
   }

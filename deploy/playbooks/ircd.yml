@@ -54,6 +54,23 @@
         - cloudflare_target_ip is defined
         - cloudflare_target_ip | length > 0
 
+    # Dual-stack: once the host has a public IPv6 address, set
+    # cloudflare_target_ipv6 in host_vars and re-run this playbook.
+    # No-op until then (skipped when the var is undefined/empty).
+    - name: Ensure irc.ircfiber.com AAAA record exists (DNS-only, no proxy)
+      community.general.cloudflare_dns:
+        api_token: "{{ vault_cloudflare_api_token }}"
+        zone: "{{ cloudflare_zone }}"
+        record: "irc"
+        type: AAAA
+        value: "{{ cloudflare_target_ipv6 }}"
+        ttl: 300
+        proxied: false
+        state: present
+      when:
+        - cloudflare_target_ipv6 is defined
+        - cloudflare_target_ipv6 | length > 0
+
 - name: Deploy IRC daemon
   hosts: ircfiber_backend
   become: true

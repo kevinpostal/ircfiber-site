@@ -69,6 +69,11 @@ ircd_oper_name: "admin"
 ircd_oper_vhost: "staff"
 ircd_oper_sslonly: true
 
+# Dashboard oper for the admin web UI (Dashboard class: REHASH + STATS +
+# G/K/Z-LINE only, host-locked to the Docker network). Gateway reads the
+# password from vault_ircd_dashboard_password via IRCFIBER_IRCD_OPER_PASSWORD.
+ircd_dashboard_oper_name: "dashboard"
+
 # Host cloaking
 ircd_cloak_prefix: "ircfiber"
 ircd_cloak_suffix: "ip"
@@ -87,6 +92,17 @@ ircd_permanent_channels:
   - channel: "#welcome"
     modes: "nt"
     topic: "New here? Say hi. /msg NickServ HELP to register your nick."
+
+# Server fingerprinting: VERSION replies show this instead of "InspIRCd-4",
+# and netsplit quits are hidden. Cosmetic; no protocol impact.
+ircd_custom_version: "IRC Fiber"
+ircd_hide_splits: true
+
+# DNSBL connection checks (DroneBL + EFnet RBL + Tor exits). Off by
+# default: lookups add connect latency and can false-positive on shared
+# or CGNAT ranges. The engine class is always exempt (usednsbl=no);
+# setting this true flips only the public "main" class to usednsbl=yes.
+ircd_enable_dnsbl: false
 
 # Logging (InspIRCd log level: error | warning | normal | debug)
 ircd_log_level: "normal"

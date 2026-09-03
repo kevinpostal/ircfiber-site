@@ -78,13 +78,35 @@
          limit="{{ ircd_public_class_limit }}"
          resolvehostnames="yes"
          useident="no"
-         usednsbl="no"
+         usednsbl="{{ 'yes' if ircd_enable_dnsbl else 'no' }}"
 {% if ircd_require_sasl %}
          requireaccount="yes"
 {% endif %}
          modes="+x">
 
 <cidr ipv4clone="32" ipv6clone="128">
+
+# Reserve service nicknames so users cannot squat them (e.g. grabbing
+# NickServ while services are split/restarting and harvesting IDENTIFY
+# attempts). Mirrors the anope.example.conf aliases; explicit here so the
+# reservation holds even when services are down.
+<badnick nick="ALIS" reason="Reserved for services">
+<badnick nick="BOTSERV" reason="Reserved for services">
+<badnick nick="CHANFIX" reason="Reserved for services">
+<badnick nick="CHANSERV" reason="Reserved for services">
+<badnick nick="GAMESERV" reason="Reserved for services">
+<badnick nick="GLOBAL" reason="Reserved for services">
+<badnick nick="GROUPSERV" reason="Reserved for services">
+<badnick nick="HELPSERV" reason="Reserved for services">
+<badnick nick="HOSTSERV" reason="Reserved for services">
+<badnick nick="INFOSERV" reason="Reserved for services">
+<badnick nick="MEMOSERV" reason="Reserved for services">
+<badnick nick="NICKSERV" reason="Reserved for services">
+<badnick nick="OPERSERV" reason="Reserved for services">
+<badnick nick="PROXYSCAN" reason="Reserved for services">
+<badnick nick="RPGSERV" reason="Reserved for services">
+<badnick nick="SASLSERV" reason="Reserved for services">
+<badnick nick="STATSERV" reason="Reserved for services">
 
 #-#-#-#-#-#-#-#-#-#-  MISCELLANEOUS CONFIGURATION  -#-#-#-#-#-#-#-#-#-#
 
@@ -116,8 +138,10 @@
 <security announceinvites="dynamic"
           hideservices="no"
           flatlinks="no"
-          hidesplits="no"
+          hidesplits="{{ 'yes' if ircd_hide_splits else 'no' }}"
           hideservicekills="yes"
+          hideulines="yes"
+          customversion="{{ ircd_custom_version }}"
           maxtargets="20"
           restrictbannedusers="yes"
           genericoper="no"

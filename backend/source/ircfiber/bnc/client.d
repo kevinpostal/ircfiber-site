@@ -815,27 +815,30 @@ final class BncClient {
             cursor = max(cursor, globalEid);
             return null;
         }
-        Json[] keep;
         foreach (ev; events) {
             if (ev.type != Json.Type.object) continue;
             // Everything fetched (kept or not) is now "seen".
             if (ev["eid"].type == Json.Type.int_) cursor = max(cursor, ev["eid"].get!long);
-            if (!isChatRow(ev)) continue;
-            // chathistory-fetched rows have new eids but old timestamps; they
-            // belong to playback, not to "what you missed".
-            if (ev["batch"].type != Json.Type.undefined) continue;
-            keep ~= ev;
         }
+        // Timestamp of the cursor row: backfill copies of already-seen
+        // messages have fresh eids but old timestamps. Anything batched at
+        // or before it is old history (skip); anything newer is genuinely
+        // missed — even when mis-tagged with a batch marker. Unknown (-1)
+        // keeps the old skip-all-batched behaviour.
+        long seenTs = -1;
+        try seenTs = ctx.messageRepo.timestampOfEid(serverId, networkId, seen);
+        catch (Exception e) logWarn("bnc: cursor timestamp lookup failed for %s: %s", networkId, e.msg);
+        if (seenTs == 0) seenTs = -1;
+        auto keep = filterMissedRows(events, seenTs);
         if (events.length < REPLAY_LIMIT) cursor = max(cursor, globalEid);
         return keep;
     }
 
-    private static bool isChatRow(ref Json ev) {
-        if (ev.type != Json.Type.object) return false;
-        const c = ev["c"].type == Json.Type.string ? ev["c"].get!string : "";
-        if (c != "PRIVMSG" && c != "NOTICE") return false;
-        return ev["phase"].type == Json.Type.undefined;
-    }
+    private alias isChatRow = isBncChatRow;
+    // Single source of truth lives in ircfiber.bnc.wire (unit-tested):
+    // the msgid identifies one upstream message across live + backfill
+    // copies, so it keys before the per-store eid.
+    private alias dedupeKey = bncRowKey;
 
     /// Buffers whose history the attached client may see: joined channels
     /// and private-message queries from the engine snapshot.
@@ -874,12 +877,6 @@ final class BncClient {
         logInfo("bnc: playback user=%s network=%s server=%s buffers=%d lines=%d rows=%d",
             userId, networkId, serverId, i, n, rows.length);
         return rows;
-    }
-
-    private static string dedupeKey(ref Json ev) {
-        if (ev["eid"].type == Json.Type.int_ && ev["eid"].get!long > 0) return "e" ~ ev["eid"].get!long.to!string;
-        if (ev["m"].type == Json.Type.string && ev["m"].get!string.length) return "m" ~ ev["m"].get!string;
-        return "t" ~ ev["t"].toString() ~ "|" ~ ev["n"].toString() ~ "|" ~ ev["x"].toString();
     }
 
     private static long rowTime(ref Json ev) {
