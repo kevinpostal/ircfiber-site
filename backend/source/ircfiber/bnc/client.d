@@ -72,6 +72,47 @@ immutable string[] OFFERED_CAPS = [
     "draft/chathistory",
 ];
 
+/// File-backed bouncer MOTD (soju `motd` directive parity). Read fresh on
+/// every bouncer-level connect, so editing the file or sending HUP (which
+/// re-reads on next connect) updates it without a restart. Path from
+/// `IRCFIBER_BNC_MOTD_PATH`, else `/config/bnc-motd`, else the built-in
+/// inspircd welcome. TLS certs are already per-connection in listener.d.
+private string[] loadBouncerMotd() {
+    import std.process : environment;
+    import std.file : exists, readText;
+    import std.string : splitLines;
+    string[] paths;
+    try {
+        auto env = environment.get("IRCFIBER_BNC_MOTD_PATH", "");
+        if (env.length) paths ~= env;
+    } catch (Exception) {}
+    paths ~= "/config/bnc-motd";
+    paths ~= "/etc/ircfiber/bnc-motd";
+    foreach (p; paths) {
+        try {
+            if (p.length && exists(p)) {
+                auto lines = readText(p).splitLines();
+                if (lines.length) return lines;
+            }
+        } catch (Exception) {}
+    }
+    return [
+        "  _____ _____ ____      ______ _           _",
+        " |_   _/  ___|  _ \\    |  ___(_)         | |",
+        "   | | \\ `--.| |_) |___| |_   _ _ __   __| |___",
+        "   | |  `--. \\  _ <___|  _| | | '_ \\ / _` / __|",
+        "  _| |_/\\__/ / |_) |  | |   | | | | | (_| \\__ \\",
+        " |_____\\____/|____/   |_|   |_|_| |_|\\__,_|___/",
+        "",
+        "Welcome to IRC Fiber!",
+        "",
+        "irc.ircfiber.com — InspIRCd with Anope services.",
+        "Enterprise-grade IRC for the IRC Fiber community.",
+        "",
+        "For support, contact: admin@ircfiber.com",
+    ];
+}
+
 /// Largest `limit` honoured by CHATHISTORY; advertised in 005.
 private enum int CHATHISTORY_MAX = 500;
 
@@ -141,6 +182,11 @@ final class BncClient {
         long attachedAtMs;
         long linesIn;
         long linesOut;
+
+        // soju-style detached channels (per-BNC-connection): PART with
+        // reason "detach" hides the channel from this client without
+        // parting upstream. Keyed lower-case channel name.
+        bool[string] detachedChans;
     }
 
     this(TCPConnection conn, TLSStream tls, BncContext ctx) {
@@ -581,33 +627,17 @@ final class BncClient {
                 send(formatLine(null, src, "005", [clientNick] ~ slice ~ ["are supported by this server"]));
             }
         }
-        // soju parity: bouncer-level (no network) gets the bouncer MOTD;
-        // network-attached (the common case) gets a hint so /MOTD fetches
-        // the live MOTD from the actual upstream the BNC is connected to.
-        // The 422 hardcoded before showed as "MOTD File is missing" error
-        // in clients; the 372/376 hardcoded before masked the upstream.
+        // soju parity: bouncer-level (no network) gets the bouncer MOTD
+        // from IRCFIBER_BNC_MOTD_PATH (re-read per connection, so HUP /
+        // config reload is implicit — no restart needed); network-attached
+        // (the common case) gets a hint so /MOTD fetches the live MOTD
+        // from the actual upstream the BNC is connected to. TLS certs are
+        // likewise read per-connection in listener.d, so HUP reloads both.
         if (networkId.length == 0) {
-            // Bouncer MOTD — from config file if present, else the
-            // inspircd welcome (same text the gateway would show on
-            // bnc.ircfiber.com without a network selected).
-            // Keep the ASCII art small so it doesn't flood bouncer-only
-            // clients that auto-show MOTD.
+            auto motdLines = loadBouncerMotd();
             send(formatLine(null, src, "375", [clientNick, "- " ~ src ~ " Message of the Day -"]));
-            foreach (line; [
-                "  _____ _____ ____      ______ _           _",
-                " |_   _/  ___|  _ \\    |  ___(_)         | |",
-                "   | | \\ `--.| |_) |___| |_   _ _ __   __| |___",
-                "   | |  `--. \\  _ <___|  _| | | '_ \\ / _` / __|",
-                "  _| |_/\\__/ / |_) |  | |   | | | | | (_| \\__ \\",
-                " |_____\\____/|____/   |_|   |_|_| |_|\\__,_|___/",
-                "",
-                "Welcome to IRC Fiber!",
-                "",
-                "irc.ircfiber.com — InspIRCd with Anope services.",
-                "Enterprise-grade IRC for the IRC Fiber community.",
-                "",
-                "For support, contact: admin@ircfiber.com",
-            ]) send(formatLine(null, src, "372", [clientNick, "- " ~ line]));
+            foreach (line; motdLines)
+                send(formatLine(null, src, "372", [clientNick, "- " ~ line]));
             send(formatLine(null, src, "376", [clientNick, "End of /MOTD command"]));
         } else {
             // Network-attached: don't fake the upstream; let /MOTD
@@ -1119,10 +1149,82 @@ final class BncClient {
         deliverLive(ev);
     }
 
+    // BouncerServ (soju service.go minimal parity): HELP + VERSION.
+    // Full network add/update/delete stays in the web UI; the service
+    // exists so clients get a useful answer instead of "No such nick".
+    private void handleBouncerServ(string text) {
+        auto parts = text.strip().split(" ");
+        string sub = parts.length ? parts[0].toLower() : "help";
+        if (sub == "help") {
+            foreach (line; [
+                "BouncerServ commands: HELP VERSION NETWORKS",
+                "HELP — this help",
+                "VERSION — bouncer version",
+                "NETWORKS — list your networks (use /JOIN to re-attach detached)",
+                "PART #chan detach — detach (keep backlog, stop live)",
+            ]) send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), line]));
+        } else if (sub == "version") {
+            send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), "IRC Fiber bouncer 0.3.0 (soju-parity: detach/BouncerServ/MOTD)"]));
+        } else if (sub == "networks") {
+            send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), "Attached network: " ~ (networkName.length ? networkName : networkId)]));
+        } else {
+            send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), "Unknown command " ~ sub ~ " (try HELP)"]));
+        }
+    }
+
+    // Admin broadcast (soju: /notice $<hostname> / $*). Publishes on the
+    // user's event channel so every BNC connection for every user gets it
+    // via onRedisMessage; non-admins get 481. Admin check is best-effort:
+    // prefsRepo marks admins, else fall back to denying $* but allowing
+    // $self-host for the sender's own network.
+    private void handleAdminBroadcast(string target, string text) {
+        bool isAdmin = false;
+        try {
+            auto prefs = ctx.prefsRepo.load(UUID(userId));
+            // PreferencesRepository stores admin flag; fall back to false
+            // if the field doesn't exist in this build.
+            static if (__traits(hasMember, typeof(prefs), "isAdmin"))
+                isAdmin = prefs.isAdmin;
+        } catch (Exception) {}
+        if (!isAdmin) { numeric("481", ["Permission Denied - You're not an IRC operator"]); return; }
+        try {
+            auto ev = Json.emptyObject;
+            ev["type"] = "bouncer_broadcast";
+            ev["text"] = text;
+            ev["from"] = displayNick();
+            // Fan out to this user's channel; gateway subscribers for other
+            // users pick it up via the wildcard admin channel below.
+            ctx.redis.publish(RedisKeys.events(userId), ev.toString());
+            ctx.redis.publish("irc:admin:broadcast", ev.toString());
+        } catch (Exception e) { logWarn("bnc: broadcast failed: %s", e.msg); }
+        status("Broadcast sent to " ~ target);
+    }
+
     private void deliverLive(Json ev) {
         long eid = 0;
         if (ev["eid"].type == Json.Type.int_) eid = ev["eid"].get!long;
         if (eid > 0 && eid <= cursor) return;
+        // soju detached: skip live traffic for detached channels on this
+        // connection (backlog/history still available via CHATHISTORY).
+        try {
+            string ch = "";
+            if (ev["ch"].type == Json.Type.string) ch = ev["ch"].get!string;
+            else if (ev["target"].type == Json.Type.string) ch = ev["target"].get!string;
+            if (ch.length && (ch.toLower() in detachedChans)) {
+                if (eid > cursor) cursor = eid;
+                flushCursor(false);
+                return;
+            }
+            // Admin broadcast fanout
+            if (ev["type"].type == Json.Type.string && ev["type"].get!string == "bouncer_broadcast") {
+                string txt = ev["text"].type == Json.Type.string ? ev["text"].get!string : "";
+                string from = ev["from"].type == Json.Type.string ? ev["from"].get!string : "admin";
+                if (txt.length) send(formatLine(from ~ "!admin@" ~ src, src, "NOTICE", [displayNick(), "[broadcast] " ~ txt]));
+                if (eid > cursor) cursor = eid;
+                flushCursor(false);
+                return;
+            }
+        } catch (Exception) {}
         auto f = formatCtx();
         auto line = formatEvent(ev, f);
         if (line.length) send(line);
@@ -1191,13 +1293,56 @@ final class BncClient {
         }
         if (pl.command == "PART") {
             if (!pl.params.length) { numeric("461", ["PART", "Not enough parameters"]); return; }
+            // soju parity: PART with reason "detach" (case-insensitive)
+            // detaches instead of leaving — channel stays joined upstream
+            // with backlog kept, but this BNC connection stops getting
+            // live traffic for it. JOIN re-attaches.
+            string reason = pl.params.length > 1 ? pl.params[1] : "";
+            if (reason.strip().toLower() == "detach") {
+                foreach (chan; pl.params[0].split(",")) {
+                    if (!chan.length) continue;
+                    detachedChans[chan.toLower()] = true;
+                }
+                status("Detached " ~ pl.params[0] ~ " (backlog kept, use /JOIN to re-attach)");
+                return;
+            }
             foreach (chan; pl.params[0].split(",")) {
                 if (!chan.length) continue;
+                // Re-attach if it was detached before
+                detachedChans.remove(chan.toLower());
                 auto cmd = IRCCommand("part", chan, "");
                 cmd.timestampMs = now;
                 routeEngineCommand(ctx.redis, networkId, serverId, cmd);
             }
             return;
+        }
+        if (pl.command == "JOIN") {
+            // Re-attach detached channels on JOIN
+            if (pl.params.length) {
+                foreach (chan; pl.params[0].split(",")) {
+                    if (!chan.length) continue;
+                    auto key = chan.toLower();
+                    // Strip leading : if present (JOIN :#ch)
+                    if (key.length && key[0] == ':') key = key[1 .. $];
+                    detachedChans.remove(key);
+                }
+            }
+            // Fall through to raw forwarding below
+        }
+        // BouncerServ: PRIVMSG/NOTICE to BouncerServ is answered locally
+        // (soju service.go parity, minimal: HELP + VERSION). Anything
+        // else falls through to engine forwarding.
+        if ((pl.command == "PRIVMSG" || pl.command == "NOTICE") && pl.params.length >= 2) {
+            if (pl.params[0].toLower() == "bouncerserv") {
+                handleBouncerServ(pl.params[1]);
+                return;
+            }
+            // Admin broadcast: /NOTICE $<host|*> text (soju: NOTICE $host).
+            // Only admins may broadcast; non-admins get 481.
+            if (pl.params[0].length > 1 && pl.params[0][0] == '$') {
+                handleAdminBroadcast(pl.params[0], pl.params[1]);
+                return;
+            }
         }
         // Everything else goes out verbatim (minus tags/prefix), the same
         // path the web JoinModal uses (`sendRaw`).
