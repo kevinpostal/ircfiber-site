@@ -112,10 +112,14 @@ a:hover { color: #79c0ff; text-decoration: underline; }
   grid-template-columns: 1fr;
 }
 #wrap.sidebar-collapsed {
-  grid-template-columns: 1fr 48px;
+  grid-template-columns: 1fr 0;
 }
 #app.sidebar-left #wrap.sidebar-collapsed {
-  grid-template-columns: 48px 1fr;
+  grid-template-columns: 0 1fr;
+}
+#wrap.sidebar-collapsed #sidebar {
+  overflow: hidden;
+  border: none;
 }
 .main-area {
   display: flex;

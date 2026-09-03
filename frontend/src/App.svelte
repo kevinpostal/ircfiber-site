@@ -252,6 +252,14 @@ let showNetworkForm: boolean = $state(false);
       .catch((err) => console.error('Failed to sync members collapsed:', err));
   }
 
+  function toggleSidebar(): void {
+    if (isNarrow) {
+      sidebarDrawerOpen = !sidebarDrawerOpen;
+    } else {
+      sidebarCollapsed = !sidebarCollapsed;
+    }
+  }
+
   $effect(() => {
     if (ircState.showSettings || ircState.showShortcuts || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     const { networkId, bufferName } = ircState.activeBuffer;
@@ -1743,7 +1751,7 @@ let showNetworkForm: boolean = $state(false);
         onEditNetwork={() => { networkFormMode = 'edit'; editNetworkId = ircState.activeBuffer.networkId; showNetworkForm = true; }}
         onJoinChannel={openChannelMenu}
         onToggleMembers={toggleMemberPanel}
-        onToggleSidebar={() => sidebarDrawerOpen = !sidebarDrawerOpen}
+        onToggleSidebar={toggleSidebar}
         memberPanelOpen={isNarrow ? mobileMembersOpen : memberPanelOpen}
       />
       <div class="content-row">

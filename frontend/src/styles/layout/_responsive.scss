@@ -10,8 +10,23 @@
   html, body, #app, #wrap { height: 100dvh; }
 }
 
-/* Hidden on desktop; the media query below reveals them. */
-.bufferHead .sidebarToggle { display: none; }
+/* B — Header hamburger always visible (desktop push + mobile drawer) */
+.bufferHead .sidebarToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-right: 8px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #8b949e;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.bufferHead .sidebarToggle:hover { background: rgba(255,255,255,0.08); color: #d6d6d6; }
 .drawer-backdrop { display: none; }
 
 .content-row { position: relative; }

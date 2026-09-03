@@ -22,16 +22,7 @@
   }
   let { onSwitchBuffer, onAddNetwork, onNetworkOptions, onJoinChannel, isCollapsed = false, onToggleCollapsed }: Props = $props();
 
-  const railNetworks = $derived.by(() => {
-    if (!networkOrder.length) return ircState.networks;
-    const ordered: Network[] = [];
-    for (const id of networkOrder) {
-      const n = ircState.networks.find(x => x.networkId === id);
-      if (n) ordered.push(n);
-    }
-    for (const n of ircState.networks) if (!ordered.includes(n)) ordered.push(n);
-    return ordered;
-  });
+  // (B) no rail — hamburger in header controls visibility
 
   function toggleNetwork(networkId: string): void {
     const newValue = !collapsedMap[networkId];
@@ -368,30 +359,11 @@
     {/each}
   </div>
 </div>
-{#if isCollapsed}
-  <div class="sidebar-rail" role="navigation" aria-label="Servers">
-    {#each railNetworks as net (net.networkId)}
-      {@const totalUnread = net.buffers.some(b => b.name !== '_server' && b.unseen && isTrackingUnread(net.networkId, b.name))}
-      {@const totalBadge = net.buffers.reduce((s, b) => s + ((b.name !== '_server' && b.unseen && showsUnreadCount(net.networkId, b.name)) ? b.unseenCount : 0), 0)}
-      {@const initial = (net.name || '?')[0].toUpperCase()}
-      <button class="rail-item" class:rail-unread={totalUnread} class:rail-active={ircState.activeBuffer.networkId === net.networkId} onclick={() => onSwitchBuffer(net.networkId, '_server')} title={net.name} aria-label={net.name}>
-        <span class="rail-letter">{initial}</span>
-        {#if totalUnread}<span class="rail-dot" aria-hidden="true"></span>{/if}
-        {#if totalBadge > 0}<span class="rail-badge">{totalBadge > 99 ? '99+' : totalBadge}</span>{/if}
-      </button>
-    {/each}
-    <div class="rail-spacer"></div>
-    <button class="rail-add" onclick={onAddNetwork} title="Add a network" aria-label="Add a network"><i class="fa fa-plus"></i></button>
-  </div>
-{/if}
 <SidebarIndicators {sidebarEl} {onSwitchBuffer} />
 <div class="addNetworkButtonContainer">
   <button class="addNetworkButton" class:addNetworkButton--selected={ircState.networks.length === 0} id="add-network-btn" type="button" onclick={onAddNetwork}>
     <i class="fa fa-plus-circle"></i>
-    <span class="addNetworkLabel">Add a network</span>
-  </button>
-  <button class="sidebarCollapseButton" type="button" onclick={() => onToggleCollapsed?.()} title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!isCollapsed}>
-    <i class="fa {isCollapsed ? 'fa-chevron-right' : 'fa-chevron-left'}"></i>
+    Add a network
   </button>
 </div>
 <AccountMenu {onAddNetwork} />
