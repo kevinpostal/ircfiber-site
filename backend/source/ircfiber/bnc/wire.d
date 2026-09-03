@@ -133,7 +133,7 @@ string formatLine(string[string] tags, string prefix, string command, string[] p
         if (last && (p.length == 0 || p.canFind(' ') || p.startsWith(":"))) app.put(':');
         app.put(p);
     }
-    string line = app.data;
+    string line = sanitizeUtf8Wire(app.data);
     // 512 for the message body (incl. CRLF) — reserve 2 bytes for CRLF.
     const size_t bodyLimit = 510;
     const size_t tagLimit = tags.length ? 8191 : 0;
@@ -147,10 +147,35 @@ string formatLine(string[string] tags, string prefix, string command, string[] p
 }
 
 /// Cuts `s` to at most `max` bytes without splitting a UTF-8 sequence.
+/// Also sanitizes invalid sequences to U+FFFD so a 10k unicode burst
+/// with mixed CP437/legacy bytes cannot emit an invalid UTF-8 line that
+/// crashes the TLS writer or downstream parser.
+private string sanitizeUtf8Wire(string s) @safe pure {
+    import std.utf : decode, encode;
+    char[] out_;
+    out_.reserve(s.length);
+    size_t i = 0;
+    while (i < s.length) {
+        try {
+            auto d = decode(s, i);
+            encode(out_, d);
+        } catch (Exception) {
+            out_ ~= '\uFFFD';
+            i++;
+        }
+    }
+    return () @trusted { return cast(string) out_; }();
+}
+
 private string truncateUtf8(string s, size_t max) @safe pure {
     if (s.length <= max) return s;
+    if (max == 0) return "";
     size_t end = max;
-    while (end > 0 && (s[end] & 0xC0) == 0x80) end--;
+    // Back up over continuation bytes so we don't split a codepoint.
+    while (end > 0 && end < s.length && (s[end] & 0xC0) == 0x80) end--;
+    // If we stopped on a lead byte that claims more bytes than we have
+    // room for, the caller already caps at max — the lead itself would be
+    // a split sequence, so stay before it (end already points there).
     return s[0 .. end];
 }
 

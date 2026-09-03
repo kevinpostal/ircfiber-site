@@ -179,6 +179,7 @@ final class BncClient {
     private void writerLoop() nothrow {
         try {
             string line;
+            size_t n;
             while (outbound.tryConsumeOne(line)) {
                 try writeLine(line);
                 catch (Exception e) {
@@ -186,6 +187,9 @@ final class BncClient {
                     closing = true;
                     closeSocket();
                     break;
+                }
+                if (++n % 100 == 0) {
+                    try yield(); catch (Exception) {}
                 }
             }
         } catch (Exception e) {
