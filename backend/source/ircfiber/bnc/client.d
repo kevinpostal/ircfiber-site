@@ -1182,13 +1182,13 @@ final class BncClient {
                 "VERSION — bouncer version",
                 "NETWORKS — list your networks (use /JOIN to re-attach detached)",
                 "PART #chan detach — detach (keep backlog, stop live)",
-            ]) send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), line]));
+            ]) send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), line]));
         } else if (sub == "version") {
-            send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), "IRC Fiber bouncer 0.3.0 (soju-parity: detach/BouncerServ/MOTD)"]));
+            send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), "IRC Fiber bouncer 0.3.0 (soju-parity: detach/BouncerServ/MOTD)"]));
         } else if (sub == "networks") {
-            send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), "Attached network: " ~ (networkName.length ? networkName : networkId)]));
+            send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), "Attached network: " ~ (networkName.length ? networkName : networkId)]));
         } else {
-            send(formatLine("BouncerServ!bouncerserv@" ~ src, src, "NOTICE", [displayNick(), "Unknown command " ~ sub ~ " (try HELP)"]));
+            send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), "Unknown command " ~ sub ~ " (try HELP)"]));
         }
     }
 
@@ -1239,7 +1239,7 @@ final class BncClient {
             if (ev["type"].type == Json.Type.string && ev["type"].get!string == "bouncer_broadcast") {
                 string txt = ev["text"].type == Json.Type.string ? ev["text"].get!string : "";
                 string from = ev["from"].type == Json.Type.string ? ev["from"].get!string : "admin";
-                if (txt.length) send(formatLine(from ~ "!admin@" ~ src, src, "NOTICE", [displayNick(), "[broadcast] " ~ txt]));
+                if (txt.length) send(formatLine(null, from ~ "!admin@" ~ src, "NOTICE", [displayNick(), "[broadcast] " ~ txt]));
                 if (eid > cursor) cursor = eid;
                 flushCursor(false);
                 return;
