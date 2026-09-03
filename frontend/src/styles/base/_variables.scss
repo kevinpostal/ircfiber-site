@@ -121,6 +121,12 @@ a:hover { color: #79c0ff; text-decoration: underline; }
   overflow: hidden;
   border: none;
 }
+@media (max-width: 800px) {
+  #wrap.sidebar-collapsed,
+  #app.sidebar-left #wrap.sidebar-collapsed {
+    grid-template-columns: 1fr !important;
+  }
+}
 .main-area {
   display: flex;
   flex-direction: column;

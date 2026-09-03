@@ -67,7 +67,14 @@
     padding-right: env(safe-area-inset-right, 0px);
     grid-column: auto;
   }
+  #app.sidebar-left #sidebar {
+    right: auto;
+    left: 0;
+    transform: translateX(-100%);
+    box-shadow: 6px 0 24px rgba(0, 0, 0, 0.6);
+  }
   #wrap.sidebar-open #sidebar { transform: none; visibility: visible; pointer-events: auto; }
+  #app.sidebar-left #wrap.sidebar-open #sidebar { transform: none; }
 
   .drawer-backdrop {
     display: block;
