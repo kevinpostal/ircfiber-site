@@ -61,6 +61,7 @@
     if (match('/uploads', path)) return { kind: 'uploads' } as const;
     if (match('/mongo', path)) return { kind: 'mongo' } as const;
     if (match('/redis', path)) return { kind: 'redis' } as const;
+    if (match('/logs', path)) return { kind: 'logs' } as const;
     if (match('/version', path)) return { kind: 'version' } as const;
     return { kind: 'notfound' } as const;
   });
