@@ -613,6 +613,7 @@
         {@const colorCls = `c${colorIndex}`}
         {@const initial = nick.charAt(0).toUpperCase()}
         {@const modePrefix = getModeForNick(nick)}
+        {@const modeInfo = modePrefix ? getUserModePrefix(modePrefix + 'x') : null}
         {@const usermask = getUsermask(msg.prefix || '')}
         {@const authorTitle = usermask ? `${nick} (${usermask})` : nick}
         {@const member = findMemberForNick(nick)}
@@ -621,8 +622,8 @@
         <span translate="no" class="authorWrap">
           <span class="g" aria-hidden="true">&lt;</span>
           <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <span role="button" tabindex="0" class="buffer bufferLink author {colorCls} user hasUserParent link"
-                title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix}{@const modeInfo = getUserModePrefix(modePrefix + 'x')}<span class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span>{/if}{nick}</span>
+          <span role="button" tabindex="0" class="buffer bufferLink author {colorCls} {modeInfo ? 'moded ' + modeInfo.cls : ''} user hasUserParent link"
+                title={authorTitle} onclick={handleNickClick} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNickClick?.(nick, e as any); } }}>{#if modePrefix && modeInfo}<span title={modeInfo.title} class="mode_prefix mode_symbol {modeInfo.cls}">{modePrefix}</span><span title={modeInfo.title} class="mode_prefix mode_pill {modeInfo.cls}">&bull;</span>{/if}{nick}</span>
           <span class="g" aria-hidden="true">&gt;</span>
           {#if sensibleRealname}
             <span class="author-realname">{sensibleRealname}</span>

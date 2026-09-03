@@ -334,6 +334,14 @@ let showNetworkForm: boolean = $state(false);
     } else if (val.theme !== 'dark') {
       app.classList.add('theme-' + val.theme);
     }
+
+    // Mode indicators — Svelte 5 $state objects are proxies that only
+    // become reactive when their properties are read inside the effect.
+    // val.modeIndicator is reactive; document.body classes are the
+    // observable side effect consumed by app.css.
+    const mode = val.modeIndicator;
+    document.body.classList.toggle('mode-hidesymbol', mode === 'dots');
+    document.body.classList.toggle('mode-hidden', mode === 'hidden');
   });
 
   // Inject custom CSS

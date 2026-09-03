@@ -395,7 +395,8 @@ body.ascii-compact .row.messageRow {
 /* Channel-mode prefixes shown next to nicks. IRCCloud emits BOTH a
    "symbol" variant (the raw IRC char `@`/`%`/`+`) and a "pill" variant
    (the • bullet) — the active site preference toggles which is visible
-   via `body.mode-hidesymbol`. We default to the symbol form. */
+   via `body.mode-hidesymbol` (dots) / `body.mode-hidden` (hidden).
+   Default is symbol form (modeIndicator === 'symbols'). */
 .mode_prefix.mode_symbol,
 .mode_prefix.mode_pill {
   display: inline;
@@ -406,6 +407,8 @@ body.ascii-compact .row.messageRow {
 .mode_prefix.mode_pill { font-weight: 600; display: none; }
 body.mode-hidesymbol .mode_prefix.mode_symbol { display: none; }
 body.mode-hidesymbol .mode_prefix.mode_pill   { display: inline; }
+body.mode-hidden .mode_prefix.mode_symbol,
+body.mode-hidden .mode_prefix.mode_pill { display: none !important; }
 
 /* Mode-prefix colors. Picked from IRCCloud's dusk theme so the
    half-op/op/voiced markers match the colors users already recognise. */
