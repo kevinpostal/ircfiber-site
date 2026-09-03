@@ -872,21 +872,15 @@ final class BncClient {
     /// deduped against it.
     private bool[string] sendHistory(string serverId, ref NetworkStateSnapshot snap) {
         auto rows = fetchMissed(serverId);
-        // cursor now marks everything seen through fetchMissed (or globalEid
-        // for first-connect/anonymous). Playback must only cover what the
-        // client hasn't seen — otherwise every reconnect replays the same
-        // newest N per buffer (observed 408 PRIVMSGs twice for same
-        // clientid). Filter playback to eid > cursor at entry.
+        // Playback must only go to first-connect clients — otherwise every
+        // reconnect replays the same newest N per buffer (verified live:
+        // same clientid got 590 total / 408 PRIVMSG twice). Missed (eid >
+        // prior seen) already covers what arrived while away; playback rows
+        // often lack eid (old backlog) so eid-filtering can't be trusted.
+        // Rule: named client with prior bncSeen gets missed-only; everyone
+        // else (first connect, anonymous) gets full playback. Anonymous has
+        // no cursor — use PASS bnc@clientid:token to avoid repeats.
         if (!has("draft/chathistory") && serverId.length) {
-            const long base = cursor;
-            auto pb = fetchPlayback(serverId, snap);
-            // First connect of a named client (seen<=0) keeps full playback;
-            // detect via bncSeen lookup: if no prior seen, base==globalEid
-            // but the client never saw anything, so don't filter. Heuristic:
-            // if fetchMissed returned rows (missed>0) or cursor advanced from
-            // globalEid via playback-unseen, filter; if base came from a
-            // fresh globalEid with no prior seen, keep all. We distinguish
-            // by checking whether this clientid had a prior seen value.
             bool hadPriorSeen = false;
             if (clientId.length) {
                 try {
@@ -896,14 +890,8 @@ final class BncClient {
                     }
                 } catch (Exception) {}
             }
-            if (clientId.length && hadPriorSeen) {
-                foreach (ev; pb) {
-                    long eid = ev["eid"].type == Json.Type.int_ ? ev["eid"].get!long : 0;
-                    if (eid > 0 && eid <= base) continue;
-                    rows ~= ev;
-                }
-            } else {
-                rows ~= pb;
+            if (!(clientId.length && hadPriorSeen)) {
+                rows ~= fetchPlayback(serverId, snap);
             }
         }
         if (!rows.length) return null;
