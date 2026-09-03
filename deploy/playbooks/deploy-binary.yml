@@ -46,6 +46,7 @@
         dest: "{{ src_root }}"
         delete: true
         rsync_opts:
+          - "--omit-dir-times"
           - "--exclude=.git"
           - "--exclude=node_modules"
           - "--exclude=.dub"
@@ -58,7 +59,7 @@
     - name: Build gateway via Docker BuildKit (cached LDC + incremental dub)
       ansible.builtin.shell: |
         DOCKER_BUILDKIT=1 docker build \
-          --target builder \
+          --target builder-backend \
           -t ircfiber-builder \
           -f Containerfile \
           . 2>&1

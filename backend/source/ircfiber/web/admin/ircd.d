@@ -247,24 +247,43 @@ final class IrcdClient {
             throw new IrcdError("IRCd management is not configured. Set " ~
                 "IRCFIBER_IRCD_HOST / IRCFIBER_IRCD_OPER / " ~
                 "IRCFIBER_IRCD_OPER_PASSWORD on the gateway.", 503);
-        _sock = new TcpSocket();
         scope (failure) close();
-        _sock.blocking = false;
         auto addrs = getAddress(s.host, s.port);
         if (addrs.length == 0)
             throw new IrcdError("IRCd host does not resolve: " ~ s.host);
-        try {
-            _sock.connect(addrs[0]);
-        } catch (Exception) {
-            if (!waitWritable(5000))
-                throw new IrcdError("IRCd connection timed out: " ~ s.host ~ ":" ~
-                    s.port.to!string);
-            int errVal = 0;
-            import std.socket : SocketOptionLevel, SocketOption;
-            _sock.getOption(SocketOptionLevel.SOCKET, SocketOption.ERROR, errVal);
-            if (errVal != 0)
+        // Try every resolved address with a matching socket family.
+        // A fixed AF_INET socket cannot connect to a v6 address (EAFNOSUPPORT
+        // fails sync with SO_ERROR left at 0, which used to look like success
+        // and died later as "broke while sending" on dual-stack networks).
+        Exception lastErr;
+        foreach (addr; addrs) {
+            import std.socket : AddressFamily;
+            auto probe = new TcpSocket(addr.addressFamily());
+            probe.blocking = false;
+            try {
+                probe.connect(addr);
+                _sock = probe;
+                break;
+            } catch (Exception e) {
+                lastErr = e;
+                if (!waitWritable(probe, 5000)) { probe.close(); continue; }
+                int errVal = 0;
+                import std.socket : SocketOptionLevel, SocketOption;
+                probe.getOption(SocketOptionLevel.SOCKET, SocketOption.ERROR, errVal);
+                if (errVal != 0) {
+                    probe.close();
+                    continue;
+                }
+                _sock = probe;
+                break;
+            }
+        }
+        if (_sock is null) {
+            if (lastErr !is null)
                 throw new IrcdError("IRCd connection refused: " ~ s.host ~ ":" ~
                     s.port.to!string);
+            throw new IrcdError("IRCd connection timed out: " ~ s.host ~ ":" ~
+                s.port.to!string);
         }
         _sock.blocking = true;
         import std.socket : SocketOptionLevel, SocketOption;
@@ -273,7 +292,11 @@ final class IrcdClient {
         _sock.setOption(SocketOptionLevel.SOCKET, SocketOption.SNDTIMEO, dur!"msecs"(_ioTimeoutMs));
 
         import std.datetime : Clock;
-        _nick = "ircfiber-adm-" ~ (Clock.currTime.toUnixTime() % 100000).to!string;
+        // Unique per session: the page fires status/channels/bans concurrently
+        // and same-second identical nicks collide (nick grab kills the loser).
+        import std.random : uniform;
+        _nick = "ircfiber-adm-" ~ (Clock.currTime.toUnixTime() % 100000).to!string ~
+            "-" ~ uniform(0, 1_000_000).to!string;
         sendLine("USER ircfiber-adm 0 * :IRC Fiber admin dashboard");
         sendLine("NICK " ~ _nick);
         // Registration burst: 001..004, 005, 251.., 375/372/376 or 422.
@@ -374,15 +397,15 @@ final class IrcdClient {
         return out_;
     }
 
-    private bool waitWritable(long timeoutMs) {
+    private bool waitWritable(Socket sock, long timeoutMs) {
         import core.time : msecs;
         auto wset = new SocketSet(1);
         auto eset = new SocketSet(1);
-        wset.add(_sock);
-        eset.add(_sock);
+        wset.add(sock);
+        eset.add(sock);
         try {
             auto sel = Socket.select(null, wset, eset, msecs(timeoutMs));
-            return sel > 0 && wset.isSet(_sock);
+            return sel > 0 && wset.isSet(sock);
         } catch (Exception) { return false; }
     }
 

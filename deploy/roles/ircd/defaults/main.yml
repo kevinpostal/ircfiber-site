@@ -46,6 +46,9 @@ ircd_link_port: 7000
 # user through a handful of IPs here, so it gets no clone limits, no DNS
 # lookups and no throttling.
 ircd_trusted_subnet: "{{ docker_ircfiber_subnet }}"
+# Same, IPv6 half (dual-stack ircfiber_net). Used by the engine connect
+# class and the Dashboard oper host mask.
+ircd_trusted_subnet_v6: "{{ docker_ircfiber_subnet_v6 }}"
 ircd_engine_class_limit: 20000
 
 # Registration / auth

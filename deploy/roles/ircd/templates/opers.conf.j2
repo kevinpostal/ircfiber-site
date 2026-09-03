@@ -39,10 +39,13 @@
 <type name="Dashboard"
       classes="Dashboard"
       vhost="dashboard&netsuffix;">
+# Host mask covers both families: the gateway may arrive over IPv4 or
+# IPv6 (dual-stack ircfiber_net) and a v6 source does not match the v4
+# subnet — without the second mask OPER fails with 491.
 <oper name="{{ ircd_dashboard_oper_name }}"
       hash="hmac-sha256"
       password="{{ ircd_dashboard_oper_hash }}"
-      host="*@{{ ircd_trusted_subnet }}"
+      host="*@{{ ircd_trusted_subnet }} *@{{ ircd_trusted_subnet_v6 }}"
       type="Dashboard">
 
 # /OPER {{ ircd_oper_name }} <vault_ircd_oper_password>

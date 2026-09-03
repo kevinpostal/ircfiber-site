@@ -61,6 +61,34 @@
 {% endif %}
          modes="+x">
 
+# Same exemptions for engine traffic arriving over IPv6 (dual-stack
+# ircfiber_net). A v6 source does not match the v4 allow above and would
+# otherwise fall into "main" (clone limits, throttling, connectban) —
+# that Z-lined the admin dashboard path the day v6 was enabled.
+<connect name="ircfiber-engine-v6"
+         allow="{{ ircd_trusted_subnet_v6 }}"
+         maxchans="{{ ircd_max_channels_per_account }}"
+         timeout="60"
+         pingfreq="2m"
+         hardsendq="4M"
+         softsendq="1M"
+         recvq="64K"
+         threshold="100"
+         commandrate="100000"
+         fakelag="no"
+         localmax="0"
+         globalmax="0"
+         limit="{{ ircd_engine_class_limit }}"
+         resolvehostnames="no"
+         useident="no"
+         usednsbl="no"
+         useconnectban="no"
+         useconnflood="no"
+{% if ircd_require_sasl %}
+         requireaccount="yes"
+{% endif %}
+         modes="+x">
+
 # Everyone else (direct public connections to {{ ircd_port_plain }}/{{ ircd_port_tls }}).
 <connect name="main"
          allow="*"
