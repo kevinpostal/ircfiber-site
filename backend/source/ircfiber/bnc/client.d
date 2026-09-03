@@ -60,6 +60,9 @@ struct BncContext {
     string sourceName;
     /// Redis URL for the per-client subscriber connection.
     string redisUrl;
+    /// Protocol trace (every client/server line at info). Off unless the
+    /// listener saw `IRCFIBER_BNC_TRACE=1` — high volume, for drop diagnosis.
+    bool trace;
 }
 
 /// CAPs the bouncer offers (ZNC core set).
@@ -146,6 +149,11 @@ final class BncClient {
         Task writerTask;
         Task keepaliveTask;
         bool closing;
+        /// Why this connection is going down (quit, idle-timeout,
+        /// remote-eof, read-error, write-failed, revoked, admin-kick,
+        /// bad-password, line-too-long, wait-error). First reason wins so
+        /// the teardown summary names the original cause, not a follow-on.
+        string closeReason;
         /// Set when the password was revoked/regenerated: the cursor hash was
         /// deleted server-side and must not be re-created on detach.
         bool revoked;
@@ -219,7 +227,23 @@ final class BncClient {
     /// Queues one line for the writer task. Safe from any fiber.
     private void send(string line) nothrow {
         if (closing) return;
+        traceLine("S>", line);
         try outbound.put(line);
+        catch (Exception) {}
+    }
+
+    /// Records why this connection is going down. Nothrow so the writer
+    /// task can use it; string slice assignment never allocates.
+    private void markClosing(string reason) nothrow {
+        if (!closeReason.length) closeReason = reason;
+        closing = true;
+    }
+
+    /// One protocol-trace line (server-bound "C>", client-bound "S>").
+    /// Only when the listener enabled `IRCFIBER_BNC_TRACE`.
+    private void traceLine(string dir, string line) nothrow {
+        if (!ctx.trace) return;
+        try logInfo("bnc: trace sid=%s %s %s", sessionId, dir, line);
         catch (Exception) {}
     }
 
@@ -238,8 +262,9 @@ final class BncClient {
             while (outbound.tryConsumeOne(line)) {
                 try writeLine(line);
                 catch (Exception e) {
-                    logDebug("bnc: write failed for %s: %s", peer, e.msg);
-                    closing = true;
+                    try logWarn("bnc: sid=%s write failed for %s: %s", sessionId, peer, e.msg);
+                    catch (Exception) {}
+                    markClosing("write-failed");
                     closeSocket();
                     break;
                 }
@@ -248,7 +273,8 @@ final class BncClient {
                 }
             }
         } catch (Exception e) {
-            logDebug("bnc: writer loop error for %s: %s", peer, e.msg);
+            try logWarn("bnc: sid=%s writer loop error for %s: %s", sessionId, peer, e.msg);
+            catch (Exception) {}
         }
     }
 
@@ -277,11 +303,12 @@ final class BncClient {
                     final switch (conn.waitForDataEx(5.seconds)) {
                         case WaitForDataStatus.dataAvailable: ready = true; break;
                         case WaitForDataStatus.timeout: break;
-                        case WaitForDataStatus.noMoreData: closing = true; break;
+                        case WaitForDataStatus.noMoreData: markClosing("remote-eof"); break;
                     }
                 }
             } catch (Exception e) {
-                logDebug("bnc: wait failed for %s: %s", peer, e.msg);
+                logWarn("bnc: sid=%s wait failed for %s: %s", sessionId, peer, e.msg);
+                markClosing("wait-error");
                 break;
             }
             if (closing) break;
@@ -290,11 +317,16 @@ final class BncClient {
             size_t n;
             try n = tls !is null ? tls.read(buf[], IOMode.once) : conn.read(buf[], IOMode.once);
             catch (Exception e) {
-                logDebug("bnc: read ended for %s: %s", peer, e.msg);
+                logInfo("bnc: sid=%s read ended for %s: %s", sessionId, peer, e.msg);
+                markClosing("read-error");
                 break;
             }
             if (n == 0) {
-                if (!conn.connected) break;
+                if (!conn.connected) {
+                    logInfo("bnc: sid=%s EOF from %s", sessionId, peer);
+                    markClosing("remote-eof");
+                    break;
+                }
                 continue;
             }
             lastRecvMs = nowMs();
@@ -307,8 +339,9 @@ final class BncClient {
                 if (!line.length) continue;
                 linesIn++;
                 if (line.length > MAX_LINE) {
+                    logWarn("bnc: sid=%s line too long (%d bytes) from %s", sessionId, line.length, peer);
                     send("ERROR :Closing link: Too long raw line");
-                    closing = true;
+                    markClosing("line-too-long");
                     break;
                 }
                 try handleLine(line);
@@ -317,8 +350,9 @@ final class BncClient {
                 }
             }
             if (partial.length > MAX_LINE) {
+                logWarn("bnc: sid=%s partial line too long (%d bytes) from %s", sessionId, partial.length, peer);
                 send("ERROR :Closing link: Too long raw line");
-                closing = true;
+                markClosing("line-too-long");
             }
         }
     }
@@ -326,11 +360,15 @@ final class BncClient {
     private void checkTimeouts() {
         const now = nowMs();
         if (now - lastRecvMs > DEAD_AFTER_MS) {
+            logWarn("bnc: sid=%s idle timeout user=%s client=%s peer=%s idleRecv=%ss idleSend=%ss linesIn=%d linesOut=%d",
+                sessionId, userId.length ? userId : "-", clientId.length ? clientId : "-",
+                peer, (now - lastRecvMs) / 1000, (now - lastSendMs) / 1000, linesIn, linesOut);
             send("ERROR :Closing link: Timeout");
-            closing = true;
+            markClosing("idle-timeout");
             return;
         }
         if (registered && now - lastRecvMs > KEEPALIVE_IDLE_MS && now - lastSendMs > KEEPALIVE_IDLE_MS) {
+            logDebug("bnc: sid=%s PING (idle %ss)", sessionId, (now - lastRecvMs) / 1000);
             send("PING :" ~ src);
         }
     }
@@ -432,11 +470,18 @@ final class BncClient {
         closeSocket();
         try writerTask.join(); catch (Exception) {}
         if (keepaliveTask != Task.init) { try keepaliveTask.join(); catch (Exception) {} }
-        if (registered) {
-            logInfo("bnc: detached user=%s network=%s client=%s peer=%s", userId, networkId,
-                clientId.length ? clientId : "-", peer);
-        } else {
-            logDebug("bnc: unregistered client gone peer=%s", peer);
+        {
+            // One summary line per connection at info so drops are always
+            // diagnosable: the reason names the original cause (first wins),
+            // idleRecv/idleSend show how silent it was before going down.
+            const now = nowMs();
+            logInfo("bnc: closed sid=%s reason=%s reg=%s user=%s network=%s client=%s nick=%s peer=%s tls=%s dur=%ss in=%d out=%d idleRecv=%ss idleSend=%ss",
+                sessionId, closeReason.length ? closeReason : "unknown",
+                registered ? "yes" : "no",
+                userId.length ? userId : "-", networkId.length ? networkId : "-",
+                clientId.length ? clientId : "-", displayNick(), peer, tls !is null,
+                registered ? (now - attachedAtMs) / 1000 : 0, linesIn, linesOut,
+                (now - lastRecvMs) / 1000, (now - lastSendMs) / 1000);
         }
     }
 
@@ -457,6 +502,7 @@ final class BncClient {
     private void handleLine(string line) {
         auto pl = parseClientLine(line);
         if (!pl.command.length) return;
+        traceLine("C>", pl.command == "PASS" ? "PASS <redacted>" : line);
         switch (pl.command) {
             case "PING":
                 send("PONG :" ~ (pl.params.length ? pl.params[0] : src));
@@ -464,7 +510,8 @@ final class BncClient {
             case "PONG":
                 return;
             case "QUIT":
-                closing = true;
+                logInfo("bnc: sid=%s QUIT from %s (%s)", sessionId, displayNick(), peer);
+                markClosing("quit");
                 return;
             case "CAP":
                 handleCap(pl.params);
@@ -552,14 +599,14 @@ final class BncClient {
         if (!p.ok) {
             numeric("464", ["Password must be bnc:<password> or bnc@<clientid>:<password>"]);
             send("ERROR :Closing link: Invalid password format");
-            closing = true;
+            markClosing("bad-password-format");
             return;
         }
         auto info = ctx.networkRepo.findByBncToken(p.token);
         if (info.config.id == UUID.init) {
             numeric("464", ["Invalid password"]);
             send("ERROR :Closing link: Invalid password");
-            closing = true;
+            markClosing("bad-password");
             return;
         }
         userId = info.userId.toString();
@@ -690,8 +737,8 @@ final class BncClient {
                 ~ (capList.length ? ", caps: " ~ capList.join(" ") : ", no caps"));
         }
         keepaliveTask = runTask(&keepaliveLoop);
-        logInfo("bnc: attached user=%s network=%s client=%s nick=%s peer=%s caps=%s",
-            userId, networkId, clientId.length ? clientId : "-", currentNick, peer, caps.keys.join(","));
+        logInfo("bnc: attached sid=%s user=%s network=%s client=%s nick=%s peer=%s caps=%s",
+            sessionId, userId, networkId, clientId.length ? clientId : "-", currentNick, peer, caps.keys.join(","));
     }
 
     private void dumpChannels(ref NetworkStateSnapshot snap) {
@@ -1158,8 +1205,9 @@ final class BncClient {
             const nid = ev["networkId"].type == Json.Type.string ? ev["networkId"].get!string : "";
             if (nid == networkId) {
                 revoked = true;
+                logInfo("bnc: sid=%s password revoked, closing", sessionId);
                 send("ERROR :Closing link: Bouncer password revoked");
-                closing = true;
+                markClosing("revoked");
             }
             return;
         }
@@ -1170,7 +1218,7 @@ final class BncClient {
                     ? ev["reason"].get!string : "Disconnected by administrator";
                 logInfo("bnc: admin kick user=%s network=%s sid=%s reason=%s", userId, networkId, sid, reason);
                 send("ERROR :Closing link: " ~ reason);
-                closing = true;
+                markClosing("admin-kick");
             }
             return;
         }

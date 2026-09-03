@@ -10,6 +10,9 @@
  *   IRCFIBER_BNC_TLS_KEY      PEM private key
  *   IRCFIBER_BNC_PUBLIC_HOST  `:server` prefix / 001 host (default bnc.ircfiber)
  *   IRCFIBER_REDIS_URL        per-client subscriber connections
+ *   IRCFIBER_BNC_TRACE        "1" → log every client/server line at info
+ *                             (PASS redacted). High volume; for drop diagnosis.
+ *                             Needs a restart (read once at listen).
  */
 module ircfiber.bnc.listener;
 
@@ -59,9 +62,11 @@ void startBncListener(RedisStorage redis) {
     g_ctx.bufferManager = new BufferManager(redis);
     g_ctx.sourceName = environment.get("IRCFIBER_BNC_PUBLIC_HOST", "bnc.ircfiber");
     g_ctx.redisUrl = environment.get("IRCFIBER_REDIS_URL", "redis://127.0.0.1:6379");
+    g_ctx.trace = environment.get("IRCFIBER_BNC_TRACE", "0") == "1";
 
     listenTCP(port, (TCPConnection c) @safe nothrow { onConnection(c); }, bind);
-    logInfo("BNC listener on %s:%s (%s) as %s", bind, port, tlsEnabled ? "TLS" : "plaintext", g_ctx.sourceName);
+    logInfo("BNC listener on %s:%s (%s) as %s trace=%s", bind, port,
+        tlsEnabled ? "TLS" : "plaintext", g_ctx.sourceName, g_ctx.trace ? "on" : "off");
 }
 
 private void onConnection(TCPConnection conn) @trusted nothrow {
@@ -79,12 +84,12 @@ private void onConnection(TCPConnection conn) @trusted nothrow {
             tctx.usePrivateKeyFile(g_keyPath);
             try tls = createTLSStream(conn, tctx, TLSStreamState.accepting);
             catch (Exception e) {
-                logDebug("bnc: TLS handshake failed from %s: %s", peer, e.msg);
+                logWarn("bnc: TLS handshake failed from %s: %s", peer, e.msg);
                 try conn.close(); catch (Exception) {}
                 return;
             }
         }
-        logDebug("bnc: connection from %s", peer);
+        logInfo("bnc: accept from %s (%s)", peer, g_certPath.length ? "TLS" : "plaintext");
         auto client = new BncClient(conn, tls, g_ctx);
         client.run();
     } catch (Exception e) {
