@@ -581,38 +581,40 @@ final class BncClient {
                 send(formatLine(null, src, "005", [clientNick] ~ slice ~ ["are supported by this server"]));
             }
         }
-        send(formatLine(null, src, "375", [clientNick, "- " ~ src ~ " Message of the Day -"]));
-        foreach (line; [
-            "  _____ _____ ____      ______ _           _",
-            " |_   _/  ___|  _ \\    |  ___(_)         | |",
-            "   | | \\ `--.| |_) |___| |_   _ _ __   __| |___",
-            "   | |  `--. \\  _ <___|  _| | | '_ \\ / _` / __|",
-            "  _| |_/\\__/ / |_) |  | |   | | | | | (_| \\__ \\",
-            " |_____\\____/|____/   |_|   |_|_| |_|\\__,_|___/",
-            "",
-            "Welcome to IRC Fiber!",
-            "",
-            "irc.ircfiber.com — InspIRCd with Anope services.",
-            "Enterprise-grade IRC for the IRC Fiber community.",
-            "",
-            "For support, contact: admin@ircfiber.com",
-            "",
-            "Register your nickname with NickServ to protect it:",
-            "    /msg NickServ REGISTER <password> [email]",
-            "    /msg NickServ HELP",
-            "",
-            "Register a channel you founded:",
-            "    /msg ChanServ REGISTER #channel",
-            "",
-            "To join a channel:",
-            "    /join #channelname",
-            "",
-            "Rules:",
-            "  1. Be respectful to other users.",
-            "  2. No spam, flooding, or abuse.",
-            "  3. Follow the network operator instructions.",
-        ]) send(formatLine(null, src, "372", [clientNick, "- " ~ line]));
-        send(formatLine(null, src, "376", [clientNick, "End of /MOTD command"]));
+        // soju parity: bouncer-level (no network) gets the bouncer MOTD;
+        // network-attached (the common case) gets a hint so /MOTD fetches
+        // the live MOTD from the actual upstream the BNC is connected to.
+        // The 422 hardcoded before showed as "MOTD File is missing" error
+        // in clients; the 372/376 hardcoded before masked the upstream.
+        if (networkId.length == 0) {
+            // Bouncer MOTD — from config file if present, else the
+            // inspircd welcome (same text the gateway would show on
+            // bnc.ircfiber.com without a network selected).
+            // Keep the ASCII art small so it doesn't flood bouncer-only
+            // clients that auto-show MOTD.
+            send(formatLine(null, src, "375", [clientNick, "- " ~ src ~ " Message of the Day -"]));
+            foreach (line; [
+                "  _____ _____ ____      ______ _           _",
+                " |_   _/  ___|  _ \\    |  ___(_)         | |",
+                "   | | \\ `--.| |_) |___| |_   _ _ __   __| |___",
+                "   | |  `--. \\  _ <___|  _| | | '_ \\ / _` / __|",
+                "  _| |_/\\__/ / |_) |  | |   | | | | | (_| \\__ \\",
+                " |_____\\____/|____/   |_|   |_|_| |_|\\__,_|___/",
+                "",
+                "Welcome to IRC Fiber!",
+                "",
+                "irc.ircfiber.com — InspIRCd with Anope services.",
+                "Enterprise-grade IRC for the IRC Fiber community.",
+                "",
+                "For support, contact: admin@ircfiber.com",
+            ]) send(formatLine(null, src, "372", [clientNick, "- " ~ line]));
+            send(formatLine(null, src, "376", [clientNick, "End of /MOTD command"]));
+        } else {
+            // Network-attached: don't fake the upstream; let /MOTD
+            // fetch the real server MOTD via the engine (handleClientLine
+            // routes "MOTD" as raw -> engine -> ircd -> 372/376 live).
+            send(formatLine(null, src, "422", [clientNick, "MOTD File is missing - Use /MOTD to read the message of the day from " ~ networkName]));
+        }
         if (clientNick != currentNick) {
             send(formatLine(null, clientNick ~ "!" ~ clientNick ~ "@" ~ src, "NICK", [currentNick]));
         }
