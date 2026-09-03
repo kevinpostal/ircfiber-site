@@ -25,6 +25,7 @@
   import Card from '../components/Card.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import LogsToolbar from '../components/logs/LogsToolbar.svelte';
+  import LogsCharts from '../components/logs/LogsCharts.svelte';
   import LogTable from '../components/logs/LogTable.svelte';
   import JsonDrawer from '../components/logs/JsonDrawer.svelte';
   import FilterCheatsheet from '../components/logs/FilterCheatsheet.svelte';
@@ -327,6 +328,12 @@
   </div>
 
   <LogsToolbar />
+
+  {#if ($logs?.results?.length ?? 0) > 0}
+    <div class="mb-2">
+      <LogsCharts />
+    </div>
+  {/if}
 
   <div class="flex-1 overflow-hidden">
     <Card>
