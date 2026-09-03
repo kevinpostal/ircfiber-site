@@ -221,9 +221,13 @@
       - name: "{{ docker_ircfiber_network }}"
         aliases: "{{ ircd_ircfiber_net_aliases }}"
     networks_cli_compatible: true
+    # Dual publish (v4 + v6 explicitly): bare "6667:6667" normalizes to
+    # 0.0.0.0-only with no ::: counterpart on this daemon.
     ports:
-      - "{{ ircd_port_plain }}:{{ ircd_port_plain }}"
-      - "{{ ircd_port_tls }}:{{ ircd_port_tls }}"
+      - "0.0.0.0:{{ ircd_port_plain }}:{{ ircd_port_plain }}"
+      - "[::]:{{ ircd_port_plain }}:{{ ircd_port_plain }}"
+      - "0.0.0.0:{{ ircd_port_tls }}:{{ ircd_port_tls }}"
+      - "[::]:{{ ircd_port_tls }}:{{ ircd_port_tls }}"
     volumes:
       - "{{ ircd_conf_dir }}:/inspircd/conf"
       - "{{ ircd_data_volume }}:/inspircd/data"

@@ -81,9 +81,12 @@
     # is skipped at template render time.
     env:
       SIGNOZ_API_KEY: "{{ caddy_signoz_api_key | default('') }}"
+    # Dual publish: the docker_container module normalizes bare "80:80" to
+    # 0.0.0.0-only, so v4 and v6 are listed explicitly (verified: bare form
+    # binds 0.0.0.0 without a ::: counterpart on this daemon).
     ports: >-
       {{
-        ["80:80", "443:443"]
+        ["0.0.0.0:80:80", "[::]:80:80", "0.0.0.0:443:443", "[::]:443:443"]
         + ([caddy_tailscale_logging_address ~ ":" ~ (caddy_tailscale_logging_port | default(3443)) ~ ":" ~ (caddy_tailscale_logging_port | default(3443))] if (caddy_tailscale_logging_enabled | default(false) | bool) else [])
         + ([caddy_tailscale_logging_address ~ ":" ~ (caddy_tailscale_signoz_port | default(3003)) ~ ":" ~ (caddy_tailscale_signoz_port | default(3003))] if (caddy_tailscale_signoz_enabled | default(false) | bool) else [])
       }}

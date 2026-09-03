@@ -21,7 +21,24 @@ docker_daemon_config:
   log-opts:
     max-size: "10m"
     max-file: "3"
-  storage-driver: overlay2
+  # NOTE: no storage-driver key on purpose. With the containerd image
+  # store (default since Docker 29) the driver must be overlayfs/native;
+  # pinning overlay2 (the legacy graphdriver name) makes the daemon refuse
+  # to start. Let Docker pick its own default.
   default-address-pools:
     - base: "172.17.0.0/12"
       size: 24
+  # REQUIRED on hosts provisioned with it (e.g. vps-efb4b52d): all images
+  # and layers live in /var/lib/containerd. Rendering daemon.json WITHOUT
+  # this key makes the daemon fall back to the classic image store and
+  # every container/image silently disappears (volumes survive). Never
+  # drop this key.
+  features:
+    containerd-snapshotter: true
+  # Dual-stack: enables Docker's ip6tables machinery so published ports bind
+  # :::port and user-defined bridges can carry IPv6. fixed-cidr-v6 only
+  # scopes the default bridge; ircfiber_net gets its own prefix via
+  # docker_ircfiber_subnet_v6. Changing this restarts the daemon (all
+  # containers restart) — plan a maintenance window.
+  ipv6: true
+  fixed-cidr-v6: "fd00:f1b3::/80"

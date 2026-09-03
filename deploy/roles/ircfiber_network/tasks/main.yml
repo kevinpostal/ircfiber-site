@@ -3,8 +3,10 @@
   community.docker.docker_network:
     name: "{{ docker_ircfiber_network }}"
     driver: bridge
+    enable_ipv6: true
     ipam_config:
       - subnet: "{{ docker_ircfiber_subnet }}"
+      - subnet: "{{ docker_ircfiber_subnet_v6 }}"
     state: present
 
 - name: Show network info

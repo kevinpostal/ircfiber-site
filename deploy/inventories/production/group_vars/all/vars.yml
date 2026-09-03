@@ -47,6 +47,12 @@ tailscale_state_dir: "/var/lib/tailscale"
 docker_ircfiber_subnet: "172.30.0.0/16"
 docker_ircfiber_network: "ircfiber_net"
 docker_ircfiber_gateway: "172.30.0.1"
+# Dual-stack: ULA prefix for container IPv6 on ircfiber_net. Inbound public
+# v6 reaches published ports via Docker's ip6tables DNAT (no per-container
+# public address needed); outbound container v6 uses this prefix. Changing
+# either subnet requires recreating the network (all attached containers
+# restart) — plan a maintenance window.
+docker_ircfiber_subnet_v6: "fd00:f1b3:1::/64"
 
 # --- Firewall -----------------------------------------------------------------
 firewall_enabled: true
