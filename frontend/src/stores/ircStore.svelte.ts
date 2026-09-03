@@ -1306,10 +1306,37 @@ export function unseenHighlightCountAfter(networkId: string, bufferName: string,
 
 // Per-buffer lastSeen values not yet sent to the gateway (IRCCloud
 // heartbeat `seenEids` dirty model). App.svelte drains this every 2 s.
+// Also persisted to localStorage so a disconnect/reload before the 2s
+// drain doesn't lose the read marker and re-raise the same unread
+// notice on reconnect. Re-hydrated below; cleared when sent.
 export const dirtySeenEids: Record<string, Record<string, number>> = {};
+const DIRTY_SEEN_KEY = 'ircfiber:dirtySeen';
+function persistDirtySeen(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(DIRTY_SEEN_KEY, JSON.stringify(dirtySeenEids));
+  } catch {}
+}
+try {
+  if (typeof localStorage !== 'undefined') {
+    const raw = localStorage.getItem(DIRTY_SEEN_KEY);
+    if (raw) {
+      const obj = JSON.parse(raw) as Record<string, Record<string, number>>;
+      for (const [nid, bids] of Object.entries(obj)) {
+        if (!bids || typeof bids !== 'object') continue;
+        const nets = dirtySeenEids[nid] ?? (dirtySeenEids[nid] = {});
+        for (const [bid, t] of Object.entries(bids)) {
+          if (typeof t !== 'number') continue;
+          if (!(bid in nets) || (nets[bid] ?? 0) < t) nets[bid] = t;
+        }
+      }
+    }
+  }
+} catch {}
 export function markSeenEidDirty(networkId: string, bufferName: string, t: number): void {
   const nets = dirtySeenEids[networkId] ?? (dirtySeenEids[networkId] = {});
   nets[normalizeChannelName(bufferName)] = t;
+  persistDirtySeen();
 }
 
 /** IRCCloud `Buffer.setLastSeen(m)`. */

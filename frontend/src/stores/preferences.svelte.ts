@@ -451,12 +451,19 @@ export function getLastSeen(networkId: string, bufferName: string): number | nul
 }
 export function setLastSeen(networkId: string, bufferName: string, ts: number): void {
   lastSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] = ts;
+  // Write-through so a fast disconnect/reload (<500ms debounce) doesn't
+  // lose the read marker and re-raise the same unread notice on reconnect.
+  // Same pattern as hideChannel.
+  setStorageItem('ircfiber:lastSeen', lastSeenMap);
+  schedulePersist('ircfiber:lastSeen', lastSeenMap);
 }
 export function getBottomSeen(networkId: string, bufferName: string): number | null {
   return bottomSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] ?? null;
 }
 export function setBottomSeen(networkId: string, bufferName: string, ts: number): void {
   bottomSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] = ts;
+  setStorageItem('ircfiber:bottomSeen', bottomSeenMap);
+  schedulePersist('ircfiber:bottomSeen', bottomSeenMap);
 }
 
 export function getFocusSeen(networkId: string, bufferName: string): number | null {

@@ -423,9 +423,27 @@ let showNetworkForm: boolean = $state(false);
         seenEids[nid] = { ...dirtySeenEids[nid] };
         delete dirtySeenEids[nid];
       }
+      try {
+        if (typeof localStorage !== 'undefined')
+          localStorage.setItem('ircfiber:dirtySeen', JSON.stringify(dirtySeenEids));
+      } catch {}
       sendJson({ cmd: 'heartbeat', seenEids });
     }
     scheduleSendState();
+  }
+
+  // Flush read markers before the tab closes so a reload within the 2s
+  // heartbeat window doesn't resurrect the same unread notices. WS may
+  // already be gone — localStorage write-through (setLastSeen +
+  // dirtySeen persist) is the durable path; this just drains the
+  // debounced persist maps.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', () => {
+      try {
+        if (typeof localStorage !== 'undefined')
+          localStorage.setItem('ircfiber:dirtySeen', JSON.stringify(dirtySeenEids));
+      } catch {}
+    });
   }
 
   function startWebSocket(): void {
