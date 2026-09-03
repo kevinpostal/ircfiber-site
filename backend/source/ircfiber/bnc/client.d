@@ -581,7 +581,38 @@ final class BncClient {
                 send(formatLine(null, src, "005", [clientNick] ~ slice ~ ["are supported by this server"]));
             }
         }
-        send(formatLine(null, src, "422", [clientNick, "MOTD File is missing"]));
+        send(formatLine(null, src, "375", [clientNick, "- " ~ src ~ " Message of the Day -"]));
+        foreach (line; [
+            "  _____ _____ ____      ______ _           _",
+            " |_   _/  ___|  _ \\    |  ___(_)         | |",
+            "   | | \\ `--.| |_) |___| |_   _ _ __   __| |___",
+            "   | |  `--. \\  _ <___|  _| | | '_ \\ / _` / __|",
+            "  _| |_/\\__/ / |_) |  | |   | | | | | (_| \\__ \\",
+            " |_____\\____/|____/   |_|   |_|_| |_|\\__,_|___/",
+            "",
+            "Welcome to IRC Fiber!",
+            "",
+            "irc.ircfiber.com — InspIRCd with Anope services.",
+            "Enterprise-grade IRC for the IRC Fiber community.",
+            "",
+            "For support, contact: admin@ircfiber.com",
+            "",
+            "Register your nickname with NickServ to protect it:",
+            "    /msg NickServ REGISTER <password> [email]",
+            "    /msg NickServ HELP",
+            "",
+            "Register a channel you founded:",
+            "    /msg ChanServ REGISTER #channel",
+            "",
+            "To join a channel:",
+            "    /join #channelname",
+            "",
+            "Rules:",
+            "  1. Be respectful to other users.",
+            "  2. No spam, flooding, or abuse.",
+            "  3. Follow the network operator instructions.",
+        ]) send(formatLine(null, src, "372", [clientNick, "- " ~ line]));
+        send(formatLine(null, src, "376", [clientNick, "End of /MOTD command"]));
         if (clientNick != currentNick) {
             send(formatLine(null, clientNick ~ "!" ~ clientNick ~ "@" ~ src, "NICK", [currentNick]));
         }
