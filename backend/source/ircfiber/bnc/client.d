@@ -872,7 +872,40 @@ final class BncClient {
     /// deduped against it.
     private bool[string] sendHistory(string serverId, ref NetworkStateSnapshot snap) {
         auto rows = fetchMissed(serverId);
-        if (!has("draft/chathistory") && serverId.length) rows ~= fetchPlayback(serverId, snap);
+        // cursor now marks everything seen through fetchMissed (or globalEid
+        // for first-connect/anonymous). Playback must only cover what the
+        // client hasn't seen — otherwise every reconnect replays the same
+        // newest N per buffer (observed 408 PRIVMSGs twice for same
+        // clientid). Filter playback to eid > cursor at entry.
+        if (!has("draft/chathistory") && serverId.length) {
+            const long base = cursor;
+            auto pb = fetchPlayback(serverId, snap);
+            // First connect of a named client (seen<=0) keeps full playback;
+            // detect via bncSeen lookup: if no prior seen, base==globalEid
+            // but the client never saw anything, so don't filter. Heuristic:
+            // if fetchMissed returned rows (missed>0) or cursor advanced from
+            // globalEid via playback-unseen, filter; if base came from a
+            // fresh globalEid with no prior seen, keep all. We distinguish
+            // by checking whether this clientid had a prior seen value.
+            bool hadPriorSeen = false;
+            if (clientId.length) {
+                try {
+                    auto s = ctx.redis.getDb().hget!string(RedisKeys.bncSeen(networkId), clientId);
+                    if (s.length) {
+                        try { hadPriorSeen = s.to!long > 0; } catch (Exception) {}
+                    }
+                } catch (Exception) {}
+            }
+            if (clientId.length && hadPriorSeen) {
+                foreach (ev; pb) {
+                    long eid = ev["eid"].type == Json.Type.int_ ? ev["eid"].get!long : 0;
+                    if (eid > 0 && eid <= base) continue;
+                    rows ~= ev;
+                }
+            } else {
+                rows ~= pb;
+            }
+        }
         if (!rows.length) return null;
 
         // Merge per buffer, dedupe, oldest first.
