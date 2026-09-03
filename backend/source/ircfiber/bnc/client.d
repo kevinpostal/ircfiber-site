@@ -771,9 +771,9 @@ final class BncClient {
     // sendHistory uses it to decide playback vs missed-only without a
     // second Redis read (which races the previous connection's teardown
     // flush when reconnecting within ~2s).
-    private bool hadPriorBncSeen = false;
+    bool hadPriorBncSeen = false;
 
-    private Json[] fetchMissed(string serverId) {
+    Json[] fetchMissed(string serverId) {
         const globalEid = readGlobalEid();
         hadPriorBncSeen = false;
         if (!clientId.length) { cursor = globalEid; return null; }
