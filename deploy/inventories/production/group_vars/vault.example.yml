@@ -61,6 +61,13 @@ vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"
 # the human admin oper password.
 vault_ircd_dashboard_password: "REPLACE-WITH-STRONG-PASSWORD"
 
+# --- SigNoz query API (admin Logs page) --------------------------------------
+# Service-account API key for the k8s SigNoz (mint in SigNoz UI →
+# Settings → API Keys). The gateway sends it as SIGNOZ-API-KEY when
+# proxying /api/admin/logs/* → Signoz query API.
+# DO NOT commit the real value — use `ansible-vault edit`.
+vault_signoz_api_key: "REPLACE-WITH-SIGNOZ-API-KEY"
+
 # --- Cloudflare Tunnel (cloudflared) -----------------------------------------
 # Token for a named tunnel created in Cloudflare Zero Trust dashboard:
 #   https://one.dash.cloudflare.com/ → Networks → Tunnels → Add a tunnel

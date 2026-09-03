@@ -119,7 +119,7 @@ describe('logsStore -- setQuery and debounce', () => {
     expect(body.compositeQuery.queries[0].spec.filter.expression).toContain("body CONTAINS 'foo'");
   });
 
-  it('hits POST /api/v5/query_range with the current start/end and filter', async () => {
+  it('hits POST /api/admin/logs/query_range with the current start/end and filter', async () => {
     const spy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(makeResponse({ status: 'success', data: { A: { list: [] } } }));
@@ -128,7 +128,7 @@ describe('logsStore -- setQuery and debounce', () => {
     await flushMicrotasks();
     expect(spy).toHaveBeenCalledTimes(1);
     const [url, init] = spy.mock.calls[0]! as [string, RequestInit];
-    expect(url).toBe('/api/v5/query_range');
+    expect(url).toBe('/api/admin/logs/query_range');
     expect(init.method).toBe('POST');
     const body = JSON.parse(init.body as string);
     expect(body.start).toBe(get(store.logs).timeRange.start);

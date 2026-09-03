@@ -40,6 +40,7 @@ import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
     apiBncSeenClear, apiBncSeenForget;
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
     apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig;
+import ircfiber.web.admin.logs : apiLogsQueryRange;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -168,6 +169,13 @@ final class AdminController {
         router.post("/api/admin/ircd/bans/delete", &adminWrap!apiIrcdBanDeleteRoute);
         router.post("/api/admin/ircd/rehash", &adminWrap!apiIrcdRehashRoute);
         router.get("/api/admin/ircd/config", &adminWrap!apiIrcdConfigRoute);
+
+        // Logs (SigNoz) — gateway-side proxy so the browser needs no
+        // SigNoz route or key of its own (see web.admin.logs).
+        // Only query_range is proxied: the installed SigNoz (v0.138)
+        // no longer serves /api/v1/services or /api/v1/user, and the
+        // response is reshaped to the legacy list envelope the UI parses.
+        router.post("/api/admin/logs/query_range", &adminWrap!apiLogsQueryRange);
     }
 
 private:

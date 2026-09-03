@@ -1,43 +1,34 @@
 /**
- * logsLiveTail -- WebSocket-driven live-tail of SigNoz logs.
+ * logsLiveTail -- polling live-tail of SigNoz logs via the gateway proxy.
  *
- * Single WebSocket connection to `signoz.wsUrl(orgId)` (which returns
- * the Caddy-routed path `/signoz/ws/logs/v5/{orgId}`). The orgId is
- * discovered lazily on first connect via `currentUser()` (GET
- * /api/v1/user); a failed discovery falls back to the literal string
- * "default" with a `toastWarn` so the admin sees the degradation.
+ * The old WebSocket path (`/signoz/ws/logs/v5/...` through Caddy) is
+ * gone: the Caddy SigNoz block only renders with a key file the edge
+ * host doesn't have, and proxying a SigNoz WS through the D gateway
+ * would be a second protocol to maintain. Instead, while live is on we
+ * re-run the current filter as a `queryRange` every POLL_MS through
+ * `/api/admin/logs/query_range` and append rows we haven't seen.
  *
- * Status state machine (see `LiveTailStatus`):
+ * Status state machine (same stores/statuses the toolbar already reads):
  *
- *     idle ──startLiveTail──> connecting ──onopen──> open
- *                                              │
- *                                              ├──onclose──> reconnecting ──timer──> connecting
- *                                              │                  │
- *                                              │                  └──10 attempts──> closed
- *                                              │
- *                                              └──stopLiveTail──> idle
+ *     idle ──startLiveTail──> connecting ──first success──> open
+ *                                                  │
+ *                                                  ├──poll error──> reconnecting ──next tick──> open
+ *                                                  │                     │
+ *                                                  │                     └──10 consecutive failures──> closed
+ *                                                  │
+ *                                                  └──stopLiveTail──> idle
  *
- * Backoff: 1s, 2s, 4s, 8s, 16s, 30s (capped) with +/-20 percent jitter.
- * A 1s floor is applied after the jitter math so the test driver is
- * never waiting on a sub-second schedule that's noisier than the
- * production minimum. Reconnect timers use the real `setTimeout`
- * so that `vi.useFakeTimers()` in the test suite can advance through
- * 30 backoff cycles deterministically.
+ * Failure cap: 10 consecutive poll failures after the LAST success
+ * flips status to `closed` permanently (interval cleared).
+ * `startLiveTail()` from `closed` resets the counter and retries.
  *
- * Failure cap: 10 consecutive reconnect attempts after the LAST
- * successful `open` flips status to `closed` permanently (no further
- * timers scheduled). `startLiveTail()` from `closed` is allowed --
- * it resets the attempt counter and retries.
- *
-* Wire data: incoming `MessageEvent.data` is parsed as JSON. The
- *  payload may be either a single object OR an array of objects; rows
- *  that fail the `LogRow` contract are silently dropped. Throwing
- *  from the message handler would tear down the WS via the error
- *  path, which is exactly the failure mode we DON'T want during a
- *  live stream -- so we trade visibility for resilience.
+ * Row identity: `getRowId()` (traceId, else timestamp+service+body
+ * prefix). Seen ids are capped so a days-long tail doesn't grow the
+ * set without bound; rows are also skipped when older than the newest
+ * row already appended, which covers the common re-poll overlap.
  */
 import { get, writable, type Writable } from 'svelte/store';
-import { currentUser, wsUrl } from '../../lib/signoz';
+import { queryRange, type QueryRangeRequest } from '../../lib/signoz';
 import {
   logs,
   logsLive,
@@ -45,14 +36,26 @@ import {
   wsReady,
   type LogRow,
 } from './logsStore';
+import { getRowId } from '../components/logs/rowId';
 import { toastWarn } from './ui';
 
 // --- Constants -------------------------------------------------------------
 
-/** Max consecutive reconnect attempts before declaring permanent failure. */
+/** Max consecutive poll failures before declaring permanent failure. */
 const MAX_ATTEMPTS = 10;
 
-/** Base backoff schedule in ms: 1s, 2s, 4s, 8s, 16s, 30s. */
+/** Re-poll cadence while live. */
+const POLL_MS = 5_000;
+
+/** Active cadence; overridable by tests (the browser runner does not
+ *  honor fake timers, so tests shrink the interval instead). */
+let pollIntervalMs = POLL_MS;
+
+/** Query window per poll (sliding "now forward" tail). */
+const WINDOW_MS = 120_000;
+
+/** Base backoff schedule in ms: 1s, 2s, 4s, 8s, 16s, 30s. Kept for the
+ *  toolbar's "attempt n/10" display pacing and unit-tested below. */
 const BASE_DELAYS_MS: readonly number[] = [
   1_000, 2_000, 4_000, 8_000, 16_000, 30_000,
 ];
@@ -60,11 +63,11 @@ const BASE_DELAYS_MS: readonly number[] = [
 /** Floor applied after the jitter math to keep delays >= 1s. */
 const MIN_DELAY_MS = 1_000;
 
-/** Fallback orgId used when /api/v1/user is unreachable. */
-const DEFAULT_ORG_ID = 'default';
+/** Cap for the seen-id set; cleared (not grown) past this. */
+const SEEN_ID_CAP = 20_000;
 
-/** Default tail filter used when `startLiveTail()` is called with no args. */
-const DEFAULT_FILTER = '';
+/** Cap for appended live rows, mirroring the old WS tail. */
+const LIVE_TAIL_CAP = 10_000;
 
 // --- Public types ----------------------------------------------------------
 
@@ -76,18 +79,16 @@ export type LiveTailStatus =
   | 'closed';
 
 export interface LiveTailFilter {
-  /** Body CONTAINS expression forwarded as the WS `filter` query string. */
+  /** Body CONTAINS expression forwarded as a builder filter clause. */
   query?: string;
   /** Severity filter (e.g. `["ERROR","WARN"]`). */
   severities?: readonly string[];
   /** Service-name filter (e.g. `["irc-fiber-engine"]`). */
   services?: readonly string[];
   /**
-   * Time-range filter forwarded for context only. SigNoz live-tail ignores
-   * timeRange -- the WS tail is always "now forward" and cannot rewind --
-   * so the field exists to keep callers' filter shapes uniform with
-   * `TimeRange`-aware query paths. The start/end/label are not serialized
-   * to the WS envelope and have no effect on what rows stream back.
+   * Accepted for shape uniformity with `TimeRange`-aware query paths
+   * but ignored: the poll tail is always "now forward" and cannot
+   * rewind, so start/end/label are never serialized.
    */
   timeRange?: { start: number; end: number; label?: string };
 }
@@ -98,28 +99,34 @@ export interface LiveTailFilter {
 export const liveTailStatus: Writable<LiveTailStatus> =
   writable<LiveTailStatus>('idle');
 
-/** 1-based counter of consecutive reconnect attempts (0 when first trying
- *  or after a successful open). Useful for UI badges ("attempt 3/10"). */
+/** 1-based counter of consecutive poll failures (0 when fresh or after
+ *  a success). Useful for UI badges ("attempt 3/10"). */
 export const liveTailAttempt: Writable<number> = writable<number>(0);
 
 /** Permanent error surfaced when MAX_ATTEMPTS is reached. `null` when
- *  the connection is healthy or still retrying. */
+ *  the tail is healthy or still retrying. */
 export const liveTailError: Writable<string | null> =
   writable<string | null>(null);
 
-// --- Internal mutable state (module-scoped) --------------------------------
+// --- Internal mutable state (module-scoped, not exported) -----------------
 
-/** Active WebSocket handle, or `null` when idle. */
-let ws: WebSocket | null = null;
+/** Active poll timer handle, or `null` when idle. */
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-/** Pending reconnect timer handle, or `null` when not waiting. */
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-/** Current 1-based reconnect attempt counter (0 = fresh start). */
+/** Current 1-based consecutive-failure counter (0 = fresh start). */
 let attempt = 0;
 
-/** Cached orgId so we don't re-fetch on every reconnect. */
-let cachedOrgId: string | null = null;
+/** Filter snapshot taken at startLiveTail time. */
+let activeFilter: LiveTailFilter = {};
+
+/** Row ids already appended (dedup across overlapping windows). */
+let seenIds = new Set<string>();
+
+/** Newest row timestamp appended; older rows are skipped outright. */
+let maxSeenTs = 0;
+
+/** In-flight guard so a slow poll never overlaps the next tick. */
+let pollBusy = false;
 
 // --- Helpers ---------------------------------------------------------------
 
@@ -144,57 +151,58 @@ export function delayForAttempt(n: number): number {
   return Math.max(MIN_DELAY_MS, Math.floor(jittered));
 }
 
-/** Build the absolute WS URL. The path returned by `wsUrl()` is
- *  already browser-relative (e.g. `/signoz/ws/logs/v5/{orgId}`); we
- *  anchor it against `location.origin` so `new WebSocket()` always
- *  sees a fully-qualified URL regardless of the dev proxy or
- *  reverse-proxy in front of it. */
-function buildFullUrl(path: string): string {
-  // Defensive guard for SSR / test environments where `location` is
-  // undefined; callers should not invoke this path in that case but
-  // the fallback keeps the function total.
-  const origin =
-    typeof location !== 'undefined' && location?.origin
-      ? location.origin
-      : 'http://localhost';
-  return new URL(path, origin).href;
+function escapeFilterString(s: string): string {
+  // Same grammar as logsStore: single-quoted SigNoz filter strings.
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
-/** Discover the SigNoz orgId via /api/v1/user. Returns 'default' on
- *  any failure (network, non-2xx, missing orgId field) so the WS
- *  upgrade can still attempt -- SigNoz itself decides whether the
- *  bogus orgId is fatal. */
-async function discoverOrgId(): Promise<string> {
-  const res = await currentUser();
-  const orgId = res?.data?.orgId ?? res?.orgId;
-  if (typeof orgId === 'string' && orgId.length > 0) return orgId;
-  return DEFAULT_ORG_ID;
-}
-
-/** Send the initial tail filter over the open WS. The SigNoz v5
- *  live-tail protocol expects a JSON envelope with the filter
- *  payload; we send it as the first message after `open`. */
-function sendFilter(wsHandle: WebSocket, filter: LiveTailFilter): void {
-  try {
-    wsHandle.send(JSON.stringify({
-      filter: filter.query ?? DEFAULT_FILTER,
-      severities: filter.severities ?? [],
-      services: filter.services ?? [],
-    }));
-  } catch {
-    // send() throws if the socket is mid-close; we silently let the
-    // close handler take over rather than propagate.
+/** Build the builder-query request for one poll tick: current filter
+ *  over a sliding window ending now. */
+function buildPollRequest(filter: LiveTailFilter, end: number): QueryRangeRequest {
+  const clauses: string[] = [];
+  const sevs = filter.severities ?? [];
+  if (sevs.length > 0) {
+    clauses.push(`severity_text IN (${sevs.map((s) => `'${s}'`).join(',')})`);
   }
+  const svcs = filter.services ?? [];
+  if (svcs.length > 0) {
+    clauses.push(
+      `service.name IN (${svcs.map((s) => `'${escapeFilterString(s)}'`).join(',')})`,
+    );
+  }
+  const q = (filter.query ?? '').trim();
+  if (q.length > 0) {
+    clauses.push(`body CONTAINS '${escapeFilterString(q)}'`);
+  }
+  return {
+    start: end - WINDOW_MS,
+    end,
+    requestType: 'raw',
+    schemaVersion: 'v1',
+    compositeQuery: {
+      queryType: 'builder',
+      panelType: 'list',
+      queries: [
+        {
+          type: 'builder_query',
+          spec: {
+            name: 'A',
+            signal: 'logs',
+            stepInterval: null,
+            filter: { expression: clauses.join(' AND ') },
+          },
+        },
+      ],
+    },
+  };
 }
 
-/** Parse one raw row from the WS payload into the LogRow contract.
- *  Returns `null` for inputs that don't satisfy the contract -- the
- *  caller is expected to drop the row (logged for diagnosability). */
+/** Parse one raw row into the LogRow contract. Returns `null` for
+ *  inputs that don't satisfy it -- the caller drops those silently. */
 function parseRawRow(raw: unknown): LogRow | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
 
-  // Timestamp: accept ms (`timestamp`), ms (`time`), or ns (`timestamp_nano`).
   let ts: number;
   if (typeof r.timestamp === 'number') ts = r.timestamp;
   else if (typeof r.time === 'number') ts = r.time;
@@ -202,8 +210,6 @@ function parseRawRow(raw: unknown): LogRow | null {
     ts = Math.floor(r.timestamp_nano / 1_000_000);
   else ts = Date.now();
 
-  // Severity: accept either `severity_text` or `severity`, normalize to
-  // uppercase, and validate against the LogRow literal union.
   const sevRaw =
     typeof r.severity_text === 'string'
       ? r.severity_text
@@ -246,7 +252,7 @@ function parseRawRow(raw: unknown): LogRow | null {
 
   return {
     timestamp: ts,
-    severity: sev,
+    severity: sev as LogRow['severity'],
     service,
     body,
     traceId,
@@ -255,183 +261,124 @@ function parseRawRow(raw: unknown): LogRow | null {
   };
 }
 
-/** Append a single parsed row to the logs.results array. Caps at
- *  10_000 rows so an unbounded tail doesn't OOM the browser. Older
- *  rows are dropped from the front of the array. */
-const LIVE_TAIL_CAP = 10_000;
-
-function appendLiveRow(row: LogRow): void {
+/** Append unseen rows to logs.results, capped at LIVE_TAIL_CAP. */
+function appendNewRows(rows: LogRow[]): void {
+  if (rows.length === 0) return;
+  if (seenIds.size > SEEN_ID_CAP) {
+    seenIds = new Set<string>();
+  }
   logs.update((s) => {
-    const next = s.results.length >= LIVE_TAIL_CAP
-      ? [...s.results.slice(s.results.length - LIVE_TAIL_CAP + 1), row]
-      : [...s.results, row];
-    return { ...s, results: next, totalRows: next.length };
+    const fresh: LogRow[] = [];
+    for (const row of rows) {
+      if (row.timestamp < maxSeenTs) continue;
+      const id = getRowId(row);
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+      if (row.timestamp > maxSeenTs) maxSeenTs = row.timestamp;
+      fresh.push(row);
+    }
+    if (fresh.length === 0) return s;
+    const next = [...s.results, ...fresh];
+    const capped =
+      next.length > LIVE_TAIL_CAP ? next.slice(next.length - LIVE_TAIL_CAP) : next;
+    return { ...s, results: capped, totalRows: capped.length };
   });
 }
 
-/** Parse a single WS message. Payload may be a JSON object (single row)
- *  or a JSON array (batch). Unknown shapes are logged and dropped. */
-function handleMessage(raw: string): void {
-  let parsed: unknown;
+// --- Poll lifecycle --------------------------------------------------------
+
+async function pollOnce(): Promise<void> {
+  if (pollBusy) return;
+  if (get(liveTailStatus) === 'idle') return;
+  pollBusy = true;
   try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // Non-JSON frames are expected (some servers emit heartbeats as
-    // plain text); drop silently.
-    return;
-  }
-  const rows = Array.isArray(parsed) ? parsed : [parsed];
-  for (const r of rows) {
-    const row = parseRawRow(r);
-    if (row) appendLiveRow(row);
-  }
-}
-
-// --- Connection lifecycle --------------------------------------------------
-
-async function openConnection(filter: LiveTailFilter): Promise<void> {
-  liveTailStatus.set('connecting');
-  wsReady.set(toWsReady('connecting'));
-  wsLastAttemptAt.set(Date.now());
-
-  if (!cachedOrgId) {
-    try {
-      cachedOrgId = await discoverOrgId();
-    } catch {
-      cachedOrgId = DEFAULT_ORG_ID;
-      toastWarn(
-        'Could not discover SigNoz orgId; falling back to "default" (live tail may fail)',
-      );
+    const end = Date.now();
+    const res = await queryRange(buildPollRequest(activeFilter, end));
+    const data = (res?.data ?? {}) as Record<string, { list?: readonly unknown[] }>;
+    const list = Array.isArray(data['A']?.list) ? data['A']!.list! : [];
+    const rows: LogRow[] = [];
+    for (const item of list) {
+      const row = parseRawRow(item);
+      if (row) rows.push(row);
     }
-  }
-
-  const path = wsUrl(cachedOrgId);
-  const fullUrl = buildFullUrl(path);
-
-  // The browser throws synchronously if the URL is malformed, which is
-  // a permanent failure -- treat it like the 10-attempt cap and bail.
-  let handle: WebSocket;
-  try {
-    handle = new WebSocket(fullUrl);
-  } catch (e) {
-    handlePermanentFailure(
-      e instanceof Error ? e.message : 'WebSocket construction failed',
-    );
-    return;
-  }
-  ws = handle;
-
-  handle.onopen = (): void => {
+    // Oldest-first so maxSeenTs advances monotonically.
+    rows.sort((a, b) => a.timestamp - b.timestamp);
+    appendNewRows(rows);
     attempt = 0;
     liveTailAttempt.set(0);
     liveTailError.set(null);
-    liveTailStatus.set('open');
-    wsReady.set(toWsReady('open'));
-    sendFilter(handle, filter);
-  };
-
-  handle.onmessage = (ev: MessageEvent): void => {
-    if (typeof ev.data !== 'string') return;
-    handleMessage(ev.data);
-  };
-
-  handle.onerror = (): void => {
-    // Don't transition to `closed` here -- the close handler will fire
-    // immediately after with a more specific reason. We just record the
-    // error for the surface so it can be surfaced if we never recover.
-    liveTailError.set('WebSocket error');
-  };
-
-  handle.onclose = (): void => {
-    ws = null;
-    if (get(liveTailStatus) === 'idle') return; // user toggled off
-
-    // Count THIS close as the next failure, then check whether we've
-    // hit the cap. `attempt` is the 1-based count of consecutive
-    // reconnect attempts (0 at boot / after a successful open). The
-    // 10th close therefore drives `attempt` to 10, which trips the
-    // permanent-failure branch -- matching the spec: "10 consecutive
-    // failures -> status 'closed', no further retries".
+    if (get(liveTailStatus) !== 'open') {
+      liveTailStatus.set('open');
+      wsReady.set(toWsReady('open'));
+    }
+  } catch (e) {
     attempt += 1;
     liveTailAttempt.set(attempt);
     wsLastAttemptAt.set(Date.now());
-
     if (attempt >= MAX_ATTEMPTS) {
       handlePermanentFailure(
-        `Live tail unavailable after ${MAX_ATTEMPTS} attempts`,
+        e instanceof Error ? e.message : 'Live tail unavailable',
       );
-      return;
+    } else {
+      liveTailStatus.set('reconnecting');
+      wsReady.set(toWsReady('reconnecting'));
     }
-
-    liveTailStatus.set('reconnecting');
-    wsReady.set(toWsReady('reconnecting'));
-
-    const delay = delayForAttempt(attempt);
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      void openConnection(filter);
-    }, delay);
-  };
+  } finally {
+    pollBusy = false;
+  }
 }
 
-/** Flip into the permanent-error state: cancel any pending timer,
- *  close the WS (no-op if already closed), and lock the status. */
+/** Flip into the permanent-error state: stop the interval and lock. */
 function handlePermanentFailure(message: string): void {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  if (ws) {
-    try {
-      ws.close();
-    } catch {
-      /* swallow */
-    }
-    ws = null;
-  }
+  stopTimer();
   attempt = MAX_ATTEMPTS;
   liveTailAttempt.set(attempt);
   liveTailStatus.set('closed');
   wsReady.set(toWsReady('closed'));
-  liveTailError.set(message);
+  liveTailError.set(`Live tail unavailable after ${MAX_ATTEMPTS} attempts: ${message}`);
+  toastWarn('Live tail stopped after repeated failures - toggle Live off and on to retry');
+}
+
+function stopTimer(): void {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
 }
 
 // --- Public API ------------------------------------------------------------
 
-/** Start the live-tail WS. Idempotent: a second call while already
- *  `connecting`, `open`, or `reconnecting` is a no-op. Calling from
- *  `'closed'` resets the attempt counter and retries. Calling from
- *  `'idle'` (the initial state) is the normal path. */
+/** Start the polling live tail. Idempotent: a second call while
+ *  already `connecting`, `open`, or `reconnecting` is a no-op.
+ *  Calling from `'closed'` resets the attempt counter and retries. */
 export function startLiveTail(filter: LiveTailFilter = {}): void {
   const s = get(liveTailStatus);
   if (s === 'connecting' || s === 'open' || s === 'reconnecting') return;
 
-  // Reset the failure bookkeeping so a manual start after `closed`
-  // gets a fresh 10-attempt budget.
+  // Fresh budget + fresh dedup window on every (re)start.
   attempt = 0;
   liveTailAttempt.set(0);
   liveTailError.set(null);
+  seenIds = new Set<string>();
+  maxSeenTs = 0;
+  activeFilter = { ...filter };
   logsLive.set(true);
-  void openConnection(filter);
+  liveTailStatus.set('connecting');
+  wsReady.set(toWsReady('connecting'));
+  wsLastAttemptAt.set(Date.now());
+  void pollOnce();
+  stopTimer();
+  pollTimer = setInterval(() => {
+    void pollOnce();
+  }, pollIntervalMs);
 }
 
-/** Stop the live-tail WS. Closes the socket, clears any pending
- *  reconnect timer, and resets all status to the initial `'idle'`
- *  state. Safe to call when already idle. */
+/** Stop the polling live tail. Clears the interval and resets all
+ *  status to the initial `'idle'` state. Safe to call when idle. */
 export function stopLiveTail(): void {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  if (ws) {
-    try {
-      ws.close();
-    } catch {
-      /* swallow */
-    }
-    ws = null;
-  }
+  stopTimer();
   attempt = 0;
+  pollBusy = false;
   liveTailStatus.set('idle');
   liveTailAttempt.set(0);
   liveTailError.set(null);
@@ -439,35 +386,32 @@ export function stopLiveTail(): void {
   logsLive.set(false);
 }
 
-/** Predicate: true if the WS is connecting, open, or reconnecting.
+/** Predicate: true if the tail is connecting, open, or reconnecting.
  *  Used by callers that want to avoid double-starts or display a
- *  "live" indicator without subscribing to the writable. */
+ *  "live" indicator without subscribing to a writable. */
 export function isLiveTailActive(): boolean {
   const s = get(liveTailStatus);
   return s === 'connecting' || s === 'open' || s === 'reconnecting';
 }
 
+/** Test-only escape hatch for the poll cadence. The browser test
+ *  runner does not honor fake timers, so tests shrink the interval
+ *  (e.g. 50ms) instead of advancing a fake clock. */
+export function __setPollIntervalForTesting(ms: number): void {
+  pollIntervalMs = ms;
+}
+
 /** Test-only escape hatch. Mirrors the `__resetForTesting` pattern
- *  used by `logsStore` and `savedViews`: cancels any pending timer,
- *  closes any active WS, and resets all writables to their initial
- *  state. Tests call this in `beforeEach` so the module-scoped
- *  state doesn't leak between cases (browser-mode vitest caches
- *  the module instance across the suite). */
+ *  used by `logsStore` and `savedViews`: clears the interval and
+ *  resets all writables plus module-scoped dedup state to initial. */
 export function __resetForTesting(): void {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  if (ws) {
-    try {
-      ws.close();
-    } catch {
-      /* swallow */
-    }
-    ws = null;
-  }
-  cachedOrgId = null;
+  stopTimer();
   attempt = 0;
+  pollBusy = false;
+  activeFilter = {};
+  seenIds = new Set<string>();
+  maxSeenTs = 0;
+  pollIntervalMs = POLL_MS;
   liveTailStatus.set('idle');
   liveTailAttempt.set(0);
   liveTailError.set(null);

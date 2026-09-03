@@ -2,11 +2,6 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
   ApiError,
   queryRange,
-  services,
-  fields,
-  fieldValues,
-  currentUser,
-  wsUrl,
   type QueryRangeRequest,
 } from './signoz';
 
@@ -113,7 +108,7 @@ describe('signoz', () => {
   });
 
   describe('queryRange', () => {
-    it('sends POST /api/v5/query_range with JSON body and returns the parsed response', async () => {
+    it('sends POST /api/admin/logs/query_range with JSON body and returns the parsed response', async () => {
       const body = {
         status: 'success',
         data: {
@@ -137,7 +132,7 @@ describe('signoz', () => {
 
       // Outgoing call: method, URL, headers, body.
       const call = inspectFetchCall(fetchSpy);
-      expect(call.url).toBe('/api/v5/query_range');
+      expect(call.url).toBe('/api/admin/logs/query_range');
       expect(call.init.method).toBe('POST');
       expect(call.init.headers['Content-Type']).toBe('application/json');
       expect(call.init.headers.Accept).toBe('application/json');
@@ -257,81 +252,18 @@ describe('signoz', () => {
     });
   });
 
-  describe('GET helpers', () => {
-    it('services() hits /api/v1/services and returns the data array', async () => {
+  describe('gateway transport', () => {
+    it('sends the admin session cookie (same-origin credentials)', async () => {
       fetchSpy.mockResolvedValueOnce(
-        mockResponse({
-          status: 200,
-          body: { data: ['ircfiber-gateway', 'ircfiber-engine'] },
-        }),
+        mockResponse({ status: 200, body: { data: {} } }),
       );
-      const r = await services();
-      expect(r.data).toEqual(['ircfiber-gateway', 'ircfiber-engine']);
+      await queryRange(sampleRequest);
       const call = inspectFetchCall(fetchSpy);
-      expect(call.url).toBe('/api/v1/services');
-      expect(call.init.method).toBe('GET');
-      // GET helpers must not attach a body or Content-Type.
-      expect(call.init.body).toBeUndefined();
-      expect(call.init.headers['Content-Type']).toBeUndefined();
-    });
-
-    it('fields() hits /api/v1/logs/fields', async () => {
-      fetchSpy.mockResolvedValueOnce(
-        mockResponse({
-          status: 200,
-          body: { data: [{ name: 'service.name', fieldDataType: 'string' }] },
-        }),
+      // The gateway proxy requires the admin session: without the
+      // cookie every call 401s at requireAuth.
+      expect((call.init as { credentials?: string }).credentials).toBe(
+        'same-origin',
       );
-      const r = await fields();
-      expect(r.data?.[0]?.name).toBe('service.name');
-      expect(r.data?.[0]?.fieldDataType).toBe('string');
-      const call = inspectFetchCall(fetchSpy);
-      expect(call.url).toBe('/api/v1/logs/fields');
-    });
-
-    it('fieldValues(name, q) hits /api/v1/values with param0 + query', async () => {
-      fetchSpy.mockResolvedValueOnce(
-        mockResponse({
-          status: 200,
-          body: { values: ['error', 'error_trace'] },
-        }),
-      );
-      const r = await fieldValues('severity_text', 'err');
-      expect(r.values).toEqual(['error', 'error_trace']);
-      const call = inspectFetchCall(fetchSpy);
-      expect(call.url).toBe('/api/v1/values?param0=severity_text&query=err');
-    });
-
-    it('fieldValues(name) without q omits the query= parameter', async () => {
-      fetchSpy.mockResolvedValueOnce(
-        mockResponse({ status: 200, body: { values: [] } }),
-      );
-      await fieldValues('service.name');
-      const call = inspectFetchCall(fetchSpy);
-      expect(call.url).toBe('/api/v1/values?param0=service.name');
-    });
-
-    it('currentUser() hits /api/v1/user and surfaces the orgId', async () => {
-      fetchSpy.mockResolvedValueOnce(
-        mockResponse({
-          status: 200,
-          body: { data: { orgId: 'org-123', email: 'a@b' } },
-        }),
-      );
-      const r = await currentUser();
-      expect(r.data?.orgId).toBe('org-123');
-      const call = inspectFetchCall(fetchSpy);
-      expect(call.url).toBe('/api/v1/user');
-    });
-  });
-
-  describe('wsUrl', () => {
-    it('builds /signoz/ws/logs/v5/{orgId} for the live-tail endpoint', () => {
-      expect(wsUrl('abc-123')).toBe('/signoz/ws/logs/v5/abc-123');
-    });
-
-    it('percent-encodes an orgId so a malicious value cannot escape the path', () => {
-      expect(wsUrl('org/123')).toBe('/signoz/ws/logs/v5/org%2F123');
     });
   });
 });

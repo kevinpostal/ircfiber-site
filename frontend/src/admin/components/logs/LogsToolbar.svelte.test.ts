@@ -23,19 +23,10 @@ import { flushSync } from 'svelte';
 import LogsToolbar from './LogsToolbar.svelte';
 import * as store from '../../stores/logsStore';
 import * as liveTail from '../../stores/logsLiveTail';
-import { services as signozServices } from '/src/lib/signoz';
+import { queryRange as signozQueryRange } from '/src/lib/signoz';
 
 vi.mock('/src/lib/signoz', () => ({
-  services: vi.fn(),
   queryRange: vi.fn(),
-  fields: vi.fn(),
-  fieldValues: vi.fn(),
-  // currentUser() and wsUrl() are needed by logsLiveTail.startLiveTail's
-  // openConnection() path. The real currentUser hits /api/v1/user; the
-  // tests stub it to return a synthetic orgId so the WS URL can be
-  // built without a real fetch.
-  currentUser: vi.fn(async () => ({ data: { orgId: 'test-org' } })),
-  wsUrl: vi.fn((orgId: string) => `/signoz/ws/logs/v5/${orgId}`),
   ApiError: class extends Error {
     readonly status: number;
     constructor(m: string, s: number) {
@@ -58,59 +49,20 @@ vi.mock('/src/lib/signoz', () => ({
 // to the real implementation, and reading `toasts` from the real
 // module reflects what was pushed.
 
-// --- WebSocket stub (w3-t2) -----------------------------------------------
+// --- Polling live tail (no WebSocket) --------------------------------------
 // The toolbar's wire-up effect calls the REAL startLiveTail (from
-// logsLiveTail.ts), which constructs a `new WebSocket(...)` and waits
-// for onopen/onmessage/onclose events. The native browser WebSocket in
-// vitest's playwright mode would hit a real (failing) connection; we
-// replace it with a no-op class that records construction calls so
-// tests can assert "startLiveTail was called" via the side-effect on
-// the liveTailStatus writable (it transitions to 'connecting' on call)
-// without any network activity. Tests drive the WS lifecycle manually
-// via `stub.fire('open' | 'message' | 'error' | 'close')`.
-class StubWebSocket {
-  static instances: StubWebSocket[] = [];
-  static lastInstance(): StubWebSocket | null {
-    const all = StubWebSocket.instances;
-    return all.length === 0 ? null : (all[all.length - 1] as StubWebSocket);
-  }
-  url: string;
-  readyState = 0;
-  onopen: ((ev: Event) => void) | null = null;
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: Event) => void) | null = null;
-  onclose: ((ev: CloseEvent) => void) | null = null;
-  close = vi.fn();
-  send = vi.fn();
-  constructor(url: string) {
-    this.url = url;
-    StubWebSocket.instances.push(this);
-    // The WS stays in the 'connecting' state by default. Tests can
-    // call `fire('open')` / `fire('close')` / `fire('message', payload)`
-    // on the instance to drive the production code's event handlers.
-    // Auto-fire onclose was deliberately removed so the reconnect
-    // cycle doesn't kick in mid-test; tests that need reconnect behavior
-    // fire `close` explicitly.
-  }
-  fire(type: 'open' | 'message' | 'error' | 'close', payload?: unknown): void {
-    if (type === 'open' && this.onopen) this.onopen(new Event('open'));
-    else if (type === 'message' && this.onmessage)
-      this.onmessage(new MessageEvent('message', { data: payload as string }));
-    else if (type === 'error' && this.onerror) this.onerror(new Event('error'));
-    else if (type === 'close' && this.onclose) this.onclose(new CloseEvent('close'));
-  }
-}
-beforeEach(() => {
-  StubWebSocket.instances = [];
-  vi.stubGlobal('WebSocket', StubWebSocket);
-});
+// logsLiveTail.ts), which polls the mocked `queryRange` on a 5s
+// interval. Tests assert "startLiveTail was called" via the
+// side-effect on the liveTailStatus writable (it transitions to
+// 'connecting' on call) and on the mocked queryRange call count,
+// without any network activity.
 
-// `signozServices` is the vi.fn() from the vi.mock factory above. The
-// cast through `unknown` is necessary because the static import sees the
-// real type (Promise<ServicesResponse>) while the test runtime sees the
-// vi.fn() value -- vitest's hoisting of vi.mock above the import line
-// is what makes this safe.
-const mockedServices = signozServices as unknown as ReturnType<typeof vi.fn>;
+// `signozQueryRange` is the vi.fn() from the vi.mock factory above. The
+// cast through `unknown` is necessary because the static import sees
+// the real type while the test runtime sees the vi.fn() value --
+// vitest's hoisting of vi.mock above the import line is what makes
+// this safe.
+const mockedQueryRange = signozQueryRange as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   // Wipe localStorage and reset the store to a known baseline. The
@@ -122,14 +74,10 @@ beforeEach(() => {
   // a stale 'closed' status from a prior case doesn't auto-flip the
   // toggle via the toolbar's permanent-error effect.
   liveTail.__resetForTesting();
-  // Clear any StubWebSocket instances carried over from a prior test
-  // (each beforeEach re-stubs the global above).
-  StubWebSocket.instances = [];
-  vi.stubGlobal('WebSocket', StubWebSocket);
-  // Default services() mock: empty list, but resolves so the dropdown
-  // transitions out of "Loading..." after the lazy-load fires.
-  mockedServices.mockReset();
-  mockedServices.mockResolvedValue({ data: [] });
+  // Default queryRange() mock: empty result so the polling tail opens
+  // without appending rows.
+  mockedQueryRange.mockReset();
+  mockedQueryRange.mockResolvedValue({ data: { A: { list: [] } } });
   // Default clipboard: present + working. Individual cases override.
   Object.defineProperty(navigator, 'clipboard', {
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -185,10 +133,10 @@ describe('LogsToolbar -- default render', () => {
     expect((h1.element() as HTMLButtonElement).className).not.toContain('font-semibold');
   });
 
-  it('does NOT fetch /api/v1/services on mount (lazy-load guard)', async () => {
+  it('does NOT query on mount (no fetch without interaction)', async () => {
     render(LogsToolbar);
-    // No timer advance / no interaction -- services() must not have fired.
-    expect(mockedServices).not.toHaveBeenCalled();
+    // No timer advance / no interaction -- queryRange() must not fire.
+    expect(mockedQueryRange).not.toHaveBeenCalled();
   });
 });
 
@@ -345,6 +293,9 @@ describe('LogsToolbar -- live toggle + status badge', () => {
 
   it('shows the "Live unavailable" pill when live=true and wsReady=closed', async () => {
     store.__resetForTesting();
+    // Pin the tail in 'connecting' (wsReady 'closed'): the immediate
+    // poll never settles, so no success flips it to open.
+    mockedQueryRange.mockImplementation(() => new Promise(() => {}));
     store.toggleLive(); // logsLive = true (triggers wire-up -> startLiveTail on mount)
     render(LogsToolbar);
     flushSync();
@@ -400,7 +351,7 @@ describe('LogsToolbar -- live toggle + status badge', () => {
 // ---------------------------------------------------------------------------
 //
 // These tests verify the toolbar's two $effect blocks that bridge
-// `logsLive` to the WS lifecycle:
+// `logsLive` to the polling-tail lifecycle:
 //   - The wire-up effect: flips of `logsLive` (false -> true) call
 //     `startLiveTail(filter)`; flips the other way (true -> false) call
 //     `stopLiveTail()`.
@@ -411,67 +362,52 @@ describe('LogsToolbar -- live toggle + status badge', () => {
 // Verification strategy: because vi.mock with relative import paths is
 // unreliable for Svelte components in the browser-mode vitest runner, we
 // run the REAL startLiveTail / stopLiveTail / toastError (with the
-// /src/lib/signoz mocks providing the orgId + wsUrl) and observe the
-// SIDE EFFECTS:
+// /src/lib/signoz mocks standing in for the gateway proxy) and observe
+// the SIDE EFFECTS:
 //   - `liveTailStatus` becomes 'connecting' on startLiveTail().
 //   - `liveTailStatus` becomes 'idle' on stopLiveTail().
-//   - `StubWebSocket.instances` increments by one per startLiveTail().
+//   - the mocked `queryRange` gains one call per immediate poll.
 //   - `toastError` pushes a Toast record onto the `toasts` writable.
 
 describe('LogsToolbar -- live toggle wire-up to logsLiveTail (w3-t2)', () => {
   it('clicking the live toggle calls startLiveTail with a filter snapshot', async () => {
     render(LogsToolbar);
     flushSync();
-    // Initial state: logsLive=false, no WS constructed.
+    // Initial state: logsLive=false, no poll issued.
     expect(get(store.logsLive)).toBe(false);
-    expect(StubWebSocket.instances.length).toBe(0);
-    // Flip the toggle -> wire-up effect should construct a WS (via
-    // startLiveTail) and push a filter object that mirrors the store.
+    expect(mockedQueryRange).not.toHaveBeenCalled();
+    // Flip the toggle -> wire-up effect should start the tail (via
+    // startLiveTail) with a filter object that mirrors the store.
     await userEvent.click(page.getByTestId('logs-live-toggle').element());
     flushSync();
     expect(get(store.logsLive)).toBe(true);
-    // startLiveTail constructed exactly one WebSocket against the mocked
-    // wsUrl('/signoz/ws/logs/v5/test-org').
-    expect(StubWebSocket.instances.length).toBe(1);
-    expect(StubWebSocket.lastInstance()!.url).toMatch(
-      /\/signoz\/ws\/logs\/v5\/test-org$/,
-    );
-    // Fire the onopen event so the WS layer runs its onopen handler,
-    // which calls sendFilter() with the filter snapshot.
-    StubWebSocket.lastInstance()!.fire('open');
-    flushSync();
-    // The WS sent the initial filter envelope via `send(...)` -- the
-    // mock records it so we can assert the filter shape without parsing
-    // the WS wire format.
-    const sendCalls = StubWebSocket.lastInstance()!.send.mock.calls;
-    expect(sendCalls.length).toBeGreaterThanOrEqual(1);
-    const envelope = JSON.parse(sendCalls[0]![0] as string) as {
-      filter: string;
-      severities: string[];
-      services: string[];
+    // startLiveTail ran its immediate poll against the mocked
+    // queryRange with a builder request carrying the filter snapshot.
+    expect(mockedQueryRange).toHaveBeenCalledTimes(1);
+    const req = mockedQueryRange.mock.calls[0]![0] as {
+      compositeQuery: { queries: { spec: { filter: { expression: string } } }[] };
     };
-    expect(envelope).toEqual({
-      filter: '',
-      severities: ['WARN', 'ERROR'],
-      services: [],
-    });
+    const expr = req.compositeQuery.queries[0]!.spec.filter.expression;
+    expect(expr).toContain(`severity_text IN ('WARN','ERROR')`);
   });
 
-  it('toggling live off after on calls stopLiveTail (closes the WS)', async () => {
+  it('toggling live off after on calls stopLiveTail (clears the poll)', async () => {
+    // Pin the tail in 'connecting' so the status assertion below is
+    // deterministic (a resolving poll would already have flipped it).
+    mockedQueryRange.mockImplementation(() => new Promise(() => {}));
     render(LogsToolbar);
     flushSync();
     // Toggle on
     await userEvent.click(page.getByTestId('logs-live-toggle').element());
     flushSync();
-    expect(StubWebSocket.instances.length).toBe(1);
+    expect(mockedQueryRange).toHaveBeenCalledTimes(1);
     expect(get(liveTail.liveTailStatus)).toBe('connecting');
-    // Toggle off -> wire-up effect calls stopLiveTail() which closes the
-    // socket and resets status to 'idle'.
+    // Toggle off -> wire-up effect calls stopLiveTail() which clears the
+    // interval and resets status to 'idle'.
     await userEvent.click(page.getByTestId('logs-live-toggle').element());
     flushSync();
     expect(get(store.logsLive)).toBe(false);
     expect(get(liveTail.liveTailStatus)).toBe('idle');
-    expect(StubWebSocket.lastInstance()!.close).toHaveBeenCalled();
   });
 
   it('hides the time-range picker while live is on', async () => {
@@ -491,9 +427,9 @@ describe('LogsToolbar -- live toggle wire-up to logsLiveTail (w3-t2)', () => {
   it('auto-toggles off and toasts on permanent error (liveTailStatus=closed while live=true)', async () => {
     // Set up the toolbar with logsLive=true (so the wire-up effect runs
     // startLiveTail on mount and the toolbar is "streaming"). Then,
-    // AFTER mount, drive liveTailStatus to 'closed' to simulate the WS
-    // layer hitting MAX_ATTEMPTS -- that's the trigger the auto-toggle
-    // effect watches for.
+    // AFTER mount, drive liveTailStatus to 'closed' to simulate the
+    // polling tail hitting MAX_ATTEMPTS -- that's the trigger the
+    // auto-toggle effect watches for.
     store.__resetForTesting();
     // Reset the toast stack so the assertion below sees only toasts
     // pushed by THIS test.
@@ -504,7 +440,7 @@ describe('LogsToolbar -- live toggle wire-up to logsLiveTail (w3-t2)', () => {
     flushSync();
     // The wire-up effect ran startLiveTail() on mount, which resets
     // liveTailError to null and liveTailStatus to 'connecting'. Override
-    // BOTH now to simulate the WS layer hitting MAX_ATTEMPTS:
+    // BOTH now to simulate the polling tail hitting MAX_ATTEMPTS:
     liveTail.liveTailError.set('Live tail unavailable after 10 attempts');
     liveTail.liveTailStatus.set('closed');
     flushSync();
@@ -528,50 +464,60 @@ describe('LogsToolbar -- live toggle wire-up to logsLiveTail (w3-t2)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Service multi-select (lazy-load + diff)
+// Service multi-select (derived from loaded rows + diff)
 // ---------------------------------------------------------------------------
+//
+// The dropdown options come from the store's loaded results (the
+// installed SigNoz has no services catalogue endpoint), so tests seed
+// `store.logs.results` directly instead of mocking a fetch.
+
+function seedResults(services: string[]): void {
+  store.logs.update((s) => ({
+    ...s,
+    results: services.map((service, i) => ({
+      timestamp: 1_700_000_000_000 + i,
+      severity: 'ERROR' as const,
+      service,
+      body: `msg ${i}`,
+      attributes: {},
+      rawJson: {},
+    })),
+  }));
+}
 
 describe('LogsToolbar -- service multi-select', () => {
-  it('fetches services on first click and renders them as <option> entries', async () => {
-    mockedServices.mockResolvedValue({
-      data: ['irc-fiber-gateway', 'irc-fiber-engine', 'signoz-otel-collector'],
-    });
+  it('lists distinct services from loaded rows, alpha-sorted', async () => {
+    seedResults(['irc-fiber-engine', 'irc-fiber-gateway', 'irc-fiber-engine']);
     render(LogsToolbar);
     flushSync();
-    // No fetch on mount.
-    expect(mockedServices).not.toHaveBeenCalled();
-    // Click the select to trigger the lazy load.
     const select = page.getByTestId('logs-services-select').element() as HTMLSelectElement;
-    select.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    // Wait for the microtask chain (services() is async) to flush.
-    await new Promise<void>((r) => setTimeout(r, 30));
-    flushSync();
-    expect(mockedServices).toHaveBeenCalledTimes(1);
     const options = Array.from(select.querySelectorAll('option')).map((o) => o.value);
-    expect(options).toContain('irc-fiber-gateway');
-    expect(options).toContain('irc-fiber-engine');
-    expect(options).toContain('signoz-otel-collector');
+    expect(options).toEqual(['irc-fiber-engine', 'irc-fiber-gateway']);
   });
 
-  it('does not refetch services on subsequent opens (servicesLoaded guard)', async () => {
-    mockedServices.mockResolvedValue({ data: ['a'] });
+  it('unions active filter values so a selected service never vanishes', async () => {
+    seedResults(['gateway']);
+    store.setService('engine');
     render(LogsToolbar);
+    flushSync();
     const select = page.getByTestId('logs-services-select').element() as HTMLSelectElement;
-    select.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise<void>((r) => setTimeout(r, 30));
-    select.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise<void>((r) => setTimeout(r, 30));
-    expect(mockedServices).toHaveBeenCalledTimes(1);
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value);
+    expect(options).toContain('gateway');
+    expect(options).toContain('engine');
+  });
+
+  it('renders an empty dropdown when no rows are loaded', async () => {
+    render(LogsToolbar);
+    flushSync();
+    const select = page.getByTestId('logs-services-select').element() as HTMLSelectElement;
+    expect(select.querySelectorAll('option').length).toBe(0);
   });
 
   it('selecting a service writes to store.services and renders a chip', async () => {
-    mockedServices.mockResolvedValue({ data: ['gateway', 'engine'] });
+    seedResults(['gateway', 'engine']);
     render(LogsToolbar);
     flushSync();
-    // Prime the lazy load.
     const select = page.getByTestId('logs-services-select').element() as HTMLSelectElement;
-    select.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await new Promise<void>((r) => setTimeout(r, 30));
     flushSync();
     // Simulate the user picking an option via the multi-select control.
     // The native control uses .selected on <option> elements which the
@@ -641,7 +587,7 @@ describe('LogsToolbar -- copy as cURL', () => {
     await new Promise<void>((r) => setTimeout(r, 30));
     expect(writeSpy).toHaveBeenCalledTimes(1);
     const cmd = writeSpy.mock.calls[0]![0] as string;
-    expect(cmd).toMatch(/^curl -sS -X POST 'https?:\/\/[^/]+\/api\/v5\/query_range'/);
+    expect(cmd).toMatch(/^curl -sS -X POST 'https?:\/\/[^/]+\/api\/admin\/logs\/query_range'/);
     expect(cmd).toContain("-H 'Content-Type: application/json'");
     expect(cmd).toContain('-d \'');
     expect(cmd).toContain('"severity_text IN');

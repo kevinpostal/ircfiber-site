@@ -16,9 +16,8 @@
  * Pattern follows the existing LogsToolbar.svelte.test.ts:
  * vitest-browser-svelte `render`, `page` + `userEvent` from
  * vitest/browser, real logsStore + savedViews stores (reset via the
- * existing __resetForTesting hooks). signoz.services is mocked because
- * LogsToolbar's lazy-load fires it as soon as the operator opens the
- * services dropdown.
+ * existing __resetForTesting hooks). signoz.queryRange is mocked
+ * because the page fires runQuery() in onMount.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -29,16 +28,11 @@ import { get } from 'svelte/store';
 import Logs from './Logs.svelte';
 import * as logsStore from '../stores/logsStore';
 import { __resetForTesting as resetViews, saveView, listViews } from '../stores/savedViews';
-import { services as signozServices, queryRange as signozQueryRange } from '/src/lib/signoz';
+import { queryRange as signozQueryRange } from '/src/lib/signoz';
 import type { LogRow } from '../stores/logsStore';
 
 vi.mock('/src/lib/signoz', () => ({
-  services: vi.fn(),
   queryRange: vi.fn(),
-  fields: vi.fn(),
-  fieldValues: vi.fn(),
-  currentUser: vi.fn(),
-  wsUrl: vi.fn(),
   ApiError: class extends Error {
     readonly status: number;
     constructor(m: string, s: number) {
@@ -48,7 +42,6 @@ vi.mock('/src/lib/signoz', () => ({
   },
 }));
 
-const mockedServices = signozServices as unknown as ReturnType<typeof vi.fn>;
 const mockedQueryRange = signozQueryRange as unknown as ReturnType<typeof vi.fn>;
 
 /**
@@ -123,8 +116,6 @@ beforeEach(() => {
   window.localStorage.clear();
   logsStore.__resetForTesting();
   resetViews();
-  mockedServices.mockReset();
-  mockedServices.mockResolvedValue({ data: [] });
   // Default: queryRange never resolves. Individual tests that need a
   // populated table or a specific error override this with a resolved
   // mock or a rejected mock.
@@ -147,12 +138,12 @@ describe('Logs -- page header and Open SigNoz link', () => {
     await expect.element(link).toBeInTheDocument();
     // The href must end in /logs so the operator lands on the SigNoz
     // Logs explorer, not the home dashboard. The URL is sourced from
-    // TAILNET_SIGNOZ_LOGS_URL (defined in signozUrl.ts) -- the IP literal
-    // lives in that one file only, not in this page.
+    // TAILNET_SIGNOZ_LOGS_URL (defined in signozUrl.ts) -- the tailnet
+    // address lives in that one file only, not in this page.
     const href = (link.element() as HTMLAnchorElement).getAttribute('href');
     expect(href).toBeTruthy();
     expect(href).toMatch(/\/logs$/);
-    expect(href).toMatch(/:\d+\/logs$/);
+    expect(href).toMatch(/^https:\/\/[^/]+\/logs$/);
     // The page itself must not contain the literal IP. Grep-level
     // verification runs separately; this assertion ensures the rendered
     // DOM does not embed a copy of the URL constant in a place that
@@ -167,13 +158,13 @@ describe('Logs -- page header and Open SigNoz link', () => {
     await expect.element(link).toBeInTheDocument();
     const anchor = link.element() as HTMLAnchorElement;
     // The href comes from the TAILNET_SIGNOZ_URL constant in
-    // signozUrl.ts. We assert the shape (http://host:port) rather than
-    // hard-coding the IP literal, so this test does NOT embed a copy of
-    // the address (W2-T5 single-source-of-truth rule).
-    expect(anchor.getAttribute('href')).toMatch(/^http:\/\/[^/]+:\d+$/);
+    // signozUrl.ts. We assert the shape (https://tailnet-host) rather
+    // than hard-coding the address, so this test does NOT embed a copy
+    // of it (W2-T5 single-source-of-truth rule).
+    expect(anchor.getAttribute('href')).toMatch(/^https:\/\/[^/]+$/);
     expect(anchor.getAttribute('href')).not.toMatch(/\/logs$/);
     // The visible text is the same URL string (single source of truth).
-    expect(anchor.textContent?.trim()).toMatch(/^http:\/\/[^/]+:\d+$/);
+    expect(anchor.textContent?.trim()).toMatch(/^https:\/\/[^/]+$/);
   });
 });
 

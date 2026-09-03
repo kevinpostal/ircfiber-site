@@ -78,3 +78,16 @@ configuration "ircd-test" {
     mainSourceFile "tests/ircd_test.d"
     versions "VibeUseFibers"
 }
+
+// Pure-code unit test for the admin Logs SigNoz proxy reshape/sanitize
+// helpers (no SigNoz needed):
+//   dub --root=backend build --config=logs-test && ./backend/logs-test
+configuration "logs-test" {
+    targetType "executable"
+    targetName "logs-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/web/admin/logs.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d"
+    mainSourceFile "tests/logs_test.d"
+    versions "VibeUseFibers"
+}

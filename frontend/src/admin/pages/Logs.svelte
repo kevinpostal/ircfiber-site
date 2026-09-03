@@ -73,25 +73,27 @@
 
   // --- Error-toast translation ----------------------------------------
   // The raw error string from logsStore is informative for the inline
-  // error state, but operators care about two specific signals:
-  //   1. auth / rotation -- the SIGNOZ-API-KEY the Caddy file holds has
-  //      rotated out from under us; the Caddy reload will pick up the
-  //      new key but the browser cannot do that itself.
-  //   2. unreachable -- the tailnet listener is down OR VITE_SIGNOZ_URL
-  //      is misconfigured; surface both paths so the operator knows
-  //      which knob to turn.
+  // error state, but operators care about two specific signals, both
+  // of which now come from the gateway proxy (the browser never talks
+  // to SigNoz itself):
+  //   1. rejected API key -- the gateway's IRCFIBER_SIGNOZ_API_KEY is
+  //      missing or rotated; mint one in SigNoz -> Settings -> API Keys,
+  //      set vault_signoz_api_key, and redeploy the gateway.
+  //   2. unreachable -- the gateway cannot reach the SigNoz query API
+  //      over the tailnet; check IRCFIBER_SIGNOZ_URL/HOST and the
+  //      tailnet route from the VPS.
   $effect(() => {
     const err = $logsError;
     if (!err) return;
     const lower = err.toLowerCase();
-    if (lower.includes('auth') || lower.includes('rotat')) {
+    if (lower.includes('api key') || lower.includes('401')) {
       toastError(
-        'SigNoz API key may have been rotated - page reload may help',
+        'SigNoz rejected the API key - mint one in SigNoz Settings and redeploy the gateway',
         6000,
       );
     } else if (lower.includes('unreachable')) {
       toastError(
-        'SigNoz unreachable - set VITE_SIGNOZ_URL or check ircfiber-caddy has SIGNOZ_API_KEY',
+        'SigNoz unreachable from the gateway - check IRCFIBER_SIGNOZ_* env and tailnet',
         6000,
       );
     }

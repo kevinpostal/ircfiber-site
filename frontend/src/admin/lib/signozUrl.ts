@@ -1,19 +1,17 @@
 /**
- * Single source of truth for the tailnet SigNoz listener URL.
+ * Single source of truth for the tailnet SigNoz UI URL.
  *
  * The IRC Fiber admin SPA offers a deep link into the full SigNoz UI
- * (saved views, pivots, anomalies) via /signoz/logs. The listener URL
- * is rendered in the Logs page header.
+ * (saved views, pivots, anomalies) via /logs. The URL is rendered in
+ * the Logs page header and on per-row "open in SigNoz" links.
  *
- * Operationally, this lives on the deploy-managed Tailscale-only
- * listener (see deploy/roles/caddy/templates/Caddyfile.j2:174-184)
- * and is owned by ircfiber-caddy. If the listener IP/port changes,
- * update this file AND the Caddyfile.
- *
- * For local dev, the SigNoz URL is the VITE_SIGNOZ_URL env var (see
- * vite.config.ts). This file is INTENTIONALLY only the tailnet URL
- * because that one is configuration, not per-environment.
+ * Operationally this is the k8s SigNoz ingress over the tailnet
+ * (see deploy/k8s/signoz/ingress.yaml). It needs Tailscale MagicDNS
+ * on the client (e.g. the operator's tailnet-joined laptop) -- the
+ * old 198.51.100.1:3003 Caddy listener is gone. If the ingress
+ * host changes, update this file AND the ingress manifest.
  */
 
-export const TAILNET_SIGNOZ_URL = 'http://198.51.100.1:3003';
+export const TAILNET_SIGNOZ_URL =
+  'https://signoz.ubuntu-docker.tail544547.ts.net';
 export const TAILNET_SIGNOZ_LOGS_URL = `${TAILNET_SIGNOZ_URL}/logs`;

@@ -1,32 +1,31 @@
 /**
- * Pure TypeScript wrapper around the SigNoz v0.130 REST endpoints used by
- * the admin logs panel. No Svelte imports -- eligible for the lib project
- * test config (node, no DOM).
+ * Client for the admin logs panel. The browser NEVER talks to SigNoz
+ * directly: every call below hits the same-origin gateway proxy at
+ * `/api/admin/logs/*` (admin session required), and the gateway holds
+ * the SIGNOZ-API-KEY server-side (see backend/source/ircfiber/web/admin/logs.d).
+ * Request/response shapes are still the SigNoz v0.130 envelopes so the
+ * stores keep parsing what they parse today.
  *
- * Endpoints covered (all paths are relative to the page origin; the host
- * is whatever Caddy/Vite decides):
- *   POST /api/v5/query_range        -> queryRange(req)
- *   GET  /api/v1/services           -> services()
- *   GET  /api/v1/logs/fields        -> fields()
- *   GET  /api/v1/values             -> fieldValues(name, q?)
- *   GET  /api/v1/user               -> currentUser()
+ * No Svelte imports -- eligible for the lib project test config
+ * (node, no DOM).
  *
- * Live-tail WS helper (consumer appends "?filter=...&start=..." as needed):
- *   wsUrl(orgId)                    -> '/signoz/ws/logs/v5/{orgId}'
+ * Endpoints covered (all paths are relative to the page origin):
+ *   POST /api/admin/logs/query_range  -> queryRange(req)
+ *
+ * Service options are derived client-side from loaded rows: the
+ * installed SigNoz (v0.138) no longer serves /api/v1/services, so
+ * there is no services() helper.
+ *
+ * Live tail is polling-based (see admin/stores/logsLiveTail.ts), not a
+ * SigNoz WebSocket -- there is no wsUrl helper anymore.
  *
  * SECURITY (do not change without security review):
- *   This module NEVER sets a SIGNOZ-API-KEY header. The key is injected
- *   server-side by Caddy on /api/v1..5/* and /signoz/* reverse_proxy
- *   rules. If you are tempted to add an Authorization, x-api-key, or any
- *   other auth header here, stop and read
- *   deploy/roles/caddy/templates/Caddyfile.j2 instead. Browser-side code
- *   must never see the SigNoz key. Any change that adds such a header is
- *   a security regression and must be rejected in code review.
- *
- * Local-dev: in `npm run dev`, set VITE_SIGNOZ_URL to the SigNoz instance
- * with auth disabled, or use the EDITOR service account the deploy already
- * provisions. The vite dev proxy will forward /api/v1..5/ and /signoz/ to
- * that URL.
+ *   This module NEVER sets a SIGNOZ-API-KEY header. The key lives in
+ *   the gateway's IRCFIBER_SIGNOZ_API_KEY env. If you are tempted to
+ *   add an Authorization, x-api-key, or any other auth header here,
+ *   stop. Browser-side code must never see the SigNoz key. Any change
+ *   that adds such a header is a security regression and must be
+ *   rejected in code review.
  */
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -106,9 +105,10 @@ async function request<T>(
 ): Promise<T> {
   const url = appendQuery(path, opts.query);
 
-  // Headers are deliberately minimal: NO auth. Caddy adds the SIGNOZ-API-KEY
-  // server-side. Accept: application/json so non-JSON error pages fall
-  // through to statusText instead of being parsed as something they aren't.
+  // Headers are deliberately minimal: NO auth. The gateway holds the
+  // SIGNOZ-API-KEY server-side. Accept: application/json so non-JSON
+  // error pages fall through to statusText instead of being parsed as
+  // something they aren't.
   const headers: Record<string, string> = {
     Accept: 'application/json',
   };
@@ -144,7 +144,11 @@ async function request<T>(
       headers,
       body: payload,
       signal: ac.signal,
-      credentials: 'omit',
+      // Same-origin: the gateway proxy endpoints require the admin
+      // session cookie (requireAuth). The old Caddy SigNoz path needed
+      // no cookies because Caddy injected the key; the gateway path
+      // authenticates the operator instead.
+      credentials: 'same-origin',
     });
   } catch (e) {
     if (timer) clearTimeout(timer);
@@ -192,43 +196,7 @@ async function post<T>(
 // live contract if v0.131 changes the envelope.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** GET /api/v1/services -- SigNoz returns `{"data": ["service.name", ...]}`. */
-export interface ServicesResponse {
-  data?: readonly string[];
-}
 
-/** Single entry from GET /api/v1/logs/fields. Extra keys (version-specific)
- *  pass through `unknown` rather than `any`; narrow them at the call site
- *  after a runtime check. */
-export interface LogField {
-  name: string;
-  fieldContext?: string;
-  fieldDataType?: string;
-  type?: string;
-  readonly [extra: string]: unknown;
-}
-
-export interface LogFieldsResponse {
-  data?: readonly LogField[];
-}
-
-/** GET /api/v1/values -- cardinality-bounded distinct values for a log
- *  field. SigNoz historically returns `{values: []}`; newer payloads may
- *  nest under `data`, so both keys are typed (callers handle the union). */
-export interface FieldValuesResponse {
-  data?: readonly string[];
-  values?: readonly string[];
-}
-
-/** GET /api/v1/user -- only `orgId` is used by the logs panel; additional
- *  fields (email/name) are typed loosely so we don't have to track every
- *  field SigNoz adds in a minor release. */
-export interface CurrentUserResponse {
-  data?: { orgId?: string; email?: string; name?: string };
-  /** Some SigNoz versions return the orgId at the top level instead of
-   *  nested under `data`. Surfaced for compatibility. */
-  orgId?: string;
-}
 
 /** Per-query result inside a /api/v5/query_range response. Either `series`
  *  (time-series queries) or `list` (table/log queries) is populated;
@@ -280,52 +248,12 @@ export interface QueryRangeRequest {
 // Public API
 // ───────────────────────────────────────────────────────────────────────────
 
-/** POST /api/v5/query_range -- runs a SigNoz v5 query builder request. */
+/** POST query_range via the gateway proxy -- runs a SigNoz v5 builder query. */
 export function queryRange(
   req: QueryRangeRequest,
   opts?: RequestOptions,
 ): Promise<QueryRangeResponse> {
-  return post<QueryRangeResponse>('/api/v5/query_range', req, opts);
+  return post<QueryRangeResponse>('/api/admin/logs/query_range', req, opts);
 }
 
-/** GET /api/v1/services -- discovered service names. */
-export function services(opts?: RequestOptions): Promise<ServicesResponse> {
-  return get<ServicesResponse>('/api/v1/services', opts);
-}
 
-/** GET /api/v1/logs/fields -- log-queryable field catalogue. */
-export function fields(opts?: RequestOptions): Promise<LogFieldsResponse> {
-  return get<LogFieldsResponse>('/api/v1/logs/fields', opts);
-}
-
-/** GET /api/v1/values -- distinct values for a log field. The optional
- *  `q` is the SigNoz v1 prefix-substring filter; omit it to fetch the
- *  full first page. */
-export function fieldValues(
-  name: string,
-  q?: string,
-  opts?: RequestOptions,
-): Promise<FieldValuesResponse> {
-  const query: Record<string, string> = { param0: name };
-  if (q !== undefined) query.query = q;
-  return get<FieldValuesResponse>('/api/v1/values', {
-    ...(opts ?? {}),
-    query,
-  });
-}
-
-/** GET /api/v1/user -- current SigNoz session, used to discover the
- *  org id for live-tail WS URL construction. */
-export function currentUser(
-  opts?: RequestOptions,
-): Promise<CurrentUserResponse> {
-  return get<CurrentUserResponse>('/api/v1/user', opts);
-}
-
-/** Browser-relative URL for the live-tail WS endpoint, served through the
- *  existing /signoz/* Caddy route so the SIGNOZ-API-KEY header is
- *  injected server-side. The consumer appends `?filter=...&start=...`
- *  themselves as needed before constructing `new WebSocket(...)`. */
-export function wsUrl(orgId: string): string {
-  return `/signoz/ws/logs/v5/${encodeURIComponent(orgId)}`;
-}

@@ -104,6 +104,17 @@ bnc_public_port: 7000
 bnc_container_name: "ircfiber-bnc"
 bnc_tls_cert_path: "/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{{ bnc_public_host }}/{{ bnc_public_host }}.crt"
 bnc_tls_key_path: "/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/{{ bnc_public_host }}/{{ bnc_public_host }}.key"
+# Protocol trace (every BNC client/server line at info, PASS redacted).
+# High volume — set true only to diagnose drops, then redeploy with false.
+bnc_trace: false
+# --- SigNoz query API (admin Logs page, gateway-side proxy) ------------------
+# The gateway container has no Tailscale MagicDNS, so the URL is the
+# tailnet IP with a Host-header override for the SNI-routed Traefik
+# ingress. Traefik serves its default self-signed cert -> insecure TLS
+# stays on (transport is still WireGuard-encrypted end to end).
+signoz_query_url: "https://100.94.116.56"
+signoz_query_host: "signoz.ubuntu-docker.tail544547.ts.net"
+signoz_insecure_tls: true
 # --- Caddy --------------------------------------------------------------------
 caddy_data_volume: "ircfiber_caddy_data"
 caddy_config_volume: "ircfiber_caddy_config"

@@ -1,20 +1,18 @@
 /**
- * logsLiveTail -- WS reconnect store with exponential backoff.
+ * logsLiveTail -- polling live tail over the gateway proxy.
  *
  * Mirrors the existing test patterns in this directory:
- *   - `vi.useFakeTimers()` for deterministic backoff scheduling
- *   - `vi.stubGlobal('WebSocket', MockWS)` to swap in a fake socket
- *     (the real WebSocket constructor is non-configurable in
+ *   - real timers with short `setTimeout` waits (the
+ *     browser-playwright provider does not reliably honor
+ *     vi.useFakeTimers -- see LogsToolbar.svelte.test.ts)
+ *   - `vi.stubGlobal('fetch', ...)` so queryRange() resolves against a
+ *     canned SigNoz envelope (the real fetch is non-configurable in
  *     vitest's playwright-browser mode)
  *   - `__resetForTesting()` in beforeEach to wipe module-scoped state
  *     (the static-import + browser cache combo makes
  *     `vi.resetModules()` unreliable -- see logsStore.test.ts)
- *
- * The MockWS below exposes onopen/onmessage/onerror/onclose as
- * settable properties (matching native WebSocket) so the production
- * code's property-assignment handlers work without modification.
- * The `fire(type, ...)` helper invokes the registered handler to
- * simulate server events.
+ *   - `__setPollIntervalForTesting(50)` to shrink the 5s production
+ *     cadence so interval tests finish in hundreds of ms
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
@@ -22,93 +20,70 @@ import * as mod from './logsLiveTail';
 import * as logs from './logsStore';
 import { toasts } from './ui';
 
-// ── Mock WebSocket ─────────────────────────────────────────────────────────
+// ── Fetch mock ─────────────────────────────────────────────────────────────
 
-interface MockWS {
-  url: string;
-  readyState: number;
-  onopen: ((ev: Event) => void) | null;
-  onmessage: ((ev: MessageEvent) => void) | null;
-  onerror: ((ev: Event) => void) | null;
-  onclose: ((ev: CloseEvent) => void) | null;
-  close: ReturnType<typeof vi.fn>;
-  send: ReturnType<typeof vi.fn>;
-  fire(type: 'open' | 'message' | 'error' | 'close', payload?: unknown): void;
+function mockListResponse(list: unknown[], status = 200): Response {
+  return new Response(JSON.stringify({ data: { A: { list } } }), {
+    status,
+  });
 }
 
-class MockWebSocket {
-  static instances: MockWS[] = [];
-  static lastInstance(): MockWS | null {
-    const all = MockWebSocket.instances;
-    return all.length === 0 ? null : (all[all.length - 1] as MockWS);
-  }
-
-  url: string;
-  readyState = 0; // CONNECTING
-  onopen: ((ev: Event) => void) | null = null;
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onerror: ((ev: Event) => void) | null = null;
-  onclose: ((ev: CloseEvent) => void) | null = null;
-  close = vi.fn();
-  send = vi.fn();
-
-  constructor(url: string) {
-    this.url = url;
-    (this as unknown as MockWS).url = url;
-    MockWebSocket.instances.push(this as unknown as MockWS);
-  }
-
-  /** Simulate a server event by invoking the production code's
-   *  registered property handler. We pass a synthetic Event so the
-   *  handler's parameter typing is satisfied. */
-  fire(type: 'open' | 'message' | 'error' | 'close', payload?: unknown): void {
-    const m = this as unknown as MockWS;
-    if (type === 'open' && m.onopen) m.onopen(new Event('open'));
-    else if (type === 'message' && m.onmessage)
-      m.onmessage(new MessageEvent('message', { data: payload as string }));
-    else if (type === 'error' && m.onerror) m.onerror(new Event('error'));
-    else if (type === 'close' && m.onclose)
-      m.onclose(new CloseEvent('close'));
-  }
+function row(ts: number, body: string, extra: Record<string, unknown> = {}) {
+  return {
+    timestamp: ts,
+    severity_text: 'INFO',
+    service_name: 'ircfiber-gateway',
+    body,
+    ...extra,
+  };
 }
 
-// Patch the static constants onto the class so anything that reads
-// `WebSocket.OPEN` etc. still works (production code doesn't, but
-// future consumers might).
-(MockWebSocket as unknown as { CONNECTING: number }).CONNECTING = 0;
-(MockWebSocket as unknown as { OPEN: number }).OPEN = 1;
-(MockWebSocket as unknown as { CLOSING: number }).CLOSING = 2;
-(MockWebSocket as unknown as { CLOSED: number }).CLOSED = 3;
+let fetchSpy: ReturnType<typeof vi.fn>;
 
 // ── Lifecycle / setup ──────────────────────────────────────────────────────
 
+function wait(ms: number): Promise<void> {
+  return new Promise<void>((r) => setTimeout(r, ms));
+}
+
 beforeEach(() => {
-  vi.useFakeTimers();
-  MockWebSocket.instances = [];
-  vi.stubGlobal('WebSocket', MockWebSocket);
+  fetchSpy = vi.fn();
+  vi.stubGlobal('fetch', fetchSpy);
   mod.__resetForTesting();
   logs.__resetForTesting();
   toasts.set([]);
+  mod.__setPollIntervalForTesting(50);
 });
 
 afterEach(() => {
   mod.__resetForTesting();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.useRealTimers();
 });
 
-/** Advance the fake clock past any pending reconnect timer AND wait
- *  for the resulting openConnection() chain (discoverOrgId -> new
- *  WebSocket) to construct the next socket. Without the async
- *  variant, vi.advanceTimersByTime fires the timer synchronously but
- *  the awaits inside openConnection never get to resolve, so the
- *  next iteration's `lastInstance()` would still point at the prior
- *  (already-closed) socket. */
-async function flushBackoff(): Promise<void> {
-  await vi.advanceTimersByTimeAsync(60_000);
-  await Promise.resolve();
-  await Promise.resolve();
+function lastRequestBody(): Record<string, any> {
+  const calls = fetchSpy.mock.calls;
+  const init = calls[calls.length - 1][1] as { body?: string };
+  return JSON.parse(init.body ?? '{}') as Record<string, any>;
+}
+
+function expressionOf(body: Record<string, any>): string {
+  return body.compositeQuery.queries[0].spec.filter.expression as string;
+}
+
+/** Wait until the tail reaches a status (throws on timeout so a stuck
+ *  tail fails loudly instead of hanging the suite). */
+async function waitForStatus(
+  s: 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed',
+  timeoutMs = 3000,
+): Promise<void> {
+  const t0 = Date.now();
+  while (get(mod.liveTailStatus) !== s) {
+    if (Date.now() - t0 > timeoutMs) {
+      throw new Error(`timed out waiting for live-tail status ${s}`);
+    }
+    await wait(25);
+  }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -119,9 +94,6 @@ describe('logsLiveTail: status writable contract', () => {
   });
 
   it('LiveTailStatus is a string literal union, not an enum', () => {
-    // Compile-time guarantee backed by the type signature; the runtime
-    // check is the const-assertion below which would be `false` if
-    // someone replaced the union with a `string` or an enum object.
     const values: readonly mod.LiveTailStatus[] = [
       'idle',
       'connecting',
@@ -136,391 +108,202 @@ describe('logsLiveTail: status writable contract', () => {
       'reconnecting',
       'closed',
     ]);
-    // Sanity: assert the writable accepts only those five strings.
-    // If LiveTailStatus were widened to `string`, the next line would
-    // still compile (acceptable), but the explicit literal annotation
-    // pins the contract at the call site.
     mod.liveTailStatus.set('connecting');
     expect(get(mod.liveTailStatus)).toBe('connecting');
   });
 });
 
-describe('logsLiveTail: startLiveTail() idempotency + URL construction', () => {
-  it('opens a WS using signoz.wsUrl(orgId), absolute URL anchored to location.origin', async () => {
-    // Stub fetch via globalThis so currentUser() resolves with an orgId.
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'my-org' } }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
-
-    mod.startLiveTail({ query: 'severity=ERROR' });
-
-    // Let the discoverOrgId() promise resolve and the WS construct.
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-
-    const ws = MockWebSocket.lastInstance()!;
-    expect(ws.url).toBe(`${location.origin}/signoz/ws/logs/v5/my-org`);
+describe('logsLiveTail: start polls the gateway proxy', () => {
+  it('runs an immediate queryRange POST and opens on success', async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([row(1_700_000_000_000, 'hello')])));
+    mod.startLiveTail({});
     expect(get(mod.liveTailStatus)).toBe('connecting');
+    await waitForStatus('open');
+
+    expect(get(logs.logsLive)).toBe(true);
+    mod.stopLiveTail();
+    expect(fetchSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, { method: string }];
+    expect(url).toBe('/api/admin/logs/query_range');
+    expect(init.method).toBe('POST');
+    expect(get(logs.logs).results).toHaveLength(1);
+    expect(get(logs.logs).results[0]?.body).toBe('hello');
   });
 
-  it('second startLiveTail while connecting is a no-op (single WS instance)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-1' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
+  it('serializes the filter snapshot into builder clauses', async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([])));
+    mod.startLiveTail({
+      query: 'boom',
+      severities: ['ERROR'],
+      services: ['ircfiber-engine'],
     });
-    // Second call while still connecting -- must NOT construct a new WS.
-    mod.startLiveTail();
-    expect(MockWebSocket.instances.length).toBe(1);
+    await wait(150);
 
-    // After open, still no-op.
-    MockWebSocket.lastInstance()!.fire('open');
-    mod.startLiveTail();
-    expect(MockWebSocket.instances.length).toBe(1);
+    const expr = expressionOf(lastRequestBody());
+    expect(expr).toContain(`severity_text IN ('ERROR')`);
+    expect(expr).toContain(`service.name IN ('ircfiber-engine')`);
+    expect(expr).toContain(`body CONTAINS 'boom'`);
   });
 
-  it('startLiveTail from closed resets attempt counter and retries', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'retry-org' } }), {
-        status: 200,
-      }),
+  it('second startLiveTail while open is a no-op (single interval)', async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([])));
+    mod.startLiveTail({});
+    await waitForStatus('open');
+    // A redundant start must not fire a second immediate poll: the
+    // call count synchronously after the call is unchanged (an
+    // interval tick cannot fire synchronously).
+    const calls = fetchSpy.mock.calls.length;
+    mod.startLiveTail({});
+    expect(fetchSpy.mock.calls.length).toBe(calls);
+    expect(get(mod.liveTailStatus)).toBe('open');
+    mod.stopLiveTail();
+  });
+});
+
+describe('logsLiveTail: interval re-poll + dedup', () => {
+  it('appends new rows on each tick and skips already-seen ids', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      mockListResponse([row(100, 'first'), row(200, 'second')]),
     );
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(
+        mockListResponse([row(100, 'first'), row(200, 'second'), row(300, 'third')]),
+      ),
+    );
+    mod.startLiveTail({});
+    await wait(300);
+    const bodies = get(logs.logs).results.map((r) => r.body);
+    expect(bodies).toContain('first');
+    expect(bodies).toContain('second');
+    expect(bodies).toContain('third');
+    expect(bodies.filter((b) => b === 'first')).toHaveLength(1);
+    expect(bodies.filter((b) => b === 'second')).toHaveLength(1);
+  });
 
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
+  it('skips rows older than the newest appended row even with unseen ids', async () => {
+    fetchSpy.mockResolvedValueOnce(mockListResponse([row(500, 'new')]));
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(
+        mockListResponse([row(400, 'late-duplicate'), row(600, 'next')]),
+      ),
+    );
+    mod.startLiveTail({});
+    await wait(300);
+    const bodies = get(logs.logs).results.map((r) => r.body);
+    expect(bodies).toContain('new');
+    expect(bodies).toContain('next');
+    expect(bodies).not.toContain('late-duplicate');
+  });
 
-    // Drive 10 consecutive close events to land in `closed`.
-    for (let i = 0; i < 10; i++) {
-      const cur = MockWebSocket.lastInstance()!;
-      // If a reconnect timer fired since the last close, the active
-      // WS has moved on -- that's the expected backoff loop.
-      cur.fire('close');
-      await flushBackoff();
-    }
+  it('drops rows that fail the LogRow contract silently', async () => {
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve(
+        mockListResponse([
+          row(100, 'ok'),
+          { timestamp: 101, severity_text: 'NOPE', body: 'bad sev' },
+          'not-an-object',
+        ]),
+      ),
+    );
+    mod.startLiveTail({});
+    await wait(200);
+    expect(get(logs.logs).results.map((r) => r.body)).toEqual(['ok']);
+  });
+});
+
+describe('logsLiveTail: stopLiveTail() cleanup', () => {
+  it('clears the interval and resets status to idle', async () => {
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([])));
+    mod.startLiveTail({});
+    await wait(150);
+    expect(get(mod.liveTailStatus)).toBe('open');
+
+    mod.stopLiveTail();
+    expect(get(mod.liveTailStatus)).toBe('idle');
+    expect(get(logs.logsLive)).toBe(false);
+    const calls = fetchSpy.mock.calls.length;
+    await wait(200);
+    // No further interval ticks after stop.
+    expect(fetchSpy.mock.calls.length).toBe(calls);
+  });
+
+  it('is safe to call when already idle', () => {
+    expect(() => mod.stopLiveTail()).not.toThrow();
+    expect(get(mod.liveTailStatus)).toBe('idle');
+  });
+});
+
+describe('logsLiveTail: failure counting + 10-failure cap', () => {
+  it('a failed poll flips to reconnecting and recovers on the next success', async () => {
+    // Fail everything first so the tail deterministically lands in
+    // reconnecting (no later tick can succeed early and mask it).
+    fetchSpy.mockRejectedValue(new TypeError('fetch failed'));
+    mod.startLiveTail({});
+    await waitForStatus('reconnecting');
+    expect(get(mod.liveTailAttempt)).toBeGreaterThanOrEqual(1);
+
+    fetchSpy.mockReset();
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([row(100, 'back')])));
+    await waitForStatus('open');
+    expect(get(mod.liveTailAttempt)).toBe(0);
+    expect(get(logs.logs).results).toHaveLength(1);
+    mod.stopLiveTail();
+  });
+
+  it('after 10 consecutive failures status becomes closed with an error', async () => {
+    fetchSpy.mockRejectedValue(new TypeError('fetch failed'));
+    mod.startLiveTail({});
+    // Immediate poll + 9 interval ticks at 50ms = 10 failures.
+    await wait(800);
     expect(get(mod.liveTailStatus)).toBe('closed');
-    expect(get(mod.liveTailAttempt)).toBe(10);
+    expect(get(mod.liveTailError)).toContain('10 attempts');
+    const callsAfterClose = fetchSpy.mock.calls.length;
+    await wait(200);
+    expect(fetchSpy.mock.calls.length).toBe(callsAfterClose);
+  });
 
-    // Manual restart from `closed` must reset the counter and construct
-    // a new WS (which is exactly what the `closed -> connecting` edge
-    // in the state machine promises).
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(11);
-    });
-    expect(get(mod.liveTailStatus)).toBe('connecting');
+  it('startLiveTail from closed resets the counter and retries', async () => {
+    fetchSpy.mockRejectedValue(new TypeError('fetch failed'));
+    mod.startLiveTail({});
+    await wait(800);
+    expect(get(mod.liveTailStatus)).toBe('closed');
+
+    fetchSpy.mockReset();
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([])));
+    mod.startLiveTail({});
+    await wait(150);
+    expect(get(mod.liveTailStatus)).toBe('open');
     expect(get(mod.liveTailAttempt)).toBe(0);
     expect(get(mod.liveTailError)).toBeNull();
   });
 });
 
-describe('logsLiveTail: stopLiveTail() cleanup', () => {
-  it('closes WS, clears timer, and resets status to idle', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-2' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-    MockWebSocket.lastInstance()!.fire('open');
-    expect(get(mod.liveTailStatus)).toBe('open');
-
-    mod.stopLiveTail();
-    expect(MockWebSocket.lastInstance()!.close).toHaveBeenCalledTimes(1);
-    expect(get(mod.liveTailStatus)).toBe('idle');
-    expect(get(logs.wsReady)).toBe('closed');
-    expect(get(logs.logsLive)).toBe(false);
-    expect(get(mod.liveTailError)).toBeNull();
-
-    // Advancing the clock should NOT spawn a new WS -- the reconnect
-    // timer must have been cleared by stopLiveTail().
-    vi.advanceTimersByTime(120_000);
-    expect(MockWebSocket.instances.length).toBe(1);
-  });
-
-  it('clear during reconnect prevents further retries', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-3' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-
-    // First close -> reconnecting + timer armed.
-    MockWebSocket.lastInstance()!.fire('close');
-    expect(get(mod.liveTailStatus)).toBe('reconnecting');
-    expect(MockWebSocket.instances.length).toBe(1);
-
-    // Stop while reconnecting -- close the in-flight WS handle (it's
-    // already null after the close event, but stopLiveTail must not
-    // blow up if `ws` is null) and clear the timer.
-    mod.stopLiveTail();
-    expect(get(mod.liveTailStatus)).toBe('idle');
-
-    // Advancing the clock past the would-be reconnect delay must NOT
-    // construct a second WS.
-    vi.advanceTimersByTime(120_000);
-    expect(MockWebSocket.instances.length).toBe(1);
-  });
-});
-
-describe('logsLiveTail: exponential backoff + jitter', () => {
+describe('logsLiveTail: exponential backoff schedule (delayForAttempt)', () => {
   it('backoff schedule progresses 1s, 2s, 4s, 8s, 16s, 30s with +/-20% jitter', () => {
-    // Sample 100 runs of delayForAttempt(n) for each attempt n and
-    // assert the distribution sits within the +/-20% band of the base.
-    // With Math.random, a 100-sample mean is statistically near the
-    // center of the band; an out-of-range sample would be a real bug.
-    const samples = 200;
     const bases = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
-    for (let attempt = 1; attempt <= bases.length; attempt++) {
-      const base = bases[attempt - 1]!;
-      const lo = base * 0.8;
-      const hi = base * 1.2;
-      let allInRange = true;
-      let min = Infinity;
-      let max = -Infinity;
-      for (let i = 0; i < samples; i++) {
-        const d = mod.delayForAttempt(attempt);
-        if (d < lo || d > hi) allInRange = false;
-        if (d < min) min = d;
-        if (d > max) max = d;
+    for (let n = 1; n <= 6; n++) {
+      for (let i = 0; i < 25; i++) {
+        const d = mod.delayForAttempt(n);
+        expect(d).toBeGreaterThanOrEqual(Math.max(1_000, bases[n - 1]! * 0.8 - 1));
+        expect(d).toBeLessThanOrEqual(bases[n - 1]! * 1.2 + 1);
       }
-      // The floor of 1000 only affects attempt=1 (lo would be 800).
-      // For attempts >= 2, the jitter band is naturally >= 1600ms.
-      const floor = attempt === 1 ? 1_000 : 0;
-      const effectiveLo = Math.max(lo, floor);
-      expect(allInRange).toBe(true);
-      expect(min).toBeGreaterThanOrEqual(effectiveLo - 1); // off-by-one safety
-      expect(max).toBeLessThanOrEqual(Math.ceil(hi));
     }
-  });
-
-  it('reconnect timer fires the next openConnection attempt', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-4' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-
-    // Close the first attempt -- reconnecting.
-    MockWebSocket.lastInstance()!.fire('close');
-    expect(get(mod.liveTailStatus)).toBe('reconnecting');
-    expect(get(mod.liveTailAttempt)).toBe(1);
-
-    // Advance past the (jittered) first backoff window. We use a
-    // generous 5s advance because the base is 1s +/- 20% plus the 1s
-    // floor; 5s comfortably covers any jitter + clock skew.
-    await flushBackoff();
-
-    // A second WS must have been constructed by the timer.
-    expect(MockWebSocket.instances.length).toBe(2);
-  });
-});
-
-describe('logsLiveTail: 10-failure cap', () => {
-  it('after 10 consecutive closes, status becomes closed and no further timers fire', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-5' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-
-    for (let i = 0; i < 10; i++) {
-      const cur = MockWebSocket.lastInstance()!;
-      cur.fire('close');
-      // Only the first 9 closes schedule a reconnect timer; the 10th
-      // flips to `closed` and stops.
-      if (i < 9) await flushBackoff();
-    }
-
-    expect(get(mod.liveTailStatus)).toBe('closed');
-    expect(get(mod.liveTailAttempt)).toBe(10);
-    expect(get(mod.liveTailError)).toMatch(/unavailable after 10 attempts/i);
-    expect(get(logs.wsReady)).toBe('closed');
-
-    const instancesAtCap = MockWebSocket.instances.length;
-    // Advance a long time -- no further reconnects must be scheduled.
-    vi.advanceTimersByTime(10 * 60_000);
-    expect(MockWebSocket.instances.length).toBe(instancesAtCap);
-  });
-});
-
-describe('logsLiveTail: orgId discovery', () => {
-  it('falls back to "default" with a toast warn when /api/v1/user fails', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response('internal server error', { status: 500 }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-
-    const ws = MockWebSocket.lastInstance()!;
-    // The path still routes through wsUrl('default') -- that's the
-    // literal fallback the spec requires.
-    expect(ws.url).toBe(`${location.origin}/signoz/ws/logs/v5/default`);
-
-    const warns = get(toasts).filter((t) => t.kind === 'warn');
-    expect(warns.length).toBeGreaterThan(0);
-    expect(warns[0]!.message).toMatch(/orgId/i);
-  });
-
-  it('falls back to "default" when /api/v1/user returns 200 with no orgId', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: {} }), { status: 200 }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-
-    expect(MockWebSocket.lastInstance()!.url).toBe(
-      `${location.origin}/signoz/ws/logs/v5/default`,
-    );
-  });
-
-  it('caches the discovered orgId across reconnect attempts', async () => {
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'cached-org' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-
-    // First close -> reconnecting, timer armed.
-    MockWebSocket.lastInstance()!.fire('close');
-    await flushBackoff();
-
-    // Second WS constructed, but fetch should NOT have been called
-    // again because the orgId is cached after the first discovery.
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(MockWebSocket.instances.length).toBe(2);
-  });
-});
-
-describe('logsLiveTail: WS message -> LogRow append', () => {
-  it('appends a valid row to logs.results and caps at 10_000 entries', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-6' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-    MockWebSocket.lastInstance()!.fire('open');
-
-    // Fire one batch with two rows (object + array payload both valid).
-    MockWebSocket.lastInstance()!.fire(
-      'message',
-      JSON.stringify([
-        {
-          timestamp: 1_700_000_000_000,
-          severity_text: 'ERROR',
-          service_name: 'irc-fiber-engine',
-          body: 'first row',
-          trace_id: 'trace-1',
-        },
-        {
-          timestamp: 1_700_000_001_000,
-          severity_text: 'INFO',
-          service_name: 'irc-fiber-engine',
-          body: 'second row',
-        },
-      ]),
-    );
-
-    const results = get(logs.logs).results;
-    expect(results.length).toBe(2);
-    expect(results[0]!.body).toBe('first row');
-    expect(results[0]!.traceId).toBe('trace-1');
-    expect(results[0]!.severity).toBe('ERROR');
-    expect(results[1]!.body).toBe('second row');
-    expect(results[1]!.traceId).toBeUndefined();
-  });
-
-  it('drops invalid rows silently (no throw, no append)', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-7' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-    MockWebSocket.lastInstance()!.fire('open');
-
-    // Invalid: severity is a non-union string, no body. Must NOT throw.
-    expect(() =>
-      MockWebSocket.lastInstance()!.fire(
-        'message',
-        JSON.stringify({ severity_text: 'BOGUS', service_name: 'x' }),
-      ),
-    ).not.toThrow();
-
-    expect(get(logs.logs).results).toEqual([]);
+    // Caps at 30s past the end of the table.
+    expect(mod.delayForAttempt(99)).toBeLessThanOrEqual(30_000 * 1.2 + 1);
   });
 });
 
 describe('logsLiveTail: status -> wsReady mirroring', () => {
   it('drives logsStore.wsReady through the open / reconnecting / closed lifecycle', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-8' } }), {
-        status: 200,
-      }),
-    );
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
-    // During `connecting`, wsReady is the closed-equivalent (nothing
-    // usable yet) -- this matches the w2-t2 toolbar badge contract.
-    expect(get(logs.wsReady)).toBe('closed');
-
-    MockWebSocket.lastInstance()!.fire('open');
-    expect(get(logs.wsReady)).toBe('open');
-
-    MockWebSocket.lastInstance()!.fire('close');
+    fetchSpy.mockRejectedValue(new TypeError('fetch failed'));
+    mod.startLiveTail({});
+    await waitForStatus('reconnecting');
     expect(get(logs.wsReady)).toBe('reconnecting');
+
+    fetchSpy.mockReset();
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([])));
+    await waitForStatus('open');
+    expect(get(logs.wsReady)).toBe('open');
 
     mod.stopLiveTail();
     expect(get(logs.wsReady)).toBe('closed');
@@ -529,26 +312,12 @@ describe('logsLiveTail: status -> wsReady mirroring', () => {
 
 describe('logsLiveTail: isLiveTailActive() predicate', () => {
   it('returns true only for connecting/open/reconnecting', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: { orgId: 'org-9' } }), {
-        status: 200,
-      }),
-    );
-
     expect(mod.isLiveTailActive()).toBe(false);
-
-    mod.startLiveTail();
-    await vi.waitFor(() => {
-      expect(MockWebSocket.instances.length).toBe(1);
-    });
+    fetchSpy.mockImplementation(() => Promise.resolve(mockListResponse([])));
+    mod.startLiveTail({});
     expect(mod.isLiveTailActive()).toBe(true);
-
-    MockWebSocket.lastInstance()!.fire('open');
+    await wait(150);
     expect(mod.isLiveTailActive()).toBe(true);
-
-    MockWebSocket.lastInstance()!.fire('close');
-    expect(mod.isLiveTailActive()).toBe(true);
-
     mod.stopLiveTail();
     expect(mod.isLiveTailActive()).toBe(false);
   });

@@ -21,13 +21,11 @@
   debounce so a single keystroke burst collapses to one refetch.
 
   Security note (cURL export): the command omits any Authorization /
-  SIGNOZ-API-KEY header. The browser never sees the SigNoz key -- Caddy
-  injects it server-side on the /api/v5/* proxy. See
-  deploy/roles/caddy/templates/Caddyfile.j2 for the auth-injection config.
+  SIGNOZ-API-KEY header. The browser never sees the SigNoz key -- the
+  gateway holds it server-side (see backend/source/ircfiber/web/admin/logs.d).
   Any change that adds a header here is a security regression.
 -->
 <script lang="ts">
-  import { services } from '../../../lib/signoz';
   import {
     logs,
     logsLoading,
@@ -60,9 +58,20 @@
   // is the debounced sink; typing only flips `queryText` and waits.
   let queryText = $state('');
   let servicesOpen = $state(false);
-  let servicesLoaded = $state(false);
-  let serviceNames = $state<string[]>([]);
-  let servicesLoading = $state(false);
+  // Service options are derived from the loaded rows: the installed
+  // SigNoz (v0.138) has no services catalogue endpoint, so the
+  // dropdown lists the distinct service names seen in the current
+  // result set (alpha-sorted). Active filter values are unioned in so
+  // a selected service never vanishes when a new query returns no
+  // rows for it.
+  let serviceNames = $derived.by(() => {
+    const seen = new Set<string>();
+    for (const r of $logs?.results ?? []) {
+      if (r.service) seen.add(r.service);
+    }
+    for (const s of $logs?.services ?? []) seen.add(s);
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  });
   let customRangeOpen = $state(false);
   let customStart = $state('');
   let customEnd = $state('');
@@ -111,35 +120,11 @@
   // --- Services multi-select -------------------------------------------
   // The native <select multiple> approach is mandated by the plan
   // ("do_not_reinvestigate: dropdown UI library -- use native <select
-  // multiple> + custom chip overlay"). Lazy-load on first open via a
-  // `servicesLoaded` flag so the toolbar never hits /api/v1/services on
-  // mount -- only when the operator opens the dropdown.
-  async function openServices(): Promise<void> {
+  // multiple> + custom chip overlay"). Options are the derived
+  // `serviceNames` above, so opening the dropdown is synchronous and
+  // never fetches.
+  function openServices(): void {
     servicesOpen = true;
-    if (servicesLoaded || servicesLoading) return;
-    servicesLoading = true;
-    try {
-      const r = await services();
-      // signoz.services() returns { data?: string[] }. Drop empty /
-      // non-string entries defensively -- the contract allows unknown
-      // server extensions and we don't want a TypeError on a malformed
-      // payload.
-      const names = (r?.data ?? []).filter(
-        (n): n is string => typeof n === 'string' && n.length > 0,
-      );
-      // Stable, alpha sort so the dropdown is reproducible across opens.
-      names.sort((a, b) => a.localeCompare(b));
-      serviceNames = names;
-      servicesLoaded = true;
-    } catch {
-      // Fail silent -- the toolbar should not throw from a UI gesture.
-      // The operator can re-open to retry; eventually the live-task
-      // (w3-t1) will surface WS / HTTP errors in the badge area.
-      serviceNames = [];
-      servicesLoaded = true; // mark loaded so we don't spin forever
-    } finally {
-      servicesLoading = false;
-    }
   }
 
   function onServiceChange(e: Event): void {
@@ -197,9 +182,9 @@
   }
 
   // --- Live toggle wire-up ----------------------------------------------
-  // Connect the toolbar's `logsLive` flag to the actual WS lifecycle:
-  // `startLiveTail()` opens the socket with a snapshot of the current
-  // filter, `stopLiveTail()` tears it down. The `wasLive` flag tracks
+  // Connect the toolbar's `logsLive` flag to the polling tail lifecycle:
+  // `startLiveTail()` snapshots the current filter and polls the gateway
+  // proxy every 5s, `stopLiveTail()` clears the interval. The `wasLive` flag tracks
   // the previous value so we only fire on transitions (not on every
   // reactive read of the store -- which would be a no-op anyway, but
   // would still call into the WS layer spuriously on mount).
@@ -226,8 +211,8 @@
     wasLive = live;
   });
 
-  // Auto-toggle off + toast on permanent failure. When the WS layer
-  // hits MAX_ATTEMPTS and flips status to 'closed', we surface the
+  // Auto-toggle off + toast on permanent failure. When the polling
+  // tail hits MAX_ATTEMPTS and flips status to 'closed', we surface the
   // error to the operator and pull the switch back. The wire-up effect
   // above will then call `stopLiveTail()` as a cascade of `toggleLive()`
   // flipping `logsLive` to false.
@@ -242,8 +227,11 @@
   // --- Copy as cURL -----------------------------------------------------
   // SECURITY: This command intentionally has NO Authorization /
   // x-api-key / SIGNOZ-API-KEY header. The browser never sees the
-  // SigNoz key. Caddy injects it server-side on /api/v5/* proxy.
-  // See deploy/roles/caddy/templates/Caddyfile.j2.
+  // SigNoz key -- the gateway holds it server-side.
+  // NOTE: the pasted command replays against the gateway proxy, which
+  // requires the admin session cookie. Run it with the browser's cookies
+  // (e.g. via DevTools "copy as cURL" on a live request) or add
+  // --cookie with a valid admin session.
   // The single-quote escaping (\\' -> \') is sufficient for the JSON
   // payload we produce because JSON.stringify wraps all keys/strings
   // in double quotes -- the only way a single quote can land inside
@@ -252,7 +240,7 @@
   // in case future filter formats change.
   function buildCurl(): string {
     const body = ($logs?.lastQueryBody ?? {}) as unknown;
-    const url = new URL('/api/v5/query_range', location.origin).href;
+    const url = new URL('/api/admin/logs/query_range', location.origin).href;
     const json = JSON.stringify(body).replace(/'/g, "\\'");
     return [
       `curl -sS -X POST '${url}' \\`,
@@ -422,9 +410,6 @@
       data-testid="logs-services-select"
       class="max-w-xs rounded-md border border-border bg-surface-2 px-2 py-1 text-xs text-text"
     >
-      {#if servicesLoading}
-        <option disabled selected>Loading services&hellip;</option>
-      {/if}
       {#each serviceNames as name}
         <option value={name} selected={($logs?.services ?? []).includes(name)}>
           {name}
