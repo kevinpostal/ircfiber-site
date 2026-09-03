@@ -103,4 +103,10 @@ export function getPastebinIdFromUrl(): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 export function isPastebinUrl(): boolean { return /^\?\/pastebin=/.test(window.location.search); }
-export function navigateBackFromPastebin(): void { history.back(); }
+export function navigateBackFromPastebin(): void {
+  // Direct-link visitors (e.g. a shared public pastebin URL) have no
+  // in-app history: history.back() would be a dead button, so send
+  // them to the landing page instead.
+  if (window.history.length > 1) history.back();
+  else window.location.href = '/';
+}

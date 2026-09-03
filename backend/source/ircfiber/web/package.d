@@ -126,6 +126,15 @@ final class WebController {
         // Logged-in users get the SPA, which detects auth state via /api/me.
         const sid = req.session ? req.session.get("sessionUserId", "") : "";
         if (sid.length == 0) {
+            // Public share routes render the SPA without login so links
+            // can be shared (e.g. /?/pastebin=<id>). The SPA boots
+            // unauthenticated, skips the LoginPage overlay for these
+            // routes (see App.svelte), and the viewer fetches the
+            // public /api/pastebins/:id endpoint.
+            if (path == "/" && req.queryString.startsWith("/pastebin=")) {
+                res.render!("index.dt")();
+                return;
+            }
             serveLanding(req, res);
             return;
         }
