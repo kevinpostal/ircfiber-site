@@ -2263,7 +2263,12 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
             }
           }
           existingBuf.isPinned = incomingBuf.isPinned;
-          existingBuf.isArchived = incomingBuf.isArchived;
+          // Archived is client-owned via archivedMap (persisted to server
+          // prefs + broadcast as "archived", not per-buffer in sync).
+          // Server never sends chan["isArchived"], so blind copy would
+          // clobber local true with undefined on every sync/reconnect and
+          // reopen closed DMs like Zodiac/KneeGrow. Derive from map.
+          existingBuf.isArchived = !!archivedMap[`${existing.networkId}:${existingBuf.name}`];
           existingBuf.lastSeenMsgTime = incomingBuf.lastSeenMsgTime;
           existingBuf.firstUnseenMsgIndex = incomingBuf.firstUnseenMsgIndex;
           const incomingJoined = incomingBuf.isJoined;
