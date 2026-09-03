@@ -1562,22 +1562,49 @@
     padding: 2px 8px;
   }
   .row.loadMore .loadMore__button:hover { text-decoration: underline; }
-  /* IRCCloud fetch divider: line with centered text chip (matches the
-     LoadMore component's row.fetch). */
+  /* IRCCloud fetch divider — from common-002a6024.css / common-5650bddb.js
+     div.log div.fetch hr{margin:20px 0; border-color:#8c8c8c (midnight) / #4d8ccb (dusk)}
+     .divider-text-wrapper{float:left;width:100%;height:15px;margin-top:-30px;line-height:15px;font-size:14px;text-align:center}
+     span{padding:0 10px;background-color:#000;color:#8c8c8c} */
   .row.fetch {
-    position: relative;
-    text-align: center;
-    padding: 8px 0;
     margin: 0;
+    user-select: none;
   }
   .row.fetch hr {
     border: none;
-    border-top: 1px solid var(--accent, #1e72ff);
-    margin: 0;
-    position: absolute;
-    left: 16px;
-    right: 16px;
-    top: 50%;
+    border-top: 1px solid #8c8c8c;
+    margin: 20px 0;
+  }
+  .row.fetch .divider-text-wrapper {
+    float: left;
+    width: 100%;
+    height: 15px;
+    margin-top: -30px;
+    line-height: 15px;
+    font-size: 14px;
+    text-align: center;
+  }
+  .row.fetch .divider-text {
+    padding: 0 10px;
+    background-color: var(--chat-bg, #000);
+    color: #8c8c8c;
+  }
+  .row.fetch.initialFetch {
+    padding-top: 0;
+  }
+  :global(body.theme-dusk) .row.fetch hr {
+    border-color: #4d8ccb;
+  }
+  :global(body.theme-dusk) .row.fetch .divider-text {
+    background-color: #11263b;
+    color: #4d8ccb;
+  }
+  :global(body.theme-midnight) .row.fetch hr {
+    border-color: #8c8c8c;
+  }
+  :global(body.theme-midnight) .row.fetch .divider-text {
+    background-color: #000;
+    color: #8c8c8c;
   }
   .row.fetch .history-loading__retry {
     position: relative;
