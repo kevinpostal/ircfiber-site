@@ -80,7 +80,7 @@ body {
    Toggles the entire app to a monospace stack (IRCCloud does the same). */
 body.font-mono,
 body.font-mono * {
-  font-family: "0xProto", "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 /* `compact` body class — IRCCloud's compact mode. Tighter line-height. */
@@ -98,7 +98,7 @@ body.ascii-compact .row.messageRow {
 
 /* `monospace` inline class used by parseIrcFormatting's 0x11 code */
 .monospace {
-  font-family: "0xProto", "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 /* Per-row base. IRCCloud uses 118px right padding for layout balance,
@@ -128,7 +128,7 @@ body.ascii-compact .row.messageRow {
 .row.messageRow.bot,
 .row.messageRow.type_buffer_msg,
 .row.messageRow.blockArt {
-  font-family: "0xProto", "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   line-height: 16px;
   padding: 0 118px 0 68px;
 }
@@ -172,7 +172,7 @@ body.ascii-compact .row.messageRow {
   display: none;
 }
 .row.messageRow.status {
-  font-family: "0xProto", "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   /* Same IRCCloud right gutter (118px for the timestamp/hover-tools
      column) and left avatar gutter (68px) as the base .row. Without
      this, status lines were wrapping into the timestamp area. */
@@ -400,7 +400,7 @@ body.ascii-compact .row.messageRow {
 .mode_prefix.mode_pill {
   display: inline;
   margin-right: 3px;
-  font-family: "0xProto", Hack, monospace;
+  font-family: Hack, monospace;
   font-size: 14px;
 }
 .mode_prefix.mode_pill { font-weight: 600; display: none; }
