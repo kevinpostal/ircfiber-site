@@ -502,3 +502,75 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .contextMenu.bufferContextMenu hr { border-top: 1px solid #555; }
 .contextMenu.bufferContextMenu .contextMenu__item i.fa { color: #fff; }
 .contextMenu .info { margin: 0.5rem 1rem 0.25rem 1rem; font-size: 0.75rem; color: #8b949e; font-family: var(--font-mono); }
+
+/* ── Footer rail toggle (Design A) ────────────────────────────────────── */
+.addNetworkButtonContainer {
+  display: flex;
+  gap: 6px;
+  padding: 8px 6px;
+  border-top: 1px solid #1a1a1a;
+  align-items: center;
+}
+.addNetworkButton {
+  flex: 1;
+  min-width: 0;
+  background: #1a1a1a;
+  border: 1px solid #222;
+  color: #d6d6d6;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.addNetworkButton:hover { background: #222; }
+.sidebarCollapseButton {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  background: #111;
+  border: 1px solid #222;
+  color: #8b949e;
+  border-radius: 6px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-size: 10px;
+}
+.sidebarCollapseButton:hover { background: #1a1a1a; color: #d6d6d6; }
+#sidebar.collapsed .network-list,
+#sidebar.collapsed .sidebar-brand .brand-text,
+#sidebar.collapsed .sidebar-section-header { display: none; }
+#sidebar.collapsed .sidebar-rail { display: flex; }
+.sidebar-rail { display: none; flex-direction: column; flex: 1; min-height: 0; padding: 8px 4px; gap: 4px; overflow-y: auto; }
+.rail-item {
+  position: relative;
+  width: 100%;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #a6a6a6;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 12px;
+}
+.rail-item:hover { background: #1a1a1a; border-color: #222; color: #fff; }
+.rail-item.rail-active { background: #1a1a1a; border-color: #333; color: #fff; }
+.rail-letter { width: 28px; height: 28px; border-radius: 4px; background: #222; display: grid; place-items: center; font-size: 12px; }
+.rail-item.rail-active .rail-letter { background: #333; }
+.rail-dot { position: absolute; top: 4px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: #56a4f7; border: 1px solid #000; }
+.rail-badge { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 8px; background: #ff1f1a; color: #fff; font-size: 9px; font-weight: 700; display: grid; place-items: center; line-height: 1; }
+.rail-spacer { flex: 1; }
+.rail-add { width: 36px; height: 36px; margin: 0 auto; border-radius: 6px; border: 1px solid #222; background: #111; color: #8b949e; display: grid; place-items: center; cursor: pointer; }
+.rail-add:hover { background: #1a1a1a; color: #fff; }
+#sidebar.collapsed .addNetworkButtonContainer { justify-content: center; padding: 6px 4px; }
+#sidebar.collapsed .addNetworkButton .addNetworkLabel { display: none; }
+#sidebar.collapsed .addNetworkButton { flex: 0 0 36px; width: 36px; padding: 0; justify-content: center; }
+#sidebar.collapsed .sidebarCollapseButton { width: 36px; flex: 0 0 36px; }

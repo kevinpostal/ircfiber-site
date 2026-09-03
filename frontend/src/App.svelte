@@ -202,6 +202,13 @@ let showNetworkForm: boolean = $state(false);
   let isNarrow = $state(false);
   let sidebarDrawerOpen = $state(false);
   let mobileMembersOpen = $state(false);
+  let sidebarCollapsed = $state(false);
+  onMount(() => {
+    try { sidebarCollapsed = localStorage.getItem('ircfiber.sidebarCollapsed') === '1'; } catch {}
+  });
+  $effect(() => {
+    try { localStorage.setItem('ircfiber.sidebarCollapsed', sidebarCollapsed ? '1' : '0'); } catch {}
+  });
 
   $effect(() => {
     const mq = window.matchMedia('(max-width: 800px)');
@@ -1716,7 +1723,7 @@ let showNetworkForm: boolean = $state(false);
   {/if}
 {/if}
 
-<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false}>
+<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
   <div class="main-area">
     {#if pasteViewerId !== null}
       <PasteViewerPage id={pasteViewerId} onClose={() => { syncViewers(); navigateBackFromPastebin(); }} />
@@ -1766,8 +1773,10 @@ let showNetworkForm: boolean = $state(false);
     <div class="drawer-backdrop" onclick={closeDrawers} role="presentation"></div>
   {/if}
   {#if !isBootLoading && fileViewerId === null && pasteViewerId === null}
-  <aside id="sidebar">
-    <Sidebar onSwitchBuffer={navigateToBuffer}
+  <aside id="sidebar" class:collapsed={sidebarCollapsed && !isNarrow}>
+    <Sidebar isCollapsed={sidebarCollapsed && !isNarrow}
+             onToggleCollapsed={() => sidebarCollapsed = !sidebarCollapsed}
+             onSwitchBuffer={navigateToBuffer}
              onAddNetwork={() => { networkFormMode = 'add'; showNetworkForm = true; }}
              onNetworkOptions={openNetworkOptions}
              onJoinChannel={(networkId) => { joinModalNetworkId = networkId; showJoinModal = true; }} />
