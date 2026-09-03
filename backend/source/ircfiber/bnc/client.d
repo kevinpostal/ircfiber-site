@@ -76,8 +76,16 @@ immutable string[] OFFERED_CAPS = [
 private enum int CHATHISTORY_MAX = 500;
 
 private enum size_t MAX_LINE = 1024;
-private enum long KEEPALIVE_IDLE_MS = 60_000;
-private enum long DEAD_AFTER_MS = 180_000;
+// Keepalive: PING after 45s idle, drop only after 10m silence.
+// Previous 60s/180s was too aggressive for mobile/NAT and caused
+// spurious "no clientid after 1h13m" drops when the client slept
+// or hit a transient NAT timeout. 45s PING keeps NAT open, 10m
+// dead timeout matches ZNC/IRCCloud and allows resume via clientid
+// + cursor after a sleep. Anonymous (no clientid) connections also
+// benefit — they have no cursor to resume but should survive short
+// network blips without being reaped at 3m.
+private enum long KEEPALIVE_IDLE_MS = 45_000;
+private enum long DEAD_AFTER_MS = 600_000;
 private enum long CURSOR_FLUSH_MS = 10_000;
 private enum int REPLAY_LIMIT = 1000;
 private enum size_t PENDING_LIVE_MAX = 500;
