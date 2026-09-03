@@ -365,10 +365,6 @@ final class WebSocketGateway {
         foreach (ch; prefs.archivedChannels) archived ~= Json(ch);
         msg["archivedChannels"] = archived;
 
-        auto slc = Json.emptyObject;
-        foreach (k, v; prefs.serverlogCollapsed) slc[k] = Json(v);
-        msg["serverlogCollapsed"] = slc;
-
         auto mc = Json.emptyObject;
         foreach (k, v; prefs.membersCollapsed) mc[k] = Json(v);
         msg["membersCollapsed"] = mc;
@@ -524,6 +520,19 @@ final class WebSocketGateway {
                     isupportObj[k] = Json(v);
                 netObj["isupport"] = isupportObj;
 
+                // Live connection telemetry (owner: engine state.d →
+                // NetworkStateSnapshot). Egress keys are always shipped
+                // as strings ("" = direct), lagMs -1 = unknown,
+                // connectedAtMs 0 = not connected, tlsInfo omitted when
+                // the link is plaintext or the handshake details are
+                // not known yet.
+                netObj["activeEgressLabel"] = Json(snap.activeEgressLabel);
+                netObj["activeEgressHost"] = Json(snap.activeEgressHost);
+                netObj["activeEgressIp"] = Json(snap.activeEgressIp);
+                netObj["lagMs"] = Json(snap.lagMs);
+                netObj["connectedAtMs"] = Json(snap.connectedAtMs);
+                if (snap.hasTlsInfo) netObj["tlsInfo"] = snap.tlsInfo.toJson();
+
                 // W1-T01-rev1: structured retry status from the engine's
                 // reconnect loop. Mirrors the `CONNECTION_RETRY_STATUS`
                 // event payload's field names exactly so the frontend
@@ -559,6 +568,11 @@ final class WebSocketGateway {
                 netObj["status"] = Json("unknown");
                 netObj["currentNick"] = Json(cfg.nick);
                 netObj["serverId"] = Json("");
+                netObj["activeEgressLabel"] = Json("");
+                netObj["activeEgressHost"] = Json("");
+                netObj["activeEgressIp"] = Json("");
+                netObj["lagMs"] = Json(-1L);
+                netObj["connectedAtMs"] = Json(0L);
             }
 
             string[string] topics;

@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import App from './App.svelte';
 import { ircState, updateChannelUsers, activeJoinList, setLastSeenMessage, dirtySeenEids } from './stores/ircStore.svelte';
-import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, serverlogCollapsedMap, conversationsCollapsedMap, pinnedMap, lastSeenMap, globalPrefs } from './stores/preferences.svelte';
+import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, pinnedMap, lastSeenMap, globalPrefs } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
@@ -65,7 +65,6 @@ vi.mock('/src/stores/api', () => ({
   fetchUploadsOffset: vi.fn(async () => ({ uploads: [], total: 0 })),
   updateCollapsed: vi.fn(async () => undefined),
   updateInactiveCollapsed: vi.fn(async () => undefined),
-  updateServerlogCollapsed: vi.fn(async () => undefined),
   updateNetworkOrder: vi.fn(async () => undefined),
   updateBufferPrefs: vi.fn(async () => undefined),
   hideChannel: vi.fn(async () => undefined),
@@ -471,7 +470,6 @@ describe('App', () => {
         collapsed: {},
         membersCollapsed: {},
         inactiveCollapsed: {},
-        serverlogCollapsed: {},
       });
       flushSync();
 
@@ -481,45 +479,6 @@ describe('App', () => {
       expect(inactiveCollapsedMap['net1']).toBe(true);
     });
 
-    // ── handlePrefUpdate (real-time sync path) ──
-    // serverlogCollapsed keys are keyed by per-attempt event IDs that
-    // change every boot, so cross-device "delete when key missing"
-    // semantics would wipe the user's locally-collapsed entries on
-    // every pref_update. Must be additive-only. See App.svelte:767-780.
-
-    it('handlePrefUpdate additive-only for serverlogCollapsed', async () => {
-      // Seed a locally-collapsed card (keyed by per-attempt eid '5').
-      serverlogCollapsedMap['net1:5'] = true;
-
-      render(App);
-
-      // Wait for the async onMount -> checkAuth -> startWebSocket
-      // chain to call our connectWebSocket mock.
-      const wsMock = connectWebSocket as unknown as {
-        mock: { calls: Array<Array<(d: unknown) => void>> };
-      };
-      await vi.waitFor(() => {
-        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
-      });
-      const onMessage = wsMock.mock.calls[0]?.[0];
-      expect(onMessage).toBeDefined();
-
-      // Simulate a pref_update from another tab with a DIFFERENT key
-      // ('net1:9' — a new connection attempt on another device).
-      onMessage!({
-        type: 'pref_update',
-        key: 'serverlogCollapsed',
-        value: { 'net1:9': true },
-      });
-      flushSync();
-
-      // Pre-fix: the local 'net1:5' would be deleted because the server
-      // payload doesn't include it. With the additive-only fix, the
-      // local entry survives AND the new key is added.
-      expect(serverlogCollapsedMap['net1:5']).toBe(true);
-      expect(serverlogCollapsedMap['net1:9']).toBe(true);
-    });
-
     // Clean up the persisted $state maps so we don't leak state to
     // sibling tests (fileParallelism: false keeps them sequential but
     // $state + localStorage writes survive across tests in the same file).
@@ -527,7 +486,6 @@ describe('App', () => {
       for (const k of Object.keys(collapsedMap)) delete collapsedMap[k];
       for (const k of Object.keys(membersCollapsedMap)) delete membersCollapsedMap[k];
       for (const k of Object.keys(inactiveCollapsedMap)) delete inactiveCollapsedMap[k];
-      for (const k of Object.keys(serverlogCollapsedMap)) delete serverlogCollapsedMap[k];
       for (const k of Object.keys(conversationsCollapsedMap)) delete conversationsCollapsedMap[k];
     });
   });

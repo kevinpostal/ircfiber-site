@@ -4,10 +4,11 @@
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml } from '../lib/autolinker';
-  import { normalizeChannelName } from '../lib/utils';
-  import { archivedMap, serverlogCollapsedMap } from '../stores/preferences.svelte';
-  import { groupServerLog, getServerLogCollapsedKey } from '../lib/serverLogGroups';
+  import { archivedMap } from '../stores/preferences.svelte';
+  import { groupServerLog, phaseToLabel } from '../lib/serverLogGroups';
+  import { FAIL_TYPES } from '../lib/connectionWarnings';
   import { isFiberServer } from '../lib/fiberServer';
+  import LiveElapsed from './LiveElapsed.svelte';
 
   interface Props {
     onAddNetwork: () => void;
@@ -40,10 +41,10 @@
   const isConnecting = $derived(activeNetwork?.connectionState === 'connecting');
   const isFiber = $derived(activeNetwork ? isFiberServer(activeNetwork) : false);
   // Server-log buffer detection — used to scope the fiber-brand restyle
-  // (channel-name uses Space Grotesk, status pill mirrors the homepage's
-  // topbar LED, buttons use fiber hairline borders). Outside the _server
-  // view BufferHeader still looks like a normal channel header so the
-  // rest of the app is unchanged.
+  // (network name uses Space Grotesk, live status pill + kv after it,
+  // buttons use fiber hairline borders). Outside the _server view
+  // BufferHeader still looks like a normal channel header so the rest of
+  // the app is unchanged.
   const isServerBuffer = $derived(ircState.activeBuffer.bufferName === '_server');
   const isJoined = $derived(activeBufferObj?.isJoined === true);
   const isArchived = $derived(!!archivedMap[`${activeNetwork?.networkId}:${activeBufferObj?.name}`]);
@@ -84,6 +85,70 @@
     return Math.max(0, Math.floor((entry.expireAt - now) / 1000));
   });
 
+  // ── Server-buffer live pill (mockup: docs/mockups/server-log-irccloud.html)
+  // Text is driven by connectionState; the tickers (uptime / elapsed /
+  // retry countdown) live in LiveElapsed so only that text node re-renders.
+  type PillKind = 'connected' | 'busy' | 'retry' | 'failed' | 'off';
+  const pillKind: PillKind = $derived.by(() => {
+    if (!activeNetwork) return 'off';
+    if (connected) return 'connected';
+    const s = activeNetwork.connectionState;
+    if (s === 'connecting' || s === 'queued' || s === 'ip_retry') return 'busy';
+    if (s === 'waiting_to_retry') return 'retry';
+    if (activeNetwork.failInfo) return 'failed';
+    return 'off';
+  });
+  const serverMessages = $derived(
+    activeNetwork && isServerBuffer ? (ircState.messages[`${activeNetwork.networkId}:_server`] ?? []) : []
+  );
+  // Newest engine phase while connecting — the pill's "Connecting · <step>".
+  const connectingPhase = $derived.by(() => {
+    if (pillKind !== 'busy') return '';
+    for (let i = serverMessages.length - 1; i >= 0; i--) {
+      const p = serverMessages[i].phase;
+      if (p) return phaseToLabel(p);
+    }
+    return '';
+  });
+  // Start of the in-flight attempt — the pill's "<elapsed>s elapsed".
+  const attemptStartMs = $derived.by(() => {
+    if (pillKind !== 'busy') return null;
+    const attempts = groupServerLog(serverMessages);
+    const last = attempts[attempts.length - 1];
+    return last?.start.t ?? null;
+  });
+  const joinedChannelCount = $derived(
+    activeNetwork?.buffers.filter(b => b.type === 'channel' && b.isJoined === true).length ?? 0
+  );
+  const lastError = $derived(activeNetwork?.failInfo?.reason || activeNetwork?.disconnectReason || '');
+  const failLabel = $derived.by(() => {
+    const fail = activeNetwork?.failInfo;
+    if (!fail) return '';
+    if (fail.sslVerifyError || fail.type === FAIL_TYPES.SSL_CERTIFICATE_ERROR) return 'TLS';
+    switch (fail.type) {
+      case FAIL_TYPES.KILLED:             return 'Killed';
+      case FAIL_TYPES.CONNECTION_BLOCKED: return 'Blocked';
+      case FAIL_TYPES.CONNECTING_FAILED:  return 'Connect';
+      case FAIL_TYPES.SOCKET_CLOSED:      return 'Socket closed';
+      default:                            return fail.type;
+    }
+  });
+  const retryAtMs = $derived(activeNetwork?.retryStatus?.nextRetryAtMs ?? 0);
+  const attemptCount = $derived(activeNetwork?.retryStatus?.attemptCount ?? 0);
+
+  function formatUptime(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+    return hh ? `${hh}h ${mm}m` : mm ? `${mm}m ${ss}s` : `${ss}s`;
+  }
+  function formatElapsedSeconds(ms: number): string {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+  // LiveElapsed with since=0 hands us the wall clock; count down to retryAtMs.
+  function formatRetryCountdown(nowMs: number): string {
+    return `${Math.max(0, Math.ceil((retryAtMs - nowMs) / 1000))}s`;
+  }
+
   async function handleConnectionAction(): Promise<void> {
     if (!activeNetwork || busy) return;
     if (isFiber) {
@@ -118,14 +183,6 @@
         // User clicked Reconnect — clear the indefinite disconnect guard
         // so the sync's 'connected' state can update the UI again.
         clearUserDisconnected(net.networkId);
-
-        // Collapse all existing server-log cards so only the new
-        // connection attempt (which will get a fresh eid) stays expanded.
-        const serverMessages = ircState.messages[`${net.networkId}:_server`] ?? [];
-        for (const attempt of groupServerLog(serverMessages)) {
-          const key = getServerLogCollapsedKey(attempt, net.networkId);
-          if (key) serverlogCollapsedMap[key] = true;
-        }
 
         net.connectionState = 'connecting';
         setActiveBuffer(net.networkId, '_server');
@@ -193,16 +250,37 @@
         <span class="bufferlabel label" id="current-channel">Conversation with {channelName}</span>
         <span class="realname" id="conversation-realname">{conversationRealname}</span>
       {:else}
-        <span class="bufferlabel label bufferlabel--fiber" id="current-channel">
-          {#if isServerBuffer}
-            <span class="status-led"
-                  class:status-led--connected={connected}
-                  class:status-led--connecting={isConnecting}
-                  class:status-led--disconnected={!connected && !isConnecting}
-                  aria-hidden="true"></span>
-          {/if}
-          {channelName}
-        </span>
+        <span class="bufferlabel label bufferlabel--fiber" id="current-channel">{channelName}</span>
+        {#if isServerBuffer && activeNetwork}
+          <span class="pill" class:busy={pillKind === 'busy'} class:off={pillKind !== 'connected' && pillKind !== 'busy'}
+                data-testid="server-pill" data-state={pillKind} role="status" aria-live="polite">
+            <span class="dot" aria-hidden="true"></span>
+            <span class="pill-text">
+              {#if pillKind === 'connected'}
+                Connected{#if activeNetwork.connectedAtMs != null}<span class="sep">{' · '}</span><LiveElapsed since={activeNetwork.connectedAtMs} format={formatUptime} />{/if}
+              {:else if pillKind === 'busy'}
+                Connecting{#if connectingPhase}<span class="sep">{' · '}</span>{connectingPhase}{/if}
+              {:else if pillKind === 'retry'}
+                Disconnected{#if retryAtMs > 0}<span class="sep">{' · '}</span>retry in <LiveElapsed since={0} format={formatRetryCountdown} />{/if}
+              {:else if pillKind === 'failed'}
+                Failed<span class="sep">{' · '}</span>{failLabel}
+              {:else}
+                Disconnected
+              {/if}
+            </span>
+          </span>
+          <span class="kv" data-testid="server-kv">
+            {#if pillKind === 'connected'}
+              {#if activeNetwork.lagMs != null}lag <b>{activeNetwork.lagMs} ms</b>{' · '}{/if}{#if activeNetwork.egressLabel}egress <b>{activeNetwork.egressLabel}</b>{' · '}{/if}{joinedChannelCount} {joinedChannelCount === 1 ? 'channel' : 'channels'}
+            {:else if pillKind === 'busy'}
+              {#if attemptStartMs != null}<b><LiveElapsed since={attemptStartMs} format={formatElapsedSeconds} interval={100} /></b>{' elapsed · '}{/if}{activeNetwork.host}:{activeNetwork.port}{#if activeNetwork.egressLabel}{' via '}<b>{activeNetwork.egressLabel}</b>{/if}
+            {:else if pillKind === 'retry'}
+              {#if lastError}last error <b>{lastError}</b>{/if}
+            {:else if pillKind === 'failed'}
+              {#if lastError}last error <b>{lastError}</b>{/if}{#if lastError && attemptCount > 0}{' · '}{/if}{#if attemptCount > 0}{attemptCount} {attemptCount === 1 ? 'attempt' : 'attempts'}{/if}
+            {/if}
+          </span>
+        {/if}
       {/if}
       {#if topic}
         <span class="topic" id="channel-topic">{@html autolinkHtml(parseIrcFormatting(topic))}</span>
@@ -273,9 +351,8 @@
   /* Fiber-styled channel name (network name on the server log) — uses
      Space Grotesk + fiber-snow, matching the homepage's brand font. */
   :global(.bufferstatus--fiber) .bufferlabel--fiber {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
+    display: inline-block;
+    margin-right: 8px;
     font-family: var(--font-display, var(--font-sans, sans-serif));
     font-weight: 600;
     letter-spacing: -0.01em;
@@ -283,40 +360,54 @@
     font-size: 15px;
   }
 
-  /* Connection status LED — mirrors the homepage's .status-pill .led.
-     Color follows status; pending state pulses with a cyan glow. */
-  :global(.bufferstatus--fiber) .status-led {
-    display: inline-block;
+  /* Live status pill + kv — mockup `.pill` / `.kv` on Fiber tokens.
+     The pill's dot colour follows state; `.busy` pulses. */
+  :global(.bufferstatus--fiber) .pill {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    vertical-align: middle;
+    font-family: var(--font-sans, sans-serif);
+    font-size: 12px;
+    line-height: 16px;
+    padding: 1px 8px 1px 6px;
+    border-radius: 10px;
+    border: 1px solid var(--fiber-line-2, #232c38);
+    color: var(--fiber-cloud, #c8d2dd);
+    white-space: nowrap;
+  }
+  :global(.bufferstatus--fiber) .pill .dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--fiber-mist, #4d5867);
-    box-shadow: none;
-    flex-shrink: 0;
-    transition: background-color 200ms ease, box-shadow 200ms ease;
-  }
-  :global(.bufferstatus--fiber) .status-led--connected {
     background: var(--fiber-signal, #34d399);
-    box-shadow: 0 0 8px rgba(52, 211, 153, 0.45);
+    flex-shrink: 0;
   }
-  :global(.bufferstatus--fiber) .status-led--connecting {
+  :global(.bufferstatus--fiber) .pill.busy .dot {
     background: var(--fiber-blue, #67e8f9);
-    box-shadow: 0 0 8px var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
-    animation: bufferstatus-led-pulse 2.4s ease-in-out infinite;
+    animation: bufferstatus-pulse 1s infinite;
   }
-  :global(.bufferstatus--fiber) .status-led--disconnected {
-    background: var(--fiber-mist, #4d5867);
-    box-shadow: none;
+  :global(.bufferstatus--fiber) .pill.off .dot {
+    background: var(--fiber-stop, #f87171);
   }
-  @keyframes bufferstatus-led-pulse {
-    0%, 100% {
-      box-shadow: 0 0 6px var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
-      opacity: 1;
-    }
-    50% {
-      box-shadow: 0 0 14px var(--fiber-blue-glow, rgba(103, 232, 249, 0.35));
-      opacity: 0.65;
-    }
+  :global(.bufferstatus--fiber) .pill .sep {
+    color: var(--fiber-mist, #4d5867);
+  }
+  :global(.bufferstatus--fiber) .kv {
+    margin-left: 8px;
+    font-family: var(--font-sans, sans-serif);
+    font-size: 12px;
+    color: var(--fiber-mist, #4d5867);
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  :global(.bufferstatus--fiber) .kv b {
+    color: var(--fiber-fog, #8b96a4);
+    font-weight: 500;
+  }
+  @keyframes bufferstatus-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
   }
 
   /* Fiber-themed button row — hairline cyan accent borders + cyan hover

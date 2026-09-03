@@ -88,6 +88,16 @@ export interface FailInfo {
   ip?: string;
 }
 
+/** TLS session details from the engine's `NetworkStateSnapshot.tlsInfo`
+ *  (wire key `version` maps to `version`). `certNotAfterMs` is unix ms. */
+export interface TlsInfo {
+  version: string;
+  cipher: string;
+  certCn: string;
+  certIssuer: string;
+  certNotAfterMs: number;
+}
+
 export interface Network {
   networkId: string;
   name: string;
@@ -248,6 +258,25 @@ export interface Network {
    * field when `failInfo.ip` is absent.
    */
   ip?: string;
+  /**
+   * Live connection telemetry copied from the engine's
+   * `NetworkStateSnapshot` on every WS sync (websocket.d:performStateDump).
+   * `null` means unknown / not applicable; `updateNetworkFromSync` maps
+   * the wire's empty-string / `-1` / `0` / missing-key sentinels to null
+   * so the header can test each field with a single truthiness check.
+   */
+  /** Human label of the egress route in use (e.g. `mullvad-us-nyc`). */
+  egressLabel: string | null;
+  /** SOCKS host of the egress route in use. */
+  egressHost: string | null;
+  /** Public IP the network sees us from. */
+  egressIp: string | null;
+  /** Last measured PING round-trip in ms. */
+  lagMs: number | null;
+  /** Unix ms of RPL_WELCOME for the current session; null when not connected. */
+  connectedAtMs: number | null;
+  /** TLS session details; null when plaintext or unknown. */
+  tlsInfo: TlsInfo | null;
 }
 
 export interface Buffer {
@@ -391,6 +420,15 @@ export interface IRCMessage {
   selfEcho?: boolean;
   type?: string;       // 'action' for /me messages
   highlight?: boolean;
+  /** Author's services account from the IRCv3 account-tag (`data.a`). */
+  account?: string;
+  /** Label of the original message this event edits in place
+   *  (remote draft/edit-message; engine tags it `edit_of`, wire `data.eo`). */
+  editOf?: string;
+  /** Set when a draft/message-redaction REDACT tombstoned this row. */
+  redacted?: boolean;
+  /** Redaction reason from `REDACT <target> <msgid> [<reason>]`. */
+  redactReason?: string;
   /** Optimistic message state — mirrors IRCCloud .pending / .pendingOut / .failed */
   pendingState?: 'pending' | 'pendingOut' | 'failed';
   // For grouped messages

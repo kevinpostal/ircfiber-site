@@ -5,7 +5,7 @@
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
-  import ServerLogTimeline from './ServerLogTimeline.svelte';
+  import ServerLog from './ServerLog.svelte';
 
   import SeenDivider from './SeenDivider.svelte';
   import ChatterBar from './ChatterBar.svelte';
@@ -74,19 +74,17 @@
 
   // Server log view needs raw (un-grouped) messages — preprocessing
   // merges consecutive 372/375 MOTD lines into MOTD_GROUP blocks that
-  // our classifier doesn't understand, burying them in "Raw IRC traffic".
-  // FIX: return the original array reference without spreading. The previous
-  // spread `[...arr]` created a new array on every store mutation, even when
-  // a different buffer's messages changed (e.g. a channel PRIVMSG while
-  // viewing _server), causing ServerLogTimeline to re-group and flicker.
-  // With reference identity, downstream deriveds only re-run when the
-  // _server array itself is reassigned (new message for _server).
+  // the server-log classifier doesn't understand.
+  // Return the original array reference without spreading: a spread
+  // would create a new array on every store mutation, even when a
+  // different buffer's messages changed (e.g. a channel PRIVMSG while
+  // viewing _server), and re-render the whole log. With reference
+  // identity, downstream deriveds only re-run when the _server array
+  // itself is reassigned (new message for _server).
   const rawMessages = $derived(ircState.messages[bufferKey] ?? []);
 
-  // _server buffers use the ServerLogTimeline card view instead of
-  // the flat message-row view — each connection attempt becomes a card
-  // with a header, a phase timeline, MOTD, and collapsed details blocks
-  // for raw IRC traffic. See frontend/src/lib/serverLogGroups.ts.
+  // _server buffers render the flat ServerLog view instead of the
+  // message-row view. See frontend/src/lib/serverLogRows.ts.
   const isServerBuffer = $derived(ircState.activeBuffer.bufferName === '_server');
   const activeNetwork = $derived(getActiveNetwork());
 
@@ -864,10 +862,6 @@
   // own message after Enter, even if you had scrolled up.
   let lastForceScrollNonce = 0;
   $effect(() => {
-    if (isServerBuffer) {
-      lastForceScrollNonce = ircState.forceScrollToBottomNonce;
-      return;
-    }
     const nonce = ircState.forceScrollToBottomNonce;
     if (nonce === lastForceScrollNonce) return;
     lastForceScrollNonce = nonce;
@@ -886,7 +880,6 @@
   // Viewport/content resize (IRCCloud window resize + autogrowInput with
   // checkRecent, and image/embed decode): re-pin while pinned.
   $effect(() => {
-    if (isServerBuffer) return;
     const el = container;
     if (!el) return;
     // Window resize (IRCCloud @538661): suppress scroll handling while
@@ -941,7 +934,7 @@
   });
   $effect(() => {
     void isTypingActive;
-    if (isServerBuffer || !container) return;
+    if (!container) return;
     untrack(() => { const pin = shouldPinBottom(); tick().then(() => onChange(pin)); });
   });
 
@@ -1427,10 +1420,10 @@
     {/if}
 
     {#if isServerBuffer}
-      <!-- Server log view: connection attempts as collapsible cards.
-           Same scroll container so the existing scroll-tracking logic
-           (ChatterBar, ScrollClock, bottomSeen) keeps working. -->
-      <ServerLogTimeline messages={rawMessages} network={activeNetwork} />
+      <!-- Server log view: flat IRCCloud-style connection log. Same
+           scroll container so the IRCCloud onChange pin (only when
+           already at bottom) applies to the log exactly like chat. -->
+      <ServerLog messages={rawMessages} network={activeNetwork} />
     {:else}
       {#each messagesWithDates as item, idx (item._key)}
         {@const msg = item.msg}

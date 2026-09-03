@@ -115,6 +115,18 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 
 .network-shield { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; color: #d9d9d9; pointer-events: none; }
 .fa-globe.network-shield { font-size: 11px; }
+/* Connecting: mockup `.dot.busy` — accent dot pulsing in the shield slot. */
+.network-dot.busy {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fiber-blue, #67e8f9);
+  animation: network-dot-pulse 1s infinite;
+}
+@keyframes network-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
 
 .network-unread { margin-left: auto; }
 .network-buffers { padding-bottom: 0; }

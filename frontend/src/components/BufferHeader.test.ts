@@ -3,7 +3,7 @@ import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import BufferHeader from './BufferHeader.svelte';
-import { createNetwork, createBuffer, createMember } from '../test/factories';
+import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
 import { ircState, clearTempUnavailable } from '../stores/ircStore.svelte';
 
 vi.mock('/src/stores/api', () => ({
@@ -44,6 +44,7 @@ function resetState(): void {
     ircState.networks.length = 0;
     ircState.activeBuffer.networkId = null;
     ircState.activeBuffer.bufferName = null;
+    for (const k of Object.keys(ircState.messages)) delete ircState.messages[k];
 }
 
 beforeEach(() => {
@@ -405,5 +406,137 @@ describe('BufferHeader', () => {
 		await expect.element(page.getByRole('button', { name: /Members list/i })).toBeInTheDocument();
 		await expect(page.getByRole('button', { name: /Rejoin/i })).not.toBeInTheDocument();
 		await expect(page.getByRole('button', { name: /Archive/i })).not.toBeInTheDocument();
+	});
+
+	describe('server-buffer live pill', () => {
+		const props = { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() };
+		const pill = () => document.querySelector('[data-testid="server-pill"]');
+		const kv = () => document.querySelector('[data-testid="server-kv"]');
+
+		it('connected: "Connected · <uptime>" with lag / egress / channel count', async () => {
+			const net = createNetwork({
+				networkId: 'net1', connected: true, connectionState: 'connected',
+				connectedAtMs: Date.now() - (3 * 3600 + 12 * 60 + 7) * 1000,
+				lagMs: 41, egressLabel: 'mullvad-us-nyc',
+			});
+			net.buffers.push(
+				createBuffer({ name: '_server', type: 'server' }),
+				createBuffer({ name: '#a', isJoined: true }),
+				createBuffer({ name: '#b', isJoined: true }),
+				createBuffer({ name: '#parted', isJoined: false }),
+				createBuffer({ name: 'nickserv', type: 'query' }),
+			);
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(pill()).toHaveAttribute('data-state', 'connected');
+			expect(pill()).toHaveTextContent('Connected · 3h 12m');
+			expect(pill()?.classList.contains('busy')).toBe(false);
+			expect(pill()?.classList.contains('off')).toBe(false);
+			expect(kv()).toHaveTextContent('lag 41 ms · egress mullvad-us-nyc · 2 channels');
+		});
+
+		it('connected without telemetry: plain "Connected" and only the channel count', async () => {
+			const net = createNetwork({ networkId: 'net1', connected: true, connectionState: 'connected' });
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }), createBuffer({ name: '#a', isJoined: true }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(pill()).toHaveTextContent(/^Connected$/);
+			expect(kv()).toHaveTextContent(/^1 channel$/);
+		});
+
+		it('connecting: "Connecting · <phase>" with pulsing dot, elapsed and host:port via egress', async () => {
+			const net = createNetwork({
+				networkId: 'net1', connected: false, connectionState: 'connecting',
+				host: 'irc.supernets.org', port: 6697, egressLabel: 'mullvad-us-nyc',
+			});
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			ircState.networks.push(net);
+			const t0 = Date.now() - 4200;
+			ircState.messages['net1:_server'] = [
+				createMessage({ command: 'NOTICE', nick: '', phase: 'queued', text: 'Queued', t: t0 }),
+				createMessage({ command: 'NOTICE', nick: '', phase: 'resolving', text: 'Resolving', t: t0 + 14 }),
+				createMessage({ command: 'NOTICE', nick: '', phase: 'tls', text: 'TLS handshake', t: t0 + 312 }),
+			];
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(pill()).toHaveAttribute('data-state', 'busy');
+			expect(pill()?.classList.contains('busy')).toBe(true);
+			expect(pill()).toHaveTextContent('Connecting · tls');
+			expect(kv()).toHaveTextContent(/^4\.\ds elapsed · irc\.supernets\.org:6697 via mullvad-us-nyc$/);
+		});
+
+		it('waiting_to_retry: "Disconnected · retry in Ns" with last error', async () => {
+			const net = createNetwork({
+				networkId: 'net1', connected: false, connectionState: 'waiting_to_retry',
+				retryStatus: { attemptCount: 2, nextRetryAtMs: Date.now() + 8000, delayMs: 8000 },
+				failInfo: { type: 'socket_closed', reason: 'ECONNRESET' },
+			});
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(pill()).toHaveAttribute('data-state', 'retry');
+			expect(pill()?.classList.contains('off')).toBe(true);
+			expect(pill()).toHaveTextContent(/^Disconnected · retry in [78]s$/);
+			expect(kv()).toHaveTextContent(/^last error ECONNRESET$/);
+		});
+
+		it('failed: "Failed · TLS" with last error and attempt count', async () => {
+			const net = createNetwork({
+				networkId: 'net1', connected: false, connectionState: 'disconnected',
+				retryStatus: { attemptCount: 5, nextRetryAtMs: 0, delayMs: 0 },
+				failInfo: { type: 'ssl_certificate_error', reason: 'CERT_HAS_EXPIRED', sslVerifyError: { type: 'x509', error: 'certificate has expired' } },
+			});
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(pill()).toHaveAttribute('data-state', 'failed');
+			expect(pill()).toHaveTextContent(/^Failed · TLS$/);
+			expect(kv()).toHaveTextContent(/^last error CERT_HAS_EXPIRED · 5 attempts$/);
+		});
+
+		it('disconnected by the user: plain "Disconnected", empty kv', async () => {
+			const net = createNetwork({ networkId: 'net1', connected: false, connectionState: 'disconnected', disconnectReason: 'You disconnected' });
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(pill()).toHaveAttribute('data-state', 'off');
+			expect(pill()).toHaveTextContent(/^Disconnected$/);
+			expect(kv()).toHaveTextContent(/^$/);
+		});
+
+		it('is absent on channel buffers', async () => {
+			const net = createNetwork({ networkId: 'net1', connected: true });
+			net.buffers.push(createBuffer({ name: '#general' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#general';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(pill()).toBeNull();
+		});
 	});
 });

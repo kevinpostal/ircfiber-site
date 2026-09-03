@@ -77,6 +77,7 @@ private immutable string[] DROP_COMMANDS = [
 private immutable string[] FORWARD_COMMANDS = [
     "PRIVMSG", "NOTICE", "JOIN", "PART", "QUIT", "KICK", "NICK", "MODE", "TOPIC",
     "INVITE", "AWAY", "ACCOUNT", "CHGHOST", "TAGMSG", "WALLOPS",
+    "SETNAME", "REDACT", "FAIL", "WARN", "NOTE",
     // Not "ERROR": the upstream `ERROR :Closing link` belongs to the engine's
     // connection, a client receiving it would drop its bouncer session (ZNC
     // swallows it too). The drop surfaces as the `*status` notice below.
@@ -134,6 +135,8 @@ string formatEvent(Json ev, FormatCtx c) @trusted {
     if (cmd == "AWAY" && !c.has("away-notify")) return "";
     if (cmd == "ACCOUNT" && !c.has("account-notify")) return "";
     if (cmd == "CHGHOST" && !c.has("chghost")) return "";
+    if (cmd == "SETNAME" && !c.has("setname")) return "";
+    if (cmd == "REDACT" && !c.has("draft/message-redaction")) return "";
     if (cmd == "INVITE" && !c.has("invite-notify")
         && !(params.length && icmp(params[0], c.nick) == 0)) return "";
 
@@ -169,6 +172,10 @@ string formatEvent(Json ev, FormatCtx c) @trusted {
         if (m.length && m != str(ev, "i")) tags["msgid"] = m;
         const typing = str(ev, "typing");
         if (typing.length) tags["+typing"] = typing;
+    }
+    if (c.has("account-tag")) {
+        const a = str(ev, "a");
+        if (a.length) tags["account"] = a;
     }
 
     string prefix = str(ev, "px");

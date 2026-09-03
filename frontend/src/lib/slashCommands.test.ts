@@ -136,6 +136,69 @@ describe('/cycle /hop /rejoin slash commands (W3-T06)', () => {
 		);
 		expect(vi.mocked(reconnectNetwork)).not.toHaveBeenCalled();
 	});
+});
+
+describe('/monitor and /setname slash commands (IRCv3 monitor / setname)', () => {
+	beforeEach(() => {
+		ircState.networks.length = 0;
+		vi.mocked(sendRaw).mockClear();
+	});
+
+	it('/monitor + nicks sends MONITOR + with targets', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		ircState.networks.push(net);
+
+		dispatch('/monitor + alice,bob', 'n1', net);
+
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'MONITOR + alice,bob');
+	});
+
+	it('/monitor l sends a bare MONITOR L', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		ircState.networks.push(net);
+
+		dispatch('/monitor l', 'n1', net);
+
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'MONITOR L');
+	});
+
+	it('/monitor rejects unknown verbs and missing targets', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		ircState.networks.push(net);
+
+		expect(() => dispatch('/monitor x', 'n1', net)).toThrow('Usage: /monitor');
+		expect(() => dispatch('/monitor +', 'n1', net)).toThrow('Usage: /monitor +');
+		expect(vi.mocked(sendRaw)).not.toHaveBeenCalled();
+	});
+
+	it('/setname sends SETNAME with a trailing realname', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		ircState.networks.push(net);
+
+		dispatch('/setname New Real Name', 'n1', net);
+
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'SETNAME :New Real Name');
+	});
+
+	it('/setname requires a realname', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		ircState.networks.push(net);
+
+		expect(() => dispatch('/setname', 'n1', net)).toThrow('Usage: /setname');
+		expect(vi.mocked(sendRaw)).not.toHaveBeenCalled();
+	});
+});
+
+describe('/rejoin delegates identically to /cycle (W3-T06)', () => {
+	beforeEach(() => {
+		ircState.networks.length = 0;
+		activeJoinList.clear();
+		pendingJoins.clear();
+		vi.mocked(sendRaw).mockClear();
+		vi.mocked(reconnectNetwork).mockClear();
+	});
 
 	it('/rejoin #chan delegates identically to /cycle', () => {
 		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });

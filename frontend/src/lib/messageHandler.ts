@@ -2,7 +2,7 @@ import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
-         checkHighlight, isMessageUnseen } from '../stores/ircStore.svelte';
+         checkHighlight, isMessageUnseen, applySetname, markRedacted } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs, getLastSeen } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
@@ -119,6 +119,8 @@ export function unpackEvent(
     prefix: ((data.prefix as string) || (data.px as string) || '') as string,
     msgid: ((data.msgid as string) || (data.m as string) || (data.i as string) || '') as string,
     label: ((data.label as string) || (data.l as string) || (data.le as string) || '') as string,
+    account: (((data.a as string) || tags?.account || '') as string) || undefined,
+    editOf: (((data.eo as string) || tags?.edit_of || '') as string) || undefined,
     t: data.t as number,
     eid: (data.eid as number) || undefined,
     selfEcho: !!(data.se as string | undefined),
@@ -278,9 +280,8 @@ export function processIrcEvent(
         applyIsupportUpdate(networkId, raw as Record<string, string>);
       }
     } catch {
-      // Malformed payload — leave `net.isupport` untouched; the
-      // fallback parser in ServerLogTimeline will still get us a
-      // view from the buffered 005 lines.
+      // Malformed payload — leave `net.isupport` untouched; ServerLog
+      // still renders the buffered 005 lines as ISUPPORT rows.
     }
     return {};
   }
@@ -403,6 +404,9 @@ export function processIrcEvent(
       const u = bufObj.users.find(x => stripPrefix(x.nick) === msg.nick);
       if (u) {
         u.lastSpoke = msg.t ?? Date.now();
+        // Backfill the services account from the IRCv3 account-tag so
+        // the member list shows identity without a WHOIS round trip.
+        if (msg.account && msg.account !== '*' && !u.account) u.account = msg.account;
         // Backfill ident + isBot from the message prefix the first time
         // we see a member speak, so members originally added via NAMES
         // (which doesn't carry the userhost) still get a BOT badge and
@@ -468,7 +472,7 @@ export function processIrcEvent(
   //   </div>
   // We trigger for private NOTICEs (target is not a channel), from a
   // non-server nick, with non-empty text, not self-echo, not CTCP, and
-  // not a "***" server lookup notice (those live in ServerLogTimeline).
+  // not a "***" server lookup notice (those live in ServerLog).
   if (cmd === 'NOTICE' && msg.nick && msg.text && !isBackfill) {
     const target = (msg.params && msg.params[0]) || '';
     const isChannelTarget = target.length > 0 && ['#', '&', '+', '!'].includes(target[0]);
@@ -504,6 +508,26 @@ export function processIrcEvent(
     const isSpam = t.includes('no external') || t.includes('not on channel') || t.includes('cannot send to channel');
     if (isSpam && shouldSuppressNotInChannel(networkId, channel)) {
       return result;
+    }
+  }
+  // ── SETNAME — live realname change ──
+  // The engine fans the event out per shared channel and keeps its own
+  // cache; refresh the member rows + network cache here too. The event
+  // itself still appends below so the change is visible in the timeline.
+  if (cmd === 'SETNAME' && msg.nick) {
+    const newRealname = msg.text || (msg.params?.[msg.params.length - 1] ?? '');
+    if (newRealname) applySetname(networkId, msg.nick, newRealname);
+  }
+  // ── REDACT — tombstone by msgid ──
+  // `REDACT <target> <msgid> [<reason>]`. When the original row is in
+  // the buffer, replace it with a tombstone and swallow the REDACT;
+  // otherwise let it append so the deletion stays visible.
+  if (cmd === 'REDACT' && msg.params && msg.params.length >= 2) {
+    const targetMsgid = msg.params[1] || '';
+    const reason = msg.text || (msg.params[2] ?? '');
+    if (targetMsgid) {
+      const redactBuf = normalizeChannelName(msg.params[0] || channel);
+      if (markRedacted(networkId, redactBuf, targetMsgid, reason)) return {};
     }
   }
   // ── Message append + notification ──

@@ -24,11 +24,9 @@
   // fail-state backgrounds until that token is added to the palette.
   // ─────────────────────────────────────────────────────────────────────
 
-  import { getActiveNetwork, setActiveBuffer, ircState } from '../stores/ircStore.svelte';
+  import { getActiveNetwork, setActiveBuffer } from '../stores/ircStore.svelte';
   import { sendRaw, requestSync } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
-  import { serverlogCollapsedMap } from '../stores/preferences.svelte';
-  import { groupServerLog, getServerLogCollapsedKey } from '../lib/serverLogGroups';
   import { isFiberServer } from '../lib/fiberServer';
   import {
     connectionWarnings,
@@ -314,14 +312,6 @@
     if (!activeNetwork) return;
     const net = activeNetwork;
 
-    // Collapse all existing server-log cards so only the new connection
-    // attempt (fresh eid) stays expanded.
-    const serverMessages = ircState.messages[`${net.networkId}:_server`] ?? [];
-    for (const attempt of groupServerLog(serverMessages)) {
-      const key = getServerLogCollapsedKey(attempt, net.networkId);
-      if (key) serverlogCollapsedMap[key] = true;
-    }
-
     net.connectionState = 'connecting';
     setActiveBuffer(net.networkId, '_server');
     try {
@@ -464,21 +454,14 @@
 </div>
 
 <style>
-  /* ── Connection status banner — calm minimal mono ────────────────
-     Three deliberate constraints:
-       • No spinner / icon badge / CTA pill. The state is signalled
-         by a 2px coloured left rule on the outer container.
-       • No tinted background per state — the bar is chrome-free
-         apart from hairline borders. Headline copy carries the
-         semantic meaning.
-       • Whole row IS the button — real <button type="button">, not
-         the legacy <a href="/"> + role="button" hack. Native
-         activation handles Enter/Space + disabled state.
-
-     Outer `.connectionstatuscell` keeps the same class name as the
-     legacy component so ChatArea's existing styling continues to
-     apply. The outer cell stays chrome-free so ChatArea's collapse
-     animation when `show` toggles stays clean. */
+  /* ── Connection status banner — IRCCloud `.connectionStatus` strip ──
+     Colours/padding follow docs/mockups/server-log-irccloud.html:
+       busy      (connecting / queued / joining / ready / ip-retry / quitting)
+       reconnect (waiting_to_retry countdown / plain disconnected)
+       fail      (terminal failInfo)
+     Whole row IS the button — real <button type="button">. Outer
+     `.connectionstatuscell` keeps the same class name as the legacy
+     component so ChatArea's existing styling continues to apply. */
 
   .connectionstatuscell {
     padding: 0;
@@ -487,17 +470,12 @@
   }
 
   .connectionStatus {
-    /* Container carries the top + bottom hairlines + the 2px left
-       state edge. The inner button does the rest. No tinted
-       background — the headline copy is the entire visible surface.
-       Monospace matches the timeline so the two surfaces read as one
-       real-time log. */
-    font-family: var(--font-mono-fiber, var(--font-mono, monospace));
+    font-family: var(--font-sans, sans-serif);
     border-top: 1px solid var(--fiber-line);
     border-bottom: 1px solid var(--fiber-line);
-    border-left: 2px solid var(--fiber-line);
     background: transparent;
-    transition: border-left-color 160ms ease;
+    color: var(--fiber-cloud);
+    transition: background-color 160ms ease, border-color 160ms ease;
   }
 
   /* ── Clickable row — the entire bar ────────────────────────────── */
@@ -507,12 +485,11 @@
     text-align: left;
     background: transparent;
     border: 0;
-    padding: 6px 12px 6px 10px;
-    color: var(--fiber-snow);
+    padding: 5px 10px;
+    color: inherit;
     font: inherit;
-    font-size: 12.5px;
+    font-size: 13px;
     line-height: 1.4;
-    letter-spacing: 0.005em;
     cursor: default;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -522,7 +499,6 @@
 
   .connectionStatus__row:disabled {
     cursor: default;
-    color: var(--fiber-cloud);
   }
 
   .connectionStatus__row:not(:disabled) {
@@ -531,7 +507,7 @@
 
   .connectionStatus__row:not(:disabled):hover,
   .connectionStatus__row:not(:disabled):focus-visible {
-    background-color: rgba(255, 255, 255, 0.025);
+    background-color: rgba(255, 255, 255, 0.04);
   }
 
   .connectionStatus__row:focus-visible {
@@ -549,28 +525,27 @@
     white-space: nowrap;
   }
 
-  /* ── State-coloured left edge ─────────────────────────────────── */
-  /* The left rule IS the only signal of state. Headline copy carries
-     the semantic meaning; the colour is just to help users skim a
-     column of banners when several nets are flapping at once. */
+  /* ── State tints (mockup .connectionStatus.{busy,reconnect,fail}) ── */
   :global(.connectionStatus--connecting),
   :global(.connectionStatus--connected-joining),
   :global(.connectionStatus--connected-ready),
   :global(.connectionStatus--queued),
-  :global(.connectionStatus--waiting) {
-    border-left-color: var(--fiber-blue);
-  }
-
-  :global(.connectionStatus--ip-retry) {
-    border-left-color: var(--fiber-blue);
-  }
-
+  :global(.connectionStatus--ip-retry),
   :global(.connectionStatus--quitting) {
-    border-left-color: var(--fiber-fog);
+    background: #0f2238;
+    border-color: #1e3a5c;
+    color: #9cbfe2;
+  }
+
+  :global(.connectionStatus--waiting),
+  :global(.connectionStatus--disconnected) {
+    background: #173350;
+    border-color: #224d77;
+    color: #c4d9ee;
   }
 
   :global(.connectionStatus--away) {
-    border-left-color: var(--fiber-mist);
+    border-left: 2px solid var(--fiber-mist);
   }
   :global(.connectionStatus--away) .connectionStatus__headline {
     color: var(--fiber-fog);
@@ -578,14 +553,14 @@
   }
 
   :global(.connectionStatus--fail) {
-    border-left-color: var(--fiber-amber);
+    background: #3a1d1d;
+    border-color: #5c2626;
+    color: #f0c2c2;
   }
 
-  /* Fail hover gets the barest amber tint (1.5x the row's resting tint)
-     so the click affordance reads without overpowering the calm. */
   :global(.connectionStatus--fail.connectionStatus--clickable) .connectionStatus__row:not(:disabled):hover,
   :global(.connectionStatus--fail.connectionStatus--clickable) .connectionStatus__row:not(:disabled):focus-visible {
-    background-color: rgba(251, 191, 36, 0.04);
+    background-color: rgba(255, 255, 255, 0.05);
   }
 
   /* ── Inline warnings (rendered as a separate list below the
@@ -593,11 +568,12 @@
   .connectionStatus__warnings {
     list-style: none;
     margin: 0;
-    padding: 0 12px 7px 14px;
+    padding: 0 10px 6px 10px;
     border: 0;
     background: transparent;
-    color: var(--fiber-fog);
-    font-size: 11.5px;
+    color: inherit;
+    opacity: 0.8;
+    font-size: 12px;
     line-height: 1.55;
   }
 
@@ -609,11 +585,7 @@
   /* The CTA-style warning ("Check your host, port and ssl settings")
      sits on its own line so the user can scan past the others. */
   .connectionStatus__warnings li:last-child {
-    color: var(--fiber-cloud);
-    font-weight: 500;
-  }
-
-  :global(.connectionStatus--fail) .connectionStatus__warnings li:last-child {
-    color: var(--fiber-amber);
+    opacity: 1;
+    font-weight: 600;
   }
 </style>

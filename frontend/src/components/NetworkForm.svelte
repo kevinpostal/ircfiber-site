@@ -199,6 +199,12 @@
             capabilities: new Set(),
             isupport: {},
             chanTypes: '#',
+            egressLabel: null,
+            egressHost: null,
+            egressIp: null,
+            lagMs: null,
+            connectedAtMs: null,
+            tlsInfo: null,
           };
           ircState.networks.push(net);
           // Ensure the new server starts expanded in the sidebar

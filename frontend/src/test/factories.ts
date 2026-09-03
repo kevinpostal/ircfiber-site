@@ -39,6 +39,12 @@ export function createNetwork(overrides: Partial<Network> = {}): Network {
     capabilities: new Set(),
     isupport: {},
     chanTypes: '#',
+    egressLabel: null,
+    egressHost: null,
+    egressIp: null,
+    lagMs: null,
+    connectedAtMs: null,
+    tlsInfo: null,
     ...overrides,
   };
 }

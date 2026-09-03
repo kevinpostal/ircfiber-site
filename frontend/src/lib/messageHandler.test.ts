@@ -104,3 +104,46 @@ describe('unpackEvent — phase tag extraction', () => {
     expect(evt.phase).toBeUndefined();
   });
 });
+
+describe('unpackEvent — account-tag and remote-edit fields', () => {
+  it('maps data.a to account (compact wire format)', () => {
+    const evt = unpackEvent(
+      { c: 'PRIVMSG', n: 'alice', x: 'hello', network: 'libera', a: 'alice123' },
+      { value: 0 },
+    );
+    expect(evt.account).toBe('alice123');
+  });
+
+  it('falls back to data.tags.account (long-form / replay)', () => {
+    const evt = unpackEvent(
+      { c: 'PRIVMSG', n: 'alice', x: 'hello', network: 'libera', tags: { account: 'alice123' } },
+      { value: 0 },
+    );
+    expect(evt.account).toBe('alice123');
+  });
+
+  it('leaves account undefined when no tag is present', () => {
+    const evt = unpackEvent(
+      { c: 'PRIVMSG', n: 'alice', x: 'hello', network: 'libera' },
+      { value: 0 },
+    );
+    expect(evt.account).toBeUndefined();
+  });
+
+  it('maps data.eo to editOf (remote draft/edit-message)', () => {
+    const evt = unpackEvent(
+      { c: 'PRIVMSG', n: 'alice', x: 'fixed', network: 'libera', l: 'lbl-1', eo: 'lbl-1' },
+      { value: 0 },
+    );
+    expect(evt.label).toBe('lbl-1');
+    expect(evt.editOf).toBe('lbl-1');
+  });
+
+  it('leaves editOf undefined for ordinary messages', () => {
+    const evt = unpackEvent(
+      { c: 'PRIVMSG', n: 'alice', x: 'hello', network: 'libera' },
+      { value: 0 },
+    );
+    expect(evt.editOf).toBeUndefined();
+  });
+});

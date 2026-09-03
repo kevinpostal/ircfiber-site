@@ -13,7 +13,7 @@
   // ── Fiber palette (homepage brand tokens) ──
   // Mirror of the variables exposed on ircfiber.com so the web app can
   // match the marketing site's visual language. Used today by the server
-  // log (ServerLogTimeline + BufferHeader for _server) and available for
+  // log (ServerLog + BufferHeader for _server) and available for
   // any future component that wants to opt into the homepage aesthetic.
   --fiber-void:       #05080c;
   --fiber-ink:        #0a0e14;

@@ -43,6 +43,8 @@ import {
 	clearPendingNickChanges, clearPendingMemberRemovals,
 	applyRetryStatus,
 	applyFail,
+	applySetname,
+	markRedacted,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
@@ -90,8 +92,6 @@ vi.mock('/src/stores/api', () => ({
 	updateHiddenChannels: (() => undefined) as never,
 	updatePinnedChannels: (() => undefined) as never,
 	updateArchivedChannels: (() => undefined) as never,
-	updateServerlogCollapsed: (() => undefined) as never,
-	updateServerlogHidden: (() => undefined) as never,
 	updateMembersCollapsed: (() => undefined) as never,
 	updateConversationsCollapsed: (() => undefined) as never,
 	getNetworks: (() => undefined) as never,
@@ -3165,6 +3165,93 @@ describe('applyRetryStatus (W2-T02 — engine CONNECTION_RETRY_STATUS adapter)',
 	});
 });
 
+describe('updateNetworkFromSync — connection telemetry mapping', () => {
+	const live = (id: string) => ircState.networks.find((n) => n.networkId === id)!;
+
+	function telemetrySync(overrides: Partial<SyncNetwork> = {}): SyncNetwork {
+		const incoming = createNetwork({ networkId: 'net1' }) as SyncNetwork;
+		incoming.activeEgressLabel = 'mullvad-us-nyc';
+		incoming.activeEgressHost = '10.42.0.1';
+		incoming.activeEgressIp = '198.51.100.7';
+		incoming.lagMs = 41;
+		incoming.connectedAtMs = 1_700_000_000_000;
+		incoming.tlsInfo = {
+			version: 'TLSv1.3',
+			cipher: 'TLS_AES_256_GCM_SHA384',
+			certCn: '*.supernets.org',
+			certIssuer: "Let's Encrypt",
+			certNotAfterMs: 1_705_000_000_000,
+		};
+		return Object.assign(incoming, overrides);
+	}
+
+	it('maps activeEgress*/lagMs/connectedAtMs/tlsInfo onto a new network', () => {
+		updateNetworkFromSync([telemetrySync()]);
+		flushSync();
+		const net = live('net1');
+		expect(net.egressLabel).toBe('mullvad-us-nyc');
+		expect(net.egressHost).toBe('10.42.0.1');
+		expect(net.egressIp).toBe('198.51.100.7');
+		expect(net.lagMs).toBe(41);
+		expect(net.connectedAtMs).toBe(1_700_000_000_000);
+		expect(net.tlsInfo).toEqual({
+			version: 'TLSv1.3',
+			cipher: 'TLS_AES_256_GCM_SHA384',
+			certCn: '*.supernets.org',
+			certIssuer: "Let's Encrypt",
+			certNotAfterMs: 1_705_000_000_000,
+		});
+	});
+
+	it('advances telemetry on an existing network from a later sync', () => {
+		ircState.networks.push(createNetwork({ networkId: 'net1' }));
+		expect(live('net1').lagMs).toBeNull();
+		updateNetworkFromSync([telemetrySync({ lagMs: 0 })]);
+		flushSync();
+		expect(live('net1').lagMs).toBe(0);
+		expect(live('net1').egressLabel).toBe('mullvad-us-nyc');
+		updateNetworkFromSync([telemetrySync({ lagMs: 87, activeEgressLabel: 'direct' })]);
+		flushSync();
+		expect(live('net1').lagMs).toBe(87);
+		expect(live('net1').egressLabel).toBe('direct');
+	});
+
+	it('maps wire sentinels (empty string, -1, 0, missing tlsInfo) to null', () => {
+		ircState.networks.push(createNetwork({ networkId: 'net1', lagMs: 12, egressLabel: 'old', tlsInfo: { version: 'x', cipher: '', certCn: '', certIssuer: '', certNotAfterMs: 0 } }));
+		const incoming = createNetwork({ networkId: 'net1' }) as SyncNetwork;
+		incoming.activeEgressLabel = '';
+		incoming.activeEgressHost = '';
+		incoming.activeEgressIp = '';
+		incoming.lagMs = -1;
+		incoming.connectedAtMs = 0;
+		delete (incoming as Partial<SyncNetwork>).tlsInfo;
+		updateNetworkFromSync([incoming]);
+		flushSync();
+		const net = live('net1');
+		expect(net.egressLabel).toBeNull();
+		expect(net.egressHost).toBeNull();
+		expect(net.egressIp).toBeNull();
+		expect(net.lagMs).toBeNull();
+		expect(net.connectedAtMs).toBeNull();
+		expect(net.tlsInfo).toBeNull();
+	});
+
+	it('treats absent keys as null', () => {
+		const incoming = createNetwork({ networkId: 'net1' }) as Partial<SyncNetwork>;
+		delete incoming.lagMs;
+		delete incoming.connectedAtMs;
+		delete incoming.tlsInfo;
+		delete incoming.egressLabel;
+		updateNetworkFromSync([incoming as SyncNetwork]);
+		flushSync();
+		const net = live('net1');
+		expect(net.egressLabel).toBeNull();
+		expect(net.lagMs).toBeNull();
+		expect(net.connectedAtMs).toBeNull();
+		expect(net.tlsInfo).toBeNull();
+	});
+});
+
 describe('applyFail (W2-T02 — engine CONNECTION_FAIL adapter)', () => {
 	const live = (id: string) => ircState.networks.find((n) => n.networkId === id)!;
 
@@ -3231,5 +3318,72 @@ describe('applyFail (W2-T02 — engine CONNECTION_FAIL adapter)', () => {
 			type: 'connecting_failed',
 			reason: 'econnrefused',
 		})).not.toThrow();
+	});
+});
+
+describe('applySetname (IRCv3 setname)', () => {
+	it('refreshes member realnames across all buffers plus the network cache', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const a = createBuffer({ name: '#a' });
+		a.users = [createMember({ nick: 'alice', realname: 'Old Name' })];
+		const b = createBuffer({ name: '#b' });
+		b.users = [createMember({ nick: '@alice', realname: 'Old Name' }), createMember({ nick: 'bob' })];
+		net.buffers.push(a, b);
+		ircState.networks.push(net);
+
+		applySetname('net1', 'alice', 'New Name');
+		flushSync();
+
+		expect(liveBuf('net1', '#a')?.users?.[0].realname).toBe('New Name');
+		expect(liveBuf('net1', '#b')?.users?.[0].realname).toBe('New Name');
+		expect(liveBuf('net1', '#b')?.users?.[1].realname).toBe('');
+		expect(untrack(() => ircState.networks[0].realnames?.['alice'])).toBe('New Name');
+	});
+
+	it('is a no-op when the network is unknown', () => {
+		expect(() => applySetname('not-a-network', 'alice', 'Name')).not.toThrow();
+	});
+});
+
+describe('markRedacted (draft/message-redaction)', () => {
+	it('tombstones the row by msgid and reports true', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#chan'] = [
+			createMessage({ nick: 'alice', text: 'secret', msgid: 'm1' }),
+			createMessage({ nick: 'bob', text: 'hi', msgid: 'm2' }),
+		];
+
+		expect(markRedacted('net1', '#chan', 'm1', 'oops')).toBe(true);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#chan']);
+		expect(list[0].text).toBe('[message deleted: oops]');
+		expect(list[0].redacted).toBe(true);
+		expect(list[0].redactReason).toBe('oops');
+		expect(list[1].text).toBe('hi');
+	});
+
+	it('renders a bare tombstone without a reason', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#chan'] = [createMessage({ nick: 'alice', text: 'x', msgid: 'm9' })];
+
+		expect(markRedacted('net1', '#chan', 'm9', '')).toBe(true);
+
+		const list = untrack(() => ircState.messages['net1:#chan']);
+		expect(list[0].text).toBe('[message deleted]');
+	});
+
+	it('returns false when the msgid is unknown', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#chan'] = [createMessage({ msgid: 'm1' })];
+
+		expect(markRedacted('net1', '#chan', 'nope', '')).toBe(false);
+		expect(untrack(() => ircState.messages['net1:#chan']).length).toBe(1);
 	});
 });

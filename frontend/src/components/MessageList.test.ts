@@ -635,54 +635,94 @@ describe('MessageList', () => {
 		});
 	});
 
-	describe('server log auto-scroll guard (W7-T02b)', () => {
-		// Regression: viewing the _server buffer used to flicker because
-		// the MessageList's ResizeObserver + scrollToBottom effects fired
-		// on every phase event (~10/s during a connect), slamming
-		// container.scrollTop = scrollHeight and animating the scrollbar.
-		// The server log is a fixed-content view; the user owns their
-		// scroll position. Both effects now early-return when
-		// isServerBuffer is true.
-		it('does NOT snap to bottom when new content arrives in the _server buffer', async () => {
+	function seedServerLog(count: number): IRCMessage[] {
+		const msgs: IRCMessage[] = [
+			createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
+			createMessage({ command: 'NOTICE', text: 'connecting', t: 1100, eid: 2, phase: 'connecting' }),
+		];
+		for (let i = 0; i < count; i++) {
+			msgs.push(createMessage({ command: '251', nick: 'irc.test.com', text: `There are ${i} users`, t: 2000 + i, eid: 10 + i }));
+		}
+		return msgs;
+	}
+
+	describe('server log pin (IRCCloud onChange)', () => {
+		// The server log lives in the same scroll container as chat and
+		// follows the same IRCCloud rule: new content re-pins to the
+		// bottom only when the viewport already sits at the bottom; a
+		// user reading history keeps their scroll position.
+		function mountServerLog(): void {
 			ircState.networks.length = 0;
 			ircState.activeBuffer.networkId = 'net1';
 			ircState.activeBuffer.bufferName = '_server';
 			const network = createNetwork({ networkId: 'net1', host: 'irc.test.com', port: 6697 });
 			network.buffers.push(createBuffer({ name: '_server' }));
 			ircState.networks.push(network);
+			ircState.messages['net1:_server'] = seedServerLog(80);
+			flushSync();
+		}
 
-			// Seed with a few phase events so the attempt has rows to render
+		function appendPhase(): void {
 			ircState.messages['net1:_server'] = [
-				createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
-				createMessage({ command: 'NOTICE', text: 'connecting', t: 1100, eid: 2, phase: 'connecting' }),
+				...ircState.messages['net1:_server'],
+				createMessage({ command: 'NOTICE', text: 'tcp_open', t: 5000, eid: 500, phase: 'tcp_open' }),
 			];
 			flushSync();
+		}
 
+		it('does NOT snap to bottom when new content arrives while scrolled up', async () => {
+			mountServerLog();
 			render(MessageList, { props: {} });
 			await new Promise((r) => requestAnimationFrame(r));
 
 			const container = document.getElementById('messages') as HTMLDivElement | null;
 			expect(container).not.toBeNull();
 			if (!container) return;
+			container.style.height = '300px';
+			expect(container.scrollHeight).toBeGreaterThan(container.clientHeight);
+			// Let the ResizeObserver re-pin (checkRecent) settle before the
+			// user scrolls away, then let the 100 ms wasRecently window lapse.
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 150));
 
-			// Make sure we are NOT at the bottom (user is reading history)
-			container.scrollTop = Math.max(0, Math.floor(container.scrollHeight * 0.5));
+			// User is reading history (not at the bottom).
+			container.scrollTop = 50;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 150));
 			const pinnedScroll = container.scrollTop;
+			expect(pinnedScroll).toBe(50);
+
+			appendPhase();
+			await new Promise((r) => requestAnimationFrame(r));
 			await new Promise((r) => setTimeout(r, 30));
 
-			// Simulate a new phase event arriving mid-connect — the
-			// container's height grows, the ResizeObserver fires (or
-			// would have fired), and the main scroll effect re-runs.
-			ircState.messages['net1:_server'] = [
-				...ircState.messages['net1:_server'],
-				createMessage({ command: 'NOTICE', text: 'tcp_open', t: 1200, eid: 3, phase: 'tcp_open' }),
-			];
-			flushSync();
+			expect(Math.abs(container.scrollTop - pinnedScroll)).toBeLessThan(4);
+		});
+
+		it('re-pins to the bottom when new content arrives while already at the bottom', async () => {
+			mountServerLog();
+			render(MessageList, { props: {} });
 			await new Promise((r) => requestAnimationFrame(r));
 
-			// Scroll position must NOT have been forced to scrollHeight.
-			// (We allow up to 4px drift for browser sub-pixel rounding.)
-			const drift = container.scrollTop - pinnedScroll;
+			const container = document.getElementById('messages') as HTMLDivElement | null;
+			expect(container).not.toBeNull();
+			if (!container) return;
+			container.style.height = '300px';
+			expect(container.scrollHeight).toBeGreaterThan(container.clientHeight);
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 150));
+
+			container.scrollTop = container.scrollHeight;
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 30));
+			const before = container.scrollHeight;
+
+			appendPhase();
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 30));
+
+			expect(container.scrollHeight).toBeGreaterThan(before);
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
 			expect(Math.abs(drift)).toBeLessThan(4);
 		});
 	});
@@ -758,20 +798,14 @@ describe('MessageList', () => {
 			expect(Math.abs(drift)).toBeLessThan(4);
 		});
 
-		it('does NOT snap on _server even when the trigger fires (only chat buffers force-scroll)', async () => {
-			// See the force-scroll effect in MessageList.svelte — it
-			// early-returns when isServerBuffer is true, so the server
-			// log's scroll position is owned by the user.
+		it('snaps on _server too (the force-scroll is buffer-agnostic)', async () => {
 			ircState.networks.length = 0;
 			ircState.activeBuffer.networkId = 'net1';
 			ircState.activeBuffer.bufferName = '_server';
 			const network = createNetwork({ networkId: 'net1' });
 			network.buffers.push(createBuffer({ name: '_server' }));
 			ircState.networks.push(network);
-			ircState.messages['net1:_server'] = [
-				createMessage({ command: 'NOTICE', text: 'queued', t: 1000, eid: 1, phase: 'queued' }),
-				createMessage({ command: 'NOTICE', text: 'connecting', t: 1100, eid: 2, phase: 'connecting' }),
-			];
+			ircState.messages['net1:_server'] = seedServerLog(80);
 			flushSync();
 
 			render(MessageList, { props: {} });
@@ -780,17 +814,25 @@ describe('MessageList', () => {
 			const container = document.getElementById('messages') as HTMLDivElement | null;
 			expect(container).not.toBeNull();
 			if (!container) return;
+			container.style.height = '300px';
+			expect(container.scrollHeight).toBeGreaterThan(container.clientHeight);
+			// Let the ResizeObserver re-pin (checkRecent) settle before the
+			// user scrolls away, then let the 100 ms wasRecently window lapse.
+			await new Promise((r) => requestAnimationFrame(r));
+			await new Promise((r) => setTimeout(r, 150));
 
 			container.scrollTop = 0;
-			await new Promise((r) => setTimeout(r, 30));
+			container.dispatchEvent(new Event('scroll'));
+			await new Promise((r) => setTimeout(r, 150));
+			expect(container.scrollTop).toBe(0);
 
-			// Trigger fires — but the server-log effect must ignore it.
 			requestForceScrollToBottom();
 			await new Promise((r) => requestAnimationFrame(r));
 			flushSync();
 			await new Promise((r) => setTimeout(r, 30));
 
-			expect(container.scrollTop).toBe(0);
+			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
+			expect(Math.abs(drift)).toBeLessThan(4);
 		});
 	});
 

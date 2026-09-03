@@ -26,8 +26,6 @@ import {
 	unhideChannel,
 	isChannelHidden,
 	flushPersist,
-	getServerlogCollapseEvents,
-	setServerlogCollapseEvents,
 } from './preferences.svelte';
 
 function resetPreferenceState(): void {
@@ -44,7 +42,6 @@ function resetPreferenceState(): void {
 	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
 	networkOrder.length = 0;
-	setServerlogCollapseEvents(true);
 	Object.assign(globalPrefs, DEFAULT_PREFS);
 }
 
@@ -532,94 +529,5 @@ describe('featureFlags (W0-T01)', () => {
 		expect(merged.featureFlags.buffersToDelete.enabled).toBe(true);
 		expect(merged.featureFlags.idleEvents.enabled).toBe(true);
 		expect(merged.featureFlags.xhrFallback.enabled).toBe(true);
-	});
-});
-
-// ── W2-T03 / W4-T01: serverlogCollapseEvents pref ──
-// Global pref that drives the `<details class="connection-events">` wrap
-// in ServerLogTimeline. Default is `true` (collapsed) so a fresh user
-// sees the per-attempt header with a count badge rather than the full
-// raw event stream. Persisted to localStorage + cross-tab synced via
-// the storage event.
-describe('serverlogCollapseEvents (W2-T03 / W4-T01)', () => {
-	it('defaults to true (collapsed) when localStorage is empty', () => {
-		// beforeEach clears localStorage so the default applies.
-		expect(getServerlogCollapseEvents()).toBe(true);
-	});
-
-	it('setter persists immediately to localStorage', () => {
-		window.localStorage.removeItem('ircfiber:serverlogCollapseEvents');
-
-		setServerlogCollapseEvents(false);
-		flushSync();
-
-		const raw = window.localStorage.getItem('ircfiber:serverlogCollapseEvents');
-		expect(raw).toBeTruthy();
-		expect(JSON.parse(raw as string)).toBe(false);
-
-		window.localStorage.removeItem('ircfiber:serverlogCollapseEvents');
-	});
-
-	it('setter updates the getter immediately', () => {
-		setServerlogCollapseEvents(false);
-		expect(getServerlogCollapseEvents()).toBe(false);
-
-		setServerlogCollapseEvents(true);
-		expect(getServerlogCollapseEvents()).toBe(true);
-	});
-
-	it('reads existing localStorage value (pre-existing user pref honoured)', () => {
-		// Simulate a returning user who already collapsed (false = open)
-		window.localStorage.setItem(
-			'ircfiber:serverlogCollapseEvents',
-			JSON.stringify(false)
-		);
-		// Note: the underlying _serverlogCollapseEvents was already
-		// initialised from the default true on first import. To test the
-		// "honoured on import" path, we read the storage key directly and
-		// assert it survives — the module-level state initialiser runs
-		// once at import time and is not re-runnable per-test. The
-		// contract pinned here is that the storage shape (boolean) is
-		// valid JSON and round-trips through the setter.
-		const raw = window.localStorage.getItem('ircfiber:serverlogCollapseEvents');
-		expect(JSON.parse(raw as string)).toBe(false);
-
-		setServerlogCollapseEvents(true);
-		expect(getServerlogCollapseEvents()).toBe(true);
-
-		window.localStorage.removeItem('ircfiber:serverlogCollapseEvents');
-	});
-
-	it('re-reads storage event from another tab', () => {
-		// Tab A flips to expanded (false); tab B receives the storage
-		// event and mirrors the value into its own _serverlogCollapseEvents
-		// so the <details> re-renders without a page reload.
-		fireStorageEvent('ircfiber:serverlogCollapseEvents', JSON.stringify(false));
-		flushSync();
-		expect(getServerlogCollapseEvents()).toBe(false);
-
-		fireStorageEvent('ircfiber:serverlogCollapseEvents', JSON.stringify(true));
-		flushSync();
-		expect(getServerlogCollapseEvents()).toBe(true);
-	});
-
-	it('storage event with null value resets to default true', () => {
-		setServerlogCollapseEvents(false);
-		expect(getServerlogCollapseEvents()).toBe(false);
-
-		// Another tab cleared the key — fall back to the default.
-		fireStorageEvent('ircfiber:serverlogCollapseEvents', null);
-		flushSync();
-		expect(getServerlogCollapseEvents()).toBe(true);
-	});
-
-	it('storage event with malformed JSON does not throw and resets to default', () => {
-		setServerlogCollapseEvents(false);
-		expect(getServerlogCollapseEvents()).toBe(false);
-
-		fireStorageEvent('ircfiber:serverlogCollapseEvents', 'not json{');
-		flushSync();
-		// Malformed JSON → default (true)
-		expect(getServerlogCollapseEvents()).toBe(true);
 	});
 });

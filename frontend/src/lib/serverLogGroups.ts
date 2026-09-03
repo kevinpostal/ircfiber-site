@@ -22,16 +22,25 @@ export type ServerLogKind =
   | 'numeric'
   | 'notice'
   | 'lifecycle'
+  | 'self'
   | 'skip';
 
 export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   if (msg.phase) return 'phase';
   const cmd = msg.command;
   if (cmd === 'PING' || cmd === 'PONG' || cmd === 'ERROR') return 'skip';
+  // Engine state events that ride the `_server` stream but are consumed
+  // by the store (isupport map, retry countdown, structured fail info) —
+  // the log shows their effect via phase rows / the disconnect row.
+  if (cmd === 'ISUPPORT' || cmd === 'CONNECTION_RETRY_STATUS' || cmd === 'CONNECTION_FAIL') return 'skip';
+  // Our own QUIT echo duplicates the DISCONNECTED lifecycle row.
+  if (cmd === 'QUIT') return 'skip';
   if (cmd === 'CONNECT' || cmd === 'DISCONNECT' || cmd === 'CONNECTED' || cmd === 'DISCONNECTED') {
     return 'lifecycle';
   }
   if (cmd === 'NOTICE') return 'notice';
+  // Self events echoed into the server buffer (user mode, nick change).
+  if (cmd === 'MODE' || cmd === 'NICK') return 'self';
   // Numeric IRC replies
   if (cmd === '005') return 'cap';
   if (cmd === '372' || cmd === '375' || cmd === '376') return 'motd';
@@ -257,7 +266,7 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
       // attempt when its own connecting event arrived a second later.
       // The user's "There should only be 1 connected card" concern
       // is now handled by the 'superseded' status in the welcome
-      // branch (above) and the ServerLogTimeline filter (below).
+      // branch (above).
       // Discard any synthetic (pre-phase) attempt — it has no phases
       // and would stay frozen on "Connecting…" forever after the real
       // connection events start flowing into the new card. Transfer
@@ -374,8 +383,8 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
         // stacks multiple "Connected" cards within 1-2 seconds
         // (Disconnected → Connected → Connecting → Connected),
         // confusing the user. The superseded card stays in the
-        // attempts array (for the MOTD/ISUPPORT history) but the
-        // ServerLogTimeline filter (below) hides it from the view.
+        // attempts array (for the MOTD/ISUPPORT history); the flat
+        // ServerLog view still renders its rows in message order.
         for (const a of attempts) {
           if (a.status === 'success' && a !== current) {
             a.status = 'superseded';
@@ -441,18 +450,6 @@ export function phaseToLabel(p: string): string {
 }
 
 /**
- * Compute the key used for persistable collapsed-state tracking in
- * `serverlogCollapsedMap`.  Must stay in sync with the key derivation
- * in `ServerLogCard.svelte`.
- */
-export function getServerLogCollapsedKey(attempt: ServerLogAttempt, networkId: string): string {
-  const start = attempt.start;
-  if (start?.eid) return `${networkId}:${start.eid}`;
-  if (start?.msgid) return `${networkId}:msgid:${start.msgid}`;
-  return `${networkId}:id:${start?.id || 'synthetic'}`;
-}
-
-/**
  * Duration of an attempt in milliseconds — derived from the timestamps
  * of the first and last events in the attempt. Returns null when the
  * attempt is still in flight or only has one timestamp.
@@ -471,24 +468,34 @@ export function attemptDuration(a: ServerLogAttempt): number | null {
  */
 /**
  * Offset of a row from the start of its attempt, rendered as a compact
- * `+1.2s` / `+34s` / `+2m05s` label so the timeline reads like a real-time
- * log ("how long did each step take?"). Empty when either timestamp is
+ * `+14ms` / `+1.24s` / `+2m05s` label so the log reads like a real-time
+ * trace ("how long did each step take?"). Empty when either timestamp is
  * missing (legacy scrollback without `t`).
  */
 export function relativeOffset(startT: number | undefined, t: number | undefined): string {
   if (!startT || !t) return '';
-  const ms = Math.max(0, t - startT);
-  if (ms < 100) return '+0.0s';
-  if (ms < 60_000) return `+${(ms / 1000).toFixed(1)}s`;
-  return `+${formatDuration(ms)}`;
+  return `+${formatOffset(Math.max(0, t - startT))}`;
 }
 
+/** `14ms` / `1.24s` / `2m05s` — the phase-rail offset unit. */
+export function formatOffset(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(2)}s`;
+  return formatDuration(ms);
+}
+
+/** `250ms` / `1.2s` / `1m15s` / `3h 12m` — compact human duration. */
 export function formatDuration(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.round((ms % 60_000) / 1000);
-  return `${m}m${s.toString().padStart(2, '0')}s`;
+  if (ms < 3_600_000) {
+    const m = Math.floor(ms / 60_000);
+    const s = Math.round((ms % 60_000) / 1000);
+    return `${m}m${s.toString().padStart(2, '0')}s`;
+  }
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  return `${h}h ${m}m`;
 }
 
 /**
@@ -511,19 +518,18 @@ export function numericBody(msg: IRCMessage): string {
 }
 
 /**
- * Format an RPL_ISUPPORT (numeric 005) message for display.
- * The actual capability tokens are in `msg.params[1..n-2]` — everything
- * between the user's nick and the trailing `:are supported by this server`
- * boilerplate. Returns a compact line of tokens, one per line.
+ * ISUPPORT (005) tokens of one message. The wire form is
+ * `:server 005 nick TOK TOK … :are supported by this server`; the engine
+ * sometimes ships only the flattened text. Both shapes yield the bare
+ * `KEY=value` / `KEY` tokens.
  */
-export function formatIsupport(msg: IRCMessage): string {
+export function isupportTokens(msg: IRCMessage): string[] {
   const params = msg.params ?? [];
-  if (params.length <= 2) return msg.text || params.join(' ');
-  // params[0] is the user's nick, params[last] is the trailing boilerplate
-  // (":are supported by this server" or similar). Extract everything in
-  // between — those are the actual capability definitions.
-  const tokens = params.slice(1, params.length - 1);
-  return tokens.join('\n');
+  if (params.length > 2) return params.slice(1, -1).filter(Boolean);
+  return numericBody(msg)
+    .replace(/\s*:?are (?:supported|available) (?:by|on) this server.*$/i, '')
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 /**
@@ -548,7 +554,7 @@ export function formatIsupport(msg: IRCMessage): string {
  * can each emit a DISCONNECTED with different text for the same disconnect,
  * and those all represent the same logical event.
  */
-function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
+export function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
   const DUP_WINDOW_MS = 60_000;
   const lastSeen = new Map<string, number>();
   const lifecycleLastSeen = new Map<string, number>();

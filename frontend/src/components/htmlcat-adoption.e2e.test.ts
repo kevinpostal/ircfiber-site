@@ -1,9 +1,8 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { tick } from 'svelte';
-import { page, userEvent } from 'vitest/browser';
+import { userEvent } from 'vitest/browser';
 import Dialog from './Dialog.svelte';
-import ServerFeaturesPanel from './ServerFeaturesPanel.svelte';
 import { ircState } from '../stores/ircStore.svelte';
 
 beforeEach(() => {
@@ -53,43 +52,6 @@ describe('htmlcat — <dialog> adoption', () => {
   });
 });
 
-describe('htmlcat — ServerFeaturesPanel details', () => {
-  beforeEach(() => localStorage.clear());
-  it('categories render as details/summary', async () => {
-    render(ServerFeaturesPanel, { props: { isupport: { NETWORK: 'irc.example', CHANTYPES: '#' } } } as any);
-    const cats = document.querySelectorAll('details.server-features-panel__cat');
-    expect(cats.length).toBeGreaterThan(0);
-    expect(cats[0].querySelector('summary')).toBeTruthy();
-  });
-
-  it('summary toggles open', async () => {
-    render(ServerFeaturesPanel, { props: { isupport: { NETWORK: 'irc.example', CHANTYPES: '#' } } } as any);
-    const details = document.querySelector('details.server-features-panel__cat') as HTMLDetailsElement;
-    const summary = details.querySelector('summary') as HTMLElement;
-    const wasOpen = details.open;
-    summary.click();
-    await tick();
-    expect(details.open).toBe(!wasOpen);
-  });
-
-  it('dense mode starts collapsed', async () => {
-    localStorage.clear();
-    // Force a fresh render with dense=true, and check that details are not open
-    const { unmount } = render(ServerFeaturesPanel, { props: { isupport: { NETWORK: 'irc.example', CHANTYPES: '#' }, dense: true } } as any);
-    await tick();
-    const details = document.querySelector('details.server-features-panel__cat') as HTMLDetailsElement | null;
-    expect(details).toBeTruthy();
-    if (details) expect(details.open).toBe(false);
-    // The rows may still be in DOM but hidden via details not open, or via {#if}
-    // Check that the details is collapsed, not that rows are null (which depends on previous test's collapsed state)
-    const summary = document.querySelector('details.server-features-panel__cat summary') as HTMLElement;
-    summary.click();
-    await tick();
-    expect(details.open).toBe(true);
-    unmount();
-  });
-});
-
 describe('htmlcat — FilterCheatsheet/JsonDrawer Dialog', () => {
   it('FilterCheatsheet renders dialog when open', async () => {
     const FilterCheatsheet = (await import('../admin/components/logs/FilterCheatsheet.svelte')).default;
@@ -122,35 +84,6 @@ describe('htmlcat — FilterCheatsheet/JsonDrawer Dialog', () => {
     render(JsonDrawer, { props: { row: null, anchorRect: null, onClose: vi.fn() } } as any);
     expect(document.querySelector('[data-testid="json-drawer"]')).toBeNull();
     expect(document.querySelector('[data-testid="json-drawer-backdrop"]')).toBeNull();
-  });
-});
-
-describe('htmlcat — ServerLogTimeline hidden=until-found', () => {
-  it('collapsed clone has hidden until-found', async () => {
-    const ServerLogTimeline = (await import('./ServerLogTimeline.svelte')).default;
-    const { createNetwork, createBuffer, createMessage } = await import('../test/factories');
-    const { ircState: state } = await import('../stores/ircStore.svelte');
-    const { serverlogCollapsedMap } = await import('../stores/preferences.svelte');
-    for (const k of Object.keys(serverlogCollapsedMap)) delete (serverlogCollapsedMap as any)[k];
-    const now = Date.now();
-    const msgs: any[] = [
-      createMessage({ command: 'CONNECTING', text: 'Connecting to irc.test.com:6697...', t: now - 5000, nick: '*', channel: '_server' }),
-      createMessage({ command: '001', text: 'Welcome to the TestNet IRC Network testnick', t: now - 4000, nick: '*', channel: '_server' }),
-    ];
-    const network: any = createNetwork({ networkId: 'net1', name: 'TestNet', connected: false, host: 'irc.test.com', port: 6697 });
-    network.buffers.push(createBuffer({ name: '_server' }));
-    state.networks.length = 0;
-    state.networks.push(network);
-    state.activeBuffer.networkId = 'net1';
-    state.activeBuffer.bufferName = '_server';
-    render(ServerLogTimeline, { props: { messages: msgs, network } } as any);
-    await tick();
-    const hiddenClone = document.querySelector('[data-testid="server-log-hidden-search"]');
-    const body = document.querySelector('.connection-events-body');
-    // At least one of them should exist with hidden until-found
-    const hasHidden = (hiddenClone && hiddenClone.getAttribute('hidden') === 'until-found') || (body && body.getAttribute('hidden') === 'until-found');
-    // If timeline is expanded, body may be hidden until-found; if collapsed, clone is hidden
-    expect(hasHidden || document.querySelector('.serverLogTimeline')).toBeTruthy();
   });
 });
 

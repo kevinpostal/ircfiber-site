@@ -155,7 +155,7 @@ export function renderSSLVerify(info: SslVerifyInfo | null | undefined): string 
 //     (paste_too_large, paste_invalid, paste_empty, database_down, auth,
 //      …) can be ported wholesale. The `file_too_large` entry has to
 //     stay dropped because fiber has no client-side sizeToString —
-//     port it later if a ServerLogTimeline banner path needs it.
+//     port it later if a ServerLog banner path needs it.
 //
 // Each of these is a follow-up PR; this file stays surgical until a
 // consumer lands.

@@ -65,8 +65,9 @@ struct BncContext {
 /// CAPs the bouncer offers (ZNC core set).
 immutable string[] OFFERED_CAPS = [
     "server-time", "batch", "message-tags", "echo-message", "multi-prefix",
-    "userhost-in-names", "away-notify", "account-notify", "extended-join",
-    "invite-notify", "chghost", "cap-notify",
+    "userhost-in-names", "away-notify", "account-notify", "account-tag",
+    "extended-join", "invite-notify", "chghost", "cap-notify",
+    "standard-replies", "setname", "draft/message-redaction",
     // On-demand history (soju-style). Clients that negotiate it get no
     // attach playback and pull what they need with CHATHISTORY.
     "draft/chathistory",

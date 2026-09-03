@@ -73,6 +73,25 @@ registerSlash(['back'], (_args, networkId, _target, net) => {
   }
 });
 
+registerSlash(['monitor'], (args, networkId) => {
+  // IRCv3 monitor (replaces obsolete ISON/WATCH): /monitor + nick…,
+  // /monitor - nick…, /monitor l (list), /monitor s (status), /monitor c (clear).
+  const verb = (args[0] || '').toUpperCase();
+  if (!['+', '-', 'C', 'L', 'S'].includes(verb)) {
+    throw new Error('Usage: /monitor +|- <nick,…> | /monitor L|S|C');
+  }
+  if ((verb === '+' || verb === '-') && !args[1]) {
+    throw new Error(`Usage: /monitor ${verb} <nick,…>`);
+  }
+  sendRaw(networkId, 'MONITOR ' + verb + (args[1] ? ' ' + args.slice(1).join(' ') : ''));
+});
+
+registerSlash(['setname'], (args, networkId) => {
+  // IRCv3 setname: change your realname (GECOS) without reconnecting.
+  if (!args[0]) throw new Error('Usage: /setname <realname>');
+  sendRaw(networkId, 'SETNAME :' + args.join(' '));
+});
+
 registerSlash(['invite'], (args, networkId, target) => {
   if (!args[0]) throw new Error('Usage: /invite <nickname>');
   if (!target?.startsWith('#')) throw new Error('Not in a channel');

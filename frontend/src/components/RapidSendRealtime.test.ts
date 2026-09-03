@@ -23,7 +23,6 @@ vi.mock('/src/stores/api', () => ({
   deleteNetwork: vi.fn(async () => undefined),
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
-  updateServerlogCollapsed: vi.fn(async () => undefined),
   normalizeMessage: vi.fn((m: unknown) => m),
   editUpload: vi.fn(async () => undefined),
   createIrcArtSave: vi.fn(async () => undefined),

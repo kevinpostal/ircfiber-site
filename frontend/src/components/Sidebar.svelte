@@ -225,6 +225,7 @@
       {@const totalHighlights = net.buffers.reduce((s, b) => s + ((b.name !== '_server' && b.unseen) ? b.unseenHighlights.length : 0), 0)}
       {@const totalBadge = totalHighlights > 0 ? totalHighlights : net.buffers.reduce((s, b) => s + ((b.name !== '_server' && b.unseen && showsUnreadCount(net.networkId, b.name)) ? b.unseenCount : 0), 0)}
       <div class="network connection" class:connected={net.connected} class:disconnected={!net.connected}
+           class:connecting={!net.connected && net.connectionState === 'connecting'}
            class:collapsed class:totalUnread class:activeTotalBadge={totalBadge > 0}
            data-network-id={net.networkId}>
         <div class="network-header buffer"
@@ -238,6 +239,8 @@
           <span class="buffer" role="tab">
             {#if net.connected}
               <i class="fa fa-lock network-shield" title="Secure connection" aria-hidden="true"></i>
+            {:else if net.connectionState === 'connecting'}
+              <span class="network-shield network-dot busy" title="Connecting" aria-hidden="true"></span>
             {:else}
               <i class="fa fa-globe network-shield" aria-hidden="true" style="opacity:0.5"></i>
             {/if}

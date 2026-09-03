@@ -729,6 +729,58 @@ export function handleBuffersToDelete(bidList: string[]): void {
   }
 }
 
+/**
+ * Apply a live SETNAME realname change: refresh the network-wide realname
+ * cache and every member row for the nick across all buffers.
+ */
+export function applySetname(networkId: string, nick: string, realname: string): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  const bare = stripPrefix(nick);
+  if (!bare) return;
+  if (realname) {
+    if (!net.realnames) net.realnames = {};
+    net.realnames[bare] = realname;
+  }
+  for (const b of net.buffers) {
+    if (!b.users) continue;
+    for (const u of b.users) {
+      if (stripPrefix(u.nick).toLowerCase() === bare.toLowerCase()) {
+        u.realname = realname;
+      }
+    }
+  }
+  markNetworkSeen(networkId);
+}
+
+/**
+ * Tombstone a message redacted via draft/message-redaction
+ * (`REDACT <target> <msgid> [<reason>]`). Returns true when a row with
+ * the msgid was found and replaced (caller then skips appending the
+ * REDACT event itself); false when the original is unknown (caller
+ * falls through to the generic append so the REDACT stays visible).
+ */
+export function markRedacted(networkId: string, bufferName: string, msgid: string, reason: string): boolean {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const list = ircState.messages[key] ?? [];
+  const idx = list.findIndex((m: IRCMessage) => m.msgid === msgid);
+  if (idx < 0) return false;
+  const original = list[idx];
+  const tombstone: IRCMessage = {
+    ...original,
+    text: reason ? `[message deleted: ${reason}]` : '[message deleted]',
+    redacted: true,
+    redactReason: reason || undefined,
+  };
+  list[idx] = tombstone;
+  ircState.messages[key] = [...list];
+  const replaced = ircState.processedMessages[key]
+    ? replaceInProcessedBuffer(ircState.processedMessages[key], original, tombstone)
+    : null;
+  ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
+  return true;
+}
+
 export function prependMessage(networkId: string, bufferName: string, msg: IRCMessage): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const list = ircState.messages[key] ?? [];
@@ -1820,6 +1872,32 @@ export interface SyncNetwork extends Network {
   accounts?: Record<string, string>;
   idents?: Record<string, string>;
   realnames?: Record<string, string>;
+  /** Live telemetry (websocket.d performStateDump ← NetworkStateSnapshot).
+   *  Wire sentinels: empty string / `lagMs < 0` / `connectedAtMs <= 0` /
+   *  missing `tlsInfo` all mean "unknown" and map to `null` on `Network`. */
+  activeEgressLabel?: string;
+  activeEgressHost?: string;
+  activeEgressIp?: string;
+}
+
+/** Copy the sync's telemetry sentinels onto `target` as nullable fields. */
+function applyTelemetryFromSync(target: Network, raw: SyncNetwork): void {
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+  target.egressLabel = str(raw.activeEgressLabel);
+  target.egressHost = str(raw.activeEgressHost);
+  target.egressIp = str(raw.activeEgressIp);
+  target.lagMs = typeof raw.lagMs === 'number' && raw.lagMs >= 0 ? raw.lagMs : null;
+  target.connectedAtMs = typeof raw.connectedAtMs === 'number' && raw.connectedAtMs > 0 ? raw.connectedAtMs : null;
+  const tls = raw.tlsInfo;
+  target.tlsInfo = tls && typeof tls === 'object'
+    ? {
+        version: typeof tls.version === 'string' ? tls.version : '',
+        cipher: typeof tls.cipher === 'string' ? tls.cipher : '',
+        certCn: typeof tls.certCn === 'string' ? tls.certCn : '',
+        certIssuer: typeof tls.certIssuer === 'string' ? tls.certIssuer : '',
+        certNotAfterMs: typeof tls.certNotAfterMs === 'number' ? tls.certNotAfterMs : 0,
+      }
+    : null;
 }
 
 /** Sync payload buffer. `lastSeen` (inherited) carries the gateway-persisted
@@ -1992,6 +2070,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       if (net.autoJoinChannels !== undefined) existing.autoJoinChannels = net.autoJoinChannels;
       if (net.autoJoinDelaySeconds !== undefined) existing.autoJoinDelaySeconds = net.autoJoinDelaySeconds;
       existing.status = net.status;
+      applyTelemetryFromSync(existing, rawNet);
       // systemManaged is a server-side flag we don't expect to change
       // during a session; only adopt it from sync if we don't have a
       // value yet (initial load). Treat undefined/missing as false.
@@ -2050,8 +2129,8 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
         // engine is between attempts in its backoff loop). Show it so the
         // user gets a "Disconnect" button to cancel the pending reconnect.
         // If the user has explicitly disconnected (userDisconnectedAt set),
-        // suppress this — they don't want to see "Connecting" cards and the
-        // synthetic attempt in ServerLogTimeline would create a ghost card.
+        // suppress this — they don't want to see a "Connecting" pill and
+        // the synthetic attempt in ServerLog would create ghost phase rows.
         existing.connectionState = connectionState;
       }
       // Don't blindly overwrite currentNick from sync — the IRC NICK event
@@ -2454,7 +2533,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       // `c` for command, etc.) because it's a verbatim slice of the Redis
       // scrollback JSON. Feed each entry through normalizeMessage so the
       // frontend sees IRCMessage-shaped objects — without this, server-log
-      // phase events render with empty bodies in ServerLogCard (the field
+      // phase events render with empty bodies in ServerLog (the field
       // name `text` is never set; only `x` survives the JSON trip).
       for (const buf of net.buffers) {
         const rawMsgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
@@ -2695,9 +2774,9 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       // for text, `c` for command, etc.) — a verbatim slice of the Redis
       // scrollback JSON. normalizeMessage() translates it into the
       // IRCMessage shape used everywhere else in the frontend so phase
-      // events surface their `text` body (without this, ServerLogCard
-      // would render phase chips but `msg.text === undefined` and the
-      // timeline body shows `&nbsp;`).
+      // events surface their `text` body (without this, ServerLog would
+      // render phase rows with `msg.text === undefined` and an empty
+      // content cell).
       for (const buf of net.buffers) {
         const rawMsgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
         if (rawMsgs && rawMsgs.length > 0) {
@@ -2714,6 +2793,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
         }
       }
 
+      applyTelemetryFromSync(net, rawNet);
       ircState.networks.push(net);
     }
   }
@@ -2803,9 +2883,8 @@ export function handleConnect(cmd: string, networkId: string, text?: string): vo
  * values (empty string for bare flags).
  *
  * Empty value means "bare flag" — the server sent `KNOCK` not
- * `KNOCK=something`. `CategorizedFeature.isFlag` in
- * `lib/isupportCategorize.ts` is what downstream consumers should
- * inspect to distinguish.
+ * `KNOCK=something`; downstream consumers (ServerLog's ISUPPORT row)
+ * distinguish the two by the empty string.
  */
 export function applyIsupportUpdate(
   networkId: string,

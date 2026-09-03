@@ -122,7 +122,6 @@ final class RESTAPI {
         router.delete_("/api/me/pins/:network/:channel", &unpinChannel);
         router.post("/api/me/members-collapsed", &updateMembersCollapsed);
         router.post("/api/me/conversations-collapsed", &updateConversationsCollapsed);
-        router.post("/api/me/serverlog-collapsed", &updateServerlogCollapsed);
         router.post("/api/me/buffer-prefs", &updateBufferPrefs);
         router.post("/api/me/collapsed", &updateCollapsed);
         router.post("/api/me/inactive-collapsed", &updateInactiveCollapsed);
@@ -1460,53 +1459,6 @@ final class RESTAPI {
             cc[k] = Json(v);
         json["value"] = cc;
         redis.publish(RedisKeys.events(user.id.toString()), json.toString());
-
-        res.statusCode = 204;
-        res.writeVoidBody();
-    }
-
-    /// Enterprise-grade server-log collapse persistence. Same pattern as
-    /// membersCollapsed — keyed by networkId:eid so collapses survive
-    /// reconnection cycles deterministically. Broadcast via pref_update
-    /// to all connected sessions in real time.
-    private void updateServerlogCollapsed(HTTPServerRequest req, HTTPServerResponse res) {
-        requireAuth(req, res);
-        if (res.headerWritten) return;
-
-        auto user = req.context["user"].get!User;
-        auto bodyJson = req.json;
-
-        // Support both eid (preferred) and msgid (legacy fallback) so
-        // connection attempts without an eid still get persisted collapse.
-        string key;
-        if (auto e = "eid" in bodyJson) {
-            key = bodyJson["network"].get!string ~ ":" ~ bodyJson["eid"].get!string;
-        } else if (auto m = "msgid" in bodyJson) {
-            key = bodyJson["network"].get!string ~ ":msgid:" ~ bodyJson["msgid"].get!string;
-        } else if (auto i = "id" in bodyJson) {
-            // Synthetic/legacy attempts keyed by the event's random id — the
-            // same `<network>:id:<id>` shape `getServerLogCollapsedKey`
-            // uses client-side, so the pref round-trips across devices.
-            key = bodyJson["network"].get!string ~ ":id:" ~ bodyJson["id"].get!string;
-        } else {
-            res.statusCode = 400;
-            res.writeJsonBody(Json(["error": Json("eid, msgid or id required")]));
-            return;
-        }
-        const collapsed = bodyJson["collapsed"].get!bool;
-
-        auto prefs = prefsRepo.load(user.id);
-        if (collapsed) {
-            prefs.serverlogCollapsed[key] = true;
-        } else {
-            prefs.serverlogCollapsed.remove(key);
-        }
-        auto newVersion = prefsRepo.save(user.id, prefs);
-
-        auto slc = Json.emptyObject;
-        foreach (k, v; prefs.serverlogCollapsed)
-            slc[k] = Json(v);
-        broadcastPrefUpdate(user.id.toString(), "serverlogCollapsed", slc, newVersion);
 
         res.statusCode = 204;
         res.writeVoidBody();

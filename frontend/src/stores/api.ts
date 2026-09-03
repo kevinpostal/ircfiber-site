@@ -13,8 +13,8 @@ const API_BASE = viteEnv.VITE_API_BASE ?? '/api';
  * Exported so sync payloads (which carry the wire-format `messages[]` from
  * the server's Redis scrollback) can be normalized before reaching
  * ircState.messages — without this normalization, the frontend's
- * ServerLogCard sees `msg.text === undefined` for events stored under
- * `x` and the timeline body renders as `&nbsp;`. See the WebSocket sync
+ * ServerLog sees `msg.text === undefined` for events stored under
+ * `x` and the row body renders empty. See the WebSocket sync
  * path in ircStore.svelte.ts (updateNetworkFromSync) for the consumer.
  */
 export function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
@@ -165,30 +165,6 @@ export async function updateNetworkOrder(order: string[]): Promise<void> {
     body: JSON.stringify({ order })
   });
   if (!r.ok) throw new Error('Update network order failed');
-}
-
-/// Persist the collapsed state of a server-log connection card. The
-/// server keys the preference exactly like `getServerLogCollapsedKey`
-/// (`<net>:<eid>` / `<net>:msgid:<msgid>` / `<net>:id:<id>`), so pass the
-/// attempt's start message and let one place pick the identifier. Cards
-/// with no identifier at all stay localStorage-only instead of POSTing a
-/// request the server can only answer with 400.
-export async function updateServerlogCollapsed(
-  networkId: string,
-  start: { eid?: number | string; msgid?: string; id?: string } | undefined,
-  collapsed: boolean,
-): Promise<void> {
-  const body: Record<string, unknown> = { network: networkId, collapsed };
-  if (start?.eid) body.eid = String(start.eid);
-  else if (start?.msgid) body.msgid = start.msgid;
-  else if (start?.id) body.id = start.id;
-  else return;
-  const r = await fetch(`${API_BASE}/me/serverlog-collapsed`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error('Update serverlog collapsed failed');
 }
 
 export async function updateMembersCollapsed(networkId: string, channel: string, collapsed: boolean): Promise<void> {

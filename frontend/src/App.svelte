@@ -42,7 +42,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { serverlogCollapsedMap, membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -1055,6 +1055,12 @@ let showNetworkForm: boolean = $state(false);
       capabilities: new Set(),
       isupport: {},
       chanTypes: '#',
+      egressLabel: null,
+      egressHost: null,
+      egressIp: null,
+      lagMs: null,
+      connectedAtMs: null,
+      tlsInfo: null,
     }));
     ircState.networks = skeletons as unknown as Network[];
 
@@ -1122,22 +1128,8 @@ let showNetworkForm: boolean = $state(false);
         if (archivedMap[key] !== false) archivedMap[key] = true;
       }
     }
-    if (user.serverlogCollapsed) {
-      // Additive-only merge: the server may lag behind (stale stat_user
-      // cached by the gateway) or be out of sync with another device.
-      // Deleting local keys causes a visible flicker — cards that were
-      // collapsed correctly from localStorage snap expanded when the
-      // delete loop runs, then snap collapsed again on the next render.
-      // The pref_update WS handler handles cross-tab/device sync; the
-      // initial stat_user is purely a seed for first-time visitors.
-      const slc = user.serverlogCollapsed as Record<string, boolean>;
-      for (const [key, value] of Object.entries(slc)) {
-        if (value === true) serverlogCollapsedMap[key] = true;
-      }
-    }
     if (user.membersCollapsed) {
-      // Additive-only merge: mirrors the serverlogCollapsed pattern at
-      // App.svelte:650-661. The server may lag behind (stale stat_user
+      // Additive-only merge: the server may lag behind (stale stat_user
       // cached by the gateway) or be out of sync with another device.
       // Deleting local keys that are missing from the server payload
       // causes a visible flicker — the sidebar would briefly snap to
@@ -1151,8 +1143,7 @@ let showNetworkForm: boolean = $state(false);
       }
     }
     if (user.collapsed) {
-      // Additive-only merge: see membersCollapsed comment above and
-      // serverlogCollapsed pattern at App.svelte:650-661. Same reason:
+      // Additive-only merge: see membersCollapsed comment above. Same reason:
       // delete-then-add on boot would visibly flicker the sidebar
       // network groupings (collapsed → expanded → collapsed) because
       // localStorage-backed collapses are the user's source of truth
@@ -1163,8 +1154,7 @@ let showNetworkForm: boolean = $state(false);
       }
     }
     if (user.inactiveCollapsed) {
-      // Additive-only merge: see membersCollapsed comment above and
-      // serverlogCollapsed pattern at App.svelte:650-661. Same reason:
+      // Additive-only merge: see membersCollapsed comment above. Same reason:
       // delete-then-add on boot would visibly flicker the inactive
       // (disconnected) network groupings on page refresh.
       const ic = user.inactiveCollapsed as Record<string, boolean>;
@@ -1173,8 +1163,8 @@ let showNetworkForm: boolean = $state(false);
       }
     }
     if (user.conversationsCollapsed) {
-      // Additive-only merge: see serverlogCollapsed comment at
-      // App.svelte:650-661. Same flicker rationale: a stale or empty
+      // Additive-only merge: see membersCollapsed comment above.
+      // Same flicker rationale: a stale or empty
       // stat_user payload must NOT wipe the user's localStorage-backed
       // conversation-grouping collapses. The pref_update WS handler is
       // the authoritative path for cross-tab/device sync; this seed is
@@ -1270,20 +1260,6 @@ let showNetworkForm: boolean = $state(false);
         if (archivedMap[k] !== false) {
           archivedMap[k] = true;
         }
-      }
-    } else if (key === 'serverlogCollapsed') {
-      // Additive-only merge: keys are keyed by per-attempt event IDs that
-      // change every boot, so cross-device "delete when key missing"
-      // semantics would wipe the user's locally-collapsed entries and
-      // cause a visible flicker (cards snap expanded, then collapsed) on
-      // every refresh. The mergePreferences boot path already adds
-      // server-true values, so this path is only needed for cross-tab
-      // sync where the user just collapsed a card in another tab.
-      // Mirrors the serverlogCollapsed pattern in mergePreferences at
-      // App.svelte:650-661.
-      const slc = (data.value as Record<string, boolean>) ?? {};
-      for (const [k, v] of Object.entries(slc)) {
-        if (v === true) serverlogCollapsedMap[k] = true;
       }
     } else if (key === 'membersCollapsed') {
       if (!locallyInitiated) {
@@ -1412,63 +1388,6 @@ let showNetworkForm: boolean = $state(false);
         // irc.supernets.org autoJoinChannels=["#tclmafia"] bug.
         if (ircState.activeBuffer.bufferName && ircState.activeBuffer.networkId === netId) {
           maybeAutoJoinChannel(netId, ircState.activeBuffer.bufferName);
-        }
-        // Auto-collapse the previous disconnect card in the server log so
-        // the new connection events are immediately visible without having
-        // to scroll past a tall "Disconnected" card.  Walk backwards
-        // from the end of the server buffer (CONNECT is the most recent
-        // entry; the DISCONNECT we want to collapse is just before it).
-        // Tries both eid and msgid key formats (matching ServerLogCard's
-        // collapsedKey derivation).
-        const serverKey = `${netId}:_server`;
-        const serverMsgs = ircState.messages[serverKey] ?? [];
-        for (let i = serverMsgs.length - 1; i >= 0; i--) {
-          const m = serverMsgs[i];
-          const isDisco = m.command === 'DISCONNECT' ||
-                          m.command === 'DISCO_GROUP' ||
-                          m.command === 'ERROR';
-          if (!isDisco) continue;
-          let collapseKey = '';
-          if (m.eid) {
-            collapseKey = `${netId}:${m.eid}`;
-          } else if (m.msgid) {
-            collapseKey = `${netId}:msgid:${m.msgid}`;
-          }
-          if (collapseKey) {
-            serverlogCollapsedMap[collapseKey] = true;
-          }
-          break;
-        }
-      }
-    }
-    // When DISCONNECT fires, auto-collapse the most recent CONNECTED card
-    // so the timeline doesn't accumulate expanded cards side by side.
-    if (cmd === 'DISCONNECT' || cmd === 'DISCONNECTED') {
-      let netId = data.nid as string;
-      if (!netId) {
-        const netName = data.network as string;
-        if (netName) {
-          const found = ircState.networks.find(n => n.name === netName);
-          if (found) netId = found.networkId;
-        }
-      }
-      if (netId) {
-        const serverKey = `${netId}:_server`;
-        const serverMsgs = ircState.messages[serverKey] ?? [];
-        for (let i = serverMsgs.length - 1; i >= 0; i--) {
-          const m = serverMsgs[i];
-          const isConnected = m.command === 'CONNECT' || m.command === 'CONNECTED' || m.command === '001';
-          if (!isConnected) continue;
-          let collapseKey = '';
-          if (m.eid) {
-            collapseKey = `${netId}:${m.eid}`;
-          } else if (m.msgid) {
-            collapseKey = `${netId}:msgid:${m.msgid}`;
-          }
-          if (collapseKey) {
-            serverlogCollapsedMap[collapseKey] = true;
-          }
-          break;
         }
       }
     }

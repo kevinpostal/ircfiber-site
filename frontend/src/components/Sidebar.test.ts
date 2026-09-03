@@ -51,6 +51,39 @@ describe('Sidebar', () => {
 		await expect.element(page.getByText('random')).toBeInTheDocument();
 	});
 
+	it('network header gets the connecting class and a pulsing dot while connecting', async () => {
+		const net = createNetwork({ networkId: 'net1', name: 'Libera', connected: false, connectionState: 'connecting' });
+		net.buffers.push(createBuffer({ name: '_server', type: 'server' }));
+		ircState.networks.push(net);
+		flushSync();
+
+		render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+		const header = document.querySelector('.network.connection[data-network-id="net1"]')!;
+		expect(header.classList.contains('connecting')).toBe(true);
+		expect(header.classList.contains('connected')).toBe(false);
+		expect(header.querySelector('.network-dot.busy')).not.toBeNull();
+		expect(header.querySelector('.fa-globe.network-shield')).toBeNull();
+		expect(header.querySelector('.fa-lock.network-shield')).toBeNull();
+	});
+
+	it('network header has no connecting dot when connected or plainly disconnected', async () => {
+		const up = createNetwork({ networkId: 'up', name: 'Up', connected: true, connectionState: 'connected' });
+		const down = createNetwork({ networkId: 'down', name: 'Down', connected: false, connectionState: 'disconnected' });
+		ircState.networks.push(up, down);
+		flushSync();
+
+		render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+
+		for (const id of ['up', 'down']) {
+			const header = document.querySelector(`.network.connection[data-network-id="${id}"]`)!;
+			expect(header.classList.contains('connecting')).toBe(false);
+			expect(header.querySelector('.network-dot.busy')).toBeNull();
+		}
+		expect(document.querySelector('[data-network-id="up"] .fa-lock.network-shield')).not.toBeNull();
+		expect(document.querySelector('[data-network-id="down"] .fa-globe.network-shield')).not.toBeNull();
+	});
+
 	it('highlights active buffer', async () => {
 		const net = createNetwork({ networkId: 'net1', name: 'Libera' });
 		net.buffers.push(createBuffer({ name: '#general' }));

@@ -7,6 +7,7 @@ import {
   formatDuration,
   numericBody,
   relativeOffset,
+  isupportTokens,
 } from './serverLogGroups';
 import type { IRCMessage } from '../types';
 
@@ -413,6 +414,16 @@ describe('numericBody', () => {
     expect(numericBody(m({ command: '005', text: '', params: ['nick', 'token1', 'token2'] }))).toBe('nick token1 token2');
   });
 });
+describe('isupportTokens', () => {
+  it('takes the tokens between nick and the trailing boilerplate from params', () => {
+    const msg = m({ command: '005', text: '', params: ['nick', 'CHANTYPES=#', 'NICKLEN=30', 'SAFELIST', ':are supported by this server'] });
+    expect(isupportTokens(msg)).toEqual(['CHANTYPES=#', 'NICKLEN=30', 'SAFELIST']);
+  });
+  it('strips the boilerplate from a flattened text body', () => {
+    const msg = m({ command: '005', text: 'CHANTYPES=# PREFIX=(ov)@+ are supported by this server' });
+    expect(isupportTokens(msg)).toEqual(['CHANTYPES=#', 'PREFIX=(ov)@+']);
+  });
+});
 describe('live connection flow (2026-09-02)', () => {
   it('a bare `connecting` after a completed connect opens a new card (engine restart, no DISCONNECTED)', () => {
     const messages = [
@@ -449,9 +460,10 @@ describe('live connection flow (2026-09-02)', () => {
     expect(attempts[0].phases).toHaveLength(6);
   });
 
-  it('relativeOffset renders +s offsets from the attempt start', () => {
-    expect(relativeOffset(1000, 1000)).toBe('+0.0s');
-    expect(relativeOffset(1000, 3450)).toBe('+2.5s');
+  it('relativeOffset renders ms / s / m offsets from the attempt start', () => {
+    expect(relativeOffset(1000, 1000)).toBe('+0ms');
+    expect(relativeOffset(1000, 1014)).toBe('+14ms');
+    expect(relativeOffset(1000, 3450)).toBe('+2.45s');
     expect(relativeOffset(1000, 1000 + 125_000)).toBe('+2m05s');
     expect(relativeOffset(undefined, 5)).toBe('');
   });

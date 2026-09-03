@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IRC Fiber — Server log redesign mockup</title>
+<style>
+  :root {
+    --text-primary: #d1d5db; --text-secondary: #8b949e; --text-tertiary: #6e7681;
+    --chat-bg: #000; --border: #2c2f35; --link: #58a6ff; --accent: #1e72ff;
+    --status-fg: #9cbfe2;            /* IRCCloud dusk div.status content */
+    --grouped-bg: #1d4063;           /* IRCCloud dusk groupedLines */
+    --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+    --font-mono: 'Hack','SFMono-Regular',Menlo,Consolas,monospace;
+    --font-sans: Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #14171c; color: var(--text-primary); font-family: var(--font-sans); }
+
+  /* ── mockup chrome (not part of the design) ─────────────────────── */
+  .mock-bar { display:flex; gap:8px; align-items:center; padding:10px 14px; background:#1b1f26; border-bottom:1px solid #2c2f35; font-size:13px; color:#8b949e; }
+  .mock-bar b { color:#fff; margin-right:6px; }
+  .mock-bar button { background:#262b33; color:#d1d5db; border:1px solid #363b44; border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
+  .mock-bar button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .frame { display:grid; grid-template-columns: 200px 1fr; grid-template-rows: 1fr; height: calc(100vh - 42px); min-height: 640px; }
+
+  /* ── sidebar (existing Fiber, shown for context only) ───────────── */
+  .sidebar { background:#0d1117; border-right:1px solid var(--border); padding:8px 0; font-size:13px; }
+  .sidebar h2 { margin:6px 8px 2px; padding:4px 8px; font-size:13px; font-weight:600; color:#c9d1d9; display:flex; gap:6px; align-items:center; border-radius:4px; }
+  .sidebar h2.active { background:#1e2126; }
+  .sidebar h2 .dot { width:7px; height:7px; border-radius:50%; background:var(--ok); }
+  .sidebar h2 .dot.off { background:var(--bad); }
+  .sidebar h2 .dot.busy { background:var(--accent); animation: pulse 1s infinite; }
+  .sidebar ul { list-style:none; margin:0 0 10px; padding:0; }
+  .sidebar li { padding:3px 8px 3px 26px; color:#8b949e; }
+  .sidebar li.b { color:#fff; font-weight:600; }
+
+  /* ── server page ────────────────────────────────────────────────── */
+  .page { display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--chat-bg); }
+
+  .bufferHead { padding:8px 12px 6px; border-bottom:1px solid var(--border); background:#0d1117; font-family: var(--font-mono); }
+  .bufferHead .buttons { float:right; margin:0; display:flex; gap:6px; }
+  .bufferHead .buttons button { font:600 12px var(--font-sans); padding:4px 10px; border-radius:4px; border:1px solid #363b44; background:#1e2126; color:#d1d5db; cursor:pointer; }
+  .bufferHead .buttons button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .bufferHead .buttons button.cog { padding:4px 8px; }
+  .bufferHead h2 { margin:0; font-size:15px; font-weight:600; color:#fff; display:flex; gap:8px; align-items:baseline; }
+  .bufferHead h2 .shield { color:var(--ok); font-size:13px; }
+  .bufferHead h2 .host { color:var(--text-secondary); font-weight:400; font-size:13px; }
+  .bufferHead .identity { font-size:13px; color:var(--text-secondary); margin-top:2px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .bufferHead .identity .nick { color:#fff; }
+  .pill { display:inline-flex; gap:6px; align-items:center; font-size:12px; padding:1px 8px 1px 6px; border-radius:10px; border:1px solid var(--border); color:var(--text-primary); }
+  .pill .dot { width:7px; height:7px; border-radius:50%; background:var(--ok); }
+  .pill.busy .dot { background:var(--accent); animation:pulse 1s infinite; }
+  .pill.off .dot { background:var(--bad); }
+  .pill .sep { color:var(--text-tertiary); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+  /* IRCCloud .connectionStatus strip */
+  .connectionStatus { display:none; font:13px var(--font-sans); padding:5px 10px; border-top:1px solid; border-bottom:1px solid; }
+  .connectionStatus.show { display:flex; justify-content:space-between; align-items:center; }
+  .connectionStatus.reconnect { background:#173350; border-color:#224d77; color:#c4d9ee; }
+  .connectionStatus.fail { background:#3a1d1d; border-color:#5c2626; color:#f0c2c2; }
+  .connectionStatus.busy { background:#0f2238; border-color:#1e3a5c; color:#9cbfe2; }
+  .connectionStatus a { color:#9cc7ff; font-weight:600; cursor:pointer; }
+
+  /* ── the log ────────────────────────────────────────────────────── */
+  .viewport { flex:1; min-height:0; overflow:auto; }
+  .log { font:14px/19px var(--font-mono); padding-bottom: 12px; }
+  .row { position:relative; padding:0 132px 0 12px; }
+  .row .date { position:absolute; right:12px; top:0; font-size:12px; line-height:19px; color:var(--text-tertiary); }
+  .row .content { color:var(--status-fg); white-space:pre-wrap; word-break:break-word; }
+  .row.status { background:rgba(255,255,255,.015); }
+  .row.status b { color:#b0cce8; }
+  .row.muted .content { color:var(--text-tertiary); }
+  .row.dateChange { padding:0; margin:10px 0 6px; background:#0d1117; border-top:1px solid var(--border); border-bottom:1px solid var(--border); text-align:center; }
+  .row.dateChange h3 { margin:0; font:600 13px/24px var(--font-mono); color:#c9d1d9; }
+  .row.fetch { text-align:center; color:var(--text-tertiary); font-size:12px; padding:6px 0; }
+  .row.loadMore { text-align:center; padding:8px 0 2px; }
+  .row.loadMore button { font:12px var(--font-sans); color:#88b3dd; background:#173350; border:0; border-radius:3px; padding:4px 12px; box-shadow:0 1px 0 #224d77; }
+  /* IRCCloud div.part hr — socket closed divider */
+  .row.part { padding:0; }
+  .row.part hr { border:0; border-top:3px double #444a52; margin:6px 12px; }
+
+  /* phase rows: a thin rail joins the steps of one attempt */
+  .row.phase { padding-left:36px; }
+  .row.phase::before { content:''; position:absolute; left:19px; top:0; bottom:0; width:1px; background:#2c3540; }
+  .row.phase.first::before { top:9px; }
+  .row.phase.last::before  { bottom:10px; }
+  .row.phase .glyph { position:absolute; left:14px; top:4px; width:11px; height:11px; border-radius:50%; background:#000; border:1.5px solid #4b5563; }
+  .row.phase.done .glyph { border-color:#4b5563; background:#4b5563; }
+  .row.phase.ok .glyph { border-color:var(--ok); background:var(--ok); box-shadow:0 0 0 3px rgba(63,185,80,.18); }
+  .row.phase.bad .glyph { border-color:var(--bad); background:var(--bad); box-shadow:0 0 0 3px rgba(248,81,73,.18); }
+  .row.phase.live .glyph { border-color:var(--accent); background:transparent; }
+  .row.phase.live .glyph::after { content:''; position:absolute; inset:-1.5px; border-radius:50%; border:1.5px solid transparent; border-top-color:var(--accent); animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .row.phase .content { color:var(--text-primary); }
+  .row.phase.done .content { color:var(--text-secondary); }
+  .row.phase.ok .content { color:#7ee2a8; font-weight:600; }
+  .row.phase.bad .content { color:#ff8f8a; font-weight:600; }
+  .row.phase.live .content { color:#fff; }
+  .offs { position:absolute; right:88px; top:0; font-size:11px; line-height:19px; color:var(--text-tertiary); }
+  .offs.hot { color:#9cc7ff; }
+  .kv { color:var(--text-tertiary); }
+  .kv b { color:var(--text-secondary); font-weight:500; }
+  .tag { display:inline-block; font-size:11px; line-height:15px; padding:0 5px; border-radius:3px; background:#1e2126; color:#9cbfe2; margin-left:6px; vertical-align:1px; }
+  .tag.ok { color:#7ee2a8; } .tag.bad { color:#ff8f8a; } .tag.warn { color:#e3b341; }
+
+  /* notices (server / services) — IRCCloud notice row w/ author */
+  .row.notice { padding-left:12px; margin-top:4px; }
+  .row.notice .author { display:flex; gap:8px; align-items:center; margin-bottom:1px; }
+  .row.notice .av { width:18px; height:18px; border-radius:3px; background:#7c3aed; color:#fff; font:700 11px/18px var(--font-sans); text-align:center; }
+  .row.notice .av.srv { background:#30363d; color:#9cbfe2; font-size:10px; }
+  .row.notice .name { font-weight:600; color:#e6edf3; }
+  .row.notice .bot { font:600 9px/12px var(--font-sans); padding:0 4px; border-radius:2px; background:#30363d; color:#c9d1d9; }
+  .row.notice .line { position:relative; padding:0 120px 0 26px; color:var(--status-fg); white-space:pre-wrap; }
+  .row.notice .line .date { right:0; }
+
+  /* grouped MOTD block */
+  .row.grouped { padding:4px 12px; }
+  .groupedLines { position:relative; background:var(--grouped-bg); border-radius:3px; padding:5px 8px; color:#dbe9f7; }
+  .groupedLines h2 { margin:0 0 6px; font:600 14px/19px var(--font-mono); color:#fff; display:flex; justify-content:space-between; align-items:center; }
+  .groupedLines h2 .tog { font:11px var(--font-sans); color:#9cc7ff; cursor:pointer; font-weight:500; }
+  .groupedLines .l { min-height:17px; white-space:pre; overflow:hidden; text-overflow:ellipsis; }
+  .groupedLines.collapsed .l { display:none; }
+  .groupedLines .art { color:#8fd3ff; }
+
+  /* isupport: one row, 2-line clamp, expandable */
+  .isup .content { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .isup.open .content { display:block; }
+  .isup .more { position:absolute; right:88px; bottom:0; font:11px var(--font-sans); color:#9cc7ff; cursor:pointer; background:#000; padding-left:6px; }
+
+  /* retry row */
+  .row.retry .content { color:#e3b341; }
+  .row.retry a { color:#9cc7ff; font-weight:600; cursor:pointer; margin-left:8px; }
+  .row.retry .bar { height:2px; background:#2c3540; margin:3px 0 4px; width:260px; border-radius:1px; overflow:hidden; }
+  .row.retry .bar i { display:block; height:100%; background:#e3b341; width:0%; }
+
+  .seenDivider { margin:4px 12px; border-top:1px solid var(--bad); position:relative; }
+  .seenDivider span { position:absolute; right:0; top:-8px; font:10px var(--font-sans); background:#000; color:var(--bad); padding:0 4px; }
+
+  .notes { background:#0d1117; border-top:1px solid var(--border); font:12px/17px var(--font-sans); color:#8b949e; padding:8px 12px; display:grid; grid-template-columns:repeat(4,1fr); gap:6px 18px; }
+  .notes b { color:#c9d1d9; }
+</style>
+</head>
+<body>
+
+<div class="mock-bar">
+  <b>MOCKUP</b> state:
+  <button data-state="connected" class="on">Connected</button>
+  <button data-state="connecting">Connecting (live)</button>
+  <button data-state="dropped">Dropped → auto-retry</button>
+  <button data-state="failed">Failed (TLS)</button>
+  <span style="margin-left:auto">▶ <button id="replay">Replay connect in real time</button></span>
+</div>
+
+<div class="frame">
+  <aside class="sidebar">
+    <h2><span class="dot"></span> meth.cat</h2>
+    <ul><li>#bot</li><li class="b">#bowlcut</li></ul>
+    <h2 class="active"><span class="dot" id="sb-dot"></span> SuperNETs</h2>
+    <ul><li>#comms</li><li class="b">#dev</li><li>#hardchats</li><li>#scroll</li><li class="b">#superbowl</li><li>NickServ</li></ul>
+    <h2><span class="dot"></span> ircfiber</h2>
+    <ul><li>#ircfiber</li><li>#testing</li></ul>
+  </aside>
+
+  <main class="page">
+    <div class="bufferHead">
+      <p class="buttons" id="buttons"></p>
+      <h2><span class="shield">🛡</span>SuperNETs <span class="host">irc.supernets.org:6697</span></h2>
+      <div class="identity">
+        <span><span class="nick">Zodiac</span> Zod</span>
+        <span class="pill" id="live"><span class="dot"></span><span id="live-text"></span></span>
+        <span class="kv" id="live-kv"></span>
+      </div>
+    </div>
+
+    <div class="connectionStatus" id="strip"></div>
+
+    <div class="viewport" id="vp">
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="notes">
+      <div><b>Flat, chronological.</b> One scrolling log like IRCCloud's console — no cards, no per-attempt accordions. Same MessageList scroller, backlog + date headers.</div>
+      <div><b>Phase rail.</b> Engine phases (dns → tcp → tls → register → ready) are compact rows on a thin rail; +offset from attempt start; the in-flight step spins and ticks live.</div>
+      <div><b>Live header.</b> Status pill updates on every phase: uptime ticks while connected, retry countdown while dropped, current step while connecting. Strip mirrors IRCCloud's <code>connectionStatus</code>.</div>
+      <div><b>Noise control.</b> CAP/SASL/001–004/LUSER stay as muted status rows; ISUPPORT is one 2-line row (expand); MOTD is the tinted grouped block (collapsible). PING/WHOIS/ISON never shown.</div>
+    </div>
+  </main>
+</div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const log = $('#log');
+const T0 = new Date(); T0.setHours(18,56,59,0);
+const fmt = (d) => d.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', second:'2-digit'});
+const ts = (ms) => fmt(new Date(T0.getTime()+ms));
+const offs = (ms) => ms < 1000 ? `+${ms}ms` : `+${(ms/1000).toFixed(2)}s`;
+
+const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+const row = (cls, content, ms, extra='') => h(`<div class="row ${cls}">${extra}<span class="content">${content}</span><span class="date">${ts(ms)}</span></div>`);
+const phase = (cls, content, ms, tag='') => h(`<div class="row phase ${cls}"><span class="glyph"></span><span class="content">${content}${tag}</span><span class="offs ${cls.includes('live')?'hot':''}">${offs(ms)}</span><span class="date">${ts(ms)}</span></div>`);
+
+const ISUP = 'Server supports: <b>CHANTYPES</b>=# <b>PREFIX</b>=(qaohv)~&@%+ <b>CHANMODES</b>=beI,kLf,lH,psmntirzMQNRTOVKDdGPZSCc <b>MODES</b>=12 <b>NICKLEN</b>=30 <b>MAXLIST</b>=b:60,e:60,I:60 <b>NETWORK</b>=SuperNETs <b>CASEMAPPING</b>=ascii <b>EXTBAN</b>=~,GHOTUacfjmnpqrstw <b>ELIST</b>=MNUCT <b>STATUSMSG</b>=~&@%+ <b>EXCEPTS</b> <b>INVEX</b> <b>CHANLIMIT</b>=#:20 <b>MAXCHANNELS</b>=20 <b>HCN</b> <b>SILENCE</b>=15 <b>WATCH</b>=128 <b>WATCHOPTS</b>=A <b>MAXNICKLEN</b>=30 <b>NAMESX</b> <b>UHNAMES</b> <b>AWAYLEN</b>=307 <b>KICKLEN</b>=307 <b>TOPICLEN</b>=360 <b>DEAF</b>=d <b>TARGMAX</b>=DCCALLOW:,ISON:,JOIN:,KICK:4,KILL:,LIST:,NAMES:1,NOTICE:1,PART:,PRIVMSG:4,SAJOIN:,SAPART:,TAGMSG:1,USERHOST:,USERIP:,WATCH:,WHOIS:1,WHOWAS:1 <b>SAFELIST</b> <b>MINNICKLEN</b>=1';
+
+/* ── the connect sequence, exactly the engine phase order ─────────── */
+const SEQ = [
+  { ms:0,    el: () => phase('done first', 'Queued for connection', 0) },
+  { ms:14,   el: () => phase('done', 'Resolving <b>irc.supernets.org</b> <span class="kv">→ 104.21.6.12, 2606:4700:3037::ac43:9b2a</span>', 14) },
+  { ms:22,   el: () => phase('done', 'Connecting to 104.21.6.12:6697 <span class="kv">via <b>mullvad-us-nyc</b></span>', 22) },
+  { ms:308,  el: () => phase('done', 'TCP connected', 308) },
+  { ms:312,  el: () => phase('done', 'TLS handshake', 312) },
+  { ms:521,  el: () => phase('done', 'TLS 1.3 · TLS_AES_256_GCM_SHA384 · cert <b>*.supernets.org</b> valid <span class="kv">(Let\'s Encrypt, 61d)</span>', 521, '<span class="tag ok">verified</span>') },
+  { ms:530,  el: () => phase('done', 'Registering as <b>Zodiac</b>', 530) },
+  { ms:640,  el: () => row('status muted', '<b>CAP</b> Server supports: away-notify | invite-notify | extended-join | userhost-in-names | multi-prefix | cap-notify | sasl=EXTERNAL,PLAIN | setname | tls | chghost | account-notify | account-tag | batch | draft/chathistory | echo-message | message-tags | server-time | standard-replies', 640) },
+  { ms:645,  el: () => row('status muted', '<b>CAP</b> Requesting: away-notify | invite-notify | extended-join | multi-prefix | cap-notify | sasl | setname | chghost | account-notify | account-tag | batch | echo-message | message-tags | server-time', 645) },
+  { ms:860,  el: () => row('status muted', '<b>CAP</b> Acknowledged: away-notify | invite-notify | extended-join | multi-prefix | cap-notify | sasl | setname | chghost | account-notify | account-tag | batch | echo-message | message-tags | server-time', 860) },
+  { ms:1071, el: () => row('status', 'SASL authentication successful <span class="kv">(PLAIN as <b>Zodiac</b>)</span>', 1071) },
+  { ms:1078, el: () => row('status', 'You are now in the matrix as Zodiac.', 1078) },
+  { ms:1240, el: () => phase('ok last', 'Connected', 1240, '<span class="tag ok">1.24s</span>') },
+  { ms:1242, el: () => row('status', 'SuperNETs - YOU HAVE NOW ENTERED THE VOID... Zodiac!uid707017@paying.money.to.chat.on.irc.with.irccloud.com', 1242) },
+  { ms:1243, el: () => row('status muted', 'Your host is contra.supernets.org, running version DangerousIRCd-6.6.6', 1243) },
+  { ms:1243, el: () => row('status muted', 'This server was created Fri Apr 1 1990 at 04:20:00 UTC', 1243) },
+  { ms:1244, el: () => row('status muted isup', ISUP, 1244, '<span class="more" onclick="this.parentElement.classList.toggle(\'open\'); this.textContent = this.parentElement.classList.contains(\'open\') ? \'less\' : \'…more\'">…more</span>') },
+  { ms:1250, el: () => row('status muted', 'There are 61 users and 1,309 invisible on 3 servers · 42 operators · 233 channels · Highest connection count: 1,918', 1250) },
+  { ms:1255, el: () => h(`<div class="row grouped"><div class="groupedLines"><h2><span>- <u>contra.supernets.org</u> Message of the Day -</span><span class="tog" onclick="const g=this.closest('.groupedLines'); g.classList.toggle('collapsed'); this.textContent=g.classList.contains('collapsed')?'show 14 lines':'hide'">hide</span></h2>
+    <div class="l art">- ╔═╗╦ ╦╔═╗╔═╗╦═╗╔╗╔╔═╗╔╦╗╔═╗</div>
+    <div class="l art">- ╚═╗║ ║╠═╝║╣ ╠╦╝║║║║╣  ║ ╚═╗</div>
+    <div class="l art">- ╚═╝╚═╝╩  ╚═╝╩╚═╝╚╝╚═╝ ╩ ╚═╝</div>
+    <div class="l">- </div>
+    <div class="l">- Welcome to SuperNETs, the last IRC network you will ever need.</div>
+    <div class="l">- Rules: 1. don't be a cop  2. don't spam  3. no bots without +B</div>
+    <div class="l">- Services: NickServ · ChanServ · HostServ · MemoServ · BotServ</div>
+    <div class="l">- Web:  https://supernets.org   Wiki: https://supernets.org/wiki</div>
+    <div class="l">- Admin: acidvegas · Contact: #superbowl</div>
+    <div class="l">- </div>
+    <div class="l">- This server is hosted by the void. Expect nothing.</div>
+    <div class="l">- Last updated 24/6/2025 5:20</div>
+  </div></div>`) },
+  { ms:1260, el: () => row('status muted', 'Your user mode changed: +iptxzIT', 1260) },
+  { ms:1262, el: () => row('status muted', 'Your hostmask: uid707017@paying.money.to.chat.on.irc.with.irccloud.com', 1262) },
+  { ms:1300, el: () => h(`<div class="row notice"><div class="author"><span class="av">N</span><span class="name">NickServ</span><span class="bot">BOT</span></div>
+      <div class="line">Status updated (memos, vhost, chmodes, flags).<span class="date">${ts(1300)}</span></div>
+      <div class="line">Invite to join <u>#mensa</u><span class="date">${ts(1310)}</span></div></div>`) },
+  { ms:1340, el: () => row('status muted', '<b>CAP</b> Server added: sasl', 1340) },
+  { ms:1400, el: () => h(`<div class="row notice"><div class="author"><span class="av srv">⌘</span><span class="name">contra.supernets.org</span></div>
+      <div class="line">*** You are exempt from user limits. congrats.<span class="date">${ts(1400)}</span></div>
+      <div class="line">*** Notice -- Client connecting: FAGGOT985 (uid@id-1.hampstead.irccloud.com) [104.21.6.12] {clients} <span class="date">${ts(1412)}</span></div></div>`) },
+];
+
+function header(ms, label) {
+  const d = new Date(T0.getTime()+ms);
+  return h(`<div class="row dateChange"><h3>${d.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}${label?` <span style="color:#6e7681;font-weight:400">· ${label}</span>`:''}</h3></div>`);
+}
+
+/* previous session (backlog) shown above the live attempt */
+function backlog() {
+  const f = document.createDocumentFragment();
+  f.append(h('<div class="row loadMore"><button>Load more backlog…</button></div>'));
+  f.append(header(-86400000*3));
+  f.append(row('status muted', 'Your user mode changed: +iptxzITrGR (+GR)', -86400000*3 + 1000));
+  f.append(h(`<div class="row notice"><div class="author"><span class="av" style="background:#0ea5e9">E</span><span class="name">EliManning</span><span class="bot">BOT</span></div><div class="line">[#superbowl] JOIN #5000 NOW<span class="date">${ts(-86400000*3+40000)}</span></div></div>`));
+  f.append(h('<div class="row part"><hr></div>'));
+  f.append(row('status muted', 'Disconnected: Closing Link: [id-707017.hampstead.irccloud.com] (Registration Timeout)', -86400000*3 + 63000));
+  f.append(header(0, 'today'));
+  return f;
+}
+
+let timers = [];
+function clearTimers(){ timers.forEach(clearInterval); timers=[]; }
+function setButtons(kind){
+  $('#buttons').innerHTML = kind==='connected'
+    ? '<button>Edit</button><button>Disconnect</button><button class="cog">⚙</button>'
+    : kind==='connecting'
+    ? '<button>Edit</button><button disabled>Connecting…</button><button class="cog">⚙</button>'
+    : '<button>Edit</button><button class="primary">Reconnect</button><button class="cog">⚙</button>';
+}
+function pill(cls, text, kv=''){ const l=$('#live'); l.className="pill "+cls; $('#live-text').textContent=text; $('#live-kv').innerHTML=kv; $('#sb-dot').className='dot '+(cls==='off'?'off':cls==='busy'?'busy':''); }
+function strip(cls, html){ const s=$('#strip'); s.className='connectionStatus '+(cls?'show '+cls:''); s.innerHTML=html; }
+const uptime = (s) => { const hh=Math.floor(s/3600), mm=Math.floor(s%3600/60), ss=s%60; return hh?`${hh}h ${mm}m`:mm?`${mm}m ${ss}s`:`${ss}s`; };
+
+function render(state){
+  clearTimers(); log.innerHTML=''; log.append(backlog()); setButtons(state==='connected'?'connected':state==='connecting'?'connecting':'off');
+
+  if (state==='connected') {
+    SEQ.forEach(s => log.append(s.el()));
+    let up = 3*3600+12*60+7;
+    const tick = () => pill('', `Connected · ${uptime(up++)}`, 'lag <b>41 ms</b> · egress <b>mullvad-us-nyc</b> · 6 channels');
+    tick(); timers.push(setInterval(tick, 1000)); strip('', '');
+    log.append(h('<div class="seenDivider"><span>New</span></div>'));
+    log.append(row('status muted', '<b>CAP</b> Server removed: draft/chathistory', 3*3600000+12*60000));
+  }
+
+  if (state==='connecting') {
+    const upTo = 5; // rows 0..4 done, 5 (tls) in flight
+    SEQ.slice(0, upTo).forEach(s => log.append(s.el()));
+    const live = phase('live last', 'TLS handshake', 312); log.append(live);
+    const start = Date.now();
+    const tick = () => { const e = 312 + (Date.now()-start); live.querySelector(".offs").textContent = offs(e); pill('busy', `Connecting · tls handshake`, `<b>${(e/1000).toFixed(1)}s</b> elapsed · 104.21.6.12:6697 via <b>mullvad-us-nyc</b>`); };
+    tick(); timers.push(setInterval(tick, 100));
+    strip('busy', '<span>Connecting to irc.supernets.org:6697 — TLS handshake…</span><a>Cancel</a>');
+  }
+
+  if (state==='dropped') {
+    SEQ.forEach(s => log.append(s.el()));
+    log.append(h('<div class="row part"><hr></div>'));
+    log.append(row('status', '<span style="color:#ff8f8a">Disconnected: Connection reset by peer</span> <span class="kv">after <b>3h 12m</b></span>', 3*3600000+12*60000));
+    const total = 8; let left = total;
+    const r = h(`<div class="row retry"><span class="content">Reconnecting in <b>${left}s</b>… <span class="kv">(attempt 2 of ∞, backoff 8s → 15s → 30s)</span><a>Retry now</a><div class="bar"><i></i></div></span><span class="date">${ts(3*3600000+12*60000+400)}</span></div>`);
+    log.append(r);
+    const t0 = Date.now();
+    const tick = () => { const el=(Date.now()-t0)/1000; left=Math.max(0,total-el); r.querySelector('b').textContent=`${Math.ceil(left)}s`; r.querySelector('.bar i').style.width=`${100*el/total}%`; pill('off', `Disconnected · retry in ${Math.ceil(left)}s`, 'last error <b>ECONNRESET</b> · was up 3h 12m'); if (left<=0){ clearTimers(); render('connecting'); } };
+    tick(); timers.push(setInterval(tick, 100));
+    strip('reconnect', '<span>Disconnected: Connection reset by peer — reconnecting automatically</span><a>Reconnect now</a>');
+  }
+
+  if (state==='failed') {
+    SEQ.slice(0, 5).forEach(s => log.append(s.el()));
+    log.append(phase('bad last', 'TLS handshake failed: certificate has expired <span class="kv">(notAfter 2026-08-30, CN *.supernets.org)</span>', 4831, '<span class="tag bad">x509</span>'));
+    log.append(h('<div class="row part"><hr></div>'));
+    log.append(row('status muted', 'Gave up after 5 attempts (8s, 15s, 30s, 60s, 120s). Check the certificate or turn off verification in <u>Edit</u>.', 240000));
+    pill('off', 'Failed · TLS', 'last error <b>CERT_HAS_EXPIRED</b> · 5 attempts');
+    strip('fail', '<span>Connection failed: TLS certificate has expired</span><span><a>Edit</a> &nbsp;·&nbsp; <a>Retry</a></span>');
+  }
+  const vp=$('#vp'); vp.scrollTop = vp.scrollHeight;
+}
+
+/* replay: stream the connect sequence at engine cadence with a live row at the tail */
+function replay(){
+  clearTimers(); log.innerHTML=''; log.append(backlog()); setButtons('connecting');
+  strip('busy', '<span>Connecting to irc.supernets.org:6697…</span><a>Cancel</a>');
+  const t0 = Date.now(); let i = 0; let live = null; const vp=$('#vp');
+  const liveLabels = ['Resolving irc.supernets.org…','Connecting…','TCP connect…','TLS handshake…','TLS handshake…','Registering…','Waiting for CAP…','Waiting for CAP…','Authenticating…','Registering…','Registering…','Welcome…'];
+  const step = () => {
+    const e = Date.now()-t0;
+    while (i < SEQ.length && SEQ[i].ms*2.5 <= e) { live?.remove(); live=null; log.append(SEQ[i].el()); i++; }
+    if (i < SEQ.length && i>0 && !live && i <= 12) { live = phase('live last', liveLabels[Math.min(i-1, liveLabels.length-1)], SEQ[i-1].ms); log.append(live); }
+    if (live) { const ms = SEQ[i-1].ms + (e - SEQ[i-1].ms*2.5)/2.5; live.querySelector(".offs").textContent = offs(Math.round(ms)); }
+    const cur = i>0 ? SEQ[Math.min(i,SEQ.length-1)] : SEQ[0];
+    if (i < 12) pill('busy', `Connecting · ${liveLabels[Math.max(0,i-1)].replace('…','').toLowerCase()}`, `<b>${(e/2500).toFixed(1)}s</b> elapsed`);
+    else { clearTimers(); setButtons('connected'); strip('', ''); let up=0; const t=()=>pill('', `Connected · ${uptime(up++)}`, 'lag <b>41 ms</b> · egress <b>mullvad-us-nyc</b>'); t(); timers.push(setInterval(t,1000)); }
+    vp.scrollTop = vp.scrollHeight;
+  };
+  timers.push(setInterval(step, 50));
+}
+
+document.querySelectorAll('.mock-bar [data-state]').forEach(b => b.onclick = () => { document.querySelectorAll('.mock-bar [data-state]').forEach(x=>x.classList.toggle('on', x===b)); render(b.dataset.state); });
+$('#replay').onclick = replay;
+render('connected');
+</script>
+</body>
+</html>
