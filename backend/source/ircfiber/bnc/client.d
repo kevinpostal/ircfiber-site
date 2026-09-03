@@ -767,8 +767,15 @@ final class BncClient {
 
     /// Messages this clientid missed since its last visit (updates `cursor`).
     /// Empty for anonymous clients and for a clientid's first attach.
+    // Set by fetchMissed: true when this clientid had prior bncSeen state.
+    // sendHistory uses it to decide playback vs missed-only without a
+    // second Redis read (which races the previous connection's teardown
+    // flush when reconnecting within ~2s).
+    private bool hadPriorBncSeen = false;
+
     private Json[] fetchMissed(string serverId) {
         const globalEid = readGlobalEid();
+        hadPriorBncSeen = false;
         if (!clientId.length) { cursor = globalEid; return null; }
 
         string seenStr;
@@ -781,6 +788,7 @@ final class BncClient {
             cursor = globalEid;
             return null;
         }
+        hadPriorBncSeen = true;
         cursor = seen;
         if (!serverId.length) { cursor = max(cursor, globalEid); return null; }
 
@@ -881,16 +889,7 @@ final class BncClient {
         // else (first connect, anonymous) gets full playback. Anonymous has
         // no cursor — use PASS bnc@clientid:token to avoid repeats.
         if (!has("draft/chathistory") && serverId.length) {
-            bool hadPriorSeen = false;
-            if (clientId.length) {
-                try {
-                    auto s = ctx.redis.getDb().hget!string(RedisKeys.bncSeen(networkId), clientId);
-                    if (s.length) {
-                        try { hadPriorSeen = s.to!long > 0; } catch (Exception) {}
-                    }
-                } catch (Exception) {}
-            }
-            if (!(clientId.length && hadPriorSeen)) {
+            if (!(clientId.length && hadPriorBncSeen)) {
                 rows ~= fetchPlayback(serverId, snap);
             }
         }
