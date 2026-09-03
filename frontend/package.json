@@ -38,8 +38,6 @@
     "vitest-browser-svelte": "^2.1.1"
   },
   "dependencies": {
-    "@fontsource/cascadia-code": "^5.3.0",
-    "@fontsource/iosevka": "^5.3.0",
     "axobject-query": "^4.1.0",
     "emoji-picker-element": "^1.29.1",
     "gsap": "^3.15.0",

@@ -7,7 +7,7 @@
   --link: #58a6ff;
   --accent: #1E72FF;
   --input-bg: #1e2126;
-  --font-mono: 'Iosevka', 'Cascadia Code', 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  --font-mono: '0xProto', 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
   --status-disconnected: #f85149;
 
   // ── Fiber palette (homepage brand tokens) ──
@@ -52,7 +52,7 @@
   scrollbar-color: #4a5568 transparent;
 }
 
-html, body { font-family: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 14px; letter-spacing: normal; background: #333333; color: #d1d5db; height: 100vh; overflow: hidden; overflow-x: hidden; max-width: 100vw; }
+html, body { font-family: '0xProto', 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace; font-size: 14px; letter-spacing: normal; background: #333333; color: #d1d5db; height: 100vh; overflow: hidden; overflow-x: hidden; max-width: 100vw; }
 #app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; overflow-x: clip; max-width: 100vw; }
 
 /* Scrollbars — IRCCloud parity: 8px gutter, thumb #999 with padding-box

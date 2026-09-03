@@ -3,8 +3,6 @@ import App from './App.svelte';
 import './app.css';
 import './styles/main.scss';
 import './stores/slashCommandsInit';
-import '@fontsource/iosevka/400.css';
-import '@fontsource/cascadia-code/400.css';
 
 const el = document.getElementById('app');
 let app: Record<string, unknown> | undefined;
