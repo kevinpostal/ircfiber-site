@@ -618,6 +618,19 @@ if (typeof window !== 'undefined') {
         }
         break;
       }
+      case 'ircfiber:pastebinDisablePrompt': {
+        if (e.newValue === null) {
+          _pastebinDisablePrompt = false;
+        } else {
+          try {
+            const v = JSON.parse(e.newValue);
+            _pastebinDisablePrompt = v === true || v === false ? v : false;
+          } catch {
+            _pastebinDisablePrompt = false;
+          }
+        }
+        break;
+      }
     }
   });
 }

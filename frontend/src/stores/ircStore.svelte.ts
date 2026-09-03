@@ -69,7 +69,41 @@ function saveUserDisconnected(): void {
     const obj: Record<string, number> = {};
     for (const [k, v] of userDisconnectedAt) obj[k] = v;
     localStorage.setItem(DISCONNECTED_KEY, JSON.stringify(obj));
+    try { getDisconnectBC()?.postMessage({ type: 'disconnected', payload: obj }); } catch {}
   } catch { /* storage full */ }
+}
+
+// ── Cross-tab realtime for user-initiated disconnect ──
+// Without this, Disconnect in tab A would not hide the banner in tab B
+// until refresh. Uses BroadcastChannel (instant) + storage event (fallback).
+let disconnectBC: BroadcastChannel | null = null;
+function getDisconnectBC(): BroadcastChannel | null {
+  if (disconnectBC) return disconnectBC;
+  if (typeof BroadcastChannel === 'undefined') return null;
+  try {
+    disconnectBC = new BroadcastChannel('ircfiber:disconnect');
+    disconnectBC.onmessage = (ev: MessageEvent) => {
+      const msg = ev.data as { type?: string; payload?: unknown };
+      if (msg?.type !== 'disconnected' || !msg.payload || typeof msg.payload !== 'object') return;
+      const obj = msg.payload as Record<string, number>;
+      userDisconnectedAt.clear();
+      for (const [k, v] of Object.entries(obj)) if (typeof v === 'number') userDisconnectedAt.set(k, v);
+    };
+  } catch { return null; }
+  return disconnectBC;
+}
+if (typeof window !== 'undefined') {
+  try { getDisconnectBC(); } catch {}
+  window.addEventListener('storage', (e) => {
+    if (e.key !== DISCONNECTED_KEY) return;
+    try {
+      userDisconnectedAt.clear();
+      if (e.newValue) {
+        const parsed = JSON.parse(e.newValue) as Record<string, number>;
+        for (const [k, v] of Object.entries(parsed)) if (typeof v === 'number') userDisconnectedAt.set(k, v);
+      }
+    } catch {}
+  });
 }
 const userDisconnectedAt: Map<string, number> = new Map();
 export function markUserDisconnected(networkId: string): void {
