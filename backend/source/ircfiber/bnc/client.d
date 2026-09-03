@@ -889,6 +889,7 @@ final class BncClient {
         // else (first connect, anonymous) gets full playback. Anonymous has
         // no cursor — use PASS bnc@clientid:token to avoid repeats.
         if (!has("draft/chathistory") && serverId.length) {
+            try { logInfo("bnc: sendHistory client=%s hadPrior=%s cursor=%s", clientId, hadPriorBncSeen ? "yes" : "no", cursor.to!string); } catch (Exception) {}
             if (!(clientId.length && hadPriorBncSeen)) {
                 rows ~= fetchPlayback(serverId, snap);
             }
