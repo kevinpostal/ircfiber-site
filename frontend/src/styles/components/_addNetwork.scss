@@ -568,23 +568,23 @@
     margin: 0 0 14px 0;
     padding: 0 0 12px 0;
   }
-  /* Reset the table cells so each <td> takes the full row instead
-     of fighting for half-width. The thead stays for semantics but
-     is hidden visually — labels live in the <th> of each row. */
+  /* The two-column tables put both labels in one <tr> and both fields
+     in the next, so simply stacking rows shows "Hostname / Port" above
+     the pair of fields. Flatten the table into a single-column grid
+     (thead/tbody/tr become display:contents) and interleave with
+     `order` so each label sits directly above its own field. */
   .addNetworkForm .addNetworkCells,
   .addNetworkForm .networkEditorCells {
-    display: block;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
   }
   .addNetworkForm .addNetworkCells thead,
   .addNetworkForm .networkEditorCells thead,
   .addNetworkForm .addNetworkCells tbody,
-  .addNetworkForm .networkEditorCells tbody {
-    display: block;
-  }
+  .addNetworkForm .networkEditorCells tbody,
   .addNetworkForm .addNetworkCells tr,
   .addNetworkForm .networkEditorCells tr {
-    display: block;
-    margin-bottom: 0.875rem;
+    display: contents;
   }
   .addNetworkForm .addNetworkCells th,
   .addNetworkForm .networkEditorCells th {
@@ -593,14 +593,26 @@
     padding: 0 0 0.25rem 0 !important;
     margin: 0;
     font-size: 0.8125rem;
+    min-width: 0;
   }
   .addNetworkForm .addNetworkCells td,
   .addNetworkForm .networkEditorCells td {
     display: block;
     width: 100% !important;
     padding: 0 !important;
-    margin: 0;
+    margin: 0 0 0.875rem 0;
+    min-width: 0;
   }
+  .addNetworkForm th.hostname,
+  .addNetworkForm th.nickname { order: 1; }
+  .addNetworkForm td.hostname,
+  .addNetworkForm td.nickname { order: 2; }
+  .addNetworkForm th.port,
+  .addNetworkForm th.realname { order: 3; }
+  .addNetworkForm td.port,
+  .addNetworkForm td.realname { order: 4; }
+  .addNetworkForm td.ssl { order: 5; }
+  .addNetworkForm th.ssl { display: none; }
   /* Reset the explicit width: 50%/60% classes inside cells — they
      collapse to full-width naturally when the parent table is block. */
   .addNetworkForm .hostname,

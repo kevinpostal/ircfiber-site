@@ -5,9 +5,18 @@
    ========================================================================== */
 
 /* Mobile browsers' URL bar makes 100vh taller than the visible area;
-   dvh tracks the real visible viewport. */
+   dvh tracks the real visible viewport. --app-height is set by
+   lib/viewport.ts while the on-screen keyboard is open (iOS never
+   shrinks the layout viewport) so the shell ends at the keyboard. */
 @supports (height: 100dvh) {
-  html, body, #app, #wrap { height: 100dvh; }
+  html, body, #app, #wrap { height: var(--app-height, 100dvh); }
+}
+
+/* Home-screen (standalone) install: the status bar is translucent and
+   overlays the page, so keep the buffer header below the notch/clock. */
+@media (display-mode: standalone) {
+  #app { padding-top: env(safe-area-inset-top, 0px); }
+  html, body { overscroll-behavior: none; }
 }
 
 /* B — Header hamburger always visible (desktop push + mobile drawer) */

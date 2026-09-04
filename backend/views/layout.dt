@@ -4,8 +4,20 @@ html
     block head
     title IRC Fiber
     meta(charset="utf-8")
-    meta(name="viewport", content="width=device-width, initial-scale=1")
+    meta(name="viewport", content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content")
     meta(name="theme-color", content="#0e131a")
+    // Installable web app. Opened from the home screen, iOS drops Safari's
+    // URL pill and the form accessory bar (prev/next/done) above the
+    // keyboard, so the composer sits directly on the keyboard.
+    link(rel="manifest", href="/manifest.webmanifest")
+    meta(name="mobile-web-app-capable", content="yes")
+    meta(name="apple-mobile-web-app-capable", content="yes")
+    meta(name="apple-mobile-web-app-title", content="IRC Fiber")
+    meta(name="apple-mobile-web-app-status-bar-style", content="black-translucent")
+    link(rel="icon", href="/favicon.ico", sizes="any")
+    link(rel="icon", type="image/svg+xml", href="/favicon.svg")
+    link(rel="icon", type="image/png", sizes="32x32", href="/favicon-32x32.png")
+    link(rel="apple-touch-icon", sizes="180x180", href="/apple-touch-icon.png")
     link(rel="preconnect", href="https://fonts.googleapis.com")
     link(rel="preconnect", href="https://fonts.gstatic.com", crossorigin="anonymous")
     link(rel="preconnect", href="https://cdn.jsdelivr.net", crossorigin="anonymous")

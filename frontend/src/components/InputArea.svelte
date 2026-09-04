@@ -986,6 +986,7 @@
             placeholder={notJoinedPlaceholder}
             autocomplete="off"
             rows="1"
+            enterkeyhint="send"
             aria-label="Message input"
             spellcheck="true"
             disabled={inputDisabled}

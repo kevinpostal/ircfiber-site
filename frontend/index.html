@@ -2,10 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>IRC Fiber — IRC that remembers everything.</title>
   <meta name="description" content="IRC Fiber is a cloud-hosted IRC bouncer and web app. Always connected, infinite history, every device in sync. Free tier, no credit card." />
   <meta name="theme-color" content="#0a0e14" />
+  <!-- Installable web app. Opened from the home screen, iOS drops Safari's
+       URL pill and the form accessory bar (prev/next/done) above the
+       keyboard, so the composer sits directly on the keyboard. -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="IRC Fiber" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
   <!-- Open Graph (Facebook, LinkedIn, Slack, Discord, Telegram, iMessage) -->
   <meta property="og:type" content="website" />

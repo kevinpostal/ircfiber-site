@@ -3,6 +3,7 @@ import App from './App.svelte';
 import './app.css';
 import './styles/main.scss';
 import './stores/slashCommandsInit';
+import { installViewportTracker } from './lib/viewport';
 
 const el = document.getElementById('app');
 let app: Record<string, unknown> | undefined;
@@ -19,6 +20,7 @@ if (!el) {
   app = mount(App, { target: el });
   performance.mark('spa-mounted');
   console.log('[main.ts] Svelte app mounted');
+  installViewportTracker();
 }
 
 export default app;

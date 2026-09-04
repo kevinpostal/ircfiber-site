@@ -92,6 +92,11 @@ final class WebController {
         router.get("/app-screenshot.png", &serveAppScreenshot);
         router.get("/glyphs.json", &serveGlyphs);
         router.get("/figlet-fonts.json", &serveFigletFonts);
+        // Root-level icons + web app manifest referenced from index.html
+        // (<link rel=icon>, apple-touch-icon, <link rel=manifest>). They
+        // live in public/ (the Vite publicDir) but nothing served them.
+        foreach (name; rootAssetNames)
+            router.get("/" ~ name, &serveRootAsset);
         router.get("/fonts/*", &serveFonts);
         router.get("/style.css", &serveStyle);
         router.get("/public/dist/*", &serveDist);
@@ -340,6 +345,33 @@ final class WebController {
         } catch (Exception e) {
             logWarn("Failed to serve app screenshot: %s", e.msg);
             res.statusCode = 500;
+        }
+    }
+
+    /// Files in public/ served at the site root. Allowlist, not a directory
+    /// walk: everything else in public/ stays private.
+    private static immutable string[] rootAssetNames = [
+        "favicon.ico", "favicon.svg",
+        "favicon-16x16.png", "favicon-32x32.png",
+        "favicon-192x192.png", "favicon-512x512.png",
+        "apple-touch-icon.png",
+        "manifest.webmanifest",
+    ];
+
+    private void serveRootAsset(HTTPServerRequest req, HTTPServerResponse res) {
+        auto name = req.requestPath.toString()[1 .. $];
+        if (!rootAssetNames.canFind(name)) { res.statusCode = 404; return; }
+        string mime = "application/octet-stream";
+        if (endsWith(name, ".png")) mime = "image/png";
+        else if (endsWith(name, ".svg")) mime = "image/svg+xml";
+        else if (endsWith(name, ".ico")) mime = "image/x-icon";
+        else if (endsWith(name, ".webmanifest")) mime = "application/manifest+json";
+        try {
+            res.headers["Cache-Control"] = "public, max-age=86400";
+            res.writeBody(cast(const(ubyte)[])read(buildPath("public", name)), mime);
+        } catch (Exception e) {
+            logWarn("Failed to serve %s: %s", name, e.msg);
+            res.statusCode = 404;
         }
     }
 
