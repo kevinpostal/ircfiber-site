@@ -128,6 +128,11 @@ export interface Network {
    *  join immediately after registration). Some IRCds (SuperNETs/
    *  DangerousIRCd) throttle JOIN inside the first 5s of a connection. */
   autoJoinDelaySeconds?: number;
+  /** Egress route pin: `''` automatic (any healthy exit, then direct),
+   *  `'direct'` bare host IP, or a Mullvad exit id from `GET /api/egress`.
+   *  The engine host-bans an exit when a network Z/G/K-lines it and fails
+   *  over to another — this pin is how a user chooses the location. */
+  egressNodeId?: string;
   buffers: Buffer[];
   awayNicks: Set<string>;
   // Server capabilities (from CAP)

@@ -386,7 +386,7 @@ export async function addNetwork(data: {
   name: string; host: string; port: number; tls: string;
   nick: string; realName: string; autoJoinChannels: string; nspass?: string;
   commands?: string; sasl?: string; saslUsername?: string; saslPassword?: string;
-  autoJoinDelaySeconds?: number;
+  autoJoinDelaySeconds?: number; egressNodeId?: string;
 }): Promise<Record<string, unknown>> {
   const payload = {
     ...data,
@@ -413,6 +413,19 @@ export async function updateNetwork(networkId: string, data: Record<string, unkn
 export async function deleteNetwork(networkId: string): Promise<void> {
   const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}`, { method: 'DELETE' });
   if (!r.ok) throw new Error('Delete network failed');
+}
+
+/** One selectable Mullvad exit from `GET /api/egress`. `ip` is empty until
+ *  the gateway's background probe has run once. */
+export interface EgressExit {
+  id: string; ip: string; country: string; city: string;
+  healthy: boolean; checkedAtMs: number; error: string;
+}
+
+export async function fetchEgress(): Promise<{ direct: string; exits: EgressExit[] }> {
+  const r = await fetch(`${API_BASE}/egress`);
+  if (!r.ok) throw new Error('Fetch egress failed');
+  return r.json();
 }
 
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {

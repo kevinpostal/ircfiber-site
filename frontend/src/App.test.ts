@@ -44,6 +44,7 @@ vi.mock('/src/stores/api', () => ({
   joinChannel: vi.fn(async () => undefined),
   addNetwork: vi.fn(async () => undefined),
   updateNetwork: vi.fn(async () => undefined),
+  fetchEgress: vi.fn(async () => ({ direct: 'direct', exits: [] })),
   deleteNetwork: vi.fn(async () => undefined),
   pinChannel: vi.fn(async () => undefined),
   unpinChannel: vi.fn(async () => undefined),

@@ -123,8 +123,11 @@
   ansible.builtin.set_fact:
     _engine_env: "{{ dict(_pairs) }}"
 
+# Entries with `exit_node` are local sidecars to run here; entries with only
+# `host`/`port` (e.g. the ubuntu-docker root-netns SOCKS ports) are remote
+# and just go into IRCFIBER_MULLVAD_POOL.
 - name: Run Mullvad sidecars (tailscale userspace SOCKS5, scalable 2→5)
-  when: mullvad_sidecars | length > 0
+  when: mullvad_sidecars | selectattr('exit_node', 'defined') | list | length > 0
   community.docker.docker_container:
     name: "tailscale-mullvad-{{ item.name }}"
     image: "{{ mullvad_sidecar_image }}"
@@ -145,7 +148,7 @@
     labels:
       com.ircfiber.component: "mullvad-sidecar"
       com.ircfiber.mullvad_name: "{{ item.name }}"
-  loop: "{{ mullvad_sidecars }}"
+  loop: "{{ mullvad_sidecars | selectattr('exit_node', 'defined') | list }}"
   loop_control:
     label: "{{ item.name }}"
 

@@ -36,6 +36,7 @@ import ircfiber.irc.server : ConnectionServer;
 import ircfiber.redis.protocol : RedisKeys, ControlMessage, NetworkStateSnapshot, IRCCommand;
 import ircfiber.logging : logJsonMap;
 import ircfiber.tracing : withSpan, Span;
+import ircfiber.egress : DIRECT_EGRESS_ID, egressExits, normalizeEgressId, isKnownEgressId;
 private string normalizeHost(string host) @safe pure {
     host = host.strip();
     auto schemeSep = host.indexOf("://");
@@ -108,6 +109,7 @@ final class RESTAPI {
         router.put("/api/networks/:id", &updateNetwork);
         router.patch("/api/networks/:id", &updateNetwork);
         router.delete_("/api/networks/:id", &deleteNetwork);
+        router.get("/api/egress", &getEgress);
         router.get("/api/channels/:network/:channel/messages", &getMessages);
         router.post("/api/networks/:network/join", &joinChannel);
         router.post("/api/networks/:network/part", &partChannel);
@@ -257,6 +259,17 @@ final class RESTAPI {
             cfg.autoJoinDelaySeconds = v > 0 ? cast(uint) v : 0;
         }
 
+        // Egress route: "" automatic, "direct" bare host IP, or a pool label.
+        if (bodyJson["egressNodeId"].type == Json.Type.string) {
+            const eg = normalizeEgressId(bodyJson["egressNodeId"].get!string);
+            if (!isKnownEgressId(eg)) {
+                res.statusCode = 400;
+                res.writeJsonBody(Json(["error": Json("Unknown egress: " ~ eg)]));
+                return;
+            }
+            cfg.egressNodeId = eg;
+        }
+
         networkRepo.save(cfg, user.id);
         redis.del(RedisKeys.userNetworks(user.id.toString()));
 
@@ -331,6 +344,21 @@ final class RESTAPI {
             cfg.autoJoinDelaySeconds = v > 0 ? cast(uint) v : 0;
         }
 
+        // Egress route change: the live socket is bound to the old exit, so
+        // a changed value needs a reconnect (same control path the admin
+        // pin uses) rather than the in-place updateConfig below.
+        const priorEgress = cfg.egressNodeId;
+        if (bodyJson["egressNodeId"].type == Json.Type.string) {
+            const eg = normalizeEgressId(bodyJson["egressNodeId"].get!string);
+            if (!isKnownEgressId(eg)) {
+                res.statusCode = 400;
+                res.writeJsonBody(Json(["error": Json("Unknown egress: " ~ eg)]));
+                return;
+            }
+            cfg.egressNodeId = eg;
+        }
+        const egressChanged = cfg.egressNodeId != priorEgress;
+
         auto user = req.context["user"].get!User;
         // Fiber lock: nick/realName must track the account username
         if (cfg.host == DEFAULT_FIBER_HOST) {
@@ -355,9 +383,14 @@ final class RESTAPI {
             return;
         }
 
-        auto msg = ControlMessage("updateConfig", cfg.id.toString(), "", cfg.toJson());
+        auto msg = egressChanged
+            ? ControlMessage("reconnectNetwork", cfg.id.toString(), user.id.toString(), cfg.toJson())
+            : ControlMessage("updateConfig", cfg.id.toString(), "", cfg.toJson());
         msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
         redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+        if (egressChanged)
+            logInfo("Network %s egress changed '%s' → '%s' by %s — reconnect pushed to %s",
+                cfg.id, priorEgress, cfg.egressNodeId, user.username, serverId);
 
         res.writeJsonBody(cfg.toJson());
     }
@@ -833,6 +866,32 @@ final class RESTAPI {
         redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
 
         res.writeJsonBody(Json(["status": Json("reconnecting")]));
+    }
+
+    /// GET /api/egress — routes a network can be pinned to, for the
+    /// "Connect via" picker: the direct host IP plus every Mullvad exit in
+    /// the pool with its probed public IP / country / city. Exit identity is
+    /// served from a cache refreshed in the background (see ircfiber.egress);
+    /// rows with `ip == ""` are simply not probed yet.
+    private void getEgress(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto exits = Json.emptyArray;
+        foreach (x; egressExits()) {
+            auto j = Json.emptyObject;
+            j["id"] = Json(x.id);
+            j["ip"] = Json(x.ip);
+            j["country"] = Json(x.country);
+            j["city"] = Json(x.city);
+            j["healthy"] = Json(x.healthy);
+            j["checkedAtMs"] = Json(x.checkedAtMs);
+            j["error"] = Json(x.error);
+            exits ~= j;
+        }
+        auto out_ = Json.emptyObject;
+        out_["direct"] = Json(DIRECT_EGRESS_ID);
+        out_["exits"] = exits;
+        res.writeJsonBody(out_);
     }
 
     private void getMessages(HTTPServerRequest req, HTTPServerResponse res) {

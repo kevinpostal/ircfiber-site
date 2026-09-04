@@ -333,6 +333,16 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
     bufferName = normalizeChannelName(bufferName);
   }
 
+  // Query/DM adoption: `/msg nickserv` while a `NickServ` buffer exists
+  // must switch to THAT buffer, not create a lowercase twin. Resolve
+  // here (before prev-tracking) so re-selecting the same counterparty
+  // in a different case is a no-op, not a buffer switch.
+  const adoptNet = ircState.networks.find(n => n.networkId === networkId);
+  if (adoptNet && bufferName !== '_server' && !bufferName.startsWith('#')) {
+    const existing = findBufferByName(adoptNet, bufferName);
+    if (existing) bufferName = existing.name;
+  }
+
   // Track previous buffer (IRCCloud-style) for archive focus selection
   const prevNetworkId = ircState.activeBuffer.networkId;
   const prevBufferName = ircState.activeBuffer.bufferName;
@@ -450,25 +460,31 @@ function selectNextBufferAfterClose(networkId: string, bufferName: string): { ne
 // Only changes focus if the archived buffer is the currently active buffer.
 // Priority: previousBuffer > channel above > channel below > server buffer > other networks.
 export function archiveBuffer(networkId: string, bufferName: string): void {
-  bufferName = normalizeChannelName(bufferName);
-  if (bufferName === '_server') return;
+  const norm = normalizeChannelName(bufferName);
+  if (norm === '_server') return;
 
-  const key = `${networkId}:${bufferName}`;
+  const key = `${networkId}:${norm}`;
   if (archivedMap[key]) return;
 
   archivedMap[key] = true;
 
   // Persist to the server so it syncs cross-device and across tabs in real
   // time. On failure, roll back the local state.
-  apiArchiveChannel(networkId, bufferName).catch((err) => {
+  apiArchiveChannel(networkId, norm).catch((err) => {
     console.error('Archive failed:', err);
     delete archivedMap[key];
   });
 
-  const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === bufferName;
+  // Folded active check + display-name resolution, so archiving the
+  // `NickServ` buffer via a lowercase-typed name still moves focus.
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  const archived = net ? findBufferByName(net, bufferName) : undefined;
+  const activeName = ircState.activeBuffer.bufferName;
+  const isActive = ircState.activeBuffer.networkId === networkId
+    && !!activeName && normalizeChannelName(activeName) === norm;
   if (!isActive) return;
 
-  const next = selectNextBufferAfterClose(networkId, bufferName);
+  const next = selectNextBufferAfterClose(networkId, archived ? archived.name : bufferName);
   setActiveBuffer(next.networkId, next.bufferName);
 }
 
@@ -492,22 +508,28 @@ export function unarchiveBuffer(networkId: string, bufferName: string): void {
 // (IRCCloud-compatible). Persistently hides the channel so it does not
 // reappear on the next sync.
 export function deleteBuffer(networkId: string, bufferName: string): void {
-  bufferName = normalizeChannelName(bufferName);
-  if (bufferName === '_server') return;
+  const norm = normalizeChannelName(bufferName);
+  if (norm === '_server') return;
 
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
 
+  // Folded find: `/delete nickserv` must remove the `NickServ` buffer.
+  // Resolve the display name for the focus-fallback position lookup.
+  const doomed = findBufferByName(net, bufferName);
+  const doomedName = doomed ? doomed.name : bufferName;
+
   // Decide where focus goes *before* removing the buffer, because the
   // visible-list fallback needs the deleted buffer's position to pick the
   // channel above/below it.
-  const isActive = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === bufferName;
-  const next = isActive ? selectNextBufferAfterClose(networkId, bufferName) : null;
+  const activeName = ircState.activeBuffer.bufferName;
+  const isActive = ircState.activeBuffer.networkId === networkId
+    && !!activeName && normalizeChannelName(activeName) === norm;
+  const next = isActive ? selectNextBufferAfterClose(networkId, doomedName) : null;
 
-  const idx = net.buffers.findIndex(b => b.name === bufferName);
-  if (idx >= 0) net.buffers.splice(idx, 1);
+  if (doomed) net.buffers.splice(net.buffers.indexOf(doomed), 1);
 
-  hideChannel(networkId, bufferName);
+  hideChannel(networkId, norm);
 
   if (!next) return;
   setActiveBuffer(next.networkId, next.bufferName);
@@ -1226,11 +1248,22 @@ function bufferKey(networkId: string, bufferName: string): string {
   return `${networkId}:${normalizeChannelName(bufferName)}`;
 }
 
+/**
+ * Find a buffer object by name, folding case per the network casemapping.
+ * Buffer OBJECTS keep display case (`NickServ`) while every keyed map is
+ * folded (`nickserv`), so object matching must fold both sides — an exact
+ * compare would miss `nickserv` vs `NickServ` and fork a duplicate
+ * conversation. Exported for messageHandler/slashCommands lookups.
+ */
+export function findBufferByName(net: Network, bufferName: string): Buffer | undefined {
+  const norm = normalizeChannelName(bufferName);
+  return net.buffers.find(b => b.name === bufferName || normalizeChannelName(b.name) === norm);
+}
+
 function findBuffer(networkId: string, bufferName: string): { net: Network; buf: Buffer } | null {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return null;
-  const norm = normalizeChannelName(bufferName);
-  const buf = net.buffers.find(b => b.name === norm || b.name === bufferName);
+  const buf = findBufferByName(net, bufferName);
   return buf ? { net, buf } : null;
 }
 
@@ -2069,6 +2102,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
       if (net.saslPassword) existing.saslPassword = net.saslPassword;
       if (net.autoJoinChannels !== undefined) existing.autoJoinChannels = net.autoJoinChannels;
       if (net.autoJoinDelaySeconds !== undefined) existing.autoJoinDelaySeconds = net.autoJoinDelaySeconds;
+      if (net.egressNodeId !== undefined) existing.egressNodeId = net.egressNodeId;
       existing.status = net.status;
       applyTelemetryFromSync(existing, rawNet);
       // systemManaged is a server-side flag we don't expect to change
@@ -2244,7 +2278,12 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
             incomingBuf.users = deduped;
           }
         }
-        const existingBuf = existing.buffers.find(b => b.name === incomingBuf.name);
+        // Folded match: the engine (post-fix) ships one canonical name per
+        // counterparty, but a locally-typed `nickserv` buffer predates the
+        // first server reply. Adopt the incoming (server-authoritative)
+        // case for display; every keyed map is already folded, so no
+        // message/prefs migration is needed.
+        const existingBuf = findBufferByName(existing, incomingBuf.name);
         if (existingBuf) {
           // Unseen/highlight state is client-owned; the sync only carries the
           // server-persisted `lastSeen`, applied below (advance-only).
@@ -2493,7 +2532,10 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
         // The user-initiated PART/KICK for self already clears isJoined
         // directly (see updateChannelUsers), so this guard doesn't hide
         // a genuine leave.
-        const bufKey = `${existing.networkId}:${buf.name}`;
+        // Folded key: message lists are keyed by normalizeChannelName,
+        // while buf.name keeps display case (`NickServ`), so a raw-name
+        // lookup would miss and wrongly flip an active query to unjoined.
+        const bufKey = `${existing.networkId}:${normalizeChannelName(buf.name)}`;
         const localMsgs = ircState.messages[bufKey];
         if (localMsgs && localMsgs.length > 0) continue;
         // Only flip after the threshold is reached. Otherwise just hold
@@ -3042,7 +3084,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
   // evidence the network is still alive — refresh the stale marker.
   markNetworkSeen(networkId);
   const normalized = normalizeChannelName(bufferName);
-  let buf = net.buffers.find(b => b.name === normalized);
+  let buf = findBufferByName(net, bufferName);
 
   // Auto-create buffer when the current user joins a channel.
   // Handles joins from external clients, rejoin after mode changes, etc.
@@ -3487,7 +3529,7 @@ export function getSortedMembers(): Map<ModeCategory, Member[]> {
 export function updateChannelTopic(networkId: string, bufferName: string, topic: string): void {
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
-  const buf = net.buffers.find(b => b.name === normalizeChannelName(bufferName));
+  const buf = findBufferByName(net, bufferName);
   if (buf) {
     buf.topic = topic;
     buf.topicSetAt = Date.now();

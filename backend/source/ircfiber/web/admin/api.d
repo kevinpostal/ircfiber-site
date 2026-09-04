@@ -1356,55 +1356,10 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 // ────────────────────────────────────────────────────────────
 // Mullvad helpers
 // ────────────────────────────────────────────────────────────
-private string _mullvadRawPool() {
-    import std.process : environment;
-    import std.string : split, strip, startsWith;
-    auto raw = environment.get("IRCFIBER_MULLVAD_POOL", "");
-    if (raw.length == 0) {
-        try {
-            import std.file : readText, exists;
-            if (exists("/etc/ircfiber/engine/env-ovh")) {
-                auto txt = readText("/etc/ircfiber/engine/env-ovh");
-                foreach (line; txt.split("\n")) {
-                    auto t = line.strip();
-                    if (t.startsWith("IRCFIBER_MULLVAD_POOL=")) { raw = t["IRCFIBER_MULLVAD_POOL=".length .. $].strip(); break; }
-                }
-            }
-        } catch (Exception) {}
-    }
-    return raw;
-}
-
-private struct _ParsedEntry { string label; string host; ushort port; string resolvedIp; }
-
-private _ParsedEntry[] _parseMullvadPoolEntries(string raw) {
-    import std.string : split, strip, indexOf, lastIndexOf, toLower;
-    import std.conv : to;
-    _ParsedEntry[] out_;
-    if (raw.length == 0) return out_;
-    foreach (entry; raw.split(",")) {
-        auto e = entry.strip();
-        if (e.length == 0) continue;
-        auto p = e.indexOf("://");
-        if (p >= 0) e = e[p+3 .. $];
-        auto colon = e.lastIndexOf(":");
-        string host = e; ushort port = 1080;
-        if (colon >= 0) { host = e[0 .. colon].strip(); try { port = e[colon+1 .. $].strip().to!ushort; } catch (Exception) {} }
-        string label = host.toLower();
-        auto dash = host.lastIndexOf("-");
-        if (dash >= 0 && dash+1 < host.length) label = host[dash+1 .. $].toLower();
-        else { auto dot = host.indexOf("."); if (dot > 0) label = host[0 .. dot].toLower(); }
-        string resolvedIp = "";
-        // Quick DNS with short timeout
-        try {
-            import std.socket : getAddress;
-            auto addrs = getAddress(host);
-            if (addrs.length > 0) resolvedIp = addrs[0].toAddrString();
-        } catch (Exception) {}
-        out_ ~= _ParsedEntry(label, host, port, resolvedIp);
-    }
-    return out_;
-}
+// Pool string + parser live in ircfiber.egress (shared with the user-facing
+// /api/egress and the network create/update validation) so admin and users
+// agree on labels. `<name>@host:port` entries carry an explicit label.
+import ircfiber.egress : mullvadRawPool, parseMullvadPool, PoolEntry;
 
 private struct _ContainerInfo { string container; string state; string status; string tailscaleExit; }
 
@@ -1555,8 +1510,8 @@ private string _isoNow() {
 package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, ServerRegistry serverRegistry) {
     import std.string : split, strip, indexOf, lastIndexOf, toLower;
     import std.conv : to;
-    auto raw = _mullvadRawPool();
-    auto entries = _parseMullvadPoolEntries(raw);
+    auto raw = mullvadRawPool();
+    auto entries = parseMullvadPool(raw);
 
     // Build pool data as D structs first, then serialize manually to avoid vibe.d JSON truncation
     struct IpInfo {
@@ -1954,8 +1909,8 @@ package void apiMullvadRestart(HTTPServerRequest req, HTTPServerResponse res) {
     import std.string : toLower, strip;
     auto label = req.params["label"].strip().toLower();
     if (label.length == 0) { jsonError(res, 400, "label required"); return; }
-    auto raw = _mullvadRawPool();
-    auto entries = _parseMullvadPoolEntries(raw);
+    auto raw = mullvadRawPool();
+    auto entries = parseMullvadPool(raw);
     bool found = false;
     foreach (e; entries) if (e.label.toLower() == label) { found = true; break; }
     if (!found) { jsonError(res, 404, "unknown mullvad label: " ~ label); return; }
@@ -1998,9 +1953,9 @@ package void apiMullvadTest(HTTPServerRequest req, HTTPServerResponse res) {
     import std.string : toLower, strip;
     auto label = req.params["label"].strip().toLower();
     if (label.length == 0) { jsonError(res, 400, "label required"); return; }
-    auto raw = _mullvadRawPool();
-    auto entries = _parseMullvadPoolEntries(raw);
-    _ParsedEntry* ent;
+    auto raw = mullvadRawPool();
+    auto entries = parseMullvadPool(raw);
+    PoolEntry* ent;
     foreach (ref e; entries) if (e.label.toLower() == label) { ent = &e; break; }
     if (ent is null) { jsonError(res, 404, "unknown mullvad label: " ~ label); return; }
     // SOCKS probe
@@ -2069,8 +2024,8 @@ package void apiMullvadTest(HTTPServerRequest req, HTTPServerResponse res) {
 /// POST /api/admin/mullvad/test-all — probe all proxies
 package void apiMullvadTestAll(HTTPServerRequest req, HTTPServerResponse res) {
     import std.string : toLower;
-    auto raw = _mullvadRawPool();
-    auto entries = _parseMullvadPoolEntries(raw);
+    auto raw = mullvadRawPool();
+    auto entries = parseMullvadPool(raw);
     Json[] results;
     foreach (ent; entries) {
         auto probe = _probeSocks(ent.host, ent.port);
@@ -2133,8 +2088,8 @@ package void apiMullvadServerEgressSet(HTTPServerRequest req, HTTPServerResponse
     }
     if (egressNodeId == "random" || egressNodeId == "auto") egressNodeId = "";
     if (egressNodeId.length > 0) {
-        auto raw = _mullvadRawPool();
-        auto entries = _parseMullvadPoolEntries(raw);
+        auto raw = mullvadRawPool();
+        auto entries = parseMullvadPool(raw);
         bool ok = false;
         foreach (e; entries) if (e.label.toLower() == egressNodeId) { ok = true; break; }
         if (!ok) { jsonError(res, 400, "unknown egress label: " ~ egressNodeId); return; }

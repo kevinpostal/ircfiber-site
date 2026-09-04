@@ -91,3 +91,16 @@ configuration "logs-test" {
     mainSourceFile "tests/logs_test.d"
     versions "VibeUseFibers"
 }
+
+// Pure-code unit test for the Mullvad pool / egress id helpers shared by
+// the admin API and the user "Connect via" picker (no SOCKS/Redis/Mongo):
+//   dub --root=backend build --config=egress-test && ./backend/egress-test
+configuration "egress-test" {
+    targetType "executable"
+    targetName "egress-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/egress.d"
+    mainSourceFile "tests/egress_test.d"
+    versions "VibeUseFibers"
+}

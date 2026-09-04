@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
-  import { addNetwork, updateNetwork } from '../stores/api';
+  import { addNetwork, updateNetwork, fetchEgress, type EgressExit } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
@@ -49,6 +49,26 @@
   let revealSaslPassword = $state(false);
   let error = $state('');
   let busy = $state(false);
+  // "Connect via": '' automatic, 'direct' bare host IP, or an exit id.
+  let egressNodeId = $state('');
+  let egressExits = $state<EgressExit[]>([]);
+  let egressLoaded = $state(false);
+
+  $effect(() => {
+    // Load once per open; a first call right after a gateway start may
+    // return exits without ip/country (probe not run yet) — harmless, the
+    // labels still work and the next open shows the enriched rows.
+    fetchEgress()
+      .then((r) => { egressExits = r.exits; egressLoaded = true; })
+      .catch(() => { egressExits = []; egressLoaded = true; });
+  });
+
+  function exitLabel(x: EgressExit): string {
+    const where = x.city ? `${x.city}, ${x.country}` : x.country;
+    const id = x.id.toUpperCase();
+    if (!where) return x.ip ? `${id} — ${x.ip}` : id;
+    return `${id} — ${where}${x.ip ? ` (${x.ip})` : ''}`;
+  }
 
   $effect(() => {
     if (existing) {
@@ -70,6 +90,7 @@
       saslMechanism = (existing.sasl as 'none' | 'plain' | 'external' | 'scramSha256') || 'none';
       saslUsername = existing.saslUsername || '';
       saslPassword = existing.saslPassword || '';
+      egressNodeId = existing.egressNodeId ?? '';
     } else if (mode === 'add') {
       name = '';
       host = '';
@@ -85,6 +106,7 @@
       saslMechanism = 'none';
       saslUsername = '';
       saslPassword = '';
+      egressNodeId = '';
     }
   });
 
@@ -158,7 +180,7 @@
       if (mode === 'add') {
         const result = await onAddNetwork({
           name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
-          autoJoinChannels, autoJoinDelaySeconds, nspass, serverPass, commands,
+          autoJoinChannels, autoJoinDelaySeconds, nspass, serverPass, commands, egressNodeId,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
           saslPassword: saslMechanism !== 'none' ? saslPassword : undefined,
@@ -188,6 +210,7 @@
             awayMessage: '',
             autoJoinChannels: (result.autoJoinChannels as string[]) ?? [],
             autoJoinDelaySeconds: (result.autoJoinDelaySeconds as number) ?? 0,
+            egressNodeId: (result.egressNodeId as string) ?? '',
             buffers: [{
               name: '_server', type: 'server' as const, isJoined: true,
               unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
@@ -231,6 +254,7 @@
           saslPassword: saslMechanism !== 'none' && saslPassword ? saslPassword : undefined,
           autoJoinChannels: parsedChannels,
           autoJoinDelaySeconds,
+          egressNodeId,
         });
 
         // Mirror the saved fields into local state so the form pre-fills
@@ -246,6 +270,7 @@
           if (realName) existing.realName = realName;
           existing.autoJoinChannels = parsedChannels;
           existing.autoJoinDelaySeconds = autoJoinDelaySeconds;
+          existing.egressNodeId = egressNodeId;
           // nick is handled separately below because it also needs NICK raw
           if (nickChanged) {
             existing.nick = nick;
@@ -411,6 +436,36 @@
           </tr>
         </tbody>
       </table>
+      <table class="form addNetworkCells" cellpadding="0" cellspacing="0">
+        <tbody>
+          <tr>
+            <th class="egress optional" colspan="2">
+              <label for="add-network-egress">
+                Connect via <small class="explanation">— which address the IRC network sees. Pick an exit if the network has banned (Z/G/K-lined) our usual address; Automatic tries every exit and fails over on its own.</small>
+              </label>
+            </th>
+          </tr>
+          <tr>
+            <td class="egress optional" colspan="2">
+              <select id="add-network-egress" class="input" bind:value={egressNodeId}>
+                <option value="">Automatic — any healthy exit, fails over when banned</option>
+                <option value="direct">Direct — our own server address</option>
+                {#each egressExits as x (x.id)}
+                  <option value={x.id} disabled={x.checkedAtMs > 0 && !x.healthy}>
+                    {exitLabel(x)}{x.checkedAtMs > 0 && !x.healthy ? ' — unavailable' : ''}
+                  </option>
+                {/each}
+              </select>
+              {#if egressLoaded && egressExits.length === 0}
+                <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
+                  No proxy exits are configured on this server — only the direct address is available.
+                </p>
+              {/if}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
 
       <div class="addNetworkAdvancedContainer networkEditor__container"
            class:networkEditor__container--collapsed={!showAdvanced}>

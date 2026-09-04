@@ -71,6 +71,28 @@ describe('NetworkForm', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('submits the chosen "Connect via" egress (direct) on add', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.type(page.getByLabelText('Network name'), 'BanNet');
+    await userEvent.type(page.getByLabelText('Hostname'), 'irc.ban.net');
+    await userEvent.type(page.getByLabelText('Nickname'), 'MyNick');
+    await userEvent.selectOptions(page.getByLabelText(/Connect via/), 'direct');
+    await userEvent.click(page.getByRole('button', { name: 'Join network' }));
+    expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'direct' }));
+  });
+
+  it('pre-fills and mirrors egressNodeId in edit mode', async () => {
+    const network = createNetwork({ name: 'PinNet', host: 'irc.pin.net', nick: 'PinNick' });
+    network.egressNodeId = 'direct';
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByLabelText(/Connect via/)).toHaveValue('direct');
+    await userEvent.selectOptions(page.getByLabelText(/Connect via/), '');
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    expect(mockUpdateNetwork).toHaveBeenCalledWith(network.networkId, expect.objectContaining({ egressNodeId: '' }));
+    expect(ircState.networks[0].egressNodeId).toBe('');
+  });
+
   it('calls onClose when Cancel clicked', async () => {
     const onClose = vi.fn();
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
