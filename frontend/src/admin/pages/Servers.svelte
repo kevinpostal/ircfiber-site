@@ -45,6 +45,8 @@
     activeEgressLabel: string;
     activeEgressHost: string;
     activeEgressIp: string;
+    peerIp: string;
+    localIp: string;
   }
 
   interface MullvadNode {
@@ -96,6 +98,11 @@
       const r = await api.get<{ pool: MullvadNode[] }>('/api/admin/mullvad/status');
       mullvadPool = r.pool ?? [];
     } catch {}
+  }
+
+  /** Address family of a bare IP literal from the engine snapshot. */
+  function ipFamily(ip: string): 'IPv6' | 'IPv4' {
+    return ip.includes(':') ? 'IPv6' : 'IPv4';
   }
 
   async function setEgress(networkId: string, label: string, egressNodeId: string) {
@@ -472,11 +479,26 @@
                     {/if}
                   </div>
                 {:else}
-                  <span class="inline-flex items-center gap-1 rounded bg-border px-1.5 py-0.5 text-[11px] font-medium text-muted border border-border" title="Direct — no Mullvad SOCKS, OVH IP">
-                    <span class="h-2 w-2 rounded-full bg-muted"></span>
-                    direct
-                  </span>
-                  <div class="font-mono text-[10px] text-muted">OVH</div>
+                  <div class="flex flex-col gap-0.5">
+                    <span class="inline-flex items-center gap-1">
+                      <span class="inline-flex items-center gap-1 rounded bg-border px-1.5 py-0.5 text-[11px] font-medium text-muted border border-border" title="Direct — no Mullvad SOCKS, host IP">
+                        <span class="h-2 w-2 rounded-full bg-muted"></span>
+                        direct
+                      </span>
+                      {#if a.peerIp}
+                        <span
+                          class="rounded px-1.5 py-0.5 text-[10px] font-semibold border {ipFamily(a.peerIp) === 'IPv6' ? 'bg-success/10 text-success border-success/20' : 'bg-warn/10 text-warn border-warn/20'}"
+                          title={ipFamily(a.peerIp) === 'IPv6' ? 'Connected over IPv6 (AAAA record won the Happy Eyeballs race)' : 'Connected over IPv4 — server has no AAAA record or IPv6 lost the race'}
+                        >{ipFamily(a.peerIp)}</span>
+                      {/if}
+                    </span>
+                    {#if a.peerIp}
+                      <span class="font-mono text-[10px] leading-tight text-muted" title="Remote IRC server address">→ {a.peerIp}</span>
+                    {/if}
+                    {#if a.localIp}
+                      <span class="font-mono text-[10px] leading-tight text-muted" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</span>
+                    {/if}
+                  </div>
                 {/if}
               </td>
               <td class="py-2 text-right whitespace-nowrap">

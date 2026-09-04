@@ -53,6 +53,10 @@ struct HostNetworkInfo {
     string activeEgressHost;
     /// Resolved Tailnet IP of active proxy.
     string activeEgressIp;
+    /// Remote IP of the live socket ("" when disconnected); family = IPv6/IPv4.
+    string peerIp;
+    /// Local source IP of the live socket ("" when disconnected).
+    string localIp;
 }
 /// Enriched assignment record shown in the Network Assignments table.
 struct AssignmentRow {
@@ -78,6 +82,10 @@ struct AssignmentRow {
     string activeEgressHost;
     /// Resolved Tailnet IP of active proxy (e.g. "100.117.47.8").
     string activeEgressIp;
+    /// Remote IP of the live socket ("" when disconnected); family = IPv6/IPv4.
+    string peerIp;
+    /// Local source IP of the live socket ("" when disconnected).
+    string localIp;
 }
 /// Network state helper — reads the latest engine snapshot from Redis for
 /// a given network ID. Falls back from the server-aware key to the legacy key.
@@ -209,6 +217,8 @@ package void adminServers(HTTPServerRequest req, HTTPServerResponse res,
             row.activeEgressLabel = snap.activeEgressLabel;
             row.activeEgressHost = snap.activeEgressHost;
             row.activeEgressIp = snap.activeEgressIp;
+            row.peerIp = snap.peerIp;
+            row.localIp = snap.localIp;
         } catch (Exception) {}
         assignments ~= row;
     }
@@ -260,6 +270,8 @@ package void adminHostDetail(HTTPServerRequest req, HTTPServerResponse res,
         info.activeEgressLabel = snapshot.activeEgressLabel;
         info.activeEgressHost = snapshot.activeEgressHost;
         info.activeEgressIp = snapshot.activeEgressIp;
+        info.peerIp = snapshot.peerIp;
+        info.localIp = snapshot.localIp;
         info.disabled = nw.config.disabled;
         connections ~= info;
     }

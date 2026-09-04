@@ -227,6 +227,8 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
             row.activeEgressLabel = snap.activeEgressLabel;
             row.activeEgressHost = snap.activeEgressHost;
             row.activeEgressIp = snap.activeEgressIp;
+            row.peerIp = snap.peerIp;
+            row.localIp = snap.localIp;
         } catch (Exception) {}
         assignments ~= row;
     }
@@ -274,6 +276,8 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         j["activeEgressLabel"] = Json(a.activeEgressLabel);
         j["activeEgressHost"] = Json(a.activeEgressHost);
         j["activeEgressIp"] = Json(a.activeEgressIp);
+        j["peerIp"] = Json(a.peerIp);
+        j["localIp"] = Json(a.localIp);
         assignArr ~= j;
     }
     data["assignments"] = Json(assignArr);
