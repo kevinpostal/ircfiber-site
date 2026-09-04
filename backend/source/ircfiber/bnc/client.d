@@ -43,7 +43,7 @@ import ircfiber.models.irc_event : IRCRawEvent;
 import ircfiber.redis.protocol : RedisKeys, IRCCommand, NetworkStateSnapshot;
 import ircfiber.api.websocket : loadNetworkStateSnapshot, routeEngineCommand;
 import ircfiber.bnc.wire;
-import ircfiber.bnc.format : FormatCtx, RecentOwn, formatEvent;
+import ircfiber.bnc.format : FormatCtx, RecentOwn, formatEvent, formatChannelListEvent;
 import ircfiber.bnc.control : BNC_EVENT_REVOKED, BNC_EVENT_KICK;
 
 /// Shared services handed to every client by the listener.
@@ -1308,6 +1308,13 @@ final class BncClient {
             }
         } catch (Exception) {}
         auto f = formatCtx();
+        // /LIST reply chunks are synthetic; re-expand them into 321/322/323.
+        if (ev["c"].type == Json.Type.string && ev["c"].get!string == "CHANNEL_LIST") {
+            foreach (l; formatChannelListEvent(ev, f)) send(l);
+            if (eid > cursor) cursor = eid;
+            flushCursor(false);
+            return;
+        }
         auto line = formatEvent(ev, f);
         if (line.length) send(line);
         // Track the engine's nick changes for us.

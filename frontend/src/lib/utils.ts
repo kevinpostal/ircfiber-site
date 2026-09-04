@@ -218,7 +218,10 @@ export function isSkippedCommand(cmd: string): boolean {
   // so this filter is defense-in-depth for older binaries / replays.
   //   - MODE #chan / ISON probe replies (324, 329, 303) that every
   //     bouncer client fires on attach; they carry no chat text.
-  return ['315', '352', '332', '333', '353', '354', '366', '367', '368', '376', '422', 'PONG', 'TAGMSG', '311', '312', '313', '317', '318', '319', '330', '301', '671', '401', '324', '329', '303', 'you_nickchange'].includes(cmd);
+  //   - LIST (321, 322, 323): the engine folds these into CHANNEL_LIST
+  //     chunks for the overlay; an older engine mid-rolling-upgrade may
+  //     still forward them raw and they must not flood the timeline.
+  return ['315', '352', '332', '333', '353', '354', '366', '367', '368', '376', '422', 'PONG', 'TAGMSG', '311', '312', '313', '317', '318', '319', '330', '301', '671', '401', '324', '329', '303', '321', '322', '323', 'you_nickchange'].includes(cmd);
 }
 
 export function isDisconnectLike(cmd: string, text?: string): boolean {

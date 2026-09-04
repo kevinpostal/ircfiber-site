@@ -1,5 +1,5 @@
-import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus, FailInfo } from '../types';
-import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail,
+import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus, FailInfo, ChannelListChunk } from '../types';
+import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
          checkHighlight, isMessageUnseen, applySetname, markRedacted } from '../stores/ircStore.svelte';
@@ -331,6 +331,18 @@ export function processIrcEvent(
     // Discard malformed payloads — keep the previous failInfo so the
     // banner doesn't briefly flash "Disconnected" if the wire ever
     // sends a truncated frame mid-disconnect.
+    return {};
+  }
+
+  // ── /LIST reply chunk — the engine folds 321/322/323 into
+  //    `CHANNEL_LIST` events (`data.cl`, ≤200 rows each) that are
+  //    published but never persisted. Consumed by the channellist
+  //    overlay via the store; never rendered as a message.
+  if (cmd === 'CHANNEL_LIST') {
+    const cl = data.cl as ChannelListChunk | undefined;
+    if (cl && typeof cl === 'object' && Array.isArray(cl.rows)) {
+      applyChannelListChunk(networkId, cl);
+    }
     return {};
   }
 

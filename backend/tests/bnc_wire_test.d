@@ -219,6 +219,36 @@ private void testMissedRows() {
         check(keepUnknown[0]["m"].get!string == "M2", "legacy fallback row");
 }
 
+private void testFormatChannelList() {
+    auto c = ctx();
+    auto full = parseJsonString(`{"c":"CHANNEL_LIST","eid":9,"cl":{"pattern":"","first":true,"done":true,"rows":[{"name":"#d","users":42,"topic":"D lang","modes":"+nt"}]}}`);
+    auto lines = formatChannelListEvent(full, c);
+    check(lines.length == 3, "first+done chunk expands to 3 lines: " ~ lines.length.to!string);
+    if (lines.length == 3) {
+        check(lines[0] == ":bnc.test 321 me Channel :Users  Name", "321 header: " ~ lines[0]);
+        check(lines[1] == ":bnc.test 322 me #d 42 :[+nt] D lang", "322 row: " ~ lines[1]);
+        check(lines[2] == ":bnc.test 323 me :End of /LIST", "323 footer: " ~ lines[2]);
+    }
+    check(formatEvent(full, c) == "", "formatEvent drops CHANNEL_LIST");
+
+    auto middle = parseJsonString(`{"c":"CHANNEL_LIST","cl":{"pattern":"","first":false,"done":false,"rows":[{"name":"#a","users":1,"topic":"","modes":""},{"name":"#b","users":2,"topic":"t","modes":""}]}}`);
+    auto mid = formatChannelListEvent(middle, c);
+    check(mid.length == 2, "middle chunk has only rows: " ~ mid.length.to!string);
+    if (mid.length == 2) {
+        check(mid[0] == ":bnc.test 322 me #a 1 :", "322 empty topic no modes: " ~ mid[0]);
+        check(mid[1] == ":bnc.test 322 me #b 2 t", "322 topic no modes: " ~ mid[1]);
+    }
+
+    auto err = parseJsonString(`{"c":"CHANNEL_LIST","cl":{"pattern":"#x*","first":false,"done":true,"rows":[],"error":"Server busy"}}`);
+    auto e = formatChannelListEvent(err, c);
+    check(e.length == 2, "error chunk: notice + 323: " ~ e.length.to!string);
+    if (e.length == 2) {
+        check(e[0] == ":*status!bnc@bnc.test NOTICE me :LIST failed: Server busy", "error notice: " ~ e[0]);
+        check(e[1] == ":bnc.test 323 me :End of /LIST", "323 after error: " ~ e[1]);
+    }
+    check(formatChannelListEvent(parseJsonString(`{"c":"CHANNEL_LIST"}`), c).length == 0, "missing cl → nothing");
+}
+
 void main() {
     testParseBncPass();
     testParseClientLine();
@@ -228,6 +258,7 @@ void main() {
     testFormatEvent();
     testGrouping();
     testMissedRows();
+    testFormatChannelList();
     if (failures) {
         writefln("bnc wire tests: %d FAILED", failures);
         import core.stdc.stdlib : exit;

@@ -17,8 +17,9 @@
     onJoinChannel: (e?: MouseEvent) => void;
     onEditNetwork: () => void;
     onBouncer?: () => void;
+    onChannelList?: () => void;
   }
-  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onJoinChannel, onEditNetwork, onBouncer = () => {} }: Props = $props();
+  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onJoinChannel, onEditNetwork, onBouncer = () => {}, onChannelList = () => {} }: Props = $props();
 
   const network = $derived(
     propNetworkId ? (ircState.networks.find((n) => n.networkId === propNetworkId) ?? getActiveNetwork()) : getActiveNetwork()
@@ -120,6 +121,10 @@
   }
   function clickJoin(): void {
     onJoinChannel();
+    onClose();
+  }
+  function clickChannelList(): void {
+    onChannelList();
     onClose();
   }
   function clickBouncer(): void {
@@ -239,6 +244,9 @@
       </li>
       <li class="join">
         <button class="contextMenu__item join" onclick={clickJoin}>Join a channel…</button>
+      </li>
+      <li class="list">
+        <button class="contextMenu__item list" onclick={clickChannelList}>Channel list…</button>
       </li>
       <li class="edit">
         <button class="contextMenu__item edit" onclick={clickEdit}>Edit…</button>

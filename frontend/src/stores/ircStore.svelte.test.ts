@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { untrack, flushSync } from 'svelte';
 import {
 	ircState,
@@ -45,11 +45,13 @@ import {
 	applyFail,
 	applySetname,
 	markRedacted,
+	requestChannelList,
+	applyChannelListChunk,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
 import { stripPrefix } from '../lib/utils';
-import type { Network, Member, RetryStatus, FailInfo } from '../types';
+import type { Network, Member, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import type { SyncNetwork, SyncBuffer } from './ircStore.svelte';
 
 // ── W3-T04: mock sendRaw + reconnectNetwork so the helper's side effects
@@ -3385,5 +3387,148 @@ describe('markRedacted (draft/message-redaction)', () => {
 
 		expect(markRedacted('net1', '#chan', 'nope', '')).toBe(false);
 		expect(untrack(() => ircState.messages['net1:#chan']).length).toBe(1);
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// /list — requestChannelList + applyChannelListChunk. The engine folds
+// 321/322/323 into CHANNEL_LIST chunks (`data.cl`); the store owns the
+// per-network accumulation and the overlay slot.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('channel list (/list)', () => {
+	function setupNetwork(networkId: string, overrides: Partial<Network> = {}): Network {
+		const net = createNetwork({ networkId, ...overrides });
+		ircState.networks.push(net);
+		return net;
+	}
+	const live = (id: string) => ircState.networks.find((n) => n.networkId === id)!;
+	const chunk = (over: Partial<ChannelListChunk> = {}): ChannelListChunk => ({
+		pattern: '',
+		first: true,
+		done: true,
+		rows: [],
+		...over,
+	});
+
+	beforeEach(() => {
+		vi.mocked(sendRaw).mockClear();
+		ircState.overlay.type = null;
+		ircState.overlay.data = null;
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it('sends LIST with the pattern, opens the overlay and enters loading state', () => {
+		setupNetwork('net1');
+		requestChannelList('net1', '#d*');
+		flushSync();
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('net1', 'LIST #d*');
+		expect(ircState.overlay.type).toBe('channellist');
+		expect(ircState.overlay.data).toEqual({ networkId: 'net1' });
+		const cl = live('net1').channelList!;
+		expect(cl.pattern).toBe('#d*');
+		expect(cl.rows).toEqual([]);
+		expect(cl.loading).toBe(true);
+		expect(cl.error).toBeNull();
+	});
+
+	it('sends a bare LIST when no pattern is given', () => {
+		setupNetwork('net1');
+		requestChannelList('net1');
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('net1', 'LIST');
+	});
+
+	it('on a disconnected network shows "Not connected" without sending', () => {
+		setupNetwork('net1', { connected: false, connectionState: 'disconnected' });
+		requestChannelList('net1');
+		flushSync();
+		expect(vi.mocked(sendRaw)).not.toHaveBeenCalled();
+		expect(ircState.overlay.type).toBe('channellist');
+		const cl = live('net1').channelList!;
+		expect(cl.loading).toBe(false);
+		expect(cl.error).toBe('Not connected');
+	});
+
+	it('ignores unknown networks', () => {
+		requestChannelList('nope');
+		expect(vi.mocked(sendRaw)).not.toHaveBeenCalled();
+		expect(ircState.overlay.type).toBeNull();
+	});
+
+	it('first chunk replaces rows, later chunks append, done ends loading', () => {
+		setupNetwork('net1');
+		requestChannelList('net1');
+		applyChannelListChunk('net1', chunk({
+			first: true, done: false,
+			rows: [{ name: '#a', users: 1, topic: '', modes: '' }],
+		}));
+		flushSync();
+		expect(live('net1').channelList!.rows.map((r) => r.name)).toEqual(['#a']);
+		expect(live('net1').channelList!.loading).toBe(true);
+
+		applyChannelListChunk('net1', chunk({
+			first: false, done: false,
+			rows: [{ name: '#b', users: 2, topic: 't', modes: '+nt' }],
+		}));
+		flushSync();
+		expect(live('net1').channelList!.rows.map((r) => r.name)).toEqual(['#a', '#b']);
+		expect(live('net1').channelList!.loading).toBe(true);
+
+		applyChannelListChunk('net1', chunk({ first: false, done: true, rows: [] }));
+		flushSync();
+		expect(live('net1').channelList!.rows.length).toBe(2);
+		expect(live('net1').channelList!.loading).toBe(false);
+		expect(live('net1').channelList!.error).toBeNull();
+
+		// A new request's first chunk discards the previous rows.
+		applyChannelListChunk('net1', chunk({
+			first: true, done: true,
+			rows: [{ name: '#c', users: 3, topic: '', modes: '' }],
+		}));
+		flushSync();
+		expect(live('net1').channelList!.rows.map((r) => r.name)).toEqual(['#c']);
+	});
+
+	it('a chunk carrying error surfaces it and stops loading', () => {
+		setupNetwork('net1');
+		requestChannelList('net1');
+		applyChannelListChunk('net1', chunk({ first: true, done: true, rows: [], error: 'Server busy', code: '263' }));
+		flushSync();
+		expect(live('net1').channelList!.loading).toBe(false);
+		expect(live('net1').channelList!.error).toBe('Server busy');
+		expect(live('net1').channelList!.errorCode).toBe('263');
+	});
+
+	it('an unsolicited chunk with no prior state yields an empty non-loading list', () => {
+		setupNetwork('net1');
+		applyChannelListChunk('net1', chunk({ first: false, done: true, rows: [] }));
+		flushSync();
+		expect(live('net1').channelList).toEqual(expect.objectContaining({ rows: [], loading: false, error: null }));
+	});
+
+	it('times out after 30s without a done chunk', () => {
+		vi.useFakeTimers();
+		setupNetwork('net1');
+		requestChannelList('net1');
+		vi.advanceTimersByTime(29_999);
+		expect(live('net1').channelList!.loading).toBe(true);
+		vi.advanceTimersByTime(1);
+		flushSync();
+		expect(live('net1').channelList!.loading).toBe(false);
+		expect(live('net1').channelList!.error).toBe('No response from server');
+	});
+
+	it('a done chunk cancels the timeout', () => {
+		vi.useFakeTimers();
+		setupNetwork('net1');
+		requestChannelList('net1');
+		applyChannelListChunk('net1', chunk({ first: true, done: true, rows: [] }));
+		vi.advanceTimersByTime(60_000);
+		flushSync();
+		expect(live('net1').channelList!.error).toBeNull();
 	});
 });

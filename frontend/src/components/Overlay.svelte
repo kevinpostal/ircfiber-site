@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { ircState, setActiveBuffer, deleteBuffer } from '../stores/ircStore.svelte';
+  import { ircState, setActiveBuffer, deleteBuffer, initiateRejoin } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { ignoreList } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { deleteNetwork } from '../stores/api';
 import Dialog from './Dialog.svelte';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import type { WhoisData, BanListData, ChannelDeleteConfirmData, SetTopicData, InviteData, IgnoreListData } from '../types';
+  import { autolinkHtml } from '../lib/autolinker';
+  import type { WhoisData, BanListData, ChannelDeleteConfirmData, SetTopicData, InviteData, IgnoreListData, ChannelListData, ChannelListRow } from '../types';
 
   let topicInput: HTMLTextAreaElement | null = $state(null);
   let topicValue: string = $state('');
@@ -15,6 +16,37 @@ import Dialog from './Dialog.svelte';
   let inviteNick: string = $state('');
 
   let pendingUnignores: Record<string, boolean> = $state({});
+
+  // ── Channel list (/list) — mirrors IRCCloud's `list_response` overlay:
+  // "List of channels on <server>", table Channels (N) / Topic / Members
+  // in server order, topic cell prefixed with the channel's `[+modes]`.
+  const listNet = $derived(
+    ircState.overlay.type === 'channellist' && ircState.overlay.data
+      ? ircState.networks.find(n => n.networkId === (ircState.overlay.data as ChannelListData).networkId) ?? null
+      : null,
+  );
+  const listState = $derived(listNet?.channelList ?? null);
+  const listServer = $derived(listNet?.host || listNet?.name || '');
+  // IRCCloud `list_response_toomany`: suggest `/LIST >50` only when ISUPPORT
+  // ELIST advertises the `U` (user-count) filter, and link netsplit.de when
+  // the network name is known.
+  const listElistU = $derived((listNet?.isupport?.['ELIST'] ?? '').includes('U'));
+  const listNetworkName = $derived(listNet?.isupport?.['NETWORK'] ?? '');
+
+  function listTopicHtml(row: ChannelListRow): string {
+    const modes = row.modes ? `[${row.modes}]` + (row.topic ? ' ' : '') : '';
+    return modes + autolinkHtml(parseIrcFormatting(row.topic));
+  }
+
+  function joinFromList(name: string): void {
+    if (!listNet) return;
+    const nid = listNet.networkId;
+    const buf = listNet.buffers.find(b => b.name === name);
+    if (!buf?.isJoined) initiateRejoin(nid, name);
+    setActiveBuffer(nid, name);
+    updateRoute(nid, name);
+    close();
+  }
 
   // mIRC color palette (codes 0-15) — standard 16 colors
   const IRC_COLORS: { code: number; name: string; hex: string }[] = [
@@ -228,7 +260,7 @@ import Dialog from './Dialog.svelte';
   onClose={close}
   label={ircState.overlay.type ? String(ircState.overlay.type) : undefined}
   centered={ircState.overlay.type === 'channel_delete_confirm' || ircState.overlay.type === 'set_topic' || ircState.overlay.type === 'invite'}
-  class={"overlay-panel " + (ircState.overlay.type === 'set_topic' ? 'topic-prompt' : '') + " " + (ircState.overlay.type === 'invite' ? 'invite-prompt' : '')}
+  class={"overlay-panel " + (ircState.overlay.type === 'set_topic' ? 'topic-prompt' : '') + " " + (ircState.overlay.type === 'invite' ? 'invite-prompt' : '') + " " + (ircState.overlay.type === 'channellist' ? 'channellist-panel' : '')}
   hideClose={ircState.overlay.type === 'channel_delete_confirm' || ircState.overlay.type === 'set_topic' || ircState.overlay.type === 'invite'}
 >
   <div class="overlay-content">
@@ -323,6 +355,48 @@ import Dialog from './Dialog.svelte';
                 <td class="data_ban_list">{ban.setBy}</td>
                 <td class="data_ban_list"><span title={fullDate(ban.setAt)}>{relativeTime(ban.setAt)}</span></td>
                 <td class="data_ban_list"><a href="#" class="unban" title="Unban {ban.mask}" data-mask={ban.mask} onclick={(e) => { e.preventDefault(); unban(ban.mask); }}>x</a></td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
+    {:else if ircState.overlay.type === 'channellist' && listNet}
+      <div class="overlay-header heading">
+        <h2>List of channels on {listServer}</h2>
+        <button class="overlay-done" onclick={close} style="margin-right: 32px;">Done</button>
+      </div>
+      {#if listState?.error}
+        {#if listState.errorCode === '416'}
+          <p class="no-data">
+            Too many channels to list for {listServer}.{listElistU ? ' Try limiting the list to only respond with channels that have more than e.g. 50 members: /LIST >50.' : ''}
+            {#if listNetworkName}
+              Look up channels on <a href="https://netsplit.de/channels/?net={encodeURIComponent(listNetworkName)}" class="link" rel="noreferrer" target="_blank">irc.netsplit.de</a>
+            {/if}
+          </p>
+        {:else}
+          <p class="no-data">LIST: {listState.error}</p>
+        {/if}
+      {:else if listState?.loading && listState.rows.length === 0}
+        <p class="no-data">Loading channel list for {listServer}…</p>
+      {:else if !listState || listState.rows.length === 0}
+        <p class="no-data">No data</p>
+      {:else}
+        <table cellspacing="0" class="overlayTable channellist-table">
+          <thead>
+            <tr>
+              <th class="data_list_response_name">Channels&nbsp;({listState.rows.length})</th>
+              <th class="data_list_response">Topic</th>
+              <th class="data_list_response_num_members">Members</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each listState.rows as row, i (row.name)}
+              <tr class={i % 2 === 0 ? 'odd' : 'even'}>
+                <td class="data_list_response_name">
+                  <a href="/" class="buffer bufferLink channel" title={row.name} data-name={row.name} onclick={(e) => { e.preventDefault(); joinFromList(row.name); }}>{row.name}</a>
+                </td>
+                <td class="data_list_response">{@html listTopicHtml(row)}</td>
+                <td class="data_list_response_num_members">{row.users}</td>
               </tr>
             {/each}
           </tbody>

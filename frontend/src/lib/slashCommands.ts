@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork, clearBacklog } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache, requestChannelList } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel, stripPrefix } from './utils';
 import { updateRoute } from './routing';
 
@@ -208,6 +208,12 @@ registerSlash(['banlist', 'bans'], (args, networkId, target) => {
 registerSlash(['raw', 'quote'], (args, networkId) => {
   if (!args.length) throw new Error('Usage: /raw <command>');
   sendRaw(networkId, args.join(' '));
+});
+
+// /list [pattern] — the pattern is forwarded verbatim so ELIST filters
+// (`>50`, `C<60`, …) work on servers that advertise them.
+registerSlash(['list'], (args, networkId) => {
+  requestChannelList(networkId, args.join(' '));
 });
 
 registerSlash(['umode'], (args, networkId, _target, net) => {

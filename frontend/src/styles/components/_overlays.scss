@@ -170,6 +170,15 @@
 .overlay-panel .overlayTable tr.unignored td { opacity: 0.5; }
 .overlay-panel .overlayTable span.unignored { text-decoration: line-through; }
 
+/* Channel list (/list) overlay — IRCCloud list_response column classes */
+.overlay-panel .channellist-table { padding: 12px; border-collapse: separate; border-spacing: 0; }
+.overlay-panel .channellist-table td.data_list_response_name { white-space: nowrap; }
+.overlay-panel .channellist-table .buffer.bufferLink.channel { display: inline; width: auto; color: #58a6ff; text-decoration: none; }
+.overlay-panel .channellist-table .buffer.bufferLink.channel:hover { text-decoration: underline; }
+.overlay-panel .channellist-table td.data_list_response { word-break: break-word; color: #b1bac4; }
+.overlay-panel .channellist-table th.data_list_response_num_members, .overlay-panel .channellist-table td.data_list_response_num_members { text-align: right; width: 72px; font-variant-numeric: tabular-nums; }
+.overlay-panel .no-data a.link { color: #58a6ff; }
+
 /* WHOIS overlay */
 .overlay-panel .whois-table { padding: 12px; border-collapse: separate; border-spacing: 0; }
 .overlay-panel .whois-table td.whois-label { width: 120px; font-weight: 600; color: #8b949e; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }

@@ -213,6 +213,20 @@ describe('ServerLogContextMenu', () => {
     expect(onJoinChannel).toHaveBeenCalled();
   });
 
+  it('Channel list… calls onChannelList then onClose', async () => {
+    setupConnectedNetwork();
+    const buf = ircState.networks[0].buffers[0];
+    const onChannelList = vi.fn();
+    const onClose = vi.fn();
+    render(ServerLogContextMenu, {
+      props: { x: 100, y: 100, buf, onClose, onJoinChannel: vi.fn(), onEditNetwork: vi.fn(), onChannelList },
+    });
+    await expect.element(page.getByRole('button', { name: 'Channel list…' })).toBeInTheDocument();
+    await userEvent.click(page.getByRole('button', { name: 'Channel list…' }));
+    expect(onChannelList).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('Delete… opens channel_delete_confirm overlay', async () => {
     const network = createNetwork({ networkId: 'net1', name: 'SuperNETs', connected: false });
     const buf = createBuffer({ name: '_server' });

@@ -30,9 +30,10 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   const cmd = msg.command;
   if (cmd === 'PING' || cmd === 'PONG' || cmd === 'ERROR') return 'skip';
   // Engine state events that ride the `_server` stream but are consumed
-  // by the store (isupport map, retry countdown, structured fail info) —
-  // the log shows their effect via phase rows / the disconnect row.
-  if (cmd === 'ISUPPORT' || cmd === 'CONNECTION_RETRY_STATUS' || cmd === 'CONNECTION_FAIL') return 'skip';
+  // by the store (isupport map, retry countdown, structured fail info,
+  // /LIST chunks) — the log shows their effect via phase rows / the
+  // disconnect row / the channel-list overlay.
+  if (cmd === 'ISUPPORT' || cmd === 'CONNECTION_RETRY_STATUS' || cmd === 'CONNECTION_FAIL' || cmd === 'CHANNEL_LIST') return 'skip';
   // Our own QUIT echo duplicates the DISCONNECTED lifecycle row.
   if (cmd === 'QUIT') return 'skip';
   if (cmd === 'CONNECT' || cmd === 'DISCONNECT' || cmd === 'CONNECTED' || cmd === 'DISCONNECTED') {

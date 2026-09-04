@@ -138,6 +138,38 @@ describe('/cycle /hop /rejoin slash commands (W3-T06)', () => {
 	});
 });
 
+describe('/list slash command (channel list)', () => {
+	beforeEach(() => {
+		ircState.networks.length = 0;
+		ircState.overlay = { type: null, data: null };
+		vi.mocked(sendRaw).mockClear();
+	});
+
+	it('/list foo bar forwards the pattern verbatim and opens the channellist overlay', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		ircState.networks.push(net);
+
+		dispatch('/list foo bar', 'n1', net);
+
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'LIST foo bar');
+		expect(ircState.overlay.type).toBe('channellist');
+		expect(ircState.overlay.data).toEqual({ networkId: 'n1' });
+		const live = ircState.networks.find((n) => n.networkId === 'n1')!;
+		expect(live.channelList?.pattern).toBe('foo bar');
+		expect(live.channelList?.loading).toBe(true);
+	});
+
+	it('/list with no args sends a bare LIST', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		ircState.networks.push(net);
+
+		dispatch('/list', 'n1', net);
+
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'LIST');
+	});
+});
+
 describe('/monitor and /setname slash commands (IRCv3 monitor / setname)', () => {
 	beforeEach(() => {
 		ircState.networks.length = 0;

@@ -231,6 +231,12 @@ export interface Network {
    */
   failInfo?: FailInfo | null;
   /**
+   * Transient `/LIST` result for this network (rows accumulated from
+   * `CHANNEL_LIST` chunks). Never part of the sync payload; lives only
+   * for the current page session.
+   */
+  channelList?: ChannelListState | null;
+  /**
    * W3-T01: when true, the banner shows a "Click to disconnect" button
    * instead of "Click to reconnect". Set by the engine for unrecoverable
    * scenarios (e.g. the user is blocked by the server). Optional
@@ -569,9 +575,42 @@ export interface IgnoreListData {
   networkName: string;
 }
 
+/** One row of a `/LIST` reply (RPL_LIST 322). */
+export interface ChannelListRow {
+  name: string;
+  users: number;
+  topic: string;
+  modes: string;
+}
+
+/** Per-network accumulated `/LIST` state rendered by the channellist overlay. */
+export interface ChannelListState {
+  pattern: string;
+  rows: ChannelListRow[];
+  loading: boolean;
+  error: string | null;
+  /** Aborting numeric when `error` is set: '416' (too many matches) or '263' (try again). */
+  errorCode: string | null;
+  requestedAt: number;
+}
+
+/** Wire shape of `data.cl` on a `CHANNEL_LIST` event (≤200 rows per chunk). */
+export interface ChannelListChunk {
+  pattern: string;
+  first: boolean;
+  done: boolean;
+  rows: ChannelListRow[];
+  error?: string;
+  code?: string;
+}
+
+export interface ChannelListData {
+  networkId: string;
+}
+
 export interface OverlayState {
   type: OverlayType | null;
-  data: WhoisData | BanListData | string[] | ChannelDeleteConfirmData | SetTopicData | InviteData | IgnoreListData | null;
+  data: WhoisData | BanListData | string[] | ChannelDeleteConfirmData | SetTopicData | InviteData | IgnoreListData | ChannelListData | null;
 }
 
 // ── Notification types ──

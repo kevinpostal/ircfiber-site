@@ -72,6 +72,8 @@ private immutable string[] DROP_COMMANDS = [
     "001", "002", "003", "004", "375", "372", "376", "422",
     "CONNECTION_FAIL", "CONNECTION_RETRY_STATUS", "ISUPPORT", "temp_unavailable",
     "idle", "CONNECTED", "network_isupport",
+    // Expanded back into 321/322/323 by `formatChannelListEvent`.
+    "CHANNEL_LIST",
 ];
 
 private immutable string[] FORWARD_COMMANDS = [
@@ -202,4 +204,53 @@ string formatEvent(Json ev, FormatCtx c) @trusted {
     }
 
     return formatLine(tags, prefix, cmd, params);
+}
+
+/// Expands a CHANNEL_LIST chunk (`ev["cl"] = {pattern, first, done, rows,
+/// error?}`) into the 321/322/323 lines an attached client expects from
+/// its own `LIST`. A chunk with `first` opens with 321, every row becomes
+/// a 322 (`[+modes] topic` trailing when modes are present), a non-empty
+/// `error` becomes a `*status` NOTICE, and `done` closes with 323.
+string[] formatChannelListEvent(Json ev, FormatCtx c) @trusted {
+    import std.conv : to;
+    string[] lines;
+    if (ev.type != Json.Type.object) return lines;
+    auto clp = "cl" in ev;
+    if (clp is null || clp.type != Json.Type.object) return lines;
+    const Json cl = *clp;
+
+    auto flag = (string key) {
+        if (auto v = key in cl) return v.type == Json.Type.bool_ && v.get!bool;
+        return false;
+    };
+
+    if (flag("first")) {
+        lines ~= formatLine(null, c.src, "321", [c.nick, "Channel", "Users  Name"]);
+    }
+    if (auto rows = "rows" in cl) {
+        if (rows.type == Json.Type.array) {
+            foreach (row; *rows) {
+                if (row.type != Json.Type.object) continue;
+                const name = str(row, "name");
+                if (!name.length) continue;
+                string users = "0";
+                if (auto u = "users" in row) {
+                    if (u.type == Json.Type.int_) users = u.get!long.to!string;
+                    else if (u.type == Json.Type.float_) users = (cast(long) u.get!double).to!string;
+                }
+                const modes = str(row, "modes");
+                const topic = str(row, "topic");
+                lines ~= formatLine(null, c.src, "322",
+                    [c.nick, name, users, (modes.length ? "[" ~ modes ~ "] " : "") ~ topic]);
+            }
+        }
+    }
+    const error = str(cl, "error");
+    if (error.length) {
+        lines ~= formatLine(null, "*status!bnc@" ~ c.src, "NOTICE", [c.nick, "LIST failed: " ~ error]);
+    }
+    if (flag("done")) {
+        lines ~= formatLine(null, c.src, "323", [c.nick, "End of /LIST"]);
+    }
+    return lines;
 }

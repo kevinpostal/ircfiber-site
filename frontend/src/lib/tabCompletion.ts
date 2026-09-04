@@ -78,7 +78,7 @@ export class TabCompletionEngine {
       'op', 'deop', 'voice', 'devoice', 'kick', 'ban', 'unban', 'kickban',
       'raw', 'umode', 'quit', 'part', 'me', 'cycle', 'clear', 'archive',
       'unarchive', 'delete', 'reconnect', 'highlight', 'unhighlight',
-      'join', 'msg', 'notice', 'query',
+      'join', 'msg', 'notice', 'query', 'list',
     ];
     const lower = partial.toLowerCase();
     return commands

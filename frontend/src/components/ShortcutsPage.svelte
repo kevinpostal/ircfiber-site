@@ -46,6 +46,7 @@
     { keys: ['/me', '[message]'], description: 'Send message as an action' },
     { keys: ['/msg', 'nickname', '[message]'], description: ['Send a private message to another user (', '/query', ' or ', '/m', ' or ', '/q', ')'] },
     { keys: ['/join', '[channel', '[pass]]'], description: ['Join a channel (', '/channel', ' or ', '/j', ')'] },
+    { keys: ['/list', '[pattern]'], description: 'Browse the channels on this network' },
     { keys: ['/part', '[channel]'], description: ['Leave a channel (', '/leave', ' or ', '/pa', ' or ', '/p', ' or ', '/l', ')'] },
     { keys: ['/cycle', '[channel', '[pass]]'], description: ['Rejoin a channel (', '/hop', ' or ', '/rejoin', ')'] },
     { keys: ['/clear'], description: 'Clears the current backlog (can be restored with a button)' },

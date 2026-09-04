@@ -26,7 +26,7 @@
     resetPendingState,
     isUserDisconnected,
     isMessageUnseen, setLastSeenMessage, readBuffer, markAllAsRead,
-    isTrackingUnread, dirtySeenEids
+    isTrackingUnread, dirtySeenEids, requestChannelList
   } from './stores/ircStore.svelte';
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
@@ -1660,6 +1660,7 @@ let showNetworkForm: boolean = $state(false);
         onJoinChannel={() => { const nid = channelMenu?.networkId; joinModalNetworkId = nid ?? null; showJoinModal = true; closeChannelMenu(); }}
         onEditNetwork={() => { (window as any).__testChannelMenuAtClick = channelMenu ? {networkId: channelMenu.networkId, bufferName: channelMenu.bufferName} : null; const nid = channelMenu?.networkId; (window as any).__testNidAtClick = nid; networkFormMode = 'edit'; editNetworkId = nid ?? null; showNetworkForm = true; closeChannelMenu(); }}
         onBouncer={() => { bouncerNetworkId = channelMenu?.networkId ?? null; showBouncerDialog = true; closeChannelMenu(); }}
+        onChannelList={() => { const nid = channelMenu?.networkId; if (nid) requestChannelList(nid); closeChannelMenu(); }}
       />
     {:else}
       <ChannelContextMenu

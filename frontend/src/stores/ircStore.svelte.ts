@@ -1,4 +1,4 @@
-import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo } from '../types';
+import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
 import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs } from './preferences.svelte';
@@ -2960,6 +2960,78 @@ export function applyFail(
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (!net) return;
   net.failInfo = failInfo;
+  markNetworkSeen(networkId);
+}
+
+// ── /LIST (channel list) ──
+
+/** How long to wait for the first/last `CHANNEL_LIST` chunk before giving up. */
+const CHANNEL_LIST_TIMEOUT_MS = 30_000;
+const channelListTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearChannelListTimer(networkId: string): void {
+  const t = channelListTimers.get(networkId);
+  if (t !== undefined) {
+    clearTimeout(t);
+    channelListTimers.delete(networkId);
+  }
+}
+
+/**
+ * Opens the channel-list overlay for `networkId` and asks the engine for
+ * the server's `/LIST` (optionally filtered by `pattern`, forwarded
+ * verbatim so ELIST filters like `>50` work). The engine folds the
+ * 321/322/323 numerics into `CHANNEL_LIST` chunks consumed by
+ * `applyChannelListChunk`.
+ */
+export function requestChannelList(networkId: string, pattern = ''): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  clearChannelListTimer(networkId);
+  ircState.overlay = { type: 'channellist', data: { networkId } };
+  if (!net.connected) {
+    net.channelList = { pattern, rows: [], loading: false, error: 'Not connected', errorCode: null, requestedAt: Date.now() };
+    return;
+  }
+  net.channelList = { pattern, rows: [], loading: true, error: null, errorCode: null, requestedAt: Date.now() };
+  sendRaw(networkId, 'LIST' + (pattern ? ' ' + pattern : ''));
+  channelListTimers.set(networkId, setTimeout(() => {
+    channelListTimers.delete(networkId);
+    const cur = ircState.networks.find(n => n.networkId === networkId);
+    if (cur?.channelList?.loading) {
+      cur.channelList.loading = false;
+      cur.channelList.error = 'No response from server';
+    }
+  }, CHANNEL_LIST_TIMEOUT_MS));
+}
+
+/**
+ * Applies one `CHANNEL_LIST` chunk. `first` replaces the accumulated rows
+ * (a new request), otherwise rows append; `done` ends loading. An
+ * unsolicited `done` chunk with no prior state yields an empty,
+ * non-loading list, which the overlay renders as "No data".
+ */
+export function applyChannelListChunk(networkId: string, cl: ChannelListChunk): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  if (cl.first || !net.channelList) {
+    net.channelList = {
+      pattern: cl.pattern ?? '',
+      rows: [...cl.rows],
+      loading: !cl.done,
+      error: cl.error ?? null,
+      errorCode: cl.error ? (cl.code ?? null) : null,
+      requestedAt: net.channelList?.requestedAt ?? Date.now(),
+    };
+  } else {
+    net.channelList.rows.push(...cl.rows);
+    net.channelList.loading = !cl.done;
+    if (cl.error) {
+      net.channelList.error = cl.error;
+      net.channelList.errorCode = cl.code ?? null;
+    }
+  }
+  if (cl.done) clearChannelListTimer(networkId);
   markNetworkSeen(networkId);
 }
 

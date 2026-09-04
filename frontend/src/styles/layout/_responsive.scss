@@ -392,7 +392,8 @@
   .overlay-panel.centered,
   .overlay-panel.network-form-panel,
   .overlay-panel.topic-prompt,
-  .overlay-panel.invite-prompt {
+  .overlay-panel.invite-prompt,
+  .overlay-panel.channellist-panel {
     width: calc(100vw - 16px);
     min-width: 0;
     max-width: calc(100vw - 16px);
