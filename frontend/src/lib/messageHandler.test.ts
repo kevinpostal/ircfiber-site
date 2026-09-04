@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { shouldBypassBatcher, unpackEvent } from './messageHandler';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { untrack } from 'svelte';
+import { shouldBypassBatcher, unpackEvent, processIrcEvent } from './messageHandler';
 import type { IRCMessage } from '../types';
+import { ircState } from '../stores/ircStore.svelte';
+import { createNetwork, createBuffer, createMessage } from '../test/factories';
 
 function makeMsg(overrides: Partial<IRCMessage> = {}): IRCMessage {
   return {
@@ -145,5 +148,113 @@ describe('unpackEvent — account-tag and remote-edit fields', () => {
       { value: 0 },
     );
     expect(evt.editOf).toBeUndefined();
+  });
+});
+
+describe('query case convergence (nickserv vs NickServ)', () => {
+  beforeEach(() => {
+    ircState.networks.length = 0;
+    ircState.activeBuffer.networkId = null;
+    ircState.activeBuffer.bufferName = null;
+    ircState.messages = {};
+  });
+
+  function runIncoming(data: Record<string, unknown>) {
+    const appended: Array<{ networkId: string; bufferName: string; msg: IRCMessage }> = [];
+    processIrcEvent(
+      data,
+      { value: 0 },
+      { whoisAcc: null, whoisAccs: new Map(), banAcc: [], banTargetChannel: '' },
+      { switchToBuffer: () => {} },
+      (networkId, bufferName, msg) => {
+        appended.push({ networkId, bufferName, msg });
+      },
+    );
+    return appended;
+  }
+
+  it('routes a server-case reply into the typed buffer and adopts its case', () => {
+    // The reported bug: `/msg nickserv` opens `nickserv`, the reply from
+    // `NickServ` opens a second conversation. Expect one buffer, renamed
+    // to the server case, with the reply filed under the folded key.
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: 'nickserv', type: 'query', isJoined: true }));
+    ircState.networks.push(net);
+    ircState.messages['n1:nickserv'] = [createMessage({ nick: 'me', text: 'identify hunter2', t: 1000 })];
+    ircState.activeBuffer.networkId = 'n1';
+    ircState.activeBuffer.bufferName = 'nickserv';
+
+    const appended = runIncoming({
+      command: 'PRIVMSG', nick: 'NickServ', text: 'Password accepted',
+      channel: 'NickServ', nid: 'n1', t: 2000,
+    });
+
+    const queries = net.buffers.filter((b) => b.type === 'query');
+    expect(queries).toHaveLength(1);
+    expect(queries[0].name).toBe('NickServ');
+    expect(appended).toHaveLength(1);
+    expect(appended[0].bufferName).toBe('nickserv');
+    expect(untrack(() => ircState.activeBuffer.bufferName)).toBe('NickServ');
+  });
+
+  it('does not rename the buffer on our own echo', () => {
+    // Echoes carry the typed target, not the server case — adopting them
+    // would rename away from the authoritative case on every send.
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: 'NickServ', type: 'query', isJoined: true }));
+    ircState.networks.push(net);
+
+    runIncoming({
+      command: 'PRIVMSG', nick: 'me', text: 'identify hunter2',
+      channel: 'nickserv', nid: 'n1', t: 2000, se: '1',
+    });
+
+    const queries = net.buffers.filter((b) => b.type === 'query');
+    expect(queries).toHaveLength(1);
+    expect(queries[0].name).toBe('NickServ');
+  });
+
+  it('renames the query when the counterparty changes nick (bob -> robert)', () => {
+    // IRCCloud rename model end to end: the NICK event carries old in
+    // `nick` and new in params — one buffer, history preserved, no twin.
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: 'bob', type: 'query', isJoined: true }));
+    ircState.networks.push(net);
+    ircState.messages['n1:bob'] = [createMessage({ nick: 'bob', text: 'hey', t: 1000 })];
+    ircState.activeBuffer.networkId = 'n1';
+    ircState.activeBuffer.bufferName = 'bob';
+
+    runIncoming({ command: 'NICK', nick: 'bob', params: ['robert'], nid: 'n1', t: 2000 });
+
+    const queries = net.buffers.filter((b) => b.type === 'query');
+    expect(queries).toHaveLength(1);
+    expect(queries[0].name).toBe('robert');
+    expect(ircState.messages['n1:robert']).toHaveLength(1);
+    expect(ircState.messages['n1:bob']).toBeUndefined();
+    expect(untrack(() => ircState.activeBuffer.bufferName)).toBe('robert');
+  });
+
+  it('ignores our own NICK (you_nickchange owns self)', () => {
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: 'alice', type: 'query', isJoined: true }));
+    ircState.networks.push(net);
+
+    runIncoming({ command: 'NICK', nick: 'me', params: ['me2'], nid: 'n1', t: 2000 });
+
+    expect(net.buffers.map((b) => b.name)).toEqual(['alice']);
+  });
+
+  it('a duplicate NICK (per-channel re-broadcast) is a no-op', () => {
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: 'bob', type: 'query', isJoined: true }));
+    ircState.networks.push(net);
+
+    const evt = { command: 'NICK', nick: 'bob', params: ['robert'], nid: 'n1', t: 2000 };
+    runIncoming(evt);
+    runIncoming({ ...evt, channel: '#shared' });
+
+    const queries = net.buffers.filter((b) => b.type === 'query');
+    expect(queries).toHaveLength(1);
+    expect(queries[0].name).toBe('robert');
   });
 });

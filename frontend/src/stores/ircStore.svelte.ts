@@ -1,7 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
-import { normalizeChannelName, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
-import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs } from './preferences.svelte';
+import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
+import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
@@ -1265,6 +1265,110 @@ function findBuffer(networkId: string, bufferName: string): { net: Network; buf:
   if (!net) return null;
   const buf = findBufferByName(net, bufferName);
   return buf ? { net, buf } : null;
+}
+
+/**
+ * Move one name-keyed entry to another buffer key, if present. Never
+ * clobbers an existing destination entry.
+ */
+function moveBufferKey<T>(map: Record<string, T>, from: string, to: string): void {
+  if (from === to || !(from in map)) return;
+  if (!(to in map)) map[to] = map[from];
+  delete map[from];
+}
+
+/**
+ * Migrate every name-keyed slice of a conversation after a NICK rename:
+ * message lists, drafts, prefs, read markers, unseen state, pins and
+ * archives — so the renamed conversation keeps its full state. Purely
+ * key moves; values are untouched. No-op when both names fold alike
+ * (case-only change shares every folded key already).
+ */
+function migrateBufferKeys(
+  networkId: string, oldFolded: string, newFolded: string,
+  oldExactKey: string, newExactKey: string,
+): void {
+  if (oldFolded === newFolded && oldExactKey === newExactKey) return;
+  const oldK = `${networkId}:${oldFolded}`;
+  const newK = `${networkId}:${newFolded}`;
+  moveBufferKey(ircState.messages, oldK, newK);
+  moveBufferKey(ircState.processedMessages, oldK, newK);
+  moveBufferKey(ircState.backlogDivider, oldK, newK);
+  moveBufferKey(bufferPrefsMap, oldK, newK);
+  moveBufferKey(lastSeenMap, oldK, newK);
+  moveBufferKey(bottomSeenMap, oldK, newK);
+  moveBufferKey(focusSeenMap, oldK, newK);
+  moveBufferKey(unseenMap, oldK, newK);
+  moveBufferKey(unseenHighlightsMap, oldK, newK);
+  moveBufferKey(archivedMap, oldK, newK);
+  moveBufferKey(pinnedMap, oldK, newK);
+  moveBufferKey(hiddenChannelsMap, oldK, newK);
+  // clearedAt is keyed by raw (unfolded) name.
+  moveBufferKey(clearedAtMap, oldExactKey, newExactKey);
+  // Input draft follows the conversation (keep whichever draft exists;
+  // prefer the destination's if both sides somehow have one).
+  const draft = bufferInputText.get(oldK);
+  if (draft !== undefined && !bufferInputText.has(newK)) bufferInputText.set(newK, draft);
+  bufferInputText.delete(oldK);
+  // Dirty seen markers follow, then re-persist like markSeenEidDirty does.
+  const nets = dirtySeenEids[networkId];
+  if (nets) {
+    moveBufferKey(nets, oldFolded, newFolded);
+    localStorage.setItem(DIRTY_SEEN_KEY, JSON.stringify(dirtySeenEids));
+  }
+}
+
+/**
+ * IRCCloud rename model: when a DM counterparty changes nick, rename the
+ * query buffer in place — same object, full history and state preserved —
+ * instead of opening a second conversation. Channels never rename.
+ *
+ * Returns the renamed buffer, or null when there was nothing to do: no
+ * query buffer tracks the old nick, the change is our own (you_nickchange
+ * owns self; counterparties are unchanged), or a *separate* buffer
+ * already tracks the new nick (keep both — never destroy history).
+ */
+export function renameQueryBuffer(networkId: string, oldNick: string, newNick: string): Buffer | null {
+  if (!oldNick || !newNick || oldNick === newNick) return null;
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return null;
+  // Our own change (exact, folded, or still tracked as pending).
+  const curNick = net.currentNick ?? '';
+  if (!!curNick && equalNicks(oldNick, curNick)) return null;
+  const pending = net.pendingSelfNickChange;
+  if (pending && Date.now() - pending.setAt < 12_000
+      && equalNicks(pending.oldNick, oldNick) && equalNicks(pending.newNick, newNick)) return null;
+
+  const buf = net.buffers.find(b => b.type === 'query' && equalNicks(b.name, oldNick));
+  if (!buf) return null;
+  const clash = net.buffers.find(b => b !== buf && equalNicks(b.name, newNick));
+  if (clash) return null;
+
+  const oldName = buf.name;
+  migrateBufferKeys(
+    networkId,
+    normalizeChannelName(oldName), normalizeChannelName(newNick),
+    `${networkId}:${oldName}`, `${networkId}:${newNick}`,
+  );
+  buf.name = newNick;
+  // Roster entry follows, preserving any status prefix in u.nick.
+  for (const u of buf.users ?? []) {
+    if (equalNicks(stripPrefix(u.nick), oldName)) {
+      const stripped = stripPrefix(u.nick);
+      u.nick = u.nick.slice(0, u.nick.length - stripped.length) + newNick;
+    }
+  }
+  // Focus pointers follow the conversation.
+  const act = ircState.activeBuffer;
+  if (act.networkId === networkId && act.bufferName
+      && normalizeChannelName(act.bufferName) === normalizeChannelName(oldName)) {
+    act.bufferName = newNick;
+  }
+  if (previousBuffer.networkId === networkId && previousBuffer.bufferName
+      && normalizeChannelName(previousBuffer.bufferName) === normalizeChannelName(oldName)) {
+    previousBuffer = { networkId, bufferName: newNick };
+  }
+  return buf;
 }
 
 /** IRCCloud `session.isFocused()`: window focus, mirrored into `focusLost`. */

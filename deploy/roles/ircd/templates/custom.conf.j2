@@ -1,16 +1,72 @@
 # {{ ansible_managed }}
 # Local server links (hub-specific). Included from inspircd.conf.
 # Rehash (SIGHUP) picks up changes; no restart needed.
+#
+# NOTE: sslprofile must be "main" — it is the only sslprofile defined
+# (modules.conf). There is no "defaultssl" profile; referencing one would
+# fail config parse and the link would never establish.
+
+<bind address="*"
+      port="4445"
+      sslprofile="main"
+      type="servers">
 
 <link allowmask="*"
       bind="*"
       ipaddr="2001:470:b:56f:30:5::"
-      port="4443"
+      port="4445"
       hidden="no"
       name="irc.netcrave.chat"
       recvpass="{{ vault_ircd_netcrave_link_password }}"
       sendpass="{{ vault_ircd_netcrave_link_password }}"
-      statshidden="no">
+      statshidden="no"
+      sslprofile="main"
+      timeout="8s">
 
 <autoconnect period="16s"
              server="irc.netcrave.chat">
+
+{% if ircd_tor_enabled %}
+#-#-#-#-#-#-#-#-#-#-#-#-#  TOR INGRESS (Paige's pattern)  -#-#-#-#-#-#-#
+#
+# Onion traffic arrives via a local HAProxy over PROXY protocol (not yet
+# deployed — see ircd_tor_enabled). The proxy assigns one ULA per circuit,
+# so a user's address IS their circuit id. The listener is unpublished and
+# container-scoped (see tasks/main.yml: only plain/TLS ports are published).
+# Deliberate divergences from netcrave's tor class: usecloak="no" (their
+# live class still cloaks; uncloaked is the whole point — hostmasks read
+# *!*@tor/<circuit> so +b *!*@tor/* bans per-circuit), throttles left ON
+# (fresh abuse surface), no autojoin unless ircd_tor_autojoin is set.
+# maxconnwarn omitted: v3-only attribute, ignored by v4.
+
+<bind address="{{ ircd_tor_listen_address }}"
+      hook="haproxy"
+      port="{{ ircd_tor_port }}">
+
+<connect name="tor"
+         allow="{{ ircd_tor_ula_range }}"
+         port="{{ ircd_tor_port }}"
+{% if ircd_tor_autojoin %}
+         autojoin="{{ ircd_tor_autojoin }}"
+{% endif %}
+         commandrate="1000"
+         fakelag="off"
+         globalmax="32"
+         hardsendq="3000000"
+         localmax="16"
+         maxchans="256"
+         pingfreq="256"
+         recvq="8000"
+         resolvehostnames="no"
+         softsendq="4096"
+         threshold="20"
+         timeout="16s"
+         usecloak="no"
+         useconnectban="yes"
+         useconnflood="yes"
+         usednsbl="no"
+         useident="no">
+
+<exception host="*@{{ ircd_tor_ula_range }}"
+           reason="Tor ULA addresses (represents circuit ID)">
+{% endif %}

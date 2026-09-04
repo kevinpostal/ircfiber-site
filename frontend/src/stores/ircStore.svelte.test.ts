@@ -47,6 +47,8 @@ import {
 	markRedacted,
 	requestChannelList,
 	applyChannelListChunk,
+	renameQueryBuffer,
+	findBufferByName,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
@@ -146,6 +148,96 @@ beforeEach(() => {
 	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
 	Object.keys(hiddenChannelsMap).forEach((k) => delete (hiddenChannelsMap as Record<string, unknown>)[k]);
 	highlightWords.length = 0;
+});
+
+describe('query buffer case adoption (nickserv vs NickServ)', () => {
+	it('setActiveBuffer adopts the stored display case instead of forking a twin', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: 'NickServ', type: 'query', isJoined: true }));
+		ircState.networks.push(net);
+
+		setActiveBuffer('net1', 'nickserv');
+		flushSync();
+
+		expect(untrack(() => ircState.activeBuffer.bufferName)).toBe('NickServ');
+		expect(net.buffers.filter((b) => b.type === 'query')).toHaveLength(1);
+	});
+
+	it('re-selecting the same counterparty in another case is a no-op switch', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: 'NickServ', type: 'query', isJoined: true }));
+		ircState.networks.push(net);
+
+		setActiveBuffer('net1', 'NickServ');
+		flushSync();
+		setActiveBuffer('net1', 'NICKSERV');
+		flushSync();
+
+		expect(untrack(() => ircState.activeBuffer.bufferName)).toBe('NickServ');
+		expect(net.buffers.filter((b) => b.type === 'query')).toHaveLength(1);
+	});
+});
+
+describe('renameQueryBuffer (IRCCloud rename model)', () => {
+	it('renames the query in place with history, users and focus following', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const buf = createBuffer({ name: 'bob', type: 'query', isJoined: true });
+		buf.users = [{
+			nick: '@bob', prefix: '@', category: 'OP', ident: 'bob@host', realname: 'bob',
+			isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0,
+			account: '', isBot: false,
+		}];
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+		ircState.messages['net1:bob'] = [
+			{ nick: 'me', text: 'hey', t: 1000, command: 'PRIVMSG', type: 'privmsg' } as never,
+		];
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = 'bob';
+
+		const renamed = renameQueryBuffer('net1', 'bob', 'robert');
+
+		// NOTE: read back through the ircState graph (house precedent) —
+		// the raw pre-push consts go stale once $state proxies mutate.
+		const liveNet = ircState.networks.find((n) => n.networkId === 'net1');
+		const after = liveNet?.buffers.find((b) => b.type === 'query');
+		expect(renamed?.name).toBe('robert');
+		expect(after?.name).toBe('robert');
+		expect(liveNet?.buffers.filter((b) => b.type === 'query')).toHaveLength(1);
+		expect(ircState.messages['net1:robert']).toHaveLength(1);
+		expect(ircState.messages['net1:bob']).toBeUndefined();
+		expect(after?.users[0].nick).toBe('@robert');
+		expect(untrack(() => ircState.activeBuffer.bufferName)).toBe('robert');
+	});
+
+	it('keeps both conversations when the new nick is already tracked', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		net.buffers.push(createBuffer({ name: 'bob', type: 'query', isJoined: true }));
+		net.buffers.push(createBuffer({ name: 'robert', type: 'query', isJoined: true }));
+		ircState.networks.push(net);
+
+		expect(renameQueryBuffer('net1', 'bob', 'robert')).toBeNull();
+		expect(net.buffers.map((b) => b.name).sort()).toEqual(['bob', 'robert']);
+	});
+
+	it('ignores our own nick change', () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		net.buffers.push(createBuffer({ name: 'alice', type: 'query', isJoined: true }));
+		ircState.networks.push(net);
+
+		expect(renameQueryBuffer('net1', 'me', 'me2')).toBeNull();
+		expect(net.buffers.map((b) => b.name)).toEqual(['alice']);
+	});
+
+	it('findBufferByName folds case for query buffers', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({ name: 'NickServ', type: 'query', isJoined: true });
+		net.buffers.push(buf);
+
+		expect(findBufferByName(net, 'nickserv')).toBe(buf);
+		expect(findBufferByName(net, 'NICKSERV')).toBe(buf);
+		expect(findBufferByName(net, 'alice')).toBeUndefined();
+	});
 });
 
 describe('setActiveBuffer', () => {

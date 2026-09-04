@@ -22,18 +22,50 @@ export function stripHash(name: string): string {
   return name?.startsWith('#') ? name.substring(1) : name;
 }
 
+/**
+ * Fold a nick to its case-insensitive identity per RFC 1459 casemapping
+ * (the network default, and what the engine's `sameNick` uses): A-Z →
+ * a-z plus the bracket/caret equivalences (`[`→`{`, `]`→`}`, `\`→`|`,
+ * `^`→`~`). So `NickServ` and `nickserv` — or `[foo` and `{foo` — are
+ * the same counterparty. This is intentionally narrower than
+ * `normaliseIdentifier` (IRCCloud parity): that strips ornaments for
+ * display/color identity, while this preserves every character and
+ * only folds case, so distinct nicks can never merge.
+ */
+export function foldNickCase(nick: string): string {
+  let out = '';
+  for (let i = 0; i < nick.length; i++) {
+    const c = nick.charCodeAt(i);
+    if (c >= 65 && c <= 90) out += String.fromCharCode(c + 32); // A-Z → a-z
+    else if (c === 91) out += '{'; // [ → {
+    else if (c === 93) out += '}'; // ] → }
+    else if (c === 92) out += '|'; // \ → |
+    else if (c === 94) out += '~'; // ^ → ~
+    else out += nick[i];
+  }
+  return out;
+}
+
+/** Case-insensitive nick equality under the network casemapping. */
+export function equalNicks(a: string, b: string): boolean {
+  return a.length === b.length && foldNickCase(a) === foldNickCase(b);
+}
+
 export function normalizeChannelName(name: string): string {
   if (!name || name === '_server') return name;
-  // Channels are case-insensitive on IRC (`#Zod` === `#zod`) and we
-  // lower-case them so the buffer key (`<net>:<chan>`) collides them
-  // for storage + lookup. PM/query buffers are bare nicks — they must
-  // NOT be `#`-prefixed here, otherwise the engine's synthetic
-  // self-message (`event.channel = target`) lands under
-  // `<net>:#faggy_6094` while MessageList looks up `<net>:faggy_6094`
-  // (where the buffer was registered when switchToBuffer opened the
-  // conversation), so the message disappears from view. Conditionally
-  // prepend `#` only for the names that already look like channels.
-  if (name[0] !== '#') return name;
+  // Buffer KEY function (not display): every keyed map (messages,
+  // prefs, lastSeen, unseen, input drafts) collides case variants of
+  // the same target here, so `/msg nickserv` and a reply from
+  // `NickServ` land in one conversation instead of two. Channels
+  // (`#Zod` === `#zod`) are lower-cased; bare nicks are folded per
+  // RFC 1459 (see foldNickCase) — but never `#`-prefixed, otherwise
+  // the engine's synthetic self-message (`event.channel = target`)
+  // lands under `<net>:#faggy_6094` while MessageList looks up
+  // `<net>:faggy_6094` and the message disappears from view.
+  // Buffer OBJECTS keep their display case (`buf.name`); call sites
+  // that match objects must compare folded (see findBufferByName in
+  // the store), and adopt the server-reported case on arrival.
+  if (name[0] !== '#') return foldNickCase(name);
   return name.toLowerCase();
 }
 

@@ -77,12 +77,33 @@ ircd_oper_sslonly: true
 # password from vault_ircd_dashboard_password via IRCFIBER_IRCD_OPER_PASSWORD.
 ircd_dashboard_oper_name: "dashboard"
 
-# Host cloaking
-ircd_cloak_prefix: "ircfiber"
-ircd_cloak_suffix: "ip"
+# Host cloaking. Must match linked servers exactly (method + key +
+# prefix + suffix) or spanningtree CAPAB refuses the link. Aligned with
+# irc.netcrave.chat: no prefix, "hidden" suffix. Empty prefix omits the
+# attribute (see modules.conf.j2). Changing any of these re-cloaks users.
+ircd_cloak_prefix: ""
+ircd_cloak_suffix: "hidden"
 
 # Channels every user auto-joins on connect (conn_join). Empty = none.
 ircd_default_channels: []
+
+# Tor onion ingress (Paige's pattern from irc.netcrave.chat) — ircd half
+# only. The Tor daemon + HAProxy half is NOT deployed yet; when enabled,
+# a PROXY-protocol proxy must feed the listener or nothing will match the
+# tor class. OFF by default. Link-neutral: haproxy is VF_VENDOR + modeless.
+ircd_tor_enabled: false
+# Unpublished container-side port for the haproxy listener. Do NOT add to
+# tasks/main.yml ports: haproxy listeners must never be public (PROXY
+# headers are unauthenticated, so a public listener allows origin spoofing).
+ircd_tor_port: 8080
+# Bind address inside the container ("" = all interfaces, container-scoped).
+ircd_tor_listen_address: ""
+# Per-circuit ULA range assigned by the proxy helper. Ours is distinct from
+# netcrave's fc00:dead:beef:4dad::/64 ("tor" in hex). Uncloaked by design so
+# hostmasks read *!*@tor/<circuit> and +b *!*@tor/* works per-circuit.
+ircd_tor_ula_range: "fd00:746f:72::/64"
+# Optional corralling channel for tor arrivals (their side uses #tor).
+ircd_tor_autojoin: ""
 #  - "#ircfiber"
 #  - "#welcome"
 

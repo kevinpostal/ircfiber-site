@@ -158,6 +158,9 @@
 
 <maxlist chan="*" limit="100">
 
+# allowmismatch: tolerate VF_OPTCOMMON module + extban drift against
+# irc.netcrave.chat (they set it too). Required modules and the mode
+# lists are still strictly compared — see modules.conf LINK COMPAT.
 <options prefixquit="Quit: "
          prefixpart="&quot;"
          suffixpart="&quot;"
@@ -169,7 +172,8 @@
          serverpingfreq="1m"
          defaultmodes="not"
          xlinequit="%fulltype%: %reason%"
-         modesinlist="opers">
+         modesinlist="opers"
+         allowmismatch="yes">
 
 <performance netbuffersize="10240"
              somaxconn="128"

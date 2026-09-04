@@ -1,6 +1,7 @@
 <script lang="ts">
   /**
-   * Ircd page — InspIRCd management: live overview, channels, bans, config.
+   * Ircd page — InspIRCd management: live overview, channels, bans, config,
+   * logs (last hour of ircd + services logs via the SigNoz proxy).
    * Backed by /api/admin/ircd/* (gateway opens a short-lived oper session
    * to ircd:6667). Status polls; channels/bans/config refresh on demand.
    */
@@ -10,6 +11,7 @@
   import KpiCard from '../components/KpiCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { api, ApiError } from '../lib/api-client';
+  import { queryRange } from '../../lib/signoz';
   import { highlightIrcdConf } from '../lib/ircd-highlight';
   import { toastSuccess, toastError } from '../stores/ui';
   import { startPolling } from '../stores/polling';
@@ -31,7 +33,7 @@
     setAt: number; durationSecs: number; setter: string; reason: string;
   }
 
-  type Tab = 'overview' | 'channels' | 'bans' | 'config';
+  type Tab = 'overview' | 'channels' | 'bans' | 'config' | 'logs';
   let tab = $state<Tab>('overview');
 
   let status = $state<StatusResponse | null>(null);
@@ -50,6 +52,16 @@
   let bansLoading = $state(false);
   let newBan = $state({ type: 'gline', mask: '', duration: '1d', reason: '' });
 
+  interface LogEntry { ts: number; service: string; severity: string; body: string; }
+
+  // service.name is the Docker container name (fluent-bit promotes
+  // container_name). Both ircd + services share this tab.
+  const ircdServices = ['ircfiber-ircd', 'ircfiber-services'];
+  let logRows = $state<LogEntry[]>([]);
+  let logsError = $state<string | null>(null);
+  let logsLoading = $state(false);
+  let logFilter = $state('');
+
   const confFiles = ['inspircd.conf', 'modules.conf', 'opers.conf', 'motd'] as const;
   let confFile = $state<(typeof confFiles)[number]>('inspircd.conf');
   let confContent = $state<string | null>(null);
@@ -63,6 +75,7 @@
     stop = startPolling(
       async () => {
         await fetchStatus(false);
+        if (tab === 'logs') await fetchLogs(false);
         lastFetchedAt = Date.now();
       },
       { intervalMs: 15_000 },
@@ -170,6 +183,72 @@
     }
   }
 
+  function parseLogRow(r: unknown): LogEntry {
+    const o = (r ?? {}) as Record<string, unknown>;
+    let ms: number;
+    if (typeof o.timestamp_nano === 'number') ms = o.timestamp_nano / 1e6;
+    else if (typeof o.timestamp === 'number') ms = o.timestamp > 1e14 ? o.timestamp / 1e6 : o.timestamp;
+    else ms = Date.now();
+    return {
+      ts: ms,
+      service: typeof o.service_name === 'string' ? o.service_name : '',
+      severity: typeof o.severity_text === 'string' ? o.severity_text : 'INFO',
+      body: typeof o.body === 'string' ? o.body : '',
+    };
+  }
+
+  // Last hour of ircd + services logs via the gateway SigNoz proxy
+  // (same /api/admin/logs/query_range envelope the Logs page uses).
+  async function fetchLogs(spinner: boolean = logRows.length === 0) {
+    if (spinner) logsLoading = true;
+    logsError = null;
+    try {
+      const now = Date.now();
+      const clauses = [`service.name IN (${ircdServices.map((s) => `'${s}'`).join(',')})`];
+      const q = logFilter.trim();
+      if (q) clauses.push(`body CONTAINS '${q.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`);
+      const res = await queryRange({
+        start: now - 60 * 60 * 1000,
+        end: now,
+        requestType: 'raw',
+        schemaVersion: 'v1',
+        compositeQuery: {
+          queryType: 'builder',
+          panelType: 'list',
+          queries: [
+            {
+              type: 'builder_query',
+              spec: {
+                name: 'A',
+                signal: 'logs',
+                stepInterval: null,
+                filter: { expression: clauses.join(' AND ') },
+              },
+            },
+          ],
+        },
+      });
+      const data = (res?.data ?? {}) as Record<string, { list?: unknown[] }>;
+      const list = data['A']?.list;
+      logRows = (Array.isArray(list) ? list : []).slice(-200).map(parseLogRow);
+    } catch (e) {
+      logsError = errMsg(e);
+    } finally {
+      logsLoading = false;
+    }
+  }
+
+  function fmtTime(ms: number): string {
+    return new Date(ms).toLocaleTimeString('en-GB', { hour12: false });
+  }
+
+  function sevClass(sev: string): string {
+    const s = sev.toUpperCase();
+    if (s.includes('ERROR') || s.includes('FATAL')) return 'text-danger';
+    if (s.includes('WARN')) return 'text-amber-500';
+    return 'text-muted';
+  }
+
   async function fetchConfig() {
     confLoading = true; confError = null; confContent = null;
     try {
@@ -203,6 +282,7 @@
     { id: 'channels', label: 'Channels' },
     { id: 'bans', label: 'Bans' },
     { id: 'config', label: 'Config' },
+    { id: 'logs', label: 'Logs' },
   ];
 </script>
 
@@ -243,6 +323,7 @@
         onclick={() => {
           tab = t.id;
           if (t.id === 'config' && confContent === null && !confLoading) void fetchConfig();
+          if (t.id === 'logs' && logRows.length === 0 && !logsLoading) void fetchLogs();
         }}
         class="px-4 py-2 text-sm font-medium transition {tab === t.id
           ? 'border-b-2 border-primary text-heading'
@@ -492,6 +573,51 @@
         <pre class="max-h-[60vh] overflow-auto whitespace-pre font-mono text-xs leading-relaxed text-text">{@html highlightIrcdConf(confContent)}</pre>
       {:else}
         <p class="text-sm text-muted">Loading…</p>
+      {/if}
+    </Card>
+  {:else if tab === 'logs'}
+    <Card>
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <form
+          class="flex min-w-52 flex-1 gap-2"
+          onsubmit={(e) => { e.preventDefault(); void fetchLogs(true); }}
+        >
+          <input
+            bind:value={logFilter}
+            placeholder="Filter, e.g. netcrave or CAPAB"
+            class="min-w-0 flex-1 rounded-md border border-border bg-surface-2 px-2 py-1.5 font-mono text-sm"
+            aria-label="Log text filter"
+          />
+          <button type="submit" class="rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs hover:border-primary/40">
+            Search
+          </button>
+        </form>
+        <button
+          type="button"
+          onclick={() => void fetchLogs(true)}
+          class="rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs hover:border-primary/40"
+        >
+          {logsLoading ? 'Loading…' : 'Refresh'}
+        </button>
+        <span class="text-xs text-muted">Last hour · ircfiber-ircd + ircfiber-services · via SigNoz</span>
+      </div>
+      {#if logsError}
+        <p class="text-sm text-danger">{logsError}</p>
+      {:else if logsLoading && logRows.length === 0}
+        <p class="text-sm text-muted">Loading…</p>
+      {:else if logRows.length === 0}
+        <EmptyState title="No ircd logs" description="Nothing from ircfiber-ircd or ircfiber-services in the last hour. If SigNoz is unreachable this shows the proxy error instead." />
+      {:else}
+        <div class="max-h-[60vh] space-y-0.5 overflow-auto font-mono text-xs leading-relaxed">
+          {#each logRows as r}
+            <div class="flex gap-2 border-b border-border/30 py-0.5 last:border-0">
+              <span class="shrink-0 text-muted" title={new Date(r.ts).toLocaleString()}>{fmtTime(r.ts)}</span>
+              <span class="shrink-0 text-primary">{r.service.replace('ircfiber-', '')}</span>
+              <span class="shrink-0 {sevClass(r.severity)}">{r.severity}</span>
+              <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-text">{r.body}</span>
+            </div>
+          {/each}
+        </div>
       {/if}
     </Card>
   {/if}

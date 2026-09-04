@@ -2,7 +2,7 @@ import type { Network } from '../types';
 import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte.ts';
 import { reconnectNetwork, disconnectNetwork, clearBacklog } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
-import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache, requestChannelList } from '../stores/ircStore.svelte';
+import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache, requestChannelList, findBufferByName } from '../stores/ircStore.svelte';
 import { normalizeChannelName, generateLabel, stripPrefix } from './utils';
 import { updateRoute } from './routing';
 
@@ -309,7 +309,8 @@ registerSlash(['delete', 'wd', 'rm'], (args, networkId, target, net) => {
   if (!net) return;
   const bufName = args[0] ? normalizeChannelName(args[0]) : target;
   if (!bufName || bufName === '_server') throw new Error('Cannot delete server buffer');
-  const buf = net.buffers.find(b => b.name === bufName);
+  // Folded lookup: `/delete nickserv` must find the `NickServ` buffer.
+  const buf = net.buffers.find(b => b.name === bufName) ?? findBufferByName(net, bufName);
   if (!buf) throw new Error('No such buffer: ' + bufName);
   if (buf.isJoined !== false) {
     sendRaw(networkId, 'PART ' + bufName);

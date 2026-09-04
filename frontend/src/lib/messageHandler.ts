@@ -2,7 +2,8 @@ import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
-         checkHighlight, isMessageUnseen, applySetname, markRedacted } from '../stores/ircStore.svelte';
+         checkHighlight, isMessageUnseen, applySetname, markRedacted,
+         findBufferByName, isSelfMessage, renameQueryBuffer } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs, getLastSeen } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
 import { notify } from './notifications';
@@ -169,7 +170,8 @@ export function processIrcEvent(
 
   // IRCCloud-style: track maxEid for stream resume
   setMaxEid(msg.eid ?? 0);
-  const channel = normalizeChannelName((data.channel || data.ch || '_server') as string);
+  const rawChannel = ((data.channel || data.ch || '_server') as string);
+  const channel = normalizeChannelName(rawChannel);
 
   // Look up by network UUID (nid) — NOT display name — so events from one
   // network never leak channels into another network's sidebar. The compact
@@ -185,6 +187,37 @@ export function processIrcEvent(
   // return (ignore list, TAGMSG, temp_unavailable, etc.) still mark the
   // network as seen.
   markNetworkSeen(networkId);
+
+  // Query/DM case convergence (`/msg nickserv` vs a reply from
+  // `NickServ`): a locally-typed buffer predates the first server reply.
+  // Incoming (non-self) traffic carries the server-authoritative nick
+  // case, so adopt it for the buffer OBJECT's display name. Message and
+  // prefs keys are already folded, so nothing migrates. Self echoes
+  // never rename — they carry our typed target, not the server's case.
+  if (rawChannel !== '_server' && !rawChannel.startsWith('#')
+      && (cmd === 'PRIVMSG' || cmd === 'NOTICE') && !isSelfMessage(msg, net)) {
+    const existing = findBufferByName(net, rawChannel);
+    if (existing && existing.name !== rawChannel) {
+      existing.name = rawChannel;
+      const act = ircState.activeBuffer;
+      if (act.networkId === networkId && act.bufferName
+          && normalizeChannelName(act.bufferName) === channel) {
+        act.bufferName = rawChannel;
+      }
+    }
+  }
+
+  // IRCCloud rename model: a DM counterparty's NICK renames the query
+  // buffer in place (history + state preserved) instead of opening a
+  // second conversation. Idempotent across the base event and the
+  // per-channel duplicates: after the first rename nothing matches the
+  // old nick anymore. Self changes are ignored (you_nickchange owns
+  // self; counterparties are unchanged).
+  if (cmd === 'NICK' && msg.nick) {
+    const nickParams = msg.params ?? [];
+    const newNick = (nickParams.length > 0 ? nickParams[nickParams.length - 1] : msg.text ?? '').trim();
+    if (newNick) renameQueryBuffer(networkId, msg.nick, newNick);
+  }
 
   // Ignore check
   if (msg.nick && isIgnored(msg.nick)) return {};
@@ -411,7 +444,7 @@ export function processIrcEvent(
 
   // ── lastSpoke tracking ──
   if (cmd === 'PRIVMSG' && msg.nick) {
-    const bufObj = net.buffers.find(b => b.name === channel);
+    const bufObj = findBufferByName(net, channel);
     if (bufObj?.users) {
       const u = bufObj.users.find(x => stripPrefix(x.nick) === msg.nick);
       if (u) {
@@ -565,9 +598,11 @@ export function processIrcEvent(
       appendFn(networkId, channel, msg, false);
     }
 
-    const isActiveBuffer = ircState.activeBuffer.networkId === networkId && ircState.activeBuffer.bufferName === channel;
+    const activeName = ircState.activeBuffer.bufferName;
+    const isActiveBuffer = ircState.activeBuffer.networkId === networkId
+      && !!activeName && normalizeChannelName(activeName) === channel;
     const documentHidden = typeof document !== 'undefined' && document.hidden;
-    const buf = net.buffers.find(b => b.name === channel);
+    const buf = findBufferByName(net, channel);
     // Ensure highlight is computed before notify check (batch sets it async, but notify is sync)
     if (!msg.highlight && (msg.command === 'PRIVMSG' || msg.command === 'NOTICE' || msg.type === 'action') && msg.nick) {
       if (checkHighlight(msg, net)) msg.highlight = true;

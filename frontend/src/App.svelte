@@ -641,7 +641,10 @@ let showNetworkForm: boolean = $state(false);
       let closedSomething = false;
       if (ircState.overlay.type) { ircState.overlay.type = null; ircState.overlay.data = null; closedSomething = true; }
       if (ircState.contextMenu.visible) { ircState.contextMenu.visible = false; closedSomething = true; }
-      if (showNetworkForm) { showNetworkForm = false; closedSomething = true; }
+      // Network form is ×-only (dismissable={false} below): Esc must not
+      // wipe unsaved server details, but it is still swallowed so it
+      // doesn't fall through to mark-read while the modal is open.
+      if (showNetworkForm) { closedSomething = true; }
       if (showJoinModal) { showJoinModal = false; closedSomething = true; }
       if (showBouncerDialog) { showBouncerDialog = false; bouncerNetworkId = null; closedSomething = true; }
       if (uploadState.dialog) { cancelDialog(); closedSomething = true; }
@@ -1625,7 +1628,8 @@ let showNetworkForm: boolean = $state(false);
   <ChannelSwitcher onClose={() => channelSwitcherOpen = false} scope="all" />
 {/if}
 
-<Dialog open={showNetworkForm} onClose={() => showNetworkForm = false} label={networkFormMode === 'add' ? 'Join a new network' : 'Edit network'} centered class="overlay-panel network-form-panel">
+<!-- NetworkForm is ×-only: backdrop/Esc never dismiss (unsaved input) -->
+<Dialog open={showNetworkForm} onClose={() => showNetworkForm = false} label={networkFormMode === 'add' ? 'Join a new network' : 'Edit network'} centered dismissable={false} class="overlay-panel network-form-panel">
   <NetworkForm mode={networkFormMode} networkId={editNetworkId} onClose={() => showNetworkForm = false} />
 </Dialog>
 

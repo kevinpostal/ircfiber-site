@@ -13,6 +13,8 @@ import {
   formatNumericText,
   normaliseIdentifier,
   normalizeChannelName,
+  foldNickCase,
+  equalNicks,
   nickColorIndex,
   parseChannelList,
   getDisplayName,
@@ -501,14 +503,14 @@ describe('normalizeChannelName', () => {
     expect(normalizeChannelName('#welcome')).toBe('#welcome');
   });
 
-  it('passes nick-based query buffers through unchanged', () => {
-    // These are bare nicks used as ircState buffer names. The PM-active
-    // buffer `"faggy_6094"` MUST stay that way so the engine's
-    // synthetic self-message stored under the same key actually shows
-    // up in MessageList (which builds the lookup key from the bare
-    // activeBuffer.bufferName).
+  it('folds nick-based query buffers for keys (display case lives on buf.name)', () => {
+    // normalizeChannelName is the buffer KEY function: `/msg nickserv`
+    // and a reply from `NickServ` must collide under one key instead of
+    // forking two conversations. Buffer OBJECTS keep display case and
+    // are matched with findBufferByName; only keys fold here.
     expect(normalizeChannelName('faggy_6094')).toBe('faggy_6094');
-    expect(normalizeChannelName('Zod')).toBe('Zod');
+    expect(normalizeChannelName('Zod')).toBe('zod');
+    expect(normalizeChannelName('NickServ')).toBe('nickserv');
     expect(normalizeChannelName('alice')).toBe('alice');
   });
 
@@ -528,5 +530,38 @@ describe('normalizeChannelName', () => {
     expect(n('alice')).not.toMatch(/^#/);
     expect(n('Zod')).not.toMatch(/^#/);
     expect(n('faggy_6094_')).not.toMatch(/^#/);
+  });
+});
+
+describe('foldNickCase (RFC 1459 nick identity)', () => {
+  it('lowercases ASCII', () => {
+    expect(foldNickCase('NickServ')).toBe('nickserv');
+    expect(foldNickCase('NICKSERV')).toBe('nickserv');
+    expect(foldNickCase('alice')).toBe('alice');
+  });
+
+  it('folds bracket/caret equivalences', () => {
+    expect(foldNickCase('[foo]')).toBe('{foo}');
+    expect(foldNickCase('{foo}')).toBe('{foo}');
+    expect(foldNickCase('a\\b')).toBe('a|b');
+    expect(foldNickCase('a^b')).toBe('a~b');
+  });
+
+  it('leaves ornaments in place (unlike normaliseIdentifier)', () => {
+    // `_bob_` and `bob` are different nicks — folding must not merge them.
+    expect(foldNickCase('_bob_')).toBe('_bob_');
+    expect(foldNickCase('bob')).toBe('bob');
+  });
+});
+
+describe('equalNicks', () => {
+  it('matches the reported nickserv/NickServ split', () => {
+    expect(equalNicks('nickserv', 'NickServ')).toBe(true);
+  });
+
+  it('is strict about length and characters', () => {
+    expect(equalNicks('bob', 'bob_')).toBe(false);
+    expect(equalNicks('bob', 'alic')).toBe(false);
+    expect(equalNicks('[foo', '{foo')).toBe(true);
   });
 });

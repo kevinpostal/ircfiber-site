@@ -6,6 +6,7 @@
  *  2. Rehash button confirms, then POSTs /api/admin/ircd/rehash.
  *  3. Cancelling the confirm skips the POST.
  *  4. Channels tab lists channels from GET /api/admin/ircd/channels.
+ *  5. Logs tab queries the SigNoz proxy filtered to the ircd services.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -14,6 +15,7 @@ import { page } from 'vitest/browser';
 import Ircd from './Ircd.svelte';
 import * as ui from '/src/admin/stores/ui';
 import { api, ApiError } from '/src/admin/lib/api-client';
+import { queryRange as signozQueryRange } from '/src/lib/signoz';
 
 const mockedGet = api.get as unknown as ReturnType<typeof vi.fn>;
 const mockedPost = api.post as unknown as ReturnType<typeof vi.fn>;
@@ -39,6 +41,36 @@ vi.mock('/src/admin/stores/ui', () => ({
   toastError: vi.fn(),
   pollingEnabled: { subscribe: vi.fn() },
 }));
+
+vi.mock('/src/lib/signoz', () => ({
+  queryRange: vi.fn(),
+  ApiError: class extends Error {
+    readonly status: number;
+    constructor(m: string, s: number) {
+      super(m);
+      this.status = s;
+    }
+  },
+}));
+
+const mockedQueryRange = signozQueryRange as unknown as ReturnType<typeof vi.fn>;
+
+const logsFixture = () => ({
+  status: 'success',
+  data: {
+    A: {
+      queryName: 'A',
+      list: [
+        {
+          timestamp_nano: 1756947655000000000,
+          service_name: 'ircfiber-ircd',
+          severity_text: 'INFO',
+          body: 'LINK: Connection to irc.netcrave.chat started',
+        },
+      ],
+    },
+  },
+});
 
 vi.mock('/src/admin/stores/polling', () => ({
   startPolling: vi.fn((fetcher: () => unknown) => {
@@ -119,5 +151,19 @@ describe('Ircd.svelte — IRCD management page', () => {
       expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/channels');
     });
     await expect.element(page.getByText('#ircfiber')).toBeInTheDocument();
+  });
+
+  it('Logs tab queries SigNoz filtered to the ircd services', async () => {
+    mockedQueryRange.mockResolvedValue(logsFixture());
+    render(Ircd);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/status'));
+    await page.getByRole('button', { name: 'Logs' }).first().click();
+    await vi.waitFor(() => expect(mockedQueryRange).toHaveBeenCalled());
+    const body = mockedQueryRange.mock.calls[0][0] as {
+      compositeQuery: { queries: { spec: { filter: { expression: string } } }[] };
+    };
+    const expr = body.compositeQuery.queries[0].spec.filter.expression;
+    expect(expr).toContain(`service.name IN ('ircfiber-ircd','ircfiber-services')`);
+    await expect.element(page.getByText(/Connection to irc\.netcrave\.chat started/)).toBeInTheDocument();
   });
 });

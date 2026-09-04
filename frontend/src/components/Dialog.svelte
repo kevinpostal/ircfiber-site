@@ -7,9 +7,16 @@
     centered?: boolean;
     class?: string;
     hideClose?: boolean;
+    /**
+     * When false, light-dismiss is disabled: backdrop clicks and Escape
+     * do nothing and only the × button (or an explicit onClose from the
+     * content, e.g. a successful save) closes the dialog. For forms
+     * where an accidental dismiss would lose user input (add network).
+     */
+    dismissable?: boolean;
     children?: import('svelte').Snippet;
   }
-  let { open, onClose, label, centered = false, class: klass = '', hideClose = false, children }: Props = $props();
+  let { open, onClose, label, centered = false, class: klass = '', hideClose = false, dismissable = true, children }: Props = $props();
   let dialogEl: HTMLDialogElement | null = $state(null);
   // Svelte 5: effect that both reads and writes the same signal loops
   // (effect_update_depth_exceeded). showModal/close mutate the native
@@ -28,19 +35,19 @@
     });
   });
   function handleClose(){ onClose(); }
-  function handleBackdrop(e: MouseEvent){ if(e.target===dialogEl) onClose(); }
+  function handleBackdrop(e: MouseEvent){ if(dismissable && e.target===dialogEl) onClose(); }
 </script>
 {#if open}
 <dialog
   bind:this={dialogEl}
-  closedby="any"
+  closedby={dismissable ? 'any' : 'none'}
   class={klass + (centered ? ' centered' : '')}
   role="dialog"
   aria-modal="true"
   aria-label={label}
   onclick={handleBackdrop}
   onclose={handleClose}
-  oncancel={(e)=>{ e.preventDefault(); handleClose(); }}
+  oncancel={(e)=>{ e.preventDefault(); if(dismissable) handleClose(); }}
 >
   {#if !hideClose}
     <form method="dialog"><button class="overlay-close" aria-label="Close" type="submit" onclick={onClose}>&times;</button></form>

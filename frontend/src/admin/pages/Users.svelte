@@ -137,7 +137,7 @@
 
 <PageHeader title="Users" subtitle="All registered accounts — Django admin style">
   {#snippet actions()}
-    <a href="/admin/users/new" class="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90">+ Add user</a>
+    <a href="#/users/new" class="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90">+ Add user</a>
   {/snippet}
 </PageHeader>
 

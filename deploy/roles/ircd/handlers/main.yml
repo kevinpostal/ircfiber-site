@@ -1,7 +1,9 @@
 ---
-# Config-only changes are applied with a rehash (SIGHUP) so connected
+# Config changes are applied with a rehash (SIGHUP) so connected
 # clients — including every engine-multiplexed platform user — stay up.
-# Module load/unload still needs `make deploy-restart COMP=ircd`.
+# InspIRCd 4 also loads newly added <module> tags on rehash (verified
+# 2026-09-04: "REHASH: The m_foo.so module was loaded"); only removing a
+# module or changing sslprofile/bind needs `make deploy-restart COMP=ircd`.
 - name: Rehash ircd
   ansible.builtin.command:
     argv:

@@ -3,10 +3,14 @@ module ircfiber.web.admin.ircd;
 ///
 /// IRCd (InspIRCd) management for the admin dashboard.
 ///
-/// Opens a short-lived IRC control connection to the InspIRCd daemon,
-/// authenticates as a dedicated dashboard oper, and runs read or oper
-/// commands: LUSERS / STATS / LIST / NAMES for the overview, GLINE /
-/// KLINE / ZLINE for ban management, REHASH to reload config.
+/// Keeps one IRC control connection to the InspIRCd daemon open,
+/// authenticated as a dedicated dashboard oper, and runs read or oper
+/// commands over it: LUSERS / STATS / LIST / NAMES for the overview,
+/// GLINE / KLINE / ZLINE for ban management, REHASH to reload config.
+/// The session is shared across requests (see "Shared oper session"):
+/// every connect/OPER/QUIT cycle is broadcast as CONNECT + OPER + QUIT
+/// server notices (plus an OperServ GLOBOPS) to every oper on every
+/// linked server, and the admin page polls every 15s.
 ///
 /// Wire behavior here mirrors the live InspIRCd 4.11 protocol:
 /// - OPER success -> MODE +o and numeric 381; bad password -> 491.
@@ -20,7 +24,7 @@ module ircfiber.web.admin.ircd;
 ///
 /// Blocking sockets with select() timeouts are used inline in the
 /// handler, the same pattern as _probeSocks in web.admin.api (admin
-/// endpoints are low-traffic; sessions last a few seconds at most).
+/// endpoints are low-traffic; a transaction lasts a few seconds at most).
 /// Secrets (oper password) never appear in logs or error strings.
 ///
 
@@ -235,7 +239,8 @@ class IrcdError : Exception {
     this(string msg, int status = 502) { super(msg); httpStatus = status; }
 }
 
-/// One short-lived authed IRC session. Construct, run commands, close.
+/// One authed IRC session. Construct, run commands; kept open and
+/// reused by the shared-session code below.
 final class IrcdClient {
     private TcpSocket _sock;
     private string _nick;
@@ -381,6 +386,36 @@ final class IrcdClient {
         return out_;
     }
 
+    /// Discard input queued while the session was idle (server notices,
+    /// PINGs — answered inline) so it never leaks into the next transact.
+    /// Returns false when the peer has closed the socket.
+    bool drainPending() {
+        import core.time : msecs;
+        while (true) {
+            auto rset = new SocketSet(1);
+            rset.add(_sock);
+            int sel;
+            try { sel = Socket.select(rset, null, null, msecs(0)); }
+            catch (Exception) { return false; }
+            if (sel <= 0) break;
+            ubyte[8192] chunk;
+            auto n = _sock.receive(chunk);
+            if (n <= 0) return false;
+            _readBuf ~= cast(string) chunk[0 .. cast(size_t) n].idup;
+        }
+        while (true) {
+            auto nl = _readBuf.indexOf('\n');
+            if (nl < 0) break;
+            auto line = _readBuf[0 .. nl].strip();
+            _readBuf = _readBuf[nl + 1 .. $];
+            if (line.startsWith("PING")) {
+                auto sp = line.indexOf(' ');
+                sendLine("PONG" ~ (sp >= 0 ? line[sp .. $] : ""));
+            }
+        }
+        return true;
+    }
+
     /// Send a command; collect lines until a numeric in `stopNumerics`
     /// arrives (prefix match on the command field) or the budget lapses.
     string[] transact(string cmd, string[] stopNumerics, long budgetMs = 8000) {
@@ -431,28 +466,89 @@ private Json ircdNotices(string[] lines) {
     return a;
 }
 
-/// Open an oper session, run `work`, always close. Maps IrcdError to JSON.
+// ---------------------------------------------------------------------------
+// Shared oper session
+// ---------------------------------------------------------------------------
+//
+// Handlers run on the HTTP thread and never yield while talking to the
+// socket (std.socket is blocking, and every handler finishes its IRC I/O
+// before writing the response), so one module-level session needs no
+// lock. A 30s timer on the same thread answers idle PINGs so the ircd
+// never ping-times-out the session while nobody is on the admin page,
+// and detects a closed socket so the next request reconnects.
+
+private IrcdClient _session;
+private bool _keepaliveStarted;
+
+private void dropSession() nothrow {
+    if (_session is null) return;
+    try _session.close(); catch (Exception) {}
+    _session = null;
+}
+
+private void ircdKeepalive() nothrow {
+    if (_session is null) return;
+    bool ok;
+    try ok = _session.drainPending(); catch (Exception) ok = false;
+    if (!ok) {
+        logInfo("IRCd control session closed by peer; will reconnect on demand");
+        dropSession();
+    }
+}
+
+/// Reuse the live session or open a new one. `reused` tells the caller
+/// whether a failure may be a stale socket worth one reconnect.
+private IrcdClient acquireSession(IrcdSettings settings, out bool reused) {
+    if (_session !is null) {
+        bool ok;
+        try ok = _session.drainPending(); catch (Exception) ok = false;
+        if (ok) { reused = true; return _session; }
+        dropSession();
+    }
+    reused = false;
+    _session = new IrcdClient(settings);
+    if (!_keepaliveStarted) {
+        import vibe.core.core : setTimer;
+        import core.time : seconds;
+        setTimer(30.seconds, () @trusted nothrow { ircdKeepalive(); }, true);
+        _keepaliveStarted = true;
+    }
+    return _session;
+}
+
+/// Run `work` on the shared oper session. A failure on a reused session
+/// drops it and retries once on a fresh connection (the peer may have
+/// closed it between keepalive ticks); any failure on a fresh session
+/// drops it so the next request starts clean. Maps IrcdError to JSON.
 private void withIrcd(HTTPServerRequest req, HTTPServerResponse res, void delegate(IrcdClient) work) {
     auto settings = loadIrcdSettings();
-    IrcdClient client;
-    try {
-        client = new IrcdClient(settings);
-    } catch (IrcdError e) {
-        jsonError(res, e.httpStatus, e.msg);
+    foreach (attempt; 0 .. 2) {
+        IrcdClient client;
+        bool reused;
+        try {
+            client = acquireSession(settings, reused);
+        } catch (IrcdError e) {
+            jsonError(res, e.httpStatus, e.msg);
+            return;
+        } catch (Exception e) {
+            logWarn("IRCd connect failed: %s", e.msg);
+            jsonError(res, 502, "IRCd connection failed.");
+            return;
+        }
+        try {
+            work(client);
+            return;
+        } catch (IrcdError e) {
+            dropSession();
+            if (reused && attempt == 0) continue;
+            jsonError(res, e.httpStatus, e.msg);
+        } catch (Exception e) {
+            dropSession();
+            if (reused && attempt == 0) continue;
+            logWarn("IRCd operation failed: %s", e.msg);
+            jsonError(res, 502, "IRCd operation failed.");
+        }
         return;
-    } catch (Exception e) {
-        logWarn("IRCd connect failed: %s", e.msg);
-        jsonError(res, 502, "IRCd connection failed.");
-        return;
-    }
-    scope (exit) client.close();
-    try {
-        work(client);
-    } catch (IrcdError e) {
-        jsonError(res, e.httpStatus, e.msg);
-    } catch (Exception e) {
-        logWarn("IRCd operation failed: %s", e.msg);
-        jsonError(res, 502, "IRCd operation failed.");
     }
 }
 
