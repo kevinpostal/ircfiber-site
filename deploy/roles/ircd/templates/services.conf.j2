@@ -61,7 +61,10 @@ networkinfo
 
 options
 {
-	casemap = "ascii"
+	/* Must match the ircd codepage (modules.conf ships rfc1459 to match
+	 * irc.netcrave.chat). ascii here + rfc1459 there = CAPAB "casemapping
+	 * differs" and services flap forever. Anope ships both casemaps. */
+	casemap = "rfc1459"
 	seed = {{ (vault_ircd_cloak_key | hash('sha256'))[:7] | int(base=16) }}
 	strictpasswords = yes
 	badpasslimit = 5
