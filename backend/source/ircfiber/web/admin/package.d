@@ -19,7 +19,7 @@ import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiFiberConfig, apiFiberConfigSet,
     apiMullvadStatus, apiMullvadRestart, apiMullvadTest, apiMullvadTestAll,
     apiMullvadServerEgressSet, apiMullvadServerEgressClear, apiNetworkEgressSet,
-    apiUsersList, apiUsersBulkDelete, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete,
+    apiUsersList, apiUsersBulkDelete, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete, apiRolesList,
     apiResetPassword,
     apiSessions, apiSessionsClear, apiSessionsClearUser, apiSessionsClearOne,
     apiUploadsList, apiUploadDelete;
@@ -120,6 +120,7 @@ final class AdminController {
         router.post("/api/admin/users/:id", &adminWrap!apiUserUpdateRoute);
         router.post("/api/admin/users/:id/delete", &adminWrap!apiUserDeleteRoute);
         router.post("/api/admin/users/:id/reset-password", &adminWrap!apiResetPasswordRoute);
+        router.get("/api/admin/roles", &adminWrap!apiRolesListRoute);
 
         router.get("/api/admin/sessions", &adminWrap!apiSessionsRoute);
         router.post("/api/admin/sessions/clear", &adminWrap!apiSessionsClearRoute);
@@ -276,6 +277,7 @@ private:
         apiUserDetail(req, res, redis);
     }
     void apiUserUpdateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUserUpdate(req, res); }
+    void apiRolesListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiRolesList(req, res); }
     void apiUserDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiUserDelete(req, res, redis, serverRegistry);
     }

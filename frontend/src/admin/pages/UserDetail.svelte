@@ -8,6 +8,8 @@
   import Card from '../components/Card.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import EmptyState from '../components/EmptyState.svelte';
+  import FilterHorizontal from '../components/FilterHorizontal.svelte';
+  import { adminUser } from '../stores/auth';
   import { api, ApiError } from '../lib/api-client';
   import { toastSuccess, toastError } from '../stores/ui';
   import { navigate } from '../lib/router';
@@ -51,6 +53,14 @@
     uploads: UploadData[];
   }
 
+  /** GET /api/admin/roles row — built-ins first, then custom roles seen in the DB. */
+  interface RoleInfo {
+    name: string;
+    description: string;
+    builtin: boolean;
+    users: number;
+  }
+
   interface Props {
     userId?: string;
   }
@@ -62,7 +72,21 @@
 
   // Edit form state
   let editEmail = $state('');
-  let editRoles = $state('');
+  let editRoles = $state<string[]>([]);
+  let roleCatalog = $state<RoleInfo[]>([]);
+  const roleOptions = $derived.by(() => {
+    // Ensure every role the user already has is offered even if the
+    // catalogue request failed or the label is unknown to it.
+    const known = new Set(roleCatalog.map((r) => r.name));
+    const opts = roleCatalog.map((r) => ({ value: r.name, label: r.name, hint: r.description }));
+    for (const r of user?.roles ?? []) if (!known.has(r)) opts.push({ value: r, label: r, hint: 'Custom role' });
+    return opts;
+  });
+  // Django won't let you silently lock yourself out; keep `admin` on your
+  // own account (the backend additionally refuses to strip the last admin).
+  const isSelf = $derived(!!user && !!$adminUser && user.id === $adminUser.id);
+  const lockedRoles = $derived(isSelf ? ['admin'] : []);
+  const rolesDirty = $derived(!!user && (user.roles.length !== editRoles.length || user.roles.some((r, i) => editRoles[i] !== r)));
   let saving = $state(false);
   let saveMsg = $state<string | null>(null);
 
@@ -71,7 +95,7 @@
   let resetting = $state(false);
   let resetMsg = $state<string | null>(null);
 
-  onMount(() => loadUser());
+  onMount(() => { loadUser(); loadRoles(); });
 
   async function loadUser() {
     if (!userId) return;
@@ -80,10 +104,19 @@
       const data = await api.get<UserDetailData>(`/api/admin/users/${userId}`);
       user = data;
       editEmail = data.email;
-      editRoles = data.roles.join(', ');
+      editRoles = [...data.roles];
     } catch (e) {
       error = e instanceof ApiError ? e.message : (e as Error).message;
     } finally { loading = false; }
+  }
+
+  async function loadRoles() {
+    try {
+      const data = await api.get<{ roles: RoleInfo[] }>('/api/admin/roles');
+      roleCatalog = data.roles;
+    } catch {
+      roleCatalog = [];
+    }
   }
 
   async function saveUser(e: Event) {
@@ -93,7 +126,7 @@
     try {
       await api.post(`/api/admin/users/${user.id}`, {
         email: editEmail,
-        roles: editRoles.split(',').map((r) => r.trim()).filter(Boolean),
+        roles: editRoles,
       });
       saveMsg = 'User updated successfully';
       toastSuccess('User saved');
@@ -214,14 +247,25 @@
           class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
       </div>
       <div>
-        <label for="editRoles" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Roles (comma-separated)</label>
-        <input id="editRoles" type="text" bind:value={editRoles}
-          class="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm text-text focus:border-primary focus:outline-none" />
-        <div class="mt-1 flex flex-wrap gap-1">
-          {#each user.roles as role}
-            <StatusBadge label={role} tone={role === 'admin' ? 'primary' : 'muted'} size="sm" />
-          {/each}
-        </div>
+        <span class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Roles</span>
+        <FilterHorizontal
+          id="editRoles"
+          label="roles"
+          options={roleOptions}
+          bind:selected={editRoles}
+          locked={lockedRoles}
+          disabled={saving}
+          helpText={isSelf ? 'You cannot remove admin from your own account.' : 'Hold Ctrl/⌘ to pick several, or double-click to move one. An account with no roles is saved as "user".'}
+        />
+        {#if rolesDirty}
+          <div class="mt-2 flex flex-wrap items-center gap-1 text-xs text-muted">
+            <span>Saved:</span>
+            {#each user.roles as role}
+              <StatusBadge label={role} tone={role === 'admin' ? 'primary' : 'muted'} size="sm" />
+            {/each}
+            <span class="ml-1">→ unsaved changes</span>
+          </div>
+        {/if}
       </div>
       <button type="submit" disabled={saving}
         class="rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-fg hover:bg-primary/90 disabled:opacity-50">

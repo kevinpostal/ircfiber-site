@@ -873,7 +873,63 @@ package void apiUserDetail(HTTPServerRequest req, HTTPServerResponse res,
     jsonOk(res, data);
 }
 
+/// Built-in roles the backend gives meaning to. `admin` is the only role
+/// checked by `ircfiber.auth.isAdmin`; `user` is the default every account
+/// carries. Anything else found in the DB is a custom label and is listed
+/// (with its user count) so the admin UI can offer it without free typing.
+private immutable string[2][] BUILTIN_ROLES = [
+    ["admin", "Full access to the admin panel, impersonation and every /api/admin route."],
+    ["user",  "Default role. Can log in, add networks and chat."],
+];
+
+/// Lower-cases, trims, drops empties and duplicates; keeps first-seen order.
+private string[] normalizeRoles(string[] raw) {
+    string[] outp;
+    foreach (r; raw) {
+        auto c = r.strip().toLower();
+        if (c.length == 0 || outp.canFind(c)) continue;
+        outp ~= c;
+    }
+    return outp;
+}
+
+/// GET /api/admin/roles — role catalogue for the user editor.
+/// `{roles:[{name, description, builtin, users}]}`, built-ins first.
+package void apiRolesList(HTTPServerRequest req, HTTPServerResponse res) {
+    auto repo = new UserRepository();
+    long[string] counts;
+    foreach (u; repo.findAll(10_000, 0)) {
+        foreach (r; normalizeRoles(u.roles)) counts[r] = counts.get(r, 0) + 1;
+    }
+    Json[] arr;
+    foreach (b; BUILTIN_ROLES) {
+        Json j = Json.emptyObject;
+        j["name"] = Json(b[0]);
+        j["description"] = Json(b[1]);
+        j["builtin"] = Json(true);
+        j["users"] = Json(counts.get(b[0], 0));
+        arr ~= j;
+        counts.remove(b[0]);
+    }
+    import std.algorithm : sort;
+    auto extra = counts.keys;
+    extra.sort();
+    foreach (name; extra) {
+        Json j = Json.emptyObject;
+        j["name"] = Json(name);
+        j["description"] = Json("Custom role (not checked by the backend).");
+        j["builtin"] = Json(false);
+        j["users"] = Json(counts[name]);
+        arr ~= j;
+    }
+    Json data = Json.emptyObject;
+    data["roles"] = Json(arr);
+    jsonOk(res, data);
+}
+
 /// POST /api/admin/users/:id — update email + roles.
+/// Roles are normalised (lower-case, deduped, never empty) and the last
+/// remaining admin cannot lose `admin` — same lock-out guard as bulk delete.
 package void apiUserUpdate(HTTPServerRequest req, HTTPServerResponse res) {
     import std.uuid : parseUUID;
     auto id = parseUUID(req.params["id"]);
@@ -883,16 +939,29 @@ package void apiUserUpdate(HTTPServerRequest req, HTTPServerResponse res) {
 
     auto body = readJsonBody(req);
     try {
-        user.email = body["email"].get!string.strip();
-        user.roles = [];
+        string[] roles;
         if (auto rolesArrPtr = "roles" in body) {
             auto rolesArr = *rolesArrPtr;
             if (rolesArr.type == Json.Type.array) {
-                foreach (r; rolesArr) user.roles ~= r.get!string.strip();
+                foreach (r; rolesArr) if (r.type == Json.Type.string) roles ~= r.get!string;
             }
         }
-        if (user.roles.length == 0) user.roles ~= "user";
+        roles = normalizeRoles(roles);
+        if (roles.length == 0) roles ~= "user";
+
+        if (user.roles.canFind("admin") && !roles.canFind("admin")) {
+            int adminCount;
+            foreach (u; repo.findAll(10_000, 0)) if (u.roles.canFind("admin")) adminCount++;
+            if (adminCount <= 1) {
+                jsonError(res, 400, user.username ~ " is the last admin — grant admin to another account first");
+                return;
+            }
+        }
+
+        user.email = body["email"].get!string.strip();
+        user.roles = roles;
         repo.update(user);
+        logInfo("Admin updated user: %s (roles: %s)", user.username, user.roles);
         Json data = Json.emptyObject;
         data["id"] = Json(user.id.toString());
         data["username"] = Json(user.username);
