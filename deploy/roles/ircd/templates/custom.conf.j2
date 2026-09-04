@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# Local server links (hub-specific). Included from inspircd.conf.
+# Rehash (SIGHUP) picks up changes; no restart needed.
+
+<link allowmask="*"
+      bind="*"
+      ipaddr="2001:470:b:56f:30:5::"
+      port="4443"
+      hidden="no"
+      name="irc.netcrave.chat"
+      recvpass="{{ vault_ircd_netcrave_link_password }}"
+      sendpass="{{ vault_ircd_netcrave_link_password }}"
+      statshidden="no">
+
+<autoconnect period="16s"
+             server="irc.netcrave.chat">

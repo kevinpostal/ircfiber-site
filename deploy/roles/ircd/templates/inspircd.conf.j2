@@ -30,6 +30,20 @@
 # host; only reachable from {{ docker_ircfiber_subnet }}.
 <bind address="" port="{{ ircd_link_port }}" type="servers">
 
+#-#-#-#-#-#-#-#-#-#-#-#  SERVICES LINK (Anope)  -#-#-#-#-#-#-#-#-#-#-#-#
+
+# <link> authenticates the Anope pseudo-server (Anope initiates to the
+# servers bind above using vault_ircd_services_link_password). <uline>
+# grants it services privileges (SVSJOIN, SASL forwarding, kill shield).
+# Both names must match Anope's serverinfo name ({{ ircd_services_name }}).
+<link name="{{ ircd_services_name }}"
+      ipaddr="{{ ircd_services_net_alias }}"
+      port="{{ ircd_link_port }}"
+      sendpass="{{ vault_ircd_services_link_password }}"
+      recvpass="{{ vault_ircd_services_link_password }}">
+
+<uline server="{{ ircd_services_name }}">
+
 #-#-#-#-#-#-#-#-#-#-  CONNECTIONS CONFIGURATION  -#-#-#-#-#-#-#-#-#-#-#
 #
 # Connect classes are matched top-down. The engine class MUST come first.
@@ -198,5 +212,6 @@
 
 <include file="modules.conf">
 <include file="opers.conf">
+<include file="custom.conf">
 # Anope aliases (/NS, /CS, /ID ...), reserved nicks and filter exemptions.
 <include file="&dir.example;/services/anope.example.conf">

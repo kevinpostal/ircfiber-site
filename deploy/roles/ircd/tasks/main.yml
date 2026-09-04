@@ -14,6 +14,9 @@
       - vault_ircd_oper_password != "REPLACE-WITH-STRONG-PASSWORD"
       - vault_ircd_services_link_password is defined
       - vault_ircd_services_link_password | length >= 16
+      - vault_ircd_netcrave_link_password is defined
+      - vault_ircd_netcrave_link_password | length >= 16
+      - vault_ircd_netcrave_link_password != "REPLACE-WITH-NETCRAVE-LINK-SECRET"
       - vault_ircd_cloak_key is defined
       - vault_ircd_cloak_key | length >= 30
       - vault_ircd_dashboard_password is defined
@@ -21,6 +24,7 @@
       - vault_ircd_dashboard_password != "REPLACE-WITH-STRONG-PASSWORD"
     fail_msg: |
       vault_ircd_oper_password, vault_ircd_services_link_password (>=16 chars),
+      vault_ircd_netcrave_link_password (>=16 chars, not the placeholder),
       vault_ircd_cloak_key (>=30 chars) and vault_ircd_dashboard_password
       (admin dashboard oper, used by the gateway IRCFIBER_IRCD_OPER_PASSWORD)
       must be set in inventories/production/group_vars/vault.yml:
@@ -119,6 +123,7 @@
     mode: "0640"
   loop:
     - { src: inspircd.conf.j2, dest: inspircd.conf }
+    - { src: custom.conf.j2, dest: custom.conf }
     - { src: modules.conf.j2, dest: modules.conf }
     - { src: opers.conf.j2, dest: opers.conf }
     - { src: motd.j2, dest: motd }

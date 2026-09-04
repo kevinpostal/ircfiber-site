@@ -51,6 +51,9 @@ vault_cloudflare_account_id: "REPLACE-WITH-CF-ACCOUNT-ID"
 vault_ircd_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
 # Shared secret for the InspIRCd <-> Anope server link (>= 16 chars).
 vault_ircd_services_link_password: "REPLACE-WITH-RANDOM-32-CHARS"
+# Shared secret for the InspIRCd <-> irc.netcrave.chat server link
+# (custom.conf). Must match the remote side's recvpass/sendpass.
+vault_ircd_netcrave_link_password: "REPLACE-WITH-NETCRAVE-LINK-SECRET"
 # Host-cloak HMAC key (>= 30 chars). Changing it invalidates existing
 # cloak-based channel bans.
 vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"
