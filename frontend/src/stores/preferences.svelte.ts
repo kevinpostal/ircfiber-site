@@ -231,7 +231,21 @@ export const networkOrder = $state<string[]>(getStorageItem('ircfiber:networkOrd
 export const lastSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:lastSeen', {}));
 // Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen)
 export const bottomSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:bottomSeen', {}));
-export const focusSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:focusSeen', {}));
+// Per-buffer focus-seen timestamp (IRCCloud-style focusSeen): where the
+// log stood when the window lost focus, so returning shows a "since you
+// tabbed out" divider. Deliberately TRANSIENT (in-memory only, never
+// persisted, never cross-tab synced): `readBuffer` marks read at
+// `focusSeen ?? bottomSeen ?? lastMessage`, so a focusSeen that outlives
+// its focus session becomes a permanent cap on the read marker and the
+// unread badge can never clear (a background tab's blur, or a reload
+// while blurred, used to poison it that way).
+export const focusSeenMap = $state<Record<string, number>>({});
+try {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('ircfiber:focusSeen');
+    localStorage.removeItem('ircfiber:focusSeen:_savedAt');
+  }
+} catch {}
 // IRCCloud-style: when true, the user has disabled the "post a snippet?"
 // prompt that appears when sending multi-line or very long messages. The
 // prompt itself still works on each send; this flag is a per-user
@@ -367,7 +381,6 @@ $effect.root(() => {
   $effect(() => { setStorageItem('ircfiber:networkOrder', networkOrder); });
   $effect(() => schedulePersistMap('ircfiber:lastSeen', lastSeenMap));
   $effect(() => schedulePersistMap('ircfiber:bottomSeen', bottomSeenMap));
-  $effect(() => schedulePersistMap('ircfiber:focusSeen', focusSeenMap));
   $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
   $effect(() => schedulePersistMap('ircfiber:bufferPrefs', bufferPrefsMap));
   $effect(() => { setStorageItem('ircfiber:globalPrefs', globalPrefs); });
@@ -414,6 +427,12 @@ export function setFocusSeen(networkId: string, bufferName: string, ts: number):
 }
 export function clearFocusSeen(networkId: string, bufferName: string): void {
   delete focusSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`];
+}
+/** Focus regained: every tab-out marker is stale, whatever buffer it
+ *  belongs to. Leaving one behind caps `readBuffer` on that buffer for
+ *  the rest of the session. */
+export function clearAllFocusSeen(): void {
+  for (const k of Object.keys(focusSeenMap)) delete focusSeenMap[k];
 }
 export function clearBottomSeen(networkId: string, bufferName: string): void {
   delete bottomSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`];
@@ -518,7 +537,6 @@ if (typeof window !== 'undefined') {
       case 'ircfiber:networkOrder':      applyArray(networkOrder); break;
       case 'ircfiber:lastSeen':          applyObject(lastSeenMap); break;
       case 'ircfiber:bottomSeen':        applyObject(bottomSeenMap); break;
-      case 'ircfiber:focusSeen':         applyObject(focusSeenMap); break;
       case 'ircfiber:bufferPrefs':       applyObject(bufferPrefsMap as Record<string, BufferPrefs>); break;
       case 'ircfiber:ignores':           applyArray(ignoreList); break;
       case 'ircfiber:highlightWords':    applyArray(highlightWords); break;

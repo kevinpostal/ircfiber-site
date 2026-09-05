@@ -26,6 +26,10 @@ import {
 	unhideChannel,
 	isChannelHidden,
 	flushPersist,
+	setFocusSeen,
+	getFocusSeen,
+	clearAllFocusSeen,
+	focusSeenMap,
 } from './preferences.svelte';
 
 function resetPreferenceState(): void {
@@ -40,7 +44,7 @@ function resetPreferenceState(): void {
 	Object.keys(membersCollapsedMap).forEach((k) => delete (membersCollapsedMap as Record<string, unknown>)[k]);
 	Object.keys(lastSeenMap).forEach((k) => delete (lastSeenMap as Record<string, unknown>)[k]);
 	Object.keys(bottomSeenMap).forEach((k) => delete (bottomSeenMap as Record<string, unknown>)[k]);
-	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
+	Object.keys(focusSeenMap).forEach((k) => delete (focusSeenMap as Record<string, unknown>)[k]);
 	networkOrder.length = 0;
 	Object.assign(globalPrefs, DEFAULT_PREFS);
 }
@@ -123,6 +127,25 @@ describe('localStorage persistence', () => {
 		expect(typeof parsed['net1:#chan']).toBe('number');
 
 		window.localStorage.removeItem('ircfiber:clearedAt');
+	});
+
+	// focusSeen is a per-focus-session marker: `readBuffer` marks read at
+	// `focusSeen ?? bottomSeen ?? lastMessage`, so an entry that outlives
+	// its focus session (reload while blurred, or a background tab's blur
+	// syncing over) permanently caps the read marker and the unread badge
+	// can never clear. It must stay in memory only.
+	it('never persists or cross-tab syncs focusSeen', () => {
+		setFocusSeen('net1', '#chan', 1234);
+		flushPersist();
+
+		expect(window.localStorage.getItem('ircfiber:focusSeen')).toBeNull();
+
+		fireStorageEvent('ircfiber:focusSeen', JSON.stringify({ 'net1:#other': 999 }));
+		expect(getFocusSeen('net1', '#other')).toBeNull();
+		expect(getFocusSeen('net1', '#chan')).toBe(1234);
+
+		clearAllFocusSeen();
+		expect(getFocusSeen('net1', '#chan')).toBeNull();
 	});
 });
 
