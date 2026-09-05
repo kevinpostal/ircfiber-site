@@ -1,7 +1,14 @@
-/* joinPart rows (JOIN/PART/QUIT/NICK/CHGHOST) — timestamp on right like all messages */
+/* joinPart rows (JOIN/PART/QUIT/NICK/CHGHOST/KICK/AWAY) — timestamp on right
+   like all messages.
+
+   IRCCloud renders these through `renderLine`, which adds no colour class at
+   all: the row inherits `div.log`'s colour (--log-fg) at the log's base font
+   size. They are NOT dimmed further and NOT shrunk — only the → ← ⇐ arrows
+   are their own colour/size (`div.log span.prefix { font-size:13px }`, and
+   `body.font-mono div.log span.prefix { font-family: Source Sans Pro }`, so
+   the arrows stay proportional even in a monospace log like ours). */
 .row.messageRow.joinPart {
-  color: #8b949e;
-  font-size: 13px;
+  color: var(--log-fg);
   background: transparent;
   padding: 2px 118px 2px 68px;
 }
@@ -17,10 +24,6 @@
 .row.messageRow.joinPart .content {
   color: inherit;
   display: inline;
-}
-.row.messageRow.joinPart .prefix {
-  color: #6e7681;
-  user-select: none;
 }
 
 /* Reset .buffer from sidebar flex to inline inside message content */
@@ -39,7 +42,10 @@
   padding-bottom: 0;
   line-height: 1.3;
 }
+/* IRCCloud `div.log div.monospace span.content` (and .notice/.groupedLines)
+   sit one tier brighter than the log default and one below chat text. */
 .row.messageRow.status.monospace .content {
+  color: var(--row-mono-fg);
   line-height: inherit;
   padding-right: 118px;
 }
@@ -61,20 +67,28 @@
   padding-right: 0;
 }
 
-/* Prefix symbols for join/part/quit/nick (→ ← ↔) */
-.row.messageRow.status .prefix,
+/* Prefix symbols (→ ← ⇐ ⇑ ⚙). IRCCloud: `div.log span.prefix
+   { font-size:13px; color:<theme prefix> }` and a sans-serif family in
+   monospace logs, shared by every row type that carries one. */
+.row.messageRow .prefix,
 .row.groupedJoinPart .prefix {
-  color: #6e7681;
+  color: var(--prefix-fg);
+  font-size: 13px;
+  font-family: var(--font-sans);
   user-select: none;
 }
 
-/* Clickable nicks in status rows */
-.row.messageRow.status .bufferLink.user {
-  color: #d1d5db;
+/* Clickable nicks in status/joinPart rows. IRCCloud's `linkMessageUser`
+   without a colour option emits no colour class, so the nick inherits the
+   row's colour; only the hover affordance is ours. */
+.row.messageRow.status .bufferLink.user,
+.row.messageRow.joinPart .bufferLink.user {
+  color: inherit;
   cursor: pointer;
 }
-.row.messageRow.status .bufferLink.user:hover {
-  color: #fff;
+.row.messageRow.status .bufferLink.user:hover,
+.row.messageRow.joinPart .bufferLink.user:hover {
+  color: var(--row-status-fg);
   text-decoration: underline;
 }
 
@@ -84,7 +98,7 @@
   align-items: center;
   gap: 4px;
   margin-right: 6px;
-  color: #6e7681;
+  color: var(--prefix-fg);
   cursor: pointer;
 }
 
@@ -120,7 +134,9 @@
   display: inline;
 }
 
-/* IRCCloud-style type classes */
+/* IRCCloud-style type classes. Every user-activity row sits at the log
+   default colour and the log's base font size — see the joinPart block
+   above for the source rules. */
 .row.messageRow.type_joined_channel,
 .row.messageRow.type_parted_channel,
 .row.messageRow.type_quit,
@@ -128,12 +144,7 @@
 .row.messageRow.type_chghost,
 .row.messageRow.type_kick,
 .row.messageRow.type_away {
-  color: #8b949e;
-  font-size: 13px;
-}
-
-.row.messageRow.type_kick .bufferLink.user {
-  color: #a6a6a6;
+  color: var(--log-fg);
 }
 
 /* Grouped join/part rows */
@@ -148,7 +159,7 @@
   align-items: center;
   gap: 4px;
   margin-right: 6px;
-  color: #6e7681;
+  color: var(--prefix-fg);
 }
 
 .row.groupedJoinPart.collapsedHead .collapseIcon,
@@ -182,7 +193,7 @@
 }
 
  .row.groupedJoinPart .sentence {
-  color: #8b949e;
+  color: var(--log-fg);
   display: inline;
   white-space: normal;
   word-break: normal;
@@ -195,7 +206,7 @@
   display: inline-block;
 }
 .row.groupedJoinPart .sentence .bullet {
-  color: #555;
+  color: var(--prefix-fg);
   margin: 0 6px;
 }
 
@@ -208,8 +219,7 @@
      in app.css. The 80px here was a leftover from an earlier layout
      that left status lines wrapping into the timestamp/hover area. */
   padding: 0 118px 0 68px;
-  color: #8b949e;
-  font-size: 13px;
+  color: var(--log-fg);
   background: transparent;
 }
 .row.part.groupedJoinPartPart .date {
@@ -248,8 +258,10 @@
   color: var(--text-tertiary);
 }
 
+/* IRCCloud notices: the row inherits the log default, the `.content` span is
+   the brighter mono tier (see _rowStates.scss). */
 .row.messageRow.type_notice {
-  color: #8b949e;
+  color: var(--log-fg);
 }
 
 .row.messageRow .date {

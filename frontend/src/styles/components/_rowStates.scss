@@ -1,20 +1,40 @@
-// Row state backgrounds — themed per IRCCloud design parity
-// Applied via .self, .notice, .highlight, .warning, .status classes on .row.messageRow
-// Mirrors IRCCloud dusk tokens: --row-* vars are the single source; #app.midnight-theme overrides
+// Row state backgrounds and text colors — IRCCloud parity.
+// Applied via .self, .notice, .highlight, .warning, .status classes on .row.messageRow.
+//
+// IRCCloud's log has four text tiers (verified against common-002a6024.css and
+// the live DOM of the theme-midnight app):
+//   div.log                       #737373  join/part/quit/nick/kick/chghost rows
+//                                          (they carry no colour class of their
+//                                          own and inherit the log default)
+//   div.log div.chat/.me/.status  #cccccc  chat, /me, and status rows
+//   div.monospace/.notice .content
+//   + div.groupedLines            #bfbfbf  server numerics, MOTD, notices
+//   div.log span.prefix           #b3b3b3  the → ← ⇐ arrows, 13px, sans-serif
+// plus `div.log div.status { background-color: #1a1a1a }` — status rows are
+// tinted, join/part rows are transparent.
+//
+// The --row-*/--log-fg vars are the single source; each theme file overrides
+// them with that theme's IRCCloud values. Defaults below are IRCCloud
+// theme-midnight, matching our neutral default palette (--chat-bg #000).
 
 :root {
   --row-self-bg:      transparent;
   --row-notice-bg:    #1a3b5b;
   --row-highlight-bg: #1d4063;
   --row-warning-bg:   #b2b234;
-  --row-status-bg:    transparent;
-  --row-notice-fg:    #9cbfe2;
+  --row-status-bg:    #1a1a1a;
+  --row-status-fg:    #cccccc;
+  --row-notice-fg:    #bfbfbf;
+  // Log default: user-activity rows (join/part/quit/nick/kick/away).
+  --log-fg:           #737373;
+  // .monospace .content, .notice .content, .groupedLines.
+  --row-mono-fg:      #bfbfbf;
+  --prefix-fg:        #b3b3b3;
 }
 
 #app.midnight-theme {
   --row-notice-bg:    #262626;
   --row-highlight-bg: #2b2b2b;
-  --row-status-bg:    transparent;
 }
 
 .row.messageRow.self     { background-color: var(--row-self-bg); }
@@ -22,7 +42,7 @@
 .row.messageRow.notice .content { color: var(--row-notice-fg); }
 .row.messageRow.highlight { background-color: var(--row-highlight-bg); }
 .row.messageRow.highlight .date { color: #ffe0e0; }
-.row.messageRow.status   { background-color: var(--row-status-bg); color: #b0cce8; }
+.row.messageRow.status   { background-color: var(--row-status-bg); color: var(--row-status-fg); }
 .row.messageRow.warning  { background-color: var(--row-warning-bg); color: #222; }
 
 // ── Optimistic pending / failed states (IRCCloud parity) ──────────────

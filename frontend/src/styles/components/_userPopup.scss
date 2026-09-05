@@ -335,10 +335,10 @@
   word-break: break-word;
 }
 .row.messageRow.own { background: #1f1f1f; }
+/* Colour and background live in _rowStates.scss (IRCCloud --row-status-*);
+   the log's base font size is inherited, matching IRCCloud where status rows
+   are the same size as chat. */
 .row.messageRow.status {
-  color: #ccc;
-  font-size: 13px;
-  background: transparent;
   padding: 0 118px 0 68px;
 }
 .row.messageRow.status .date { top: 2px; }

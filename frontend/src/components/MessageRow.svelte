@@ -27,7 +27,10 @@
   let { msg, isHighlight = false, isSameAuthor = false, isEntrance = false, onNickClick, memberByNick = new Map() }: Props = $props();
 
   const cmd = $derived(msg.command);
-  const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
+  // IRCCloud renders these through `renderLine` — a bare `messageRow` that
+  // inherits the log's own colour. KICK (`kicked_channel`) and AWAY belong
+  // here too: both are user activity, not server output.
+  const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','KICK','AWAY','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
   const isLifecycle = $derived(['CONNECT', 'DISCONNECT', 'DISCONNECTED'].includes(cmd));
   const isDisconnectDivider = $derived(cmd === 'DISCONNECT' || cmd === 'DISCONNECTED');
   const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','DISCONNECTED','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
@@ -41,6 +44,18 @@
   const isJoinPartGroup = $derived(cmd === 'JOINPART_GROUP');
   const isGrouped = $derived(isJoinPartGroup);
   const typeClass = $derived(getIrcCloudTypeClass(cmd, msg.params, msg.type));
+  // IRCCloud splits server output three ways (common-5650bddb.js):
+  //   renderStatus      → ["status"]              channel_topic, channel_mode,
+  //                                               user_channel_mode
+  //   renderMonoStatus  → ["status","monospace"]  numerics, self_details,
+  //                                               logged_in_as, user_mode,
+  //                                               cap_*, error
+  //   renderNotice      → ["notice"]              notice, invited,
+  //                                               channel_invite
+  const isStatusRow = $derived(isSystem && !isJoinPart && !isLifecycle);
+  const isNoticeRow = $derived(isStatusRow && cmd === 'INVITE');
+  const isPlainStatus = $derived(isStatusRow && ['TOPIC', 'MODE'].includes(cmd));
+  const isMonoStatus = $derived(isStatusRow && !isNoticeRow && !isPlainStatus);
 
   const ts = $derived(msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null));
   const timeStr = $derived(ts ? formatTime12Hour(new Date(ts)) : '--:--:--');
@@ -383,11 +398,24 @@
     } else if (cmd === 'INVITE') {
       inner += '<span class="prefix">&#x2192;</span> ' + escapeHtml(nick) + ' invited ' + escapeHtml(msg.params?.[0] || '') + ' to ' + escapeHtml(msg.params?.[1] || '');
     } else if (cmd === 'AWAY') {
-      inner += '<span class="prefix">&#x2026;</span> ' + escapeHtml(nick) + ' is ' + (msg.text ? 'away: ' + msg.text : 'back');
+      // Same shape as the expanded group row: flag prefix, linked nick.
+      // (IRCCloud drops away/back from the log entirely — `user_away`,
+      // `user_back`, `self_away` and `self_back` are all in its
+      // `unrendered_messages` list — so this is our own line, styled like
+      // every other user-activity row.)
+      inner += '<span class="prefix">&#x2691;</span> '
+        + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
+        + (msg.text ? ` is away: <span class="awayReason">${escapeHtml(msg.text)}</span>` : ' is back');
     } else if (cmd === 'ACCOUNT') {
-      inner += escapeHtml(nick) + ' ' + (msg.text === '*' ? 'logged out' : msg.text ? `logged in as ${msg.text}` : 'logged in');
+      inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> `
+        + (msg.text === '*' ? 'logged out' : msg.text ? `logged in as <b>${escapeHtml(msg.text)}</b>` : 'logged in');
     } else if (cmd === 'CHGHOST') {
-      inner += escapeHtml(nick) + ' changed host to ' + escapeHtml(msg.params?.join('@') || msg.text || '');
+      // IRCCloud `user_chghost`: "<nick> changed host: <old> → <new>".
+      const oldMask = getUsermask(msg.prefix || '');
+      const newMask = msg.params?.join('@') || msg.text || '';
+      inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> changed host: `
+        + (oldMask ? `${escapeHtml(oldMask)} <span class="prefix">&#x2192;</span> ` : '')
+        + escapeHtml(newMask);
     } else {
       inner += renderText(msg.text || '');
     }
@@ -499,10 +527,15 @@
     } else if (eCmd === 'QUIT') {
       html = `<span class="prefix">&#x21D0;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> quit${eUsermask ? ` (${escapeHtml(eUsermask)})` : ''}${evt.text ? ` ${escapeHtml(evt.text)}` : ''}`;
     } else if (eCmd === 'NICK') {
+      // IRCCloud `nickchange`: "<oldnick> → <newnick>", same as the
+      // standalone row renders it.
       const newNick = evt.params?.[evt.params.length - 1] || '';
-      html = `<span class="prefix">&#x2194;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> is now known as <span class="bufferLink user link">${escapeHtml(newNick)}</span>`;
+      html = `${escapeHtml(eNick)} <span class="prefix">&#x2192;</span> <span class="bufferLink user link">${escapeHtml(newNick)}</span>`;
     } else if (eCmd === 'CHGHOST') {
-      html = `<span class="prefix">&#x2194;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> changed host to ${escapeHtml((evt.params || []).join('@') || evt.text || '')}`;
+      const eNewMask = (evt.params || []).join('@') || evt.text || '';
+      html = `<span class="bufferLink user link">${escapeHtml(eNick)}</span> changed host: `
+        + (eUsermask ? `${escapeHtml(eUsermask)} <span class="prefix">&#x2192;</span> ` : '')
+        + escapeHtml(eNewMask);
     } else if (eCmd === 'AWAY') {
       const reason = evt.text || '';
       if (reason) {
@@ -557,7 +590,7 @@
     {#each events.slice(1) as evt, i (evt.msgid || evt.id || evt.t + ':' + i || i)}
       {@const r = renderEvent(evt)}
       <div
-        class="row messageRow status part groupedJoinPartPart {r.typeClass}"
+        class="row messageRow joinPart part groupedJoinPartPart {r.typeClass}"
         data-time={evt.t}
         data-name={evt.nick || undefined}
         data-msgid={evt.msgid || undefined}
@@ -585,7 +618,7 @@
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isSystem && !isJoinPart && !isLifecycle ? 'status monospace' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {tsHover ? 'timestampHighlight' : ''} {pendingState ?? ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isPlainStatus ? 'status' : ''} {isMonoStatus ? 'status monospace' : ''} {isNoticeRow ? 'notice' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {tsHover ? 'timestampHighlight' : ''} {pendingState ?? ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}

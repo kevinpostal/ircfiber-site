@@ -7,5 +7,12 @@
   --link: #74d161;
   --row-highlight-bg: #28631d;
   --row-notice-bg: #204f17;
-  --row-status-bg: #14320f;
+  // IRCCloud body.theme-emerald: div.log, div.chat/.status, div.status bg,
+  // div.monospace span.content, span.prefix.
+  --row-status-bg: #1b4314;
+  --row-status-fg: #b9e8b0;
+  --row-notice-fg: #a8e29c;
+  --log-fg: #49b234;
+  --row-mono-fg: #a8e29c;
+  --prefix-fg: #96dd88;
 }
