@@ -255,24 +255,30 @@ describe('img2irc 100% coverage', () => {
     expect(res.includes('\x04')).toBe(true);
     expect(res.includes('\x03')).toBe(false);
   });
+  // The Viterbi DP is only used when the active glyph table is small enough
+  // (<=32 glyphs without WASM); the default table is 38, so pin the universal
+  // alphabet (what `auto` ships) to exercise the compressed path in node.
+  const VITERBI_ALPHABET = '▀▄█▌▐░▒▓';
   it('smart truecolor viterbi emits \\x04 with palette-A colors and sticky elision', async () => {
     const paletteA = [0xff0000, 0x0000ff, 0x00ff00];
     const hexSet = new Set(paletteA.map(c=>c.toString(16).padStart(6,'0')));
-    const opts = { width:6, renderMode:'ansi24', pixelMode:'half', midgardMode:'smart', filter:'linear', brightness:0, contrast:0, gamma:0, saturation:0, hue:0, invert:false, grayscale:false, sepia:false, normalize:false, dither:false, ditherMode:'none', colorMatching:'oklab', flipH:false, flipV:false, rotate:0, pixelize:0, blur:0, nograyscale:false, viterbiW:2.5, comic:false, alphaMode:'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', _smartPaletteA: paletteA } as unknown as Img2IrcOptions;
+    const opts = { width:6, renderMode:'ansi24', pixelMode:'half', midgardMode:'smart', filter:'linear', brightness:0, contrast:0, gamma:0, saturation:0, hue:0, invert:false, grayscale:false, sepia:false, normalize:false, dither:false, ditherMode:'none', colorMatching:'oklab', flipH:false, flipV:false, rotate:0, pixelize:0, blur:0, nograyscale:false, viterbiW:2.5, comic:false, alphaMode:'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', glyphAlphabet: VITERBI_ALPHABET, _smartPaletteA: paletteA } as unknown as Img2IrcOptions;
     const d = new Uint8ClampedArray(6*2*4);
     for(let i=0;i<d.length;i+=4){ d[i]=200; d[i+1]=10; d[i+2]=20; d[i+3]=255; }
     const res = await renderPixelsCore(d, 6, 2, 6, 1, 'half', opts);
     expect(res.includes('\x04')).toBe(true);
-    const emitted = [...res.matchAll(/\x04([0-9a-f]{6})/g)].map(m=>m[1]);
+    const emitted = [...res.matchAll(/\x04([0-9a-f]{6})(?:,([0-9a-f]{6}))?/g)].flatMap(m=>[m[1], m[2]]).filter(Boolean);
     expect(emitted.length).toBeGreaterThan(0);
     expect(emitted.every(h=>hexSet.has(h))).toBe(true);
+    // Sticky elision: 6 identical cells share one colour code.
+    expect(res.match(/\x04/g)!.length).toBe(1);
   });
   it('smart indexed viterbi uses palette B as candidate set, not per-row S=12', async () => {
     const paletteB = [4, 52, 12, 14, 2, 5, 9, 1];
-    const opts = { width:6, renderMode:'irc', pixelMode:'half', midgardMode:'smart', filter:'linear', brightness:0, contrast:0, gamma:0, saturation:0, hue:0, invert:false, grayscale:false, sepia:false, normalize:false, dither:false, ditherMode:'none', colorMatching:'oklab', flipH:false, flipV:false, rotate:0, pixelize:0, blur:0, nograyscale:false, viterbiW:2.5, comic:false, alphaMode:'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', _smartPaletteB: paletteB } as unknown as Img2IrcOptions;
+    const opts = { width:6, renderMode:'irc', pixelMode:'half', midgardMode:'smart', filter:'linear', brightness:0, contrast:0, gamma:0, saturation:0, hue:0, invert:false, grayscale:false, sepia:false, normalize:false, dither:false, ditherMode:'none', colorMatching:'oklab', flipH:false, flipV:false, rotate:0, pixelize:0, blur:0, nograyscale:false, viterbiW:2.5, comic:false, alphaMode:'opaque', alphaThreshold:128, trimTransparent:false, smartEdges:true, background:'#000000', glyphAlphabet: VITERBI_ALPHABET, _smartPaletteB: paletteB } as unknown as Img2IrcOptions;
     const d = new Uint8ClampedArray(6*2*4); d.fill(128); for(let i=3;i<d.length;i+=4) d[i]=255; for(let i=0;i<4;i++){ d[i*4]=200; d[i*4+1]=10; d[i*4+2]=20; }
     const res = await renderPixelsCore(d, 6, 2, 6, 1, 'half', opts);
-    const idxs = [...res.matchAll(/\x03(\d+)/g)].map(m=>Number(m[1]));
+    const idxs = [...res.matchAll(/\x03(\d+)(?:,(\d+))?/g)].flatMap(m=>[m[1], m[2]]).filter(Boolean).map(Number);
     expect(idxs.length).toBeGreaterThan(0);
     expect(idxs.every(i=>paletteB.includes(i))).toBe(true);
   });

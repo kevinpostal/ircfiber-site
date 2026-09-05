@@ -54,13 +54,17 @@ describe('ViterbiDP collapse (Lean §1.6)', () => {
     expect(collapsedFixed).not.toBe(collapsedBuggy);
   });
 
+  // The first non-empty cell after leading spaces cannot inherit an IRC colour
+  // state, so it must emit the full `fg,bg` pair prefix (pairPref), never a
+  // bare fg code — otherwise the cell would render on the client's default
+  // background (a coverage hole).
   it('first non-empty after leading spaces must pay pairPref', async () => {
     const cols = 3;
     const rows = 1;
     const pW = 3;
     const pH = 2;
+    // Cells 0 and 1 are fully transparent => rendered as leading spaces.
     const d = new Uint8ClampedArray(pW * pH * 4);
-    for (let i = 0; i < d.length; i += 4) { d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 255; }
     const setPx = (x: number, y: number, r: number, g: number, b: number, a = 255) => {
       const idx = (y * pW + x) * 4; d[idx] = r; d[idx + 1] = g; d[idx + 2] = b; d[idx + 3] = a;
     };
@@ -71,6 +75,7 @@ describe('ViterbiDP collapse (Lean §1.6)', () => {
       nograyscale: false, gamma: 1, normalize: false, comic: false,
       dither: false, ditherMode: 'none', alphaMode: 'transparent', alphaThreshold: 10, samplingFilter: 'nearest',
     } as never);
+    expect(art.startsWith('  ')).toBe(true);
     expect(art.trim().length).toBeGreaterThan(2);
     const firstColorIdx = art.indexOf('\x03');
     expect(firstColorIdx).toBeGreaterThanOrEqual(0);

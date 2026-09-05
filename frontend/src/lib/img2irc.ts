@@ -1251,6 +1251,7 @@ export async function renderPixelsCore(
           } else {
             _wasmMisses++;
           }
+        }
         if (!usedBatch) {
           for(let i=0;i<M;i++){
             let [r1,g1,b1,a1]=tops[i]; let [r2,g2,b2,a2]=bots[i];
@@ -1267,7 +1268,6 @@ export async function renderPixelsCore(
             }
             cellGlyph[i]=rowGlyphs;
           }
-        }
         }
         _tCellGlyph += _perf() - _tc;
         const INF=1e18;
@@ -1445,6 +1445,7 @@ export async function renderPixelsCore(
             } else {
               const needFgOnly=!first && lastBg===String(bg) && lastFg!==String(fg);
               if(needFgOnly){ const cd='\x03'+fg; ln+=cd; lastFg=String(fg); }
+              else if(first||lastFg!==String(fg)||lastBg!==String(bg)){ const cd='\x03'+fg+','+bg; ln+=cd; lastFg=String(fg); lastBg=String(bg); }
               if(o.viterbiW >=2 && hasSpace) ln+=' '; else if(hasHalf) ln+='▀'; else if(brailleFallback) ln+=brailleFallback; else if(triangleFallback) ln+=triangleFallback; else if(quarterFallback) ln+=quarterFallback; else if(eighthFallback) ln+=eighthFallback; else if(cornerFallback) ln+=cornerFallback; else if(geometricFallback) ln+=geometricFallback; else if(boxFallback) ln+=boxFallback; else if(hasFull) ln+='█'; else { let best=_activeGlyphs[0],bestD=Infinity; for(const g of _activeGlyphs){const d=Math.abs(g.ct-1)+Math.abs(g.cb-0); if(d<bestD){bestD=d;best=g;}} ln+=best.ch; }
             }
           } else {
