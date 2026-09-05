@@ -51,28 +51,50 @@ const chunkEditor = findJsByFile('chunk-editor');
 const chunkEditorJs = chunkEditor ? `/public/dist/${chunkEditor.file}` : null;
 const chunkEditorCss = chunkEditor && chunkEditor.css && chunkEditor.css[0] ? `/public/dist/${chunkEditor.css[0]}` : null;
 
+const chunkPages = findJsByFile('chunk-pages');
+const chunkPagesJs = chunkPages ? `/public/dist/${chunkPages.file}` : null;
+
+const chunkPanels = findJsByFile('chunk-panels');
+const chunkPanelsJs = chunkPanels ? `/public/dist/${chunkPanels.file}` : null;
+
+// CSS for every statically-imported chunk (manualChunks groups like
+// chunk-pages and chunk-panels, plus vendor) must be linked in the HTML shell:
+// Vite auto-injects CSS only for *dynamic* imports at runtime, so a component
+// pulled into a static manualChunks group had its stylesheet silently dropped
+// — the pastebin/settings/welcome pages rendered unstyled.
+const staticCss = [];
+(function collect(key, seen = new Set()) {
+  if (seen.has(key)) return;
+  seen.add(key);
+  const node = manifest[key];
+  if (!node) return;
+  for (const c of node.css || []) staticCss.push(`/public/dist/${c}`);
+  for (const imp of node.imports || []) collect(imp, seen);
+})('index.html');
+
 // Build the new block scripts section
 let lines = [];
 lines.push('block scripts');
 lines.push('  // Preload the critical CSS/JS so the browser can start fetching before parsing');
-if (mainCss) {
-  lines.push(`  link(rel="preload", href="${mainCss}", as="style")`);
-  lines.push(`  link(rel="stylesheet", href="${mainCss}")`);
+const injectedCss = new Set();
+function addCss(href) {
+  if (!href || injectedCss.has(href)) return;
+  injectedCss.add(href);
+  lines.push(`  link(rel="preload", href="${href}", as="style")`);
+  lines.push(`  link(rel="stylesheet", href="${href}")`);
 }
-if (chunkUploadCss) {
-  lines.push(`  link(rel="preload", href="${chunkUploadCss}", as="style")`);
-  lines.push(`  link(rel="stylesheet", href="${chunkUploadCss}")`);
-}
-if (chunkEditorCss) {
-  lines.push(`  link(rel="preload", href="${chunkEditorCss}", as="style")`);
-  lines.push(`  link(rel="stylesheet", href="${chunkEditorCss}")`);
-}
-if (vendorCss && vendorCss !== mainCss) {
-  // vendor CSS is already often included via main, but ensure
-}
+// main first (base cascade), then the eagerly-preloaded feature chunks, then
+// any remaining statically-imported chunk CSS (chunk-pages, chunk-panels, …).
+addCss(mainCss);
+addCss(chunkUploadCss);
+addCss(chunkEditorCss);
+for (const href of staticCss) addCss(href);
+console.log('inject-manifest: stylesheet links →', [...injectedCss].join(', '));
 if (vendorJs) lines.push(`  link(rel="modulepreload", href="${vendorJs}")`);
 if (chunkUploadJs) lines.push(`  link(rel="modulepreload", href="${chunkUploadJs}")`);
 if (chunkEditorJs) lines.push(`  link(rel="modulepreload", href="${chunkEditorJs}")`);
+if (chunkPagesJs) lines.push(`  link(rel="modulepreload", href="${chunkPagesJs}")`);
+if (chunkPanelsJs) lines.push(`  link(rel="modulepreload", href="${chunkPanelsJs}")`);
 lines.push(`  script(type="module", src="${mainJs}")`);
 
 const newBlock = lines.join('\n');
