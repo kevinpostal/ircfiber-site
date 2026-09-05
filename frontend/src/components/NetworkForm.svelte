@@ -109,6 +109,21 @@
     return `${where}${use}${s.state === 'retargeting' ? ' — switching…' : ''}`;
   }
 
+  /// The first-party IRC Fiber server cannot be reached *through* a Mullvad
+  /// exit: the exit would have to loop back to our own public address and the
+  /// SOCKS CONNECT fails on the hairpin (`rep=1`), after which the engine
+  /// walks every exit and lands on direct anyway. So offer only Automatic and
+  /// Direct for that host instead of a picker that cannot be honoured.
+  const egressLocked = $derived(
+    host.trim().toLowerCase().replace(/\.$/, '') === 'irc.ircfiber.com'
+  );
+  /// A location pin saved before the host became irc.ircfiber.com. Kept as a
+  /// disabled option so the select still shows what is stored (and the note
+  /// explains it is ignored) rather than silently rewriting the user's value.
+  const strandedPin = $derived(
+    egressLocked && egressNodeId.length > 0 && egressNodeId !== 'direct' ? egressNodeId : ''
+  );
+
   $effect(() => {
     if (existing) {
       name = existing.name;
@@ -490,25 +505,43 @@
               <select id="add-network-egress" class="input" bind:value={egressNodeId}>
                 <option value="">Automatic — any healthy exit, fails over when banned</option>
                 <option value="direct">Direct — our own server address</option>
-                {#if runningSlots.length > 0}
-                  <optgroup label="Exits running now">
-                    {#each runningSlots as r (r.pin)}
-                      <option value={r.pin} disabled={r.slot.checkedAtMs > 0 && !r.slot.healthy}>
-                        {slotLabel(r.slot)}{r.slot.checkedAtMs > 0 && !r.slot.healthy ? ' — unavailable' : ''}
-                      </option>
-                    {/each}
-                  </optgroup>
+                {#if strandedPin}
+                  <option value={strandedPin} disabled>
+                    {strandedPin} — not available for the IRC Fiber server
+                  </option>
                 {/if}
-                {#each locationGroups as g (g.countryCode)}
-                  <optgroup label={g.country}>
-                    <option value={g.countryCode}>Any city in {g.country}</option>
-                    {#each g.cities as loc (loc.id)}
-                      <option value={loc.id}>{loc.city}</option>
-                    {/each}
-                  </optgroup>
-                {/each}
+                {#if !egressLocked}
+                  {#if runningSlots.length > 0}
+                    <optgroup label="Exits running now">
+                      {#each runningSlots as r (r.pin)}
+                        <option value={r.pin} disabled={r.slot.checkedAtMs > 0 && !r.slot.healthy}>
+                          {slotLabel(r.slot)}{r.slot.checkedAtMs > 0 && !r.slot.healthy ? ' — unavailable' : ''}
+                        </option>
+                      {/each}
+                    </optgroup>
+                  {/if}
+                  {#each locationGroups as g (g.countryCode)}
+                    <optgroup label={g.country}>
+                      <option value={g.countryCode}>Any city in {g.country}</option>
+                      {#each g.cities as loc (loc.id)}
+                        <option value={loc.id}>{loc.city}</option>
+                      {/each}
+                    </optgroup>
+                  {/each}
+                {/if}
               </select>
-              {#if egressLoaded && (egress?.slots.length ?? 0) === 0}
+              {#if egressLocked}
+                <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
+                  Exit locations don't apply to the IRC Fiber server — it sits on our own
+                  network, so an exit would have to loop back to us and the connection
+                  falls through to the direct address anyway.
+                </p>
+                {#if strandedPin}
+                  <p class="fiberLockNote" style="margin: 4px 0 0; font-size: 12px; color: var(--text-muted, #888);">
+                    <span>The saved location <b>{strandedPin}</b> is ignored here — pick Automatic or Direct.</span>
+                  </p>
+                {/if}
+              {:else if egressLoaded && (egress?.slots.length ?? 0) === 0}
                 <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
                   No proxy exits are configured on this server — only the direct address is available.
                 </p>

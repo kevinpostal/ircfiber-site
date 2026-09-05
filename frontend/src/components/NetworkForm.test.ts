@@ -194,6 +194,33 @@ describe('NetworkForm', () => {
     expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'de' }));
   });
 
+  it('hides exit locations for the IRC Fiber server, which cannot be reached via an exit', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    // Locations are offered for a third-party host…
+    await userEvent.type(page.getByLabelText('Hostname'), 'irc.other.net');
+    await expect.element(page.getByRole('option', { name: 'Any city in Sweden' })).toBeInTheDocument();
+    // …and disappear once the host is the first-party server.
+    await userEvent.fill(page.getByLabelText('Hostname'), 'irc.ircfiber.com');
+    await expect.element(page.getByText(/Exit locations don't apply to the IRC Fiber server/)).toBeInTheDocument();
+    // `as HTMLSelectElement`: known DOM node, needed to read `.options`.
+    const select = document.querySelector('#add-network-egress') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'direct']);
+  });
+
+  it('keeps a stranded location pin visible but disabled on the IRC Fiber server', async () => {
+    const network = createNetwork({ name: 'Fiber', host: 'irc.ircfiber.com', nick: 'Me' });
+    network.egressNodeId = 'se-sto';
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByText(/The saved location/)).toBeInTheDocument();
+    // `as HTMLOptionElement`: known DOM node, needed to read `.disabled`.
+    const stranded = document.querySelector('#add-network-egress option[value="se-sto"]') as HTMLOptionElement;
+    expect(stranded.textContent).toMatch(/not available for the IRC Fiber server/);
+    expect(stranded.disabled).toBe(true);
+    // The stored value is shown, not silently rewritten.
+    await expect.element(page.getByLabelText(/Connect via/)).toHaveValue('se-sto');
+  });
+
   it('calls onClose when Cancel clicked', async () => {
     const onClose = vi.fn();
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
