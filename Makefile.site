@@ -1712,7 +1712,7 @@ _update_impl: version frontend-build build build-engine ## Deploy > Build fronte
 	@ssh -F /dev/null -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_ircfiber -o StrictHostKeyChecking=no deploy@$(_target_ssh) 'sudo rm -rf /opt/ircfiber-src/public/dist/.vite* /opt/ircfiber-src/public/dist/*\ 2* /opt/ircfiber-src/frontend/.vite* 2>/dev/null; sudo find /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend -depth -name "* 2*" -exec rm -rf {} + 2>/dev/null || true; sudo chmod -R a+rX /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend 2>/dev/null || true; echo host-public-cleaned' 2>&1 | tail -3
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" backend/ deploy@$(_target_ssh):/opt/ircfiber-src/backend/ 2>&1 | tail -5
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" common/ deploy@$(_target_ssh):/opt/ircfiber-src/common/ 2>&1 | tail -5
-	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile deploy@$(_target_ssh):/opt/ircfiber-src/Containerfile 2>&1 | tail -5
+	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile Containerfile.site deploy@$(_target_ssh):/opt/ircfiber-src/ 2>&1 | tail -5
 	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" .dockerignore deploy@$(_target_ssh):/opt/ircfiber-src/.dockerignore 2>&1 | tail -5
 	@rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no" config/ deploy@$(_target_ssh):/opt/ircfiber-src/config/ 2>&1 | tail -5
 	@ssh deploy@$(_target_ssh) 'cd /opt/ircfiber-src && DOCKER_BUILDKIT=1 docker build --target runtime-gateway --build-arg CACHE_BUST=$(date +%s) --build-arg GIT_HASH=$(shell git rev-parse HEAD) --build-arg GIT_SHORT=$(shell git rev-parse --short HEAD) --build-arg GIT_DESCRIBE=$(shell git describe --always --long 2>/dev/null || echo $(shell git rev-parse --short HEAD)) --build-arg GIT_BRANCH=$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown) -t kevindpostal/irc-fiber-gateway:0.3.0 -f Containerfile . 2>&1 | tail -20'
@@ -1777,7 +1777,7 @@ update-gateway: version frontend-build ## Deploy > Build frontend + rebuild gate
 	@ssh -F /dev/null -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_ircfiber -o StrictHostKeyChecking=no deploy@$(_target_ssh) 'sudo rm -rf /opt/ircfiber-src/public/dist/.vite* /opt/ircfiber-src/public/dist/*\ 2* /opt/ircfiber-src/frontend/.vite* 2>/dev/null; sudo find /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend -depth -name "* 2*" -exec rm -rf {} + 2>/dev/null || true; sudo chmod -R a+rX /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend 2>/dev/null || true; echo host-public-cleaned' 2>&1 | tail -3
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" backend/ deploy@$(_target_ssh):/opt/ircfiber-src/backend/ 2>&1 | tail -5
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" common/ deploy@$(_target_ssh):/opt/ircfiber-src/common/ 2>&1 | tail -5
-	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile deploy@$(_target_ssh):/opt/ircfiber-src/Containerfile 2>&1 | tail -5
+	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile Containerfile.site deploy@$(_target_ssh):/opt/ircfiber-src/ 2>&1 | tail -5
 	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" .dockerignore deploy@$(_target_ssh):/opt/ircfiber-src/.dockerignore 2>&1 | tail -5
 	@rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no" config/ deploy@$(_target_ssh):/opt/ircfiber-src/config/ 2>&1 | tail -5
 	@printf '%b\n' "$(D)  2/4 Building runtime-gateway image on host (BuildKit, ~2-3m first time, cached after)$(R)"
@@ -1810,7 +1810,7 @@ update-gateway-bluegreen: version frontend-build ## Deploy > Blue/green gateway 
 	@rsync -avz --checksum --exclude=dist --exclude=.nosync --exclude=.DS_Store --exclude="* 2" --exclude="* 2.*" --exclude="* 2/**" -e "ssh -o StrictHostKeyChecking=no" public/ deploy@$(_target_ssh):/opt/ircfiber-src/public/ 2>&1 | tail -3
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" backend/ deploy@$(_target_ssh):/opt/ircfiber-src/backend/ 2>&1 | tail -5
 	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" common/ deploy@$(_target_ssh):/opt/ircfiber-src/common/ 2>&1 | tail -5
-	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile deploy@$(_target_ssh):/opt/ircfiber-src/Containerfile 2>&1 | tail -5
+	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile Containerfile.site deploy@$(_target_ssh):/opt/ircfiber-src/ 2>&1 | tail -5
 	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" .dockerignore deploy@$(_target_ssh):/opt/ircfiber-src/.dockerignore 2>&1 | tail -5
 	@rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no" config/ deploy@$(_target_ssh):/opt/ircfiber-src/config/ 2>&1 | tail -5
 	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" deploy/ deploy@$(_target_ssh):/opt/ircfiber-src/deploy/ 2>&1 | tail -5
