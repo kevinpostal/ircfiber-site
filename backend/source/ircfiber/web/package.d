@@ -178,8 +178,23 @@ final class WebController {
         // so the SPA router can handle them on initial page load.
         else if (path == "/" && !req.queryString.startsWith("/")) {
             if (auto last = "lastVisited" in req.cookies) {
-                res.redirect(*last);
-                return;
+                // vibe URL-DECODES cookie values, so a stored channel route
+                // "/irc/Net/channel/%23chan" reads back as ".../#chan". Echoing
+                // that into Location made the browser treat "#chan" as a
+                // FRAGMENT — the user landed on ".../channel/" and the SPA
+                // fell back to the first network: "it doesn't remember the
+                // channel I was on". Re-encode every segment before
+                // redirecting, and only ever redirect inside /irc/ (a cookie
+                // is attacker-influenced input; this is not an open redirect).
+                import std.algorithm : map;
+                import std.array : join, split;
+                import std.uri : encodeComponent;
+                string target = (*last).idup;
+                if (target.startsWith("/irc/")) {
+                    auto encoded = target.split("/").map!(s => encodeComponent(s)).join("/");
+                    res.redirect(encoded);
+                    return;
+                }
             }
         }
 
