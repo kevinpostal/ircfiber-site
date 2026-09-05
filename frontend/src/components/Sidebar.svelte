@@ -2,9 +2,9 @@
   import { ircState, isTrackingUnread, showsUnreadCount } from '../stores/ircStore.svelte';
   import SidebarIndicators from './SidebarIndicators.svelte';
   import { isFiberServerDown as isServerDown } from '../lib/fiberServer';
-  import { archivedMap, pinnedMap, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, pinnedOrder, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
-  import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder } from '../stores/api';
+  import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder, updatePinnedOrder } from '../stores/api';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
   import type { Buffer, Network } from '../types';
   import AccountMenu from './AccountMenu.svelte';
@@ -128,12 +128,57 @@
 
   function uniquePinned(pinned: Array<{ networkId: string; buffer: Buffer; network: Network }>): Array<{ networkId: string; buffer: Buffer; network: Network }> {
     const seen = new Set<string>();
-    return pinned.filter(p => {
+    const rows = pinned.filter(p => {
       const key = p.networkId + ':' + p.buffer.name;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+    // `pinnedOrder` is the server's pin list, which is the user's drag
+    // order. Anything missing from it (just pinned elsewhere, or a pin
+    // that predates this order) keeps its natural position after the
+    // ordered ones — index -1 sorts last, ties stay stable.
+    const rank = (key: string) => {
+      const i = pinnedOrder.indexOf(key);
+      return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    return rows
+      .map((p, i) => ({ p, i, r: rank(p.networkId + ':' + p.buffer.name) }))
+      .sort((a, b) => (a.r - b.r) || (a.i - b.i))
+      .map(x => x.p);
+  }
+
+  // svelte-dnd-action mutates the array it is given, so the Pinned zone
+  // gets its own wrapper list (same shape as the network zone above) and
+  // the real order is written on `finalize` only — one POST per drop, not
+  // one per hover frame.
+  //
+  // The effect deliberately has NO "am I dragging" guard: a drag that never
+  // finalizes (pointer lost, element unmounted mid-drag) would then latch
+  // the flag on and this list would stop tracking `pinned`/`pinnedOrder`
+  // for the rest of the session — pins and remote reorders would silently
+  // stop appearing. It only re-runs when the pinned set or its order
+  // actually changes, neither of which happens mid-drag, so the library's
+  // in-place mutations are never fought.
+  interface PinDragItem { id: string; row: { networkId: string; buffer: Buffer; network: Network }; }
+  let pinDragList = $state<PinDragItem[]>([]);
+  $effect(() => {
+    pinDragList = uniquePinned(pinned).map(row => ({ id: row.networkId + ':' + row.buffer.name, row }));
+  });
+
+  function handlePinConsider(e: CustomEvent<DndEvent<PinDragItem>>): void {
+    pinDragList = e.detail.items;
+  }
+
+  function handlePinFinalize(e: CustomEvent<DndEvent<PinDragItem>>): void {
+    pinDragList = e.detail.items;
+    const order = pinDragList.map(i => i.id);
+    // Local first so the drop looks instant even offline, then the server —
+    // whose `pinned` broadcast re-applies the same order on every other tab
+    // and device.
+    pinnedOrder.length = 0;
+    pinnedOrder.push(...order);
+    updatePinnedOrder(order).catch(err => console.error('Failed to persist pin order:', err));
   }
 </script>
 
@@ -182,9 +227,18 @@
   {#if pinned.length > 0}
     <ul class="bufferList pinnedBuffers">
       <h2><i class="fa fa-thumb-tack"></i>Pinned</h2>
-      <ul class="pinnedBufferList">
-        {#each uniquePinned(pinned) as p (p.networkId + ':' + p.buffer.name)}
-          {@render bufferRow(p.network, p.buffer, 'channel')}
+      <ul class="pinnedBufferList"
+          use:dndzone={{
+            items: pinDragList,
+            flipDurationMs: 150,
+            type: 'pin-order',
+            dropTargetStyle: {},
+            dragDisabled: pinDragList.length < 2,
+          }}
+          onconsider={handlePinConsider}
+          onfinalize={handlePinFinalize}>
+        {#each pinDragList as p (p.id)}
+          {@render bufferRow(p.row.network, p.row.buffer, 'channel')}
         {/each}
       </ul>
     </ul>

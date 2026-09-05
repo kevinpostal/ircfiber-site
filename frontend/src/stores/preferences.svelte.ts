@@ -227,6 +227,14 @@ export const conversationsCollapsedMap = $state<Record<string, boolean>>(getStor
 // their natural order. The Sidebar component reads this when iterating
 // ircState.networks.
 export const networkOrder = $state<string[]>(getStorageItem('ircfiber:networkOrder', []));
+// User-defined order of the Pinned section (top-to-bottom), as
+// `<networkId>:<bufferName>` keys. The server's `pinnedChannels` array IS
+// this order — pin appends, unpin filters, and POST /api/me/pin-order
+// rewrites it — so every tab and device converges through the existing
+// `pinned` pref broadcast. Cached locally so a refresh renders the user's
+// order immediately instead of flashing insertion order until stat_user
+// lands. Keys absent from the list sort after the ones present.
+export const pinnedOrder = $state<string[]>(getStorageItem('ircfiber:pinnedOrder', []));
 // Per-buffer last-read message timestamp (IRCCloud-style lastSeen)
 export const lastSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:lastSeen', {}));
 // Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen)
@@ -379,6 +387,7 @@ $effect.root(() => {
   $effect(() => schedulePersistMap('ircfiber:inactiveCollapsed', inactiveCollapsedMap));
   $effect(() => schedulePersistMap('ircfiber:conversationsCollapsed', conversationsCollapsedMap));
   $effect(() => { setStorageItem('ircfiber:networkOrder', networkOrder); });
+  $effect(() => { setStorageItem('ircfiber:pinnedOrder', pinnedOrder); });
   $effect(() => schedulePersistMap('ircfiber:lastSeen', lastSeenMap));
   $effect(() => schedulePersistMap('ircfiber:bottomSeen', bottomSeenMap));
   $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
@@ -535,6 +544,7 @@ if (typeof window !== 'undefined') {
       case 'ircfiber:inactiveCollapsed': applyObject(inactiveCollapsedMap); break;
       case 'ircfiber:conversationsCollapsed': applyObject(conversationsCollapsedMap); break;
       case 'ircfiber:networkOrder':      applyArray(networkOrder); break;
+      case 'ircfiber:pinnedOrder':       applyArray(pinnedOrder); break;
       case 'ircfiber:lastSeen':          applyObject(lastSeenMap); break;
       case 'ircfiber:bottomSeen':        applyObject(bottomSeenMap); break;
       case 'ircfiber:bufferPrefs':       applyObject(bufferPrefsMap as Record<string, BufferPrefs>); break;

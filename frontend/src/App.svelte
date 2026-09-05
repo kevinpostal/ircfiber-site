@@ -42,7 +42,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, pinnedOrder, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -1121,6 +1121,11 @@ let showNetworkForm: boolean = $state(false);
       for (const key of list) {
         if (pinnedMap[key] !== false) pinnedMap[key] = true;
       }
+      // The array order IS the user's Pinned order (see the pin-order
+      // endpoint), so a drag on another device arrives here as a plain
+      // `pinned` broadcast and the sidebar re-sorts live.
+      pinnedOrder.length = 0;
+      pinnedOrder.push(...list);
     }
     if (user.archivedChannels) {
       const list = user.archivedChannels as string[];
@@ -1251,6 +1256,10 @@ let showNetworkForm: boolean = $state(false);
           pinnedMap[k] = true;
         }
       }
+      // The list order is the Pinned section's order, so a drag on another
+      // device (or another tab) re-sorts this one within one WS frame.
+      pinnedOrder.length = 0;
+      pinnedOrder.push(...channels);
     } else if (key === 'archived') {
       const channels = (data.value as string[]) ?? [];
       // Same real-time sync pattern as pinned channels.

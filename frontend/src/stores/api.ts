@@ -124,6 +124,18 @@ export async function unpinChannel(networkId: string, channel: string): Promise<
   if (!r.ok) throw new Error('Unpin failed');
 }
 
+/** Rewrites the order of the Pinned section. The server treats the payload
+ *  as a reordering only: unknown ids are dropped and omitted pins keep their
+ *  place, so a stale tab cannot unpin by omission. */
+export async function updatePinnedOrder(order: string[]): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/pin-order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ order })
+  });
+  if (!r.ok) throw new Error('Pin reorder failed');
+}
+
 export async function archiveChannel(networkId: string, channel: string): Promise<void> {
   const r = await fetch(`${API_BASE}/me/archives`, {
     method: 'POST',

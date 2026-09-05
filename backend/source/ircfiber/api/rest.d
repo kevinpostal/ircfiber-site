@@ -129,6 +129,7 @@ final class RESTAPI {
         router.post("/api/me/collapsed", &updateCollapsed);
         router.post("/api/me/inactive-collapsed", &updateInactiveCollapsed);
         router.post("/api/me/network-order", &updateNetworkOrder);
+        router.post("/api/me/pin-order", &updatePinnedOrder);
         router.post("/api/me/show-member-prefixes", &updateShowMemberPrefixes);
         router.post("/api/me/bnc-playback-lines", &updateBncPlaybackLines);
         router.post("/api/me/notification-prefs", &updateNotificationPrefs);
@@ -1819,6 +1820,50 @@ final class RESTAPI {
         auto newVersion = prefsRepo.save(user.id, prefs);
 
         broadcastPrefUpdate(user.id.toString(), "networkOrder", serializeToJson(prefs.networkOrder), newVersion);
+
+        res.statusCode = 204;
+        res.writeVoidBody();
+    }
+
+    /// Replaces the order of the user's pinned channels. `prefs.pinnedChannels`
+    /// has always been an ordered array (pin appends, unpin filters), so the
+    /// order IS the pin list — no second field, no migration, and the existing
+    /// `pinned` broadcast already carries it to every other tab and device.
+    ///
+    /// The payload is treated as a reordering, never as a membership change:
+    /// ids that are not currently pinned are dropped, and pinned ids the
+    /// client omitted are appended in their existing order. That way a tab
+    /// working from a stale list cannot unpin a channel by leaving it out of
+    /// a drag it never saw.
+    private void updatePinnedOrder(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+
+        auto user = req.context["user"].get!User;
+        const bodyJson = req.json;
+
+        auto prefs = prefsRepo.load(user.id);
+
+        string[] requested;
+        if (auto o = "order" in bodyJson) {
+            if (o.type == Json.Type.array) {
+                foreach (entry; *o) {
+                    if (entry.type != Json.Type.string) continue;
+                    const id = entry.get!string;
+                    if (id.length == 0 || requested.canFind(id)) continue;
+                    if (!prefs.pinnedChannels.canFind(id)) continue;
+                    requested ~= id;
+                }
+            }
+        }
+        foreach (id; prefs.pinnedChannels) {
+            if (!requested.canFind(id)) requested ~= id;
+        }
+
+        prefs.pinnedChannels = requested;
+        auto newVersion = prefsRepo.save(user.id, prefs);
+
+        broadcastPrefUpdate(user.id.toString(), "pinned", serializeToJson(prefs.pinnedChannels), newVersion);
 
         res.statusCode = 204;
         res.writeVoidBody();

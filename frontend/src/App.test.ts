@@ -50,6 +50,7 @@ vi.mock('/src/stores/api', () => ({
   deleteNetwork: vi.fn(async () => undefined),
   pinChannel: vi.fn(async () => undefined),
   unpinChannel: vi.fn(async () => undefined),
+  updatePinnedOrder: vi.fn(async () => undefined),
   archiveChannel: vi.fn(async () => undefined),
   unarchiveChannel: vi.fn(async () => undefined),
   deletePastebin: vi.fn(async () => undefined),
