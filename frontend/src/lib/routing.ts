@@ -36,6 +36,17 @@ export function updateRoute(networkId: string, bufferName: string): void {
   if (window.location.pathname !== path) {
     history.pushState({ networkId, bufferName }, '', path);
   }
+  // Keep `lastVisited` as fresh as the URL. The gateway writes this cookie
+  // only on full-page GETs of /irc/* and redirects bare "/" to it
+  // (web/package.d `index()`), so before this line an SPA channel switch
+  // never updated it: typing the domain or opening the PWA landed you on
+  // the channel of your last page LOAD, not your last active channel —
+  // IRCCloud restores `last_selected_bid` instead, and this cookie is our
+  // equivalent marker. Same raw format the server writes (the path is
+  // already URL-encoded and cookie-safe).
+  try {
+    document.cookie = 'lastVisited=' + path + '; path=/; max-age=' + 90 * 24 * 3600;
+  } catch { /* non-browser test env */ }
 }
 
 export function navigateSettings(tab: SettingsTab): void {

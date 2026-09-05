@@ -237,8 +237,18 @@ export const networkOrder = $state<string[]>(getStorageItem('ircfiber:networkOrd
 export const pinnedOrder = $state<string[]>(getStorageItem('ircfiber:pinnedOrder', []));
 // Per-buffer last-read message timestamp (IRCCloud-style lastSeen)
 export const lastSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:lastSeen', {}));
-// Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen)
-export const bottomSeenMap = $state<Record<string, number>>(getStorageItem('ircfiber:bottomSeen', {}));
+// Per-buffer bottom-seen message timestamp (IRCCloud-style bottomSeen):
+// the scroll lock captured when the view leaves the exact bottom.
+// TRANSIENT for the same reason focusSeen is (below): `readBuffer` marks
+// read at `focusSeen ?? bottomSeen ?? lastMessage`, and IRCCloud keeps
+// `this.bottomSeen` as a plain runtime field on the buffer model (see
+// `lockBottomSeen` in build/common-5650bddb.js — it is never serialised).
+// When this map was hydrated from localStorage, a stale lock from a past
+// session capped the read marker: opening a buffer after a large influx
+// cleared the badge for an instant, the first scroll event's readBuffer
+// dragged lastSeen back to the fossil bottomSeen, and the only way out
+// was physically scrolling the view to the exact bottom.
+export const bottomSeenMap = $state<Record<string, number>>({});
 // Per-buffer focus-seen timestamp (IRCCloud-style focusSeen): where the
 // log stood when the window lost focus, so returning shows a "since you
 // tabbed out" divider. Deliberately TRANSIENT (in-memory only, never
@@ -252,6 +262,8 @@ try {
   if (typeof localStorage !== 'undefined') {
     localStorage.removeItem('ircfiber:focusSeen');
     localStorage.removeItem('ircfiber:focusSeen:_savedAt');
+    localStorage.removeItem('ircfiber:bottomSeen');
+    localStorage.removeItem('ircfiber:bottomSeen:_savedAt');
   }
 } catch {}
 // IRCCloud-style: when true, the user has disabled the "post a snippet?"
@@ -389,7 +401,6 @@ $effect.root(() => {
   $effect(() => { setStorageItem('ircfiber:networkOrder', networkOrder); });
   $effect(() => { setStorageItem('ircfiber:pinnedOrder', pinnedOrder); });
   $effect(() => schedulePersistMap('ircfiber:lastSeen', lastSeenMap));
-  $effect(() => schedulePersistMap('ircfiber:bottomSeen', bottomSeenMap));
   $effect(() => setStorageItem('ircfiber:pastebinDisablePrompt', _pastebinDisablePrompt));
   $effect(() => schedulePersistMap('ircfiber:bufferPrefs', bufferPrefsMap));
   $effect(() => { setStorageItem('ircfiber:globalPrefs', globalPrefs); });
@@ -423,9 +434,9 @@ export function getBottomSeen(networkId: string, bufferName: string): number | n
   return bottomSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] ?? null;
 }
 export function setBottomSeen(networkId: string, bufferName: string, ts: number): void {
+  // In-memory only — see the bottomSeenMap declaration for why a
+  // persisted scroll lock poisons the read marker.
   bottomSeenMap[`${networkId}:${normalizeChannelName(bufferName)}`] = ts;
-  setStorageItem('ircfiber:bottomSeen', bottomSeenMap);
-  schedulePersist('ircfiber:bottomSeen', bottomSeenMap);
 }
 
 export function getFocusSeen(networkId: string, bufferName: string): number | null {
@@ -546,7 +557,6 @@ if (typeof window !== 'undefined') {
       case 'ircfiber:networkOrder':      applyArray(networkOrder); break;
       case 'ircfiber:pinnedOrder':       applyArray(pinnedOrder); break;
       case 'ircfiber:lastSeen':          applyObject(lastSeenMap); break;
-      case 'ircfiber:bottomSeen':        applyObject(bottomSeenMap); break;
       case 'ircfiber:bufferPrefs':       applyObject(bufferPrefsMap as Record<string, BufferPrefs>); break;
       case 'ircfiber:ignores':           applyArray(ignoreList); break;
       case 'ircfiber:highlightWords':    applyArray(highlightWords); break;

@@ -261,11 +261,16 @@ describe('cross-tab sync (storage event)', () => {
 		expect(lastSeenMap['net1:#chan']).toBe(1000);
 	});
 
-	it('updates bottomSeenMap when "ircfiber:bottomSeen" changes in another tab', () => {
+	// bottomSeen is a per-view scroll lock and is deliberately NOT persisted
+	// or cross-tab synced any more (IRCCloud keeps it as a runtime field on
+	// the buffer model): a lock imported from another tab or a past session
+	// capped `readBuffer` below the newest message and the unread badge
+	// could only be cleared by scrolling the whole backlog.
+	it('ignores "ircfiber:bottomSeen" storage events from other tabs', () => {
 		fireStorageEvent('ircfiber:bottomSeen', JSON.stringify({ 'net1:#chan': 2000 }));
 		flushSync();
 
-		expect(bottomSeenMap['net1:#chan']).toBe(2000);
+		expect(bottomSeenMap['net1:#chan']).toBeUndefined();
 	});
 
 	it('updates membersCollapsedMap when "ircfiber:membersCollapsed" changes in another tab', () => {

@@ -413,6 +413,18 @@ export async function addNetwork(data: {
   return r.json();
 }
 
+/**
+ * One-click provisioning of the platform IRC Fiber network. Signup runs the
+ * same helper server-side, but that call is best-effort (admin kill-switch,
+ * Mongo/Redis hiccup) and pre-feature accounts never got one — the Welcome
+ * page offers this as a first-class action. Idempotent server-side.
+ */
+export async function provisionDefaultFiber(): Promise<Record<string, unknown>> {
+  const r = await fetch(`${API_BASE}/networks/default-fiber`, { method: 'POST' });
+  if (!r.ok) throw new Error(await serverError(r, 'IRC Fiber is not available right now'));
+  return r.json();
+}
+
 export async function updateNetwork(networkId: string, data: Record<string, unknown>): Promise<void> {
   const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}`, {
     method: 'PUT',

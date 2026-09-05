@@ -1,6 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
+import { setChanPrefixChars } from '../lib/autolinker';
 import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
@@ -410,7 +411,11 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
   delete ircState.backlogDivider[key];
   const net = ircState.networks.find(n => n.networkId === networkId);
   if (net) {
-    let buf = net.buffers.find(b => b.name === bufferName);
+    // Fold both sides: `bufferName` is already normalized for channels but
+    // buffer OBJECTS keep the server's display case (`#Dev`), so an exact
+    // compare missed them and pushed a duplicate phantom (`#dev`) into the
+    // sidebar every time a case-variant name was navigated to.
+    let buf = net.buffers.find(b => normalizeChannelName(b.name) === normalizeChannelName(bufferName));
     if (!buf) {
       // Auto-create buffer when navigating to a channel or query that doesn't
       // exist yet (e.g. joining a +R channel that rejected the JOIN, or
@@ -1556,8 +1561,17 @@ export function markSeenEidDirty(networkId: string, bufferName: string, t: numbe
   persistDirtySeen();
 }
 
-/** IRCCloud `Buffer.setLastSeen(m)`. */
+/** IRCCloud `Buffer.setLastSeen(m)`.
+ *
+ *  Advance-only: the gateway's `irc:lastseen` hash is SET_IF_GREATER, so a
+ *  local regression would show a badge the server has already cleared and
+ *  re-raise it on every boot. The historical offender was `readBuffer`
+ *  capping at a fossil bottomSeen and dragging the marker backwards —
+ *  bottomSeen is transient now, but the marker itself must still never
+ *  move back. */
 export function setLastSeenMessage(networkId: string, bufferName: string, t: number): void {
+  const before = getLastSeen(networkId, bufferName);
+  if (before !== null && t < before) return;
   clearUnseenHighlightsUntil(networkId, bufferName, t);
   updateBottomSeen(networkId, bufferName, t);
   setUnseen(networkId, bufferName, countImportantMessagesAfter(networkId, bufferName, t));
@@ -2878,7 +2892,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
           oldKeys.length === newKeys.length &&
           newKeys.every(k => old[k] === raw[k]) &&
           oldKeys.every(k => raw[k] === old[k]);
-        if (!same) net.isupport = { ...raw };
+        if (!same) { net.isupport = { ...raw }; refreshChanPrefixChars(); }
       }
 
       // W2-T02: sync payload ships `retryStatus` only when the engine
@@ -3110,6 +3124,24 @@ export function handleConnect(cmd: string, networkId: string, text?: string): vo
 }
 
 /**
+ * Feed every network's ISUPPORT `CHANTYPES` into the autolinker so
+ * `#channel` detection honours what the servers actually advertise —
+ * IRCCloud's linker asks the connection (`getChannelPrefixes()` reads
+ * `getISupport("CHANTYPES", "#")`); ours is process-global, so the union
+ * across networks is used. `&` is deliberately excluded by the linker's
+ * regex when servers do not advertise it; a server that does (CHANTYPES
+ * `#&`) turns `&channel` links on via this path.
+ */
+function refreshChanPrefixChars(): void {
+  let chars = '#';
+  for (const net of ircState.networks) {
+    const ct = net.isupport?.['CHANTYPES'];
+    if (!ct) continue;
+    for (const c of ct) if (!chars.includes(c)) chars += c;
+  }
+  setChanPrefixChars(chars);
+}
+/**
  * Apply a freshly-received ISUPPORT map to the network. Sent by the
  * engine as a dedicated synthetic event when the 005 reply stream
  * finishes — see `IRCRawEvent.makeIsupport` in
@@ -3137,6 +3169,7 @@ export function applyIsupportUpdate(
     oldKeys.every(k => raw[k] === old[k]);
   if (same) return;
   net.isupport = { ...raw };
+  refreshChanPrefixChars();
   markNetworkSeen(networkId);
 }
 /**

@@ -1495,10 +1495,10 @@ let showNetworkForm: boolean = $state(false);
       const first = visible[0] ?? ircState.networks.find(n => (n as any).host && !isFiberServerDown(n as any));
       if (first) {
         switchToBuffer(first.networkId, '_server');
-      } else {
-        window.history.replaceState({}, '', '/');
-        document.cookie = 'lastVisited=; path=/; expires=Thu, 01 Jan 1971 00:00:00 GMT';
       }
+      // No visible network: leave the URL and cookie alone —
+      // selectLastActiveBuffer resolves once the sync lands, and the
+      // route-mirror $effect rewrites the URL from whatever it picks.
       return;
     }
     const m = path.match(/^\/irc\/([^\/]+)(?:\/(channel|messages)\/([^\/]+))?\/?$/);
@@ -1509,15 +1509,16 @@ let showNetworkForm: boolean = $state(false);
     const normalize = (s: string) => s.replace(/\s+/g, '').toLowerCase();
     const net = ircState.networks.find(n => n.name === netName || n.name.toLowerCase() === netName.toLowerCase() || normalize(n.name) === normalize(netName));
     if (!net) {
-      // Networks may still be loading from the initial sync. If we have
-      // no networks yet, leave the URL alone so the sync handler's
-      // checkRoute can pick it up once the network arrives. Only redirect
-      // when we have networks but the requested one is genuinely missing
-      // (e.g. the network was deleted).
-      if (ircState.networks.length > 0) {
-        window.history.replaceState({}, '', '/');
-        document.cookie = 'lastVisited=; path=/; expires=Thu, 01 Jan 1971 00:00:00 GMT';
-      }
+      // Networks may still be loading — the sync handler's checkRoute picks
+      // the route up once they arrive. Even when networks ARE loaded and
+      // this one is missing (deleted, renamed, or a name-mangling race
+      // during boot), NEVER rewrite the URL to '/' or wipe the lastVisited
+      // cookie here: that destroyed the user's route before the data that
+      // could resolve it had landed, and the sync-time fallback then
+      // "restored" the first connected network instead of the channel they
+      // were on. When the route stays unresolved, selectLastActiveBuffer
+      // picks a buffer and the route-mirror $effect rewrites the URL —
+      // same end state, nothing destroyed in between.
       return;
     }
     let bufferName = '_server';

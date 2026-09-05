@@ -13,7 +13,8 @@ import vibe.core.log;
 import ircfiber.api.session : SessionManager;
 import ircfiber.models.user : User;
 import ircfiber.models.network : NetworkConfig, TLSMode, SASLMechanism, dedupChannels;
-import ircfiber.default_network : DEFAULT_FIBER_HOST, DEFAULT_FIBER_PORT, DEFAULT_FIBER_CHANNELS;
+import ircfiber.default_network : DEFAULT_FIBER_HOST, DEFAULT_FIBER_PORT, DEFAULT_FIBER_CHANNELS,
+    ensureDefaultFiberNetwork;
 import ircfiber.models.irc_event : IRCRawEvent;
 import ircfiber.storage.buffer : BufferManager;
 import ircfiber.storage.redis : RedisStorage;
@@ -107,6 +108,7 @@ final class RESTAPI {
         router.get("/api/image-proxy", &handleImageProxy);
         router.get("/api/networks", &getNetworks);
         router.post("/api/networks", &createNetwork);
+        router.post("/api/networks/default-fiber", &createDefaultFiberNetwork);
         router.put("/api/networks/:id", &updateNetwork);
         router.patch("/api/networks/:id", &updateNetwork);
         router.delete_("/api/networks/:id", &deleteNetwork);
@@ -286,6 +288,32 @@ final class RESTAPI {
         msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
         redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
 
+        res.writeJsonBody(cfg.toJson());
+    }
+
+    /// One-click provisioning of the platform IRC Fiber network.
+    ///
+    /// Signup already runs `ensureDefaultFiberNetwork`, but that call is
+    /// best-effort (a Mongo/Redis hiccup or the admin kill-switch skips it
+    /// silently) and accounts predating the feature never got one. This
+    /// gives the Welcome page a first-class "Connect to IRC Fiber" action.
+    /// Idempotent: an existing irc.ircfiber.com network is returned as-is,
+    /// never duplicated.
+    private void createDefaultFiberNetwork(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+
+        auto user = req.context["user"].get!User;
+        auto cfg = ensureDefaultFiberNetwork(user, networkRepo, redis, serverRegistry);
+        if (cfg.id == UUID.init) {
+            // Only the admin kill-switch (irc:config:fiberEnabled=0) or an
+            // uninitialised user reaches here — infrastructure trouble after
+            // the insert still returns the config.
+            res.statusCode = 503;
+            res.writeJsonBody(Json(["error": Json("The IRC Fiber server is not available right now")]));
+            return;
+        }
+        redis.del(RedisKeys.userNetworks(user.id.toString()));
         res.writeJsonBody(cfg.toJson());
     }
 

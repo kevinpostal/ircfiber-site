@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack, flushSync, tick, onMount, onDestroy } from 'svelte';
-  import { ircState, getActiveBufferObj, getActiveNetwork, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused, getVisitSeen, clearVisitSeen, isMessageUnseenForVisit, getVisitSeenMessage } from '../stores/ircStore.svelte';
+  import { ircState, isMessageUnseen, getActiveBufferObj, getActiveNetwork, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused, getVisitSeen, clearVisitSeen, isMessageUnseenForVisit, getVisitSeenMessage } from '../stores/ircStore.svelte';
   import { getClearedAt, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
@@ -10,6 +10,7 @@
   import SeenDivider from './SeenDivider.svelte';
   import ChatterBar from './ChatterBar.svelte';
   import ScrollClock from './ScrollClock.svelte';
+  import { handleChannelLinkClick } from '../lib/channelLinks';
   import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash, normalizeChannelName } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
   import { dividerPos as sharedDividerPos, animateScrollTo, cancelScrollAnimation } from '../lib/scroll';
@@ -1183,7 +1184,22 @@
     if (!fetching) {
       const { networkId, bufferName } = ircState.activeBuffer;
       const top = rowMessage(topRow);
-      if (upperUpdate(top) === false && (userScrolled || isSessionFocused()) && networkId && bufferName) {
+      // The bar reports against the VISIT pin (what was unread when the
+      // user arrived) and may stay up for the whole visit…
+      upperUpdate(top);
+      // …but the read trigger must gate on the LIVE marker, exactly like
+      // IRCCloud (`!1===upperChatter.update(n)&&(userScrolled||focused)&&
+      // read()` — their update() measures last_seen_eid, not a pin).
+      // Gating on the pin froze the marker after a large influx: the bar
+      // never cleared while its territory was on screen, so readBuffer
+      // never ran, and messages that landed after the open-time mark
+      // ("N unread") could only be cleared by scrolling the backlog.
+      // "Top row is seen" = the user is not reading old unread territory,
+      // so everything below (through the bottomSeen/focusSeen caps in
+      // readBuffer) is fair game to mark.
+      const topUnseenLive = top && networkId && bufferName
+        ? isMessageUnseen(top, networkId, bufferName) : null;
+      if (topUnseenLive === false && (userScrolled || isSessionFocused()) && networkId && bufferName) {
         readBuffer(networkId, bufferName);
       }
       lowerUpdate(rowMessage(bottomRow));
@@ -1404,7 +1420,9 @@
 {/if}
 
 <div class="messages-viewport" class:clockShown={clockTs !== null}>
-  <div class="messages" id="messages" bind:this={container}>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="messages" id="messages" bind:this={container}
+       onclick={(e) => handleChannelLinkClick(e)}>
     {#if !isServerBuffer && hasHistoryLoaded}
       {#if showFetchRow}
         <div class="row fetch" class:initialFetch={processedMessages.length === 0} role="status" aria-label="Loading history">

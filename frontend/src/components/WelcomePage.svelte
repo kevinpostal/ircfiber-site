@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
-  import { addNetwork } from '../stores/api';
+  import { addNetwork, provisionDefaultFiber } from '../stores/api';
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { normalizeHost, parseHostUrl } from '../lib/host';
@@ -60,6 +60,78 @@
   let revealSaslPassword = $state(false);
   let error = $state('');
   let busy = $state(false);
+  let fiberBusy = $state(false);
+  let fiberError = $state('');
+
+  // First-run nicety: the account name is almost always the wanted nick.
+  // Only fills an untouched field — a typed nick is never overwritten.
+  $effect(() => {
+    const username = ircState.me?.username;
+    if (username && !nick) nick = username;
+  });
+
+  /** Push a freshly created network into the store and navigate to it —
+   *  shared by the form submit and the IRC Fiber card. */
+  function adoptNetwork(result: Record<string, unknown>): void {
+    if (!result || !result.id) return;
+    const net: import('../types').Network = {
+      networkId: result.id as string,
+      name: result.name as string,
+      host: result.host as string,
+      port: result.port as number,
+      tls: ((result.tls as string) || 'enabled') as 'enabled' | 'disabled' | 'required',
+      nick: result.nick as string,
+      realName: (result.realName as string) || (result.nick as string),
+      currentNick: result.nick as string,
+      sasl: (result.sasl as string) || 'none',
+      saslUsername: (result.saslUsername as string) || '',
+      saslPassword: '',
+      connected: false,
+      connecting: true,
+      connectionState: 'connecting',
+      status: 'unknown',
+      disconnectReason: '',
+      isAway: false,
+      awayMessage: '',
+      buffers: [{
+        name: '_server', type: 'server' as const, isJoined: true,
+        unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
+        topic: '', topicSetBy: '', topicSetAt: 0, users: [],
+        lastSeenMsgTime: null, firstUnseenMsgIndex: null,
+        lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
+      }],
+      awayNicks: new Set(),
+      capabilities: new Set(),
+      isupport: {},
+      chanTypes: '#',
+      egressLabel: null,
+      egressHost: null,
+      egressIp: null,
+      egressLocation: null,
+      lagMs: null,
+      connectedAtMs: null,
+      tlsInfo: null,
+    };
+    ircState.networks.push(net);
+    // Ensure the new server starts expanded in the sidebar
+    collapsedMap[net.networkId] = false;
+    setActiveBuffer(net.networkId, '_server');
+    updateRoute(net.networkId, '_server');
+  }
+
+  /** The IRC Fiber card: provision the platform network in one click. */
+  async function connectFiber(): Promise<void> {
+    if (fiberBusy) return;
+    fiberBusy = true;
+    fiberError = '';
+    try {
+      adoptNetwork(await provisionDefaultFiber());
+    } catch (e: unknown) {
+      fiberError = (e as Error).message || 'IRC Fiber is not available right now';
+    } finally {
+      fiberBusy = false;
+    }
+  }
 
   function selectPreset(preset: NetworkPreset): void {
     host = preset.host;
@@ -99,52 +171,7 @@
         saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
         saslPassword: saslMechanism !== 'none' ? saslPassword : undefined,
       });
-      if (result && result.id) {
-        const net: import('../types').Network = {
-          networkId: result.id as string,
-          name: result.name as string,
-          host: result.host as string,
-          port: result.port as number,
-          tls: ((result.tls as string) || 'enabled') as 'enabled' | 'disabled' | 'required',
-          nick: result.nick as string,
-          realName: (result.realName as string) || (result.nick as string),
-          currentNick: result.nick as string,
-          sasl: (result.sasl as string) || 'none',
-          saslUsername: (result.saslUsername as string) || '',
-          saslPassword: '',
-          connected: false,
-          connecting: true,
-          connectionState: 'connecting',
-          status: 'unknown',
-          disconnectReason: '',
-          isAway: false,
-          awayMessage: '',
-          buffers: [{
-            name: '_server', type: 'server' as const, isJoined: true,
-            unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
-            topic: '', topicSetBy: '', topicSetAt: 0, users: [],
-            lastSeenMsgTime: null, firstUnseenMsgIndex: null,
-            lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
-          }],
-          awayNicks: new Set(),
-          capabilities: new Set(),
-          isupport: {},
-          chanTypes: '#',
-          egressLabel: null,
-          egressHost: null,
-          egressIp: null,
-          egressLocation: null,
-          lagMs: null,
-          connectedAtMs: null,
-          tlsInfo: null,
-        };
-        ircState.networks.push(net);
-        // Ensure the new server starts expanded in the sidebar
-        collapsedMap[net.networkId] = false;
-        // Navigate to the new network's server buffer
-        setActiveBuffer(net.networkId, '_server');
-        updateRoute(net.networkId, '_server');
-      }
+      adoptNetwork(result);
     } catch (e: unknown) {
       const err = e as Error;
       error = err.message || 'Failed to save network';
@@ -163,6 +190,31 @@
   <div id="addNetworkScroll" class="chat-body">
 
   <div id="addNetworkContents">
+    <div class="welcomeHero">
+      <h1 class="welcomeHero__title">Welcome to IRC Fiber{ircState.me?.username ? `, ${ircState.me.username}` : ''}</h1>
+      <p class="welcomeHero__sub">
+        Always connected, infinite history. Start on our own server, or join any
+        IRC network below — your connection stays online even when you close this tab.
+      </p>
+    </div>
+
+    <div class="fiberCard" data-testid="fiber-card">
+      <div class="fiberCard__body">
+        <div class="fiberCard__name"><span class="fiberCard__dot"></span>IRC Fiber</div>
+        <div class="fiberCard__desc">
+          Our community server — <b>#ircfiber</b> and <b>#welcome</b>, no setup needed.
+        </div>
+        {#if fiberError}
+          <p class="userError fiberCard__error">{fiberError}</p>
+        {/if}
+      </div>
+      <button type="button" class="fiberCard__connect" onclick={connectFiber} disabled={fiberBusy}>
+        {fiberBusy ? 'Connecting…' : 'Connect'}
+      </button>
+    </div>
+
+    <h2 class="welcomeDivider"><span>or join another network</span></h2>
+
     <div id="addNetworkEditor">
       <form id="addNetworkForm" class="addNetworkForm networkEditor" onsubmit={(e) => { e.preventDefault(); handleSubmit(); }} novalidate>
         <table cellpadding="0" cellspacing="0" class="form addNetworkCells networkEditorCells networkEditorCells__network">
@@ -417,6 +469,84 @@
 </div>
 
 <style>
+  .welcomeHero {
+    margin-bottom: 20px;
+  }
+  .welcomeHero__title {
+    margin: 0 0 6px;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+  .welcomeHero__sub {
+    margin: 0;
+    color: var(--text-secondary, #8b949e);
+    font-size: 13px;
+    line-height: 1.5;
+    max-width: 560px;
+  }
+  .fiberCard {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 16px;
+    margin-bottom: 22px;
+    border: 1px solid var(--border, #30363d);
+    border-radius: 8px;
+    background: var(--surface-2, rgba(88, 166, 255, 0.05));
+  }
+  .fiberCard__body { flex: 1; min-width: 0; }
+  .fiberCard__name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  .fiberCard__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #3fb950;
+    flex: none;
+  }
+  .fiberCard__desc {
+    color: var(--text-secondary, #8b949e);
+    font-size: 12.5px;
+  }
+  .fiberCard__error { margin: 6px 0 0; }
+  .fiberCard__connect {
+    flex: none;
+    padding: 8px 18px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent, #238636);
+    color: #fff;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .fiberCard__connect:hover { filter: brightness(1.1); }
+  .fiberCard__connect:disabled { opacity: 0.6; cursor: default; }
+  .welcomeDivider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 14px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary, #6e7681);
+  }
+  .welcomeDivider::before,
+  .welcomeDivider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border, #30363d);
+  }
   #addNetworkPage {
     display: flex;
     flex-direction: column;

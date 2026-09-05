@@ -4,6 +4,7 @@
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml } from '../lib/autolinker';
+  import { handleChannelLinkClick } from '../lib/channelLinks';
   import { archivedMap } from '../stores/preferences.svelte';
   import { groupServerLog, phaseToLabel } from '../lib/serverLogGroups';
   import { FAIL_TYPES } from '../lib/connectionWarnings';
@@ -283,7 +284,8 @@
         {/if}
       {/if}
       {#if topic}
-        <span class="topic" id="channel-topic">{@html autolinkHtml(parseIrcFormatting(topic))}</span>
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <span class="topic" id="channel-topic" onclick={(e) => handleChannelLinkClick(e)}>{@html autolinkHtml(parseIrcFormatting(topic))}</span>
       {/if}
     </h2>
     {#if tempUnavailableRemaining > 0}

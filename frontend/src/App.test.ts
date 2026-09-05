@@ -45,6 +45,7 @@ vi.mock('/src/stores/api', () => ({
   disconnectNetwork: vi.fn(async () => undefined),
   joinChannel: vi.fn(async () => undefined),
   addNetwork: vi.fn(async () => undefined),
+  provisionDefaultFiber: vi.fn(async () => undefined),
   updateNetwork: vi.fn(async () => undefined),
   fetchEgress: vi.fn(async () => ({ direct: 'direct', controllable: false, slotCount: 0, freeSlots: 0, slots: [], locations: [] })),
   deleteNetwork: vi.fn(async () => undefined),

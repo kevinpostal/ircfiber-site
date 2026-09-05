@@ -1452,6 +1452,30 @@ describe('read tracking helpers', () => {
 		expect(getLastSeen('net1', '#b')).toBe(3000);
 		expect(liveBuf('net1', '#b')?.unseen).toBe(false);
 	});
+
+	// The reported bug: a fossil bottomSeen (persisted by an old build, or
+	// simply older than the read marker) must never drag lastSeen backwards.
+	// Clicking a buffer marked it read at the newest message, then the first
+	// scroll event's readBuffer capped at the stale lock and the badge came
+	// back — clearing required scrolling the whole backlog past the lock.
+	it('readBuffer never regresses lastSeen to a stale bottomSeen', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#a' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#a'] = [
+			createMessage({ t: 1000, nick: 'x', text: 'old' }),
+			createMessage({ t: 5000, nick: 'x', text: 'new' }),
+		];
+		// Opening the buffer marks read at the newest message…
+		setLastSeenMessage('net1', '#a', 5000);
+		expect(getLastSeen('net1', '#a')).toBe(5000);
+		expect(liveBuf('net1', '#a')?.unseen).toBe(false);
+		// …then a scroll-position readBuffer with a stale lock must be a no-op.
+		bottomSeenMap['net1:#a'] = 1000;
+		readBuffer('net1', '#a');
+		expect(getLastSeen('net1', '#a')).toBe(5000);
+		expect(liveBuf('net1', '#a')?.unseen).toBe(false);
+	});
 });
 
 describe('PART/KICK/JOIN isJoined lifecycle', () => {
