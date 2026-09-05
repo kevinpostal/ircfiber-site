@@ -30,8 +30,22 @@ describe('uploadFlow', () => {
     });
   });
 
-  it('rejects non-image files without starting an upload', () => {
+  // Uploads are universal since "fix(upload): universal 50MB" — any MIME is
+  // accepted (isUploadableFile always true); only the 50 MB cap rejects.
+  it('uploads a non-image file like any other binary', () => {
     startUploads([makeFile('a.mp4', 'video/mp4')], { networkId: 'n', buffer: '#c' });
+    expect(uploadState.active.length).toBe(1);
+    expect(uploadState.active[0].filename).toBe('a.mp4');
+    expect(uploadState.dialog?.mode).toBe('single');
+  });
+
+  it('rejects a file over the 50 MB cap without starting an upload', () => {
+    const notifyError = vi.fn();
+    setDeps({ notifyError });
+    const big = makeFile('big.bin', 'application/octet-stream', 8);
+    Object.defineProperty(big, 'size', { value: 51 * 1024 * 1024 });
+    startUploads([big], { networkId: 'n', buffer: '#c' });
+    expect(notifyError).toHaveBeenCalledWith('big.bin: File too large (max 50 MB)');
     expect(uploadState.active.length).toBe(0);
     expect(uploadState.dialog).toBeNull();
   });
@@ -43,27 +57,33 @@ describe('uploadFlow', () => {
     expect(uploadState.dialog?.message).toBe('check this out');
   });
 
-  it('inserts "message url" into input after confirm once the upload finishes', async () => {
+  // IRCCloud parity (commit 4f8a655): confirming the dialog posts
+  // "<message> <url>" straight to the originating buffer and clears the
+  // composer — it no longer just prefills the input.
+  it('auto-sends "message url" to the originating buffer after confirm', async () => {
     const setInputText = vi.fn();
-    setDeps({
-      uploader: () => ({
-        promise: new Promise<UploadResponse>((res) => { resolveUpload = res; }),
-        abort: () => {},
-      }),
-      send: (networkId, target, text) => sent.push({ networkId, target, text }),
-      getInputText: () => 'check this out',
-      setInputText,
-      clearInput: vi.fn(),
-      notifyError: vi.fn(),
-    });
+    setDeps({ setInputText });
 
     startUploads([makeFile('a.png')], { networkId: 'n', buffer: '#c' });
     confirmDialog({ filename: 'a.png', message: 'look' });
     resolveUpload({ id: 'u1', url: 'https://i.postimg.cc/a.png', pageUrl: 'p', name: 'a.png', size: 100 });
     await vi.waitFor(() => {
+      expect(sent).toEqual([{ networkId: 'n', target: '#c', text: 'look https://i.postimg.cc/a.png' }]);
+    });
+    expect(setInputText).toHaveBeenCalledWith('');
+  });
+
+  it('inserts "message url" into the input when there is no buffer context', async () => {
+    const setInputText = vi.fn();
+    setDeps({ setInputText });
+
+    startUploads([makeFile('a.png')], { networkId: '', buffer: '' });
+    confirmDialog({ filename: 'a.png', message: 'look' });
+    resolveUpload({ id: 'u1', url: 'https://i.postimg.cc/a.png', pageUrl: 'p', name: 'a.png', size: 100 });
+    await vi.waitFor(() => {
       expect(setInputText).toHaveBeenCalledWith('look https://i.postimg.cc/a.png');
     });
-    expect(sent.length).toBe(0); // nothing auto-sent
+    expect(sent.length).toBe(0);
   });
 
   it('cancel aborts and clears state', () => {

@@ -51,12 +51,20 @@ describe('shouldBypassBatcher — connection log messages', () => {
   });
 });
 
+// IRCCloud BufferLogView.checkFlush cadence (see messageBatcher.test.ts):
+// the first message after ≥200 ms of quiet flushes immediately, everything
+// arriving inside the next 200 ms is held and flushed on that tick. The
+// batcher keeps `lastFlush` in module state, so each test starts on a fresh
+// stretch of the fake clock.
 describe('batcher — connection log burst patterns', () => {
   let flushes: { networkId: string; bufferName: string; msgs: IRCMessage[] }[];
   let flush: (networkId: string, bufferName: string, msgs: IRCMessage[]) => void;
+  let clock = Date.now();
 
   beforeEach(() => {
     vi.useFakeTimers();
+    clock += 60_000;
+    vi.setSystemTime(clock);
     flushes = [];
     flush = vi.fn((networkId: string, bufferName: string, msgs: IRCMessage[]) => {
       flushes.push({ networkId, bufferName, msgs });
@@ -65,12 +73,12 @@ describe('batcher — connection log burst patterns', () => {
   });
 
   afterEach(() => {
+    vi.advanceTimersByTime(1000);
+    clock += 1000;
     vi.useRealTimers();
   });
 
-  it('batches a full MOTD burst (40 messages) in a single tick into one flush', () => {
-    // When all MOTD lines arrive in the same tick (same WS frame), they
-    // coalesce into one batch — fast path.
+  it('renders a 39-line MOTD burst as two batches, not 39 renders', () => {
     const msgs: IRCMessage[] = [
       makeMsg({ command: '375', text: 'MOTD start' }),
     ];
@@ -83,12 +91,15 @@ describe('batcher — connection log burst patterns', () => {
       enqueueMessage('net1', '_server', msg);
     }
 
-    vi.advanceTimersByTime(0);
+    // First line paints at once; the other 38 land on the 200 ms tick.
     expect(flush).toHaveBeenCalledTimes(1);
-    expect(flushes[0].msgs).toHaveLength(39);
+    expect(flushes[0].msgs).toHaveLength(1);
+    vi.advanceTimersByTime(200);
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(flushes[1].msgs).toHaveLength(38);
   });
 
-  it('flushes a realistic 50-msg connection log as a single batch when all arrive in one tick', () => {
+  it('renders a realistic 50-msg connection log in two batches', () => {
     const phases = [
       'queued', 'resolving', 'connecting', 'tcp_open', 'tls',
       'tls_done', 'registering', 'caps', 'sasl', 'welcome',
@@ -109,28 +120,26 @@ describe('batcher — connection log burst patterns', () => {
     }
     enqueueMessage('net1', '_server', makeMsg({ command: '376', text: 'MOTD end' }));
 
-    vi.advanceTimersByTime(0);
-    expect(flush).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(200);
+    expect(flush).toHaveBeenCalledTimes(2);
     const total = flushes.reduce((sum, f) => sum + f.msgs.length, 0);
     expect(total).toBe(50);
   });
 
-  it('flushes each tick as its own batch when MOTD messages arrive in separate ticks — THE SLOW PATH', () => {
-    // This simulates the real IRC server behavior: MOTD lines arrive as
-    // individual TCP packets → individual WS frames → each one is its
-    // own batcher flush → visible "line by line" trickle in the DOM.
+  it('flushes each line on its own when MOTD trickles in slower than the tick', () => {
+    // Real servers can dribble MOTD lines out one TCP packet at a time.
+    // Anything ≥200 ms apart is its own batch — nothing is held back.
     enqueueMessage('net1', '_server', makeMsg({ command: '375', text: 'MOTD start' }));
-    vi.advanceTimersByTime(0);
     expect(flushes).toHaveLength(1);
 
     for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(200);
       enqueueMessage('net1', '_server', makeMsg({ command: '372', text: `Line ${i + 1}` }));
-      vi.advanceTimersByTime(0);
     }
     expect(flushes).toHaveLength(6);
 
+    vi.advanceTimersByTime(200);
     enqueueMessage('net1', '_server', makeMsg({ command: '376', text: 'MOTD end' }));
-    vi.advanceTimersByTime(0);
     expect(flushes).toHaveLength(7);
 
     const total = flushes.reduce((sum, f) => sum + f.msgs.length, 0);

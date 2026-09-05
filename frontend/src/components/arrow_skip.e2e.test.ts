@@ -4,8 +4,7 @@ import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
-import { clearedAtMap } from '../stores/preferences.svelte';
-import { logScroll } from '../test/scroll';
+import { clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
 
 function delay(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -28,12 +27,17 @@ function reset(): void {
   ircState.lastSeenMsgTime = null;
   ircState.focusLost = false;
   ircState.forceScrollToBottomNonce = 0;
-  for (const k of Object.keys(clearedAtMap)) delete (clearedAtMap as Record<string, number>)[k];
+  // Browser tests share module state (fileParallelism: false) and the
+  // component itself writes bottomSeen while reading — clear every map a
+  // sibling suite may have left behind, or the bottom pin never arms.
+  for (const m of [clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap]) {
+    for (const k of Object.keys(m)) delete (m as Record<string, unknown>)[k];
+  }
 }
 
-describe('arrow skip', () => {
+describe('small scroll steps', () => {
   beforeEach(reset);
-  it('arrow up from bottom does not skip 200 lines', async () => {
+  it('40px scroll steps up do not skip 200 lines', async () => {
     const net = createNetwork({ networkId: 'net1' });
     net.buffers.push(createBuffer({ name: '#chan', type: 'channel' }));
     ircState.networks.push(net);
@@ -70,7 +74,7 @@ describe('arrow skip', () => {
     let prevNum = getTopVisibleNum(prevTopId);
     expect(prevTopId).not.toBeNull();
     for (let i = 0; i < 20; i++) {
-      logScroll(document.getElementById('messages'), 'ArrowUp');
+      // 40px per step — one wheel notch / one arrow's worth of travel.
       c.scrollTop = Math.max(0, c.scrollTop - 40);
       c.dispatchEvent(new Event('scroll'));
       await delay(60);

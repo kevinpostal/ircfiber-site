@@ -4,8 +4,7 @@ import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
-import { clearedAtMap } from '../stores/preferences.svelte';
-import { logScroll } from '../test/scroll';
+import { clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
 
 function delay(ms:number){ return new Promise(r=>setTimeout(r,ms)); }
 function nextFrame(){ return new Promise(r=>requestAnimationFrame(()=>r())); }
@@ -20,7 +19,12 @@ function reset(){
   ircState.lastSeenMsgTime=null;
   ircState.focusLost=false;
   ircState.forceScrollToBottomNonce=0;
-  for(const k of Object.keys(clearedAtMap)) delete (clearedAtMap as Record<string,number>)[k];
+  // Browser tests share module state (fileParallelism: false) and the
+  // component writes bottomSeen while reading — clear every map a sibling
+  // suite may have left behind, or the bottom pin never arms.
+  for(const m of [clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap]){
+    for(const k of Object.keys(m)) delete (m as Record<string,unknown>)[k];
+  }
 }
 function makeMsgs(n:number){
   const now=Date.now();
@@ -40,7 +44,8 @@ describe('fast scroll up to load more', ()=>{
     ircState.activeBuffer.bufferName='#chan';
     ircState.messages['net1:#chan']=makeMsgs(1000);
     flushSync();
-    render(MessageList,{props:{onLoadMore:vi.fn(async()=>false)} as any});
+    const onLoadMore=vi.fn(async()=>false);
+    render(MessageList,{props:{onLoadMore}});
     flushSync();
     await nextFrame(); await delay(400);
     const c=document.getElementById('messages') as HTMLDivElement;
@@ -48,7 +53,6 @@ describe('fast scroll up to load more', ()=>{
     await nextFrame(); await delay(300);
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight)<=5).toBe(true);
     const startH=c.scrollHeight;
-    logScroll(document.getElementById('messages'), 'ArrowUp');
     c.scrollTop = Math.max(0, c.scrollTop - 100);
     c.dispatchEvent(new Event('scroll'));
     await delay(80); await nextFrame();
@@ -67,36 +71,5 @@ describe('fast scroll up to load more', ()=>{
     expect(c.scrollHeight > startH + 1000, `must have loaded 3 batches: ${startH} -> ${c.scrollHeight}`).toBe(true);
     const maxScroll=c.scrollHeight - c.clientHeight;
     expect(c.scrollTop > 100 && c.scrollTop < maxScroll - 100).toBe(true);
-  },20000);
-
-  it('rapid ArrowUp burst (hold) 8x fast must be monotonic and not snap', async ()=>{
-    const net=createNetwork({networkId:'net1'});
-    net.buffers.push(createBuffer({name:'#chan',type:'channel'}));
-    ircState.networks.push(net);
-    ircState.activeBuffer.networkId='net1';
-    ircState.activeBuffer.bufferName='#chan';
-    ircState.messages['net1:#chan']=makeMsgs(800);
-    flushSync();
-    render(MessageList,{props:{onLoadMore:vi.fn(async()=>false)} as any});
-    flushSync();
-    await nextFrame(); await delay(400);
-    const c=document.getElementById('messages') as HTMLDivElement;
-    c.style.height='400px'; c.style.overflowY='auto'; c.focus();
-    await nextFrame(); await delay(300);
-    const tops:number[]=[c.scrollTop];
-    for(let i=0;i<8;i++){
-      logScroll(document.getElementById('messages'), 'ArrowUp');
-      await delay(18); await nextFrame();
-      const cur=c.scrollTop;
-      tops.push(cur);
-      expect(cur < tops[tops.length-2], `burst ${i}: ${cur} < ${tops[tops.length-2]}`).toBe(true);
-      expect(c.scrollHeight - cur - c.clientHeight > 20).toBe(true);
-    }
-    for(let i=2;i<tops.length;i++){
-      const step=tops[i-1]-tops[i];
-      expect(step>0 && step<200, `step ${i} ${step} must be ~40`).toBe(true);
-    }
-    await delay(800);
-    expect(Math.abs(c.scrollTop - tops[tops.length-1])<10, `must not snap after hold`).toBe(true);
   },20000);
 });

@@ -131,10 +131,18 @@ describe('Overlay', () => {
       secure: false,
       away: '',
     };
-    render(Overlay);
+    const { container } = render(Overlay);
     await expect.element(page.getByRole('heading', { name: 'WHOIS: Alice' })).toBeInTheDocument();
-    const backdrop = document.querySelector('.overlay-backdrop') as HTMLElement | null;
-    backdrop?.click();
+    // Light dismiss: the overlay is a native modal <dialog>, so a click on the
+    // backdrop region outside the panel is dispatched with the <dialog>
+    // element itself as the event target (there is no backdrop div anymore).
+    const dialogEl = container.querySelector('dialog') as HTMLDialogElement | null;
+    expect(dialogEl).not.toBeNull();
+    // A click that originates inside the panel must NOT dismiss.
+    const inner = dialogEl!.querySelector('.overlay-content') as HTMLElement;
+    inner.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(ircState.overlay.type).toBe('whois');
+    dialogEl!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(ircState.overlay.type).toBeNull();
     expect(ircState.overlay.data).toBeNull();
   });

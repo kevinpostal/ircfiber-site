@@ -4,8 +4,7 @@ import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
-import { clearedAtMap } from '../stores/preferences.svelte';
-import { logScroll } from '../test/scroll';
+import { clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
 
 function delay(ms:number){ return new Promise(r=>setTimeout(r,ms)); }
 function nextFrame(){ return new Promise(r=>requestAnimationFrame(()=>r())); }
@@ -20,7 +19,12 @@ function reset(){
   ircState.lastSeenMsgTime=null;
   ircState.focusLost=false;
   ircState.forceScrollToBottomNonce=0;
-  for(const k of Object.keys(clearedAtMap)) delete (clearedAtMap as Record<string,number>)[k];
+  // Browser tests share module state (fileParallelism: false) and the
+  // component writes bottomSeen while reading — clear every map a sibling
+  // suite may have left behind, or the bottom pin never arms.
+  for(const m of [clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap]){
+    for(const k of Object.keys(m)) delete (m as Record<string,unknown>)[k];
+  }
 }
 function makeMsgs(n:number){
   const now=Date.now();
@@ -41,15 +45,16 @@ async function mount(n:number){
   ircState.activeBuffer.bufferName='#chan';
   ircState.messages['net1:#chan']=makeMsgs(n);
   flushSync();
-  render(MessageList,{props:{onLoadMore:vi.fn(async()=>false)} as any});
+  const onLoadMore=vi.fn(async()=>false);
+  render(MessageList,{props:{onLoadMore}});
   flushSync();
   await nextFrame(); await delay(400);
   const c=document.getElementById('messages') as HTMLDivElement;
   c.style.height='400px'; c.style.overflowY='auto'; c.focus();
   await nextFrame(); await delay(300);
   expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight)<=5, `must start bottom`).toBe(true);
-  // clear pending via one arrow like real user
-  logScroll(document.getElementById('messages'), 'ArrowUp');
+  // Break the initial bottom pin the way a user does today (wheel /
+  // scrollbar), then return to the bottom for a clean start.
   c.scrollTop=Math.max(0,c.scrollTop-20);
   c.dispatchEvent(new Event('scroll'));
   await delay(80); await nextFrame();
@@ -100,30 +105,9 @@ describe('irccloud nuances exhaustive', ()=>{
     }
     expect(c.querySelector('.backlogDivider')).not.toBeNull();
   },20000);
-  it('nuance 4: ArrowUp 1x moves 40 and placement stable after 1s', async ()=>{
-    const c=await mount(600);
-    const before=c.scrollTop;
-    logScroll(document.getElementById('messages'), 'ArrowUp');
-    await delay(80); await nextFrame();
-    const after=c.scrollTop;
-    expect(after < before && before-after>=35 && before-after<=50, `40 step before=${before} after=${after}`).toBe(true);
-    const held=after;
-    await delay(1000); await nextFrame();
-    expect(Math.abs(c.scrollTop - held) < 8, `must not drift held=${held} now=${c.scrollTop}`).toBe(true);
-  },20000);
-  it('nuance 5: ArrowUp 4x monotonic 160 and scrollbar mid', async ()=>{
-    const c=await mount(800);
-    const tops=[c.scrollTop];
-    for(let i=0;i<4;i++){ logScroll(document.getElementById('messages'), 'ArrowUp'); await delay(40); await nextFrame(); tops.push(c.scrollTop); }
-    for(let i=1;i<tops.length;i++) expect(tops[i] < tops[i-1] && tops[i-1]-tops[i] < 80, `monotonic ${i}`).toBe(true);
-    expect(tops[0]-tops[4] >=140 && tops[0]-tops[4]<=180, `4x ~160 got ${tops[0]-tops[4]}`).toBe(true);
-    const max=c.scrollHeight - c.clientHeight;
-    expect(c.scrollTop>50 && c.scrollTop < max-50).toBe(true);
-  },20000);
-  it('nuance 6: ArrowUp 20x to top then reveals half-way', async ()=>{
+  it('nuance 6: scrolling to the very top reveals half-way', async ()=>{
     const c=await mount(1000);
-    for(let i=0;i<40;i++){ logScroll(document.getElementById('messages'), 'PageUp'); await delay(30); await nextFrame(); if(c.scrollTop===0) break; }
-    if(c.scrollTop!==0){ c.scrollTop=0; c.dispatchEvent(new Event('scroll')); }
+    c.scrollTop=0; c.dispatchEvent(new Event('scroll'));
     await delay(180); await nextFrame();
     expect(c.querySelector('.backlogDivider') || c.scrollTop===0).toBeTruthy();
     if(c.querySelector('.backlogDivider')) expect(c.scrollTop>30).toBe(true);
@@ -135,7 +119,9 @@ describe('irccloud nuances exhaustive', ()=>{
   },20000);
   it('nuance 8: new msg while reading close (40px) buffers not yank', async ()=>{
     const c=await mount(600);
-    logScroll(document.getElementById('messages'), 'ArrowUp'); await delay(80); await nextFrame();
+    // Read up 40px with the scrollbar — arrow keys no longer scroll the log.
+    c.scrollTop=Math.max(0,c.scrollTop-40); c.dispatchEvent(new Event('scroll'));
+    await delay(80); await nextFrame();
     const mid=c.scrollTop;
     const nm=createMessage({text:'live', t:Date.now(), msgid:'m-live', eid:9999, nick:'other'});
     ircState.messages['net1:#chan']=[...(ircState.messages['net1:#chan']??[]), nm]; flushSync(); await delay(200); await nextFrame();
@@ -143,7 +129,8 @@ describe('irccloud nuances exhaustive', ()=>{
   },20000);
   it('nuance 9: new msg while reading far (400px) buffers', async ()=>{
     const c=await mount(600);
-    for(let i=0;i<10;i++){ logScroll(document.getElementById('messages'), 'ArrowUp'); await delay(20); await nextFrame(); }
+    c.scrollTop=Math.max(0,c.scrollTop-400); c.dispatchEvent(new Event('scroll'));
+    await delay(80); await nextFrame();
     const mid=c.scrollTop;
     expect(c.scrollHeight - mid - c.clientHeight > 300).toBe(true);
     for(let k=0;k<3;k++){ const nm=createMessage({text:`live${k}`, t:Date.now()+k, msgid:`m-${k}`, eid:9000+k, nick:'other'}); ircState.messages['net1:#chan']=[...(ircState.messages['net1:#chan']??[]), nm]; flushSync(); await delay(80); await nextFrame(); expect(Math.abs(c.scrollTop - mid) < 15).toBe(true); }
@@ -156,33 +143,26 @@ describe('irccloud nuances exhaustive', ()=>{
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight) <=5).toBe(true);
     expect(c.scrollHeight >= beforeH - 100).toBe(true);
   },20000);
-  it('nuance 11: Home from mid with history reveals half-way not 0', async ()=>{
+  it('nuance 11: top hit from mid with history reveals half-way not 0', async ()=>{
     const c=await mount(1000);
-    for(let i=0;i<5;i++){ logScroll(document.getElementById('messages'), 'ArrowUp'); await delay(20); await nextFrame(); }
-    logScroll(document.getElementById('messages'), 'Home'); await delay(180); await nextFrame();
-    // with history, Home should trigger reveal and land half-way, not stay 0 wedge
+    // Read up into the middle first, then hit the very top: the reveal
+    // must anchor half-way (divider-152) and never wedge at 0.
+    c.scrollTop=Math.max(0,c.scrollTop-200); c.dispatchEvent(new Event('scroll'));
+    await delay(80); await nextFrame();
+    c.scrollTop=0; c.dispatchEvent(new Event('scroll'));
+    await delay(180); await nextFrame();
     const d=dividerTop(c);
-    if(d!==null){ expect(c.scrollTop>20).toBe(true); expect(Math.abs(c.scrollTop - Math.max(d-152,48)) < 15).toBe(true); } else { expect(c.scrollTop===0).toBe(true); }
+    expect(d, 'reveal must have inserted the backlog divider').not.toBeNull();
+    expect(c.scrollTop>20, `must not wedge at 0, got ${c.scrollTop}`).toBe(true);
+    expect(Math.abs(c.scrollTop - Math.max((d as number)-152,48)) < 15, `half-way: dividerTop=${d} got ${c.scrollTop}`).toBe(true);
   },20000);
-  it('nuance 12: Home with no history stays 0', async ()=>{
-    const net=createNetwork({networkId:'net1'}); net.buffers.push(createBuffer({name:'#chan',type:'channel'})); ircState.networks.push(net); ircState.activeBuffer.networkId='net1'; ircState.activeBuffer.bufferName='#chan'; ircState.messages['net1:#chan']=makeMsgs(80); flushSync(); render(MessageList,{props:{onLoadMore:vi.fn(async()=>false)} as any}); flushSync(); await nextFrame(); await delay(300); const c=document.getElementById('messages') as HTMLDivElement; c.style.height='400px'; c.style.overflowY='auto'; c.focus(); await nextFrame(); await delay(200);
-    logScroll(document.getElementById('messages'), 'Home'); await delay(100); await nextFrame(); expect(c.scrollTop===0).toBe(true);
+  it('nuance 12: top hit with no history stays 0', async ()=>{
+    const net=createNetwork({networkId:'net1'}); net.buffers.push(createBuffer({name:'#chan',type:'channel'})); ircState.networks.push(net); ircState.activeBuffer.networkId='net1'; ircState.activeBuffer.bufferName='#chan'; ircState.messages['net1:#chan']=makeMsgs(80); flushSync(); const onLoadMore=vi.fn(async()=>false); render(MessageList,{props:{onLoadMore}}); flushSync(); await nextFrame(); await delay(300); const c=document.getElementById('messages') as HTMLDivElement; c.style.height='400px'; c.style.overflowY='auto'; c.focus(); await nextFrame(); await delay(200);
+    c.scrollTop=0; c.dispatchEvent(new Event('scroll')); await delay(200); await nextFrame(); expect(c.scrollTop===0).toBe(true);
   },20000);
-  it('nuance 13: End from reading snaps to bottom', async ()=>{
+  it('nuance 14: near-bottom (30px) stays reading, exact bottom pins', async ()=>{
     const c=await mount(600);
-    for(let i=0;i<5;i++){ logScroll(document.getElementById('messages'), 'ArrowUp'); await delay(20); await nextFrame(); }
-    logScroll(document.getElementById('messages'), 'End'); await delay(100); await nextFrame();
-    expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight) <=2).toBe(true);
-  },20000);
-  it('nuance 14: PageUp/PageDown ~90% viewport and not snap unless exact bottom', async ()=>{
-    const c=await mount(600);
-    const bottom=c.scrollTop;
-    logScroll(document.getElementById('messages'), 'PageUp'); await delay(80); await nextFrame();
-    expect(c.scrollTop < bottom - 200).toBe(true);
-    const afterUp=c.scrollTop;
-    logScroll(document.getElementById('messages'), 'PageDown'); await delay(80); await nextFrame();
-    expect(c.scrollTop > afterUp).toBe(true);
-    // PageDown to near bottom but not exact should not pin
+    // IRCCloud has no stick band: 30px off the bottom is still reading.
     c.scrollTop=c.scrollHeight - c.clientHeight - 30; c.dispatchEvent(new Event('scroll')); await delay(80); await nextFrame();
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight) > 5).toBe(true);
     expect(c.scrollHeight - c.scrollTop - c.clientHeight > 5).toBe(true); // should stay reading, not snap
@@ -195,7 +175,8 @@ describe('irccloud nuances exhaustive', ()=>{
     c.style.height='300px'; await delay(100); await nextFrame();
     expect(Math.abs(c.scrollHeight - c.scrollTop - c.clientHeight) <=5).toBe(true);
     // reading resize - go far enough that height increase won't clamp to bottom
-    for(let i=0;i<10;i++){ logScroll(document.getElementById('messages'), 'ArrowUp'); await delay(20); await nextFrame(); }
+    c.scrollTop=Math.max(0,c.scrollTop-400); c.dispatchEvent(new Event('scroll'));
+    await delay(120); await nextFrame();
     const mid=c.scrollTop;
     expect(c.scrollHeight - mid - c.clientHeight > 200, `must be far reading`).toBe(true);
     c.style.height='500px'; await delay(150); await nextFrame();

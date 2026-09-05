@@ -9,7 +9,6 @@ import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
 import { stripPrefix } from '../lib/utils';
 import { clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
 import type { IRCMessage } from '../types';
-import { logScroll } from '../test/scroll';
 
 function resetState(): void {
 	ircState.networks.length = 0;
@@ -1192,17 +1191,17 @@ describe('MessageList', () => {
 			expect(Math.abs(drift)).toBeLessThan(10);
 		});
 
-		it('does NOT snap back when a message lands right after ArrowUp is pressed (input-intent pre-clear)', async () => {
+		it('does NOT snap back when a message lands in the same tick as the user scrolling up', async () => {
 			const container = await setupScrollableChannel(40);
 			if (!container) return;
 
-			// User presses ArrowUp (outside an input) — the stick clears at
-			// input time, BEFORE the resulting scroll event fires.
-			// Regression: on a busy channel a message arriving between the
-			// keydown and the first scroll event used to find cachedAtBottom
-			// still true and snap the viewport back to the bottom (holding
-			// ArrowUp "keeps resetting me back down").
-			logScroll(document.getElementById('messages'), 'ArrowUp');
+			// User reads up; the message arrives in the SAME tick as the
+			// scroll event, before any settle pass has run.
+			// Regression: on a busy channel a message arriving in that window
+			// used to find cachedAtBottom still true and snap the viewport
+			// back to the bottom ("it keeps resetting me back down").
+			container.scrollTop -= 100;
+			container.dispatchEvent(new Event('scroll'));
 
 			appendMessage('net1', '#chan', {
 				command: 'PRIVMSG', nick: 'carol', text: 'lands right after the keydown', t: Date.now(), msgid: 'race-1',

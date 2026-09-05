@@ -61,15 +61,45 @@ describe('ServerLogContextMenu', () => {
       props: { x: 100, y: 100, buf, onClose: vi.fn(), onJoinChannel: vi.fn(), onEditNetwork: vi.fn() },
     });
     await expect.element(page.getByRole('button', { name: 'Join a channel…' })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Edit…' })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Ignore list…' })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Download logs…' })).toBeInTheDocument();
-    await expect.element(page.getByRole('button', { name: 'Delete active private messages…' })).toBeInTheDocument();
-    await expect.element(page.getByText('Show unread message indicator')).toBeInTheDocument();
-    await expect.element(page.getByText('Mark as read automatically')).toBeInTheDocument();
-    await expect.element(page.getByText('Mute notifications')).toBeInTheDocument();
-    await expect.element(page.getByText('Group repeated disconnects')).toBeInTheDocument();
-    await expect.element(page.getByText('Format colours')).toBeInTheDocument();
+
+    // Every actionable entry, in DOM order, for a connected non-Fiber,
+    // non-collapsed network. Rows the state hides (Reconnect, Expand) carry
+    // display:none and are excluded; the "Muted globally" notice li has no
+    // button so it never appears here either.
+    const items = Array.from(document.querySelectorAll('#serverLogContextMenu li'))
+      .filter((li) => (li as HTMLElement).style.display !== 'none')
+      .filter((li) => li.querySelector('button') !== null || li.classList.contains('contextMenu__header'))
+      .map((li) => (li.textContent ?? '').replace(/\s+/g, ' ').trim());
+    expect(items).toEqual([
+      'Join a channel…',
+      'Channel list…',
+      'Edit…',
+      'Identify Nickname…',
+      'Connect with another client…',
+      'Disconnect',
+      'Ignore list…',
+      'Download logs…',
+      'Clear backlog',
+      'Collapse',
+      'Delete active private messages…',
+      'Delete…',
+      'Show unread message indicator',
+      'Mark as read automatically',
+      'Notifications',
+      'Mentions only',
+      'All messages',
+      'Muted',
+      'Group repeated disconnects',
+      'Format colours',
+    ]);
+
+    // The single "Mute notifications" toggle was replaced (commit 648adfc,
+    // "per-channel Notifications radios … with global mute guard") by three
+    // mutually exclusive modes, so exactly one is pressed at any time.
+    const modes = ['.notifMentions', '.notifAll', '.notifMuted'].map(
+      (sel) => document.querySelector(sel)?.getAttribute('aria-pressed'),
+    );
+    expect(modes.filter((v) => v === 'true')).toHaveLength(1);
   });
 
   it('hides Reconnect when connected, shows Disconnect', async () => {

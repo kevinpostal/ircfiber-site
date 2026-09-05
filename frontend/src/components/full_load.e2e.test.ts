@@ -1,3 +1,20 @@
+// DB-BACKED INTEGRATION SUITE — needs the full local stack, not just vitest.
+//
+// It logs in as the dev-stack `admin` user, resolves the "Super Nets" network
+// from /api/networks and pages real #superbowl history out of Mongo/Redis, so
+// it only means anything when the IRC Fiber gateway is reachable through the
+// Vite proxy on 127.0.0.1:8090 (vite.config.ts BACKEND_URL).
+//
+// Run it for real:
+//   1. start the backing services + gateway (see skill://ircfiber-native-smoke-stack,
+//      or `make debug` for the colima stack on 127.0.0.1:8090)
+//   2. cd site/frontend
+//      npx vitest run --project=client src/components/full_load.e2e.test.ts
+//   (point elsewhere with VITE_BACKEND_URL=http://host:port, same var the dev
+//    server uses.)
+//
+// Without that stack the suite SKIPS via the shared gatewayAvailable() probe
+// instead of failing on ECONNREFUSED.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
@@ -6,6 +23,9 @@ import { createNetwork, createBuffer } from '../test/factories';
 import { ircState, prependMessages } from '../stores/ircStore.svelte';
 import { loadHistoryWithMeta } from '../stores/api';
 import { clearedAtMap } from '../stores/preferences.svelte';
+import { gatewayAvailable, GATEWAY_SKIP_REASON } from '../test/backendProbe';
+
+const gatewayUp = await gatewayAvailable();
 
 function reset() {
   ircState.networks.length = 0;
@@ -17,7 +37,7 @@ function reset() {
   ircState.backlogDivider = {};
 }
 
-describe('full load to start', () => {
+describe.skipIf(!gatewayUp)(`full load to start (${GATEWAY_SKIP_REASON})`, () => {
   beforeEach(reset);
   it('can load all backlog to start via paging', async () => {
     await fetch('/login', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({username:'admin', password:'REDACTED'} as any), credentials:'include' });

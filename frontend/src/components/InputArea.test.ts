@@ -7,6 +7,7 @@ import { createNetwork, createBuffer, createMember, createMessage } from '../tes
 import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText, setTyping, clearTyping } from '../stores/ircStore.svelte';
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
+import { bufferNameFromChannelPart } from '../lib/routing';
 
 vi.mock('/src/stores/api', () => ({
   reconnectNetwork: vi.fn(async () => undefined),
@@ -379,7 +380,13 @@ describe('InputArea', () => {
 		expect(updatedNet?.connected).toBe(true);
 		expect(updatedNet?.connectionState).toBe('connecting');
 
-		expect(window.location.pathname).toBe('/irc/TestNet/channel/test');
+		// The router percent-encodes the full buffer name (`#test` → `%23test`)
+		// so the URL → buffer round-trip is lossless for `##test`/`&foo` too
+		// (see lib/routing.ts channelUrlPart + App.svelte's decodeURIComponent
+		// of the `/channel/<part>` segment).
+		expect(window.location.pathname).toBe('/irc/TestNet/channel/%23test');
+		const part = window.location.pathname.split('/channel/')[1];
+		expect(bufferNameFromChannelPart(decodeURIComponent(part))).toBe('#test');
 	});
 
 	it('opens the emoji picker popover when the emoji button is clicked', async () => {
