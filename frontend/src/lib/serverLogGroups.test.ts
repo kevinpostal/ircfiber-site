@@ -57,8 +57,11 @@ describe('classifyServerLog', () => {
   // the WHOIS overlay instead — IRCCloud does the same via
   // `unrendered_messages`.
   it('drops the whole WHOIS / WHO family', () => {
-    for (const cmd of ['301', '311', '312', '313', '317', '318', '319', '320',
-                       '330', '338', '352', '354', '378', '671', '690']) {
+    // 307 is RPL_WHOISREGNICK — SuperNETs ships "is keepin it 💯" there,
+    // which leaked into the live log until the list covered it.
+    for (const cmd of ['301', '275', '276', '307', '310', '311', '312', '313', '316', '317',
+                       '318', '319', '320', '330', '335', '337', '338', '339', '352', '354',
+                       '369', '378', '379', '615', '616', '617', '671', '672', '690']) {
       expect(classifyServerLog(m({ command: cmd }))).toBe('skip');
     }
   });

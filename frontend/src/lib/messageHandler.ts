@@ -1,4 +1,5 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus, FailInfo, ChannelListChunk } from '../types';
+import { WHOIS_FAMILY } from './serverLogGroups';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
@@ -233,11 +234,11 @@ export function processIrcEvent(
     return params[0] || '';
   }
   // ── Whois accumulation (per-nick, avoids interleaving) ──
-  // 320/335/378/379 are the network-specific lines (RPL_WHOISSPECIAL,
-  // WHOISBOT, WHOISHOST, WHOISMODES). They must be here: the server log
-  // deliberately renders no WHOIS numerics, so the overlay is the only
-  // place their text can appear.
-  if (/^(311|312|313|317|319|320|330|335|378|379|301|671)$/.test(cmd)) {
+  // Gated on the SAME list the server log hides (`WHOIS_FAMILY`), minus
+  // the terminators handled below. That coupling is the point: a numeric
+  // the log refuses to render must be captured here or its text exists
+  // nowhere. Anything without a typed field lands in `special`.
+  if (cmd !== '318' && cmd !== '369' && WHOIS_FAMILY.has(cmd)) {
     const rawTarget = whoisTarget(msg.params || [], net.currentNick || '');
     const targetNick = rawTarget || msg.params?.[0] || '';
     const key = targetNick.toLowerCase();
@@ -692,13 +693,12 @@ function accumulateWhois(accum: AccumState, cmd: string, params: string[], text:
       // RPL_WHOISSECURE: nick :is using a secure connection
       accum.whoisAcc.secure = true;
       break;
-    // Network-specific WHOIS lines: RPL_WHOISSPECIAL (320), RPL_WHOISHOST
-    // (378), RPL_WHOISMODES (379), RPL_WHOISBOT (335). The server log does
-    // not render WHOIS numerics, so this bucket is where their text lives.
-    case '320':
-    case '335':
-    case '378':
-    case '379': {
+    // Everything else in the WHOIS family — RPL_WHOISSPECIAL (320),
+    // WHOISREGNICK (307), WHOISHOST (378), WHOISMODES (379), WHOISBOT
+    // (335), WHOISCERTFP (276), and whatever a network invents next. The
+    // server log renders no WHOIS numerics, so a `default` (not a fixed
+    // case list) is what guarantees the text still reaches the overlay.
+    default: {
       const line = (text || '').trim();
       if (!line) break;
       const special = accum.whoisAcc.special ?? [];

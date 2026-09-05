@@ -33,9 +33,11 @@ block scripts
   link(rel="preload", href="/public/dist/assets/chunk-editor-DNr_rhdt.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-editor-DNr_rhdt.css")
   link(rel="modulepreload", href="/public/dist/assets/vendor-BCQGhTLw.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-BBdW05AI.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-Ccxuj-EP.js")
   link(rel="modulepreload", href="/public/dist/assets/chunk-editor-BWMiYrwz.js")
-  script(type="module", src="/public/dist/assets/main-TJzbLsPA.js")
+  script(type="module", src="/public/dist/assets/main-Cl57Up20.js")
+
+
 
 
 

@@ -35,12 +35,16 @@ export type ServerLogKind =
  * `who_reply*`, `who_end*`, `who_response`, `away`, `user_details`).
  * IRC Fiber matches that: `accumulateWhois` feeds the WHOIS overlay.
  */
-const WHOIS_FAMILY = new Set([
+export const WHOIS_FAMILY = new Set([
   '301', // RPL_AWAY
-  '311', '312', '313', '314', '315', '317', '318', '319', '320',
-  '330', '335', '338', '369', '378', '379',
+  '275', // RPL_WHOISSECURE (alt) / "is connecting from"
+  '276', // RPL_WHOISCERTFP
+  '307', // RPL_WHOISREGNICK — SuperNETs ships its custom line here
+  '310', // RPL_WHOISHELPOP
+  '311', '312', '313', '314', '315', '316', '317', '318', '319', '320',
+  '330', '335', '337', '338', '339', '369', '378', '379',
   '352', '354', // WHO / WHOX replies
-  '615', '617', '671', '672', '690',
+  '615', '616', '617', '671', '672', '690',
 ]);
 
 export function classifyServerLog(msg: IRCMessage): ServerLogKind {

@@ -295,6 +295,8 @@ describe('WHOIS accumulation feeds the overlay', () => {
     const { last } = whoisRun([
       { c: '311', p: ['me', 'maknho', '~maknho', 'B39D8C93.IP', '*'], x: 'maknho', network: 'libera' },
       { c: '320', p: ['me', 'maknho'], x: 'is keepin it 100', network: 'libera' },
+      // 307 is where SuperNETs actually shipped its custom line on prod.
+      { c: '307', p: ['me', 'maknho'], x: 'is identified for this nick', network: 'libera' },
       { c: '378', p: ['me', 'maknho'], x: 'is connecting from *@1.2.3.4', network: 'libera' },
       { c: '330', p: ['me', 'maknho', 'maknhoAcct'], x: 'is logged in as', network: 'libera' },
       { c: '318', p: ['me', 'maknho'], x: 'End of /WHOIS list.', network: 'libera' },
@@ -303,7 +305,9 @@ describe('WHOIS accumulation feeds the overlay', () => {
     const w = (last as { whoisData?: WhoisData }).whoisData as WhoisData;
     expect(w.nick).toBe('maknho');
     expect(w.account).toBe('maknhoAcct');
-    expect(w.special).toEqual(['is keepin it 100', 'is connecting from *@1.2.3.4']);
+    expect(w.special).toEqual([
+      'is keepin it 100', 'is identified for this nick', 'is connecting from *@1.2.3.4',
+    ]);
   });
 
   it('never repeats the same special line when a WHOIS is answered twice', () => {
