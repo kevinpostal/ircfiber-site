@@ -158,6 +158,15 @@ export const ircState = $state({
   // Only one divider exists per buffer at a time; cleared on buffer switch
   // (IRCCloud re-renders the log fresh on select).
   backlogDivider: {} as Record<string, string>,
+  // Seen marker as it stood when the buffer was opened, keyed by buffer.
+  // Opening a buffer marks it read immediately (the sidebar badge clears on
+  // click — waiting for MessageList to render, fetch history and hit its
+  // scroll trigger left the red counter up while clicking through
+  // channels), so the live `lastSeen` can no longer tell the log where the
+  // visit started. This pin does: the "New messages" divider and the
+  // "unread above" bar stay anchored where the user left off for the whole
+  // visit, and it is dropped when the buffer is left or explicitly read.
+  openSeen: {} as Record<string, number>,
   // IRCCloud-style backlog discontinuity tracking: per-buffer record of the
   // earliest known eid and a timer. When prependMessages detects a gap
   // between the new batch's earliest eid and our cached earliest, we flag a
@@ -377,12 +386,25 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
     conversationsCollapsedMap[networkId] = false;
   }
   const key = `${networkId}:${bufferName}`;
-  // IRCCloud deselect(): only an explicit "mark as read on select" pref
-  // marks the buffer we are leaving as read. Selecting never marks read —
-  // that happens through the scroll trigger once the log is at bottom.
+  // The buffer we are leaving loses its visit pin, so a later return
+  // recomputes its markers from the real read marker.
+  if (isBufferChange && prevNetworkId && prevBufferName) {
+    clearVisitSeen(prevNetworkId, prevBufferName);
+  }
+  // IRCCloud deselect(): an explicit "mark as read on select" pref marks the
+  // buffer we are leaving as read.
   if (isBufferChange && prevNetworkId && prevBufferName && prevBufferName !== '_server'
       && getBufferPrefs(prevNetworkId, prevBufferName).markAsRead === true) {
     readBuffer(prevNetworkId, prevBufferName);
+  }
+  // Opening a buffer IS reading it: clear the badge now rather than after
+  // the log renders, fetches history and reaches its scroll trigger, which
+  // left the red counter up for hundreds of ms while clicking through
+  // channels. Only while the session is focused — a background restore or a
+  // programmatic select must not eat unread the user never saw. The log's
+  // own markers stay put via the visit pin (see `openSeen`).
+  if (isBufferChange && bufferName !== '_server' && isSessionFocused()) {
+    markBufferOpenRead(networkId, bufferName);
   }
   // IRCCloud re-renders the log fresh on buffer select — no stale divider.
   delete ircState.backlogDivider[key];
@@ -1892,6 +1914,66 @@ export function getLastSeenMessage(networkId: string, bufferName: string): IRCMe
     if ((list[i].t || 0) <= lastSeen) return list[i];
   }
   return list[0];
+}
+
+/** Seen marker for the *current visit*: the value `lastSeen` had when the
+ *  buffer was opened, falling back to the live marker when there is no pin
+ *  (buffer opened before this existed, or already read). In-log affordances
+ *  — the "New messages" divider and the "unread above" bar — read this so
+ *  they keep showing where the user left off even though opening the buffer
+ *  cleared the sidebar badge. */
+export function getVisitSeen(networkId: string, bufferName: string): number | null {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const pinned = ircState.openSeen[key];
+  return pinned !== undefined ? pinned : getLastSeen(networkId, bufferName);
+}
+
+/** Drops the visit pin — the log's markers snap to the live read marker.
+ *  Called when the buffer is left and when the user dismisses the bar. */
+export function clearVisitSeen(networkId: string, bufferName: string): void {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  if (key in ircState.openSeen) delete ircState.openSeen[key];
+}
+
+/** `isMessageUnseen` against the visit pin. */
+export function isMessageUnseenForVisit(msg: IRCMessage, networkId: string, bufferName: string): boolean {
+  const seen = getVisitSeen(networkId, bufferName);
+  if (seen === null) return true;
+  return (msg.t || 0) > seen;
+}
+
+/** `getLastSeenMessage` against the visit pin. */
+export function getVisitSeenMessage(networkId: string, bufferName: string): IRCMessage | null {
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const list = ircState.messages[key] ?? [];
+  const seen = getVisitSeen(networkId, bufferName);
+  if (seen === null || list.length === 0) return null;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if ((list[i].t || 0) <= seen) return list[i];
+  }
+  return list[0];
+}
+
+/** Marks a buffer read the instant it is opened, so the sidebar badge
+ *  clears on click instead of waiting for the log to render, fetch history
+ *  and reach its scroll trigger.
+ *
+ *  Marks at the newest loaded message — exactly what the scroll trigger
+ *  would have settled on — or at "now" when no history is loaded yet, the
+ *  common case when clicking through channels. "Now" is a sound marker:
+ *  every message already in the buffer is older than it, and anything that
+ *  arrives afterwards is genuinely new. */
+export function markBufferOpenRead(networkId: string, bufferName: string): void {
+  const list = ircState.messages[bufferKey(networkId, bufferName)] ?? [];
+  const lastT = list.length ? (list[list.length - 1].t ?? 0) : 0;
+  const t = lastT > 0 ? lastT : Date.now();
+  const before = getLastSeen(networkId, bufferName);
+  if (before !== null && before >= t) return;
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  // Pin where this visit started before advancing the marker; a buffer with
+  // nothing seen yet pins 0 so the divider sits above the first message.
+  if (!(key in ircState.openSeen)) ircState.openSeen[key] = before ?? 0;
+  setLastSeenMessage(networkId, bufferName, t);
 }
 
 export function countMessagesBetween(networkId: string, bufferName: string, startMsg?: IRCMessage | null, endMsg?: IRCMessage | null): number {

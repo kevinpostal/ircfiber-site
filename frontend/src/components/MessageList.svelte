@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack, flushSync, tick, onMount, onDestroy } from 'svelte';
-  import { ircState, getActiveBufferObj, getActiveNetwork, isMessageUnseen, getLastSeenMessage, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused } from '../stores/ircStore.svelte';
+  import { ircState, getActiveBufferObj, getActiveNetwork, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused, getVisitSeen, clearVisitSeen, isMessageUnseenForVisit, getVisitSeenMessage } from '../stores/ircStore.svelte';
   import { getClearedAt, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen } from '../stores/preferences.svelte';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
@@ -222,7 +222,7 @@
       if (lastSeenEidMap[key] === (msg.eid ?? msg.msgid)) return null;
       return 'focus';
     }
-    const lastTs = getLastSeen(nid, buf);
+    const lastTs = getVisitSeen(nid, buf);
     if (lastTs !== null && (prev.t || 0) <= lastTs && (msg.t || 0) > lastTs) {
       // Hide lastSeen when at the end (no next visible) — matches BufferView.renderLastSeenDivider's hidden
       const all = ircState.messages[key] ?? [];
@@ -678,7 +678,9 @@
     const bufferMessages = ircState.messages[key] ?? [];
     const bottomTs = getBottomSeen(nid, buf);
     const focusTs = getFocusSeen(nid, buf);
-    const lastTs = getLastSeen(nid, buf);
+    // Visit pin: opening the buffer already advanced the real read marker,
+    // so the "new messages" line has to come from where this visit started.
+    const lastTs = getVisitSeen(nid, buf);
     const globalTs = ircState.lastSeenMsgTime && ircState.focusLost ? ircState.lastSeenMsgTime : null;
     // Helper to find first msg after seenTs in the current window
     const findKey = (seenTs: number | null): string | null => {
@@ -1100,14 +1102,18 @@
   function upperUpdate(m: IRCMessage | null): boolean | null {
     const { networkId, bufferName } = ircState.activeBuffer;
     if (!m || !networkId || !bufferName) return null;
-    if (isMessageUnseen(m, networkId, bufferName)) {
+    // Measured against the visit pin, not the live marker: opening the
+    // buffer marks it read, and the bar still has to say what was unread
+    // when the user arrived.
+    if (isMessageUnseenForVisit(m, networkId, bufferName)) {
       aboveMentions = clearUnseenHighlightsAfter(networkId, bufferName, m.t ?? 0);
-      if (getLastSeen(networkId, bufferName) !== null) {
-        const n = getLastSeenMessage(networkId, bufferName);
+      const visitSeen = getVisitSeen(networkId, bufferName);
+      if (visitSeen !== null) {
+        const n = getVisitSeenMessage(networkId, bufferName);
         const show = !n || countMessagesBetween(networkId, bufferName, n, m) > 100 || countImportantMessagesBetween(networkId, bufferName, n, m) > 0;
         if (show) {
           aboveCount = true;
-          aboveTime = getLastSeen(networkId, bufferName);
+          aboveTime = visitSeen;
           aboveVisible = true;
           return true;
         }
@@ -1184,7 +1190,8 @@
   function onUpperClick(): void {
     if (!container) return;
     const { networkId, bufferName } = ircState.activeBuffer;
-    const lastSeenMsg = networkId && bufferName ? getLastSeenMessage(networkId, bufferName) : null;
+    // Jump to where the visit started, which is what the bar is reporting.
+    const lastSeenMsg = networkId && bufferName ? getVisitSeenMessage(networkId, bufferName) : null;
     const key = lastSeenMsg ? itemKeyOf(lastSeenMsg) : '';
     const idx = key ? (renderedIndexByKey.get(key) ?? -1) : -1;
     if (idx >= 0) {
@@ -1199,7 +1206,12 @@
 
   function onUpperDismiss(): void {
     const { networkId, bufferName } = ircState.activeBuffer;
-    if (networkId && bufferName) readBuffer(networkId, bufferName);
+    if (networkId && bufferName) {
+      // Dismissing is an explicit "I'm done with what was unread": drop the
+      // visit pin so the bar and the divider go away for good.
+      clearVisitSeen(networkId, bufferName);
+      readBuffer(networkId, bufferName);
+    }
     onScrollChange(isScrolledToBottom(), false);
   }
 

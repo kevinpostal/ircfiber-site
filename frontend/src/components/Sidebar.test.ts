@@ -6,7 +6,7 @@ import { flushSync } from 'svelte';
 import Sidebar from './Sidebar.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 import { ircState, setActiveBuffer, appendMessage, updateChannelUsers, updateNetworkFromSync, readBuffer } from '../stores/ircStore.svelte';
-import { archivedMap, pinnedMap, networkOrder, collapsedMap, conversationsCollapsedMap, bufferPrefsMap } from '../stores/preferences.svelte';
+import { archivedMap, pinnedMap, networkOrder, collapsedMap, conversationsCollapsedMap, bufferPrefsMap, clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap, unseenMap } from '../stores/preferences.svelte';
 
 function resetState(): void {
 	ircState.networks.length = 0;
@@ -17,6 +17,15 @@ function resetState(): void {
 	Object.keys(collapsedMap).forEach((k) => delete (collapsedMap as Record<string, unknown>)[k]);
 	Object.keys(conversationsCollapsedMap).forEach((k) => delete (conversationsCollapsedMap as Record<string, unknown>)[k]);
 	Object.keys(bufferPrefsMap).forEach((k) => delete (bufferPrefsMap as Record<string, unknown>)[k]);
+  // Selecting a buffer marks it read, so every seen marker (and the message
+  // log it was derived from) has to go too: a marker left at `Date.now()` by
+  // an earlier test mutes the next one's unread.
+  for (const m of [clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap, unseenMap]) {
+    Object.keys(m).forEach((k) => delete (m as Record<string, unknown>)[k]);
+  }
+  ircState.messages = {};
+  ircState.processedMessages = {};
+  ircState.openSeen = {};
   networkOrder.length = 0;
   // Clear any leftover DOM from a previous render — otherwise `dragging`
   // and other state left on stale `.network-list-items` containers
@@ -305,7 +314,11 @@ describe('Sidebar', () => {
     expect(document.querySelector('.buffer-item.unread .badge')?.textContent?.trim()).toBe('3');
   });
 
-  it('reactive: selecting the buffer does NOT clear unread; marking it read does', async () => {
+  // Contract change: opening a buffer IS reading it, so the badge clears on
+  // select instead of waiting for MessageList's scroll trigger (which left
+  // stale counters behind while clicking through channels). The in-log
+  // markers stay anchored via the visit pin — see Sidebar.readOnOpen.test.ts.
+  it('reactive: selecting the buffer clears unread immediately', async () => {
     const net = createNetwork({ networkId: 'net1' });
     net.buffers.push(createBuffer({ name: '#general' }));
     ircState.networks.push(net);
@@ -322,8 +335,9 @@ describe('Sidebar', () => {
 
     setActiveBuffer('net1', '#general');
     flushSync();
-    expect(document.querySelector('.buffer-item.unread')).toBeTruthy();
+    expect(document.querySelector('.buffer-item.unread')).toBeNull();
 
+    // Idempotent: the scroll trigger still runs and must not resurrect it.
     readBuffer('net1', '#general');
     flushSync();
     expect(document.querySelector('.buffer-item.unread')).toBeNull();
