@@ -128,10 +128,12 @@ export interface Network {
    *  join immediately after registration). Some IRCds (SuperNETs/
    *  DangerousIRCd) throttle JOIN inside the first 5s of a connection. */
   autoJoinDelaySeconds?: number;
-  /** Egress route pin: `''` automatic (any healthy exit, then direct),
-   *  `'direct'` bare host IP, or a Mullvad exit id from `GET /api/egress`.
-   *  The engine host-bans an exit when a network Z/G/K-lines it and fails
-   *  over to another — this pin is how a user chooses the location. */
+  /** Egress route pin. `''` automatic (any healthy exit, then direct),
+   *  `'direct'` bare host IP, a two-letter country code (`'de'` = any city
+   *  in Germany), or a city id (`'de-ber'`) from `GET /api/egress`. The
+   *  engine retargets an idle exit to that location — an exit carrying live
+   *  connections is never moved — and host-bans a location when a network
+   *  Z/G/K-lines it, failing over to another. */
   egressNodeId?: string;
   buffers: Buffer[];
   awayNicks: Set<string>;
@@ -282,6 +284,9 @@ export interface Network {
   egressHost: string | null;
   /** Public IP the network sees us from. */
   egressIp: string | null;
+  /** Human-readable location of the egress route in use (e.g. `Berlin,
+   *  Germany`); null when direct or unknown. */
+  egressLocation: string | null;
   /** Last measured PING round-trip in ms. */
   lagMs: number | null;
   /** Unix ms of RPL_WELCOME for the current session; null when not connected. */

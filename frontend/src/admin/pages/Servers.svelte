@@ -56,6 +56,11 @@
     port: number;
     socksUrl: string;
     ip: string;
+    /** Current exit location — the value an egress pin now carries. Absent
+     *  on a static slot whose location the engine cannot read. */
+    locationId?: string;
+    city?: string;
+    country?: string;
   }
   interface ServersResponse {
     engines: Engine[];
@@ -461,8 +466,10 @@
                   onchange={(e) => setEgress(a.networkId, label, (e.target as HTMLSelectElement).value)}
                 >
                   <option value="">Random</option>
-                  {#each mullvadPool as n (n.id)}
-                    <option value={n.id}>{n.label.toUpperCase()} — {n.host}{n.ip ? ' ('+n.ip+')' : ''}</option>
+                  {#each mullvadPool.filter((n) => !!n.locationId) as n (n.id)}
+                    <option value={n.locationId}>
+                      {n.city ? `${n.city}, ${n.country}` : n.locationId}
+                    </option>
                   {/each}
                 </select>
               </td>

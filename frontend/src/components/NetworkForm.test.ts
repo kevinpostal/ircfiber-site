@@ -5,6 +5,45 @@ import NetworkForm from './NetworkForm.svelte';
 import { ircState } from '../stores/ircStore.svelte';
 import { createNetwork } from '../test/factories';
 
+/// `GET /api/egress` fixture: two slots (Berlin busy, Stockholm idle) and a
+/// three-city catalog. Mutable so a test can simulate "every exit busy".
+const egressMock = vi.hoisted(() => {
+  const base = () => ({
+    direct: 'direct',
+    controllable: true,
+    slotCount: 2,
+    freeSlots: 1,
+    slots: [
+      { serverId: 'ovh1', label: 'de', host: 'mullvad-de', port: 1080, locationId: 'de-ber',
+        hostname: 'de-ber-wg-003', country: 'Germany', countryCode: 'de', city: 'Berlin',
+        controllable: true, state: 'ready', activeConns: 2, heldUntilMs: 0,
+        exitIp: '1.2.3.4', healthy: true, checkedAtMs: 1, error: '' },
+      { serverId: 'ovh1', label: 'se', host: 'mullvad-se', port: 1080, locationId: 'se-sto',
+        hostname: 'se-sto-wg-201', country: 'Sweden', countryCode: 'se', city: 'Stockholm',
+        controllable: true, state: 'ready', activeConns: 0, heldUntilMs: 0,
+        exitIp: '5.6.7.8', healthy: true, checkedAtMs: 1, error: '' },
+    ],
+    locations: [
+      { id: 'de-ber', country: 'Germany', countryCode: 'de', city: 'Berlin', relays: 2 },
+      { id: 'se-sto', country: 'Sweden', countryCode: 'se', city: 'Stockholm', relays: 3 },
+      { id: 'us-lax', country: 'USA', countryCode: 'us', city: 'Los Angeles', relays: 4 },
+    ],
+  });
+  return { base, current: base() };
+});
+
+vi.mock('/src/stores/api', () => ({
+  fetchEgress: vi.fn(async () => egressMock.current),
+  addNetwork: vi.fn(async () => undefined),
+  updateNetwork: vi.fn(async () => undefined),
+  reconnectNetwork: vi.fn(async () => undefined),
+  disconnectNetwork: vi.fn(async () => undefined),
+  clearBacklog: vi.fn(async () => undefined),
+  archiveChannel: vi.fn(async () => undefined),
+  unarchiveChannel: vi.fn(async () => undefined),
+  normalizeMessage: vi.fn((m: unknown) => m),
+}));
+
 describe('NetworkForm', () => {
   let mockAddNetwork: ReturnType<typeof vi.fn>;
   let mockUpdateNetwork: ReturnType<typeof vi.fn>;
@@ -13,6 +52,7 @@ describe('NetworkForm', () => {
     ircState.networks.length = 0;
     mockAddNetwork = vi.fn(async () => undefined);
     mockUpdateNetwork = vi.fn(async () => undefined);
+    egressMock.current = egressMock.base();
     vi.clearAllMocks();
   });
 
@@ -91,6 +131,41 @@ describe('NetworkForm', () => {
     await userEvent.click(page.getByRole('button', { name: 'Save' }));
     expect(mockUpdateNetwork).toHaveBeenCalledWith(network.networkId, expect.objectContaining({ egressNodeId: '' }));
     expect(ircState.networks[0].egressNodeId).toBe('');
+  });
+
+  it('submits a city location pin from the catalog on add', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    // The catalog arrives asynchronously; the option only exists once loaded.
+    await expect.element(page.getByRole('option', { name: 'Los Angeles' })).toBeInTheDocument();
+    await userEvent.type(page.getByLabelText('Network name'), 'CityNet');
+    await userEvent.type(page.getByLabelText('Hostname'), 'irc.city.net');
+    await userEvent.type(page.getByLabelText('Nickname'), 'MyNick');
+    await userEvent.selectOptions(page.getByLabelText(/Connect via/), 'us-lax');
+    await userEvent.click(page.getByRole('button', { name: 'Join network' }));
+    expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'us-lax' }));
+  });
+
+  it('offers a country pin for every catalogued country', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByRole('option', { name: 'Any city in Sweden' })).toBeInTheDocument();
+    await userEvent.type(page.getByLabelText('Network name'), 'CountryNet');
+    await userEvent.type(page.getByLabelText('Hostname'), 'irc.country.net');
+    await userEvent.type(page.getByLabelText('Nickname'), 'MyNick');
+    await userEvent.selectOptions(page.getByLabelText(/Connect via/), 'se');
+    await userEvent.click(page.getByRole('button', { name: 'Join network' }));
+    expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'se' }));
+  });
+
+  it('lists running exits with their live connection counts', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByRole('option', { name: 'Berlin, Germany — 2 connections' })).toBeInTheDocument();
+    await expect.element(page.getByRole('option', { name: 'Stockholm, Sweden — idle' })).toBeInTheDocument();
+  });
+
+  it('warns when every exit is in use', async () => {
+    egressMock.current = { ...egressMock.base(), freeSlots: 0 };
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByText(/All 2 exits are in use/)).toBeInTheDocument();
   });
 
   it('calls onClose when Cancel clicked', async () => {

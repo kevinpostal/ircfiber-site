@@ -452,6 +452,21 @@ describe('BufferHeader', () => {
 			expect(kv()).toHaveTextContent(/^1 channel$/);
 		});
 
+		it('connected: prefers the human egress location over the internal slot label', async () => {
+			const net = createNetwork({
+				networkId: 'net1', connected: true, connectionState: 'connected',
+				lagMs: 41, egressLabel: 'de', egressLocation: 'Berlin, Germany',
+			});
+			net.buffers.push(createBuffer({ name: '_server', type: 'server' }), createBuffer({ name: '#a', isJoined: true }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '_server';
+			flushSync();
+			render(BufferHeader, { props });
+
+			expect(kv()).toHaveTextContent('egress Berlin, Germany');
+		});
+
 		it('connecting: "Connecting · <phase>" with pulsing dot, elapsed and host:port via egress', async () => {
 			const net = createNetwork({
 				networkId: 'net1', connected: false, connectionState: 'connecting',

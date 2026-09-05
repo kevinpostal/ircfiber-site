@@ -1,7 +1,7 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
-import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
+import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
@@ -363,6 +363,12 @@ export function setActiveBuffer(networkId: string, bufferName: string): void {
   if (isBufferChange && bufferName !== '_server') {
     requestForceScrollToBottom();
   }
+  // Selecting a buffer is a fresh visit: any focusSeen ("where I was when
+  // the window lost focus") for it is stale, and leaving it in place would
+  // cap `readBuffer` below the newest message so the unread badge could
+  // never clear. Mobile/PWA never reliably fires a window `focus` event,
+  // so the select path has to do this too.
+  if (isBufferChange && bufferName !== '_server') clearFocusSeen(networkId, bufferName);
   // Clear temp_unavailable on buffer switch (W1-T08)
   clearTempUnavailable(networkId, bufferName);
   // Auto-expand the Conversations section in the sidebar when switching
@@ -2015,6 +2021,7 @@ export interface SyncNetwork extends Network {
   activeEgressLabel?: string;
   activeEgressHost?: string;
   activeEgressIp?: string;
+  activeEgressLocation?: string;
 }
 
 /** Copy the sync's telemetry sentinels onto `target` as nullable fields. */
@@ -2023,6 +2030,7 @@ function applyTelemetryFromSync(target: Network, raw: SyncNetwork): void {
   target.egressLabel = str(raw.activeEgressLabel);
   target.egressHost = str(raw.activeEgressHost);
   target.egressIp = str(raw.activeEgressIp);
+  target.egressLocation = str(raw.activeEgressLocation);
   target.lagMs = typeof raw.lagMs === 'number' && raw.lagMs >= 0 ? raw.lagMs : null;
   target.connectedAtMs = typeof raw.connectedAtMs === 'number' && raw.connectedAtMs > 0 ? raw.connectedAtMs : null;
   const tls = raw.tlsInfo;

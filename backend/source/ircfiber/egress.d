@@ -1,21 +1,32 @@
 module ircfiber.egress;
 
-/// Mullvad SOCKS egress pool as the gateway sees it (`IRCFIBER_MULLVAD_POOL`,
-/// same env the engine reads), plus a cached identity probe per exit so the
-/// user-facing "Connect via" picker can show where each exit actually comes
-/// out (country/city/IP) without blocking a request on N SOCKS round trips.
+/// Mullvad egress as the gateway sees it: the *slot* registry and location
+/// catalog the engine publishes to Redis, merged with a cached SOCKS identity
+/// probe per slot so the user-facing "Connect via" picker can show where each
+/// exit actually comes out without blocking a request on N round trips.
 ///
-/// Label derivation must match the engine (`mullvadLabelFromHost` in
+/// A slot is one long-lived SOCKS sidecar (`IRCFIBER_MULLVAD_POOL`, the same
+/// env the engine reads); the engine retargets an *idle* slot to whichever
+/// Mullvad city a user pinned. `NetworkConfig.egressNodeId` therefore stores
+/// a location pin, not a slot label: "" (automatic), DIRECT_EGRESS_ID, a
+/// two-letter country code, or `<countryCode>-<cityCode>`.
+///
+/// Label derivation must still match the engine (`mullvadLabelFromHost` in
 /// engine/source/ircfiber/irc/connection.d): `tailscale-mullvad-de:1055` →
 /// `de`, `100.94.116.56:1080` → `100.94.116.56` (no dash → host before the
-/// first dot, else the whole host). `NetworkConfig.egressNodeId` stores that
-/// label, or "" (automatic), or DIRECT_EGRESS_ID (bare host IP).
+/// first dot, else the whole host), because slot labels are the hash fields
+/// of the published registry and the keys of the probe cache.
 
 import core.sync.mutex : Mutex;
 import core.thread : Thread;
 import std.conv : to;
 import std.datetime : Clock;
 import std.string : split, strip, indexOf, lastIndexOf, toLower, startsWith;
+import vibe.data.json : Json, parseJsonString;
+
+import ircfiber.irc.registry : ServerRegistry;
+import ircfiber.redis.protocol : RedisKeys;
+import ircfiber.storage.redis : RedisStorage;
 import vibe.core.log;
 
 /// egressNodeId value that pins the un-proxied host IP. Mirrors the engine's
@@ -100,11 +111,118 @@ string normalizeEgressId(string raw) {
     return v;
 }
 
-/// True when `id` is "", DIRECT_EGRESS_ID, or a label in the configured pool.
-bool isKnownEgressId(string id) {
+/// Interval the merged slot/catalog view is cached for. Short enough that
+/// `activeConns` in the picker tracks reality, long enough that a dialog
+/// polling every 10 s costs one Redis round trip per poll.
+enum EGRESS_VIEW_TTL_MS = 5_000L;
+
+/// One egress slot: what the engine published, plus what the gateway probed.
+struct EgressSlot {
+    /// Engine that owns the slot.
+    string serverId;
+    /// Internal slot name from IRCFIBER_MULLVAD_POOL ("de").
+    string label;
+    string host;
+    ushort port;
+    /// Current exit location id ("de-ber"); "" when unknown (static slot).
+    string locationId;
+    /// Current exit relay host name ("de-ber-wg-003").
+    string hostname;
+    string country;
+    string countryCode;
+    string city;
+    /// Engine can retarget this slot to another location.
+    bool controllable;
+    /// "ready" | "retargeting" | "error".
+    string state;
+    /// Live connections currently egressing through the slot.
+    int activeConns;
+    /// Slot is reserved or in its sticky hold until this unix-ms stamp.
+    long heldUntilMs;
+    /// Public IP the IRC server would see; "" until probed.
+    string exitIp;
+    /// Probe reached the internet through this slot.
+    bool healthy;
+    /// Unix ms of the last probe; 0 = never.
+    long checkedAtMs;
+    /// Engine or probe error; "" when fine.
+    string error;
+}
+
+/// One pickable location in the catalog.
+struct EgressLocationRow {
+    /// `<countryCode>-<cityCode>` — the value a city pin carries.
+    string id;
+    string country;
+    string countryCode;
+    string city;
+    /// Relays backing the city (informational).
+    int relays;
+}
+
+/// Everything `GET /api/egress` and the pin validators need.
+struct EgressView {
+    EgressSlot[] slots;
+    /// Union across engines, deduped by id, sorted country then city.
+    EgressLocationRow[] locations;
+    int slotCount;
+    /// Slots that could be retargeted to a brand-new location right now.
+    int freeSlots;
+    /// At least one slot is retargetable — i.e. new locations are pickable.
+    bool controllable;
+}
+
+/// Derives the view's aggregate fields and dedupes/sorts the catalog. Pure so
+/// the 409/400 decisions can be unit-tested without Redis (see
+/// tests/egress_test.d).
+EgressView egressViewFrom(EgressSlot[] slots, EgressLocationRow[] locations, long nowMs) {
+    EgressView v;
+    v.slots = slots;
+    v.slotCount = cast(int) slots.length;
+    foreach (s; slots) {
+        if (!s.controllable) continue;
+        v.controllable = true;
+        if (s.activeConns == 0 && s.heldUntilMs <= nowMs && s.state != "retargeting")
+            v.freeSlots++;
+    }
+    bool[string] seen;
+    foreach (l; locations) {
+        if (l.id.length == 0 || (l.id in seen) !is null) continue;
+        seen[l.id] = true;
+        v.locations ~= l;
+    }
+    import std.algorithm : sort;
+    v.locations.sort!((a, b) => a.country == b.country ? a.city < b.city : a.country < b.country);
+    return v;
+}
+
+/// True when `id` is a pin this deployment can honour: "" (automatic) and
+/// DIRECT_EGRESS_ID always; a two-letter country pin when some location has
+/// that country code; a city pin when that exact id exists. Permissive when
+/// the catalog is empty — a freshly started engine must not lock users out of
+/// the pins already stored on their networks.
+bool isKnownEgressId(string id, EgressView v) {
     if (id.length == 0 || id == DIRECT_EGRESS_ID) return true;
-    foreach (e; parseMullvadPool(mullvadRawPool())) if (e.label == id) return true;
+    if (v.locations.length == 0) return true;
+    foreach (l; v.locations) {
+        if (l.id == id) return true;
+        if (id.length == 2 && l.countryCode == id) return true;
+    }
     return false;
+}
+
+/// The slot that would serve `pin` today (a slot already on that location),
+/// or null when the pin would require a retarget.
+const(EgressSlot)* matchingSlot(string pin, ref EgressView v) {
+    if (pin.length == 0 || pin == DIRECT_EGRESS_ID) return null;
+    foreach (i, ref s; v.slots) {
+        if (s.locationId.length == 0) continue;
+        if (s.locationId == pin) return &v.slots[i];
+        if (pin.length == 2 && s.locationId.length > 3
+            && s.locationId[0 .. 2] == pin && s.locationId[2] == '-')
+            return &v.slots[i];
+    }
+    return null;
 }
 
 /// What a user sees for one exit in the "Connect via" picker.
@@ -130,7 +248,10 @@ private __gshared long gExitsProbedAtMs;
 private __gshared bool gProbeRunning;
 private __gshared Mutex gExitsLock;
 
-shared static this() { gExitsLock = new Mutex(); }
+shared static this() {
+    gExitsLock = new Mutex();
+    gViewLock = new Mutex();
+}
 
 /// Snapshot of the pool for the picker. Returns immediately from cache and
 /// kicks off a background probe when the cache is stale or empty, so the
@@ -200,4 +321,127 @@ private void probeExits(PoolEntry[] entries) nothrow {
             gProbeRunning = false;
         }
     } catch (Exception) {}
+}
+
+private __gshared EgressView gView;
+private __gshared long gViewAtMs;
+private __gshared Mutex gViewLock;
+
+/// Reads one engine's published slot registry. Empty when the engine is
+/// older than the slot feature or its 60 s key expired.
+private EgressSlot[] readSlots(RedisStorage redis, string serverId) {
+    EgressSlot[] out_;
+    string[string] fields;
+    try {
+        fields = redis.hgetAll(RedisKeys.egressSlots(serverId));
+    } catch (Exception e) {
+        logWarn("egress: slot registry read failed for %s: %s", serverId, e.msg);
+        return out_;
+    }
+    foreach (label, raw; fields) {
+        try {
+            auto j = parseJsonString(raw);
+            EgressSlot s;
+            s.serverId = serverId;
+            s.label = label;
+            s.host = j["host"].opt!string("");
+            s.port = cast(ushort) j["port"].opt!long(0);
+            s.locationId = j["locationId"].opt!string("");
+            s.hostname = j["hostname"].opt!string("");
+            s.country = j["country"].opt!string("");
+            s.countryCode = j["countryCode"].opt!string("");
+            s.city = j["city"].opt!string("");
+            s.controllable = j["controllable"].opt!bool(false);
+            s.state = j["state"].opt!string("ready");
+            s.activeConns = cast(int) j["activeConns"].opt!long(0);
+            s.heldUntilMs = j["heldUntilMs"].opt!long(0);
+            s.error = j["error"].opt!string("");
+            out_ ~= s;
+        } catch (Exception e) {
+            logWarn("egress: bad slot JSON for %s/%s: %s", serverId, label, e.msg);
+        }
+    }
+    return out_;
+}
+
+/// Reads one engine's published location catalog.
+private EgressLocationRow[] readCatalog(RedisStorage redis, string serverId) {
+    EgressLocationRow[] out_;
+    try {
+        auto j = redis.getJson(RedisKeys.egressCatalog(serverId));
+        if (j.type != Json.Type.array) return out_;
+        foreach (e; j) {
+            EgressLocationRow r;
+            r.id = e["id"].opt!string("");
+            r.country = e["country"].opt!string("");
+            r.countryCode = e["countryCode"].opt!string("");
+            r.city = e["city"].opt!string("");
+            r.relays = cast(int) e["relays"].opt!long(0);
+            if (r.id.length) out_ ~= r;
+        }
+    } catch (Exception e) {
+        logWarn("egress: catalog read failed for %s: %s", serverId, e.msg);
+    }
+    return out_;
+}
+
+/// Slots synthesised from the gateway's own pool env, used for an engine that
+/// publishes no registry (older engine, or the key expired). They degrade the
+/// picker to the pre-slot behaviour — listed, never retargetable — instead of
+/// leaving it blank.
+private EgressSlot[] syntheticSlots(string serverId) {
+    EgressSlot[] out_;
+    foreach (e; parseMullvadPool(mullvadRawPool())) {
+        EgressSlot s;
+        s.serverId = serverId;
+        s.label = e.label;
+        s.host = e.host;
+        s.port = e.port;
+        s.state = "ready";
+        out_ ~= s;
+    }
+    return out_;
+}
+
+/// Merged slot + catalog view across every registered engine, with the
+/// gateway's SOCKS probe results folded in by slot label. Cached for
+/// EGRESS_VIEW_TTL_MS; also drives the background probe refresh.
+EgressView egressView(RedisStorage redis, ServerRegistry reg) {
+    const now = Clock.currTime.toUnixTime!long * 1000;
+    synchronized (gViewLock) {
+        if (gViewAtMs != 0 && now - gViewAtMs < EGRESS_VIEW_TTL_MS) return gView;
+    }
+    // Keeps the identity probe warm and gives us exitIp/healthy per label.
+    auto probed = egressExits();
+    string[] serverIds;
+    try {
+        foreach (s; reg.getAllServers()) if (s.serverId.length > 0) serverIds ~= s.serverId;
+    } catch (Exception e) {
+        logWarn("egress: server registry read failed: %s", e.msg);
+    }
+    EgressSlot[] slots;
+    EgressLocationRow[] locations;
+    foreach (sid; serverIds) {
+        auto published = readSlots(redis, sid);
+        slots ~= published.length > 0 ? published : syntheticSlots(sid);
+        locations ~= readCatalog(redis, sid);
+    }
+    // No engine registered at all: still show the configured pool.
+    if (serverIds.length == 0) slots = syntheticSlots("");
+    foreach (ref s; slots) {
+        foreach (p; probed) {
+            if (p.id != s.label) continue;
+            s.exitIp = p.ip;
+            s.healthy = p.healthy;
+            s.checkedAtMs = p.checkedAtMs;
+            if (s.error.length == 0) s.error = p.error;
+            break;
+        }
+    }
+    auto v = egressViewFrom(slots, locations, now);
+    synchronized (gViewLock) {
+        gView = v;
+        gViewAtMs = now;
+    }
+    return v;
 }

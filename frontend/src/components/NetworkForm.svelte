@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
-  import { addNetwork, updateNetwork, fetchEgress, type EgressExit } from '../stores/api';
+  import { addNetwork, updateNetwork, fetchEgress, type EgressInfo, type EgressSlot, type EgressLocation } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
@@ -49,25 +49,61 @@
   let revealSaslPassword = $state(false);
   let error = $state('');
   let busy = $state(false);
-  // "Connect via": '' automatic, 'direct' bare host IP, or an exit id.
+  // "Connect via": '' automatic, 'direct' bare host IP, a country code
+  // ('de' = any city in Germany), or a city id ('de-ber').
   let egressNodeId = $state('');
-  let egressExits = $state<EgressExit[]>([]);
+  let egress = $state<EgressInfo | null>(null);
   let egressLoaded = $state(false);
 
+  async function loadEgress() {
+    try {
+      egress = await fetchEgress();
+    } catch {
+      egress = null;
+    }
+    egressLoaded = true;
+  }
+
   $effect(() => {
-    // Load once per open; a first call right after a gateway start may
-    // return exits without ip/country (probe not run yet) — harmless, the
-    // labels still work and the next open shows the enriched rows.
-    fetchEgress()
-      .then((r) => { egressExits = r.exits; egressLoaded = true; })
-      .catch(() => { egressExits = []; egressLoaded = true; });
+    // Load on open, then poll while the dialog is open so activeConns /
+    // freeSlots / "switching…" stay live without reopening it. A first call
+    // right after a gateway start may return slots without exitIp (probe not
+    // run yet) — harmless, the locations still work.
+    loadEgress();
+    const timer = setInterval(loadEgress, 10_000);
+    return () => clearInterval(timer);
   });
 
-  function exitLabel(x: EgressExit): string {
-    const where = x.city ? `${x.city}, ${x.country}` : x.country;
-    const id = x.id.toUpperCase();
-    if (!where) return x.ip ? `${id} — ${x.ip}` : id;
-    return `${id} — ${where}${x.ip ? ` (${x.ip})` : ''}`;
+  /// Slots that are actually somewhere: one option per distinct location.
+  const runningSlots = $derived.by(() => {
+    const seen = new Set<string>();
+    const out: EgressSlot[] = [];
+    for (const s of egress?.slots ?? []) {
+      if (!s.locationId || seen.has(s.locationId)) continue;
+      seen.add(s.locationId);
+      out.push(s);
+    }
+    return out;
+  });
+
+  /// Catalog grouped into one optgroup per country, in catalog order (the
+  /// gateway already sorts by country then city).
+  const locationGroups = $derived.by(() => {
+    const groups: { country: string; countryCode: string; cities: EgressLocation[] }[] = [];
+    for (const loc of egress?.locations ?? []) {
+      const last = groups[groups.length - 1];
+      if (last && last.countryCode === loc.countryCode) last.cities.push(loc);
+      else groups.push({ country: loc.country, countryCode: loc.countryCode, cities: [loc] });
+    }
+    return groups;
+  });
+
+  function slotLabel(s: EgressSlot): string {
+    const where = s.city ? `${s.city}, ${s.country}` : s.label.toUpperCase();
+    const use = s.activeConns
+      ? ` — ${s.activeConns} connection${s.activeConns === 1 ? '' : 's'}`
+      : ' — idle';
+    return `${where}${use}${s.state === 'retargeting' ? ' — switching…' : ''}`;
   }
 
   $effect(() => {
@@ -225,6 +261,7 @@
             egressLabel: null,
             egressHost: null,
             egressIp: null,
+            egressLocation: null,
             lagMs: null,
             connectedAtMs: null,
             tlsInfo: null,
@@ -441,7 +478,7 @@
           <tr>
             <th class="egress optional" colspan="2">
               <label for="add-network-egress">
-                Connect via <small class="explanation">— which address the IRC network sees. Pick an exit if the network has banned (Z/G/K-lined) our usual address; Automatic tries every exit and fails over on its own.</small>
+                Connect via <small class="explanation">— which address the IRC network sees. Pick a city if the network has banned (Z/G/K-lined) our usual address; Automatic tries every exit and fails over on its own.</small>
               </label>
             </th>
           </tr>
@@ -450,15 +487,32 @@
               <select id="add-network-egress" class="input" bind:value={egressNodeId}>
                 <option value="">Automatic — any healthy exit, fails over when banned</option>
                 <option value="direct">Direct — our own server address</option>
-                {#each egressExits as x (x.id)}
-                  <option value={x.id} disabled={x.checkedAtMs > 0 && !x.healthy}>
-                    {exitLabel(x)}{x.checkedAtMs > 0 && !x.healthy ? ' — unavailable' : ''}
-                  </option>
+                {#if runningSlots.length > 0}
+                  <optgroup label="Exits running now">
+                    {#each runningSlots as s (s.locationId)}
+                      <option value={s.locationId} disabled={s.checkedAtMs > 0 && !s.healthy}>
+                        {slotLabel(s)}{s.checkedAtMs > 0 && !s.healthy ? ' — unavailable' : ''}
+                      </option>
+                    {/each}
+                  </optgroup>
+                {/if}
+                {#each locationGroups as g (g.countryCode)}
+                  <optgroup label={g.country}>
+                    <option value={g.countryCode}>Any city in {g.country}</option>
+                    {#each g.cities as loc (loc.id)}
+                      <option value={loc.id}>{loc.city}</option>
+                    {/each}
+                  </optgroup>
                 {/each}
               </select>
-              {#if egressLoaded && egressExits.length === 0}
+              {#if egressLoaded && (egress?.slots.length ?? 0) === 0}
                 <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
                   No proxy exits are configured on this server — only the direct address is available.
+                </p>
+              {:else if egress && egress.controllable && egress.freeSlots === 0}
+                <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
+                  All {egress.slotCount} exits are in use — locations already running are free to pick;
+                  a new location will connect via another exit until one frees up.
                 </p>
               {/if}
             </td>

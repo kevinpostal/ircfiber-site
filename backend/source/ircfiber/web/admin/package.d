@@ -264,7 +264,7 @@ private:
         apiFiberConfigSet(req, res, redis, serverRegistry);
     }
     void apiMullvadStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadStatus(req, res, redis, serverRegistry); }
-    void apiMullvadRestartRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadRestart(req, res); }
+    void apiMullvadRestartRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadRestart(req, res, redis, serverRegistry); }
     void apiMullvadTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadTest(req, res); }
     void apiMullvadTestAllRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadTestAll(req, res); }
     void apiMullvadServerEgressSetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadServerEgressSet(req, res, redis, serverRegistry); }

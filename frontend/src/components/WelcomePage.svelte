@@ -133,6 +133,7 @@
           egressLabel: null,
           egressHost: null,
           egressIp: null,
+          egressLocation: null,
           lagMs: null,
           connectedAtMs: null,
           tlsInfo: null,

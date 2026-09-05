@@ -397,7 +397,7 @@ export async function addNetwork(data: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  if (!r.ok) throw new Error('Add network failed');
+  if (!r.ok) throw new Error(await serverError(r, 'Add network failed'));
   return r.json();
 }
 
@@ -407,7 +407,7 @@ export async function updateNetwork(networkId: string, data: Record<string, unkn
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
-  if (!r.ok) throw new Error('Update network failed');
+  if (!r.ok) throw new Error(await serverError(r, 'Update network failed'));
 }
 
 export async function deleteNetwork(networkId: string): Promise<void> {
@@ -415,14 +415,45 @@ export async function deleteNetwork(networkId: string): Promise<void> {
   if (!r.ok) throw new Error('Delete network failed');
 }
 
-/** One selectable Mullvad exit from `GET /api/egress`. `ip` is empty until
- *  the gateway's background probe has run once. */
-export interface EgressExit {
-  id: string; ip: string; country: string; city: string;
-  healthy: boolean; checkedAtMs: number; error: string;
+/** Reads the server's `{"error": "..."}` body so 400/409 copy (e.g. "All 3
+ *  exits are in use.") reaches the form instead of a generic failure. */
+async function serverError(r: Response, fallback: string): Promise<string> {
+  try {
+    const body: unknown = await r.json();
+    if (body && typeof body === 'object' && 'error' in body) {
+      const msg = body.error;
+      if (typeof msg === 'string' && msg.length > 0) return msg;
+    }
+  } catch {
+    // Non-JSON body — fall through to the generic message.
+  }
+  return fallback;
 }
 
-export async function fetchEgress(): Promise<{ direct: string; exits: EgressExit[] }> {
+/** One egress slot from `GET /api/egress`: a long-lived SOCKS sidecar the
+ *  engine retargets to a Mullvad city on demand. `exitIp` is empty until the
+ *  gateway's background probe has run once. */
+export interface EgressSlot {
+  serverId: string; label: string; host: string; port: number;
+  locationId: string; hostname: string; country: string; countryCode: string; city: string;
+  controllable: boolean; state: 'ready' | 'retargeting' | 'error'; activeConns: number;
+  heldUntilMs: number; exitIp: string; healthy: boolean; checkedAtMs: number; error: string;
+}
+
+/** One pickable Mullvad city. `id` is `<countryCode>-<cityCode>`. */
+export interface EgressLocation {
+  id: string; country: string; countryCode: string; city: string; relays: number;
+}
+
+/** `GET /api/egress`. `freeSlots` counts exits that could be retargeted to a
+ *  new location right now; 0 means only locations already running are
+ *  pickable without disturbing someone else's connection. */
+export interface EgressInfo {
+  direct: string; controllable: boolean; slotCount: number; freeSlots: number;
+  slots: EgressSlot[]; locations: EgressLocation[];
+}
+
+export async function fetchEgress(): Promise<EgressInfo> {
   const r = await fetch(`${API_BASE}/egress`);
   if (!r.ok) throw new Error('Fetch egress failed');
   return r.json();

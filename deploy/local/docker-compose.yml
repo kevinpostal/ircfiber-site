@@ -217,6 +217,9 @@ services:
       IRCFIBER_REDIS_URL: redis://redis:6379/0
       IRCFIBER_MONGO_URL: mongodb://mongo:27017/ircfiber
       IRCFIBER_LOG_LEVEL: debug
+      # Same pool the engine reads: the gateway derives slot labels from it for
+      # the SOCKS identity probe and for the pre-slot-registry fallback.
+      IRCFIBER_MULLVAD_POOL: socks5://a@mullvad-slot-a:1080,socks5://b@mullvad-slot-b:1080
     depends_on:
       redis:
         condition: service_healthy
@@ -250,7 +253,17 @@ services:
       IRCFIBER_REDIS_URL: redis://redis:6379/0
       IRCFIBER_MONGO_URL: mongodb://mongo:27017/ircfiber
       IRCFIBER_LOG_LEVEL: debug
-      IRCFIBER_MULLVAD_POOL: socks5://tailscale-mullvad-de:1055,socks5://tailscale-mullvad-ch:1055,socks5://tailscale-mullvad-nl:1055
+      # Two local egress slots (see mullvad-slot-a/b below). Labels a/b are
+      # internal slot names; users pin locations the shim's catalog offers.
+      IRCFIBER_MULLVAD_POOL: socks5://a@mullvad-slot-a:1080,socks5://b@mullvad-slot-b:1080
+      IRCFIBER_EGRESS_CONTROL_DIR: /egress
+      # Stand-in for the real tailscale CLI — no tailnet or Mullvad license
+      # needed locally. See local/egress-shim/tailscale-shim.
+      IRCFIBER_EGRESS_TAILSCALE_BIN: /egress/bin/tailscale-shim
+    volumes:
+      - slot_a_ctl:/egress/a
+      - slot_b_ctl:/egress/b
+      - ./egress-shim:/egress/bin:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -264,6 +277,38 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # -----------------------------------------------------------------------
+  # mullvad-slot-a / mullvad-slot-b — local egress slot fixtures.
+  #
+  # Each is a plain SOCKS5 proxy (egress-shim/socks5.py) plus a shared
+  # control volume, standing in for a tailscale Mullvad sidecar: the engine
+  # reads and retargets the slot through <control volume>/tailscaled.sock,
+  # which egress-shim/tailscale-shim resolves to <control volume>/current.
+  # No tailnet and no Mullvad device license needed. Verification fixture
+  # only — nothing in production depends on these.
+  # -----------------------------------------------------------------------
+  mullvad-slot-a:
+    image: python:3.12-alpine
+    container_name: mullvad-slot-a
+    restart: unless-stopped
+    networks:
+      - ircfiber_local
+    command: ["sh", "-c", "touch /ctl/tailscaled.sock && exec python3 /fixture/socks5.py 1080 a"]
+    volumes:
+      - slot_a_ctl:/ctl
+      - ./egress-shim:/fixture:ro
+
+  mullvad-slot-b:
+    image: python:3.12-alpine
+    container_name: mullvad-slot-b
+    restart: unless-stopped
+    networks:
+      - ircfiber_local
+    command: ["sh", "-c", "touch /ctl/tailscaled.sock && exec python3 /fixture/socks5.py 1080 b"]
+    volumes:
+      - slot_b_ctl:/ctl
+      - ./egress-shim:/fixture:ro
   # -----------------------------------------------------------------------
   # ircd — local ngIRCd server for testing
   # -----------------------------------------------------------------------
@@ -311,4 +356,8 @@ volumes:
   zookeeper_datalog:
     driver: local
   uploads_data:
+    driver: local
+  slot_a_ctl:
+    driver: local
+  slot_b_ctl:
     driver: local

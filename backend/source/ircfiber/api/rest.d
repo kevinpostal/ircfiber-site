@@ -36,7 +36,8 @@ import ircfiber.irc.server : ConnectionServer;
 import ircfiber.redis.protocol : RedisKeys, ControlMessage, NetworkStateSnapshot, IRCCommand;
 import ircfiber.logging : logJsonMap;
 import ircfiber.tracing : withSpan, Span;
-import ircfiber.egress : DIRECT_EGRESS_ID, egressExits, normalizeEgressId, isKnownEgressId;
+import ircfiber.egress : DIRECT_EGRESS_ID, EgressView, egressView, matchingSlot,
+    normalizeEgressId, isKnownEgressId;
 private string normalizeHost(string host) @safe pure {
     host = host.strip();
     auto schemeSep = host.indexOf("://");
@@ -259,14 +260,12 @@ final class RESTAPI {
             cfg.autoJoinDelaySeconds = v > 0 ? cast(uint) v : 0;
         }
 
-        // Egress route: "" automatic, "direct" bare host IP, or a pool label.
+        // Egress pin: "" automatic, "direct" bare host IP, a country code, or
+        // `<country>-<city>`. Rejected when this deployment cannot serve it,
+        // 409 when it would need an exit and every exit is busy.
         if (bodyJson["egressNodeId"].type == Json.Type.string) {
             const eg = normalizeEgressId(bodyJson["egressNodeId"].get!string);
-            if (!isKnownEgressId(eg)) {
-                res.statusCode = 400;
-                res.writeJsonBody(Json(["error": Json("Unknown egress: " ~ eg)]));
-                return;
-            }
+            if (!validateEgressPin(eg, res)) return;
             cfg.egressNodeId = eg;
         }
 
@@ -344,17 +343,15 @@ final class RESTAPI {
             cfg.autoJoinDelaySeconds = v > 0 ? cast(uint) v : 0;
         }
 
-        // Egress route change: the live socket is bound to the old exit, so
-        // a changed value needs a reconnect (same control path the admin
-        // pin uses) rather than the in-place updateConfig below.
+        // Egress pin change: the live socket is bound to the old exit, so a
+        // changed value needs a reconnect (same control path the admin pin
+        // uses) rather than the in-place updateConfig below. The engine
+        // resolves the pin and retargets an idle slot on that next dial, so
+        // exactly one network's socket is affected.
         const priorEgress = cfg.egressNodeId;
         if (bodyJson["egressNodeId"].type == Json.Type.string) {
             const eg = normalizeEgressId(bodyJson["egressNodeId"].get!string);
-            if (!isKnownEgressId(eg)) {
-                res.statusCode = 400;
-                res.writeJsonBody(Json(["error": Json("Unknown egress: " ~ eg)]));
-                return;
-            }
+            if (!validateEgressPin(eg, res)) return;
             cfg.egressNodeId = eg;
         }
         const egressChanged = cfg.egressNodeId != priorEgress;
@@ -868,30 +865,111 @@ final class RESTAPI {
         res.writeJsonBody(Json(["status": Json("reconnecting")]));
     }
 
+    /// Validates an egress pin against the live slot/catalog view, writing the
+    /// error response itself. Returns false when the request is finished.
+    ///
+    /// A pin that no slot currently serves needs a free slot to retarget:
+    ///   - nothing retargetable here → 400, the location is not available;
+    ///   - every slot busy → 409 naming the exits in use, so the user can
+    ///     pick a location that is already running instead of silently
+    ///     landing somewhere else.
+    private bool validateEgressPin(string eg, HTTPServerResponse res) {
+        // Bodies here exceed the ~120-byte chunked-JSON truncation limit of
+        // vibe.d 0.10.3, so every one is written with Content-Length.
+        void fail(int status, Json body_) {
+            auto payload = body_.toString();
+            res.statusCode = status;
+            res.headers["Content-Type"] = "application/json; charset=utf-8";
+            res.writeBody(cast(const(ubyte)[]) payload);
+        }
+        auto view = egressView(redis, serverRegistry);
+        if (!isKnownEgressId(eg, view)) {
+            fail(400, Json(["error": Json("Unknown egress: " ~ eg)]));
+            return false;
+        }
+        if (eg.length == 0 || eg == DIRECT_EGRESS_ID) return true;
+        if (matchingSlot(eg, view) !is null) return true;
+        if (!view.controllable) {
+            fail(400, Json(["error":
+                Json("Location \"" ~ eg ~ "\" is not available on this server.")]));
+            return false;
+        }
+        if (view.freeSlots == 0) {
+            auto busy = Json.emptyArray;
+            foreach (s; view.slots) {
+                if (!s.controllable || s.activeConns == 0) continue;
+                auto b = Json.emptyObject;
+                b["label"] = Json(s.label);
+                b["city"] = Json(s.city);
+                b["country"] = Json(s.country);
+                b["activeConns"] = Json(cast(long) s.activeConns);
+                busy ~= b;
+            }
+            auto err = Json.emptyObject;
+            err["error"] = Json("All " ~ view.slotCount.to!string ~ " exits are in use. "
+                ~ "Pick a location that is already running, or free an exit first.");
+            err["busy"] = busy;
+            fail(409, err);
+            return false;
+        }
+        return true;
+    }
+
     /// GET /api/egress — routes a network can be pinned to, for the
-    /// "Connect via" picker: the direct host IP plus every Mullvad exit in
-    /// the pool with its probed public IP / country / city. Exit identity is
-    /// served from a cache refreshed in the background (see ircfiber.egress);
-    /// rows with `ip == ""` are simply not probed yet.
+    /// "Connect via" picker: the direct host IP, every exit slot with its
+    /// current location and live connection count, and the full catalog of
+    /// Mullvad cities an idle slot can be retargeted to. Slot identity comes
+    /// from the engine; `exitIp`/`healthy` from a background SOCKS probe, so
+    /// rows with `exitIp == ""` are simply not probed yet.
     private void getEgress(HTTPServerRequest req, HTTPServerResponse res) {
         requireAuth(req, res);
         if (res.headerWritten) return;
-        auto exits = Json.emptyArray;
-        foreach (x; egressExits()) {
+        auto view = egressView(redis, serverRegistry);
+        auto slots = Json.emptyArray;
+        foreach (s; view.slots) {
             auto j = Json.emptyObject;
-            j["id"] = Json(x.id);
-            j["ip"] = Json(x.ip);
-            j["country"] = Json(x.country);
-            j["city"] = Json(x.city);
-            j["healthy"] = Json(x.healthy);
-            j["checkedAtMs"] = Json(x.checkedAtMs);
-            j["error"] = Json(x.error);
-            exits ~= j;
+            j["serverId"] = Json(s.serverId);
+            j["label"] = Json(s.label);
+            j["host"] = Json(s.host);
+            j["port"] = Json(cast(long) s.port);
+            j["locationId"] = Json(s.locationId);
+            j["hostname"] = Json(s.hostname);
+            j["country"] = Json(s.country);
+            j["countryCode"] = Json(s.countryCode);
+            j["city"] = Json(s.city);
+            j["controllable"] = Json(s.controllable);
+            j["state"] = Json(s.state);
+            j["activeConns"] = Json(cast(long) s.activeConns);
+            j["heldUntilMs"] = Json(s.heldUntilMs);
+            j["exitIp"] = Json(s.exitIp);
+            j["healthy"] = Json(s.healthy);
+            j["checkedAtMs"] = Json(s.checkedAtMs);
+            j["error"] = Json(s.error);
+            slots ~= j;
+        }
+        auto locations = Json.emptyArray;
+        foreach (l; view.locations) {
+            auto j = Json.emptyObject;
+            j["id"] = Json(l.id);
+            j["country"] = Json(l.country);
+            j["countryCode"] = Json(l.countryCode);
+            j["city"] = Json(l.city);
+            j["relays"] = Json(cast(long) l.relays);
+            locations ~= j;
         }
         auto out_ = Json.emptyObject;
         out_["direct"] = Json(DIRECT_EGRESS_ID);
-        out_["exits"] = exits;
-        res.writeJsonBody(out_);
+        out_["controllable"] = Json(view.controllable);
+        out_["slotCount"] = Json(cast(long) view.slotCount);
+        out_["freeSlots"] = Json(cast(long) view.freeSlots);
+        out_["slots"] = slots;
+        out_["locations"] = locations;
+        // vibe.d 0.10.3 truncates chunked JSON bodies at ~120 bytes
+        // (JsonStringSerializer). Serialise once and write with
+        // Content-Length — the catalog payload is far past that limit.
+        auto payload = out_.toString();
+        res.headers["Content-Type"] = "application/json; charset=utf-8";
+        res.writeBody(cast(const(ubyte)[]) payload);
     }
 
     private void getMessages(HTTPServerRequest req, HTTPServerResponse res) {

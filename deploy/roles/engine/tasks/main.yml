@@ -141,8 +141,12 @@
       TS_USERSPACE: "true"
       TS_SOCKS5_SERVER: ":{{ item.port | default(mullvad_sidecar_socks_port) }}"
       TS_STATE_DIR: "/var/lib/tailscale"
+      # LocalAPI socket on a shared volume so the engine can retarget this
+      # slot's exit node (see IRCFIBER_EGRESS_CONTROL_DIR).
+      TS_SOCKET: "/ctl/tailscaled.sock"
     volumes:
       - "mullvad-{{ item.name }}-state:/var/lib/tailscale"
+      - "mullvad-{{ item.name }}-ctl:/ctl"
     networks:
       - name: "{{ docker_ircfiber_network }}"
     labels:
@@ -164,7 +168,14 @@
       - name: "{{ docker_ircfiber_network }}"
       - name: ircfiber_logging
     env: "{{ _engine_env }}"
-    volumes: []
+    # One control volume per local slot: <IRCFIBER_EGRESS_CONTROL_DIR>/<name>/
+    # tailscaled.sock. A slot whose socket is absent stays static (never
+    # retargeted). No docker socket is mounted; no-new-privileges stays on.
+    volumes: >-
+      {{ mullvad_sidecars | default([]) | selectattr('exit_node', 'defined')
+         | map(attribute='name')
+         | map('regex_replace', '^(.+)$', 'mullvad-\1-ctl:/egress/\1')
+         | list }}
     security_opts:
       - "no-new-privileges:true"
     ulimits:
@@ -195,7 +206,14 @@
     # instead of a NAT'd bridge IP. DNS for irc.ircfiber.com resolves via
     # public IP → host-published 6667/6697 (hairpin), which is correct.
     env: "{{ _engine_env }}"
-    volumes: []
+    # One control volume per local slot: <IRCFIBER_EGRESS_CONTROL_DIR>/<name>/
+    # tailscaled.sock. A slot whose socket is absent stays static (never
+    # retargeted). No docker socket is mounted; no-new-privileges stays on.
+    volumes: >-
+      {{ mullvad_sidecars | default([]) | selectattr('exit_node', 'defined')
+         | map(attribute='name')
+         | map('regex_replace', '^(.+)$', 'mullvad-\1-ctl:/egress/\1')
+         | list }}
     security_opts:
       - "no-new-privileges:true"
     ulimits:

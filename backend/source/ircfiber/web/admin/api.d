@@ -1359,7 +1359,9 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 // Pool string + parser live in ircfiber.egress (shared with the user-facing
 // /api/egress and the network create/update validation) so admin and users
 // agree on labels. `<name>@host:port` entries carry an explicit label.
-import ircfiber.egress : mullvadRawPool, parseMullvadPool, PoolEntry;
+import ircfiber.egress : mullvadRawPool, parseMullvadPool, PoolEntry,
+    DIRECT_EGRESS_ID, EgressView, egressView, matchingSlot, normalizeEgressId,
+    isKnownEgressId;
 
 private struct _ContainerInfo { string container; string state; string status; string tailscaleExit; }
 
@@ -1522,6 +1524,12 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         IpInfo ipinfo;
         int port;
         bool healthy;
+        // Slot state published by the engine (see ircfiber.egress): where the
+        // slot currently exits and whether it can be retargeted at all.
+        string locationId, city, country, slotState;
+        int activeConns;
+        long heldUntilMs;
+        bool controllable;
     }
     // helper to fetch ipinfo via SOCKS (k8s: use curl --socks5 with 1s, now enabled for admin visibility)
     IpInfo _fetchIpInfo(string host, ushort port) {
@@ -1680,6 +1688,28 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         }
         proxyInfos ~= pi;
     }
+    // Fold in the engine-published slot state so the admin sees the live
+    // location and connection count, not just the container.
+    try {
+        if (redis !is null && serverRegistry !is null) {
+            auto view = egressView(redis, serverRegistry);
+            foreach (ref pi; proxyInfos) {
+                foreach (s; view.slots) {
+                    if (s.label != pi.label) continue;
+                    pi.locationId = s.locationId;
+                    pi.city = s.city;
+                    pi.country = s.country;
+                    pi.slotState = s.state;
+                    pi.activeConns = s.activeConns;
+                    pi.heldUntilMs = s.heldUntilMs;
+                    pi.controllable = s.controllable;
+                    break;
+                }
+            }
+        }
+    } catch (Exception e) {
+        logWarn("mullvad status slot enrichment failed: %s", e.msg);
+    }
     struct UsageInfo { int pinned; int active; }
     UsageInfo[string] usageMap;
     struct AssocInfo { string networkId, networkName, host, username, egressNodeId, activeEgressLabel; }
@@ -1824,6 +1854,13 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         buf.put("\"ipinfo\":{\"ip\":\"" ~ pi.ipinfo.ip.escapeJson ~ "\",\"city\":\"" ~ pi.ipinfo.city.escapeJson ~ "\",\"region\":\"" ~ pi.ipinfo.region.escapeJson ~ "\",\"country\":\"" ~ pi.ipinfo.country.escapeJson ~ "\",\"loc\":\"" ~ pi.ipinfo.loc.escapeJson ~ "\",\"org\":\"" ~ pi.ipinfo.org.escapeJson ~ "\",\"postal\":\"" ~ pi.ipinfo.postal.escapeJson ~ "\",\"timezone\":\"" ~ pi.ipinfo.timezone.escapeJson ~ "\",\"hostname\":\"" ~ pi.ipinfo.hostname.escapeJson ~ "\"},");
         buf.put("\"healthy\":" ~ (pi.healthy ? "true" : "false") ~ ",");
         buf.put("\"lastTestedAt\":\"" ~ pi.lastTestedAt.escapeJson ~ "\",");
+        buf.put("\"locationId\":\"" ~ pi.locationId.escapeJson ~ "\",");
+        buf.put("\"city\":\"" ~ pi.city.escapeJson ~ "\",");
+        buf.put("\"country\":\"" ~ pi.country.escapeJson ~ "\",");
+        buf.put("\"state\":\"" ~ pi.slotState.escapeJson ~ "\",");
+        buf.put("\"activeConns\":" ~ pi.activeConns.to!string ~ ",");
+        buf.put("\"heldUntilMs\":" ~ pi.heldUntilMs.to!string ~ ",");
+        buf.put("\"controllable\":" ~ (pi.controllable ? "true" : "false") ~ ",");
         buf.put("\"error\":\"" ~ pi.error.escapeJson ~ "\"}");
     }
     buf.put("],");
@@ -1904,11 +1941,60 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
     res.writeBody(cast(const(ubyte)[]) responseStr);
 }
 
+/// Validates an egress pin for the admin API, writing the error response
+/// itself. Mirrors the user-facing validator in api/rest.d — an unknown
+/// location is a 400, and a new location while every slot is busy is a 409,
+/// because honouring it would mean dropping someone else's connection.
+private bool _validateAdminEgressPin(string pin, HTTPServerResponse res,
+                                     RedisStorage redis, ServerRegistry serverRegistry) {
+    if (redis is null || serverRegistry is null) return true;
+    EgressView view;
+    try {
+        view = egressView(redis, serverRegistry);
+    } catch (Exception e) {
+        logWarn("egress pin validation skipped: %s", e.msg);
+        return true;
+    }
+    if (!isKnownEgressId(pin, view)) {
+        jsonError(res, 400, "Unknown egress: " ~ pin);
+        return false;
+    }
+    if (pin.length == 0 || pin == DIRECT_EGRESS_ID) return true;
+    if (matchingSlot(pin, view) !is null) return true;
+    if (!view.controllable) {
+        jsonError(res, 400, "Location \"" ~ pin ~ "\" is not available on this server.");
+        return false;
+    }
+    if (view.freeSlots == 0) {
+        jsonError(res, 409, "All " ~ view.slotCount.to!string ~ " exits are in use. "
+            ~ "Pick a location that is already running, or free an exit first.");
+        return false;
+    }
+    return true;
+}
+
 /// POST /api/admin/mullvad/:label/restart — docker restart sidecar
-package void apiMullvadRestart(HTTPServerRequest req, HTTPServerResponse res) {
+package void apiMullvadRestart(HTTPServerRequest req, HTTPServerResponse res,
+                               RedisStorage redis, ServerRegistry serverRegistry) {
     import std.string : toLower, strip;
     auto label = req.params["label"].strip().toLower();
     if (label.length == 0) { jsonError(res, 400, "label required"); return; }
+    // A restart drops every connection egressing through the slot. Same lock
+    // the location picker honours, applied to the destructive admin button.
+    if (redis !is null && serverRegistry !is null) {
+        try {
+            auto view = egressView(redis, serverRegistry);
+            foreach (s; view.slots) {
+                if (s.label != label || s.activeConns == 0) continue;
+                jsonError(res, 409, "Slot " ~ label ~ " is carrying "
+                    ~ s.activeConns.to!string ~ " live connection"
+                    ~ (s.activeConns == 1 ? "" : "s") ~ " — disconnect them first.");
+                return;
+            }
+        } catch (Exception e) {
+            logWarn("mullvad restart busy check failed: %s", e.msg);
+        }
+    }
     auto raw = mullvadRawPool();
     auto entries = parseMullvadPool(raw);
     bool found = false;
@@ -2167,9 +2253,17 @@ package void apiMullvadServerEgressClear(HTTPServerRequest req, HTTPServerRespon
 package void apiNetworkEgressSet(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, ServerRegistry serverRegistry) {
     import std.uuid : parseUUID;
     import std.string : toLower, strip;
-    auto networkIdStr = req.params["id"];
+    // `parseUUID` binds an lvalue string by ref and *consumes* the range,
+    // which used to leave `networkIdStr` empty: the reconnect push below
+    // then looked up server "" and the pin only took effect on the next
+    // natural reconnect. Parse a throwaway copy and keep the id intact.
+    auto networkIdStr = req.params["id"].idup;
     UUID networkId;
-    try { networkId = parseUUID(networkIdStr); } catch (Exception e) { jsonError(res, 400, "Invalid network id: " ~ e.msg); return; }
+    {
+        auto toParse = networkIdStr;
+        try { networkId = parseUUID(toParse); }
+        catch (Exception e) { jsonError(res, 400, "Invalid network id: " ~ e.msg); return; }
+    }
     auto body = readJsonBody(req);
     string egressNodeId = "";
     if (body.type == Json.Type.object && body["egressNodeId"].type != Json.Type.undefined) {
@@ -2179,6 +2273,10 @@ package void apiNetworkEgressSet(HTTPServerRequest req, HTTPServerResponse res, 
     }
     // "random" / "auto" / "" all mean random
     if (egressNodeId == "random" || egressNodeId == "auto") egressNodeId = "";
+    // Same validation the user-facing PUT /api/networks does: an admin pin
+    // must be a location this deployment can serve, and must not silently
+    // require yanking an exit that is carrying live connections.
+    if (!_validateAdminEgressPin(egressNodeId, res, redis, serverRegistry)) return;
     auto netRepo = new NetworkRepository();
     auto existing = netRepo.findById(networkId);
     if (existing.id == typeof(existing.id).init) { jsonError(res, 404, "Network not found"); return; }

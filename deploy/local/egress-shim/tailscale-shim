@@ -1,0 +1,88 @@
+#!/bin/sh
+# tailscale CLI stand-in for local verification of the egress location picker.
+#
+# The engine drives each Mullvad slot through `tailscale --socket=<sock> …`.
+# Talking to real tailscaled would burn Mullvad device licenses and needs a
+# tailnet, so locally the engine is pointed at this script via
+# IRCFIBER_EGRESS_TAILSCALE_BIN. It implements exactly the two calls the
+# engine makes:
+#
+#   status --json          → a fixed six-city exit catalog, with the currently
+#                            selected exit read from <sockdir>/current
+#   set --exit-node=<ip>   → records that ip's relay in <sockdir>/current
+#
+# The slot's identity therefore lives in the same shared control volume the
+# real tailscaled socket would, so each slot retargets independently and the
+# retarget is observable from the host (`docker exec … cat /ctl/current`).
+#
+# Production uses the real binary (see engine/Containerfile.engine).
+set -eu
+
+SOCK=""
+CMD=""
+EXIT_IP=""
+for arg in "$@"; do
+    case "$arg" in
+        --socket=*) SOCK="${arg#--socket=}" ;;
+        --exit-node=*) EXIT_IP="${arg#--exit-node=}" ;;
+        status|set) [ -z "$CMD" ] && CMD="$arg" ;;
+    esac
+done
+
+[ -n "$SOCK" ] || { echo "tailscale-shim: --socket= is required" >&2; exit 64; }
+CTL_DIR=$(dirname "$SOCK")
+CURRENT_FILE="$CTL_DIR/current"
+
+# hostname|ip|country|countryCode|city|cityCode|priority
+RELAYS='se-sto-wg-201|100.64.10.1|Sweden|SE|Stockholm|STO|100
+se-got-wg-001|100.64.10.2|Sweden|SE|Gothenburg|GOT|40
+us-lax-wg-402|100.64.10.3|USA|US|Los Angeles, CA|LAX|100
+us-nyc-wg-001|100.64.10.4|USA|US|New York, NY|NYC|90
+ch-zrh-wg-503|100.64.10.5|Switzerland|CH|Zurich|ZRH|100
+de-ber-wg-003|100.64.10.6|Germany|DE|Berlin|BER|100'
+
+# Slots boot in Berlin so a fresh stack has a known location.
+selected="de-ber-wg-003"
+if [ -f "$CURRENT_FILE" ]; then
+    read_selected=$(cat "$CURRENT_FILE" 2>/dev/null || true)
+    [ -n "$read_selected" ] && selected="$read_selected"
+fi
+
+case "$CMD" in
+    set)
+        [ -n "$EXIT_IP" ] || { echo "tailscale-shim: set needs --exit-node=" >&2; exit 64; }
+        match=$(printf '%s\n' "$RELAYS" | awk -F'|' -v ip="$EXIT_IP" '$2 == ip { print $1 }')
+        if [ -z "$match" ]; then
+            echo "tailscale-shim: no such exit node: $EXIT_IP" >&2
+            exit 1
+        fi
+        printf '%s' "$match" > "$CURRENT_FILE"
+        exit 0
+        ;;
+    status)
+        printf '{\n'
+        printf '  "ExitNodeStatus": { "Online": true },\n'
+        printf '  "Peer": {\n'
+        first=1
+        printf '%s\n' "$RELAYS" | while IFS='|' read -r host ip country cc city citycode prio; do
+            [ -n "$host" ] || continue
+            if [ "$first" -eq 1 ]; then first=0; else printf ',\n'; fi
+            if [ "$host" = "$selected" ]; then is_exit="true"; else is_exit="false"; fi
+            printf '    "nodekey:%s": {\n' "$host"
+            printf '      "HostName": "%s",\n' "$host"
+            printf '      "TailscaleIPs": ["%s"],\n' "$ip"
+            printf '      "Online": true,\n'
+            printf '      "ExitNode": %s,\n' "$is_exit"
+            printf '      "ExitNodeOption": true,\n'
+            printf '      "Location": { "Country": "%s", "CountryCode": "%s", "City": "%s", "CityCode": "%s", "Priority": %s }\n' \
+                "$country" "$cc" "$city" "$citycode" "$prio"
+            printf '    }'
+        done
+        printf '\n  }\n}\n'
+        exit 0
+        ;;
+    *)
+        echo "tailscale-shim: unsupported command: $*" >&2
+        exit 64
+        ;;
+esac

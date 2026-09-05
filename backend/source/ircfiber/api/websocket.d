@@ -529,6 +529,7 @@ final class WebSocketGateway {
                 netObj["activeEgressLabel"] = Json(snap.activeEgressLabel);
                 netObj["activeEgressHost"] = Json(snap.activeEgressHost);
                 netObj["activeEgressIp"] = Json(snap.activeEgressIp);
+                netObj["activeEgressLocation"] = Json(snap.activeEgressLocation);
                 netObj["lagMs"] = Json(snap.lagMs);
                 netObj["connectedAtMs"] = Json(snap.connectedAtMs);
                 if (snap.hasTlsInfo) netObj["tlsInfo"] = snap.tlsInfo.toJson();
@@ -571,6 +572,7 @@ final class WebSocketGateway {
                 netObj["activeEgressLabel"] = Json("");
                 netObj["activeEgressHost"] = Json("");
                 netObj["activeEgressIp"] = Json("");
+                netObj["activeEgressLocation"] = Json("");
                 netObj["lagMs"] = Json(-1L);
                 netObj["connectedAtMs"] = Json(0L);
             }

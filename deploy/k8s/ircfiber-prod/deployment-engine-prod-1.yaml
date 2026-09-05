@@ -49,7 +49,10 @@ spec:
             - name: IRCFIBER_BIND_ADDRESS
               value: "0.0.0.0"
             - name: IRCFIBER_MULLVAD_POOL
-              value: "socks5://100.94.116.56:1080,socks5://100.94.116.56:1081,socks5://100.94.116.56:1082"
+              # Explicit <label>@ prefixes are required for bare-IP entries: the
+              # dash/dot label heuristic would collapse all three to "100" and
+              # the slot registry would see a single slot.
+              value: "socks5://de@100.94.116.56:1080,socks5://ch@100.94.116.56:1081,socks5://us@100.94.116.56:1082"
           resources:
             requests:
               cpu: 200m

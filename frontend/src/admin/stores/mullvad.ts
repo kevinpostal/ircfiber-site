@@ -31,6 +31,17 @@ export interface MullvadProxy {
   healthy: boolean;
   error: string | null;
   lastTestedAt: string;
+  /** Engine-published slot state (absent on engines older than the slot
+   *  registry): where this exit currently is and whether it can be moved. */
+  locationId?: string;
+  city?: string;
+  country?: string;
+  state?: 'ready' | 'retargeting' | 'error' | string;
+  /** Live IRC connections egressing through this slot. */
+  activeConns?: number;
+  heldUntilMs?: number;
+  /** Engine can retarget this slot to another Mullvad city. */
+  controllable?: boolean;
 }
 export interface MullvadUsage {
   pinned: number;

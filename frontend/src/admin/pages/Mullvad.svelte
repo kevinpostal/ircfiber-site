@@ -182,7 +182,7 @@
       <table class="w-full text-sm">
         <thead>
           <tr class="border-b border-border text-left text-xs font-semibold uppercase tracking-wider text-muted">
-            <th class="px-3 py-2">Label</th>
+            <th class="px-3 py-2">Exit location</th>
             <th class="px-3 py-2">Container</th>
             <th class="px-3 py-2">SOCKS URL</th>
             <th class="px-3 py-2">Resolved IP</th>
@@ -195,7 +195,19 @@
         <tbody>
           {#each data?.pool ?? [] as p}
             <tr class="border-b border-border/50 hover:bg-surface">
-              <td class="px-3 py-2 font-mono text-xs font-semibold">{p.label}</td>
+              <td class="px-3 py-2 text-xs">
+                <div class="font-medium">{p.city ? `${p.city}, ${p.country}` : p.label.toUpperCase()}</div>
+                <div class="mt-1 flex items-center gap-1">
+                  {#if (p.activeConns ?? 0) > 0}
+                    <StatusBadge label={`in use — ${p.activeConns}`} tone="primary" size="sm" />
+                  {:else}
+                    <StatusBadge label="idle" tone="muted" size="sm" />
+                  {/if}
+                  {#if p.state === 'retargeting'}<StatusBadge label="switching" tone="warn" size="sm" />{/if}
+                  {#if p.controllable === false}<StatusBadge label="static" tone="muted" size="sm" />{/if}
+                </div>
+                <div class="mt-1 font-mono text-[10px] text-muted">{p.locationId || p.label}</div>
+              </td>
               <td class="px-3 py-2">
                 <div class="font-mono text-xs">{p.container}</div>
                 <div class="mt-1"><StatusBadge label={p.containerState} tone={containerTone(p.containerState)} size="sm" /></div>
@@ -229,7 +241,10 @@
                   <button
                     onclick={() => (restartAsk = p.label)}
                     class="rounded border border-border bg-surface-2 px-2 py-1 text-[11px] font-medium hover:border-danger/40 disabled:opacity-50"
-                    disabled={restarting.has(p.label)}
+                    disabled={restarting.has(p.label) || (p.activeConns ?? 0) > 0}
+                    title={(p.activeConns ?? 0) > 0
+                      ? `Carrying ${p.activeConns} live connection(s) — disconnect them first`
+                      : 'Restart the sidecar container'}
                   >
                     {restarting.has(p.label) ? 'Restarting…' : 'Restart'}
                   </button>

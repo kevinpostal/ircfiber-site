@@ -3267,6 +3267,7 @@ describe('updateNetworkFromSync — connection telemetry mapping', () => {
 		incoming.activeEgressLabel = 'mullvad-us-nyc';
 		incoming.activeEgressHost = '10.42.0.1';
 		incoming.activeEgressIp = '198.51.100.7';
+		incoming.activeEgressLocation = 'New York, USA';
 		incoming.lagMs = 41;
 		incoming.connectedAtMs = 1_700_000_000_000;
 		incoming.tlsInfo = {
@@ -3286,6 +3287,7 @@ describe('updateNetworkFromSync — connection telemetry mapping', () => {
 		expect(net.egressLabel).toBe('mullvad-us-nyc');
 		expect(net.egressHost).toBe('10.42.0.1');
 		expect(net.egressIp).toBe('198.51.100.7');
+		expect(net.egressLocation).toBe('New York, USA');
 		expect(net.lagMs).toBe(41);
 		expect(net.connectedAtMs).toBe(1_700_000_000_000);
 		expect(net.tlsInfo).toEqual({
@@ -3316,6 +3318,7 @@ describe('updateNetworkFromSync — connection telemetry mapping', () => {
 		incoming.activeEgressLabel = '';
 		incoming.activeEgressHost = '';
 		incoming.activeEgressIp = '';
+		incoming.activeEgressLocation = '';
 		incoming.lagMs = -1;
 		incoming.connectedAtMs = 0;
 		delete (incoming as Partial<SyncNetwork>).tlsInfo;
@@ -3325,6 +3328,7 @@ describe('updateNetworkFromSync — connection telemetry mapping', () => {
 		expect(net.egressLabel).toBeNull();
 		expect(net.egressHost).toBeNull();
 		expect(net.egressIp).toBeNull();
+		expect(net.egressLocation).toBeNull();
 		expect(net.lagMs).toBeNull();
 		expect(net.connectedAtMs).toBeNull();
 		expect(net.tlsInfo).toBeNull();

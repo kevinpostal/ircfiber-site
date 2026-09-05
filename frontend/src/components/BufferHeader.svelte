@@ -271,9 +271,9 @@
           </span>
           <span class="kv" data-testid="server-kv">
             {#if pillKind === 'connected'}
-              {#if activeNetwork.lagMs != null}lag <b>{activeNetwork.lagMs} ms</b>{' · '}{/if}{#if activeNetwork.egressLabel}egress <b>{activeNetwork.egressLabel}</b>{' · '}{/if}{joinedChannelCount} {joinedChannelCount === 1 ? 'channel' : 'channels'}
+              {#if activeNetwork.lagMs != null}lag <b>{activeNetwork.lagMs} ms</b>{' · '}{/if}{#if activeNetwork.egressLabel}egress <b>{activeNetwork.egressLocation ?? activeNetwork.egressLabel}</b>{' · '}{/if}{joinedChannelCount} {joinedChannelCount === 1 ? 'channel' : 'channels'}
             {:else if pillKind === 'busy'}
-              {#if attemptStartMs != null}<b><LiveElapsed since={attemptStartMs} format={formatElapsedSeconds} interval={100} /></b>{' elapsed · '}{/if}{activeNetwork.host}:{activeNetwork.port}{#if activeNetwork.egressLabel}{' via '}<b>{activeNetwork.egressLabel}</b>{/if}
+              {#if attemptStartMs != null}<b><LiveElapsed since={attemptStartMs} format={formatElapsedSeconds} interval={100} /></b>{' elapsed · '}{/if}{activeNetwork.host}:{activeNetwork.port}{#if activeNetwork.egressLabel}{' via '}<b>{activeNetwork.egressLocation ?? activeNetwork.egressLabel}</b>{/if}
             {:else if pillKind === 'retry'}
               {#if lastError}last error <b>{lastError}</b>{/if}
             {:else if pillKind === 'failed'}

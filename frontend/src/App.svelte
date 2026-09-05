@@ -42,7 +42,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -553,25 +553,24 @@ let showNetworkForm: boolean = $state(false);
   }
 
   // IRCCloud session.setFocused + buffer view focusChange: on blur lock
-  // focusSeen (and drop bottomSeen when at bottom); on focus unlock it.
+  // focusSeen (and drop bottomSeen when at bottom); on focus drop every
+  // tab-out marker — a focusSeen left behind on ANY buffer caps
+  // `readBuffer` there forever, so its unread badge can never clear.
   // The read trigger then re-evaluates with userScrolled=false.
   function setFocused(focused: boolean): void {
     ircState.focusLost = !focused;
     const nid = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
-    if (nid && buf && buf !== '_server') {
-      if (focused) {
-        clearFocusSeen(nid, buf);
-      } else {
-        const container = document.getElementById('messages');
-        const atBottom = !!container && container.scrollHeight - (container.offsetHeight + Math.ceil(container.scrollTop)) <= 1;
-        if (atBottom) clearBottomSeen(nid, buf);
-        if (getFocusSeen(nid, buf) === null) {
-          const list = ircState.messages[`${nid}:${buf}`] ?? [];
-          const ts = list.length > 0 ? (list[list.length - 1].t ?? Date.now()) : Date.now();
-          setFocusSeen(nid, buf, ts);
-          ircState.lastSeenMsgTime = ts;
-        }
+    if (focused) clearAllFocusSeen();
+    else if (nid && buf && buf !== '_server') {
+      const container = document.getElementById('messages');
+      const atBottom = !!container && container.scrollHeight - (container.offsetHeight + Math.ceil(container.scrollTop)) <= 1;
+      if (atBottom) clearBottomSeen(nid, buf);
+      if (getFocusSeen(nid, buf) === null) {
+        const list = ircState.messages[`${nid}:${buf}`] ?? [];
+        const ts = list.length > 0 ? (list[list.length - 1].t ?? Date.now()) : Date.now();
+        setFocusSeen(nid, buf, ts);
+        ircState.lastSeenMsgTime = ts;
       }
     }
     ircState.scrollChangeHook?.(false);
@@ -1061,6 +1060,7 @@ let showNetworkForm: boolean = $state(false);
       egressLabel: null,
       egressHost: null,
       egressIp: null,
+      egressLocation: null,
       lagMs: null,
       connectedAtMs: null,
       tlsInfo: null,
