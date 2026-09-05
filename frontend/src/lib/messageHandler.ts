@@ -420,9 +420,13 @@ export function processIrcEvent(
     });
     accum.banTargetChannel = msg.params[1] || '';
   } else if (cmd === '368') {
+    // 368 RPL_ENDOFBANLIST carries the channel itself (`<me> <channel>
+    // :End of channel ban list`). Read it from there, not from the last 367:
+    // a channel with no bans sends 368 with no 367 at all, and keying off
+    // the accumulator left the channel empty so the overlay never opened.
     result.banListData = {
       networkId,
-      channel: accum.banTargetChannel,
+      channel: msg.params?.[1] || accum.banTargetChannel,
       bans: [...accum.banAcc],
     };
     accum.banAcc = [];

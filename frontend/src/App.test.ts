@@ -6,6 +6,8 @@ import App from './App.svelte';
 import { ircState, updateChannelUsers, activeJoinList, setLastSeenMessage, dirtySeenEids } from './stores/ircStore.svelte';
 import { membersCollapsedMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, pinnedMap, lastSeenMap, globalPrefs } from './stores/preferences.svelte';
 import { createNetwork, createBuffer, createMessage, createMember } from './test/factories';
+import { banListKey } from './lib/utils';
+import type { BanListData } from './types';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   // The real connectWebSocket opens a WebSocket and fires onopen/onmessage
@@ -955,6 +957,86 @@ describe('App', () => {
 
       const updated = ircState.networks.find(n => n.networkId === net.networkId);
       expect(updated?.buffers.find(b => b.name === '#ghost')).toBeDefined();
+    });
+  });
+
+  // Regression: "I am not able to open the ban list to see channel bans".
+  // The overlay is popped when the 367/368 reply lands, gated on a pending
+  // marker keyed by network + channel. Two ways that lookup used to miss —
+  // and a miss is silent, so the menu item simply did nothing:
+  //   * a channel with NO bans sends 368 with no 367 at all, and the channel
+  //     was read from the 367 accumulator, so the key was `<net>:`;
+  //   * the request side keyed on the buffer's display case (`#TclMafia`)
+  //     while the reply carries the server's case.
+  describe('ban list overlay', () => {
+    async function boot(): Promise<(d: unknown) => void> {
+      render(App);
+      const wsMock = connectWebSocket as unknown as { mock: { calls: Array<Array<(d: unknown) => void>> } };
+      await vi.waitFor(() => { expect(wsMock.mock.calls.length).toBeGreaterThan(0); });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+      return onMessage!;
+    }
+    function seed(channel: string) {
+      const net = createNetwork({ networkId: 'netban', name: 'BanNet' });
+      net.buffers.push(createBuffer({ name: channel }));
+      ircState.networks.push(net);
+      flushSync();
+      return net;
+    }
+
+    it('opens with the empty state for a channel with no bans', async () => {
+      seed('#nobans');
+      const onMessage = await boot();
+      ircState.pendingBanList.set(banListKey('netban', '#nobans'), { networkId: 'netban', ts: Date.now() });
+
+      // 368 RPL_ENDOFBANLIST only: `<me> <channel> :End of channel ban list`.
+      onMessage({ y: 'irc_event', c: '368', nid: 'netban', ch: '#nobans', p: ['me', '#nobans'], x: 'End of channel ban list', t: Date.now() });
+      flushSync();
+
+      expect(ircState.overlay.type).toBe('banlist');
+      expect((ircState.overlay.data as BanListData).channel).toBe('#nobans');
+      expect((ircState.overlay.data as BanListData).bans).toEqual([]);
+      await expect.element(page.getByText('No bans in effect.')).toBeInTheDocument();
+    });
+
+    it('opens when the server echoes a different channel case than the buffer', async () => {
+      seed('#MixedBans');
+      const onMessage = await boot();
+      // The request side sees the buffer's display case…
+      ircState.pendingBanList.set(banListKey('netban', '#MixedBans'), { networkId: 'netban', ts: Date.now() });
+
+      // …the server echoes its own.
+      onMessage({ y: 'irc_event', c: '367', nid: 'netban', ch: '#MIXEDBANS', p: ['me', '#MIXEDBANS', 'nuisance!*@*', 'op!u@h', '1700000000'], t: Date.now() });
+      onMessage({ y: 'irc_event', c: '368', nid: 'netban', ch: '#MIXEDBANS', p: ['me', '#MIXEDBANS'], t: Date.now() });
+      flushSync();
+
+      expect(ircState.overlay.type).toBe('banlist');
+      const data = ircState.overlay.data as BanListData;
+      expect(data.bans.map(b => b.mask)).toEqual(['nuisance!*@*']);
+      await expect.element(page.getByText('nuisance!*@*')).toBeInTheDocument();
+    });
+
+    it('stays closed for a 368 nobody asked for (history replay on refresh)', async () => {
+      seed('#nobans');
+      const onMessage = await boot();
+
+      onMessage({ y: 'irc_event', c: '368', nid: 'netban', ch: '#nobans', p: ['me', '#nobans'], t: Date.now() });
+      flushSync();
+
+      expect(ircState.overlay.type).toBeNull();
+    });
+
+    it('stays closed once the pending request has expired', async () => {
+      seed('#nobans');
+      const onMessage = await boot();
+      ircState.pendingBanList.set(banListKey('netban', '#nobans'), { networkId: 'netban', ts: Date.now() - 31_000 });
+
+      onMessage({ y: 'irc_event', c: '368', nid: 'netban', ch: '#nobans', p: ['me', '#nobans'], t: Date.now() });
+      flushSync();
+
+      expect(ircState.overlay.type).toBeNull();
+      expect(ircState.pendingBanList.size).toBe(0);
     });
   });
 });

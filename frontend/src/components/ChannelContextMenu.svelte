@@ -3,7 +3,7 @@
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { archivedMap, pinnedMap, getBufferPrefs, setBufferPref, setClearedAt, globalPrefs } from '../stores/preferences.svelte';
   import { pinChannel, unpinChannel, updateBufferPrefs, clearBacklog as apiClearBacklog } from '../stores/api';
-  import { normalizeChannelName } from '../lib/utils';
+  import { normalizeChannelName, banListKey } from '../lib/utils';
   import type { Buffer, IgnoreListData } from '../types';
   import { onMount, onDestroy } from 'svelte';
   import { updateRoute } from '../lib/routing';
@@ -200,7 +200,7 @@
     // Track that the user explicitly requested the ban list for this channel,
     // so the 367/368 reply will actually show the overlay. Without this, a
     // 368 replayed from history on refresh would also pop the dialog.
-    ircState.pendingBanList.set(`${networkId}:${buf.name}`, { networkId, ts: Date.now() });
+    ircState.pendingBanList.set(banListKey(networkId, buf.name), { networkId, ts: Date.now() });
     sendRaw(networkId, 'MODE ' + buf.name + ' +b');
     onClose();
   }

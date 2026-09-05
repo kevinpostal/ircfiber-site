@@ -70,6 +70,19 @@ export function normalizeChannelName(name: string): string {
 }
 
 /**
+ * Key for `ircState.pendingBanList` — the "the user asked for this ban list,
+ * so pop the overlay when the reply lands" marker.
+ *
+ * The request side knows the buffer's display case (`#TclMafia`) while the
+ * 367/368 replies echo whatever case the server keeps for the channel, so
+ * both sides MUST fold through `normalizeChannelName` or the lookup misses
+ * and the overlay silently never opens.
+ */
+export function banListKey(networkId: string, channel: string): string {
+  return `${networkId}:${normalizeChannelName(channel)}`;
+}
+
+/**
  * Normalize a channel for JOIN / auto-join: ensures leading `#` and lowercases.
  * Bare names like `testing` → `#testing` so the engine sends `JOIN #testing`
  * instead of `JOIN testing` (which IRC treats as a nick, i.e. a PRIVMSG target).

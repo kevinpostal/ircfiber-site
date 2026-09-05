@@ -31,7 +31,7 @@
   import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
-  import { normalizeChannelName, isSkippedCommand, stripPrefix } from './lib/utils';
+  import { normalizeChannelName, isSkippedCommand, stripPrefix, banListKey } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
   import UploadDialog from './components/UploadDialog.svelte';
   import UploadsPanel from './components/UploadsPanel.svelte';
@@ -1433,7 +1433,7 @@ let showNetworkForm: boolean = $state(false);
     }
     if (result.banListData) {
       const d = result.banListData as BanListData;
-      const key = `${d.networkId}:${d.channel}`;
+      const key = banListKey(d.networkId, d.channel);
       const pending = ircState.pendingBanList.get(key);
       // Only show the overlay if the user explicitly requested this ban list
       // (via the context menu or /banlist). Otherwise this 368 is from

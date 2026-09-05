@@ -3,7 +3,7 @@ import { sendRaw, sendMessage, requestSync } from '../stores/wsConnection.svelte
 import { reconnectNetwork, disconnectNetwork, clearBacklog } from '../stores/api';
 import { setClearedAt, archivedMap, ignoreList, highlightWords, rebuildIgnoreMap } from '../stores/preferences.svelte';
 import { ircState, setActiveBuffer, archiveBuffer, deleteBuffer, markUserDisconnected, getActiveNetwork, initiateRejoin, pruneMessagesBefore, clearMessageCache, requestChannelList, findBufferByName } from '../stores/ircStore.svelte';
-import { normalizeChannelName, generateLabel, stripPrefix } from './utils';
+import { normalizeChannelName, generateLabel, stripPrefix, banListKey } from './utils';
 import { updateRoute } from './routing';
 
 export type SlashHandler = (args: string[], networkId: string, target: string, network: Network | null) => void;
@@ -201,7 +201,7 @@ registerSlash(['banlist', 'bans'], (args, networkId, target) => {
   const chan = args[0] ? normalizeChannelName(args[0]) : target;
   if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
   // Track pending so the 368 reply actually shows the overlay (see App.svelte)
-  ircState.pendingBanList.set(`${networkId}:${chan}`, { networkId, ts: Date.now() });
+  ircState.pendingBanList.set(banListKey(networkId, chan), { networkId, ts: Date.now() });
   sendRaw(networkId, 'MODE ' + chan + ' +b');
 });
 
