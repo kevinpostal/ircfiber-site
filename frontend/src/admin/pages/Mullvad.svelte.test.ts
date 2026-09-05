@@ -169,11 +169,14 @@ describe('Mullvad.svelte', () => {
     expect(document.body.innerText).toContain('IRC ok');
   });
 
-  it('surfaces an IRC probe failure instead of claiming success', async () => {
+  // A Z-line and a dead route are opposite diagnoses: one says the exit got
+  // all the way to the ircd, the other says it never arrived. The row must
+  // not flatten both into "failed".
+  it('reports a refusal as having reached the ircd', async () => {
     await mount();
     mockedPost.mockResolvedValue({
       label: 'de', host: 'irc.supernets.org', port: 6667, nick: 'fbprobe4321',
-      socksOk: true, registered: false, serverName: '', welcome: '',
+      socksOk: true, reachedIrcd: true, registered: false, serverName: '', welcome: '',
       ms: 900, error: 'server refused registration: :srv 465 * :You are banned',
     });
 
@@ -182,7 +185,24 @@ describe('Mullvad.svelte', () => {
     await new Promise((r) => setTimeout(r, 120));
 
     expect(ui.toastError).toHaveBeenCalledWith(expect.stringContaining('You are banned'));
-    expect(document.body.innerText).toContain('IRC failed');
+    expect(document.body.innerText).toContain('Reached ircd, refused');
+    expect(document.body.innerText).toContain('You are banned');
+  });
+
+  it('reports a dead route as having no IRC path at all', async () => {
+    await mount();
+    mockedPost.mockResolvedValue({
+      label: 'de', host: 'irc.ircfiber.com', port: 6667, nick: 'fbprobe4321',
+      socksOk: false, reachedIrcd: false, registered: false, serverName: '', welcome: '',
+      ms: 800, error: 'proxy CONNECT refused (SOCKS reply 1)',
+    });
+
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Test IRC') as HTMLButtonElement;
+    btn.click();
+    await new Promise((r) => setTimeout(r, 120));
+
+    expect(document.body.innerText).toContain('No IRC path');
+    expect(document.body.innerText).not.toContain('Reached ircd');
   });
 
   it('explains how to add a slot instead of pretending to provision one', async () => {

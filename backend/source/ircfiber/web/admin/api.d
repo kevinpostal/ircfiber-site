@@ -1513,7 +1513,8 @@ private string _isoNow() {
 /// Result of driving a real IRC registration through one SOCKS proxy.
 private struct _IrcProbe {
     bool socksOk;      /// SOCKS5 CONNECT to the IRC host succeeded
-    bool registered;   /// the IRC server answered 001 (or a fatal numeric)
+    bool reachedIrcd;  /// the ircd spoke to us at all (banner, notice, numeric)
+    bool registered;   /// the IRC server answered 001
     string serverName; /// the 001 source, e.g. `openwater.supernets.org`
     string welcome;    /// first line of interest, verbatim
     string error;
@@ -1594,6 +1595,10 @@ private _IrcProbe _probeIrcThroughSocks(string proxyHost, ushort proxyPort,
             auto got = sock.receive(rbuf[]);
             if (got <= 0) break;
             acc ~= cast(string) rbuf[0 .. got].idup;
+            // Any byte from the peer means the SOCKS path carried us to a
+            // real ircd — "reached but refused" is a completely different
+            // diagnosis from "could not get there".
+            pr.reachedIrcd = true;
             foreach (line; acc.splitLines()) {
                 auto l = line.strip();
                 if (l.length == 0) continue;
@@ -1608,16 +1613,19 @@ private _IrcProbe _probeIrcThroughSocks(string proxyHost, ushort proxyPort,
                 auto rest = l[sp + 1 .. $];
                 auto sp2 = rest.indexOf(" ");
                 auto code = sp2 > 0 ? rest[0 .. sp2] : rest;
+                // Only a prefixed line carries a source; `ERROR :…` does not,
+                // and slicing it blindly produced serverName="RROR".
+                auto source = l[0] == ':' ? l[1 .. sp] : "";
                 if (code == "001") {
                     pr.registered = true;
-                    pr.serverName = l[1 .. sp];
+                    pr.serverName = source;
                     pr.welcome = l.length > 200 ? l[0 .. 200] : l;
                     break;
                 }
-                // Fatal registration refusals still prove the path works.
+                // A refusal still proves the path — record the server's reason.
                 if (code == "432" || code == "433" || code == "464" || code == "465"
                     || code == "451" || code == "466" || l.startsWith("ERROR")) {
-                    pr.serverName = sp > 1 ? l[1 .. sp] : "";
+                    pr.serverName = source;
                     pr.welcome = l.length > 200 ? l[0 .. 200] : l;
                     pr.error = "server refused registration: " ~ pr.welcome;
                     break;
@@ -2341,6 +2349,7 @@ package void apiMullvadIrcTest(HTTPServerRequest req, HTTPServerResponse res) {
     data["port"] = Json(cast(long) port);
     data["nick"] = Json(nick);
     data["socksOk"] = Json(pr.socksOk);
+    data["reachedIrcd"] = Json(pr.reachedIrcd);
     data["registered"] = Json(pr.registered);
     data["serverName"] = Json(pr.serverName);
     data["welcome"] = Json(pr.welcome);

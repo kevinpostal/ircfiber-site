@@ -124,6 +124,8 @@ export interface MullvadIrcTestResult {
   port: number;
   nick: string;
   socksOk: boolean;
+  /** The ircd spoke to us — so the exit reaches it even if it then refused. */
+  reachedIrcd: boolean;
   registered: boolean;
   serverName: string;
   welcome: string;

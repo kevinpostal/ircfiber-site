@@ -439,11 +439,17 @@
                 </div>
                 {#if ircResults[p.label]}
                   {@const r = ircResults[p.label]}
-                  <div class="mt-1 text-[10px] {r.registered ? 'text-success' : 'text-danger'}"
+                  <div class="mt-1 text-[10px] {r.registered
+                    ? 'text-success'
+                    : r.reachedIrcd
+                      ? 'text-warn'
+                      : 'text-danger'}"
                        title={r.welcome || r.error}>
                     {r.registered
                       ? `IRC ok · ${r.serverName || r.host} · ${r.ms} ms`
-                      : `IRC failed · ${(r.error || '').slice(0, 60)}`}
+                      : r.reachedIrcd
+                        ? `Reached ircd, refused · ${(r.error || '').replace('server refused registration: ', '').slice(0, 60)}`
+                        : `No IRC path · ${(r.error || '').slice(0, 60)}`}
                   </div>
                 {/if}
               </td>
