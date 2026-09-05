@@ -8,3 +8,8 @@ public/dist/.vite/
 frontend/.vitest-attachments/
 # Ansible vault password — local secret, never committed.
 deploy/.vault_pass.txt
+
+# Local test binaries — build outputs.
+backend/egress-test
+backend/bnc-wire-test
+backend/parser-test
