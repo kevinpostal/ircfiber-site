@@ -2145,6 +2145,29 @@ final class RESTAPI {
         return false;
     }
 
+    /// True when an upload is a WebP image. Animated WebP renders to an
+    /// animated GIF via ffmpeg's libwebp demuxer; a still WebP yields a
+    /// single-frame GIF.
+    package static bool isWebpUpload(string mime, string filename) @safe {
+        import std.string : toLower;
+        import std.algorithm.searching : endsWith;
+        if (mime.toLower == "image/webp") return true;
+        return filename.toLower.endsWith(".webp");
+    }
+
+    /// True when an upload can be converted to an animated GIF (video or WebP).
+    package static bool isGifConvertible(string mime, string filename) @safe {
+        return isVideoUpload(mime, filename) || isWebpUpload(mime, filename);
+    }
+
+    @safe unittest {
+        assert(isGifConvertible("video/mp4", "clip.mp4"));
+        assert(isGifConvertible("image/webp", "sticker.webp"));
+        assert(isGifConvertible("application/octet-stream", "anim.WEBP"));
+        assert(!isGifConvertible("image/png", "cat.png"));
+        assert(!isGifConvertible("image/jpeg", "photo.jpg"));
+    }
+
     /// Dedup `older` against `existing` by msgid (preferred) and eid
     /// (fallback). The engine writes every event to BOTH Redis and
     /// MongoDB, so when Redis returns fewer than the requested count
@@ -2402,9 +2425,9 @@ final class RESTAPI {
             return;
         }
 
-        if (!isVideoUpload(rec.mimeType, rec.filename)) {
+        if (!isGifConvertible(rec.mimeType, rec.filename)) {
             res.statusCode = 400;
-            res.writeJsonBody(Json(["error": Json("Not a video file")]));
+            res.writeJsonBody(Json(["error": Json("Not a convertible file (video or WebP)")]));
             return;
         }
 

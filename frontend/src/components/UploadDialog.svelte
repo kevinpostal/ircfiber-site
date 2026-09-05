@@ -3,7 +3,7 @@
   import { ircState } from '../stores/ircStore.svelte';
   import Img2IrcDialog from './Img2IrcDialog.svelte';
   import { abortSingleUpload, abortUploadRequest } from '../stores/uploadFlow.svelte';
-  import { isVideoFile } from '../lib/upload';
+  import { isVideoFile, isWebpFile } from '../lib/upload';
 
   interface Props {
     onConfirm: (data: { filename?: string; message: string; convertToGif?: boolean }) => void;
@@ -138,6 +138,18 @@
     return d?.uploads.length === 1 ? d.uploads[0] : null;
   }
 
+  // GIF conversion applies to videos (Upload as GIF) and WebP images
+  // (Convert to GIF — animated WebP → animated GIF via server-side ffmpeg).
+  function gifConvertible(u: { filename: string; file?: unknown } | null): boolean {
+    if (!u) return false;
+    const type = (u.file as File)?.type;
+    return isVideoFile(u.filename, type) || isWebpFile(u.filename, type);
+  }
+  function gifButtonLabel(u: { filename: string; file?: unknown } | null): string {
+    if (u && isWebpFile(u.filename, (u.file as File)?.type)) return 'Convert to GIF';
+    return 'Upload as GIF';
+  }
+
   function isBatch() {
     const d = uploadState.dialog;
     return !!d && d.uploads.length > 1;
@@ -257,9 +269,9 @@
         {#if (() => { const u = activeUpload(); return u ? isImageFile(u.filename, (u.file as File)?.type) : false; })()}
           <button type="button" class="action convertToIrc" onclick={handleConvertToIrc} title="Convert image to mIRC color codes and send as text art"><span>Convert to IRC</span></button>
         {/if}
-        {#if (() => { const u = activeUpload(); return u ? isVideoFile(u.filename, (u.file as File)?.type) : false; })()}
+        {#if gifConvertible(activeUpload())}
           <button type="button" class="action convertToGif" onclick={handleGifSubmit}
-                  title="Convert video to an animated GIF and post the GIF link"><span>Upload as GIF</span></button>
+                  title="Convert to an animated GIF and post the GIF link"><span>{gifButtonLabel(activeUpload())}</span></button>
         {/if}
         <button type="button" class="sendAsText" style="display: none;"><span>Send as text</span></button>
         <button type="button" class="close mainClose" onclick={onCancel}><span>Cancel</span></button>

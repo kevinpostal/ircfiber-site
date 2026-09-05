@@ -94,6 +94,13 @@ export function isVideoFile(filename: string, mime?: string): boolean {
   return /\.(mp4|m4v|webm|mov|avi|mkv|mpg|mpeg|flv|wmv|3gp)$/i.test(filename);
 }
 
+/** True for WebP images by MIME (preferred) or extension fallback. ffmpeg
+ *  renders animated WebP to an animated GIF (and still WebP to a 1-frame GIF). */
+export function isWebpFile(filename: string, mime?: string): boolean {
+  if (mime && /^image\/webp$/i.test(mime)) return true;
+  return /\.webp$/i.test(filename);
+}
+
 export interface UploadHandle {
   promise: Promise<UploadResponse>;
   abort: () => void;

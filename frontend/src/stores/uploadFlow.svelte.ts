@@ -136,7 +136,7 @@ export function confirmDialog(data: { filename?: string; message: string; conver
         const gif = await convertUploadToGif((results[0] as PromiseFulfilledResult<UploadResponse>).value.id);
         urls[0] = gif.url;
       } catch (e) {
-        deps.notifyError(`${(e as Error).message} — posting original video link`);
+        deps.notifyError(`${(e as Error).message} — posting original file link`);
       }
     }
 

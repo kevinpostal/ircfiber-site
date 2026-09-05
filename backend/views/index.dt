@@ -26,8 +26,8 @@ block body
 
 block scripts
   // Preload the critical CSS/JS so the browser can start fetching before parsing
-  link(rel="preload", href="/public/dist/assets/main-oJDB9oQ_.css", as="style")
-  link(rel="stylesheet", href="/public/dist/assets/main-oJDB9oQ_.css")
+  link(rel="preload", href="/public/dist/assets/main-C_--dwLd.css", as="style")
+  link(rel="stylesheet", href="/public/dist/assets/main-C_--dwLd.css")
   link(rel="preload", href="/public/dist/assets/chunk-upload-mkmfQgHN.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-upload-mkmfQgHN.css")
   link(rel="preload", href="/public/dist/assets/chunk-editor-DNr_rhdt.css", as="style")
@@ -41,11 +41,13 @@ block scripts
   link(rel="preload", href="/public/dist/assets/chunk-panels-CocnmuN3.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-panels-CocnmuN3.css")
   link(rel="modulepreload", href="/public/dist/assets/vendor-BCQGhTLw.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-LxGQoQui.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-DaGdHzIB.js")
   link(rel="modulepreload", href="/public/dist/assets/chunk-editor-CaXhmeLC.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-CGQUw0VN.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-KJ521JLo.js")
-  script(type="module", src="/public/dist/assets/main-B4KKtf4i.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-BoEuKkvE.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-CcHB6jCb.js")
+  script(type="module", src="/public/dist/assets/main-DTmqe37-.js")
+
+
 
 
 

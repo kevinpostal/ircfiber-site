@@ -1055,3 +1055,83 @@ describe('Sidebar', () => {
     });
   });
  });
+
+describe('Sidebar reorder gating on touch (coarse pointer)', () => {
+  let restoreMatchMedia: (() => void) | null = null;
+
+  function stubCoarsePointer(coarse: boolean): void {
+    const real = window.matchMedia;
+    window.matchMedia = ((query: string): MediaQueryList => {
+      if (query.includes('pointer: coarse')) {
+        return {
+          matches: coarse,
+          media: query,
+          onchange: null,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          addListener: () => {},
+          removeListener: () => {},
+          dispatchEvent: () => false,
+        } as unknown as MediaQueryList;
+      }
+      return real.call(window, query);
+    }) as typeof window.matchMedia;
+    restoreMatchMedia = () => { window.matchMedia = real; };
+  }
+
+  afterEach(() => {
+    if (restoreMatchMedia) { restoreMatchMedia(); restoreMatchMedia = null; }
+  });
+
+  function oneNetwork(): void {
+    const net = createNetwork({ networkId: 'net1', name: 'Libera' });
+    net.buffers.push(createBuffer({ name: '#general' }));
+    ircState.networks.push(net);
+  }
+
+  it('on a coarse pointer, tapping a network header selects it instead of dragging', async () => {
+    stubCoarsePointer(true);
+    oneNetwork();
+    const onSwitchBuffer = vi.fn();
+    render(Sidebar, { props: { onSwitchBuffer, onAddNetwork: vi.fn() } });
+    flushSync();
+
+    // Drag is locked off until reorder mode, so a plain tap on the server
+    // header reaches the select handler (the reported bug: it used to start
+    // a drag-reorder instead).
+    const header = document.querySelector('.network-header') as HTMLElement;
+    expect(header).toBeTruthy();
+    await userEvent.click(header);
+    expect(onSwitchBuffer).toHaveBeenCalledWith('net1', '_server');
+    expect(ircState.reorderMode).toBe(false);
+  });
+
+  it('shows a Reorder toggle on coarse pointer that enters/exits reorder mode', async () => {
+    stubCoarsePointer(true);
+    oneNetwork();
+    render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+    flushSync();
+
+    const toggle = document.querySelector('.reorder-toggle') as HTMLButtonElement;
+    expect(toggle).toBeTruthy();
+    expect(document.querySelector('.network-list.reorder')).toBeNull();
+
+    await userEvent.click(toggle);
+    flushSync();
+    expect(ircState.reorderMode).toBe(true);
+    expect(document.querySelector('.network-list.reorder')).not.toBeNull();
+    expect(document.querySelector('.reorder-hint')).not.toBeNull();
+
+    await userEvent.click(document.querySelector('.reorder-toggle') as HTMLButtonElement);
+    flushSync();
+    expect(ircState.reorderMode).toBe(false);
+  });
+
+  it('does not render the Reorder toggle on a fine pointer (desktop keeps click-vs-drag)', async () => {
+    stubCoarsePointer(false);
+    oneNetwork();
+    render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
+    flushSync();
+    expect(document.querySelector('.reorder-toggle')).toBeNull();
+  });
+});

@@ -34,6 +34,15 @@ describe('UploadDialog', () => {
     expect(onConfirm).toHaveBeenCalledWith({ filename: 'clip.mp4', message: '', convertToGif: true });
   });
 
+  it('webp upload shows Convert to GIF and confirms with convertToGif', async () => {
+    const onConfirm = vi.fn();
+    const u = trackUpload('sticker.webp', 1234);
+    uploadState.dialog = { mode: 'single', uploads: [u], message: '' };
+    render(UploadDialog, { onConfirm, onCancel: vi.fn() });
+    await userEvent.click(page.getByRole('button', { name: 'Convert to GIF' }));
+    expect(onConfirm).toHaveBeenCalledWith({ filename: 'sticker.webp', message: '', convertToGif: true });
+  });
+
   it('image upload shows no Upload as GIF button', async () => {
     const u = trackUpload('cat.png', 1234);
     uploadState.dialog = { mode: 'single', uploads: [u], message: '' };

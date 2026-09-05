@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, isTrackingUnread, showsUnreadCount } from '../stores/ircStore.svelte';
+  import { ircState, isTrackingUnread, showsUnreadCount, setReorderMode } from '../stores/ircStore.svelte';
   import SidebarIndicators from './SidebarIndicators.svelte';
   import { isFiberServerDown as isServerDown } from '../lib/fiberServer';
   import { archivedMap, pinnedMap, pinnedOrder, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
@@ -9,6 +9,7 @@
   import type { Buffer, Network } from '../types';
   import AccountMenu from './AccountMenu.svelte';
   import StaleIndicator from './StaleIndicator.svelte';
+  import { onMount } from 'svelte';
 
   let sidebarEl: HTMLDivElement | undefined = $state();
 
@@ -21,6 +22,23 @@
     onToggleCollapsed?: () => void;
   }
   let { onSwitchBuffer, onAddNetwork, onNetworkOptions, onJoinChannel, isCollapsed = false, onToggleCollapsed }: Props = $props();
+
+  // Touch/coarse-pointer devices can't tell a tap-to-select from a
+  // drag-to-reorder: svelte-dnd-action begins a drag on the first
+  // touchmove, so tapping a channel/server row was hijacked into a
+  // reorder. On these devices drag is locked off until the user
+  // explicitly enters reorder mode (the toggle below); a plain tap then
+  // always selects. Desktop (fine pointer) keeps click-vs-drag as-is.
+  let isCoarsePointer = $state(false);
+  onMount(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(pointer: coarse)');
+    const apply = () => { isCoarsePointer = mq.matches; };
+    apply();
+    mq.addEventListener?.('change', apply);
+    return () => { mq.removeEventListener?.('change', apply); setReorderMode(false); };
+  });
+  const dragLocked = $derived(isCoarsePointer && !ircState.reorderMode);
 
   // (B) no rail — hamburger in header controls visibility
 
@@ -210,7 +228,7 @@
   </li>
 {/snippet}
 
-<div class="network-list" id="networks" bind:this={sidebarEl}>
+<div class="network-list" id="networks" class:reorder={ircState.reorderMode} bind:this={sidebarEl}>
   <div class="sidebar-brand">
     <span class="brand-mark" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke-linecap="round">
@@ -221,8 +239,20 @@
       </svg>
     </span>
     <span class="brand-text">IRC<span class="brand-fiber">Fiber</span></span>
+    {#if isCoarsePointer}
+      <button class="reorder-toggle" class:active={ircState.reorderMode} type="button"
+              aria-pressed={ircState.reorderMode}
+              onclick={() => setReorderMode(!ircState.reorderMode)}
+              title={ircState.reorderMode ? 'Finish reordering' : 'Reorder networks'}>
+        <i class="fa fa-{ircState.reorderMode ? 'check' : 'bars'}" aria-hidden="true"></i>
+        {ircState.reorderMode ? 'Done' : 'Reorder'}
+      </button>
+    {/if}
 
   </div>
+  {#if ircState.reorderMode}
+    <div class="reorder-hint"><i class="fa fa-arrows-alt-v" aria-hidden="true"></i>Drag networks to reorder, then tap Done.</div>
+  {/if}
 
   {#if pinned.length > 0}
     <ul class="bufferList pinnedBuffers">
@@ -233,7 +263,7 @@
             flipDurationMs: 150,
             type: 'pin-order',
             dropTargetStyle: {},
-            dragDisabled: pinDragList.length < 2,
+            dragDisabled: pinDragList.length < 2 || dragLocked,
           }}
           onconsider={handlePinConsider}
           onfinalize={handlePinFinalize}>
@@ -249,6 +279,7 @@
           items: dragList,
           flipDurationMs: 150,
           type: 'network-order',
+          dragDisabled: dragLocked,
           transformDraggedElement: (el) => {
             // IRCCloud: the dragged server header has NO visual feedback —
             // no border, no shadow, no highlight tint, and no channel list.
