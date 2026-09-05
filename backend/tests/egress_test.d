@@ -84,6 +84,46 @@ private void testMatchingSlot() {
     check(matchingSlot(DIRECT_EGRESS_ID, v) is null, "direct matches no slot");
 }
 
+/// Deployment whose sidecars live on another host: the engine cannot read a
+/// location, so the slots are addressed by label — the pre-slot behaviour.
+private EgressView staticView() {
+    EgressSlot de;
+    de.serverId = "ovh"; de.label = "de"; de.host = "100.94.116.56"; de.port = 1080;
+    de.controllable = false; de.state = "ready";
+    de.city = "Berlin"; de.country = "Germany"; // filled from the SOCKS probe
+    EgressSlot us;
+    us.serverId = "ovh"; us.label = "us"; us.host = "100.94.116.56"; us.port = 1082;
+    us.controllable = false; us.state = "ready";
+    return egressViewFrom([de, us], null, 1_000_000L);
+}
+
+private void testStaticSlotLabelPins() {
+    auto v = staticView();
+    check(!v.controllable && v.freeSlots == 0, "static slots are never retargetable");
+    check(isKnownEgressId("de", v), "static slot label is a valid pin");
+    check(isKnownEgressId("us", v), "…for every static slot");
+    check(!isKnownEgressId("nl", v), "a label no slot carries is still rejected");
+    check(matchingSlot("de", v) !is null, "label pin is served without retargeting");
+    check(matchingSlot("de", v).label == "de", "…by the slot it names");
+    check(matchingSlot("nl", v) is null, "unknown label matches no slot");
+
+    // Retargetable slots deliberately do NOT answer to their label, so a
+    // location-capable pool never has two names for the same exit.
+    auto live = fixtureView();
+    check(matchingSlot("se", live).locationId == "se-sto",
+        "on a retargetable pool 'se' is the country pin, not the slot label");
+    EgressSlot ctl;
+    ctl.label = "zz"; ctl.locationId = "se-sto"; ctl.controllable = true; ctl.state = "ready";
+    auto only = egressViewFrom([ctl],
+        [EgressLocationRow("se-sto", "Sweden", "se", "Stockholm", 1)], 0);
+    check(matchingSlot("zz", only) is null, "controllable slot ignores its label as a pin");
+    check(!isKnownEgressId("zz", only), "…and does not advertise it");
+    // A retargetable engine that has not published its catalog yet must not
+    // reject the pins already stored on users' networks.
+    auto booting = egressViewFrom([ctl], null, 0);
+    check(isKnownEgressId("se-got", booting), "permissive while the catalog is still empty");
+}
+
 private int failures;
 
 private void check(bool cond, string what, string file = __FILE__, size_t line = __LINE__) {
@@ -119,6 +159,7 @@ void main() {
     testViewAggregates();
     testLocationValidation();
     testMatchingSlot();
+    testStaticSlotLabelPins();
     if (failures) {
         writefln("egress tests: %d FAILED", failures);
         import core.stdc.stdlib : exit;

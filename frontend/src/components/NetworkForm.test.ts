@@ -168,6 +168,32 @@ describe('NetworkForm', () => {
     await expect.element(page.getByText(/All 2 exits are in use/)).toBeInTheDocument();
   });
 
+  it('offers a static (non-retargetable) exit by its slot label', async () => {
+    // Sidecars on another host: the engine cannot read their location, so the
+    // picker addresses them by label and the SOCKS probe names the place.
+    egressMock.current = {
+      direct: 'direct',
+      controllable: false,
+      slotCount: 1,
+      freeSlots: 0,
+      slots: [
+        { serverId: 'ovh', label: 'de', host: '100.94.116.56', port: 1080, locationId: '',
+          hostname: '', country: 'Germany', countryCode: '', city: 'Berlin',
+          controllable: false, state: 'ready', activeConns: 0, heldUntilMs: 0,
+          exitIp: '151.241.171.103', healthy: true, checkedAtMs: 1, error: '' },
+      ],
+      locations: [],
+    };
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByRole('option', { name: 'Berlin, Germany — idle' })).toBeInTheDocument();
+    await userEvent.type(page.getByLabelText('Network name'), 'StaticNet');
+    await userEvent.type(page.getByLabelText('Hostname'), 'irc.static.net');
+    await userEvent.type(page.getByLabelText('Nickname'), 'MyNick');
+    await userEvent.selectOptions(page.getByLabelText(/Connect via/), 'de');
+    await userEvent.click(page.getByRole('button', { name: 'Join network' }));
+    expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'de' }));
+  });
+
   it('calls onClose when Cancel clicked', async () => {
     const onClose = vi.fn();
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose, onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });

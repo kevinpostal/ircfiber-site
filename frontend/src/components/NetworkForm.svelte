@@ -74,14 +74,17 @@
     return () => clearInterval(timer);
   });
 
-  /// Slots that are actually somewhere: one option per distinct location.
+  /// One option per exit that is actually running. A retargetable slot is
+  /// addressed by its location (deduped, since two slots can share one); a
+  /// static slot has no readable location and is addressed by its label.
   const runningSlots = $derived.by(() => {
     const seen = new Set<string>();
-    const out: EgressSlot[] = [];
+    const out: { pin: string; slot: EgressSlot }[] = [];
     for (const s of egress?.slots ?? []) {
-      if (!s.locationId || seen.has(s.locationId)) continue;
-      seen.add(s.locationId);
-      out.push(s);
+      const pin = s.controllable ? s.locationId : s.label;
+      if (!pin || seen.has(pin)) continue;
+      seen.add(pin);
+      out.push({ pin, slot: s });
     }
     return out;
   });
@@ -489,9 +492,9 @@
                 <option value="direct">Direct — our own server address</option>
                 {#if runningSlots.length > 0}
                   <optgroup label="Exits running now">
-                    {#each runningSlots as s (s.locationId)}
-                      <option value={s.locationId} disabled={s.checkedAtMs > 0 && !s.healthy}>
-                        {slotLabel(s)}{s.checkedAtMs > 0 && !s.healthy ? ' — unavailable' : ''}
+                    {#each runningSlots as r (r.pin)}
+                      <option value={r.pin} disabled={r.slot.checkedAtMs > 0 && !r.slot.healthy}>
+                        {slotLabel(r.slot)}{r.slot.checkedAtMs > 0 && !r.slot.healthy ? ' — unavailable' : ''}
                       </option>
                     {/each}
                   </optgroup>

@@ -197,13 +197,22 @@ EgressView egressViewFrom(EgressSlot[] slots, EgressLocationRow[] locations, lon
 }
 
 /// True when `id` is a pin this deployment can honour: "" (automatic) and
-/// DIRECT_EGRESS_ID always; a two-letter country pin when some location has
-/// that country code; a city pin when that exact id exists. Permissive when
-/// the catalog is empty — a freshly started engine must not lock users out of
-/// the pins already stored on their networks.
+/// DIRECT_EGRESS_ID always; the label of a static (non-controllable) slot,
+/// which is how such a slot is addressed since its location cannot be read;
+/// a two-letter country pin when some location has that country code; a city
+/// pin when that exact id exists.
+///
+/// Permissive only when this deployment genuinely cannot judge: no slots at
+/// all, or retargetable slots whose engine has not published its catalog yet
+/// (a freshly started engine must not lock users out of their stored pins).
+/// A static-only pool has no catalog by design, so there its labels are the
+/// whole truth and anything else is rejected.
 bool isKnownEgressId(string id, EgressView v) {
     if (id.length == 0 || id == DIRECT_EGRESS_ID) return true;
-    if (v.locations.length == 0) return true;
+    foreach (s; v.slots)
+        if (!s.controllable && s.label == id) return true;
+    if (v.slots.length == 0) return true;
+    if (v.controllable && v.locations.length == 0) return true;
     foreach (l; v.locations) {
         if (l.id == id) return true;
         if (id.length == 2 && l.countryCode == id) return true;
@@ -211,10 +220,13 @@ bool isKnownEgressId(string id, EgressView v) {
     return false;
 }
 
-/// The slot that would serve `pin` today (a slot already on that location),
-/// or null when the pin would require a retarget.
+/// The slot that would serve `pin` today without retargeting anything: a
+/// static slot named by its label, or a slot already sitting on the pinned
+/// location. Null when honouring the pin would require a retarget.
 const(EgressSlot)* matchingSlot(string pin, ref EgressView v) {
     if (pin.length == 0 || pin == DIRECT_EGRESS_ID) return null;
+    foreach (i, ref s; v.slots)
+        if (!s.controllable && s.label == pin) return &v.slots[i];
     foreach (i, ref s; v.slots) {
         if (s.locationId.length == 0) continue;
         if (s.locationId == pin) return &v.slots[i];
@@ -435,6 +447,11 @@ EgressView egressView(RedisStorage redis, ServerRegistry reg) {
             s.healthy = p.healthy;
             s.checkedAtMs = p.checkedAtMs;
             if (s.error.length == 0) s.error = p.error;
+            // A static slot has no engine-readable location; the SOCKS probe
+            // (am.i.mullvad.net) still knows where it comes out, so the
+            // picker can name the place instead of showing a bare label.
+            if (s.city.length == 0) s.city = p.city;
+            if (s.country.length == 0) s.country = p.country;
             break;
         }
     }
