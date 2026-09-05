@@ -10,7 +10,7 @@
   import SeenDivider from './SeenDivider.svelte';
   import ChatterBar from './ChatterBar.svelte';
   import ScrollClock from './ScrollClock.svelte';
-  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash } from '../lib/utils';
+  import { isSkippedCommand, getMsgDate, formatDate, formatDateTimeTitle, formatShortRelativeTime, stringHash, stripPrefix, stripHash, normalizeChannelName } from '../lib/utils';
   import { perfMark, perfMeasure } from '../lib/perf';
   import { dividerPos as sharedDividerPos, animateScrollTo, cancelScrollAnimation } from '../lib/scroll';
   import type { IRCMessage, Member, Network } from '../types';
@@ -61,7 +61,15 @@
   // scroll; null hides the clock (at bottom / no upper message).
   let clockTs = $state<number | null>(null);
 
-  const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${ircState.activeBuffer.bufferName}`);
+  // MUST fold the same way every store write does (`setMessages`,
+  // `appendMessage`, … all key through `normalizeChannelName`). Channels
+  // arrive here already normalized, but a query/DM keeps the counterparty's
+  // display case in `activeBuffer` on purpose — so a raw key like
+  // `<net>:EliManning` never matched the stored `<net>:elimanning`,
+  // `hasHistoryLoaded` stayed false and the DM sat on "Loading history…"
+  // forever with its messages in the store the whole time. Any nick that is
+  // not already lower-case was affected.
+  const bufferKey = $derived(`${ircState.activeBuffer.networkId}:${normalizeChannelName(ircState.activeBuffer.bufferName ?? '')}`);
   // Don't show "No messages yet" until history has been loaded for this buffer.
   // While ircState.messages[bufferKey] is undefined the REST/sync fetch is
   // still in flight — showing the empty hint during this window causes a
@@ -400,7 +408,7 @@
     const { networkId, bufferName } = ircState.activeBuffer;
     if (!networkId || !bufferName || bufferName === '_server') return;
     if (getBottomSeen(networkId, bufferName) !== null) return;
-    const list = ircState.messages[`${networkId}:${bufferName}`] ?? [];
+    const list = ircState.messages[`${networkId}:${normalizeChannelName(bufferName)}`] ?? [];
     const last = list[list.length - 1];
     if (!last?.t) return;
     setBottomSeen(networkId, bufferName, last.t);
@@ -1139,7 +1147,7 @@
       return false;
     }
     belowMentions = unseenHighlightCountAfter(networkId, bufferName, n);
-    const list = ircState.messages[`${networkId}:${bufferName}`] ?? [];
+    const list = ircState.messages[`${networkId}:${normalizeChannelName(bufferName)}`] ?? [];
     let nMsg: IRCMessage | null = null;
     for (let i = list.length - 1; i >= 0; i--) {
       if ((list[i].t ?? 0) <= n) { nMsg = list[i]; break; }

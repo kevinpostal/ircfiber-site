@@ -4,7 +4,7 @@ import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
 import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
-import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage, batchAppendMessages, prependMessages, updateChannelUsers } from '../stores/ircStore.svelte';
+import { ircState, requestForceScrollToBottom, setActiveBuffer, appendMessage, batchAppendMessages, prependMessages, updateChannelUsers, setMessages } from '../stores/ircStore.svelte';
 import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
 import { stripPrefix } from '../lib/utils';
 import { clearedAtMap, lastSeenMap, focusSeenMap, bottomSeenMap } from '../stores/preferences.svelte';
@@ -155,7 +155,10 @@ describe('MessageList', () => {
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
 		ircState.activeBuffer.bufferName = 'Alice';
-		ircState.messages['net1:Alice'] = [];
+		// Bare nicks fold to lower case in every store key — seeding the raw
+		// `net1:Alice` here matched the old unfolded read in MessageList and
+		// hid the bug where a mixed-case DM never left the loading spinner.
+		setMessages('net1', 'Alice', []);
 		flushSync();
 
 		render(MessageList, { props: {} });

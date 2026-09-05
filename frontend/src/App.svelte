@@ -567,7 +567,9 @@ let showNetworkForm: boolean = $state(false);
       const atBottom = !!container && container.scrollHeight - (container.offsetHeight + Math.ceil(container.scrollTop)) <= 1;
       if (atBottom) clearBottomSeen(nid, buf);
       if (getFocusSeen(nid, buf) === null) {
-        const list = ircState.messages[`${nid}:${buf}`] ?? [];
+        // Fold like every store write does — a DM keeps its display case
+        // in activeBuffer, so a raw key misses the stored messages.
+        const list = ircState.messages[`${nid}:${normalizeChannelName(buf)}`] ?? [];
         const ts = list.length > 0 ? (list[list.length - 1].t ?? Date.now()) : Date.now();
         setFocusSeen(nid, buf, ts);
         ircState.lastSeenMsgTime = ts;
