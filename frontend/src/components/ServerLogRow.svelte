@@ -1,14 +1,19 @@
 <script lang="ts">
-  // One visual row of the IRCCloud-style server log. Markup and CSS
-  // follow site/docs/mockups/server-log-irccloud.html; the row model is
-  // built by lib/serverLogRows.ts. The only local state is the two
-  // disclosure toggles (ISUPPORT clamp, MOTD fold) — they live here so a
-  // re-built row list keeps them as long as the row key is stable.
+  // One visual row of the IRCCloud-style server log. Non-phase rows emit
+  // the same messageRow markup contract as the channel view (app.css
+  // `.row.messageRow.status`, _joinPartRows.scss, _nickColors.scss,
+  // _rowStates.scss, _discoGroups.scss and the themes own the styling);
+  // the phase rail is our one deliberate divergence and keeps its local
+  // CSS. The row model is built by lib/serverLogRows.ts. Local state is
+  // the disclosure toggles (ISUPPORT clamp, MOTD fold, disco group) —
+  // they live here so a re-built row list keeps them as long as the row
+  // key is stable.
   import type { IRCMessage } from '../types';
   import type { ServerLogRow } from '../lib/serverLogRows';
   import { relativeOffset, formatOffset } from '../lib/serverLogGroups';
-  import { formatTime12Hour, formatDateTimeTitle, escapeHtml } from '../lib/utils';
+  import { formatTime12Hour, formatDateTimeTitle, escapeHtml, nickColorIndex } from '../lib/utils';
   import LiveElapsed from './LiveElapsed.svelte';
+  import Self from './ServerLogRow.svelte';
 
   interface Props {
     row: ServerLogRow;
@@ -17,6 +22,7 @@
 
   let isupOpen = $state(false);
   let motdCollapsed = $state(false);
+  let discoOpen = $state(false);
 
   function stamp(msg: IRCMessage): { time: string; title: string } {
     const ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
@@ -26,6 +32,11 @@
   }
 
   const liveOffset = (ms: number): string => `+${formatOffset(ms)}`;
+
+  function usermaskOf(msg: IRCMessage): string | undefined {
+    const p = msg.prefix ?? '';
+    return p.includes('!') ? p.slice(p.indexOf('!') + 1) : undefined;
+  }
 </script>
 
 {#snippet date(msg: IRCMessage)}
@@ -53,22 +64,24 @@
     {@render date(row.msg)}
   </div>
 {:else if row.kind === 'part'}
-  <div class="row part"><hr /></div>
+  <div class="row part type_socket_closed userParent"><hr /></div>
 {:else if row.kind === 'status'}
-  <div class="row status" class:muted={row.muted} data-cmd={row.msg.command} data-time={row.msg.t}>
-    <span class="content">{@html row.html}</span>
+  <div class="row messageRow status monospace {row.cls} userParent" data-cmd={row.msg.command} data-time={row.msg.t}>
+    <span class="g">&nbsp;</span>
+    <span class="message"><span translate="no" class="content">{@html row.html}</span></span>
     {@render date(row.msg)}
   </div>
 {:else if row.kind === 'isup'}
-  <div class="row status muted isup" class:open={isupOpen} data-cmd="005" data-time={row.msg.t}>
-    <span class="content">Server supports: {#each row.tokens as tok, i (tok + i)}{@const eq = tok.indexOf('=')}{#if i > 0}{' '}{/if}<b>{eq === -1 ? tok : tok.slice(0, eq)}</b>{#if eq !== -1}={tok.slice(eq + 1)}{/if}{/each}</span>
+  <div class="row messageRow status monospace type_server_supports userParent isup" class:open={isupOpen} data-cmd="005" data-time={row.msg.t}>
+    <span class="g">&nbsp;</span>
+    <span class="message"><span translate="no" class="content">Server supports: {#each row.tokens as tok, i (tok + i)}{@const eq = tok.indexOf('=')}{#if i > 0}{' '}{/if}<b>{eq === -1 ? tok : tok.slice(0, eq)}</b>{#if eq !== -1}={tok.slice(eq + 1)}{/if}{/each}</span></span>
     <button type="button" class="more" onclick={() => { isupOpen = !isupOpen; }}>{isupOpen ? 'less' : '…more'}</button>
     {@render date(row.msg)}
   </div>
 {:else if row.kind === 'motd'}
-  <div class="row grouped" data-time={row.msg.t}>
+  <div class="row messageRow type_motd_response userParent" data-time={row.msg.t}>
     <div class="groupedLines" class:collapsed={motdCollapsed}>
-      <h2>
+      <h2 class="groupedLines__line">
         <span class="motdTitle">
           {#if row.host}
             {@const idx = row.header.indexOf(row.host)}
@@ -86,35 +99,75 @@
         </button>
       </h2>
       {#each row.lines as line, i (i)}
-        <div class="l">{@html line || '&nbsp;'}</div>
+        <div class="groupedLines__line">{@html line || '&nbsp;'}</div>
       {/each}
     </div>
   </div>
 {:else if row.kind === 'notice'}
-  <div class="row notice" class:srv={row.server} data-time={row.lines[0]?.msg.t}>
-    <div class="author">
-      <span class="av" class:srv={row.server}>{row.server ? '⌘' : row.author.charAt(0).toUpperCase()}</span>
-      <span class="name">{row.author}</span>
-      {#if row.bot}<span class="bot">BOT</span>{/if}
-    </div>
-    {#each row.lines as line (line.key)}
-      <div class="line" data-time={line.msg.t}>{@html line.html || escapeHtml(line.msg.text ?? '')}{@render date(line.msg)}</div>
-    {/each}
+  <div class="row messageRow notice type_notice userParent {row.first ? 'firstAuthor' : 'sameAuthor'}"
+       class:bot={row.bot} data-time={row.msg.t}
+       data-name={row.server ? undefined : row.author}
+       data-usermask={usermaskOf(row.msg)}>
+    {#if !row.server}
+      {@const cls = `c${nickColorIndex(row.author)}`}
+      <span class="avatar letterAvatar messageAvatar hasUserParent {cls}"><span role="presentation">{row.author.charAt(0).toUpperCase()}</span></span>
+    {/if}
+    <span class="g">&nbsp;</span>
+    <span class="message">
+      {#if !row.server}
+        {@const cls = `c${nickColorIndex(row.author)}`}
+        <span translate="no" class="authorWrap">
+          <span class="g" aria-hidden="true">&lt;</span>
+          <span class="buffer bufferLink author {cls} user hasUserParent link" title={row.author}>{row.author}</span>
+          <span class="g" aria-hidden="true">&gt;</span>
+          {#if row.bot}<span class="author-bot">BOT</span>{/if}
+        </span>
+      {/if}
+      <span translate="no" class="content">{@html row.html || escapeHtml(row.msg.text ?? '')}</span>
+    </span>
+    {@render date(row.msg)}
   </div>
+{:else if row.kind === 'disco'}
+  <div role="button" aria-expanded={discoOpen} tabindex="0"
+       class="row messageRow groupedDisco {discoOpen ? 'expanded' : 'collapsedHead'}"
+       data-time={row.msg.t}
+       onclick={() => { discoOpen = !discoOpen; }}
+       onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); discoOpen = !discoOpen; } }}>
+    <span class="g">&nbsp;</span>
+    <span class="message">
+      <span translate="no" class="content"><span class="collapseWidget" aria-label="Disconnections">
+          <i class="fa-regular fa-square-minus collapseIcon"></i>
+          <i class="fa-regular fa-square-plus expandIcon"></i>
+          <i class="fa-solid fa-angle-right collapsedIcon"></i>
+        </span><span class="sentence">{@html row.sentences}</span></span>
+    </span>
+    {@render date(row.msg)}
+  </div>
+  {#if discoOpen}
+    <div class="collapseGroup discoGroup">
+      {#each row.rows as inner (inner.key)}<Self row={inner} />{/each}
+    </div>
+  {/if}
+  <div class="row part groupedDiscoPart"><hr /></div>
 {/if}
 
 <style>
-  /* ── base row (mockup .row / .content / .date) ──────────────────── */
-  .row {
+  /* ── phase rows: kept local — a thin rail joins the steps of one
+     attempt (deliberate divergence from IRCCloud's console). The base
+     layout (mono font, absolute date column) that other rows now get
+     from the global messageRow CSS is scoped here to .row.phase. ────── */
+  .row.phase {
     position: relative;
-    padding: 0 150px 0 12px;
+    padding: 0 150px 0 36px;
     font: 14px/19px var(--font-mono);
   }
-  .row .date {
+  /* Same box as the global `.row.messageRow .date` (right: 0 + 10px
+     padding) so phase and messageRow timestamps share one column. */
+  .row.phase .date {
     position: absolute;
-    right: 12px;
+    right: 0;
+    padding-right: 10px;
     top: 0;
-    width: 90px;
     text-align: right;
     font-size: 12px;
     line-height: 19px;
@@ -123,25 +176,12 @@
     user-select: none;
     white-space: nowrap;
   }
-  .row:has(.date:hover) { box-shadow: inset 5px 0 0 0 var(--accent); }
-  .row .content {
-    color: #9cbfe2; /* IRCCloud dusk div.status content */
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .row.status { background: rgba(255, 255, 255, 0.015); }
-  .row.status :global(b) { color: #b0cce8; }
-  .row.muted .content { color: var(--text-tertiary); }
+  .row.messageRow:has(.date:hover),
+  .row.phase:has(.date:hover) { box-shadow: inset 5px 0 0 0 var(--accent); }
   .row :global(.kv) { color: var(--text-tertiary); }
   .row :global(.kv b) { color: var(--text-secondary); font-weight: 500; }
-  .row :global(.disco) { color: #ff8f8a; }
+  .row :global(.disco) { color: var(--status-disconnected); }
 
-  /* IRCCloud div.part hr — socket closed divider */
-  .row.part { padding: 0; }
-  .row.part hr { border: 0; border-top: 3px double #444a52; margin: 6px 12px; }
-
-  /* ── phase rows: a thin rail joins the steps of one attempt ─────── */
-  .row.phase { padding-left: 36px; }
   .row.phase::before {
     content: '';
     position: absolute;
@@ -178,7 +218,11 @@
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .row.phase .content { color: var(--text-primary); }
+  .row.phase .content {
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
   .row.phase.done .content { color: var(--text-secondary); }
   .row.phase.ok .content { color: #7ee2a8; font-weight: 600; }
   .row.phase.bad .content { color: #ff8f8a; font-weight: 600; }
@@ -207,46 +251,15 @@
   }
   .tag.ok { color: #7ee2a8; }
 
-  /* ── notices (server / services) — IRCCloud notice row w/ author ── */
-  /* Right padding moves to each .line so every line's timestamp shares
-     the .row .date column (right: 12px of the row box). */
-  .row.notice { padding: 0 0 0 12px; margin-top: 4px; }
-  .row.notice .author { display: flex; gap: 8px; align-items: center; margin-bottom: 1px; }
-  .row.notice .av {
-    width: 18px;
-    height: 18px;
-    border-radius: 3px;
-    background: #7c3aed;
-    color: #fff;
-    font: 700 11px/18px var(--font-sans, sans-serif);
-    text-align: center;
-  }
-  .row.notice .av.srv { background: #30363d; color: #9cbfe2; font-size: 10px; }
-  .row.notice .name { font-weight: 600; color: #e6edf3; }
-  .row.notice .bot {
-    font: 600 9px/12px var(--font-sans, sans-serif);
-    padding: 0 4px;
-    border-radius: 2px;
-    background: #30363d;
-    color: #c9d1d9;
-  }
-  .row.notice .line {
-    position: relative;
-    padding: 0 150px 0 26px;
-    color: #9cbfe2;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  /* ── grouped MOTD block ─────────────────────────────────────────── */
-  .row.grouped { padding: 4px 12px; }
+  /* ── grouped MOTD block (IRCCloud groupedLines) ─────────────────── */
+  .row.type_motd_response { padding: 4px 12px; }
   .groupedLines {
     display: block;
     position: relative;
-    background: #1d4063; /* IRCCloud dusk groupedLines */
+    background: var(--row-status-bg);
     border-radius: 3px;
     padding: 5px 8px;
-    color: #dbe9f7;
+    color: var(--row-mono-fg);
   }
   .groupedLines h2 {
     margin: 0 0 6px;
@@ -268,16 +281,19 @@
     border: 0;
     padding: 0;
   }
-  .groupedLines .l {
+  .groupedLines div.groupedLines__line {
     min-height: 17px;
     white-space: pre;
     overflow: hidden;
     text-overflow: ellipsis;
     font-family: var(--font-mono);
   }
-  .groupedLines.collapsed .l { display: none; }
+  .groupedLines.collapsed div.groupedLines__line { display: none; }
 
   /* ── isupport: one row, 2-line clamp, expandable ────────────────── */
+  /* Widen the right gutter past the global 118px so the `…more` toggle
+     sits between the clamped text and the timestamp. */
+  .isup.row.messageRow.status { padding-right: 160px; }
   .isup .content {
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -290,7 +306,7 @@
     position: absolute;
     right: 106px;
     bottom: 0;
-    background: var(--chat-bg, #000);
+    background: var(--row-status-bg);
     padding-left: 6px;
     line-height: 19px;
   }

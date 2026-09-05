@@ -25,6 +25,23 @@ describe('UploadDialog', () => {
     expect(onConfirm).toHaveBeenCalledWith({ filename: 'cat.png', message: 'look at this' });
   });
 
+  it('video upload shows Upload as GIF and confirms with convertToGif', async () => {
+    const onConfirm = vi.fn();
+    const u = trackUpload('clip.mp4', 1234);
+    uploadState.dialog = { mode: 'single', uploads: [u], message: '' };
+    render(UploadDialog, { onConfirm, onCancel: vi.fn() });
+    await userEvent.click(page.getByRole('button', { name: 'Upload as GIF' }));
+    expect(onConfirm).toHaveBeenCalledWith({ filename: 'clip.mp4', message: '', convertToGif: true });
+  });
+
+  it('image upload shows no Upload as GIF button', async () => {
+    const u = trackUpload('cat.png', 1234);
+    uploadState.dialog = { mode: 'single', uploads: [u], message: '' };
+    const { container } = render(UploadDialog, { onConfirm: vi.fn(), onCancel: vi.fn() });
+    await expect.element(page.getByLabelText('Choose a file name')).toHaveValue('cat.png');
+    expect(container.querySelector('button.convertToGif')).toBeFalsy();
+  });
+
   it('cancel button triggers onCancel', async () => {
     const onCancel = vi.fn();
     const u = trackUpload('cat.png', 1234);

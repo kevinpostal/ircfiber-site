@@ -221,6 +221,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libssl3 \
         zlib1g \
         curl \
+        ffmpeg \
         procps \
         ca-certificates \
         tini \

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchUploadsOffset, deleteUpload, editUpload, type UploadEntry } from '../stores/api';
-  import { sizeToString } from '../lib/upload';
+  import { fetchUploadsOffset, deleteUpload, editUpload, convertUploadToGif, type UploadEntry } from '../stores/api';
+  import { sizeToString, isVideoFile } from '../lib/upload';
   import CodeEditor from './CodeEditor.svelte';
   import { detectSyntaxFromFilename, isTextFile, isHtmlFile } from '../lib/textFiles';
   import { navigateToFileViewer } from '../lib/routing';
@@ -30,6 +30,7 @@
   let editingLang = $state('text');
   let saving = $state(false);
   let copiedId = $state<string | null>(null);
+  let convertingId = $state<string | null>(null);
 
   // Derived for full-page edit view
   let editingEntry = $derived(entries.find((e) => e.id === editingId) ?? null);
@@ -169,6 +170,20 @@
       total = Math.max(0, total - 1);
     } catch (e) {
       console.error('Delete failed', e);
+    }
+  }
+
+  async function handleConvertGif(entry: UploadEntry): Promise<void> {
+    if (convertingId) return;
+    convertingId = entry.id;
+    error = null;
+    try {
+      await convertUploadToGif(entry.id);
+      await loadPage(1); // new gif is the newest entry — jump to page 1 so it is visible
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'GIF conversion failed';
+    } finally {
+      convertingId = null;
     }
   }
 
@@ -350,6 +365,13 @@
                 {:else}
                   <span class="loadingPreview">Loading preview…</span>
                 {/if}
+              {:else if isVideoFile(entry.name, entry.mimeType)}
+                <div class="fileLink previewLink" role="button" tabindex="0" title="Click to insert URL into chat"
+                     onclick={() => insertUrl(entry.url)}
+                     onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); insertUrl(entry.url); } }}>
+                  <!-- svelte-ignore a11y_media_has_caption -->
+                  <video class="filePreview" src={entry.url} muted preload="metadata" playsinline></video>
+                </div>
               {:else}
                 <div class="fileLink previewLink" role="button" tabindex="0" title="Click to insert URL into chat" onclick={() => insertUrl(entry.url)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); insertUrl(entry.url); } }}>
                   <img class="filePreview" src={entry.url} alt={entry.name} loading="lazy" />
@@ -358,6 +380,13 @@
               <span class="actions">
                 {#if isHtmlFile(entry.mimeType, entry.name) || isTextFile(entry.mimeType, entry.name)}
                   <button type="button" class="view" onclick={() => navigateToFileViewer(entry.id)}><span>view</span></button>
+                {/if}
+                {#if isVideoFile(entry.name, entry.mimeType)}
+                  <button type="button" class="togif" disabled={convertingId === entry.id}
+                          onclick={() => handleConvertGif(entry)}
+                          title="Convert video to animated GIF">
+                    <span>{convertingId === entry.id ? 'converting…' : 'gif'}</span>
+                  </button>
                 {/if}
                 <button type="button" class="copy" class:copied={copiedId === entry.id} onclick={() => copyUrl(entry.url, entry.id)} title="Copy URL"><span>{copiedId === entry.id ? 'copied!' : 'copy'}</span></button>
                 <button type="button" class="edit" onclick={() => startEdit(entry)}><span>edit</span></button>

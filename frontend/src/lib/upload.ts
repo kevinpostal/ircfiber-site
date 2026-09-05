@@ -88,6 +88,12 @@ export interface UploadResponse {
   id: string; url: string; pageUrl: string; name: string; size: number;
 }
 
+/** True for video files by MIME (preferred) or extension fallback. */
+export function isVideoFile(filename: string, mime?: string): boolean {
+  if (mime && /^video\//i.test(mime)) return true;
+  return /\.(mp4|m4v|webm|mov|avi|mkv|mpg|mpeg|flv|wmv|3gp)$/i.test(filename);
+}
+
 export interface UploadHandle {
   promise: Promise<UploadResponse>;
   abort: () => void;

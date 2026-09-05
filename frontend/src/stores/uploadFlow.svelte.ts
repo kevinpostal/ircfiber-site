@@ -6,6 +6,7 @@ import { sendMessage } from './wsConnection.svelte.ts';
 import { ircState } from './ircStore.svelte';
 import { generateLabel } from '../lib/utils';
 import type { IRCMessage } from '../types';
+import { convertUploadToGif } from './api';
 export interface UploadFlowDeps {
   uploader: typeof uploadFile;
   send: (networkId: string, target: string, text: string, label?: string) => void;
@@ -116,7 +117,7 @@ export async function startUploads(
   }
 }
 
-export function confirmDialog(data: { filename?: string; message: string }): void {
+export function confirmDialog(data: { filename?: string; message: string; convertToGif?: boolean }): void {
   const dialog = uploadState.dialog;
   if (!dialog) return;
   uploadState.dialog = null;
@@ -129,6 +130,15 @@ export function confirmDialog(data: { filename?: string; message: string }): voi
     const results = await Promise.allSettled(dialog.uploads.map(u => handles.get(u.id)!.promise));
     const urls: string[] = [];
     for (const r of results) if (r.status === 'fulfilled') urls.push(r.value.url);
+
+    if (data.convertToGif && dialog.uploads.length === 1 && results[0]?.status === 'fulfilled') {
+      try {
+        const gif = await convertUploadToGif((results[0] as PromiseFulfilledResult<UploadResponse>).value.id);
+        urls[0] = gif.url;
+      } catch (e) {
+        deps.notifyError(`${(e as Error).message} — posting original video link`);
+      }
+    }
 
     // Clean up handles
     for (const u of dialog.uploads) {

@@ -8,8 +8,9 @@ import {
   formatDuration,
   type ServerLogAttempt,
 } from './serverLogGroups';
-import { getMsgDate, escapeHtml } from './utils';
+import { getMsgDate, escapeHtml, getIrcCloudTypeClass } from './utils';
 import { parseIrcFormatting } from './ircFormatting';
+import { discoSentence } from './messageBuilder';
 
 /**
  * Flat, chronological render model for the `_server` buffer — one entry
@@ -35,16 +36,29 @@ export type ServerLogRow =
       tag: string | null;
     }
   | { kind: 'part'; key: string }
-  | { kind: 'status'; key: string; msg: IRCMessage; html: string; muted: boolean }
+  | { kind: 'status'; key: string; msg: IRCMessage; html: string; cls: string }
   | { kind: 'isup'; key: string; msg: IRCMessage; tokens: string[] }
   | { kind: 'motd'; key: string; msg: IRCMessage; header: string; host: string | null; lines: string[] }
   | {
       kind: 'notice';
       key: string;
+      msg: IRCMessage;
       author: string;
       server: boolean;
       bot: boolean;
-      lines: Array<{ key: string; msg: IRCMessage; html: string }>;
+      /** First row of a consecutive same-author run (IRCCloud firstAuthor). */
+      first: boolean;
+      html: string;
+    }
+  | {
+      kind: 'disco';
+      key: string;
+      /** First grouped row's message — head timestamp / data-time. */
+      msg: IRCMessage;
+      /** Dedup'd ` (xN)` failure summary (escaped HTML). */
+      sentences: string;
+      /** The swallowed rows, rendered inside the collapse group. */
+      rows: ServerLogRow[];
     };
 
 const CAP_LABELS: Record<string, string> = {
@@ -71,7 +85,7 @@ export function capNoticeBody(msg: IRCMessage): string | null {
     const sub = (params.find((p) => /^(LS|LIST|REQ|ACK|NAK|NEW|DEL)$/i.test(p)) ?? '').toUpperCase();
     const body = (msg.text || params[params.length - 1] || '').replace(/^:/, '').trim();
     const label = CAP_LABELS[sub] ?? (sub || 'CAP');
-    return `${label}: ${body.split(/\s+/).filter(Boolean).join(' | ')}`;
+    return `${label.padStart(16)}: ${body.split(/\s+/).filter(Boolean).join(' | ')}`;
   }
   const text = (msg.text ?? '').trim();
   if (!text || /^\*+\s/.test(text)) return null;
@@ -80,7 +94,7 @@ export function capNoticeBody(msg: IRCMessage): string | null {
   // At least one token must look like a real IRCv3 cap (hyphenated or
   // vendor/prefixed) — plain word lists are prose, not a cap dump.
   if (!tokens.some((t) => /[-/]/.test(t.split('=')[0]))) return null;
-  return `Server supports: ${tokens.join(' | ')}`;
+  return `${'Server supports'.padStart(16)}: ${tokens.join(' | ')}`;
 }
 
 /**
@@ -210,12 +224,20 @@ export function buildServerLogRows(
   const isupRows = new Map<ServerLogAttempt, Extract<ServerLogRow, { kind: 'isup' }>>();
   const motdRows = new Map<ServerLogAttempt, Extract<ServerLogRow, { kind: 'motd' }>>();
 
+  // Attempt tag for every emitted row — feeds the disconnect-grouping
+  // post-pass below. Kept outside ServerLogRow so the render model stays
+  // free of grouping bookkeeping. Lifecycle rows (DISCONNECTED) inherit
+  // the current attempt when groupServerLog didn't bucket them.
+  const rowAttempt = new Map<ServerLogRow, ServerLogAttempt | null>();
+  let curAttempt: ServerLogAttempt | null = null;
+
   const push = (m: IRCMessage, row: ServerLogRow): void => {
     const d = getMsgDate(m);
     if (d && d !== lastDate) {
       rows.push({ kind: 'date', key: `d${d}`, date: d });
       lastDate = d;
     }
+    rowAttempt.set(row, curAttempt);
     rows.push(row);
   };
 
@@ -223,6 +245,7 @@ export function buildServerLogRows(
     const kind = classifyServerLog(msg);
     if (kind === 'skip') return;
     const attempt = attemptOf.get(msg) ?? null;
+    curAttempt = attempt ?? curAttempt;
 
     switch (kind) {
       case 'phase': {
@@ -267,12 +290,14 @@ export function buildServerLogRows(
           }
           lastWelcomeT = 0;
           lastDisconnectText = (msg.text ?? '').trim();
-          rows.push({ kind: 'status', key, msg, html, muted: false });
+          const row: ServerLogRow = { kind: 'status', key, msg, html, cls: 'type_socket_closed' };
+          rowAttempt.set(row, curAttempt);
+          rows.push(row);
           return;
         }
         // CONNECT / CONNECTED: the `welcome` phase row already says it.
         if (attempt?.phases.some((p) => p.phase === 'welcome')) return;
-        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: escapeHtml(msg.text || 'Connected'), muted: false });
+        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: escapeHtml(msg.text || 'Connected'), cls: getIrcCloudTypeClass(msg.command, msg.params) });
         return;
       }
       case 'welcome': {
@@ -281,7 +306,7 @@ export function buildServerLogRows(
           key: keyOf(msg, i),
           msg,
           html: escapeHtml(numericBody(msg)),
-          muted: msg.command !== '001',
+          cls: getIrcCloudTypeClass(msg.command, msg.params),
         });
         return;
       }
@@ -325,7 +350,11 @@ export function buildServerLogRows(
       case 'notice': {
         const cap = capNoticeBody(msg);
         if (cap !== null) {
-          push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: `<b>CAP</b> ${escapeHtml(cap)}`, muted: true });
+          // Real CAP commands carry the subcommand after the `*` target;
+          // bare cap dumps forwarded as notices are always LS-shaped.
+          const sub = (msg.params ?? []).find((p) => /^(LS|LIST|REQ|ACK|NAK|NEW|DEL)$/i.test(p))?.toUpperCase();
+          const cls = msg.command === 'CAP' && sub ? getIrcCloudTypeClass('CAP', [sub]) : 'type_cap_ls';
+          push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: `<b>CAP</b>${escapeHtml(cap)}`, cls });
           return;
         }
         const text = msg.text ?? '';
@@ -334,20 +363,17 @@ export function buildServerLogRows(
         const nick = msg.nick ?? '';
         const author = server ? (nick && nick !== '*' ? nick : network?.host || 'server') : nick;
         const prev = rows[rows.length - 1];
-        const key = keyOf(msg, i);
-        const line = { key, msg, html: parseIrcFormatting(text) };
         const sameDay = prev && getMsgDate(msg) === lastDate;
-        if (prev && prev.kind === 'notice' && prev.author === author && prev.server === server && sameDay) {
-          prev.lines.push(line);
-          return;
-        }
+        const first = !(prev && prev.kind === 'notice' && prev.author === author && prev.server === server && sameDay);
         push(msg, {
           kind: 'notice',
-          key,
+          key: keyOf(msg, i),
+          msg,
           author,
           server,
           bot: !server && isBotAuthor(nick, msg.prefix),
-          lines: [line],
+          first,
+          html: parseIrcFormatting(text),
         });
         return;
       }
@@ -355,19 +381,112 @@ export function buildServerLogRows(
         const text = (msg.text ?? '').trim();
         if (!text) return;
         const html = msg.command === 'MODE'
-          ? `Your user mode changed: ${escapeHtml(text)}`
+          ? `Your user mode changed: <b>${escapeHtml(text)}</b>`
           : `You are now known as <b>${escapeHtml(text)}</b>`;
-        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html, muted: true });
+        // Self MODE in the server buffer is always a user-mode change.
+        const cls = msg.command === 'MODE' ? 'type_user_mode' : getIrcCloudTypeClass(msg.command, msg.params);
+        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html, cls });
         return;
       }
       case 'numeric': {
+        if (msg.command === '004') {
+          // RPL_MYINFO — IRCCloud's labelled split (`Host:` / `IRCd:` /
+          // `User modes:` / `Channel modes:`) instead of the raw
+          // parameter dump. params[0] is our own nick (the recipient).
+          const p = (msg.params ?? []).slice(1);
+          const key = keyOf(msg, i);
+          const fields = [
+            { label: 'Host', value: p[0], suffix: 'h' },
+            { label: 'IRCd', value: p[1], suffix: 'i' },
+            { label: 'User modes', value: p[2], suffix: 'u' },
+            { label: 'Channel modes', value: p[3], suffix: 'c' },
+          ];
+          let emitted = 0;
+          for (const f of fields) {
+            const value = (f.value ?? '').trim();
+            if (!value) continue;
+            const row: ServerLogRow = {
+              kind: 'status',
+              key: `${key}-${f.suffix}`,
+              msg,
+              html: `${f.label}: ${escapeHtml(value)}`,
+              // Only the first row carries the type class — follow-up
+              // rows are bare `messageRow status monospace` in IRCCloud.
+              cls: emitted === 0 ? 'type_myinfo' : '',
+            };
+            if (emitted === 0) {
+              push(msg, row); // date boundary still emitted
+            } else {
+              rowAttempt.set(row, curAttempt);
+              rows.push(row);
+            }
+            emitted++;
+          }
+          return;
+        }
         const body = numericBody(msg);
         if (lastDisconnectText && body.trim() === lastDisconnectText) return;
-        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: numericStatusHtml(msg), muted: true });
+        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: numericStatusHtml(msg), cls: getIrcCloudTypeClass(msg.command, msg.params) });
         return;
       }
     }
   });
 
-  return rows;
+  // ── Disconnect grouping (IRCCloud's collapsible "Disconnections") ──
+  // Maximal runs of rows belonging to consecutive *failed* attempts
+  // (ended, never reached welcome, not the live attempt) spanning ≥ 2
+  // distinct attempts collapse into one `disco` head row. Date rows
+  // break runs (IRCCloud's same-date guard); a single failed attempt
+  // never groups.
+  const failedAttempts = new Set<ServerLogAttempt>();
+  for (const a of attempts) {
+    if (a.end !== null && a !== liveAttempt && !a.phases.some((p) => p.phase === 'welcome')) {
+      failedAttempts.add(a);
+    }
+  }
+  if (failedAttempts.size < 2) return rows;
+
+  const out: ServerLogRow[] = [];
+  let run: ServerLogRow[] = [];
+  const flush = (): void => {
+    if (!run.length) return;
+    const runAttempts = [...new Set(run.map((r) => rowAttempt.get(r) as ServerLogAttempt))];
+    // IRCCloud drops `.part` rows inside the group body; the renderer
+    // emits its own trailing groupedDiscoPart hr.
+    const inner = run.filter((r) => r.kind !== 'part');
+    const head = inner.find((r): r is Extract<ServerLogRow, { msg: IRCMessage }> => 'msg' in r);
+    if (runAttempts.length < 2 || !head) {
+      out.push(...run);
+    } else {
+      // One failure sentence per grouped attempt: its DISCONNECTED text
+      // if present, else its attempt_fail/error phase text.
+      const texts = runAttempts.map((a) => {
+        for (const r of run) {
+          if (rowAttempt.get(r) !== a || r.kind !== 'status') continue;
+          const c = r.msg.command;
+          if (c === 'DISCONNECT' || c === 'DISCONNECTED') {
+            const t = (r.msg.text ?? '').trim();
+            if (t) return t;
+          }
+        }
+        const ph = a.phases.find((p) => p.phase === 'attempt_fail' || p.phase === 'error');
+        return (ph?.text ?? '').trim() || 'Connection failed';
+      });
+      out.push({
+        kind: 'disco',
+        key: `disco-${run[0].key}`,
+        msg: head.msg,
+        sentences: discoSentence(texts),
+        rows: inner,
+      });
+    }
+    run = [];
+  };
+  for (const r of rows) {
+    const a = rowAttempt.get(r);
+    if (a && failedAttempts.has(a)) run.push(r);
+    else { flush(); out.push(r); }
+  }
+  flush();
+  return out;
 }

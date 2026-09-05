@@ -332,24 +332,27 @@ export function groupDisconnectEvents(messages: IRCMessage[]): IRCMessage[] {
   return result;
 }
 
-function buildDiscoGroup(events: IRCMessage[]): DiscoGroupMessage {
+/**
+ * Dedup a list of failure sentences into IRCCloud's ` (xN)`-counted,
+ * comma-joined summary. Returns escaped HTML without the `⇐` prefix span.
+ */
+export function discoSentence(texts: string[]): string {
   const counts = new Map<string, number>();
-  for (const evt of events) {
-    const msg = evt.text || 'Disconnected';
-    counts.set(msg, (counts.get(msg) ?? 0) + 1);
-  }
-
+  for (const t of texts) counts.set(t, (counts.get(t) ?? 0) + 1);
   const parts: string[] = [];
-  for (const [msg, count] of counts) {
-    parts.push(count > 1 ? `${escapeHtml(msg)} (x${count})` : escapeHtml(msg));
+  for (const [t, count] of counts) {
+    parts.push(count > 1 ? `${escapeHtml(t)} (x${count})` : escapeHtml(t));
   }
+  return parts.join(', ');
+}
 
+function buildDiscoGroup(events: IRCMessage[]): DiscoGroupMessage {
   return {
     ...events[0],
     command: 'DISCO_GROUP',
     events,
     expanded: false,
-    sentences: `<span class="prefix">&#x21D0;</span> ${parts.join(', ')}`,
+    sentences: `<span class="prefix">&#x21D0;</span> ${discoSentence(events.map((e) => e.text || 'Disconnected'))}`,
   } as DiscoGroupMessage;
 }
 

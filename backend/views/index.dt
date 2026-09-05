@@ -26,16 +26,22 @@ block body
 
 block scripts
   // Preload the critical CSS/JS so the browser can start fetching before parsing
-  link(rel="preload", href="/public/dist/assets/main-BKNBMFP6.css", as="style")
-  link(rel="stylesheet", href="/public/dist/assets/main-BKNBMFP6.css")
+  link(rel="preload", href="/public/dist/assets/main-oJDB9oQ_.css", as="style")
+  link(rel="stylesheet", href="/public/dist/assets/main-oJDB9oQ_.css")
   link(rel="preload", href="/public/dist/assets/chunk-upload-mkmfQgHN.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-upload-mkmfQgHN.css")
   link(rel="preload", href="/public/dist/assets/chunk-editor-DNr_rhdt.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-editor-DNr_rhdt.css")
   link(rel="modulepreload", href="/public/dist/assets/vendor-BCQGhTLw.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-en4fbx7R.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-editor-BWMiYrwz.js")
-  script(type="module", src="/public/dist/assets/main-iPOnPeGI.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-LxGQoQui.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-editor-CaXhmeLC.js")
+  script(type="module", src="/public/dist/assets/main-B4KKtf4i.js")
+
+
+
+
+
+
 
 
 

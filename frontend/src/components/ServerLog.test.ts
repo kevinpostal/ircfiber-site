@@ -107,11 +107,11 @@ describe('ServerLog', () => {
     ];
     render(ServerLog, { props: { messages: msgs, network } });
 
-    const blocks = document.querySelectorAll('.row.grouped .groupedLines');
+    const blocks = document.querySelectorAll('.row.messageRow.type_motd_response .groupedLines');
     expect(blocks.length).toBe(1);
     const block = blocks[0];
     expect(block.querySelector('h2 .host')?.textContent).toBe('irc.test.com');
-    const lines = block.querySelectorAll('.l');
+    const lines = block.querySelectorAll('div.groupedLines__line');
     expect(lines.length).toBe(2);
     expect(lines[0].textContent).toBe('- Welcome to TestNet');
     // mIRC colour codes render as formatting spans, not raw control chars.
@@ -160,16 +160,17 @@ describe('ServerLog', () => {
     ];
     render(ServerLog, { props: { messages: msgs, network } });
 
-    const part = document.querySelector('.row.part');
+    const part = document.querySelector('.row.part.type_socket_closed');
     expect(part).not.toBeNull();
     expect(part!.querySelector('hr')).not.toBeNull();
     const status = part!.nextElementSibling as HTMLElement;
     expect(status.classList.contains('status')).toBe(true);
+    expect(status.classList.contains('type_socket_closed')).toBe(true);
     expect(status.querySelector('.disco')?.textContent).toBe('Disconnected: Connection reset by peer');
     expect(status.querySelector('.kv')?.textContent).toContain('59m59s');
   });
 
-  it('renders welcome numerics, other numerics and CAP notices as status rows', async () => {
+  it('renders welcome numerics, other numerics and CAP notices as typed status rows', async () => {
     const network = setupServerBuffer();
     const msgs = [
       ...connectSequence(DAY),
@@ -177,44 +178,64 @@ describe('ServerLog', () => {
       createMessage({ command: '002', nick: 'irc.test.com', text: 'Your host is irc.test.com', t: DAY + 1243, eid: 51 }),
       createMessage({ command: '251', nick: 'irc.test.com', text: 'There are 61 users', t: DAY + 1250, eid: 52 }),
       createMessage({ command: 'CAP', nick: undefined, text: 'away-notify sasl=PLAIN', params: ['*', 'LS', 'away-notify sasl=PLAIN'], t: DAY + 640, eid: 53 }),
-      createMessage({ command: 'NOTICE', nick: undefined, text: 'multi-prefix account-notify', t: DAY + 641, eid: 54 }),
+      createMessage({ command: 'CAP', nick: undefined, text: 'away-notify', params: ['*', 'REQ', 'away-notify'], t: DAY + 641, eid: 54 }),
+      createMessage({ command: 'NOTICE', nick: undefined, text: 'multi-prefix account-notify', t: DAY + 642, eid: 55 }),
     ];
     render(ServerLog, { props: { messages: msgs, network } });
 
     const welcome = document.querySelector('.row.status[data-cmd="001"]') as HTMLElement;
-    expect(welcome.classList.contains('muted')).toBe(false);
+    expect(welcome.classList.contains('type_server_welcome')).toBe(true);
     expect(welcome.textContent).toContain('Welcome to TestNet zodiac');
-    expect(document.querySelector('.row.status[data-cmd="002"]')?.classList.contains('muted')).toBe(true);
-    expect(document.querySelector('.row.status[data-cmd="251"]')?.classList.contains('muted')).toBe(true);
+    expect(document.querySelector('.row.status[data-cmd="002"]')?.classList.contains('type_server_yourhost')).toBe(true);
+    expect(document.querySelector('.row.status[data-cmd="251"]')?.classList.contains('type_server_luserclient')).toBe(true);
 
-    const caps = Array.from(document.querySelectorAll('.row.status.muted'))
+    // Every CAP row is a monospace status row; labels are right-aligned
+    // in a 16-char field so the colons line up column-for-column.
+    const caps = Array.from(document.querySelectorAll('.row.messageRow.status.monospace'))
       .filter((r) => r.querySelector('.content > b')?.textContent === 'CAP');
-    expect(caps.length).toBe(2);
-    expect(caps[0].textContent).toContain('Server supports: away-notify | sasl=PLAIN');
-    expect(caps[1].textContent).toContain('Server supports: multi-prefix | account-notify');
+    expect(caps.length).toBe(3);
+    const content = (r: Element) => r.querySelector('.content')?.textContent ?? '';
+    expect(content(caps[0])).toBe('CAP Server supports: away-notify | sasl=PLAIN');
+    expect(content(caps[1])).toBe('CAP      Requesting: away-notify');
+    expect(content(caps[2])).toBe('CAP Server supports: multi-prefix | account-notify');
+    expect(caps[0].classList.contains('type_cap_ls')).toBe(true);
+    expect(caps[1].classList.contains('type_cap_req')).toBe(true);
+    expect(caps[2].classList.contains('type_cap_ls')).toBe(true);
   });
 
-  it('groups consecutive notices by author with a server or letter avatar', async () => {
+  it('renders per-line notice rows with firstAuthor/sameAuthor, avatar and BOT badge', async () => {
     const network = setupServerBuffer();
     const msgs = [
       ...connectSequence(DAY),
       createMessage({ command: 'NOTICE', nick: 'irc.test.com', text: '*** Looking up your hostname...', t: DAY + 100, eid: 60 }),
-      createMessage({ command: 'NOTICE', nick: 'irc.test.com', text: '*** Found your hostname', t: DAY + 101, eid: 61 }),
-      createMessage({ command: 'NOTICE', nick: 'NickServ', text: 'This nickname is registered.', t: DAY + 1300, eid: 62 }),
-      createMessage({ command: 'NOTICE', nick: 'NickServ', text: 'Please identify.', t: DAY + 1301, eid: 63 }),
+      createMessage({ command: 'NOTICE', nick: 'NickServ', prefix: 'NickServ!services@services.test.com', text: 'This nickname is registered.', t: DAY + 1300, eid: 62 }),
+      createMessage({ command: 'NOTICE', nick: 'NickServ', prefix: 'NickServ!services@services.test.com', text: 'Please identify.', t: DAY + 1301, eid: 63 }),
+      createMessage({ command: 'NOTICE', nick: 'NickServ', prefix: 'NickServ!services@services.test.com', text: 'You have 30 seconds.', t: DAY + 1302, eid: 64 }),
     ];
     render(ServerLog, { props: { messages: msgs, network } });
 
-    const notices = document.querySelectorAll('.row.notice');
-    expect(notices.length).toBe(2);
-    expect(notices[0].querySelector('.av')?.classList.contains('srv')).toBe(true);
-    expect(notices[0].querySelector('.name')?.textContent).toBe('irc.test.com');
-    expect(notices[0].querySelectorAll('.line').length).toBe(2);
-    expect(notices[0].querySelector('.bot')).toBeNull();
-    expect(notices[1].querySelector('.av')?.textContent).toBe('N');
-    expect(notices[1].querySelector('.name')?.textContent).toBe('NickServ');
-    expect(notices[1].querySelector('.bot')?.textContent).toBe('BOT');
-    expect(notices[1].querySelectorAll('.line .date > .timestamp').length).toBe(2);
+    const notices = document.querySelectorAll('.row.messageRow.notice.type_notice');
+    expect(notices.length).toBe(4);
+    // Server notice: bare content row — no avatar, no authorWrap.
+    expect(notices[0].querySelector('.authorWrap')).toBeNull();
+    expect(notices[0].querySelector('.letterAvatar')).toBeNull();
+    expect(notices[0].textContent).toContain('*** Looking up your hostname...');
+    // NickServ run: first row firstAuthor, the rest sameAuthor — each
+    // still carries the colored avatar, <author> wrap and BOT badge.
+    const first = notices[1];
+    expect(first.classList.contains('firstAuthor')).toBe(true);
+    expect(first.getAttribute('data-usermask')).toBe('services@services.test.com');
+    expect(first.querySelector('.letterAvatar')?.className).toMatch(/\bc\d+\b/);
+    expect(first.querySelector('.authorWrap .author')?.textContent).toBe('NickServ');
+    expect(first.querySelector('.authorWrap .author')?.className).toMatch(/\bc\d+\b/);
+    expect(first.querySelector('.author-bot')?.textContent).toBe('BOT');
+    for (const r of [notices[2], notices[3]]) {
+      expect(r.classList.contains('sameAuthor')).toBe(true);
+      expect(r.querySelector('.letterAvatar')).not.toBeNull();
+      expect(r.querySelector('.authorWrap .author')?.textContent).toBe('NickServ');
+    }
+    // Each per-line row carries its own timestamp.
+    expect(document.querySelectorAll('.row.notice .date > .timestamp').length).toBe(4);
   });
 
   it('hides rows at or before the clearedAt watermark', async () => {
@@ -267,7 +288,7 @@ describe('ServerLog', () => {
     expect(document.querySelector('.row.notice')).toBeNull();
   });
 
-  it('renders self MODE / NICK as muted status rows, not author notices', async () => {
+  it('renders self MODE / NICK as typed status rows, not author notices', async () => {
     const network = setupServerBuffer();
     const msgs = [
       ...connectSequence(DAY),
@@ -275,9 +296,14 @@ describe('ServerLog', () => {
       createMessage({ command: 'NICK', nick: 'me', text: 'me2', t: DAY + 1400, eid: 11 }),
     ];
     render(ServerLog, { props: { messages: msgs, network } });
-    const status = Array.from(document.querySelectorAll('.row.status.muted')).map((r) => r.textContent?.trim());
-    expect(status.some((t) => t?.startsWith('Your user mode changed: +Ziw'))).toBe(true);
-    expect(status.some((t) => t?.startsWith('You are now known as me2'))).toBe(true);
+
+    const mode = document.querySelector('.row.status[data-cmd="MODE"]') as HTMLElement;
+    expect(mode.classList.contains('type_user_mode')).toBe(true);
+    expect(mode.textContent).toContain('Your user mode changed: +Ziw');
+    expect(mode.querySelector('.content b')?.textContent).toBe('+Ziw');
+    const nickRow = document.querySelector('.row.status[data-cmd="NICK"]') as HTMLElement;
+    expect(nickRow.classList.contains('type_nickchange')).toBe(true);
+    expect(nickRow.textContent).toContain('You are now known as me2');
     expect(document.querySelector('.row.notice')).toBeNull();
   });
 
@@ -356,17 +382,117 @@ describe('ServerLog', () => {
     expect(byCmd('265')).not.toMatch(/1000000\s+1000000\s+Current/);
   });
 
-  it('never renders WHOIS answers or the raw RPL_MYINFO dump', async () => {
+  it('renders RPL_MYINFO as labelled rows, never WHOIS answers or the raw dump', async () => {
     const network = setupServerBuffer();
     render(ServerLog, { props: { messages: supernetsMessages(), network } });
 
     const cmds = Array.from(document.querySelectorAll('.row')).map((r) => r.getAttribute('data-cmd'));
     for (const whois of ['311', '318', '330']) expect(cmds).not.toContain(whois);
-    expect(cmds).not.toContain('004');
     const body = document.querySelector('.serverLog')!.textContent ?? '';
     expect(body).not.toContain('End of /WHOIS list.');
     expect(body).not.toContain('is logged in as');
     // The raw parameter dump is what an operator saw instead of a sentence.
     expect(body).not.toContain('DangerousIRCd-6.6.6 UnrealIRCd-6.1.10');
+
+    // 004 renders as IRCCloud's positionally labelled split; only the
+    // first row carries type_myinfo.
+    const myinfo = Array.from(document.querySelectorAll('.row.status[data-cmd="004"]'));
+    const texts = myinfo.map((r) => r.querySelector('.content')?.textContent);
+    expect(texts).toEqual([
+      'Host: openwater.supernets.org',
+      'IRCd: DangerousIRCd-6.6.6',
+      'User modes: UnrealIRCd-6.1.10',
+      'Channel modes: diopqrstxzBDGHIRSTZ',
+    ]);
+    expect(myinfo[0].classList.contains('type_myinfo')).toBe(true);
+    expect(myinfo[1].classList.contains('type_myinfo')).toBe(false);
+  });
+
+  it('renders CAP ACK with aligned label and a bot notice with avatar and author', async () => {
+    const network = setupServerBuffer();
+    const msgs = [
+      ...connectSequence(DAY),
+      createMessage({ command: 'CAP', nick: undefined, text: 'sasl server-time', params: ['*', 'ACK', 'sasl server-time'], t: DAY + 700, eid: 90 }),
+      createMessage({ command: 'NOTICE', nick: 'NickServ', prefix: 'NickServ!services@services.supernets.org', text: 'You are now identified.', t: DAY + 800, eid: 91 }),
+    ];
+    render(ServerLog, { props: { messages: msgs, network } });
+
+    const ack = document.querySelector('.row.messageRow.status.monospace.type_cap_ack');
+    expect(ack).not.toBeNull();
+    expect(ack!.querySelector('.content')?.textContent).toBe('CAP    Acknowledged: sasl | server-time');
+
+    const notice = document.querySelector('.row.messageRow.notice.type_notice.firstAuthor');
+    expect(notice).not.toBeNull();
+    expect(notice!.querySelector('.letterAvatar')?.className).toMatch(/\bc\d+\b/);
+    expect(notice!.querySelector('.authorWrap .author')?.textContent).toBe('NickServ');
+    expect(notice!.querySelector('.author-bot')?.textContent).toBe('BOT');
+  });
+
+  // ── Disconnect grouping (IRCCloud "Disconnections") ──
+  // Attempts must sit > 60 s apart: dedupPhaseEvents collapses identical
+  // phase texts and same-command lifecycle events inside a 60 s window.
+  function failedAttempt(base: number, eid: number, reason = 'Connection refused') {
+    return [
+      phase('queued', 'Queued for connection', base, eid),
+      phase('connecting', 'Connecting to 10.0.0.1:6697', base + 20, eid + 1),
+      phase('attempt_fail', reason, base + 50, eid + 2),
+      createMessage({ command: 'DISCONNECTED', nick: undefined, text: reason, t: base + 60, eid: eid + 3 }),
+    ];
+  }
+
+  it('collapses consecutive failed attempts into one Disconnections group', async () => {
+    const network = setupServerBuffer();
+    const msgs = [
+      ...failedAttempt(DAY, 1),
+      ...failedAttempt(DAY + 120_000, 10),
+      ...connectSequence(DAY + 240_000, 20),
+    ];
+    render(ServerLog, { props: { messages: msgs, network } });
+
+    const heads = document.querySelectorAll('.row.messageRow.groupedDisco.collapsedHead');
+    expect(heads.length).toBe(1);
+    expect(heads[0].querySelector('.sentence')?.textContent).toContain('Connection refused (x2)');
+    // The grouped attempts' rows are swallowed while collapsed.
+    expect(document.querySelector('.row.phase[data-phase="attempt_fail"]')).toBeNull();
+    expect(document.querySelectorAll('.row.part.groupedDiscoPart').length).toBe(1);
+    // The successful attempt stays outside the group.
+    expect(document.querySelector('.row.phase[data-phase="welcome"]')).not.toBeNull();
+
+    await userEvent.click(heads[0] as HTMLElement);
+    await tick();
+    const group = document.querySelector('.collapseGroup.discoGroup');
+    expect(group).not.toBeNull();
+    expect(group!.querySelectorAll('.row.phase[data-phase="attempt_fail"]').length).toBe(2);
+    expect(document.querySelector('.row.messageRow.groupedDisco')?.classList.contains('expanded')).toBe(true);
+  });
+
+  it('never groups a single failed attempt', async () => {
+    const network = setupServerBuffer();
+    const msgs = [
+      ...failedAttempt(DAY, 1),
+      ...connectSequence(DAY + 120_000, 20),
+    ];
+    render(ServerLog, { props: { messages: msgs, network } });
+
+    expect(document.querySelector('.row.messageRow.groupedDisco')).toBeNull();
+    expect(document.querySelector('.row.phase[data-phase="attempt_fail"]')).not.toBeNull();
+  });
+
+  it('keeps the live retrying attempt outside the Disconnections group', async () => {
+    const network = setupServerBuffer(false);
+    network.connectionState = 'ip_retry';
+    const msgs = [
+      ...failedAttempt(DAY, 1),
+      ...failedAttempt(DAY + 120_000, 10),
+      phase('queued', 'Queued for connection', DAY + 240_000, 20),
+      phase('connecting', 'Connecting to 10.0.0.1:6697', DAY + 240_020, 21),
+    ];
+    render(ServerLog, { props: { messages: msgs, network } });
+
+    expect(document.querySelectorAll('.row.messageRow.groupedDisco').length).toBe(1);
+    // The newest attempt's rows render normally, outside any group.
+    const visiblePhases = document.querySelectorAll('.serverLog > .row.phase, .serverLog .row.phase');
+    expect(visiblePhases.length).toBe(2);
+    expect(document.querySelector('.row.phase[data-phase="connecting"]')?.classList.contains('live')).toBe(true);
   });
 });

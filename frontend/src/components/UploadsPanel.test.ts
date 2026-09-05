@@ -29,6 +29,7 @@ vi.mock('/src/stores/api', () => ({
   fetchUploads: vi.fn(async () => []),
   deleteUpload: vi.fn(async () => {}),
   editUpload: vi.fn(async () => ({ status: 'ok' })),
+  convertUploadToGif: vi.fn(async () => ({})),
   fetchPastebinsOffset: vi.fn(async () => ({ entries: [], total: 0 })),
   createPastebin: vi.fn(async () => ({})),
   updatePastebin: vi.fn(async () => ({})),
@@ -62,6 +63,7 @@ vi.mock('../stores/api', () => ({
   fetchUploads: vi.fn(async () => []),
   deleteUpload: vi.fn(async () => {}),
   editUpload: vi.fn(async () => ({ status: 'ok' })),
+  convertUploadToGif: vi.fn(async () => ({})),
   fetchPastebinsOffset: vi.fn(async () => ({ entries: [], total: 0 })),
   createPastebin: vi.fn(async () => ({})),
   updatePastebin: vi.fn(async () => ({})),
@@ -139,5 +141,22 @@ describe('UploadsPanel edit', () => {
     await vi.waitFor(() => expect(container.querySelector('.editFullPage')).toBeTruthy());
     expect(container.querySelector('.editFullPage .codeEditor')).toBeFalsy();
     expect(container.querySelector('#editNameInputFull')).toBeTruthy();
+  });
+
+  it('video files show a gif convert action; text files do not', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('') } as Response));
+    vi.mocked(fetchUploadsOffset).mockResolvedValueOnce({ entries: [{ id: '3', name: 'clip.mp4', mimeType: 'video/mp4', size: 5000, url: '/uploads/3.mp4', createdAt: Date.now(), buffer: '', networkId: '' }], total: 1 });
+    const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
+    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('clip.mp4'));
+    expect(container.querySelector('button.togif')).toBeTruthy();
+    expect(container.querySelector('video.filePreview')).toBeTruthy();
+    expect(container.querySelector('img.filePreview')).toBeFalsy();
+  });
+
+  it('text files render no gif action', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('file content') } as Response));
+    const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
+    await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('test.py'));
+    expect(container.querySelector('button.togif')).toBeFalsy();
   });
 });

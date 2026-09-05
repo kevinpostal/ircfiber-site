@@ -68,14 +68,10 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   if (cmd === '005') return 'cap';
   if (cmd === '372' || cmd === '375' || cmd === '376') return 'motd';
   // RPL_WELCOME / YOURHOST / CREATED — the server's connection banner,
-  // always visible like MOTD. 004 (RPL_MYINFO) is deliberately absent:
-  // it carries no trailing, so it rendered as a raw parameter dump
-  // ("Zodifag omega.supernets.org DangerousIRCd-6.6.6 …"). IRCCloud lists
-  // `server_myinfo` in `unrendered_messages` (common-5650bddb.js) and
-  // shows nothing; the ircd version is already in the 002 text and the
-  // mode letters are in the ISUPPORT row.
+  // always visible like MOTD. 004 (RPL_MYINFO) falls through to
+  // 'numeric'; the row builder splits it into IRCCloud's labelled
+  // Host / IRCd / User modes / Channel modes rows.
   if (cmd === '001' || cmd === '002' || cmd === '003') return 'welcome';
-  if (cmd === '004') return 'skip';
   // The whole WHOIS / WHOWAS / WHO family. These are consumed by
   // `accumulateWhois` (lib/messageHandler.ts) and surface in the WHOIS
   // overlay — which is exactly what IRCCloud does: every `whois_*`,

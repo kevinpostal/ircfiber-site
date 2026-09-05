@@ -3,9 +3,10 @@
   import { ircState } from '../stores/ircStore.svelte';
   import Img2IrcDialog from './Img2IrcDialog.svelte';
   import { abortSingleUpload, abortUploadRequest } from '../stores/uploadFlow.svelte';
+  import { isVideoFile } from '../lib/upload';
 
   interface Props {
-    onConfirm: (data: { filename?: string; message: string }) => void;
+    onConfirm: (data: { filename?: string; message: string; convertToGif?: boolean }) => void;
     onCancel: () => void;
   }
   let { onConfirm, onCancel }: Props = $props();
@@ -119,6 +120,10 @@
   function handleSubmit(e: Event): void {
     e.preventDefault();
     onConfirm({ filename: filenameInput || undefined, message: messageInput });
+  }
+
+  function handleGifSubmit(): void {
+    onConfirm({ filename: filenameInput || undefined, message: messageInput, convertToGif: true });
   }
 
   function handleKeydown(e: KeyboardEvent): void {
@@ -251,6 +256,10 @@
         <button type="submit" class="action confirm"><span>Upload</span></button>
         {#if (() => { const u = activeUpload(); return u ? isImageFile(u.filename, (u.file as File)?.type) : false; })()}
           <button type="button" class="action convertToIrc" onclick={handleConvertToIrc} title="Convert image to mIRC color codes and send as text art"><span>Convert to IRC</span></button>
+        {/if}
+        {#if (() => { const u = activeUpload(); return u ? isVideoFile(u.filename, (u.file as File)?.type) : false; })()}
+          <button type="button" class="action convertToGif" onclick={handleGifSubmit}
+                  title="Convert video to an animated GIF and post the GIF link"><span>Upload as GIF</span></button>
         {/if}
         <button type="button" class="sendAsText" style="display: none;"><span>Send as text</span></button>
         <button type="button" class="close mainClose" onclick={onCancel}><span>Cancel</span></button>

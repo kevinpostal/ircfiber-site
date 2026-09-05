@@ -46,10 +46,11 @@ describe('classifyServerLog', () => {
     expect(classifyServerLog(m({ command: '003' }))).toBe('welcome');
   });
 
-  // 004 has no trailing at all, so it used to render as a raw parameter
-  // dump. IRCCloud lists `server_myinfo` in `unrendered_messages`.
-  it('drops RPL_MYINFO (004) rather than dumping its parameters', () => {
-    expect(classifyServerLog(m({ command: '004' }))).toBe('skip');
+  // 004 has no trailing at all; the row builder splits it into the
+  // labelled Host / IRCd / User modes / Channel modes rows (IRCCloud's
+  // server_myinfo split), so it classifies as a plain numeric.
+  it('classifies RPL_MYINFO (004) as a numeric for the labelled split', () => {
+    expect(classifyServerLog(m({ command: '004' }))).toBe('numeric');
   });
 
   // A WHOIS answer names its subject in a leading parameter, so these rows

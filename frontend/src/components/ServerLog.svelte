@@ -41,7 +41,6 @@
 
 <style>
   .serverLog {
-    font: 14px/19px var(--font-mono);
     padding-bottom: 12px;
   }
   .serverLog__empty {
