@@ -1509,6 +1509,130 @@ private string _isoNow() {
         return Clock.currTime.toISOExtString();
     } catch (Exception) { return ""; }
 }
+
+/// Result of driving a real IRC registration through one SOCKS proxy.
+private struct _IrcProbe {
+    bool socksOk;      /// SOCKS5 CONNECT to the IRC host succeeded
+    bool registered;   /// the IRC server answered 001 (or a fatal numeric)
+    string serverName; /// the 001 source, e.g. `openwater.supernets.org`
+    string welcome;    /// first line of interest, verbatim
+    string error;
+    long  ms;          /// wall time of the whole probe
+}
+
+/// Answers the only question that matters about an egress: "can we actually
+/// reach IRC through it?" — SOCKS5 CONNECT to `host:port`, then a real
+/// NICK/USER registration, reading until 001 or a refusal. Plain text only
+/// (no TLS): this proves the *path*, and every IRCd worth probing offers a
+/// plain port. Never sends anything but registration + QUIT.
+private _IrcProbe _probeIrcThroughSocks(string proxyHost, ushort proxyPort,
+                                        string host, ushort port, string nick) {
+    import std.socket;
+    import std.datetime.stopwatch : StopWatch, AutoStart;
+    import core.time : dur;
+    import std.string : indexOf, splitLines, startsWith, strip;
+    _IrcProbe pr;
+    auto sw = StopWatch(AutoStart.yes);
+    scope(exit) pr.ms = sw.peek.total!"msecs";
+    Socket sock;
+    try {
+        auto addrs = getAddress(proxyHost, proxyPort);
+        if (addrs.length == 0) { pr.error = "proxy DNS failed"; return pr; }
+        sock = new Socket(addrs[0].addressFamily, SocketType.STREAM);
+        sock.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"seconds"(6));
+        sock.setOption(SocketOptionLevel.SOCKET, SocketOption.SNDTIMEO, dur!"seconds"(6));
+        sock.connect(addrs[0]);
+    } catch (Exception e) {
+        pr.error = "proxy connect failed: " ~ e.msg;
+        if (sock !is null) try { sock.close(); } catch (Exception) {}
+        return pr;
+    }
+    void closeSock() nothrow { try { sock.close(); } catch (Exception) {} }
+    scope(exit) closeSock();
+    try {
+        // SOCKS5 greeting: no auth.
+        ubyte[3] greet = [0x05, 0x01, 0x00];
+        if (sock.send(greet[]) != 3) { pr.error = "proxy write failed"; return pr; }
+        ubyte[2] gr;
+        if (sock.receive(gr[]) != 2 || gr[0] != 0x05 || gr[1] != 0x00) {
+            pr.error = "proxy refused SOCKS5 no-auth"; return pr;
+        }
+        // CONNECT with ATYP=domain so the EXIT resolves the hostname — the
+        // same shape the engine uses, and what makes split-horizon work.
+        ubyte[] reqBuf = [0x05, 0x01, 0x00, 0x03, cast(ubyte) host.length];
+        reqBuf ~= cast(ubyte[]) host.dup;
+        reqBuf ~= cast(ubyte)((port >> 8) & 0xFF);
+        reqBuf ~= cast(ubyte)(port & 0xFF);
+        if (sock.send(reqBuf) != reqBuf.length) { pr.error = "proxy write failed"; return pr; }
+        ubyte[262] rep;
+        auto n = sock.receive(rep[0 .. 5]);
+        if (n < 5) { pr.error = "proxy CONNECT: short reply"; return pr; }
+        if (rep[1] != 0x00) {
+            pr.error = "proxy CONNECT refused (SOCKS reply " ~ rep[1].to!string ~ ")";
+            return pr;
+        }
+        // Drain the bound-address tail so the IRC stream starts clean.
+        size_t tail = 0;
+        switch (rep[3]) {
+            case 0x01: tail = 4 + 2 - 1; break;              // IPv4 + port, minus the byte already read
+            case 0x04: tail = 16 + 2 - 1; break;             // IPv6 + port
+            case 0x03: tail = rep[4] + 2; break;             // domain length byte was rep[4]
+            default:   tail = 0; break;
+        }
+        while (tail > 0) {
+            auto got = sock.receive(rep[0 .. (tail > rep.length ? rep.length : tail)]);
+            if (got <= 0) break;
+            tail -= got;
+        }
+        pr.socksOk = true;
+        // Real registration.
+        string reg = "NICK " ~ nick ~ "\r\nUSER " ~ nick ~ " 0 * :IRC Fiber egress probe\r\n";
+        sock.send(cast(ubyte[]) reg.dup);
+        ubyte[4096] rbuf;
+        string acc;
+        foreach (_; 0 .. 40) {
+            auto got = sock.receive(rbuf[]);
+            if (got <= 0) break;
+            acc ~= cast(string) rbuf[0 .. got].idup;
+            foreach (line; acc.splitLines()) {
+                auto l = line.strip();
+                if (l.length == 0) continue;
+                if (l.startsWith("PING ")) {
+                    auto tok = l.length > 5 ? l[5 .. $] : "";
+                    sock.send(cast(ubyte[]) ("PONG " ~ tok ~ "\r\n").dup);
+                    continue;
+                }
+                // `:server 001 nick :Welcome…`
+                auto sp = l.indexOf(" ");
+                if (sp <= 0) continue;
+                auto rest = l[sp + 1 .. $];
+                auto sp2 = rest.indexOf(" ");
+                auto code = sp2 > 0 ? rest[0 .. sp2] : rest;
+                if (code == "001") {
+                    pr.registered = true;
+                    pr.serverName = l[1 .. sp];
+                    pr.welcome = l.length > 200 ? l[0 .. 200] : l;
+                    break;
+                }
+                // Fatal registration refusals still prove the path works.
+                if (code == "432" || code == "433" || code == "464" || code == "465"
+                    || code == "451" || code == "466" || l.startsWith("ERROR")) {
+                    pr.serverName = sp > 1 ? l[1 .. sp] : "";
+                    pr.welcome = l.length > 200 ? l[0 .. 200] : l;
+                    pr.error = "server refused registration: " ~ pr.welcome;
+                    break;
+                }
+            }
+            if (pr.registered || pr.error.length) break;
+        }
+        try { sock.send(cast(ubyte[]) "QUIT :probe\r\n".dup); } catch (Exception) {}
+        if (!pr.registered && pr.error.length == 0)
+            pr.error = "no 001 from " ~ host ~ " within the probe window";
+    } catch (Exception e) {
+        if (pr.error.length == 0) pr.error = "probe failed: " ~ e.msg;
+    }
+    return pr;
+}
 package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, ServerRegistry serverRegistry) {
     import std.string : split, strip, indexOf, lastIndexOf, toLower;
     import std.conv : to;
@@ -1518,6 +1642,17 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
     // Build pool data as D structs first, then serialize manually to avoid vibe.d JSON truncation
     struct IpInfo {
         string ip, city, region, country, loc, org, postal, timezone, hostname;
+        /// am.i.mullvad.net's own verdict: `"mullvad_exit_ip": true` means the
+        /// request genuinely left through a Mullvad relay, i.e. the tailnet's
+        /// Mullvad add-on grant (the "licence") is working for this sidecar.
+        /// This was previously read with a string getter — the field is a
+        /// BOOL, so the check silently did nothing and the admin had no way
+        /// to tell a real Mullvad exit from the host's own uplink.
+        bool mullvadExit;
+        /// `mullvad_exit_ip_hostname`, e.g. `de-ber-wg-003` — names the relay.
+        string mullvadHostname;
+        /// `organization`, e.g. `Mullvad VPN AB` (vs the host's own ISP).
+        string organization;
     }
     struct ProxyInfo {
         string id, label, host, socksUrl, ip, container, containerState, containerStatus, tailscaleExitNode, error, lastTestedAt;
@@ -1557,9 +1692,16 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
                             return "";
                         }
                         string ip = getStr("ip");
-                        if (ip.length == 0) ip = getStr("mullvad_exit_ip");
-                        if (ip.length == 0) ip = getStr("mullvad_exit_ip_hostname");
                         if (ip.length > 0) { ii.ip = ip; exitIpForEnrich = ip; }
+                        // `mullvad_exit_ip` is a BOOL — the verdict, not an IP.
+                        if ("mullvad_exit_ip" in j) {
+                            auto mv = j["mullvad_exit_ip"];
+                            if (mv.type == Json.Type.bool_) ii.mullvadExit = mv.get!bool;
+                        }
+                        auto mvHost = getStr("mullvad_exit_ip_hostname");
+                        if (mvHost.length > 0) ii.mullvadHostname = mvHost;
+                        auto orgName = getStr("organization");
+                        if (orgName.length > 0) ii.organization = orgName;
                         string city = getStr("city");
                         if (city.length > 0 && city != "null") ii.city = city;
                         else {
@@ -1852,6 +1994,11 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         buf.put("\"containerStatus\":\"" ~ pi.containerStatus.escapeJson ~ "\",");
         buf.put("\"tailscaleExitNode\":\"" ~ pi.tailscaleExitNode.escapeJson ~ "\",");
         buf.put("\"ipinfo\":{\"ip\":\"" ~ pi.ipinfo.ip.escapeJson ~ "\",\"city\":\"" ~ pi.ipinfo.city.escapeJson ~ "\",\"region\":\"" ~ pi.ipinfo.region.escapeJson ~ "\",\"country\":\"" ~ pi.ipinfo.country.escapeJson ~ "\",\"loc\":\"" ~ pi.ipinfo.loc.escapeJson ~ "\",\"org\":\"" ~ pi.ipinfo.org.escapeJson ~ "\",\"postal\":\"" ~ pi.ipinfo.postal.escapeJson ~ "\",\"timezone\":\"" ~ pi.ipinfo.timezone.escapeJson ~ "\",\"hostname\":\"" ~ pi.ipinfo.hostname.escapeJson ~ "\"},");
+        // The Mullvad verdict for this sidecar: is the traffic actually
+        // leaving through a Mullvad relay, and which one.
+        buf.put("\"mullvadExit\":" ~ (pi.ipinfo.mullvadExit ? "true" : "false") ~ ",");
+        buf.put("\"mullvadHostname\":\"" ~ pi.ipinfo.mullvadHostname.escapeJson ~ "\",");
+        buf.put("\"organization\":\"" ~ pi.ipinfo.organization.escapeJson ~ "\",");
         buf.put("\"healthy\":" ~ (pi.healthy ? "true" : "false") ~ ",");
         buf.put("\"lastTestedAt\":\"" ~ pi.lastTestedAt.escapeJson ~ "\",");
         buf.put("\"locationId\":\"" ~ pi.locationId.escapeJson ~ "\",");
@@ -2015,6 +2162,12 @@ package void apiMullvadSlotExit(HTTPServerRequest req, HTTPServerResponse res,
     if (body.type == Json.Type.object && body["locationId"].type == Json.Type.string)
         locationId = body["locationId"].get!string.strip().toLower();
     if (locationId.length == 0) { jsonError(res, 400, "locationId required"); return; }
+    // `force` is the operator saying "yes, move it anyway". Every slot on a
+    // busy deployment carries connections, so without this the admin can
+    // never change an exit — which is exactly what it looked like.
+    bool force = false;
+    if (body.type == Json.Type.object && body["force"].type == Json.Type.bool_)
+        force = body["force"].get!bool;
 
     EgressView view;
     try {
@@ -2031,10 +2184,17 @@ package void apiMullvadSlotExit(HTTPServerRequest req, HTTPServerResponse res,
             ~ "reach its tailscaled socket (sidecar on another host).");
         return;
     }
-    if (slot.activeConns > 0) {
-        jsonError(res, 409, "Slot " ~ label ~ " is carrying " ~ slot.activeConns.to!string
+    if (slot.activeConns > 0 && !force) {
+        // Not a dead end any more: the client re-sends with force:true after
+        // the operator confirms, and `affected` tells them what it costs.
+        auto err = Json.emptyObject;
+        err["error"] = Json("Slot " ~ label ~ " is carrying " ~ slot.activeConns.to!string
             ~ " live connection" ~ (slot.activeConns == 1 ? "" : "s")
-            ~ " — swapping its exit would drop them. Free it first.");
+            ~ " — moving its exit reconnects them through " ~ locationId ~ ".");
+        err["needsForce"] = Json(true);
+        err["affected"] = Json(cast(long) slot.activeConns);
+        res.statusCode = 409;
+        res.writeJsonBody(err);
         return;
     }
     if (slot.locationId == locationId) {
@@ -2051,6 +2211,10 @@ package void apiMullvadSlotExit(HTTPServerRequest req, HTTPServerResponse res,
         auto payload = Json.emptyObject;
         payload["label"] = Json(label);
         payload["locationId"] = Json(locationId);
+        // Tells the engine to retarget even though the slot is in use, and to
+        // reconnect the networks riding it so they land on the new exit
+        // immediately instead of waiting for the socket to notice.
+        payload["force"] = Json(force);
         auto msg = ControlMessage("retargetEgress", "", "", payload);
         msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
         redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
@@ -2058,12 +2222,15 @@ package void apiMullvadSlotExit(HTTPServerRequest req, HTTPServerResponse res,
         jsonError(res, 500, "could not queue retarget: " ~ e.msg);
         return;
     }
-    logInfo("Admin queued egress retarget: slot %s → %s on engine %s", label, locationId, serverId);
+    logInfo("Admin queued egress retarget: slot %s → %s on engine %s (force=%s, activeConns=%d)",
+        label, locationId, serverId, force, slot.activeConns);
     Json data = Json.emptyObject;
     data["label"] = Json(label);
     data["locationId"] = Json(locationId);
     data["serverId"] = Json(serverId);
     data["queued"] = Json(true);
+    data["forced"] = Json(force);
+    data["affected"] = Json(cast(long) slot.activeConns);
     jsonOk(res, data);
 }
 
@@ -2126,6 +2293,56 @@ package void apiMullvadRestart(HTTPServerRequest req, HTTPServerResponse res,
         }
         jsonError(res, 500, e.msg);
     }
+}
+
+/// POST /api/admin/mullvad/:label/irc-test — prove IRC works through this exit.
+///
+/// Body (all optional): `{ "host": "irc.libera.chat", "port": 6667 }`.
+/// Defaults to the first-party ircd. Runs a SOCKS5 CONNECT plus a real
+/// NICK/USER registration and reports the server that answered, so an
+/// operator can confirm a freshly swapped exit is not just "healthy" but
+/// actually usable for IRC — including whether the network Z-lines it.
+package void apiMullvadIrcTest(HTTPServerRequest req, HTTPServerResponse res) {
+    import std.string : toLower, strip;
+    import std.random : uniform;
+    auto label = req.params["label"].strip().toLower();
+    if (label.length == 0) { jsonError(res, 400, "label required"); return; }
+    auto raw = mullvadRawPool();
+    auto entries = parseMullvadPool(raw);
+    PoolEntry* ent;
+    foreach (ref e; entries) if (e.label.toLower() == label) { ent = &e; break; }
+    if (ent is null) { jsonError(res, 404, "unknown mullvad label: " ~ label); return; }
+
+    string host = "irc.ircfiber.com";
+    ushort port = 6667;
+    auto body = readJsonBody(req);
+    if (body.type == Json.Type.object) {
+        if (body["host"].type == Json.Type.string) {
+            auto h = body["host"].get!string.strip();
+            if (h.length > 0 && h.length < 200) host = h;
+        }
+        if (body["port"].type == Json.Type.int_) {
+            auto p = body["port"].get!long;
+            if (p > 0 && p < 65536) port = cast(ushort) p;
+        }
+    }
+    // Random nick: two probes in a row must not collide on the target ircd.
+    auto nick = "fbprobe" ~ uniform(1000, 9999).to!string;
+    auto pr = _probeIrcThroughSocks(ent.host, ent.port, host, port, nick);
+    logInfo("Admin IRC probe via slot %s → %s:%d: socks=%s registered=%s (%d ms) %s",
+        label, host, port, pr.socksOk, pr.registered, pr.ms, pr.error);
+    Json data = Json.emptyObject;
+    data["label"] = Json(label);
+    data["host"] = Json(host);
+    data["port"] = Json(cast(long) port);
+    data["nick"] = Json(nick);
+    data["socksOk"] = Json(pr.socksOk);
+    data["registered"] = Json(pr.registered);
+    data["serverName"] = Json(pr.serverName);
+    data["welcome"] = Json(pr.welcome);
+    data["ms"] = Json(pr.ms);
+    data["error"] = Json(pr.error);
+    jsonOk(res, data);
 }
 
 /// POST /api/admin/mullvad/:label/test — SOCKS probe + egress IP check

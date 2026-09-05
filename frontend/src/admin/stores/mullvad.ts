@@ -31,6 +31,15 @@ export interface MullvadProxy {
   healthy: boolean;
   error: string | null;
   lastTestedAt: string;
+  /** am.i.mullvad.net's verdict for this sidecar: true only when the probe
+   *  genuinely left through a Mullvad relay. False means the traffic is
+   *  going out on the host's own uplink — the tailnet Mullvad grant or a
+   *  licence seat is missing for this device. */
+  mullvadExit?: boolean;
+  /** Relay that answered, e.g. `de-ber-wg-003`. */
+  mullvadHostname?: string;
+  /** `organization` from the probe, e.g. `Mullvad VPN AB`. */
+  organization?: string;
   /** Engine-published slot state (absent on engines older than the slot
    *  registry): where this exit currently is and whether it can be moved. */
   locationId?: string;
@@ -106,6 +115,21 @@ export interface MullvadTestResult {
   checkedAt: string;
   error: string;
 }
+/** Outcome of driving a real IRC registration through one slot's SOCKS
+ *  proxy — the only check that proves an exit is usable for IRC rather than
+ *  merely reachable (a Z-lined exit is "healthy" and still useless). */
+export interface MullvadIrcTestResult {
+  label: string;
+  host: string;
+  port: number;
+  nick: string;
+  socksOk: boolean;
+  registered: boolean;
+  serverName: string;
+  welcome: string;
+  ms: number;
+  error: string;
+}
 
 export const mullvadStatus = writable<MullvadStatus | null>(null);
 export const mullvadLoading = writable(false);
@@ -116,15 +140,15 @@ export const mullvadRestarting = writable<Set<string>>(new Set());
 export const mullvadSwapping = writable<Set<string>>(new Set());
 
 /** Ask the engine that owns `label` to move that slot to `locationId`.
- *  Refused server-side (409) while the slot carries live connections. The
- *  slot registry then reports `state: "retargeting"` until it lands, so the
- *  caller just refreshes status. */
-export async function swapSlotExit(label: string, locationId: string): Promise<void> {
+ *  A slot carrying live connections is refused with 409 + `needsForce`;
+ *  call again with `force` once the operator has confirmed, and the engine
+ *  bounces those connections so they come back on the new exit. */
+export async function swapSlotExit(label: string, locationId: string, force = false): Promise<void> {
   const cur = get(mullvadSwapping);
   cur.add(label);
   mullvadSwapping.set(new Set(cur));
   try {
-    await api.post(`/api/admin/mullvad/${encodeURIComponent(label)}/exit`, { locationId });
+    await api.post(`/api/admin/mullvad/${encodeURIComponent(label)}/exit`, { locationId, force });
     // Optimistic: show the slot as switching until the next poll confirms.
     const st = get(mullvadStatus);
     if (st?.pool) {
@@ -177,6 +201,40 @@ export async function testProxy(label: string): Promise<MullvadTestResult> {
     const s = get(mullvadTesting);
     s.delete(label);
     mullvadTesting.set(new Set(s));
+  }
+}
+
+/** Slots with an IRC probe in flight, and the last result per slot. */
+export const mullvadIrcTesting = writable<Set<string>>(new Set());
+export const mullvadIrcResults = writable<Record<string, MullvadIrcTestResult>>({});
+
+/** Drives a real IRC registration through `label`'s SOCKS proxy. Defaults to
+ *  the first-party ircd; pass a host to check a network that is prone to
+ *  Z-lining exits (SuperNETs, Libera). */
+export async function testIrcThroughProxy(
+  label: string,
+  host?: string,
+  port?: number,
+): Promise<MullvadIrcTestResult> {
+  const cur = get(mullvadIrcTesting);
+  cur.add(label);
+  mullvadIrcTesting.set(new Set(cur));
+  try {
+    const body: Record<string, unknown> = {};
+    if (host) body.host = host;
+    if (port) body.port = port;
+    const res = await api.post<MullvadIrcTestResult>(
+      `/api/admin/mullvad/${encodeURIComponent(label)}/irc-test`, body);
+    mullvadIrcResults.update((m) => ({ ...m, [label]: res }));
+    return res;
+  } catch (e) {
+    const msg = e instanceof ApiError ? e.message : (e as Error).message;
+    mullvadError.set(msg);
+    throw e;
+  } finally {
+    const s = get(mullvadIrcTesting);
+    s.delete(label);
+    mullvadIrcTesting.set(new Set(s));
   }
 }
 

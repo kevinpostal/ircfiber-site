@@ -17,7 +17,7 @@ import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiRemoveAssignment, apiEngineConfig, apiHostDisconnect, apiHostReconnect,
     apiHostDeleteNetwork, apiAssignmentDelete, apiRouting,
     apiFiberConfig, apiFiberConfigSet,
-    apiMullvadStatus, apiMullvadRestart, apiMullvadTest, apiMullvadTestAll, apiMullvadSlotExit,
+    apiMullvadStatus, apiMullvadRestart, apiMullvadTest, apiMullvadIrcTest, apiMullvadTestAll, apiMullvadSlotExit,
     apiMullvadServerEgressSet, apiMullvadServerEgressClear, apiNetworkEgressSet,
     apiUsersList, apiUsersBulkDelete, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete, apiRolesList,
     apiResetPassword,
@@ -109,6 +109,7 @@ final class AdminController {
         router.post("/api/admin/mullvad/:label/restart", &adminWrap!apiMullvadRestartRoute);
         router.post("/api/admin/mullvad/:label/exit", &adminWrap!apiMullvadSlotExitRoute);
         router.post("/api/admin/mullvad/:label/test", &adminWrap!apiMullvadTestRoute);
+        router.post("/api/admin/mullvad/:label/irc-test", &adminWrap!apiMullvadIrcTestRoute);
         router.post("/api/admin/mullvad/test-all", &adminWrap!apiMullvadTestAllRoute);
         router.post("/api/admin/mullvad/server/:serverId/egress", &adminWrap!apiMullvadServerEgressSetRoute);
         router.delete_("/api/admin/mullvad/server/:serverId/egress", &adminWrap!apiMullvadServerEgressClearRoute);
@@ -268,6 +269,7 @@ private:
     void apiMullvadRestartRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadRestart(req, res, redis, serverRegistry); }
     void apiMullvadSlotExitRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadSlotExit(req, res, redis, serverRegistry); }
     void apiMullvadTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadTest(req, res); }
+    void apiMullvadIrcTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadIrcTest(req, res); }
     void apiMullvadTestAllRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadTestAll(req, res); }
     void apiMullvadServerEgressSetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadServerEgressSet(req, res, redis, serverRegistry); }
     void apiMullvadServerEgressClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadServerEgressClear(req, res, redis, serverRegistry); }

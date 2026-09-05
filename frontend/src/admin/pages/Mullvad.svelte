@@ -22,6 +22,9 @@
     testAll,
     restartProxy,
     swapSlotExit,
+    testIrcThroughProxy,
+    mullvadIrcTesting,
+    mullvadIrcResults,
     setServerEgress,
     clearServerEgress,
   } from '../stores/mullvad';
@@ -41,6 +44,10 @@
   $effect(() => { restarting = $mullvadRestarting; });
   let swapping = $state($mullvadSwapping);
   $effect(() => { swapping = $mullvadSwapping; });
+  let ircTesting = $state($mullvadIrcTesting);
+  $effect(() => { ircTesting = $mullvadIrcTesting; });
+  let ircResults = $state($mullvadIrcResults);
+  $effect(() => { ircResults = $mullvadIrcResults; });
 
   let liveTab = $state('all');
   let expandedUsage = $state<Record<string, boolean>>({});
@@ -51,7 +58,15 @@
   let egressPick = $state<Record<string, string>>({});
   /// Per-slot target city for the "swap exit" control, keyed by slot label.
   let exitPick = $state<Record<string, string>>({});
-  let exitAsk = $state<{ label: string; locationId: string } | null>(null);
+  // `affected` carries the live-connection count so the confirm can say what
+  // the move costs; `force` is set once the operator has agreed to it.
+  let exitAsk = $state<{ label: string; locationId: string; affected: number } | null>(null);
+  /// Host the "Test IRC" probe dials through each slot. Defaults to the
+  /// first-party ircd; an operator chasing a Z-line points it at the network
+  /// that is refusing them.
+  let ircProbeHost = $state('irc.ircfiber.com');
+  /// Shown by the "Add exit" dialog — slots are provisioned at deploy time.
+  let showAddExit = $state(false);
   /// Catalog grouped by country for the swap <select>.
   const locationGroups = $derived.by(() => {
     const groups: { country: string; cities: { id: string; city: string }[] }[] = [];
@@ -67,14 +82,21 @@
   async function doSwapExit(label: string) {
     const locationId = exitPick[label] ?? '';
     if (!locationId) return;
-    exitAsk = { label, locationId };
+    const slot = (data?.pool ?? []).find((p) => p.label === label);
+    exitAsk = { label, locationId, affected: slot?.activeConns ?? 0 };
   }
   async function confirmSwapExit() {
     if (!exitAsk) return;
-    const { label, locationId } = exitAsk;
+    const { label, locationId, affected } = exitAsk;
     try {
-      await swapSlotExit(label, locationId);
-      toastSuccess(`Slot ${label} → ${cityName(locationId)} — switching…`);
+      // A slot carrying connections needs the operator's explicit override —
+      // the server refuses the unforced call with 409 + needsForce.
+      await swapSlotExit(label, locationId, affected > 0);
+      toastSuccess(
+        affected > 0
+          ? `Slot ${label} → ${cityName(locationId)} — ${affected} connection${affected === 1 ? '' : 's'} reconnecting`
+          : `Slot ${label} → ${cityName(locationId)} — switching…`
+      );
       exitPick[label] = '';
     } catch (e) {
       toastError((e as Error).message);
@@ -83,9 +105,42 @@
     }
   }
 
+  async function doIrcTest(label: string) {
+    try {
+      // The field takes `host` or `host:port` — a network on a non-standard
+      // plain port (or a local fixture ircd) is the common case when an
+      // operator is chasing a blocked exit.
+      const raw = (ircProbeHost || '').trim();
+      const colon = raw.lastIndexOf(':');
+      const host = colon > 0 ? raw.slice(0, colon) : raw;
+      const port = colon > 0 ? Number(raw.slice(colon + 1)) : undefined;
+      const res = await testIrcThroughProxy(label, host || undefined,
+        Number.isFinite(port) && port ? port : undefined);
+      if (res.registered) {
+        toastSuccess(`${label}: IRC OK via ${res.serverName || res.host} (${res.ms} ms)`);
+      } else {
+        toastError(`${label}: ${res.error || 'IRC unreachable'}`);
+      }
+    } catch (e) {
+      toastError((e as Error).message);
+    }
+  }
+
   let stop: (() => void) | null = null;
 
   const healthyCount = $derived((data?.pool ?? []).filter((p) => p.healthy).length);
+  /// Slots am.i.mullvad.net confirmed are exiting through a Mullvad relay.
+  /// This is the licence check: a healthy slot that reports false is going
+  /// out on the host's own IP, which means the tailnet Mullvad grant or a
+  /// licence seat is missing for that device.
+  const mullvadVerified = $derived((data?.pool ?? []).filter((p) => p.mullvadExit === true).length);
+  /// Suggests the next free single-letter-ish slot name for the add-exit
+  /// runbook, so the operator does not have to guess one that is unused.
+  const nextSlotLabel = $derived.by(() => {
+    const used = new Set((data?.pool ?? []).map((p) => p.label));
+    for (const c of ['de2', 'nl', 'se', 'uk', 'fr', 'ca', 'jp', 'au']) if (!used.has(c)) return c;
+    return `slot${(data?.pool?.length ?? 0) + 1}`;
+  });
   const sumPinned = $derived(
     data?.usage ? Object.values(data.usage).reduce((a, b) => a + (b.pinned ?? 0), 0) : 0
   );
@@ -187,6 +242,13 @@
     >
       Test all
     </button>
+    <button
+      type="button"
+      onclick={() => (showAddExit = true)}
+      class="ml-2 rounded-md border border-border px-3 py-1.5 text-xs font-semibold hover:bg-surface"
+    >
+      Add exit…
+    </button>
   {/snippet}
 </PageHeader>
 
@@ -197,9 +259,16 @@
 {/if}
 
 <!-- KPIs -->
-<div class="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+<div class="mb-6 grid grid-cols-2 gap-4 md:grid-cols-5">
   <KpiCard label="Total proxies" value={data?.pool?.length ?? '—'} loading={loading && !data} icon="🛡️" />
   <KpiCard label="Healthy" value={healthyCount} loading={loading && !data} icon="✅" tone={data && healthyCount < (data?.pool?.length ?? 0) ? 'warn' : 'success'} />
+  <KpiCard
+    label="Mullvad verified"
+    value={data ? `${mullvadVerified}/${data?.pool?.length ?? 0}` : '—'}
+    loading={loading && !data}
+    icon="🔐"
+    tone={data && mullvadVerified < (data?.pool?.length ?? 0) ? 'warn' : 'success'}
+  />
   <KpiCard label="Pinned networks" value={sumPinned} loading={loading && !data} icon="📌" />
   <KpiCard label="Active connections" value={sumActive} loading={loading && !data} icon="🔌" />
 </div>
@@ -215,6 +284,19 @@
   {#if !data?.pool?.length}
     <EmptyState icon="🛡️" title="No pool configured" description="Add mullvad_sidecars and redeploy engine. Pool is driven by IRCFIBER_MULLVAD_POOL env / /etc/ircfiber/engine/env-ovh." />
   {:else}
+    <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+      <label class="text-muted" for="mullvad-irc-probe-host">Test IRC target</label>
+      <input
+        id="mullvad-irc-probe-host"
+        class="w-56 rounded border border-border bg-surface px-2 py-1 font-mono text-[11px] text-text"
+        bind:value={ircProbeHost}
+        placeholder="irc.ircfiber.com or host:port"
+      />
+      <span class="text-muted">
+        port 6667 · each “Test IRC” dials this host through that slot and registers for real,
+        so a Z-lined or blocked exit shows up as a failure instead of “healthy”.
+      </span>
+    </div>
     <div class="overflow-x-auto">
       <table class="w-full text-sm">
         <thead>
@@ -224,6 +306,7 @@
             <th class="px-3 py-2">SOCKS URL</th>
             <th class="px-3 py-2">Resolved IP</th>
             <th class="px-3 py-2">Exit IP</th>
+            <th class="px-3 py-2">Mullvad</th>
             <th class="px-3 py-2">Location / ISP</th>
             <th class="px-3 py-2">Healthy</th>
             <th class="px-3 py-2">Swap exit</th>
@@ -255,6 +338,20 @@
               <td class="px-3 py-2 font-mono text-xs">{p.ip || '—'}</td>
               <td class="px-3 py-2 font-mono text-xs">{p?.tailscaleExitNode || p?.ipinfo?.ip || '—'}</td>
               <td class="px-3 py-2 text-xs">
+                {#if p.mullvadExit === true}
+                  <StatusBadge label="Mullvad" tone="success" size="sm" />
+                  {#if p.mullvadHostname}<div class="mt-1 font-mono text-[10px] text-muted">{p.mullvadHostname}</div>{/if}
+                {:else if p.healthy}
+                  <StatusBadge label="not Mullvad" tone="danger" size="sm" />
+                  <div class="mt-1 max-w-[18ch] text-[10px] text-muted"
+                       title="am.i.mullvad.net says this traffic did not leave through a Mullvad relay — the tailnet grant or a licence seat is missing for this device">
+                    {p.organization || 'host uplink'}
+                  </div>
+                {:else}
+                  <span class="text-muted">—</span>
+                {/if}
+              </td>
+              <td class="px-3 py-2 text-xs">
                 {#if p?.ipinfo?.city || p?.ipinfo?.country || p?.ipinfo?.loc || p?.ipinfo?.org}
                   <div class="font-medium">{p?.ipinfo?.city || p?.ipinfo?.loc?.split(',')[0] || '—'}{p?.ipinfo?.region ? `, ${p?.ipinfo?.region}` : ''} {p?.ipinfo?.country ? `(${p?.ipinfo?.country})` : ''}</div>
                   <div class="text-[10px] text-muted">{p?.ipinfo?.org || '—'}</div>
@@ -279,7 +376,7 @@
                     <select
                       class="max-w-[13rem] rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text"
                       bind:value={exitPick[p.label]}
-                      disabled={(p.activeConns ?? 0) > 0 || swapping.has(p.label) || p.state === 'retargeting'}
+                      disabled={swapping.has(p.label) || p.state === 'retargeting'}
                     >
                       <option value="">Move to…</option>
                       {#each locationGroups as g (g.country)}
@@ -295,9 +392,9 @@
                     <button
                       onclick={() => doSwapExit(p.label)}
                       class="rounded border border-border bg-surface-2 px-2 py-1 text-[11px] font-medium hover:border-primary/40 disabled:opacity-50"
-                      disabled={!exitPick[p.label] || (p.activeConns ?? 0) > 0 || swapping.has(p.label) || p.state === 'retargeting'}
+                      disabled={!exitPick[p.label] || swapping.has(p.label) || p.state === 'retargeting'}
                       title={(p.activeConns ?? 0) > 0
-                        ? `Carrying ${p.activeConns} live connection(s) — swapping would drop them`
+                        ? `Carrying ${p.activeConns} live connection(s) — they reconnect through the new city`
                         : 'Move this exit to another Mullvad city'}
                     >
                       {swapping.has(p.label) || p.state === 'retargeting' ? 'Switching…' : 'Swap'}
@@ -305,7 +402,7 @@
                   </div>
                   {#if (p.activeConns ?? 0) > 0}
                     <div class="mt-1 text-[10px] text-muted">
-                      in use by {p.activeConns} connection{p.activeConns === 1 ? '' : 's'} — free it first
+                      in use by {p.activeConns} connection{p.activeConns === 1 ? '' : 's'} — they reconnect on the new exit
                     </div>
                   {/if}
                 {/if}
@@ -320,6 +417,14 @@
                     {testing.has(p.label) ? 'Testing…' : 'Test'}
                   </button>
                   <button
+                    onclick={() => doIrcTest(p.label)}
+                    class="rounded border border-border bg-surface-2 px-2 py-1 text-[11px] font-medium hover:border-primary/40 disabled:opacity-50"
+                    disabled={ircTesting.has(p.label)}
+                    title={`SOCKS5 + real NICK/USER registration against ${ircProbeHost} through this exit`}
+                  >
+                    {ircTesting.has(p.label) ? 'Dialing…' : 'Test IRC'}
+                  </button>
+                  <button
                     onclick={() => (restartAsk = p.label)}
                     class="rounded border border-border bg-surface-2 px-2 py-1 text-[11px] font-medium hover:border-danger/40 disabled:opacity-50"
                     disabled={restarting.has(p.label) || (p.activeConns ?? 0) > 0}
@@ -330,11 +435,20 @@
                     {restarting.has(p.label) ? 'Restarting…' : 'Restart'}
                   </button>
                 </div>
+                {#if ircResults[p.label]}
+                  {@const r = ircResults[p.label]}
+                  <div class="mt-1 text-[10px] {r.registered ? 'text-success' : 'text-danger'}"
+                       title={r.welcome || r.error}>
+                    {r.registered
+                      ? `IRC ok · ${r.serverName || r.host} · ${r.ms} ms`
+                      : `IRC failed · ${(r.error || '').slice(0, 60)}`}
+                  </div>
+                {/if}
               </td>
             </tr>
             <!-- per-proxy usage collapsed row -->
             <tr class="border-b border-border/30 bg-bg/30">
-              <td colspan="9" class="px-3 py-2">
+              <td colspan="10" class="px-3 py-2">
                 <button
                   onclick={() => (expandedUsage[p.label] = !expandedUsage[p.label])}
                   class="text-[11px] font-medium text-primary hover:underline"
@@ -527,15 +641,85 @@
 <!-- Swap exit confirm -->
 <ConfirmDialog
   open={exitAsk !== null}
-  title="Move this exit?"
+  title={exitAsk && exitAsk.affected > 0 ? 'Move an exit that is in use?' : 'Move this exit?'}
   message={exitAsk
-    ? `Move slot ${exitAsk.label} to ${cityName(exitAsk.locationId)}? The sidecar's exit node is retargeted in place — the slot is idle, so no IRC connection is dropped. New connections pinned to the old city will land elsewhere until an exit is moved back.`
+    ? (exitAsk.affected > 0
+        ? `Move slot ${exitAsk.label} to ${cityName(exitAsk.locationId)}? ${exitAsk.affected} live IRC connection${exitAsk.affected === 1 ? '' : 's'} ${exitAsk.affected === 1 ? 'rides' : 'ride'} this exit — they are reconnected through ${cityName(exitAsk.locationId)} immediately (a few seconds of downtime each) instead of stalling on a path the sidecar no longer uses.`
+        : `Move slot ${exitAsk.label} to ${cityName(exitAsk.locationId)}? The sidecar's exit node is retargeted in place and the slot is idle, so no IRC connection is touched.`)
     : ''}
-  confirmLabel="Move exit"
-  tone="primary"
+  confirmLabel={exitAsk && exitAsk.affected > 0 ? 'Move and reconnect' : 'Move exit'}
+  tone={exitAsk && exitAsk.affected > 0 ? 'warn' : 'primary'}
   onConfirm={confirmSwapExit}
   onCancel={() => (exitAsk = null)}
 />
+
+<!-- Add exit: slots are deploy-provisioned, so this is a runbook, not a
+     button that pretends to create a container. The gateway has no docker
+     socket on purpose (see engine deploy role) and the Mullvad add-on grants
+     exit-node access per DEVICE, so a new sidecar also needs a free seat. -->
+{#if showAddExit}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+       role="presentation"
+       onclick={() => (showAddExit = false)}>
+    <div class="w-full max-w-2xl rounded-lg border border-border bg-surface shadow-2xl"
+         role="dialog" aria-modal="true" aria-labelledby="add-exit-title"
+         tabindex="-1"
+         onkeydown={(e) => { if (e.key === 'Escape') showAddExit = false; }}
+         onclick={(e) => e.stopPropagation()}>
+      <div class="border-b border-border px-5 py-4">
+        <h2 id="add-exit-title" class="text-base font-semibold text-heading">Add an exit</h2>
+      </div>
+      <div class="space-y-3 px-5 py-4 text-sm text-text">
+        <p>
+          You usually do not need one: each of the {data?.pool?.length ?? 0} slots can be moved to
+          any of the {data?.locations?.length ?? 0} Mullvad cities with <b>Swap</b> above, live.
+          Add a slot only to run more cities <i>at the same time</i>.
+        </p>
+        <p class="text-muted">
+          A slot is a tailscale sidecar container on the engine host plus a shared
+          control volume — created by the deploy, not from here (the gateway has no
+          docker socket by design). Each sidecar also consumes one Mullvad
+          <b>device</b> seat on the tailnet add-on; when the seats run out the new
+          sidecar comes up healthy but exits on the host's own IP, which the
+          <b>Mullvad</b> column above will show as “not Mullvad”.
+        </p>
+        <div>
+          <div class="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">
+            1 · add the slot to both inventories
+          </div>
+          <pre class="overflow-x-auto rounded border border-border bg-bg px-3 py-2 font-mono text-[11px] leading-relaxed">{`# site/deploy/inventories/production/host_vars/vps-efb4b52d.yml
+# engine/deploy/inventories/production/group_vars/all/vars.yml   (keep identical)
+mullvad_sidecars:
+${(data?.pool ?? []).map((p) => `  - { name: "${p.label}", exit_node: "<relay tailnet IP>", port: 1055 }`).join('\n')}
+  - { name: "${nextSlotLabel}", exit_node: "<relay tailnet IP>", port: 1055 }`}</pre>
+        </div>
+        <div>
+          <div class="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">
+            2 · deploy the engine (recreates the container set)
+          </div>
+          <pre class="overflow-x-auto rounded border border-border bg-bg px-3 py-2 font-mono text-[11px]">cd engine/deploy &amp;&amp; ansible-playbook playbooks/deploy-engine.yml -l vps-efb4b52d</pre>
+        </div>
+        <div>
+          <div class="mb-1 text-xs font-semibold uppercase tracking-wider text-muted">
+            3 · confirm the licence covers it
+          </div>
+          <p class="text-muted">
+            Come back here and hit <b>Test all</b>: the new slot must show
+            <b>Mullvad</b> (green) — that is am.i.mullvad.net confirming the traffic
+            left through a Mullvad relay. Then <b>Test IRC</b> proves it can actually
+            reach an ircd. “not Mullvad” means the tailnet ACL grant
+            (<code>nodeAttrs: mullvad</code>) or a device seat is missing.
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-2 border-t border-border px-5 py-3">
+        <button type="button"
+                class="rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs font-medium hover:bg-border"
+                onclick={() => (showAddExit = false)}>Close</button>
+      </div>
+    </div>
+  </div>
+{/if}
 <!-- Restart confirm -->
 <ConfirmDialog
   open={restartAsk !== null}
