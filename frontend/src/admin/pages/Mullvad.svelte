@@ -61,10 +61,11 @@
   // `affected` carries the live-connection count so the confirm can say what
   // the move costs; `force` is set once the operator has agreed to it.
   let exitAsk = $state<{ label: string; locationId: string; affected: number } | null>(null);
-  /// Host the "Test IRC" probe dials through each slot. Defaults to the
-  /// first-party ircd; an operator chasing a Z-line points it at the network
-  /// that is refusing them.
-  let ircProbeHost = $state('irc.ircfiber.com');
+  /// Host the "Test IRC" probe dials through each slot. Deliberately NOT
+  /// irc.ircfiber.com: our own address hairpins back to this host and the
+  /// SOCKS CONNECT always fails through an exit, which proves nothing. An
+  /// operator chasing a Z-line points this at the network refusing them.
+  let ircProbeHost = $state('irc.libera.chat:6667');
   /// Shown by the "Add exit" dialog — slots are provisioned at deploy time.
   let showAddExit = $state(false);
   /// Catalog grouped by country for the swap <select>.
@@ -290,11 +291,12 @@
         id="mullvad-irc-probe-host"
         class="w-56 rounded border border-border bg-surface px-2 py-1 font-mono text-[11px] text-text"
         bind:value={ircProbeHost}
-        placeholder="irc.ircfiber.com or host:port"
+        placeholder="irc.libera.chat:6667"
       />
       <span class="text-muted">
-        port 6667 · each “Test IRC” dials this host through that slot and registers for real,
-        so a Z-lined or blocked exit shows up as a failure instead of “healthy”.
+        each “Test IRC” dials this host through that slot and registers for real, so a
+        Z-lined or blocked exit shows up as a failure instead of “healthy”. Note
+        irc.ircfiber.com cannot be reached through an exit (it hairpins back here).
       </span>
     </div>
     <div class="overflow-x-auto">

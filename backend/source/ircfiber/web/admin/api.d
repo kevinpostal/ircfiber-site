@@ -2313,7 +2313,11 @@ package void apiMullvadIrcTest(HTTPServerRequest req, HTTPServerResponse res) {
     foreach (ref e; entries) if (e.label.toLower() == label) { ent = &e; break; }
     if (ent is null) { jsonError(res, 404, "unknown mullvad label: " ~ label); return; }
 
-    string host = "irc.ircfiber.com";
+    // NOT irc.ircfiber.com: our own ircd cannot be reached *through* a Mullvad
+    // exit — the public address hairpins back to this host and the SOCKS
+    // CONNECT fails (rep=1), which says nothing about the exit. A third-party
+    // network is the only meaningful default.
+    string host = "irc.libera.chat";
     ushort port = 6667;
     auto body = readJsonBody(req);
     if (body.type == Json.Type.object) {

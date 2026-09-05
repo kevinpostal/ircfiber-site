@@ -162,7 +162,9 @@ describe('Mullvad.svelte', () => {
     btn.click();
     await new Promise((r) => setTimeout(r, 120));
 
-    expect(mockedPost).toHaveBeenCalledWith('/api/admin/mullvad/de/irc-test', { host: 'irc.ircfiber.com' });
+    // The default target is a third-party network on purpose: our own ircd
+    // hairpins and can never be reached through an exit.
+    expect(mockedPost).toHaveBeenCalledWith('/api/admin/mullvad/de/irc-test', { host: 'irc.libera.chat', port: 6667 });
     expect(ui.toastSuccess).toHaveBeenCalledWith(expect.stringContaining('IRC OK via irc.ircfiber.com'));
     expect(document.body.innerText).toContain('IRC ok');
   });
