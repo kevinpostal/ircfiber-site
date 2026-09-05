@@ -1360,8 +1360,8 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 // /api/egress and the network create/update validation) so admin and users
 // agree on labels. `<name>@host:port` entries carry an explicit label.
 import ircfiber.egress : mullvadRawPool, parseMullvadPool, PoolEntry,
-    DIRECT_EGRESS_ID, EgressView, egressView, matchingSlot, normalizeEgressId,
-    isKnownEgressId;
+    DIRECT_EGRESS_ID, EgressSlot, EgressView, egressView, matchingSlot,
+    normalizeEgressId, isKnownEgressId;
 
 private struct _ContainerInfo { string container; string state; string status; string tailscaleExit; }
 
@@ -1933,6 +1933,25 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         buf.put("\"networkCount\":" ~ s.networkCount.to!string ~ ",");
         buf.put("\"healthy\":" ~ (s.healthy ? "true" : "false") ~ "}");
     }
+    buf.put("],");
+    // Pickable Mullvad cities, so the admin page can offer a slot swap.
+    // Empty when no slot is retargetable (nothing to swap to).
+    buf.put("\"locations\":[");
+    try {
+        if (redis !is null && serverRegistry !is null) {
+            auto view = egressView(redis, serverRegistry);
+            foreach (i, l; view.locations) {
+                if (i > 0) buf.put(",");
+                buf.put("{\"id\":\"" ~ l.id.escapeJson ~ "\",");
+                buf.put("\"country\":\"" ~ l.country.escapeJson ~ "\",");
+                buf.put("\"countryCode\":\"" ~ l.countryCode.escapeJson ~ "\",");
+                buf.put("\"city\":\"" ~ l.city.escapeJson ~ "\",");
+                buf.put("\"relays\":" ~ l.relays.to!string ~ "}");
+            }
+        }
+    } catch (Exception e) {
+        logWarn("mullvad status catalog failed: %s", e.msg);
+    }
     buf.put("]");
     buf.put("}}");
     auto responseStr = buf.data;
@@ -1971,6 +1990,81 @@ private bool _validateAdminEgressPin(string pin, HTTPServerResponse res,
         return false;
     }
     return true;
+}
+
+/// POST /api/admin/mullvad/:label/exit — move one slot to another Mullvad
+/// city. Body: `{"locationId": "se-sto"}`.
+///
+/// Only the engine can do this (the slot's tailscaled socket lives on the
+/// engine host), so this validates and forwards a `retargetEgress` control
+/// message to the engine that owns the slot. The result is observed through
+/// the slot registry — `GET /api/admin/mullvad/status` shows the slot go
+/// `retargeting` and then land on the new location, or carry an `error`.
+///
+/// Refuses a slot that is carrying live connections: swapping its exit would
+/// drop them. Free the slot (or wait out its hold) first.
+package void apiMullvadSlotExit(HTTPServerRequest req, HTTPServerResponse res,
+                                RedisStorage redis, ServerRegistry serverRegistry) {
+    import std.string : toLower, strip;
+    auto label = req.params["label"].strip().toLower();
+    if (label.length == 0) { jsonError(res, 400, "label required"); return; }
+    if (redis is null || serverRegistry is null) { jsonError(res, 503, "storage unavailable"); return; }
+
+    auto body = readJsonBody(req);
+    string locationId;
+    if (body.type == Json.Type.object && body["locationId"].type == Json.Type.string)
+        locationId = body["locationId"].get!string.strip().toLower();
+    if (locationId.length == 0) { jsonError(res, 400, "locationId required"); return; }
+
+    EgressView view;
+    try {
+        view = egressView(redis, serverRegistry);
+    } catch (Exception e) {
+        jsonError(res, 503, "egress state unavailable: " ~ e.msg);
+        return;
+    }
+    const(EgressSlot)* slot = null;
+    foreach (i, ref s; view.slots) if (s.label == label) { slot = &view.slots[i]; break; }
+    if (slot is null) { jsonError(res, 404, "unknown slot: " ~ label); return; }
+    if (!slot.controllable) {
+        jsonError(res, 400, "Slot " ~ label ~ " is not retargetable — the engine cannot "
+            ~ "reach its tailscaled socket (sidecar on another host).");
+        return;
+    }
+    if (slot.activeConns > 0) {
+        jsonError(res, 409, "Slot " ~ label ~ " is carrying " ~ slot.activeConns.to!string
+            ~ " live connection" ~ (slot.activeConns == 1 ? "" : "s")
+            ~ " — swapping its exit would drop them. Free it first.");
+        return;
+    }
+    if (slot.locationId == locationId) {
+        jsonError(res, 409, "Slot " ~ label ~ " is already on " ~ locationId ~ ".");
+        return;
+    }
+    bool known = false;
+    foreach (l; view.locations) if (l.id == locationId) { known = true; break; }
+    if (!known) { jsonError(res, 400, "Unknown location: " ~ locationId); return; }
+
+    auto serverId = slot.serverId;
+    if (serverId.length == 0) { jsonError(res, 503, "slot has no owning engine"); return; }
+    try {
+        auto payload = Json.emptyObject;
+        payload["label"] = Json(label);
+        payload["locationId"] = Json(locationId);
+        auto msg = ControlMessage("retargetEgress", "", "", payload);
+        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+        redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+    } catch (Exception e) {
+        jsonError(res, 500, "could not queue retarget: " ~ e.msg);
+        return;
+    }
+    logInfo("Admin queued egress retarget: slot %s → %s on engine %s", label, locationId, serverId);
+    Json data = Json.emptyObject;
+    data["label"] = Json(label);
+    data["locationId"] = Json(locationId);
+    data["serverId"] = Json(serverId);
+    data["queued"] = Json(true);
+    jsonOk(res, data);
 }
 
 /// POST /api/admin/mullvad/:label/restart — docker restart sidecar

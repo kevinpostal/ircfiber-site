@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
-  import { addNetwork, updateNetwork, fetchEgress, type EgressInfo, type EgressSlot, type EgressLocation } from '../stores/api';
+  import { addNetwork, updateNetwork, fetchEgress, type EgressInfo, type EgressSlot } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { collapsedMap } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
@@ -89,17 +89,10 @@
     return out;
   });
 
-  /// Catalog grouped into one optgroup per country, in catalog order (the
-  /// gateway already sorts by country then city).
-  const locationGroups = $derived.by(() => {
-    const groups: { country: string; countryCode: string; cities: EgressLocation[] }[] = [];
-    for (const loc of egress?.locations ?? []) {
-      const last = groups[groups.length - 1];
-      if (last && last.countryCode === loc.countryCode) last.cities.push(loc);
-      else groups.push({ country: loc.country, countryCode: loc.countryCode, cities: [loc] });
-    }
-    return groups;
-  });
+  /// The catalog is deliberately NOT offered to users: a city no exit is on
+  /// requires retargeting a free slot, which fails whenever every slot is
+  /// busy. Users choose among the exits that are actually running; moving an
+  /// exit to another city is an admin action (Mullvad page).
 
   function slotLabel(s: EgressSlot): string {
     const where = s.city ? `${s.city}, ${s.country}` : s.label.toUpperCase();
@@ -117,12 +110,16 @@
   const egressLocked = $derived(
     host.trim().toLowerCase().replace(/\.$/, '') === 'irc.ircfiber.com'
   );
-  /// A location pin saved before the host became irc.ircfiber.com. Kept as a
-  /// disabled option so the select still shows what is stored (and the note
-  /// explains it is ignored) rather than silently rewriting the user's value.
-  const strandedPin = $derived(
-    egressLocked && egressNodeId.length > 0 && egressNodeId !== 'direct' ? egressNodeId : ''
-  );
+  /// A pin that the select cannot offer: a legacy country/city pin no exit is
+  /// on, or any location while the host is the first-party server. Rendered
+  /// as a disabled option so the stored value stays visible and is not
+  /// silently rewritten.
+  const unlistedPin = $derived.by(() => {
+    const p = egressNodeId;
+    if (!p || p === 'direct') return '';
+    if (egressLocked) return p;
+    return runningSlots.some((r) => r.pin === p) ? '' : p;
+  });
 
   $effect(() => {
     if (existing) {
@@ -496,7 +493,7 @@
           <tr>
             <th class="egress optional" colspan="2">
               <label for="add-network-egress">
-                Connect via <small class="explanation">— which address the IRC network sees. Pick a city if the network has banned (Z/G/K-lined) our usual address; Automatic tries every exit and fails over on its own.</small>
+                Connect via <small class="explanation">— which address the IRC network sees. Pick one of our running exits if the network has banned (Z/G/K-lined) our usual address; Automatic tries them all and fails over on its own.</small>
               </label>
             </th>
           </tr>
@@ -505,28 +502,16 @@
               <select id="add-network-egress" class="input" bind:value={egressNodeId}>
                 <option value="">Automatic — any healthy exit, fails over when banned</option>
                 <option value="direct">Direct — our own server address</option>
-                {#if strandedPin}
-                  <option value={strandedPin} disabled>
-                    {strandedPin} — not available for the IRC Fiber server
+                {#if unlistedPin}
+                  <option value={unlistedPin} disabled>
+                    {unlistedPin} — {egressLocked ? 'not available for the IRC Fiber server' : 'not running right now'}
                   </option>
                 {/if}
                 {#if !egressLocked}
-                  {#if runningSlots.length > 0}
-                    <optgroup label="Exits running now">
-                      {#each runningSlots as r (r.pin)}
-                        <option value={r.pin} disabled={r.slot.checkedAtMs > 0 && !r.slot.healthy}>
-                          {slotLabel(r.slot)}{r.slot.checkedAtMs > 0 && !r.slot.healthy ? ' — unavailable' : ''}
-                        </option>
-                      {/each}
-                    </optgroup>
-                  {/if}
-                  {#each locationGroups as g (g.countryCode)}
-                    <optgroup label={g.country}>
-                      <option value={g.countryCode}>Any city in {g.country}</option>
-                      {#each g.cities as loc (loc.id)}
-                        <option value={loc.id}>{loc.city}</option>
-                      {/each}
-                    </optgroup>
+                  {#each runningSlots as r (r.pin)}
+                    <option value={r.pin} disabled={r.slot.checkedAtMs > 0 && !r.slot.healthy}>
+                      {slotLabel(r.slot)}{r.slot.checkedAtMs > 0 && !r.slot.healthy ? ' — unavailable' : ''}
+                    </option>
                   {/each}
                 {/if}
               </select>
@@ -536,19 +521,20 @@
                   network, so an exit would have to loop back to us and the connection
                   falls through to the direct address anyway.
                 </p>
-                {#if strandedPin}
+                {#if unlistedPin}
                   <p class="fiberLockNote" style="margin: 4px 0 0; font-size: 12px; color: var(--text-muted, #888);">
-                    <span>The saved location <b>{strandedPin}</b> is ignored here — pick Automatic or Direct.</span>
+                    <span>The saved location <b>{unlistedPin}</b> is ignored here — pick Automatic or Direct.</span>
                   </p>
                 {/if}
               {:else if egressLoaded && (egress?.slots.length ?? 0) === 0}
                 <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
                   No proxy exits are configured on this server — only the direct address is available.
                 </p>
-              {:else if egress && egress.controllable && egress.freeSlots === 0}
+              {:else if unlistedPin}
                 <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
-                  All {egress.slotCount} exits are in use — locations already running are free to pick;
-                  a new location will connect via another exit until one frees up.
+                  This network is pinned to <b>{unlistedPin}</b>, which no exit is currently on —
+                  it will connect through another exit until one is moved there. An admin can
+                  swap an exit's city on the Mullvad page.
                 </p>
               {/if}
             </td>

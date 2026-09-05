@@ -72,6 +72,14 @@ export interface MullvadServerEgress {
   networkCount: number;
   healthy: boolean;
 }
+export interface MullvadLocation {
+  /** `<countryCode>-<cityCode>` — the value a slot swap targets. */
+  id: string;
+  country: string;
+  countryCode: string;
+  city: string;
+  relays: number;
+}
 export interface MullvadStatus {
   pool: MullvadProxy[] | null;
   count: number;
@@ -85,6 +93,9 @@ export interface MullvadStatus {
   liveConnectionsTotal: number;
   servers: MullvadServerEgress[] | null;
   serverEgress: MullvadServerEgress[] | null;
+  /** Mullvad cities a retargetable slot can be swapped to. Empty when no
+   *  slot is controllable (nothing to swap). */
+  locations?: MullvadLocation[] | null;
   warning?: string | null;
 }
 export interface MullvadTestResult {
@@ -102,6 +113,35 @@ export const mullvadError = writable<string | null>(null);
 export const mullvadTesting = writable<Set<string>>(new Set());
 export const mullvadRestarting = writable<Set<string>>(new Set());
 
+export const mullvadSwapping = writable<Set<string>>(new Set());
+
+/** Ask the engine that owns `label` to move that slot to `locationId`.
+ *  Refused server-side (409) while the slot carries live connections. The
+ *  slot registry then reports `state: "retargeting"` until it lands, so the
+ *  caller just refreshes status. */
+export async function swapSlotExit(label: string, locationId: string): Promise<void> {
+  const cur = get(mullvadSwapping);
+  cur.add(label);
+  mullvadSwapping.set(new Set(cur));
+  try {
+    await api.post(`/api/admin/mullvad/${encodeURIComponent(label)}/exit`, { locationId });
+    // Optimistic: show the slot as switching until the next poll confirms.
+    const st = get(mullvadStatus);
+    if (st?.pool) {
+      st.pool = st.pool.map((p) => (p.label === label ? { ...p, state: 'retargeting' } : p));
+      mullvadStatus.set({ ...st });
+    }
+    await fetchMullvadStatus(true);
+  } catch (e) {
+    const msg = e instanceof ApiError ? e.message : (e as Error).message;
+    mullvadError.set(msg);
+    throw e;
+  } finally {
+    const s = get(mullvadSwapping);
+    s.delete(label);
+    mullvadSwapping.set(new Set(s));
+  }
+}
 export async function fetchMullvadStatus(force = false): Promise<void> {
   void force;
   mullvadLoading.set(true);

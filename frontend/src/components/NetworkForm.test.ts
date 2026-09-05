@@ -133,27 +133,27 @@ describe('NetworkForm', () => {
     expect(ircState.networks[0].egressNodeId).toBe('');
   });
 
-  it('submits a city location pin from the catalog on add', async () => {
+  it('submits the location of a running exit on add', async () => {
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
-    // The catalog arrives asynchronously; the option only exists once loaded.
-    await expect.element(page.getByRole('option', { name: 'Los Angeles' })).toBeInTheDocument();
+    // The slot registry arrives asynchronously; the option only exists once loaded.
+    await expect.element(page.getByRole('option', { name: 'Stockholm, Sweden — idle' })).toBeInTheDocument();
     await userEvent.type(page.getByLabelText('Network name'), 'CityNet');
     await userEvent.type(page.getByLabelText('Hostname'), 'irc.city.net');
     await userEvent.type(page.getByLabelText('Nickname'), 'MyNick');
-    await userEvent.selectOptions(page.getByLabelText(/Connect via/), 'us-lax');
+    await userEvent.selectOptions(page.getByLabelText(/Connect via/), 'se-sto');
     await userEvent.click(page.getByRole('button', { name: 'Join network' }));
-    expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'us-lax' }));
+    expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'se-sto' }));
   });
 
-  it('offers a country pin for every catalogued country', async () => {
+  it('offers only the running exits — the city catalog is admin-only', async () => {
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
-    await expect.element(page.getByRole('option', { name: 'Any city in Sweden' })).toBeInTheDocument();
-    await userEvent.type(page.getByLabelText('Network name'), 'CountryNet');
-    await userEvent.type(page.getByLabelText('Hostname'), 'irc.country.net');
-    await userEvent.type(page.getByLabelText('Nickname'), 'MyNick');
-    await userEvent.selectOptions(page.getByLabelText(/Connect via/), 'se');
-    await userEvent.click(page.getByRole('button', { name: 'Join network' }));
-    expect(mockAddNetwork).toHaveBeenCalledWith(expect.objectContaining({ egressNodeId: 'se' }));
+    await expect.element(page.getByRole('option', { name: 'Berlin, Germany — 2 connections' })).toBeInTheDocument();
+    // The fixture catalogues us-lax and offers a Swedish country pin; neither
+    // may appear, because honouring them needs a retarget the user can't do.
+    // `as HTMLSelectElement`: known DOM node, needed to read `.options`.
+    const select = document.querySelector('#add-network-egress') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['', 'direct', 'de-ber', 'se-sto']);
+    expect(select.querySelectorAll('optgroup')).toHaveLength(0);
   });
 
   it('lists running exits with their live connection counts', async () => {
@@ -162,10 +162,17 @@ describe('NetworkForm', () => {
     await expect.element(page.getByRole('option', { name: 'Stockholm, Sweden — idle' })).toBeInTheDocument();
   });
 
-  it('warns when every exit is in use', async () => {
-    egressMock.current = { ...egressMock.base(), freeSlots: 0 };
-    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
-    await expect.element(page.getByText(/All 2 exits are in use/)).toBeInTheDocument();
+  it('explains a stored pin no exit is currently on', async () => {
+    const network = createNetwork({ name: 'Away', host: 'irc.away.net', nick: 'Me' });
+    network.egressNodeId = 'us-lax'; // in the catalog, but no slot is there
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await expect.element(page.getByText(/which no exit is currently on/)).toBeInTheDocument();
+    // `as HTMLOptionElement`: known DOM node, needed to read `.disabled`.
+    const unlisted = document.querySelector('#add-network-egress option[value="us-lax"]') as HTMLOptionElement;
+    expect(unlisted.textContent).toMatch(/not running right now/);
+    expect(unlisted.disabled).toBe(true);
+    await expect.element(page.getByLabelText(/Connect via/)).toHaveValue('us-lax');
   });
 
   it('offers a static (non-retargetable) exit by its slot label', async () => {
@@ -198,7 +205,7 @@ describe('NetworkForm', () => {
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
     // Locations are offered for a third-party host…
     await userEvent.type(page.getByLabelText('Hostname'), 'irc.other.net');
-    await expect.element(page.getByRole('option', { name: 'Any city in Sweden' })).toBeInTheDocument();
+    await expect.element(page.getByRole('option', { name: 'Stockholm, Sweden — idle' })).toBeInTheDocument();
     // …and disappear once the host is the first-party server.
     await userEvent.fill(page.getByLabelText('Hostname'), 'irc.ircfiber.com');
     await expect.element(page.getByText(/Exit locations don't apply to the IRC Fiber server/)).toBeInTheDocument();

@@ -17,7 +17,7 @@ import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiRemoveAssignment, apiEngineConfig, apiHostDisconnect, apiHostReconnect,
     apiHostDeleteNetwork, apiAssignmentDelete, apiRouting,
     apiFiberConfig, apiFiberConfigSet,
-    apiMullvadStatus, apiMullvadRestart, apiMullvadTest, apiMullvadTestAll,
+    apiMullvadStatus, apiMullvadRestart, apiMullvadTest, apiMullvadTestAll, apiMullvadSlotExit,
     apiMullvadServerEgressSet, apiMullvadServerEgressClear, apiNetworkEgressSet,
     apiUsersList, apiUsersBulkDelete, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete, apiRolesList,
     apiResetPassword,
@@ -107,6 +107,7 @@ final class AdminController {
         router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
         router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
         router.post("/api/admin/mullvad/:label/restart", &adminWrap!apiMullvadRestartRoute);
+        router.post("/api/admin/mullvad/:label/exit", &adminWrap!apiMullvadSlotExitRoute);
         router.post("/api/admin/mullvad/:label/test", &adminWrap!apiMullvadTestRoute);
         router.post("/api/admin/mullvad/test-all", &adminWrap!apiMullvadTestAllRoute);
         router.post("/api/admin/mullvad/server/:serverId/egress", &adminWrap!apiMullvadServerEgressSetRoute);
@@ -265,6 +266,7 @@ private:
     }
     void apiMullvadStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadStatus(req, res, redis, serverRegistry); }
     void apiMullvadRestartRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadRestart(req, res, redis, serverRegistry); }
+    void apiMullvadSlotExitRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadSlotExit(req, res, redis, serverRegistry); }
     void apiMullvadTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadTest(req, res); }
     void apiMullvadTestAllRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadTestAll(req, res); }
     void apiMullvadServerEgressSetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadServerEgressSet(req, res, redis, serverRegistry); }

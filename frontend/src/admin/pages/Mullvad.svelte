@@ -16,10 +16,12 @@
     mullvadError,
     mullvadTesting,
     mullvadRestarting,
+    mullvadSwapping,
     fetchMullvadStatus,
     testProxy,
     testAll,
     restartProxy,
+    swapSlotExit,
     setServerEgress,
     clearServerEgress,
   } from '../stores/mullvad';
@@ -37,6 +39,8 @@
   $effect(() => { error = $mullvadError; });
   $effect(() => { testing = $mullvadTesting; });
   $effect(() => { restarting = $mullvadRestarting; });
+  let swapping = $state($mullvadSwapping);
+  $effect(() => { swapping = $mullvadSwapping; });
 
   let liveTab = $state('all');
   let expandedUsage = $state<Record<string, boolean>>({});
@@ -45,6 +49,39 @@
   let egressAsk = $state<{ serverId: string; label: string } | null>(null);
   let clearAsk = $state<string | null>(null);
   let egressPick = $state<Record<string, string>>({});
+  /// Per-slot target city for the "swap exit" control, keyed by slot label.
+  let exitPick = $state<Record<string, string>>({});
+  let exitAsk = $state<{ label: string; locationId: string } | null>(null);
+  /// Catalog grouped by country for the swap <select>.
+  const locationGroups = $derived.by(() => {
+    const groups: { country: string; cities: { id: string; city: string }[] }[] = [];
+    for (const loc of data?.locations ?? []) {
+      const last = groups[groups.length - 1];
+      if (last && last.country === loc.country) last.cities.push({ id: loc.id, city: loc.city });
+      else groups.push({ country: loc.country, cities: [{ id: loc.id, city: loc.city }] });
+    }
+    return groups;
+  });
+  const cityName = (id: string) => data?.locations?.find((l) => l.id === id)?.city ?? id;
+
+  async function doSwapExit(label: string) {
+    const locationId = exitPick[label] ?? '';
+    if (!locationId) return;
+    exitAsk = { label, locationId };
+  }
+  async function confirmSwapExit() {
+    if (!exitAsk) return;
+    const { label, locationId } = exitAsk;
+    try {
+      await swapSlotExit(label, locationId);
+      toastSuccess(`Slot ${label} → ${cityName(locationId)} — switching…`);
+      exitPick[label] = '';
+    } catch (e) {
+      toastError((e as Error).message);
+    } finally {
+      exitAsk = null;
+    }
+  }
 
   let stop: (() => void) | null = null;
 
@@ -189,6 +226,7 @@
             <th class="px-3 py-2">Exit IP</th>
             <th class="px-3 py-2">Location / ISP</th>
             <th class="px-3 py-2">Healthy</th>
+            <th class="px-3 py-2">Swap exit</th>
             <th class="px-3 py-2">Actions</th>
           </tr>
         </thead>
@@ -230,6 +268,49 @@
                 {#if p.error}<div class="mt-1 max-w-[20ch] truncate text-[10px] text-danger" title={p.error}>{p.error.slice(0, 60)}</div>{/if}
               </td>
               <td class="px-3 py-2">
+                {#if p.controllable === false}
+                  <span class="text-[11px] text-muted" title="The engine cannot reach this sidecar's tailscaled socket">
+                    not retargetable
+                  </span>
+                {:else if (data?.locations?.length ?? 0) === 0}
+                  <span class="text-[11px] text-muted">no catalog</span>
+                {:else}
+                  <div class="flex items-center gap-1.5">
+                    <select
+                      class="max-w-[13rem] rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text"
+                      bind:value={exitPick[p.label]}
+                      disabled={(p.activeConns ?? 0) > 0 || swapping.has(p.label) || p.state === 'retargeting'}
+                    >
+                      <option value="">Move to…</option>
+                      {#each locationGroups as g (g.country)}
+                        <optgroup label={g.country}>
+                          {#each g.cities as c (c.id)}
+                            <option value={c.id} disabled={c.id === p.locationId}>
+                              {c.city}{c.id === p.locationId ? ' (current)' : ''}
+                            </option>
+                          {/each}
+                        </optgroup>
+                      {/each}
+                    </select>
+                    <button
+                      onclick={() => doSwapExit(p.label)}
+                      class="rounded border border-border bg-surface-2 px-2 py-1 text-[11px] font-medium hover:border-primary/40 disabled:opacity-50"
+                      disabled={!exitPick[p.label] || (p.activeConns ?? 0) > 0 || swapping.has(p.label) || p.state === 'retargeting'}
+                      title={(p.activeConns ?? 0) > 0
+                        ? `Carrying ${p.activeConns} live connection(s) — swapping would drop them`
+                        : 'Move this exit to another Mullvad city'}
+                    >
+                      {swapping.has(p.label) || p.state === 'retargeting' ? 'Switching…' : 'Swap'}
+                    </button>
+                  </div>
+                  {#if (p.activeConns ?? 0) > 0}
+                    <div class="mt-1 text-[10px] text-muted">
+                      in use by {p.activeConns} connection{p.activeConns === 1 ? '' : 's'} — free it first
+                    </div>
+                  {/if}
+                {/if}
+              </td>
+              <td class="px-3 py-2">
                 <div class="flex items-center gap-1.5">
                   <button
                     onclick={() => doTest(p.label)}
@@ -253,7 +334,7 @@
             </tr>
             <!-- per-proxy usage collapsed row -->
             <tr class="border-b border-border/30 bg-bg/30">
-              <td colspan="8" class="px-3 py-2">
+              <td colspan="9" class="px-3 py-2">
                 <button
                   onclick={() => (expandedUsage[p.label] = !expandedUsage[p.label])}
                   class="text-[11px] font-medium text-primary hover:underline"
@@ -443,6 +524,18 @@
   {/if}
 </Card>
 
+<!-- Swap exit confirm -->
+<ConfirmDialog
+  open={exitAsk !== null}
+  title="Move this exit?"
+  message={exitAsk
+    ? `Move slot ${exitAsk.label} to ${cityName(exitAsk.locationId)}? The sidecar's exit node is retargeted in place — the slot is idle, so no IRC connection is dropped. New connections pinned to the old city will land elsewhere until an exit is moved back.`
+    : ''}
+  confirmLabel="Move exit"
+  tone="primary"
+  onConfirm={confirmSwapExit}
+  onCancel={() => (exitAsk = null)}
+/>
 <!-- Restart confirm -->
 <ConfirmDialog
   open={restartAsk !== null}
