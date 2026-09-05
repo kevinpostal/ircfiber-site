@@ -134,45 +134,7 @@ describe('ChannelContextMenu', () => {
     expect(archiveLi?.getAttribute('style')?.includes('display: none')).toBe(true);
   });
 
-  it('persists "showUnread" toggle so it survives a refresh', async () => {
-    const network = createNetwork({ networkId: 'net1' });
-    ircState.networks.push(network);
-    ircState.activeBuffer.networkId = network.networkId;
-    const buf = createBuffer({ name: '#chan' });
-    render(ChannelContextMenu, {
-      props: { x: 100, y: 100, buf, onClose: vi.fn(), onToggleMembers: vi.fn(), memberPanelOpen: false },
-    });
-
-    // Initially checked (default)
-    const button = page.getByRole('button', { name: /Show unread message indicator/ }).element() as HTMLButtonElement;
-    expect(button.getAttribute('aria-pressed')).toBe('true');
-
-    // Click to toggle off
-    await userEvent.click(button);
-    expect(button.getAttribute('aria-pressed')).toBe('false');
-
-    // Persisted in the prefs map
-    expect(bufferPrefsMap['net1:#chan']?.showUnread).toBe(false);
-  });
-
-  it('reads "showUnread" from persisted prefs on mount', async () => {
-    // Simulate a previous session having toggled showUnread off
-    bufferPrefsMap['net1:#chan'] = { showUnread: false };
-
-    const network = createNetwork({ networkId: 'net1' });
-    ircState.networks.push(network);
-    ircState.activeBuffer.networkId = network.networkId;
-    const buf = createBuffer({ name: '#chan' });
-    render(ChannelContextMenu, {
-      props: { x: 100, y: 100, buf, onClose: vi.fn(), onToggleMembers: vi.fn(), memberPanelOpen: false },
-    });
-
-    const button = page.getByRole('button', { name: /Show unread message indicator/ }).element() as HTMLButtonElement;
-    // Should reflect the persisted (off) state, not the default (on)
-    expect(button.getAttribute('aria-pressed')).toBe('false');
-  });
-
-  it('"Show unread count" defaults on, persists off, and is disabled while the indicator is off', async () => {
+  it('"Show unread count" defaults on and persists off', async () => {
     const network = createNetwork({ networkId: 'net1' });
     ircState.networks.push(network);
     ircState.activeBuffer.networkId = network.networkId;
@@ -188,11 +150,32 @@ describe('ChannelContextMenu', () => {
     await userEvent.click(count);
     expect(count.getAttribute('aria-pressed')).toBe('false');
     expect(bufferPrefsMap['net1:#chan']?.showUnreadCount).toBe(false);
+  });
 
-    // Turning the indicator off disables the count toggle (implied off).
-    const indicator = page.getByRole('button', { name: /Show unread message indicator/ }).element() as HTMLButtonElement;
-    await userEvent.click(indicator);
-    expect(count.disabled).toBe(true);
+  it('reads "showUnreadCount" from persisted prefs on mount', async () => {
+    bufferPrefsMap['net1:#chan'] = { showUnreadCount: false };
+
+    const network = createNetwork({ networkId: 'net1' });
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = network.networkId;
+    const buf = createBuffer({ name: '#chan' });
+    render(ChannelContextMenu, {
+      props: { x: 100, y: 100, buf, onClose: vi.fn(), onToggleMembers: vi.fn(), memberPanelOpen: false },
+    });
+
+    const count = page.getByRole('button', { name: /Show unread count/ }).element() as HTMLButtonElement;
+    expect(count.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('no longer offers a separate unread-indicator toggle', async () => {
+    const network = createNetwork({ networkId: 'net1' });
+    ircState.networks.push(network);
+    ircState.activeBuffer.networkId = network.networkId;
+    const buf = createBuffer({ name: '#chan' });
+    render(ChannelContextMenu, {
+      props: { x: 100, y: 100, buf, onClose: vi.fn(), onToggleMembers: vi.fn(), memberPanelOpen: false },
+    });
+    expect(document.querySelector('#channelContextMenu li.trackUnread')).toBeNull();
   });
 
   it('Leave sends PART without removing the buffer', async () => {

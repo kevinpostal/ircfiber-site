@@ -241,17 +241,16 @@ describe('Sidebar', () => {
     expect(item?.classList.contains('activeBadge')).toBe(false);
   });
 
-  it('showUnread=false renders ignoredUnread instead of unread', async () => {
+  it('always emphasizes an unseen buffer (unread class, never ignoredUnread)', async () => {
     const net = createNetwork({ networkId: 'net1' });
     net.buffers.push(createBuffer({ name: '#general', unseen: true }));
     ircState.networks.push(net);
-    bufferPrefsMap['net1:#general'] = { showUnread: false };
 
     render(Sidebar, { props: { onSwitchBuffer: vi.fn(), onAddNetwork: vi.fn() } });
 
     const item = document.querySelector('.buffer-item');
-    expect(item?.classList.contains('unread')).toBe(false);
-    expect(item?.classList.contains('ignoredUnread')).toBe(true);
+    expect(item?.classList.contains('unread')).toBe(true);
+    expect(item?.classList.contains('ignoredUnread')).toBe(false);
   });
 
   it('showUnreadCount=false keeps bold/border but drops the plain count; mentions still count', async () => {

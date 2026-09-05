@@ -26,7 +26,7 @@
     resetPendingState,
     isUserDisconnected,
     isMessageUnseen, setLastSeenMessage, readBuffer, markAllAsRead,
-    isTrackingUnread, dirtySeenEids, requestChannelList
+    dirtySeenEids, requestChannelList
   } from './stores/ircStore.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
@@ -723,7 +723,6 @@ let showNetworkForm: boolean = $state(false);
       const net = ircState.networks.find(n => n.networkId === cand.networkId);
       const buf = net?.buffers.find(b => b.name === cand.bufferName);
       if (!buf || !buf.unseen) continue;
-      if (!isTrackingUnread(cand.networkId, cand.bufferName) && buf.unseenHighlights.length === 0) continue;
       switchToBuffer(cand.networkId, cand.bufferName);
       return;
     }

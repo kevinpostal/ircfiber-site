@@ -83,7 +83,6 @@ describe('ServerLogContextMenu', () => {
       'Collapse',
       'Delete active private messages…',
       'Delete…',
-      'Show unread message indicator',
       'Mark as read automatically',
       'Notifications',
       'Mentions only',

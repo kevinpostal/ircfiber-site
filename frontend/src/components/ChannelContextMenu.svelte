@@ -218,7 +218,6 @@
   const prefs = $derived(getBufferPrefs(networkId, buf.name));
   const toggles = $state({
     showMembers: memberPanelOpen,
-    showUnread: prefs.showUnread ?? true,
     showUnreadCount: prefs.showUnreadCount ?? true,
     markAsRead: prefs.markAsRead ?? true,
     notifyAll: prefs.notifyAll ?? false,
@@ -240,7 +239,6 @@
   // or another tab (storage event), keep the menu UI in sync while it's open.
   // Without this, toggles would stay stuck at the mount-time snapshot.
   $effect(() => {
-    toggles.showUnread = prefs.showUnread ?? true;
     toggles.showUnreadCount = prefs.showUnreadCount ?? true;
     toggles.markAsRead = prefs.markAsRead ?? true;
     toggles.notifyAll = prefs.notifyAll ?? false;
@@ -298,8 +296,7 @@
         // Persist all other toggles per-buffer so they survive a refresh
         setBufferPref(networkId, buf.name, key, toggles[key]);
         // Muting suppresses highlights (IRCCloud shouldMuteNotifications);
-        // `unseen` is untouched. showUnread=false only changes the class
-        // rendered (ignoredUnread), so nothing to clear there.
+        // `unseen` is untouched.
         if (key === 'mute' && toggles[key] === true) clearUnseenHighlightsUntil(networkId, buf.name, Infinity);
         // Sync to server for cross-device realtime propagation
         updateBufferPrefs(networkId, buf.name, { [key]: toggles[key] })
@@ -364,14 +361,9 @@
           {#if toggles.showMembers}<i class="fa fa-check"></i>{/if}Show members
         </button>
       </li>
-      <li class="trackUnread" class:enabled={toggles.showUnread}>
-        <button class="contextMenu__item unread" aria-pressed={toggles.showUnread} onclick={() => toggle('showUnread')}>
-          {#if toggles.showUnread}<i class="fa fa-check"></i>{/if}Show unread message indicator
-        </button>
-      </li>
-      <li class="showUnreadCount" class:enabled={toggles.showUnreadCount && toggles.showUnread} aria-disabled={!toggles.showUnread}>
-        <button class="contextMenu__item unreadCount" class:contextMenu__item--disabled={!toggles.showUnread} disabled={!toggles.showUnread} aria-pressed={toggles.showUnreadCount} onclick={() => toggle('showUnreadCount')}>
-          {#if toggles.showUnreadCount && toggles.showUnread}<i class="fa fa-check"></i>{/if}Show unread count
+      <li class="showUnreadCount" class:enabled={toggles.showUnreadCount}>
+        <button class="contextMenu__item unreadCount" aria-pressed={toggles.showUnreadCount} onclick={() => toggle('showUnreadCount')}>
+          {#if toggles.showUnreadCount}<i class="fa fa-check"></i>{/if}Show unread count
         </button>
       </li>
       <li class="markAsReadOnSelect" class:enabled={toggles.markAsRead}>

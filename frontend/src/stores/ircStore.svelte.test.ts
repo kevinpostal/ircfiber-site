@@ -1425,10 +1425,10 @@ describe('read tracking helpers', () => {
 		expect(getUnseenMessageStats()).toBe(2);
 		expect(getUnseenBuffers().map(x => x.buf.name)).toEqual(['#a', '#b']);
 
-		// showUnread=false drops a buffer unless it carries highlights.
-		bufferPrefsMap['net1:#a'] = { showUnread: false };
-		bufferPrefsMap['net1:#b'] = { showUnread: false };
-		expect(getUnseenBuffers().map(x => x.buf.name)).toEqual(['#b']);
+		// Unread is always tracked now: a per-buffer pref cannot drop an
+		// unseen buffer from the list.
+		bufferPrefsMap['net1:#a'] = { showUnreadCount: false };
+		expect(getUnseenBuffers().map(x => x.buf.name)).toEqual(['#a', '#b']);
 
 		liveBuf('net1', '#a')!.unseen = false;
 		liveBuf('net1', '#b')!.unseen = false;

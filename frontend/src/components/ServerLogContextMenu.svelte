@@ -195,7 +195,6 @@
 
   const prefs = $derived(getBufferPrefs(networkId, '_server'));
   const toggles = $state({
-    showUnread: prefs.showUnread ?? true,
     markAsRead: prefs.markAsRead ?? true,
     mute: prefs.mute ?? false,
     notifyAll: prefs.notifyAll ?? false,
@@ -203,7 +202,6 @@
     formatColor: prefs.formatColor ?? true,
   });
   $effect(() => {
-    toggles.showUnread = prefs.showUnread ?? true;
     toggles.markAsRead = prefs.markAsRead ?? true;
     toggles.mute = prefs.mute ?? false;
     toggles.notifyAll = prefs.notifyAll ?? false;
@@ -284,11 +282,6 @@
     </ul>
     <hr>
     <ul class="actions" style="">
-      <li class="trackUnread" class:enabled={toggles.showUnread}>
-        <button class="contextMenu__item unread" aria-pressed={toggles.showUnread} onclick={() => toggle('showUnread')}>
-          {#if toggles.showUnread}<i class="fa fa-check"></i>{/if}Show unread message indicator
-        </button>
-      </li>
       <li class="markAsReadOnSelect" class:enabled={toggles.markAsRead}>
         <button class="contextMenu__item readOnSelect" aria-pressed={toggles.markAsRead} onclick={() => toggle('markAsRead')}>
           {#if toggles.markAsRead}<i class="fa fa-check"></i>{/if}Mark as read automatically

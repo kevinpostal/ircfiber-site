@@ -307,14 +307,14 @@ export function getIsServerBuffer(): boolean {
   return ircState.activeBuffer.bufferName === '_server';
 }
 
-/** IRCCloud `session.unseenBuffers`: buffers that are unseen and either
- *  tracked or carrying highlights. `_server` never participates. */
+/** IRCCloud `session.unseenBuffers`: every unseen buffer. `_server` never
+ *  participates. */
 export function getUnseenBuffers(): Array<{ net: Network; buf: Buffer }> {
   const out: Array<{ net: Network; buf: Buffer }> = [];
   for (const net of ircState.networks) {
     for (const buf of net.buffers) {
       if (buf.name === '_server' || !buf.unseen) continue;
-      if (isTrackingUnread(net.networkId, buf.name) || buf.unseenHighlights.length > 0) out.push({ net, buf });
+      out.push({ net, buf });
     }
   }
   return out;
@@ -1427,15 +1427,12 @@ export function isImportantMessage(msg: IRCMessage, net: Network): boolean {
   return false;
 }
 
-export function isTrackingUnread(networkId: string, bufferName: string): boolean {
-  return getBufferPrefs(networkId, bufferName).showUnread !== false;
-}
-
-/** Fiber "Show unread count": plain-message count in the red badge.
- *  Implies the indicator itself is on; mention counts are unaffected. */
+/** Fiber-only "Show unread count": the plain-message count in the red
+ *  sidebar badge. IRCCloud has no plain-message count (its badge shows
+ *  mention/highlight counts only) — this toggle is a Fiber extension.
+ *  Mention/highlight counts are always shown regardless of this pref. */
 export function showsUnreadCount(networkId: string, bufferName: string): boolean {
-  const p = getBufferPrefs(networkId, bufferName);
-  return p.showUnread !== false && p.showUnreadCount !== false;
+  return getBufferPrefs(networkId, bufferName).showUnreadCount !== false;
 }
 
 /** IRCCloud `Message.isHighlightable()`. */
@@ -1444,7 +1441,7 @@ export function isHighlightableMessage(msg: IRCMessage, net: Network, buf: Buffe
   const prefs = getBufferPrefs(net.networkId, buf.name);
   if (prefs.mute) return false;
   if (msg.highlight || checkHighlight(msg, net)) return true;
-  if (buf.type === 'query' && isTrackingUnread(net.networkId, buf.name) && msg.command !== 'NOTICE') return true;
+  if (buf.type === 'query' && msg.command !== 'NOTICE') return true;
   return msg.command === 'INVITE' || msg.command === 'WALLOPS';
 }
 

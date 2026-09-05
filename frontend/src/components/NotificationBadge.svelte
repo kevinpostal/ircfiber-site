@@ -5,7 +5,7 @@
   //     N    = Σ unseen highlights; "+ " when the current buffer is the
   //            (tracked) unseen one, "* " when another buffer is unseen.
   //   favicon: the site icon with a red dot when any highlight is unseen.
-  import { ircState, getActiveNetwork, getUnseenMessageStats, isTrackingUnread } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getUnseenMessageStats } from '../stores/ircStore.svelte';
 
   let titleTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -22,7 +22,7 @@
       if (stats) prefix = `(${stats}) `;
       else {
         const cur = net?.buffers.find(b => b.name === bufferName);
-        prefix = cur && bufferName !== '_server' && isTrackingUnread(net!.networkId, bufferName) && cur.unseen ? '+ ' : '* ';
+        prefix = cur && bufferName !== '_server' && cur.unseen ? '+ ' : '* ';
       }
     }
     if (ircState.me && !ircState.wsConnected) prefix += '(Offline) ';

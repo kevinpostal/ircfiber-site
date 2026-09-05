@@ -237,19 +237,19 @@ describe('cross-tab sync (storage event)', () => {
 	});
 
 	it('updates bufferPrefsMap when "ircfiber:bufferPrefs" changes in another tab', () => {
-		// Simulate another tab toggling "Show unread message indicator" off
+		// Simulate another tab toggling "Show unread count" off
 		fireStorageEvent(
 			'ircfiber:bufferPrefs',
-			JSON.stringify({ 'net1:#chan': { showUnread: false } })
+			JSON.stringify({ 'net1:#chan': { showUnreadCount: false } })
 		);
 		flushSync();
 
-		expect(bufferPrefsMap['net1:#chan']?.showUnread).toBe(false);
-		expect(getBufferPrefs('net1', '#chan').showUnread).toBe(false);
+		expect(bufferPrefsMap['net1:#chan']?.showUnreadCount).toBe(false);
+		expect(getBufferPrefs('net1', '#chan').showUnreadCount).toBe(false);
 	});
 
 	it('clears bufferPrefsMap when "ircfiber:bufferPrefs" is removed in another tab', () => {
-		bufferPrefsMap['net1:#chan'] = { showUnread: false };
+		bufferPrefsMap['net1:#chan'] = { showUnreadCount: false };
 		fireStorageEvent('ircfiber:bufferPrefs', null);
 		flushSync();
 
@@ -357,7 +357,7 @@ describe('cross-tab sync (storage event)', () => {
 	});
 
 	it('end-to-end: toggle in tab A is visible to tab B via getBufferPrefs', () => {
-		// Tab A user toggles "Show unread message indicator" off for #chan.
+		// Tab A user toggles "Show unread count" off for #chan.
 		// This is the full flow: the component calls setBufferPref → state
 		// changes → $effect writes to localStorage → storage event fires in
 		// other tabs → other tabs update their reactive map.
@@ -365,7 +365,7 @@ describe('cross-tab sync (storage event)', () => {
 		// We simulate the storage event reaching tab B by reading what tab A
 		// would have written. (In a real browser, tab A's $effect writes to
 		// localStorage and the browser dispatches a StorageEvent to tab B.)
-		bufferPrefsMap['net1:#chan'] = { showUnread: false };
+		bufferPrefsMap['net1:#chan'] = { showUnreadCount: false };
 		flushSync();
 
 		// Simulate the storage event that tab B would receive
@@ -373,7 +373,7 @@ describe('cross-tab sync (storage event)', () => {
 		flushSync();
 
 		// Tab B now sees the updated pref
-		expect(getBufferPrefs('net1', '#chan').showUnread).toBe(false);
+		expect(getBufferPrefs('net1', '#chan').showUnreadCount).toBe(false);
 	});
 
 	it('surgically updates membersCollapsedMap without replacing the whole object', () => {

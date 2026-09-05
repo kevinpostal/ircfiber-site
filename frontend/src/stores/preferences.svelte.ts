@@ -305,9 +305,8 @@ export function setShowMemberPrefixes(value: boolean): void {
   setStorageItem('ircfiber:showMemberPrefixes', value);
 }
 
-// Per-buffer channel preferences (showUnread, mute, formatColor, etc.)
+// Per-buffer channel preferences (showUnreadCount, mute, formatColor, etc.)
 export interface BufferPrefs {
-  showUnread?: boolean;
   /** Red badge with the unseen message count (mentions always show theirs). Default true. */
   showUnreadCount?: boolean;
   markAsRead?: boolean;

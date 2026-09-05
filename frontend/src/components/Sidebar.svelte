@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, isTrackingUnread, showsUnreadCount, setReorderMode } from '../stores/ircStore.svelte';
+  import { ircState, showsUnreadCount, setReorderMode } from '../stores/ircStore.svelte';
   import SidebarIndicators from './SidebarIndicators.svelte';
   import { isFiberServerDown as isServerDown } from '../lib/fiberServer';
   import { archivedMap, pinnedMap, pinnedOrder, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
@@ -202,14 +202,12 @@
 
 {#snippet bufferRow(net: Network, buf: Buffer, extraClasses: string)}
   {@const isActive = net.networkId === ircState.activeBuffer.networkId && buf.name === ircState.activeBuffer.bufferName}
-  {@const tracking = isTrackingUnread(net.networkId, buf.name)}
   {@const badgeCount = buf.unseenHighlights.length > 0 ? buf.unseenHighlights.length : (buf.unseen && showsUnreadCount(net.networkId, buf.name) ? buf.unseenCount : 0)}
   <li role="presentation"
       class="buffer buffer-item {extraClasses}"
       class:active={isActive}
       class:selected={isActive}
-      class:unread={tracking && buf.unseen}
-      class:ignoredUnread={!tracking && buf.unseen}
+      class:unread={buf.unseen}
       class:activeBadge={badgeCount > 0}
       class:secret={buf.modeFlags?.secret}
       class:private={buf.modeFlags?.private}
@@ -306,7 +304,7 @@
       {@const net = item.net}
       {@const isActiveNet = ircState.activeBuffer.networkId === net.networkId && ircState.activeBuffer.bufferName === '_server'}
       {@const collapsed = !!collapsedMap[net.networkId]}
-      {@const totalUnread = collapsed && net.buffers.some(b => b.name !== '_server' && b.unseen && isTrackingUnread(net.networkId, b.name))}
+      {@const totalUnread = collapsed && net.buffers.some(b => b.name !== '_server' && b.unseen)}
       {@const totalHighlights = net.buffers.reduce((s, b) => s + ((b.name !== '_server' && b.unseen) ? b.unseenHighlights.length : 0), 0)}
       {@const totalBadge = totalHighlights > 0 ? totalHighlights : net.buffers.reduce((s, b) => s + ((b.name !== '_server' && b.unseen && showsUnreadCount(net.networkId, b.name)) ? b.unseenCount : 0), 0)}
       <div class="network connection" class:connected={net.connected} class:disconnected={!net.connected}
