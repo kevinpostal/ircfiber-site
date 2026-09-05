@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { untrack } from 'svelte';
 import { shouldBypassBatcher, unpackEvent, processIrcEvent } from './messageHandler';
-import type { IRCMessage } from '../types';
+import type { IRCMessage, WhoisData } from '../types';
 import { ircState } from '../stores/ircStore.svelte';
 import { createNetwork, createBuffer, createMessage } from '../test/factories';
 
@@ -256,5 +256,62 @@ describe('query case convergence (nickserv vs NickServ)', () => {
     const queries = net.buffers.filter((b) => b.type === 'query');
     expect(queries).toHaveLength(1);
     expect(queries[0].name).toBe('robert');
+  });
+});
+
+// WHOIS answers no longer render in the server log (IRCCloud keeps its
+// `whois_*` types in `unrendered_messages`), so every line a network invents
+// for itself must reach the overlay or it is lost.
+describe('WHOIS accumulation feeds the overlay', () => {
+  beforeEach(() => {
+    ircState.networks.length = 0;
+    ircState.messages = {};
+  });
+
+  function whoisRun(lines: Array<Record<string, unknown>>) {
+    // The dispatcher needs the owning network to tell "us" from the subject.
+    const net = createNetwork({ networkId: 'n1', name: 'libera', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: '_server' }));
+    ircState.networks.push(net);
+    const accum = {
+      whoisAcc: {
+        nick: '', user: '', host: '', realname: '', server: '', serverInfo: '',
+        channels: [] as string[], idle: 0, signon: 0, account: '', secure: false, away: '',
+      },
+      whoisAccs: new Map(),
+      banAcc: [],
+      banTargetChannel: '',
+    };
+    let last: unknown;
+    for (const l of lines) {
+      last = processIrcEvent(l, { value: 0 }, accum as never, { switchToBuffer: () => {} }, () => {});
+    }
+    return { accum, last };
+  }
+
+  it('keeps the subject nick, account and network-specific lines', () => {
+    // Wire shapes from irc.supernets.org, 2026-09-05: the subject nick is a
+    // LEADING parameter, so `params[1]`, never `params[0]` (that is us).
+    const { last } = whoisRun([
+      { c: '311', p: ['me', 'maknho', '~maknho', 'B39D8C93.IP', '*'], x: 'maknho', network: 'libera' },
+      { c: '320', p: ['me', 'maknho'], x: 'is keepin it 100', network: 'libera' },
+      { c: '378', p: ['me', 'maknho'], x: 'is connecting from *@1.2.3.4', network: 'libera' },
+      { c: '330', p: ['me', 'maknho', 'maknhoAcct'], x: 'is logged in as', network: 'libera' },
+      { c: '318', p: ['me', 'maknho'], x: 'End of /WHOIS list.', network: 'libera' },
+    ]);
+    // 318 closes the block and hands the finished record to the overlay.
+    const w = (last as { whoisData?: WhoisData }).whoisData as WhoisData;
+    expect(w.nick).toBe('maknho');
+    expect(w.account).toBe('maknhoAcct');
+    expect(w.special).toEqual(['is keepin it 100', 'is connecting from *@1.2.3.4']);
+  });
+
+  it('never repeats the same special line when a WHOIS is answered twice', () => {
+    const { last } = whoisRun([
+      { c: '320', p: ['me', 'maknho'], x: 'is keepin it 100', network: 'libera' },
+      { c: '320', p: ['me', 'maknho'], x: 'is keepin it 100', network: 'libera' },
+      { c: '318', p: ['me', 'maknho'], x: 'End of /WHOIS list.', network: 'libera' },
+    ]);
+    expect((last as { whoisData?: WhoisData }).whoisData?.special).toEqual(['is keepin it 100']);
   });
 });

@@ -315,4 +315,58 @@ describe('ServerLog', () => {
     await tick();
     expect(document.querySelector('.row.phase.live')).not.toBeNull();
   });
+  // Wire capture from irc.supernets.org, prod `_server` buffer 2026-09-05.
+  // UnrealIRCd addresses us first and repeats the trailing as the last
+  // parameter, so a trailing-only render loses the count / host / nick and
+  // produced rows like "operator(s) online" and "End of /WHOIS list.".
+  const SUPERNETS = [
+    { command: '004', params: ['Zodifag', 'openwater.supernets.org', 'DangerousIRCd-6.6.6', 'UnrealIRCd-6.1.10', 'diopqrstxzBDGHIRSTZ'], text: '' },
+    { command: '252', params: ['Zodifag', '5000', 'operator(s) online'], text: 'operator(s) online' },
+    { command: '253', params: ['Zodifag', '2', 'unknown connection(s)'], text: 'unknown connection(s)' },
+    { command: '254', params: ['Zodifag', '1000000', 'channels formed'], text: 'channels formed' },
+    { command: '265', params: ['Zodifag', '1000000', '1000000', 'Current local users 1000000, max 1000000'], text: 'Current local users 1000000, max 1000000' },
+    { command: '396', params: ['Zodifag', '5C17EEA5:5AA1AD86:1905531:IP', 'is now your displayed host'], text: 'is now your displayed host' },
+    { command: '421', params: ['Zodifag', 'JOIN', 'You must be connected for at least 5 seconds'], text: 'You must be connected for at least 5 seconds' },
+    { command: '311', params: ['Zodifag', 'maknho', '~maknho', 'B39D8C93.IP', '*', 'maknho'], text: 'maknho' },
+    { command: '330', params: ['Zodifag', 'maknho', 'maknho', 'is logged in as'], text: 'is logged in as' },
+    { command: '318', params: ['Zodifag', 'maknho', 'End of /WHOIS list.'], text: 'End of /WHOIS list.' },
+  ];
+
+  function supernetsMessages() {
+    return SUPERNETS.map((s, i) =>
+      createMessage({ ...s, nick: 'openwater.supernets.org', t: DAY + i, eid: 200 + i }),
+    );
+  }
+
+  it('keeps the count, host and command that live in leading parameters', async () => {
+    const network = setupServerBuffer();
+    render(ServerLog, { props: { messages: supernetsMessages(), network } });
+
+    const rows = Array.from(document.querySelectorAll('.row.status'));
+    const byCmd = (cmd: string) => rows.find((r) => r.getAttribute('data-cmd') === cmd)?.textContent ?? '';
+
+    expect(byCmd('252')).toContain('5000 operator(s) online');
+    expect(byCmd('253')).toContain('2 unknown connection(s)');
+    expect(byCmd('254')).toContain('1000000 channels formed');
+    expect(byCmd('396')).toContain('5C17EEA5:5AA1AD86:1905531:IP is now your displayed host');
+    expect(byCmd('421')).toContain('JOIN: You must be connected for at least 5 seconds');
+    // 265 carries its numbers inside the trailing; IRCCloud does not
+    // prefix that one, so the sentence must not gain a stray "1000000".
+    expect(byCmd('265')).toContain('Current local users 1000000, max 1000000');
+    expect(byCmd('265')).not.toMatch(/1000000\s+1000000\s+Current/);
+  });
+
+  it('never renders WHOIS answers or the raw RPL_MYINFO dump', async () => {
+    const network = setupServerBuffer();
+    render(ServerLog, { props: { messages: supernetsMessages(), network } });
+
+    const cmds = Array.from(document.querySelectorAll('.row')).map((r) => r.getAttribute('data-cmd'));
+    for (const whois of ['311', '318', '330']) expect(cmds).not.toContain(whois);
+    expect(cmds).not.toContain('004');
+    const body = document.querySelector('.serverLog')!.textContent ?? '';
+    expect(body).not.toContain('End of /WHOIS list.');
+    expect(body).not.toContain('is logged in as');
+    // The raw parameter dump is what an operator saw instead of a sentence.
+    expect(body).not.toContain('DangerousIRCd-6.6.6 UnrealIRCd-6.1.10');
+  });
 });

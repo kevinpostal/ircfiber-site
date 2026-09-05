@@ -83,6 +83,59 @@ export function capNoticeBody(msg: IRCMessage): string | null {
   return `Server supports: ${tokens.join(' | ')}`;
 }
 
+/**
+ * Render one status numeric the way IRCCloud does.
+ *
+ * A numeric's meaning is often split between a leading parameter and the
+ * trailing text — `252 me 5000 :operator(s) online` reads as "5000
+ * operator(s) online". Rendering the trailing alone (what we used to do)
+ * produced headless fragments: "operator(s) online", "tents formed",
+ * "is now your displayed host".
+ *
+ * The per-numeric shapes below are taken from IRCCloud's own renderers in
+ * `build/common-5650bddb.js`, which bold the value and keep the server's
+ * wording verbatim:
+ *
+ *   server_luserop/unknown/channels  `render(value) + " " + renderLinkify(msg)`
+ *   server_luserclient/me/n_local/n_global  `renderLinkify(msg)` — value NOT shown
+ *   hidden_host_set  `"<b>" + hidden_host + "</b> " + (msg || "is your hostname")`
+ *   your_unique_id   `"Your unique ID is <b>" + unique_id + "</b>"`
+ *   unknown_command  `"<b>" + command + "</b>: " + msg`
+ *   need_more_params `"Missing parameters for command: " + command`
+ *
+ * Returns escaped HTML.
+ */
+export function numericStatusHtml(msg: IRCMessage): string {
+  const params = msg.params ?? [];
+  const text = (msg.text ?? '').trim();
+  // Leading parameters, i.e. everything after our own nick and before the
+  // trailing. Servers repeat the trailing as the last parameter.
+  const lead = params.slice(1).filter((p) => p.trim() !== text);
+  const value = lead[0] ?? '';
+  const b = (s: string): string => `<b>${escapeHtml(s)}</b>`;
+  switch (msg.command) {
+    // RPL_LUSEROP / LUSERUNKNOWN / LUSERCHANNELS — the count is the point.
+    case '252':
+    case '253':
+    case '254':
+      return value ? `${b(value)} ${escapeHtml(text)}` : escapeHtml(text);
+    // RPL_HOSTHIDDEN — the host is the point.
+    case '396':
+      return value ? `${b(value)} ${escapeHtml(text || 'is your hostname')}` : escapeHtml(text);
+    // RPL_YOURID
+    case '042':
+      return value ? `Your unique ID is ${b(value)}` : escapeHtml(text);
+    // ERR_UNKNOWNCOMMAND — which command was refused.
+    case '421':
+      return value ? `${b(value)}: ${escapeHtml(text)}` : escapeHtml(text);
+    // ERR_NEEDMOREPARAMS
+    case '461':
+      return value ? `Missing parameters for command: ${b(value)}` : escapeHtml(text);
+    default:
+      return escapeHtml(numericBody(msg));
+  }
+}
+
 /** Server-originated notice: no nick, a `*` placeholder, a hostname, or a `***` body. */
 function isServerNotice(msg: IRCMessage): boolean {
   const nick = msg.nick ?? '';
@@ -310,7 +363,7 @@ export function buildServerLogRows(
       case 'numeric': {
         const body = numericBody(msg);
         if (lastDisconnectText && body.trim() === lastDisconnectText) return;
-        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: escapeHtml(body), muted: true });
+        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: numericStatusHtml(msg), muted: true });
         return;
       }
     }

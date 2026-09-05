@@ -327,6 +327,14 @@ import Dialog from './Dialog.svelte';
               <td class="whois-value whois-channels">{w.channels.join(' ')}</td>
             </tr>
           {/if}
+          <!-- Network-specific lines (320/335/378/379). The server log does
+               not render WHOIS numerics, so this is where their text shows. -->
+          {#each w.special ?? [] as line, i (line)}
+            <tr class:odd={i % 2 === 1} class:even={i % 2 === 0}>
+              <td class="whois-label">{i === 0 ? 'Info' : ''}</td>
+              <td class="whois-value">{w.nick} {line}</td>
+            </tr>
+          {/each}
         </tbody>
       </table>
       {/if}

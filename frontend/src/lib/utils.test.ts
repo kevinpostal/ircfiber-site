@@ -280,20 +280,43 @@ describe('formatNumericText', () => {
     expect(formatNumericText('001', [], 'Custom welcome', 'alice')).toBe('Custom welcome');
   });
 
-  it('formats 004 with params', () => {
-    expect(formatNumericText('004', ['server', 'version', 'umodes', 'cmodes'], '')).toBe('server version umodes cmodes');
+  // Every numeric addresses us first, so `params[0]` is our own nick and the
+  // subject/value is `params[1]`. Wire shapes below are verbatim from
+  // irc.supernets.org (prod `_server` buffer, 2026-09-05).
+  it('formats 004 without echoing our own nick', () => {
+    expect(formatNumericText('004', ['me', 'server', 'version', 'umodes', 'cmodes'], ''))
+      .toBe('server version umodes cmodes');
   });
 
-  it('formats 311 (WHOIS user)', () => {
-    expect(formatNumericText('311', ['alice', 'user', 'host', '*'], 'realname')).toBe('alice is user@host * realname');
+  it('formats 311 (WHOIS user) with the subject nick, not ours', () => {
+    expect(formatNumericText('311', ['me', 'alice', 'user', 'host', '*'], 'realname'))
+      .toBe('alice is user@host * realname');
   });
 
   it('formats 317 (idle time)', () => {
-    expect(formatNumericText('317', ['alice', '3600'], '')).toBe('alice has been idle 3600 seconds');
+    expect(formatNumericText('317', ['me', 'alice', '3600'], '')).toBe('alice has been idle 3600 seconds');
   });
 
   it('formats 330 (logged in as)', () => {
-    expect(formatNumericText('330', ['alice', 'account'], '')).toBe('alice is logged in as account');
+    expect(formatNumericText('330', ['me', 'alice', 'account'], 'is logged in as'))
+      .toBe('alice is logged in as account');
+  });
+
+  it('keeps the count in the LUSERS numerics', () => {
+    expect(formatNumericText('252', ['me', '5000'], 'operator(s) online')).toBe('5000 operator(s) online');
+    expect(formatNumericText('253', ['me', '2'], 'unknown connection(s)')).toBe('2 unknown connection(s)');
+    expect(formatNumericText('254', ['me', '1000000'], 'channels formed')).toBe('1000000 channels formed');
+  });
+
+  it('keeps the host in 396', () => {
+    expect(formatNumericText('396', ['me', 'A1B2:C3D4:IP'], 'is now your displayed host'))
+      .toBe('A1B2:C3D4:IP is now your displayed host');
+  });
+
+  it('never repeats the trailing when the server also sends it as a parameter', () => {
+    // UnrealIRCd repeats the trailing as the last parameter.
+    expect(formatNumericText('252', ['me', '5000', 'operator(s) online'], 'operator(s) online'))
+      .toBe('5000 operator(s) online');
   });
 
   it('returns empty string for 366', () => {

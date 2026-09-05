@@ -542,6 +542,14 @@ export interface WhoisData {
   away: string;
   operator?: boolean;
   waway?: string;
+  /**
+   * Free-form WHOIS lines a network invents for itself — RPL_WHOISSPECIAL
+   * (320), RPL_WHOISHOST (378), RPL_WHOISMODES (379), RPL_WHOISBOT (335).
+   * They are the only place their text exists, so they must surface here:
+   * the server log no longer renders WHOIS numerics. IRCCloud keeps the
+   * same bucket (`special` in its whois_response renderer).
+   */
+  special?: string[];
 }
 
 export interface BanEntry {

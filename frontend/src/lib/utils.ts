@@ -497,42 +497,58 @@ export function getIrcCloudTypeClass(cmd: string, params?: string[], type?: stri
   }
 }
 
-/** Format numeric reply text for display */
+/**
+ * Format numeric reply text for display.
+ *
+ * Every numeric's first parameter is the *recipient* — our own nick — so
+ * the subject of a WHOIS/WHO answer is `params[1]`, not `params[0]`. Using
+ * index 0 printed our own nick as the subject ("Zodifag is ~maknho@host").
+ * Counts (RPL_LUSEROP and friends) live in `params[1]` too and are half
+ * the sentence: `252 me 5000 :operator(s) online`.
+ */
 export function formatNumericText(cmd: string, params: string[], text: string, nick?: string): string {
+  const p = params ?? [];
+  // Subject / value parameter, i.e. the first one that is not our nick and
+  // not a repeat of the trailing.
+  const v = (i = 1): string => (p[i] ?? '').trim() === text.trim() ? '' : (p[i] ?? '');
+  const withValue = (): string => (v() ? `${v()} ${text}` : text);
   switch (cmd) {
     case '001': return text || `Welcome to the network, ${nick}`;
     case '002': return text || 'Your host is...';
     case '003': return text || 'This server was created...';
-    case '004': return params ? params.join(' ') : text;
-    case '005': return params ? params.slice(0, -1).join(' ') : text;
-    case '251': case '252': case '253': case '254': case '255':
-    case '265': case '266':
+    case '004': return p.length > 1 ? p.slice(1).join(' ') : text;
+    case '005': return p.length ? p.slice(1, -1).join(' ') : text;
+    case '251': case '255': case '265': case '266':
       return text;
+    // RPL_LUSEROP / LUSERUNKNOWN / LUSERCHANNELS — "5000 operator(s) online"
+    case '252': case '253': case '254':
+      return withValue();
     case '311':
-      return params ? `${params[0]} is ${params[1]}@${params[2]} * ${text}` : text;
+      return p.length > 3 ? `${v()} is ${p[2]}@${p[3]} * ${text}` : text;
     case '312':
-      return params ? `${params[0]} using ${params[1]} (${text})` : text;
-    case '313': return params ? `${params[0]} ${text}` : text;
+      return p.length > 2 ? `${v()} using ${p[2]} (${text})` : text;
+    case '313': return p.length > 1 ? `${v()} ${text}` : text;
     case '317':
-      return params ? `${params[0]} has been idle ${params[1]} seconds` : text;
-    case '318': return params ? `${params[0]} :End of /WHOIS` : text;
-    case '319': return params ? `${params[0]} : ${text}` : text;
-    case '330': return params ? `${params[0]} is logged in as ${params[1]}` : text;
+      return p.length > 2 ? `${v()} has been idle ${p[2]} seconds` : text;
+    case '318': return p.length > 1 ? `${v()} End of /WHOIS list.` : text;
+    case '319': return p.length > 1 ? `${v()} ${text}` : text;
+    case '330': return p.length > 2 ? `${v()} ${text} ${p[2]}` : text;
     case '332': return text;
     case '333': {
-      if (!params || params.length < 3) return text;
-      const setter = params[2];
-      const ts = params[3] ? parseInt(params[3], 10) : NaN;
+      if (!p || p.length < 3) return text;
+      const setter = p[2];
+      const ts = p[3] ? parseInt(p[3], 10) : NaN;
       if (!Number.isFinite(ts)) return `Topic set by ${setter}`;
       return `Topic set by ${setter} at ${new Date(ts * 1000).toLocaleString()}`;
     }
-    case '352': return params ? `${params[4]} ${params[1]}@${params[2]} (${text})` : text;
+    case '352': return p.length > 5 ? `${p[5]} ${p[2]}@${p[3]} (${text})` : text;
     case '353': return text;
     case '366': return '';
     case '372': return text;
     case '375': return text || '--- Message of the Day ---';
     case '376': return '';
-    case '396': return params ? `${params[1]} ${text}` : text;
+    // RPL_HOSTHIDDEN — "<host> is now your displayed host"
+    case '396': return withValue();
     case '433': return text || 'Nickname already in use';
     default: return text;
   }

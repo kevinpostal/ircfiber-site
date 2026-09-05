@@ -40,11 +40,27 @@ describe('classifyServerLog', () => {
     expect(classifyServerLog(m({ command: '005' }))).toBe('cap');
   });
 
-  it('classifies 001/002/003/004 (RPL_WELCOME/YOURHOST/CREATED/MYINFO) as welcome', () => {
+  it('classifies 001/002/003 (RPL_WELCOME/YOURHOST/CREATED) as welcome', () => {
     expect(classifyServerLog(m({ command: '001' }))).toBe('welcome');
     expect(classifyServerLog(m({ command: '002' }))).toBe('welcome');
     expect(classifyServerLog(m({ command: '003' }))).toBe('welcome');
-    expect(classifyServerLog(m({ command: '004' }))).toBe('welcome');
+  });
+
+  // 004 has no trailing at all, so it used to render as a raw parameter
+  // dump. IRCCloud lists `server_myinfo` in `unrendered_messages`.
+  it('drops RPL_MYINFO (004) rather than dumping its parameters', () => {
+    expect(classifyServerLog(m({ command: '004' }))).toBe('skip');
+  });
+
+  // A WHOIS answer names its subject in a leading parameter, so these rows
+  // rendered headless ("is logged in as", "End of /WHOIS list."). They feed
+  // the WHOIS overlay instead — IRCCloud does the same via
+  // `unrendered_messages`.
+  it('drops the whole WHOIS / WHO family', () => {
+    for (const cmd of ['301', '311', '312', '313', '317', '318', '319', '320',
+                       '330', '338', '352', '354', '378', '671', '690']) {
+      expect(classifyServerLog(m({ command: cmd }))).toBe('skip');
+    }
   });
 
   it('classifies raw NOTICEs (no phase) as notice', () => {

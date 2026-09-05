@@ -80,10 +80,32 @@ def _client(conn, addr):
                 print('[ircd] joined %s' % chan, flush=True)
         elif cmd == 'QUIT':
             break
+        elif cmd == 'WHOIS':
+            who = parts[1] if len(parts) > 1 else nick
+            # Verbatim shapes from irc.supernets.org: the subject nick is a
+            # LEADING parameter, so a trailing-only renderer loses it.
+            send(':%s 311 %s %s ~%s host.example * :%s' % (HOST_NAME, nick, who, who, who))
+            send(':%s 320 %s %s :is keepin it 100' % (HOST_NAME, nick, who))
+            send(':%s 330 %s %s %s :is logged in as' % (HOST_NAME, nick, who, who))
+            send(':%s 318 %s %s :End of /WHOIS list.' % (HOST_NAME, nick, who))
         if nick and not registered:
             registered = True
             send(':%s 001 %s :Welcome' % (HOST_NAME, nick))
+            send(':%s 002 %s :Your host is hidden, running version DangerousIRCd-6.6.6' % (HOST_NAME, nick))
+            send(':%s 003 %s :This server was created Fri Apr 1 1990' % (HOST_NAME, nick))
+            # 004 has NO trailing at all — it used to render as a raw
+            # parameter dump in the server log.
+            send(':%s 004 %s %s DangerousIRCd-6.6.6 UnrealIRCd-6.1.10 diopqrstxzBDGHIRSTZ'
+                 % (HOST_NAME, nick, HOST_NAME))
             send(':%s 005 %s CHANTYPES=# CHANLIMIT=#:10 TARGMAX=JOIN: :are supported' % (HOST_NAME, nick))
+            # LUSERS: the count lives in a leading parameter.
+            send(':%s 251 %s :There are 1000000 users and 0 invisible on 5000 servers' % (HOST_NAME, nick))
+            send(':%s 252 %s 5000 :operator(s) online' % (HOST_NAME, nick))
+            send(':%s 253 %s 2 :unknown connection(s)' % (HOST_NAME, nick))
+            send(':%s 254 %s 1000000 :channels formed' % (HOST_NAME, nick))
+            send(':%s 255 %s :I have 5000 clients and 5000 servers' % (HOST_NAME, nick))
+            send(':%s 265 %s 1000000 1000000 :Current local users 1000000, max 1000000' % (HOST_NAME, nick))
+            send(':%s 396 %s 5C17EEA5:5AA1AD86:1905531:IP :is now your displayed host' % (HOST_NAME, nick))
             send(':%s 376 %s :End of MOTD' % (HOST_NAME, nick))
     try:
         conn.close()

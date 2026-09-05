@@ -25,6 +25,24 @@ export type ServerLogKind =
   | 'self'
   | 'skip';
 
+/**
+ * Numerics answering WHOIS / WHOWAS / WHO, plus RPL_AWAY. Every one of
+ * them names its subject in a leading parameter, so a trailing-only
+ * render loses the nick; IRCCloud never renders them into a buffer at
+ * all (`unrendered_messages` in common-5650bddb.js lists `whois_user`,
+ * `whois_server`, `whois_idle`, `whois_channels`, `whois_ip`,
+ * `whois_info`, `whois_operator`, `whois_end`, `whois_response`,
+ * `who_reply*`, `who_end*`, `who_response`, `away`, `user_details`).
+ * IRC Fiber matches that: `accumulateWhois` feeds the WHOIS overlay.
+ */
+const WHOIS_FAMILY = new Set([
+  '301', // RPL_AWAY
+  '311', '312', '313', '314', '315', '317', '318', '319', '320',
+  '330', '335', '338', '369', '378', '379',
+  '352', '354', // WHO / WHOX replies
+  '615', '617', '671', '672', '690',
+]);
+
 export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   if (msg.phase) return 'phase';
   const cmd = msg.command;
@@ -45,21 +63,27 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   // Numeric IRC replies
   if (cmd === '005') return 'cap';
   if (cmd === '372' || cmd === '375' || cmd === '376') return 'motd';
-  // RPL_WELCOME / YOURHOST / CREATED / MYINFO — server's connection banner.
-  // Always visible like MOTD.
-  if (cmd === '001' || cmd === '002' || cmd === '003' || cmd === '004') return 'welcome';
-  // WHOIS / WHOX responses (311 = RPL_WHOISUSER, 354 = WHOX reply, 671 = RPL_WHOISSECURE)
-  // flood the server log on large networks like SuperNets (2000+ users → 2000+ WHOIS queries).
-  // The engine sends WHOIS for every user on every JOIN to discover realnames, but the
-  // responses are consumed internally (stored in `realnames[]`) and don't need to be
-  // surfaced in the server log timeline. Skip them to keep the log readable.
+  // RPL_WELCOME / YOURHOST / CREATED — the server's connection banner,
+  // always visible like MOTD. 004 (RPL_MYINFO) is deliberately absent:
+  // it carries no trailing, so it rendered as a raw parameter dump
+  // ("Zodifag omega.supernets.org DangerousIRCd-6.6.6 …"). IRCCloud lists
+  // `server_myinfo` in `unrendered_messages` (common-5650bddb.js) and
+  // shows nothing; the ircd version is already in the 002 text and the
+  // mode letters are in the ISUPPORT row.
+  if (cmd === '001' || cmd === '002' || cmd === '003') return 'welcome';
+  if (cmd === '004') return 'skip';
+  // The whole WHOIS / WHOWAS / WHO family. These are consumed by
+  // `accumulateWhois` (lib/messageHandler.ts) and surface in the WHOIS
+  // overlay — which is exactly what IRCCloud does: every `whois_*`,
+  // `whowas_*`, `who_*` and `away` type sits in its `unrendered_messages`
+  // list, so a WHOIS never writes rows into a buffer there.
   //
-  // The engine also drops 354 at publish time (`case "354": return;` in
-  // source/ircfiber/irc/connection.d), so this skip is defense-in-depth for
-  // replays from older binaries during a rolling upgrade. 311 still arrives
-  // for the registration-time WHOIS burst, and 671 is filtered because the
-  // "is using a Secure Connection" notice adds nothing.
-  if (cmd === '311' || cmd === '354' || cmd === '671') return 'skip';
+  // Rendering them here produced the nick-less garbage an operator sees
+  // as "is keepin it 💯 / is logged in as / End of /WHOIS list." — the
+  // subject nick lives in a leading parameter that the trailing-only
+  // body drops, and the engine WHOISes every user on JOIN, so a large
+  // network repeats those rows hundreds of times.
+  if (WHOIS_FAMILY.has(cmd)) return 'skip';
   // Ban list (367 = RPL_BANLIST, 368 = RPL_ENDOFBANLIST) — consumed by the
   // ban-list overlay; 368 is "End of Channel Ban List" noise.
   if (cmd === '367' || cmd === '368') return 'skip';
