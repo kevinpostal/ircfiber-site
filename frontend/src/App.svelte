@@ -28,7 +28,6 @@
     isMessageUnseen, setLastSeenMessage, readBuffer, markAllAsRead,
     isTrackingUnread, dirtySeenEids, requestChannelList
   } from './stores/ircStore.svelte';
-  import { isIgnored } from './stores/preferences.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix, banListKey } from './lib/utils';
@@ -42,7 +41,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, pinnedOrder, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, pinnedOrder, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs, ignoreList, applyServerIgnores } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -1201,6 +1200,15 @@ let showNetworkForm: boolean = $state(false);
         return 0;
       });
     }
+    if (Array.isArray(user.ignores)) {
+      const server = user.ignores as string[];
+      if (server.length === 0 && ignoreList.length > 0) {
+        // Legacy localStorage list predates sync — seed the server once.
+        import('./stores/api').then(({ updateIgnores }) => updateIgnores([...ignoreList])).catch(() => {});
+      } else {
+        applyServerIgnores(server);
+      }
+    }
     if (user.bufferPrefs) {
       const serverPrefs = user.bufferPrefs as Record<string, Record<string, boolean>>;
       // Server is authoritative for bufferPrefs (including notifyAll/mute).
@@ -1332,6 +1340,10 @@ let showNetworkForm: boolean = $state(false);
         if (bi !== -1) return 1;
         return 0;
       });
+    } else if (key === 'ignores') {
+      // Real-time cross-device sync of the ignore-mask list (IRCCloud
+      // `set_ignores` push). Full-list replace, no re-POST.
+      applyServerIgnores((data.value as string[]) ?? []);
     } else if (key === 'bufferPrefs') {
       // Real-time sync of per-buffer prefs from another tab/device.
       // Normalize server keys so "#TEST" and "#test" collide.

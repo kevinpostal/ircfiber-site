@@ -1,7 +1,10 @@
 <script lang="ts">
   import { ircState, setActiveBuffer, deleteBuffer, initiateRejoin } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { ignoreList } from '../stores/preferences.svelte';
+  import { ignoreList, removeIgnores } from '../stores/preferences.svelte';
+  import { parseIgnoreList } from '../lib/ignore';
+  import { IGNORABLE_COMMANDS } from '../lib/ignorePolicy';
+  import { normalizeChannelName, messageHostmask } from '../lib/utils';
   import { updateRoute } from '../lib/routing';
   import { deleteNetwork } from '../stores/api';
 import Dialog from './Dialog.svelte';
@@ -16,6 +19,28 @@ import Dialog from './Dialog.svelte';
   let inviteNick: string = $state('');
 
   let pendingUnignores: Record<string, boolean> = $state({});
+
+  // IRCCloud ignore_list overlay: per-mask "(N messages matched)" counted
+  // against the current buffer with a single-mask matcher per row.
+  const ignoreMatchCounts = $derived.by(() => {
+    const counts: Record<string, number> = {};
+    if (ircState.overlay.type !== 'ignore_list' || ignoreList.length === 0) return counts;
+    const { networkId, bufferName } = ircState.activeBuffer;
+    const msgs = networkId && bufferName
+      ? ircState.messages[`${networkId}:${normalizeChannelName(bufferName)}`] ?? []
+      : [];
+    for (const mask of ignoreList) {
+      const map = parseIgnoreList([mask]);
+      let n = 0;
+      for (const m of msgs) {
+        if (!m.nick) continue;
+        if (!IGNORABLE_COMMANDS.has(m.command) && m.type !== 'action') continue;
+        if (map.check(m.nick, messageHostmask(m))) n++;
+      }
+      counts[mask] = n;
+    }
+    return counts;
+  });
 
   // ── Channel list (/list) — mirrors IRCCloud's `list_response` overlay:
   // "List of channels on <server>", table Channels (N) / Topic / Members
@@ -70,10 +95,7 @@ import Dialog from './Dialog.svelte';
 
   function close(): void {
     if (ircState.overlay.type === 'ignore_list') {
-      for (const mask of Object.keys(pendingUnignores)) {
-        const idx = ignoreList.indexOf(mask);
-        if (idx >= 0) ignoreList.splice(idx, 1);
-      }
+      removeIgnores(Object.keys(pendingUnignores));
       for (const key of Object.keys(pendingUnignores)) delete pendingUnignores[key];
     }
     ircState.overlay.type = null;
@@ -438,7 +460,7 @@ import Dialog from './Dialog.svelte';
                       pendingUnignores[mask] = true;
                     }
                   }}>{unignored ? 'undo' : 'x'}</a>
-                  <span class={unignored ? 'unignored' : ''}>{mask}</span>
+                  <span class={unignored ? 'unignored' : ''}>{mask}</span>{#if ignoreMatchCounts[mask]} <span class="explanation">({ignoreMatchCounts[mask]} message{ignoreMatchCounts[mask] === 1 ? '' : 's'} matched)</span>{/if}
                 </td>
               </tr>
             {/each}

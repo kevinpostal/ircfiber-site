@@ -5,7 +5,8 @@
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml } from '../lib/autolinker';
   import { handleChannelLinkClick } from '../lib/channelLinks';
-  import { archivedMap } from '../stores/preferences.svelte';
+  import { archivedMap, isIgnored, ignoreList, addIgnores, removeIgnores } from '../stores/preferences.svelte';
+  import { parseIgnoreList } from '../lib/ignore';
   import { groupServerLog, phaseToLabel } from '../lib/serverLogGroups';
   import { FAIL_TYPES } from '../lib/connectionWarnings';
   import { isFiberServer } from '../lib/fiberServer';
@@ -56,6 +57,29 @@
   // W7-T01: surface the reason a previous JOIN failed (471/473/474/475/etc.)
   // so the user knows whether to retry, ask for an invite, or move on.
   const joinErrorCode = $derived(activeBufferObj?.joinError ?? null);
+  // IRCCloud conversation-ignore banner: DM rows are never hidden; the
+  // header shows "ignored" with unignore/undo instead. Nick-only match —
+  // a query buffer has no reliable hostmask.
+  const isQuery = $derived(!isChannel && !isServerBuffer && !!ircState.activeBuffer.bufferName);
+  const conversationIgnored = $derived(isQuery && !!activeBufferObj?.name && isIgnored(activeBufferObj.name));
+  let undoMasks = $state<string[]>([]);
+  $effect(() => {
+    void channelName; // reset undo state when the buffer changes
+    undoMasks = [];
+  });
+  function unignoreConversation(): void {
+    const nick = activeBufferObj?.name;
+    if (!nick) return;
+    // IRCCloud `unignore`: remove every mask that matches this user.
+    const matched = ignoreList.filter(m => parseIgnoreList([m]).check(nick));
+    if (matched.length === 0) return;
+    undoMasks = matched;
+    removeIgnores(matched);
+  }
+  function undoUnignore(): void {
+    addIgnores(undoMasks);
+    undoMasks = [];
+  }
   const joinErrorText = $derived.by(() => {
     switch (joinErrorCode) {
       case 'invite-only':  return 'Invite-only channel';
@@ -288,6 +312,11 @@
         <span class="topic" id="channel-topic" onclick={(e) => handleChannelLinkClick(e)}>{@html autolinkHtml(parseIrcFormatting(topic))}</span>
       {/if}
     </h2>
+    {#if isQuery && conversationIgnored}
+      <p class="conversation__ignored conversation__ignored--show">You are ignoring messages from this user <button class="conversation__ignored-button" type="button" onclick={unignoreConversation}>unignore</button></p>
+    {:else if isQuery && undoMasks.length > 0}
+      <p class="conversation__ignored conversation__ignored--undo">No longer ignoring messages from this user <button class="conversation__ignored-button" type="button" onclick={undoUnignore}>undo</button></p>
+    {/if}
     {#if tempUnavailableRemaining > 0}
       <div class="temp-unavailable-chip">Server busy — retry in {tempUnavailableRemaining}s</div>
     {/if}
@@ -345,6 +374,33 @@
 </div>
 
 <style>
+  /* ── DM conversation ignore banner (IRCCloud .conversation__ignored) ── */
+  .conversation__ignored {
+    margin: 0 12px;
+    align-self: center;
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
+    color: var(--fiber-cloud, #c8d2dd);
+  }
+  .conversation__ignored--undo {
+    opacity: 0.65;
+  }
+  .conversation__ignored-button {
+    margin-left: 6px;
+    padding: 1px 8px;
+    font-size: 12px;
+    line-height: 16px;
+    border: 1px solid var(--fiber-line-2, #232c38);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--fiber-snow, #ecf2f8);
+    cursor: pointer;
+  }
+  .conversation__ignored-button:hover {
+    border-color: var(--fiber-cloud, #c8d2dd);
+  }
+
   /* ── Server-log buffer header — fiber brand restyle ─────────────
      Scoped to the _server view only via .bufferstatus--fiber (applied
      when isServerBuffer is true). Other buffers keep the existing

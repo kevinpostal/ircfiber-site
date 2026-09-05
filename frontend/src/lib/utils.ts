@@ -553,3 +553,11 @@ export function formatNumericText(cmd: string, params: string[], text: string, n
     default: return text;
   }
 }
+
+/** Sender `user@host` for ignore-mask matching: wire `hm` field, else derived from the raw prefix. */
+export function messageHostmask(msg: IRCMessage): string | undefined {
+  if (msg.hostmask) return msg.hostmask;
+  const p = msg.prefix;
+  if (p && p.includes('!')) return p.slice(p.indexOf('!') + 1);
+  return undefined;
+}

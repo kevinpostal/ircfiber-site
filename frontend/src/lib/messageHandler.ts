@@ -6,7 +6,8 @@ import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, apply
          checkHighlight, isMessageUnseen, applySetname, markRedacted,
          findBufferByName, isSelfMessage, renameQueryBuffer } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getBufferPrefs, getLastSeen } from '../stores/preferences.svelte';
-import { normalizeChannelName, stripPrefix, isSkippedCommand } from './utils';
+import { normalizeChannelName, stripPrefix, isSkippedCommand, messageHostmask } from './utils';
+import { isMessageIgnored } from './ignorePolicy';
 import { notify } from './notifications';
 import { shouldNotifyForMessage, getNotificationTitle } from './notificationPolicy';
 import { enqueueMessage } from './messageBatcher';
@@ -119,6 +120,7 @@ export function unpackEvent(
     command: cmd,
     params: ((data.params as string[]) || (data.p as string[]) || []) as string[],
     prefix: ((data.prefix as string) || (data.px as string) || '') as string,
+    hostmask: (((data.hostmask as string) || (data.hm as string) || '') as string) || undefined,
     msgid: ((data.msgid as string) || (data.m as string) || (data.i as string) || '') as string,
     label: ((data.label as string) || (data.l as string) || (data.le as string) || '') as string,
     account: (((data.a as string) || tags?.account || '') as string) || undefined,
@@ -220,8 +222,10 @@ export function processIrcEvent(
     if (newNick) renameQueryBuffer(networkId, msg.nick, newNick);
   }
 
-  // Ignore check
-  if (msg.nick && isIgnored(msg.nick)) return {};
+  // Ignore check — IRCCloud keeps and stores ignored messages (class
+  // `ignored`, hidden by CSS) so unignore reveals them retroactively.
+  // We mirror that: no early return, only side effects are suppressed.
+  const ignored = isMessageIgnored(msg);
 
   const result: { whoisData?: WhoisData; whoisFailedNick?: string; banListData?: BanListData } = {};
 
@@ -452,7 +456,7 @@ export function processIrcEvent(
   }
 
   // ── lastSpoke tracking ──
-  if (cmd === 'PRIVMSG' && msg.nick) {
+  if (cmd === 'PRIVMSG' && msg.nick && !ignored) {
     const bufObj = findBufferByName(net, channel);
     if (bufObj?.users) {
       const u = bufObj.users.find(x => stripPrefix(x.nick) === msg.nick);
@@ -496,7 +500,8 @@ export function processIrcEvent(
       ?? (data.tags as Record<string, string> | undefined)?.['+typing'];
     if (typingTag === 'done') {
       clearTyping(networkId, channel, msg.nick);
-    } else {
+    } else if (!isIgnored(msg.nick, messageHostmask(msg))) {
+      // IRCCloud getTypers filters ignored members; done still clears.
       setTyping(networkId, channel, msg.nick);
     }
     return {};
@@ -527,7 +532,7 @@ export function processIrcEvent(
   // We trigger for private NOTICEs (target is not a channel), from a
   // non-server nick, with non-empty text, not self-echo, not CTCP, and
   // not a "***" server lookup notice (those live in ServerLog).
-  if (cmd === 'NOTICE' && msg.nick && msg.text && !isBackfill) {
+  if (cmd === 'NOTICE' && msg.nick && msg.text && !isBackfill && !ignored) {
     const target = (msg.params && msg.params[0]) || '';
     const isChannelTarget = target.length > 0 && ['#', '&', '+', '!'].includes(target[0]);
     const isServerNick = msg.nick.includes('.');
@@ -628,7 +633,7 @@ export function processIrcEvent(
     const msgTs = msg.t ?? 0;
     const isUnseen = isMessageUnseen(msg, networkId, channel);
     const isRecent = msgTs !== 0 && Date.now() - msgTs < 60_000;
-    const shouldGateNotify = !isBackfill && isUnseen && (lastSeenTs !== null || isRecent);
+    const shouldGateNotify = !isBackfill && !ignored && isUnseen && (lastSeenTs !== null || isRecent);
 
     if (shouldGateNotify && shouldNotifyForMessage({
       networkId,

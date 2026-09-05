@@ -427,6 +427,8 @@ export interface IRCMessage {
   command: string;
   params?: string[];
   prefix?: string;
+  /** Sender `ident@host` (wire `hm`) for ignore-mask matching; no nick part. */
+  hostmask?: string;
   msgid?: string;
   /** Global sequential event ID (IRCCloud-style). Always present on
    *  new events; may be absent on legacy stored messages. Serves as the

@@ -385,6 +385,10 @@ final class WebSocketGateway {
         foreach (id; prefs.networkOrder) no ~= Json(id);
         msg["networkOrder"] = no;
 
+        auto ig = Json.emptyArray;
+        foreach (m; prefs.ignores) ig ~= Json(m);
+        msg["ignores"] = ig;
+
         auto bp = Json.emptyObject;
         foreach (k, v; prefs.bufferPrefs) bp[k] = v;
         msg["bufferPrefs"] = bp;

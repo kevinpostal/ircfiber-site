@@ -31,6 +31,7 @@ import {
 	clearAllFocusSeen,
 	focusSeenMap,
 } from './preferences.svelte';
+import { isMessageIgnored } from '../lib/ignorePolicy';
 
 function resetPreferenceState(): void {
 	Object.keys(clearedAtMap).forEach((k) => delete (clearedAtMap as Record<string, unknown>)[k]);
@@ -110,6 +111,53 @@ describe('isIgnored', () => {
 		expect(isIgnored('SPAMMER')).toBe(true);
 		expect(isIgnored('Troll_123')).toBe(true);
 		expect(isIgnored('BOT1')).toBe(true);
+	});
+
+	it('matches hostmask-only patterns against user@host', () => {
+		ignoreList.push('*!*@spam.example');
+		expect(isIgnored('anynick', 'user@spam.example')).toBe(true);
+		expect(isIgnored('anynick', 'user@ok.example')).toBe(false);
+	});
+
+	it('bare-nick pattern matches regardless of hostmask', () => {
+		expect(isIgnored('spammer', 'user@anywhere.example')).toBe(true);
+		expect(isIgnored('other', 'user@anywhere.example')).toBe(false);
+	});
+
+	it('retroactively reflects list mutations (derived map)', () => {
+		expect(isIgnored('newpest')).toBe(false);
+		ignoreList.push('newpest');
+		expect(isIgnored('newpest')).toBe(true);
+		ignoreList.splice(ignoreList.indexOf('newpest'), 1);
+		expect(isIgnored('newpest')).toBe(false);
+	});
+});
+
+describe('isMessageIgnored', () => {
+	beforeEach(() => {
+		ignoreList.push('spammer');
+	});
+
+	it('ignores only IRCCloud-ignorable types', () => {
+		expect(isMessageIgnored({ command: 'PRIVMSG', nick: 'spammer' })).toBe(true);
+		expect(isMessageIgnored({ command: 'NOTICE', nick: 'spammer' })).toBe(true);
+		// /me actions arrive as PRIVMSG with type 'action'
+		expect(isMessageIgnored({ command: 'PRIVMSG', type: 'action', nick: 'spammer' })).toBe(true);
+		// Joins/parts/quits from ignored users are NOT hidden (IRCCloud parity)
+		expect(isMessageIgnored({ command: 'JOIN', nick: 'spammer' })).toBe(false);
+		expect(isMessageIgnored({ command: 'QUIT', nick: 'spammer' })).toBe(false);
+	});
+
+	it('does not ignore other senders', () => {
+		expect(isMessageIgnored({ command: 'PRIVMSG', nick: 'friend' })).toBe(false);
+		expect(isMessageIgnored({ command: 'PRIVMSG' })).toBe(false);
+	});
+
+	it('matches hostmask masks via wire hm or prefix', () => {
+		ignoreList.push('*!*@spam.example');
+		expect(isMessageIgnored({ command: 'PRIVMSG', nick: 'anyone', hostmask: 'u@spam.example' })).toBe(true);
+		expect(isMessageIgnored({ command: 'PRIVMSG', nick: 'anyone', prefix: 'anyone!u@spam.example' })).toBe(true);
+		expect(isMessageIgnored({ command: 'PRIVMSG', nick: 'anyone', hostmask: 'u@ok.example' })).toBe(false);
 	});
 });
 

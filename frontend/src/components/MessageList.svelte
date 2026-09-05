@@ -1,7 +1,8 @@
 <script lang="ts">
   import { untrack, flushSync, tick, onMount, onDestroy } from 'svelte';
   import { ircState, isMessageUnseen, getActiveBufferObj, getActiveNetwork, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused, getVisitSeen, clearVisitSeen, isMessageUnseenForVisit, getVisitSeenMessage } from '../stores/ircStore.svelte';
-  import { getClearedAt, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen } from '../stores/preferences.svelte';
+  import { getClearedAt, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen, ignoreList } from '../stores/preferences.svelte';
+  import { isMessageIgnored } from '../lib/ignorePolicy';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
   import DateChange from './DateChange.svelte';
@@ -126,6 +127,18 @@
     return messages.filter(m => !AWAY_COMMANDS.has(m.command));
   }
 
+  // IRCCloud: `div.messageRow.ignored { display:none }` in channel/server/
+  // thread views only — DM conversations keep the rows and show a header
+  // banner instead (BufferHeader). Reading `ignoreList.length` subscribes
+  // this derived to the list, so /ignore retro-hides rendered history and
+  // /unignore reveals it live (IRCCloud's `ignoresChange` retoggle).
+  function filterIgnored(messages: IRCMessage[]): IRCMessage[] {
+    if (messages.length === 0 || ignoreList.length === 0) return messages;
+    const buf = getActiveBufferObj();
+    if (buf?.type === 'query') return messages;
+    return messages.filter(m => !isMessageIgnored(m));
+  }
+
   // (cold start / migration).  The clearedAt filter and empty-message
   // filter are still applied on top of the cached processed array because
   // they depend on UI state, not on the raw stream.
@@ -139,14 +152,16 @@
       if (!clearedAt) {
         const jpFiltered = filterJoinPart(cached);
         const awayFiltered = filterAway(jpFiltered);
-        const skippedFiltered = awayFiltered.filter(m => !isSkippedCommand(m.command));
+        const ignoredFiltered = filterIgnored(awayFiltered);
+        const skippedFiltered = ignoredFiltered.filter(m => !isSkippedCommand(m.command));
         perfMeasure(`processedMessages len=${skippedFiltered.length} (cache hit)`, t0);
         return skippedFiltered;
       }
       const filtered = cached.filter(m => (m.t || 0) > clearedAt);
       const jpFiltered = filterJoinPart(filtered);
       const awayFiltered = filterAway(jpFiltered);
-      const skippedFiltered = awayFiltered.filter(m => !isSkippedCommand(m.command));
+      const ignoredFiltered = filterIgnored(awayFiltered);
+      const skippedFiltered = ignoredFiltered.filter(m => !isSkippedCommand(m.command));
       perfMeasure(`processedMessages len=${skippedFiltered.length} (cache hit, cleared)`, t0);
       return skippedFiltered;
     }
@@ -167,7 +182,8 @@
     const result = preprocessMessages(noEmpty);
     const jpFiltered = filterJoinPart(result);
     const awayFiltered = filterAway(jpFiltered);
-    const skippedFiltered = awayFiltered.filter(m => !isSkippedCommand(m.command));
+    const ignoredFiltered = filterIgnored(awayFiltered);
+    const skippedFiltered = ignoredFiltered.filter(m => !isSkippedCommand(m.command));
     perfMeasure(`processedMessages len=${skippedFiltered.length} (cold)`, t0);
     return skippedFiltered;
   });

@@ -459,23 +459,47 @@ export function clearBottomSeen(networkId: string, bufferName: string): void {
 }
 
 // ── Ignore map (3-level host→user→nick) ──
-let ignoreMap: IgnoreMap = parseIgnoreList(ignoreList);
+// Module-level $derived: every $derived/$effect that calls isIgnored()
+// tracks ignoreList automatically, so /ignore + /unignore retro-hide and
+// reveal rendered history live (IRCCloud's `ignoresChange` equivalent).
+const ignoreMap = $derived(parseIgnoreList(ignoreList));
 
-export function rebuildIgnoreMap(): void {
-  ignoreMap = parseIgnoreList(ignoreList);
+export function isIgnored(nick: string, hostmask?: string): boolean {
+  if (!nick) return false;
+  return ignoreMap.check(nick, hostmask);
 }
 
-$effect.root(() => {
-  $effect(() => {
-    // Rebuild the 3-level map whenever ignoreList changes (automatic via $state).
-    // This covers slash-command mutations, cross-tab sync, and direct edits.
-    ignoreMap = parseIgnoreList(ignoreList);
-  });
-});
-
-export function isIgnored(nick: string): boolean {
-  if (!nick) return false;
-  return ignoreMap.check(nick);
+// ── Ignore-list mutation funnel (cross-device sync) ──
+// Every user-initiated mutation goes through these so the server list
+// stays authoritative (IRCCloud `set-ignores` equivalent). One POST per
+// user action — callers batch masks and call a plural helper once.
+function syncIgnores(): void {
+  setStorageItem('ircfiber:ignores', ignoreList);
+  // Fire-and-forget full-list replace — lazy import avoids a top-level cycle.
+  import('./api').then(({ updateIgnores }) => updateIgnores([...ignoreList])).catch(() => {});
+}
+export function addIgnore(mask: string): void {
+  addIgnores([mask]);
+}
+export function addIgnores(masks: string[]): void {
+  let changed = false;
+  for (const m of masks) {
+    if (m && !ignoreList.includes(m)) { ignoreList.push(m); changed = true; }
+  }
+  if (changed) syncIgnores();
+}
+export function removeIgnores(masks: string[]): void {
+  let changed = false;
+  for (const m of masks) {
+    const i = ignoreList.indexOf(m);
+    if (i >= 0) { ignoreList.splice(i, 1); changed = true; }
+  }
+  if (changed) syncIgnores();
+}
+/** Server push (`stat_user` / `pref_update`): replace without re-POSTing. */
+export function applyServerIgnores(list: string[]): void {
+  ignoreList.length = 0;
+  ignoreList.push(...list);
 }
 
 // ── Hidden channels (user-deleted) ──

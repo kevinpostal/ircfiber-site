@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ircState, getActiveNetwork, getActiveBufferObj } from '../stores/ircStore.svelte';
   import { sendRaw, sendMessage } from '../stores/wsConnection.svelte.ts';
-  import { ignoreList } from '../stores/preferences.svelte';
+  import { addIgnore } from '../stores/preferences.svelte';
   import { getAvatarColor, stripPrefix } from '../lib/utils';
   import type { Member, ModeCategory, WhoisData } from '../types';
 
@@ -198,11 +198,10 @@
   }
 
   function doIgnore(): void {
-    const mask = '*!*@' + (ident || displayNick + '!*@*');
-    const input = prompt('Ignore mask:', mask);
-    if (input && !ignoreList.includes(input)) {
-      ignoreList.push(input);
-    }
+    // IRCCloud getBanMask: *!user@host when the userhost is known, else nick!*@*.
+    const mask = ident && ident.includes('@') ? '*!' + ident : displayNick + '!*@*';
+    const input = prompt('Ignore messages from ' + displayNick + ' at this hostmask:', mask);
+    if (input) addIgnore(input);
     close();
   }
 

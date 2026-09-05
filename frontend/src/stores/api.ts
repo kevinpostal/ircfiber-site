@@ -54,6 +54,7 @@ export function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
     command,
     params: (raw.params as string[]) || (raw.p as string[]) || [],
     prefix: (raw.prefix as string) || (raw.px as string) || undefined,
+    hostmask: (raw.hostmask as string) || (raw.hm as string) || undefined,
     msgid: (raw.msgid as string) || (raw.m as string) || (raw.i as string) || undefined,
     label: (raw.label as string) || (raw.l as string) || undefined,
     type,
@@ -72,6 +73,7 @@ export interface MeResponse {
   collapsed?: Record<string, boolean>;
   inactiveCollapsed?: Record<string, boolean>;
   networkOrder?: string[];
+  ignores?: string[];
   bufferPrefs?: Record<string, Record<string, boolean>>;
   showMemberPrefixes?: boolean;
   desktopNotifications?: boolean;
@@ -134,6 +136,16 @@ export async function updatePinnedOrder(order: string[]): Promise<void> {
     body: JSON.stringify({ order })
   });
   if (!r.ok) throw new Error('Pin reorder failed');
+}
+
+/** Full-list replace, mirroring IRCCloud's `set-ignores`. */
+export async function updateIgnores(ignores: string[]): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/ignores`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ignores })
+  });
+  if (!r.ok) throw new Error('Ignore update failed');
 }
 
 export async function archiveChannel(networkId: string, channel: string): Promise<void> {
@@ -555,6 +567,16 @@ export async function editUpload(id: string, data: { content: string; filename: 
     body: JSON.stringify(data),
   });
   if (!r.ok) throw new Error('Failed to edit');
+  return r.json();
+}
+
+export async function convertUploadToGif(id: string): Promise<UploadEntry> {
+  const r = await fetch(`${API_BASE}/uploads/${encodeURIComponent(id)}/gif`, { method: 'POST' });
+  if (!r.ok) {
+    let msg = `GIF conversion failed (${r.status})`;
+    try { const b = await r.json(); if (b.error) msg = b.error; } catch {}
+    throw new Error(msg);
+  }
   return r.json();
 }
 export interface PasteEntry {

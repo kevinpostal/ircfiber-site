@@ -2,6 +2,7 @@ import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, O
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
 import { setChanPrefixChars } from '../lib/autolinker';
+import { isMessageIgnored } from '../lib/ignorePolicy';
 import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
@@ -1488,7 +1489,7 @@ export function countImportantMessagesAfter(networkId: string, bufferName: strin
   for (let i = list.length - 1; i >= 0; i--) {
     const m = list[i];
     if ((m.t ?? 0) <= t) break;
-    if (isImportantMessage(m, found.net)) n++;
+    if (isImportantMessage(m, found.net) && !isMessageIgnored(m)) n++;
   }
   return n;
 }
@@ -1637,6 +1638,9 @@ function applyAddMessageUnseen(networkId: string, bufferName: string, msgs: IRCM
   const highlights: number[] = [];
   for (const msg of msgs) {
     if (!isMessageUnseen(msg, networkId, bufferName)) continue;
+    // IRCCloud: `isMessageUnseen(t) && !t.isIgnored()` — ignored senders
+    // never bump unread badges or highlight counts.
+    if (isMessageIgnored(msg)) continue;
     if (ircState.bootComplete && !buf.unseen && added === 0 && isSelfMessage(msg, net)) {
       if (msg.t) setLastSeenMessage(networkId, bufferName, msg.t);
       continue;
@@ -2011,7 +2015,7 @@ export function countImportantMessagesBetween(networkId: string, bufferName: str
   if ((startMsg && startIdx < 0) || endIdx < 0) return 0;
   let count = 0;
   for (let i = startIdx + 1; i <= endIdx; i++) {
-    if (isImportantMessage(list[i], found.net)) count++;
+    if (isImportantMessage(list[i], found.net) && !isMessageIgnored(list[i])) count++;
   }
   return count;
 }
@@ -2042,7 +2046,7 @@ function reconcileBuffer(net: Network, buf: Buffer): void {
   for (let i = msgs.length - 1; i >= 0; i--) {
     const m = msgs[i];
     if ((m.t ?? 0) <= lastSeen) break;
-    if (!isImportantMessage(m, net)) continue;
+    if (!isImportantMessage(m, net) || isMessageIgnored(m)) continue;
     count++;
     if (isHighlightableMessage(m, net, buf)) {
       m.highlight = true;

@@ -131,6 +131,7 @@ final class RESTAPI {
         router.post("/api/me/collapsed", &updateCollapsed);
         router.post("/api/me/inactive-collapsed", &updateInactiveCollapsed);
         router.post("/api/me/network-order", &updateNetworkOrder);
+        router.post("/api/me/ignores", &updateIgnores);
         router.post("/api/me/pin-order", &updatePinnedOrder);
         router.post("/api/me/show-member-prefixes", &updateShowMemberPrefixes);
         router.post("/api/me/bnc-playback-lines", &updateBncPlaybackLines);
@@ -159,6 +160,7 @@ final class RESTAPI {
         router.get("/api/uploads/:id", &getUploadById);
         router.delete_("/api/uploads/:id", &deleteUpload);
         router.post("/api/uploads/:id/edit", &editUpload);
+        router.post("/api/uploads/:id/gif", &convertUploadToGif);
         router.get("/api/pastebins", &getPastebins);
         router.post("/api/pastebins", &createPastebin);
         router.get("/api/pastebins/:id/raw", &getPastebinRaw);
@@ -1453,6 +1455,7 @@ final class RESTAPI {
             "collapsed": col,
             "inactiveCollapsed": ic,
             "networkOrder": serializeToJson(prefs.networkOrder),
+            "ignores": serializeToJson(prefs.ignores),
             "bufferPrefs": bp,
             "showMemberPrefixes": Json(prefs.showMemberPrefixes),
             "bncPlaybackLines": Json(prefs.bncPlaybackLines),
@@ -1853,6 +1856,45 @@ final class RESTAPI {
         res.writeVoidBody();
     }
 
+    /// Replaces the user's ignore-mask list (IRCCloud `set-ignores`
+    /// equivalent). Full-list replace like network-order: the frontend
+    /// funnels every add/remove through one POST. Caps are new policy —
+    /// 256 chars per mask, 1000 masks — bounding the Redis prefs blob.
+    private void updateIgnores(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+
+        auto user = req.context["user"].get!User;
+        const bodyJson = req.json;
+
+        string[] masks;
+        if (auto o = "ignores" in bodyJson) {
+            if (o.type == Json.Type.array) {
+                foreach (entry; *o) {
+                    if (entry.type == Json.Type.string) {
+                        const m = entry.get!string;
+                        if (m.length > 0 && m.length <= 256 && !masks.canFind(m))
+                            masks ~= m;
+                    }
+                }
+            }
+        }
+        if (masks.length > 1000) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("too many ignore masks")]));
+            return;
+        }
+
+        auto prefs = prefsRepo.load(user.id);
+        prefs.ignores = masks;
+        auto newVersion = prefsRepo.save(user.id, prefs);
+
+        broadcastPrefUpdate(user.id.toString(), "ignores", serializeToJson(prefs.ignores), newVersion);
+
+        res.statusCode = 204;
+        res.writeVoidBody();
+    }
+
     /// Replaces the order of the user's pinned channels. `prefs.pinnedChannels`
     /// has always been an ordered array (pin appends, unpin filters), so the
     /// order IS the pin list — no second field, no migration, and the existing
@@ -2092,6 +2134,17 @@ final class RESTAPI {
         return null;
     }
 
+    /// True when an upload record is a convertible video (browser MIME or extension).
+    package static bool isVideoUpload(string mime, string filename) @safe {
+        import std.string : startsWith, toLower;
+        import std.algorithm.searching : endsWith;
+        if (mime.startsWith("video/")) return true;
+        auto lower = filename.toLower;
+        foreach (ext; [".mp4", ".m4v", ".webm", ".mov", ".avi", ".mkv", ".mpg", ".mpeg", ".flv", ".wmv", ".3gp"])
+            if (lower.endsWith(ext)) return true;
+        return false;
+    }
+
     /// Dedup `older` against `existing` by msgid (preferred) and eid
     /// (fallback). The engine writes every event to BOTH Redis and
     /// MongoDB, so when Redis returns fewer than the requested count
@@ -2326,6 +2379,142 @@ final class RESTAPI {
         bool ok = repo.updateContent(user.id.toString(), id, newContent, newFilename, newContent.length);
         if (!ok) { res.statusCode = 500; return; }
         res.writeJsonBody(Json(["status": Json("ok"), "id": Json(id)]));
+    }
+
+    /// Convert an uploaded video to an animated GIF via ffmpeg and save it
+    /// as a new upload record. Returns the new record's JSON (uploadFile +
+    /// getUploadById union shape).
+    private void convertUploadToGif(HTTPServerRequest req, HTTPServerResponse res) {
+        import vibe.core.process : spawnProcess;
+        import core.time : seconds;
+        import std.file : tempDir;
+        import std.path : stripExtension;
+        import std.array : replace;
+
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+
+        auto rec = uploadRepo.getById(user.id.toString(), req.params["id"]);
+        if (rec is UploadRecord.init || rec.id.length == 0) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("not found")]));
+            return;
+        }
+
+        if (!isVideoUpload(rec.mimeType, rec.filename)) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("Not a video file")]));
+            return;
+        }
+
+        // Resolve local source path from the direct URL (same as deleteUpload).
+        auto url = rec.directUrl.strip;
+        auto uploadPrefix = "/uploads/";
+        auto prefixPos = url.indexOf(uploadPrefix);
+        if (prefixPos == -1) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("Remote uploads cannot be converted")]));
+            return;
+        }
+        auto srcName = url[prefixPos + uploadPrefix.length .. $];
+        auto srcPath = buildPath(uploadDir(), srcName);
+        if (srcName.length == 0 || !exists(srcPath)) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("file missing on disk")]));
+            return;
+        }
+
+        auto tmpPath = buildPath(tempDir, randomUUID().toString().replace("-", "") ~ ".gif");
+        // Cap at 30s, 12fps, max width 480, palette-optimized. ffmpeg's own
+        // filtergraph parser handles the argument; argv exec, no shell.
+        auto args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", srcPath,
+            "-t", "30",
+            "-vf", "fps=12,scale=w='min(480,iw)':h=-2:flags=lanczos," ~
+                   "split[s0][s1];[s0]palettegen=stats_mode=diff[p];" ~
+                   "[s1][p]paletteuse=dither=bayer:bayer_scale=5",
+            "-loop", "0", tmpPath];
+
+        typeof(spawnProcess(args)) proc;
+        try {
+            proc = spawnProcess(args);
+        } catch (Exception e) {
+            logWarn("ffmpeg spawn failed: %s", e.msg);
+            res.statusCode = 501;
+            res.writeJsonBody(Json(["error": Json("GIF conversion unavailable (ffmpeg not installed)")]));
+            return;
+        }
+
+        auto code = proc.wait(120.seconds);
+        if (code.isNull) {
+            proc.forceKill();
+            proc.wait();
+            try { if (exists(tmpPath)) remove(tmpPath); } catch (Exception) {}
+            res.statusCode = 502;
+            res.writeJsonBody(Json(["error": Json("GIF conversion timed out")]));
+            return;
+        }
+        if (code.get != 0) {
+            try { if (exists(tmpPath)) remove(tmpPath); } catch (Exception) {}
+            res.statusCode = 502;
+            res.writeJsonBody(Json(["error": Json("ffmpeg failed (exit " ~ code.get.to!string ~ ")")]));
+            return;
+        }
+
+        const(ubyte)[] data;
+        {
+            import std.file : read;
+            data = cast(const(ubyte)[]) read(tmpPath);
+        }
+        try { remove(tmpPath); } catch (Exception) {}
+        if (data.length == 0) {
+            res.statusCode = 502;
+            res.writeJsonBody(Json(["error": Json("ffmpeg produced empty output")]));
+            return;
+        }
+        if (data.length > MAX_UPLOAD_BYTES) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("Converted GIF exceeds 50 MB")]));
+            return;
+        }
+
+        auto host = req.headers["Host"];
+        if (host.length == 0) host = "localhost:8090";
+        string proto = req.headers.get("X-Forwarded-Proto", "http");
+        auto baseUrl = proto ~ "://" ~ host;
+
+        auto gifName = stripExtension(rec.filename) ~ ".gif";
+        LocalUploadResult uploaded;
+        try {
+            uploaded = saveUpload(gifName, "image/gif", data, baseUrl);
+        } catch (LocalUploadException e) {
+            logWarn("gif upload save failed: %s", e.msg);
+            res.statusCode = 502;
+            res.writeJsonBody(Json(["error": Json(e.msg)]));
+            return;
+        }
+
+        UploadRecord rec2;
+        rec2.id = randomUUID().toString();
+        rec2.userId = rec.userId;
+        rec2.networkId = rec.networkId;
+        rec2.buffer = rec.buffer;
+        rec2.filename = gifName;
+        rec2.originalFilename = rec.filename;
+        rec2.mimeType = "image/gif";
+        rec2.size = cast(long)data.length;
+        rec2.pageUrl = uploaded.url;
+        rec2.directUrl = uploaded.url;
+        rec2.createdAt = Clock.currTime.toUnixTime!long * 1000;
+        try { uploadRepo.insert(rec2); }
+        catch (Exception e) { logError("Failed to record gif upload: %s", e.msg); }
+
+        res.writeJsonBody(Json([
+            "id": Json(rec2.id), "url": Json(rec2.directUrl), "pageUrl": Json(rec2.pageUrl),
+            "name": Json(rec2.filename), "mimeType": Json(rec2.mimeType), "size": Json(rec2.size),
+            "createdAt": Json(rec2.createdAt), "buffer": Json(rec2.buffer), "networkId": Json(rec2.networkId),
+        ]));
     }
 
     private Json pasteToJson(const ref PasteRecord r) {
