@@ -1,0 +1,206 @@
+# Daily off-host backups of IRC Fiber prod state, run on ubuntu-docker k3s.
+#
+# Why this exists: on 2026-09-06 an account purge removed a user's networks and
+# the only copy on the OVH host was a hand-made tarball from 2026-08-23 whose
+# embedded mongodump archive had never been test-restored. It turned out to be
+# gzip-wrapped, so `mongorestore --archive` answered "stream or file does not
+# appear to be a mongodump archive" and recovered nothing. Both rules below
+# follow from that: keep dailies off the box that holds the data, and make each
+# job prove its own archive restores before it reports success.
+#
+# Why the `ircfiber-prod` namespace rather than a dedicated one:
+#   * Rancher is broken on this cluster (rancher, rancher-webhook and
+#     api-extension pods Pending/Error), and its `rancher.cattle.io` validating
+#     webhook fails closed — `kubectl create namespace` is refused outright.
+#   * This namespace already carries `allow-ovh-prod-db-and-mullvad`, whose
+#     egress rule permits TCP 6379 and 27017 to any address, which is exactly
+#     the OVH-over-tailnet access a backup needs. The `ircfiber` namespace does
+#     NOT: its `allow-egress-to-signoz` policy selects every pod and opens only
+#     80/443/41641/1055/6697/6667 to 0.0.0.0/0, so a backup pod there cannot
+#     reach the databases at all.
+#
+# Credentials live in the `ircfiber-backup-conn` Secret, created imperatively
+# and deliberately NOT committed:
+#
+#   ssh -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_ircfiber deploy@100.94.72.103 \
+#     'docker exec ircfiber-gateway cat /etc/ircfiber/gateway/secrets/mongo_url' \
+#     | tr -d '\n' > /tmp/MONGO_URL          # then rewrite the host to 100.94.72.103:27017
+#   printf 'redis://100.94.72.103:6379/0' > /tmp/REDIS_URL
+#   kubectl -n ircfiber-prod create secret generic ircfiber-backup-conn \
+#     --from-file=MONGO_URL=/tmp/MONGO_URL --from-file=REDIS_URL=/tmp/REDIS_URL
+#
+# Run one now:      kubectl -n ircfiber-prod create job --from=cronjob/ircfiber-mongo-backup manual-$(date +%s)
+# List archives:    kubectl -n ircfiber-prod run bk --rm -it --image=busybox:1.36 \
+#                   ssh ubuntu@ubuntu-docker 'sudo ls -lh /var/backups/ircfiber'
+#
+# Restore into a scratch namespace — never straight over prod. `--gzip` is
+# REQUIRED or mongorestore rejects the archive:
+#   mongorestore --uri "$MONGO_URL" --gzip --archive=/backups/mongo-<ts>.archive.gz \
+#     --nsFrom 'ircfiber.*' --nsTo 'ircfiber_restore.*'
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ircfiber-mongo-backup
+  namespace: ircfiber-prod
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: backup
+spec:
+  schedule: "17 3 * * *"          # 03:17 UTC daily
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600   # still runs after a node reboot within the hour
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            component: backup
+        spec:
+          restartPolicy: OnFailure
+          # The node carries node.kubernetes.io/disk-pressure:NoSchedule (the
+          # 1.7T filesystem it shares with the odysseus host sits at 93%, and
+          # kubelet's default threshold is 10% free). A backup is precisely the
+          # workload that must still run when the disk is tight, and its
+          # archives are ~100 MB, so it tolerates the taint rather than waiting
+          # for headroom that nothing here controls.
+          tolerations:
+            - key: node.kubernetes.io/disk-pressure
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: mongodump
+              image: mongo:7
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -euo pipefail
+                  # Fail with instructions rather than handing mongodump an
+                  # empty --uri, which errors out unrecognisably.
+                  : "${MONGO_URL:?not set — create the ircfiber-backup-conn Secret, or (while the Rancher webhook is down and blocks Secret writes) kubectl -n ircfiber-prod set env cronjob/ircfiber-mongo-backup MONGO_URL=...}"
+                  OUT="/backups/mongo-$(date -u +%Y%m%d-%H%M%S).archive.gz"
+                  mongodump --uri "$MONGO_URL" --gzip --archive="$OUT" --quiet
+                  test -s "$OUT"
+
+                  # A backup nobody has restored is a guess. A dry run reads the
+                  # archive end to end and writes nothing, so the job only
+                  # succeeds once the file has been proven parseable AND to
+                  # carry the collections whose loss actually hurts.
+                  mongorestore --uri "$MONGO_URL" --gzip --archive="$OUT" \
+                    --dryRun --verbose > /tmp/verify.log 2>&1 || {
+                      echo "FAILED: dry-run restore of $OUT"; tail -20 /tmp/verify.log; exit 1; }
+                  for ns in users networks messages; do
+                    grep -q "ircfiber\.$ns" /tmp/verify.log \
+                      || { echo "FAILED: $ns missing from $OUT"; tail -20 /tmp/verify.log; exit 1; }
+                  done
+
+                  # Retention: 14 dailies. Pruning only after a verified dump
+                  # means a broken one can never evict a good one.
+                  find /backups -maxdepth 1 -name 'mongo-*.archive.gz' -mtime +14 -print -delete
+                  echo "OK $(du -h "$OUT" | cut -f1) $OUT"
+              envFrom:
+                # optional: the Rancher admission webhook on this cluster has
+                # no endpoints (its pods cannot schedule under DiskPressure)
+                # and fails closed, so `kubectl create secret` is refused
+                # cluster-wide. Marking it optional lets the job run from
+                # `kubectl set env` values until that is fixed, and pick the
+                # Secret up automatically once it can be created.
+                - secretRef:
+                    name: ircfiber-backup-conn
+                    optional: true
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+          volumes:
+            - name: backups
+              # hostPath, not a PVC: local-path provisioning runs a helper pod
+              # that carries no disk-pressure toleration, so on this tainted
+              # node the claim never binds ("create process timeout after 120
+              # seconds"). A node directory needs no provisioner, survives
+              # namespace churn, and is trivial to rsync off-box.
+              hostPath:
+                path: /var/backups/ircfiber
+                type: DirectoryOrCreate
+---
+# Redis holds preferences, per-network engine state and sessions. `--rdb` asks
+# the server for a fresh dump over the wire, so it needs no access to the OVH
+# filesystem.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ircfiber-redis-backup
+  namespace: ircfiber-prod
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: backup
+spec:
+  schedule: "37 3 * * *"          # 20 minutes after the Mongo job
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            component: backup
+        spec:
+          restartPolicy: OnFailure
+          tolerations:                       # see the Mongo job above
+            - key: node.kubernetes.io/disk-pressure
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: redis-rdb
+              image: redis:7-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  : "${REDIS_URL:?not set — see the Mongo job's note on the Secret}"
+                  OUT="/backups/redis-$(date -u +%Y%m%d-%H%M%S).rdb"
+                  redis-cli -u "$REDIS_URL" --rdb "$OUT"
+                  test -s "$OUT"
+                  # An RDB file starts with the magic "REDIS"; anything else
+                  # means we saved an error, not a database.
+                  head -c 5 "$OUT" | grep -q REDIS \
+                    || { echo "FAILED: $OUT is not an RDB"; exit 1; }
+                  find /backups -maxdepth 1 -name 'redis-*.rdb' -mtime +14 -print -delete
+                  echo "OK $(du -h "$OUT" | cut -f1) $OUT"
+              envFrom:
+                - secretRef:
+                    name: ircfiber-backup-conn
+                    optional: true          # see the Mongo job above
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+          volumes:
+            - name: backups
+              # hostPath, not a PVC: local-path provisioning runs a helper pod
+              # that carries no disk-pressure toleration, so on this tainted
+              # node the claim never binds ("create process timeout after 120
+              # seconds"). A node directory needs no provisioner, survives
+              # namespace churn, and is trivial to rsync off-box.
+              hostPath:
+                path: /var/backups/ircfiber
+                type: DirectoryOrCreate
