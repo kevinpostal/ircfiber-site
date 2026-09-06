@@ -771,7 +771,13 @@ package void apiFiberConfigSet(HTTPServerRequest req, HTTPServerResponse res,
 // ────────────────────────────────────────────────────────────
 package void apiUsersList(HTTPServerRequest req, HTTPServerResponse res) {
     auto repo = new UserRepository();
+    // `formString` reads req.form, which is the request BODY — empty for a
+    // GET. So `?q=` was silently ignored and every caller got the unfiltered
+    // first 200 users; the Users page only looked right because it also
+    // filters client-side, and the NickServ link picker (which cannot) got
+    // every user back. Read the query string too.
     auto q = formString(req, "q");
+    if (q.length == 0) q = req.query.get("q", "").strip();
     User[] users;
     if (q.length > 0) users = repo.search(q, 200);
     else users = repo.findAll(200, 0);

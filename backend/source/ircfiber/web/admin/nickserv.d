@@ -35,16 +35,16 @@ import std.uuid : UUID, parseUUID;
 
 import vibe.core.log : logInfo, logWarn;
 import vibe.data.json : Json;
-import vibe.db.redis.redis : RedisReply;
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.user : UserRepository;
-import ircfiber.default_network : DEFAULT_FIBER_HOST;
+import ircfiber.default_network : DEFAULT_FIBER_HOST, buildDefaultNick,
+    ensureDefaultFiberNetwork;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.models.network : NetworkConfig, SASLMechanism;
 import ircfiber.models.user : User;
-import ircfiber.redis.protocol : RedisKeys;
+import ircfiber.redis.protocol : ControlMessage, RedisKeys;
 import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick,
     persistProvisionedAccount, provisionServicesAccountAsync, ProvisionOutcome,
     servicesPendingKey, servicesSkipKey, SERVICES_OUTCOMES_KEY;
@@ -246,60 +246,57 @@ private bool findPlatformAccount(string nick, out NetworkConfig cfg, out User ow
 /// to prevent.
 private enum long COUNT_UNKNOWN = -1;
 
-/// Number of keys matching `pattern`, via SCAN — never KEYS, because this is
-/// the production Redis that also carries the engine's control lists.
-/// `COUNT_UNKNOWN` when Redis failed.
-private long countKeys(RedisStorage redis, string pattern) {
-    long total = 0;
-    try {
-        auto db = redis.getDb();
-        string cursor = "0";
-        // These are per-user keys of a ten-user deployment; the iteration
-        // bound only stops a pathological cursor that never returns to 0.
-        foreach (_; 0 .. 1024) {
-            auto reply = db.request!(RedisReply!string)(
-                "SCAN", cursor, "MATCH", pattern, "COUNT", "500");
-            // The reply is [cursor, [key, ...]] and must be drained fully or
-            // the pooled connection desyncs for the next caller.
-            bool first = true;
-            string next = "0";
-            foreach (item; reply) {
-                if (first) {
-                    next = item;
-                    first = false;
-                } else {
-                    total++;
-                }
-            }
-            cursor = next;
-            if (!cursor.length || cursor == "0") break;
-        }
-    } catch (Exception e) {
-        logWarn("nickserv: counting %s failed: %s", pattern, e.msg);
-        return COUNT_UNKNOWN;
-    }
-    return total;
+/// The three per-user counters, all derived in one pass.
+private struct ProvisioningCounts {
+    long pendingOrphans = COUNT_UNKNOWN;
+    long skipMarkers = COUNT_UNKNOWN;
+    long unprovisioned = COUNT_UNKNOWN;
 }
 
-/// Fiber-host networks with no NickServ credential at all — the number that
-/// was ten out of ten in prod while every log looked quiet. Counted from
-/// `findAll` rather than a dedicated query because `NetworkRepository` lives
-/// in the vendored `common/` tree mirrored into three repos, and this
-/// deployment has a handful of networks.
-private long countUnprovisioned() {
-    long n = 0;
+/**
+ * Counts derived per user instead of by scanning the keyspace.
+ *
+ * The first version issued `SCAN` and read the reply as `RedisReply!string`.
+ * A SCAN reply is a NESTED multi-bulk — `[cursor, [key, ...]]` — so consuming
+ * the second element as a string desynchronised the pooled connection, and
+ * every later request that borrowed it hung too: the whole account inventory
+ * stopped responding (observed in the scratch smoke, >30s with no reply).
+ *
+ * Two `GET`s per Fiber network cost nothing at this scale, cannot desync
+ * anything, and read the exact keys the provisioner writes. The population is
+ * the Fiber-host networks, which is also what `unprovisioned` counts: a
+ * pending or skip marker only exists for a user who already had one.
+ */
+private ProvisioningCounts provisioningCounts(RedisStorage redis) {
+    ProvisioningCounts c;
+    long pending = 0, skips = 0, unprov = 0;
+    bool redisOk = true;
     try {
-        auto networks = new NetworkRepository();
-        foreach (row; networks.findAll()) {
+        auto db = redis.getDb();
+        foreach (row; new NetworkRepository().findAll()) {
             if (row.config.host != DEFAULT_FIBER_HOST) continue;
-            if (row.config.saslUsername.strip().length) continue;
-            n++;
+            if (row.config.saslUsername.strip().length == 0) unprov++;
+            if (!redisOk) continue;
+            const uid = row.userId.toString();
+            try {
+                if (db.get(servicesPendingKey(uid)).length) pending++;
+                if (db.get(servicesSkipKey(uid)).length) skips++;
+            } catch (Exception e) {
+                // Keep the Mongo-derived number; only the Redis ones degrade.
+                logWarn("nickserv: reading provisioning markers failed: %s", e.msg);
+                redisOk = false;
+            }
         }
     } catch (Exception e) {
-        logWarn("nickserv: counting unprovisioned networks failed: %s", e.msg);
-        return COUNT_UNKNOWN;
+        logWarn("nickserv: counting provisioning state failed: %s", e.msg);
+        return c;
     }
-    return n;
+    c.unprovisioned = unprov;
+    if (redisOk) {
+        c.pendingOrphans = pending;
+        c.skipMarkers = skips;
+    }
+    return c;
 }
 
 /// The `provisioning` block of the inventory response. Every source is read
@@ -346,13 +343,13 @@ private Json provisioningJson(RedisStorage redis) {
     j["outcomes"] = outcomes;
     j["lastOutcome"] = lastOutcome;
     j["lastOutcomeAt"] = lastOutcomeAt;
-    // Patterns derived from the key builders so they cannot drift apart.
-    j["pendingOrphans"] = countKeys(redis, servicesPendingKey("") ~ "*");
+    const counts = provisioningCounts(redis);
+    j["pendingOrphans"] = counts.pendingOrphans;
     // Named `skipMarkers`, not `skipped`: `outcomes.skipped` already means
     // something else (an attempt that bailed out), and confusing the two
     // would misread a healthy no-op as a giving-up.
-    j["skipMarkers"] = countKeys(redis, servicesSkipKey("") ~ "*");
-    j["unprovisioned"] = countUnprovisioned();
+    j["skipMarkers"] = counts.skipMarkers;
+    j["unprovisioned"] = counts.unprovisioned;
     return j;
 }
 
@@ -703,5 +700,347 @@ package void apiNsResetPassword(HTTPServerRequest req, HTTPServerResponse res,
     data["nick"] = nick;
     data["password"] = pw;
     data["platformSynced"] = synced;
+    jsonOk(res, data);
+}
+
+// ---------------------------------------------------------------------------
+// Link / unlink a website user to a NickServ account
+// ---------------------------------------------------------------------------
+//
+// The join the inventory renders is derived, not stored: a row is "linked"
+// because some irc.ircfiber.com network carries that account as its
+// `saslUsername`. So linking is not a bookkeeping entry — it means giving the
+// user's network a credential that actually authenticates, which is why both
+// paths below refuse to persist anything they have not proven with
+// `checkAuthentication` first.
+
+/// Make the engine re-read a network's credential.
+///
+/// `persistProvisionedAccount` does this for a credential being SET; clearing
+/// one needs the same push, or the live session keeps authenticating with the
+/// credential we just removed until something else happens to reconnect it.
+private void pushReconnect(NetworkConfig cfg, string userId, RedisStorage redis,
+                           ServerRegistry serverRegistry) {
+    import std.datetime : Clock;
+
+    string serverId;
+    try {
+        serverId = serverRegistry.getServerForNetwork(cfg.id.toString());
+        if (!serverId.length) serverId = serverRegistry.assignNetwork(cfg.id.toString());
+    } catch (Exception e) {
+        logWarn("nickserv: server lookup for %s failed: %s", cfg.id.toString(), e.msg);
+    }
+    if (!serverId.length) {
+        logWarn("nickserv: no healthy engine to reconnect network %s — it will pick the " ~
+                "credential up on its next bootstrap", cfg.id.toString());
+        return;
+    }
+    try {
+        auto msg = ControlMessage("reconnectNetwork", cfg.id.toString(), userId, cfg.toJson());
+        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+        redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+    } catch (Exception e) {
+        logWarn("nickserv: failed to push reconnectNetwork for %s: %s", cfg.id.toString(), e.msg);
+    }
+}
+
+/// Strip the SASL credential from `cfg` and make the engine drop it.
+///
+/// A non-empty `skipReason` also parks auto-provisioning for 24h via the
+/// existing skip marker. Without that, the very next login would see a
+/// network with no credential, register a brand-new NickServ account and
+/// silently re-link the user — which makes an admin's unlink look broken.
+/// The marker is the same 24h one the provisioner uses, so it expires on its
+/// own and shows up in this page's `skipMarkers` count.
+private void clearCredential(User owner, NetworkConfig cfg, RedisStorage redis,
+                             ServerRegistry serverRegistry, string skipReason) {
+    const userId = owner.id.toString();
+    auto db = redis.getDb();
+
+    // Linking sets nick/realName to the account name, so clearing must undo
+    // that too. Leaving the nick pointing at an account the user no longer
+    // holds means their session reconnects trying to use somebody else's
+    // nickname and gets guest-nicked by services (observed in the scratch
+    // smoke: an unlinked user kept `nick: nslink1` after the account moved).
+    const removed = cfg.saslUsername.strip();
+    cfg.sasl = SASLMechanism.none;
+    cfg.saslUsername = "";
+    cfg.saslPassword = "";
+    if (removed.length && sicmp(cfg.nick.strip(), removed) == 0) {
+        const own = buildDefaultNick(owner);
+        if (own.length) {
+            cfg.nick = own;
+            cfg.realName = own;
+        }
+    }
+    new NetworkRepository().save(cfg, owner.id);
+    redis.del(RedisKeys.userNetworks(userId));
+    try db.del(servicesPendingKey(userId));
+    catch (Exception e) logWarn("nickserv: clearing pending key for %s failed: %s", userId, e.msg);
+    if (skipReason.length) {
+        try db.request!string("SET", servicesSkipKey(userId), skipReason, "EX", "86400");
+        catch (Exception e) logWarn("nickserv: setting skip key for %s failed: %s", userId, e.msg);
+    } else {
+        try db.del(servicesSkipKey(userId));
+        catch (Exception e) logWarn("nickserv: clearing skip key for %s failed: %s", userId, e.msg);
+    }
+    pushReconnect(cfg, userId, redis, serverRegistry);
+}
+
+/// The user's `irc.ircfiber.com` network, created if they somehow lack one.
+/// `ensureDefaultFiberNetwork` is the same idempotent helper signup and login
+/// use, so linking works for an account that predates the feature.
+private bool fiberNetworkFor(User owner, RedisStorage redis, ServerRegistry serverRegistry,
+                             out NetworkConfig cfg) {
+    cfg = NetworkConfig.init;
+    auto repo = new NetworkRepository();
+    foreach (ref c; repo.findByUserId(owner.id)) {
+        if (c.host == DEFAULT_FIBER_HOST) {
+            cfg = c;
+            return true;
+        }
+    }
+    cfg = ensureDefaultFiberNetwork(owner, repo, redis, serverRegistry);
+    return cfg.id != UUID.init;
+}
+
+/// Resolve the `userId` field of a request body to a real user.
+private bool bodyUser(HTTPServerResponse res, Json payload, out User owner) {
+    owner = User.init;
+    const userId = jsonStr(payload, "userId");
+    if (!userId.length) {
+        jsonError(res, 400, "A userId is required.");
+        return false;
+    }
+    UUID uid;
+    // `.idup`: vibe.d's parseUUID aliases (and can blank) the source slice.
+    try uid = parseUUID(userId.idup);
+    catch (Exception) {
+        jsonError(res, 400, "That userId is not a UUID.");
+        return false;
+    }
+    try owner = new UserRepository().findById(uid);
+    catch (Exception e) {
+        logWarn("nickserv: user lookup for %s failed: %s", userId, e.msg);
+        jsonError(res, 502, "Could not read the user record.");
+        return false;
+    }
+    if (owner.id == UUID.init) {
+        jsonError(res, 404, "No user with that id.");
+        return false;
+    }
+    return true;
+}
+
+/**
+ * POST /api/admin/ircd/nickserv/link
+ * body {nick, userId, password?, confirm?, force?}
+ *
+ * Two credential modes, because an admin links for two different reasons:
+ *   - `password` supplied — the user already knows their NickServ password and
+ *     it must not change. The password is only verified, never written.
+ *   - no `password` — the credential is unknown (the usual case for an account
+ *     registered on IRC long ago), so one is generated, set with SASET and
+ *     returned once. That rotates the account's password, hence `confirm`.
+ */
+package void apiNsLink(HTTPServerRequest req, HTTPServerResponse res,
+                       RedisStorage redis, ServerRegistry serverRegistry) {
+    AnopeSettings s;
+    if (!nsSettings(res, s)) return;
+    auto payload = readJsonBody(req);
+    const nick = jsonStr(payload, "nick");
+    if (!nsValidNick(res, nick)) return;
+    User owner;
+    if (!bodyUser(res, payload, owner)) return;
+
+    // Refuse to "link" a nickname nobody owns: the credential could never
+    // authenticate, and the supplied-password path would otherwise report the
+    // password as wrong rather than the account as missing.
+    auto info = anopeOperQuery(s, "INFO " ~ nick);
+    if (!nsReplyOk(res, s, nick, info)) return;
+    if (!parseNickInfo(info.rawText.length ? info.rawText : info.text).registered) {
+        jsonError(res, 404, "No NickServ account named \"" ~ nick ~ "\".");
+        return;
+    }
+
+    // One account, one network. Two networks authenticating as the same
+    // account fight over the nick on IRC and one of them loses its session.
+    string replacedUser;
+    NetworkConfig otherCfg;
+    User otherOwner;
+    if (findPlatformAccount(nick, otherCfg, otherOwner) && otherOwner.id != owner.id) {
+        if (!jsonTrue(payload, "force")) {
+            jsonError(res, 409, "\"" ~ nick ~ "\" is already linked to " ~ otherOwner.username
+                ~ ". Unlink that user first, or pass force to move the account.");
+            return;
+        }
+        replacedUser = otherOwner.username;
+    }
+
+    const supplied = jsonStr(payload, "password");
+    string pw = supplied;
+    const rotate = supplied.length == 0;
+    if (rotate) {
+        if (!jsonTrue(payload, "confirm")) {
+            jsonError(res, 400, "Confirmation required: linking without a password rotates " ~
+                      "the account's password.");
+            return;
+        }
+        try pw = generateServicesPassword();
+        catch (Exception e) {
+            logWarn("nickserv: password generation failed: %s", e.msg);
+            jsonError(res, 500, "Could not generate a password.");
+            return;
+        }
+        auto set = anopeOperCommand(s, nickServSetPasswordCommand(nick, pw));
+        if (!nsReplyOk(res, s, nick, set)) return;
+    } else if (!isSafeServicesArg(pw)) {
+        jsonError(res, 400, "That password cannot be used (whitespace or control characters).");
+        return;
+    }
+
+    // Never persist a credential we have not proven: this is the check that
+    // caught SASET's reversed parameter order, where Anope answered 200 and
+    // changed nothing.
+    bool determined;
+    if (!anopeCheckAuthentication(s, nick, pw, determined)) {
+        if (!determined) {
+            jsonError(res, 502, "Could not verify the credential (Anope unreachable).");
+            return;
+        }
+        jsonError(res, rotate ? 502 : 400,
+                  rotate ? "Anope accepted no new password for \"" ~ nick ~ "\"."
+                         : "That password does not authenticate for \"" ~ nick ~ "\".");
+        return;
+    }
+
+    NetworkConfig cfg;
+    if (!fiberNetworkFor(owner, redis, serverRegistry, cfg)) {
+        jsonError(res, 409, owner.username ~ " has no " ~ DEFAULT_FIBER_HOST ~ " network and " ~
+                  "one could not be created (the Fiber network may be disabled in config).");
+        return;
+    }
+    const previousAccount = cfg.saslUsername.strip();
+
+    // Move the account off the previous owner first, so there is never a
+    // moment where two networks hold the same credential.
+    if (replacedUser.length) {
+        try clearCredential(otherOwner, otherCfg, redis, serverRegistry,
+                            "NickServ account " ~ nick ~ " was reassigned by an administrator");
+        catch (Exception e) {
+            logWarn("nickserv: could not unlink %s from %s: %s", nick, replacedUser, e.msg);
+            jsonError(res, 502, "Could not unlink " ~ replacedUser ~ " first; nothing was changed.");
+            return;
+        }
+    }
+
+    try {
+        // The signup path, so the engine reconnects and identifies instead of
+        // retrying whatever it held before.
+        persistProvisionedAccount(owner, cfg, nick, pw,
+                                  new NetworkRepository(), redis, serverRegistry);
+    } catch (Exception e) {
+        logWarn("nickserv: linking %s to %s failed: %s", nick, owner.username, e.msg);
+        jsonError(res, 502, "Could not persist the credential: " ~ e.msg);
+        return;
+    }
+    // The link is deliberate, so auto-provisioning must neither be parked nor
+    // hold a stale half-finished credential for this user.
+    auto db = redis.getDb();
+    try db.del(servicesSkipKey(owner.id.toString()));
+    catch (Exception) {}
+    try db.del(servicesPendingKey(owner.id.toString()));
+    catch (Exception) {}
+
+    logInfo("Admin linked NickServ account %s to user %s (rotated: %s, previous account: %s, " ~
+            "taken from: %s)", nick, owner.username, rotate,
+            previousAccount.length ? previousAccount : "none",
+            replacedUser.length ? replacedUser : "none");
+
+    auto data = Json.emptyObject;
+    data["nick"] = nick;
+    data["userId"] = owner.id.toString();
+    data["username"] = owner.username;
+    data["networkId"] = cfg.id.toString();
+    data["passwordRotated"] = rotate;
+    // Shown once, and only when we generated it — never echo one the admin
+    // supplied back into a response body.
+    if (rotate) data["password"] = pw;
+    data["previousAccount"] = previousAccount;
+    data["takenFrom"] = replacedUser;
+    jsonOk(res, data);
+}
+
+/**
+ * POST /api/admin/ircd/nickserv/unlink
+ * body {nick?, userId?, confirm}
+ *
+ * Clears the credential without touching the NickServ account itself — that
+ * is what `drop` is for. Deliberately does NOT require Anope to be reachable:
+ * an unreachable services host is exactly when an admin needs to stop a
+ * session from retrying a credential.
+ */
+package void apiNsUnlink(HTTPServerRequest req, HTTPServerResponse res,
+                         RedisStorage redis, ServerRegistry serverRegistry) {
+    auto payload = readJsonBody(req);
+    if (!jsonTrue(payload, "confirm")) {
+        jsonError(res, 400, "Confirmation required.");
+        return;
+    }
+    const nick = jsonStr(payload, "nick");
+    const userId = jsonStr(payload, "userId");
+
+    NetworkConfig cfg;
+    User owner;
+    if (nick.length) {
+        if (!nsValidNick(res, nick)) return;
+        if (!findPlatformAccount(nick, cfg, owner)) {
+            jsonError(res, 404, "\"" ~ nick ~ "\" is not linked to any IRC Fiber user.");
+            return;
+        }
+    } else if (userId.length) {
+        if (!bodyUser(res, payload, owner)) return;
+        bool found;
+        try {
+            foreach (ref c; new NetworkRepository().findByUserId(owner.id)) {
+                if (c.host == DEFAULT_FIBER_HOST && c.saslUsername.strip().length) {
+                    cfg = c;
+                    found = true;
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            logWarn("nickserv: network lookup for %s failed: %s", owner.username, e.msg);
+            jsonError(res, 502, "Could not read the user's networks.");
+            return;
+        }
+        if (!found) {
+            jsonError(res, 404, owner.username ~ " holds no NickServ credential.");
+            return;
+        }
+    } else {
+        jsonError(res, 400, "A nick or a userId is required.");
+        return;
+    }
+
+    const account = cfg.saslUsername.strip();
+    try clearCredential(owner, cfg, redis, serverRegistry,
+                        "unlinked from NickServ account " ~ account ~ " by an administrator");
+    catch (Exception e) {
+        logWarn("nickserv: unlinking %s from %s failed: %s", account, owner.username, e.msg);
+        jsonError(res, 502, "Could not clear the credential: " ~ e.msg);
+        return;
+    }
+
+    logWarn("Admin unlinked NickServ account %s from user %s", account, owner.username);
+    auto data = Json.emptyObject;
+    data["nick"] = account;
+    data["userId"] = owner.id.toString();
+    data["username"] = owner.username;
+    data["networkId"] = cfg.id.toString();
+    data["unlinked"] = true;
+    // Auto-provisioning is parked for 24h so the next login does not silently
+    // mint a replacement account and re-link the user.
+    data["autoProvisionParkedHours"] = 24;
     jsonOk(res, data);
 }

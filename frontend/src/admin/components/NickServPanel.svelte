@@ -48,6 +48,12 @@
     nick: string; registered: boolean; account: string; realName: string;
     fields: Record<string, string>; lines: string[]; platform: NsPlatform | null;
   }
+  interface UserRow { id: string; username: string; email: string; }
+  interface NsLinkResult {
+    nick: string; userId: string; username: string; networkId: string;
+    passwordRotated: boolean; password?: string;
+    previousAccount: string; takenFrom: string;
+  }
 
   let accounts = $state<NsAccount[]>([]);
   let available = $state(true);
@@ -93,6 +99,18 @@
   let passwordSynced = $state(true);
   let confirmDrop = $state(false);
   let confirmReset = $state(false);
+
+  // Linking a website user to this NickServ account. The join the table shows
+  // is derived from the user's saslUsername, so "linking" means writing a
+  // credential that actually authenticates — hence the two modes below.
+  let linkQuery = $state('');
+  let linkResults = $state<UserRow[]>([]);
+  let linkUserId = $state('');
+  let linkPassword = $state('');
+  let linkSearching = $state(false);
+  let linkConflict = $state<string | null>(null);
+  let confirmLinkRotate = $state(false);
+  let confirmUnlink = $state(false);
 
   /// `ns_info` emits labels in a fixed order; anything Anope adds later is
   /// appended rather than dropped. The suspension labels are the ones
@@ -291,6 +309,96 @@
       toastSuccess('Password copied');
     } catch {
       toastError('Could not copy to the clipboard.');
+    }
+  }
+
+  async function searchUsers() {
+    linkSearching = true;
+    actionError = null;
+    try {
+      const q = linkQuery.trim();
+      const r = await api.get<{ users: UserRow[] }>('/api/admin/users', q ? { q } : undefined);
+      linkResults = r.users ?? [];
+      // Preselect when the search leaves exactly one candidate; with several,
+      // force an explicit choice rather than guessing at the right person.
+      linkUserId = linkResults.length === 1 ? linkResults[0].id : '';
+    } catch (e) {
+      actionError = errMsg(e);
+      linkResults = [];
+    } finally {
+      linkSearching = false;
+    }
+  }
+
+  /// `force` moves the account off whoever currently holds it.
+  async function link(force = false) {
+    const nick = infoNick;
+    if (!linkUserId) {
+      toastError('Pick a website user first.');
+      return;
+    }
+    const pw = linkPassword.trim();
+    confirmLinkRotate = false;
+    acting = 'link';
+    actionError = null;
+    linkConflict = null;
+    try {
+      const r = await api.post<NsLinkResult>('/api/admin/ircd/nickserv/link', {
+        nick,
+        userId: linkUserId,
+        // A supplied password is only verified; no password means generate one,
+        // which rotates the account's and therefore needs confirmation.
+        ...(pw ? { password: pw } : { confirm: true }),
+        ...(force ? { force: true } : {}),
+      });
+      toastSuccess(`Linked ${nick} to ${r.username}`);
+      if (r.takenFrom) toastInfo(`Moved the account away from ${r.takenFrom}.`);
+      linkPassword = '';
+      linkQuery = '';
+      linkResults = [];
+      linkUserId = '';
+      // Refresh first: lookup() only clears the password when the nick changes,
+      // so a generated credential survives and renders once below.
+      await afterAction(nick);
+      if (r.passwordRotated && r.password) {
+        newPassword = r.password;
+        passwordSynced = true;
+      }
+    } catch (e) {
+      actionError = errMsg(e);
+      // 409 means another user holds it; offer the move instead of dead-ending.
+      // The conflict box carries the message *and* the remedy, so hand it over
+      // rather than also rendering it in the generic error line.
+      if (e instanceof ApiError && e.status === 409) {
+        linkConflict = actionError;
+        actionError = null;
+      }
+      toastError(linkConflict ?? errMsg(e));
+    } finally {
+      acting = '';
+    }
+  }
+
+  async function unlink() {
+    const nick = infoNick;
+    confirmUnlink = false;
+    acting = 'unlink';
+    actionError = null;
+    try {
+      const r = await api.post<{ username: string; autoProvisionParkedHours: number }>(
+        '/api/admin/ircd/nickserv/unlink', { nick, confirm: true },
+      );
+      toastSuccess(`Unlinked ${nick} from ${r.username}`);
+      toastInfo(
+        `Auto-provisioning is parked for ${r.autoProvisionParkedHours}h so the next login ` +
+        'does not mint a replacement account.',
+      );
+      await afterAction(nick);
+    } catch (e) {
+      actionError = errMsg(e);
+      toastError(actionError);
+    } finally {
+      acting = '';
     }
   }
 
@@ -576,6 +684,93 @@
       {/if}
     </dl>
 
+    <!--
+      Link / unlink. The Website user row above is derived from the account's
+      saslUsername, so this is the only place the join can actually be created:
+      it writes a proven credential onto the user's irc.ircfiber.com network.
+    -->
+    {#if info.platform}
+      <div class="mt-3 flex flex-wrap items-center gap-2 border-t border-border/40 pt-3">
+        <span class="text-xs text-muted">
+          Linked to <span class="font-semibold text-text">{info.platform.username}</span>
+        </span>
+        <button
+          type="button"
+          data-testid="ns-unlink"
+          onclick={() => (confirmUnlink = true)}
+          class="rounded-md border border-danger/40 px-2.5 py-1 text-xs text-danger hover:bg-danger/10"
+        >
+          {acting === 'unlink' ? 'Loading…' : 'Unlink'}
+        </button>
+      </div>
+    {:else}
+      <div class="mt-3 border-t border-border/40 pt-3">
+        <h4 class="text-xs font-semibold text-heading">Link to an IRC Fiber user</h4>
+        <p class="mt-0.5 text-xs text-muted">
+          Writes this account as the user's SASL credential and reconnects their session. Leave
+          the password blank to generate a new one; supply the existing password to link without
+          changing it.
+        </p>
+        <form
+          class="mt-2 flex flex-wrap items-center gap-2"
+          onsubmit={(e) => { e.preventDefault(); void searchUsers(); }}
+        >
+          <input
+            type="search"
+            bind:value={linkQuery}
+            placeholder="Search users by name or email…"
+            aria-label="Search users to link"
+            class="w-full max-w-[260px] {input}"
+          />
+          <button type="submit" class={btn}>{linkSearching ? 'Searching…' : 'Search'}</button>
+        </form>
+        {#if linkResults.length > 0}
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <select
+              bind:value={linkUserId}
+              aria-label="Website user to link"
+              class="max-w-[320px] {input}"
+            >
+              <option value="">Select a user…</option>
+              {#each linkResults as u}
+                <option value={u.id}>{u.username} · {u.email}</option>
+              {/each}
+            </select>
+            <input
+              bind:value={linkPassword}
+              type="password"
+              placeholder="existing password (optional)"
+              aria-label="Existing NickServ password"
+              class="w-full max-w-[220px] font-mono {input}"
+            />
+            <button
+              type="button"
+              data-testid="ns-link"
+              onclick={() => (linkPassword.trim() ? void link() : (confirmLinkRotate = true))}
+              class="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90"
+            >
+              {acting === 'link' ? 'Loading…' : 'Link account'}
+            </button>
+          </div>
+        {:else if linkQuery && !linkSearching}
+          <p class="mt-2 text-xs text-muted">No users matched.</p>
+        {/if}
+        {#if linkConflict}
+          <div class="mt-2 rounded-md border border-warn/40 bg-warn/5 p-2">
+            <p class="text-xs text-danger">{linkConflict}</p>
+            <button
+              type="button"
+              data-testid="ns-link-force"
+              onclick={() => void link(true)}
+              class="mt-2 {btn}"
+            >
+              Move the account anyway
+            </button>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
     <details class="mt-3">
       <summary class="cursor-pointer text-xs text-muted">Raw NickServ reply</summary>
       <pre
@@ -667,4 +862,22 @@
   confirmLabel="Drop account"
   onConfirm={drop}
   onCancel={() => (confirmDrop = false)}
+/>
+<ConfirmDialog
+  open={confirmLinkRotate}
+  tone="warn"
+  title="Link and generate a new password?"
+  message={`No existing password was supplied, so a new one is generated for ${infoNick} and shown once. Anyone using the old password — including the account's owner — stops being able to identify.`}
+  confirmLabel="Generate and link"
+  onConfirm={() => link()}
+  onCancel={() => (confirmLinkRotate = false)}
+/>
+<ConfirmDialog
+  open={confirmUnlink}
+  tone="danger"
+  title="Unlink this account from the user?"
+  message={`${infoNick} stays registered on services, but stops being ${info?.platform?.username ?? 'the user'}'s SASL credential and their session reconnects unauthenticated. Auto-provisioning is parked for 24h so the next login does not mint a replacement.`}
+  confirmLabel="Unlink"
+  onConfirm={unlink}
+  onCancel={() => (confirmUnlink = false)}
 />

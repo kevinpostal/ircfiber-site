@@ -326,4 +326,136 @@ describe('NickServPanel.svelte — NickServ account management', () => {
     expect(orphans.textContent?.trim()).toBe('unknown');
     expect(orphans.className).not.toContain('text-danger');
   });
+
+  // ── linking a website user to a NickServ account ──────────────────────────
+  // The Website-user column is derived from the account's saslUsername, so
+  // these are the only paths that can actually create or remove that join.
+
+  /// `nsvictim` is registered on IRC but owned by nobody.
+  const unlinkedInfo = () => ({
+    ...infoFixture(),
+    nick: 'nsvictim',
+    account: 'nsvictim',
+    fields: { Account: 'nsvictim' },
+    platform: null,
+  });
+
+  const USERS = '/api/admin/users';
+
+  function mockUnlinked() {
+    mockedGet.mockImplementation((path: string) => {
+      if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
+      if (path === ACCOUNT) return Promise.resolve(unlinkedInfo());
+      if (path === USERS)
+        return Promise.resolve({ users: [{ id: 'u-9', username: 'bob', email: 'bob@example.com' }] });
+      return Promise.reject(new Error('unexpected GET ' + path));
+    });
+  }
+
+  /// Looks up `nsvictim` by name rather than clicking the first Manage button,
+  /// which is `alice` — the account the component acts on is the one it looked
+  /// up, so the row and the fixture have to agree.
+  async function openUnlinked() {
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(2));
+    await page.getByLabelText('Nickname to look up').fill('nsvictim');
+    await page.getByRole('button', { name: 'Look up' }).click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(ACCOUNT, { nick: 'nsvictim' }));
+  }
+
+  it('links with a supplied password and does not rotate it', async () => {
+    mockUnlinked();
+    mockedPost.mockResolvedValue({
+      nick: 'nsvictim', userId: 'u-9', username: 'bob', networkId: 'n-9',
+      passwordRotated: false, previousAccount: '', takenFrom: '',
+    });
+    await openUnlinked();
+
+    await page.getByLabelText('Search users to link').fill('bob');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(USERS, { q: 'bob' }));
+    await page.getByLabelText('Existing NickServ password').fill('hunter2hunter2hunter2');
+    await page.getByRole('button', { name: 'Link account' }).click();
+
+    // A supplied password must be verified, never rewritten: no `confirm`.
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/nickserv/link', {
+        nick: 'nsvictim', userId: 'u-9', password: 'hunter2hunter2hunter2',
+      }),
+    );
+  });
+
+  it('a blank password confirms first, then shows the generated one once', async () => {
+    mockUnlinked();
+    mockedPost.mockResolvedValue({
+      nick: 'nsvictim', userId: 'u-9', username: 'bob', networkId: 'n-9',
+      passwordRotated: true, password: 'GeneratedPw012345678901', previousAccount: '', takenFrom: '',
+    });
+    await openUnlinked();
+    await page.getByLabelText('Search users to link').fill('bob');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(USERS, { q: 'bob' }));
+
+    await page.getByRole('button', { name: 'Link account' }).click();
+    await expect.element(page.getByText('Link and generate a new password?')).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+
+    await page.getByRole('button', { name: 'Generate and link' }).click();
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/nickserv/link', {
+        nick: 'nsvictim', userId: 'u-9', confirm: true,
+      }),
+    );
+    const shown = await vi.waitFor(() => {
+      const el = document.querySelector('input[aria-label="New NickServ password"]');
+      expect(el).toBeTruthy();
+      return el as HTMLInputElement;
+    });
+    expect(shown.value).toBe('GeneratedPw012345678901');
+  });
+
+  it('offers to move an account that another user already holds', async () => {
+    mockUnlinked();
+    mockedPost.mockRejectedValueOnce(
+      new ApiError('"nsvictim" is already linked to carol. Unlink that user first, or pass force to move the account.', 409),
+    );
+    await openUnlinked();
+    await page.getByLabelText('Search users to link').fill('bob');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(USERS, { q: 'bob' }));
+    await page.getByLabelText('Existing NickServ password').fill('hunter2hunter2hunter2');
+    await page.getByRole('button', { name: 'Link account' }).click();
+
+    await expect.element(page.getByText(/already linked to carol/)).toBeInTheDocument();
+    mockedPost.mockResolvedValue({
+      nick: 'nsvictim', userId: 'u-9', username: 'bob', networkId: 'n-9',
+      passwordRotated: false, previousAccount: '', takenFrom: 'carol',
+    });
+    await page.getByRole('button', { name: 'Move the account anyway' }).click();
+    await vi.waitFor(() => {
+      const forced = mockedPost.mock.calls.find(
+        (c) => typeof c[1] === 'object' && c[1] !== null && 'force' in c[1],
+      );
+      expect(forced?.[1]).toMatchObject({ nick: 'nsvictim', userId: 'u-9', force: true });
+    });
+  });
+
+  it('unlink posts nothing until the dialog is confirmed', async () => {
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(2));
+    await page.getByRole('button', { name: 'Manage' }).first().click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(ACCOUNT, { nick: 'alice' }));
+    mockedPost.mockResolvedValue({ username: 'alice', autoProvisionParkedHours: 24 });
+
+    await page.getByRole('button', { name: 'Unlink', exact: true }).click();
+    await expect.element(page.getByText('Unlink this account from the user?')).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+
+    await page.getByRole('button', { name: 'Unlink' }).last().click();
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/nickserv/unlink', {
+        nick: 'alice', confirm: true,
+      }),
+    );
+  });
 });

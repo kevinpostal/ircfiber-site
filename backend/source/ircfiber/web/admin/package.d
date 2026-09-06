@@ -41,7 +41,7 @@ import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
     apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig;
 import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
-    apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout;
+    apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink;
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
@@ -198,6 +198,8 @@ final class AdminController {
         router.post("/api/admin/ircd/nickserv/drop", &adminWrap!apiNsDropRoute);
         router.post("/api/admin/ircd/nickserv/password", &adminWrap!apiNsResetPasswordRoute);
         router.post("/api/admin/ircd/nickserv/logout", &adminWrap!apiNsLogoutRoute);
+        router.post("/api/admin/ircd/nickserv/link", &adminWrap!apiNsLinkRoute);
+        router.post("/api/admin/ircd/nickserv/unlink", &adminWrap!apiNsUnlinkRoute);
 
         // Logs (SigNoz) — gateway-side proxy so the browser needs no
         // SigNoz route or key of its own (see web.admin.logs).
@@ -263,6 +265,13 @@ private:
     }
     void apiNsResetPasswordRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiNsResetPassword(req, res, redis, serverRegistry);
+    }
+    // Linking writes the user's SASL credential and reconnects their session.
+    void apiNsLinkRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNsLink(req, res, redis, serverRegistry);
+    }
+    void apiNsUnlinkRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNsUnlink(req, res, redis, serverRegistry);
     }
     void apiDashboardRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiDashboard(req, res, redis, serverRegistry);
