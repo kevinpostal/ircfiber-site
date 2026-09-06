@@ -190,7 +190,11 @@
             {/if}
             {#if editError}<p class="userError editError" style="display:block;">{editError}</p>{/if}
           </h1>
-          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="position: relative; height: {Math.max(lineCount,1)*16 + 28}px; --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
+          <!-- Editing keeps a fixed height because CodeEditor's textarea
+               overlay is absolutely positioned; the wrapped read-only view
+               sizes itself, since a line can occupy several visual rows and
+               lineCount*16 would clip it. -->
+          <div class="editor ace_editor ace_hidpi ace-twilight ace_dark" style="position: relative; {editing && isOwner ? `height: ${Math.max(lineCount,1)*16 + 28}px;` : ''} --line-number-color: rgba(255, 255, 255, 0.3); --border-color: rgba(255, 255, 255, 0.1); --padding-left: 2em; --padding-right: 1em; --copy-background: rgba(255, 255, 255, 0.1); --copy-color: #fff; --copy-border-radius: 8px; --copy-size: 2.5em;">
             <div class="editorToolbar">
               <button class="copyButton" onclick={copyCode} aria-label="Copy code" title={copied ? 'Copied!' : 'Copy'}>
                 {#if copied}
@@ -204,7 +208,7 @@
             {#if editing && isOwner}
               <CodeEditor bind:value={editContent} language={editLang} showGutter={!gutterHidden} twilight />
             {:else}
-              <CodeEditor value={entry.body + '\n '} language={entry.syntax} readonly showGutter={!gutterHidden} twilight />
+              <CodeEditor value={entry.body} language={entry.syntax} readonly showGutter={!gutterHidden} twilight wrap />
             {/if}
           </div>
         </div>
@@ -247,7 +251,15 @@
   .paste .header .editForm button.cancel { padding: 4px 10px; border-radius: 3px; border: 1px solid #2a2d33; background: #161a22; color: #c9d1d9; cursor: pointer; font-size: 12px; }
   .paste .header .userError { color: #f85149; font-size: 12px; margin: 4px 0 0; padding: 0; }
   .editor { position: relative; border: none; overflow: visible; display: block; background: #141414; margin-top: 1px; }
-  .editor :global(.codeEditor) { display: flex; height: auto; min-height: 0; }
+  /* The wrapped read-only view stacks one row per line and sets its own
+     display:block; without the :not() this ties on specificity and wins on
+     source order, laying the rows out side by side instead of down. */
+  .editor :global(.codeEditor:not(.wrapped)) { display: flex; height: auto; min-height: 0; }
+  /* The copy button and the language tag float over the code. Unwrapped
+     lines only reached them by accident; wrapped lines always run the full
+     width, so the first and last rows reserve room for them. */
+  .editor :global(.codeEditor.wrapped .wrapRow:first-child .wrapCode) { padding-right: 46px; }
+  .editor :global(.codeEditor.wrapped .wrapRow:last-child .wrapCode) { padding-right: 74px; }
   .editorToolbar { position: absolute; top: 8px; right: 8px; z-index: 5; display: flex; align-items: center; }
   .copyButton { width: var(--copy-size, 2.5em); height: var(--copy-size, 2.5em); display: inline-flex; align-items: center; justify-content: center; padding: 0; font-size: 12px; line-height: 1; color: var(--copy-color, #fff); background: var(--copy-background, rgba(255,255,255,0.1)); border: 1px solid transparent; border-radius: var(--copy-border-radius, 8px); cursor: pointer; }
   .copyButton:hover { background: rgba(255,255,255,0.16); }

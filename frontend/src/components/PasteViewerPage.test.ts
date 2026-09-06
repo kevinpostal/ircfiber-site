@@ -50,15 +50,40 @@ describe('PasteViewerPage', () => {
 
   it('shows 1-line snippet without clipping', async () => {
     const { container } = render(PasteViewerPage, { props: { id: '8df764c9-3f89-4cd7-bd22-26b48a1dc6cc' } });
-    await new Promise(r => setTimeout(r, 300));
-    let tries = 0;
-    while (!container.querySelector('.editor') && tries < 20) {
-      await new Promise(r => setTimeout(r, 100));
-      tries++;
-    }
+    await vi.waitFor(() => {
+      if (!container.querySelector('.wrapRow')) throw new Error('not rendered');
+    });
     const editor = container.querySelector('.editor') as HTMLElement;
-    expect(editor).toBeTruthy();
-    expect(editor?.style.height).toBe('44px');
+    const row = container.querySelector('.wrapRow') as HTMLElement;
+    // The viewer sizes itself to its content rather than to a computed
+    // lineCount*16 height, so assert the line actually fits inside the
+    // editor box instead of pinning the pixel height that produced it.
+    const eb = editor.getBoundingClientRect();
+    const rb = row.getBoundingClientRect();
+    expect(rb.height).toBeGreaterThanOrEqual(16);
+    expect(rb.bottom).toBeLessThanOrEqual(eb.bottom + 1);
+    expect(rb.top).toBeGreaterThanOrEqual(eb.top - 1);
+  });
+
+  it('wraps long lines instead of scrolling horizontally', async () => {
+    const oneLongLine = 'x'.repeat(600);
+    const paste = { ...mockPaste, id: 'wrap-1', lines: 1, body: oneLongLine, content: oneLongLine };
+    vi.stubGlobal('fetch', vi.fn((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(typeof url === 'string' && url.includes('/api/pastebins/') ? paste : {}),
+        text: () => Promise.resolve(oneLongLine),
+      } as Response)));
+    const { container } = render(PasteViewerPage, { props: { id: 'wrap-1' } });
+    await vi.waitFor(() => {
+      if (!container.querySelector('.wrapRow')) throw new Error('not rendered');
+    });
+    const code = container.querySelector('.codeEditor') as HTMLElement;
+    const row = container.querySelector('.wrapRow') as HTMLElement;
+    // Nothing spills sideways...
+    expect(code.scrollWidth).toBeLessThanOrEqual(code.clientWidth + 1);
+    // ...because the single logical line occupies several visual rows.
+    expect(row.getBoundingClientRect().height).toBeGreaterThan(16);
   });
 
   it('syntax highlight updates in real-time when language select changes (arrow keys)', async () => {

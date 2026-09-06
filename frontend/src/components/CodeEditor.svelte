@@ -1,6 +1,7 @@
 <script lang="ts">
   import hljs from 'highlight.js/lib/common';
   import 'highlight.js/styles/atom-one-dark.css';
+  import { splitHighlightedLines } from '../lib/codeLines';
 
   interface Props {
     value: string;
@@ -9,8 +10,13 @@
     readonly?: boolean;
     showGutter?: boolean;
     twilight?: boolean;
+    /** Soft-wrap long lines instead of scrolling horizontally. Read-only
+     *  only: the editable path overlays a textarea on the highlight layer
+     *  and the two would have to wrap identically to stay aligned. */
+    wrap?: boolean;
   }
-  let { value = $bindable(''), language = 'text', oninput, readonly = false, showGutter = true, twilight = false }: Props = $props();
+  let { value = $bindable(''), language = 'text', oninput, readonly = false, showGutter = true, twilight = false, wrap = false }: Props = $props();
+  let wrapped = $derived(wrap && readonly);
 
   const HLJS_MAP: Record<string, string> = {
     text: 'plaintext',
@@ -84,6 +90,11 @@
     return nums.join('\n');
   });
 
+  // One HTML fragment per logical line, used only by the wrapped view.
+  let wrappedLines = $derived(wrapped ? splitHighlightedLines(highlightedHtml) : []);
+  // Widen the number column with the file, so 4-digit pastes don't clip.
+  let gutterDigits = $derived(Math.max(String(Math.max(wrappedLines.length, 1)).length, 2));
+
   // svelte-ignore non_reactive_update — bind:this targets, not user state
   let editorEl: HTMLTextAreaElement | undefined = $state(undefined);
   let hlEl: HTMLPreElement | undefined = $state(undefined);
@@ -104,6 +115,21 @@
     oninput?.(value);
   }
 </script>
+{#if wrapped}
+  <!-- Wrapped view: one row per logical line so a number can sit beside a
+       block several visual rows tall, top-aligned, exactly as ACE renders
+       it in IRCCloud's paste viewer. -->
+  <div class="codeEditor wrapped" class:twilight>
+    {#each wrappedLines as html, i (i)}
+      <div class="wrapRow">
+        {#if showGutter}
+          <span class="wrapLn" aria-hidden="true" style="--gutter-digits: {gutterDigits}">{i + 1}</span>
+        {/if}
+        <code class="wrapCode">{@html html}</code>
+      </div>
+    {/each}
+  </div>
+{:else}
 <div class="codeEditor" class:readonly class:twilight>
   {#if showGutter}<pre bind:this={gutterEl} class="gutter" aria-hidden="true">{gutterText}</pre>{/if}
   <div class="editorWrap" class:readonly>
@@ -123,6 +149,7 @@
     {/if}
   </div>
 </div>
+{/if}
 
 <style>
   .codeEditor {
@@ -132,6 +159,62 @@
     min-height: 0;
     background: #282c34;
     overflow: hidden;
+  }
+
+  /* ── wrapped view ─────────────────────────────────────────────────
+     A column of rows rather than the two absolutely-positioned layers:
+     the row's own height is what keeps the number aligned with the top
+     of its (possibly multi-row) line, and it also lets the container
+     grow so the page scrolls vertically instead of horizontally. */
+  .codeEditor.wrapped {
+    display: block;
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #282c34;
+    overflow: hidden;
+    padding: 6px 0;
+  }
+  .wrapRow {
+    display: flex;
+    align-items: stretch;
+    min-height: 16px;
+  }
+  .wrapLn,
+  .wrapCode {
+    font-family: Hack, monospace;
+    font-size: 14px;
+    line-height: 16px;
+    font-variant-ligatures: no-common-ligatures;
+  }
+  .wrapLn {
+    flex: 0 0 auto;
+    /* Same 41px default as .gutter, but grows for pastes past 99 lines. */
+    width: max(var(--gutter-width, 41px), calc(var(--gutter-digits, 2) * 1ch + 12px));
+    padding-left: var(--padding-left, 0);
+    padding-right: var(--padding-right, 6px);
+    box-sizing: border-box;
+    text-align: right;
+    color: var(--line-number-color, #5c6370);
+    background: #21252b;
+    border-right: 1px solid var(--border-color, #2c313a);
+    user-select: none;
+    cursor: default;
+    white-space: pre;
+  }
+  .wrapCode {
+    flex: 1 1 auto;
+    /* min-width:0 is what actually permits the shrink; without it the
+       flex item keeps its max-content width and nothing wraps. */
+    min-width: 0;
+    padding: 0 4px 0 10px;
+    background: transparent;
+    color: #abb2bf;
+    cursor: text;
+    tab-size: 4;
+    /* pre-wrap keeps indentation; anywhere breaks the unbroken 300-char
+       runs (URLs, base64, minified JS) that break-word leaves overflowing. */
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .gutter,
   .hlLayer,
@@ -259,8 +342,10 @@
     padding: 6px 4px;
   }
   .codeEditor.twilight { background: #141414; }
-  .codeEditor.twilight .gutter { background: #232323; color: var(--line-number-color, #E2E2E2); border-right-color: var(--border-color, #232323); }
-  .codeEditor.twilight .hlLayer { color: #f8f8f8; }
+  .codeEditor.twilight .gutter,
+  .codeEditor.twilight .wrapLn { background: #232323; color: var(--line-number-color, #E2E2E2); border-right-color: var(--border-color, #232323); }
+  .codeEditor.twilight .hlLayer,
+  .codeEditor.twilight .wrapCode { color: #f8f8f8; }
   .codeEditor.twilight :global(.hljs) { background: #141414; color: #f8f8f8; }
   .codeEditor.twilight :global(.hljs-meta),
   .codeEditor.twilight :global(.hljs-selector-tag) { color: #CDA869; }
