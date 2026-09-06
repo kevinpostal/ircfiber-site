@@ -594,6 +594,45 @@ describe('updateNetworkFromSync', () => {
 		expect(updated?.host).toBe('new.host');
 	});
 
+	/**
+	 * A network deleted server-side stayed in this store forever — nothing
+	 * ever removed it — and its messages stayed with it, so the room was
+	 * still openable at /irc/<name>/channel/%23chan (and still rendered from
+	 * the sessionStorage cache after a reload) while the sidebar, rebuilt
+	 * from the same list, correctly stopped showing it. Reported 2026-09-06
+	 * for BLCKND/#blcknd.
+	 */
+	it('prunes networks the authoritative sync no longer lists', () => {
+		ircState.networks.push(
+			createNetwork({ networkId: 'keep', name: 'Keep' }),
+			createNetwork({ networkId: 'gone', name: 'BLCKND' }),
+		);
+		ircState.messages['gone:#blcknd'] = [];
+		ircState.messages['keep:#chan'] = [];
+		ircState.activeBuffer.networkId = 'gone';
+		ircState.activeBuffer.bufferName = '#blcknd';
+
+		updateNetworkFromSync([createNetwork({ networkId: 'keep', name: 'Keep' })], true);
+		flushSync();
+
+		expect(untrack(() => ircState.networks.map((n) => n.networkId))).toEqual(['keep']);
+		// Its messages go too, or the buffer keeps rendering without it.
+		expect(Object.keys(untrack(() => ircState.messages))).toEqual(['keep:#chan']);
+		// And the view cannot stay pointed at a network that no longer exists.
+		expect(untrack(() => ircState.activeBuffer.networkId)).toBeNull();
+	});
+
+	it('keeps everything when the payload carried no network list', () => {
+		// `updateNetworkFromSync(obj.networks || [])` with the key absent must
+		// not be read as "this user has no networks" — pruning is opt-in.
+		ircState.networks.push(createNetwork({ networkId: 'net1', name: 'Libera' }));
+
+		updateNetworkFromSync([]);
+		flushSync();
+
+		expect(untrack(() => ircState.networks)).toHaveLength(1);
+	});
+
 	it('enriches member realnames from sync caches (bare + prefixed keys)', () => {
 		// The engine ships a network-wide `realnames` cache (bare nick keys,
 		// from extended-join + WHOIS 311) plus a per-buffer `chan.realnames`

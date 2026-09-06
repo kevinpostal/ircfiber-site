@@ -66,41 +66,8 @@ void purgeUserAccount(User user, RedisStorage redis, ServerRegistry serverRegist
 
     foreach (net; netRepo.findByUserId(id)) {
         dropServicesAccount(net);
-        const netId = net.id.toString();
-        string serverId;
-        try serverId = serverRegistry.getServerForNetwork(netId);
-        catch (Exception e) logWarn("purge %s: server lookup for %s failed: %s",
-                                    user.username, netId, e.msg);
-
-        auto msg = ControlMessage("removeNetwork", netId);
-        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
-        try {
-            if (serverId.length > 0) {
-                redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
-                try bufferManager.clearNetworkBuffers(serverId, netId);
-                catch (Exception) {}
-            } else {
-                redis.lpush(RedisKeys.control_legacy(), msg.toJson().toString());
-                try bufferManager.clearNetworkBuffers(netId);
-                catch (Exception) {}
-            }
-        } catch (Exception e) {
-            logWarn("purge %s: could not tell the engine to drop %s: %s",
-                    user.username, netId, e.msg);
-        }
-
+        purgeNetworkRuntimeState(net.id, redis, serverRegistry);
         netRepo.deleteById(net.id);
-
-        try {
-            if (serverId.length > 0) db.del(RedisKeys.state(serverId, netId));
-            db.del(RedisKeys.state_legacy(netId));
-            // The assignment outlives the network otherwise, and the janitor
-            // then keeps reporting a network nothing can look up.
-            db.hdel(RedisKeys.networkAssignments(), netId);
-            db.del(RedisKeys.networkFail(netId));
-        } catch (Exception e) {
-            logWarn("purge %s: Redis cleanup for %s failed: %s", user.username, netId, e.msg);
-        }
     }
 
     try db.del("prefs:" ~ userId);
@@ -110,6 +77,66 @@ void purgeUserAccount(User user, RedisStorage redis, ServerRegistry serverRegist
     purgeWsSessions(redis, userId);
     new UserRepository().deleteById(id);
     logWarn("Account purged: %s (id=%s)", user.username, userId);
+}
+
+/**
+ * Disconnects a network and erases every trace of it OUTSIDE Mongo: the
+ * engine is told to drop the socket, its scrollback and dedup sets go, and
+ * so do the assignment, the state snapshot, the retry marker, the lease and
+ * the persisted nick.
+ *
+ * Shared by account deletion and `DELETE /api/networks/:id`, because the
+ * single-network path used to leave all of it behind. Observed on prod: a
+ * network deleted at 19:10 still had its `irc:assignments` entry, a state
+ * snapshot claiming `connected: true`, and full `#channel` scrollback half
+ * an hour later — so the admin dashboard counted a network nothing could
+ * look up, and the frontend could still open and render the dead room.
+ *
+ * The Mongo document is NOT deleted here: the two callers delete it at
+ * different points (account purge does it last, per-network delete has
+ * already validated ownership), and mixing the two would hide which
+ * failure left what behind.
+ */
+void purgeNetworkRuntimeState(UUID networkId, RedisStorage redis,
+                              ServerRegistry serverRegistry) {
+    const netId = networkId.toString();
+    auto db = redis.getDb();
+    auto bufferManager = new BufferManager(redis);
+
+    string serverId;
+    try serverId = serverRegistry.getServerForNetwork(netId);
+    catch (Exception e) logWarn("purge: server lookup for %s failed: %s", netId, e.msg);
+
+    auto msg = ControlMessage("removeNetwork", netId);
+    msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
+    try {
+        if (serverId.length > 0) redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+        else redis.lpush(RedisKeys.control_legacy(), msg.toJson().toString());
+    } catch (Exception e) {
+        logWarn("purge: could not tell the engine to drop %s: %s", netId, e.msg);
+    }
+
+    try {
+        if (serverId.length > 0) bufferManager.clearNetworkBuffers(serverId, netId);
+        else bufferManager.clearNetworkBuffers(netId);
+    } catch (Exception e) {
+        logWarn("purge: clearing buffers for %s failed: %s", netId, e.msg);
+    }
+
+    try {
+        if (serverId.length > 0) db.del(RedisKeys.state(serverId, netId));
+        db.del(RedisKeys.state_legacy(netId));
+        // The assignment outlives the network otherwise, and the janitor
+        // then keeps reporting a network nothing can look up.
+        db.hdel(RedisKeys.networkAssignments(), netId);
+        db.del(RedisKeys.networkFail(netId));
+        // The lease is what stops another engine from adopting the id, and
+        // the persisted nick is what a re-created network would inherit.
+        db.del(RedisKeys.lease(netId));
+        db.del(RedisKeys.networkNick(netId));
+    } catch (Exception e) {
+        logWarn("purge: Redis cleanup for %s failed: %s", netId, e.msg);
+    }
 }
 
 /// Drops the NickServ account the provisioner registered for this user.

@@ -957,7 +957,10 @@ let showNetworkForm: boolean = $state(false);
         const isBootSync = (obj.cmd === undefined);
         performance.mark(isBootSync ? 'sync-boot' : 'sync-poll');
         syncReceived = true;
-        updateNetworkFromSync((obj.networks || []) as Network[]);
+        // `networks` present means the server sent its authoritative list,
+        // so anything missing from it has been deleted and must go here too.
+        // A payload without the key at all is not evidence of "no networks".
+        updateNetworkFromSync((obj.networks || []) as Network[], Array.isArray(obj.networks));
         // IRCCloud-style: persist the network names so the next page load
         // skips the WelcomePage and renders a loading skeleton with real
         // network names while the WebSocket sync fills in fresh state.

@@ -44,6 +44,7 @@ import ircfiber.tracing : withSpan, Span;
 import ircfiber.egress : DIRECT_EGRESS_ID, EgressView, egressView, matchingSlot,
     normalizeEgressId, isKnownEgressId;
 import ircfiber.services.accounts : provisionServicesAccountAsync, servicesSkipKey;
+import ircfiber.account_deletion : purgeNetworkRuntimeState;
 private string normalizeHost(string host) @safe pure {
     host = host.strip();
     auto schemeSep = host.indexOf("://");
@@ -463,21 +464,18 @@ final class RESTAPI {
         // Capture owner userId before deleting, for cache invalidation.
         auto ownerId = networkRepo.findByIdWithUser(id).userId;
 
-        // NEW: Route to assigned server
-        auto serverId = serverRegistry.getServerForNetwork(id.toString());
-        if (serverId.length == 0) {
-            logWarn("Delete network %s: no assigned server found, using legacy routing", id.toString());
-        }
-        
-        auto msg = ControlMessage("removeNetwork", id.toString());
-        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
-        
-        if (serverId.length > 0) {
-            redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
-        } else {
-            // Legacy fallback
-            redis.lpush(RedisKeys.control_legacy(), msg.toJson().toString());
-        }
+        // One teardown, shared with account deletion
+        // (`ircfiber.account_deletion`): tell the engine to drop the socket,
+        // then erase the scrollback, dedup sets, assignment, state snapshot,
+        // retry marker, lease and persisted nick.
+        //
+        // This route used to push `removeNetwork`, clear only the `_server`
+        // buffer and stop — leaving the assignment and a state snapshot that
+        // still said `connected: true`, plus every channel's scrollback on a
+        // 30-day TTL. That is what let a deleted network keep answering at
+        // `/irc/<name>/channel/%23chan` while the sidebar no longer listed
+        // it (reported 2026-09-06 for BLCKND/#blcknd).
+        purgeNetworkRuntimeState(id, redis, serverRegistry);
 
         networkRepo.deleteById(id);
         if (ownerId != UUID.init)
@@ -485,15 +483,6 @@ final class RESTAPI {
         // Drop any attached bouncer clients and their replay cursors.
         redis.del(RedisKeys.bncSeen(id.toString()));
         if (ownerId != UUID.init) publishBncRevoked(ownerId, id);
-
-        // Clear scrollback buffers so a new network with the same name
-        // doesn't inherit old server logs / messages.
-        if (serverId.length > 0) {
-            bufferManager.clearNetworkBuffers(serverId, id.toString());
-        } else {
-            bufferManager.clearNetworkBuffers(id.toString());
-        }
-
         res.writeJsonBody(Json(["status": Json("deleted")]));
     }
 

@@ -2222,7 +2222,57 @@ function enrichMembersFromSync(
   }
 }
 
-export function updateNetworkFromSync(incoming: SyncNetwork[]): void {
+/**
+ * Removes every network that the authoritative sync no longer lists, along
+ * with the state that would otherwise keep it reachable: its messages, its
+ * sessionStorage message cache and — if the user was looking at it — the
+ * active buffer. Without the cache sweep the room still renders from
+ * `sessionStorage` after a reload, which is exactly what made a deleted
+ * network look alive.
+ */
+function pruneMissingNetworks(incoming: SyncNetwork[]): void {
+  const live = new Set<string>();
+  for (const n of incoming) {
+    const id = n.networkId || n.id;
+    if (id) live.add(id);
+  }
+  const gone = ircState.networks.filter(n => !live.has(n.networkId)).map(n => n.networkId);
+  if (gone.length === 0) return;
+
+  for (const id of gone) {
+    for (const key of Object.keys(ircState.messages)) {
+      if (key.startsWith(`${id}:`)) delete ircState.messages[key];
+    }
+    try {
+      for (const key of Object.keys(sessionStorage)) {
+        if (key.startsWith(CACHE_PREFIX + id + ':')) sessionStorage.removeItem(key);
+      }
+    } catch {
+      // Private-mode / quota-exhausted storage: the in-memory drop above is
+      // what actually hides the network, so this is best-effort.
+    }
+    if (ircState.activeBuffer.networkId === id) {
+      ircState.activeBuffer.networkId = null;
+      ircState.activeBuffer.bufferName = null;
+    }
+  }
+  const kept = ircState.networks.filter(n => live.has(n.networkId));
+  ircState.networks.splice(0, ircState.networks.length, ...kept);
+}
+
+/**
+ * Applies the authoritative network list from a WS `sync`.
+ *
+ * `prune` drops networks the payload does NOT mention — a deleted network
+ * otherwise lived on in this tab forever, because nothing ever removed it
+ * here. It kept its cached messages too, which is how a deleted network
+ * stayed openable at `/irc/<name>/channel/%23chan` while the sidebar
+ * (rebuilt from the same list) correctly stopped showing it. Only the
+ * caller that received a real `networks` array may prune: a payload that
+ * omitted the key entirely must not be read as "the user has none".
+ */
+export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): void {
+  if (prune) pruneMissingNetworks(incoming);
   for (const rawNet of incoming) {
     // Map backend `id` field to frontend `networkId`
     const net = rawNet;
