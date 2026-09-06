@@ -26,10 +26,10 @@ block body
 
 block scripts
   // Preload the critical CSS/JS so the browser can start fetching before parsing
-  link(rel="preload", href="/public/dist/assets/main-C_--dwLd.css", as="style")
-  link(rel="stylesheet", href="/public/dist/assets/main-C_--dwLd.css")
-  link(rel="preload", href="/public/dist/assets/chunk-upload-mkmfQgHN.css", as="style")
-  link(rel="stylesheet", href="/public/dist/assets/chunk-upload-mkmfQgHN.css")
+  link(rel="preload", href="/public/dist/assets/main-76d-_PeI.css", as="style")
+  link(rel="stylesheet", href="/public/dist/assets/main-76d-_PeI.css")
+  link(rel="preload", href="/public/dist/assets/chunk-upload-DHiQu8Jg.css", as="style")
+  link(rel="stylesheet", href="/public/dist/assets/chunk-upload-DHiQu8Jg.css")
   link(rel="preload", href="/public/dist/assets/chunk-editor-DNr_rhdt.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-editor-DNr_rhdt.css")
   link(rel="preload", href="/public/dist/assets/Dialog-DRzVuPxC.css", as="style")
@@ -41,11 +41,20 @@ block scripts
   link(rel="preload", href="/public/dist/assets/chunk-panels-CocnmuN3.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-panels-CocnmuN3.css")
   link(rel="modulepreload", href="/public/dist/assets/vendor-BCQGhTLw.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-xX5h58gg.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-D8acJX3x.js")
   link(rel="modulepreload", href="/public/dist/assets/chunk-editor-CaXhmeLC.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-kLxoIxDy.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-DiU7vF7e.js")
-  script(type="module", src="/public/dist/assets/main-BftExsDU.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-BCdqnbfj.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-EH6BNBc9.js")
+  script(type="module", src="/public/dist/assets/main-Doz1ooGS.js")
+
+
+
+
+
+
+
+
+
 
 
 
