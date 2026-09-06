@@ -45,7 +45,9 @@ block scripts
   link(rel="modulepreload", href="/public/dist/assets/chunk-editor-CaXhmeLC.js")
   link(rel="modulepreload", href="/public/dist/assets/chunk-pages-BCdqnbfj.js")
   link(rel="modulepreload", href="/public/dist/assets/chunk-panels-EH6BNBc9.js")
-  script(type="module", src="/public/dist/assets/main-Doz1ooGS.js")
+  script(type="module", src="/public/dist/assets/main-DayooU--.js")
+
+
 
 
 
