@@ -11,6 +11,7 @@
   import KpiCard from '../components/KpiCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import SupportBotCard from '../components/SupportBotCard.svelte';
+  import NickServPanel from '../components/NickServPanel.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { queryRange } from '../../lib/signoz';
   import { highlightIrcdConf } from '../lib/ircd-highlight';
@@ -34,7 +35,7 @@
     setAt: number; durationSecs: number; setter: string; reason: string;
   }
 
-  type Tab = 'overview' | 'channels' | 'bans' | 'config' | 'logs';
+  type Tab = 'overview' | 'channels' | 'bans' | 'nickserv' | 'config' | 'logs';
   let tab = $state<Tab>('overview');
 
   let status = $state<StatusResponse | null>(null);
@@ -282,6 +283,7 @@
     { id: 'overview', label: 'Overview' },
     { id: 'channels', label: 'Channels' },
     { id: 'bans', label: 'Bans' },
+    { id: 'nickserv', label: 'NickServ' },
     { id: 'config', label: 'Config' },
     { id: 'logs', label: 'Logs' },
   ];
@@ -548,6 +550,8 @@
         {/each}
       {/if}
     </div>
+  {:else if tab === 'nickserv'}
+    <NickServPanel />
   {:else if tab === 'config'}
     <Card>
       <div class="mb-3 flex flex-wrap items-center gap-2">

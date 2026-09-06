@@ -494,7 +494,13 @@ ProvisionOutcome provisionServicesAccount(User user, NetworkRepository networkRe
 /// Shared tail of both paths (fresh registration and adopted pending
 /// credential): persist the SASL credential, drop the engine's remembered
 /// nick, and make the live session reconnect so it authenticates.
-private ProvisionOutcome persistProvisionedAccount(
+///
+/// Not `private`: `ircfiber.web.admin.nickserv` commits an admin-generated
+/// password through exactly this path, because skipping any one of its five
+/// steps (Mongo save, userNetworks cache drop, pending-record delete,
+/// networkNick delete, reconnectNetwork push) leaves the engine
+/// authenticating with the stale credential.
+ProvisionOutcome persistProvisionedAccount(
         User user, NetworkConfig cfg, string account, string password,
         NetworkRepository networkRepo, RedisStorage redis, ServerRegistry serverRegistry) {
     const userId = user.id.toString();

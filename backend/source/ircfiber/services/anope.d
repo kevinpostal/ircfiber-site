@@ -31,6 +31,8 @@
  *   IRCFIBER_ANOPE_RPC_URL      full endpoint, e.g. http://services:8080/xmlrpc
  *                               (empty → auto-registration disabled)
  *   IRCFIBER_ANOPE_RPC_TIMEOUT  connect/read timeout in seconds (default 10)
+ *   IRCFIBER_ANOPE_OPER_ACCOUNT NickServ account privileged commands run as
+ *                               (empty → privileged actions disabled)
  */
 module ircfiber.services.anope;
 
@@ -50,13 +52,19 @@ import vibe.stream.operations : readAll;
 struct AnopeSettings {
     string rpcUrl;             /// IRCFIBER_ANOPE_RPC_URL; "" disables provisioning
     int timeoutSeconds = 10;   /// IRCFIBER_ANOPE_RPC_TIMEOUT
+    string operAccount;        /// IRCFIBER_ANOPE_OPER_ACCOUNT; "" = no privileged ops
 
     bool configured() const @safe pure nothrow @nogc { return rpcUrl.length > 0; }
+    /// Whether privileged NickServ commands can be attempted at all. The
+    /// account must also be tied to an Anope opertype, which only Anope
+    /// knows — a misconfiguration there surfaces as `Access denied.`
+    bool hasOper() const @safe pure nothrow @nogc { return operAccount.length > 0; }
 }
 
 AnopeSettings loadAnopeSettings() {
     AnopeSettings s;
     s.rpcUrl = environment.get("IRCFIBER_ANOPE_RPC_URL", "").strip();
+    s.operAccount = environment.get("IRCFIBER_ANOPE_OPER_ACCOUNT", "").strip();
     const raw = environment.get("IRCFIBER_ANOPE_RPC_TIMEOUT", "").strip();
     if (raw.length) {
         try {
@@ -75,6 +83,10 @@ struct AnopeReply {
     string result;          /// "result" member ("Success")
     string error;           /// "error" member ("Invalid parameters"/"Invalid service")
     string text;            /// "return" member, unescaped
+    /// The `return` member decoded but NOT newline-flattened. `text` stays
+    /// single-line for classification/logging/Redis values; multi-line
+    /// replies (INFO) must be parsed from here.
+    string rawText;
     string transportError;  /// non-empty when transportOk is false
     /// Every member of the returned struct, decoded. `command` only ever
     /// sets result/error/return; `user` returns nick plus, when a live user
@@ -305,6 +317,7 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
     // transport failure. The status is logged when unexpected so the next
     // occurrence is diagnosable.
     r = parseXmlRpcResponse(responseBody);
+    r.rawText = r.text;
     r.text = flattenReplyText(r.text);
     if (!r.transportOk) {
         r.transportError = status == 200
@@ -363,6 +376,64 @@ AnopeReply anopeUser(AnopeSettings s, string nick) {
 AnopeReply anopeQuery(AnopeSettings s, string service, string asNick, string command) {
     return anopePostIdempotent(s, buildXmlRpcCall("command", [service, asNick, command]),
                                service ~ " " ~ commandVerb(command) ~ " as " ~ asNick);
+}
+
+/**
+ * Read-only NickServ command run as the services-oper account, retried once
+ * like every other probe. `AnopeReply.transportOk` is false with a spelled-out
+ * `transportError` when no oper account is configured, so callers never have
+ * to special-case the unconfigured deployment themselves.
+ */
+AnopeReply anopeOperQuery(AnopeSettings s, string command) {
+    AnopeReply r;
+    if (!s.hasOper) {
+        r.transportError = "Anope oper account not configured";
+        return r;
+    }
+    return anopeQuery(s, "NickServ", s.operAccount, command);
+}
+
+/**
+ * Mutating NickServ command run as the services-oper account, sent exactly
+ * once: repeating SUSPEND/DROP/SASET after a transport failure is not free of
+ * consequence (the first attempt may well have landed).
+ */
+AnopeReply anopeOperCommand(AnopeSettings s, string command) {
+    AnopeReply r;
+    if (!s.hasOper) {
+        r.transportError = "Anope oper account not configured";
+        return r;
+    }
+    return anopeCommand(s, "NickServ", s.operAccount, command);
+}
+
+/**
+ * True when Anope refused the command for lack of privileges. This is NOT a
+ * transport error: `Access denied.` (`include/language.h`'s ACCESS_DENIED)
+ * arrives as an ordinary HTTP 200 `methodResponse`, so it has to be detected
+ * in the reply text. It means the oper account is not tied to an opertype
+ * holding the command's priv — Anope attaches `nc->o` only at config load.
+ */
+bool anopeAccessDenied(const AnopeReply r) @safe pure {
+    import std.uni : toLower;
+    static bool denied(string s) @safe pure {
+        return s.length > 0 && s.toLower().indexOf("access denied") >= 0;
+    }
+    return denied(r.text) || denied(r.rawText);
+}
+
+/**
+ * The `SASET PASSWORD` command line for `nick`.
+ *
+ * `SASET`'s parameters are option-first — `SASET <option> <nickname>
+ * <parameters>` — verified against 2.0.20: the reversed form
+ * `SASET <nick> PASSWORD <pw>` answers `Syntax: SASET option nickname
+ * parameters` and changes nothing. That failure is silent (HTTP 200, no
+ * `Access denied`, old password still valid), which is why the order lives
+ * here with the evidence instead of inline at the call site.
+ */
+string nickServSetPasswordCommand(string nick, string password) @safe pure {
+    return "SASET PASSWORD " ~ nick ~ " " ~ password;
 }
 
 /**
@@ -429,6 +500,58 @@ NickRegistration anopeNickRegistration(AnopeSettings s, string nick) {
     auto r = anopeQuery(s, "NickServ", nick, "INFO " ~ nick);
     if (!r.transportOk) return NickRegistration.unknown;
     return classifyNickInfoReply(r.text);
+}
+
+/// One parsed `NickServ INFO <nick>` reply.
+struct NickInfo {
+    bool registered;            /// false when the reply is NICK_X_NOT_REGISTERED
+    string account;             /// "Account" field
+    string realName;            /// tail of the leading "<nick> is <realname>" line
+    string[string] fields;      /// every "Label: value" line, label trimmed
+    string[] lines;             /// every reply line verbatim, for display
+}
+
+/**
+ * Parse a `NickServ INFO <nick>` reply. Feed it `AnopeReply.rawText`, never
+ * `text`: the latter is newline-flattened and the whole reply is line-oriented.
+ *
+ * A line is a field when it reads `<label>: <value>` after trimming, with a
+ * non-empty label; the labels our `nickserv.conf` can emit are `Account`,
+ * `Online from`, `Last seen address`, `Registered`, `Last seen`,
+ * `Last quit message`, `Email address`, `VHost`, plus `Suspended`, `By`,
+ * `Reason`, `On`, `Expires` from `ns_suspend`'s `show` list. A repeated label
+ * (`Online from` appears twice for a dual-host session) keeps the last value,
+ * and every raw line is kept in `lines` so the UI can show the reply verbatim.
+ *
+ * `registered` reuses `classifyNickInfoReply` rather than re-matching, so a
+ * service bot ("is part of this Network's Services") and an unregistered nick
+ * both come back `registered == false` with an empty `account`.
+ */
+NickInfo parseNickInfo(string rawText) @safe pure {
+    import std.string : splitLines;
+
+    NickInfo info;
+    info.registered = classifyNickInfoReply(flattenReplyText(rawText))
+        == NickRegistration.registered;
+
+    bool first = true;
+    foreach (line; rawText.splitLines()) {
+        const trimmed = line.strip();
+        if (!trimmed.length) continue;   // Anope emits none; a trailing one would be noise
+        info.lines ~= line;
+        const colon = trimmed.indexOf(':');
+        if (colon > 0) {
+            info.fields[trimmed[0 .. colon].strip()] = trimmed[colon + 1 .. $].strip();
+        } else if (first && info.registered) {
+            // Leading line of a registered reply: "<nick> is <realname>".
+            const is_ = trimmed.indexOf(" is ");
+            if (is_ > 0) info.realName = trimmed[is_ + 4 .. $].strip();
+        }
+        first = false;
+    }
+
+    if (auto p = "Account" in info.fields) info.account = *p;
+    return info;
 }
 
 /**

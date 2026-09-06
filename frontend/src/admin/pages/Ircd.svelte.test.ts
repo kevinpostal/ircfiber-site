@@ -39,6 +39,9 @@ vi.mock('/src/admin/lib/api-client', () => ({
 vi.mock('/src/admin/stores/ui', () => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  // NickServPanel (the NickServ tab) also uses toastInfo; a module mock
+  // replaces the whole module, so a missing export breaks the import.
+  toastInfo: vi.fn(),
   pollingEnabled: { subscribe: vi.fn() },
 }));
 

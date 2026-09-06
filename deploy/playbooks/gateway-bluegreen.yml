@@ -18,6 +18,16 @@
     docker_ircfiber_network: ircfiber_net
     ircfiber_gateway_image_full: "irc-fiber-gateway:latest"
     ircfiber_admin_password_reset: "{{ vault_ircfiber_admin_password | default('') }}"
+    # MUST match `volumes:` in roles/gateway/tasks/main.yml. This list is
+    # duplicated because the playbook runs standalone, and a divergence
+    # silently *removes* mounts on every swap: the `/etc/ircfiber/ircd:ro`
+    # mount behind the admin config viewer was lost exactly that way, and the
+    # anope mount below backs the admin NickServ account inventory.
+    _gateway_volumes:
+      - "{{ gateway_uploads_volume }}:/app/uploads"
+      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
+      - "{{ ircd_services_data_volume | default('ircfiber_services_data') }}:/var/lib/ircfiber/anope:ro"
   tasks:
     - name: Discover this host's Tailscale IPv4 address
       ansible.builtin.command: tailscale ip -4
@@ -89,9 +99,7 @@
         networks: "{{ ircfiber_networks_for_gateway }}"
         networks_cli_compatible: true
         env: "{{ _gateway_env }}"
-        volumes:
-          - "{{ gateway_uploads_volume }}:/app/uploads"
-          - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+        volumes: "{{ _gateway_volumes }}"
         security_opts:
           - "no-new-privileges:true"
         ulimits:
@@ -137,9 +145,7 @@
         networks: "{{ ircfiber_networks_for_gateway }}"
         networks_cli_compatible: true
         env: "{{ _gateway_env }}"
-        volumes:
-          - "{{ gateway_uploads_volume }}:/app/uploads"
-          - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+        volumes: "{{ _gateway_volumes }}"
         security_opts:
           - "no-new-privileges:true"
         ulimits:

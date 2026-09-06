@@ -103,12 +103,21 @@
     networks: "{{ ircfiber_networks_for_gateway }}"
     networks_cli_compatible: true
     env: "{{ _gateway_env }}"
+    # Keep in sync with `_gateway_volumes` in playbooks/gateway-bluegreen.yml:
+    # that playbook recreates this container standalone, so a mount missing
+    # there is dropped on the next blue/green swap.
     volumes:
       - "{{ gateway_uploads_volume }}:/app/uploads"
       - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
       # Read-only mount of the rendered InspIRCd config for the admin
       # dashboard's redacted config viewer (values never leave redacted).
       - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
+      # Read-only mount of Anope's data volume for the admin NickServ
+      # account inventory. anope.db is mode 0600 owned by uid 10000; the
+      # gateway runs as uid 0, so :ro is sufficient and nothing writes here.
+      # Deliberately NOT on ircfiber-bnc or ircfiber-support-bot: neither
+      # serves admin routes, so the mount would widen their access for nothing.
+      - "{{ ircd_services_data_volume | default('ircfiber_services_data') }}:/var/lib/ircfiber/anope:ro"
     security_opts:
       - "no-new-privileges:true"
     ulimits:

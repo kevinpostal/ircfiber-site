@@ -40,6 +40,8 @@ import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
     apiBncSeenClear, apiBncSeenForget;
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
     apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig;
+import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
+    apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout;
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
@@ -188,6 +190,15 @@ final class AdminController {
         router.post("/api/admin/ircd/rehash", &adminWrap!apiIrcdRehashRoute);
         router.get("/api/admin/ircd/config", &adminWrap!apiIrcdConfigRoute);
 
+        // NickServ (Anope) account management, on the same IRCD page
+        router.get("/api/admin/ircd/nickserv/accounts", &adminWrap!apiNsAccountsRoute);
+        router.get("/api/admin/ircd/nickserv/account", &adminWrap!apiNsAccountRoute);
+        router.post("/api/admin/ircd/nickserv/suspend", &adminWrap!apiNsSuspendRoute);
+        router.post("/api/admin/ircd/nickserv/unsuspend", &adminWrap!apiNsUnsuspendRoute);
+        router.post("/api/admin/ircd/nickserv/drop", &adminWrap!apiNsDropRoute);
+        router.post("/api/admin/ircd/nickserv/password", &adminWrap!apiNsResetPasswordRoute);
+        router.post("/api/admin/ircd/nickserv/logout", &adminWrap!apiNsLogoutRoute);
+
         // Logs (SigNoz) — gateway-side proxy so the browser needs no
         // SigNoz route or key of its own (see web.admin.logs).
         // Only query_range is proxied: the installed SigNoz (v0.138)
@@ -238,6 +249,19 @@ private:
     void apiIrcdBanDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdBanDelete(req, res); }
     void apiIrcdRehashRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdRehash(req, res); }
     void apiIrcdConfigRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfig(req, res); }
+    void apiNsAccountsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsAccounts(req, res); }
+    void apiNsAccountRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsAccount(req, res); }
+    void apiNsSuspendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsSuspend(req, res); }
+    void apiNsUnsuspendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsUnsuspend(req, res); }
+    void apiNsLogoutRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsLogout(req, res); }
+    // Drop and password reset also rewrite the owning user's SASL credential,
+    // so they need the same storage objects the provisioner uses.
+    void apiNsDropRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNsDrop(req, res, redis, serverRegistry);
+    }
+    void apiNsResetPasswordRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNsResetPassword(req, res, redis, serverRegistry);
+    }
     void apiDashboardRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiDashboard(req, res, redis, serverRegistry);
     }
