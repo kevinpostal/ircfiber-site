@@ -170,6 +170,44 @@ module
 	sessionlimitexceeded = "The session limit for your IP %IP% has been exceeded."
 	sessionlimitdetailsloc = "Please contact staff on #ircfiber."
 }
+
+/*
+ * os_defcon — network-wide emergency restrictions, ships commented out in
+ * operserv.example.conf. Declared here so the module actually loads;
+ * defaultlevel 5 is normal operation, so nothing changes until an oper
+ * runs `OperServ DEFCON <1-4>`.
+ *
+ * The level lists are the example's, minus `reducedsessions`. That
+ * operation clamps every IP to <sessionlimit> concurrent clients, and on
+ * this network every platform user arrives through a couple of engine
+ * container IPs — the exact shape that made OperServ kill every 6th user
+ * in the incident recorded above. Any limit low enough to blunt an attack
+ * would disconnect our own users first, so the operation is structurally
+ * wrong here rather than merely mistuned.
+ *
+ * Two consequences of the levels that are kept are worth knowing before
+ * reaching for them: `forcechanmodes` sets +R on every channel, which
+ * locks out platform users who have no NickServ account, and level 1's
+ * `akillnewclients` will AKILL the engine IPs themselves — taking the
+ * platform down for akillexpire even after DefCon is lifted. Both are the
+ * intended shape of a "we are under attack" switch; `timeout` is enabled
+ * so a forgotten level reverts itself rather than becoming an outage.
+ */
+module
+{
+	name = "os_defcon"
+	defaultlevel = 5
+	level4 = "nonewchannels nonewnicks nomlockchanges"
+	level3 = "nonewchannels nonewnicks nomlockchanges forcechanmodes"
+	level2 = "nonewchannels nonewnicks nomlockchanges forcechanmodes silentoperonly"
+	level1 = "nonewchannels nonewnicks nomlockchanges forcechanmodes silentoperonly akillnewclients"
+	chanmodes = "+R"
+	akillexpire = 5m
+	timeout = 15m
+	globalondefcon = yes
+	akillreason = "{{ ircd_network_name }} is not accepting new connections right now, please try again later."
+}
+command { service = "OperServ"; name = "DEFCON"; command = "operserv/defcon"; permission = "operserv/defcon"; }
 include { type = "file"; name = "operserv.example.conf" }
 
 /* Logging: services.log under /anope/logs plus globops for admin actions. */
