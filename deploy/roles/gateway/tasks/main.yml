@@ -162,3 +162,37 @@
       com.ircfiber.component: "bnc"
       com.ircfiber.version: "{{ ircfiber_version }}"
   when: bnc_enabled | default(false) | bool
+
+# #support services bot: same image, dedicated container (not part of
+# blue/green, no published ports). Only this process sets
+# IRCFIBER_SUPPORT_BOT_ENABLED; it reaches the ircd through the docker alias
+# already rendered as IRCFIBER_IRCD_HOST/PORT in the gateway env.
+- name: Run ircfiber-support-bot
+  tags: [support-bot]
+  community.docker.docker_container:
+    name: "{{ support_bot_container_name }}"
+    image: "{{ ircfiber_gateway_image_full }}"
+    state: started
+    restart_policy: unless-stopped
+    command: ["/app/irc-fiber"]
+    networks: "{{ ircfiber_networks_for_gateway }}"
+    networks_cli_compatible: true
+    env: "{{ _gateway_env | combine({'IRCFIBER_SUPPORT_BOT_ENABLED': '1', 'IRCFIBER_SUPPORT_BOT_NICK': support_bot_nick, 'IRCFIBER_SUPPORT_BOT_CHANNEL': support_bot_channel, 'IRCFIBER_SUPPORT_BOT_PUBLIC_URL': support_bot_public_url, 'IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD': vault_support_bot_nickserv_password | default('')}) }}"
+    volumes:
+      - "{{ gateway_uploads_volume }}:/app/uploads"
+      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+    security_opts:
+      - "no-new-privileges:true"
+    ulimits:
+      - "nofile:65536:65536"
+    healthcheck:
+      # The bot process also serves HTTP on the internal gateway port.
+      test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
+      interval: "{{ gateway_healthcheck_interval }}"
+      timeout: "{{ gateway_healthcheck_timeout }}"
+      retries: "{{ gateway_healthcheck_retries }}"
+      start_period: "{{ gateway_healthcheck_start_period }}"
+    labels:
+      com.ircfiber.component: "support-bot"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+  when: support_bot_enabled | default(false) | bool

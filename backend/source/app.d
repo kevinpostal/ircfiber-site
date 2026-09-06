@@ -161,6 +161,10 @@ void main() {
     // IRCFIBER_BNC_PORT is set (prod: the dedicated ircfiber-bnc container).
     import ircfiber.bnc.listener : startBncListener;
     startBncListener(redis);
+    // #support services bot — same image, only runs where
+    // IRCFIBER_SUPPORT_BOT_ENABLED=1 (prod: the ircfiber-support-bot container).
+    import ircfiber.support.bot : startSupportBot;
+    startSupportBot();
 
     auto adminController = new AdminController(redis);
     adminController.registerRoutes(router);

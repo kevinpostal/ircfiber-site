@@ -346,6 +346,25 @@ openssl s_client -connect bnc.<domain>:7000 -servername bnc.<domain> </dev/null 
 
 If Caddy stores the cert elsewhere, point `bnc_tls_cert_path` / `bnc_tls_key_path` at the discovered files in host_vars.
 
+### Support bot (`FiberSupport` in `#support`, Help & Feedback)
+
+The gateway image also contains the `#support` services bot; it only runs in a process that has `IRCFIBER_SUPPORT_BOT_ENABLED=1`, which the `gateway` role gives to the dedicated `ircfiber-support-bot` container (`support_bot_enabled`, `support_bot_nick`, `support_bot_channel`, `support_bot_public_url` in `group_vars/all/vars.yml`; the blue/green replicas never set it). The bot connects plaintext to the ircd docker alias (`IRCFIBER_IRCD_HOST`/`PORT` from the gateway env), sets `+B`, joins `#support` (a permanent channel from `ircd_permanent_channels`) and announces every Help & Feedback report, status change and public reply that the gateway queues on the Redis list `irc:support:outbox`. It also answers `!help`, `!issues [open|all]` and `!issue <n>`. Lines never contain the report body, e-mail or diagnostics.
+
+The bot is visible from the admin **IRCD** page (Overview → *Services bot* card, and its container logs in the Logs tab): every ≤5 s it publishes a heartbeat to the Redis key `irc:support:bot` (60 s TTL — no heartbeat = **Offline**) with nick, channel, session age, last disconnect reason, announcement/command counters and the outbox depth. The card's **Rejoin** / **Reconnect** buttons push `{cmd, by, ts}` onto `irc:support:bot:control` (consumed by the bot, ignored after 60 s), and **Announce** queues a `Notice from <admin>: …` line through the normal outbox, so it is delivered when the bot is back if it is currently away. All of this works from any gateway replica; only the bot container needs `IRCFIBER_SUPPORT_BOT_ENABLED`.
+
+`vault_support_bot_nickserv_password` is the NickServ password of the bot nick; the bot sends `IDENTIFY` after 001 when it is set (leave it empty to skip — on a nick collision the bot runs as `FiberSupport_`). Roll out in this order:
+
+```bash
+ansible-playbook playbooks/ircd.yml                      # adds #support to the permanent channels (rehash, sockets stay up)
+# register the bot nick once, from the prod host (Anope: usemail=no, no confirmation needed):
+ssh <host> 'sudo docker run --rm --network ircfiber_net busybox sh -c \
+  "(printf \"NICK FiberSupport\\r\\nUSER fibersupport 0 * :bot\\r\\n\"; sleep 4; \
+    printf \"PRIVMSG NickServ :REGISTER <vault_support_bot_nickserv_password> support@<domain>\\r\\n\"; sleep 4; \
+    printf \"QUIT\\r\\n\") | nc ircd 6667"'          # expect the NickServ "registered" notice
+ansible-playbook playbooks/gateway.yml -t support-bot     # (re)creates ircfiber-support-bot; not part of blue/green
+docker logs ircfiber-support-bot | grep 'joined #support' # then file a report at https://<domain>/?/feedback and watch #support
+```
+
 ## Tailscale ACL recommendation
 
 In the Tailscale admin console → ACLs, restrict the `ircfiber` tag to:

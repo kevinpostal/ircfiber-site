@@ -150,6 +150,7 @@ export const ircState = $state({
   showSettings: false,
   settingsTab: 'design' as SettingsTab,
   showShortcuts: false,
+  showFeedback: false,
   // Nicks the user has explicitly requested WHOIS for (via /whois or the
   // user-popup "Whois" action). The server also sends automatic WHOIS
   // queries on JOIN to discover realnames (see ircfiber/irc/connection.d),

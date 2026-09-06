@@ -74,6 +74,14 @@ package void apiDashboard(HTTPServerRequest, HTTPServerResponse res,
         uploadCount = uploadRepo.countAll();
     } catch (Exception) { uploadCount = -1; }
 
+    // Open support issues (open + in_progress)
+    long openSupportIssues;
+    try {
+        import ircfiber.db.support_issues : SupportIssueRepository;
+        auto c = new SupportIssueRepository().countByStatus();
+        openSupportIssues = c.get("open", 0) + c.get("in_progress", 0);
+    } catch (Exception) { openSupportIssues = -1; }
+
     // Engines + networks
     auto allServers = serverRegistry.getAllServers();
     auto healthyServers = serverRegistry.getHealthyServers();
@@ -89,6 +97,7 @@ package void apiDashboard(HTTPServerRequest, HTTPServerResponse res,
     data["activeSessions"] = Json(activeSessions);
     data["totalNetworks"] = Json(totalNetworks);
     data["uploadCount"] = Json(uploadCount);
+    data["openSupportIssues"] = Json(openSupportIssues);
     data["engineCount"] = Json(engineCount);
     data["healthyCount"] = Json(healthyCount);
     data["maxConnsPerHost"] = Json(maxConns);

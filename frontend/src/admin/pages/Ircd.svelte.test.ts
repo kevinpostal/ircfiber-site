@@ -163,7 +163,11 @@ describe('Ircd.svelte — IRCD management page', () => {
       compositeQuery: { queries: { spec: { filter: { expression: string } } }[] };
     };
     const expr = body.compositeQuery.queries[0].spec.filter.expression;
-    expect(expr).toContain(`service.name IN ('ircfiber-ircd','ircfiber-services')`);
+    // The #support services bot logs under its own service name, so the
+    // IRCD Logs tab has to include it alongside the ircd and Anope.
+    expect(expr).toContain(
+      `service.name IN ('ircfiber-ircd','ircfiber-services','ircfiber-support-bot')`,
+    );
     await expect.element(page.getByText(/Connection to irc\.netcrave\.chat started/)).toBeInTheDocument();
   });
 });

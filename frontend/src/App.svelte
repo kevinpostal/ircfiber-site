@@ -43,13 +43,14 @@
   import { startOnlineChecker } from './lib/onlineChecker';
   import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, pinnedOrder, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs, ignoreList, applyServerIgnores } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
-  import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
+  import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFeedbackUrl, navigateBackFromFeedback, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
   import { isFiberServerDown } from './lib/fiberServer';
   import { enqueueMessage, setFlushFn, setBackfillFlushFn } from './lib/messageBatcher';
   import WelcomePage from './components/WelcomePage.svelte';
   import SettingsPage from './components/SettingsPage.svelte';
   import ShortcutsPage from './components/ShortcutsPage.svelte';
+  import FeedbackPage from './components/FeedbackPage.svelte';
   import FileViewerPage from './components/FileViewerPage.svelte';
   import PasteViewerPage from './components/PasteViewerPage.svelte';
   import ChannelSwitcher from './components/ChannelSwitcher.svelte';
@@ -260,7 +261,7 @@ let showNetworkForm: boolean = $state(false);
   }
 
   $effect(() => {
-    if (ircState.showSettings || ircState.showShortcuts || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     const { networkId, bufferName } = ircState.activeBuffer;
     if (networkId && bufferName) updateRoute(networkId, bufferName);
   });
@@ -271,7 +272,7 @@ let showNetworkForm: boolean = $state(false);
   // (host !== '' ensures we have full sync data, not just the skeleton
   // from the `networks` WS message which lacks host/systemManaged).
   $effect(() => {
-    if (ircState.showSettings || ircState.showShortcuts || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     if (!ircState.activeBuffer.networkId && !ircState.activeBuffer.bufferName && ircState.networks.length > 0) {
       const candidates = ircState.networks.filter(n => n.host && !isFiberServerDown(n as any));
       const firstNet = candidates.length > 0 ? candidates[0] : null;
@@ -291,7 +292,7 @@ let showNetworkForm: boolean = $state(false);
   // landed on Fiber (e.g. before the sync had host/systemManaged to
   // detect isDown, or via a stale lastVisited cookie).
   $effect(() => {
-    if (ircState.showSettings || ircState.showShortcuts || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     const activeId = ircState.activeBuffer.networkId;
     const activeBuf = ircState.activeBuffer.bufferName;
     if (!activeId || !activeBuf) return;
@@ -638,6 +639,11 @@ let showNetworkForm: boolean = $state(false);
         navigateBackFromShortcuts();
         return;
       }
+      if (ircState.showFeedback) {
+        ircState.showFeedback = false;
+        navigateBackFromFeedback();
+        return;
+      }
       let closedSomething = false;
       if (ircState.overlay.type) { ircState.overlay.type = null; ircState.overlay.data = null; closedSomething = true; }
       if (ircState.contextMenu.visible) { ircState.contextMenu.visible = false; closedSomething = true; }
@@ -682,7 +688,7 @@ let showNetworkForm: boolean = $state(false);
       );
       if (isTypingTarget) return;
       // Don't steal when any modal/overlay is open
-      if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts ||
+      if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts || ircState.showFeedback ||
           ircState.overlay.type || showNetworkForm || showJoinModal || showBouncerDialog ||
           ircState.contextMenu.visible || !!userPopup) return;
       if (ircState.activeBuffer.bufferName === '_server') return;
@@ -1477,12 +1483,14 @@ let showNetworkForm: boolean = $state(false);
     if (isPastebinUrl()) {
       ircState.showSettings = false;
       ircState.showShortcuts = false;
+      ircState.showFeedback = false;
       return;
     }
     // File viewer overlay takes precedence — don't treat as buffer route
     if (isFileViewerUrl()) {
       ircState.showSettings = false;
       ircState.showShortcuts = false;
+      ircState.showFeedback = false;
       return;
     }
     const path = window.location.pathname;
@@ -1491,15 +1499,24 @@ let showNetworkForm: boolean = $state(false);
       ircState.showSettings = true;
       ircState.settingsTab = settingsTab;
       ircState.showShortcuts = false;
+      ircState.showFeedback = false;
       return;
     }
     if (isShortcutsUrl()) {
       ircState.showShortcuts = true;
       ircState.showSettings = false;
+      ircState.showFeedback = false;
+      return;
+    }
+    if (isFeedbackUrl()) {
+      ircState.showFeedback = true;
+      ircState.showSettings = false;
+      ircState.showShortcuts = false;
       return;
     }
     ircState.showSettings = false;
     ircState.showShortcuts = false;
+    ircState.showFeedback = false;
     if (path === '/irc' || path === '/irc/') {
       if (ircState.networks.length === 0) return;
       const visible = ircState.networks.filter(n => (n as any).host && !isFiberServerDown(n as any));
@@ -1546,7 +1563,7 @@ let showNetworkForm: boolean = $state(false);
 
   function selectLastActiveBuffer(syncNetworks: Network[]): void {
 
-    if (ircState.showSettings || ircState.showShortcuts || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) return;
     for (const net of syncNetworks) {
       if (!net.connected) continue;
@@ -1704,7 +1721,7 @@ let showNetworkForm: boolean = $state(false);
   {/if}
 {/if}
 
-<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
+<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
   <div class="main-area">
     {#if pasteViewerId !== null}
       <PasteViewerPage id={pasteViewerId} onClose={() => { syncViewers(); navigateBackFromPastebin(); }} />
@@ -1714,6 +1731,8 @@ let showNetworkForm: boolean = $state(false);
       <SettingsPage />
     {:else if ircState.showShortcuts}
       <ShortcutsPage />
+    {:else if ircState.showFeedback}
+      <FeedbackPage />
     {:else if isBootLoading}
       <LoadingSkeleton networkNames={cachedNetworkNames} />
     {:else if ircState.networks.length === 0}
@@ -1740,10 +1759,10 @@ let showNetworkForm: boolean = $state(false);
         {/if}
       </div>
     {/if}
-    {#if uploadState.panelOpen && !ircState.showSettings && !isShortcutsUrl() && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
+    {#if uploadState.panelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
       <UploadsPanel onClose={() => uploadState.panelOpen = false} />
     {/if}
-    {#if uploadState.pastebinPanelOpen && !ircState.showSettings && !isShortcutsUrl() && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
+    {#if uploadState.pastebinPanelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
       <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
     {/if}
     {#if ircArtPanelOpen.value && !ircState.showSettings && fileViewerId === null && pasteViewerId === null}

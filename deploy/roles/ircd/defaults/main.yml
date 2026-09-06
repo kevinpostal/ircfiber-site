@@ -116,6 +116,9 @@ ircd_permanent_channels:
   - channel: "#welcome"
     modes: "nt"
     topic: "New here? Say hi. /msg NickServ HELP to register your nick."
+  - channel: "#support"
+    modes: "nt"
+    topic: "IRC Fiber support — report problems at https://ircfiber.com/?/feedback · FiberSupport announces new reports here"
 
 # Server fingerprinting: VERSION replies show this instead of "InspIRCd-4",
 # and netsplit quits are hidden. Cosmetic; no protocol impact.

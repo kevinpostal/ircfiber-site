@@ -38,6 +38,7 @@ export interface DashboardData {
   activeSessions: number;
   totalNetworks: number;
   uploadCount: number;
+  openSupportIssues: number;
   engineCount: number;
   healthyCount: number;
   maxConnsPerHost: number;

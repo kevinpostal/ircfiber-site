@@ -113,6 +113,16 @@ bnc_tls_key_path: "/caddy-data/caddy/certificates/acme-v02.api.letsencrypt.org-d
 # Protocol trace (every BNC client/server line at info, PASS redacted).
 # High volume — set true only to diagnose drops, then redeploy with false.
 bnc_trace: false
+# --- #support services bot (same gateway image, dedicated container) --------
+# Only the process with IRCFIBER_SUPPORT_BOT_ENABLED=1 connects to the ircd
+# (docker alias from IRCFIBER_IRCD_HOST/PORT in env.j2) as FiberSupport and
+# announces Help & Feedback reports in #support. Never set on the
+# blue/green gateway replicas. NickServ password: vault_support_bot_nickserv_password.
+support_bot_enabled: true
+support_bot_container_name: "ircfiber-support-bot"
+support_bot_nick: "FiberSupport"
+support_bot_channel: "#support"
+support_bot_public_url: "https://{{ ircfiber_domain }}"
 # --- SigNoz query API (admin Logs page, gateway-side proxy) ------------------
 # The gateway container has no Tailscale MagicDNS, so the URL is the
 # tailnet IP with a Host-header override for the SNI-routed Traefik

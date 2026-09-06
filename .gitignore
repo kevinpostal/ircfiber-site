@@ -13,3 +13,4 @@ deploy/.vault_pass.txt
 backend/egress-test
 backend/bnc-wire-test
 backend/parser-test
+backend/support-format-test

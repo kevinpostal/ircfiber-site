@@ -105,7 +105,7 @@
   </Card>
 {/if}
 
-<div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+<div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
   <KpiCard
     label="Users"
     value={$dashboard?.userCount ?? '—'}
@@ -130,6 +130,14 @@
     value={`${$dashboard?.healthyCount ?? '—'}/${$dashboard?.engineCount ?? '—'}`}
     tone={$dashboard?.healthyCount === $dashboard?.engineCount && ($dashboard?.engineCount ?? 0) > 0 ? 'success' : ($dashboard?.healthyCount ?? 0) > 0 ? 'warn' : 'danger'}
     icon="🖥️"
+    loading={$dashboardLoading && !$dashboard}
+  />
+  <KpiCard
+    label="Open Support Issues"
+    value={$dashboard?.openSupportIssues ?? '—'}
+    tone={($dashboard?.openSupportIssues ?? 0) > 0 ? 'warn' : 'success'}
+    icon="🎫"
+    href="#/support"
     loading={$dashboardLoading && !$dashboard}
   />
 </div>

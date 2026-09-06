@@ -10,6 +10,7 @@
   import Card from '../components/Card.svelte';
   import KpiCard from '../components/KpiCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
+  import SupportBotCard from '../components/SupportBotCard.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { queryRange } from '../../lib/signoz';
   import { highlightIrcdConf } from '../lib/ircd-highlight';
@@ -55,8 +56,8 @@
   interface LogEntry { ts: number; service: string; severity: string; body: string; }
 
   // service.name is the Docker container name (fluent-bit promotes
-  // container_name). Both ircd + services share this tab.
-  const ircdServices = ['ircfiber-ircd', 'ircfiber-services'];
+  // container_name). ircd, services and the #support bot share this tab.
+  const ircdServices = ['ircfiber-ircd', 'ircfiber-services', 'ircfiber-support-bot'];
   let logRows = $state<LogEntry[]>([]);
   let logsError = $state<string | null>(null);
   let logsLoading = $state(false);
@@ -315,6 +316,7 @@
       hint="Set IRCFIBER_IRCD_HOST, IRCFIBER_IRCD_OPER and IRCFIBER_IRCD_OPER_PASSWORD on the gateway (deploy writes them from vault_ircd_dashboard_password), then redeploy the gateway."
     />
   </Card>
+  <div class="mt-4"><SupportBotCard /></div>
 {:else}
   <div class="mb-4 flex gap-1 border-b border-border">
     {#each tabs as t}
@@ -372,6 +374,7 @@
     {:else}
       <Card><p class="text-sm text-muted">Loading…</p></Card>
     {/if}
+    <div class="mt-4"><SupportBotCard /></div>
   {:else if tab === 'channels'}
     <Card>
       <div class="mb-3 flex items-center justify-between">

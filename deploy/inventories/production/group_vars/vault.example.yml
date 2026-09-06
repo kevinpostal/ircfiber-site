@@ -63,6 +63,12 @@ vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"
 # IRCFIBER_IRCD_OPER_PASSWORD. Use a distinct random value — never reuse
 # the human admin oper password.
 vault_ircd_dashboard_password: "REPLACE-WITH-STRONG-PASSWORD"
+# NickServ password of the #support bot nick (support_bot_nick, default
+# FiberSupport). Register the nick once from the prod host before the first
+# deploy (see the support-bot rollout notes); the bot sends
+# `PRIVMSG NickServ :IDENTIFY FiberSupport <password>` after 001. Leave empty
+# to skip IDENTIFY (the bot then falls back to FiberSupport_ on a 433).
+vault_support_bot_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD"
 
 # --- SigNoz query API (admin Logs page) --------------------------------------
 # Service-account API key for the k8s SigNoz (mint in SigNoz UI →

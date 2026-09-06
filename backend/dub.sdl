@@ -104,3 +104,16 @@ configuration "egress-test" {
     mainSourceFile "tests/egress_test.d"
     versions "VibeUseFibers"
 }
+
+// Pure-code unit test for the #support bot formatting / command parsing
+// and the outbox event JSON (no Redis/Mongo/IRCd needed):
+//   dub --root=backend build --config=support-format-test && ./backend/support-format-test
+configuration "support-format-test" {
+    targetType "executable"
+    targetName "support-format-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/support/format.d" "source/ircfiber/support/events.d" "source/ircfiber/support/json.d"
+    mainSourceFile "tests/support_format_test.d"
+    versions "VibeUseFibers"
+}

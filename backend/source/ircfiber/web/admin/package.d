@@ -40,6 +40,9 @@ import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
     apiBncSeenClear, apiBncSeenForget;
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
     apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig;
+import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
+    apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
+    apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
@@ -131,6 +134,18 @@ final class AdminController {
 
         router.get("/api/admin/uploads", &adminWrap!apiUploadsListRoute);
         router.post("/api/admin/uploads/:id/delete", &adminWrap!apiUploadDeleteRoute);
+
+        // Support issues (Help & Feedback reports)
+        router.get("/api/admin/support/issues", &adminWrap!apiSupportIssuesListRoute);
+        router.get("/api/admin/support/issues/:id", &adminWrap!apiSupportIssueDetailRoute);
+        router.post("/api/admin/support/issues/:id", &adminWrap!apiSupportIssueUpdateRoute);
+        router.post("/api/admin/support/issues/:id/comments", &adminWrap!apiSupportIssueCommentRoute);
+        router.post("/api/admin/support/issues/:id/delete", &adminWrap!apiSupportIssueDeleteRoute);
+        // #support services bot (heartbeat + control; shown on the IRCD page)
+        router.get("/api/admin/support/bot", &adminWrap!apiSupportBotStatusRoute);
+        router.post("/api/admin/support/bot/reconnect", &adminWrap!apiSupportBotReconnectRoute);
+        router.post("/api/admin/support/bot/rejoin", &adminWrap!apiSupportBotRejoinRoute);
+        router.post("/api/admin/support/bot/announce", &adminWrap!apiSupportBotAnnounceRoute);
 
         // Bouncer: attached clients + accounts with a bouncer password
         router.get("/api/admin/bnc", &adminWrap!apiBncOverviewRoute);
@@ -296,6 +311,17 @@ private:
     }
     void apiUploadsListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUploadsList(req, res); }
     void apiUploadDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiUploadDelete(req, res); }
+
+    // Support issues
+    void apiSupportIssuesListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportIssuesList(req, res); }
+    void apiSupportIssueDetailRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportIssueDetail(req, res); }
+    void apiSupportIssueUpdateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportIssueUpdate(req, res, redis); }
+    void apiSupportIssueCommentRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportIssueComment(req, res, redis); }
+    void apiSupportIssueDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportIssueDelete(req, res); }
+    void apiSupportBotStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotStatus(req, res, redis); }
+    void apiSupportBotReconnectRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotReconnect(req, res, redis); }
+    void apiSupportBotRejoinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotRejoin(req, res, redis); }
+    void apiSupportBotAnnounceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotAnnounce(req, res, redis); }
 
     // Mongo
     void apiMongoStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMongoStatus(req, res); }

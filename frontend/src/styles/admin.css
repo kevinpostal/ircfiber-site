@@ -56,6 +56,7 @@
   --color-text: var(--text);
   --color-heading: var(--heading);
   --color-primary: var(--primary);
+  --color-primary-fg: var(--primary-fg);
   --color-success: var(--success);
   --color-warn: var(--warn);
   --color-danger: var(--danger);

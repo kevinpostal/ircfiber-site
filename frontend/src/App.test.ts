@@ -93,6 +93,11 @@ vi.mock('/src/stores/api', () => ({
   // Remaining api surface (dialogs/panels imported by App) — inert stubs.
   updateBncPlaybackLines: vi.fn(async () => undefined),
   updateNotificationPrefs: vi.fn(async () => undefined),
+  submitSupportIssue: vi.fn(async () => ({ id: 's1', number: 1 })),
+  fetchMySupportIssues: vi.fn(async () => ({ issues: [], total: 0 })),
+  fetchSupportIssue: vi.fn(async () => undefined),
+  addSupportIssueComment: vi.fn(async () => undefined),
+  convertUploadToGif: vi.fn(async () => ({})),
 }));
 
 import { connectWebSocket, disconnectWebSocket, sendRaw, sendMessage, sendJson, requestSync, requestSwitchBuffer } from '/src/stores/wsConnection.svelte.ts';
@@ -107,6 +112,7 @@ beforeEach(() => {
   ircState.contextMenu = { visible: false, x: 0, y: 0, actions: [] };
   ircState.showSettings = false;
   ircState.showShortcuts = false;
+  ircState.showFeedback = false;
   for (const k of Object.keys(dirtySeenEids)) delete dirtySeenEids[k];
   history.replaceState({}, '', '/');
 
@@ -432,6 +438,13 @@ describe('App', () => {
     await expect.element(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
     await expect.element(page.getByText('Switch to previous buffer')).toBeInTheDocument();
     await expect.element(page.getByText('Selected IRC commands')).toBeInTheDocument();
+  });
+
+  it('shows the Help & Feedback page at /?/feedback route', async () => {
+    history.replaceState({}, '', '/?/feedback');
+    render(App);
+    await expect.element(page.getByRole('region', { name: 'Help and feedback' })).toBeInTheDocument();
+    await expect.element(page.getByPlaceholder('Short summary')).toBeInTheDocument();
   });
 
   describe('groupings flicker fix (issue 20260627)', () => {

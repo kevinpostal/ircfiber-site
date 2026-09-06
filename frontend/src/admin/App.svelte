@@ -21,6 +21,8 @@
   import UserNew from './pages/UserNew.svelte';
   import UserDetail from './pages/UserDetail.svelte';
   import Uploads from './pages/Uploads.svelte';
+  import Support from './pages/Support.svelte';
+  import SupportDetail from './pages/SupportDetail.svelte';
   import MongoMonitor from './pages/MongoMonitor.svelte';
   import RedisMonitor from './pages/RedisMonitor.svelte';
   import Replication from './pages/Replication.svelte';
@@ -54,6 +56,9 @@
     if (match('/replication', path)) return { kind: 'replication' } as const;
     if (match('/sessions', path)) return { kind: 'sessions' } as const;
     if (match('/bouncer', path)) return { kind: 'bouncer' } as const;
+    const supportMatch = match('/support/:id', path);
+    if (supportMatch) return { kind: 'support-detail', issueId: supportMatch.id } as const;
+    if (match('/support', path)) return { kind: 'support' } as const;
     if (match('/users/new', path)) return { kind: 'users-new' } as const;
     const usersMatch = match('/users/:id', path);
     if (usersMatch) return { kind: 'users-detail', userId: usersMatch.id } as const;
@@ -102,6 +107,10 @@
         <Users />
       {:else if page?.kind === 'uploads'}
         <Uploads />
+      {:else if page?.kind === 'support-detail'}
+        <SupportDetail issueId={page.issueId} />
+      {:else if page?.kind === 'support'}
+        <Support />
       {:else if page?.kind === 'mongo'}
         <MongoMonitor />
       {:else if page?.kind === 'redis'}
