@@ -4,3 +4,10 @@
     name: "{{ item }}"
     restart: true
   loop: "{{ ['ircfiber-gateway'] if (gateway_replica_count | default(1) | int) == 1 else (range(gateway_replica_count | default(1) | int) | map('regex_replace', '^', 'ircfiber-gateway-') | list) }}"
+  # Secrets are read once at startup, so a rotated file needs a restart — but
+  # NOT during a blue/green swap, which already replaces the container with
+  # one that mounts the new files. Flushing this handler there would restart
+  # the container we just promoted, turning a zero-downtime deploy into a
+  # few seconds of 502 for no benefit. Set only by
+  # playbooks/gateway-bluegreen.yml, so a plain role run still restarts.
+  when: not (gateway_bluegreen_enabled | default(false) | bool)

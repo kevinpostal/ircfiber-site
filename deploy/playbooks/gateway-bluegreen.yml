@@ -54,6 +54,19 @@
         group: root
         mode: "0750"
 
+    # env.j2 emits only `<VAR>_FILE` paths for secrets, so the files have to
+    # exist before a container that mounts them starts. This playbook renders
+    # the env itself instead of running the whole gateway role, so without
+    # this include a blue/green deploy would start green with an
+    # IRCFIBER_MONGO_URL_FILE pointing at nothing — envSecret falls back to
+    # the inline value, which env.j2 no longer emits, so the gateway would
+    # boot with no Mongo URL at all. include_role (not include_tasks) so the
+    # role's own defaults — gateway_secrets_dir — resolve at role precedence.
+    - name: Materialise the secret files the env only references by path
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: secrets.yml
+
     - name: Render gateway env file (so green gets current env)
       ansible.builtin.template:
         src: ../roles/gateway/templates/env.j2
