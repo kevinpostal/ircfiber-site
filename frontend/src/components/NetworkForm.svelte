@@ -299,6 +299,16 @@
 
         const parsedChannels = parseChannelList(autoJoinChannels);
 
+        // Write-only fields: the form never pre-fills them (the stored
+        // values are not shown), so a blank field means "leave what is
+        // stored alone". They are omitted rather than sent as "" because
+        // the backend treats any present key as authoritative and would
+        // wipe the stored value (rest.d updateNetwork).
+        const writeOnly: Record<string, string> = {};
+        if (nspass) writeOnly.nspass = nspass;
+        if (serverPass) writeOnly.serverPass = serverPass;
+        if (commands) writeOnly.commands = commands;
+
         await onUpdateNetwork(networkId, {
           name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
           sasl: saslMechanism,
@@ -307,6 +317,7 @@
           autoJoinChannels: parsedChannels,
           autoJoinDelaySeconds,
           egressNodeId,
+          ...writeOnly,
         });
 
         // Mirror the saved fields into local state so the form pre-fills
@@ -570,7 +581,8 @@
                     <div class="passwordRow">
                       <input id="add-network-nspass" class="input"
                              type={revealNickserv ? 'text' : 'password'}
-                             bind:value={nspass} autocomplete="new-password" />
+                             bind:value={nspass} autocomplete="new-password"
+                             placeholder={mode === 'edit' ? 'Leave blank to keep current' : ''} />
                       <label class="reveal">
                         <input type="checkbox" class="reveal" bind:checked={revealNickserv} />
                         <span>Reveal</span>
@@ -589,7 +601,9 @@
                   <td class="joincommands optional" colspan="2">
                     <textarea id="add-network-commands" class="input" rows="5"
                               bind:value={commands}
-                              placeholder="AUTH <user> <password> etc..."></textarea>
+                              placeholder={mode === 'edit'
+                                ? 'Leave blank to keep current'
+                                : 'AUTH <user> <password> etc...'}></textarea>
                   </td>
                 </tr>
                 <tr>
@@ -604,7 +618,8 @@
                     <div class="passwordRow">
                       <input id="add-network-serverpass" class="input"
                              type={revealServerPass ? 'text' : 'password'}
-                             bind:value={serverPass} autocomplete="new-password" />
+                             bind:value={serverPass} autocomplete="new-password"
+                             placeholder={mode === 'edit' ? 'Leave blank to keep current' : ''} />
                       <label class="reveal">
                         <input type="checkbox" class="reveal" bind:checked={revealServerPass} />
                         <span>Reveal</span>
@@ -728,7 +743,7 @@
 
       <div class="formButtons">
         {#if mode === 'edit'}
-          <span class="reconnectNote">Nickname changes take effect immediately on the live connection. Changing your real name, SASL settings, or any host settings requires a reconnect.</span>
+          <span class="reconnectNote">Nickname changes take effect immediately on the live connection. Changing your real name, SASL settings, or any host settings requires a reconnect. A new NickServ password, server password, or connect command is stored now and used the next time this network connects.</span>
         {/if}
         <button type="button" class="action secondary" onclick={onClose} disabled={busy}>
           <span>Cancel</span>

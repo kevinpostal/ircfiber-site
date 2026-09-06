@@ -283,9 +283,26 @@ describe('NetworkForm', () => {
     const call = mockUpdateNetwork.mock.calls[0];
     expect(call[1]).toHaveProperty('autoJoinChannels');
     expect(Array.isArray(call[1].autoJoinChannels)).toBe(true);
-    // commands and nspass remain add-only
+    // Untouched write-only fields are omitted, not sent as "" — an empty
+    // string would wipe the stored credential.
     expect(call[1]).not.toHaveProperty('commands');
     expect(call[1]).not.toHaveProperty('nspass');
+    expect(call[1]).not.toHaveProperty('serverPass');
+  });
+
+  it('Update mode sends a newly typed NickServ password, server password and commands', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
+    await userEvent.type(page.getByLabelText(/NickServ password/), 'hunter2');
+    await userEvent.type(page.getByLabelText(/Server password/), 'srvpass');
+    await userEvent.type(page.getByLabelText(/Commands to run on connect/), 'OPER admin secret');
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    const call = mockUpdateNetwork.mock.calls[0];
+    expect(call[1]).toHaveProperty('nspass', 'hunter2');
+    expect(call[1]).toHaveProperty('serverPass', 'srvpass');
+    expect(call[1]).toHaveProperty('commands', 'OPER admin secret');
   });
 
   it('Update mode includes autoJoinDelaySeconds in payload', async () => {
