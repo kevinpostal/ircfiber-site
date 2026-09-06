@@ -21,6 +21,11 @@
  *     for 24h. Transport failures set no skip key: they retry next login.
  *   - `cfg.sasl == plain && saslUsername && saslPassword` — already done.
  *
+ * Every attempt's outcome is counted into `irc:services:outcomes`
+ * (`SERVICES_OUTCOMES_KEY`), because a failing provisioner is otherwise
+ * invisible: a transport failure writes one `logWarn` and no skip key, so it
+ * retries on every login forever. The admin NickServ page reads that hash.
+ *
  * Anope only flushes `anope.db` every `updatetimeout` (5m), so a services
  * restart right after a signup can lose the registration. Recovery is
  * automatic: the credential guard above is the only state that matters, and
@@ -229,6 +234,38 @@ private string lockKey(string userId) @safe pure { return "irc:services:lock:" ~
  */
 string servicesPendingKey(string userId) @safe pure { return "irc:services:pending:" ~ userId; }
 
+/**
+ * Redis hash carrying provisioning telemetry: one counter per
+ * `ProvisionOutcome` member (HINCRBY), plus `lastOutcome` and
+ * `lastOutcomeAt` (unix seconds) for the most recent attempt.
+ *
+ * Why it exists: prod sat at zero provisioned credentials for weeks and
+ * nothing showed it. `ProvisionOutcome.failed` only logs, and a transport
+ * failure deliberately sets no skip key so it retries — which means a
+ * permanently broken Anope looks exactly like an idle system. These counters
+ * are the observable form of that state.
+ *
+ * No TTL: the counts are a lifetime tally of a rare event and the hash holds
+ * a dozen small fields.
+ */
+enum string SERVICES_OUTCOMES_KEY = "irc:services:outcomes";
+
+/// Records one attempt. Telemetry must never change the outcome it reports
+/// nor escape as an exception, so every failure is swallowed after a warning.
+private void recordProvisionOutcome(RedisStorage redis, ProvisionOutcome outcome) nothrow {
+    try {
+        auto db = redis.getDb();
+        const name = outcome.to!string;
+        db.request!long("HINCRBY", SERVICES_OUTCOMES_KEY, name, "1");
+        db.hset(SERVICES_OUTCOMES_KEY, "lastOutcome", name);
+        db.hset(SERVICES_OUTCOMES_KEY, "lastOutcomeAt",
+                Clock.currTime.toUnixTime!long.to!string);
+    } catch (Exception e) {
+        try logWarn("services: recording a provisioning outcome failed: %s", e.msg);
+        catch (Exception) {}
+    }
+}
+
 
 /**
  * Register the user's nick with NickServ and persist the generated password
@@ -239,6 +276,19 @@ string servicesPendingKey(string userId) @safe pure { return "irc:services:pendi
  * handler.
  */
 ProvisionOutcome provisionServicesAccount(User user, NetworkRepository networkRepo,
+                                          RedisStorage redis, ServerRegistry serverRegistry) {
+    // One recording site for every exit of the attempt below, including the
+    // exception path (which `ServicesProvisioner.run` swallows): the initial
+    // value is what an escaping exception is counted as.
+    ProvisionOutcome outcome = ProvisionOutcome.failed;
+    scope (exit) recordProvisionOutcome(redis, outcome);
+    outcome = provisionAttempt(user, networkRepo, redis, serverRegistry);
+    return outcome;
+}
+
+/// The attempt itself. Every `return` here is counted by the wrapper above,
+/// so nothing in this body touches the telemetry hash.
+private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRepo,
                                           RedisStorage redis, ServerRegistry serverRegistry) {
     auto s = loadAnopeSettings();
     if (!s.configured) {

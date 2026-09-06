@@ -602,9 +602,18 @@ final class WebController {
 
             // Hashed assets under public/dist/assets/* are content-addressed
             bool isImmutable = rel.startsWith("assets/") && rel.canFind("-");
+            // An HTML shell is an INDEX of content-hashed bundles, so caching
+            // it caches the bundle names: with max-age=3600 a browser kept
+            // loading the previous deploy's admin-<hash>.js for up to an hour
+            // after a swap, which reads as "my change did not deploy". The
+            // shell must always be revalidated; only the hashed assets it
+            // points at may be cached forever.
+            const isShell = endsWith(rel, ".html");
             if (isImmutable) {
                 res.headers["Cache-Control"] = "public, max-age=31536000, immutable";
                 // strip Pragma/Expires so caches honor immutable
+            } else if (isShell) {
+                res.headers["Cache-Control"] = "no-store, must-revalidate";
             } else {
                 res.headers["Cache-Control"] = "public, max-age=3600";
             }
@@ -671,8 +680,13 @@ final class WebController {
             else if (endsWith(rel, ".woff")) mime = "font/woff";
 
             bool isImmutable = rel.canFind("-");
-            if (isImmutable) {
+            // Same rule as serveDist: an HTML shell indexes hashed bundles, so
+            // it must be revalidated or a deploy stays invisible for an hour.
+            const isShell = endsWith(rel, ".html");
+            if (isImmutable && !isShell) {
                 res.headers["Cache-Control"] = "public, max-age=31536000, immutable";
+            } else if (isShell) {
+                res.headers["Cache-Control"] = "no-store, must-revalidate";
             } else {
                 res.headers["Cache-Control"] = "public, max-age=3600";
             }

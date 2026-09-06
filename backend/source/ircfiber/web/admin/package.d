@@ -249,7 +249,9 @@ private:
     void apiIrcdBanDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdBanDelete(req, res); }
     void apiIrcdRehashRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdRehash(req, res); }
     void apiIrcdConfigRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfig(req, res); }
-    void apiNsAccountsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsAccounts(req, res); }
+    // Needs redis: the inventory response also reports provisioning health
+    // (outcome counters, orphan pending credentials, unprovisioned users).
+    void apiNsAccountsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsAccounts(req, res, redis); }
     void apiNsAccountRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsAccount(req, res); }
     void apiNsSuspendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsSuspend(req, res); }
     void apiNsUnsuspendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsUnsuspend(req, res); }

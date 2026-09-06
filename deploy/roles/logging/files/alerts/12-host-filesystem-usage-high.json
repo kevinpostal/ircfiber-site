@@ -1,0 +1,98 @@
+{
+  "alert": "IRCFiber host filesystem usage high",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "evalWindow": "15m",
+  "frequency": "5m",
+  "disabled": false,
+  "labels": {
+    "severity": "warning",
+    "deployment_environment": "production",
+    "host": "ovh-prod",
+    "service": "host",
+    "signal": "filesystem"
+  },
+  "annotations": {
+    "summary": "A filesystem on ovh-prod is above the usage threshold",
+    "description": "At least one non-tmpfs filesystem crossed the threshold inside the window. Before the 2026-09-06 cleanup the root filesystem sat at 81% with 27 GB of BuildKit cache, which is one bad deploy away from a full disk: mongo refuses writes, dockerd cannot create layers. Check: df -h; docker system df; docker builder prune -af. UNIT NOTE: the OTel spec emits system.filesystem.utilization as a ratio 0..1, which is why the default target is 0.85. If the SigNoz graph for this metric shows 0..100 in this deployment, set signoz_alert_host_fs_utilization: 85 instead."
+  },
+  "preferredChannels": [],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "1",
+    "target": 0.85,
+    "targetUnit": "percentunit",
+    "matchType": "1",
+    "alertOnAbsent": true,
+    "absentFor": 15,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "percentunit",
+      "builderQueries": {
+        "A": {
+          "queryName": "A",
+          "dataSource": "metrics",
+          "aggregateOperator": "max",
+          "aggregateAttribute": {
+            "key": "system.filesystem.utilization",
+            "dataType": "float64",
+            "type": "Gauge",
+            "isColumn": true
+          },
+          "timeAggregation": "max",
+          "spaceAggregation": "max",
+          "functions": [],
+          "filter": {
+            "expression": "host.name = 'ovh-prod' AND type != 'tmpfs'"
+          },
+          "filters": {
+            "op": "AND",
+            "items": [
+              {
+                "key": {
+                  "key": "host.name",
+                  "dataType": "string",
+                  "type": "resource",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "ovh-prod"
+              },
+              {
+                "key": {
+                  "key": "type",
+                  "dataType": "string",
+                  "type": "tag",
+                  "isColumn": false
+                },
+                "op": "!=",
+                "value": "tmpfs"
+              }
+            ]
+          },
+          "groupBy": [
+            {
+              "key": "mountpoint",
+              "dataType": "string",
+              "type": "tag",
+              "isColumn": false
+            }
+          ],
+          "expression": "A",
+          "disabled": false,
+          "having": {
+            "expression": ""
+          },
+          "limit": null,
+          "stepInterval": 60,
+          "orderBy": [],
+          "reduceTo": "last",
+          "legend": "filesystem utilization"
+        }
+      },
+      "promQueries": {},
+      "chQueries": {}
+    }
+  }
+}

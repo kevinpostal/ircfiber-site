@@ -59,12 +59,15 @@ struct SignozSettings {
 
 SignozSettings loadSignozSettings() {
     import std.process : environment;
+    import ircfiber.env : envSecret;
     SignozSettings st;
     try {
         auto u = environment.get("IRCFIBER_SIGNOZ_URL", "");
         if (u.length) st.url = u;
         st.hostHeader = environment.get("IRCFIBER_SIGNOZ_HOST", "");
-        st.apiKey = environment.get("IRCFIBER_SIGNOZ_API_KEY", "");
+        // Service-account key: file-backed in prod
+        // (IRCFIBER_SIGNOZ_API_KEY_FILE), never inline in the container env.
+        st.apiKey = envSecret("IRCFIBER_SIGNOZ_API_KEY", "");
         st.insecure = environment.get("IRCFIBER_SIGNOZ_INSECURE", "0") == "1";
     } catch (Exception) {}
     return st;

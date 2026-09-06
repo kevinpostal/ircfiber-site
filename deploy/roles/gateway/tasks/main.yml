@@ -40,8 +40,21 @@
     group: root
     mode: "0750"
 
+# Secrets are installed as individual 0400 root-owned files under
+# {{ gateway_secrets_dir }} and reach the process through the *_FILE env
+# indirection, so no credential appears in the container env or in
+# `docker inspect`. Must run before env.j2 is rendered: that template emits
+# the *_FILE paths pointing at these files.
+- name: Install gateway secret files
+  tags: [always]
+  ansible.builtin.include_tasks: secrets.yml
+
 - name: Render gateway env file
   tags: [always]
+  # The rendered file still carries connection URLs with embedded
+  # credentials, and a template diff would print them into the deploy log
+  # (and into whatever CI captures that log).
+  no_log: true
   ansible.builtin.template:
     src: env.j2
     dest: /etc/ircfiber/gateway/env
@@ -92,46 +105,21 @@
   ansible.builtin.set_fact:
     _gateway_env: "{{ dict(_pairs) }}"
 
+# Every container below is defined by tasks/container.yml — one spec, four
+# call sites (these three plus the green replica in
+# playbooks/gateway-bluegreen.yml). The per-component differences are passed
+# in as vars; nothing about the image, env, mounts, ulimits, security
+# options, limits or health probe is restated here, because the copy that
+# used to live in the blue/green playbook drifted and silently dropped a
+# mount on every swap.
 - name: Run ircfiber-gateway replicas
   tags: [gateway]
-  community.docker.docker_container:
-    name: "{{ item }}"
-    image: "{{ ircfiber_gateway_image_full }}"
-    state: started
-    restart_policy: unless-stopped
-    command: ["/app/irc-fiber"]
-    networks: "{{ ircfiber_networks_for_gateway }}"
-    networks_cli_compatible: true
-    env: "{{ _gateway_env }}"
-    # Keep in sync with `_gateway_volumes` in playbooks/gateway-bluegreen.yml:
-    # that playbook recreates this container standalone, so a mount missing
-    # there is dropped on the next blue/green swap.
-    volumes:
-      - "{{ gateway_uploads_volume }}:/app/uploads"
-      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
-      # Read-only mount of the rendered InspIRCd config for the admin
-      # dashboard's redacted config viewer (values never leave redacted).
-      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
-      # Read-only mount of Anope's data volume for the admin NickServ
-      # account inventory. anope.db is mode 0600 owned by uid 10000; the
-      # gateway runs as uid 0, so :ro is sufficient and nothing writes here.
-      # Deliberately NOT on ircfiber-bnc or ircfiber-support-bot: neither
-      # serves admin routes, so the mount would widen their access for nothing.
-      - "{{ ircd_services_data_volume | default('ircfiber_services_data') }}:/var/lib/ircfiber/anope:ro"
-    security_opts:
-      - "no-new-privileges:true"
-    ulimits:
-      - "nofile:65536:65536"
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
-      interval: "{{ gateway_healthcheck_interval }}"
-      timeout: "{{ gateway_healthcheck_timeout }}"
-      retries: "{{ gateway_healthcheck_retries }}"
-      start_period: "{{ gateway_healthcheck_start_period }}"
-    labels:
-      com.ircfiber.component: "gateway"
-      com.ircfiber.version: "{{ ircfiber_version }}"
+  ansible.builtin.include_tasks: container.yml
   loop: "{{ _gw_container_names }}"
+  loop_control:
+    loop_var: gateway_spec_name
+  vars:
+    gateway_spec_component: "gateway"
 
 # Bouncer listener: same image, dedicated container so the public TCP
 # port is independent of the HTTP gateway replicas (not part of blue/green).
@@ -139,69 +127,49 @@
 # volume is mounted read-only and the cert is re-read per connection.
 - name: Run ircfiber-bnc
   tags: [bnc]
-  community.docker.docker_container:
-    name: "{{ bnc_container_name }}"
-    image: "{{ ircfiber_gateway_image_full }}"
-    state: started
-    restart_policy: unless-stopped
-    command: ["/app/irc-fiber"]
-    networks: "{{ ircfiber_networks_for_gateway }}"
-    networks_cli_compatible: true
-    env: "{{ _gateway_env | combine({'IRCFIBER_BNC_PORT': bnc_public_port | string, 'IRCFIBER_BNC_TLS_CERT': bnc_tls_cert_path, 'IRCFIBER_BNC_TLS_KEY': bnc_tls_key_path}) }}"
-    published_ports:
+  ansible.builtin.include_tasks: container.yml
+  vars:
+    gateway_spec_name: "{{ bnc_container_name }}"
+    gateway_spec_component: "bnc"
+    gateway_spec_env_extra:
+      IRCFIBER_BNC_PORT: "{{ bnc_public_port | string }}"
+      IRCFIBER_BNC_TLS_CERT: "{{ bnc_tls_cert_path }}"
+      IRCFIBER_BNC_TLS_KEY: "{{ bnc_tls_key_path }}"
+    gateway_spec_ports:
       - "{{ bnc_public_port }}:{{ bnc_public_port }}"
-    volumes:
-      - "{{ gateway_uploads_volume }}:/app/uploads"
-      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+    # Caddy's cert store plus the ircd config; explicitly no Anope data
+    # volume, since bnc serves no admin routes.
+    gateway_spec_volumes_extra:
       - "{{ caddy_data_volume }}:/caddy-data:ro"
       - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
-    security_opts:
-      - "no-new-privileges:true"
-    ulimits:
-      - "nofile:65536:65536"
-    healthcheck:
-      # The runtime image has curl but no nc; the bnc process also serves
-      # HTTP on the internal gateway port.
-      test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
-      interval: "{{ gateway_healthcheck_interval }}"
-      timeout: "{{ gateway_healthcheck_timeout }}"
-      retries: "{{ gateway_healthcheck_retries }}"
-      start_period: "{{ gateway_healthcheck_start_period }}"
-    labels:
-      com.ircfiber.component: "bnc"
-      com.ircfiber.version: "{{ ircfiber_version }}"
+    gateway_spec_memory: "{{ bnc_memory_limit }}"
+    gateway_spec_memory_reservation: "{{ bnc_memory_reservation }}"
+    gateway_spec_cpus: "{{ bnc_cpus }}"
+    gateway_spec_oom_score_adj: "{{ bnc_oom_score_adj }}"
   when: bnc_enabled | default(false) | bool
 
 # #support services bot: same image, dedicated container (not part of
 # blue/green, no published ports). Only this process sets
 # IRCFIBER_SUPPORT_BOT_ENABLED; it reaches the ircd through the docker alias
-# already rendered as IRCFIBER_IRCD_HOST/PORT in the gateway env.
+# already rendered as IRCFIBER_IRCD_HOST/PORT in the gateway env. Its
+# NickServ password is NOT injected here: env.j2 renders
+# IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD_FILE and the value lives in a 0400
+# file under {{ gateway_secrets_dir }}, so it stays out of `docker inspect`.
 - name: Run ircfiber-support-bot
   tags: [support-bot]
-  community.docker.docker_container:
-    name: "{{ support_bot_container_name }}"
-    image: "{{ ircfiber_gateway_image_full }}"
-    state: started
-    restart_policy: unless-stopped
-    command: ["/app/irc-fiber"]
-    networks: "{{ ircfiber_networks_for_gateway }}"
-    networks_cli_compatible: true
-    env: "{{ _gateway_env | combine({'IRCFIBER_SUPPORT_BOT_ENABLED': '1', 'IRCFIBER_SUPPORT_BOT_NICK': support_bot_nick, 'IRCFIBER_SUPPORT_BOT_CHANNEL': support_bot_channel, 'IRCFIBER_SUPPORT_BOT_PUBLIC_URL': support_bot_public_url, 'IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD': vault_support_bot_nickserv_password | default('')}) }}"
-    volumes:
-      - "{{ gateway_uploads_volume }}:/app/uploads"
-      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
-    security_opts:
-      - "no-new-privileges:true"
-    ulimits:
-      - "nofile:65536:65536"
-    healthcheck:
-      # The bot process also serves HTTP on the internal gateway port.
-      test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
-      interval: "{{ gateway_healthcheck_interval }}"
-      timeout: "{{ gateway_healthcheck_timeout }}"
-      retries: "{{ gateway_healthcheck_retries }}"
-      start_period: "{{ gateway_healthcheck_start_period }}"
-    labels:
-      com.ircfiber.component: "support-bot"
-      com.ircfiber.version: "{{ ircfiber_version }}"
+  ansible.builtin.include_tasks: container.yml
+  vars:
+    gateway_spec_name: "{{ support_bot_container_name }}"
+    gateway_spec_component: "support-bot"
+    gateway_spec_env_extra:
+      IRCFIBER_SUPPORT_BOT_ENABLED: "1"
+      IRCFIBER_SUPPORT_BOT_NICK: "{{ support_bot_nick }}"
+      IRCFIBER_SUPPORT_BOT_CHANNEL: "{{ support_bot_channel }}"
+      IRCFIBER_SUPPORT_BOT_PUBLIC_URL: "{{ support_bot_public_url }}"
+    # Base mounts only — no ircd config, no Anope data, no cert store.
+    gateway_spec_volumes_extra: []
+    gateway_spec_memory: "{{ support_bot_memory_limit }}"
+    gateway_spec_memory_reservation: "{{ support_bot_memory_reservation }}"
+    gateway_spec_cpus: "{{ support_bot_cpus }}"
+    gateway_spec_oom_score_adj: "{{ support_bot_oom_score_adj }}"
   when: support_bot_enabled | default(false) | bool

@@ -27,12 +27,15 @@ module ircfiber.web.admin.nickserv;
 ///
 
 import std.algorithm : canFind, sort;
+import std.conv : to;
 import std.string : strip, toLower;
+import std.traits : EnumMembers;
 import std.uni : sicmp;
 import std.uuid : UUID, parseUUID;
 
 import vibe.core.log : logInfo, logWarn;
 import vibe.data.json : Json;
+import vibe.db.redis.redis : RedisReply;
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 
 import ircfiber.db.network : NetworkRepository;
@@ -43,8 +46,8 @@ import ircfiber.models.network : NetworkConfig, SASLMechanism;
 import ircfiber.models.user : User;
 import ircfiber.redis.protocol : RedisKeys;
 import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick,
-    persistProvisionedAccount, provisionServicesAccountAsync,
-    servicesPendingKey, servicesSkipKey;
+    persistProvisionedAccount, provisionServicesAccountAsync, ProvisionOutcome,
+    servicesPendingKey, servicesSkipKey, SERVICES_OUTCOMES_KEY;
 import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
     anopeCheckAuthentication, anopeOperCommand, anopeOperQuery, isSafeServicesArg,
     loadAnopeSettings, nickServSetPasswordCommand, parseNickInfo;
@@ -226,6 +229,134 @@ private bool findPlatformAccount(string nick, out NetworkConfig cfg, out User ow
 }
 
 // ---------------------------------------------------------------------------
+// Provisioning telemetry
+// ---------------------------------------------------------------------------
+//
+// Why this is on the NickServ page: prod ran for weeks with zero of ten
+// website users holding a NickServ credential, and nothing said so. The
+// provisioner logs a warning on failure and deliberately sets no skip key
+// for a transport failure, so a permanently broken Anope is indistinguishable
+// from an idle one. The three numbers below are the ones that would have
+// shown it: how many networks have no credential at all, how many generated
+// credentials were never persisted (each one a user locked out of their own
+// nick), and how the last attempts actually ended.
+
+/// A count we could not read. The SPA renders it as "unknown": reporting a
+/// Redis hiccup as `0` would be the exact reassuring lie this section exists
+/// to prevent.
+private enum long COUNT_UNKNOWN = -1;
+
+/// Number of keys matching `pattern`, via SCAN — never KEYS, because this is
+/// the production Redis that also carries the engine's control lists.
+/// `COUNT_UNKNOWN` when Redis failed.
+private long countKeys(RedisStorage redis, string pattern) {
+    long total = 0;
+    try {
+        auto db = redis.getDb();
+        string cursor = "0";
+        // These are per-user keys of a ten-user deployment; the iteration
+        // bound only stops a pathological cursor that never returns to 0.
+        foreach (_; 0 .. 1024) {
+            auto reply = db.request!(RedisReply!string)(
+                "SCAN", cursor, "MATCH", pattern, "COUNT", "500");
+            // The reply is [cursor, [key, ...]] and must be drained fully or
+            // the pooled connection desyncs for the next caller.
+            bool first = true;
+            string next = "0";
+            foreach (item; reply) {
+                if (first) {
+                    next = item;
+                    first = false;
+                } else {
+                    total++;
+                }
+            }
+            cursor = next;
+            if (!cursor.length || cursor == "0") break;
+        }
+    } catch (Exception e) {
+        logWarn("nickserv: counting %s failed: %s", pattern, e.msg);
+        return COUNT_UNKNOWN;
+    }
+    return total;
+}
+
+/// Fiber-host networks with no NickServ credential at all — the number that
+/// was ten out of ten in prod while every log looked quiet. Counted from
+/// `findAll` rather than a dedicated query because `NetworkRepository` lives
+/// in the vendored `common/` tree mirrored into three repos, and this
+/// deployment has a handful of networks.
+private long countUnprovisioned() {
+    long n = 0;
+    try {
+        auto networks = new NetworkRepository();
+        foreach (row; networks.findAll()) {
+            if (row.config.host != DEFAULT_FIBER_HOST) continue;
+            if (row.config.saslUsername.strip().length) continue;
+            n++;
+        }
+    } catch (Exception e) {
+        logWarn("nickserv: counting unprovisioned networks failed: %s", e.msg);
+        return COUNT_UNKNOWN;
+    }
+    return n;
+}
+
+/// The `provisioning` block of the inventory response. Every source is read
+/// under its own guard: a failing Redis or Mongo degrades one number to
+/// `unknown` instead of taking the whole account inventory down with it.
+private Json provisioningJson(RedisStorage redis) {
+    auto outcomes = Json.emptyObject;
+    // Zero-fill first, so the UI always renders the same breakdown and a
+    // field that was never incremented reads as "never happened" rather than
+    // disappearing from the list.
+    bool[string] known;
+    foreach (m; EnumMembers!ProvisionOutcome) {
+        const name = m.to!string;
+        known[name] = true;
+        outcomes[name] = 0L;
+    }
+
+    string lastOutcome;
+    long lastOutcomeAt = 0;
+    try {
+        auto raw = redis.hgetAll(SERVICES_OUTCOMES_KEY);
+        foreach (name, value; raw) {
+            if (name == "lastOutcome") {
+                lastOutcome = value;
+                continue;
+            }
+            if (name == "lastOutcomeAt") {
+                try lastOutcomeAt = value.to!long;
+                catch (Exception) {}
+                continue;
+            }
+            // Ignore anything else: an outcome member dropped from the enum
+            // must not resurrect itself in the breakdown, and `opIndex` on a
+            // mutable Json object would insert the stale field.
+            if (name !in known) continue;
+            try outcomes[name] = value.to!long;
+            catch (Exception) {}
+        }
+    } catch (Exception e) {
+        logWarn("nickserv: reading %s failed: %s", SERVICES_OUTCOMES_KEY, e.msg);
+    }
+
+    auto j = Json.emptyObject;
+    j["outcomes"] = outcomes;
+    j["lastOutcome"] = lastOutcome;
+    j["lastOutcomeAt"] = lastOutcomeAt;
+    // Patterns derived from the key builders so they cannot drift apart.
+    j["pendingOrphans"] = countKeys(redis, servicesPendingKey("") ~ "*");
+    // Named `skipMarkers`, not `skipped`: `outcomes.skipped` already means
+    // something else (an attempt that bailed out), and confusing the two
+    // would misread a healthy no-op as a giving-up.
+    j["skipMarkers"] = countKeys(redis, servicesSkipKey("") ~ "*");
+    j["unprovisioned"] = countUnprovisioned();
+    return j;
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/admin/ircd/nickserv/accounts
 // ---------------------------------------------------------------------------
 
@@ -263,7 +394,10 @@ private void annotate(ref Json j, const PlatformRow p) {
 /// alone still lists every IRC Fiber account, and `reason` tells the admin
 /// what is missing. Accounts registered only on IRC are invisible then —
 /// which is exactly why the flatfile is read in the first place.
-package void apiNsAccounts(HTTPServerRequest req, HTTPServerResponse res) {
+/// The `provisioning` block additionally reports how provisioning itself is
+/// going (see the telemetry section above); it needs Redis, which is why this
+/// handler takes the storage the other read-only admin endpoints take.
+package void apiNsAccounts(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
     auto inv = readAnopeInventory();
     auto platform = loadPlatformRows();
 
@@ -293,6 +427,7 @@ package void apiNsAccounts(HTTPServerRequest req, HTTPServerResponse res) {
     data["reason"] = inv.reason;
     data["asOf"] = inv.fileMtime;
     data["accounts"] = arr;
+    data["provisioning"] = provisioningJson(redis);
     jsonOk(res, data);
 }
 

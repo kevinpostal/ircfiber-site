@@ -1,0 +1,81 @@
+{
+  "alert": "IRCFiber host load average sustained above core count",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "evalWindow": "5m",
+  "frequency": "1m",
+  "disabled": false,
+  "labels": {
+    "severity": "critical",
+    "deployment_environment": "production",
+    "host": "ovh-prod",
+    "service": "host",
+    "signal": "load"
+  },
+  "annotations": {
+    "summary": "Host 5-minute load average above threshold on ovh-prod",
+    "description": "The 5-minute load average stayed above the threshold for the whole window. The host has 4 vCPU, so anything sustained above 4 means the run queue is backed up; the default 6 tolerates short bursts (nightly backup, docker prune, image pull) while still catching a runaway. The 2026-09-06 incident peaked at load 45 during an on-host ldc2 compile. Check: uptime; top -bn1 | head -20; docker stats --no-stream. Requires the load scraper (see README-alerts.md); with no data this fires as absent."
+  },
+  "preferredChannels": [],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "1",
+    "target": 6,
+    "targetUnit": "",
+    "matchType": "2",
+    "alertOnAbsent": true,
+    "absentFor": 10,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "short",
+      "builderQueries": {
+        "A": {
+          "queryName": "A",
+          "dataSource": "metrics",
+          "aggregateOperator": "max",
+          "aggregateAttribute": {
+            "key": "system.cpu.load_average.5m",
+            "dataType": "float64",
+            "type": "Gauge",
+            "isColumn": true
+          },
+          "timeAggregation": "max",
+          "spaceAggregation": "max",
+          "functions": [],
+          "filter": {
+            "expression": "host.name = 'ovh-prod'"
+          },
+          "filters": {
+            "op": "AND",
+            "items": [
+              {
+                "key": {
+                  "key": "host.name",
+                  "dataType": "string",
+                  "type": "resource",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "ovh-prod"
+              }
+            ]
+          },
+          "groupBy": [],
+          "expression": "A",
+          "disabled": false,
+          "having": {
+            "expression": ""
+          },
+          "limit": null,
+          "stepInterval": 60,
+          "orderBy": [],
+          "reduceTo": "last",
+          "legend": "load5"
+        }
+      },
+      "promQueries": {},
+      "chQueries": {}
+    }
+  }
+}

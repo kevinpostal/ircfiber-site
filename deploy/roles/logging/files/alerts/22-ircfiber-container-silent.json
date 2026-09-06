@@ -1,0 +1,88 @@
+{
+  "alert": "IRCFiber container stopped shipping logs",
+  "alertType": "LOGS_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "evalWindow": "10m",
+  "frequency": "1m",
+  "disabled": false,
+  "labels": {
+    "severity": "critical",
+    "deployment_environment": "production",
+    "host": "ovh-prod",
+    "service": "docker",
+    "signal": "absence"
+  },
+  "annotations": {
+    "summary": "No container logs at all from ovh-prod",
+    "description": "Total log volume from the prod host dropped to zero for the window. This is the coarse but unmissable outage signal: when the host wedged on 2026-09-06 dockerd stopped answering, every container stopped producing output and fluent-bit stopped shipping — and nothing said so. It also catches fluent-bit itself dying, the Tailscale path to the collector breaking, and a container stuck unhealthy with a dead main loop. Check: ssh the host, docker ps, docker logs ircfiber-fluent-bit --tail 50, tailscale status, and curl -fsS https://ircfiber.com/health from outside."
+  },
+  "preferredChannels": [],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "2",
+    "target": 1,
+    "targetUnit": "",
+    "matchType": "4",
+    "alertOnAbsent": true,
+    "absentFor": 10,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "short",
+      "builderQueries": {
+        "A": {
+          "queryName": "A",
+          "dataSource": "logs",
+          "aggregateOperator": "count",
+          "aggregateAttribute": {
+            "key": "",
+            "dataType": "",
+            "type": "",
+            "isColumn": false
+          },
+          "timeAggregation": "count",
+          "spaceAggregation": "sum",
+          "functions": [],
+          "filter": {
+            "expression": "host.name = 'ovh-prod'"
+          },
+          "filters": {
+            "op": "AND",
+            "items": [
+              {
+                "key": {
+                  "key": "host.name",
+                  "dataType": "string",
+                  "type": "resource",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "ovh-prod"
+              }
+            ]
+          },
+          "groupBy": [
+            {
+              "key": "service.name",
+              "dataType": "string",
+              "type": "resource",
+              "isColumn": false
+            }
+          ],
+          "expression": "A",
+          "disabled": false,
+          "having": {
+            "expression": ""
+          },
+          "limit": null,
+          "stepInterval": 60,
+          "orderBy": [],
+          "reduceTo": "last",
+          "legend": "prod log volume"
+        }
+      },
+      "promQueries": {},
+      "chQueries": {}
+    }
+  }
+}

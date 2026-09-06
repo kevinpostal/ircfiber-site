@@ -1,20 +1,77 @@
 ---
 gateway_container_name: ircfiber-gateway
-gateway_no_new_privileges: true
-gateway_ulimits:
-  nofile:
-    soft: 65536
-    hard: 65536
+# Open-file ceiling for every container built from this image: one FD per
+# client websocket plus one per upstream IRC connection, so the default of
+# 1024 is reached by a few hundred users. Applied by tasks/container.yml as
+# a soft=hard nofile ulimit. (This replaces a gateway_ulimits dict that no
+# task ever read — the value was hardcoded in the container definitions.)
+gateway_nofile_limit: 65536
 gateway_healthcheck_interval: 30s
 gateway_healthcheck_timeout: 10s
 gateway_healthcheck_retries: 3
 gateway_healthcheck_start_period: 40s
-# When set, the gateway's admin password is reset to this on every start
- # vault_ircfiber_admin_password overrides default — no hardcoded value
-ircfiber_admin_password_reset: "{{ vault_ircfiber_admin_password | default('') }}"
+
+# Directory holding the individual secret files rendered by tasks/secrets.yml
+# (0700, root-owned; each file 0400). Bind-mounted read-only into every
+# container running this image and consumed through the *_FILE env
+# indirection, so no credential ever appears in `docker inspect`.
+gateway_secrets_dir: "/etc/ircfiber/gateway/secrets"
 
 gateway_replica_count: 1
 # Blue/green: when true, also run ircfiber-gateway-green alongside the
 # primary so Caddy can load-balance with health checks.
 gateway_bluegreen: true
 gateway_replica_sticky: true
+
+# ---------------------------------------------------------------------------
+# Resource limits
+#
+# Nothing on this host had a memory or CPU limit before 2026-09-06 (docker
+# inspect showed Memory 0, NanoCpus 0, CpuShares 0 for every container), so
+# one runaway process took all 7.565 GiB of RAM, dockerd stopped answering and
+# ircfiber.com went down with it. The limits below exist to turn that class of
+# failure into "one container is OOM-killed and restarted" instead of "the
+# host is gone".
+#
+# Each limit is sized from the measured steady state of the running prod
+# container. Reservations are kept deliberately tiny: they are only soft
+# floors under host pressure, and a set of reservations summing anywhere near
+# 7.5 GiB would defeat the purpose. Sum of the reservations for this role at
+# the prod replica count: 192 + 64 + 64 = 320 MiB.
+#
+# oom_score_adj makes the kernel's choice of victim deliberate rather than
+# accidental. Ordering across both roles, most-protected first:
+#   ircd (-500) < services (-300) < gateway (+200) < bnc (+300)
+#     < support-bot (+500)
+# An ircd kill disconnects every user on the network at once and triggers a
+# full reconnect storm; the services process owns registration state. The
+# gateway replicas, bnc and support-bot hold no state, are restarted by
+# `unless-stopped`, and the replicas additionally sit behind a health-checked
+# blue/green swap — so they are the cheapest things to lose and are made the
+# preferred victims on purpose.
+# ---------------------------------------------------------------------------
+
+# Measured steady state: 137 MiB RSS. 1 GiB is ~7.5x that, which covers a
+# burst of concurrent uploads and websocket buffers while still leaving room
+# for a second replica during a blue/green swap (2 x 1 GiB worst case).
+gateway_memory_limit: "1g"
+gateway_memory_reservation: "192m"
+# 2 of 4 vCPUs: enough for TLS + JSON on a single replica, while making it
+# impossible for one gateway to starve the ircd and mongo of the whole box.
+gateway_cpus: 2.0
+gateway_oom_score_adj: 200
+
+# Measured steady state: 26 MiB RSS. 256 MiB is ~10x — above the 4-8x band on
+# purpose, because a bouncer's memory scales with the number of attached
+# clients and their replay buffers, not with the idle baseline.
+bnc_memory_limit: "256m"
+bnc_memory_reservation: "64m"
+bnc_cpus: 1.0
+bnc_oom_score_adj: 300
+
+# Measured steady state: 26 MiB RSS. Same shape as bnc, but it serves one IRC
+# connection and the feedback endpoint, so it gets half a core.
+support_bot_memory_limit: "256m"
+support_bot_memory_reservation: "64m"
+support_bot_cpus: 0.5
+support_bot_oom_score_adj: 500

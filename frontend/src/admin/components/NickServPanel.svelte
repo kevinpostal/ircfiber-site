@@ -32,8 +32,16 @@
     userId: string; username: string; userEmail: string;
     networkId: string; networkNick: string; networkDisabled: boolean;
   }
+  /// How provisioning itself is going. `pendingOrphans`, `skipMarkers` and
+  /// `unprovisioned` are `-1` when the gateway could not read that source.
+  interface NsProvisioning {
+    outcomes: Record<string, number>;
+    lastOutcome: string; lastOutcomeAt: number;
+    pendingOrphans: number; skipMarkers: number; unprovisioned: number;
+  }
   interface NsAccountsResponse {
     available: boolean; reason: string; asOf: number; accounts: NsAccount[];
+    provisioning?: NsProvisioning;
   }
   interface NsPlatform { userId: string; username: string; networkId: string; }
   interface NsInfo {
@@ -47,6 +55,7 @@
   let asOf = $state(0);
   let listError = $state<string | null>(null);
   let listLoading = $state(false);
+  let provisioning = $state<NsProvisioning | null>(null);
 
   let filter = $state('');
   let page = $state(1);
@@ -109,6 +118,25 @@
     if (!unix) return '—';
     return new Date(unix * 1000).toLocaleString();
   }
+  /// The backend reports a count it could not read as -1, because rendering a
+  /// Redis failure as "0 orphans" would be the exact false all-clear this
+  /// section exists to prevent.
+  function fmtCount(n: number): string {
+    return n < 0 ? 'unknown' : String(n);
+  }
+  /// Only outcomes that actually happened: a wall of zeroes hides the one
+  /// number that matters. An empty list is itself the signal that the
+  /// provisioner has never run.
+  const outcomeRows = $derived.by(() => {
+    const o = provisioning?.outcomes ?? {};
+    return Object.entries(o).filter(([, count]) => count > 0);
+  });
+  const badOutcomes = ['failed', 'collisionExhausted', 'nickUnavailable'];
+  function outcomeClass(name: string): string {
+    if (badOutcomes.includes(name)) return 'text-danger';
+    if (name === 'deferred') return 'text-amber-500';
+    return 'text-muted';
+  }
 
   onMount(() => { void loadAccounts(); });
 
@@ -121,6 +149,7 @@
       available = r.available;
       reason = r.reason ?? '';
       asOf = r.asOf ?? 0;
+      provisioning = r.provisioning ?? null;
     } catch (e) {
       listError = errMsg(e);
     } finally {
@@ -269,6 +298,99 @@
   const input =
     'rounded-md border border-border bg-surface px-3 py-1.5 text-sm text-text placeholder-muted focus:border-primary focus:outline-none';
 </script>
+
+<!--
+  Provisioning health, above the inventory because it answers the question the
+  table cannot: whether website users are getting NickServ accounts at all.
+  Prod ran with zero of ten users provisioned and the only trace was a log
+  line nobody read.
+-->
+{#if provisioning}
+  <Card class="mb-4">
+    <h3 class="text-sm font-semibold text-heading">Provisioning</h3>
+    <p class="mt-0.5 text-xs text-muted">
+      Signup and every login run the NickServ provisioner. A transport failure sets no skip
+      marker, so it retries forever without complaining — these counters are where that shows.
+    </p>
+
+    <div class="mt-3 grid gap-4 sm:grid-cols-3">
+      <div>
+        <div
+          data-testid="ns-pending-orphans"
+          class="text-xl font-semibold {provisioning.pendingOrphans > 0
+            ? 'text-danger'
+            : 'text-heading'}"
+        >
+          {fmtCount(provisioning.pendingOrphans)}
+        </div>
+        <div
+          class="text-xs font-medium {provisioning.pendingOrphans > 0
+            ? 'text-danger'
+            : 'text-muted'}"
+        >
+          orphan pending credentials
+        </div>
+        <p class="mt-0.5 text-xs text-muted">
+          Generated but never stored. Each one is a user locked out of their own nick.
+        </p>
+      </div>
+
+      <div>
+        <div
+          data-testid="ns-unprovisioned"
+          class="text-xl font-semibold {provisioning.unprovisioned > 0
+            ? 'text-amber-500'
+            : 'text-heading'}"
+        >
+          {fmtCount(provisioning.unprovisioned)}
+        </div>
+        <div
+          class="text-xs font-medium {provisioning.unprovisioned > 0
+            ? 'text-amber-500'
+            : 'text-muted'}"
+        >
+          users without a NickServ credential
+        </div>
+        <p class="mt-0.5 text-xs text-muted">
+          Their irc.ircfiber.com network has no SASL account, so nobody owns their nick.
+        </p>
+      </div>
+
+      <div>
+        <div data-testid="ns-skip-markers" class="text-xl font-semibold text-heading">
+          {fmtCount(provisioning.skipMarkers)}
+        </div>
+        <div class="text-xs font-medium text-muted">users skipped for 24h</div>
+        <p class="mt-0.5 text-xs text-muted">
+          Provisioning gave up on these after a permanent refusal; it retries after the marker
+          expires.
+        </p>
+      </div>
+    </div>
+
+    <div class="mt-3 border-t border-border pt-3 text-xs text-muted">
+      {#if outcomeRows.length}
+        <div class="flex flex-wrap items-center gap-2" data-testid="ns-outcomes">
+          {#each outcomeRows as [name, count] (name)}
+            <span class="rounded border border-border px-1.5 py-0.5 font-mono {outcomeClass(name)}">
+              {name} {count}
+            </span>
+          {/each}
+        </div>
+      {:else}
+        <p data-testid="ns-outcomes">No provisioning attempt has been recorded yet.</p>
+      {/if}
+      {#if provisioning.lastOutcome}
+        <p class="mt-2">
+          Last attempt: <span class="font-mono {outcomeClass(provisioning.lastOutcome)}"
+            >{provisioning.lastOutcome}</span
+          >
+          {provisioning.lastOutcomeAt ? `· ${fmtTime(provisioning.lastOutcomeAt)}` : ''}
+        </p>
+      {/if}
+    </div>
+  </Card>
+{/if}
 
 <Card>
   <div class="mb-3 flex flex-wrap items-start justify-between gap-2">

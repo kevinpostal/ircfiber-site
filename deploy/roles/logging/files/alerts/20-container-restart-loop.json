@@ -1,0 +1,98 @@
+{
+  "alert": "IRCFiber container restart loop",
+  "alertType": "LOGS_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "evalWindow": "10m",
+  "frequency": "1m",
+  "disabled": false,
+  "labels": {
+    "severity": "critical",
+    "deployment_environment": "production",
+    "host": "ovh-prod",
+    "service": "docker",
+    "signal": "restarts"
+  },
+  "annotations": {
+    "summary": "An IRC Fiber container booted more than the allowed number of times",
+    "description": "Counts gateway boot banners in container stdout (fluent-bit ships every /var/lib/docker/containers/*/*-json.log on the prod host, and the collector's logs/ovh pipeline promotes container_name to service.name). A healthy container prints this once per deploy, so more than 2 in 10 minutes is a crash loop or an OOM kill cycle. Check: docker ps; docker inspect ircfiber-gateway | grep -E 'RestartCount|Health' ; docker logs --tail 200 ircfiber-gateway. This is the restart signal that needs no new receiver; rule 21 is the exact restart counter and needs the docker_stats receiver."
+  },
+  "preferredChannels": [],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "1",
+    "target": 2,
+    "targetUnit": "",
+    "matchType": "4",
+    "alertOnAbsent": false,
+    "absentFor": 0,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "short",
+      "builderQueries": {
+        "A": {
+          "queryName": "A",
+          "dataSource": "logs",
+          "aggregateOperator": "count",
+          "aggregateAttribute": {
+            "key": "",
+            "dataType": "",
+            "type": "",
+            "isColumn": false
+          },
+          "timeAggregation": "count",
+          "spaceAggregation": "sum",
+          "functions": [],
+          "filter": {
+            "expression": "host.name = 'ovh-prod' AND body contains 'Starting IRC Fiber Gateway'"
+          },
+          "filters": {
+            "op": "AND",
+            "items": [
+              {
+                "key": {
+                  "key": "host.name",
+                  "dataType": "string",
+                  "type": "resource",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "ovh-prod"
+              },
+              {
+                "key": {
+                  "key": "body",
+                  "dataType": "string",
+                  "type": "tag",
+                  "isColumn": false
+                },
+                "op": "contains",
+                "value": "Starting IRC Fiber Gateway"
+              }
+            ]
+          },
+          "groupBy": [
+            {
+              "key": "service.name",
+              "dataType": "string",
+              "type": "resource",
+              "isColumn": false
+            }
+          ],
+          "expression": "A",
+          "disabled": false,
+          "having": {
+            "expression": ""
+          },
+          "limit": null,
+          "stepInterval": 60,
+          "orderBy": [],
+          "reduceTo": "last",
+          "legend": "gateway boots"
+        }
+      },
+      "promQueries": {},
+      "chQueries": {}
+    }
+  }
+}

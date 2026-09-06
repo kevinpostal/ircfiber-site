@@ -62,13 +62,16 @@ struct IrcdSettings {
 
 IrcdSettings loadIrcdSettings() {
     import std.process : environment;
+    import ircfiber.env : envSecret;
     IrcdSettings s;
     s.host = environment.get("IRCFIBER_IRCD_HOST", "").strip();
     try {
         s.port = environment.get("IRCFIBER_IRCD_PORT", "6667").strip().to!ushort;
     } catch (Exception) { s.port = 6667; }
     s.operName = environment.get("IRCFIBER_IRCD_OPER", "").strip();
-    s.operPassword = environment.get("IRCFIBER_IRCD_OPER_PASSWORD", "");
+    // Oper password: file-backed in prod (IRCFIBER_IRCD_OPER_PASSWORD_FILE)
+    // so `docker inspect` cannot hand out ircd oper rights.
+    s.operPassword = envSecret("IRCFIBER_IRCD_OPER_PASSWORD", "");
     auto dir = environment.get("IRCFIBER_IRCD_CONF_DIR", "").strip();
     if (dir.length > 0) s.confDir = dir;
     return s;

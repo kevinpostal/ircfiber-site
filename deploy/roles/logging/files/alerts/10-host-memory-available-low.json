@@ -1,0 +1,81 @@
+{
+  "alert": "IRCFiber host memory available critically low",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "evalWindow": "5m",
+  "frequency": "1m",
+  "disabled": false,
+  "labels": {
+    "severity": "critical",
+    "deployment_environment": "production",
+    "host": "ovh-prod",
+    "service": "host",
+    "signal": "memory"
+  },
+  "annotations": {
+    "summary": "Host MemAvailable below threshold on ovh-prod",
+    "description": "MemAvailable stayed under the threshold for the whole evaluation window. On 2026-09-06 an on-host D compile drove this to 117 MB of 7.565 GiB, after which dockerd stopped answering and ircfiber.com went down with no alert. Steady state is mongo 2.77 GiB + gateway 137 MiB + engine 109 MiB + caddy 52 MiB + the small sidecars, so a sustained dip under ~700 MiB means something new is eating the box. Check: docker stats --no-stream; free -m; ps aux --sort=-rss | head. Never build on the prod host — BUILD_HOST in site/Makefile.site compiles on ubuntu-docker. This rule also fires when host metrics stop arriving (alertOnAbsent), which is itself the condition that made the incident invisible."
+  },
+  "preferredChannels": [],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "2",
+    "target": 734003200,
+    "targetUnit": "bytes",
+    "matchType": "2",
+    "alertOnAbsent": true,
+    "absentFor": 10,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "bytes",
+      "builderQueries": {
+        "A": {
+          "queryName": "A",
+          "dataSource": "metrics",
+          "aggregateOperator": "min",
+          "aggregateAttribute": {
+            "key": "system.linux.memory.available",
+            "dataType": "float64",
+            "type": "Gauge",
+            "isColumn": true
+          },
+          "timeAggregation": "min",
+          "spaceAggregation": "min",
+          "functions": [],
+          "filter": {
+            "expression": "host.name = 'ovh-prod'"
+          },
+          "filters": {
+            "op": "AND",
+            "items": [
+              {
+                "key": {
+                  "key": "host.name",
+                  "dataType": "string",
+                  "type": "resource",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "ovh-prod"
+              }
+            ]
+          },
+          "groupBy": [],
+          "expression": "A",
+          "disabled": false,
+          "having": {
+            "expression": ""
+          },
+          "limit": null,
+          "stepInterval": 60,
+          "orderBy": [],
+          "reduceTo": "last",
+          "legend": "MemAvailable"
+        }
+      },
+      "promQueries": {},
+      "chQueries": {}
+    }
+  }
+}

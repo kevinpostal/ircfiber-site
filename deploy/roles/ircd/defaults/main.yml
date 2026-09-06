@@ -7,6 +7,67 @@
 # Container restart
 ircd_restart_policy: "unless-stopped"
 
+# ---------------------------------------------------------------------------
+# Resource limits
+#
+# Nothing on this host had a memory or CPU limit before 2026-09-06 (docker
+# inspect showed Memory 0, NanoCpus 0, CpuShares 0 for every container), so
+# one runaway process took all 7.565 GiB of RAM, dockerd stopped answering
+# and the site went down with it. These caps turn that into a single
+# container being OOM-killed and restarted by `unless-stopped`.
+#
+# oom_score_adj deliberately orders the victims (whole stack, most-protected
+# first):
+#   ircd (-500) < services (-300) < gateway (+200) < bnc (+300)
+#     < support-bot (+500)
+# The ircd is the most damaging process to lose: killing it disconnects every
+# user on the network simultaneously and the reconnect storm that follows
+# then hits the same starved host. Services rank just behind it — users stay
+# connected without them, but NickServ/ChanServ state is in play and a
+# restart on an unreadable database has cost us data before. The gateway
+# replicas, bnc and the support bot are stateless and health-checked, so they
+# are made the preferred victims instead.
+#
+# Reservations are only soft floors under host pressure and are kept far
+# below the limits on purpose: 128 + 64 MiB for this role.
+
+# Measured steady state: 8.5 MiB RSS — but that is an idle-ish figure and the
+# ircd is the one process here whose footprint scales with users: the "main"
+# connect class allows hardsendq="1M" per client up to
+# {{ ircd_public_class_limit }} clients, so 4-8x of the idle measurement
+# (35-70 MiB) would be OOM-killed by an ordinary evening. 512 MiB is sized
+# for the sendq headroom, not for the idle baseline, and is still only 6.6%
+# of host RAM.
+ircd_memory_limit: "512m"
+ircd_memory_reservation: "128m"
+# InspIRCd is effectively single-threaded; 2 of 4 vCPUs leaves it room for
+# TLS handshake bursts while making it impossible to monopolise the host.
+ircd_cpus: 2.0
+ircd_oom_score_adj: -500
+
+# Measured steady state: 6.0 MiB RSS. Anope keeps its whole database in
+# memory (prod anope.db is ~450 KB today), so growth is slow and bounded;
+# 256 MiB is a wide margin over any plausible registration count.
+ircd_services_memory_limit: "256m"
+ircd_services_memory_reservation: "64m"
+ircd_services_cpus: 1.0
+ircd_services_oom_score_adj: -300
+
+# ---------------------------------------------------------------------------
+# Health probes (see the healthcheck comments in tasks/main.yml)
+#
+# The socket probe runs on every Nth healthcheck invocation, i.e. every
+# {{ (ircd_healthcheck_interval_seconds | int) * (ircd_healthcheck_socket_every | int) }}
+# seconds. It has to stay rare because m_connectban counts *every* inbound
+# connection per IP (threshold="32" in modules.conf.j2) and InspIRCd only
+# clears those counters in its hourly garbage collection: a probe every 30 s
+# is 120 connections/hour from 127.0.0.1, which Z-lined loopback for hours on
+# 2026-09-06. At 20 (one connect per 10 minutes) it is 6 connections/hour —
+# a 5x margin under the threshold. Set to 0 to disable the connect probe
+# entirely and rely on the process + listener checks alone.
+ircd_healthcheck_interval_seconds: 30
+ircd_healthcheck_socket_every: 20
+
 # Host-side config dirs. The InspIRCd dir is bind-mounted over
 # /inspircd/conf/ and must be writable by uid 10000 (the image entrypoint
 # writes cert.pem/key.pem/dhparams.pem there on first boot). The Anope dir

@@ -19,7 +19,9 @@
  *   IRCFIBER_SUPPORT_BOT_TLS                "1" → TLS client connection (default plaintext)
  *   IRCFIBER_SUPPORT_BOT_NICK               default FiberSupport
  *   IRCFIBER_SUPPORT_BOT_CHANNEL            default #support
- *   IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD  optional; IDENTIFY after 001 when set
+ *   IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD  optional; IDENTIFY after 001 when set.
+ *                                           Prod sets only the _FILE form
+ *                                           (ircfiber.env.envSecret).
  *   IRCFIBER_SUPPORT_BOT_PUBLIC_URL         default https://ircfiber.com (admin/feedback links)
  *   IRCFIBER_REDIS_URL                      outbox consumer connection
  */
@@ -45,6 +47,7 @@ import vibe.stream.tls : TLSContextKind, TLSPeerValidationMode, TLSStream, TLSSt
     createTLSContext, createTLSStream;
 
 import ircfiber.db.support_issues : SupportIssueRepository, SupportIssueRecord;
+import ircfiber.env : envSecret;
 import ircfiber.redis.protocol : RedisKeys;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.support.events : SupportEvent;
@@ -82,7 +85,9 @@ void startSupportBot() {
     if (nick.length) cfg.nick = nick;
     auto channel = environment.get("IRCFIBER_SUPPORT_BOT_CHANNEL", "").strip();
     if (channel.length) cfg.channel = channel;
-    cfg.nickservPassword = environment.get("IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD", "");
+    // File-backed in prod so the bot's NickServ password is not readable
+    // from `docker inspect ircfiber-support-bot`.
+    cfg.nickservPassword = envSecret("IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD", "");
     auto publicUrl = environment.get("IRCFIBER_SUPPORT_BOT_PUBLIC_URL", "").strip();
     if (publicUrl.length) cfg.publicUrl = publicUrl;
     cfg.redisUrl = environment.get("IRCFIBER_REDIS_URL", cfg.redisUrl);

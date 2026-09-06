@@ -1,0 +1,420 @@
+---
+# Apply the IRC Fiber SigNoz alert rules from roles/logging/files/alerts/*.json.
+#
+# WHY THIS EXISTS: on 2026-09-06 a `make deploy-blue` compiled D on the 4-vCPU /
+# 7.565 GiB prod VPS, memory fell to 117 MB available, load hit 45, dockerd
+# stopped answering and ircfiber.com went down. Nothing alerted — the operator
+# found out by loading the site. SigNoz already ingests OVH logs/traces/metrics,
+# so the missing piece was never collection plumbing: no rule existed to turn
+# "the host is dying" into a notification. These rules are that piece.
+#
+# Runs from the Ansible controller against the k3s SigNoz over Tailscale. It
+# touches NOTHING on the prod host, so it is safe to run during an incident.
+#
+# Idempotent: every rule is keyed by its `alert` name. Known name -> PUT
+# /api/v1/rules/<id>; new name -> POST /api/v1/rules. Re-running never
+# duplicates a rule, and it re-asserts the thresholds this repo declares.
+#
+#   Offline dry run (assembles and validates every payload, no HTTP, no vault):
+#     ansible-playbook playbooks/signoz-alerts.yml -e signoz_alerts_render_only=true
+#
+#   Apply (key comes from inventories/production/group_vars/all/vault.yml):
+#     ansible-playbook playbooks/signoz-alerts.yml
+#
+#   Apply with a notification channel (see OPEN QUESTION below):
+#     ansible-playbook playbooks/signoz-alerts.yml \
+#       -e '{"signoz_alert_channels":["ircfiber-oncall"]}'
+#
+# The request shape has NOT been verified against the running SigNoz build
+# (chart signoz/signoz 0.138.0, app v0.138.0). Run the offline render, then
+# apply, and read roles/logging/README-alerts.md -> "If the API rejects a
+# payload" before hand-editing anything.
+
+- name: Apply IRC Fiber SigNoz alert rules
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    # ── Endpoint ────────────────────────────────────────────────────────────
+    # Mirrors roles/signoz_dashboards/defaults/main.yml. The controller reaches
+    # k3s over Tailscale MagicDNS; Traefik serves its default (self-signed)
+    # cert there, hence validate_certs false — the transport is still WireGuard.
+    # Do NOT point this at 100.126.197.92:3003 (dead colima SigNoz) or at
+    # http://signoz:8080 (compose service name, only valid inside the stack).
+    signoz_api_url: "https://signoz.ubuntu-docker.tail544547.ts.net"
+    signoz_api_validate_certs: false
+    # When signoz_api_url is the bare tailnet IP form the gateway uses
+    # (signoz_query_url = https://100.94.116.56), Traefik still needs the SNI
+    # host, which group_vars/all/vars.yml already publishes as
+    # signoz_query_host. Sent only in that case; empty otherwise.
+    signoz_extra_headers: >-
+      {{ {'Host': signoz_query_host}
+         if (signoz_api_url | regex_search('://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+             and (signoz_query_host | default('') | length > 0))
+         else {} }}
+
+    signoz_alerts_dir: "{{ playbook_dir }}/../roles/logging/files/alerts"
+    signoz_alerts_group_vars: "{{ playbook_dir }}/../inventories/production/group_vars/all/vars.yml"
+    signoz_alerts_vault_file: "{{ playbook_dir }}/../inventories/production/group_vars/all/vault.yml"
+    # Where the offline dry run writes the assembled payloads.
+    signoz_alerts_render_dir: "/tmp/ircfiber-signoz-alerts"
+    signoz_alerts_render_only: false
+
+    # ── Host identity ───────────────────────────────────────────────────────
+    # The resource-attribute value the host-scoped rules filter on. The
+    # resource/ovh processor in site/deploy/k8s/signoz/values.yaml stamps
+    # host.name=ovh-prod onto signals arriving on the OVH pipelines, so this is
+    # the prod host as SigNoz knows it. Changing it here rewrites the filter in
+    # every rule file, including the mirrored filter expression string.
+    signoz_alert_host_name: "ovh-prod"
+
+    # ── Notification channel — OPEN QUESTION, unset on purpose ─────────────
+    # The operator has not chosen Slack / email / webhook / IRC. An empty list
+    # means SigNoz evaluates and displays every rule (Alerts -> Triggered) but
+    # notifies nowhere. That is deliberate: a visible rule with no channel
+    # still beats no rule, and it lets these thresholds be validated against
+    # real traffic before anyone is paged.
+    # To wire one up: create the channel in SigNoz (Settings -> Alert
+    # Channels), then put its NAME (not id) here — in
+    # inventories/production/group_vars/all/vars.yml for the durable answer, or
+    # with -e for a one-off.
+    signoz_alert_channels: []
+
+    # ── Thresholds and durations ────────────────────────────────────────────
+    # Host memory. Incident signature: 117 MB available of 7.565 GiB. Measured
+    # steady state on this box: mongo 2.77 GiB, gateway 137 MiB, engine
+    # 109 MiB, caddy 52 MiB, grafana 61 MiB (capped 256 MiB), cloudflared
+    # 37 MiB, mullvad-{de,ch,us} ~45 MiB each, bnc 26 MiB, support-bot 26 MiB,
+    # redis 40 MiB, fluent-bit 9 MiB (capped 128 MiB), ircd 8.5 MiB, services
+    # 6 MiB. ~700 MiB available is ordinary headroom, so a sustained dip below
+    # it means genuinely new load — with enough runway left to intervene.
+    # 700 MiB = 734003200 bytes (~9% of RAM).
+    signoz_alert_host_mem_available_bytes: 734003200
+    signoz_alert_host_mem_window: "5m"
+
+    # Host load. 4 vCPU, so sustained > 4 is a backed-up run queue. 6 (1.5x
+    # cores) tolerates the nightly backup and a docker prune without flapping;
+    # the incident hit 45. Builds no longer run here (BUILD_HOST in
+    # site/Makefile.site compiles on ubuntu-docker), so there is no legitimate
+    # multi-minute load spike left on this host.
+    signoz_alert_host_load5_threshold: 6
+    signoz_alert_host_load_window: "5m"
+
+    # Filesystem. The box sat at 81% with 27 GB of BuildKit cache before the
+    # post-incident prune; 85% is the last point at which pruning is a calm
+    # decision rather than an emergency (mongo refuses writes and dockerd
+    # cannot create layers on a full disk).
+    # UNIT: OTel emits system.filesystem.utilization as a ratio 0..1, hence
+    # 0.85. If the SigNoz graph for that metric shows 0..100 in this
+    # deployment, set 85 here instead.
+    signoz_alert_host_fs_utilization: 0.85
+    signoz_alert_host_fs_window: "15m"
+
+    # Container restarts. A container prints its boot banner once per deploy,
+    # so more than 2 boots in 10 minutes is a crash loop. The same numbers
+    # drive the exact docker_stats counter in rule 21.
+    signoz_alert_container_boot_count: 2
+    signoz_alert_container_restart_window: "10m"
+
+    # Log silence. fluent-bit ships every container's stdout with Flush 1, so
+    # 10 minutes of total silence from the host is not quiet, it is broken
+    # (dockerd wedged, fluent-bit dead, or the Tailscale path to the collector
+    # down). This is the rule that would have fired first on 2026-09-06.
+    signoz_alert_container_silence: "10m"
+
+    # Gateway silence. The gateway has no fixed log cadence, so this window is
+    # deliberately long and the severity is warning. Rule 31 is the real probe.
+    signoz_alert_gateway_silence: "15m"
+
+    # Engine heartbeat. The engine records its gauge every ~10s, and
+    # ServerRegistry declares a server unhealthy at 60s of staleness — the
+    # admin dashboard's "Healthy Engines 0/1". 3 minutes is 18 missed cycles:
+    # well past the registry's own verdict, still short enough to matter.
+    signoz_alert_engine_heartbeat_window: "3m"
+
+    # ── Rules gated on telemetry that does not exist yet ────────────────────
+    # Both stay off until the matching receiver exists, because a rule that can
+    # never gather data is worse than no rule: it looks like coverage. Exact
+    # receiver snippets are in roles/logging/README-alerts.md.
+    #   docker_stats -> container.restarts (rule 21)
+    #   httpcheck    -> httpcheck.status  (rule 31; probes ircfiber.com from
+    #                   ubuntu-docker, i.e. off the prod host on purpose, so it
+    #                   survives the host wedging)
+    signoz_alert_enable_docker_stats: false
+    signoz_alert_enable_endpoint_probe: false
+
+    # Per-rule overrides keyed by the `alert` name inside each JSON file.
+    # Anything omitted keeps the value committed in the file.
+    signoz_alert_tuning:
+      "IRCFiber host memory available critically low":
+        target: "{{ signoz_alert_host_mem_available_bytes }}"
+        evalWindow: "{{ signoz_alert_host_mem_window }}"
+      "IRCFiber host load average sustained above core count":
+        target: "{{ signoz_alert_host_load5_threshold }}"
+        evalWindow: "{{ signoz_alert_host_load_window }}"
+      "IRCFiber host filesystem usage high":
+        target: "{{ signoz_alert_host_fs_utilization }}"
+        evalWindow: "{{ signoz_alert_host_fs_window }}"
+      "IRCFiber container restart loop":
+        target: "{{ signoz_alert_container_boot_count }}"
+        evalWindow: "{{ signoz_alert_container_restart_window }}"
+      "IRCFiber container restart count increasing":
+        target: "{{ signoz_alert_container_boot_count }}"
+        evalWindow: "{{ signoz_alert_container_restart_window }}"
+        disabled: "{{ not (signoz_alert_enable_docker_stats | bool) }}"
+      "IRCFiber container stopped shipping logs":
+        evalWindow: "{{ signoz_alert_container_silence }}"
+      "IRCFiber gateway silent":
+        evalWindow: "{{ signoz_alert_gateway_silence }}"
+      "IRCFiber public endpoint failing from outside":
+        disabled: "{{ not (signoz_alert_enable_endpoint_probe | bool) }}"
+      "IRCFiber engine heartbeat stale":
+        evalWindow: "{{ signoz_alert_engine_heartbeat_window }}"
+
+  tasks:
+    # ── Load the committed rule definitions ────────────────────────────────
+    - name: Find committed alert rule files
+      ansible.builtin.find:
+        paths: "{{ signoz_alerts_dir }}"
+        patterns: "*.json"
+      register: signoz_alert_files
+
+    - name: Fail when no rule files were found
+      ansible.builtin.assert:
+        that: signoz_alert_files.files | length > 0
+        fail_msg: >-
+          No *.json under {{ signoz_alerts_dir }} — wrong playbook_dir, or the
+          files are not checked out.
+
+    # slurp, not lookup('file'): rule bodies are data. Ansible re-templates
+    # string values when a variable is dereferenced, so the JSON is kept free
+    # of Jinja braces — which is also why the legends are plain text instead of
+    # SigNoz's {{label}} interpolation.
+    - name: Read each rule file
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ signoz_alert_files.files | sort(attribute='path') }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: signoz_alert_blobs
+
+    - name: Assemble the payloads (thresholds, host identity, channel routing)
+      ansible.builtin.set_fact:
+        signoz_alert_payloads: >-
+          {{ signoz_alert_payloads | default([]) + [
+               rule | combine({
+                 'evalWindow': tune.evalWindow | default(rule.evalWindow),
+                 'frequency': tune.frequency | default(rule.frequency),
+                 'disabled': (tune.disabled | default(rule.disabled)) | bool,
+                 'preferredChannels': signoz_alert_channels,
+                 'condition': rule.condition | combine({
+                   'target': (tune.target | default(rule.condition.target)) | float,
+                   'absentFor': (tune.absentFor | default(rule.condition.absentFor)) | int
+                 })
+               }, recursive=True)
+             ] }}
+      vars:
+        # replace(), because the host attribute appears both in the builder
+        # filter items and in the mirrored filter expression string.
+        rule: >-
+          {{ (item.content | b64decode | replace('ovh-prod', signoz_alert_host_name))
+             | from_json }}
+        tune: "{{ signoz_alert_tuning[(item.content | b64decode | from_json).alert] | default({}) }}"
+      loop: "{{ signoz_alert_blobs.results }}"
+      loop_control:
+        label: "{{ (item.content | b64decode | from_json).alert }}"
+
+    - name: Reject duplicate rule names
+      ansible.builtin.assert:
+        that:
+          - (signoz_alert_payloads | map(attribute='alert') | list | unique | length)
+            == (signoz_alert_payloads | length)
+        fail_msg: >-
+          Two rule files declare the same `alert` name. That name is the
+          idempotency key, so duplicates would fight over one SigNoz rule.
+
+    # ── Offline dry run: assemble, write, stop before any credential ───────
+    - name: Offline dry run
+      when: signoz_alerts_render_only | bool
+      block:
+        - name: Ensure the render directory exists
+          ansible.builtin.file:
+            path: "{{ signoz_alerts_render_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Write each assembled payload
+          ansible.builtin.copy:
+            content: "{{ item | to_nice_json }}\n"
+            dest: "{{ signoz_alerts_render_dir }}/{{ item.alert | regex_replace('[^A-Za-z0-9]+', '-') | lower }}.json"
+            mode: "0644"
+          loop: "{{ signoz_alert_payloads }}"
+          loop_control:
+            label: "{{ item.alert }}"
+
+        - name: Render summary
+          ansible.builtin.debug:
+            msg: >-
+              Rendered {{ signoz_alert_payloads | length }} payloads to
+              {{ signoz_alerts_render_dir }} — nothing was sent, no credential
+              was read. Channels:
+              {{ signoz_alert_channels | join(', ') | default('none (UI-only)', true) }}.
+              Disabled: {{ signoz_alert_payloads | selectattr('disabled')
+                           | map(attribute='alert') | list | join('; ')
+                           | default('none', true) }}
+
+        - name: Stop before any HTTP call
+          ansible.builtin.meta: end_play
+
+    # ── Endpoint + credential ──────────────────────────────────────────────
+    # `hosts: localhost` is the implicit host, which does NOT inherit
+    # inventories/production/group_vars, so the shared endpoint vars and the
+    # vault are loaded explicitly. Both loads sit after the dry-run exit so the
+    # offline render needs neither the vault password nor the inventory.
+    - name: Load shared SigNoz endpoint vars (signoz_query_url/host, insecure)
+      ansible.builtin.include_vars:
+        file: "{{ signoz_alerts_group_vars }}"
+      failed_when: false
+
+    - name: Load the vault (SigNoz API key)
+      ansible.builtin.include_vars:
+        file: "{{ signoz_alerts_vault_file }}"
+      no_log: true
+      when:
+        - vault_signoz_api_key | default('') | length == 0
+        - vault_signoz_admin_password | default('') | length == 0
+
+    - name: Fail early when no SigNoz credential is available
+      ansible.builtin.assert:
+        that:
+          - (vault_signoz_api_key | default('') | length > 0)
+            or (vault_signoz_admin_password | default('') | length > 0)
+        fail_msg: >-
+          No SigNoz credential. vault_signoz_api_key belongs in
+          inventories/production/group_vars/all/vault.yml (mint the key in
+          SigNoz -> Settings -> API Keys, then `ansible-vault edit`). Never pass
+          the literal key with -e: it lands in shell history and in the Ansible
+          log.
+
+    - name: Get an admin JWT (skipped when an API key is available)
+      ansible.builtin.uri:
+        url: "{{ signoz_api_url }}/api/v2/sessions/email_password"
+        method: POST
+        body_format: json
+        body:
+          email: "{{ signoz_admin_email | default('kevindpostal@gmail.com') }}"
+          password: "{{ vault_signoz_admin_password }}"
+          orgId: "{{ signoz_alerts_org_id | default('019f1235-79b1-787f-b4a9-370824295f2f') }}"
+        status_code: 200
+        validate_certs: "{{ signoz_api_validate_certs | bool }}"
+        headers: "{{ signoz_extra_headers }}"
+      register: signoz_login
+      no_log: true
+      when:
+        - vault_signoz_api_key | default('') | length == 0
+        - vault_signoz_admin_password | default('') | length > 0
+
+    - name: Build the auth headers
+      # SIGNOZ-API-KEY is the header the gateway already uses for its
+      # /api/admin/logs proxy (IRCFIBER_SIGNOZ_API_KEY in the gateway env), so
+      # the same vault key works here unchanged.
+      ansible.builtin.set_fact:
+        signoz_auth_headers: >-
+          {{ signoz_extra_headers | combine(
+               {'SIGNOZ-API-KEY': vault_signoz_api_key,
+                'Content-Type': 'application/json'}
+               if (vault_signoz_api_key | default('') | length > 0)
+               else {'Authorization': 'Bearer ' ~ signoz_login.json.data.accessToken,
+                     'Content-Type': 'application/json'}) }}
+      no_log: true
+
+    # ── Look up what exists, so a re-run updates instead of duplicating ────
+    - name: List existing alert rules
+      ansible.builtin.uri:
+        url: "{{ signoz_api_url }}/api/v1/rules"
+        method: GET
+        headers: "{{ signoz_auth_headers }}"
+        status_code: [200]
+        validate_certs: "{{ signoz_api_validate_certs | bool }}"
+      register: signoz_rules_get
+
+    - name: Normalise the rule list across API shapes
+      ansible.builtin.set_fact:
+        # Some builds answer {"data": [...]}, others {"data": {"rules": [...]}}.
+        signoz_existing_rules: >-
+          {{ (signoz_rules_get.json.data.rules
+              if (signoz_rules_get.json.data is mapping
+                  and 'rules' in signoz_rules_get.json.data)
+              else signoz_rules_get.json.data) | default([], true) }}
+
+    - name: Map existing rule name -> id
+      ansible.builtin.set_fact:
+        signoz_rule_id_by_name: >-
+          {{ dict(named | map(attribute='alert')
+                  | zip(named | map(attribute='id') | map('string'))) }}
+      vars:
+        named: >-
+          {{ signoz_existing_rules
+             | selectattr('alert', 'defined')
+             | selectattr('id', 'defined') | list }}
+
+    - name: Report what will be created versus updated
+      ansible.builtin.debug:
+        msg: >-
+          {{ signoz_alert_payloads | length }} rules:
+          {{ signoz_alert_payloads | map(attribute='alert')
+             | select('in', signoz_rule_id_by_name) | list | length }} update,
+          {{ signoz_alert_payloads | map(attribute='alert')
+             | reject('in', signoz_rule_id_by_name) | list | length }} create.
+          Channels: {{ signoz_alert_channels | join(', ') | default('none (UI-only)', true) }}
+
+    # ── Apply: PUT with the id for a known name, POST otherwise ────────────
+    - name: Create or update each rule
+      ansible.builtin.uri:
+        url: >-
+          {{ signoz_api_url }}/api/v1/rules{{
+             '/' ~ signoz_rule_id_by_name[item.alert]
+             if item.alert in signoz_rule_id_by_name else '' }}
+        method: "{{ 'PUT' if item.alert in signoz_rule_id_by_name else 'POST' }}"
+        headers: "{{ signoz_auth_headers }}"
+        body_format: json
+        body: "{{ item }}"
+        status_code: [200, 201]
+        validate_certs: "{{ signoz_api_validate_certs | bool }}"
+      loop: "{{ signoz_alert_payloads }}"
+      loop_control:
+        label: >-
+          {{ 'update' if item.alert in signoz_rule_id_by_name else 'create' }}:
+          {{ item.alert }}
+      register: signoz_alert_apply
+
+    - name: Verify every rule was accepted
+      ansible.builtin.assert:
+        that:
+          - signoz_alert_apply.results
+            | rejectattr('status', 'in', [200, 201]) | list | length == 0
+        success_msg: >-
+          {{ signoz_alert_payloads | length }} alert rules applied —
+          {{ signoz_api_url }}/alerts
+        fail_msg: >-
+          Rejected: {{ signoz_alert_apply.results
+                       | rejectattr('status', 'in', [200, 201])
+                       | map(attribute='item.alert') | list | join('; ') }}.
+          The request shape is version-sensitive — see
+          roles/logging/README-alerts.md -> "If the API rejects a payload".
+
+    - name: Post-apply reminder
+      ansible.builtin.debug:
+        msg: >-
+          {% if signoz_alert_channels | length == 0 %}
+          NO NOTIFICATION CHANNEL is attached: the rules evaluate and show at
+          {{ signoz_api_url }}/alerts but page nobody. Decide Slack / email /
+          webhook / IRC, create it in SigNoz -> Settings -> Alert Channels,
+          then set signoz_alert_channels in
+          inventories/production/group_vars/all/vars.yml.
+          {% else %}
+          Notifying: {{ signoz_alert_channels | join(', ') }}.
+          {% endif %}
+          Still disabled: {{ signoz_alert_payloads | selectattr('disabled')
+                             | map(attribute='alert') | list | join('; ')
+                             | default('none', true) }}

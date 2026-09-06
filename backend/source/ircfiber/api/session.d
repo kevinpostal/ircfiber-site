@@ -62,20 +62,67 @@ public shared(ManualEvent)* allocSharedEvent() @trusted {
     return mem;
 }
 
-/// Returns the JWT HMAC secret from env or a dev fallback.
-/// Production MUST set IRCFIBER_JWT_SECRET.
-private string jwtSecret() {
-    auto secret = environment.get("IRCFIBER_JWT_SECRET", "");
-    if (secret.length > 0) return secret;
+/**
+ * The JWT HMAC secret, resolved once per process.
+ *
+ * This used to fall back to the literal
+ * `"ircfiber-dev-jwt-secret-do-not-use-in-prod"`. That constant lives in a
+ * public repository, and production never set IRCFIBER_JWT_SECRET (verified
+ * 2026-09-06: the variable was absent from the gateway's environment and the
+ * container had logged "using dev fallback"), so every session token on
+ * ircfiber.com was signed with a published key and could be forged for any
+ * user by anyone who read the source. A fail-OPEN default is the wrong shape
+ * for an authentication secret.
+ *
+ * Unset now yields a cryptographically random per-process secret: tokens stop
+ * validating across a restart, which is visible and merely annoying, instead
+ * of being forgeable, which is invisible and catastrophic. Configure
+ * IRCFIBER_JWT_SECRET (or IRCFIBER_JWT_SECRET_FILE) to keep sessions across
+ * restarts.
+ */
+private __gshared string _jwtSecret;
+private __gshared bool _jwtSecretGenerated;
 
-    // Log only once per process — previously every WebSocket session
-    // restoration (4x per minute) triggered this warning, spamming SigNoz.
-    static bool warned = false;
-    if (!warned) {
-        warned = true;
-        logWarn("IRCFIBER_JWT_SECRET not set; using dev fallback. Set it in production.");
+shared static this() {
+    import ircfiber.env : envSecret;
+    _jwtSecret = envSecret("IRCFIBER_JWT_SECRET", "");
+    if (_jwtSecret.length > 0) return;
+
+    // No logging here: the module constructor runs before the logger is set
+    // up. jwtSecret() reports it on first use instead.
+    _jwtSecretGenerated = true;
+    _jwtSecret = randomSecretHex();
+}
+
+/// 64 hex chars (32 bytes) from /dev/urandom. Falls back to a random UUID pair
+/// only if /dev/urandom cannot be read, which still beats a constant.
+private string randomSecretHex() @trusted nothrow {
+    import std.digest : toHexString;
+    import std.stdio : File;
+    try {
+        auto f = File("/dev/urandom", "rb");
+        scope (exit) f.close();
+        ubyte[32] buf;
+        auto got = f.rawRead(buf[]);
+        if (got.length == buf.length) return toHexString(buf[]).idup;
+    } catch (Exception) {
     }
-    return "ircfiber-dev-jwt-secret-do-not-use-in-prod";
+    try return (randomUUID().toString() ~ randomUUID().toString()).replace("-", "");
+    catch (Exception) return null;
+}
+
+private string jwtSecret() {
+    if (_jwtSecretGenerated) {
+        // Log once per thread — cheap, and never prints the secret itself.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            logError("IRCFIBER_JWT_SECRET is not set: signing sessions with a random " ~
+                     "per-process secret, so every session is invalidated on restart. " ~
+                     "Set IRCFIBER_JWT_SECRET_FILE in production.");
+        }
+    }
+    return _jwtSecret;
 }
 
 /// HMAC-SHA256 helper.

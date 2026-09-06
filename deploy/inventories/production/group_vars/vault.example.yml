@@ -83,3 +83,16 @@ vault_signoz_api_key: "REPLACE-WITH-SIGNOZ-API-KEY"
 # The token is available under the tunnel's "Configure" tab.
 # DO NOT commit the real value — use `ansible-vault edit`.
 vault_cloudflared_tunnel_token: "REPLACE-WITH-CF-TUNNEL-TOKEN"
+
+# ── Session signing key ──────────────────────────────────────────────────────
+# HMAC key for the session JWTs minted by ircfiber.api.session.
+#
+# REQUIRED in production. Until 2026-09-06 nothing rendered it, so session.d
+# fell back to a literal that is committed to a public repository and every
+# production token was forgeable by anyone who read the source. The fallback is
+# now a random per-process key instead, which is safe but invalidates every
+# session on restart — so an unset value here is still an operational bug, just
+# no longer a security one.
+#
+# Generate with: openssl rand -hex 32
+vault_ircfiber_jwt_secret: "REPLACE-WITH-openssl-rand-hex-32"

@@ -1,0 +1,91 @@
+{
+  "alert": "IRCFiber public endpoint failing from outside",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "evalWindow": "3m",
+  "frequency": "1m",
+  "disabled": true,
+  "labels": {
+    "severity": "critical",
+    "deployment_environment": "production",
+    "host": "ovh-prod",
+    "service": "ircfiber-public",
+    "signal": "synthetic"
+  },
+  "annotations": {
+    "summary": "https://ircfiber.com/health is not answering 200 from outside the host",
+    "description": "Counts successful synthetic probes of the public endpoint. Below one success for the whole window means users cannot reach the site — the only rule here that sees what the operator saw on 2026-09-06 by loading the site in a browser. The probe must run OFF the prod host (the k3s collector on ubuntu-docker is a genuinely external vantage point) so it survives the host wedging. DISABLED BY DEFAULT: no httpcheck receiver is configured anywhere yet. Add it to site/deploy/k8s/signoz/values.yaml (snippet in README-alerts.md), then set signoz_alert_enable_endpoint_probe: true."
+  },
+  "preferredChannels": [],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "2",
+    "target": 1,
+    "targetUnit": "",
+    "matchType": "2",
+    "alertOnAbsent": true,
+    "absentFor": 3,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "short",
+      "builderQueries": {
+        "A": {
+          "queryName": "A",
+          "dataSource": "metrics",
+          "aggregateOperator": "sum",
+          "aggregateAttribute": {
+            "key": "httpcheck.status",
+            "dataType": "float64",
+            "type": "Sum",
+            "isColumn": true
+          },
+          "timeAggregation": "sum",
+          "spaceAggregation": "sum",
+          "functions": [],
+          "filter": {
+            "expression": "http.url = 'https://ircfiber.com/health' AND http.status_code = '200'"
+          },
+          "filters": {
+            "op": "AND",
+            "items": [
+              {
+                "key": {
+                  "key": "http.url",
+                  "dataType": "string",
+                  "type": "tag",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "https://ircfiber.com/health"
+              },
+              {
+                "key": {
+                  "key": "http.status_code",
+                  "dataType": "string",
+                  "type": "tag",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "200"
+              }
+            ]
+          },
+          "groupBy": [],
+          "expression": "A",
+          "disabled": false,
+          "having": {
+            "expression": ""
+          },
+          "limit": null,
+          "stepInterval": 60,
+          "orderBy": [],
+          "reduceTo": "last",
+          "legend": "ircfiber.com/health 200"
+        }
+      },
+      "promQueries": {},
+      "chQueries": {}
+    }
+  }
+}

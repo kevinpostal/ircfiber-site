@@ -10,24 +10,23 @@
     - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
   vars:
     gateway_bluegreen_enabled: true
-    gateway_container_name: ircfiber-gateway
     gateway_green_name: ircfiber-gateway-green
     gateway_http_port: 8090
     gateway_uploads_volume: ircfiber_uploads
     gateway_logs_volume: ircfiber_logs
     docker_ircfiber_network: ircfiber_net
     ircfiber_gateway_image_full: "irc-fiber-gateway:latest"
-    ircfiber_admin_password_reset: "{{ vault_ircfiber_admin_password | default('') }}"
-    # MUST match `volumes:` in roles/gateway/tasks/main.yml. This list is
-    # duplicated because the playbook runs standalone, and a divergence
-    # silently *removes* mounts on every swap: the `/etc/ircfiber/ircd:ro`
-    # mount behind the admin config viewer was lost exactly that way, and the
-    # anope mount below backs the admin NickServ account inventory.
-    _gateway_volumes:
-      - "{{ gateway_uploads_volume }}:/app/uploads"
-      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
-      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
-      - "{{ ircd_services_data_volume | default('ircfiber_services_data') }}:/var/lib/ircfiber/anope:ro"
+    # Also a gateway role default. Declared here because the stop / rename /
+    # verify tasks below live outside the role, and a role default pulled in
+    # by include_role is in scope only inside that role's own tasks.
+    # Deliberately NOT sourced by adding roles/gateway/defaults/main.yml to
+    # vars_files: play vars_files rank *above* inventory group_vars while
+    # role defaults rank at the very bottom, so that would invert precedence
+    # for every gateway_* variable and let a role default silently beat a
+    # deliberate group_vars override — a second source of truth that
+    # disagrees under one invocation, which is exactly the class of bug the
+    # shared container spec was factored out to kill.
+    gateway_container_name: ircfiber-gateway
   tasks:
     - name: Discover this host's Tailscale IPv4 address
       ansible.builtin.command: tailscale ip -4
@@ -89,31 +88,32 @@
           - name: "{{ docker_ircfiber_network }}"
           - name: ircfiber_logging
 
+    # One definition, two call sites in this playbook and three in the role:
+    # roles/gateway/tasks/container.yml. Nothing about the env, mounts,
+    # ulimits, security options, limits or probe is restated here. The copy
+    # that used to live in this file drifted from the role and silently
+    # dropped the /etc/ircfiber/ircd:ro mount on every swap, which broke the
+    # admin config viewer in prod for weeks.
+    #
+    # include_role (not include_tasks) so the role's defaults come in at
+    # role-defaults precedence — i.e. still below inventory group_vars, the
+    # same way they rank when the role runs normally. ansible.cfg sets
+    # roles_path = roles, so `name: gateway` resolves when this playbook is
+    # invoked standalone from site/deploy/.
     - name: Start green gateway (new image, same env)
-      community.docker.docker_container:
-        name: "{{ gateway_green_name }}"
-        image: "{{ ircfiber_gateway_image_full }}"
-        state: started
-        restart_policy: unless-stopped
-        command: ["/app/irc-fiber"]
-        networks: "{{ ircfiber_networks_for_gateway }}"
-        networks_cli_compatible: true
-        env: "{{ _gateway_env }}"
-        volumes: "{{ _gateway_volumes }}"
-        security_opts:
-          - "no-new-privileges:true"
-        ulimits:
-          - "nofile:65536:65536"
-        healthcheck:
-          test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
-          interval: 10s
-          timeout: 5s
-          retries: 3
-          start_period: 10s
-        labels:
-          com.ircfiber.component: "gateway-green"
-          com.ircfiber.version: "{{ ircfiber_version | default('unknown') }}"
-      register: green_start
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: container.yml
+      vars:
+        gateway_spec_name: "{{ gateway_green_name }}"
+        gateway_spec_component: "gateway-green"
+        # Deliberately faster than the role's 30s interval / 40s start
+        # period: the next task gives green at most 60s to report healthy,
+        # which a 40s start period would never satisfy.
+        gateway_spec_healthcheck_interval: 10s
+        gateway_spec_healthcheck_timeout: 5s
+        gateway_spec_healthcheck_retries: 3
+        gateway_spec_healthcheck_start_period: 10s
 
     - name: Wait for green to become healthy
       community.docker.docker_container_info:
@@ -135,30 +135,17 @@
       failed_when: false
       changed_when: rename_result.rc == 0
 
+    # Same shared spec, now under the blue name and label. As before, the
+    # promoted container differs from this spec in its label and (fast)
+    # probe, so the module normalises it here — the label is what the rest
+    # of the fleet filters on.
     - name: Ensure blue is started (after rename, ensure it stays up)
-      community.docker.docker_container:
-        name: "{{ gateway_container_name }}"
-        image: "{{ ircfiber_gateway_image_full }}"
-        state: started
-        restart_policy: unless-stopped
-        command: ["/app/irc-fiber"]
-        networks: "{{ ircfiber_networks_for_gateway }}"
-        networks_cli_compatible: true
-        env: "{{ _gateway_env }}"
-        volumes: "{{ _gateway_volumes }}"
-        security_opts:
-          - "no-new-privileges:true"
-        ulimits:
-          - "nofile:65536:65536"
-        healthcheck:
-          test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
-          interval: 30s
-          timeout: 10s
-          retries: 3
-          start_period: 40s
-        labels:
-          com.ircfiber.component: "gateway"
-          com.ircfiber.version: "{{ ircfiber_version | default('unknown') }}"
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: container.yml
+      vars:
+        gateway_spec_name: "{{ gateway_container_name }}"
+        gateway_spec_component: "gateway"
 
     - name: Reload Caddy to clear DNS cache and re-resolve gateway IP
       ansible.builtin.shell: docker exec ircfiber-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | head -n 20; echo reload_done

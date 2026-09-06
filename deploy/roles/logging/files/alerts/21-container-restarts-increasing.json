@@ -1,0 +1,88 @@
+{
+  "alert": "IRCFiber container restart count increasing",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "evalWindow": "10m",
+  "frequency": "1m",
+  "disabled": true,
+  "labels": {
+    "severity": "critical",
+    "deployment_environment": "production",
+    "host": "ovh-prod",
+    "service": "docker",
+    "signal": "restarts"
+  },
+  "annotations": {
+    "summary": "Docker restart counter climbing for a container on ovh-prod",
+    "description": "container.restarts is a cumulative counter from the docker_stats receiver; an increase inside the window means dockerd is restarting the container. Also the only way to see an unhealthy container flip: a failing healthcheck under restart: unless-stopped shows up here as repeated increments, and container.uptime resets alongside it. DISABLED BY DEFAULT: the prod collector currently has receivers: [otlp] only, so this metric does not exist yet. Add the docker_stats receiver (snippet in README-alerts.md), then set signoz_alert_enable_docker_stats: true."
+  },
+  "preferredChannels": [],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "1",
+    "target": 2,
+    "targetUnit": "",
+    "matchType": "1",
+    "alertOnAbsent": false,
+    "absentFor": 0,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "unit": "short",
+      "builderQueries": {
+        "A": {
+          "queryName": "A",
+          "dataSource": "metrics",
+          "aggregateOperator": "increase",
+          "aggregateAttribute": {
+            "key": "container.restarts",
+            "dataType": "float64",
+            "type": "Sum",
+            "isColumn": true
+          },
+          "timeAggregation": "increase",
+          "spaceAggregation": "max",
+          "functions": [],
+          "filter": {
+            "expression": "host.name = 'ovh-prod'"
+          },
+          "filters": {
+            "op": "AND",
+            "items": [
+              {
+                "key": {
+                  "key": "host.name",
+                  "dataType": "string",
+                  "type": "resource",
+                  "isColumn": false
+                },
+                "op": "=",
+                "value": "ovh-prod"
+              }
+            ]
+          },
+          "groupBy": [
+            {
+              "key": "container.name",
+              "dataType": "string",
+              "type": "resource",
+              "isColumn": false
+            }
+          ],
+          "expression": "A",
+          "disabled": false,
+          "having": {
+            "expression": ""
+          },
+          "limit": null,
+          "stepInterval": 60,
+          "orderBy": [],
+          "reduceTo": "last",
+          "legend": "container restarts"
+        }
+      },
+      "promQueries": {},
+      "chQueries": {}
+    }
+  }
+}

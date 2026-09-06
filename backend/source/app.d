@@ -39,6 +39,7 @@ import ircfiber.observability : configureMetrics;
 import ircfiber.threadpool : initThreadPools, shutdownThreadPools,
     g_httpPool, g_ircPool, g_bgPool, g_stgPool;
 import ircfiber.db.redis_pool : initRedisPool, shutdownRedisPool;
+import ircfiber.env : envSecret;
 __gshared WebSocketGateway g_wsGateway;
 
 void main() {
@@ -53,7 +54,10 @@ void main() {
     // Initialize shared Redis connection pool (avoids per-thread connections)
     initRedisPool();
 
-    auto mongoUrl = environment.get("IRCFIBER_MONGO_URL", "mongodb://127.0.0.1:27017/ircfiber");
+    // The URL embeds the Mongo application password, so prod ships it as a
+    // root-only file and only IRCFIBER_MONGO_URL_FILE reaches the container
+    // env; the inline form stays for local dev.
+    auto mongoUrl = envSecret("IRCFIBER_MONGO_URL", "mongodb://127.0.0.1:27017/ircfiber");
     auto mongoDbName = "ircfiber";
     auto mongoSlash = mongoUrl.lastIndexOf("/");
     if (mongoSlash > "mongodb://".length) {

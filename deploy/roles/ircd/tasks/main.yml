@@ -243,17 +243,68 @@
       INSP_TLS_ORG: "{{ ircd_network_name }}"
       INSP_TLS_UNIT: "Server Admins"
       INSP_TLS_DURATION: "3650"
+    # Resource limits — see the "Resource limits" block in defaults/main.yml
+    # for the measurements, the sendq-based sizing and why the ircd is the
+    # most protected process on this host.
+    memory: "{{ ircd_memory_limit }}"
+    memory_reservation: "{{ ircd_memory_reservation }}"
+    cpus: "{{ ircd_cpus | float }}"
+    oom_score_adj: "{{ ircd_oom_score_adj | int }}"
     healthcheck:
-      # `pgrep`, not a socket connect. `nc -z 127.0.0.1 <plain port>` opened a
-      # real TCP connection to the client port every 30s and m_connectban
-      # counts those: 32 probes (~16 min at threshold=32) Z-lined 127.0.0.1
-      # for 6h, which then re-armed on expiry, spamming every oper with
-      # ANNOUNCEMENT + XLINE notices in a ~6h loop (observed 2026-09-06).
-      # It was not even a useful liveness probe — `nc -z` keeps succeeding
-      # while the ircd is Z-lining that very source, so the container stayed
-      # "healthy" the whole time. Same check the services container uses.
-      test: ["CMD-SHELL", "pgrep inspircd >/dev/null"]
-      interval: 30s
+      # Three layers, in ascending cost:
+      #
+      #   1. `pgrep inspircd` — the process exists at all.
+      #   2. the plain and TLS client ports are in LISTEN state (0A) in
+      #      /proc/net/tcp{,6}. This catches a live process that never bound
+      #      or has lost its listeners — a bad rehash, a port taken at boot —
+      #      which pgrep alone cannot see. Reading /proc opens no connection,
+      #      so it is free to run on every invocation.
+      #   3. every {{ ircd_healthcheck_socket_every }}th invocation only, a
+      #      real TCP connect that exercises accept() end to end.
+      #
+      # Layer 3 is rate-limited because it is a *client* connection and
+      # m_connectban counts every one of those per IP: threshold="32" in
+      # modules.conf.j2, and InspIRCd only clears the per-IP counters in its
+      # hourly garbage collection. `nc -z` every 30s meant 120 connections
+      # per hour from 127.0.0.1, crossing 32 after ~16 minutes: it Z-lined
+      # loopback for hours, re-armed on expiry and spammed every oper with
+      # ANNOUNCEMENT + XLINE notices (observed 2026-09-06) — while still
+      # reporting "healthy", because `nc -z` keeps succeeding against an ircd
+      # that is Z-lining the connection. One connect per 10 minutes is 6 per
+      # hour: a 5x margin under the threshold in every GC window.
+      #
+      # The residual risk is structural, not accidental: 127.0.0.1 matches no
+      # <connect allow=...> in inspircd.conf.j2, so it falls into the "main"
+      # class where connectban and connflood are enabled. Adding a
+      # <connect name="localhost" allow="127.0.0.1" ... useconnectban="no"
+      # useconnflood="no"> class there is what would make a per-interval
+      # socket probe safe; until then the rate limit is the only guard, so
+      # do not lower ircd_healthcheck_socket_every.
+      #
+      # The counter lives in /tmp and every write is guarded: if /tmp is not
+      # writable the counter never advances and the probe degrades to layers
+      # 1+2 instead of failing the container.
+      test:
+        - CMD-SHELL
+        - >-
+          pgrep inspircd >/dev/null 2>&1 || exit 1;
+          for p in {{ '%04X' | format(ircd_port_plain | int) }} {{ '%04X' | format(ircd_port_tls | int) }}; do
+          grep -qEi "^[[:space:]]*[0-9]+:[[:space:]]+[0-9A-F]+:$p[[:space:]]+[0-9A-F]+:0000[[:space:]]+0A"
+          /proc/net/tcp /proc/net/tcp6 2>/dev/null || exit 1;
+          done;
+          n={{ ircd_healthcheck_socket_every | int }};
+          [ "$n" -le 0 ] && exit 0;
+          f=/tmp/.ircd-healthcheck-count;
+          c=$(cat "$f" 2>/dev/null || echo 0);
+          c=$((c + 1));
+          if [ "$c" -ge "$n" ]; then
+          (echo 0 > "$f") 2>/dev/null || true;
+          nc -z 127.0.0.1 {{ ircd_port_plain }} >/dev/null 2>&1 || exit 1;
+          else
+          (echo "$c" > "$f") 2>/dev/null || true;
+          fi;
+          exit 0
+      interval: "{{ ircd_healthcheck_interval_seconds }}s"
       timeout: 5s
       retries: 3
       start_period: 120s
@@ -359,7 +410,21 @@
       - "{{ ircd_services_conf_dir }}/services.conf:/anope/conf/services.conf:ro"
       - "{{ ircd_services_conf_dir }}/nickserv.conf:/anope/conf/nickserv.conf:ro"
       - "{{ ircd_services_conf_dir }}/services.motd:/anope/conf/services.motd:ro"
+    # Resource limits — see the "Resource limits" block in defaults/main.yml.
+    # Services rank just behind the ircd in OOM protection: users stay
+    # connected without NickServ, but a restart on an unreadable database
+    # has silently destroyed registrations here before.
+    memory: "{{ ircd_services_memory_limit }}"
+    memory_reservation: "{{ ircd_services_memory_reservation }}"
+    cpus: "{{ ircd_services_cpus | float }}"
+    oom_score_adj: "{{ ircd_services_oom_score_adj | int }}"
     healthcheck:
+      # Process check only, deliberately: Anope has no client listener to
+      # probe (its uplink to ircd:{{ ircd_link_port }} is an *outbound*
+      # connection, and its absence is normal during a netsplit or an ircd
+      # restart, so treating that as unhealthy would flap). The real
+      # database/link assertions live in the "Assert Anope loaded its
+      # database" task below, which greps the log for "Databases loaded".
       test: ["CMD-SHELL", "pgrep services >/dev/null"]
       interval: 30s
       timeout: 5s

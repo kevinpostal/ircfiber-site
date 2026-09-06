@@ -1,0 +1,113 @@
+---
+# The single definition of an irc-fiber container: the gateway replicas, the
+# blue/green "green" replica, ircfiber-bnc and ircfiber-support-bot all run
+# the same image with the same env, mounts, ulimits, security options and
+# health probe. This file is INCLUDED with vars — never copy-pasted — by:
+#
+#   * tasks/main.yml                            (replicas, bnc, support-bot)
+#   * playbooks/gateway-bluegreen.yml           (green start, post-rename blue)
+#
+# It exists because that playbook used to re-declare the entire container
+# independently of this role, and the two copies drifted: the
+# /etc/ircfiber/ircd:ro mount that backs the admin dashboard's config viewer
+# was present in the role and missing from the playbook, so every blue/green
+# swap silently *removed* it and the viewer was broken in prod for weeks with
+# nobody noticing. A mount, an ulimit or a memory limit can no longer be added
+# in one place only.
+#
+# The playbook is invoked directly (ansible-playbook
+# playbooks/gateway-bluegreen.yml), so it never runs this role and does not
+# get its defaults through the role machinery; it loads
+# roles/gateway/defaults/main.yml through vars_files instead. Every variable
+# read below must therefore either live in those defaults or carry an explicit
+# `| default()` fallback — otherwise the standalone run breaks.
+#
+# Caller contract:
+#   gateway_spec_name              (required) container name
+#   gateway_spec_component         (required) com.ircfiber.component label
+#   gateway_spec_env_extra         extra env merged over _gateway_env
+#   gateway_spec_volumes_extra     mounts added to the shared base list;
+#                                  omit for the admin-serving default, pass
+#                                  [] for "base mounts only"
+#   gateway_spec_ports             published_ports (default: publish nothing)
+#   gateway_spec_memory            hard memory limit
+#   gateway_spec_memory_reservation soft memory limit (kept small on purpose)
+#   gateway_spec_cpus              CPU quota in cores
+#   gateway_spec_oom_score_adj     OOM victim preference
+#   gateway_spec_healthcheck_*     probe timings (green wants a fast probe)
+- name: "Run {{ gateway_spec_name }}"
+  vars:
+    # Mounts every container running this image needs.
+    _gateway_spec_volumes_base:
+      - "{{ gateway_uploads_volume }}:/app/uploads"
+      - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+      # Secret material rendered by tasks/secrets.yml (0700 dir, 0400 files,
+      # root-owned) and read through the *_FILE env indirection, so no
+      # credential is visible in `docker inspect` or the container env.
+      - "{{ gateway_secrets_dir }}:{{ gateway_secrets_dir }}:ro"
+    # Extra mounts the admin-serving replicas need. `gateway_spec_volumes_extra`
+    # is only defaulted to this when the caller says nothing at all: bnc and
+    # support-bot pass their own list (possibly empty) and must NOT get these.
+    _gateway_spec_volumes_admin:
+      # Read-only mount of the rendered InspIRCd config for the admin
+      # dashboard's redacted config viewer (values never leave redacted).
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
+      # Read-only mount of Anope's data volume for the admin NickServ
+      # account inventory. anope.db is mode 0600 owned by uid 10000; the
+      # gateway runs as uid 0, so :ro is sufficient and nothing writes here.
+      # Deliberately NOT on ircfiber-bnc or ircfiber-support-bot: neither
+      # serves admin routes, so the mount would widen their access for
+      # nothing.
+      - "{{ ircd_services_data_volume | default('ircfiber_services_data') }}:/var/lib/ircfiber/anope:ro"
+  community.docker.docker_container:
+    name: "{{ gateway_spec_name }}"
+    image: "{{ ircfiber_gateway_image_full }}"
+    state: started
+    restart_policy: unless-stopped
+    command: ["/app/irc-fiber"]
+    networks: "{{ ircfiber_networks_for_gateway }}"
+    networks_cli_compatible: true
+    # env: (not env_file:) so the module compares values against the running
+    # container and recreates it when env content drifts — see the slurp
+    # comment in tasks/main.yml for the outage that taught us this.
+    env: "{{ _gateway_env | combine(gateway_spec_env_extra | default({}, true)) }}"
+    published_ports: "{{ gateway_spec_ports | default([], true) }}"
+    volumes: "{{ _gateway_spec_volumes_base + (gateway_spec_volumes_extra | default(_gateway_spec_volumes_admin)) }}"
+    # Resource limits. Until 2026-09-06 no container on this host had any
+    # (docker inspect: Memory 0, NanoCpus 0), so a single runaway process
+    # exhausted all 7.5 GiB, dockerd stopped answering and the site went
+    # down with it. A hard memory limit turns that into one container being
+    # OOM-killed and restarted by unless-stopped instead of a host outage.
+    memory: "{{ gateway_spec_memory | default(gateway_memory_limit) }}"
+    # Reservation is a *soft* floor honoured only under host memory pressure.
+    # It is deliberately far below the limit so the reservations of every
+    # container together stay a small fraction of RAM — reservations that sum
+    # near the host total make the kernel's reclaim decisions useless, which
+    # is the failure mode we are trying to avoid.
+    memory_reservation: "{{ gateway_spec_memory_reservation | default(gateway_memory_reservation) }}"
+    cpus: "{{ gateway_spec_cpus | default(gateway_cpus) | float }}"
+    # OOM victim ordering, most-protected to most-disposable:
+    #   ircd (-500) < services (-300) < gateway replicas (+200)
+    #     < bnc (+300) < support-bot (+500)
+    # Killing the ircd disconnects every user on the network and triggers a
+    # full reconnect storm, so it must be the last thing the kernel picks.
+    # The gateway replicas, bnc and support-bot are stateless, restarted by
+    # unless-stopped and (for the replicas) sit behind a health-checked
+    # blue/green swap, so losing one costs a few seconds — they are the
+    # preferred victims.
+    oom_score_adj: "{{ gateway_spec_oom_score_adj | default(gateway_oom_score_adj) | int }}"
+    security_opts:
+      - "no-new-privileges:true"
+    ulimits:
+      - "nofile:{{ gateway_nofile_limit }}:{{ gateway_nofile_limit }}"
+    healthcheck:
+      # The runtime image has curl but no nc; bnc and the support bot also
+      # serve HTTP on the internal gateway port, so one probe fits all.
+      test: ["CMD", "curl", "-fsS", "http://localhost:{{ gateway_http_port }}/health"]
+      interval: "{{ gateway_spec_healthcheck_interval | default(gateway_healthcheck_interval) }}"
+      timeout: "{{ gateway_spec_healthcheck_timeout | default(gateway_healthcheck_timeout) }}"
+      retries: "{{ gateway_spec_healthcheck_retries | default(gateway_healthcheck_retries) }}"
+      start_period: "{{ gateway_spec_healthcheck_start_period | default(gateway_healthcheck_start_period) }}"
+    labels:
+      com.ircfiber.component: "{{ gateway_spec_component }}"
+      com.ircfiber.version: "{{ ircfiber_version | default('unknown') }}"

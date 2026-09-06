@@ -74,7 +74,7 @@ configuration "ircd-test" {
     targetName "ircd-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/web/admin/ircd.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d"
+    sourceFiles "source/ircfiber/web/admin/ircd.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d" "source/ircfiber/env.d"
     mainSourceFile "tests/ircd_test.d"
     versions "VibeUseFibers"
 }
@@ -87,7 +87,7 @@ configuration "logs-test" {
     targetName "logs-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/web/admin/logs.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d"
+    sourceFiles "source/ircfiber/web/admin/logs.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d" "source/ircfiber/env.d"
     mainSourceFile "tests/logs_test.d"
     versions "VibeUseFibers"
 }
