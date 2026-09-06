@@ -124,38 +124,6 @@ RUN --mount=type=cache,target=/build/.dub,sharing=locked \
     echo "build: $CACHE_BUST" && \
     dub build --root=common --compiler=ldc2 --build=release --parallel $DUB_FLAGS
 
-# ============================================================================
-# Stage: builder-backend — gateway binary only (irc-fiber + irc-fiber-gateway)
-# ============================================================================
-FROM builder-common AS builder-backend
-ARG CACHE_BUST
-
-COPY <<EOF ./backend/source/.cache_bust_$CACHE_BUST
-bust=$CACHE_BUST
-EOF
-
-COPY backend/dub.sdl backend/dub.selections.json ./backend/
-COPY backend/source/ ./backend/source/
-COPY backend/views/  ./backend/views/
-
-# `--config=gateway` was a second full backend compile whose output was
-# discarded (the image ships the default-config binary under both names).
-# Dropped in the split — see runtime-gateway.
-RUN --mount=type=cache,target=/build/.dub,sharing=locked \
-    --mount=type=cache,target=/root/.dub,sharing=locked \
-    if [ "$CACHE_BUST" != "fixed" ]; then \
-        DUB_FLAGS="--force" && \
-        echo "dub cache busted (CACHE_BUST=$CACHE_BUST)" ; \
-    else \
-        DUB_FLAGS="" ; \
-    fi && \
-    dub build --root=backend --compiler=ldc2 --build=release --parallel $DUB_FLAGS && \
-    cp backend/irc-fiber ./irc-fiber && \
-    cp backend/irc-fiber ./irc-fiber-gateway && \
-    cp -r backend/views ./views && \
-    test -f ./irc-fiber
-RUN find . -maxdepth 1 -type f -executable -exec strip {} +; find backend -maxdepth 2 -type f -executable -exec strip {} + 2>/dev/null; true
-
 
 # ============================================================================
 # Stage: frontend-builder — vite build on server (avoids iCloud Mobile Documents hang)
@@ -200,6 +168,51 @@ RUN if [ "$GIT_HASH" != "unknown" ] && [ "$GIT_HASH" != "" ]; then \
       cat frontend/src/lib/buildInfo.ts; \
     fi
 RUN cd frontend && npm ci --ignore-scripts 2>&1 | tail -5 && npm run build 2>&1 | tail -20 && node inject-manifest.js 2>&1 | tail -5 && ls -lh ../public/dist/assets/ 2>&1 | tail -5
+
+# ============================================================================
+# Stage: builder-backend — gateway binary only (irc-fiber + irc-fiber-gateway)
+# ============================================================================
+FROM builder-common AS builder-backend
+ARG CACHE_BUST
+
+COPY <<EOF ./backend/source/.cache_bust_$CACHE_BUST
+bust=$CACHE_BUST
+EOF
+
+COPY backend/dub.sdl backend/dub.selections.json ./backend/
+COPY backend/source/ ./backend/source/
+# The SPA shell (views/index.dt) is a Diet template compiled INTO the binary
+# by CTFE, so the content-hashed asset URLs it names are frozen at compile
+# time — /app/views/index.dt is never read at runtime. Vite emits a new hash
+# on every build (buildInfo.ts carries the commit and build timestamp), so the
+# *committed* index.dt is stale by construction: taking it from the build
+# context baked a shell pointing at whichever bundle was last committed, while
+# the fresh bundle shipped in the same image was never loaded. A frontend
+# change then deployed "successfully" and did not appear, and the 6/6 version
+# gate could not see it because the baked version string was correct
+# (2026-09-06: main-D8JwTKZS.js served instead of main-CTLlAYkQ.js).
+# Take the views from the stage that just rewrote them. This serializes the
+# vite build ahead of the D compile, which is why frontend-builder is defined
+# above; the couple of minutes lost is the price of a coherent artifact.
+COPY --from=frontend-builder /build/backend/views/ ./backend/views/
+
+# `--config=gateway` was a second full backend compile whose output was
+# discarded (the image ships the default-config binary under both names).
+# Dropped in the split — see runtime-gateway.
+RUN --mount=type=cache,target=/build/.dub,sharing=locked \
+    --mount=type=cache,target=/root/.dub,sharing=locked \
+    if [ "$CACHE_BUST" != "fixed" ]; then \
+        DUB_FLAGS="--force" && \
+        echo "dub cache busted (CACHE_BUST=$CACHE_BUST)" ; \
+    else \
+        DUB_FLAGS="" ; \
+    fi && \
+    dub build --root=backend --compiler=ldc2 --build=release --parallel $DUB_FLAGS && \
+    cp backend/irc-fiber ./irc-fiber && \
+    cp backend/irc-fiber ./irc-fiber-gateway && \
+    cp -r backend/views ./views && \
+    test -f ./irc-fiber
+RUN find . -maxdepth 1 -type f -executable -exec strip {} +; find backend -maxdepth 2 -type f -executable -exec strip {} + 2>/dev/null; true
 
 
 # ============================================================================
