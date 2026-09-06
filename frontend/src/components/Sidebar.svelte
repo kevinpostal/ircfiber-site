@@ -2,7 +2,7 @@
   import { ircState, showsUnreadCount, setReorderMode } from '../stores/ircStore.svelte';
   import SidebarIndicators from './SidebarIndicators.svelte';
   import { isFiberServerDown as isServerDown } from '../lib/fiberServer';
-  import { archivedMap, pinnedMap, pinnedOrder, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem } from '../stores/preferences.svelte';
+  import { archivedMap, pinnedMap, pinnedOrder, hiddenChannelsMap, collapsedMap, inactiveCollapsedMap, conversationsCollapsedMap, networkOrder, setStorageItem, globalPrefs } from '../stores/preferences.svelte';
   import { stripHash, normalizeChannelName } from '../lib/utils';
   import { updateCollapsed, updateInactiveCollapsed, updateNetworkOrder, updatePinnedOrder } from '../stores/api';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
@@ -10,6 +10,7 @@
   import AccountMenu from './AccountMenu.svelte';
   import StaleIndicator from './StaleIndicator.svelte';
   import { onMount } from 'svelte';
+  import { shouldRequest, requestPermission } from '../lib/notifications';
 
   let sidebarEl: HTMLDivElement | undefined = $state();
 
@@ -198,6 +199,16 @@
     pinnedOrder.push(...order);
     updatePinnedOrder(order).catch(err => console.error('Failed to persist pin order:', err));
   }
+
+  // IRCCloud `sidebarBufferClick`: browsers only surface the notification
+  // permission prompt from a real user gesture, so ask here — clicking a
+  // buffer that has unseen highlights is exactly when the user cares.
+  function selectBuffer(networkId: string, buf: Buffer): void {
+    if (globalPrefs.desktopNotifications && buf.unseenHighlights.length > 0 && shouldRequest()) {
+      void requestPermission();
+    }
+    onSwitchBuffer(networkId, buf.name);
+  }
 </script>
 
 {#snippet bufferRow(net: Network, buf: Buffer, extraClasses: string)}
@@ -216,7 +227,7 @@
       class:password={buf.modeFlags?.password}
       class:buffer-item--joining={buf.joinInFlight}
       data-buffer-key="{net.networkId}:{buf.name}"
-      onclick={() => onSwitchBuffer(net.networkId, buf.name)}>
+      onclick={() => selectBuffer(net.networkId, buf)}>
     <span class="buffer" role="tab" tabindex="0" aria-selected={isActive ? 'true' : 'false'}>
       <div class="bufferBadges"><span class="badge" class:badge--mention={buf.unseenHighlights.length > 0}>{badgeCount > 0 ? (badgeCount > 99 ? '99+' : badgeCount) : ''}</span></div>
       <span class="g unread__label">unread</span>

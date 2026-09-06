@@ -4,12 +4,12 @@ import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, apply
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
          checkHighlight, isMessageUnseen, applySetname, markRedacted,
-         findBufferByName, isSelfMessage, renameQueryBuffer } from '../stores/ircStore.svelte';
-import { isIgnored, globalPrefs, getBufferPrefs, getLastSeen } from '../stores/preferences.svelte';
+         findBufferByName, isSelfMessage, renameQueryBuffer, isSessionFocused } from '../stores/ircStore.svelte';
+import { isIgnored, globalPrefs, getLastSeen, getBottomSeen } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand, messageHostmask } from './utils';
 import { isMessageIgnored } from './ignorePolicy';
 import { notify } from './notifications';
-import { shouldNotifyForMessage, getNotificationTitle } from './notificationPolicy';
+import { shouldNotifyForMessage, getNotificationTitle, getNotificationBody, getNotificationIcon } from './notificationPolicy';
 import { enqueueMessage } from './messageBatcher';
 import { setMaxEid } from '../stores/wsConnection.svelte';
 import { addNotice } from '../stores/noticeOverlay.svelte';
@@ -615,7 +615,6 @@ export function processIrcEvent(
     const activeName = ircState.activeBuffer.bufferName;
     const isActiveBuffer = ircState.activeBuffer.networkId === networkId
       && !!activeName && normalizeChannelName(activeName) === channel;
-    const documentHidden = typeof document !== 'undefined' && document.hidden;
     const buf = findBufferByName(net, channel);
     // Ensure highlight is computed before notify check (batch sets it async, but notify is sync)
     if (!msg.highlight && (msg.command === 'PRIVMSG' || msg.command === 'NOTICE' || msg.type === 'action') && msg.nick) {
@@ -633,24 +632,27 @@ export function processIrcEvent(
     const msgTs = msg.t ?? 0;
     const isUnseen = isMessageUnseen(msg, networkId, channel);
     const isRecent = msgTs !== 0 && Date.now() - msgTs < 60_000;
-    const shouldGateNotify = !isBackfill && !ignored && isUnseen && (lastSeenTs !== null || isRecent);
+    const shouldGateNotify = !isBackfill && isUnseen && (lastSeenTs !== null || isRecent);
 
-    if (shouldGateNotify && shouldNotifyForMessage({
-      networkId,
-      bufferName: channel,
-      bufferType: buf?.type,
+    if (buf && shouldGateNotify && shouldNotifyForMessage({
       msg,
-      currentNick: net.currentNick || net.nick,
-      bufferPrefs: getBufferPrefs(networkId, channel),
+      net,
+      buf,
+      ignored,
+      bootComplete: ircState.bootComplete,
       desktopNotificationsEnabled: globalPrefs.desktopNotifications,
       muteAll: globalPrefs.muteAll,
       isActiveBuffer,
-      documentHidden,
+      sessionFocused: isSessionFocused(),
+      bottomSeen: getBottomSeen(networkId, channel),
     })) {
       notify({
-        tag: `${networkId}:${channel}:${msg.msgid || msg.t}`,
-        title: getNotificationTitle(msg, buf?.type, channel),
-        body: msg.text || '',
+        // IRCCloud tags per buffer (`buffer.getId()`): one live notification
+        // per buffer, replaced by each newer message and closed on read.
+        tag: `${networkId}:${channel}`,
+        title: getNotificationTitle(msg, buf, net.name),
+        body: getNotificationBody(msg),
+        icon: getNotificationIcon(net, buf, msg),
         silent: !globalPrefs.notificationSound,
         autoDismiss: globalPrefs.autoDismissNotifs,
         onClick: () => cb.switchToBuffer(networkId, channel),

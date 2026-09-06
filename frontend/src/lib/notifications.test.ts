@@ -6,6 +6,7 @@ import {
   requestPermission,
   notify,
   resetNotificationState,
+  closeNotification,
 } from './notifications';
 
 describe('notifications', () => {
@@ -150,7 +151,7 @@ describe('notifications', () => {
       expect(notification_instances[0].title).toBe('Test');
       expect(notification_instances[0].options).toMatchObject({
         body: 'Hello',
-        icon: '/favicon.ico',
+        icon: '/favicon-192x192.png',
         tag: 'ircfiber:test',
         silent: false,
       });
@@ -251,6 +252,30 @@ describe('notifications', () => {
       expect(instance.onshow).toBeInstanceOf(Function);
       // onclose handler set
       expect(instance.onclose).toBeInstanceOf(Function);
+    });
+
+    it('closeNotification closes the buffer\'s live notification', () => {
+      mock_permission = 'granted';
+      notify({ title: 'First', body: 'Hello', tag: 'net:#chan' });
+      closeNotification('net:#chan');
+      expect(notification_instances[0].close).toHaveBeenCalledTimes(1);
+
+      // The store entry is gone, so a later message creates a fresh one
+      // without a second close of the already-closed instance.
+      notify({ title: 'Second', body: 'World', tag: 'net:#chan' });
+      expect(notification_instances).toHaveLength(2);
+      expect(notification_instances[0].close).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a replacement notification closeable after the superseded onclose fires', () => {
+      mock_permission = 'granted';
+      notify({ title: 'First', body: 'Hello', tag: 'net:#chan' });
+      notify({ title: 'Second', body: 'World', tag: 'net:#chan' });
+      // The superseded instance's onclose arrives after the replacement was
+      // stored; without the identity guard it would evict the live one.
+      notification_instances[0].onclose?.();
+      closeNotification('net:#chan');
+      expect(notification_instances[1].close).toHaveBeenCalledTimes(1);
     });
   });
 });

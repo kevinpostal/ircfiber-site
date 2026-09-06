@@ -1,139 +1,242 @@
-import { describe, it, expect } from 'vitest';
-import { shouldNotifyForMessage, isChatMessage, getNotificationTitle } from './notificationPolicy';
-import type { IRCMessage, Buffer } from '../types';
-import type { BufferPrefs } from '../stores/preferences.svelte';
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  isNotableMessage,
+  shouldNotifyForMessage,
+  getNotificationTitle,
+  getNotificationBody,
+  getNotificationIcon,
+  type NotifyPolicyInput,
+} from './notificationPolicy';
+import { createNetwork, createBuffer, createMessage } from '../test/factories';
+import { bufferPrefsMap, setBufferPref, highlightWords, globalPrefs } from '../stores/preferences.svelte';
+import type { IRCMessage } from '../types';
 
-function makeMsg(overrides: Partial<IRCMessage> = {}): IRCMessage {
-  return {
-    command: 'PRIVMSG',
-    nick: 'alice',
-    text: 'hello',
-    ...overrides,
-  };
+const NET_ID = 'net1';
+const MSG_T = 1_700_000_000_000;
+
+function net() {
+  return createNetwork({ networkId: NET_ID, name: 'TestNet', nick: 'tester', currentNick: 'tester' });
+}
+function chan() {
+  return createBuffer({ name: '#chan', type: 'channel' });
+}
+function query(name = 'alice') {
+  return createBuffer({ name, type: 'query' });
+}
+function msg(overrides: Partial<IRCMessage> = {}): IRCMessage {
+  return createMessage({ nick: 'alice', text: 'hello', t: MSG_T, ...overrides });
 }
 
-function baseInput(overrides: Partial<Parameters<typeof shouldNotifyForMessage>[0]> = {}) {
+/** Defaults: notifiable context (booted, enabled, inactive buffer). */
+function input(overrides: Partial<NotifyPolicyInput> = {}): NotifyPolicyInput {
   return {
-    networkId: 'net1',
-    bufferName: '#chan',
-    bufferType: 'channel' as const,
-    msg: makeMsg(),
-    currentNick: 'bob',
-    bufferPrefs: {} as BufferPrefs,
+    msg: msg(),
+    net: net(),
+    buf: chan(),
+    ignored: false,
+    bootComplete: true,
     desktopNotificationsEnabled: true,
     muteAll: false,
     isActiveBuffer: false,
-    documentHidden: true,
+    sessionFocused: true,
+    bottomSeen: null,
     ...overrides,
   };
 }
 
-describe('isChatMessage', () => {
-  it('returns true for PRIVMSG', () => {
-    expect(isChatMessage(makeMsg({ command: 'PRIVMSG' }))).toBe(true);
+describe('notificationPolicy', () => {
+  beforeEach(() => {
+    for (const k of Object.keys(bufferPrefsMap)) delete bufferPrefsMap[k];
+    highlightWords.length = 0;
+    globalPrefs.inlineImages = true;
   });
 
-  it('returns false for NOTICE (IRCCloud parity: NickServ etc. must not notify)', () => {
-    expect(isChatMessage(makeMsg({ command: 'NOTICE' }))).toBe(false);
+  describe('isNotableMessage — IRCCloud Message.isNotable()', () => {
+    it('is notable for a highlight in a channel', () => {
+      expect(isNotableMessage(msg({ text: 'tester: ping' }), net(), chan(), false)).toBe(true);
+    });
+
+    it('is not notable for a plain channel message', () => {
+      expect(isNotableMessage(msg(), net(), chan(), false)).toBe(false);
+    });
+
+    it('is notable for a NOTICE that highlights the current nick', () => {
+      // IRCCloud parity: isHighlightable() covers isHighlight() first, so a
+      // NOTICE naming you notifies even though notifyAll excludes notices.
+      const m = msg({ command: 'NOTICE', nick: 'op', text: 'tester: server going down' });
+      expect(isNotableMessage(m, net(), chan(), false)).toBe(true);
+    });
+
+    it('is not notable for a service NOTICE in a query', () => {
+      const m = msg({ command: 'NOTICE', nick: 'NickServ', text: 'You are now identified' });
+      expect(isNotableMessage(m, net(), query('NickServ'), false)).toBe(false);
+    });
+
+    it('is notable for a plain PRIVMSG in a query', () => {
+      expect(isNotableMessage(msg(), net(), query(), false)).toBe(true);
+    });
+
+    it('is notable for an INVITE', () => {
+      const m = msg({ command: 'INVITE', text: '', params: ['tester', '#chan'] });
+      expect(isNotableMessage(m, net(), chan(), false)).toBe(true);
+    });
+
+    it('is notable for WALLOPS', () => {
+      expect(isNotableMessage(msg({ command: 'WALLOPS', text: 'rebooting' }), net(), chan(), false)).toBe(true);
+    });
+
+    it('is notable for a plain channel message when notifyAll is set', () => {
+      setBufferPref(NET_ID, '#chan', 'notifyAll', true);
+      expect(isNotableMessage(msg(), net(), chan(), false)).toBe(true);
+    });
+
+    it('is not notable for a non-highlighting NOTICE even with notifyAll', () => {
+      setBufferPref(NET_ID, '#chan', 'notifyAll', true);
+      const m = msg({ command: 'NOTICE', nick: 'op', text: 'channel topic changed' });
+      expect(isNotableMessage(m, net(), chan(), false)).toBe(false);
+    });
+
+    it('honours notifyAll on the server buffer (Fiber exposes the radio there)', () => {
+      setBufferPref(NET_ID, '_server', 'notifyAll', true);
+      const buf = createBuffer({ name: '_server', type: 'server' });
+      expect(isNotableMessage(msg(), net(), buf, false)).toBe(true);
+    });
+
+    it('is not notable when the buffer is muted', () => {
+      setBufferPref(NET_ID, '#chan', 'mute', true);
+      expect(isNotableMessage(msg({ text: 'tester: ping' }), net(), chan(), false)).toBe(false);
+    });
+
+    it('is not notable when the message is ignored', () => {
+      expect(isNotableMessage(msg({ text: 'tester: ping' }), net(), chan(), true)).toBe(false);
+    });
+
+    it('is not notable for a message from self', () => {
+      expect(isNotableMessage(msg({ nick: 'tester', text: 'tester: ping' }), net(), query(), false)).toBe(false);
+    });
+
+    it('is not notable for a JOIN', () => {
+      expect(isNotableMessage(msg({ command: 'JOIN', text: '' }), net(), query(), false)).toBe(false);
+    });
   });
 
-  it('returns true for actions', () => {
-    expect(isChatMessage(makeMsg({ command: 'PRIVMSG', type: 'action' }))).toBe(true);
+  describe('shouldNotifyForMessage — IRCCloud shouldNotify()', () => {
+    it('notifies a highlight in an inactive channel', () => {
+      expect(shouldNotifyForMessage(input({ msg: msg({ text: 'tester: ping' }) }))).toBe(true);
+    });
+
+    it('does not notify before boot completes', () => {
+      expect(shouldNotifyForMessage(input({ msg: msg({ text: 'tester: ping' }), bootComplete: false }))).toBe(false);
+    });
+
+    it('does not notify when desktop notifications are disabled', () => {
+      expect(shouldNotifyForMessage(input({
+        msg: msg({ text: 'tester: ping' }),
+        desktopNotificationsEnabled: false,
+      }))).toBe(false);
+    });
+
+    it('does not notify when muteAll is set', () => {
+      expect(shouldNotifyForMessage(input({ msg: msg({ text: 'tester: ping' }), muteAll: true }))).toBe(false);
+    });
+
+    it('is silent for the active buffer while pinned to the bottom and focused', () => {
+      expect(shouldNotifyForMessage(input({
+        msg: msg({ text: 'tester: ping' }),
+        isActiveBuffer: true,
+        sessionFocused: true,
+        bottomSeen: null,
+      }))).toBe(false);
+    });
+
+    it('notifies in the active focused buffer while scrolled up (bottomSeen locked below the message)', () => {
+      expect(shouldNotifyForMessage(input({
+        msg: msg({ text: 'tester: ping' }),
+        isActiveBuffer: true,
+        sessionFocused: true,
+        bottomSeen: MSG_T - 1,
+      }))).toBe(true);
+    });
+
+    it('stays silent in the active focused buffer when bottomSeen is at or past the message', () => {
+      expect(shouldNotifyForMessage(input({
+        msg: msg({ text: 'tester: ping' }),
+        isActiveBuffer: true,
+        sessionFocused: true,
+        bottomSeen: MSG_T,
+      }))).toBe(false);
+    });
+
+    it('notifies for the active buffer when the window is blurred', () => {
+      expect(shouldNotifyForMessage(input({
+        msg: msg({ text: 'tester: ping' }),
+        isActiveBuffer: true,
+        sessionFocused: false,
+      }))).toBe(true);
+    });
+
+    it('notifies for an inactive buffer while the window is focused', () => {
+      expect(shouldNotifyForMessage(input({
+        msg: msg({ text: 'tester: ping' }),
+        isActiveBuffer: false,
+        sessionFocused: true,
+      }))).toBe(true);
+    });
   });
 
-  it('returns false for JOIN', () => {
-    expect(isChatMessage(makeMsg({ command: 'JOIN' }))).toBe(false);
-  });
-});
+  describe('getNotificationTitle', () => {
+    it('uses "<nick> — <channel>" in channels', () => {
+      expect(getNotificationTitle(msg(), chan(), 'TestNet')).toBe('alice \u2014 #chan');
+    });
 
-describe('shouldNotifyForMessage', () => {
-  it('notifies on highlights in channels', () => {
-    expect(shouldNotifyForMessage(baseInput({ msg: makeMsg({ highlight: true }) }))).toBe(true);
-  });
+    it('uses "<nick> — <network>" in queries', () => {
+      expect(getNotificationTitle(msg(), query(), 'TestNet')).toBe('alice \u2014 TestNet');
+    });
 
-  it('notifies on all messages in a channel with notifyAll', () => {
-    expect(shouldNotifyForMessage(baseInput({ bufferPrefs: { notifyAll: true } }))).toBe(true);
-  });
+    it('formats channel invites', () => {
+      const m = msg({ command: 'INVITE', params: ['tester', '#chan'], text: '' });
+      expect(getNotificationTitle(m, chan(), 'TestNet')).toBe('Channel invite from: alice (TestNet)');
+    });
 
-  it('notifies on all query messages', () => {
-    expect(shouldNotifyForMessage(baseInput({ bufferType: 'query', bufferName: 'alice' }))).toBe(true);
-  });
-
-  it('does NOT notify for NOTICE in query (NickServ spam)', () => {
-    expect(shouldNotifyForMessage(baseInput({ bufferType: 'query', bufferName: 'NickServ', msg: makeMsg({ command: 'NOTICE', nick: 'NickServ', text: 'You are now identified' }) }))).toBe(false);
+    it('formats wallops', () => {
+      expect(getNotificationTitle(msg({ command: 'WALLOPS' }), chan(), 'TestNet')).toBe('alice (TestNet)');
+    });
   });
 
-  it('does not notify for non-highlight, non-notifyAll channel messages', () => {
-    expect(shouldNotifyForMessage(baseInput())).toBe(false);
+  describe('getNotificationBody', () => {
+    it('strips IRC formatting codes', () => {
+      expect(getNotificationBody(msg({ text: '\x0304,08hi \x02there\x02' }))).toBe('hi there');
+    });
+
+    it('replaces emoji colon codes', () => {
+      expect(getNotificationBody(msg({ text: ':smile:' }))).toBe('\u{1F604}');
+    });
+
+    it('names the invited channel for INVITE', () => {
+      const m = msg({ command: 'INVITE', params: ['tester', '#chan'], text: '' });
+      expect(getNotificationBody(m)).toBe('Invite to join #chan');
+    });
   });
 
-  it('does not notify when desktop notifications are disabled', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      desktopNotificationsEnabled: false,
-      msg: makeMsg({ highlight: true }),
-    }))).toBe(false);
-  });
+  describe('getNotificationIcon', () => {
+    it('uses the message\'s single inline image', () => {
+      const icon = getNotificationIcon(net(), chan(), msg({ text: 'look https://example.com/cat.png' }));
+      expect(icon).toBeTruthy();
+      expect(icon).toContain('cat.png');
+    });
 
-  it('does not notify when muteAll is enabled', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      muteAll: true,
-      msg: makeMsg({ highlight: true }),
-    }))).toBe(false);
-  });
+    it('returns undefined without an image', () => {
+      expect(getNotificationIcon(net(), chan(), msg())).toBeUndefined();
+    });
 
-  it('does not notify when buffer is muted', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      bufferPrefs: { mute: true },
-      msg: makeMsg({ highlight: true }),
-    }))).toBe(false);
-  });
+    it('respects the global inline-images pref', () => {
+      globalPrefs.inlineImages = false;
+      expect(getNotificationIcon(net(), chan(), msg({ text: 'https://example.com/cat.png' }))).toBeUndefined();
+    });
 
-  it('does not notify for messages from self', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      currentNick: 'alice',
-      bufferType: 'query',
-      bufferName: 'bob',
-    }))).toBe(false);
-  });
-
-  it('does not notify for non-chat messages', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      msg: makeMsg({ command: 'JOIN' }),
-      bufferType: 'query',
-    }))).toBe(false);
-  });
-
-  it('does not notify for the active buffer when document is visible', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      isActiveBuffer: true,
-      documentHidden: false,
-      msg: makeMsg({ highlight: true }),
-    }))).toBe(false);
-  });
-
-  it('notifies for the active buffer when document is hidden', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      isActiveBuffer: true,
-      documentHidden: true,
-      msg: makeMsg({ highlight: true }),
-    }))).toBe(true);
-  });
-
-  it('notifies for a non-active buffer even when document is visible', () => {
-    expect(shouldNotifyForMessage(baseInput({
-      isActiveBuffer: false,
-      documentHidden: false,
-      msg: makeMsg({ highlight: true }),
-    }))).toBe(true);
-  });
-});
-
-describe('getNotificationTitle', () => {
-  it('uses nick only for queries', () => {
-    expect(getNotificationTitle(makeMsg({ nick: 'alice' }), 'query', 'alice')).toBe('alice');
-  });
-
-  it('uses nick and channel for channels', () => {
-    expect(getNotificationTitle(makeMsg({ nick: 'alice' }), 'channel', '#chan')).toBe('alice in #chan');
+    it('respects the per-buffer inline-images override', () => {
+      setBufferPref(NET_ID, '#chan', 'inlineImages', false);
+      expect(getNotificationIcon(net(), chan(), msg({ text: 'https://example.com/cat.png' }))).toBeUndefined();
+    });
   });
 });

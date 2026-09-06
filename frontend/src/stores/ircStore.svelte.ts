@@ -3,6 +3,7 @@ import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
 import { setChanPrefixChars } from '../lib/autolinker';
 import { isMessageIgnored } from '../lib/ignorePolicy';
+import { closeNotification } from '../lib/notifications';
 import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw } from './wsConnection.svelte';
@@ -1473,8 +1474,12 @@ function writeUnseenHighlights(networkId: string, bufferName: string, buf: Buffe
   if (next.length === buf.unseenHighlights.length) return;
   const key = bufferKey(networkId, bufferName);
   buf.unseenHighlights = next;
-  if (next.length === 0) { if (key in unseenHighlightsMap) delete unseenHighlightsMap[key]; }
-  else unseenHighlightsMap[key] = next;
+  // IRCCloud `BufferNotificationView.unseenHighlightChange`: no unseen
+  // highlights left ⇒ close the buffer's live desktop notification.
+  if (next.length === 0) {
+    if (key in unseenHighlightsMap) delete unseenHighlightsMap[key];
+    closeNotification(key);
+  } else unseenHighlightsMap[key] = next;
 }
 
 /** Unseen important messages strictly after `t` (0 when none loaded). */

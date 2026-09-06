@@ -38,9 +38,9 @@ export function resetNotificationState(): void {
 
 /**
  * Create a Notification wrapped with notStore for GC prevention and
- * tag-based dedup. The uid is the dedup key (typically the nick-based tag
- * like `${networkId}:${channel}:${nick}`). Closes any existing notification
- * with the same uid before creating a new one.
+ * tag-based dedup. The uid is the dedup key — IRCCloud uses `buffer.getId()`,
+ * i.e. one live notification per buffer (`${networkId}:${bufferName}`), so a
+ * newer message replaces the buffer's previous notification.
  */
 function showNotification(
   uid: string,
@@ -62,8 +62,21 @@ function showNotification(
 
   notStore.set(uid, not);
   not.onshow = () => notStore.set(uid, not);   // keep ref for Safari GC
-  not.onclose = () => notStore.delete(uid);
+  // Identity guard: a same-uid replacement must not be evicted when the
+  // superseded instance's onclose fires afterwards.
+  not.onclose = () => { if (notStore.get(uid) === not) notStore.delete(uid); };
   return not;
+}
+
+/**
+ * IRCCloud `BufferNotificationView.unseenHighlightChange` → `close()`: drop the
+ * live notification for a buffer once its unseen highlights are cleared.
+ */
+export function closeNotification(uid: string): void {
+  const n = notStore.get(uid);
+  if (!n) return;
+  notStore.delete(uid);
+  n.close();
 }
 
 export function notify(options: NotificationOptions): void {
@@ -89,7 +102,7 @@ export function notify(options: NotificationOptions): void {
     const uid = options.tag;
     const notification = showNotification(uid, options.title, {
       body,
-      icon: options.icon || '/favicon.ico',
+      icon: options.icon || '/favicon-192x192.png',
       tag: 'ircfiber:' + options.tag,
       silent,
     });
