@@ -37,8 +37,8 @@ import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.models.network : NetworkConfig;
 import ircfiber.models.user : User;
 import ircfiber.redis.protocol : ControlMessage, RedisKeys;
-import ircfiber.services.anope : anopeAccessDenied, anopeOperCommand, isSafeServicesArg,
-    loadAnopeSettings;
+import ircfiber.services.anope : AnopeSettings, anopeAccessDenied, anopeOperCommand,
+    anopeOperQuery, flattenReplyText, isSafeServicesArg, loadAnopeSettings, parseNickInfo;
 import ircfiber.storage.buffer : BufferManager;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.upload.local : uploadDir;
@@ -64,8 +64,11 @@ void purgeUserAccount(User user, RedisStorage redis, ServerRegistry serverRegist
     auto netRepo = new NetworkRepository();
     auto bufferManager = new BufferManager(redis);
 
-    foreach (net; netRepo.findByUserId(id)) {
-        dropServicesAccount(net);
+    // Services first: the account names live on the network documents, so a
+    // failure here must not have already deleted the only record of them.
+    auto networks = netRepo.findByUserId(id);
+    dropServicesAccounts(user, networks);
+    foreach (net; networks) {
         purgeNetworkRuntimeState(net.id, redis, serverRegistry);
         netRepo.deleteById(net.id);
     }
@@ -139,37 +142,131 @@ void purgeNetworkRuntimeState(UUID networkId, RedisStorage redis,
     }
 }
 
-/// Drops the NickServ account the provisioner registered for this user.
-///
-/// Only for the platform network: that account exists because we created it,
-/// under the user's email, and nobody else holds its password. Leaving it
-/// behind keeps their nick claimed forever and keeps their address in
-/// `anope.db` after they asked to be deleted. A network the user added
-/// themselves is never touched — the credential there is theirs, not ours.
-///
-/// Best-effort by design: an unreachable Anope must not stop the deletion.
-private void dropServicesAccount(NetworkConfig cfg) {
-    if (cfg.host != DEFAULT_FIBER_HOST) return;
-    const account = cfg.saslUsername.strip();
-    if (account.length == 0 || !isSafeServicesArg(account)) return;
+/**
+ * Drops every NickServ account this user provably owns.
+ *
+ * This used to look only at the linked credential — `saslUsername` on the
+ * user's `irc.ircfiber.com` network — and on prod that misses most of them:
+ * 15 of 19 Fiber networks carry no `saslUsername` while Anope holds accounts
+ * registered under those very users' email addresses (`kfnFiber`, `TL`,
+ * `lex0de_df02`, …). A credential goes missing that way whenever an admin
+ * unlinks one, or a REGISTER landed and the persist behind it did not. The
+ * account still exists, still holds the user's nick, and still stores the
+ * email address they just asked us to erase — so keying the drop on that one
+ * field left services permanently out of step with the database.
+ *
+ * Each candidate name — the linked credential, the Fiber network's nick, and
+ * the website username — is therefore dropped when EITHER
+ *   - it is the linked credential, because we are the ones who put it there, or
+ *   - `NickServ INFO` reports an `Email address` equal to this user's, which
+ *     only our own provisioner ever sets (it registers with the signup
+ *     address) and which is itself personal data the deletion must remove.
+ *
+ * An account registered under somebody else's address is never touched: a
+ * human who registered their own nick over IRC does not lose it because a
+ * website account with a similar name went away. That is not hypothetical —
+ * prod's `dnsk` has no website user at all and its owner was online in
+ * #welcome while this was written.
+ *
+ * Best-effort by design: an unreachable Anope must never block the deletion
+ * the user asked for, so every failure is a warning rather than a throw.
+ */
+private void dropServicesAccounts(User user, NetworkConfig[] networks) {
+    import std.array : join;
+    import std.uni : toLower;
+
+    string[] candidates;
+    bool[string] linked;      // lower(name) of credentials we stored ourselves
+    bool[string] seen;
+
+    void add(string raw, bool isCredential) {
+        const name = raw.strip();
+        if (name.length == 0 || !isSafeServicesArg(name)) return;
+        const key = name.toLower();
+        if (isCredential) linked[key] = true;
+        if (key in seen) return;
+        seen[key] = true;
+        candidates ~= name;
+    }
+
+    foreach (ref cfg; networks) {
+        // Only the platform network: a network the user added themselves
+        // authenticates with a credential that is theirs, not ours.
+        if (cfg.host != DEFAULT_FIBER_HOST) continue;
+        add(cfg.saslUsername, true);
+        add(cfg.nick, false);
+    }
+    add(user.username, false);
+    if (candidates.length == 0) return;
 
     auto s = loadAnopeSettings();
     if (!s.configured || !s.hasOper) {
-        logWarn("purge: cannot drop NickServ account %s — Anope RPC or oper account not configured",
-                account);
+        logWarn("purge %s: cannot drop NickServ account(s) %s — Anope RPC or oper "
+                ~ "account not configured", user.username, candidates.join(", "));
         return;
     }
+
+    foreach (name; candidates) {
+        const isLinked = (name.toLower() in linked) !is null;
+        if (!isLinked && !registeredToUser(s, name, user)) continue;
+        dropOneServicesAccount(s, user, name, isLinked ? "linked credential" : "same email");
+    }
+}
+
+/// True when `account` is registered AND its `Email address` is this user's.
+///
+/// The oper form of `INFO` is required: Anope hides the address from ordinary
+/// callers, and `nickserv.conf` has `Private` set on these accounts.
+private bool registeredToUser(AnopeSettings s, string account, User user) {
+    import std.uni : sicmp;
+
+    const email = user.email.strip();
+    if (email.length == 0) return false;
+    auto r = anopeOperQuery(s, "INFO " ~ account);
+    if (!r.transportOk) {
+        logWarn("purge %s: cannot tell whether NickServ account %s is theirs: %s",
+                user.username, account, r.transportError);
+        return false;
+    }
+    auto info = parseNickInfo(r.rawText);
+    if (!info.registered) return false;
+    auto addr = "Email address" in info.fields;
+    return addr !is null && sicmp((*addr).strip(), email) == 0;
+}
+
+/// One DROP, with the reply actually checked.
+///
+/// The old code logged "dropped" on any HTTP 200 that was not `Access
+/// denied.`, so a refusal Anope spells out in prose — the exact failure mode
+/// this whole path exists to prevent — was recorded as a success. `isn't
+/// registered` counts as done: the account is gone, which is all the caller
+/// wants.
+private void dropOneServicesAccount(AnopeSettings s, User user, string account, string why) {
+    import std.algorithm.searching : canFind;
+    import std.uni : toLower;
+
     auto r = anopeOperCommand(s, "DROP " ~ account);
     if (!r.transportOk) {
-        logWarn("purge: dropping NickServ account %s failed: %s", account, r.transportError);
+        logWarn("purge %s: dropping NickServ account %s failed: %s",
+                user.username, account, r.transportError);
         return;
     }
     if (anopeAccessDenied(r)) {
-        logWarn("purge: Anope refused to drop %s — the services oper account has no privileges",
-                account);
+        logWarn("purge %s: Anope refused to drop %s — the services oper account has no "
+                ~ "privileges", user.username, account);
         return;
     }
-    logInfo("purge: dropped NickServ account %s", account);
+    const reply = flattenReplyText(r.text).toLower();
+    if (reply.canFind("has been dropped")) {
+        logInfo("purge %s: dropped NickServ account %s (%s)", user.username, account, why);
+        return;
+    }
+    if (reply.canFind("isn't registered") || reply.canFind("is not registered")) {
+        logInfo("purge %s: NickServ account %s was already gone", user.username, account);
+        return;
+    }
+    logWarn("purge %s: NickServ did not confirm dropping %s: %s",
+            user.username, account, flattenReplyText(r.text));
 }
 
 /// Kills every login the user still holds, so a deleted account cannot keep

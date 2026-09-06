@@ -50,10 +50,12 @@ import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick,
     ProvisionOutcome, servicesAccountCandidates, servicesPendingKey, servicesSkipKey,
     SERVICES_OUTCOMES_KEY;
 import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
-    anopeCheckAuthentication, anopeNickRegistration, anopeOperCommand, anopeOperQuery,
-    isSafeServicesArg, loadAnopeSettings, nickServSetPasswordCommand, NickRegistration,
-    parseNickInfo;
-import ircfiber.services.anope_db : AnopeAccount, readAnopeInventory;
+    anopeCheckAuthentication, anopeNickRegistration, anopeOperAccounts, anopeOperCommand,
+    anopeOperQuery, isSafeServicesArg, loadAnopeSettings, nickServSetPasswordCommand,
+    NickRegistration, parseNickInfo;
+import ircfiber.services.anope_db : AnopeAccount, AnopeInventory, asciiLowerStr,
+    classifyAccountOwnership, readAnopeInventory;
+import ircfiber.support.bot : SupportBotConfig;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
 
@@ -626,6 +628,94 @@ package void apiNsCreate(HTTPServerRequest req, HTTPServerResponse res,
 }
 
 // ---------------------------------------------------------------------------
+// Account ownership (who, if anybody, this account belongs to)
+// ---------------------------------------------------------------------------
+//
+// The inventory says an account exists; it never said whether anybody still
+// wants it. Prod is the argument for this section: of 13 NickServ accounts
+// only 4 carry a `saslUsername` link, three more (`kfnFiber`, `TL`,
+// `lex0de_df02`) belong to current users and are tied to them by nothing but
+// the address they registered with, and one (`dnsk`) has no website user at
+// all — yet its owner was seen online on IRC. So this classifies and
+// reports; it never drops. `unowned` is a prompt for a human to press the
+// existing Drop button, not a verdict.
+
+// `classifyAccountOwnership` and `asciiLowerStr` live in
+// `services.anope_db`: they are pure inventory logic, and only there does a
+// dub configuration (`services-test`) actually compile and run their
+// unittests — in this module the blocks would never execute.
+
+/**
+ * The accounts that must never read as unowned, ASCII-lowercased.
+ *
+ * Three sources, because no single one covers the staff population:
+ *   * `OperServ OPER LIST` over RPC — the authoritative opers, but it reports
+ *     the *nick* each `oper {}` block names, so prod's `admin` block has to
+ *     be resolved through the inventory to its display `Zodiac` (both rows
+ *     are then staff);
+ *   * `IRCFIBER_ANOPE_OPER_ACCOUNT` — the account this gateway itself runs
+ *     privileged commands as. It is an oper by construction, and adding it
+ *     unconditionally means an unreachable Anope cannot make it look
+ *     droppable;
+ *   * the support bot's nick — `FiberSupport` is *not* an Anope oper
+ *     (verified: its `NickServ INFO` has no "is a Services Operator" line),
+ *     it is infrastructure this codebase owns and identifies as, so nothing
+ *     in Mongo will ever claim it.
+ */
+private bool[string] staffAccountsLower(const ref AnopeInventory inv) {
+    import std.process : environment;
+
+    auto s = loadAnopeSettings();
+    auto staff = anopeOperAccounts(s);
+    if (s.operAccount.length) staff[asciiLowerStr(s.operAccount)] = true;
+    auto botNick = environment.get("IRCFIBER_SUPPORT_BOT_NICK", "").strip();
+    if (!botNick.length) botNick = SupportBotConfig.init.nick;
+    if (botNick.length) staff[asciiLowerStr(botNick)] = true;
+
+    // Alias → display. A grouped account is one identity wearing several
+    // nicks, so flagging only the nick the oper block happens to name would
+    // leave its other rows (prod: `Zodiac`, from the `admin` block) looking
+    // ownerless.
+    foreach (ref a; inv.accounts) {
+        if (!a.account.length) continue;
+        const nick = asciiLowerStr(a.nick);
+        const display = asciiLowerStr(a.account);
+        if (nick in staff || display in staff) {
+            staff[nick] = true;
+            staff[display] = true;
+        }
+    }
+    return staff;
+}
+
+/// lower(email) → username for every website user, from one Mongo query. The
+/// `email` ownership class exists entirely because of this index: accounts
+/// registered before SASL linking carry their owner's address and nothing
+/// else.
+private string[string] loadUserEmails() {
+    string[string] byEmail;
+    try {
+        auto users = new UserRepository();
+        // findAll ignores its offset argument, so one oversized page holds
+        // everybody (same idiom as unprovisionedUsers).
+        foreach (u; users.findAll(users.count() + 50, 0)) {
+            const email = asciiLowerStr(u.email.strip());
+            if (!email.length) continue;
+            // Two users on one address (prod: `TL` and `TPABA` both hold
+            // audrius@gamesnet.lt) is a Mongo defect, not two owners. The
+            // lowest username wins so the reported owner cannot flip
+            // between requests as Mongo reorders documents.
+            if (auto have = email in byEmail)
+                if (asciiLowerStr(*have) <= asciiLowerStr(u.username)) continue;
+            byEmail[email] = u.username;
+        }
+    } catch (Exception e) {
+        logWarn("nickserv: loading the user email index failed: %s", e.msg);
+    }
+    return byEmail;
+}
+
+// ---------------------------------------------------------------------------
 // GET /api/admin/ircd/nickserv/accounts
 // ---------------------------------------------------------------------------
 
@@ -655,9 +745,27 @@ private void annotate(ref Json j, const PlatformRow p) {
     j["networkDisabled"] = p.networkDisabled;
 }
 
+/// Sets the two ownership keys on one row and reports whether it came out
+/// `unowned` — the number the panel headlines.
+private bool annotateOwnership(ref Json j, string account, string email,
+                               const(PlatformRow)* p, const bool[string] staffLower,
+                               const string[string] userEmails) {
+    string owner;
+    const ownership = classifyAccountOwnership(account, email, p !is null,
+                                               staffLower, userEmails, owner);
+    // A linked row already reports its owner via the platform join; the
+    // classifier only resolves the email match.
+    if (ownership == "linked" && p !is null) owner = p.username;
+    j["ownership"] = ownership;
+    j["ownerUsername"] = owner;
+    return ownership == "unowned";
+}
+
 /// GET /api/admin/ircd/nickserv/accounts — the whole account inventory,
-/// annotated with the website user that owns each account. No RPC: this is
-/// the one view Anope cannot answer.
+/// annotated with the website user that owns each account and with how that
+/// ownership was established (`ownership`/`ownerUsername`, plus the
+/// `unownedCount` roll-up). One `OperServ OPER LIST` and one users query per
+/// request, never per row.
 ///
 /// Degraded mode (no mount, path unset, unreadable file): the Mongo join
 /// alone still lists every IRC Fiber account, and `reason` tells the admin
@@ -669,12 +777,20 @@ private void annotate(ref Json j, const PlatformRow p) {
 package void apiNsAccounts(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
     auto inv = readAnopeInventory();
     auto platform = loadPlatformRows();
+    auto staff = staffAccountsLower(inv);
+    auto userEmails = loadUserEmails();
+    long unownedCount = 0;
 
     auto arr = Json.emptyArray;
     foreach (ref a; inv.accounts) {
         auto j = accountJson(a);
         auto p = a.nick.toLower() in platform;
         annotate(j, p ? *p : PlatformRow.init);
+        // An alias whose NickCore is missing has no display; the nick is
+        // then the only name it has (see anopeAccountsFromDb).
+        if (annotateOwnership(j, a.account.length ? a.account : a.nick, a.email,
+                              p, staff, userEmails))
+            unownedCount++;
         arr ~= j;
     }
     if (!inv.available) {
@@ -687,6 +803,9 @@ package void apiNsAccounts(HTTPServerRequest, HTTPServerResponse res, RedisStora
             a.account = name;
             auto j = accountJson(a);
             annotate(j, platform[name.toLower()]);
+            // Degraded rows exist *because* a network carries this account
+            // as its saslUsername, so they are linked by construction.
+            annotateOwnership(j, name, "", &platform[name.toLower()], staff, userEmails);
             arr ~= j;
         }
     }
@@ -696,6 +815,7 @@ package void apiNsAccounts(HTTPServerRequest, HTTPServerResponse res, RedisStora
     data["reason"] = inv.reason;
     data["asOf"] = inv.fileMtime;
     data["accounts"] = arr;
+    data["unownedCount"] = unownedCount;
     data["provisioning"] = provisioningJson(redis);
     jsonOk(res, data);
 }

@@ -128,7 +128,7 @@ configuration "services-test" {
     targetName "services-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/services/anope.d" "source/ircfiber/services/accounts.d"
+    sourceFiles "source/ircfiber/services/anope.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope_db.d"
     mainSourceFile "tests/services_test.d"
     versions "VibeUseFibers"
     buildOptions "unittests"

@@ -124,7 +124,11 @@ private char asciiLower(char c) @safe pure nothrow @nogc {
     return (c >= 'A' && c <= 'Z') ? cast(char)(c + ('a' - 'A')) : c;
 }
 
-private string asciiLowerStr(string s) @safe pure {
+/// ASCII lowercase. Public because the admin NickServ page joins the same
+/// values (nicks, account displays, email addresses) and must fold them
+/// identically; an email comparison in particular must not depend on Unicode
+/// case folding (`İ` lowercases to two code points).
+string asciiLowerStr(string s) @safe pure {
     bool needs = false;
     foreach (char c; s)
         if (c >= 'A' && c <= 'Z') { needs = true; break; }
@@ -134,6 +138,82 @@ private string asciiLowerStr(string s) @safe pure {
     foreach (i, char c; s) out_[i] = asciiLower(c);
     return out_.idup;
 }
+
+
+/**
+ * Who owns one NickServ account: `"staff"`, `"linked"`, `"email"` or
+ * `"unowned"`. `ownerUsername` is set only for `"email"` — a `"linked"` row
+ * already carries its owner from the platform join, and the caller keeps
+ * that value.
+ *
+ * Pure, and every input is resolved once per request, because the interesting
+ * part is the precedence and it has to be reviewable without a services
+ * connection: staff > linked > email > unowned. Staff first is the
+ * load-bearing rule — `sq` and `Zodiac` are both staff opers *and* website
+ * users, and a staff account must never be presented as unowned.
+ */
+string classifyAccountOwnership(string account, string accountEmail, bool linked,
+                                const bool[string] staffLower,
+                                const string[string] emailToUsernameLower,
+                                out string ownerUsername) @safe pure {
+    ownerUsername = "";
+    const name = asciiLowerStr(account.strip());
+    if (name.length && name in staffLower) return "staff";
+    if (linked) return "linked";
+    const email = asciiLowerStr(accountEmail.strip());
+    // An empty email is "unset", not an identity: Anope leaves `email` blank
+    // for `Bunghole` and `redlegion` on prod, and Mongo has users with no
+    // address either. Matching those to each other would invent an owner.
+    if (email.length)
+        if (auto u = email in emailToUsernameLower) {
+            ownerUsername = *u;
+            return "email";
+        }
+    return "unowned";
+}
+
+@("classifyAccountOwnership puts staff ahead of every other owner")
+unittest {
+    string owner;
+    // sq on prod: an oper block, a saslUsername link and a website email.
+    assert(classifyAccountOwnership("sq", "paigeadele@gmail.com", true,
+        ["sq": true], ["paigeadele@gmail.com": "sq"], owner) == "staff");
+    assert(owner == "");
+}
+
+@("a linked account is never reclassified by its email")
+unittest {
+    string owner;
+    assert(classifyAccountOwnership("quark", "casters@icloud.com", true,
+        null, ["casters@icloud.com": "someone-else"], owner) == "linked");
+    // The platform join owns this value for a linked row.
+    assert(owner == "");
+}
+
+@("the email fallback matches case-insensitively and names the owner")
+unittest {
+    string owner;
+    assert(classifyAccountOwnership("kfnFiber", "Sorter.Bristle_1C@iCloud.COM", false,
+        ["zodiac": true], ["sorter.bristle_1c@icloud.com": "kfn"], owner) == "email");
+    assert(owner == "kfn");
+}
+
+@("an account with no email does not match a user with no email")
+unittest {
+    string owner;
+    assert(classifyAccountOwnership("Bunghole", "   ", false,
+        null, ["": "nobody", "someone@example.com": "someone"], owner) == "unowned");
+    assert(owner == "");
+}
+
+@("an account nothing can be tied to is unowned")
+unittest {
+    string owner;
+    assert(classifyAccountOwnership("dnsk", "shusky.canine@protonmail.com", false,
+        ["zodiac": true, "sq": true], ["other@example.com": "other"], owner) == "unowned");
+    assert(owner == "");
+}
+
 
 /// ASCII case-insensitive ordering, for the inventory sort.
 private int asciiICmp(string a, string b) @safe pure nothrow @nogc {

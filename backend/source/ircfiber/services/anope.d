@@ -422,6 +422,100 @@ bool anopeAccessDenied(const AnopeReply r) @safe pure {
     return denied(r.text) || denied(r.rawText);
 }
 
+/// ASCII lowercase. Account displays and nicks are ASCII on IRC, and the
+/// caller's set lookups must not depend on Unicode case folding.
+private string asciiLowerStr(string s) @safe pure {
+    char[] res;
+    res.length = s.length;
+    foreach (i, char c; s)
+        res[i] = (c >= 'A' && c <= 'Z') ? cast(char)(c + ('a' - 'A')) : c;
+    return res.idup;
+}
+
+/**
+ * Pull the account names out of an `OperServ OPER LIST` reply. Feed it
+ * `AnopeReply.rawText`; the reply is line-oriented.
+ *
+ * Observed shape on anope/anope:2.0.20 (probe: `command OperServ admin
+ * "OPER LIST"`):
+ *
+ *     Name     Type
+ *     sq       Services Root
+ *        This oper is configured in the configuration file.
+ *        sq is online using this oper block.
+ *     admin    Services Root
+ *        This oper is configured in the configuration file.
+ *
+ * so a row is a line starting in column 0 whose first token is the name and
+ * whose second column is the opertype; the indented lines are `os_oper`'s
+ * per-entry annotations. Parsed positionally, never by matching the prose,
+ * because every one of those strings is translatable.
+ *
+ * The first non-empty line is `ListFormatter`'s header and is dropped
+ * unconditionally. That is also what makes every single-line refusal
+ * (`Access denied.`, `There are no Services Operators.`) come out as the
+ * empty set instead of as an account called "Access" or "There".
+ */
+private string[] parseOperListNames(string rawText) @safe pure {
+    import std.string : splitLines;
+
+    string[] names;
+    bool headerSeen = false;
+    foreach (line; rawText.splitLines()) {
+        if (!line.strip().length) continue;
+        if (!headerSeen) {
+            headerSeen = true;
+            continue;
+        }
+        if (line[0] == ' ' || line[0] == '\t') continue;
+        size_t i = 0;
+        while (i < line.length && line[i] != ' ' && line[i] != '\t') i++;
+        // No second column → not a list row (a wrapped Syntax:/help line).
+        if (i == 0 || i >= line.length) continue;
+        names ~= asciiLowerStr(line[0 .. i]);
+    }
+    return names;
+}
+
+/**
+ * The nicks Anope has tied to an opertype, ASCII-lowercased — the "this is
+ * staff, never offer to drop it" oracle for the admin inventory.
+ *
+ * NOT the `opers` XML-RPC method, despite the name: probed against our own
+ * 2.0.20 (`<methodName>opers</methodName>`, no params) it answers one struct
+ * member per *opertype* — member name `Services Root` / `Services
+ * Administrator` / `Services Operator` / `Helper`, value that type's command
+ * and priv list. No account appears in that reply at all, so it cannot
+ * identify a staff account. `OperServ OPER LIST` (`os_oper.cpp`) does, and
+ * covers config-file opers as well as `OPER ADD` ones.
+ *
+ * The names are *nicks*: Anope resolves `oper { name = }` through
+ * `NickAlias::Find`, and `OPER LIST` prints the configured name verbatim. On
+ * prod that means `admin`, whose account display is `Zodiac` — so a caller
+ * comparing against account displays MUST resolve the alias itself.
+ *
+ * Never throws and never reports failure: an unreachable Anope, a missing
+ * oper account or a refused command all yield an empty set, and the caller
+ * degrades to "nobody is staff" (a false droppable flag on a report page)
+ * rather than to an error.
+ */
+bool[string] anopeOperAccounts(AnopeSettings s) {
+    bool[string] names;
+    if (!s.hasOper) return names;
+    auto r = anopeQuery(s, "OperServ", s.operAccount, "OPER LIST");
+    if (!r.transportOk) {
+        logWarn("anope rpc: OPER LIST failed, treating nobody as staff: %s", r.transportError);
+        return names;
+    }
+    if (anopeAccessDenied(r)) {
+        logWarn("anope rpc: OPER LIST refused — %s holds no operserv/oper priv", s.operAccount);
+        return names;
+    }
+    foreach (name; parseOperListNames(r.rawText))
+        if (name.length) names[name] = true;
+    return names;
+}
+
 /**
  * The `SASET PASSWORD` command line for `nick`.
  *

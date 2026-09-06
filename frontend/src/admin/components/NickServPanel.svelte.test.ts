@@ -16,6 +16,9 @@
  *  9. Users with no NickServ account are listed and can be given one: the
  *     suggested nick can be overridden, and a free nick can be registered
  *     for a user straight from the manage card.
+ * 10. Ownership: an account no platform user can be tied to is badged, the
+ *     filter narrows the table to exactly those rows, and a gateway that
+ *     does not report ownership renders no badges at all.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -582,5 +585,97 @@ describe('NickServPanel.svelte — NickServ account management', () => {
     await page.getByTestId('ns-create-u-4').click();
     await expect.element(page.getByText(/already registered\. Link it to dave/)).toBeInTheDocument();
     expect(unprovRows().length).toBe(2);
+  });
+
+  // ── ownership visibility ──────────────────────────────────────────────────
+  // Anope holds accounts that predate credential linking, so "not linked" is
+  // not the same as "nobody owns it". Only `unowned` rows are safe-to-consider
+  // drop candidates, and even then a human decides: prod has an unowned
+  // account whose owner was seen online on IRC.
+
+  /// One row per ownership state, in the shape the gateway sends.
+  const ownershipFixture = () => ({
+    available: true,
+    reason: '',
+    asOf: 1788681000,
+    unownedCount: 1,
+    accounts: [
+      nsAccount({ nick: 'alice', account: 'alice', ownership: 'linked', ownerUsername: 'alice' }),
+      nsAccount({
+        nick: 'Zodiac', account: 'Zodiac', userId: '', username: '', networkId: '',
+        ownership: 'staff', ownerUsername: '',
+      }),
+      nsAccount({
+        nick: 'kfnFiber', account: 'kfnFiber', email: 'kfn@example.com',
+        userId: '', username: '', networkId: '',
+        ownership: 'email', ownerUsername: 'kfn',
+      }),
+      nsAccount({
+        nick: 'dnsk', account: 'dnsk', email: 'dnsk@example.com',
+        userId: '', username: '', networkId: '',
+        ownership: 'unowned', ownerUsername: '',
+      }),
+    ],
+    provisioning: provisioningFixture(),
+  });
+
+  function mockOwnership(over: Record<string, unknown> = {}) {
+    mockedGet.mockImplementation((path: string) => {
+      if (path === ACCOUNTS) return Promise.resolve({ ...ownershipFixture(), ...over });
+      if (path === ACCOUNT) return Promise.resolve(infoFixture());
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      return Promise.reject(new Error('unexpected GET ' + path));
+    });
+  }
+
+  it('badges each account with the evidence that ties it to a person', async () => {
+    mockOwnership();
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(4));
+
+    const row = (nick: string) => bodyRows().find((r) => r.textContent?.includes(nick))!;
+    expect(row('dnsk').textContent).toContain('No platform user');
+    expect(row('Zodiac').textContent).toContain('Staff');
+    expect(row('alice').textContent).toContain('Linked');
+    // The email match has no credential, so its owner is only readable here.
+    expect(row('kfnFiber').textContent).toContain('Same email');
+    expect(row('kfnFiber').textContent).toContain('kfn');
+
+    const badge = page.getByTestId('ns-ownership-dnsk').element();
+    expect(badge.getAttribute('title')).toBe(
+      'No IRC Fiber account matches this NickServ account. Dropping it deletes a nick that may still be in use.',
+    );
+  });
+
+  it('the unowned filter keeps only rows nobody can be traced from', async () => {
+    mockOwnership();
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(4));
+    // The count is the gateway's, not a client-side tally of the loaded page.
+    expect(page.getByTestId('ns-unowned-count').element().textContent?.trim()).toBe('1');
+
+    await page.getByLabelText('Only accounts with no platform user').click();
+    await vi.waitFor(() => expect(bodyRows().length).toBe(1));
+    expect(bodyRows()[0].textContent).toContain('dnsk');
+
+    await page.getByLabelText('Only accounts with no platform user').click();
+    await vi.waitFor(() => expect(bodyRows().length).toBe(4));
+  });
+
+  /// The gateway may be older than the ownership fields. Guessing "unowned"
+  /// from their absence would badge every account as a drop candidate.
+  it('renders no ownership badge or filter when the gateway omits the fields', async () => {
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(2));
+
+    expect(document.querySelectorAll('[data-testid^="ns-ownership-"]').length).toBe(0);
+    expect(document.querySelector('[data-testid="ns-unowned-count"]')).toBeNull();
+    expect(
+      document.querySelector('input[aria-label="Only accounts with no platform user"]'),
+    ).toBeNull();
+    // Unchanged layout: "Website user" is still the third column.
+    const victim = bodyRows().find((r) => r.textContent?.includes('nsvictim'))!;
+    expect(victim.children[2].textContent?.trim()).toBe('—');
+    expect(bodyRows()[0].textContent).not.toContain('No platform user');
   });
 });

@@ -16,6 +16,13 @@
    * Accounts owned by a website user are annotated with that user, because
    * suspending/dropping/resetting one of those also changes what the engine
    * authenticates with.
+   *
+   * The Ownership column states how each account was tied to a person, so
+   * drift between Anope and Mongo is visible instead of inferred: most
+   * accounts predate credential linking, and dropping one nobody can be
+   * traced to is the one irreversible mistake here. Nothing on this page
+   * drops an account in bulk — the per-account Drop button stays the only
+   * way, deliberately.
    */
   import { onMount } from 'svelte';
   import Card from './Card.svelte';
@@ -31,6 +38,17 @@
     suspendedAt: number; suspendExpiresAt: number;
     userId: string; username: string; userEmail: string;
     networkId: string; networkNick: string; networkDisabled: boolean;
+    /// How the gateway tied this account to a person: an Anope oper block
+    /// (`staff`), a saslUsername credential (`linked`), a matching account
+    /// email with no credential (`email`), or nothing at all (`unowned`).
+    /// Optional because a gateway older than this field answers without it,
+    /// and a row nobody can classify must not read as unowned — prod has an
+    /// unowned account whose owner was seen online on IRC.
+    ownership?: 'staff' | 'linked' | 'email' | 'unowned';
+    /// The person behind `ownership`; '' when unknown. Carries the matched
+    /// user for `email` rows, where `userId`/`username` are empty because no
+    /// credential links them.
+    ownerUsername?: string;
   }
   /// How provisioning itself is going. `pendingOrphans`, `skipMarkers` and
   /// `unprovisioned` are `-1` when the gateway could not read that source.
@@ -42,6 +60,7 @@
   interface NsAccountsResponse {
     available: boolean; reason: string; asOf: number; accounts: NsAccount[];
     provisioning?: NsProvisioning;
+    unownedCount?: number;
   }
   interface NsPlatform { userId: string; username: string; networkId: string; }
   interface NsInfo {
@@ -80,23 +99,39 @@
   let creating = $state('');
 
   let filter = $state('');
+  /// Narrows the table to accounts no platform user can be tied to — the only
+  /// rows where Drop has nobody to ask first. Off by default: it hides most of
+  /// the inventory.
+  let onlyUnowned = $state(false);
+  /// How many rows the gateway itself classified as unowned, or null when it
+  /// does not report ownership at all (older gateway). 0 is a real answer and
+  /// must still be shown, so absence cannot be spelled as a number.
+  let unownedCount = $state<number | null>(null);
   let page = $state(1);
   const pageSize = 25;
 
+  /// Whether this response carries ownership at all. Drives the badge and the
+  /// filter row: an older gateway sends neither, and inventing "unowned" for
+  /// every row would turn silence into an accusation.
+  const hasOwnership = $derived(accounts.some((a) => !!a.ownership));
+
   const filtered = $derived.by(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return accounts;
-    return accounts.filter(
+    let rows = accounts;
+    if (onlyUnowned && hasOwnership) rows = rows.filter((a) => a.ownership === 'unowned');
+    if (!q) return rows;
+    return rows.filter(
       (a) =>
         a.nick.toLowerCase().includes(q) ||
         a.account.toLowerCase().includes(q) ||
         a.email.toLowerCase().includes(q) ||
-        a.username.toLowerCase().includes(q),
+        a.username.toLowerCase().includes(q) ||
+        (a.ownerUsername ?? '').toLowerCase().includes(q),
     );
   });
   const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
   const paged = $derived(filtered.slice((page - 1) * pageSize, page * pageSize));
-  $effect(() => { void filter; page = 1; });
+  $effect(() => { void filter; void onlyUnowned; page = 1; });
   $effect(() => { if (page > totalPages) page = totalPages; });
 
   let lookupNick = $state('');
@@ -171,6 +206,35 @@
     if (name === 'deferred') return 'text-amber-500';
     return 'text-muted';
   }
+  /// Ownership evidence, one badge per state. The wording states the evidence
+  /// rather than a verdict: `email` is a probable owner with no credential
+  /// (13 of Anope's accounts predate saslUsername linking), while `unowned`
+  /// is the only state where Drop destroys a nick with nobody to ask — one
+  /// such account's owner was seen online on IRC — so it alone reads as a
+  /// warning. `staff` holds an oper block and is never a drop candidate.
+  const ownershipBadges = {
+    staff: {
+      label: 'Staff',
+      title: 'Holds an Anope oper block — never dropped.',
+      tone: 'bg-surface-2 text-muted',
+    },
+    linked: {
+      label: 'Linked',
+      title: "Credential stored on this user's IRC Fiber network.",
+      tone: 'bg-surface-2 text-muted',
+    },
+    email: {
+      label: 'Same email',
+      title: "Registered under this user's account email; not linked as a credential.",
+      tone: 'bg-warn/5 text-amber-500',
+    },
+    unowned: {
+      label: 'No platform user',
+      title:
+        'No IRC Fiber account matches this NickServ account. Dropping it deletes a nick that may still be in use.',
+      tone: 'bg-danger/10 text-danger',
+    },
+  } as const;
 
   onMount(() => {
     void loadAccounts();
@@ -187,6 +251,7 @@
       reason = r.reason ?? '';
       asOf = r.asOf ?? 0;
       provisioning = r.provisioning ?? null;
+      unownedCount = typeof r.unownedCount === 'number' ? r.unownedCount : null;
     } catch (e) {
       listError = errMsg(e);
     } finally {
@@ -689,7 +754,7 @@
     <p class="mb-3 text-xs text-amber-500">{reason} · Showing IRC Fiber accounts only.</p>
   {/if}
 
-  <div class="mb-3 flex items-center gap-2">
+  <div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
     <input
       type="search"
       bind:value={filter}
@@ -701,6 +766,30 @@
       <button type="button" onclick={() => (filter = '')} class="text-xs text-muted hover:text-text">
         Clear
       </button>
+    {/if}
+    <!--
+      Ownership is only offered when the gateway reports it: without the field
+      every row would match "no platform user" and the filter would lie.
+    -->
+    {#if hasOwnership}
+      <label class="flex items-center gap-2 text-xs text-muted">
+        <input
+          type="checkbox"
+          bind:checked={onlyUnowned}
+          aria-label="Only accounts with no platform user"
+        />
+        Only accounts with no platform user
+      </label>
+      {#if unownedCount !== null}
+        <span
+          data-testid="ns-unowned-count"
+          class="rounded px-2 py-0.5 text-xs font-semibold {unownedCount > 0
+            ? 'bg-danger/10 text-danger'
+            : 'bg-surface-2 text-muted'}"
+        >
+          {unownedCount}
+        </span>
+      {/if}
     {/if}
   </div>
 
@@ -719,6 +808,9 @@
             <th class="py-2 pr-4">Nick</th>
             <th class="py-2 pr-4">Account</th>
             <th class="py-2 pr-4">Website user</th>
+            {#if hasOwnership}
+              <th class="py-2 pr-4">Ownership</th>
+            {/if}
             <th class="py-2 pr-4">Email</th>
             <th class="py-2 pr-4">Registered</th>
             <th class="py-2 pr-4">Last seen</th>
@@ -740,6 +832,30 @@
                   <span class="text-muted">—</span>
                 {/if}
               </td>
+              {#if hasOwnership}
+                <td class="py-2 pr-4">
+                  {#if a.ownership}
+                    {@const badge = ownershipBadges[a.ownership]}
+                    <span
+                      data-testid="ns-ownership-{a.nick}"
+                      title={badge.title}
+                      class="whitespace-nowrap rounded px-2 py-0.5 text-xs font-semibold {badge.tone}"
+                    >
+                      {badge.label}
+                    </span>
+                    <!--
+                      An `email` match has no credential, so the Website-user
+                      column above is empty for it; the matched user is only
+                      visible here.
+                    -->
+                    {#if a.ownership === 'email' && a.ownerUsername}
+                      <div class="mt-0.5 text-xs text-muted">{a.ownerUsername}</div>
+                    {/if}
+                  {:else}
+                    <span class="text-muted">—</span>
+                  {/if}
+                </td>
+              {/if}
               <td class="max-w-[14rem] truncate py-2 pr-4 text-muted">{a.email || '—'}</td>
               <td class="py-2 pr-4 text-xs text-muted">{fmtTime(a.registeredAt)}</td>
               <td class="py-2 pr-4 text-xs text-muted">{fmtTime(a.lastSeenAt)}</td>
