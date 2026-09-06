@@ -83,7 +83,7 @@ options
 	languages = "ca_ES.UTF-8 de_DE.UTF-8 el_GR.UTF-8 es_ES.UTF-8 fr_FR.UTF-8 hu_HU.UTF-8 it_IT.UTF-8 nl_NL.UTF-8 pl_PL.UTF-8 pt_PT.UTF-8 ru_RU.UTF-8 tr_TR.UTF-8"
 }
 
-/* Pseudo-clients. BotServ is intentionally not loaded. */
+/* Pseudo-clients. */
 
 /*
  * Like os_session below, this MUST precede its example include — Anope
@@ -109,6 +109,28 @@ module
 	always_lower_ts = no
 }
 include { type = "file"; name = "chanserv.example.conf" }
+
+/*
+ * Same first-block-wins override as chanserv above. Every value matches
+ * botserv.example.conf except `minusers`: at the example's 1, an assigned
+ * bot parts as soon as the channel empties and rejoins when someone
+ * arrives. At 0 it "will not part unless specifically unassigned, and
+ * will keep the channel open" — which is what we want for channels that
+ * are permanent anyway (+P), and stops the bot flapping in and out of a
+ * quiet channel.
+ *
+ * Loading BotServ does not create any bots. bs_autoassign ships commented
+ * out, so nothing happens until an oper runs `BOT ADD` and `ASSIGN`.
+ */
+module
+{
+	name = "botserv"
+	client = "BotServ"
+	defaults = "greet fantasy"
+	minusers = 0
+	botmodes = "ao"
+}
+include { type = "file"; name = "botserv.example.conf" }
 include { type = "file"; name = "global.example.conf" }
 include { type = "file"; name = "hostserv.example.conf" }
 include { type = "file"; name = "memoserv.example.conf" }
