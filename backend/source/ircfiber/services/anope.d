@@ -283,22 +283,22 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
     auto settings = new HTTPClientSettings;
     settings.connectTimeout = s.timeoutSeconds.seconds;
     settings.readTimeout = s.timeoutSeconds.seconds;
-    // One fresh connection per call, because m_httpd's answers stop making
-    // sense once a connection has served one request. Observed 2026-09-06
-    // on prod: an account deletion's ownership `INFO` returned 200 and the
-    // `DROP` right behind it came back HTTP 404 with an 18-byte body
-    // ("Unrecognized page"), leaving the NickServ account standing. Reads
-    // hide that because `anopePostIdempotent` retries; single-shot
-    // mutations do not, which is why it surfaced there first. With reuse
-    // off, that INFO-then-DROP sequence has been verified working end to
-    // end against prod.
+    // One request per connection, forced on the request header below.
+    // `defaultKeepAliveTimeout = 0` was the obvious knob and it does NOT
+    // work: prod kept logging `Connection closed while writing` and 404s
+    // with an 18-byte body ("Unrecognized page") after it was deployed.
+    // vibe.d writes `Connection: keep-alive` itself (client.d:727) and then
+    // derives `close_conn` from whatever the requester left in that header
+    // (client.d:750), so the header is the lever that actually decides.
     //
-    // NOT a complete theory of the 404s: `checkAuthentication` still
-    // answers 404 to this client (twice in a row, so not a stale pooled
-    // connection) while curl gets 200 for the identical body, chunked or
-    // not, on the same socket. That one is still open, and it is why
-    // provisioning leaves orphan pending credentials.
-    settings.defaultKeepAliveTimeout = 0.seconds;
+    // Why it matters: m_httpd is a hand-rolled server that does not serve a
+    // second request on a connection. Reusing one makes it read the next
+    // POST body as a request line — hence "Unrecognized page" rather than
+    // an XML fault — or, if it closed first, the write fails outright.
+    // Observed 2026-09-06: a deletion's ownership `INFO` answered 200 and
+    // the `DROP` behind it 404'd, leaving the account standing; and every
+    // provisioning `checkAuthentication` failed the same way, which is what
+    // produced prod's 10 orphan pending credentials.
     // No address-family pin: the listener binds `::` (see the httpd block in
     // services.conf.j2), which on Linux accepts IPv4 too, so either record of
     // the dual-stack `services` alias works.
@@ -309,6 +309,7 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
         requestHTTP(s.rpcUrl,
             (scope HTTPClientRequest req) {
                 req.method = HTTPMethod.POST;
+                req.headers["Connection"] = "close";
                 req.headers["Content-Type"] = "text/xml";
                 req.bodyWriter.write(cast(const(ubyte)[]) payload);
             },

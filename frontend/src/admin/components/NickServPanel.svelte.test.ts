@@ -438,7 +438,13 @@ describe('NickServPanel.svelte — NickServ account management', () => {
     await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(USERS, { q: 'bob' }));
 
     await page.getByRole('button', { name: 'Link account' }).click();
-    await expect.element(page.getByText('Link and generate a new password?')).toBeInTheDocument();
+    // Both sides named: the account whose password rotates AND the user it
+    // is being given to, so a Manage press one row off is visible here.
+    await expect.element(
+      page.getByText('Link nsvictim and generate a new password?'),
+    ).toBeInTheDocument();
+    await expect.element(page.getByText(/nsvictim becomes bob's SASL credential/)).toBeInTheDocument();
+    await expect.element(page.getByText(/supply the existing password to link without changing it/)).toBeInTheDocument();
     expect(api.post).not.toHaveBeenCalled();
 
     await page.getByRole('button', { name: 'Generate and link' }).click();

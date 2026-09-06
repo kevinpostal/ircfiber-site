@@ -162,6 +162,14 @@
   let linkConflict = $state<string | null>(null);
   let confirmLinkRotate = $state(false);
   let confirmUnlink = $state(false);
+  // The selected user's name, for the confirmations. Both dialogs used to
+  // name only the NickServ account, and the account is whichever row's
+  // Manage was pressed — one row off in a table where `sq` sits directly
+  // above `TL` is enough to rotate the wrong person's password. Naming both
+  // sides makes a mis-click visible before it is confirmed.
+  const linkTargetName = $derived(
+    linkResults.find((u) => u.id === linkUserId)?.username ?? ''
+  );
 
   /// `ns_info` emits labels in a fixed order; anything Anope adds later is
   /// appended rather than dropped. The suspension labels are the ones
@@ -1044,7 +1052,9 @@
       </div>
     {:else}
       <div class="mt-3 border-t border-border/40 pt-3">
-        <h4 class="text-xs font-semibold text-heading">Link to an IRC Fiber user</h4>
+        <h4 class="text-xs font-semibold text-heading">
+          Link <span class="font-mono">{infoNick}</span> to an IRC Fiber user
+        </h4>
         <p class="mt-0.5 text-xs text-muted">
           Writes this account as the user's SASL credential and reconnects their session. Leave
           the password blank to generate a new one; supply the existing password to link without
@@ -1205,8 +1215,8 @@
 <ConfirmDialog
   open={confirmLinkRotate}
   tone="warn"
-  title="Link and generate a new password?"
-  message={`No existing password was supplied, so a new one is generated for ${infoNick} and shown once. Anyone using the old password — including the account's owner — stops being able to identify.`}
+  title={`Link ${infoNick} and generate a new password?`}
+  message={`${infoNick} becomes ${linkTargetName || 'the selected user'}'s SASL credential. No existing password was supplied, so a new one is generated for ${infoNick} and shown once: anyone using the old password — including ${infoNick}'s owner — stops being able to identify. Cancel and supply the existing password to link without changing it.`}
   confirmLabel="Generate and link"
   onConfirm={() => link()}
   onCancel={() => (confirmLinkRotate = false)}
