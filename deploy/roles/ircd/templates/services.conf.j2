@@ -84,6 +84,30 @@ options
 }
 
 /* Pseudo-clients. BotServ is intentionally not loaded. */
+
+/*
+ * Like os_session below, this MUST precede its example include — Anope
+ * keeps the first module block by a given name. Every value matches
+ * chanserv.example.conf except `defaults`, which drops cs_secure: with it,
+ * a channel's access list only counts users who are identified to
+ * NickServ. Note this applies to newly registered channels only; existing
+ * ones keep whatever they were registered with (ircd_channel_setup.py
+ * turns SECURE off explicitly on the staff channels).
+ */
+module
+{
+	name = "chanserv"
+	client = "ChanServ"
+	defaults = "keeptopic peace securefounder signkick"
+	maxregistered = 20
+	accessmax = 1024
+	inhabit = 15s
+	reasonmax = 200
+	signkickformat = "%m (%n)"
+	disallow_hostmask_access = no
+	disallow_channel_access = no
+	always_lower_ts = no
+}
 include { type = "file"; name = "chanserv.example.conf" }
 include { type = "file"; name = "global.example.conf" }
 include { type = "file"; name = "hostserv.example.conf" }

@@ -370,28 +370,36 @@ def setup_channel(session: IrcSession, spec: dict, account: str) -> bool:
         changed = True
 
     # Channel options: (command, name Anope prints in INFO's `Options:`
-    # line, phrase it confirms with). The three differ per option —
-    # KEEPTOPIC shows up as "Topic retention", and NOEXPIRE answers
-    # "will not expire" rather than "is now on" — and matching the INFO
-    # name keeps the run idempotent instead of re-setting every deploy.
+    # line, whether it should be on, phrase ChanServ confirms with). All
+    # three parts vary per option — KEEPTOPIC shows up as "Topic
+    # retention", cs_secure as "Security", and NOEXPIRE answers "will not
+    # expire" rather than "is now on" — and matching the INFO name is what
+    # keeps the run idempotent instead of re-setting on every deploy.
+    #
+    # SECURE is turned off rather than merely left out of the chanserv
+    # module's `defaults`: that directive only applies to channels at
+    # registration time, so it would never reach one already registered.
     options = info.get("options", "").lower()
     wanted = [
-        ("KEEPTOPIC", "topic retention", "is now on"),
-        ("SECUREOPS", "secure ops", "is now on"),
-        ("NOEXPIRE", "no expire", "will not expire"),
+        ("KEEPTOPIC", "topic retention", True, "is now on"),
+        ("SECUREOPS", "secure ops", True, "is now on"),
+        ("NOEXPIRE", "no expire", True, "will not expire"),
+        ("SECURE", "security", False, "is now off"),
     ]
-    for command, needle, confirmation in wanted:
-        if needle in options:
+    for command, needle, want_on, confirmation in wanted:
+        if (needle in options) == want_on:
             continue
+        value = "ON" if want_on else "OFF"
         # Anope's grammar is `SET <option> <channel> <value>`. With the
         # channel first ChanServ answers "Syntax: SET option channel
         # parameters" and changes nothing — so anything but the explicit
         # confirmation has to be treated as a failure.
         reply = service_reply(session, "ChanServ",
-                              f"SET {command} {channel} ON", 4.0)
+                              f"SET {command} {channel} {value}", 4.0)
         if not matches(reply, confirmation):
-            raise IrcError(f"ChanServ SET {command} {channel} failed: {reply}")
-        log(f"{channel}: {command} ON")
+            raise IrcError(
+                f"ChanServ SET {command} {channel} {value} failed: {reply}")
+        log(f"{channel}: {command} {value}")
         changed = True
 
     topic = spec.get("topic") or ""
