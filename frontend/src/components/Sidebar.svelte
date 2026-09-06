@@ -115,6 +115,9 @@
 
   function handleFinalize(e: CustomEvent<DndEvent<DragItem>>): void {
     dragActive = false;
+    // The pointer is wherever the drop happened, not necessarily on a
+    // header, so re-arm the handle gate rather than leaving the zone hot.
+    overNetworkHandle = false;
     (e.currentTarget as HTMLElement).classList.remove('dragging');
     const items = e.detail.items;
     const nets = items.map(i => i.net);
@@ -133,8 +136,46 @@
     updateNetworkOrder(order).catch(err => console.error('Failed to persist network order:', err));
   }
 
-  // Drag-to-reorder is always active via svelte-dnd-action below.
-  // A quick click selects the network; a click+hold+drag reorders it.
+  /**
+   * IRCCloud's connection list is a jQuery UI sortable with a HANDLE, and
+   * the handle is the server header only:
+   *
+   *   renderConnectionSortable: this.$el.sortable({revert:100,
+   *     scrollSensitivity:20, scrollSpeed:20, cursorAt:{top:17},
+   *     distance:5, axis:"y", cursor:"move", opacity:.7,
+   *     handle:"h2.buffer"})
+   *
+   * (common-5650bddb.js @717158; live DOM confirms only the 7 `h2.buffer`
+   * headers carry `ui-sortable-handle` while all 36 plain `li.buffer`
+   * channel rows carry none. Their pinned list — the one sortable that
+   * does drag channel rows — passes no handle, so there the whole name row
+   * is the grip.)
+   *
+   * Our dnd items are the whole `.network.connection` block, channel list
+   * included, so without a handle a press anywhere in it reordered the
+   * server: grabbing a channel name dragged its entire network. This is
+   * the handle. svelte-dnd-action has no `handle` option, so drag is
+   * disabled for the zone unless the pointer is over a `.network-header`
+   * — the press lands on the header or it is not a drag at all.
+   *
+   * The library's own start threshold is a fixed
+   * MIN_MOVEMENT_BEFORE_DRAG_START_PX = 3 rather than IRCCloud's
+   * `distance: 5`; it is not configurable, and 3px past the header is not
+   * the accident being reported.
+   */
+  let overNetworkHandle = $state(false);
+  const netDragDisabled = $derived(
+    dragLocked || (!ircState.reorderMode && !overNetworkHandle && !dragActive)
+  );
+
+  function handleEnter(): void {
+    overNetworkHandle = true;
+  }
+  function handleLeave(): void {
+    // Leaving the header mid-drag is normal — the pointer moves away from
+    // the row it grabbed. Disabling the zone then would cancel the drag.
+    if (!dragActive) overNetworkHandle = false;
+  }
 
   function uniqueBuffersByName<T extends { name: string }>(buffers: T[]): T[] {
     // Compare via normalizeChannelName so "#autism" and "autism" collapse
@@ -288,7 +329,7 @@
           items: dragList,
           flipDurationMs: 150,
           type: 'network-order',
-          dragDisabled: dragLocked,
+          dragDisabled: netDragDisabled,
           transformDraggedElement: (el) => {
             // IRCCloud: the dragged server header has NO visual feedback —
             // no border, no shadow, no highlight tint, and no channel list.
@@ -322,11 +363,15 @@
            class:connecting={!net.connected && net.connectionState === 'connecting'}
            class:collapsed class:totalUnread class:activeTotalBadge={totalBadge > 0}
            data-network-id={net.networkId}>
+        <!-- The one grip for reordering this server, mirroring IRCCloud's
+             `handle: "h2.buffer"` — see netDragDisabled. -->
         <div class="network-header buffer"
             class:active={isActiveNet}
             class:collapsed={collapsedMap[net.networkId]}
             role="button"
             tabindex="0"
+            onmouseenter={handleEnter}
+            onmouseleave={handleLeave}
             onclick={() => onSwitchBuffer(net.networkId, '_server')}
             ondblclick={() => { if (collapsedMap[net.networkId]) { collapsedMap[net.networkId] = false; setStorageItem('ircfiber:collapsed', collapsedMap); void updateCollapsed(net.networkId, false).catch(() => {}); } }}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSwitchBuffer(net.networkId, '_server'); } }}>
