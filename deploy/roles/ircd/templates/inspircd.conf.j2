@@ -103,6 +103,64 @@
 {% endif %}
          modes="+x">
 
+# Loopback (127.0.0.1 / ::1) — the container's own healthcheck, and nothing
+# else: only a process inside the ircd container can source from loopback, so
+# exempting it grants the network nothing.
+#
+# A probe that opens a TCP connection to the client port is indistinguishable
+# from an attack to m_connectban. At threshold=32 the 30s healthcheck tripped
+# it every ~15.5 minutes, Z-lining 127.0.0.1 for 6h, which then re-armed on
+# expiry and spammed every oper with ANNOUNCEMENT + REMOTEXLINE notices in a
+# permanent ~6h loop. This is the identical failure the ircfiber-engine-v6
+# block above documents — a source matching no earlier allow falls into
+# "main" and gets throttled — so the fix is the same: give it a class.
+#
+# MUST stay above "main": connect classes match in file order and main's
+# allow="*" would otherwise claim loopback first. That ordering is also why
+# these cannot use parent="main" (a parent must already be defined), hence
+# the explicit field list mirroring main.
+<connect name="localhost"
+         allow="127.0.0.1"
+         maxchans="{{ ircd_max_channels_per_account }}"
+         timeout="60"
+         pingfreq="2m"
+         hardsendq="1M"
+         softsendq="512K"
+         recvq="8K"
+         threshold="10"
+         commandrate="1000"
+         fakelag="yes"
+         localmax="8"
+         globalmax="8"
+         limit="8"
+         resolvehostnames="no"
+         useident="no"
+         usednsbl="no"
+         useconnectban="no"
+         useconnflood="no"
+         modes="+x">
+
+<connect name="localhost-v6"
+         allow="::1"
+         maxchans="{{ ircd_max_channels_per_account }}"
+         timeout="60"
+         pingfreq="2m"
+         hardsendq="1M"
+         softsendq="512K"
+         recvq="8K"
+         threshold="10"
+         commandrate="1000"
+         fakelag="yes"
+         localmax="8"
+         globalmax="8"
+         limit="8"
+         resolvehostnames="no"
+         useident="no"
+         usednsbl="no"
+         useconnectban="no"
+         useconnflood="no"
+         modes="+x">
+
 # Everyone else (direct public connections to {{ ircd_port_plain }}/{{ ircd_port_tls }}).
 <connect name="main"
          allow="*"

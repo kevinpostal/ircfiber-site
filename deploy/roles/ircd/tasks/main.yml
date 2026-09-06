@@ -129,6 +129,13 @@
     - { src: motd.j2, dest: motd }
   loop_control:
     label: "{{ item.dest }}"
+  # Tagged so the config can be re-rendered and rehashed on its own:
+  #   ansible-playbook -l <host> playbooks/ircd.yml -t ircdconf
+  # A full role run would also reconcile the container spec and therefore
+  # RECREATE the ircd, disconnecting every user on the network. SIGHUP rehash
+  # (see the handler) applies config with nobody dropped, so config-only
+  # changes must never need a window.
+  tags: [ircdconf]
   notify: Rehash ircd
 
 - name: Render Anope config
