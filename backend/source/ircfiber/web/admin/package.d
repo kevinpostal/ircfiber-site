@@ -41,7 +41,8 @@ import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
     apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig;
 import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
-    apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink;
+    apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink,
+    apiNsUnprovisioned, apiNsCreate;
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
@@ -200,6 +201,8 @@ final class AdminController {
         router.post("/api/admin/ircd/nickserv/logout", &adminWrap!apiNsLogoutRoute);
         router.post("/api/admin/ircd/nickserv/link", &adminWrap!apiNsLinkRoute);
         router.post("/api/admin/ircd/nickserv/unlink", &adminWrap!apiNsUnlinkRoute);
+        router.get("/api/admin/ircd/nickserv/unprovisioned", &adminWrap!apiNsUnprovisionedRoute);
+        router.post("/api/admin/ircd/nickserv/create", &adminWrap!apiNsCreateRoute);
 
         // Logs (SigNoz) — gateway-side proxy so the browser needs no
         // SigNoz route or key of its own (see web.admin.logs).
@@ -272,6 +275,14 @@ private:
     }
     void apiNsUnlinkRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiNsUnlink(req, res, redis, serverRegistry);
+    }
+    // The unprovisioned list reads the skip markers; creating an account runs
+    // the provisioner, which writes the credential and reconnects the engine.
+    void apiNsUnprovisionedRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNsUnprovisioned(req, res, redis);
+    }
+    void apiNsCreateRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNsCreate(req, res, redis, serverRegistry);
     }
     void apiDashboardRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiDashboard(req, res, redis, serverRegistry);

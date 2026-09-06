@@ -13,6 +13,9 @@
  *  8. Provisioning faults (orphan pending credentials, users with no
  *     credential) are called out; a healthy provisioner raises no alarm; an
  *     unreadable count reads "unknown" rather than a reassuring zero.
+ *  9. Users with no NickServ account are listed and can be given one: the
+ *     suggested nick can be overridden, and a free nick can be registered
+ *     for a user straight from the manage card.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -46,6 +49,8 @@ vi.mock('/src/admin/stores/ui', () => ({
 
 const ACCOUNTS = '/api/admin/ircd/nickserv/accounts';
 const ACCOUNT = '/api/admin/ircd/nickserv/account';
+const UNPROVISIONED = '/api/admin/ircd/nickserv/unprovisioned';
+const CREATE = '/api/admin/ircd/nickserv/create';
 
 const nsAccount = (over: Record<string, unknown> = {}) => ({
   nick: 'alice',
@@ -110,6 +115,23 @@ const accountsFixture = () => ({
   provisioning: provisioningFixture(),
 });
 
+/// `dave` never got a credential; `eve`'s username yields no legal nick, so
+/// the admin has to type one.
+const unprovisionedFixture = () => ({
+  users: [
+    {
+      userId: 'u-4', username: 'dave', email: 'dave@example.com',
+      networkId: 'n-4', hasNetwork: true, networkDisabled: false,
+      suggestedNick: 'dave', skipReason: '',
+    },
+    {
+      userId: 'u-5', username: 'eve.smith', email: 'eve@example.com',
+      networkId: '', hasNetwork: false, networkDisabled: false,
+      suggestedNick: '', skipReason: 'username is not a valid IRC nickname',
+    },
+  ],
+});
+
 const infoFixture = () => ({
   nick: 'alice',
   registered: true,
@@ -124,8 +146,18 @@ const infoFixture = () => ({
   platform: { userId: 'u-1', username: 'alice', networkId: 'n-1' },
 });
 
+/// Scoped to the inventory table: the page also renders the
+/// users-without-an-account table.
 function bodyRows(): HTMLElement[] {
-  return Array.from(document.querySelectorAll('tbody tr')) as HTMLElement[];
+  return Array.from(
+    document.querySelectorAll('[data-testid="ns-accounts-rows"] tr'),
+  ) as HTMLElement[];
+}
+
+function unprovRows(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll('[data-testid="ns-unprovisioned-rows"] tr'),
+  ) as HTMLElement[];
 }
 
 describe('NickServPanel.svelte — NickServ account management', () => {
@@ -134,6 +166,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
     mockedGet.mockImplementation((path: string) => {
       if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
       if (path === ACCOUNT) return Promise.resolve(infoFixture());
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     mockedPost.mockResolvedValue({});
@@ -172,6 +205,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
           asOf: 0,
           accounts: [nsAccount({ nick: 'nsplat', account: 'nsplat', username: 'platuser' })],
         });
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -244,6 +278,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
     mockedGet.mockImplementation((path: string) => {
       if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
       if (path === ACCOUNT) return Promise.reject(new ApiError(refusal, 403));
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -266,6 +301,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
             unprovisioned: 10,
           }),
         });
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -314,6 +350,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
           ...accountsFixture(),
           provisioning: provisioningFixture({ pendingOrphans: -1, unprovisioned: -1 }),
         });
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -348,6 +385,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
       if (path === ACCOUNT) return Promise.resolve(unlinkedInfo());
       if (path === USERS)
         return Promise.resolve({ users: [{ id: 'u-9', username: 'bob', email: 'bob@example.com' }] });
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
   }
@@ -457,5 +495,92 @@ describe('NickServPanel.svelte — NickServ account management', () => {
         nick: 'alice', confirm: true,
       }),
     );
+  });
+
+  // ── creating an account for a user who has none ────────────────────────────
+  // The inventory can only show accounts that exist, so these rows are the
+  // only view of the users nobody owns a nick for — the sync gap.
+
+  it('lists users with no NickServ account and creates one with the suggested nick', async () => {
+    mockedPost.mockResolvedValue({ nick: 'dave', username: 'dave' });
+    render(NickServPanel);
+    await vi.waitFor(() => expect(unprovRows().length).toBe(2));
+    expect(unprovRows()[0].textContent).toContain('dave');
+
+    const before = mockedGet.mock.calls.filter((c) => c[0] === UNPROVISIONED).length;
+    await page.getByTestId('ns-create-u-4').click();
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(CREATE, { userId: 'u-4', nick: 'dave' }),
+    );
+    // The list and the inventory both change, so both are re-read.
+    await vi.waitFor(() => {
+      expect(mockedGet.mock.calls.filter((c) => c[0] === UNPROVISIONED).length).toBeGreaterThan(
+        before,
+      );
+      expect(mockedGet.mock.calls.filter((c) => c[0] === ACCOUNTS).length).toBeGreaterThan(1);
+    });
+  });
+
+  /// `eve.smith` has no legal derived nick: creating would fail without one,
+  /// so the button stays disabled until the admin types a nickname.
+  it('requires a typed nick when none can be derived, and posts what was typed', async () => {
+    mockedPost.mockResolvedValue({ nick: 'eve', username: 'eve.smith' });
+    render(NickServPanel);
+    await vi.waitFor(() => expect(unprovRows().length).toBe(2));
+
+    const create = document.querySelector('[data-testid="ns-create-u-5"]') as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+
+    await page.getByLabelText('Nickname for eve.smith').fill('eve');
+    await vi.waitFor(() => {
+      const el = document.querySelector('[data-testid="ns-create-u-5"]') as HTMLButtonElement;
+      expect(el.disabled).toBe(false);
+    });
+    await page.getByTestId('ns-create-u-5').click();
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(CREATE, { userId: 'u-5', nick: 'eve' }),
+    );
+  });
+
+  it('registers a free nickname for a user from the manage card', async () => {
+    const free = { ...infoFixture(), nick: 'newguy', registered: false, fields: {}, lines: [], platform: null };
+    mockedGet.mockImplementation((path: string) => {
+      if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
+      if (path === ACCOUNT) return Promise.resolve(free);
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === USERS)
+        return Promise.resolve({ users: [{ id: 'u-9', username: 'bob', email: 'bob@example.com' }] });
+      return Promise.reject(new Error('unexpected GET ' + path));
+    });
+    mockedPost.mockResolvedValue({ nick: 'newguy', username: 'bob' });
+
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(2));
+    await page.getByLabelText('Nickname to look up').fill('newguy');
+    await page.getByRole('button', { name: 'Look up' }).click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(ACCOUNT, { nick: 'newguy' }));
+    await expect.element(page.getByText('Not registered')).toBeInTheDocument();
+
+    await page.getByLabelText('Search users to create for').fill('bob');
+    await page.getByRole('button', { name: 'Search' }).click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith(USERS, { q: 'bob' }));
+    await page.getByTestId('ns-create-for-user').click();
+
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith(CREATE, { userId: 'u-9', nick: 'newguy' }),
+    );
+  });
+
+  /// A nick somebody already owns must not read as "provisioning failed":
+  /// the endpoint names the remedy and the panel shows it.
+  it("surfaces the server's refusal instead of silently doing nothing", async () => {
+    mockedPost.mockRejectedValue(
+      new ApiError('"dave" is already registered. Link it to dave instead of creating an account.', 409),
+    );
+    render(NickServPanel);
+    await vi.waitFor(() => expect(unprovRows().length).toBe(2));
+    await page.getByTestId('ns-create-u-4').click();
+    await expect.element(page.getByText(/already registered\. Link it to dave/)).toBeInTheDocument();
+    expect(unprovRows().length).toBe(2);
   });
 });

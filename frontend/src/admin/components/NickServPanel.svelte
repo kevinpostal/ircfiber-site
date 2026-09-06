@@ -54,6 +54,14 @@
     passwordRotated: boolean; password?: string;
     previousAccount: string; takenFrom: string;
   }
+  /// A website user whose nick no NickServ account owns. `suggestedNick` is
+  /// the candidate the automatic provisioner would try first ('' when the
+  /// username cannot yield a legal nick); `skipReason` is why it stopped.
+  interface NsUnprovisioned {
+    userId: string; username: string; email: string;
+    networkId: string; hasNetwork: boolean; networkDisabled: boolean;
+    suggestedNick: string; skipReason: string;
+  }
 
   let accounts = $state<NsAccount[]>([]);
   let available = $state(true);
@@ -62,6 +70,14 @@
   let listError = $state<string | null>(null);
   let listLoading = $state(false);
   let provisioning = $state<NsProvisioning | null>(null);
+  let unprovisioned = $state<NsUnprovisioned[]>([]);
+  let unprovLoading = $state(false);
+  let unprovError = $state<string | null>(null);
+  /// Per-row nick override, keyed by userId; absent means the suggestion.
+  let nickDraft = $state<Record<string, string>>({});
+  /// Which create is in flight: a userId for a table row, 'lookup' for the
+  /// manage card's free-nick form.
+  let creating = $state('');
 
   let filter = $state('');
   let page = $state(1);
@@ -156,7 +172,10 @@
     return 'text-muted';
   }
 
-  onMount(() => { void loadAccounts(); });
+  onMount(() => {
+    void loadAccounts();
+    void loadUnprovisioned();
+  });
 
   async function loadAccounts() {
     listLoading = true;
@@ -172,6 +191,59 @@
       listError = errMsg(e);
     } finally {
       listLoading = false;
+    }
+  }
+
+  async function loadUnprovisioned() {
+    unprovLoading = true;
+    unprovError = null;
+    try {
+      const r = await api.get<{ users: NsUnprovisioned[] }>(
+        '/api/admin/ircd/nickserv/unprovisioned',
+      );
+      unprovisioned = r.users ?? [];
+    } catch (e) {
+      unprovError = errMsg(e);
+    } finally {
+      unprovLoading = false;
+    }
+  }
+
+  function nickFor(u: NsUnprovisioned): string {
+    return nickDraft[u.userId] ?? u.suggestedNick;
+  }
+
+  /**
+   * Register a NickServ account for a website user and store it as their SASL
+   * credential. An empty `nick` lets the server walk the same candidate list
+   * signup uses, so the response — not the request — names the account.
+   */
+  async function createAccount(userId: string, nick: string, from: 'list' | 'lookup') {
+    if (!userId) {
+      toastError('Pick a website user first.');
+      return;
+    }
+    creating = from === 'lookup' ? 'lookup' : userId;
+    if (from === 'lookup') actionError = null;
+    else unprovError = null;
+    try {
+      const r = await api.post<{ nick: string; username: string }>(
+        '/api/admin/ircd/nickserv/create',
+        nick ? { userId, nick } : { userId },
+      );
+      toastSuccess(`Created ${r.nick} for ${r.username}`);
+      await loadUnprovisioned();
+      await loadAccounts();
+      // The manage card is live INFO, so re-read it: the nick it is showing as
+      // free is registered now.
+      if (infoNick && r.nick.toLowerCase() === infoNick.toLowerCase()) await lookup(r.nick);
+    } catch (e) {
+      const msg = errMsg(e);
+      if (from === 'lookup') actionError = msg;
+      else unprovError = msg;
+      toastError(msg);
+    } finally {
+      creating = '';
     }
   }
 
@@ -196,10 +268,12 @@
     }
   }
 
-  /// The table is stale by construction, so refresh both after every action.
+  /// The table is stale by construction, so refresh every view after an
+  /// action: suspending, dropping or unlinking all change who is unsynced.
   async function afterAction(nick: string) {
     await lookup(nick);
     await loadAccounts();
+    await loadUnprovisioned();
   }
 
   async function suspend() {
@@ -295,6 +369,7 @@
       lookupNick = '';
       newPassword = '';
       await loadAccounts();
+      await loadUnprovisioned();
     } catch (e) {
       actionError = errMsg(e);
       toastError(actionError);
@@ -500,6 +575,101 @@
   </Card>
 {/if}
 
+<!--
+  Users with no NickServ account, above the inventory because the inventory
+  can only list accounts that exist: this is the only view that shows the
+  users the network holds no identity for, and the only place to fix it.
+  Creating one here is the manual form of what signup does automatically.
+-->
+<Card class="mb-4">
+  <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
+    <div>
+      <h3 class="text-sm font-semibold text-heading">
+        Users without a NickServ account ({unprovisioned.length})
+      </h3>
+      <p class="mt-0.5 text-xs text-muted">
+        Nobody owns their nick, so anyone on IRC can take it. Creating an account registers it and
+        stores it as the user's SASL credential — their session reconnects identified. The
+        generated password is not shown; use Reset password below for one the owner can type.
+      </p>
+    </div>
+    <button type="button" onclick={() => void loadUnprovisioned()} class={btn}>
+      {unprovLoading ? 'Loading…' : 'Refresh'}
+    </button>
+  </div>
+
+  {#if unprovError}
+    <p class="mb-3 text-sm text-danger">{unprovError}</p>
+  {/if}
+
+  {#if unprovisioned.length === 0}
+    <EmptyState
+      title="Every user has a NickServ account"
+      hint={unprovError ? 'The list could not be read.' : 'Nothing to sync.'}
+    />
+  {:else}
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm">
+        <thead>
+          <tr class="border-b border-border text-xs uppercase tracking-wider text-muted">
+            <th class="py-2 pr-4">Website user</th>
+            <th class="py-2 pr-4">Email</th>
+            <th class="py-2 pr-4">Nickname to register</th>
+            <th class="py-2"></th>
+          </tr>
+        </thead>
+        <tbody data-testid="ns-unprovisioned-rows">
+          {#each unprovisioned as u (u.userId)}
+            <tr class="border-b border-border/50 last:border-0">
+              <td class="py-2 pr-4">
+                <a href="#/users/{u.userId}" class="text-primary hover:underline">{u.username}</a>
+                {#if u.networkDisabled}
+                  <div class="text-xs text-amber-500">
+                    their irc.ircfiber.com network is disabled — enable it first
+                  </div>
+                {:else if !u.hasNetwork}
+                  <div class="text-xs text-muted">no Fiber network yet — one is created</div>
+                {/if}
+                {#if u.skipReason}
+                  <div class="text-xs text-amber-500" title="Auto-provisioning parked for 24h">
+                    provisioning gave up: {u.skipReason}
+                  </div>
+                {/if}
+              </td>
+              <td class="max-w-[14rem] truncate py-2 pr-4 text-muted">{u.email || '—'}</td>
+              <td class="py-2 pr-4">
+                <input
+                  value={nickFor(u)}
+                  oninput={(e) => (nickDraft[u.userId] = e.currentTarget.value)}
+                  placeholder="nickname"
+                  aria-label="Nickname for {u.username}"
+                  class="w-full max-w-[180px] font-mono {input}"
+                />
+                {#if !u.suggestedNick}
+                  <div class="text-xs text-amber-500">
+                    no legal nick can be derived from this username — type one
+                  </div>
+                {/if}
+              </td>
+              <td class="py-2 text-right">
+                <button
+                  type="button"
+                  data-testid="ns-create-{u.userId}"
+                  disabled={!nickFor(u).trim() || creating === u.userId}
+                  onclick={() => void createAccount(u.userId, nickFor(u).trim(), 'list')}
+                  class="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90 disabled:opacity-40"
+                >
+                  {creating === u.userId ? 'Creating…' : 'Create account'}
+                </button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {/if}
+</Card>
+
 <Card>
   <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
     <div>
@@ -556,7 +726,7 @@
             <th class="py-2"></th>
           </tr>
         </thead>
-        <tbody>
+        <tbody data-testid="ns-accounts-rows">
           {#each paged as a}
             <tr class="border-b border-border/50 last:border-0">
               <td class="py-2 pr-4 font-mono font-semibold">{a.nick}</td>
@@ -663,7 +833,60 @@
   {/if}
 
   {#if info && !info.registered}
-    <EmptyState title="Not registered" hint="This nickname is free." />
+    <EmptyState
+      title="Not registered"
+      hint="This nickname is free — register it for a website user below."
+    />
+    <!--
+      The other way into creation: an admin who already knows which nick they
+      want types it here. The table above only offers each user's suggested
+      nick, which is the wrong tool when the account name is the decision.
+    -->
+    <div class="mt-3 border-t border-border/40 pt-3">
+      <h4 class="text-xs font-semibold text-heading">Register this nick for an IRC Fiber user</h4>
+      <p class="mt-0.5 text-xs text-muted">
+        Registers <span class="font-mono">{infoNick}</span> with NickServ and stores it as that
+        user's SASL credential, so their session identifies with it. The generated password is not
+        shown — use Reset password afterwards if the owner needs one they can type.
+      </p>
+      <form
+        class="mt-2 flex flex-wrap items-center gap-2"
+        onsubmit={(e) => { e.preventDefault(); void searchUsers(); }}
+      >
+        <input
+          type="search"
+          bind:value={linkQuery}
+          placeholder="Search users by name or email…"
+          aria-label="Search users to create for"
+          class="w-full max-w-[260px] {input}"
+        />
+        <button type="submit" class={btn}>{linkSearching ? 'Searching…' : 'Search'}</button>
+      </form>
+      {#if linkResults.length > 0}
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <select
+            bind:value={linkUserId}
+            aria-label="Website user to create for"
+            class="max-w-[320px] {input}"
+          >
+            <option value="">Select a user…</option>
+            {#each linkResults as u}
+              <option value={u.id}>{u.username} · {u.email}</option>
+            {/each}
+          </select>
+          <button
+            type="button"
+            data-testid="ns-create-for-user"
+            onclick={() => void createAccount(linkUserId, infoNick, 'lookup')}
+            class="rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90"
+          >
+            {creating === 'lookup' ? 'Creating…' : 'Create account'}
+          </button>
+        </div>
+      {:else if linkQuery && !linkSearching}
+        <p class="mt-2 text-xs text-muted">No users matched.</p>
+      {/if}
+    </div>
   {:else if info}
     <dl class="text-sm">
       {#each orderedFields as [label, value]}

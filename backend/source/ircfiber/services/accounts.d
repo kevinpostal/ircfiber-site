@@ -80,13 +80,23 @@ bool isValidIrcNick(string s, size_t maxLen = IRC_MAX_NICK_LEN) @safe pure nothr
  * Account names to try, in priority order: the username, then the
  * deterministic `<username>_<4 hex>` fallback, then `<username>_2` …
  * `<username>_9`. Invalid nicks are dropped rather than sent to Anope.
+ *
+ * A non-empty `preferred` (the account name an admin typed in the NickServ
+ * page's create action) REPLACES the derived list instead of heading it: an
+ * admin naming `bob` means that account, so quietly falling back to `bob_2`
+ * would hand the user an account nobody asked for. An illegal `preferred`
+ * yields no candidates at all, which the caller reports as `nickUnavailable`.
  */
-string[] servicesAccountCandidates(User user) @safe {
+string[] servicesAccountCandidates(User user, string preferred = "") @safe {
     string[] out_;
     void add(string c) {
         if (!isValidIrcNick(c)) return;
         if (out_.canFind(c)) return;
         out_ ~= c;
+    }
+    if (preferred.length) {
+        add(preferred);
+        return out_;
     }
     add(user.username);
     add(buildDefaultNick(user));
@@ -274,22 +284,28 @@ private void recordProvisionOutcome(RedisStorage redis, ProvisionOutcome outcome
  * Synchronous body — only safe to call inside a vibe.d fiber (it does Redis,
  * Mongo and HTTP I/O). Use `provisionServicesAccountAsync` from a request
  * handler.
+ *
+ * `preferredAccount` is the admin-chosen account name (`web.admin.nickserv`'s
+ * create action). Supplying it also suppresses the 24h skip marker: an
+ * admin's nick choice must not park the automatic provisioner for a user.
  */
 ProvisionOutcome provisionServicesAccount(User user, NetworkRepository networkRepo,
-                                          RedisStorage redis, ServerRegistry serverRegistry) {
+                                          RedisStorage redis, ServerRegistry serverRegistry,
+                                          string preferredAccount = "") {
     // One recording site for every exit of the attempt below, including the
     // exception path (which `ServicesProvisioner.run` swallows): the initial
     // value is what an escaping exception is counted as.
     ProvisionOutcome outcome = ProvisionOutcome.failed;
     scope (exit) recordProvisionOutcome(redis, outcome);
-    outcome = provisionAttempt(user, networkRepo, redis, serverRegistry);
+    outcome = provisionAttempt(user, networkRepo, redis, serverRegistry, preferredAccount);
     return outcome;
 }
 
 /// The attempt itself. Every `return` here is counted by the wrapper above,
 /// so nothing in this body touches the telemetry hash.
 private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRepo,
-                                          RedisStorage redis, ServerRegistry serverRegistry) {
+                                          RedisStorage redis, ServerRegistry serverRegistry,
+                                          string preferredAccount = "") {
     auto s = loadAnopeSettings();
     if (!s.configured) {
         logDebug("services: IRCFIBER_ANOPE_RPC_URL unset — NickServ auto-registration disabled");
@@ -349,7 +365,13 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
     if (cfg.sasl == SASLMechanism.plain && cfg.saslUsername.length && cfg.saslPassword.length)
         return ProvisionOutcome.alreadyProvisioned;
 
+    // An admin-chosen nick never parks automatic provisioning: the refusal
+    // says something about that nick, not about the user, and a 24h marker
+    // would then stop the ordinary provisioner from ever trying the user's
+    // own candidates again.
+    const adminChosen = preferredAccount.length > 0;
     void markSkip(string reason) {
+        if (adminChosen) return;
         try db.request!string("SET", servicesSkipKey(userId), reason, "EX", "86400");
         catch (Exception e) logWarn("services: setting skip key for %s failed: %s", user.username, e.msg);
     }
@@ -403,12 +425,13 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
         }
     }
 
-    auto candidates = servicesAccountCandidates(user);
+    auto candidates = servicesAccountCandidates(user, preferredAccount);
     if (!candidates.length) {
         // Accounts created before the registerPost nick gate can hold a
         // username no derived nick can be legal for (`bob.smith`, `1234`).
         markSkip("username is not a valid IRC nickname");
-        logWarn("services: no legal IRC nick can be derived from username %s", user.username);
+        logWarn("services: no legal IRC nick can be derived from %s",
+                adminChosen ? preferredAccount : "username " ~ user.username);
         return ProvisionOutcome.nickUnavailable;
     }
 
@@ -694,6 +717,19 @@ unittest {
     u.id = UUID("12345678-90ab-cdef-1234-567890abcdef");
     u.username = "1234";  // not a legal nick — every derived candidate keeps the digit
     assert(servicesAccountCandidates(u).length == 0);
+}
+
+@("an admin-supplied account name replaces the derived candidates")
+unittest {
+    import std.uuid : UUID;
+    User u;
+    u.id = UUID("12345678-90ab-cdef-1234-567890abcdef");
+    u.username = "alice";
+    // Falling back to alice_2 for an admin who asked for "bobby" would create
+    // an account nobody requested, so the list is exactly the one name.
+    assert(servicesAccountCandidates(u, "bobby") == ["bobby"]);
+    assert(servicesAccountCandidates(u, "1234").length == 0,
+           "an illegal admin nick yields nickUnavailable, never a fallback");
 }
 
 @("generateServicesPassword is unbiased-sampled, alphanumeric and unique")

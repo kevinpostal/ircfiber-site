@@ -46,11 +46,13 @@ import ircfiber.models.network : NetworkConfig, SASLMechanism;
 import ircfiber.models.user : User;
 import ircfiber.redis.protocol : ControlMessage, RedisKeys;
 import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick,
-    persistProvisionedAccount, provisionServicesAccountAsync, ProvisionOutcome,
-    servicesPendingKey, servicesSkipKey, SERVICES_OUTCOMES_KEY;
+    persistProvisionedAccount, provisionServicesAccount, provisionServicesAccountAsync,
+    ProvisionOutcome, servicesAccountCandidates, servicesPendingKey, servicesSkipKey,
+    SERVICES_OUTCOMES_KEY;
 import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
-    anopeCheckAuthentication, anopeOperCommand, anopeOperQuery, isSafeServicesArg,
-    loadAnopeSettings, nickServSetPasswordCommand, parseNickInfo;
+    anopeCheckAuthentication, anopeNickRegistration, anopeOperCommand, anopeOperQuery,
+    isSafeServicesArg, loadAnopeSettings, nickServSetPasswordCommand, NickRegistration,
+    parseNickInfo;
 import ircfiber.services.anope_db : AnopeAccount, readAnopeInventory;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
@@ -246,6 +248,68 @@ private bool findPlatformAccount(string nick, out NetworkConfig cfg, out User ow
 /// to prevent.
 private enum long COUNT_UNKNOWN = -1;
 
+/// The 24h "stopped trying, here's why" marker, or "" when there is none.
+/// Read rather than inferred: the provisioner stores NickServ's own refusal
+/// text there, which is the only record of why a user was given up on.
+private string skipReasonFor(RedisStorage redis, string userId) {
+    try return redis.getDb().get(servicesSkipKey(userId));
+    catch (Exception e) {
+        logWarn("nickserv: reading the skip marker for %s failed: %s", userId, e.msg);
+        return "";
+    }
+}
+
+/// One website user whose IRC identity is backed by no NickServ account.
+private struct UnprovisionedUser {
+    User user;
+    NetworkConfig cfg;   /// their Fiber network; `id == UUID.init` when they have none
+    bool hasNetwork;
+}
+
+/**
+ * Every website user whose `irc.ircfiber.com` network carries no SASL
+ * credential, plus the users who have no Fiber network at all — those are
+ * equally unsynced, and `create` provisions the network for them.
+ *
+ * Enumerated from the users collection, not from networks, so the count this
+ * page reports and the rows it offers to fix are the same population. A
+ * networks-derived list would silently omit exactly the users nothing has
+ * ever provisioned.
+ */
+private UnprovisionedUser[] unprovisionedUsers() {
+    auto users = new UserRepository();
+    // findAll ignores its offset argument, so one oversized page holds
+    // everybody; the admin user table is in the tens.
+    auto all = users.findAll(users.count() + 50, 0);
+
+    NetworkConfig[string] fiber;
+    foreach (row; new NetworkRepository().findAll()) {
+        if (row.config.host != DEFAULT_FIBER_HOST) continue;
+        const uid = row.userId.toString();
+        // Hand-made Mongo docs can leave a user with two Fiber networks: the
+        // one holding a credential wins, so a provisioned user is never listed.
+        if (auto have = uid in fiber)
+            if (have.saslUsername.strip().length) continue;
+        fiber[uid] = row.config;
+    }
+
+    UnprovisionedUser[] rows;
+    foreach (u; all) {
+        if (u.id == UUID.init) continue;
+        auto cfg = u.id.toString() in fiber;
+        if (cfg && cfg.saslUsername.strip().length) continue;
+        UnprovisionedUser r;
+        r.user = u;
+        if (cfg) {
+            r.cfg = *cfg;
+            r.hasNetwork = true;
+        }
+        rows ~= r;
+    }
+    sort!((a, b) => sicmp(a.user.username, b.user.username) < 0)(rows);
+    return rows;
+}
+
 /// The three per-user counters, all derived in one pass.
 private struct ProvisioningCounts {
     long pendingOrphans = COUNT_UNKNOWN;
@@ -263,26 +327,27 @@ private struct ProvisioningCounts {
  * stopped responding (observed in the scratch smoke, >30s with no reply).
  *
  * Two `GET`s per Fiber network cost nothing at this scale, cannot desync
- * anything, and read the exact keys the provisioner writes. The population is
- * the Fiber-host networks, which is also what `unprovisioned` counts: a
- * pending or skip marker only exists for a user who already had one.
+ * anything, and read the exact keys the provisioner writes — a pending or
+ * skip marker only exists for a user who already had a network.
+ *
+ * `unprovisioned` is counted from `unprovisionedUsers` instead, so the number
+ * and the rows the create action offers to fix can never disagree.
  */
 private ProvisioningCounts provisioningCounts(RedisStorage redis) {
     ProvisioningCounts c;
-    long pending = 0, skips = 0, unprov = 0;
+    long pending = 0, skips = 0;
     bool redisOk = true;
     try {
         auto db = redis.getDb();
         foreach (row; new NetworkRepository().findAll()) {
             if (row.config.host != DEFAULT_FIBER_HOST) continue;
-            if (row.config.saslUsername.strip().length == 0) unprov++;
             if (!redisOk) continue;
             const uid = row.userId.toString();
             try {
                 if (db.get(servicesPendingKey(uid)).length) pending++;
                 if (db.get(servicesSkipKey(uid)).length) skips++;
             } catch (Exception e) {
-                // Keep the Mongo-derived number; only the Redis ones degrade.
+                // Keep whatever else is readable; only the Redis numbers degrade.
                 logWarn("nickserv: reading provisioning markers failed: %s", e.msg);
                 redisOk = false;
             }
@@ -291,11 +356,12 @@ private ProvisioningCounts provisioningCounts(RedisStorage redis) {
         logWarn("nickserv: counting provisioning state failed: %s", e.msg);
         return c;
     }
-    c.unprovisioned = unprov;
     if (redisOk) {
         c.pendingOrphans = pending;
         c.skipMarkers = skips;
     }
+    try c.unprovisioned = cast(long) unprovisionedUsers().length;
+    catch (Exception e) logWarn("nickserv: counting unprovisioned users failed: %s", e.msg);
     return c;
 }
 
@@ -351,6 +417,212 @@ private Json provisioningJson(RedisStorage redis) {
     j["skipMarkers"] = counts.skipMarkers;
     j["unprovisioned"] = counts.unprovisioned;
     return j;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/admin/ircd/nickserv/unprovisioned
+// POST /api/admin/ircd/nickserv/create
+// ---------------------------------------------------------------------------
+
+/// GET /api/admin/ircd/nickserv/unprovisioned — the website users the create
+/// action exists for: no NickServ account owns their nick, so anybody on IRC
+/// can take it. `suggestedNick` is the candidate the automatic provisioner
+/// would try first, and `skipReason` is why it stopped trying (if it did).
+package void apiNsUnprovisioned(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
+    UnprovisionedUser[] rows;
+    try rows = unprovisionedUsers();
+    catch (Exception e) {
+        logWarn("nickserv: listing users without a NickServ account failed: %s", e.msg);
+        jsonError(res, 502, "Could not read the user list: " ~ e.msg);
+        return;
+    }
+
+    auto arr = Json.emptyArray;
+    foreach (ref r; rows) {
+        auto j = Json.emptyObject;
+        const userId = r.user.id.toString();
+        j["userId"] = userId;
+        j["username"] = r.user.username;
+        j["email"] = r.user.email;
+        j["networkId"] = r.hasNetwork ? r.cfg.id.toString() : "";
+        j["hasNetwork"] = r.hasNetwork;
+        j["networkDisabled"] = r.hasNetwork && r.cfg.disabled;
+        auto candidates = servicesAccountCandidates(r.user);
+        // "" when no legal nick can be derived from the username (a legacy
+        // `bob.smith`): the UI then makes the admin type one.
+        j["suggestedNick"] = candidates.length ? candidates[0] : "";
+        j["skipReason"] = skipReasonFor(redis, userId);
+        arr ~= j;
+    }
+    auto data = Json.emptyObject;
+    data["users"] = arr;
+    jsonOk(res, data);
+}
+
+/// Maps a provisioning attempt that did not end in `registered` onto HTTP.
+/// Each message names the remedy, because every one of these outcomes has a
+/// different one and "provisioning failed" would name none of them.
+private void createFailed(HTTPServerResponse res, ProvisionOutcome outcome,
+                          string username, string nick, string skipReason) {
+    switch (outcome) {
+        case ProvisionOutcome.disabled:
+            jsonError(res, 501, "Anope RPC is not configured (IRCFIBER_ANOPE_RPC_URL).");
+            return;
+        case ProvisionOutcome.alreadyProvisioned:
+            jsonError(res, 409, username ~ " already holds a NickServ credential.");
+            return;
+        case ProvisionOutcome.skipped:
+            jsonError(res, 409, "Provisioning declined for " ~ username ~ ": their "
+                      ~ DEFAULT_FIBER_HOST ~ " network is missing or disabled.");
+            return;
+        case ProvisionOutcome.nickUnavailable:
+            jsonError(res, 400, nick.length
+                ? "\"" ~ nick ~ "\" is not a legal IRC nickname."
+                : "No legal IRC nickname can be derived from \"" ~ username
+                  ~ "\" — type one in.");
+            return;
+        case ProvisionOutcome.deferred:
+            // ns_register ends with u->Identify(na), so registering a nick a
+            // stranger holds would hand them the new account.
+            jsonError(res, 409, (nick.length ? "\"" ~ nick ~ "\"" : "That nickname")
+                      ~ " is online and the session cannot be attributed to " ~ username
+                      ~ ", so nothing was registered. Retry once their engine session is"
+                      ~ " connected, or pick another nick.");
+            return;
+        case ProvisionOutcome.collisionExhausted:
+            jsonError(res, 409, nick.length
+                ? "\"" ~ nick ~ "\" is already registered or in use on IRC. Link the existing"
+                  ~ " account instead."
+                : "Every candidate nick for " ~ username
+                  ~ " is registered or in use on IRC — type a different nick.");
+            return;
+        default:
+            jsonError(res, 502, skipReason.length
+                ? "NickServ refused the registration: " ~ skipReason
+                : "The registration failed — see the gateway log.");
+            return;
+    }
+}
+
+/**
+ * POST /api/admin/ircd/nickserv/create   body {userId, nick?}
+ *
+ * The manual form of what signup and login do automatically: register a
+ * NickServ account and store it as the user's SASL credential, so their
+ * session identifies and nobody else can take their nick. `nick` is optional
+ * — without it the provisioner walks the same candidate list signup uses
+ * (username, `<username>_<hex>`, `_2`…`_9`).
+ *
+ * Runs the real provisioner rather than a second registration path: its
+ * hijack guard (never register a nick a foreign session holds), its
+ * pending-credential crash recovery and its credential verification are the
+ * reason an account created here actually authenticates.
+ *
+ * No services-oper privileges are needed — `REGISTER` is sent *as* the target
+ * nick, exactly as the automatic provisioner sends it — so this stays usable
+ * on a deployment whose oper account is not tied yet.
+ *
+ * The generated password is deliberately not returned: SASL reads it from
+ * Mongo, no human needs it, and "Reset password" already exists for the case
+ * where the owner wants one they can type.
+ */
+package void apiNsCreate(HTTPServerRequest req, HTTPServerResponse res,
+                         RedisStorage redis, ServerRegistry serverRegistry) {
+    auto s = loadAnopeSettings();
+    if (!s.configured) {
+        jsonError(res, 501, "Anope RPC is not configured (IRCFIBER_ANOPE_RPC_URL).");
+        return;
+    }
+    auto payload = readJsonBody(req);
+    User owner;
+    if (!bodyUser(res, payload, owner)) return;
+    const nick = jsonStr(payload, "nick");
+    if (nick.length && !nsValidNick(res, nick)) return;
+
+    // Reject an owned name before touching anything: the provisioner would
+    // answer `collisionExhausted`, which reads as "try another nick" when the
+    // actual remedy is to link the account that already exists.
+    if (nick.length) {
+        final switch (anopeNickRegistration(s, nick)) {
+            case NickRegistration.registered:
+                jsonError(res, 409, "\"" ~ nick ~ "\" is already registered. Link it to "
+                          ~ owner.username ~ " instead of creating an account.");
+                return;
+            case NickRegistration.servicesReserved:
+                jsonError(res, 409, "\"" ~ nick ~ "\" belongs to the network's own services.");
+                return;
+            case NickRegistration.unknown:
+                jsonError(res, 502, "Could not check \"" ~ nick ~ "\" with Anope.");
+                return;
+            case NickRegistration.free:
+                break;
+        }
+    }
+
+    NetworkConfig cfg;
+    if (!fiberNetworkFor(owner, redis, serverRegistry, cfg)) {
+        jsonError(res, 409, owner.username ~ " has no " ~ DEFAULT_FIBER_HOST ~ " network and one"
+                  ~ " could not be created (the Fiber network may be disabled in config).");
+        return;
+    }
+    if (cfg.disabled) {
+        jsonError(res, 409, owner.username ~ "'s " ~ DEFAULT_FIBER_HOST
+                  ~ " network is disabled — enable it before creating an account.");
+        return;
+    }
+    const existing = cfg.saslUsername.strip();
+    if (existing.length && cfg.saslPassword.length) {
+        jsonError(res, 409, owner.username ~ " already holds NickServ account \"" ~ existing
+                  ~ "\". Use Reset password, or unlink it first.");
+        return;
+    }
+
+    // An admin pressing this button overrides the 24h park a previous
+    // permanent refusal left behind; without this the action would silently
+    // no-op as `skipped`.
+    const userId = owner.id.toString();
+    try redis.getDb().del(servicesSkipKey(userId));
+    catch (Exception e) logWarn("nickserv: clearing the skip marker for %s failed: %s",
+                                userId, e.msg);
+
+    ProvisionOutcome outcome;
+    try outcome = provisionServicesAccount(owner, new NetworkRepository(), redis,
+                                           serverRegistry, nick);
+    catch (Exception e) {
+        logWarn("nickserv: creating a NickServ account for %s failed: %s", owner.username, e.msg);
+        jsonError(res, 502, "The registration failed: " ~ e.msg);
+        return;
+    }
+    if (outcome != ProvisionOutcome.registered) {
+        createFailed(res, outcome, owner.username, nick, skipReasonFor(redis, userId));
+        return;
+    }
+
+    // Read back what the provisioner settled on instead of echoing the
+    // request: without an explicit nick it picks a candidate, and it also
+    // adopts an orphaned pending credential when one still authenticates.
+    string account = nick;
+    string networkId = cfg.id.toString();
+    try {
+        foreach (ref c; new NetworkRepository().findByUserId(owner.id)) {
+            if (c.host != DEFAULT_FIBER_HOST) continue;
+            if (!c.saslUsername.strip().length) continue;
+            account = c.saslUsername.strip();
+            networkId = c.id.toString();
+            break;
+        }
+    } catch (Exception e) {
+        logWarn("nickserv: reading back the credential for %s failed: %s", owner.username, e.msg);
+    }
+
+    logInfo("Admin created NickServ account %s for user %s", account, owner.username);
+    auto data = Json.emptyObject;
+    data["nick"] = account;
+    data["userId"] = userId;
+    data["username"] = owner.username;
+    data["networkId"] = networkId;
+    data["created"] = true;
+    jsonOk(res, data);
 }
 
 // ---------------------------------------------------------------------------
