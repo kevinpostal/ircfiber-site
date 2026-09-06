@@ -28,10 +28,14 @@ Environment:
   IRCD_ACCOUNT         NickServ account that owns the channels
   IRCD_ACCOUNT_PASSWORD  its password (also the /OPER password)
   IRCD_ACCOUNT_EMAIL   e-mail used if the account must be registered
+  IRCD_ACCOUNT_DISPLAY  NickServ group display to converge on
+                       (default = IRCD_ACCOUNT)
   IRCD_OPER_NAME       InspIRCd <oper name=...> to /OPER as
   IRCD_OPER_PASSWORD   its password
   IRCD_CHANNELS        JSON list of
                        {"channel","description","topic","history","modes"}
+  IRCD_CHANNEL_ACCESS  JSON {"qop":[..],"sop":[..],"aop":[..],
+                       "hop":[..],"vop":[..]} of NickServ accounts
   IRCD_TIMEOUT         seconds to allow for the whole run (default 180)
 
 Exit status is 0 only when every channel reached the desired state.
@@ -158,6 +162,12 @@ def service_reply(session: IrcSession, service: str, command: str,
 FORMATTING = re.compile(r"[\x02\x0f\x11\x16\x1d\x1e\x1f]|\x03(\d{1,2}(,\d{1,2})?)?")
 
 
+# XOP tiers, highest first. Each name is both the ChanServ command that
+# grants it and the level string `ACCESS LIST` prints back: QOP +q
+# (owner), SOP +a (admin), AOP +o, HOP +h, VOP +v.
+XOP_TIERS = ("QOP", "SOP", "AOP", "HOP", "VOP")
+
+
 def clean(text: str) -> str:
     return FORMATTING.sub("", text)
 
@@ -187,15 +197,20 @@ def wait_for_services(session: IrcSession, seconds: float = 120.0) -> None:
         time.sleep(5)
 
 
+def account_registered(session: IrcSession, account: str) -> bool:
+    """True when NickServ knows the account.
+
+    NickServ STATUS answers with a numeric code, not prose, so INFO is
+    the only reply that distinguishes "no such account" reliably.
+    """
+    reply = service_reply(session, "NickServ", f"INFO {account}", 4.0)
+    return not matches(reply, "isn't registered", "is not registered")
+
+
 def ensure_account(session: IrcSession, account: str, password: str,
                    email: str) -> None:
     """IDENTIFY when the account exists, REGISTER it when it does not."""
-    # NickServ STATUS answers with a numeric code, not prose, so INFO is
-    # the only reply that distinguishes "no such account" reliably.
-    info = service_reply(session, "NickServ", f"INFO {account}", 4.0)
-    registered = not matches(info, "isn't registered", "is not registered")
-
-    if registered:
+    if account_registered(session, account):
         reply = service_reply(session, "NickServ",
                               f"IDENTIFY {account} {password}", 6.0)
         if not matches(reply, "password accepted", "you are now identified",
@@ -226,6 +241,105 @@ def ensure_account(session: IrcSession, account: str, password: str,
         if time.monotonic() > deadline:
             raise IrcError(f"NickServ REGISTER for {account} failed: {reply}")
         time.sleep(5)
+
+
+def require_accounts(session: IrcSession, access: dict) -> None:
+    """Fail the run when any account in the access list is unregistered.
+
+    ChanServ answers an ADD for an unknown account with "isn't
+    registered", which would surface halfway through the channel loop and
+    leave some channels synced and some not. One INFO per distinct name
+    up front turns a typo in ircd_channel_access into an immediate error
+    that lists every bad name at once.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for tier in XOP_TIERS:
+        for name in access.get(tier.lower()) or []:
+            if name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            names.append(name)
+    missing = [n for n in names if not account_registered(session, n)]
+    if missing:
+        raise IrcError("not registered with NickServ, cannot be given "
+                       f"channel access: {', '.join(missing)}")
+
+
+def group_and_display(session: IrcSession, account: str, display: str,
+                      password: str) -> bool:
+    """Converge the account's NickServ group display. True when changed.
+
+    The display is what ChanServ INFO prints as Founder and what Anope
+    resolves its oper{} blocks against, so this is what makes the network
+    read as owned by a person instead of by "admin". Grouping a nick
+    requires *being* it, which the deploy usually cannot do because the
+    human is connected under that nick — that case defers to the next run
+    rather than failing, since nothing else depends on it.
+    """
+    if not display or display.lower() == account.lower():
+        return False
+
+    # `GLIST <nick>` headers its list with the group's *current* display
+    # (`List of nicknames in the group of <display>:`) and then prints one
+    # nick per row. The bare `GLIST` answers "List of nicknames in your
+    # group:" instead, naming nothing — which would make every run re-set
+    # the display and report `changed` forever. Passing an alias of our
+    # own account needs no privilege (Anope only checks nickserv/list when
+    # the nick belongs to someone else).
+    current = ""
+    grouped = False
+    for line in service_reply(session, "NickServ", f"GLIST {account}", 4.0):
+        text = clean(line).strip()
+        header = re.search(r"group of (\S+?):?$", text, re.I)
+        if header:
+            current = header.group(1)
+            continue
+        tokens = text.split()
+        if tokens and tokens[0].lower() == display.lower():
+            grouped = True
+    if not current:
+        raise IrcError(f"NickServ GLIST {account} named no group display: "
+                       "cannot tell whether the rename is needed")
+    if current.lower() == display.lower():
+        return False
+
+    if not grouped:
+        original = session.nick
+        session.send(f"NICK {display}")
+        answer = session.wait_for(
+            re.compile(rf"\s433\s+\S+\s+{re.escape(display)}\s"
+                       rf"|^:{re.escape(original)}!\S+\sNICK\s", re.I), 6.0)
+        if answer is None:
+            raise IrcError(f"no reply to NICK {display} from the server")
+        if " 433 " in answer:
+            log(f"display {account} -> {display} deferred: the nick is in "
+                f"use. From the client holding it run `/msg NickServ GROUP "
+                f"{account} <password>` then `/msg NickServ SET DISPLAY "
+                f"{display}`; otherwise the next deploy retries")
+            return False
+        session.nick = display
+        reply = service_reply(session, "NickServ",
+                              f"GROUP {account} {password}", 6.0)
+        if not matches(reply, "you are now in the group of",
+                       "you are already a member of the group of"):
+            raise IrcError(f"NickServ GROUP {account} failed: {reply}")
+        set_display(session, display)
+        # session.nick is what setup_channel puts in its SAMODE line, so
+        # the rename has to be undone; identification survives it.
+        session.send(f"NICK {original}")
+        session.nick = original
+        session.collect(0.5)
+    else:
+        set_display(session, display)
+    log(f"display {account} -> {display}")
+    return True
+
+
+def set_display(session: IrcSession, display: str) -> None:
+    reply = service_reply(session, "NickServ", f"SET DISPLAY {display}", 4.0)
+    if not matches(reply, "the new display is now"):
+        raise IrcError(f"NickServ SET DISPLAY {display} failed: {reply}")
 
 
 def chan_info(session: IrcSession, channel: str) -> dict[str, str]:
@@ -285,7 +399,52 @@ def channel_modes(session: IrcSession, channel: str) -> tuple[str, str]:
     return letters, " ".join(p.lstrip(":") for p in parts[1:])
 
 
-def setup_channel(session: IrcSession, spec: dict, account: str) -> bool:
+def access_list(session: IrcSession, channel: str) -> dict[str, str]:
+    """{lower-cased mask: level} from `ChanServ ACCESS {channel} LIST`.
+
+    Parsed by shape rather than by prose: Anope's ListFormatter prints
+    `Number | Level | Mask | By | Last seen`, where Level is the xop tier
+    (SOP, AOP, ...) for an xop entry and a bare number for a cs_access
+    one. Keeping only rows whose first column is a number skips the
+    header, the "list is empty" line and any trailing prose without
+    depending on translated text.
+    """
+    out: dict[str, str] = {}
+    replies = service_reply(session, "ChanServ", f"ACCESS {channel} LIST", 5.0)
+    for line in replies:
+        tokens = clean(line).split()
+        if len(tokens) < 3 or not tokens[0].isdigit():
+            continue
+        out[tokens[2].lower()] = tokens[1].upper()
+    return out
+
+
+def sync_access(session: IrcSession, channel: str, access: dict) -> bool:
+    """Put every listed account on its tier. Returns True when changed.
+
+    One ADD also *moves* an account between tiers — cs_xop drops any
+    existing entry for the same resolved mask before inserting — so no
+    DEL step is needed. Additive on purpose: entries nobody listed
+    (hand-granted ops, hostmask entries) are left alone.
+    """
+    changed = False
+    current = access_list(session, channel)
+    for tier in XOP_TIERS:
+        for name in access.get(tier.lower()) or []:
+            if current.get(name.lower()) == tier:
+                continue
+            reply = service_reply(session, "ChanServ",
+                                  f"{tier} {channel} ADD {name}", 4.0)
+            if not matches(reply, "added to"):
+                raise IrcError(
+                    f"ChanServ {tier} {channel} ADD {name} failed: {reply}")
+            log(f"{channel}: {tier} += {name}")
+            changed = True
+    return changed
+
+
+def setup_channel(session: IrcSession, spec: dict, account: str,
+                  display: str, access: dict) -> bool:
     """Bring one channel to the desired state. Returns True when changed."""
     channel = spec["channel"]
     changed = False
@@ -313,11 +472,16 @@ def setup_channel(session: IrcSession, spec: dict, account: str) -> bool:
         changed = True
         info = chan_info(session, channel)
 
+    # ChanServ INFO prints the founder's *group display*, so both the
+    # account name and its display are acceptable — they are the same
+    # account, and which one INFO shows depends on whether the rename in
+    # group_and_display has landed yet.
     founder = info.get("founder", "")
-    if founder and founder.lower() != account.lower():
+    owners = {account.lower(), (display or account).lower()}
+    if founder and founder.lower() not in owners:
         raise IrcError(
-            f"{channel} is registered to {founder}, not {account} — "
-            "refusing to take it over")
+            f"{channel} is registered to {founder}, not "
+            f"{' / '.join(sorted(owners))} — refusing to take it over")
 
     # Mode lock, then the live channel. These are two different things and
     # only the second one actually makes history work: after a channel is
@@ -408,6 +572,12 @@ def setup_channel(session: IrcSession, spec: dict, account: str) -> bool:
         log(f"{channel}: topic updated")
         changed = True
 
+    # While still in the channel: cs_statusupdate re-applies status modes
+    # to members when their access changes, so anyone online gets their
+    # prefix immediately instead of on next join.
+    if sync_access(session, channel, access):
+        changed = True
+
     session.send(f"PART {channel} :setup complete")
     session.collect(0.5)
     return changed
@@ -426,6 +596,8 @@ def main() -> int:
     oper_name = os.environ["IRCD_OPER_NAME"]
     oper_password = os.environ["IRCD_OPER_PASSWORD"]
     channels = json.loads(os.environ["IRCD_CHANNELS"])
+    display = os.environ.get("IRCD_ACCOUNT_DISPLAY") or account
+    access = json.loads(os.environ.get("IRCD_CHANNEL_ACCESS") or "{}")
     deadline = time.monotonic() + float(os.environ.get("IRCD_TIMEOUT", "180"))
 
     session = IrcSession(host, port, use_tls, verify, sni, deadline)
@@ -448,8 +620,12 @@ def main() -> int:
             raise IrcError(f"OPER {oper_name} failed: {opered}")
         log(f"opered as {oper_name}")
 
+        require_accounts(session, access)
+        if group_and_display(session, account, display, password):
+            changed = True
+
         for spec in channels:
-            if setup_channel(session, spec, account):
+            if setup_channel(session, spec, account, display, access):
                 changed = True
             else:
                 log(f"{spec['channel']}: already configured")

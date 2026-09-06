@@ -140,6 +140,12 @@ ircd_oper_sslonly: true
 # name in opers.conf are independent.
 ircd_services_root_extra_accounts:
   - "sq"
+  # Same account as ircd_services_root_account; named here so the Anope
+  # oper{} block matches after the display rename below (Anope resolves
+  # opers by group display, not by nick alias). Both blocks are rendered,
+  # so Services Root survives whichever display is current — an oper block
+  # naming an account that does not exist is inert.
+  - "Zodiac"
 
 # uid:gid the anope/anope image runs its services process as. The gid is
 # `nogroup`, deliberately unrelated to the uid, so it cannot be derived —
@@ -227,6 +233,35 @@ ircd_services_root_email: "{{ ircd_admins[0].email }}"
 # cover the script's 120 s wait for services to link plus NickServ's 30 s
 # regdelay on the very first run, before any channel work starts.
 ircd_chanserv_setup_timeout: 420
+
+# ChanServ access tiers applied to every channel in ircd_permanent_channels
+# (ircd_channel_setup.py). Names are NickServ *account displays* — the value
+# ChanServ ACCESS LIST prints and the script compares against — and each
+# account must already be registered or the setup task fails naming it.
+# Tier -> Anope XOP command -> prefix mode: qop +q (owner), sop +a (admin),
+# aop +o, hop +h, vop +v. The founder (ircd_services_root_account, displayed
+# as ircd_services_root_display) already outranks QOP, so it is deliberately
+# NOT listed here; qop is for additional owners.
+# Additive: entries listed here are added or moved to the right tier, and
+# entries nobody listed (hand-granted ops, #dmz-style hostmask entries) are
+# left alone.
+ircd_channel_access:
+  qop: []
+  sop:
+    - "sq"
+  aop: []
+  hop: []
+  vop: []
+
+# NickServ display for ircd_services_root_account. The account keeps its
+# `admin` nick alias (IDENTIFY admin <password> keeps working, so
+# ircd_services_root_account stays "admin"); only the group's display name
+# changes, which is what ChanServ INFO prints as Founder and what Anope
+# matches its oper{} blocks against. The script groups the nick into the
+# account and runs NickServ SET DISPLAY; set to "" to disable.
+# Consequence: once grouped, `Zodiac` is a registered nick, so killprotect
+# applies (kill = 60s) to anyone using it without identifying.
+ircd_services_root_display: "Zodiac"
 
 # Server fingerprinting: VERSION replies show this instead of "InspIRCd-4",
 # and netsplit quits are hidden. Cosmetic; no protocol impact.

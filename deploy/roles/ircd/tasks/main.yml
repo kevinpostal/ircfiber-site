@@ -525,6 +525,8 @@
     IRCD_OPER_PASSWORD: "{{ vault_ircd_oper_password }}"
     IRCD_CHANNELS: "{{ ircd_permanent_channels | to_json }}"
     IRCD_TIMEOUT: "{{ ircd_chanserv_setup_timeout }}"
+    IRCD_ACCOUNT_DISPLAY: "{{ ircd_services_root_display }}"
+    IRCD_CHANNEL_ACCESS: "{{ ircd_channel_access | to_json }}"
   register: ircd_chanserv_setup
   # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".
   changed_when: "'CHANGED' in ircd_chanserv_setup.stdout_lines"
