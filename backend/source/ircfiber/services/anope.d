@@ -283,16 +283,21 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
     auto settings = new HTTPClientSettings;
     settings.connectTimeout = s.timeoutSeconds.seconds;
     settings.readTimeout = s.timeoutSeconds.seconds;
-    // One fresh connection per call. m_httpd does not keep a connection
-    // usable for a second request, and vibe.d's client pool has no way to
-    // know that: the FIRST request on a pooled connection answers 200 and
-    // the next one comes back HTTP 404 with an unparseable body. Reads hid
-    // it because `anopePostIdempotent` retries, so it only ever surfaced on
-    // the single-shot mutations — observed 2026-09-06 on prod, where an
-    // account deletion's ownership `INFO` was followed by a `DROP` that
-    // failed with exactly that 404 and left the NickServ account standing.
-    // (It is also the "404 for checkAuthentication, 200 for command"
-    // asymmetry noted below: the same stale-pool bug, not a per-method one.)
+    // One fresh connection per call, because m_httpd's answers stop making
+    // sense once a connection has served one request. Observed 2026-09-06
+    // on prod: an account deletion's ownership `INFO` returned 200 and the
+    // `DROP` right behind it came back HTTP 404 with an 18-byte body
+    // ("Unrecognized page"), leaving the NickServ account standing. Reads
+    // hide that because `anopePostIdempotent` retries; single-shot
+    // mutations do not, which is why it surfaced there first. With reuse
+    // off, that INFO-then-DROP sequence has been verified working end to
+    // end against prod.
+    //
+    // NOT a complete theory of the 404s: `checkAuthentication` still
+    // answers 404 to this client (twice in a row, so not a stale pooled
+    // connection) while curl gets 200 for the identical body, chunked or
+    // not, on the same socket. That one is still open, and it is why
+    // provisioning leaves orphan pending credentials.
     settings.defaultKeepAliveTimeout = 0.seconds;
     // No address-family pin: the listener binds `::` (see the httpd block in
     // services.conf.j2), which on Linux accepts IPv4 too, so either record of
