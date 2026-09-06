@@ -1,7 +1,8 @@
 <script lang="ts">
   import { ircState } from '../stores/ircStore.svelte';
   import { highlightWords } from '../stores/preferences.svelte';
-  import { changePassword, deleteAccount, uploadAvatar, removeAvatar } from '../stores/api';
+  import { onMount } from 'svelte';
+  import { changePassword, deleteAccount, uploadAvatar, removeAvatar, fetchIrcAccount, retryIrcAccount, type IrcAccountInfo } from '../stores/api';
   import SettingsSection from './SettingsSection.svelte';
 
   let highlightInput = $state('');
@@ -16,6 +17,11 @@
   let oldPassword = $state('');
   let newPassword = $state('');
   let confirmPassword = $state('');
+
+  let ircAccount = $state<IrcAccountInfo | null>(null);
+  let ircAccountError = $state('');
+  let revealNickserv = $state(false);
+  let ircRetryBusy = $state(false);
 
   function addHighlightWord(): void {
     const word = highlightInput.trim();
@@ -110,6 +116,51 @@
       avatarBusy = false;
     }
   }
+
+  async function loadIrcAccount(): Promise<void> {
+    try {
+      ircAccount = await fetchIrcAccount();
+    } catch (e: unknown) {
+      ircAccountError = (e as Error).message || 'Failed to load your IRC account';
+    }
+  }
+
+  function copyNickservPassword(): void {
+    const value = ircAccount?.password;
+    if (!value) return;
+    const done = (): void => { successMsg = 'NickServ password copied'; };
+    navigator.clipboard.writeText(value).then(done).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = value;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      done();
+    });
+  }
+
+  async function retryNickservRegistration(): Promise<void> {
+    ircRetryBusy = true;
+    ircAccountError = '';
+    try {
+      await retryIrcAccount();
+      // Provisioning runs in the background; poll until it settles or the
+      // engine-connect wait (12s) plus a margin has elapsed.
+      for (let i = 0; i < 12; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        await loadIrcAccount();
+        if (ircAccount?.status === 'ready') break;
+      }
+      if (ircAccount?.status === 'ready') successMsg = 'Your nick is now registered with NickServ';
+    } catch (e: unknown) {
+      ircAccountError = (e as Error).message || 'Could not start a retry';
+    } finally {
+      ircRetryBusy = false;
+    }
+  }
+
+  onMount(() => { void loadIrcAccount(); });
 </script>
 
 {#if successMsg}
@@ -158,6 +209,93 @@
         </div>
       </div>
     </div>
+  </div>
+</SettingsSection>
+
+<SettingsSection heading="IRC account">
+  <div class="settings-rows">
+    {#if ircAccountError}
+      <div class="settings-error">{ircAccountError}</div>
+    {:else if !ircAccount}
+      <div class="settings-row">
+        <div class="settings-control">
+          <span class="settings-value">Loading…</span>
+        </div>
+      </div>
+    {:else if ircAccount.status === 'ready'}
+      <div class="settings-row">
+        <div class="settings-label">
+          <span class="settings-label-text">Account</span>
+          <span class="settings-label-desc">Registered with NickServ on {ircAccount.network}</span>
+        </div>
+        <div class="settings-control">
+          <span class="settings-value">{ircAccount.account}</span>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">
+          <span class="settings-label-text">NickServ password</span>
+        </div>
+        <div class="settings-control">
+          <div class="irc-account-cred">
+            <input
+              class="settings-input"
+              type={revealNickserv ? 'text' : 'password'}
+              readonly
+              value={ircAccount.password}
+              aria-label="NickServ password"
+              onfocus={(e) => (e.currentTarget as HTMLInputElement).select()}
+            />
+            <button class="settings-btn settings-btn--secondary" onclick={() => (revealNickserv = !revealNickserv)}>
+              {revealNickserv ? 'Hide' : 'Show'}
+            </button>
+            <button class="settings-btn settings-btn--secondary" onclick={copyNickservPassword}>Copy</button>
+          </div>
+        </div>
+      </div>
+      <div class="settings-row">
+        <div class="settings-label">
+          <span class="settings-label-text">Server</span>
+        </div>
+        <div class="settings-control">
+          <span class="settings-value">{ircAccount.host}:{ircAccount.port} (TLS)</span>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-value">
+          Your nick on IRC Fiber is registered with NickServ and IRC Fiber signs you in
+          automatically. Use these credentials for SASL PLAIN from another client, or
+          <code>/msg NickServ HELP</code>.
+        </span>
+      </div>
+    {:else if ircAccount.status === 'unavailable'}
+      <div class="settings-row">
+        <div class="settings-label">
+          <span class="settings-label-text">Not registered</span>
+          <span class="settings-label-desc">{ircAccount.reason || 'NickServ registration did not complete.'}</span>
+        </div>
+        <div class="settings-control">
+          <button class="settings-btn settings-btn--secondary" onclick={retryNickservRegistration} disabled={ircRetryBusy}>
+            {ircRetryBusy ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      </div>
+      <div class="settings-row">
+        <span class="settings-value">
+          You are still connected to IRC Fiber, but your nick is not registered, so
+          nobody is holding it for you. Retry once the name is free, or set your own
+          NickServ account under the network's SASL settings.
+        </span>
+      </div>
+    {:else if ircAccount.status === 'pending'}
+      <div class="settings-row">
+        <span class="settings-value">Registering your nick with NickServ… this finishes in the background; reload in a moment.</span>
+      </div>
+    {:else}
+      <div class="settings-row">
+        <span class="settings-value">You are not connected to the IRC Fiber server.</span>
+      </div>
+    {/if}
   </div>
 </SettingsSection>
 
@@ -255,3 +393,20 @@
     </div>
   </div>
 </section>
+
+<style>
+  /* input + Show + Copy on one line. The only flex row rule in
+     _settings.scss is `.settings-highlight-input-row`, which is specific to
+     the highlight-words editor. */
+  .irc-account-cred {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .irc-account-cred .settings-input {
+    flex: 1;
+    min-width: 160px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+</style>

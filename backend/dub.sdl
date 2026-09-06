@@ -117,3 +117,19 @@ configuration "support-format-test" {
     mainSourceFile "tests/support_format_test.d"
     versions "VibeUseFibers"
 }
+
+// Pure-code unit test for the Anope XML-RPC wire helpers plus the NickServ
+// account/nick/password helpers (built with -unittest so the `@("…")`
+// unittest blocks in services/accounts.d run before main; no Anope, Redis
+// or Mongo needed):
+//   dub --root=backend build --config=services-test && ./backend/services-test
+configuration "services-test" {
+    targetType "executable"
+    targetName "services-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/services/anope.d" "source/ircfiber/services/accounts.d"
+    mainSourceFile "tests/services_test.d"
+    versions "VibeUseFibers"
+    buildOptions "unittests"
+}

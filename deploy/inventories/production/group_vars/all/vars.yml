@@ -206,6 +206,13 @@ ircd_data_volume: "ircfiber_inspircd_data"
 ircd_services_image: "anope/anope:2.0.20"
 ircd_services_container_name: "ircfiber-services"
 ircd_services_data_volume: "ircfiber_services_data"
+# Anope XML-RPC (m_httpd + m_xmlrpc + m_xmlrpc_main). Used by the gateway to
+# register website accounts with NickServ (ircfiber.services.anope). The
+# services container publishes no ports, so the listener is reachable only
+# from containers on {{ docker_ircfiber_network }}. m_xmlrpc has no auth of
+# its own — never publish this port.
+ircd_services_rpc_enabled: true
+ircd_services_rpc_port: 8080
 
 # --- Cloudflare DNS ------------------------------------------------------------
 # Used by the `cloudflare` role to point DNS records at this host's public IP.

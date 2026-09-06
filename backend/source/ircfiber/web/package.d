@@ -9,6 +9,7 @@ import std.string : indexOf;
 import std.regex : regex, replaceAll;
 import std.datetime : Clock;
 import std.conv : to;
+import std.process : environment;
 
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse, render;
 import vibe.http.router : URLRouter;
@@ -22,6 +23,8 @@ import ircfiber.db.user : UserRepository;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.default_network : ensureDefaultFiberNetwork;
+import ircfiber.services.accounts : isValidIrcNick, provisionServicesAccountAsync;
+import ircfiber.services.anope : NickRegistration, anopeNickRegistration, loadAnopeSettings;
 import ircfiber.models.user : User;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
 
@@ -240,6 +243,15 @@ final class WebController {
                     logWarn("Failed to ensure default network for %s on login: %s", user.username, e.msg);
                 }
 
+                // Backfill: claim this account's nick with NickServ if it
+                // isn't claimed yet. No-op once the Fiber network carries a
+                // SASL credential. Fire-and-forget — never blocks login.
+                try {
+                    provisionServicesAccountAsync(user, redis);
+                } catch (Exception e) {
+                    logWarn("Failed to schedule NickServ registration for %s: %s", user.username, e.msg);
+                }
+
                 if (!req.session) req.session = res.startSession();
                 persistSessionCookie(res, req.session.id);
                 req.session.set("sessionUserId", user.id.toString());
@@ -267,6 +279,47 @@ final class WebController {
         res.render!("register.dt", authError)();
     }
 
+    /**
+     * Whether `username` is already claimed as an IRC nick on our own
+     * network. The website username IS the user's IRC nick and NickServ
+     * account name, so a name somebody else already owns can never become
+     * theirs — better to say so at signup than to silently rename them.
+     *
+     * Fails OPEN by design: when Anope is unreachable, disabled, or answers
+     * something unrecognised, the signup proceeds and
+     * `ircfiber.services.accounts` falls back to a derived nick. Signup must
+     * never depend on services being up. Set IRCFIBER_SIGNUP_NICK_CHECK=0 to
+     * turn the check off entirely.
+     */
+    private bool ircNickIsClaimed(string username, out string why) {
+        why = "";
+        const flag = environment.get("IRCFIBER_SIGNUP_NICK_CHECK", "1");
+        if (flag == "0" || flag == "false") return false;
+
+        auto s = loadAnopeSettings();
+        if (!s.configured) return false;
+        // A signup must not sit on a services round trip.
+        if (s.timeoutSeconds > 4) s.timeoutSeconds = 4;
+
+        final switch (anopeNickRegistration(s, username)) {
+            case NickRegistration.registered:
+                why = "The nickname \"" ~ username ~ "\" is already registered on IRC Fiber's "
+                    ~ "IRC network. Your username is also your IRC nickname, so please choose "
+                    ~ "another — or sign in with the account that owns it.";
+                return true;
+            case NickRegistration.servicesReserved:
+                why = "The nickname \"" ~ username ~ "\" is reserved by the IRC network's "
+                    ~ "services. Please choose another username.";
+                return true;
+            case NickRegistration.free:
+                return false;
+            case NickRegistration.unknown:
+                logWarn("register: could not verify IRC availability of %s — allowing signup",
+                        username);
+                return false;
+        }
+    }
+
     private void registerPost(HTTPServerRequest req, HTTPServerResponse res) {
         auto repo = new UserRepository();
         auto username = req.form.get("username", "").strip();
@@ -281,6 +334,15 @@ final class WebController {
             username = at > 0 ? email[0..at].idup : email;
             // Strip non-alphanumeric to keep usernames IRC-friendly.
             username = replaceAll(username, regex(r"[^a-zA-Z0-9_\-]"), "");
+            // An IRC nick must start with a letter, so drop leading digits,
+            // hyphens and underscores the email local part may have begun with.
+            size_t nickStart = 0;
+            while (nickStart < username.length) {
+                const c = username[nickStart];
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) break;
+                nickStart++;
+            }
+            username = username[nickStart .. $];
             if (username.length == 0) username = "user";
         }
 
@@ -291,8 +353,25 @@ final class WebController {
             return;
         }
 
-        if (!email.canFind('@') || !email.canFind('.')) {
+        // Whitespace and control characters are rejected outright: the email
+        // is interpolated into `NickServ REGISTER <password> <email>`, which
+        // is a space-delimited services command.
+        bool emailWellFormed = email.canFind('@') && email.canFind('.');
+        foreach (char c; email)
+            if (c <= 0x20 || c == 0x7F) emailWellFormed = false;
+        if (!emailWellFormed) {
             authError = "That doesn't look like a valid email address.";
+            res.statusCode = 400;
+            res.render!("register.dt", authError)();
+            return;
+        }
+
+        // The username is also the IRC nick and the NickServ account name
+        // (ircfiber.services.accounts) — all three are the same string, so
+        // reject anything the ircd would refuse.
+        if (!isValidIrcNick(username)) {
+            authError = "Usernames must be a valid IRC nickname: letters, digits, - _ [ ] \\ ` ^ { | }, "
+                      ~ "starting with a letter, at most 32 characters.";
             res.statusCode = 400;
             res.render!("register.dt", authError)();
             return;
@@ -305,8 +384,18 @@ final class WebController {
             return;
         }
 
-        if (repo.findByUsername(username).username.length > 0) {
+        // Case-insensitive: the username is also the IRC nick, and IRC nicks
+        // are case-insensitive, so `Alice` and `alice` are one identity.
+        if (repo.findByUsernameCI(username).username.length > 0) {
             authError = "That username is already taken. Please choose another.";
+            res.statusCode = 409;
+            res.render!("register.dt", authError)();
+            return;
+        }
+
+        string claimedWhy;
+        if (ircNickIsClaimed(username, claimedWhy)) {
+            authError = claimedWhy;
             res.statusCode = 409;
             res.render!("register.dt", authError)();
             return;
@@ -329,6 +418,15 @@ final class WebController {
             ensureDefaultFiberNetwork(u, new NetworkRepository(), redis, new ServerRegistry(redis));
         } catch (Exception e) {
             logWarn("Failed to provision default network for new user %s: %s", u.username, e.msg);
+        }
+
+        // Claim the username with NickServ and store the generated password
+        // as the Fiber network's SASL credential. Fire-and-forget: the user
+        // record must survive an Anope/Redis hiccup.
+        try {
+            provisionServicesAccountAsync(u, redis);
+        } catch (Exception e) {
+            logWarn("Failed to schedule NickServ registration for %s: %s", u.username, e.msg);
         }
 
         if (!req.session) req.session = res.startSession();

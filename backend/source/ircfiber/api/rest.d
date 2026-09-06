@@ -43,6 +43,7 @@ import ircfiber.logging : logJsonMap;
 import ircfiber.tracing : withSpan, Span;
 import ircfiber.egress : DIRECT_EGRESS_ID, EgressView, egressView, matchingSlot,
     normalizeEgressId, isKnownEgressId;
+import ircfiber.services.accounts : provisionServicesAccountAsync, servicesSkipKey;
 private string normalizeHost(string host) @safe pure {
     host = host.strip();
     auto schemeSep = host.indexOf("://");
@@ -129,6 +130,8 @@ final class RESTAPI {
         router.post("/api/networks/:id/bouncer", &generateBouncer);
         router.delete_("/api/networks/:id/bouncer", &revokeBouncer);
         router.get("/api/me", &getMe);
+        router.get("/api/me/irc-account", &getIrcAccount);
+        router.post("/api/me/irc-account/retry", &retryIrcAccount);
         router.post("/api/me/pins", &pinChannel);
         router.delete_("/api/me/pins/:network/:channel", &unpinChannel);
         router.post("/api/me/members-collapsed", &updateMembersCollapsed);
@@ -400,10 +403,13 @@ final class RESTAPI {
         const egressChanged = cfg.egressNodeId != priorEgress;
 
         auto user = req.context["user"].get!User;
-        // Fiber lock: nick/realName must track the account username
+        // Fiber lock: nick/realName track the services account when one has
+        // been provisioned (a collision fallback may have renamed it, and the
+        // SASL username must equal the nick), else the account username.
         if (cfg.host == DEFAULT_FIBER_HOST) {
-            cfg.nick = user.username;
-            cfg.realName = user.username;
+            const managedNick = cfg.saslUsername.length ? cfg.saslUsername : user.username;
+            cfg.nick = managedNick;
+            cfg.realName = managedNick;
             cfg.port = DEFAULT_FIBER_PORT;
             cfg.tls = TLSMode.required;
             cfg.host = DEFAULT_FIBER_HOST;
@@ -1481,6 +1487,105 @@ final class RESTAPI {
             // state. See docs/PREF_VERSION.md.
             "prefVersion": Json(prefs.prefVersion)
         ]));
+    }
+
+    /// GET /api/me/irc-account — the NickServ account this website account
+    /// owns on irc.ircfiber.com plus the password the gateway generated for
+    /// it (`ircfiber.services.accounts`), so the user can manage the account
+    /// or sign in with a third-party client. Read-only: the credential is
+    /// only ever minted by the provisioner.
+    ///
+    /// `status`: ready | pending (in flight, will retry) | unavailable
+    /// (provisioning gave up; `reason` says why, retry via the POST below) |
+    /// none (no IRC Fiber network).
+    private void getIrcAccount(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+
+        auto user = req.context["user"].get!User;
+        NetworkConfig fiber;
+        bool found = false;
+        foreach (ref cfg; networkRepo.findByUserId(user.id)) {
+            if (cfg.host == DEFAULT_FIBER_HOST) {
+                fiber = cfg;
+                found = true;
+                break;
+            }
+        }
+        // The response carries a live credential: never let a shared cache,
+        // proxy or the browser's back/forward cache retain it.
+        res.headers["Cache-Control"] = "no-store, max-age=0";
+        res.headers["Pragma"] = "no-cache";
+
+
+        string status = "none";
+        if (found)
+            status = (fiber.sasl == SASLMechanism.plain
+                      && fiber.saslUsername.length
+                      && fiber.saslPassword.length) ? "ready" : "pending";
+
+        // A skip key means the provisioner stopped trying for 24h, so
+        // "pending" would be a lie — surface the reason instead.
+        string reason;
+        if (status == "pending") {
+            try {
+                reason = redis.getDb().get(servicesSkipKey(user.id.toString()));
+                if (reason.length) status = "unavailable";
+            } catch (Exception e) {
+                logWarn("irc-account: reading skip key for %s failed: %s", user.username, e.msg);
+            }
+        }
+
+        const ready = status == "ready";
+        res.writeJsonBody(Json([
+            "status": Json(status),
+            "reason": Json(reason),
+            "account": Json(ready ? fiber.saslUsername : ""),
+            "password": Json(ready ? fiber.saslPassword : ""),
+            "host": Json(DEFAULT_FIBER_HOST),
+            "port": Json(cast(int) DEFAULT_FIBER_PORT),
+            "network": Json(found && fiber.name.length ? fiber.name : "IRC Fiber")
+        ]));
+    }
+
+    /// POST /api/me/irc-account/retry — clear the 24h give-up marker and run
+    /// provisioning again. Self-service for the case where the nick that
+    /// blocked registration has since been released. Rate-limited to one
+    /// attempt per minute per user.
+    private void retryIrcAccount(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+
+        auto user = req.context["user"].get!User;
+        const userId = user.id.toString();
+        auto db = redis.getDb();
+        const throttleKey = "irc:services:retry:" ~ userId;
+        // The read-back must compare a value only this request could have
+        // written: SET NX with a constant looks identical whether we won or
+        // lost the race, which silently disables the throttle.
+        const token = randomUUID().toString();
+        try {
+            db.request!string("SET", throttleKey, token, "NX", "EX", "60");
+            if (db.get(throttleKey) != token) {
+                res.statusCode = 429;
+                res.writeJsonBody(Json(["error": Json("Please wait a minute before retrying.")]));
+                return;
+            }
+        } catch (Exception e) {
+            logWarn("irc-account: retry throttle for %s failed: %s", user.username, e.msg);
+        }
+
+        try db.del(servicesSkipKey(userId));
+        catch (Exception e) {
+            logWarn("irc-account: clearing skip key for %s failed: %s", user.username, e.msg);
+            res.statusCode = 503;
+            res.writeJsonBody(Json(["error": Json("Could not start a retry. Try again shortly.")]));
+            return;
+        }
+        provisionServicesAccountAsync(user, redis);
+        logInfo("irc-account: user %s requested a NickServ provisioning retry", user.username);
+        res.statusCode = 202;
+        res.writeJsonBody(Json(["status": Json("retrying")]));
     }
 
     private void pinChannel(HTTPServerRequest req, HTTPServerResponse res) {

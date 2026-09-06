@@ -36,16 +36,20 @@ block scripts
   link(rel="stylesheet", href="/public/dist/assets/Dialog-DRzVuPxC.css")
   link(rel="preload", href="/public/dist/assets/vendor-Bil6o97j.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/vendor-Bil6o97j.css")
-  link(rel="preload", href="/public/dist/assets/chunk-pages-CCadadWy.css", as="style")
-  link(rel="stylesheet", href="/public/dist/assets/chunk-pages-CCadadWy.css")
+  link(rel="preload", href="/public/dist/assets/chunk-pages-CDeUYLgQ.css", as="style")
+  link(rel="stylesheet", href="/public/dist/assets/chunk-pages-CDeUYLgQ.css")
   link(rel="preload", href="/public/dist/assets/chunk-panels-CocnmuN3.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-panels-CocnmuN3.css")
   link(rel="modulepreload", href="/public/dist/assets/vendor-BqvCPNYh.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-Dc2p1E6K.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-CKrsfrya.js")
   link(rel="modulepreload", href="/public/dist/assets/chunk-editor-DD9-cTfl.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-CC3mF-zS.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-Bx44IRzI.js")
-  script(type="module", src="/public/dist/assets/main-D2vI2yGr.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-XuL3EaJL.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-CsEMyKri.js")
+  script(type="module", src="/public/dist/assets/main-B2Ldw5u6.js")
+
+
+
+
 
 
 

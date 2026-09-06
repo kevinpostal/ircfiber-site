@@ -14,3 +14,4 @@ backend/egress-test
 backend/bnc-wire-test
 backend/parser-test
 backend/support-format-test
+backend/services-test

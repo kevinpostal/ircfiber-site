@@ -23,6 +23,80 @@ One page for day-to-day network operation. Canonical config lives in
   accounts materialized yet — add an `<oper>` entry of the right type when
   staff grows, never widen Dashboard.
 
+## Anope XML-RPC (website account registration)
+
+- `ircfiber-services` loads `m_httpd` + `m_xmlrpc` + `m_xmlrpc_main` and
+  listens on `{{ ircd_services_rpc_port }}` (8080) **inside** the container.
+  The container publishes no ports, so only `ircfiber_net` can reach it.
+  m_xmlrpc has no authentication of its own — never publish this port.
+- The gateway (`ircfiber.services.accounts`) uses it to run
+  `NickServ REGISTER <generated-pw> <email>` for every website account on
+  signup and on the first login of an existing account, then stores the
+  password as the user's SASL PLAIN credential on the IRC Fiber network and
+  pushes `reconnectNetwork` so the live session authenticates. The account
+  name is the username, falling back to `<username>_<4 hex>` then
+  `<username>_2…_9` when the nick is already registered.
+- Endpoint wiring: `IRCFIBER_ANOPE_RPC_URL` /
+  `IRCFIBER_ANOPE_RPC_TIMEOUT` in the gateway env. Set
+  `ircd_services_rpc_enabled: false` to turn the listener and the
+  auto-registration off; the gateway then logs "Anope RPC not configured"
+  and skips provisioning. Adding/removing the modules needs a services
+  **restart**, not a rehash — the ircd role handler already does that.
+- **Hijack guard (security-critical).** `ns_register` finishes with
+  `u->Identify(na)` for whoever is online as the target nick, so registering
+  a nick a stranger holds logs *them* into the brand-new account. Verified on
+  2.0.20: the squatter's own socket received
+  `900 … :You are now logged in as probesquat` plus `MODE +r`. The gateway
+  therefore registers a nick only when either (a) our engine currently holds
+  exactly that nick — nicks are unique, so it must be our session — or
+  (b) Anope's `user` method reports no live session on it. `NickServ STATUS`
+  is **not** usable here: it reports identification, so an online
+  *unregistered* nick answers `0` exactly like an offline one. The oracle for
+  (a) is the engine's `NetworkStateSnapshot.currentNick`; when the engine has
+  not connected yet and somebody holds the nick, provisioning defers
+  (`ProvisionOutcome.deferred`, no skip key) and retries on the next login.
+- Guard keys (Redis): `irc:services:lock:<userId>` (SET NX EX 60,
+  single-flight across gateway replicas), `irc:services:skip:<userId>`
+  (24h give-up marker whose value is the user-facing reason) and
+  `irc:services:retry:<userId>` (60s throttle on the self-service retry).
+- User-visible state comes from `GET /api/me/irc-account`:
+  `ready` | `pending` (in flight, retries itself) | `unavailable` (skip key
+  set; its text is shown as the reason, with a Retry button that
+  `POST`s `/api/me/irc-account/retry`) | `none` (no IRC Fiber network).
+  Deleting the skip key by hand has the same effect as the Retry button.
+- **Signup-time availability gate.** `/register` rejects a username that
+  `NickServ INFO` reports as registered (`Account:` line) or as a service bot
+  (`is part of this Network's Services`), because the username *is* the user's
+  nick and account name. It fails **open**: an unreachable or disabled Anope
+  logs `register: could not verify IRC availability of <name>` and lets the
+  signup through, where the fallback chain takes over — signup never depends
+  on services being up. Kill switch: `IRCFIBER_SIGNUP_NICK_CHECK=0`
+  (`ircd_signup_nick_check: false`). The check is budgeted to 4s.
+- Username uniqueness is checked **case-insensitively**
+  (`UserRepository.findByUsernameCI`) because IRC nicks are: `Alice` and
+  `alice` are one identity on the network and must not become two accounts.
+  ASCII folding only; the rfc1459 `[]\`↔`{}|` equivalence is caught by the
+  Anope gate above.
+- Emails are rejected at signup if they contain whitespace or control
+  characters, and every value interpolated into a services command passes
+  `isSafeServicesArg` first — services commands are space-delimited, so an
+  unsanitised argument injects extra parameters into what Anope runs.
+- Every generated credential is proved with `checkAuthentication` (the same
+  path SASL PLAIN takes) **before** it is persisted or shown, and is written
+  to `irc:services:pending:<userId>` (24h) *before* `REGISTER`. If the gateway
+  dies between registering and saving, the next run adopts that record
+  instead of orphaning the user's nick under a password nobody knows; a
+  record that no longer authenticates is discarded.
+- Anope flushes `anope.db` every `updatetimeout` (5m); a services restart
+  within that window can lose a just-created account. No action needed —
+  the user's next login re-provisions it.
+- Manual probe from a container on `ircfiber_net`:
+  `POST http://services:8080/xmlrpc`, `Content-Type: text/xml`, body
+  `<?xml version="1.0"?><methodCall><methodName>command</methodName><params>`
+  `<param><value><string>NickServ</string></value></param>` … one `<string>`
+  per positional argument. Replies are XML-escaped **twice**
+  (`&amp;#xA;` is one newline, `&amp;qt;` is `>`).
+
 ## Common actions
 
 ```sh

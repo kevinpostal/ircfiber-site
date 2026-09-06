@@ -316,5 +316,34 @@ module
 module { name = "enc_bcrypt" }
 module { name = "enc_sha256" }
 
+{% if ircd_services_rpc_enabled | default(true) | bool %}
+/* XML-RPC control surface. Container-internal only: ircfiber-services
+   publishes no ports, so only the docker network can reach it, and
+   m_xmlrpc has no authentication of its own. The gateway uses it to run
+   `NickServ REGISTER` on behalf of a website account whose nick may be
+   online (the engine holds it) or offline — see ircfiber.services.anope. */
+module
+{
+	name = "m_httpd"
+
+	httpd
+	{
+		name = "httpd/main"
+		ip = "0.0.0.0"
+		port = {{ ircd_services_rpc_port | default(8080) }}
+		timeout = 30
+		extforward_header = "X-Forwarded-For Forwarded-For"
+	}
+}
+
+module
+{
+	name = "m_xmlrpc"
+	server = "httpd/main"
+}
+
+module { name = "m_xmlrpc_main" }
+{% endif %}
+
 /* Extras: help + m_sasl (IRCv3 SASL PLAIN via InspIRCd's sasl module). */
 include { type = "file"; name = "modules.example.conf" }

@@ -110,6 +110,37 @@ export async function fetchMe(): Promise<MeResponse> {
   return r.json();
 }
 
+/** The NickServ account the gateway registered for this website account on
+ *  irc.ircfiber.com, plus the password it generated for SASL PLAIN.
+ *  `pending` — provisioning is in flight and will retry by itself.
+ *  `unavailable` — provisioning gave up (see `reason`); retryable.
+ *  `none` — there is no IRC Fiber network. */
+export interface IrcAccountInfo {
+  status: 'ready' | 'pending' | 'unavailable' | 'none';
+  reason: string;
+  account: string;
+  password: string;
+  host: string;
+  port: number;
+  network: string;
+}
+
+export async function fetchIrcAccount(): Promise<IrcAccountInfo> {
+  const r = await fetch(`${API_BASE}/me/irc-account`);
+  if (!r.ok) throw new Error('Failed to fetch IRC account');
+  return r.json();
+}
+
+/** Clear the 24h give-up marker and provision again. Rate-limited server-side
+ *  to one attempt per minute. */
+export async function retryIrcAccount(): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/irc-account/retry`, { method: 'POST' });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({})) as { error?: string };
+    throw new Error(j.error || 'Could not start a retry');
+  }
+}
+
 export async function pinChannel(networkId: string, channel: string): Promise<void> {
   const r = await fetch(`${API_BASE}/me/pins`, {
     method: 'POST',
