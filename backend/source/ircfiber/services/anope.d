@@ -283,6 +283,17 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
     auto settings = new HTTPClientSettings;
     settings.connectTimeout = s.timeoutSeconds.seconds;
     settings.readTimeout = s.timeoutSeconds.seconds;
+    // One fresh connection per call. m_httpd does not keep a connection
+    // usable for a second request, and vibe.d's client pool has no way to
+    // know that: the FIRST request on a pooled connection answers 200 and
+    // the next one comes back HTTP 404 with an unparseable body. Reads hid
+    // it because `anopePostIdempotent` retries, so it only ever surfaced on
+    // the single-shot mutations — observed 2026-09-06 on prod, where an
+    // account deletion's ownership `INFO` was followed by a `DROP` that
+    // failed with exactly that 404 and left the NickServ account standing.
+    // (It is also the "404 for checkAuthentication, 200 for command"
+    // asymmetry noted below: the same stale-pool bug, not a per-method one.)
+    settings.defaultKeepAliveTimeout = 0.seconds;
     // No address-family pin: the listener binds `::` (see the httpd block in
     // services.conf.j2), which on Linux accepts IPv4 too, so either record of
     // the dual-stack `services` alias works.

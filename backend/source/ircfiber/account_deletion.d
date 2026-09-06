@@ -234,39 +234,55 @@ private bool registeredToUser(AnopeSettings s, string account, User user) {
     return addr !is null && sicmp((*addr).strip(), email) == 0;
 }
 
-/// One DROP, with the reply actually checked.
+/// True when NickServ still knows `account`.
+private bool stillRegistered(AnopeSettings s, string account) {
+    auto r = anopeOperQuery(s, "INFO " ~ account);
+    // Unreachable Anope: say "still there" so the caller retries rather than
+    // reporting a drop it never saw.
+    if (!r.transportOk) return true;
+    return parseNickInfo(r.rawText).registered;
+}
+
+/// Drops one account and then checks that it is actually gone.
 ///
-/// The old code logged "dropped" on any HTTP 200 that was not `Access
-/// denied.`, so a refusal Anope spells out in prose — the exact failure mode
-/// this whole path exists to prevent — was recorded as a success. `isn't
-/// registered` counts as done: the account is gone, which is all the caller
-/// wants.
+/// The reply alone is not enough on two counts. The old code logged
+/// "dropped" for any HTTP 200 that was not `Access denied.`, so a refusal
+/// Anope spells out in prose read as a success. And a lost reply is not a
+/// lost command: on 2026-09-06 a prod deletion's `DROP` came back
+/// "HTTP 404" from a stale pooled connection while the account stayed
+/// registered. Unlike REGISTER, DROP is safe to repeat — a second one
+/// answers "isn't registered" — so the end state decides, with one retry.
 private void dropOneServicesAccount(AnopeSettings s, User user, string account, string why) {
     import std.algorithm.searching : canFind;
     import std.uni : toLower;
 
-    auto r = anopeOperCommand(s, "DROP " ~ account);
-    if (!r.transportOk) {
-        logWarn("purge %s: dropping NickServ account %s failed: %s",
-                user.username, account, r.transportError);
-        return;
+    foreach (attempt; 0 .. 2) {
+        auto r = anopeOperCommand(s, "DROP " ~ account);
+        if (anopeAccessDenied(r)) {
+            logWarn("purge %s: Anope refused to drop %s — the services oper account has "
+                    ~ "no privileges", user.username, account);
+            return;
+        }
+        const reply = r.transportOk ? flattenReplyText(r.text).toLower() : "";
+        if (reply.canFind("isn't registered") || reply.canFind("is not registered")) {
+            logInfo("purge %s: NickServ account %s was already gone", user.username, account);
+            return;
+        }
+        if (reply.canFind("has been dropped") && !stillRegistered(s, account)) {
+            logInfo("purge %s: dropped NickServ account %s (%s)", user.username, account, why);
+            return;
+        }
+        if (!stillRegistered(s, account)) {
+            // The command landed even though its reply did not come back.
+            logInfo("purge %s: dropped NickServ account %s (%s)", user.username, account, why);
+            return;
+        }
+        logWarn("purge %s: NickServ account %s survived DROP attempt %s: %s",
+                user.username, account, attempt + 1,
+                r.transportOk ? flattenReplyText(r.text) : r.transportError);
     }
-    if (anopeAccessDenied(r)) {
-        logWarn("purge %s: Anope refused to drop %s — the services oper account has no "
-                ~ "privileges", user.username, account);
-        return;
-    }
-    const reply = flattenReplyText(r.text).toLower();
-    if (reply.canFind("has been dropped")) {
-        logInfo("purge %s: dropped NickServ account %s (%s)", user.username, account, why);
-        return;
-    }
-    if (reply.canFind("isn't registered") || reply.canFind("is not registered")) {
-        logInfo("purge %s: NickServ account %s was already gone", user.username, account);
-        return;
-    }
-    logWarn("purge %s: NickServ did not confirm dropping %s: %s",
-            user.username, account, flattenReplyText(r.text));
+    logWarn("purge %s: NickServ account %s is STILL registered after two DROPs — services "
+            ~ "and the database are out of step for this account", user.username, account);
 }
 
 /// Kills every login the user still holds, so a deleted account cannot keep
