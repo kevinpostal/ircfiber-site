@@ -271,6 +271,9 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
     auto settings = new HTTPClientSettings;
     settings.connectTimeout = s.timeoutSeconds.seconds;
     settings.readTimeout = s.timeoutSeconds.seconds;
+    // No address-family pin: the listener binds `::` (see the httpd block in
+    // services.conf.j2), which on Linux accepts IPv4 too, so either record of
+    // the dual-stack `services` alias works.
 
     int status = 0;
     string responseBody;

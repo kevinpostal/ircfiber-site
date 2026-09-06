@@ -329,7 +329,15 @@ module
 	httpd
 	{
 		name = "httpd/main"
-		ip = "0.0.0.0"
+		/* Dual-stack. `ircfiber_net` is dual-stack, so the `services`
+		   alias resolves to both an A and an AAAA record and a client
+		   may pick either. m_httpd chooses the socket family purely
+		   from whether this value contains a colon
+		   (`Socket(-1, i.find(':') != npos)` in m_httpd.cpp), and
+		   Anope never sets IPV6_V6ONLY, so a `::` bind accepts IPv4
+		   too (Linux net.ipv6.bindv6only=0). Binding 0.0.0.0 instead
+		   makes every IPv6 client get ECONNREFUSED. */
+		ip = "{{ ircd_services_rpc_bind | default('::') }}"
 		port = {{ ircd_services_rpc_port | default(8080) }}
 		timeout = 30
 		extforward_header = "X-Forwarded-For Forwarded-For"
