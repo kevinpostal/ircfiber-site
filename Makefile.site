@@ -1880,10 +1880,28 @@ update-gateway-bluegreen: _require_clean ## Deploy > Blue/green gateway (zero-do
 	@# at ~250 KB/s, so every deploy would pay ~7 minutes to resend bytes that
 	@# did not change. `--delete` is what stops stale content-hashed assets
 	@# accumulating in the context, which per-subdir rsync used to allow.
-	@rm -rf .deploy-cache/ctx && mkdir -p .deploy-cache/ctx
-	@git archive --format=tar HEAD | tar x -C .deploy-cache/ctx
-	@rsync -az --delete --info=stats1 $(if $(BUILD_HOST),,--rsync-path="sudo rsync") -e "$(_ctx_ssh)" .deploy-cache/ctx/ $(_ctx_host):$(_ctx_dir)/ 2>&1 | tail -4
-	@$(_ctx_ssh) $(_ctx_host) 'echo "context: $$(find $(_ctx_dir) -type f | wc -l) files at $(_git_short)"'
+	@# `set -e`, no output pipe, and NO `--info=`: macOS ships openrsync
+	@# ("rsync version 2.6.9 compatible"), which rejects `--info` with a usage
+	@# message and a non-zero status. Piped through `tail` that was invisible,
+	@# so the context silently never synced, the build reused a WEEKS-OLD tree,
+	@# and the image still got labelled with the new SHA via --build-arg
+	@# GIT_SHORT — a green container running old code under a new version
+	@# string (2026-09-06). Keep this option set portable.
+	@set -e; \
+	  rm -rf .deploy-cache/ctx; mkdir -p .deploy-cache/ctx; \
+	  git archive --format=tar HEAD | tar x -C .deploy-cache/ctx; \
+	  git rev-parse HEAD > .deploy-cache/ctx/.deploy-sha; \
+	  rsync -az --delete $(if $(BUILD_HOST),,--rsync-path="sudo rsync") -e "$(_ctx_ssh)" .deploy-cache/ctx/ $(_ctx_host):$(_ctx_dir)/
+	@# Prove it, do not assume it: compare a sentinel written into the tree
+	@# against HEAD. An exit status only tells you rsync thought it succeeded;
+	@# this tells you the builder is holding exactly the commit being deployed,
+	@# which is the precondition the whole reproducibility story rests on.
+	@remote=$$($(_ctx_ssh) $(_ctx_host) 'cat $(_ctx_dir)/.deploy-sha 2>/dev/null' | tr -d '\r\n'); \
+	 if [ "$$remote" != "$(_git_hash)" ]; then \
+	   printf '%b\n' "\033[31m✗ builder context is $${remote:-missing}, expected $(_git_hash) — refusing to build stale source\033[0m"; \
+	   exit 1; \
+	 fi; \
+	 printf '%b\n' "$(BG)$(OK) builder context verified at $(_git_short)$(R)"
 	@# deploy/ always goes to the target — Ansible runs against it, not the
 	@# builder — and it is tooling, not part of the artifact.
 	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" deploy/ deploy@$(_target_ssh):/opt/ircfiber-src/deploy/ 2>&1 | tail -5
