@@ -72,6 +72,22 @@ ircd_oper_name: "admin"
 ircd_oper_vhost: "staff"
 ircd_oper_sslonly: true
 
+# Extra NickServ accounts granted Anope "Services Root" beyond
+# {{ ircd_oper_name }}. Each entry still needs to /OPER on the IRCd first
+# (require_oper = yes in services.conf.j2), so listing an account here
+# grants nothing on its own — the NickServ account name and the <oper>
+# name in opers.conf are independent.
+ircd_services_root_extra_accounts:
+  - "sq"
+
+# uid:gid the anope/anope image runs its services process as. The gid is
+# `nogroup`, deliberately unrelated to the uid, so it cannot be derived —
+# and it is load-bearing: the data volume must be owned by exactly this
+# pair or Anope logs "DB_FLATFILE: Unable to open data/anope.db for
+# reading" and runs on an empty in-memory database.
+ircd_services_uid: 10000
+ircd_services_gid: 65533
+
 # Dashboard oper for the admin web UI (Dashboard class: REHASH + STATS +
 # G/K/Z-LINE only, host-locked to the Docker network). Gateway reads the
 # password from vault_ircd_dashboard_password via IRCFIBER_IRCD_OPER_PASSWORD.
@@ -108,17 +124,48 @@ ircd_tor_autojoin: ""
 #  - "#welcome"
 
 # Channels created at boot and kept open when empty (+P). These are the
-# engine's DEFAULT_FIBER_CHANNELS, so the auto-join never 403s.
+# engine's DEFAULT_FIBER_CHANNELS, so the auto-join never 403s. They are
+# also registered with ChanServ (founder = {{ ircd_services_root_account }},
+# the services-root account) so they keep a founder, an access list, a
+# re-asserted mode lock and topic retention; `description` is the one-line
+# text ChanServ REGISTER stores. `history` switches on chat-history replay
+# (`+H <lines>:<age>`, InspIRCd's chanhistory module) and must stay within
+# the <chanhistory maxlines/maxduration> caps in modules.conf.j2.
 ircd_permanent_channels:
   - channel: "#ircfiber"
     modes: "nt"
+    history: "50:1w"
+    description: "IRC Fiber"
     topic: "Welcome to IRC Fiber — https://ircfiber.com"
   - channel: "#welcome"
     modes: "nt"
+    history: "50:1w"
+    description: "IRC Fiber newcomers"
     topic: "New here? Say hi. /msg NickServ HELP to register your nick."
   - channel: "#support"
     modes: "nt"
+    history: "50:1w"
+    description: "IRC Fiber support requests"
     topic: "IRC Fiber support — report problems at https://ircfiber.com/?/feedback · FiberSupport announces new reports here"
+
+# ChanServ registration of the staff channels above (roles/ircd/files/
+# ircd_channel_setup.py, run over TLS on the loopback TLS port). Set false
+# to skip it entirely, e.g. on a host where services are not deployed.
+ircd_chanserv_setup_enabled: true
+# NickServ account that owns the staff channels. services.conf.j2 already
+# declares oper { name = "{{ ircd_oper_name }}"; type = "Services Root";
+# require_oper = yes }, so this account is the designated Services Root and
+# its password is vault_ircd_oper_password — but an oper block only becomes
+# usable once the account it names actually exists in NickServ, which is
+# exactly what the setup script registers on its first run.
+ircd_services_root_account: "{{ ircd_oper_name }}"
+# Used only when the account still has to be registered. Anope runs with
+# usemail = no, so no confirmation mail is ever sent to it.
+ircd_services_root_email: "{{ ircd_admins[0].email }}"
+# Overall seconds budget for the whole setup run (IRCD_TIMEOUT). Has to
+# cover the script's 120 s wait for services to link plus NickServ's 30 s
+# regdelay on the very first run, before any channel work starts.
+ircd_chanserv_setup_timeout: 420
 
 # Server fingerprinting: VERSION replies show this instead of "InspIRCd-4",
 # and netsplit quits are hidden. Cosmetic; no protocol impact.

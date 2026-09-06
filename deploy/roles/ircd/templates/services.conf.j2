@@ -76,7 +76,10 @@ options
 	timeoutcheck = 3s
 	retrywait = 30s
 	hideprivilegedcommands = yes
-	hideregisteredcommands = yes
+	/* Show every registered command in HELP, not just the ones the caller
+	 * currently has access to — a newcomer asking `/msg ChanServ HELP`
+	 * should see what the service can do, not a list trimmed to nothing. */
+	hideregisteredcommands = no
 	languages = "ca_ES.UTF-8 de_DE.UTF-8 el_GR.UTF-8 es_ES.UTF-8 fr_FR.UTF-8 hu_HU.UTF-8 it_IT.UTF-8 nl_NL.UTF-8 pl_PL.UTF-8 pt_PT.UTF-8 ru_RU.UTF-8 tr_TR.UTF-8"
 }
 
@@ -170,6 +173,21 @@ oper
 	type = "Services Root"
 	require_oper = yes
 }
+{% for account in ircd_services_root_extra_accounts %}
+
+/*
+ * Additional Services Root. `require_oper = yes` means the account only
+ * gains these privileges while its owner is also opered on the IRCd, so
+ * they still need the <oper> credentials in opers.conf — the NickServ
+ * account name and the /OPER name are independent.
+ */
+oper
+{
+	name = "{{ account }}"
+	type = "Services Root"
+	require_oper = yes
+}
+{% endfor %}
 
 /* No mailer in the container: registration does not require email confirmation. */
 mail
@@ -180,11 +198,13 @@ mail
 	delay = 5m
 }
 
-/* Database: flat file on the /data volume (image symlinks /anope/data/anope.db there). */
+/* Database: flat file on the data volume, which the role mounts directly at
+   /anope/data (the image's own /data VOLUME + symlink bridge does not
+   survive db_flatfile's first rename()-based save). */
 module
 {
 	name = "db_flatfile"
-	/* Relative to /anope/data; anope.db there is a symlink to /data/anope.db (volume). */
+	/* Relative to /anope/data, which is the mounted volume. */
 	database = "anope.db"
 	keepbackups = 3
 	fork = no

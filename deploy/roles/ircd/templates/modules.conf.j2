@@ -112,8 +112,13 @@
                saveperiod="5s"
                operonly="yes">
 <include file="/inspircd/data/permchannels.conf" missingokay="yes">
+# Seeds these channels on a fresh host only: permchanneldb writes the live
+# modes back to /inspircd/data/permchannels.conf, which is <include>d above
+# (i.e. before these tags) and LoadDatabase skips channels that already
+# exist — so on an existing network the saved copy always wins, and it is
+# the ChanServ mode lock that changes an existing channel, not this.
 {% for ch in ircd_permanent_channels %}
-<permchannels channel="{{ ch.channel }}" modes="{{ ch.modes | default('nt') }}P" topic="{{ ch.topic | default('') }}">
+<permchannels channel="{{ ch.channel }}" modes="{{ ch.modes | default('nt') }}P{% if ch.history is defined and ch.history %}H {{ ch.history }}{% endif %}" topic="{{ ch.topic | default('') }}">
 {% endfor %}
 
 {% if ircd_default_channels | length > 0 %}

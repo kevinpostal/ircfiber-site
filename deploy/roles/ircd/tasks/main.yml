@@ -254,6 +254,83 @@
       com.ircfiber.version: "{{ ircfiber_version }}"
       com.ircfiber.server_name: "{{ ircd_server_name }}"
 
+# Anope database persistence. The anope image declares VOLUME /data/ and
+# ships /anope/data/anope.db as a symlink to /data/anope.db. db_flatfile
+# saves by writing anope.db.tmp and then rename()-ing it over the target,
+# and rename() REPLACES the symlink with a regular file — so from the very
+# first save onward every NickServ/ChanServ registration is written to the
+# container's writable layer instead of the volume, and is destroyed by the
+# next `docker rm`. The volume is therefore mounted at Anope's real data
+# dir (/anope/data, see below) instead of the image's /data VOLUME; this
+# task first moves whatever state the old layout accumulated inside the
+# container onto the volume, so the remount keeps the existing accounts.
+#
+# Ownership is load-bearing and easy to lose: `docker cp` out of a
+# container writes host files as root, so a plain `cp -a` into the volume
+# hands Anope a database it cannot read or write ("DB_FLATFILE: Unable to
+# open data/anope.db for writing"), and it then runs with an empty
+# in-memory database that silently overwrites nothing. The uid/gid are
+# therefore read from the live container and re-applied, and the check is
+# re-run every deploy so a volume that is already wrong gets repaired.
+- name: Migrate Anope database onto the data volume
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      vol="{{ ircd_services_data_volume }}"
+      helper="{{ ircd_cert_sync_image }}"
+      container="{{ ircd_services_container_name }}"
+      uid={{ ircd_services_uid }}
+      gid={{ ircd_services_gid }}
+      changed=0
+
+      volume_ok() {
+        docker run --rm -v "$vol:/v" "$helper" sh -c "
+          test -s /v/anope.db && test ! -L /v/anope.db \
+            && test \"\$(stat -c '%u:%g' /v)\" = '$uid:$gid' \
+            && test \"\$(stat -c '%u:%g' /v/anope.db)\" = '$uid:$gid'"
+      }
+
+      if volume_ok; then
+        echo "UNCHANGED"
+        exit 0
+      fi
+
+      # Everything below mutates the volume, so Anope must not be running.
+      # A live services process that could not read the database is holding
+      # an EMPTY one in memory, and the instant the files become writable
+      # again it commits that emptiness over the real data — which is
+      # exactly how #dmz/sq/FiberSupport were lost once already. Stopping
+      # first both flushes a healthy process and muzzles a broken one; the
+      # next task starts the container again.
+      if docker inspect "$container" >/dev/null 2>&1; then
+        docker stop "$container" >/dev/null
+      fi
+
+      # Salvage state stranded in the container layer by the old /data
+      # mount, if the volume has no usable database of its own.
+      if ! docker run --rm -v "$vol:/v" "$helper" \
+        sh -c 'test -s /v/anope.db && test ! -L /v/anope.db'; then
+        if docker inspect "$container" >/dev/null 2>&1; then
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          docker cp "$container:/anope/data/." "$tmp/"
+          docker run --rm -v "$vol:/v" -v "$tmp:/src" "$helper" \
+            sh -c 'rm -f /v/anope.db; cp -a /src/. /v/'
+        fi
+        # No container yet: fresh host, Docker populates the empty volume
+        # from the image on first start. Nothing to salvage.
+      fi
+
+      # `docker cp` writes host files as root, so ownership has to be put
+      # back explicitly or Anope cannot read or write its own database.
+      docker run --rm -v "$vol:/v" "$helper" sh -c "chown -R $uid:$gid /v"
+      changed=1
+
+      [ "$changed" -eq 1 ] && echo "CHANGED" || echo "UNCHANGED"
+  register: ircd_anope_db_migrate
+  # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".
+  changed_when: "'CHANGED' in ircd_anope_db_migrate.stdout_lines"
+
 - name: Run ircfiber-services (Anope)
   community.docker.docker_container:
     name: "{{ ircd_services_container_name }}"
@@ -267,7 +344,10 @@
           - "{{ ircd_services_name }}"
     networks_cli_compatible: true
     volumes:
-      - "{{ ircd_services_data_volume }}:/data"
+      # Mounted at Anope's real data dir rather than the image's /data
+      # VOLUME: the symlink the image uses to bridge the two does not
+      # survive db_flatfile's first save (see the migration task above).
+      - "{{ ircd_services_data_volume }}:/anope/data"
       - "{{ ircd_services_conf_dir }}/services.conf:/anope/conf/services.conf:ro"
       - "{{ ircd_services_conf_dir }}/nickserv.conf:/anope/conf/nickserv.conf:ro"
       - "{{ ircd_services_conf_dir }}/services.motd:/anope/conf/services.motd:ro"
@@ -281,3 +361,99 @@
       com.ircfiber.component: "services"
       com.ircfiber.version: "{{ ircfiber_version }}"
       com.ircfiber.server_name: "{{ ircd_services_name }}"
+
+# Handlers normally fire at the very end of the play — which would restart
+# Anope *after* the registrations below and throw them away, because
+# db_flatfile only persists on <options:updatetimeout> (5m) or a clean
+# shutdown. Flushing here means the restart happens first and the channels
+# are registered against the services process that will keep running.
+- name: Apply pending ircd/services restarts before touching ChanServ
+  ansible.builtin.meta: flush_handlers
+  tags: [chanserv]
+
+# Hard stop. If Anope could not read its database it is running on an
+# empty one, and the ChanServ registrations below would be flushed over
+# the real file — turning a permissions slip into silent data loss. Only
+# the log since the current container start is inspected, so an old
+# failure that has since been repaired does not block the deploy.
+- name: Assert Anope loaded its database
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      started="$(docker inspect -f '{{ "{{" }}.State.StartedAt{{ "}}" }}' \
+        {{ ircd_services_container_name }})"
+      log="$(docker logs --since "$started" {{ ircd_services_container_name }} 2>&1)"
+      if printf '%s' "$log" | grep -q 'Unable to open .*anope.db'; then
+        printf '%s\n' "$log" | grep 'anope.db' | tail -5
+        echo "Anope cannot read/write its database — refusing to register" \
+          "channels on top of an empty in-memory copy."
+        exit 1
+      fi
+      printf '%s' "$log" | grep -q 'Databases loaded' || {
+        echo "Anope has not reported 'Databases loaded' yet."
+        exit 1
+      }
+      echo OK
+  register: ircd_anope_db_ok
+  until: ircd_anope_db_ok.rc == 0
+  retries: 6
+  delay: 10
+  changed_when: false
+  when: ircd_chanserv_setup_enabled | bool
+  tags: [chanserv]
+
+# ChanServ ownership of the staff channels: founder, access list, the
+# +H chat-history mode lock and topic retention. permchannels alone gives
+# none of these, and its modes= attribute cannot change an existing
+# network (permchanneldb's saved copy is included first and wins).
+- name: Install ChanServ channel setup script
+  ansible.builtin.copy:
+    src: ircd_channel_setup.py
+    dest: /usr/local/sbin/ircfiber-ircd-channel-setup
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [chanserv]
+
+# Readiness is the script's job, not a log grep: it WHOISes ChanServ until
+# the pseudo-client answers 311. `docker logs --tail 50` only shows the
+# "is done syncing" line right after a restart — on a host that has been
+# up for days it has long scrolled off, which would have failed every
+# `-t chanserv` run.
+
+# Connects over TLS on the published loopback port because the admin oper
+# block is sslonly (plaintext /OPER is refused). TLS verification is on
+# only in letsencrypt mode: the LE certificate is issued for
+# {{ ircd_server_name }} and TLS validates the SNI hostname, not the peer
+# address, so a loopback connection with that SNI verifies fine — a
+# self-signed cert has no chain to verify against. Passwords are passed in
+# `environment:` only, never on the command line.
+- name: Register staff channels with ChanServ
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/ircfiber-ircd-channel-setup
+  environment:
+    IRCD_HOST: "127.0.0.1"
+    IRCD_PORT: "{{ ircd_port_tls }}"
+    IRCD_TLS: "1"
+    IRCD_TLS_VERIFY: "{{ '1' if ircd_tls_mode == 'letsencrypt' else '0' }}"
+    IRCD_TLS_SNI: "{{ ircd_server_name }}"
+    IRCD_ACCOUNT: "{{ ircd_services_root_account }}"
+    IRCD_ACCOUNT_PASSWORD: "{{ vault_ircd_oper_password }}"
+    IRCD_ACCOUNT_EMAIL: "{{ ircd_services_root_email }}"
+    IRCD_OPER_NAME: "{{ ircd_oper_name }}"
+    IRCD_OPER_PASSWORD: "{{ vault_ircd_oper_password }}"
+    IRCD_CHANNELS: "{{ ircd_permanent_channels | to_json }}"
+    IRCD_TIMEOUT: "{{ ircd_chanserv_setup_timeout }}"
+  register: ircd_chanserv_setup
+  # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".
+  changed_when: "'CHANGED' in ircd_chanserv_setup.stdout_lines"
+  when: ircd_chanserv_setup_enabled | bool
+  tags: [chanserv]
+
+# Per-channel results (REGISTERED / mode lock / options / topic).
+- name: ChanServ channel setup result
+  ansible.builtin.debug:
+    var: ircd_chanserv_setup.stdout_lines
+  when: ircd_chanserv_setup_enabled | bool
+  tags: [chanserv]
