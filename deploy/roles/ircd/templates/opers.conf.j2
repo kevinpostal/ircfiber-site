@@ -2,9 +2,20 @@
 # InspIRCd 4 oper classes/types/accounts — {{ ircd_server_name }}
 # Reference: https://docs.inspircd.org/4/configuration/#oper
 
+# The three users/flood/* privs are the only complete bypass of the
+# penalty system, and each disables a different check in src/users.cpp:
+#   no-fakelag         penaltymax = ULONG_MAX, so CommandFloodPenalty is
+#                      never reached and the class's threshold stops
+#                      applying at all
+#   increased-buffers  skips the recvq, softsendq and hardsendq limits
+#   no-throttle        exempts from connection throttling
+# Note that `fakelag="no"` on a <connect> class is NOT a bypass: it only
+# swaps the penalty from "pause parsing until it drains" to "QuitUser:
+# Excess Flood" (users.cpp:287). Raising the threshold is what buys
+# headroom; no-fakelag is what removes the ceiling.
 <class name="Shutdown"
        commands="DIE RESTART REHASH LOADMODULE UNLOADMODULE RELOADMODULE GLOADMODULE GUNLOADMODULE GRELOADMODULE"
-       privs="users/auspex channels/auspex servers/auspex users/mass-message channels/high-join-limit users/flood/no-throttle users/flood/increased-buffers"
+       privs="users/auspex channels/auspex servers/auspex users/mass-message channels/high-join-limit users/flood/no-fakelag users/flood/no-throttle users/flood/increased-buffers"
        usermodes="*"
        chanmodes="*"
        snomasks="*">
