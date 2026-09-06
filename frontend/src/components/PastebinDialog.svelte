@@ -1,7 +1,6 @@
 <script lang="ts">
   import CodeEditor from './CodeEditor.svelte';
   import { sendMessage } from '../stores/wsConnection.svelte';
-  import { splitIntoMessages } from '../lib/messageSplitter';
   interface Props {
     open?: boolean;
     text?: string;
@@ -87,27 +86,17 @@
     oncloseCb?.();
   }
 
-  // "Send as messages" — strict line-by-line.  Each newline-separated line
-  // becomes its own PRIVMSG.  We deliberately do NOT greedy-pack because
-  // multi-line content is almost always art where every line is
-  // structurally significant (e.g. a metadata strip on the last line that
-  // must render on its own row, not get space-joined onto the line above).
+  // "Send as messages" — ONE logical message.  The engine owns splitting and
+  // pacing: it breaks the text into protocol lines byte-correctly from the
+  // server's ISUPPORT LINELEN, sanitises CR/LF, and either sends a single
+  // IRCv3 draft/multiline BATCH or paces the lines under the server's
+  // fake-lag budget.  Client-side splitting or pacing would only fight that.
   function sendAsText() {
-    const messages = splitIntoMessages(editor, 400, false);
-    if (messages.length === 0) { close(); return; }
+    const body = editor.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+    if (body.length === 0) { close(); return; }
     oncloseCb?.();
-    let i = 0;
-    const sendNext = () => {
-      if (i >= messages.length) {
-        onsentCb?.();
-        return;
-      }
-      const m = messages[i++];
-      sendMessage(networkId, target, m);
-      // Pace at ~30ms to avoid the WS batcher swallowing individual echoes
-      setTimeout(sendNext, 30);
-    };
-    sendNext();
+    sendMessage(networkId, target, body);
+    onsentCb?.();
   }
 
   // "Post snippet" — create a pastebin via POST /api/pastebins and share the

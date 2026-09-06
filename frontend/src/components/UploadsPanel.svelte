@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fetchUploadsOffset, deleteUpload, editUpload, convertUploadToGif, type UploadEntry } from '../stores/api';
+  import { fetchUploadsOffset, deleteUpload, editUpload, convertUploadToGif, type UploadEntry, type GifJob } from '../stores/api';
   import { sizeToString, isVideoFile } from '../lib/upload';
   import CodeEditor from './CodeEditor.svelte';
   import { detectSyntaxFromFilename, isTextFile, isHtmlFile } from '../lib/textFiles';
@@ -31,6 +31,7 @@
   let saving = $state(false);
   let copiedId = $state<string | null>(null);
   let convertingId = $state<string | null>(null);
+  let convertProgress = $state<GifJob | null>(null);
 
   // Derived for full-page edit view
   let editingEntry = $derived(entries.find((e) => e.id === editingId) ?? null);
@@ -176,15 +177,29 @@
   async function handleConvertGif(entry: UploadEntry): Promise<void> {
     if (convertingId) return;
     convertingId = entry.id;
+    convertProgress = null;
     error = null;
     try {
-      await convertUploadToGif(entry.id);
+      await convertUploadToGif(entry.id, (job) => { convertProgress = job; });
       await loadPage(1); // new gif is the newest entry — jump to page 1 so it is visible
     } catch (e) {
       error = e instanceof Error ? e.message : 'GIF conversion failed';
     } finally {
       convertingId = null;
+      convertProgress = null;
     }
+  }
+
+  /** Live conversion label: percentage when ffprobe knew the duration,
+   *  frame counter when it did not (durationMs === 0 ⇒ percent meaningless). */
+  function gifLabel(job: GifJob | null): string {
+    if (!job) return 'converting…';
+    // The first snapshot is a placeholder written before ffmpeg emitted
+    // anything: no duration probed yet and no frames encoded, so neither a
+    // percentage nor a frame count means anything.
+    if (job.durationMs <= 0 && !job.frame) return 'converting…';
+    const head = job.durationMs > 0 ? `${job.percent}%` : `frame ${job.frame}`;
+    return job.etaMs > 1000 ? `${head} · ${Math.round(job.etaMs / 1000)}s left` : head;
   }
 
   function copyUrl(url: string, id: string): void {
@@ -382,10 +397,16 @@
                   <button type="button" class="view" onclick={() => navigateToFileViewer(entry.id)}><span>view</span></button>
                 {/if}
                 {#if isVideoFile(entry.name, entry.mimeType)}
-                  <button type="button" class="togif" disabled={convertingId === entry.id}
+                  <button type="button" class="togif" class:converting={convertingId === entry.id}
+                          disabled={convertingId === entry.id}
                           onclick={() => handleConvertGif(entry)}
                           title="Convert video to animated GIF">
-                    <span>{convertingId === entry.id ? 'converting…' : 'gif'}</span>
+                    <span>{convertingId === entry.id ? gifLabel(convertProgress) : 'gif'}</span>
+                    {#if convertingId === entry.id}
+                      <div class="gifBar" class:indeterminate={!convertProgress || convertProgress.durationMs === 0}>
+                        <div class="gifBarFill" style={convertProgress && convertProgress.durationMs > 0 ? `width:${convertProgress.percent}%` : ''}></div>
+                      </div>
+                    {/if}
                   </button>
                 {/if}
                 <button type="button" class="copy" class:copied={copiedId === entry.id} onclick={() => copyUrl(entry.url, entry.id)} title="Copy URL"><span>{copiedId === entry.id ? 'copied!' : 'copy'}</span></button>
@@ -440,6 +461,35 @@
     outline: 2px solid #58a6ff;
     outline-offset: 2px;
     border-radius: 4px;
+  }
+  /* Live ffmpeg conversion progress rendered inside the gif button. */
+  .file .actions .togif.converting {
+    position: relative;
+    overflow: hidden;
+    min-width: 92px;
+    cursor: progress;
+  }
+  .file .actions .togif .gifBar {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 2px;
+    background: #2c2f35;
+    overflow: hidden;
+  }
+  .file .actions .togif .gifBarFill {
+    height: 100%;
+    width: 0;
+    background: #58a6ff;
+    transition: width 0.2s linear;
+  }
+  .file .actions .togif .gifBar.indeterminate .gifBarFill {
+    width: 40%;
+    animation: gifBarSlide 1.1s ease-in-out infinite;
+    transition: none;
+  }
+  @keyframes gifBarSlide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(250%); }
   }
   .file .actions .copy {
     background: #1f6feb;

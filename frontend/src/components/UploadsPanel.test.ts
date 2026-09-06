@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import UploadsPanel from './UploadsPanel.svelte';
-import { fetchUploadsOffset } from '../stores/api';
+import { fetchUploadsOffset, convertUploadToGif, type GifJob, type UploadEntry } from '../stores/api';
 
 vi.mock('/src/stores/api', () => ({
   normalizeMessage: vi.fn((m) => m),
@@ -158,5 +158,56 @@ describe('UploadsPanel edit', () => {
     const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
     await vi.waitFor(() => expect(container.querySelector('.file .name')?.textContent).toContain('test.py'));
     expect(container.querySelector('button.togif')).toBeFalsy();
+  });
+
+  it('gif button shows live percent, ETA and a determinate bar while converting', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('') } as Response));
+    vi.mocked(fetchUploadsOffset).mockResolvedValue({ entries: [{ id: '3', name: 'clip.mp4', mimeType: 'video/mp4', size: 5000, url: '/uploads/3.mp4', createdAt: Date.now(), buffer: '', networkId: '' }], total: 1 });
+    const gate = Promise.withResolvers<UploadEntry>();
+    let emit: ((job: GifJob) => void) | undefined;
+    vi.mocked(convertUploadToGif).mockImplementation((_id, onProgress) => {
+      emit = onProgress;
+      return gate.promise;
+    });
+
+    const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
+    await vi.waitFor(() => expect(container.querySelector('button.togif')).toBeTruthy());
+    await (container.querySelector('button.togif') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(emit).toBeTruthy());
+
+    emit!({ state: 'running', percent: 42, frame: 123, fps: 18.3, speed: 1.4, durationMs: 30000, outTimeMs: 12600, elapsedMs: 8200, etaMs: 10400 });
+    await vi.waitFor(() => expect(container.querySelector('button.togif')?.textContent).toContain('42%'));
+    expect(container.querySelector('button.togif')?.textContent).toContain('10s left');
+    const bar = container.querySelector('button.togif .gifBar') as HTMLElement;
+    expect(bar.classList.contains('indeterminate')).toBe(false);
+    expect((bar.querySelector('.gifBarFill') as HTMLElement).style.width).toBe('42%');
+
+    gate.resolve({ id: '4', url: '/uploads/4.gif', name: 'clip.gif', mimeType: 'image/gif', size: 10, createdAt: 0, buffer: '', networkId: '' });
+    await vi.waitFor(() => expect(container.querySelector('button.togif .gifBar')).toBeFalsy());
+    expect(container.querySelector('button.togif')?.textContent).toContain('gif');
+  });
+
+  it('gif button falls back to a frame counter and indeterminate bar when durationMs is 0', async () => {
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve('') } as Response));
+    vi.mocked(fetchUploadsOffset).mockResolvedValue({ entries: [{ id: '3', name: 'clip.mp4', mimeType: 'video/mp4', size: 5000, url: '/uploads/3.mp4', createdAt: Date.now(), buffer: '', networkId: '' }], total: 1 });
+    const gate = Promise.withResolvers<UploadEntry>();
+    let emit: ((job: GifJob) => void) | undefined;
+    vi.mocked(convertUploadToGif).mockImplementation((_id, onProgress) => {
+      emit = onProgress;
+      return gate.promise;
+    });
+
+    const { container } = render(UploadsPanel, { props: { onClose: () => {} } });
+    await vi.waitFor(() => expect(container.querySelector('button.togif')).toBeTruthy());
+    await (container.querySelector('button.togif') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(emit).toBeTruthy());
+
+    emit!({ state: 'running', percent: 99, frame: 77, fps: 12.5, speed: 1, durationMs: 0, outTimeMs: 0, elapsedMs: 3000, etaMs: 0 });
+    await vi.waitFor(() => expect(container.querySelector('button.togif')?.textContent).toContain('frame 77'));
+    expect(container.querySelector('button.togif')?.textContent).not.toContain('99%');
+    const bar = container.querySelector('button.togif .gifBar') as HTMLElement;
+    expect(bar.classList.contains('indeterminate')).toBe(true);
+    expect((bar.querySelector('.gifBarFill') as HTMLElement).style.width).toBe('');
+    gate.resolve({ id: '4', url: '/uploads/4.gif', name: 'clip.gif', mimeType: 'image/gif', size: 10, createdAt: 0, buffer: '', networkId: '' });
   });
 });

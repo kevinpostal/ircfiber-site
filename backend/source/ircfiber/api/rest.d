@@ -10,6 +10,7 @@ import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 import vibe.data.json : Json, deserializeJson, parseJson, parseJsonString, serializeToJson;
 import vibe.data.bson : Bson;
 import vibe.core.log;
+import vibe.core.core : runTask;
 import ircfiber.api.session : SessionManager;
 import ircfiber.models.user : User;
 import ircfiber.models.network : NetworkConfig, TLSMode, SASLMechanism, dedupChannels;
@@ -24,6 +25,9 @@ import ircfiber.db.preferences : PreferencesRepository, UserPreferences;
 import ircfiber.db.uploads : UploadRepository, UploadRecord;
 import ircfiber.db.pastebins : PastebinRepository, PasteRecord, countLines;
 import ircfiber.db.img2irc_saves : Img2IrcSaveRecord, Img2IrcSaveRepository;
+import ircfiber.db.support_issues : SupportIssueRepository, SupportIssueRecord, SupportComment, SupportIssueContext;
+import ircfiber.support.events : SupportEvent, pushSupportEvent;
+import ircfiber.support.json : supportIssueToJson, isValidKind, sanitizeLine;
 import ircfiber.upload.local : LocalUploadResult, LocalUploadException, saveUpload, saveIrcArtOriginal, saveIrcArtThumbnail, uploadDir;
 import std.file : remove, readText, exists;
 import std.path : buildPath;
@@ -85,6 +89,7 @@ final class RESTAPI {
         UploadRepository uploadRepo;
         PastebinRepository pastebinRepo;
         Img2IrcSaveRepository ircArtRepo;
+        SupportIssueRepository supportRepo;
         RedisStorage redis;
         ServerRegistry serverRegistry;  // NEW: decentralized routing
         SessionManager sessionManager;  // T1-W3: gateway contention metrics
@@ -100,6 +105,7 @@ final class RESTAPI {
         this.uploadRepo = new UploadRepository();
         this.pastebinRepo = new PastebinRepository();
         this.ircArtRepo = new Img2IrcSaveRepository();
+        this.supportRepo = new SupportIssueRepository();
         this.serverRegistry = new ServerRegistry(redis);  // NEW
     }
 
@@ -161,6 +167,7 @@ final class RESTAPI {
         router.delete_("/api/uploads/:id", &deleteUpload);
         router.post("/api/uploads/:id/edit", &editUpload);
         router.post("/api/uploads/:id/gif", &convertUploadToGif);
+        router.get("/api/uploads/gif-jobs/:jobId", &getGifJob);
         router.get("/api/pastebins", &getPastebins);
         router.post("/api/pastebins", &createPastebin);
         router.get("/api/pastebins/:id/raw", &getPastebinRaw);
@@ -172,6 +179,11 @@ final class RESTAPI {
         router.get("/api/img2irc-saves/:id", &getIrcArtSave);
         router.put("/api/img2irc-saves/:id", &updateIrcArtSave);
         router.delete_("/api/img2irc-saves/:id", &deleteIrcArtSave);
+        // Help & Feedback reports (announced in #support by the support bot)
+        router.get("/api/support/issues", &getSupportIssues);
+        router.post("/api/support/issues", &createSupportIssue);
+        router.get("/api/support/issues/:id", &getSupportIssue);
+        router.post("/api/support/issues/:id/comments", &addSupportIssueComment);
         // W3-T01a: Bulk archive-names endpoint (cached, 5-min TTL)
         router.get("/api/buffers/archive-names", &getArchiveNames);
     }
@@ -1784,39 +1796,48 @@ final class RESTAPI {
             res.writeJsonBody(Json(["error": Json("body must be object")]));
             return;
         }
-        auto prefs = prefsRepo.load(user.id);
+        // Validate BEFORE taking the per-user lock so a bad body cannot
+        // hold up a concurrent legitimate write.
+        foreach (k; ["desktopNotifications", "notificationSound",
+                     "autoDismissNotifs", "muteAll"]) {
+            if (auto v = k in bodyJson) {
+                if (v.type != Json.Type.bool_) {
+                    res.statusCode = 400;
+                    res.writeJsonBody(Json(["error": Json(k ~ " must be boolean")]));
+                    return;
+                }
+            }
+        }
+
+        // Serialized read-modify-write. Two toggles of the same switch can
+        // land within a millisecond of each other (the permission-denied
+        // auto-revert always does), and an unserialized load/save pair
+        // loses the newer value AND gives it the lower prefVersion, so the
+        // client's highest-version-wins rule then keeps the stale one.
         bool any = false;
-        if (auto v = "desktopNotifications" in bodyJson) {
-            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("desktopNotifications must be boolean")])); return; }
-            prefs.desktopNotifications = v.get!bool; any = true;
-        }
-        if (auto v = "notificationSound" in bodyJson) {
-            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("notificationSound must be boolean")])); return; }
-            prefs.notificationSound = v.get!bool; any = true;
-        }
-        if (auto v = "autoDismissNotifs" in bodyJson) {
-            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("autoDismissNotifs must be boolean")])); return; }
-            prefs.autoDismissNotifs = v.get!bool; any = true;
-        }
-        if (auto v = "muteAll" in bodyJson) {
-            if (v.type != Json.Type.bool_) { res.statusCode = 400; res.writeJsonBody(Json(["error": Json("muteAll must be boolean")])); return; }
-            prefs.muteAll = v.get!bool; any = true;
-        }
+        UserPreferences after;
+        auto newVersion = prefsRepo.mutate(user.id, (ref UserPreferences prefs) {
+            if (auto v = "desktopNotifications" in bodyJson) { prefs.desktopNotifications = v.get!bool; any = true; }
+            if (auto v = "notificationSound" in bodyJson) { prefs.notificationSound = v.get!bool; any = true; }
+            if (auto v = "autoDismissNotifs" in bodyJson) { prefs.autoDismissNotifs = v.get!bool; any = true; }
+            if (auto v = "muteAll" in bodyJson) { prefs.muteAll = v.get!bool; any = true; }
+            after = prefs;
+            return any;
+        });
         if (!any) {
             res.statusCode = 400;
             res.writeJsonBody(Json(["error": Json("no notification pref provided")]));
             return;
         }
-        auto newVersion = prefsRepo.save(user.id, prefs);
         auto val = Json.emptyObject;
-        val["desktopNotifications"] = Json(prefs.desktopNotifications);
-        val["notificationSound"] = Json(prefs.notificationSound);
-        val["autoDismissNotifs"] = Json(prefs.autoDismissNotifs);
-        val["muteAll"] = Json(prefs.muteAll);
+        val["desktopNotifications"] = Json(after.desktopNotifications);
+        val["notificationSound"] = Json(after.notificationSound);
+        val["autoDismissNotifs"] = Json(after.autoDismissNotifs);
+        val["muteAll"] = Json(after.muteAll);
         broadcastPrefUpdate(user.id.toString(), "notificationPrefs", val, newVersion);
         // Also broadcast granular keys for forward-compat fallback (plan Step 2 fallback branch)
-        broadcastPrefUpdate(user.id.toString(), "desktopNotifications", Json(prefs.desktopNotifications), newVersion);
-        broadcastPrefUpdate(user.id.toString(), "muteAll", Json(prefs.muteAll), newVersion);
+        broadcastPrefUpdate(user.id.toString(), "desktopNotifications", Json(after.desktopNotifications), newVersion);
+        broadcastPrefUpdate(user.id.toString(), "muteAll", Json(after.muteAll), newVersion);
         res.writeJsonBody(Json(["prefVersion": Json(newVersion)]));
     }
 
@@ -2404,16 +2425,55 @@ final class RESTAPI {
         res.writeJsonBody(Json(["status": Json("ok"), "id": Json(id)]));
     }
 
-    /// Convert an uploaded video to an animated GIF via ffmpeg and save it
-    /// as a new upload record. Returns the new record's JSON (uploadFile +
-    /// getUploadById union shape).
-    private void convertUploadToGif(HTTPServerRequest req, HTTPServerResponse res) {
-        import vibe.core.process : spawnProcess;
-        import core.time : seconds;
-        import std.file : tempDir;
-        import std.path : stripExtension;
-        import std.array : replace;
+    /// Hard cap on the converted GIF's duration, in seconds. Also the
+    /// denominator for progress: ffmpeg reports `out_time_us` against the
+    /// output timeline, which `-t` truncates.
+    private enum int GIF_MAX_SECONDS = 30;
+    /// How long a finished/failed job stays readable by the poller.
+    private enum long GIF_JOB_TTL_SECONDS = 300;
 
+    private static string gifJobKey(string jobId) {
+        return "gif:job:" ~ jobId;
+    }
+
+    /// Publishes a job snapshot. Redis (not process memory) so a poll that
+    /// lands on the other side of a blue/green gateway swap still resolves,
+    /// and so the record expires on its own.
+    private void putGifJob(string jobId, Json job) {
+        try redis.setJson(gifJobKey(jobId), job, GIF_JOB_TTL_SECONDS);
+        catch (Exception e) logWarn("gif job publish failed: %s", e.msg);
+    }
+
+    /// Duration of the source in ms via ffprobe, clamped to GIF_MAX_SECONDS.
+    /// Returns 0 when ffprobe is unavailable or the value is unparseable —
+    /// the client then renders an indeterminate progress bar instead of a
+    /// wrong percentage.
+    private long probeDurationMs(string srcPath) {
+        import vibe.core.process : execute;
+        import std.string : strip;
+        try {
+            auto r = execute(["ffprobe", "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", srcPath]);
+            if (r.status != 0) return 0;
+            auto secs = r.output.strip.to!double;
+            if (secs <= 0) return 0;
+            if (secs > GIF_MAX_SECONDS) secs = GIF_MAX_SECONDS;
+            return cast(long)(secs * 1000);
+        } catch (Exception) {
+            return 0;
+        }
+    }
+
+    /// Convert an uploaded video (or WebP) to an animated GIF via ffmpeg.
+    ///
+    /// Returns `202 {jobId}` immediately and does the work in a background
+    /// task, publishing live ffmpeg progress under `gif:job:<jobId>`; the
+    /// client polls `GET /api/uploads/gif-jobs/:jobId`. Conversion of a 30 s
+    /// clip takes tens of seconds, so the previous blocking request left the
+    /// UI on a static "converting…" label with no way to tell progress from
+    /// a hang.
+    private void convertUploadToGif(HTTPServerRequest req, HTTPServerResponse res) {
         requireAuth(req, res);
         if (res.headerWritten) return;
         auto user = req.context["user"].get!User;
@@ -2448,40 +2508,234 @@ final class RESTAPI {
             return;
         }
 
+        auto host = req.headers["Host"];
+        if (host.length == 0) host = "localhost:8090";
+        string proto = req.headers.get("X-Forwarded-Proto", "http");
+        auto baseUrl = proto ~ "://" ~ host;
+
+        const jobId = randomUUID().toString();
+        const userId = user.id.toString();
+        const startedAt = Clock.currTime.toUnixTime!long * 1000;
+
+        // The very first poll can land before ffmpeg has emitted anything, so
+        // this placeholder MUST carry the full field set the poll contract
+        // promises — a missing `frame` renders as "frame undefined" in the
+        // client's indeterminate label.
+        putGifJob(jobId, Json([
+            "state":      Json("running"),
+            "userId":     Json(userId),
+            "uploadId":   Json(rec.id),
+            "filename":   Json(rec.filename),
+            "percent":    Json(0),
+            "frame":      Json(0L),
+            "fps":        Json(0.0),
+            "speed":      Json(0.0),
+            "durationMs": Json(0L),
+            "outTimeMs":  Json(0L),
+            "elapsedMs":  Json(0L),
+            "etaMs":      Json(0L),
+            "startedAt":  Json(startedAt),
+        ]));
+
+        // Everything the task needs is copied out of `req` first: the
+        // request object is dead the moment we return.
+        auto recCopy = rec;
+        // runTask requires a nothrow delegate, so every failure has to be
+        // funnelled into the job record instead of propagating.
+        runTask(() nothrow {
+            try {
+                runGifConversion(jobId, userId, recCopy, srcPath, baseUrl, startedAt);
+            } catch (Exception e) {
+                try {
+                    logWarn("gif conversion task failed: %s", e.msg);
+                    putGifJob(jobId, Json([
+                        "state":  Json("error"),
+                        "userId": Json(userId),
+                        "error":  Json(e.msg),
+                    ]));
+                } catch (Exception) {}
+            }
+        });
+
+        res.statusCode = 202;
+        res.writeJsonBody(Json([
+            "jobId": Json(jobId),
+            "state": Json("running"),
+        ]));
+    }
+
+    /// Poll endpoint for `convertUploadToGif`. 404 once the job's TTL has
+    /// expired, so a client that slept through the whole conversion is told
+    /// to reload rather than shown a stale bar.
+    private void getGifJob(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+
+        Json job;
+        try job = redis.getJson(gifJobKey(req.params["jobId"]));
+        catch (Exception e) {
+            logWarn("gif job read failed: %s", e.msg);
+            res.statusCode = 502;
+            res.writeJsonBody(Json(["error": Json("job lookup failed")]));
+            return;
+        }
+        if (job.type != Json.Type.object) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("unknown or expired job")]));
+            return;
+        }
+        // A job id is a UUID, but ownership is still checked: the poller
+        // must not be able to read another user's filenames or result URL.
+        if (job["userId"].opt!string != user.id.toString()) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("unknown or expired job")]));
+            return;
+        }
+        res.writeJsonBody(job);
+    }
+
+    /// The actual ffmpeg run. Publishes progress as it goes and the finished
+    /// upload record (same shape the endpoint used to return synchronously)
+    /// under `result` when done.
+    private void runGifConversion(string jobId, string userId, UploadRecord rec,
+                                  string srcPath, string baseUrl, long startedAt) {
+        import vibe.core.process : pipeProcess, Redirect;
+        import vibe.stream.operations : readLine;
+        import core.time : seconds;
+        import std.file : tempDir;
+        import std.path : stripExtension;
+        import std.array : replace;
+        import std.string : indexOf, strip;
+        import std.algorithm : endsWith;
+
+        const durationMs = probeDurationMs(srcPath);
+
+        void publish(string state, int percent, long frame, double fps, double speed,
+                     long outTimeMs, string error, Json result) {
+            const now = Clock.currTime.toUnixTime!long * 1000;
+            const elapsed = now - startedAt;
+            // ETA from observed throughput, not from `speed` (which is
+            // relative to realtime and jumps around at the start).
+            long etaMs = 0;
+            if (percent > 0 && percent < 100 && elapsed > 0)
+                etaMs = cast(long)(elapsed * (100.0 - percent) / percent);
+            auto job = Json.emptyObject;
+            job["state"]      = Json(state);
+            job["userId"]     = Json(userId);
+            job["uploadId"]   = Json(rec.id);
+            job["filename"]   = Json(rec.filename);
+            job["percent"]    = Json(percent);
+            job["frame"]      = Json(frame);
+            job["fps"]        = Json(fps);
+            job["speed"]      = Json(speed);
+            job["durationMs"] = Json(durationMs);
+            job["outTimeMs"]  = Json(outTimeMs);
+            job["elapsedMs"]  = Json(elapsed);
+            job["etaMs"]      = Json(etaMs);
+            job["startedAt"]  = Json(startedAt);
+            if (error.length > 0) job["error"] = Json(error);
+            if (result.type == Json.Type.object) job["result"] = result;
+            putGifJob(jobId, job);
+        }
+
         auto tmpPath = buildPath(tempDir, randomUUID().toString().replace("-", "") ~ ".gif");
         // Cap at 30s, 12fps, max width 480, palette-optimized. ffmpeg's own
         // filtergraph parser handles the argument; argv exec, no shell.
+        // `-progress pipe:1 -nostats` turns stdout into a machine-readable
+        // key=value progress stream (frame/fps/out_time_us/speed/progress).
+        // `-stats_period 0.2` overrides ffmpeg's 0.5 s default so a short
+        // conversion still emits several blocks and the bar actually moves.
         auto args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-nostats", "-progress", "pipe:1", "-stats_period", "0.2",
             "-i", srcPath,
-            "-t", "30",
+            "-t", GIF_MAX_SECONDS.to!string,
             "-vf", "fps=12,scale=w='min(480,iw)':h=-2:flags=lanczos," ~
                    "split[s0][s1];[s0]palettegen=stats_mode=diff[p];" ~
                    "[s1][p]paletteuse=dither=bayer:bayer_scale=5",
             "-loop", "0", tmpPath];
 
-        typeof(spawnProcess(args)) proc;
+        typeof(pipeProcess(args, Redirect.stdout)) pipes;
         try {
-            proc = spawnProcess(args);
+            pipes = pipeProcess(args, Redirect.stdout);
         } catch (Exception e) {
             logWarn("ffmpeg spawn failed: %s", e.msg);
-            res.statusCode = 501;
-            res.writeJsonBody(Json(["error": Json("GIF conversion unavailable (ffmpeg not installed)")]));
+            publish("error", 0, 0, 0, 0, 0,
+                "GIF conversion unavailable (ffmpeg not installed)", Json.undefined);
             return;
         }
 
-        auto code = proc.wait(120.seconds);
+        long frame, outTimeMs;
+        double fps = 0, speed = 0;
+        int percent = 0;
+        long lastPublishMs = 0;
+        try {
+            while (!pipes.stdout.empty) {
+                // vibe's readLine defaults to a CRLF separator and THROWS if
+                // the stream ends without one. ffmpeg's `-progress` stream is
+                // LF-separated, so without the explicit separator the whole
+                // stream comes back as one unparseable blob at EOF and every
+                // progress field stays zero.
+                auto line = cast(string) pipes.stdout.readLine(4096, "\n");
+                const eq = line.indexOf('=');
+                if (eq <= 0) continue;
+                const key = line[0 .. eq].strip;
+                const val = line[eq + 1 .. $].strip;
+                switch (key) {
+                    case "frame":
+                        try frame = val.to!long; catch (Exception) {}
+                        break;
+                    case "fps":
+                        try fps = val.to!double; catch (Exception) {}
+                        break;
+                    case "speed":
+                        // e.g. "1.42x", or "N/A" before the first frame.
+                        try speed = val.endsWith("x") ? val[0 .. $ - 1].to!double : val.to!double;
+                        catch (Exception) {}
+                        break;
+                    case "out_time_us":
+                    case "out_time_ms":   // ffmpeg reports microseconds here too
+                        try outTimeMs = val.to!long / 1000; catch (Exception) {}
+                        break;
+                    case "progress":
+                        // Every ffmpeg progress block is terminated by a
+                        // `progress=continue|end` line. Publishing only here
+                        // means a snapshot never mixes this block's frame
+                        // count with the previous block's timestamp.
+                        if (val == "end") outTimeMs = durationMs > 0 ? durationMs : outTimeMs;
+                        if (durationMs > 0) {
+                            auto p = cast(int)(outTimeMs * 100 / durationMs);
+                            percent = p < 0 ? 0 : (p > 99 ? 99 : p);
+                        }
+                        const nowMs = Clock.currTime.toUnixTime!long * 1000;
+                        if (val != "end" && nowMs - lastPublishMs >= 150) {
+                            lastPublishMs = nowMs;
+                            publish("running", percent, frame, fps, speed, outTimeMs, "", Json.undefined);
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+        } catch (Exception e) {
+            // A read failure is not fatal on its own — the exit status below
+            // decides. Progress simply stops updating.
+            logWarn("ffmpeg progress read ended: %s", e.msg);
+        }
+
+        auto code = pipes.process.wait(120.seconds);
         if (code.isNull) {
-            proc.forceKill();
-            proc.wait();
+            pipes.process.forceKill();
+            pipes.process.wait();
             try { if (exists(tmpPath)) remove(tmpPath); } catch (Exception) {}
-            res.statusCode = 502;
-            res.writeJsonBody(Json(["error": Json("GIF conversion timed out")]));
+            publish("error", percent, frame, fps, speed, outTimeMs,
+                "GIF conversion timed out", Json.undefined);
             return;
         }
         if (code.get != 0) {
             try { if (exists(tmpPath)) remove(tmpPath); } catch (Exception) {}
-            res.statusCode = 502;
-            res.writeJsonBody(Json(["error": Json("ffmpeg failed (exit " ~ code.get.to!string ~ ")")]));
+            publish("error", percent, frame, fps, speed, outTimeMs,
+                "ffmpeg failed (exit " ~ code.get.to!string ~ ")", Json.undefined);
             return;
         }
 
@@ -2492,20 +2746,15 @@ final class RESTAPI {
         }
         try { remove(tmpPath); } catch (Exception) {}
         if (data.length == 0) {
-            res.statusCode = 502;
-            res.writeJsonBody(Json(["error": Json("ffmpeg produced empty output")]));
+            publish("error", percent, frame, fps, speed, outTimeMs,
+                "ffmpeg produced empty output", Json.undefined);
             return;
         }
         if (data.length > MAX_UPLOAD_BYTES) {
-            res.statusCode = 400;
-            res.writeJsonBody(Json(["error": Json("Converted GIF exceeds 50 MB")]));
+            publish("error", percent, frame, fps, speed, outTimeMs,
+                "Converted GIF exceeds 50 MB", Json.undefined);
             return;
         }
-
-        auto host = req.headers["Host"];
-        if (host.length == 0) host = "localhost:8090";
-        string proto = req.headers.get("X-Forwarded-Proto", "http");
-        auto baseUrl = proto ~ "://" ~ host;
 
         auto gifName = stripExtension(rec.filename) ~ ".gif";
         LocalUploadResult uploaded;
@@ -2513,8 +2762,7 @@ final class RESTAPI {
             uploaded = saveUpload(gifName, "image/gif", data, baseUrl);
         } catch (LocalUploadException e) {
             logWarn("gif upload save failed: %s", e.msg);
-            res.statusCode = 502;
-            res.writeJsonBody(Json(["error": Json(e.msg)]));
+            publish("error", percent, frame, fps, speed, outTimeMs, e.msg, Json.undefined);
             return;
         }
 
@@ -2533,7 +2781,7 @@ final class RESTAPI {
         try { uploadRepo.insert(rec2); }
         catch (Exception e) { logError("Failed to record gif upload: %s", e.msg); }
 
-        res.writeJsonBody(Json([
+        publish("done", 100, frame, fps, speed, outTimeMs, "", Json([
             "id": Json(rec2.id), "url": Json(rec2.directUrl), "pageUrl": Json(rec2.pageUrl),
             "name": Json(rec2.filename), "mimeType": Json(rec2.mimeType), "size": Json(rec2.size),
             "createdAt": Json(rec2.createdAt), "buffer": Json(rec2.buffer), "networkId": Json(rec2.networkId),
@@ -2629,6 +2877,193 @@ final class RESTAPI {
             res.statusCode = 404;
             res.writeJsonBody(Json(["error": Json("not found")]));
         }
+    }
+
+    // ── Help & Feedback (support issues) ───────────────────────────────
+
+    private enum SUPPORT_MAX_PER_HOUR = 10;
+    private enum SUPPORT_MAX_ATTACHMENTS = 3;
+    private enum SUPPORT_CONTEXT_FIELD_MAX = 512;
+
+    private static void supportError(HTTPServerResponse res, int code, string msg) {
+        res.statusCode = code;
+        res.writeJsonBody(Json(["error": Json(msg)]));
+    }
+
+    private static string jsonStr(Json j, string key) {
+        auto v = j[key];
+        return v.type == Json.Type.string ? v.get!string : "";
+    }
+
+    private static string clip(string s, size_t max) {
+        if (s.length <= max) return s;
+        // Back up to a UTF-8 sequence start so we never emit a torn char.
+        size_t cut = max;
+        while (cut > 0 && (s[cut] & 0xC0) == 0x80) cut--;
+        return s[0 .. cut];
+    }
+
+    private void getSupportIssues(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        int limit = 20;
+        if (auto p = "limit" in req.query) { try limit = (*p).to!int; catch (Exception) {} }
+        if (limit < 1) limit = 1;
+        if (limit > 50) limit = 50;
+        int offset = 0;
+        if (auto p = "offset" in req.query) { try offset = (*p).to!int; catch (Exception) {} }
+        if (offset < 0) offset = 0;
+        const uid = user.id.toString();
+        auto records = supportRepo.pageByUser(uid, offset, limit);
+        const long total = supportRepo.countByUser(uid);
+        auto arr = Json.emptyArray;
+        foreach (ref r; records) arr ~= supportIssueToJson(r, false, false);
+        res.writeJsonBody(Json(["issues": arr, "total": Json(total)]));
+    }
+
+    private void createSupportIssue(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto j = req.json;
+        if (j.type != Json.Type.object) { supportError(res, 400, "invalid body"); return; }
+
+        const kind = jsonStr(j, "kind");
+        if (!isValidKind(kind)) { supportError(res, 400, "invalid kind"); return; }
+        const title = sanitizeLine(jsonStr(j, "title"));
+        if (title.length < 3 || title.length > 120) {
+            supportError(res, 400, "title must be 3–120 characters");
+            return;
+        }
+        const body_ = jsonStr(j, "body").strip();
+        if (body_.length < 10 || body_.length > 5000) {
+            supportError(res, 400, "description must be 10–5000 characters");
+            return;
+        }
+        string[] attachments;
+        auto att = j["attachments"];
+        if (att.type == Json.Type.array) {
+            if (att.length > SUPPORT_MAX_ATTACHMENTS) { supportError(res, 400, "invalid attachment"); return; }
+            foreach (a; att) {
+                if (a.type != Json.Type.string) { supportError(res, 400, "invalid attachment"); return; }
+                const url = a.get!string;
+                if (url.length == 0 || url.length > 512 || !url.canFind("/uploads/")) {
+                    supportError(res, 400, "invalid attachment");
+                    return;
+                }
+                attachments ~= url;
+            }
+        } else if (att.type != Json.Type.undefined && att.type != Json.Type.null_) {
+            supportError(res, 400, "invalid attachment");
+            return;
+        }
+        SupportIssueContext ctx;
+        auto cj = j["context"];
+        if (cj.type == Json.Type.object) {
+            ctx.appVersion = clip(sanitizeLine(jsonStr(cj, "appVersion")), SUPPORT_CONTEXT_FIELD_MAX);
+            ctx.userAgent = clip(sanitizeLine(jsonStr(cj, "userAgent")), SUPPORT_CONTEXT_FIELD_MAX);
+            ctx.url = clip(sanitizeLine(jsonStr(cj, "url")), SUPPORT_CONTEXT_FIELD_MAX);
+            ctx.networkId = clip(sanitizeLine(jsonStr(cj, "networkId")), SUPPORT_CONTEXT_FIELD_MAX);
+            ctx.bufferName = clip(sanitizeLine(jsonStr(cj, "bufferName")), SUPPORT_CONTEXT_FIELD_MAX);
+            ctx.viewport = clip(sanitizeLine(jsonStr(cj, "viewport")), SUPPORT_CONTEXT_FIELD_MAX);
+        }
+
+        const now = Clock.currTime.toUnixTime!long * 1000;
+        const uid = user.id.toString();
+        if (supportRepo.countByUserSince(uid, now - 3_600_000) >= SUPPORT_MAX_PER_HOUR) {
+            supportError(res, 429, "Too many reports in the last hour — please try again later");
+            return;
+        }
+
+        SupportIssueRecord rec;
+        rec.id = randomUUID().toString();
+        rec.number = supportRepo.nextNumber();
+        rec.userId = uid;
+        rec.reporterUsername = user.username;
+        rec.kind = kind;
+        rec.title = title;
+        rec.body_ = body_;
+        rec.status = "open";
+        rec.priority = "normal";
+        rec.attachments = attachments;
+        rec.context = ctx;
+        rec.createdAt = now;
+        rec.updatedAt = now;
+        supportRepo.insert(rec);
+        logInfo("Support issue #%d (%s) filed by %s", rec.number, rec.kind, user.username);
+
+        SupportEvent ev;
+        ev.type = "issue_created";
+        ev.issueId = rec.id;
+        ev.number = rec.number;
+        ev.kind = rec.kind;
+        ev.title = rec.title;
+        ev.status = rec.status;
+        ev.priority = rec.priority;
+        ev.reporter = user.username;
+        ev.ts = now;
+        pushSupportEvent(redis, ev);
+
+        res.statusCode = 201;
+        res.writeJsonBody(supportIssueToJson(rec, false, false));
+    }
+
+    private void getSupportIssue(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto rec = supportRepo.getByIdForUser(user.id.toString(), req.params["id"]);
+        if (rec.id.length == 0) { supportError(res, 404, "not found"); return; }
+        res.writeJsonBody(supportIssueToJson(rec, false, false));
+    }
+
+    private void addSupportIssueComment(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        auto j = req.json;
+        const text = j.type == Json.Type.object ? jsonStr(j, "body").strip() : "";
+        if (text.length < 1 || text.length > 5000) {
+            supportError(res, 400, "comment must be 1–5000 characters");
+            return;
+        }
+        const uid = user.id.toString();
+        auto rec = supportRepo.getByIdForUser(uid, req.params["id"]);
+        if (rec.id.length == 0) { supportError(res, 404, "not found"); return; }
+
+        const now = Clock.currTime.toUnixTime!long * 1000;
+        SupportComment c;
+        c.id = randomUUID().toString();
+        c.authorId = uid;
+        c.authorName = user.username;
+        c.fromAdmin = false;
+        c.internal = false;
+        c.body_ = text;
+        c.createdAt = now;
+        // A follow-up on a finished issue reopens it.
+        const newStatus = (rec.status == "resolved" || rec.status == "closed") ? "open" : "";
+        if (!supportRepo.appendComment(rec.id, c, now, newStatus, 0)) {
+            supportError(res, 404, "not found");
+            return;
+        }
+
+        SupportEvent ev;
+        ev.type = "comment_added";
+        ev.issueId = rec.id;
+        ev.number = rec.number;
+        ev.kind = rec.kind;
+        ev.title = rec.title;
+        ev.status = newStatus.length ? newStatus : rec.status;
+        ev.priority = rec.priority;
+        ev.actor = user.username;
+        ev.reporter = rec.reporterUsername;
+        ev.actorIsAdmin = false;
+        ev.reopened = newStatus.length > 0;
+        ev.ts = now;
+        pushSupportEvent(redis, ev);
+
+        res.writeJsonBody(supportIssueToJson(supportRepo.getById(rec.id), false, false));
     }
     private void getPastebinById(HTTPServerRequest req, HTTPServerResponse res) {
         // Public viewer (branded) — no auth required, allow sharing via link.

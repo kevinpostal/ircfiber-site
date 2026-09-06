@@ -1,6 +1,6 @@
 import type { UploadResponse } from '../lib/upload';
 
-export type UploadStatus = 'uploading' | 'finalizing' | 'done' | 'error' | 'cancelled';
+export type UploadStatus = 'uploading' | 'finalizing' | 'converting' | 'done' | 'error' | 'cancelled';
 
 export interface ActiveUpload {
   id: number;
@@ -51,6 +51,15 @@ export function setProgress(id: number, pct: number): void {
   if (pct >= 100 && u.status === 'uploading') u.status = 'finalizing';
 }
 
+/** Server-side GIF conversion progress for an already-uploaded file.
+ *  Drives the same ring/progress UI as the upload itself. */
+export function setConverting(id: number, pct: number): void {
+  const u = find(id);
+  if (!u) return;
+  u.status = 'converting';
+  u.progress = Math.max(0, Math.min(100, pct));
+}
+
 export function finishUpload(id: number, result: UploadResponse): void {
   const u = find(id);
   if (u) { u.status = 'done'; u.progress = 100; u.result = result; }
@@ -72,12 +81,13 @@ export function aggregateProgress(): number {
   return Math.round((done / total) * 100);
 }
 
-export type RingState = 'idle' | 'active' | 'finalizing' | 'success' | 'error';
+export type RingState = 'idle' | 'active' | 'converting' | 'finalizing' | 'success' | 'error';
 
 export function ringState(): RingState {
   const a = uploadState.active;
   if (a.length === 0) return 'idle';
   if (a.some(u => u.status === 'error')) return 'error';
+  if (a.some(u => u.status === 'converting')) return 'converting';
   if (a.some(u => u.status === 'uploading')) return 'active';
   if (a.some(u => u.status === 'finalizing')) return 'finalizing';
   return 'success';

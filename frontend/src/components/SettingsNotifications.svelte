@@ -15,29 +15,51 @@
     }
   });
 
-  function onDesktopToggle(): void {
-    setGlobalNotifPref('desktopNotifications', globalPrefs.desktopNotifications);
-    if (globalPrefs.desktopNotifications) {
-      permissionHint = '';
-      if (shouldRequest()) {
-        requestPermission().then((granted) => {
-          if (!granted) {
-            globalPrefs.desktopNotifications = false;
-            setGlobalNotifPref('desktopNotifications', false);
-            permissionHint = 'Permission denied — enable in browser settings';
-          }
-        });
-      } else if (!isSupported()) {
-        notSupportedHint = 'Notifications not supported in this browser';
-      } else if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
-        globalPrefs.desktopNotifications = false;
-        setGlobalNotifPref('desktopNotifications', false);
-        permissionHint = 'Permission denied — enable in browser settings';
-      }
-    } else {
+  // One user gesture must produce exactly ONE server write.
+  //
+  // The old flow persisted `true` immediately and then persisted `false`
+  // from the permission callback. Those two writes race in the gateway:
+  // observed live, they were sent true-then-false but assigned prefVersion
+  // 19 and 18, so the server kept `true` while the client showed `false` —
+  // the switch then "came back on" on the next load. Resolve the browser
+  // permission FIRST, then write the value we actually settled on.
+  async function onDesktopToggle(): Promise<void> {
+    const wanted = globalPrefs.desktopNotifications;
+
+    if (!wanted) {
       resetNotificationState();
       permissionHint = '';
+      setGlobalNotifPref('desktopNotifications', false);
+      return;
     }
+
+    permissionHint = '';
+    if (!isSupported()) {
+      notSupportedHint = 'Notifications not supported in this browser';
+      globalPrefs.desktopNotifications = false;
+      setGlobalNotifPref('desktopNotifications', false);
+      return;
+    }
+
+    let allowed = Notification.permission === 'granted';
+    if (!allowed && shouldRequest()) {
+      allowed = await requestPermission();
+    }
+
+    if (!allowed) {
+      globalPrefs.desktopNotifications = false;
+      setGlobalNotifPref('desktopNotifications', false);
+      // 'denied' is a hard block the user must undo in browser settings;
+      // 'default' means the prompt was dismissed (or already spent this
+      // page load), which a reload can retry. Saying "denied" for both
+      // sent people to a settings screen that had nothing to fix.
+      permissionHint = Notification.permission === 'denied'
+        ? 'Blocked by your browser — allow notifications for this site, then try again'
+        : 'Browser permission not granted — reload the page and allow the prompt';
+      return;
+    }
+
+    setGlobalNotifPref('desktopNotifications', true);
   }
 
   function onSoundToggle(): void {

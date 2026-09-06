@@ -60,9 +60,12 @@
 .uploadcell .radialProgress { display:inline-block; width:16px; height:16px; border-radius:50%;
   background: conic-gradient(var(--ring-color, #6af) calc(var(--pct) * 1%), rgba(255,255,255,.15) 0); }
 .uploadcell.finalizing .radialProgress { animation: uploadspin 1s linear infinite; }
+/* server-side GIF conversion: amber ring, pulsing so 0% (indeterminate) still reads as busy */
+.uploadcell.converting .radialProgress { --ring-color: #d29922; animation: uploadpulse 1.2s ease-in-out infinite; }
 .uploadcell.success .radialProgress { --ring-color: #3c5; }
 .uploadcell.error .radialProgress { --ring-color: #e55; }
 @keyframes uploadspin { to { transform: rotate(360deg); } }
+@keyframes uploadpulse { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 
 /* ---- upload dialog ---- */
 .upload-dialog .previewWrapper img { max-width: 100%; max-height: 240px; }

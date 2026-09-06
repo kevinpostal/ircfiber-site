@@ -67,6 +67,9 @@
   function statusText(u: ActiveUpload): string {
     if (u.status === 'uploading') return `${u.progress}%`;
     if (u.status === 'finalizing') return 'Processing…';
+    // GIF conversion runs server-side after the upload finished; progress is
+    // 0 when ffprobe could not determine the source duration (indeterminate).
+    if (u.status === 'converting') return u.progress > 0 ? `GIF ${u.progress}%` : 'Converting…';
     if (u.status === 'done') return 'Done';
     if (u.status === 'error') return u.error || 'Failed';
     if (u.status === 'cancelled') return 'Cancelled';

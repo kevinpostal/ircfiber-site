@@ -1,6 +1,6 @@
 import { uploadFile, validateFile, flattenFileList, joinMessageLink, type UploadHandle, type UploadResponse } from '../lib/upload';
 import { isTextFile, detectSyntaxFromFilename, MAX_TEXT_FILE_BYTES } from '../lib/textFiles';
-import { uploadState, trackUpload, setProgress, finishUpload, failUpload, removeUpload, type ActiveUpload } from './uploadStore.svelte';
+import { uploadState, trackUpload, setProgress, setConverting, finishUpload, failUpload, removeUpload, type ActiveUpload } from './uploadStore.svelte';
 import { openFromFile } from './pastebinStore.svelte';
 import { sendMessage } from './wsConnection.svelte.ts';
 import { ircState } from './ircStore.svelte';
@@ -132,8 +132,14 @@ export function confirmDialog(data: { filename?: string; message: string; conver
     for (const r of results) if (r.status === 'fulfilled') urls.push(r.value.url);
 
     if (data.convertToGif && dialog.uploads.length === 1 && results[0]?.status === 'fulfilled') {
+      // The upload row is still in uploadState.active here (removal happens
+      // below, after this await settles), so it can carry live ffmpeg progress.
+      const uid = dialog.uploads[0].id;
       try {
-        const gif = await convertUploadToGif((results[0] as PromiseFulfilledResult<UploadResponse>).value.id);
+        const gif = await convertUploadToGif(
+          (results[0] as PromiseFulfilledResult<UploadResponse>).value.id,
+          (job) => { setConverting(uid, job.durationMs > 0 ? job.percent : 0); },
+        );
         urls[0] = gif.url;
       } catch (e) {
         deps.notifyError(`${(e as Error).message} — posting original file link`);

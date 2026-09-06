@@ -570,14 +570,70 @@ export async function editUpload(id: string, data: { content: string; filename: 
   return r.json();
 }
 
-export async function convertUploadToGif(id: string): Promise<UploadEntry> {
+/** Live snapshot of a server-side ffmpeg GIF conversion job.
+ *  `durationMs === 0` means ffprobe could not determine the source duration,
+ *  so `percent` is meaningless and the UI must render an indeterminate bar
+ *  (showing `frame`/`fps` instead). `percent` is clamped to 99 while running;
+ *  only the terminal `done` snapshot carries 100. */
+export interface GifJob {
+  state: 'running' | 'done' | 'error';
+  percent: number; frame: number; fps: number; speed: number;
+  durationMs: number; outTimeMs: number; elapsedMs: number; etaMs: number;
+  filename?: string; uploadId?: string; startedAt?: number;
+  error?: string; result?: UploadEntry;
+}
+
+/** Kick off a GIF conversion. Returns the job id (202); validation failures
+ *  (404 not found / 400 not convertible or remote) still come back synchronously. */
+export async function startGifConversion(id: string): Promise<string> {
   const r = await fetch(`${API_BASE}/uploads/${encodeURIComponent(id)}/gif`, { method: 'POST' });
   if (!r.ok) {
     let msg = `GIF conversion failed (${r.status})`;
     try { const b = await r.json(); if (b.error) msg = b.error; } catch {}
     throw new Error(msg);
   }
+  const body = await r.json();
+  if (!body.jobId) throw new Error('GIF conversion did not start');
+  return body.jobId as string;
+}
+
+/** Poll a conversion job. 404 = expired (jobs live 300s), unknown, or another user's. */
+export async function getGifJob(jobId: string): Promise<GifJob> {
+  const r = await fetch(`${API_BASE}/uploads/gif-jobs/${encodeURIComponent(jobId)}`);
+  if (r.status === 404) throw new Error('GIF conversion job expired');
+  if (!r.ok) throw new Error(`GIF job poll failed (${r.status})`);
   return r.json();
+}
+
+function sleep(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setTimeout(resolve, ms);
+  return promise;
+}
+
+/** Start a GIF conversion and poll it to completion, reporting every snapshot
+ *  (including the first) to `onProgress`. Sequential awaits — never setInterval —
+ *  so two polls can never overlap. */
+export async function convertUploadToGif(
+  id: string,
+  onProgress?: (job: GifJob) => void,
+  opts?: { intervalMs?: number; timeoutMs?: number },
+): Promise<UploadEntry> {
+  const intervalMs = opts?.intervalMs ?? 500;
+  const timeoutMs = opts?.timeoutMs ?? 180000;
+  const jobId = await startGifConversion(id);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const job = await getGifJob(jobId);
+    onProgress?.(job);
+    if (job.state === 'done') {
+      if (!job.result) throw new Error('GIF conversion returned no result');
+      return job.result;
+    }
+    if (job.state === 'error') throw new Error(job.error ?? 'GIF conversion failed');
+    if (Date.now() >= deadline) throw new Error('GIF conversion timed out');
+    await sleep(intervalMs);
+  }
 }
 export interface PasteEntry {
   id: string; name: string; syntax: string; lines: number;
@@ -627,6 +683,66 @@ export function pastebinUrl(id: string): string { return `/?/pastebin=${encodeUR
 
 export function pastebinRawUrl(id: string): string {
   return `${API_BASE}/pastebins/${encodeURIComponent(id)}/raw`;
+}
+
+// ── Help & Feedback (support issues) ─────────────────────────────────────
+export type SupportIssueKind = 'bug' | 'feature' | 'question' | 'other';
+export type SupportIssueStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
+export interface SupportComment {
+  id: string; authorName: string; fromAdmin: boolean; internal: boolean; body: string; createdAt: number;
+}
+export interface SupportIssueContext {
+  appVersion: string; userAgent: string; url: string; networkId: string; bufferName: string; viewport: string;
+}
+export interface SupportIssueEntry {
+  id: string; number: number; kind: SupportIssueKind; title: string; body: string;
+  status: SupportIssueStatus; priority: string; reporterUsername: string; assigneeUsername: string;
+  attachments: string[]; comments: SupportComment[]; commentCount: number;
+  createdAt: number; updatedAt: number; resolvedAt: number;
+}
+
+/** Surfaces the server's `{error}` message (400 validation, 429 rate limit) to the form. */
+async function supportError(r: Response, fallback: string): Promise<Error> {
+  const body = await r.json().catch(() => ({}));
+  return new Error(typeof body?.error === 'string' && body.error ? body.error : fallback);
+}
+
+export async function submitSupportIssue(data: {
+  kind: SupportIssueKind; title: string; body: string; attachments: string[]; context?: SupportIssueContext;
+}): Promise<SupportIssueEntry> {
+  const r = await fetch(`${API_BASE}/support/issues`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) throw await supportError(r, 'Failed to submit report');
+  return r.json();
+}
+
+export async function fetchMySupportIssues(offset = 0, limit = 20): Promise<{ issues: SupportIssueEntry[]; total: number }> {
+  const params = new URLSearchParams();
+  params.set('offset', String(offset));
+  params.set('limit', String(limit));
+  const r = await fetch(`${API_BASE}/support/issues?${params}`);
+  if (!r.ok) throw await supportError(r, 'Failed to load your reports');
+  const body = await r.json();
+  return { issues: body.issues ?? [], total: body.total ?? 0 };
+}
+
+export async function fetchSupportIssue(id: string): Promise<SupportIssueEntry> {
+  const r = await fetch(`${API_BASE}/support/issues/${encodeURIComponent(id)}`);
+  if (!r.ok) throw await supportError(r, r.status === 404 ? 'Not found' : 'Failed to load report');
+  return r.json();
+}
+
+export async function addSupportIssueComment(id: string, body: string): Promise<SupportIssueEntry> {
+  const r = await fetch(`${API_BASE}/support/issues/${encodeURIComponent(id)}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ body }),
+  });
+  if (!r.ok) throw await supportError(r, 'Failed to send reply');
+  return r.json();
 }
 export interface ArchiveNamesResponse {
   archives: Record<string, string[]>;
