@@ -1699,6 +1699,43 @@ _target      = $(or $(TARGET),vps-efb4b52d)
 _target_ssh   = $(or $(TARGET_SSH),$(shell grep -m1 'ansible_host=' deploy/inventories/production/hosts.ini 2>/dev/null | sed -E 's/.*ansible_host=([^ ]+).*/\1/'),15.204.93.54)
 _playbook    = cd deploy && ansible-playbook -l $(_target) $(_vault_arg)
 
+# ── Remote build host ────────────────────────────────────────────────────────
+# The gateway image is built on BUILD_HOST, NOT on the deploy target.
+#
+# Why: vps-efb4b52d is 4 vCPU / 7.7 GB and simultaneously runs the ircd, Anope,
+# Mongo, Redis, Caddy and the engine that holds every IRC socket. Running
+# `ldc2 --build=release --parallel` there exhausted RAM (117 MB free, load 45),
+# dockerd stopped answering and the site went down mid-deploy (2026-09-06);
+# BuildKit had also grown 27 GB of cache on a 72 GB disk. ubuntu-docker is
+# 16 vCPU / 125 GB / 1.7 TB and is native linux/amd64, so it builds the same
+# image faster and the target never compiles anything.
+#
+# The finished image is streamed over with `docker save | docker load`, so the
+# target stores only the runtime layer — no builder stages, no build cache.
+# A registry (ubuntu-docker already runs registry:2 on :5000) would need
+# `insecure-registries` in the target's daemon.json plus a dockerd restart,
+# which would drop every container — save/load needs no daemon change.
+#
+# Set BUILD_HOST= (empty) to fall back to building on the deploy target.
+BUILD_HOST     ?= ubuntu@ubuntu-docker
+BUILD_HOST_SRC ?= /home/ubuntu/ircfiber-src
+_ctx_ssh   = ssh -o StrictHostKeyChecking=no -o ConnectTimeout=20
+_ctx_host  = $(if $(BUILD_HOST),$(BUILD_HOST),deploy@$(_target_ssh))
+_ctx_dir   = $(if $(BUILD_HOST),$(BUILD_HOST_SRC),/opt/ircfiber-src)
+_ctx_where = $(if $(BUILD_HOST),$(BUILD_HOST) (remote builder),$(_target) (deploy target))
+_gw_image  = kevindpostal/irc-fiber-gateway:0.3.0
+# Intermediate image tarball. /tmp on the builder, .deploy-cache/ locally.
+_gw_tar    = /tmp/irc-fiber-gateway-$(_git_short).tar.gz
+# The target needs an explicit key: the 1Password agent otherwise trips
+# "Too many authentication failures".
+_tgt_ssh   = ssh -F /dev/null -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_ircfiber -o StrictHostKeyChecking=no
+# Evaluated locally: the synced context has no .git, so `git rev-parse` run on
+# the build host would bake "unknown" into the image labels.
+_git_hash     = $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+_git_short    = $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+_git_describe = $(shell git describe --always --long 2>/dev/null || echo $(_git_short))
+_git_branch   = $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
+
 update: ## Deploy > DEPRECATED — use update-gateway-bluegreen (site only, gateway blue/green)
 	@echo "✗ update is deprecated for site — use 'make update-gateway-bluegreen' (blue/green, gateway only) or 'make -C ../engine update' for engine" >&2; exit 1
 
@@ -1801,23 +1838,47 @@ update-gateway: version frontend-build ## Deploy > Build frontend + rebuild gate
 #   make update-gateway-bluegreen TARGET=foo   # → alternate host
 update-gateway-bluegreen: version frontend-build ## Deploy > Blue/green gateway (zero-downtime, engine untouched)
 	@printf '\n%b\n' "$(_BCn)$(K)$(B)  Blue/green gateway deploy → $(_target)  $(R)"
-	@printf '%b\n' "$(D)  1/5 Syncing frontend + gateway D source to /opt/ircfiber-src$(R)"
-	@rsync -avz --checksum --delete --exclude=node_modules --exclude=.vite --exclude=".vite*" --exclude=dist --exclude=".turbo" --exclude="* 2" --exclude="* 2/**" -e "ssh -o StrictHostKeyChecking=no" frontend/ deploy@$(_target_ssh):/opt/ircfiber-src/frontend/ 2>&1 | tail -5
+	@printf '%b\n' "$(D)  1/5 Syncing build context → $(_ctx_where)$(R)"
+	@rsync -avz --checksum --delete --exclude=node_modules --exclude=.vite --exclude=".vite*" --exclude=dist --exclude=".turbo" --exclude="* 2" --exclude="* 2/**" -e "$(_ctx_ssh)" frontend/ $(_ctx_host):$(_ctx_dir)/frontend/ 2>&1 | tail -5
 	@rm -rf public/dist/.vite* 2>/dev/null; find public/dist -depth -name "* 2*" -exec rm -rf {} + 2>/dev/null || true; chmod -R a+rX public/dist 2>/dev/null || true
-	@tar cz --no-xattrs --exclude=".vite*" --exclude="* 2*" --exclude="* 2/*" --format=ustar -C public dist 2>&1 | ssh -F /dev/null -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_ircfiber -o StrictHostKeyChecking=no deploy@$(_target_ssh) 'sudo sh -c "rm -rf /opt/ircfiber-src/public/dist && mkdir -p /opt/ircfiber-src/public && tar xzf - --no-same-owner -C /opt/ircfiber-src/public && sudo rm -rf /opt/ircfiber-src/public/dist/.vite* /opt/ircfiber-src/frontend/.vite* 2>/dev/null; sudo find /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend -depth -name \"* 2*\" -exec rm -rf {} + 2>/dev/null || true; sudo chmod -R a+rX /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend 2>/dev/null || true; echo public-synced"' 2>&1 | tail -5
+	@# dist/: plain rsync when the context lives in the builder's home dir. The
+	@# tar+sudo pipe below is only needed for the target's root-owned
+	@# /opt/ircfiber-src, where it also dodges the macOS xattr "Permission
+	@# denied" that breaks `rsync --delete` on public/dist.
+	@if [ -n "$(BUILD_HOST)" ]; then \
+	  rsync -avz --checksum --delete --exclude=".vite*" --exclude="* 2*" -e "$(_ctx_ssh)" public/dist/ $(_ctx_host):$(_ctx_dir)/public/dist/ 2>&1 | tail -3; \
+	else \
+	  tar cz --no-xattrs --exclude=".vite*" --exclude="* 2*" --exclude="* 2/*" --format=ustar -C public dist 2>&1 | ssh -F /dev/null -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_ircfiber -o StrictHostKeyChecking=no deploy@$(_target_ssh) 'sudo sh -c "rm -rf /opt/ircfiber-src/public/dist && mkdir -p /opt/ircfiber-src/public && tar xzf - --no-same-owner -C /opt/ircfiber-src/public && sudo rm -rf /opt/ircfiber-src/public/dist/.vite* /opt/ircfiber-src/frontend/.vite* 2>/dev/null; sudo find /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend -depth -name \"* 2*\" -exec rm -rf {} + 2>/dev/null || true; sudo chmod -R a+rX /opt/ircfiber-src/public/dist /opt/ircfiber-src/frontend 2>/dev/null || true; echo public-synced"' 2>&1 | tail -5; \
+	fi
 	@# Everything in public/ except dist (landing.html, favicons, fonts, style.css)
-	@# is COPY'd into the image too; the tar above only ships dist/.
-	@rsync -avz --checksum --exclude=dist --exclude=.nosync --exclude=.DS_Store --exclude="* 2" --exclude="* 2.*" --exclude="* 2/**" -e "ssh -o StrictHostKeyChecking=no" public/ deploy@$(_target_ssh):/opt/ircfiber-src/public/ 2>&1 | tail -3
-	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" backend/ deploy@$(_target_ssh):/opt/ircfiber-src/backend/ 2>&1 | tail -5
-	@rsync -avz --checksum --delete -e "ssh -o StrictHostKeyChecking=no" common/ deploy@$(_target_ssh):/opt/ircfiber-src/common/ 2>&1 | tail -5
-	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" Containerfile Containerfile.site deploy@$(_target_ssh):/opt/ircfiber-src/ 2>&1 | tail -5
-	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" .dockerignore deploy@$(_target_ssh):/opt/ircfiber-src/.dockerignore 2>&1 | tail -5
-	@rsync -avz --delete -e "ssh -o StrictHostKeyChecking=no" config/ deploy@$(_target_ssh):/opt/ircfiber-src/config/ 2>&1 | tail -5
+	@# is COPY'd into the image too; the step above only ships dist/.
+	@rsync -avz --checksum --exclude=dist --exclude=.nosync --exclude=.DS_Store --exclude="* 2" --exclude="* 2.*" --exclude="* 2/**" -e "$(_ctx_ssh)" public/ $(_ctx_host):$(_ctx_dir)/public/ 2>&1 | tail -3
+	@rsync -avz --checksum --delete -e "$(_ctx_ssh)" backend/ $(_ctx_host):$(_ctx_dir)/backend/ 2>&1 | tail -5
+	@rsync -avz --checksum --delete -e "$(_ctx_ssh)" common/ $(_ctx_host):$(_ctx_dir)/common/ 2>&1 | tail -5
+	@# -L: Containerfile is a symlink to Containerfile.site; the builder needs a real file.
+	@rsync -avzL -e "$(_ctx_ssh)" Containerfile Containerfile.site $(_ctx_host):$(_ctx_dir)/ 2>&1 | tail -5
+	@rsync -avz --delete -e "$(_ctx_ssh)" config/ $(_ctx_host):$(_ctx_dir)/config/ 2>&1 | tail -5
+	@# deploy/ always goes to the target — Ansible runs against it, not the builder.
 	@rsync -avz -e "ssh -o StrictHostKeyChecking=no" deploy/ deploy@$(_target_ssh):/opt/ircfiber-src/deploy/ 2>&1 | tail -5
-	@printf '%b\n' "$(D)  2/5 Building runtime-gateway image on host (old still serving)$(R)"
-	@ssh deploy@$(_target_ssh) 'ls -la /opt/ircfiber-src/public/dist/ | head -n 20; ls -ld /opt/ircfiber-src/public/dist/.vite 2>&1 | head -n 5; cat /opt/ircfiber-src/.dockerignore | tail -n 10; echo "---"; ls -la /opt/ircfiber-src/frontend/.vite 2>&1 | head -n 5; echo "---"' 2>&1 | tail -n 30
-	@ssh deploy@$(_target_ssh) 'cd /opt/ircfiber-src && DOCKER_BUILDKIT=1 docker build --target runtime-gateway --build-arg CACHE_BUST=$$(date +%s) --build-arg GIT_HASH=$$(git rev-parse HEAD 2>/dev/null || echo unknown) --build-arg GIT_SHORT=$$(git rev-parse --short HEAD 2>/dev/null || echo unknown) -t kevindpostal/irc-fiber-gateway:0.3.0 -f Containerfile . 2>&1 | tail -20'
-	@ssh deploy@$(_target_ssh) 'docker tag kevindpostal/irc-fiber-gateway:0.3.0 kevindpostal/irc-fiber-gateway:0.3.1 2>/dev/null || true; docker tag kevindpostal/irc-fiber-gateway:0.3.0 irc-fiber-gateway:latest 2>/dev/null || true; docker tag kevindpostal/irc-fiber-gateway:0.3.0 irc-fiber-gateway:0.3.0 2>/dev/null || true'
+	@printf '%b\n' "$(D)  2/5 Building runtime-gateway image on $(_ctx_where) (old gateway still serving)$(R)"
+	@$(_ctx_ssh) $(_ctx_host) 'cd $(_ctx_dir) && DOCKER_BUILDKIT=1 docker build --target runtime-gateway --build-arg CACHE_BUST=$$(date +%s) --build-arg GIT_HASH=$(_git_hash) --build-arg GIT_SHORT=$(_git_short) --build-arg GIT_DESCRIBE=$(_git_describe) --build-arg GIT_BRANCH=$(_git_branch) -t $(_gw_image) -f Containerfile . 2>&1 | tail -20'
+	@# Ship the finished image as a FILE, never as a pipe. `ssh BUILDER 'docker
+	@# save' | ssh TARGET 'docker load'` DEADLOCKS: both hops are Tailscale SSH
+	@# channels joined on the laptop, and a 605 MB stream settles at ~0 B/s with
+	@# no progress and no timeout (observed 2026-09-06: 360 bytes in 5 s, hung
+	@# 23 min). Each leg below is observable and resumable, and the target still
+	@# stores only the runtime layer — no builder stages, no BuildKit cache.
+	@if [ -n "$(BUILD_HOST)" ]; then \
+	  mkdir -p .deploy-cache; \
+	  printf '%b\n' "$(D)      1/3 docker save + gzip on $(BUILD_HOST)$(R)"; \
+	  $(_ctx_ssh) $(_ctx_host) 'docker save $(_gw_image) | gzip -1 > $(_gw_tar) && du -h $(_gw_tar)' 2>&1 | tail -2; \
+	  printf '%b\n' "$(D)      2/3 fetch image → .deploy-cache/$(R)"; \
+	  rsync -e "$(_ctx_ssh)" --partial --inplace --info=progress2 $(_ctx_host):$(_gw_tar) .deploy-cache/gw-image.tgz 2>&1 | tail -2; \
+	  printf '%b\n' "$(D)      3/3 upload + docker load on $(_target)$(R)"; \
+	  rsync -e "$(_tgt_ssh)" --partial --inplace --info=progress2 .deploy-cache/gw-image.tgz deploy@$(_target_ssh):/tmp/gw-image.tgz 2>&1 | tail -2; \
+	  $(_tgt_ssh) deploy@$(_target_ssh) 'gunzip -c /tmp/gw-image.tgz | docker load && rm -f /tmp/gw-image.tgz' 2>&1 | tail -3; \
+	fi
+	@ssh deploy@$(_target_ssh) 'docker tag $(_gw_image) kevindpostal/irc-fiber-gateway:0.3.1 2>/dev/null || true; docker tag $(_gw_image) irc-fiber-gateway:latest 2>/dev/null || true; docker tag $(_gw_image) irc-fiber-gateway:0.3.0 2>/dev/null || true'
 	@printf '%b\n' "$(D)  3/5 Ensuring Caddy is in blue/green dual-upstream mode$(R)"
 	@cd deploy && ansible-playbook -l $(_target) $(_vault_arg) playbooks/caddy.yml 2>&1 | tail -10
 	@printf '%b\n' "$(D)  4/5 Blue/green swap: start green → wait healthy → stop blue → rename$(R)"
