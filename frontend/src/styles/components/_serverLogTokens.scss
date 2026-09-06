@@ -1,0 +1,120 @@
+// Server-log token styling — the connect dump (CAP negotiation, RPL_MYINFO,
+// RPL_ISUPPORT, the LUSER counts) is machine output, so it gets a machine
+// layout instead of a wall of one-colour monospace.
+//
+// Three tiers, mirroring the existing --row-* scheme:
+//   tag    tone-coloured, says what kind of line this is (CAP …)
+//   label  dim, the field name, in a fixed monospace column
+//   value  brightest, the thing you actually came to read
+//
+// Alignment is a CSS column, never padded spaces. The old renderer used
+// `label.padStart(16)`, which right-aligned every label and so left a
+// ragged gap after the tag and pushed the content ~21 columns in.
+//
+// The markup is built as `{@html}` strings by lib/serverLogRows.ts, so
+// these rules cannot live in a Svelte component's scoped <style>.
+
+:root {
+  --log-tag-ok: #3fb950;
+  --log-tag-bad: #f85149;
+  --log-tag-wait: #d29922;
+  --log-tag-info: #58a6ff;
+  --log-label-fg: #7d8590;
+  --log-value-fg: #e6edf3;
+  --log-arg-fg: #8b949e;
+  --log-sep-fg: #3d444d;
+}
+
+// CAP rows are a three-column grid so a 30-capability list wraps under
+// the values instead of under the tag. `.content` is already a block, and
+// the row's own children (.g, .date) are siblings of .message, so the
+// grid is scoped to the text itself.
+.row.messageRow.type_cap,
+.row.messageRow.type_cap_ls,
+.row.messageRow.type_cap_req,
+.row.messageRow.type_cap_ack,
+.row.messageRow.type_cap_nak,
+.row.messageRow.type_cap_new,
+.row.messageRow.type_cap_del {
+  .content {
+    display: grid;
+    // "CAP" + the longest label ("Acknowledged") + the rest.
+    grid-template-columns: 4ch 13ch minmax(0, 1fr);
+    align-items: baseline;
+  }
+}
+
+.row.messageRow.status.monospace {
+  .logTag {
+    font-weight: 600;
+    color: var(--log-tag-info);
+
+    &.ok { color: var(--log-tag-ok); }
+    &.bad { color: var(--log-tag-bad); }
+    &.wait { color: var(--log-tag-wait); }
+  }
+
+  // Field names are never the thing that should wrap.
+  .logLabel,
+  .logBody {
+    color: var(--log-label-fg);
+  }
+
+  .logLabel,
+  .logKey {
+    white-space: nowrap;
+  }
+
+  // `Host` / `IRCd` / `Server supports` — a label→value pair with no tag.
+  // 14ch fits "Channel modes:" exactly, so RPL_MYINFO's four values line
+  // up; a longer key just pushes its own value out.
+  .logKey {
+    display: inline-block;
+    min-width: 14ch;
+    margin-right: 1ch;
+    color: var(--log-label-fg);
+
+    &::after { content: ':'; }
+  }
+
+  // The ISUPPORT row clamps to two lines with `-webkit-box`, where every
+  // inline-block child counts as its own line — an inline-block key there
+  // would eat the whole clamp and leave the token list unclipped.
+  &.isup .logKey {
+    display: inline;
+    min-width: 0;
+    margin-right: 0.5ch;
+  }
+
+  // The clamp has to live here, not in ServerLogRow.svelte: the scoped
+  // `.isup .content` resolves to three classes, exactly tying the global
+  // `.row.messageRow .content`, and Svelte injects component styles when
+  // App.svelte is imported — before main.scss. The tie broke against the
+  // component, so `…more` toggled a row that was never clipped. Four
+  // classes on the row settles it.
+  &.isup .content {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  &.isup.open .content { display: block; }
+
+  // Capability/ISUPPORT names, emphasised numerics, hidden hosts: the
+  // payload of the line.
+  b,
+  .logValue {
+    color: var(--log-value-fg);
+    font-weight: 500;
+  }
+
+  // `sasl=PLAIN,EXTERNAL` — the name matters, the argument rarely does.
+  .logArg { color: var(--log-arg-fg); }
+
+  .logSep {
+    color: var(--log-sep-fg);
+    padding: 0 0.35em;
+  }
+}

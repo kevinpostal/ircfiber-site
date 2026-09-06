@@ -9,7 +9,7 @@
   // they live here so a re-built row list keeps them as long as the row
   // key is stable.
   import type { IRCMessage } from '../types';
-  import type { ServerLogRow } from '../lib/serverLogRows';
+  import { type ServerLogRow, tokenListHtml } from '../lib/serverLogRows';
   import { relativeOffset, formatOffset } from '../lib/serverLogGroups';
   import { formatTime12Hour, formatDateTimeTitle, escapeHtml, nickColorIndex } from '../lib/utils';
   import LiveElapsed from './LiveElapsed.svelte';
@@ -74,7 +74,7 @@
 {:else if row.kind === 'isup'}
   <div class="row messageRow status monospace type_server_supports userParent isup" class:open={isupOpen} data-cmd="005" data-time={row.msg.t}>
     <span class="g">&nbsp;</span>
-    <span class="message"><span translate="no" class="content">Server supports: {#each row.tokens as tok, i (tok + i)}{@const eq = tok.indexOf('=')}{#if i > 0}{' '}{/if}<b>{eq === -1 ? tok : tok.slice(0, eq)}</b>{#if eq !== -1}={tok.slice(eq + 1)}{/if}{/each}</span></span>
+    <span class="message"><span translate="no" class="content"><span class="logKey">Server supports</span>{@html tokenListHtml(row.tokens)}</span></span>
     <button type="button" class="more" onclick={() => { isupOpen = !isupOpen; }}>{isupOpen ? 'less' : '…more'}</button>
     {@render date(row.msg)}
   </div>
@@ -294,14 +294,10 @@
   /* Widen the right gutter past the global 118px so the `…more` toggle
      sits between the clamped text and the timestamp. */
   .isup.row.messageRow.status { padding-right: 160px; }
-  .isup .content {
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
-  .isup.open .content { display: block; }
+  /* The clamp itself lives in styles/components/_serverLogTokens.scss:
+     scoped `.isup .content` ties on specificity with the global
+     `.row.messageRow .content`, and component styles are injected before
+     main.scss, so the tie broke against us and the clamp never applied. */
   .isup .more {
     position: absolute;
     right: 106px;

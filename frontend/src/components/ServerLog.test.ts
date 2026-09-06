@@ -189,15 +189,25 @@ describe('ServerLog', () => {
     expect(document.querySelector('.row.status[data-cmd="002"]')?.classList.contains('type_server_yourhost')).toBe(true);
     expect(document.querySelector('.row.status[data-cmd="251"]')?.classList.contains('type_server_luserclient')).toBe(true);
 
-    // Every CAP row is a monospace status row; labels are right-aligned
-    // in a 16-char field so the colons line up column-for-column.
+    // Every CAP row is a monospace status row split into tag / label /
+    // body spans; alignment is a CSS column, so the text carries no
+    // padding and the capability names are individually emphasised.
     const caps = Array.from(document.querySelectorAll('.row.messageRow.status.monospace'))
-      .filter((r) => r.querySelector('.content > b')?.textContent === 'CAP');
+      .filter((r) => r.querySelector('.content > .logTag')?.textContent === 'CAP');
     expect(caps.length).toBe(3);
-    const content = (r: Element) => r.querySelector('.content')?.textContent ?? '';
-    expect(content(caps[0])).toBe('CAP Server supports: away-notify | sasl=PLAIN');
-    expect(content(caps[1])).toBe('CAP      Requesting: away-notify');
-    expect(content(caps[2])).toBe('CAP Server supports: multi-prefix | account-notify');
+    const label = (r: Element) => r.querySelector('.logLabel')?.textContent ?? '';
+    const body = (r: Element) => r.querySelector('.logBody')?.textContent ?? '';
+    expect(caps.map(label)).toEqual(['Available', 'Requesting', 'Available']);
+    expect(body(caps[0])).toBe('away-notify·sasl=PLAIN');
+    expect(body(caps[1])).toBe('away-notify');
+    expect(body(caps[2])).toBe('multi-prefix·account-notify');
+    // The capability name is the bright tier, its argument the dim one.
+    expect(Array.from(caps[0].querySelectorAll('.logBody b')).map((b) => b.textContent))
+      .toEqual(['away-notify', 'sasl']);
+    expect(caps[0].querySelector('.logArg')?.textContent).toBe('=PLAIN');
+    // Tone comes from the subcommand: LS informational, REQ pending.
+    expect(caps[0].querySelector('.logTag')?.classList.contains('info')).toBe(true);
+    expect(caps[1].querySelector('.logTag')?.classList.contains('wait')).toBe(true);
     expect(caps[0].classList.contains('type_cap_ls')).toBe(true);
     expect(caps[1].classList.contains('type_cap_req')).toBe(true);
     expect(caps[2].classList.contains('type_cap_ls')).toBe(true);
@@ -398,17 +408,22 @@ describe('ServerLog', () => {
     // first row carries type_myinfo.
     const myinfo = Array.from(document.querySelectorAll('.row.status[data-cmd="004"]'));
     const texts = myinfo.map((r) => r.querySelector('.content')?.textContent);
+    // Label and value are separate spans (the colon is CSS) so the four
+    // values can share one monospace column.
     expect(texts).toEqual([
-      'Host: openwater.supernets.org',
-      'IRCd: DangerousIRCd-6.6.6',
-      'User modes: UnrealIRCd-6.1.10',
-      'Channel modes: diopqrstxzBDGHIRSTZ',
+      'Hostopenwater.supernets.org',
+      'IRCdDangerousIRCd-6.6.6',
+      'User modesUnrealIRCd-6.1.10',
+      'Channel modesdiopqrstxzBDGHIRSTZ',
     ]);
+    expect(myinfo.map((r) => r.querySelector('.logKey')?.textContent))
+      .toEqual(['Host', 'IRCd', 'User modes', 'Channel modes']);
+    expect(myinfo[0].querySelector('.logValue')?.textContent).toBe('openwater.supernets.org');
     expect(myinfo[0].classList.contains('type_myinfo')).toBe(true);
     expect(myinfo[1].classList.contains('type_myinfo')).toBe(false);
   });
 
-  it('renders CAP ACK with aligned label and a bot notice with avatar and author', async () => {
+  it('renders CAP ACK with an ok-toned tag and a bot notice with avatar and author', async () => {
     const network = setupServerBuffer();
     const msgs = [
       ...connectSequence(DAY),
@@ -419,7 +434,10 @@ describe('ServerLog', () => {
 
     const ack = document.querySelector('.row.messageRow.status.monospace.type_cap_ack');
     expect(ack).not.toBeNull();
-    expect(ack!.querySelector('.content')?.textContent).toBe('CAP    Acknowledged: sasl | server-time');
+    expect(ack!.querySelector('.logTag')?.textContent).toBe('CAP');
+    expect(ack!.querySelector('.logTag')?.classList.contains('ok')).toBe(true);
+    expect(ack!.querySelector('.logLabel')?.textContent).toBe('Acknowledged');
+    expect(ack!.querySelector('.logBody')?.textContent).toBe('sasl·server-time');
 
     const notice = document.querySelector('.row.messageRow.notice.type_notice.firstAuthor');
     expect(notice).not.toBeNull();

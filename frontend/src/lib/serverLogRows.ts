@@ -61,31 +61,69 @@ export type ServerLogRow =
       rows: ServerLogRow[];
     };
 
-const CAP_LABELS: Record<string, string> = {
-  LS: 'Server supports',
-  LIST: 'Enabled',
-  REQ: 'Requesting',
-  ACK: 'Acknowledged',
-  NAK: 'Rejected',
-  NEW: 'Server added',
-  DEL: 'Server removed',
+/**
+ * CAP subcommand → (label, tone). The labels deliberately avoid "Server
+ * supports", which numeric 005 already owns two rows further down: LS is
+ * what the server *offers*, 005 is what it *implements*, and printing the
+ * same words for both made the connect dump unreadable.
+ */
+const CAP_LABELS: Record<string, { label: string; tone: LogTone }> = {
+  LS: { label: 'Available', tone: 'info' },
+  LIST: { label: 'Enabled', tone: 'info' },
+  REQ: { label: 'Requesting', tone: 'wait' },
+  ACK: { label: 'Acknowledged', tone: 'ok' },
+  NAK: { label: 'Rejected', tone: 'bad' },
+  NEW: { label: 'Added', tone: 'ok' },
+  DEL: { label: 'Removed', tone: 'bad' },
 };
 
 const CAP_TOKEN = /^[a-z0-9][a-z0-9_./-]*[a-z0-9](=\S*)?$/i;
 
+type LogTone = 'ok' | 'bad' | 'wait' | 'info';
+
+/**
+ * `sasl=PLAIN,EXTERNAL` → bright name, dim argument. Splitting the two
+ * lets a reader skim the capability names without the values shouting.
+ */
+function tokenHtml(tok: string): string {
+  const eq = tok.indexOf('=');
+  if (eq === -1) return `<b>${escapeHtml(tok)}</b>`;
+  return `<b>${escapeHtml(tok.slice(0, eq))}</b>`
+    + `<span class="logArg">=${escapeHtml(tok.slice(eq + 1))}</span>`;
+}
+
+/** Interpunct-separated token list; the separators are the dimmest tier. */
+export function tokenListHtml(tokens: string[]): string {
+  return tokens.map(tokenHtml).join('<span class="logSep">·</span>');
+}
+
+/**
+ * The shared shape of a machine-readable server-log line: a short tone-
+ * coloured tag, a dim label in a fixed monospace column, then the body.
+ * The column is CSS (`.logLabel { min-width }`), not padded spaces — the
+ * old `padStart(16)` right-aligned every label, which left a ragged gap
+ * after the tag and pushed the content ~21 columns to the right.
+ */
+function taggedHtml(tag: string, tone: LogTone, label: string, body: string): string {
+  return `<span class="logTag ${tone}">${escapeHtml(tag)}</span>`
+    + `<span class="logLabel">${escapeHtml(label)}</span>`
+    + `<span class="logBody">${body}</span>`;
+}
+
 /**
  * CAP negotiation lines land in `_server` either as a raw `CAP` command
  * (`CAP * LS :away-notify …`) or as a bare space-separated capability
- * list forwarded as a notice. Returns the rendered body (`Server
- * supports: a | b | c`) or null when the message is not a CAP line.
+ * list forwarded as a notice. Returns the rendered row HTML, or null when
+ * the message is not a CAP line.
  */
-export function capNoticeBody(msg: IRCMessage): string | null {
+export function capNoticeHtml(msg: IRCMessage): string | null {
   if (msg.command === 'CAP') {
     const params = msg.params ?? [];
     const sub = (params.find((p) => /^(LS|LIST|REQ|ACK|NAK|NEW|DEL)$/i.test(p)) ?? '').toUpperCase();
     const body = (msg.text || params[params.length - 1] || '').replace(/^:/, '').trim();
-    const label = CAP_LABELS[sub] ?? (sub || 'CAP');
-    return `${label.padStart(16)}: ${body.split(/\s+/).filter(Boolean).join(' | ')}`;
+    const meta = CAP_LABELS[sub] ?? { label: sub || 'CAP', tone: 'info' as LogTone };
+    return taggedHtml('CAP', meta.tone, meta.label,
+      tokenListHtml(body.split(/\s+/).filter(Boolean)));
   }
   const text = (msg.text ?? '').trim();
   if (!text || /^\*+\s/.test(text)) return null;
@@ -94,7 +132,7 @@ export function capNoticeBody(msg: IRCMessage): string | null {
   // At least one token must look like a real IRCv3 cap (hyphenated or
   // vendor/prefixed) — plain word lists are prose, not a cap dump.
   if (!tokens.some((t) => /[-/]/.test(t.split('=')[0]))) return null;
-  return `${'Server supports'.padStart(16)}: ${tokens.join(' | ')}`;
+  return taggedHtml('CAP', 'info', 'Available', tokenListHtml(tokens));
 }
 
 /**
@@ -127,6 +165,14 @@ export function numericStatusHtml(msg: IRCMessage): string {
   const lead = params.slice(1).filter((p) => p.trim() !== text);
   const value = lead[0] ?? '';
   const b = (s: string): string => `<b>${escapeHtml(s)}</b>`;
+  // Counts are the payload of the LUSER family, but only 252/253/254 put
+  // them in a parameter — 251/255/265/266 bury them mid-sentence. Split on
+  // the digit runs and escape each piece separately: escaping first and
+  // then matching would also hit the `039` inside `&#039;`.
+  const counts = (s: string): string => s
+    .split(/(\d[\d,]*)/)
+    .map((part, i) => (i % 2 === 1 ? `<b>${escapeHtml(part)}</b>` : escapeHtml(part)))
+    .join('');
   switch (msg.command) {
     // RPL_LUSEROP / LUSERUNKNOWN / LUSERCHANNELS — the count is the point.
     case '252':
@@ -145,6 +191,13 @@ export function numericStatusHtml(msg: IRCMessage): string {
     // ERR_NEEDMOREPARAMS
     case '461':
       return value ? `Missing parameters for command: ${b(value)}` : escapeHtml(text);
+    // RPL_LUSERCLIENT / LUSERME / LOCALUSERS / GLOBALUSERS — the counts
+    // are inside the sentence the server wrote, so emphasise them there.
+    case '251':
+    case '255':
+    case '265':
+    case '266':
+      return counts(text || numericBody(msg));
     default:
       return escapeHtml(numericBody(msg));
   }
@@ -348,13 +401,13 @@ export function buildServerLogRows(
         return;
       }
       case 'notice': {
-        const cap = capNoticeBody(msg);
+        const cap = capNoticeHtml(msg);
         if (cap !== null) {
           // Real CAP commands carry the subcommand after the `*` target;
           // bare cap dumps forwarded as notices are always LS-shaped.
           const sub = (msg.params ?? []).find((p) => /^(LS|LIST|REQ|ACK|NAK|NEW|DEL)$/i.test(p))?.toUpperCase();
           const cls = msg.command === 'CAP' && sub ? getIrcCloudTypeClass('CAP', [sub]) : 'type_cap_ls';
-          push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: `<b>CAP</b>${escapeHtml(cap)}`, cls });
+          push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: cap, cls });
           return;
         }
         const text = msg.text ?? '';
@@ -409,7 +462,8 @@ export function buildServerLogRows(
               kind: 'status',
               key: `${key}-${f.suffix}`,
               msg,
-              html: `${f.label}: ${escapeHtml(value)}`,
+              html: `<span class="logKey">${escapeHtml(f.label)}</span>`
+                + `<span class="logValue">${escapeHtml(value)}</span>`,
               // Only the first row carries the type class — follow-up
               // rows are bare `messageRow status monospace` in IRCCloud.
               cls: emitted === 0 ? 'type_myinfo' : '',
