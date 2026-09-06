@@ -130,6 +130,7 @@ final class RESTAPI {
         router.post("/api/networks/:id/bouncer", &generateBouncer);
         router.delete_("/api/networks/:id/bouncer", &revokeBouncer);
         router.get("/api/me", &getMe);
+        router.delete_("/api/me", &deleteMe);
         router.get("/api/me/irc-account", &getIrcAccount);
         router.post("/api/me/irc-account/retry", &retryIrcAccount);
         router.post("/api/me/pins", &pinChannel);
@@ -1486,6 +1487,74 @@ final class RESTAPI {
             // payload or skip the merge in favour of its locally-tracked
             // state. See docs/PREF_VERSION.md.
             "prefVersion": Json(prefs.prefVersion)
+        ]));
+    }
+
+    /**
+     * DELETE /api/me — the owner erases their own account ("Delete my
+     * account" in Settings → Danger zone).
+     *
+     * The button was calling this route since it shipped; the route did not
+     * exist, so every attempt answered 404 and the SPA showed "Delete
+     * account failed". It runs exactly the purge the admin path runs
+     * (`ircfiber.account_deletion`) — networks disconnected and deleted,
+     * engine state and assignments dropped, buffers, prefs, sessions and
+     * uploaded files removed, and the NickServ account we registered for
+     * them dropped — so self-deletion can never leave state behind that an
+     * admin deletion would have cleaned.
+     *
+     * The sole remaining admin is refused: a self-delete there locks
+     * everybody out of /admin with no way back in. Same guard the admin
+     * bulk-delete applies.
+     */
+    private void deleteMe(HTTPServerRequest req, HTTPServerResponse res) {
+        import std.algorithm : canFind;
+        import ircfiber.account_deletion : purgeUserAccount;
+        import ircfiber.db.user : UserRepository;
+
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+
+        if (user.roles.canFind("admin")) {
+            auto userRepo = new UserRepository();
+            int admins;
+            try {
+                foreach (u; userRepo.findAll(userRepo.count() + 50, 0))
+                    if (u.roles.canFind("admin")) admins++;
+            } catch (Exception e) {
+                logWarn("deleteMe: counting admins failed: %s", e.msg);
+                res.statusCode = 502;
+                res.writeJsonBody(Json(["error": Json("Could not verify administrator count")]));
+                return;
+            }
+            if (admins <= 1) {
+                res.statusCode = 409;
+                res.writeJsonBody(Json(["error":
+                    Json("You are the only administrator. Grant admin to another account first, "
+                         ~ "or delete this one from the admin panel.")]));
+                return;
+            }
+        }
+
+        logWarn("User %s (%s) requested deletion of their own account",
+                user.username, user.id.toString());
+        try purgeUserAccount(user, redis, serverRegistry);
+        catch (Exception e) {
+            // The account still exists, so say so instead of logging the user
+            // out of something that was not deleted.
+            logError("deleteMe: purging %s failed: %s", user.username, e.msg);
+            res.statusCode = 500;
+            res.writeJsonBody(Json(["error":
+                Json("Deleting your account failed: " ~ e.msg)]));
+            return;
+        }
+
+        // `purgeUserAccount` already destroyed every session this user held,
+        // including the one that made this request.
+        res.writeJsonBody(Json([
+            "deleted": Json(true),
+            "username": Json(user.username)
         ]));
     }
 

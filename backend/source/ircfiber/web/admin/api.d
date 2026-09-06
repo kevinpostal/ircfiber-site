@@ -993,13 +993,14 @@ package void apiUserUpdate(HTTPServerRequest req, HTTPServerResponse res) {
 }
 
 /// POST /api/admin/users/:id/delete
+///
+/// The purge itself lives in `ircfiber.account_deletion` because the user's
+/// own "Delete my account" (`DELETE /api/me`) must erase exactly the same
+/// state; two copies of it drifted once already.
 package void apiUserDelete(HTTPServerRequest req, HTTPServerResponse res,
                           RedisStorage redis, ServerRegistry serverRegistry) {
     import std.uuid : parseUUID;
-    import std.file : remove;
-    import std.path : buildPath;
-    import ircfiber.upload.local : uploadDir;
-    import ircfiber.storage.buffer : BufferManager;
+    import ircfiber.account_deletion : purgeUserAccount;
 
     auto id = parseUUID(req.params["id"]);
     auto userRepo = new UserRepository();
@@ -1007,64 +1008,8 @@ package void apiUserDelete(HTTPServerRequest req, HTTPServerResponse res,
     if (user.username.length == 0) { jsonError(res, 404, "User not found"); return; }
     logWarn("Admin deleting user via API: %s", user.username);
 
-    auto db = redis.getDb();
-    auto netRepo = new NetworkRepository();
-    auto bufferManager = new BufferManager(redis);
+    purgeUserAccount(user, redis, serverRegistry);
 
-    auto networks = netRepo.findByUserId(id);
-    foreach (net; networks) {
-        auto netId = net.id.toString();
-        auto serverId = serverRegistry.getServerForNetwork(netId);
-        auto msg = ControlMessage("removeNetwork", netId);
-        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
-        if (serverId.length > 0) {
-            redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
-            try { bufferManager.clearNetworkBuffers(serverId, netId); } catch (Exception) {}
-        } else {
-            redis.lpush(RedisKeys.control_legacy(), msg.toJson().toString());
-            try { bufferManager.clearNetworkBuffers(netId); } catch (Exception) {}
-        }
-        netRepo.deleteById(net.id);
-        if (serverId.length > 0) db.del(RedisKeys.state(serverId, netId));
-        db.del(RedisKeys.state_legacy(netId));
-        db.hdel(RedisKeys.networkAssignments(), netId);
-        db.del(RedisKeys.networkFail(netId));
-    }
-    // Clear sessions via store (uses vibed session APIs)
-    try {
-        auto store = new RedisSessionStore(redis);
-        const targetUid = id.toString();
-        foreach (sid; store.listAllSessionIds()) {
-            const fields = store.getSessionFields(sid);
-            if (fields is null) continue;
-            auto uidPtr = "sessionUserId" in fields;
-            if (uidPtr) {
-                import ircfiber.web.admin.helpers : stripJsonStr;
-                if (stripJsonStr(*uidPtr) == targetUid) store.destroy(sid);
-            }
-        }
-    } catch (Exception) {}
-    try { db.del("prefs:" ~ id.toString()); } catch (Exception) {}
-    // Hard-delete uploads
-    try {
-        auto uploadRepo = new UploadRepository();
-        auto uploads = uploadRepo.listAllByUser(id.toString());
-        foreach (upload; uploads) {
-            auto url = upload.directUrl.strip;
-            auto prefixPos = url.indexOf("/uploads/");
-            if (prefixPos != -1) {
-                auto filename = url[prefixPos + "/uploads/".length .. $];
-                if (filename.length > 0) {
-                    try remove(buildPath(uploadDir(), filename));
-                    catch (Exception) {}
-                }
-            }
-            try uploadRepo.hardDelete(id.toString(), upload.id);
-            catch (Exception) {}
-        }
-    } catch (Exception) {}
-
-    userRepo.deleteById(id);
     Json data = Json.emptyObject;
     data["deletedUserId"] = Json(id.toString());
     jsonOk(res, data);
@@ -1075,10 +1020,7 @@ package void apiUserDelete(HTTPServerRequest req, HTTPServerResponse res,
 package void apiUsersBulkDelete(HTTPServerRequest req, HTTPServerResponse res,
                           RedisStorage redis, ServerRegistry serverRegistry) {
     import std.uuid : parseUUID;
-    import std.file : remove;
-    import std.path : buildPath;
-    import ircfiber.upload.local : uploadDir;
-    import ircfiber.storage.buffer : BufferManager;
+    import ircfiber.account_deletion : purgeUserAccount;
     import ircfiber.models.user : User;
 
     auto body = readJsonBody(req);
@@ -1095,9 +1037,6 @@ package void apiUsersBulkDelete(HTTPServerRequest req, HTTPServerResponse res,
     string currentId = currentUser.id != UUID.init ? currentUser.id.toString() : "";
 
     auto userRepo = new UserRepository();
-    auto db = redis.getDb();
-    auto netRepo = new NetworkRepository();
-    auto bufferManager = new BufferManager(redis);
 
     int deleted;
     string[] skipped;
@@ -1121,55 +1060,8 @@ package void apiUsersBulkDelete(HTTPServerRequest req, HTTPServerResponse res,
             if (adminCount <= 1) { errors ~= user.username ~ " is last admin — skipped"; continue; }
         }
         logWarn("Admin bulk-deleting user: %s (id=%s)", user.username, id);
-        // Reuse single-delete cleanup inline (networks, sessions, prefs, uploads, user)
         try {
-            auto networks = netRepo.findByUserId(id);
-            foreach (net; networks) {
-                auto netId = net.id.toString();
-                auto serverId = serverRegistry.getServerForNetwork(netId);
-                auto msg = ControlMessage("removeNetwork", netId);
-                msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
-                if (serverId.length > 0) {
-                    redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
-                    try { bufferManager.clearNetworkBuffers(serverId, netId); } catch (Exception) {}
-                } else {
-                    redis.lpush(RedisKeys.control_legacy(), msg.toJson().toString());
-                    try { bufferManager.clearNetworkBuffers(netId); } catch (Exception) {}
-                }
-                netRepo.deleteById(net.id);
-                if (serverId.length > 0) db.del(RedisKeys.state(serverId, netId));
-                db.del(RedisKeys.state_legacy(netId));
-                db.hdel(RedisKeys.networkAssignments(), netId);
-                db.del(RedisKeys.networkFail(netId));
-            }
-            // sessions
-            try {
-                auto store = new RedisSessionStore(redis);
-                const targetUid = id.toString();
-                foreach (sid; store.listAllSessionIds()) {
-                    const fields = store.getSessionFields(sid);
-                    if (fields is null) continue;
-                    auto uidPtr = "sessionUserId" in fields;
-                    if (uidPtr) {
-                        if (stripJsonStr(*uidPtr) == targetUid) store.destroy(sid);
-                    }
-                }
-            } catch (Exception) {}
-            try { db.del("prefs:" ~ id.toString()); } catch (Exception) {}
-            try {
-                auto uploadRepo = new UploadRepository();
-                auto uploads = uploadRepo.listAllByUser(id.toString());
-                foreach (upload; uploads) {
-                    auto url = upload.directUrl.strip;
-                    auto prefixPos = url.indexOf("/uploads/");
-                    if (prefixPos != -1) {
-                        auto filename = url[prefixPos + "/uploads/".length .. $];
-                        if (filename.length > 0) try remove(buildPath(uploadDir(), filename)); catch (Exception) {}
-                    }
-                    try uploadRepo.hardDelete(id.toString(), upload.id); catch (Exception) {}
-                }
-            } catch (Exception) {}
-            userRepo.deleteById(id);
+            purgeUserAccount(user, redis, serverRegistry);
             deleted++;
         } catch (Exception e) {
             logWarn("Bulk delete failed for %s: %s", idStr, e.msg);

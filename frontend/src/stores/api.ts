@@ -537,7 +537,9 @@ export async function changePassword(oldPassword: string, newPassword: string): 
 
 export async function deleteAccount(): Promise<void> {
   const r = await fetch(`${API_BASE}/me`, { method: 'DELETE' });
-  if (!r.ok) throw new Error('Delete account failed');
+  // The server explains a refusal (e.g. "you are the only administrator");
+  // swallowing it left the Danger zone showing a bare "Delete account failed".
+  if (!r.ok) throw new Error(await serverError(r, 'Delete account failed'));
 }
 
 export async function uploadAvatar(file: File): Promise<{ url: string }> {

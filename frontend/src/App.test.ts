@@ -65,6 +65,10 @@ vi.mock('/src/stores/api', () => ({
   deleteAccount: vi.fn(async () => undefined),
   uploadAvatar: vi.fn(async () => undefined),
   removeAvatar: vi.fn(async () => undefined),
+  // SettingsAccount imports these; a mock factory that omits an export makes
+  // the whole module unloadable, which silently reduced this file to 0 tests.
+  fetchIrcAccount: vi.fn(async () => ({ status: 'none', account: '', password: '', reason: '' })),
+  retryIrcAccount: vi.fn(async () => undefined),
   deleteUpload: vi.fn(async () => undefined),
   editUpload: vi.fn(async () => ({ status: 'ok' })),
   fetchUploadsOffset: vi.fn(async () => ({ uploads: [], total: 0 })),

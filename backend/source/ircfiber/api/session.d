@@ -23,7 +23,10 @@ import ircfiber.storage.redis : RedisStorage;
 import ircfiber.models.user : User;
 import ircfiber.models.network : Network;
 
-package enum WS_SESSION_KEY_PREFIX = "ws_session:";
+/// Redis key prefix for a persisted WebSocket session. Public because
+/// `ircfiber.account_deletion` has to find and remove the blobs belonging to
+/// a user being erased — they are keyed by session id, not by user.
+enum WS_SESSION_KEY_PREFIX = "ws_session:";
 package enum JWT_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days — matches RedisSessionStore.TTL_SECONDS
 private enum WS_SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
 
