@@ -130,6 +130,24 @@ module
 	minusers = 0
 	botmodes = "ao"
 }
+
+/*
+ * The fantasy prefix lives in its own module block, so it needs its own
+ * override ahead of the same include. The directive is a *set* of
+ * characters, any one of which starts a fantasy command; the example's
+ * commented-out "!." would accept both `!kick` and `.kick`, and leaving
+ * it out defaults to "!".
+ *
+ * A backtick keeps fantasy commands clear of the two prefixes that
+ * already mean something here: `!` is what the IRC Fiber support bot
+ * answers to in #support, and `.` opens a sentence often enough to
+ * misfire.
+ */
+module
+{
+	name = "fantasy"
+	fantasycharacter = "`"
+}
 include { type = "file"; name = "botserv.example.conf" }
 include { type = "file"; name = "global.example.conf" }
 include { type = "file"; name = "hostserv.example.conf" }
