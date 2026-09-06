@@ -297,18 +297,40 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
         return r;
     }
 
-    if (status != 200) {
-        r.transportError = "HTTP " ~ status.to!string;
-        logWarn("anope rpc: %s returned HTTP %s", label, status);
-        return r;
-    }
-
+    // m_httpd's status code is not a reliable verdict: prod produced an
+    // HTTP 404 for `checkAuthentication` while `command` on the same socket
+    // answered 200, and m_xmlrpc signals its own errors inside the struct
+    // (`error` member). So the body decides — a `methodResponse` is a real
+    // answer whatever the status, and only a body we cannot parse is a
+    // transport failure. The status is logged when unexpected so the next
+    // occurrence is diagnosable.
     r = parseXmlRpcResponse(responseBody);
     r.text = flattenReplyText(r.text);
-    if (!r.transportOk)
-        logWarn("anope rpc: %s returned an unparseable body (%s bytes)",
-                label, responseBody.length);
+    if (!r.transportOk) {
+        r.transportError = status == 200
+            ? "unparseable XML-RPC body"
+            : "HTTP " ~ status.to!string;
+        logWarn("anope rpc: %s returned HTTP %s with an unparseable body (%s bytes): %s",
+                label, status, responseBody.length,
+                responseBody.length > 200 ? responseBody[0 .. 200] : responseBody);
+        return r;
+    }
+    if (status != 200)
+        logWarn("anope rpc: %s answered HTTP %s but the body parsed — using it", label, status);
     return r;
+}
+
+/**
+ * `anopePost` plus one retry, for calls that are safe to repeat: a stale
+ * pooled connection or a services restart shows up as a transport failure on
+ * the write, and losing a read-only probe needlessly defers provisioning.
+ * Never used for `REGISTER`, which is not idempotent.
+ */
+private AnopeReply anopePostIdempotent(AnopeSettings s, string payload, string label) {
+    auto r = anopePost(s, payload, label);
+    if (r.transportOk) return r;
+    logDebug("anope rpc: retrying %s after %s", label, r.transportError);
+    return anopePost(s, payload, label);
 }
 
 /**
@@ -333,7 +355,14 @@ AnopeReply anopeCommand(AnopeSettings s, string service, string asNick, string c
  * online unregistered nick answers 0 exactly like an offline one).
  */
 AnopeReply anopeUser(AnopeSettings s, string nick) {
-    return anopePost(s, buildXmlRpcCall("user", [nick]), "user " ~ nick);
+    return anopePostIdempotent(s, buildXmlRpcCall("user", [nick]), "user " ~ nick);
+}
+
+/// Read-only `command` variant, retried once. Only for probes — never for
+/// `REGISTER`, which `anopeCommand` sends exactly once.
+AnopeReply anopeQuery(AnopeSettings s, string service, string asNick, string command) {
+    return anopePostIdempotent(s, buildXmlRpcCall("command", [service, asNick, command]),
+                               service ~ " " ~ commandVerb(command) ~ " as " ~ asNick);
 }
 
 /**
@@ -397,7 +426,7 @@ NickRegistration classifyNickInfoReply(string text) @safe pure {
 /// callers decide explicitly whether to fail open or closed.
 NickRegistration anopeNickRegistration(AnopeSettings s, string nick) {
     if (!isSafeServicesArg(nick)) return NickRegistration.unknown;
-    auto r = anopeCommand(s, "NickServ", nick, "INFO " ~ nick);
+    auto r = anopeQuery(s, "NickServ", nick, "INFO " ~ nick);
     if (!r.transportOk) return NickRegistration.unknown;
     return classifyNickInfoReply(r.text);
 }
@@ -411,8 +440,8 @@ NickRegistration anopeNickRegistration(AnopeSettings s, string nick) {
 bool anopeCheckAuthentication(AnopeSettings s, string account, string password, out bool determined) {
     determined = false;
     if (!isSafeServicesArg(account) || !isSafeServicesArg(password)) return false;
-    auto r = anopePost(s, buildXmlRpcCall("checkAuthentication", [account, password]),
-                       "checkAuthentication " ~ account);
+    auto r = anopePostIdempotent(s, buildXmlRpcCall("checkAuthentication", [account, password]),
+                                 "checkAuthentication " ~ account);
     if (!r.transportOk) return false;
     determined = true;
     if (r.result == "Success") return true;
