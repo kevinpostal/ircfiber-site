@@ -219,6 +219,40 @@ describe('ConnectionStatus — banner states (W3-T01)', () => {
     const cell = document.querySelector('.connectionstatuscell');
     expect(cell?.classList.contains('show')).toBeFalsy();
   });
+
+  /**
+   * The bar collapses over 200ms (`app.css` animates max-height/opacity on
+   * `.connectionstatuscell`) and its content stays mounted for that whole
+   * animation, so whatever the headline derives to while connected is what
+   * the user sees on the way out. It used to fall through to
+   * "Disconnected: …", which is why connecting to a server flashed the
+   * disconnected bar right before going connected (measured live: store
+   * connected at +2573ms, bar still read "Disconnected:" until +2761ms).
+   *
+   * A connected network must therefore render no disconnect copy at all,
+   * even with a stale `disconnectReason` from the session before — that
+   * field is only cleared by the next 001.
+   */
+  it('renders no disconnect copy while connected, even with a stale reason', async () => {
+    pushNetwork({
+      connected: true,
+      connectionState: 'connected',
+      isAway: false,
+      disconnectReason: 'You disconnected',
+      host: 'irc.example.com',
+      port: 6667,
+      tls: 'required',
+    });
+    render(ConnectionStatus);
+
+    const cell = document.querySelector('.connectionstatuscell');
+    expect(cell?.classList.contains('show')).toBeFalsy();
+    // Nothing in the (still-mounted) content may claim a disconnect, and
+    // the host/port advice must not reappear either.
+    expect(cell?.textContent ?? '').not.toMatch(/Disconnect/i);
+    expect(cell?.textContent ?? '').not.toMatch(/Check your host/i);
+    expect(document.querySelector('.connectionStatus--disconnected')).toBeNull();
+  });
 });
 
 describe('ConnectionStatus — transient state coverage (W3-rev1)', () => {

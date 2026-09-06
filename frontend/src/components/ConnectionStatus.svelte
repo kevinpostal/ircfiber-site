@@ -102,6 +102,7 @@
     | 'fail-blocked'
     | 'fail-connecting'
     | 'fail-socket'
+    | 'connected'
     | 'disconnected';
 
   interface BannerLine {
@@ -137,6 +138,16 @@
     if (isQuitting) return 'quitting';
     if (isIpRetry) return 'ip-retry';
     if (isConnecting) return 'connecting';
+    // A live connection is NOT a disconnect. Falling through to
+    // 'disconnected' here is what made the bar flash "Disconnected" for
+    // the ~200ms of its own hide animation (app.css animates max-height
+    // 200ms / opacity 150ms on `.connectionstatuscell`): the content stays
+    // mounted while the strip collapses, so the headline re-derived from
+    // `connected: true, connectionState: 'connected'` — a state no branch
+    // above claims — and printed the default disconnect line on the way
+    // out. Measured in a browser: store said connected at +2573ms, the bar
+    // still read "Disconnected:" until +2761ms.
+    if (activeNetwork.connected) return 'connected';
     return 'disconnected';
   });
 
@@ -207,6 +218,11 @@
         return `Failed to connect - ${renderReason(fail?.reason)}`;
       case 'fail-socket':
         return `Disconnected: ${renderReason(fail?.reason)}`;
+      case 'connected':
+        // Nothing to say — the bar is on its way out (or should never
+        // have been shown). Deliberately empty rather than a cheerful
+        // "Connected": IRCCloud's bar carries no steady-state message.
+        return '';
       case 'disconnected':
       default: {
         const base = `Disconnected: ${renderReason(disconnectReason)}`;
@@ -240,6 +256,9 @@
   // never replace the headline; they only append to it.
   const warnings: string[] = $derived.by(() => {
     if (!activeNetwork) return [];
+    // A connected network has nothing to warn about, and the host/port
+    // advice must not reappear while the bar animates away.
+    if (bannerKind === 'connected') return [];
     const includeCta =
       bannerKind === 'fail-connecting' ||
       bannerKind === 'fail-socket' ||
@@ -383,6 +402,9 @@
       case 'fail-socket':
         classes.push('fail', 'connectionStatus--fail');
         if (bannerKind === 'fail-ssl') classes.push('fail-ssl');
+        break;
+      case 'connected':
+        // No state colour: the row carries no message in this kind.
         break;
       case 'disconnected':
       default:
