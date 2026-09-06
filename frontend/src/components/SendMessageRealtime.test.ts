@@ -9,6 +9,11 @@ import { ircState } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
 
 vi.mock('/src/stores/api', () => ({
+  // uploadFlow imports these; a factory mock must name every export the
+  // module graph pulls in or the whole suite fails to collect.
+  convertUploadToGif: vi.fn(async () => ({ id: 'gif1', url: '/uploads/x.gif' })),
+  startGifConversion: vi.fn(async () => 'job1'),
+  getGifJob: vi.fn(async () => ({ state: 'done', percent: 100, frame: 0, fps: 0, speed: 0, durationMs: 0, outTimeMs: 0, elapsedMs: 0, etaMs: 0 })),
   reconnectNetwork: vi.fn(async () => undefined),
   clearBacklog: vi.fn(async () => undefined),
   disconnectNetwork: vi.fn(async () => undefined),
