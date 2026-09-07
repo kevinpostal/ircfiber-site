@@ -10,6 +10,17 @@
   --font-mono: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
   --status-disconnected: #f85149;
 
+  // ── Message-row geometry ──
+  // Every row family in the log shares one left content edge: chat rows,
+  // status/notice rows, the server-log phase rail, MOTD/ISUPPORT cards
+  // and the disconnect rules. The avatar column starts on the same 12px
+  // inset as the composer pill (.bufferinputcell .nickinputcell), so the
+  // gutter is avatar-left + avatar-size + gap (12 + 32 + 8). The right
+  // gutter is the timestamp/hover-tools column.
+  --row-avatar-left: 12px;
+  --row-gutter-left: 52px;
+  --row-gutter-right: 118px;
+
   // ── Fiber palette (homepage brand tokens) ──
   // Mirror of the variables exposed on ircfiber.com so the web app can
   // match the marketing site's visual language. Used today by the server

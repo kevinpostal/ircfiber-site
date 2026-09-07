@@ -44,7 +44,7 @@
   font-family: var(--font-mono);
 }
 
-#app.font-mono .row.dateDivider h3 {
+#app.font-mono .row.dateChange h3 {
   font-size: 14px;
   font-family: var(--font-mono);
 }
@@ -80,7 +80,8 @@
   height: 1px;
   border: none;
   border-top: 3px double #595959;
-  margin: 5px -21px 5px -68px;
+  /* Bleeds out of the row's own gutters so the rule spans the log. */
+  margin: 5px -21px 5px calc(-1 * var(--row-gutter-left));
   padding: 0;
   overflow: hidden;
   background: transparent;

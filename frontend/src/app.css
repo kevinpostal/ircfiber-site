@@ -101,13 +101,14 @@ body.ascii-compact .row.messageRow {
   font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
-/* Per-row base. IRCCloud uses 118px right padding for layout balance,
-   68px left for avatar, 0 vertical padding. line-height:1.15 gives 16px
-   at 14px font, matching IRCCloud's compact message density. The
-   padding shorthand is deliberately NOT set here — it must come from
-   public/style.css so that .firstAuthor { padding-top: 6px } (also
-   defined there) isn't overridden by a shorthand's reset of all four
-   sides. */
+/* Per-row base. The row gutters come from --row-gutter-left /
+   --row-gutter-right (styles/base/_variables.scss) so every row family
+   shares one left content edge; line-height:1.15 gives 16px at 14px
+   font, matching IRCCloud's compact message density. The padding
+   shorthand is deliberately NOT set here — it must come from the
+   .row.messageRow rule in styles/components/_userPopup.scss so that
+   .firstAuthor { padding-top: 6px } isn't overridden by a shorthand's
+   reset of all four sides. */
 .row.messageRow {
   line-height: 1.15;
   font-size: 14px;
@@ -130,7 +131,7 @@ body.ascii-compact .row.messageRow {
 .row.messageRow.blockArt {
   font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   line-height: 16px;
-  padding: 0 118px 0 68px;
+  padding: 0 var(--row-gutter-right) 0 var(--row-gutter-left);
 }
 /* ANSI-art rows (blockArt / bot) can be 20-100 lines × 10 spans/line.
    content-visibility skips off-screen art during scroll, intrinsic-size
@@ -173,10 +174,10 @@ body.ascii-compact .row.messageRow {
 }
 .row.messageRow.status {
   font-family: "Hack", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  /* Same IRCCloud right gutter (118px for the timestamp/hover-tools
-     column) and left avatar gutter (68px) as the base .row. Without
-     this, status lines were wrapping into the timestamp area. */
-  padding: 0 118px 0 68px;
+  /* Same gutters as the base row (the right one is the timestamp/
+     hover-tools column). Without this, status lines wrapped into the
+     timestamp area. */
+  padding: 0 var(--row-gutter-right) 0 var(--row-gutter-left);
 }
 
 /* `.content` is the inner span that holds the formatted message body. The
@@ -558,7 +559,7 @@ textarea.message-input {
   display: flex;
   align-items: center;
   min-height: 1px;
-  padding: 6px 16px 6px 68px;
+  padding: 6px 16px 6px var(--row-gutter-left);
 }
 .row.part.type_socket_closed hr {
   flex: 1;

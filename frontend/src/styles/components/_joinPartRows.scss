@@ -10,7 +10,7 @@
 .row.messageRow.joinPart {
   color: var(--log-fg);
   background: transparent;
-  padding: 2px 118px 2px 68px;
+  padding: 2px var(--row-gutter-right) 2px var(--row-gutter-left);
 }
 .row.messageRow.joinPart.firstAuthor {
   padding-top: 6px;
@@ -50,9 +50,11 @@
   padding-right: 118px;
 }
 
-/* Full-width MOTD/info rows matching IRCCloud */
+/* Full-width MOTD/info rows matching IRCCloud. The card's own 8px inset
+   is subtracted from the row gutter so its text starts on the shared
+   left edge instead of 10px from the viewport. */
 .row.messageRow.type_motd_response {
-  padding: 10px;
+  padding: 10px 10px 10px calc(var(--row-gutter-left) - 8px);
   border-radius: 3px;
   background: #404040;
 }
@@ -215,10 +217,10 @@
 }
 
 .row.part.groupedJoinPartPart {
-  /* Match the IRCCloud right gutter (118px) used by .row.messageRow.status
-     in app.css. The 80px here was a leftover from an earlier layout
-     that left status lines wrapping into the timestamp/hover area. */
-  padding: 0 118px 0 68px;
+  /* Shares the row gutters so the rule lines up with the rows it
+     separates (an earlier 80px right gutter let status lines wrap into
+     the timestamp/hover area). */
+  padding: 0 var(--row-gutter-right) 0 var(--row-gutter-left);
   color: var(--log-fg);
   background: transparent;
 }
@@ -367,11 +369,11 @@
 }
 .row.messageRow .letterAvatar {
   top: 8px;
-  left: 25px;
+  left: var(--row-avatar-left);
 }
 .stickyAvatar .letterAvatar {
   top: 0;
-  left: 25px;
+  left: var(--row-avatar-left);
 }
 
 .row.messageRow .letterAvatar span,

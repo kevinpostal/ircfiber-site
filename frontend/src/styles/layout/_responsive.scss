@@ -150,7 +150,7 @@
 
   /* ─────────────────────────────────────────────────────────────
      Mobile message-row gutters
-     Desktop IRCCloud parity uses 68px left + 118px right padding so
+     Desktop parity uses --row-gutter-left/--row-gutter-right so
      avatars sit in their own column and the timestamp/hover-tools
      column has a stable gutter. On a 375px phone that eats 50% of
      the horizontal real estate — collapsed to a thin column with no
@@ -175,7 +175,7 @@
   .row.messageRow.firstAuthor.bot,
   .row.messageRow.firstAuthor.type_buffer_msg,
   .row.messageRow.firstAuthor.blockArt { padding-top: 8px; }
-  /* Avatars: hidden on phones per request — frees the 68px gutter */
+  /* Avatars: hidden on phones per request — frees the left gutter */
   .row.messageRow .letterAvatar,
   .row.messageRow .avatar,
   .row.messageRow .messageAvatar,

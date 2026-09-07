@@ -37,11 +37,14 @@
 }
 
 .collapseGroup.discoGroup {
-  padding-left: 88px;
+  /* No extra indent: the rows inside already carry the shared row
+     gutter, and an 88px nest pushed them off the log's left edge
+     (matches .collapseGroup.joinPartGroup). */
+  padding-left: 0;
 }
 
 .row.part.groupedDiscoPart {
-  padding: 4px 16px;
+  padding: 4px 16px 4px var(--row-gutter-left);
 }
 
 .row.part.groupedDiscoPart hr {

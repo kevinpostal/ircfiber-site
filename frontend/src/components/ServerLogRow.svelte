@@ -158,7 +158,10 @@
      from the global messageRow CSS is scoped here to .row.phase. ────── */
   .row.phase {
     position: relative;
-    padding: 0 150px 0 36px;
+    /* Shares --row-gutter-left with every other row family; the rail and
+       its glyph sit in the avatar column so the log has one left edge.
+       The wider right gutter keeps the +Nms offset clear of the clock. */
+    padding: 0 150px 0 var(--row-gutter-left);
     font: 14px/19px var(--font-mono);
   }
   /* Same box as the global `.row.messageRow .date` (right: 0 + 10px
@@ -185,7 +188,7 @@
   .row.phase::before {
     content: '';
     position: absolute;
-    left: 19px;
+    left: 28px;
     top: 0;
     bottom: 0;
     width: 1px;
@@ -195,10 +198,10 @@
   .row.phase.last::before { bottom: 10px; }
   .row.phase .glyph {
     position: absolute;
-    left: 14px;
+    left: 22px;
     top: 4px;
-    width: 11px;
-    height: 11px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     background: var(--chat-bg, #000);
     border: 1.5px solid #4b5563;
@@ -252,7 +255,9 @@
   .tag.ok { color: #7ee2a8; }
 
   /* ── grouped MOTD block (IRCCloud groupedLines) ─────────────────── */
-  .row.type_motd_response { padding: 4px 12px; }
+  /* The card's 8px inset is subtracted so its text starts on the shared
+     left edge (mirrors the global rule in _joinPartRows.scss). */
+  .row.type_motd_response { padding: 4px 12px 4px calc(var(--row-gutter-left) - 8px); }
   .groupedLines {
     display: block;
     position: relative;
