@@ -356,10 +356,15 @@ Those three live in `host_vars/vps-efb4b52d.yml` as `cloudflare_records`: the SP
 Verify with **one** real send before declaring it fixed:
 
 ```bash
-ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'K=$(cat /etc/ircfiber/gateway/secrets/resend_api_key); \
+# One real send. Read the key on the host (the container user cannot read the
+# 0400 secret file), and send to a real inbox: Resend answers HTTP 422 for
+# RFC-reserved recipients such as you@example.org (2026-09-07: a signup with
+# an @example.com address failed exactly this way while the provider was
+# healthy).
+ssh <host> 'K=$(sudo cat /etc/ircfiber/gateway/secrets/resend_api_key); \
   curl -s -w "\nHTTP %{http_code}\n" -X POST https://api.resend.com/emails \
     -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
-    -d "{\"from\":\"IRC Fiber <no-reply@ircfiber.com>\",\"to\":[\"you@example.org\"],\"subject\":\"probe\",\"text\":\"probe\"}"'"'"''
+    -d "{\"from\":\"IRC Fiber <no-reply@ircfiber.com>\",\"to\":[\"admin@ircfiber.com\"],\"subject\":\"probe\",\"text\":\"probe\"}"'
 ```
 
 Do **not** loop that probe while waiting for DNS. A retry every two minutes got the sender.net account suspended for "suspicious activity" (HTTP 403, then 401 on every send) even though each request was a legitimate API call; a provider's resolver can cache the old negative answer for the zone's negative TTL (1800 s on `ircfiber.com`), so wait that out and re-check the provider's own domain state instead of re-sending.
