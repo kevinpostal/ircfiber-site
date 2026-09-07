@@ -228,6 +228,22 @@ k8s-push-deploy: k8s-push k8s-apply ## K8s > Push + deploy (build → push → a
 k8s-up: k8s-push k8s-apply ## K8s > Full cycle: build → push → deploy (use for every D change)
 
 # ----------------------------------------------------------------------------
+# Prod backups (ircfiber-prod namespace) — CronJobs + least-privilege RBAC
+# for the admin Backups page. KUBE_NS is `ircfiber` (dev), so the namespace
+# is explicit here rather than $(KUBE_NS).
+# ----------------------------------------------------------------------------
+K8S_PROD_DIR := $(SITE_DIR)/deploy/k8s/ircfiber-prod
+
+k8s-prod-backups-apply: ## K8s > Apply the ircfiber-prod backup CronJobs + RBAC
+	$(KUBECTL) -n ircfiber-prod apply -f $(K8S_PROD_DIR)/rbac-backup-admin.yaml
+	$(KUBECTL) -n ircfiber-prod apply -f $(K8S_PROD_DIR)/cronjob-backup.yaml
+	$(KUBECTL) -n ircfiber-prod get cronjob -o wide
+
+k8s-prod-backups-token: ## K8s > Print the gateway's backup ServiceAccount token (for the vault)
+	@$(KUBECTL) -n ircfiber-prod get secret ircfiber-backup-admin-token \
+	  -o jsonpath='{.data.token}' | base64 -d; echo
+
+# ----------------------------------------------------------------------------
 # Observability — status, logs, shell, events, port-forward
 # ----------------------------------------------------------------------------
 .PHONY: k8s-status k8s-pods k8s-logs k8s-logs-gateway k8s-logs-engine k8s-shell k8s-shell-engine k8s-events k8s-describe k8s-port-forward

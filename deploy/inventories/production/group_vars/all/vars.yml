@@ -131,6 +131,10 @@ support_bot_public_url: "https://{{ ircfiber_domain }}"
 signoz_query_url: "https://100.94.116.56"
 signoz_query_host: "signoz.ubuntu-docker.tail544547.ts.net"
 signoz_insecure_tls: true
+# k3s API on ubuntu-docker over the tailnet. Backs the admin Backups page
+# (GET /api/admin/backups). A group var because k3s_tailscale_ip exists only
+# in host_vars/ircfiber-prod-1.yml, which does not apply to vps-efb4b52d.
+k3s_api_url: "https://100.94.116.56:6443"
 # --- Caddy --------------------------------------------------------------------
 caddy_data_volume: "ircfiber_caddy_data"
 caddy_config_volume: "ircfiber_caddy_config"

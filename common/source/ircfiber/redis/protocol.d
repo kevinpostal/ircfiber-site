@@ -194,6 +194,12 @@ struct RedisKeys {
     /// Commands older than 60 s are dropped by the consumer.
     static string supportBotControl() { return "irc:support:bot:control"; }
 
+    /// Run records published by the k3s `ircfiber-redis-backup` CronJob
+    /// (LPUSH + LTRIM 0 59). Read by GET /api/admin/backups; the Mongo job
+    /// writes its own records to the `backup_runs` collection instead,
+    /// because `mongo:7` carries no redis-cli.
+    static string backupRuns() { return "irc:backup:runs"; }
+
     /// Protocol version key. Written by engine heartbeat (see
     /// `ircfiber.engine.state.writeStateSnapshots`). Gateways and
     /// future Python implementations read this at startup to assert

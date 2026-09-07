@@ -46,6 +46,7 @@ import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
+import ircfiber.web.admin.backups : apiBackupsOverview, apiBackupsRun, apiBackupsSuspend, apiBackupsLogs;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
@@ -174,6 +175,12 @@ final class AdminController {
 
         // Replication monitor (Mongo rs0 + Redis global keys / shake)
         router.get("/api/admin/replication", &adminWrap!apiReplicationStatusRoute);
+
+        // Backups (k8s CronJob state + published run history; see web.admin.backups)
+        router.get("/api/admin/backups", &adminWrap!apiBackupsOverviewRoute);
+        router.get("/api/admin/backups/:name/logs", &adminWrap!apiBackupsLogsRoute);
+        router.post("/api/admin/backups/:name/run", &adminWrap!apiBackupsRunRoute);
+        router.post("/api/admin/backups/:name/suspend", &adminWrap!apiBackupsSuspendRoute);
 
         // Engine janitor control plane
         router.get("/api/admin/janitor/status", &adminWrap!apiJanitorStatusRoute);
@@ -388,6 +395,12 @@ private:
 
     // Replication (Mongo rs0 + Redis global keys)
     void apiReplicationStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiReplicationStatus(req, res, redis); }
+
+    // Backups (overview needs redis for the published run history)
+    void apiBackupsOverviewRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsOverview(req, res, redis); }
+    void apiBackupsRunRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsRun(req, res); }
+    void apiBackupsSuspendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsSuspend(req, res); }
+    void apiBackupsLogsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsLogs(req, res); }
 
     // Janitor
     void apiJanitorStatusRoute(HTTPServerRequest req, HTTPServerResponse res) {

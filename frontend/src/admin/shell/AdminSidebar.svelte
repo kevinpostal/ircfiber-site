@@ -44,6 +44,7 @@
       items: [
         { label: 'MongoDB', path: '/mongo', icon: '🍃' },
         { label: 'Redis', path: '/redis', icon: '🔴' },
+        { label: 'Backups', path: '/backups', icon: '💾' },
       ],
     },
     {

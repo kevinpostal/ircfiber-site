@@ -31,6 +31,14 @@ export function duration(ms: number | null | undefined): string {
 export function relative(ms: number | null | undefined, now: number = Date.now()): string {
   if (ms == null || ms <= 0) return '—';
   const diff = now - ms;
+  if (diff < 0) {
+    // Future timestamp (e.g. a next-run estimate): mirror the past buckets.
+    const ahead = -diff;
+    if (ahead < 60_000) return 'just now';
+    if (ahead < 3_600_000) return `in ${Math.floor(ahead / 60_000)}m`;
+    if (ahead < 86_400_000) return `in ${Math.floor(ahead / 3_600_000)}h`;
+    return `in ${Math.floor(ahead / 86_400_000)}d`;
+  }
   if (diff < 1000) return 'just now';
   if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;

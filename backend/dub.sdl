@@ -92,6 +92,18 @@ configuration "logs-test" {
     versions "VibeUseFibers"
 }
 
+// Pure-code unit test for the admin Backups k8s/schedule/freshness helpers
+// (no k8s, Redis or Mongo needed):
+configuration "backups-test" {
+    targetType "executable"
+    targetName "backups-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/web/admin/backups.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d" "source/ircfiber/env.d"
+    mainSourceFile "tests/backups_test.d"
+    versions "VibeUseFibers"
+}
+
 // Pure-code unit test for the Mullvad pool / egress id helpers shared by
 // the admin API and the user "Connect via" picker (no SOCKS/Redis/Mongo):
 //   dub --root=backend build --config=egress-test && ./backend/egress-test

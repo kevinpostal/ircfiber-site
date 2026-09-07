@@ -25,6 +25,7 @@
     '/uploads': 'Uploads',
     '/mongo': 'MongoDB Monitor',
     '/redis': 'Redis Monitor',
+    '/backups': 'Backups',
   };
   const pageTitle = $derived.by(() => {
     const cur = current();

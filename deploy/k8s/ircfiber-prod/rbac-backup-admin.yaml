@@ -1,0 +1,75 @@
+# Least-privilege access for the gateway's admin Backups page
+# (`GET /api/admin/backups`, Run now, Suspend/Resume, pod-log tail).
+#
+# There is deliberately NO `delete` verb anywhere in this Role: the page can
+# list CronJobs/jobs/pods, read pod logs, create a manual Job from the
+# CronJob template and flip `spec.suspend` — it can never remove a job or an
+# archive. Archive deletion stays with the jobs' own 14-day `find -mtime +14`
+# prune; restores stay with `site/deploy/playbooks/restore.yml`.
+#
+# The Role is namespaced to `ircfiber-prod`, so this token cannot touch the
+# `ircfiber` dev namespace, any other namespace, or any node/cluster object.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ircfiber-backup-admin
+  namespace: ircfiber-prod
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: backup
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ircfiber-backup-admin
+  namespace: ircfiber-prod
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: backup
+rules:
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ircfiber-backup-admin
+  namespace: ircfiber-prod
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: backup
+subjects:
+  - kind: ServiceAccount
+    name: ircfiber-backup-admin
+    namespace: ircfiber-prod
+roleRef:
+  kind: Role
+  name: ircfiber-backup-admin
+  apiGroup: rbac.authorization.k8s.io
+---
+# Non-expiring token for the gateway (k3s still honors the legacy
+# `kubernetes.io/service-account-token` controller). If the token field stays
+# empty after ~15 s, mint a time-boxed token instead:
+#   kubectl -n ircfiber-prod create token ircfiber-backup-admin --duration=8760h
+# and record the expiry date in the vault comment next to the value.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ircfiber-backup-admin-token
+  namespace: ircfiber-prod
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: backup
+  annotations:
+    kubernetes.io/service-account.name: ircfiber-backup-admin
+type: kubernetes.io/service-account-token
