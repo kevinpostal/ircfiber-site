@@ -1,13 +1,18 @@
 <script lang="ts">
   /**
-   * Full-page compose text styling editor (the gear in the input row).
+   * Compose text styling editor (the gear in the input row). It is a
+   * full-page surface in the sense settings is: App swaps it into
+   * `.main-area`, so the sidebar and its buffer list stay on screen and the
+   * chat column is what gets replaced.
+   *
    * Edits a draft copy of globalPrefs.composeStyle; Apply commits, Cancel and
    * Escape discard. Heavy work (effects, fonts, the 1 000-font TheDraw pack) is
    * behind dynamic imports so opening the page is the first time any of it loads.
    */
   import { untrack } from 'svelte';
-  import Dialog from './Dialog.svelte';
   import FontGallery from './FontGallery.svelte';
+  import { ircState } from '../stores/ircStore.svelte';
+  import { navigateBackFromComposeStyle } from '../lib/routing';
   import { globalPrefs } from '../stores/preferences.svelte';
   import {
     DEFAULT_COMPOSE_STYLE,
@@ -29,13 +34,16 @@
     type FontSort,
   } from '../lib/fontCatalog';
 
-  interface Props {
-    sampleText: string;
-    onClose: () => void;
-  }
-  let { sampleText, onClose }: Props = $props();
-
   type Tab = 'text' | 'colour' | 'font' | 'gallery';
+
+  /// Whatever was in the input when the gear was clicked, so the preview
+  /// starts from the user's own words.
+  const sampleText = ircState.composeStyleSample;
+
+  function close(): void {
+    ircState.showComposeStyle = false;
+    navigateBackFromComposeStyle();
+  }
 
   const PREVIEW_BUDGET = 400;
   const SAMPLE = 'The quick brown fox jumps over the lazy dog';
@@ -202,17 +210,24 @@
 
   function apply(): void {
     globalPrefs.composeStyle = structuredClone($state.snapshot(draft));
-    onClose();
+    close();
   }
 
   function reset(): void {
     draft = structuredClone(DEFAULT_COMPOSE_STYLE);
   }
 
+  /// Cmd/Ctrl+Enter applies. Escape is handled here as well as in App's
+  /// global chain so it works while focus is inside one of the panels.
   function onKeydown(e: KeyboardEvent): void {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       apply();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
     }
   }
 </script>
@@ -248,9 +263,8 @@
   {@render swatches(mode.bg, (c) => { mode.bg = c < 0 ? null : c; }, false, true)}
 {/snippet}
 
-<Dialog open={true} {onClose} label="Text style" hideClose class="compose-style-page">
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div class="csp" role="presentation" onkeydown={onKeydown}>
+<div class="compose-style-page csp" role="presentation" onkeydown={onKeydown}>
   <header class="csp-head">
     <div class="csp-headline">
       <h2>Text style</h2>
@@ -258,7 +272,7 @@
     </div>
     <div class="csp-actions">
       <button type="button" class="csp-btn" onclick={reset} disabled={!draftActive}>Reset</button>
-      <button type="button" class="csp-btn" onclick={onClose}>Cancel</button>
+      <button type="button" class="csp-btn" onclick={close}>Cancel</button>
       <button type="button" class="csp-btn primary" onclick={apply} title="Apply (⌘/Ctrl + Enter)">Apply</button>
     </div>
   </header>
@@ -425,4 +439,3 @@
     </aside>
   </div>
 </div>
-</Dialog>

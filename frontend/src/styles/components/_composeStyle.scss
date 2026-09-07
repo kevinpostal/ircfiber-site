@@ -1,4 +1,6 @@
-/* ── Compose text styling — full-page editor behind the input-row gear ── */
+/* ── Compose text styling — the editor the gear swaps into the chat area ──
+   Not an overlay: App renders it inside `.main-area` exactly where the
+   buffer header + chat column would be, so the sidebar stays visible. */
 $cs-accent: #1e72ff;
 $cs-border: #2c2f35;
 $cs-muted: #8b949e;
@@ -6,32 +8,15 @@ $cs-text: #c9d1d9;
 $cs-bg: #0d1117;
 $cs-surface: #161b22;
 
-/* [open] lifts specificity above Dialog.svelte's scoped `dialog` rules. */
-dialog.compose-style-page[open] {
-  position: fixed;
-  inset: 0;
-  margin: 0;
-  width: 100vw;
-  max-width: none;
-  height: 100dvh;
-  max-height: none;
-  border: none;
-  border-radius: 0;
-  padding: 0;
+.compose-style-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
-  z-index: 100;
   background: $cs-bg;
   color: $cs-text;
   font-size: 13px;
-}
-
-.compose-style-page {
-  .csp {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    min-height: 0;
-  }
 
   /* Header */
   .csp-head {

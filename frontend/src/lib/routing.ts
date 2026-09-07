@@ -112,6 +112,25 @@ export function navigateBackFromFeedback(): void {
   }
 }
 
+export function navigateComposeStyle(): void {
+  history.pushState({ composeStyle: true }, '', '/?/text-style');
+}
+
+export function isComposeStyleUrl(): boolean {
+  return /^\?\/text-style$/.test(window.location.search);
+}
+
+export function navigateBackFromComposeStyle(): void {
+  const net = ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId);
+  if (net && ircState.activeBuffer.bufferName) {
+    updateRoute(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName);
+  } else if (ircState.networks.length > 0) {
+    updateRoute(ircState.networks[0].networkId, '_server');
+  } else {
+    window.location.href = '/';
+  }
+}
+
 export function navigateAddNetwork(welcome = false): void {
   history.pushState({ addNetwork: true }, '', welcome ? '/?/add-network=welcome' : '/?/add-network');
 }

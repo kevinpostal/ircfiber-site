@@ -39,7 +39,7 @@
   import { startOnlineChecker } from './lib/onlineChecker';
   import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, pinnedOrder, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs, ignoreList, applyServerIgnores } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
-  import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFeedbackUrl, navigateBackFromFeedback, isAddNetworkUrl, isAddNetworkWelcome, navigateAddNetwork, navigateBackFromAddNetwork, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
+  import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFeedbackUrl, navigateBackFromFeedback, isComposeStyleUrl, navigateBackFromComposeStyle, isAddNetworkUrl, isAddNetworkWelcome, navigateAddNetwork, navigateBackFromAddNetwork, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
   import { isFiberServerDown } from './lib/fiberServer';
   import { enqueueMessage, setFlushFn, setBackfillFlushFn } from './lib/messageBatcher';
@@ -265,7 +265,7 @@ let showEditNetwork: boolean = $state(false);
   }
 
   $effect(() => {
-    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showAddNetwork || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle || ircState.showAddNetwork || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     const { networkId, bufferName } = ircState.activeBuffer;
     if (networkId && bufferName) updateRoute(networkId, bufferName);
   });
@@ -276,7 +276,7 @@ let showEditNetwork: boolean = $state(false);
   // (host !== '' ensures we have full sync data, not just the skeleton
   // from the `networks` WS message which lacks host/systemManaged).
   $effect(() => {
-    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showAddNetwork || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle || ircState.showAddNetwork || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     if (!ircState.activeBuffer.networkId && !ircState.activeBuffer.bufferName && ircState.networks.length > 0) {
       const candidates = ircState.networks.filter(n => n.host && !isFiberServerDown(n as any));
       const firstNet = candidates.length > 0 ? candidates[0] : null;
@@ -296,7 +296,7 @@ let showEditNetwork: boolean = $state(false);
   // landed on Fiber (e.g. before the sync had host/systemManaged to
   // detect isDown, or via a stale lastVisited cookie).
   $effect(() => {
-    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showAddNetwork || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle || ircState.showAddNetwork || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     const activeId = ircState.activeBuffer.networkId;
     const activeBuf = ircState.activeBuffer.bufferName;
     if (!activeId || !activeBuf) return;
@@ -651,6 +651,11 @@ let showEditNetwork: boolean = $state(false);
         navigateBackFromFeedback();
         return;
       }
+      if (ircState.showComposeStyle) {
+        ircState.showComposeStyle = false;
+        navigateBackFromComposeStyle();
+        return;
+      }
       let closedSomething = false;
       if (ircState.overlay.type) { ircState.overlay.type = null; ircState.overlay.data = null; closedSomething = true; }
       if (ircState.contextMenu.visible) { ircState.contextMenu.visible = false; closedSomething = true; }
@@ -695,7 +700,7 @@ let showEditNetwork: boolean = $state(false);
       );
       if (isTypingTarget) return;
       // Don't steal when any modal/overlay is open
-      if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts || ircState.showFeedback ||
+      if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle ||
           ircState.overlay.type || showEditNetwork || showJoinModal || showBouncerDialog ||
           ircState.contextMenu.visible || !!userPopup) return;
       if (ircState.activeBuffer.bufferName === '_server') return;
@@ -1509,59 +1514,54 @@ let showEditNetwork: boolean = $state(false);
     }
   }
 
+  /// Exactly one full-page surface owns the main area at a time. `checkRoute`
+  /// is the only writer, so it always sets every flag together — a route that
+  /// forgot one left two pages fighting over the same slot.
+  type FullPage = 'settings' | 'shortcuts' | 'feedback' | 'composeStyle' | 'addNetwork' | null;
+  function showFullPage(which: FullPage): void {
+    ircState.showSettings = which === 'settings';
+    ircState.showShortcuts = which === 'shortcuts';
+    ircState.showFeedback = which === 'feedback';
+    ircState.showComposeStyle = which === 'composeStyle';
+    ircState.showAddNetwork = which === 'addNetwork';
+  }
+
   function checkRoute(): void {
     syncViewers();
     if (isPastebinUrl()) {
-      ircState.showSettings = false;
-      ircState.showShortcuts = false;
-      ircState.showFeedback = false;
-      ircState.showAddNetwork = false;
+      showFullPage(null);
       return;
     }
     // File viewer overlay takes precedence — don't treat as buffer route
     if (isFileViewerUrl()) {
-      ircState.showSettings = false;
-      ircState.showShortcuts = false;
-      ircState.showFeedback = false;
-      ircState.showAddNetwork = false;
+      showFullPage(null);
       return;
     }
     const path = window.location.pathname;
     const settingsTab = getSettingsTabFromUrl();
     if (settingsTab) {
-      ircState.showSettings = true;
+      showFullPage('settings');
       ircState.settingsTab = settingsTab;
-      ircState.showShortcuts = false;
-      ircState.showFeedback = false;
-      ircState.showAddNetwork = false;
       return;
     }
     if (isShortcutsUrl()) {
-      ircState.showShortcuts = true;
-      ircState.showSettings = false;
-      ircState.showFeedback = false;
-      ircState.showAddNetwork = false;
+      showFullPage('shortcuts');
       return;
     }
     if (isFeedbackUrl()) {
-      ircState.showFeedback = true;
-      ircState.showSettings = false;
-      ircState.showShortcuts = false;
-      ircState.showAddNetwork = false;
+      showFullPage('feedback');
+      return;
+    }
+    if (isComposeStyleUrl()) {
+      showFullPage('composeStyle');
       return;
     }
     if (isAddNetworkUrl()) {
-      ircState.showAddNetwork = true;
+      showFullPage('addNetwork');
       ircState.addNetworkWelcome = isAddNetworkWelcome();
-      ircState.showSettings = false;
-      ircState.showShortcuts = false;
-      ircState.showFeedback = false;
       return;
     }
-    ircState.showSettings = false;
-    ircState.showShortcuts = false;
-    ircState.showFeedback = false;
-    ircState.showAddNetwork = false;
+    showFullPage(null);
     if (path === '/irc' || path === '/irc/') {
       if (ircState.networks.length === 0) return;
       const visible = ircState.networks.filter(n => (n as any).host && !isFiberServerDown(n as any));
@@ -1608,7 +1608,7 @@ let showEditNetwork: boolean = $state(false);
 
   function selectLastActiveBuffer(syncNetworks: Network[]): void {
 
-    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
+    if (ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle || isPastebinUrl() || isFileViewerUrl() || fileViewerId !== null || pasteViewerId !== null) return;
     if (ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName) return;
     for (const net of syncNetworks) {
       if (!net.connected) continue;
@@ -1768,7 +1768,7 @@ let showEditNetwork: boolean = $state(false);
   {/if}
 {/if}
 
-<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showAddNetwork || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
+<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings && !ircState.showComposeStyle} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings && !ircState.showComposeStyle} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle || ircState.showAddNetwork || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
   <div class="main-area">
     {#if pasteViewerId !== null}
       {#await import('./components/PasteViewerPage.svelte') then { default: PasteViewerPage }}
@@ -1789,6 +1789,10 @@ let showEditNetwork: boolean = $state(false);
     {:else if ircState.showFeedback}
       {#await import('./components/FeedbackPage.svelte') then { default: FeedbackPage }}
         <FeedbackPage />
+      {/await}
+    {:else if ircState.showComposeStyle}
+      {#await import('./components/ComposeStylePage.svelte') then { default: ComposeStylePage }}
+        <ComposeStylePage />
       {/await}
     {:else if ircState.showAddNetwork}
       <AddNetworkPage welcome={ircState.addNetworkWelcome}
@@ -1821,17 +1825,17 @@ let showEditNetwork: boolean = $state(false);
         {/if}
       </div>
     {/if}
-    {#if uploadState.panelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
+    {#if uploadState.panelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showComposeStyle && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
       {#await import('./components/UploadsPanel.svelte') then { default: UploadsPanel }}
         <UploadsPanel onClose={() => uploadState.panelOpen = false} />
       {/await}
     {/if}
-    {#if uploadState.pastebinPanelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
+    {#if uploadState.pastebinPanelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showComposeStyle && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
       {#await import('./components/SnippetsPanel.svelte') then { default: SnippetsPanel }}
         <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
       {/await}
     {/if}
-    {#if ircArtPanelOpen.value && !ircState.showSettings && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null}
+    {#if ircArtPanelOpen.value && !ircState.showSettings && !ircState.showComposeStyle && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null}
       {#await import('./components/IrcArtPanel.svelte') then { default: IrcArtPanel }}
         <IrcArtPanel onClose={() => ircArtPanelOpen.value = false} />
       {/await}

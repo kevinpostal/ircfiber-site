@@ -18,7 +18,7 @@
   import { getPastebinDisablePrompt, globalPrefs } from '../stores/preferences.svelte';
   import { isComposeStyleActive } from '../lib/composeStyle';
   import type { IRCMessage } from '../types';
-  import { updateRoute } from '../lib/routing';
+  import { updateRoute, navigateComposeStyle } from '../lib/routing';
   import { tick } from 'svelte';
   // emoji-picker-element is loaded on demand in toggleEmoji() below so its
   // weight stays out of the initial bundle.
@@ -35,7 +35,19 @@
   let inputValue = $state('');
   let editTarget = $state<{ eid?: number; msgid?: string; label: string } | null>(null);
   let uploadMenuOpen = $state(false);
-  let styleOpen = $state(false);
+  /// The style editor is a full-page surface owned by App (it swaps the chat
+  /// column, like settings), so the gear only routes to it. This component
+  /// unmounts with the chat column, and nothing persists `inputValue` on
+  /// unmount — so park the half-typed message in the per-buffer draft the
+  /// same way a buffer switch does, and it is back in the box on return.
+  function openStylePage(): void {
+    const netId = ircState.activeBuffer.networkId;
+    const bufName = ircState.activeBuffer.bufferName;
+    if (netId && bufName) setBufferInputText(netId, bufName, inputValue);
+    ircState.composeStyleSample = inputValue;
+    ircState.showComposeStyle = true;
+    navigateComposeStyle();
+  }
   const styleActive = $derived(isComposeStyleActive(globalPrefs.composeStyle));
   const tabEngine = new TabCompletionEngine();
   // IRCCloud-style tab completion popup — shows original fragment + all matches
@@ -1030,10 +1042,10 @@
         <i class="fa-regular fa-face-smile" aria-hidden="true"></i>
       </div>
       <div class="stylecell" class:engaged={styleActive} role="button" tabindex="0"
-           aria-label="Text style" aria-expanded={styleOpen} aria-haspopup="dialog"
+           aria-label="Text style"
            title={styleActive ? 'Text style (active)' : 'Text style'}
-           onclick={() => { styleOpen = true; }}
-           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); styleOpen = true; } }}>
+           onclick={openStylePage}
+           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openStylePage(); } }}>
         <i class="fa-solid fa-gear" aria-hidden="true"></i>
       </div>
       <div class="uploadcell {ringState()}" class:engaged={uploadState.active.length > 0}
@@ -1072,11 +1084,6 @@
         onclose={onPastebinClose}
         onsent={onPastebinSent}
       />
-    {/await}
-  {/if}
-  {#if styleOpen}
-    {#await import('./ComposeStylePage.svelte') then { default: ComposeStylePage }}
-      <ComposeStylePage sampleText={inputValue} onClose={() => { styleOpen = false; textarea?.focus(); }} />
     {/await}
   {/if}
   <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>
