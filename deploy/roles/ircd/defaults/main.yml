@@ -204,7 +204,10 @@ ircd_tor_autojoin: ""
 # (`+H <lines>:<age>`, InspIRCd's chanhistory module) and must stay within
 # the <chanhistory maxlines/maxduration> caps in modules.conf.j2.
 # `bot: true` also assigns the services bot (ircd_services_bot below) to
-# the channel, so channel staff get fantasy commands in it.
+# the channel, so channel staff get fantasy commands in it. `access` adds
+# ChanServ tiers for this channel only, on top of ircd_channel_access (a
+# name listed here is taken out of its network-wide tier for this channel,
+# so the two can never fight over it).
 ircd_permanent_channels:
   - channel: "#ircfiber"
     modes: "nt"
@@ -223,6 +226,14 @@ ircd_permanent_channels:
     description: "IRC Fiber support requests"
     topic: "IRC Fiber support — report problems at https://ircfiber.com/?/feedback · FiberSupport announces new reports here"
     bot: true
+    # The support bot needs ops where it works: SECUREOPS is on, so `+o`
+    # only sticks for an account on the access list — and it has to be
+    # scoped to this channel, since the bot has no business holding ops in
+    # #ircfiber or #welcome. AOP, not SOP: it kicks and sets topics, it
+    # never manages the access list.
+    access:
+      aop:
+        - "FiberSupport"
 
 # ChanServ registration of the staff channels above (roles/ircd/files/
 # ircd_channel_setup.py, run over TLS on the loopback TLS port). Set false

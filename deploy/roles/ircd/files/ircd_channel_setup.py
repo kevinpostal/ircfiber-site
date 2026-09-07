@@ -40,10 +40,13 @@ Environment:
                        (default = IRCD_ACCOUNT)
   IRCD_OPER_NAME       InspIRCd <oper name=...> to /OPER as
   IRCD_OPER_PASSWORD   its password
-  IRCD_CHANNELS        JSON list of
-                       {"channel","description","topic","history","modes"}
+  IRCD_CHANNELS        JSON list of {"channel","description","topic",
+                       "history","modes","bot","access"}, where "access"
+                       is this channel's own tier map and overrides the
+                       network-wide one below for any name it lists
   IRCD_CHANNEL_ACCESS  JSON {"qop":[..],"sop":[..],"aop":[..],
-                       "hop":[..],"vop":[..]} of NickServ accounts
+                       "hop":[..],"vop":[..]} of NickServ accounts,
+                       applied to every channel
   IRCD_CHANNEL_AUTOVOICE  JSON ["v:account:*", ...] autoop (+w) entries to
                        keep on the channel
   IRCD_SERVICES_BOT    JSON {"nick","ident","host","realname"} for the
@@ -277,6 +280,27 @@ def require_accounts(session: IrcSession, access: dict) -> None:
     if missing:
         raise IrcError("not registered with NickServ, cannot be given "
                        f"channel access: {', '.join(missing)}")
+
+
+def channel_access(base: dict, spec: dict) -> dict:
+    """The tiers for one channel: the network-wide list plus the channel's
+    own `access`, with the channel's winning.
+
+    A name the channel names is dropped from every base tier first,
+    because `sync_access` walks the tiers highest-first and a cs_xop ADD
+    *moves* an account between them — the same name in two tiers would
+    otherwise be re-added on every run and never settle.
+    """
+    extra = spec.get("access") or {}
+    override = {n.lower()
+                for tier in XOP_TIERS
+                for n in (extra.get(tier.lower()) or [])}
+    out: dict[str, list] = {}
+    for tier in XOP_TIERS:
+        t = tier.lower()
+        out[t] = [n for n in (base.get(t) or []) if n.lower() not in override]
+        out[t] += list(extra.get(t) or [])
+    return out
 
 
 def group_and_display(session: IrcSession, account: str, display: str,
@@ -796,7 +820,15 @@ def main() -> int:
             raise IrcError(f"OPER {oper_name} failed: {opered}")
         log(f"opered as {oper_name}")
 
-        require_accounts(session, access)
+        # Every name any channel can hand access to, in one pass, so a typo
+        # in a per-channel list fails before the first channel is touched
+        # (require_accounts dedups case-insensitively).
+        all_access = {t.lower(): list(access.get(t.lower()) or [])
+                      for t in XOP_TIERS}
+        for spec in channels:
+            for tier, names in (spec.get("access") or {}).items():
+                all_access.setdefault(tier.lower(), []).extend(names or [])
+        require_accounts(session, all_access)
         if group_and_display(session, account, display, password):
             changed = True
 
@@ -808,7 +840,8 @@ def main() -> int:
                 changed = True
 
         for spec in channels:
-            if setup_channel(session, spec, account, display, access,
+            if setup_channel(session, spec, account, display,
+                             channel_access(access, spec),
                              autovoice, services_bot):
                 changed = True
             else:
