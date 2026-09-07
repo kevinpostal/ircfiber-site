@@ -20,16 +20,16 @@
          | default(hostvars[groups['ircfiber_backend'][0]]['host_tailscale_ip']
             | default(host_tailscale_ip)) }}
 
-- name: Pull irc-fiber image (registry configured)
+- name: Pull irc-fiber image (registry-qualified ref only)
   tags: [gateway, bnc]
   community.docker.docker_image:
     name: "{{ ircfiber_gateway_image_full }}"
     source: pull
     state: present
-  when: docker_registry_url | length > 0
-  # Note: when docker_registry_url is empty, the ircfiber_image role has
-  # already built the image on this host via docker build, so no pull/build
-  # is needed here.
+  # gateway-deploy.yml hands this role a plain local tag
+  # (irc-fiber-gateway:deploy) it has already pulled by digest and tagged;
+  # a pull of that would go to Docker Hub and fail.
+  when: "'/' in ircfiber_gateway_image_full"
 
 - name: Ensure ircfiber config dir exists
   tags: [always]
@@ -107,7 +107,7 @@
 
 # Every container below is defined by tasks/container.yml — one spec, four
 # call sites (these three plus the green replica in
-# playbooks/gateway-bluegreen.yml). The per-component differences are passed
+# playbooks/gateway-deploy.yml). The per-component differences are passed
 # in as vars; nothing about the image, env, mounts, ulimits, security
 # options, limits or health probe is restated here, because the copy that
 # used to live in the blue/green playbook drifted and silently dropped a
