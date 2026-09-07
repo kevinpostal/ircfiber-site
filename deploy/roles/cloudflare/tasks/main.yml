@@ -72,7 +72,7 @@
     cloudflare_records_to_manage
     | selectattr('type', 'equalto', 'A') | list | length > 0
 
-- name: Manage Cloudflare DNS records (A + CNAME + TXT)
+- name: Manage Cloudflare DNS records (A + CNAME + TXT + MX)
   community.general.cloudflare_dns:
     api_token: "{{ vault_cloudflare_api_token }}"
     zone: "{{ cloudflare_zone }}"
@@ -92,6 +92,9 @@
     # without it a changed policy is added alongside the old one, and two
     # SPF records at the same name are a permerror rather than a merge.
     solo: "{{ item.solo | default(omit) }}"
+    # MX (and SRV) records carry a priority; Cloudflare rejects the record
+    # without one.
+    priority: "{{ item.priority | default(omit) }}"
     state: present
   loop: "{{ cloudflare_records_to_manage }}"
   loop_control:
