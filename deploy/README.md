@@ -330,9 +330,19 @@ The role manages apex (`@`) and `www` records by default; override `cloudflare_r
 
 ### Outbound mail (signup verification)
 
-`IRCFIBER_EMAIL_VERIFICATION=1` makes a new account unusable until the user clicks the link in a verification e-mail, so a broken mail path blocks *all* signups. `IRCFIBER_MAIL_PROVIDER=sender` sends through sender.net's transactional API (`backend/source/ircfiber/mail.d`, token in `IRCFIBER_SENDER_API_TOKEN_FILE`); `log` is the local-dev provider that just logs the link, and anything else throws.
+`IRCFIBER_EMAIL_VERIFICATION=1` makes a new account unusable until the user clicks the link in a verification e-mail, so a broken mail path blocks *all* signups. `backend/source/ircfiber/mail.d` speaks three providers, selected by `IRCFIBER_MAIL_PROVIDER`:
 
-sender.net refuses a message outright until the sending domain's DNS is complete — the failure surfaces as `register: sending verification email to … failed: sender.net rejected the message: HTTP 400 …`. Ask it what it wants rather than guessing:
+| provider | endpoint | credential | accepted when |
+|---|---|---|---|
+| `resend` (default) | `POST https://api.resend.com/emails` | `IRCFIBER_RESEND_API_KEY_FILE` ← `vault_resend_api_key` | 2xx with an `id` |
+| `sender` | `POST https://api.sender.net/v2/message/send` | `IRCFIBER_SENDER_API_TOKEN_FILE` ← `vault_sender_api_token` | 2xx with `success: true` |
+| `log` | — | — | always (local dev: logs the link) |
+
+Only the selected provider's credential is read, so both can stay in the vault across a switch. Anything else — including unset — is unconfigured and every send throws, which surfaces as a 503 from `/api/register` while verification is on.
+
+**Both HTTP providers refuse to send until the sending domain's DNS is complete**, and the message names the missing record. Resend answers `HTTP 403 The <domain> domain is not verified` until its DKIM/SPF records (shown in its dashboard when the domain is added; a full-access API key can read them from `GET /domains`) exist — add them to `cloudflare_records` in `host_vars/<host>.yml` and run `ansible-playbook playbooks/cloudflare.yml`. A send-only key cannot manage domains: `GET /domains` answers `401 restricted_api_key`.
+
+sender.net additionally requires DMARC, and answers `HTTP 400 The domain … does not have a DMARC policy` without it. It publishes what it wants:
 
 ```bash
 ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'T=$(cat /etc/ircfiber/gateway/secrets/sender_api_token); \
@@ -341,14 +351,18 @@ ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'T=$(cat /etc/ircfiber/
 # merged_spf_record is the SPF string it wants, expected_dkim_value the DKIM target.
 ```
 
-All three live in `host_vars/vps-efb4b52d.yml` as `cloudflare_records` (`ansible-playbook playbooks/cloudflare.yml`): the SPF include (`include:sendersrv.com`, alongside Cloudflare Email Routing's include for inbound), `sender._domainkey` CNAME → `dkim.sendersrv.com`, and a `_dmarc` TXT policy. sender.net has no API to re-run the checks, and its resolver caches the previous negative answer, so a new record takes up to the zone's negative TTL (1800 s on `ircfiber.com`) to take effect. Verify with a real send before declaring it fixed:
+Those three live in `host_vars/vps-efb4b52d.yml` as `cloudflare_records`: the SPF include (`include:sendersrv.com`, alongside Cloudflare Email Routing's include for inbound), `sender._domainkey` CNAME → `dkim.sendersrv.com`, and a `_dmarc` TXT policy.
+
+Verify with **one** real send before declaring it fixed:
 
 ```bash
-ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'T=$(cat /etc/ircfiber/gateway/secrets/sender_api_token); \
-  curl -s -w "\nHTTP %{http_code}\n" -X POST https://api.sender.net/v2/message/send \
-    -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
-    -d "{\"from\":{\"email\":\"no-reply@ircfiber.com\",\"name\":\"IRC Fiber\"},\"to\":{\"email\":\"you@example.org\"},\"subject\":\"probe\",\"text\":\"probe\"}"'"'"''
+ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'K=$(cat /etc/ircfiber/gateway/secrets/resend_api_key); \
+  curl -s -w "\nHTTP %{http_code}\n" -X POST https://api.resend.com/emails \
+    -H "Authorization: Bearer $K" -H "Content-Type: application/json" \
+    -d "{\"from\":\"IRC Fiber <no-reply@ircfiber.com>\",\"to\":[\"you@example.org\"],\"subject\":\"probe\",\"text\":\"probe\"}"'"'"''
 ```
+
+Do **not** loop that probe while waiting for DNS. A retry every two minutes got the sender.net account suspended for "suspicious activity" (HTTP 403, then 401 on every send) even though each request was a legitimate API call; a provider's resolver can cache the old negative answer for the zone's negative TTL (1800 s on `ircfiber.com`), so wait that out and re-check the provider's own domain state instead of re-sending.
 
 ### Bouncer (`bnc.<domain>:7000`, "Connect with another client…")
 

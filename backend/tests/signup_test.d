@@ -51,6 +51,37 @@ private void testSenderNetAccepted() {
     check(!senderNetAccepted(200, `{"ok":true}`), "missing success key rejected");
 }
 
+private void testResendPayload() {
+    MailSettings s;
+    s.provider = "resend";
+    s.apiToken = "re_key";
+    s.fromEmail = "no-reply@ircfiber.com";
+    s.fromName = "IRC Fiber";
+    MailMessage m = { "alice@x.test", "subj", "body text", "<p>body text</p>" };
+    auto p = resendPayload(s, m);
+    check(p["from"].get!string == "IRC Fiber <no-reply@ircfiber.com>", "from is one address string");
+    check(p["to"].length == 1 && p["to"][0].get!string == "alice@x.test", "to is an array");
+    check(p["subject"].get!string == "subj", "subject");
+    check(p["text"].get!string == "body text", "text");
+    check(p["html"].get!string == "<p>body text</p>", "html");
+
+    // No display name configured: bare address, not "<addr>" with an empty
+    // phrase, which Resend rejects as a malformed from.
+    s.fromName = "";
+    check(resendPayload(s, m)["from"].get!string == "no-reply@ircfiber.com", "nameless from");
+}
+
+private void testResendAccepted() {
+    check(resendAccepted(200, `{"id":"7b1f…","from":"x","to":["y"]}`), "200 + id");
+    check(!resendAccepted(200, `{"id":""}`), "empty id rejected");
+    check(!resendAccepted(200, `{"ok":true}`), "missing id rejected");
+    check(!resendAccepted(403,
+        `{"statusCode":403,"message":"The ircfiber.com domain is not verified.","name":"validation_error"}`),
+        "unverified domain rejected");
+    check(!resendAccepted(401, `{"message":"API key is invalid"}`), "401 rejected");
+    check(!resendAccepted(200, "not json"), "unparseable body rejected");
+}
+
 private void testVerificationLink() {
     check(verificationLink("https://ircfiber.com/", "abc")
         == "https://ircfiber.com/verify?token=abc", "trailing slash stripped");
@@ -179,6 +210,8 @@ private void testSummarize() {
 
 void main() {
     testSenderNetPayload();
+    testResendPayload();
+    testResendAccepted();
     testSenderNetAccepted();
     testVerificationLink();
     testVerificationEmail();

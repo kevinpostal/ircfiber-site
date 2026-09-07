@@ -19,3 +19,9 @@ vault_signoz_admin_password: "CHANGE_ME"
 # sender.net → Account settings → API access tokens. Feeds the gateway
 # sender_api_token secret file for signup email verification.
 vault_sender_api_token: "CHANGE_ME"
+# Resend → API Keys (a send-only key is enough for the gateway; managing
+# domains needs a full-access one). Feeds the resend_api_key secret file and
+# is what IRCFIBER_MAIL_PROVIDER=resend reads. The sending domain must be
+# verified in Resend first, or every send answers HTTP 403 "domain is not
+# verified".
+vault_resend_api_key: "CHANGE_ME"
