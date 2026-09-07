@@ -127,6 +127,13 @@ describe('stripPrefix', () => {
     expect(stripPrefix('!alice')).toBe('alice');
   });
 
+  // `*` is <operprefix prefix="*"> on this network, and with multi-prefix
+  // an opered founder arrives as `*~@Zodiac`.
+  it('removes the operprefix * char, alone and combined', () => {
+    expect(stripPrefix('*Zodiac')).toBe('Zodiac');
+    expect(stripPrefix('*~@Zodiac')).toBe('Zodiac');
+  });
+
   it('removes multiple prefixes', () => {
     expect(stripPrefix('@+alice')).toBe('alice');
   });
@@ -145,6 +152,12 @@ describe('getUserModePrefix', () => {
     const result = getUserModePrefix('!alice');
     expect(result.category).toBe('OPER');
     expect(result.prefix).toBe('!');
+  });
+
+  it('returns OPER for the operprefix * char', () => {
+    const result = getUserModePrefix('*Zodiac');
+    expect(result.category).toBe('OPER');
+    expect(result.prefix).toBe('*');
   });
 
   it('returns OWNER for ~ prefix', () => {

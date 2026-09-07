@@ -3759,24 +3759,30 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       params.length >= 3 &&
       (target.startsWith('#') || target.startsWith('&') || target.startsWith('!') || target.startsWith('+'));
     if (isChannelMode) {
+      // Every prefix mode this network can send: InspIRCd's customprefix
+      // q/a/h, core o/v, operprefix `y` (renders as `*`) and ojoin `Y`
+      // (`!`). Each one consumes a target from the parameter list, so a
+      // letter missing here does not merely fail to colour somebody — it
+      // shifts every following target by one.
+      const PREFIX_MODES: Record<string, { prefix: string; category: ModeCategory }> = {
+        'q': { prefix: '~', category: 'OWNER' },
+        'a': { prefix: '&', category: 'ADMIN' },
+        'o': { prefix: '@', category: 'OP' },
+        'h': { prefix: '%', category: 'HALFOP' },
+        'v': { prefix: '+', category: 'VOICED' },
+        'y': { prefix: '*', category: 'OPER' },
+        'Y': { prefix: '!', category: 'OPER' },
+      };
       const targets = params.slice(2);
       let adding = true;
       let targetIdx = 0;
       for (const ch of modeStr) {
         if (ch === '+') { adding = true; continue; }
         if (ch === '-') { adding = false; continue; }
-        if ('oOaAhvq'.includes(ch) && targetIdx < targets.length) {
+        if (ch in PREFIX_MODES && targetIdx < targets.length) {
           const targetNick = targets[targetIdx++];
           const member = buf.users.find(u => stripPrefix(u.nick) === targetNick);
-          const prefixMap: Record<string, { prefix: string; category: ModeCategory }> = {
-            'q': { prefix: '~', category: 'OWNER' },
-            'a': { prefix: '&', category: 'ADMIN' },
-            'o': { prefix: '@', category: 'OP' },
-            'O': { prefix: '@', category: 'OPER' },
-            'h': { prefix: '%', category: 'HALFOP' },
-            'v': { prefix: '+', category: 'VOICED' },
-          };
-          const pm = prefixMap[ch];
+          const pm = PREFIX_MODES[ch];
           if (member && adding && pm) {
             member.prefix = pm.prefix;
             member.category = pm.category;
@@ -3812,7 +3818,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       for (const ch of modeStr) {
         if (ch === '+' || ch === '-') continue;
         const flag = channelModeMap[ch];
-        if (flag && !'oOaAhvq'.includes(ch)) {
+        if (flag && !(ch in PREFIX_MODES)) {
           buf.modeFlags[flag] = adding;
         }
       }

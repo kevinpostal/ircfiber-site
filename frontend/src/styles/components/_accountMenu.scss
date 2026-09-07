@@ -170,7 +170,27 @@
   padding: 0 0 0 5px;
 }
 
-/* Category backgrounds and borders - IRCCloud dark theme */
+/* One band per category, in IRCCloud's hue for it — its light theme uses
+   orange for `oper`, yellow for `owner`, purple for `admin`, red for
+   `ops`, amber for `halfops`, green for `voiced` and blue-grey for
+   `members`; these are the dark-theme equivalents. Without the first
+   three, an `&` services bot such as FiberServ landed in the red Ops
+   band and the Admins section was invisible. */
+.memberList .category.oper {
+  box-shadow: inset 3px 0 0 0 hsl(9, 80%, 28%);
+  border-bottom: 1px solid hsl(9, 50%, 36%);
+  background-color: hsl(9, 45%, 15%);
+}
+.memberList .category.owner {
+  box-shadow: inset 3px 0 0 0 hsl(44, 85%, 26%);
+  border-bottom: 1px solid hsl(44, 50%, 32%);
+  background-color: hsl(44, 40%, 14%);
+}
+.memberList .category.admin {
+  box-shadow: inset 3px 0 0 0 hsl(277, 80%, 32%);
+  border-bottom: 1px solid hsl(277, 40%, 36%);
+  background-color: hsl(277, 38%, 17%);
+}
 .memberList .category.members {
   box-shadow: inset 3px 0 0 0 hsl(221, 32%, 25%);
   border-bottom: 1px solid hsl(221, 32%, 25%);
@@ -200,43 +220,35 @@
   display: flex; align-items: center; justify-content: space-between;
   font-size: 14px; font-weight: 400;
   line-height: 18px;
-  text-transform: capitalize;
+  /* No text-transform: IRCCloud's own labels are "Half ops" / "Admins",
+     and capitalising turned that into "Half Ops". */
   padding: 8px 8px 1px;
 }
 
-/* Category header colors — match IRCCloud dark theme */
-.memberList .category.ops h2 {
-  color: #f4a9aa;
+/* Header, count and symbol colour per category. These are IRCCloud's
+   `li.<category> h2 span.memberCount` tints rather than its `h2` colours:
+   the h2 colours (#6500a5 admin, #ba1719 ops, …) are meant for its light
+   theme and go nearly invisible on these dark bands, while the count
+   tints are the same hues at usable contrast. `color: inherit` on the
+   symbol overrides the global `.mode_prefix.mode_*` rules, which keep the
+   strong values for message rows and the user popup. */
+.memberList .category h2,
+.memberList .category .memberExtras,
+.memberList .category h2 .mode_prefix {
+  color: inherit;
 }
-.memberList .category.halfops h2 {
-  color: #ffbf82;
-}
-.memberList .category.voiced h2 {
-  color: #99ff7e;
-}
-.memberList .category.members h2 {
-  color: #b3b3b3;
-}
+.memberList .category.oper { color: #fd8d4a; }
+.memberList .category.owner { color: #fed85c; }
+.memberList .category.admin { color: #b580ff; }
+.memberList .category.ops { color: #fcadaf; }
+.memberList .category.halfops { color: #fdcc9a; }
+.memberList .category.voiced { color: #9eeb4a; }
+.memberList .category.members { color: #b3b3b3; }
 
 .memberExtras { display: inline-flex; align-items: center; gap: 4px; }
-.mode_prefix { }
 .mode_symbol { font-weight: 600; }
 .mode_pill { font-size: 10px; line-height: 1; }
 .memberCount { font-size: 0.75rem; font-weight: 500; }
-
-/* Mode prefix colors per category — match IRCCloud dark theme */
-.memberList .category.ops .memberExtras {
-  color: #f4a9aa;
-}
-.memberList .category.halfops .memberExtras {
-  color: #ffbf82;
-}
-.memberList .category.voiced .memberExtras {
-  color: #99ff7e;
-}
-.memberList .category.members .memberExtras {
-  color: #b3b3b3;
-}
 
 .categoryMemberList { list-style: none; margin: 5px 0; padding: 0; }
 .categoryMemberList li.user {

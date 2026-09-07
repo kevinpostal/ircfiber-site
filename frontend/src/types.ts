@@ -3,8 +3,14 @@ export type ModeCategory = 'OPER' | 'OWNER' | 'ADMIN' | 'OP' | 'HALFOP' | 'VOICE
 
 export const MODE_HIERARCHY: ModeCategory[] = ['OPER', 'OWNER', 'ADMIN', 'OP', 'HALFOP', 'VOICED', 'MEMBER'];
 
-// Maps mode prefix chars to categories
+// Maps mode prefix chars to categories. Two of them are IRC Fiber's own
+// ircd config rather than RFC prefixes: `*` is <operprefix prefix="*">
+// (InspIRCd's operprefix module, channel mode `y`) and `!` is <ojoin
+// prefix="!"> (mode `Y`). Both mean "IRC operator", which is why they
+// share the OPER category — IRCCloud renders the same two as its `oper`
+// and `Y` sections.
 export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; category: ModeCategory; mode: string; title: string }> = {
+  '*': { prefix: '*', cls: 'mode_OPER',   category: 'OPER',   mode: 'y', title: 'IRC Operator' },
   '!': { prefix: '!', cls: 'mode_OPER',   category: 'OPER',   mode: 'Y', title: 'IRC Operator' },
   '~': { prefix: '~', cls: 'mode_OWNER',  category: 'OWNER',  mode: 'q', title: 'Channel owner' },
   '&': { prefix: '&', cls: 'mode_ADMIN',  category: 'ADMIN',  mode: 'a', title: 'Channel admin' },
@@ -406,7 +412,7 @@ export interface Buffer {
 
 export interface Member {
   nick: string;
-  prefix: string;       // raw prefix char: ~, &, @, %, +, or ''
+  prefix: string;       // raw prefix char: *, !, ~, &, @, %, +, or ''
   category: ModeCategory;
   ident: string;        // user@host
   realname: string;

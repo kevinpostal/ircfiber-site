@@ -3,6 +3,7 @@
   import { sendRaw, sendMessage } from '../stores/wsConnection.svelte.ts';
   import { addIgnore } from '../stores/preferences.svelte';
   import { getAvatarColor, stripPrefix } from '../lib/utils';
+  import { MODE_PREFIX_MAP } from '../types';
   import type { Member, ModeCategory, WhoisData } from '../types';
 
   interface Props {
@@ -28,11 +29,7 @@
   const avatarLetter = $derived(displayNick.charAt(0).toUpperCase());
 
   const modePrefix = $derived(member?.prefix ?? '');
-  const modeClass = $derived.by(() => {
-    if (!member?.prefix) return '';
-    const map: Record<string, string> = { '!': 'mode_OPER', '~': 'mode_OWNER', '&': 'mode_ADMIN', '@': 'mode_OP', '%': 'mode_HALFOP', '+': 'mode_VOICED' };
-    return map[member.prefix] ?? '';
-  });
+  const modeClass = $derived(member?.prefix ? MODE_PREFIX_MAP[member.prefix]?.cls ?? '' : '');
   const modeTitle = $derived.by(() => {
     if (!member?.category || member.category === 'MEMBER') return '';
     const titles: Record<ModeCategory, string> = { OPER: 'IRC Operator', OWNER: 'Owner', ADMIN: 'Admin', OP: 'Op', HALFOP: 'Halfop', VOICED: 'Voiced', MEMBER: '' };
@@ -45,7 +42,7 @@
   const isAway = $derived(member?.isAway ?? false);
   const awayMessage = $derived(member?.awayMessage ?? '');
 
-  const hasOp = $derived(modePrefix === '@' || modePrefix === '~' || modePrefix === '&' || modePrefix === '!');
+  const hasOp = $derived(modePrefix === '@' || modePrefix === '~' || modePrefix === '&' || modePrefix === '!' || modePrefix === '*');
   const hasVoice = $derived(modePrefix === '+');
 
   let menuEl: HTMLDivElement;

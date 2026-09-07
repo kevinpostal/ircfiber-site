@@ -30,11 +30,12 @@ describe('MemberList', () => {
     await expect.element(page.getByText('member1')).toBeInTheDocument();
   });
 
-  it('renders category labels', async () => {
+  it('renders IRCCloud category labels', async () => {
     const net = createNetwork({ networkId: 'net1' });
     const buf = createBuffer({
       name: '#chan',
       users: [
+        createMember({ nick: '*oper1', prefix: '*', category: 'OPER' }),
         createMember({ nick: '~owner1', prefix: '~', category: 'OWNER' }),
         createMember({ nick: '&admin1', prefix: '&', category: 'ADMIN' }),
         createMember({ nick: '@op1', prefix: '@', category: 'OP' }),
@@ -48,15 +49,45 @@ describe('MemberList', () => {
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#chan';
     render(MemberList);
-    await expect.element(page.getByRole('heading', { name: /Owners/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /Admins/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /^Ops @/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /Half-Ops/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /Voiced/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /Members/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Oper/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Owner/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Admins/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Ops/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Half ops/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Voiced/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Members/ })).toBeInTheDocument();
   });
 
-  it('renders member count per category', async () => {
+  // The bug this guards: OPER/OWNER/ADMIN all rendered with the `ops`
+  // class, so a services bot holding `&` (FiberServ, channel mode +a) sat
+  // inside the red "Ops" band and the Admins section never appeared.
+  it('gives every category its own section class', async () => {
+    const net = createNetwork({ networkId: 'net1' });
+    const buf = createBuffer({
+      name: '#chan',
+      users: [
+        createMember({ nick: '*Zodiac', prefix: '*', category: 'OPER' }),
+        createMember({ nick: '&FiberServ', prefix: '&', category: 'ADMIN' }),
+        createMember({ nick: '@op1', prefix: '@', category: 'OP' }),
+      ],
+    });
+    net.buffers.push(buf);
+    ircState.networks.push(net);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#chan';
+    render(MemberList);
+    await expect.element(page.getByText('FiberServ')).toBeInTheDocument();
+    const section = (cls: string) =>
+      document.querySelector(`.memberList li.category.${cls}`);
+    expect(section('oper')).not.toBeNull();
+    expect(section('admin')).not.toBeNull();
+    expect(section('ops')).not.toBeNull();
+    expect(section('admin')!.querySelector('.member-item')!.textContent)
+      .toContain('FiberServ');
+    expect(section('ops')!.textContent).not.toContain('FiberServ');
+  });
+
+  it('renders the mode symbol and count in each category header', async () => {
     const net = createNetwork({ networkId: 'net1' });
     const buf = createBuffer({
       name: '#chan',
@@ -71,8 +102,13 @@ describe('MemberList', () => {
     ircState.activeBuffer.networkId = 'net1';
     ircState.activeBuffer.bufferName = '#chan';
     render(MemberList);
-    await expect.element(page.getByText('@ 2')).toBeInTheDocument();
-    await expect.element(page.getByText('• 1')).toBeInTheDocument();
+    const header = (cls: string) =>
+      document.querySelector(`.memberList li.category.${cls} h2`)!;
+    expect(header('ops').querySelector('.mode_symbol')!.textContent).toBe('@');
+    expect(header('ops').querySelector('.memberCount')!.textContent).toBe('2');
+    // Members carries a count only, exactly as IRCCloud renders it.
+    expect(header('members').querySelector('.mode_symbol')).toBeNull();
+    expect(header('members').querySelector('.memberCount')!.textContent).toBe('1');
   });
 
   it('calls onNickClick when member nick clicked', async () => {

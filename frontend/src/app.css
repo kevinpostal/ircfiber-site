@@ -410,14 +410,17 @@ body.mode-hidesymbol .mode_prefix.mode_pill   { display: inline; }
 body.mode-hidden .mode_prefix.mode_symbol,
 body.mode-hidden .mode_prefix.mode_pill { display: none !important; }
 
-/* Mode-prefix colors. Picked from IRCCloud's dusk theme so the
-   half-op/op/voiced markers match the colors users already recognise. */
-.mode_prefix.mode_OPER   { color: rgb(255, 99, 71); }
-.mode_prefix.mode_OWNER  { color: rgb(255, 99, 71); }
-.mode_prefix.mode_ADMIN  { color: rgb(181, 145, 0); }
-.mode_prefix.mode_OP     { color: rgb(50, 205, 50); }
-.mode_prefix.mode_HALFOP { color: rgb(181, 89, 0); }
-.mode_prefix.mode_VOICED { color: rgb(0, 191, 255); }
+/* Mode-prefix colors, taken verbatim from IRCCloud's stylesheet
+   (`span.mode_prefix.mode_*`) so every marker matches the colors users
+   already recognise, and so the member list, message rows and the user
+   popup all read from one palette. */
+.mode_prefix.mode_OPER   { color: #e02305; }
+.mode_prefix.mode_OWNER  { color: #e7aa00; }
+.mode_prefix.mode_ADMIN  { color: #6500a5; }
+.mode_prefix.mode_OP     { color: #ba1719; }
+.mode_prefix.mode_HALFOP { color: #b55900; }
+.mode_prefix.mode_VOICED { color: #25b100; }
+.mode_prefix.mode_MEMBER { color: #777; }
 
 /* When the author span carries a `.moded` modifier (e.g. `moded
    mode_HALFOP`) IRCCloud bumps the nick to font-weight 600 — same

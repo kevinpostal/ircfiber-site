@@ -346,7 +346,11 @@ export function getUserModePrefix(nick: string): { prefix: string; cls: string; 
 }
 
 export function stripPrefix(nick: string): string {
-  let n = nick.replace(/^[!~&@%+]+/, '');
+  // `*` (operprefix) and `!` (ojoin) are prefixes on this network too, and
+  // with multi-prefix a nick arrives carrying every one it holds
+  // (`*~@Zodiac`). Neither char can legally start a nick, so stripping the
+  // whole leading run is unambiguous.
+  let n = nick.replace(/^[*!~&@%+]+/, '');
   const bang = n.indexOf('!');
   if (bang > 0) n = n.slice(0, bang);
   return n;

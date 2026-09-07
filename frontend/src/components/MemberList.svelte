@@ -16,33 +16,42 @@
     return stripPrefix(net?.currentNick ?? net?.nick ?? '');
   });
 
+  // Section headings and symbols, verbatim from IRCCloud's member list
+  // (`li.category > h2`): Oper, Owner, Admins, Ops, Half ops, Voiced,
+  // Members. `*` is this network's operprefix char (see MODE_PREFIX_MAP);
+  // Members carries no symbol there, only a count.
   const CATEGORY_LABELS: Record<ModeCategory, string> = {
-    OPER: 'IRC Operators',
-    OWNER: 'Owners',
+    OPER: 'Oper',
+    OWNER: 'Owner',
     ADMIN: 'Admins',
     OP: 'Ops',
-    HALFOP: 'Half-Ops',
+    HALFOP: 'Half ops',
     VOICED: 'Voiced',
     MEMBER: 'Members',
   };
 
   const CATEGORY_SYMBOLS: Record<ModeCategory, string> = {
-    OPER: '!',
+    OPER: '*',
     OWNER: '~',
     ADMIN: '&',
     OP: '@',
     HALFOP: '%',
     VOICED: '+',
-    MEMBER: '•',
+    MEMBER: '',
   };
 
-  /** Map 7 categories down to 4 CSS classes used by existing theme */
-  function cssCategory(cat: ModeCategory): string {
-    if (cat === 'OP' || cat === 'OPER' || cat === 'OWNER' || cat === 'ADMIN') return 'ops';
-    if (cat === 'HALFOP') return 'halfops';
-    if (cat === 'VOICED') return 'voiced';
-    return 'members';
-  }
+  /** One CSS class per category, matching IRCCloud's `li.category.<cls>`.
+   *  Collapsing OPER/OWNER/ADMIN into `ops` (as this did) is why a `&`
+   *  services bot rendered inside a red "Ops" band. */
+  const CATEGORY_CLASSES: Record<ModeCategory, string> = {
+    OPER: 'oper',
+    OWNER: 'owner',
+    ADMIN: 'admin',
+    OP: 'ops',
+    HALFOP: 'halfops',
+    VOICED: 'voiced',
+    MEMBER: 'members',
+  };
 
   const sortedMembers = $derived(getSortedMembers());
   const showPrefixes = $derived(getShowMemberPrefixes());
@@ -51,12 +60,16 @@
 <div class="memberwrapper" id="flat-members">
   <ul class="memberList">
     {#each [...sortedMembers.entries()] as [category, members] (category)}
-      {@const cssCat = cssCategory(category)}
+      {@const cssCat = CATEGORY_CLASSES[category]}
       <li class="category {cssCat}">
         <h2>
           {CATEGORY_LABELS[category]}
           <span class="memberExtras">
-            <span class="memberCount">{showPrefixes ? CATEGORY_SYMBOLS[category] : ''}{showPrefixes && CATEGORY_SYMBOLS[category] ? ' ' : ''}{members.length}</span>
+            {#if showPrefixes && CATEGORY_SYMBOLS[category]}
+              <span class="mode_prefix mode_symbol mode_{category}">{CATEGORY_SYMBOLS[category]}</span>
+              <span class="mode_prefix mode_pill mode_{category}">&bull;</span>
+            {/if}
+            <span class="memberCount">{members.length}</span>
           </span>
         </h2>
         <ul class="categoryMemberList">
@@ -64,10 +77,11 @@
             {@const nick = stripPrefix(member.nick)}
             {@const isSelf = nick === myNick}
             {@const isMatch = hoveredNick !== null && hoveredNick === nick}
-            <li class="user member-item" class:away={member.isAway} class:isSelf={isSelf} class:match={isMatch} data-category={category}>
+            <li class="user member-item" class:away={member.isAway} class:isSelf={isSelf} class:match={isMatch} data-category={category} data-mode={member.prefix}>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
-              <button type="button" class="bufferLink"
+              <button type="button" class="bufferLink {cssCat}"
                       class:away={member.isAway}
+                      title={member.ident ? `${nick} (${member.ident})` : nick}
                       onclick={(e) => onNickClick?.(nick, e, member)}
                       onmouseenter={() => onNickHover?.(nick)}
                       onmouseleave={() => onNickHover?.(null)}>
@@ -109,15 +123,17 @@
     flex-shrink: 0;
     text-align: center;
     font: 600 12px/1 var(--font-mono, ui-monospace, monospace);
-    color: #6e7681;
+    color: #b3b3b3;
   }
-  /* Mode colors — mirror MessageRow .mode_prefix but scoped to member list */
-  :global(.member-item[data-category="OWNER"] .member-mode-prefix),
-  :global(.member-item[data-category="OPER"] .member-mode-prefix) { color: rgb(255,99,71); }
-  :global(.member-item[data-category="ADMIN"] .member-mode-prefix) { color: rgb(181,145,0); }
-  :global(.member-item[data-category="OP"] .member-mode-prefix) { color: rgb(50,205,50); }
-  :global(.member-item[data-category="HALFOP"] .member-mode-prefix) { color: rgb(181,89,0); }
-  :global(.member-item[data-category="VOICED"] .member-mode-prefix) { color: rgb(0,191,255); }
+  /* Same per-category tints as the section header (IRCCloud's
+     `memberCount` colours), set explicitly because the row's button fixes
+     its own `color` for the nick and hover states. */
+  :global(.member-item[data-category="OPER"] .member-mode-prefix) { color: #fd8d4a; }
+  :global(.member-item[data-category="OWNER"] .member-mode-prefix) { color: #fed85c; }
+  :global(.member-item[data-category="ADMIN"] .member-mode-prefix) { color: #b580ff; }
+  :global(.member-item[data-category="OP"] .member-mode-prefix) { color: #fcadaf; }
+  :global(.member-item[data-category="HALFOP"] .member-mode-prefix) { color: #fdcc9a; }
+  :global(.member-item[data-category="VOICED"] .member-mode-prefix) { color: #9eeb4a; }
   :global(.member-item.away) { opacity: .5; }
   :global(.member-item.isSelf .member-nick) { font-weight: 600; color: #fff; }
   :global(.member-item.match) { background: rgba(88,166,255,.08); border-left: 3px solid #58a6ff; }
