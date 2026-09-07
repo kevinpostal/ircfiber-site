@@ -66,6 +66,8 @@ RUN case "$TARGETARCH" in \
 
 ENV PATH="/opt/ldc2/bin:${PATH}"
 WORKDIR /build
+# Every RUN below fails on the first failing command; /bin/sh (dash) has no pipefail.
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 
 # ============================================================================
@@ -83,7 +85,6 @@ COPY common/source/ ./common/source/
 
 RUN --mount=type=cache,target=/build/.dub,sharing=locked \
     --mount=type=cache,target=/root/.dub,sharing=locked \
-    set -e -o pipefail && \
     dub build --root=common --compiler=ldc2 --build=release --parallel
 
 
@@ -93,17 +94,16 @@ RUN --mount=type=cache,target=/build/.dub,sharing=locked \
 # reruns only `npm run build`.
 # ============================================================================
 FROM node:20-bookworm AS frontend-builder
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    set -e -o pipefail && \
     cd frontend && npm ci --ignore-scripts
 COPY frontend/bun.lock* frontend/tsconfig.json frontend/svelte.config.js frontend/vite.config.ts frontend/index.html frontend/admin.html frontend/postbuild.js ./frontend/
 COPY frontend/src ./frontend/src/
 COPY frontend/wasm-img2irc ./frontend/wasm-img2irc/
 COPY public/ ./public/
-RUN set -e -o pipefail && \
-    cd frontend && npm run build && \
+RUN cd frontend && npm run build && \
     test -f ../public/dist/.vite/manifest.json
 
 
@@ -124,7 +124,6 @@ COPY backend/views/ ./backend/views/
 # Dropped in the split — see runtime-gateway.
 RUN --mount=type=cache,target=/build/.dub,sharing=locked \
     --mount=type=cache,target=/root/.dub,sharing=locked \
-    set -e -o pipefail && \
     dub build --root=backend --compiler=ldc2 --build=release --parallel && \
     cp backend/irc-fiber ./irc-fiber && \
     cp backend/irc-fiber ./irc-fiber-gateway && \
