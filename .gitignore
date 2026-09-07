@@ -29,3 +29,7 @@ backend/services-test
 
 # Compiled dub test-config binaries (services-test, ircd-test, logs-test, ...)
 backend/*-test
+
+# Local build outputs (the image rebuilds these; never deploy artifacts)
+/backend/irc-fiber-gateway
+/.docker-build-stamp-gateway
