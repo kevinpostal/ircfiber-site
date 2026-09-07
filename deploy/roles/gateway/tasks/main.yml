@@ -112,9 +112,17 @@
 # options, limits or health probe is restated here, because the copy that
 # used to live in the blue/green playbook drifted and silently dropped a
 # mount on every swap.
+# `apply:` is what makes `-t gateway` / `-t bnc` / `-t support-bot` work: a
+# tag on a dynamic include only decides whether the include itself runs, and
+# the tasks inside container.yml carry no tags of their own — so a tagged run
+# printed the include and then silently created nothing (which is exactly how
+# `-t bnc,support-bot` reported changed=0 while both containers were gone).
 - name: Run ircfiber-gateway replicas
   tags: [gateway]
-  ansible.builtin.include_tasks: container.yml
+  ansible.builtin.include_tasks:
+    file: container.yml
+    apply:
+      tags: [gateway]
   loop: "{{ _gw_container_names }}"
   loop_control:
     loop_var: gateway_spec_name
@@ -127,7 +135,10 @@
 # volume is mounted read-only and the cert is re-read per connection.
 - name: Run ircfiber-bnc
   tags: [bnc]
-  ansible.builtin.include_tasks: container.yml
+  ansible.builtin.include_tasks:
+    file: container.yml
+    apply:
+      tags: [bnc]
   vars:
     gateway_spec_name: "{{ bnc_container_name }}"
     gateway_spec_component: "bnc"
@@ -157,12 +168,20 @@
 # file under {{ gateway_secrets_dir }}, so it stays out of `docker inspect`.
 - name: Run ircfiber-support-bot
   tags: [support-bot]
-  ansible.builtin.include_tasks: container.yml
+  ansible.builtin.include_tasks:
+    file: container.yml
+    apply:
+      tags: [support-bot]
   vars:
     gateway_spec_name: "{{ support_bot_container_name }}"
     gateway_spec_component: "support-bot"
     gateway_spec_env_extra:
       IRCFIBER_SUPPORT_BOT_ENABLED: "1"
+      # The bot's port falls back to IRCFIBER_IRCD_PORT — the TLS port on
+      # this host — while its own TLS flag defaults to off, so without this
+      # it dials 6697 in plaintext, the ircd drops it ("Connection closed
+      # while writing data") and it reconnects forever without ever joining.
+      IRCFIBER_SUPPORT_BOT_TLS: "{{ _gateway_env['IRCFIBER_IRCD_TLS'] | default('0') }}"
       IRCFIBER_SUPPORT_BOT_NICK: "{{ support_bot_nick }}"
       IRCFIBER_SUPPORT_BOT_CHANNEL: "{{ support_bot_channel }}"
       IRCFIBER_SUPPORT_BOT_PUBLIC_URL: "{{ support_bot_public_url }}"
