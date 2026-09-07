@@ -31,7 +31,8 @@ import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 
 import ircfiber.mail : MailSettings, adminTestEmail, emailWellFormed,
     loadMailSettings, sendMail;
-import ircfiber.mail_events : MailEvent, MailEventLog, mailTestLockKey, summarize;
+import ircfiber.mail_events : MailEvent, MailEventLog, mailEventsCap, mailEventsWindow,
+    mailTestLockKey, summarize;
 import ircfiber.models.user : User;
 import ircfiber.signup : PendingSignup, emailVerificationRequired, ipKey, pendingKey,
     sentKey, verificationEmail, verificationLink;
@@ -162,8 +163,23 @@ private void recordSend(RedisStorage redis, string kind, string toEmail, string 
     new MailEventLog(redis).record(ev);
 }
 
-/// GET /api/admin/emails
+/// GET /api/admin/emails?page&limit
+///
+/// `page` (0-based) and `limit` window the **send log only** — same
+/// contract as the support list. Everything else in the payload is a full
+/// snapshot, so the KPI counts stay stable while an operator pages.
+///
+/// The log itself is read whole (it is capped at `mailEventsCap`): the 24h
+/// counts have to see every retained event, not just the page on screen.
 package void apiEmailsOverview(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    int page = 0;
+    int limit = 50;
+    if (auto p = "page" in req.query) { try page = (*p).to!int; catch (Exception) {} }
+    if (auto l = "limit" in req.query) { try limit = (*l).to!int; catch (Exception) {} }
+    if (page < 0) page = 0;
+    if (limit < 1) limit = 1;
+    if (limit > mailEventsCap) limit = mailEventsCap;
+
     auto mail = loadMailSettings();
     Json data = Json.emptyObject;
     data["provider"] = providerJson(mail);
@@ -179,10 +195,15 @@ package void apiEmailsOverview(HTTPServerRequest req, HTTPServerResponse res, Re
     }
 
     MailEvent[] events;
-    if (redisUp) events = new MailEventLog(redis).recent(100);
+    if (redisUp) events = new MailEventLog(redis).recent(mailEventsCap);
+    const window = mailEventsWindow(events.length, page, limit);
     Json eventsJson = Json.emptyArray;
-    foreach (const ref e; events) eventsJson ~= e.toJson();
+    foreach (const ref e; events[window.start .. window.end]) eventsJson ~= e.toJson();
     data["events"] = eventsJson;
+    data["eventsTotal"] = Json(cast(long) events.length);
+    data["eventsPage"] = Json(cast(long) window.page);
+    data["eventsPageCount"] = Json(cast(long) window.pageCount);
+    data["eventsLimit"] = Json(cast(long) limit);
     data["stats"] = summarize(events, Clock.currTime.toUnixTime() * 1000L).toJson();
 
     struct PendingOut {

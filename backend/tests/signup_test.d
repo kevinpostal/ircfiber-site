@@ -208,6 +208,29 @@ private void testSummarize() {
         "empty window summarizes to zeros");
 }
 
+private void testMailEventsWindow() {
+    auto first = mailEventsWindow(120, 0, 50);
+    check(first.start == 0 && first.end == 50, "page 0 is the newest 50 rows");
+    check(first.pageCount == 3, "120 rows at 50/page is 3 pages");
+
+    auto last = mailEventsWindow(120, 2, 50);
+    check(last.start == 100 && last.end == 120, "the last page stops at the log's end");
+
+    // The log is capped and trimmed under readers: a stale page number must
+    // land on the last page, not on an empty table.
+    auto past = mailEventsWindow(120, 9, 50);
+    check(past.page == 2 && past.start == 100 && past.end == 120,
+        "a page past the end clamps to the last page");
+
+    auto empty = mailEventsWindow(0, 3, 50);
+    check(empty.start == 0 && empty.end == 0 && empty.page == 0 && empty.pageCount == 0,
+        "an empty log has no pages");
+
+    auto exact = mailEventsWindow(100, 1, 50);
+    check(exact.pageCount == 2 && exact.start == 50 && exact.end == 100,
+        "an exact multiple does not grow a trailing empty page");
+}
+
 void main() {
     testSenderNetPayload();
     testResendPayload();
@@ -222,6 +245,7 @@ void main() {
     testEmailWellFormed();
     testMailEventJson();
     testSummarize();
+    testMailEventsWindow();
     if (failures == 0)
         writeln("signup_test: all checks passed");
     else

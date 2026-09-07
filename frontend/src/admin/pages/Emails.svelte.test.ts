@@ -84,6 +84,10 @@ const overviewFixture = (provider?: Partial<Record<string, unknown>>) => ({
       durationMs: 210, sourceIp: '127.0.0.1',
     },
   ],
+  eventsTotal: 2,
+  eventsPage: 0,
+  eventsPageCount: 1,
+  eventsLimit: 50,
   pending: [
     {
       id: PENDING_ID, username: 'mailadmin', email: 'mailadmin@example.test',
@@ -93,6 +97,23 @@ const overviewFixture = (provider?: Partial<Record<string, unknown>>) => ({
   cooldowns: [{ email: 'mailadmin@example.test', ttlSeconds: 42 }],
   ipCounters: [{ ip: '127.0.0.1', count: 3, ttlSeconds: 3400 }],
   redisError: '',
+});
+
+/// A 120-row log at 50/page. Each page carries one identifiable row so the
+/// table can be asserted on without counting.
+const pagedFixture = (servedPage: number) => ({
+  ...overviewFixture(),
+  events: [
+    {
+      atMs: now - 60_000 * (servedPage + 1), kind: 'signup_verification',
+      toEmail: `page${servedPage}@example.test`, username: `user${servedPage}`,
+      provider: 'resend', status: 'sent', error: '', durationMs: 200, sourceIp: '127.0.0.1',
+    },
+  ],
+  eventsTotal: 120,
+  eventsPage: servedPage,
+  eventsPageCount: 3,
+  eventsLimit: 50,
 });
 
 function kpiValue(label: string): string {
@@ -117,7 +138,8 @@ describe('Emails.svelte — signup verification delivery page', () => {
 
   it("renders the failed send's provider error and the failure KPI", async () => {
     render(Emails);
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/emails'));
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
     await expect
       .element(page.getByText(/HTTP 422 domain not verified/).first())
       .toBeInTheDocument();
@@ -128,7 +150,8 @@ describe('Emails.svelte — signup verification delivery page', () => {
 
   it('Revoke on the pending row confirms then POSTs that row id', async () => {
     render(Emails);
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/emails'));
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
     await page.getByRole('button', { name: 'Revoke' }).first().click();
     await expect.element(page.getByText(/Revoke the signup for mailadmin\?/)).toBeInTheDocument();
     await page.getByRole('button', { name: 'Revoke' }).last().click();
@@ -148,9 +171,59 @@ describe('Emails.svelte — signup verification delivery page', () => {
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(Emails);
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/emails'));
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
     await expect.element(page.getByText('Not configured')).toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Send test' })).toBeDisabled();
     expect(api.post).not.toHaveBeenCalled();
+  });
+
+  it('pages the send log without touching the rest of the payload', async () => {
+    mockedGet.mockImplementation((path: string, query?: { page?: number }) => {
+      if (path === '/api/admin/emails') return Promise.resolve(pagedFixture(query?.page ?? 0));
+      return Promise.reject(new Error('unexpected GET ' + path));
+    });
+    render(Emails);
+    await expect.element(page.getByText('page0@example.test')).toBeInTheDocument();
+    await expect.element(page.getByText(/Showing 1–1 of 120/)).toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+
+    await page.getByRole('button', { name: 'Next page' }).click();
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 1, limit: 50 }));
+    await expect.element(page.getByText('page1@example.test')).toBeInTheDocument();
+    await expect.element(page.getByText(/Showing 51–51 of 120/)).toBeInTheDocument();
+    // Pending/KPI sections are a full snapshot on every page.
+    expect(kpiValue('Pending')).toBe('1');
+
+    await page.getByRole('button', { name: 'Last page' }).click();
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 2, limit: 50 }));
+    await expect.element(page.getByRole('button', { name: 'Next page' })).toBeDisabled();
+  });
+
+  it('follows the gateway back when the log is trimmed under the page being read', async () => {
+    // Asked for page 2, answered with page 1: the capped log shrank. The
+    // pager must land there instead of asking for the vanished page again.
+    mockedGet.mockImplementation((path: string, query?: { page?: number }) => {
+      if (path !== '/api/admin/emails') return Promise.reject(new Error('unexpected GET ' + path));
+      const asked = query?.page ?? 0;
+      return Promise.resolve({
+        ...pagedFixture(Math.min(asked, 1)),
+        eventsTotal: 60,
+        eventsPageCount: 2,
+      });
+    });
+    render(Emails);
+    await expect.element(page.getByText('page0@example.test')).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Last page' }).click();
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 1, limit: 50 }));
+    await expect.element(page.getByText('page1@example.test')).toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'Next page' })).toBeDisabled();
+    // Previous still moves: the local page followed the served one.
+    await page.getByRole('button', { name: 'Previous page' }).click();
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
   });
 });

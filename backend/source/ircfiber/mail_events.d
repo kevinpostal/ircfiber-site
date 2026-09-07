@@ -156,6 +156,32 @@ MailStats summarize(const MailEvent[] events, long nowMs) @safe {
     return s;
 }
 
+/// Half-open slice `[start, end)` of a newest-first log for a 0-based
+/// `page` of `limit` rows, plus the page actually served.
+///
+/// Pure. A page past the end clamps to the last one instead of answering
+/// with an empty slice: the log is a capped list that gets trimmed under a
+/// reader's feet, and a reader sitting on page 9 when the log shrinks to
+/// four pages must see rows, not what looks like data loss.
+struct MailEventWindow {
+    size_t start;
+    size_t end;
+    int page;        /// the page actually served, after clamping
+    int pageCount;   /// 0 when the log is empty
+}
+
+MailEventWindow mailEventsWindow(size_t total, int page, int limit) @safe pure nothrow @nogc {
+    MailEventWindow w;
+    if (limit < 1) limit = 1;
+    if (total == 0) return w;
+    w.pageCount = cast(int)((total + limit - 1) / limit);
+    w.page = page < 0 ? 0 : (page >= w.pageCount ? w.pageCount - 1 : page);
+    w.start = cast(size_t) w.page * cast(size_t) limit;
+    w.end = w.start + cast(size_t) limit;
+    if (w.end > total) w.end = total;
+    return w;
+}
+
 /// Capped Redis list, newest first.
 final class MailEventLog {
     private RedisStorage redis;

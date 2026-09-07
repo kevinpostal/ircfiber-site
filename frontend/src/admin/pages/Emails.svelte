@@ -51,6 +51,11 @@
     provider: ProviderState;
     stats: Stats;
     events: SendEvent[];
+    /** Rows in the whole retained log, not in `events` (one page of it). */
+    eventsTotal: number;
+    eventsPage: number;
+    eventsPageCount: number;
+    eventsLimit: number;
     pending: PendingRow[];
     cooldowns: CooldownRow[];
     ipCounters: IpRow[];
@@ -60,6 +65,11 @@
   let overview = $state<Overview | null>(null);
   let overviewError = $state<string | null>(null);
   let loading = $state(false);
+
+  /// Send-log paging. Only the log is paged: every other section of the
+  /// payload is a full snapshot, so the KPIs do not move while paging.
+  const EVENTS_LIMIT = 50;
+  let eventsPage = $state(0);
 
   let testEmail = $state('');
   let testing = $state(false);
@@ -90,10 +100,24 @@
     if (spinner) loading = true;
     overviewError = null;
     try {
-      overview = await api.get<Overview>('/api/admin/emails');
+      overview = await api.get<Overview>('/api/admin/emails', {
+        page: eventsPage,
+        limit: EVENTS_LIMIT,
+      });
+      // The log is a capped list: it can be trimmed below the page being
+      // read, and the gateway then answers with the last page it has.
+      if (overview.eventsPage !== eventsPage) eventsPage = overview.eventsPage;
     } catch (e) {
       overviewError = errMsg(e);
     } finally { loading = false; }
+  }
+
+  async function goToPage(p: number) {
+    const last = Math.max(0, (overview?.eventsPageCount ?? 1) - 1);
+    const next = Math.min(Math.max(0, p), last);
+    if (next === eventsPage) return;
+    eventsPage = next;
+    await fetchOverview(false);
   }
 
   // Verification required with no configured provider is the state where
@@ -324,7 +348,7 @@
 
   <div class="mt-4">
     <Card>
-      <h3 class="mb-3 text-sm font-semibold text-heading">Send log ({overview.events.length})</h3>
+      <h3 class="mb-3 text-sm font-semibold text-heading">Send log ({overview.eventsTotal})</h3>
       {#if overview.events.length === 0}
         <EmptyState
           title="No sends recorded"
@@ -363,6 +387,48 @@
             </tbody>
           </table>
         </div>
+        {#if overview.eventsPageCount > 1}
+          <div
+            class="mt-3 flex items-center justify-between border-t border-border pt-3 text-xs text-muted"
+            data-testid="send-log-pager"
+          >
+            <div>
+              Showing {overview.eventsPage * overview.eventsLimit + 1}–{overview.eventsPage *
+                overview.eventsLimit + overview.events.length} of {overview.eventsTotal}
+            </div>
+            <div class="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="First page"
+                onclick={() => goToPage(0)}
+                disabled={overview.eventsPage === 0}
+                class="rounded border border-border bg-surface px-2 py-1 hover:bg-surface-2 disabled:opacity-40"
+              >«</button>
+              <button
+                type="button"
+                aria-label="Previous page"
+                onclick={() => goToPage(eventsPage - 1)}
+                disabled={overview.eventsPage === 0}
+                class="rounded border border-border bg-surface px-2 py-1 hover:bg-surface-2 disabled:opacity-40"
+              >‹</button>
+              <span class="px-2">{overview.eventsPage + 1} / {overview.eventsPageCount}</span>
+              <button
+                type="button"
+                aria-label="Next page"
+                onclick={() => goToPage(eventsPage + 1)}
+                disabled={overview.eventsPage >= overview.eventsPageCount - 1}
+                class="rounded border border-border bg-surface px-2 py-1 hover:bg-surface-2 disabled:opacity-40"
+              >›</button>
+              <button
+                type="button"
+                aria-label="Last page"
+                onclick={() => goToPage(overview.eventsPageCount - 1)}
+                disabled={overview.eventsPage >= overview.eventsPageCount - 1}
+                class="rounded border border-border bg-surface px-2 py-1 hover:bg-surface-2 disabled:opacity-40"
+              >»</button>
+            </div>
+          </div>
+        {/if}
       {/if}
     </Card>
   </div>
