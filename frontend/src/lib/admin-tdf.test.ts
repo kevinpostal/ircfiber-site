@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-// Lives under src/lib so it runs in the node `lib` project (needs fs for
-// the font fixtures); the module under test is admin-only.
-import { parseTdf, renderTdf, tdfCovers } from '../admin/lib/tdf';
+import { parseTdf, renderTdfFont } from './tdf';
 import { stripMirc, maxLineBytes } from '../admin/lib/mirc';
 
-const load = (name: string) => parseTdf(readFileSync(new URL(`../../../public/tdf/${name}.tdf`, import.meta.url)));
+// Real font fixtures from public/tdf (the admin MOTD builder's curated set);
+// tdf.test.ts covers the format with synthetic fonts, this pins the port
+// against tdfiglet's output for a shipped font.
+function load(name: string) {
+  const buf = readFileSync(new URL(`../../../public/tdf/${name}.tdf`, import.meta.url));
+  // A Node Buffer can be a view into a shared pool: hand over an exact copy.
+  return parseTdf(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+}
 
-describe('TheDraw font renderer', () => {
-  // Reference output from tdfiglet (github.com/tat3r/tdfiglet) for the same
-  // font: `tdfiglet -c m -e u -f aardvark.tdf IRC`, colour codes stripped.
+describe('TheDraw fonts shipped for the MOTD builder', () => {
+  // Reference: `tdfiglet -c m -e u -f aardvark.tdf IRC` (github.com/tat3r/
+  // tdfiglet), colour codes stripped, blank edge rows dropped.
   it('renders glyphs cell-for-cell like tdfiglet', () => {
-    const lines = renderTdf(load('aardvark'), 'IRC').map(stripMirc);
+    const lines = renderTdfFont(load('aardvark'), 'IRC').map((l) => stripMirc(l).replace(/\s+$/, ''));
     expect(lines).toEqual([
       '▐▄▄▌ ▐▄▄▄▄▄▄▌   ▐▄▄▄▄▄▌',
       '▐██▌ ▐██▌ ▐██▌ ▐██▌',
@@ -21,37 +26,23 @@ describe('TheDraw font renderer', () => {
     ]);
   });
 
-  it('emits two-digit mIRC codes so a digit glyph never extends a code', () => {
-    const font = load('aardvark');
-    const line = renderTdf(font, 'A1').join('\n');
-    for (const m of line.matchAll(/\x03(\d*)(?:,(\d*))?/g)) {
-      if (m[1]) expect(m[1]).toHaveLength(2);
-      if (m[2]) expect(m[2]).toHaveLength(2);
-    }
-    // Plain rendering carries no codes at all.
-    expect(renderTdf(font, 'IRC', { color: false }).join('')).not.toMatch(/\x03/);
-  });
-
   it('keeps a 72-column coloured banner inside the IRC line byte budget', () => {
-    // The widest curated fonts at "IRC Fiber" are the ones that matter.
-    for (const name of ['aardvark', 'cybrcrme', 'blcktrnc']) {
-      const body = renderTdf(load(name), 'IRC Fiber').join('\n');
-      expect(maxLineBytes(body)).toBeLessThanOrEqual(450);
+    // The widest curated fonts at "IRC Fiber" are the ones that matter:
+    // `:server 372 <32-char nick> :` leaves ~450 bytes of a 512-byte line.
+    for (const name of ['aardvark', 'cybrcrme', 'blcktrnc', 'hwplated']) {
+      const body = renderTdfFont(load(name), 'IRC Fiber').join('\n');
+      expect(maxLineBytes(body), name).toBeLessThanOrEqual(450);
     }
   });
 
-  it('reports glyph coverage and skips missing characters like tdfiglet', () => {
-    const font = load('aardvark');
-    expect(tdfCovers(font, 'IRC Fiber 2026')).toBe(true);
-    expect(tdfCovers(font, 'ünïcode')).toBe(false);
-    // A space becomes a gap; an uncovered character is dropped, not drawn.
-    const withSpace = renderTdf(font, 'I C', { color: false })[1];
-    const without = renderTdf(font, 'IC', { color: false })[1];
-    expect(withSpace.length).toBeGreaterThan(without.length);
-    expect(renderTdf(font, 'IüC', { color: false })).toEqual(renderTdf(font, 'IC', { color: false }));
-  });
-
-  it('rejects files that are not TheDraw colour fonts', () => {
-    expect(() => parseTdf(new TextEncoder().encode('not a font'))).toThrow(/TheDraw/);
+  it('every curated font renders the full alphabet in colour', () => {
+    const index = JSON.parse(readFileSync(new URL('../admin/lib/tdf-fonts.json', import.meta.url), 'utf8')) as { name: string }[];
+    expect(index.length).toBe(60);
+    for (const { name } of index) {
+      const font = load(name);
+      const plain = renderTdfFont(font, 'ABCXYZabcxyz09', { color: false }).join('');
+      expect(plain.replace(/\s/g, '').length, name).toBeGreaterThan(0);
+      expect(renderTdfFont(font, 'IRC').join('')).toMatch(/\x03\d\d/);
+    }
   });
 });
