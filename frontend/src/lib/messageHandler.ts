@@ -589,17 +589,17 @@ export function processIrcEvent(
       if (markRedacted(networkId, redactBuf, targetMsgid, reason)) return {};
     }
   }
-  // ── ACCOUNT — server-log only ──
-  // "nick logged in as account" rows spammed every shared channel's
-  // timeline. Route them to _server (like the WHOIS numerics) and refresh
-  // the member rows in place so identity stays live without the noise.
+  // ── ACCOUNT — state only, never a row ──
+  // account-notify is identity bookkeeping: it fires for every user who
+  // identifies, so as a timeline row it buried the server log ("probe555
+  // logged in as probe555", once per login, per network). IRCCloud does
+  // not render it either — it has handlers for `logged_in_as` /
+  // `logged_out` (your own 900/901) and none for another user's account
+  // change. `isSkippedCommand('ACCOUNT')` drops the row; the member
+  // metadata below is the whole point of the cap.
   if (cmd === 'ACCOUNT' && msg.nick) {
     const account = msg.text || (msg.params?.[0] ?? '');
     if (account) applyAccountChange(networkId, msg.nick, account);
-    // Colon-less `ACCOUNT acct` parses with empty text; the row renders
-    // msg.text, so normalize it (new engines already send it populated).
-    if (!msg.text && account) msg.text = account;
-    channel = '_server';
   }
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {

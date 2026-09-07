@@ -120,13 +120,6 @@ describe('server-output rows', () => {
     expect(getComputedStyle(content).color).toBe(MONO_FG);
   });
 
-  it('renders an account login as a monospace status row', () => {
-    render(MessageRow, { props: { msg: createMessage({ command: 'ACCOUNT', nick: 'space', text: 'spaceacct' }) } });
-    const r = row();
-    expect(r.classList.contains('monospace')).toBe(true);
-    expect(r.textContent).toContain('space logged in as spaceacct');
-  });
-
   it('renders topic and mode changes as status rows without the monospace tier', () => {
     for (const msg of [
       createMessage({ command: 'TOPIC', nick: 'op', text: 'new topic' }),

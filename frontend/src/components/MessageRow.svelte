@@ -33,7 +33,7 @@
   const isJoinPart = $derived(['JOIN','PART','QUIT','NICK','CHGHOST','KICK','AWAY','JOINPART_GROUP','DISCO_GROUP'].includes(cmd));
   const isLifecycle = $derived(['CONNECT', 'DISCONNECT', 'DISCONNECTED'].includes(cmd));
   const isDisconnectDivider = $derived(cmd === 'DISCONNECT' || cmd === 'DISCONNECTED');
-  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','DISCONNECTED','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','ACCOUNT','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
+  const isSystem = $derived(['TOPIC','CONNECT','DISCONNECT','DISCONNECTED','ERROR','MODE','CAP','JOINPART_GROUP','DISCO_GROUP','MOTD_GROUP','AWAY','KICK','INVITE'].includes(cmd) || /^\d{3}$/.test(cmd) || (cmd === 'NOTICE' && !msg.nick));
   const isAction = $derived(msg.type === 'action');
   // Server-log progress entries from the engine carry a `phase` tag. We
   // expose both a boolean (for styling) and the raw phase (for the
@@ -259,7 +259,7 @@
   // Long-message truncation: chat content (PRIVMSG, NOTICE, CONNECT, 001,
   // numeric replies, action) renders through LongMessageContent so a single
   // message body never creates thousands of line boxes. The non-chat system
-  // messages (JOIN/PART/QUIT/NICK/MODE/TOPIC/KICK/INVITE/AWAY/ACCOUNT/CHGHOST
+  // messages (JOIN/PART/QUIT/NICK/MODE/TOPIC/KICK/INVITE/AWAY/CHGHOST
   // and the grouped variants) keep their existing rendering because their
   // text is always a short human-readable phrase.
   const chatContent = $derived.by(() => {
@@ -406,9 +406,6 @@
       inner += '<span class="prefix">&#x2691;</span> '
         + `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span>`
         + (msg.text ? ` is away: <span class="awayReason">${escapeHtml(msg.text)}</span>` : ' is back');
-    } else if (cmd === 'ACCOUNT') {
-      inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> `
-        + (msg.text === '*' ? 'logged out' : msg.text ? `logged in as <b>${escapeHtml(msg.text)}</b>` : 'logged in');
     } else if (cmd === 'CHGHOST') {
       // IRCCloud `user_chghost`: "<nick> changed host: <old> → <new>".
       const oldMask = getUsermask(msg.prefix || '');

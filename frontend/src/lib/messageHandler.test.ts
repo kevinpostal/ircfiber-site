@@ -321,9 +321,12 @@ describe('WHOIS accumulation feeds the overlay', () => {
 });
 
 // ACCOUNT notify ("nick logged in as account") used to fan out into every
-// shared channel's timeline. It now routes to the server log while the
-// member rows update in place.
-describe('ACCOUNT routes to the server log', () => {
+// shared channel's timeline, then into the server log — where a channel of
+// identifying users still buried everything else. IRCCloud renders it
+// nowhere (it has `logged_in_as` / `logged_out` for your own 900/901 and no
+// handler for another user's account change), so neither do we: the member
+// metadata updates and no row is created anywhere.
+describe('ACCOUNT updates members without a row', () => {
   beforeEach(() => {
     ircState.networks.length = 0;
     ircState.activeBuffer.networkId = null;
@@ -350,13 +353,12 @@ describe('ACCOUNT routes to the server log', () => {
     return { net, serverRows, chanRows };
   }
 
-  it('files a per-channel ACCOUNT event into _server, not the channel', () => {
+  it('creates no row in the channel or the server log', () => {
     // Old-engine fan-out shape: the event names the shared channel.
     const { serverRows, chanRows } = runAccount([
       { command: 'ACCOUNT', nick: 'pv6109', params: ['pv6109'], text: 'pv6109', channel: '#chan', nid: 'n1', t: 2000 },
     ]);
-    expect(serverRows).toHaveLength(1);
-    expect(serverRows[0].text).toBe('pv6109');
+    expect(serverRows).toHaveLength(0);
     expect(chanRows).toHaveLength(0);
   });
 
@@ -365,8 +367,7 @@ describe('ACCOUNT routes to the server log', () => {
     const { net, serverRows, chanRows } = runAccount([
       { command: 'ACCOUNT', nick: 'pv6109', params: ['pv6109'], text: '', channel: '#chan', nid: 'n1', t: 2000 },
     ]);
-    expect(serverRows).toHaveLength(1);
-    expect(serverRows[0].text).toBe('pv6109');
+    expect(serverRows).toHaveLength(0);
     expect(chanRows).toHaveLength(0);
     const member = net.buffers.find((b) => b.name === '#chan')!.users!.find((u) => u.nick === 'pv6109')!;
     expect(member.account).toBe('pv6109');
@@ -377,7 +378,7 @@ describe('ACCOUNT routes to the server log', () => {
       { command: 'ACCOUNT', nick: 'pv6109', params: ['pv6109'], text: 'pv6109', channel: '#chan', nid: 'n1', t: 2000 },
       { command: 'ACCOUNT', nick: 'pv6109', params: ['*'], text: '*', channel: '#chan', nid: 'n1', t: 3000 },
     ]);
-    expect(serverRows).toHaveLength(2);
+    expect(serverRows).toHaveLength(0);
     expect(chanRows).toHaveLength(0);
     const member = net.buffers.find((b) => b.name === '#chan')!.users!.find((u) => u.nick === 'pv6109')!;
     expect(member.account).toBe('');
