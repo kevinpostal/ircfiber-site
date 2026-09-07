@@ -46,11 +46,15 @@
   register: ircd_oper_hash_raw
   changed_when: false
   no_log: true
+  # opers.conf is part of the `ircdconf` config-only run, so the hashes it
+  # renders must be computed on that path too.
+  tags: [ircdconf]
 
 - name: Set oper password hash fact
   ansible.builtin.set_fact:
     ircd_oper_password_hash: "{{ ircd_oper_hash_raw.stdout | trim }}"
   no_log: true
+  tags: [ircdconf]
 
 # Dashboard oper (least-privilege class for the admin web UI). Separate
 # credential from the human admin oper so it can be rotated independently;
@@ -68,11 +72,13 @@
   register: ircd_dashboard_oper_hash_raw
   changed_when: false
   no_log: true
+  tags: [ircdconf]
 
 - name: Set dashboard oper password hash fact
   ansible.builtin.set_fact:
     ircd_dashboard_oper_hash: "{{ ircd_dashboard_oper_hash_raw.stdout | trim }}"
   no_log: true
+  tags: [ircdconf]
 
 - name: Ensure data volumes exist
   community.docker.docker_volume:
