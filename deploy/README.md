@@ -351,7 +351,7 @@ ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'T=$(cat /etc/ircfiber/
 # merged_spf_record is the SPF string it wants, expected_dkim_value the DKIM target.
 ```
 
-Those three live in `host_vars/vps-efb4b52d.yml` as `cloudflare_records`: the SPF include (`include:sendersrv.com`, alongside Cloudflare Email Routing's include for inbound), `sender._domainkey` CNAME → `dkim.sendersrv.com`, and a `_dmarc` TXT policy.
+The live set lives in `host_vars/vps-efb4b52d.yml` as `cloudflare_records` (five records, all `solo: true`): apex SPF, `resend._domainkey` TXT (Resend's DKIM public key), `send` TXT + `send` MX (the SES bounce/return-path subdomain Resend puts in `Return-Path:`), and a `_dmarc` TXT policy (`p=none`, relaxed alignment). The apex SPF carries **both** includes — `v=spf1 include:_spf.mx.cloudflare.net include:amazonses.com ~all` — because Cloudflare Email Routing's include only covers inbound forwarding: a message that ever leaves with a bare `@ircfiber.com` envelope sender (region change, direct SES/SMTP send, origin-generated bounce) would otherwise softfail SPF and lean entirely on DKIM to satisfy DMARC. Both includes are flat `ip4:` lists, so the record costs 2 of the 10 permitted DNS lookups. The sender.net-era `include:sendersrv.com` / `sender._domainkey` records are gone with that provider.
 
 Verify with **one** real send before declaring it fixed:
 
