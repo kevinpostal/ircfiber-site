@@ -30,6 +30,7 @@
   import Version from './pages/Version.svelte';
   import Mullvad from './pages/Mullvad.svelte';
   import Backups from './pages/Backups.svelte';
+  import Emails from './pages/Emails.svelte';
   import ToastViewport from './components/ToastViewport.svelte';
   import { current, onChange, navigate, match } from './lib/router';
   import { adminUser, loadMe } from './stores/auth';
@@ -55,6 +56,7 @@
     if (match('/ircd', path)) return { kind: 'ircd' } as const;
     if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
     if (match('/backups', path)) return { kind: 'backups' } as const;
+    if (match('/emails', path)) return { kind: 'emails' } as const;
     if (match('/replication', path)) return { kind: 'replication' } as const;
     if (match('/sessions', path)) return { kind: 'sessions' } as const;
     if (match('/bouncer', path)) return { kind: 'bouncer' } as const;
@@ -95,6 +97,8 @@
         <Mullvad />
       {:else if page?.kind === 'backups'}
         <Backups />
+      {:else if page?.kind === 'emails'}
+        <Emails />
       {:else if page?.kind === 'replication'}
         <Replication />
       {:else if page?.kind === 'sessions'}

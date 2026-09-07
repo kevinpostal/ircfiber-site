@@ -53,6 +53,7 @@
         { label: 'Users', path: '/users', icon: '👥' },
         { label: 'Uploads', path: '/uploads', icon: '📎' },
         { label: 'Support', path: '/support', icon: '🎫' },
+        { label: 'Emails', path: '/emails', icon: '✉️' },
       ],
     },
   ];

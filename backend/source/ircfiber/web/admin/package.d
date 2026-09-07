@@ -47,6 +47,9 @@ import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
 import ircfiber.web.admin.backups : apiBackupsOverview, apiBackupsRun, apiBackupsSuspend, apiBackupsLogs;
+import ircfiber.web.admin.emails : apiEmailsOverview, apiEmailsTest,
+    apiEmailsPendingResend, apiEmailsPendingRevoke, apiEmailsCooldownClear,
+    apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
@@ -181,6 +184,14 @@ final class AdminController {
         router.get("/api/admin/backups/:name/logs", &adminWrap!apiBackupsLogsRoute);
         router.post("/api/admin/backups/:name/run", &adminWrap!apiBackupsRunRoute);
         router.post("/api/admin/backups/:name/suspend", &adminWrap!apiBackupsSuspendRoute);
+
+        // Emails (signup verification: provider state, send log, pending queue)
+        router.get("/api/admin/emails", &adminWrap!apiEmailsOverviewRoute);
+        router.post("/api/admin/emails/test", &adminWrap!apiEmailsTestRoute);
+        router.post("/api/admin/emails/pending/:id/resend", &adminWrap!apiEmailsPendingResendRoute);
+        router.post("/api/admin/emails/pending/:id/revoke", &adminWrap!apiEmailsPendingRevokeRoute);
+        router.post("/api/admin/emails/cooldown/clear", &adminWrap!apiEmailsCooldownClearRoute);
+        router.post("/api/admin/emails/ip-limit/clear", &adminWrap!apiEmailsIpLimitClearRoute);
 
         // Engine janitor control plane
         router.get("/api/admin/janitor/status", &adminWrap!apiJanitorStatusRoute);
@@ -401,6 +412,14 @@ private:
     void apiBackupsRunRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsRun(req, res); }
     void apiBackupsSuspendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsSuspend(req, res); }
     void apiBackupsLogsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsLogs(req, res); }
+
+    // Emails (signup verification delivery; all need redis)
+    void apiEmailsOverviewRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsOverview(req, res, redis); }
+    void apiEmailsTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsTest(req, res, redis); }
+    void apiEmailsPendingResendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsPendingResend(req, res, redis); }
+    void apiEmailsPendingRevokeRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsPendingRevoke(req, res, redis); }
+    void apiEmailsCooldownClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsCooldownClear(req, res, redis); }
+    void apiEmailsIpLimitClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsIpLimitClear(req, res, redis); }
 
     // Janitor
     void apiJanitorStatusRoute(HTTPServerRequest req, HTTPServerResponse res) {

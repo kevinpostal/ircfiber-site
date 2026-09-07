@@ -11,17 +11,16 @@
   import { pastebinStore, closeFromFile } from '../stores/pastebinStore.svelte';
   import { dataURIToBlob } from '../lib/upload';
   import UploadMenu from './UploadMenu.svelte';
-  import PastebinDialog from './PastebinDialog.svelte';
+  // Lazy: PastebinDialog pulls CodeEditor + highlight.js (~hundreds of KB).
+  // Loaded on demand via {#await} at the usage site below.
   import { MESSAGE_LENGTH_TRIGGER } from '../lib/messageSplitter';
   import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
   import { getPastebinDisablePrompt, globalPrefs } from '../stores/preferences.svelte';
   import { updateRoute } from '../lib/routing';
   import { tick } from 'svelte';
-  import type { IRCMessage } from '../types';
-
-  // Side-effect import: registers the <emoji-picker> custom element.
-  // The picker + its data are lazy-loaded only when first opened (see toggleEmoji).
-  import 'emoji-picker-element';
+  // emoji-picker-element is loaded on demand in toggleEmoji() below so its
+  // weight stays out of the initial bundle.
+  // (see toggleEmoji).
 
   interface Props {
     onSendMessage?: (...args: any[]) => any;
@@ -852,8 +851,10 @@
   async function toggleEmoji(): Promise<void> {
     emojiOpen = !emojiOpen;
     if (emojiOpen) {
-      // Wait for the {#if} block to render the element, then wire the event.
-      await Promise.resolve();
+      // Load the picker (and register the custom element) on first open so
+      // its weight stays out of the initial bundle.
+      await import('emoji-picker-element');
+      await tick();
       const el = document.querySelector('#emoji-popover emoji-picker') as HTMLElement | null;
       if (el && el !== emojiPicker) {
         emojiPicker = el;
@@ -1028,16 +1029,20 @@
       {/if}
     </div>
   </div>
-  <PastebinDialog
-    open={pastebinOpen}
-    text={pastebinText}
-    networkId={pastebinNetworkId}
-    target={pastebinTarget}
-    initialFilename={pastebinFilename}
-    initialLanguage={pastebinLanguage}
-    onclose={onPastebinClose}
-    onsent={onPastebinSent}
-  />
+  {#if pastebinOpen}
+    {#await import('./PastebinDialog.svelte') then { default: PastebinDialog }}
+      <PastebinDialog
+        open={pastebinOpen}
+        text={pastebinText}
+        networkId={pastebinNetworkId}
+        target={pastebinTarget}
+        initialFilename={pastebinFilename}
+        initialLanguage={pastebinLanguage}
+        onclose={onPastebinClose}
+        onsent={onPastebinSent}
+      />
+    {/await}
+  {/if}
   <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>
   {#if emojiOpen}
     <div id="emoji-popover" class="emoji-popover" role="dialog" aria-label="Emoji picker">

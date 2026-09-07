@@ -32,10 +32,6 @@
   import { loadHistory, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix, banListKey } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
-  import UploadDialog from './components/UploadDialog.svelte';
-  import UploadsPanel from './components/UploadsPanel.svelte';
-  import SnippetsPanel from './components/SnippetsPanel.svelte';
-  import IrcArtPanel from './components/IrcArtPanel.svelte';
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
@@ -48,11 +44,6 @@
   import { isFiberServerDown } from './lib/fiberServer';
   import { enqueueMessage, setFlushFn, setBackfillFlushFn } from './lib/messageBatcher';
   import AddNetworkPage from './components/AddNetworkPage.svelte';
-  import SettingsPage from './components/SettingsPage.svelte';
-  import ShortcutsPage from './components/ShortcutsPage.svelte';
-  import FeedbackPage from './components/FeedbackPage.svelte';
-  import FileViewerPage from './components/FileViewerPage.svelte';
-  import PasteViewerPage from './components/PasteViewerPage.svelte';
   import ChannelSwitcher from './components/ChannelSwitcher.svelte';
   import LoadingSkeleton from './components/LoadingSkeleton.svelte';
   import LoginPage from './components/LoginPage.svelte';
@@ -1719,9 +1710,11 @@ let showEditNetwork: boolean = $state(false);
 </Dialog>
 
 {#if uploadState.dialog}
-  <UploadDialog
-    onConfirm={(data) => confirmDialog(data)}
-    onCancel={() => cancelDialog()} />
+  {#await import('./components/UploadDialog.svelte') then { default: UploadDialog }}
+    <UploadDialog
+      onConfirm={(data) => confirmDialog(data)}
+      onCancel={() => cancelDialog()} />
+  {/await}
 {/if}
 
 {#if channelMenu}
@@ -1761,15 +1754,25 @@ let showEditNetwork: boolean = $state(false);
 <div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showAddNetwork || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
   <div class="main-area">
     {#if pasteViewerId !== null}
-      <PasteViewerPage id={pasteViewerId} onClose={() => { syncViewers(); navigateBackFromPastebin(); }} />
+      {#await import('./components/PasteViewerPage.svelte') then { default: PasteViewerPage }}
+        <PasteViewerPage id={pasteViewerId} onClose={() => { syncViewers(); navigateBackFromPastebin(); }} />
+      {/await}
     {:else if fileViewerId !== null}
-      <FileViewerPage id={fileViewerId} onClose={() => { syncFileViewer(); navigateBackFromFileViewer(); }} />
+      {#await import('./components/FileViewerPage.svelte') then { default: FileViewerPage }}
+        <FileViewerPage id={fileViewerId} onClose={() => { syncFileViewer(); navigateBackFromFileViewer(); }} />
+      {/await}
     {:else if ircState.showSettings}
-      <SettingsPage />
+      {#await import('./components/SettingsPage.svelte') then { default: SettingsPage }}
+        <SettingsPage />
+      {/await}
     {:else if ircState.showShortcuts}
-      <ShortcutsPage />
+      {#await import('./components/ShortcutsPage.svelte') then { default: ShortcutsPage }}
+        <ShortcutsPage />
+      {/await}
     {:else if ircState.showFeedback}
-      <FeedbackPage />
+      {#await import('./components/FeedbackPage.svelte') then { default: FeedbackPage }}
+        <FeedbackPage />
+      {/await}
     {:else if ircState.showAddNetwork}
       <AddNetworkPage welcome={ircState.addNetworkWelcome}
                       onSwitchBuffer={navigateToBuffer}
@@ -1802,13 +1805,19 @@ let showEditNetwork: boolean = $state(false);
       </div>
     {/if}
     {#if uploadState.panelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
-      <UploadsPanel onClose={() => uploadState.panelOpen = false} />
+      {#await import('./components/UploadsPanel.svelte') then { default: UploadsPanel }}
+        <UploadsPanel onClose={() => uploadState.panelOpen = false} />
+      {/await}
     {/if}
     {#if uploadState.pastebinPanelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
-      <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
+      {#await import('./components/SnippetsPanel.svelte') then { default: SnippetsPanel }}
+        <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
+      {/await}
     {/if}
     {#if ircArtPanelOpen.value && !ircState.showSettings && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null}
-      <IrcArtPanel onClose={() => ircArtPanelOpen.value = false} />
+      {#await import('./components/IrcArtPanel.svelte') then { default: IrcArtPanel }}
+        <IrcArtPanel onClose={() => ircArtPanelOpen.value = false} />
+      {/await}
     {/if}
   </div>
   {#if isNarrow && (sidebarDrawerOpen || mobileMembersOpen)}

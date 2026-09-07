@@ -97,6 +97,32 @@ bool senderNetAccepted(int status, string body_) @safe {
     }
 }
 
+/// Whitespace and control characters are rejected outright: the address is
+/// interpolated into `NickServ REGISTER <password> <email>`, a space-delimited
+/// services command.
+bool emailWellFormed(string email) @safe pure nothrow @nogc {
+    bool at = false, dot = false;
+    foreach (char c; email) {
+        if (c <= 0x20 || c == 0x7F) return false;
+        if (c == '@') at = true;
+        if (c == '.') dot = true;
+    }
+    return at && dot;
+}
+
+/// Body of the admin "send test email" action. No link, no user data — its
+/// only job is to make the provider answer.
+MailMessage adminTestEmail(string toEmail) @safe {
+    MailMessage m;
+    m.toEmail = toEmail;
+    m.subject = "IRC Fiber mail test";
+    m.text = "This is a test message from the IRC Fiber admin dashboard.\n"
+        ~ "If you received it, transactional mail is working.\n";
+    m.html = "<p>This is a test message from the IRC Fiber admin dashboard.</p>"
+        ~ "<p>If you received it, transactional mail is working.</p>";
+    return m;
+}
+
 /// Throws MailException on any failure. The token never appears in a log
 /// or message.
 void sendMail(const MailSettings s, const MailMessage m) {

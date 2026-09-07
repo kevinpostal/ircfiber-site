@@ -2,46 +2,9 @@
   import { tick, onMount } from 'svelte';
   import Highlight from 'svelte-highlight';
   import 'svelte-highlight/styles/atom-one-dark.css';
-  import CodeEditor from './CodeEditor.svelte';
+  // Lazy: CodeEditor pulls highlight.js/common. Loaded on demand in edit mode below.
   import { fetchUploadsOffset, editUpload, fetchMe } from '../stores/api';
-  import plaintext from 'svelte-highlight/languages/plaintext';
-  import python from 'svelte-highlight/languages/python';
-  import javascript from 'svelte-highlight/languages/javascript';
-  import typescript from 'svelte-highlight/languages/typescript';
-  import bash from 'svelte-highlight/languages/bash';
-  import json from 'svelte-highlight/languages/json';
-  import yaml from 'svelte-highlight/languages/yaml';
-  import markdown from 'svelte-highlight/languages/markdown';
-  import sql from 'svelte-highlight/languages/sql';
-  import xml from 'svelte-highlight/languages/xml';
-  import css from 'svelte-highlight/languages/css';
-  import scss from 'svelte-highlight/languages/scss';
-  import less from 'svelte-highlight/languages/less';
-  import java from 'svelte-highlight/languages/java';
-  import cpp from 'svelte-highlight/languages/cpp';
-  import csharp from 'svelte-highlight/languages/csharp';
-  import go from 'svelte-highlight/languages/go';
-  import rust from 'svelte-highlight/languages/rust';
-  import ruby from 'svelte-highlight/languages/ruby';
-  import php from 'svelte-highlight/languages/php';
-  import swift from 'svelte-highlight/languages/swift';
-  import kotlin from 'svelte-highlight/languages/kotlin';
-  import dart from 'svelte-highlight/languages/dart';
-  import ini from 'svelte-highlight/languages/ini';
-  import dockerfile from 'svelte-highlight/languages/dockerfile';
-  import makefile from 'svelte-highlight/languages/makefile';
-  import nginx from 'svelte-highlight/languages/nginx';
-  import lua from 'svelte-highlight/languages/lua';
-  import perl from 'svelte-highlight/languages/perl';
-  import powershell from 'svelte-highlight/languages/powershell';
-  import rlang from 'svelte-highlight/languages/r';
-  import graphql from 'svelte-highlight/languages/graphql';
-  import protobuf from 'svelte-highlight/languages/protobuf';
-  import twig from 'svelte-highlight/languages/twig';
-  import verilog from 'svelte-highlight/languages/verilog';
-  import vhdl from 'svelte-highlight/languages/vhdl';
-  import zig from 'svelte-highlight/languages/zig';
-  import toml from 'svelte-highlight/languages/toml';
+  import { coreLanguage, ensureLanguage, languageNameForFile } from '../lib/highlightLanguages';
 
   interface Props {
     url: string;
@@ -66,48 +29,38 @@
   let isPasteOwner = $derived(pastebinIdForInline ? meId !== null && pasteOwnerId !== null && meId === pasteOwnerId : false);
   let canEdit = $derived(pastebinIdForInline ? isPasteOwner : uploadIdForEdit !== null);
 
-  function detectLang(u: string): any {
-    const pathname = (() => { try { return new URL(u).pathname.toLowerCase(); } catch { return u.toLowerCase(); } })();
-    const ext = pathname.split('.').pop() ?? '';
-    const base = pathname.split('/').pop() ?? '';
-    if (base === 'dockerfile') return dockerfile;
-    if (base === 'makefile') return makefile;
-    const map: Record<string, any> = {
-      txt: plaintext, text: plaintext, log: plaintext,
-      md: markdown, markdown,
-      json, js: javascript, jsx: javascript, mjs: javascript, cjs: javascript,
-      ts: typescript, tsx: typescript, mts: typescript, cts: typescript,
-      py: python,
-      java,
-      c: cpp, h: cpp, cc: cpp, cpp, cxx: cpp, hpp: cpp,
-      cs: csharp, go, rs: rust, php, rb: ruby, sh: bash, bash, zsh: bash,
-      yaml, yml: yaml,
-      xml, html: xml, htm: xml,
-      css, scss, less,
-      sql, toml, ini,
-      lua, perl, powershell, r: rlang, graphql, protobuf, twig, verilog, vhdl, zig,
-      swift, kotlin, dart,
-      dockerfile, makefile, nginx,
-    };
-    return map[ext] ?? plaintext;
+  // Resolves a grammar object for <Highlight>. Starts with the synchronous
+  // core hit (or plaintext) so first paint never waits, then upgrades to the
+  // full grammar for rarer languages. Stale responses are dropped.
+  let langToken = 0;
+  async function resolveHlLang(name: string): Promise<void> {
+    const t = ++langToken;
+    hlLang = coreLanguage(name) ?? coreLanguage('plaintext');
+    if (coreLanguage(name)) return;
+    const full = await ensureLanguage(name);
+    if (t === langToken) hlLang = full;
   }
 
-  let hlLang: any = $state(plaintext);
+  function detectLang(u: string): string {
+    return languageNameForFile(u);
+  }
+
+  let hlLang: any = $state(coreLanguage('plaintext'));
   let pastebinIdForInline: string | null = $state(null);
   let pasteRawHref = $derived(pastebinIdForInline ? `/api/pastebins/${pastebinIdForInline}/raw` : displayUrl);
   let pasteViewerHref = $derived(pastebinIdForInline ? `/?/pastebin=${pastebinIdForInline}` : displayUrl);
-  // edit-time highlight derived from filename input (so changing extension updates realtime)
-  let editHlLang: any = $derived.by(() => {
-    if (!editing) return hlLang;
+  // edit-time language is name-only (CodeEditor takes a string)
+  let editHlName: string | null = $derived.by(() => {
+    if (!editing) return null;
     const name = editFilename.trim() || uploadName || '';
-    if (name) return detectLang(name);
-    return hlLang;
+    if (name) return languageNameForFile(name);
+    return null;
   });
   onMount(async () => {
     try { const me = await fetchMe(); meId = me.id; } catch {}
   });
   $effect(() => {
-    hlLang = detectLang(url);
+    void resolveHlLang(detectLang(url));
     void load();
   });
 
@@ -141,27 +94,11 @@
         void afterCodeLoaded();
         uploadName = rec.name;
         pasteOwnerId = (rec as any).userId ?? null;
-        // pick highlight based on syntax
+        // pick highlight based on syntax (extension-style ids and full names both work)
         try {
           const lang = (rec.syntax || 'text').toLowerCase();
-          const syntaxMap: Record<string, any> = {
-            txt: plaintext, text: plaintext, log: plaintext,
-            md: markdown, markdown,
-            json, js: javascript, jsx: javascript, mjs: javascript, cjs: javascript,
-            ts: typescript, tsx: typescript, mts: typescript, cts: typescript,
-            py: python, python,
-            java, c: cpp, h: cpp, cc: cpp, cpp, cxx: cpp, hpp: cpp,
-            cs: csharp, csharp,
-            go, rs: rust, rust, php, rb: ruby, ruby, sh: bash, bash, zsh: bash,
-            yaml, yml: yaml,
-            xml, html: xml, htm: xml,
-            css, scss, less,
-            sql, toml, ini,
-            lua, perl, powershell, r: rlang, graphql, protobuf, twig, verilog, vhdl, zig,
-            swift, kotlin, dart,
-            dockerfile, makefile, nginx,
-          };
-          hlLang = syntaxMap[lang] ?? detectLang(rec.name || `file.${lang}`);
+          const fromSyntax = languageNameForFile(`file.${lang}`);
+          void resolveHlLang(fromSyntax !== 'plaintext' ? fromSyntax : languageNameForFile(rec.name || `file.${lang}`));
         } catch {}
         return;
       }
@@ -321,7 +258,9 @@
     {#if editing}
       {@const editLines = editValue.split('\n').length}
       <div class="editor editing" style="height: {Math.min(Math.max(editLines,1),12)*16 + 28}px; min-height: 44px;">
-        <CodeEditor bind:value={editValue} language={editHlLang?.name?.toLowerCase() ?? hlLang?.name?.toLowerCase() ?? 'text'} />
+        {#await import('./CodeEditor.svelte') then { default: CodeEditor }}
+          <CodeEditor bind:value={editValue} language={editHlName ?? hlLang?.name?.toLowerCase() ?? 'text'} />
+        {/await}
       </div>
     {:else}
       <div class="editor" style="height: {Math.min(Math.max(lineCount,1),12)*16 + 28}px; min-height: 44px;">

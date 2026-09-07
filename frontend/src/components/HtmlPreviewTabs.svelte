@@ -1,7 +1,10 @@
 <script lang="ts">
   import Highlight, { LineNumbers } from 'svelte-highlight';
   import 'svelte-highlight/styles/atom-one-dark.css';
-  import xml from 'svelte-highlight/languages/xml';
+  import { ensureLanguage, coreLanguage } from '../lib/highlightLanguages';
+  // xml grammar loads on demand; plaintext covers first paint.
+  let xmlFallback: any = $state(coreLanguage('plaintext'));
+  void ensureLanguage('xml').then((l) => { xmlFallback = l; });
   import { HTML_EXT_RE } from '../lib/htmlInline';
 
   interface Props {
@@ -70,7 +73,7 @@
     });
   }
 
-  let hl = $derived(highlightLang ?? xml);
+  let hl = $derived(highlightLang ?? xmlFallback);
 </script>
 
 <div class="htmlPreviewTabs" class:compact data-url={url}>

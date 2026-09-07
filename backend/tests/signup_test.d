@@ -7,6 +7,7 @@ import std.string : indexOf;
 
 import ircfiber.mail;
 import ircfiber.signup;
+import ircfiber.mail_events;
 import vibe.data.json : parseJsonString;
 
 /// Same shape as services_test.d: built with -unittest so the `@("…")`
@@ -117,6 +118,65 @@ private void testKeyShapes() {
     check(ipKey("1.2.3.4") == "signup:ip:1.2.3.4", "ipKey");
 }
 
+private void testEmailWellFormed() {
+    check(emailWellFormed("a@b.co"), "plain address accepted");
+    check(!emailWellFormed("ab.co"), "no @ rejected");
+    check(!emailWellFormed("a@bco"), "no dot rejected");
+    check(!emailWellFormed("a b@c.co"), "embedded space rejected");
+    check(!emailWellFormed("a@b.co\n"), "trailing newline rejected");
+    check(!emailWellFormed(""), "empty rejected");
+}
+
+private void testMailEventJson() {
+    MailEvent e = {
+        atMs: 1788680000000L, kind: "signup_verification", toEmail: "a@b.co",
+        username: "alice", provider: "sender", status: "failed",
+        error: "sender.net rejected the message", durationMs: 412,
+        sourceIp: "1.2.3.4",
+    };
+    auto rt = MailEvent.fromJson(e.toJson());
+    check(rt.atMs == 1788680000000L, "atMs round-trips");
+    check(rt.kind == "signup_verification", "kind round-trips");
+    check(rt.toEmail == "a@b.co", "toEmail round-trips");
+    check(rt.username == "alice", "username round-trips");
+    check(rt.provider == "sender", "provider round-trips");
+    check(rt.status == "failed", "status round-trips");
+    check(rt.error == "sender.net rejected the message", "error round-trips");
+    check(rt.durationMs == 412, "durationMs round-trips");
+    check(rt.sourceIp == "1.2.3.4", "sourceIp round-trips");
+
+    auto empty = MailEvent.fromJson(parseJsonString(`{}`));
+    check(empty.atMs == 0 && empty.durationMs == 0, "missing numbers read as 0");
+    check(empty.kind.length == 0 && empty.toEmail.length == 0
+        && empty.username.length == 0 && empty.provider.length == 0
+        && empty.status.length == 0 && empty.error.length == 0
+        && empty.sourceIp.length == 0, "missing strings read as empty");
+}
+
+private void testSummarize() {
+    const nowMs = 1788700000000L;
+    const hour = 3_600_000L;
+    MailEvent[] events = [
+        // Newest first, as LRANGE returns them.
+        MailEvent(nowMs - hour, "signup_verification", "new@b.co", "newbie", "sender", "sent", "", 120, "1.1.1.1"),
+        MailEvent(nowMs - 2 * hour, "admin_test", "probe@b.co", "", "sender", "failed", "domain not verified", 90, "2.2.2.2"),
+        MailEvent(nowMs - 5 * hour, "signup_verification", "old@b.co", "older", "sender", "sent", "", 150, "3.3.3.3"),
+        MailEvent(nowMs - 30 * hour, "signup_verification", "stale@b.co", "stale", "sender", "failed", "connection refused", 10_000, "4.4.4.4"),
+    ];
+    auto s = summarize(events, nowMs);
+    check(s.sent24h == 2, "sent24h counts both recent sends");
+    check(s.failed24h == 1, "failed24h excludes the 30h-old failure");
+    check(s.windowSize == 4, "windowSize is the whole window");
+    check(s.sentWindow == 2 && s.failedWindow == 2, "window counts include the stale failure");
+    check(s.lastError == "domain not verified", "lastError is the newest failure");
+    check(s.lastFailedAtMs == nowMs - 2 * hour, "lastFailedAt is the newest failure");
+    check(s.lastSentAtMs == nowMs - hour, "lastSentAt is the newest send");
+
+    auto none = summarize(null, nowMs);
+    check(none.windowSize == 0 && none.sent24h == 0 && none.lastError.length == 0,
+        "empty window summarizes to zeros");
+}
+
 void main() {
     testSenderNetPayload();
     testSenderNetAccepted();
@@ -126,6 +186,9 @@ void main() {
     testSignupToken();
     testMailConfigured();
     testKeyShapes();
+    testEmailWellFormed();
+    testMailEventJson();
+    testSummarize();
     if (failures == 0)
         writeln("signup_test: all checks passed");
     else

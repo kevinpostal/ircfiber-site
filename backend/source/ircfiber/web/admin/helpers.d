@@ -77,6 +77,13 @@ package string formString(HTTPServerRequest req, string key, string fallback = "
     return req.form.get(key, fallback).strip();
 }
 
+/// Trim + null-coalesce a query-string value. GET routes MUST use this:
+/// `req.form` is only populated for form-encoded request bodies, so
+/// reading a GET parameter with `formString` always yields the fallback.
+package string queryString(HTTPServerRequest req, string key, string fallback = "") {
+    return req.query.get(key, fallback).strip();
+}
+
 /// Captures client IP + User-Agent and stores them on the session as flat
 /// string keys (`clientIp`, `userAgent`, `createdAt`, `lastAccess`) so the
 /// admin Sessions page can render them without parsing JSON for every row.

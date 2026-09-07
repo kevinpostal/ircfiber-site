@@ -3,6 +3,10 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { playwright } from '@vitest/browser-playwright';
 import tailwindcss from '@tailwindcss/vite';
 import { createLogger } from 'vite';
+// Lib modules used ONLY by lazy UI (or workers/admin). Everything else under
+// src/lib + src/stores is forced into chunk-core (startup) so Rollup can't
+// home shared logic in the async chunk and defeat the split.
+const LAZY_LIB_RE = /lib\/(aceModes|aristotleGlyphs|blockKind|buildInfo|codeLines|emoji|glyphCatalog|helpText|htmlInline|img2irc|notificationPolicy|segmentation|textFiles|uniform)\b/;
 
 // Backend URL for the dev server's API + WS proxy. Override via env vars
 // to point at a non-local backend (e.g. the tailnet gateway or Python gateway):
@@ -112,18 +116,42 @@ export default defineConfig({
       },
       output: {
         manualChunks(id) {
-          // Split heavy app panels - defer non-critical UI
-          if (id.includes('/components/UploadDialog') || id.includes('/components/UploadsPanel')) return 'chunk-upload';
-          if (id.includes('/components/SnippetsPanel') || id.includes('/components/IrcArtPanel')) return 'chunk-panels';
-          if (id.includes('/components/SettingsPage') || id.includes('/components/ShortcutsPage') || id.includes('/components/FileViewerPage') || id.includes('/components/PasteViewerPage') || id.includes('/components/WelcomePage')) return 'chunk-pages';
+          // Secondary UI (dynamic import() in App.svelte) — one lazy chunk.
+          // viewer components (HtmlPreviewTabs), so separate groups import
+          // each other and Rollup forces co-loading anyway.
+          if (id.includes('/components/UploadDialog') || id.includes('/components/UploadsPanel') ||
+              id.includes('/components/SnippetsPanel') || id.includes('/components/IrcArtPanel') ||
+              id.includes('/components/SettingsPage') || id.includes('/components/ShortcutsPage') ||
+              id.includes('/components/FeedbackPage') || id.includes('/components/FileViewerPage') ||
+              id.includes('/components/PasteViewerPage') || id.includes('/components/WelcomePage') ||
+              id.includes('/components/HtmlPreviewTabs')) return 'chunk-lazy';
           if (id.includes('/components/CodeEditor') || id.includes('wasm-img2irc')) return 'chunk-editor';
+          // Core app logic (stores + shared lib) needed synchronously at boot.
+          // Without this Rollup homes multi-importer lib modules in chunk-lazy
+          // (most of their importers are lazy), forcing the entry to
+          // statically import the whole lazy chunk — defeating the split.
+          // Denylisted: lazy-only helpers that must stay out of first paint
+          // (aceModes, img2irc family, textFiles, htmlInline, …).
+          if (id.includes('src/stores/') && !id.includes('src/admin/')) return 'chunk-core';
+          if (id.includes('src/lib/') && !id.includes('src/admin/') &&
+              !LAZY_LIB_RE.test(id)) return 'chunk-core';
+          // On-demand grammars + picker: explicit async chunks. (Returning
+          // undefined lets Rollup home them in vendor, which testing showed
+          // keeps them in first paint.)
+          // The 8 core grammars stay with the startup code; the rest defer.
+          if (/svelte-highlight\/languages\/(plaintext|javascript|typescript|python|bash|json|yaml|markdown)\.js$/.test(id)) return 'chunk-core';
+          if (id.includes('svelte-highlight/languages/')) return 'chunk-hl';
+          if (id.includes('emoji-picker-element')) return 'chunk-emoji';
+          // hljs core is needed synchronously by svelte-highlight's engine
+          // (message view path) — pin it in vendor.
+          if (id.includes('highlight.js/lib/core')) return 'vendor';
+          // hljs (common + grammars) is used only by the async CodeEditor —
+          // keep it in the editor chunk.
+          if (id.includes('highlight.js/lib/common') || id.includes('highlight.js/lib/languages/') || id.includes('highlight.js/es/common') || id.includes('highlight.js/es/languages/')) return 'chunk-editor';
+          // Admin-only heavy deps — the chat entry must not download these
+          if (id.includes('node_modules/layerchart') || id.includes('node_modules/mode-watcher')) return 'vendor-admin';
           // Keep vendor as single chunk to avoid circular deps (svelte + highlights share graph)
           if (id.includes('node_modules')) return 'vendor';
-          // Split heavy panels into separate chunks — loaded on demand
-          if (id.includes('/components/UploadDialog') || id.includes('/components/UploadsPanel')) return 'chunk-upload';
-          if (id.includes('/components/SnippetsPanel') || id.includes('/components/IrcArtPanel')) return 'chunk-panels';
-          if (id.includes('/components/SettingsPage') || id.includes('/components/ShortcutsPage') || id.includes('/components/FileViewerPage') || id.includes('/components/PasteViewerPage') || id.includes('/components/WelcomePage')) return 'chunk-pages';
-          if (id.includes('/components/CodeEditor') || id.includes('wasm-img2irc')) return 'chunk-editor';
         },
         chunkFileNames: 'assets/[name]-[hash].js',
         entryFileNames: 'assets/[name]-[hash].js',

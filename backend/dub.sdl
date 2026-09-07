@@ -155,7 +155,7 @@ configuration "signup-test" {
     targetName "signup-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/mail.d" "source/ircfiber/signup.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d"
+    sourceFiles "source/ircfiber/mail.d" "source/ircfiber/mail_events.d" "source/ircfiber/signup.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d"
     mainSourceFile "tests/signup_test.d"
     versions "VibeUseFibers"
     buildOptions "unittests"

@@ -29,44 +29,18 @@
   let isText = $derived(entry ? isTextFile(entry.mimeType, entry.name) : false);
   let highlightLang = $derived(entry ? detectSyntaxFromFilename(entry.name) : 'text');
 
-  // Map detectSyntax to svelte-highlight languages via lazy? Pass string to HtmlPreviewTabs which maps xml fallback, but for text we want proper highlight.
-  // HtmlPreviewTabs expects highlightLang any; we pass null and let it fallback to xml for html, for text we need actual language mapping similar to TextInline.
-  import plaintext from 'svelte-highlight/languages/plaintext';
-  import python from 'svelte-highlight/languages/python';
-  import javascript from 'svelte-highlight/languages/javascript';
-  import typescript from 'svelte-highlight/languages/typescript';
-  import bash from 'svelte-highlight/languages/bash';
-  import jsonLang from 'svelte-highlight/languages/json';
-  import yaml from 'svelte-highlight/languages/yaml';
-  import markdown from 'svelte-highlight/languages/markdown';
-  import sql from 'svelte-highlight/languages/sql';
-  import xml from 'svelte-highlight/languages/xml';
-  import css from 'svelte-highlight/languages/css';
-  import scss from 'svelte-highlight/languages/scss';
-  import less from 'svelte-highlight/languages/less';
-  import java from 'svelte-highlight/languages/java';
-  import cpp from 'svelte-highlight/languages/cpp';
-  import csharp from 'svelte-highlight/languages/csharp';
-  import go from 'svelte-highlight/languages/go';
-  import rust from 'svelte-highlight/languages/rust';
-  import ruby from 'svelte-highlight/languages/ruby';
-  import php from 'svelte-highlight/languages/php';
-  import swift from 'svelte-highlight/languages/swift';
-  import kotlin from 'svelte-highlight/languages/kotlin';
-  import dart from 'svelte-highlight/languages/dart';
-  import ini from 'svelte-highlight/languages/ini';
-  import dockerfile from 'svelte-highlight/languages/dockerfile';
-  import makefile from 'svelte-highlight/languages/makefile';
-  // Resolve string mode to language
-  function langFromMode(mode: string): any {
-    const map: Record<string, any> = {
-      text: plaintext, python, javascript, typescript, bash, sh: bash,
-      yaml, json: jsonLang, markdown, html: xml, css, scss, less, sql, xml,
-      java, c_cpp: cpp, csharp, golang: go, rust, ruby, php, swift, kotlin, dart, ini, dockerfile, makefile,
-    };
-    return map[mode] ?? plaintext;
-  }
-  let resolvedLang = $derived(langFromMode(highlightLang));
+  // Grammar objects resolve via the shared registry (core bundled, rest on
+  // demand) so the ~20 rarely-used grammars stay out of the vendor chunk.
+  import { coreLanguage, ensureLanguage, languageNameForMode } from '../lib/highlightLanguages';
+  let hlLangObj: any = $state(coreLanguage('plaintext'));
+  let langToken = 0;
+  $effect(() => {
+    const name = languageNameForMode(highlightLang);
+    const t = ++langToken;
+    hlLangObj = coreLanguage(name) ?? coreLanguage('plaintext');
+    if (coreLanguage(name)) return;
+    void ensureLanguage(name).then((full) => { if (t === langToken) hlLangObj = full; });
+  });
 
   let displayUrl = $derived(entry ? (() => { try { const u = new URL(entry!.url, location.origin); if (u.pathname.startsWith('/uploads/')) return u.pathname + u.search + u.hash; } catch {} return entry!.url; })() : '');
   let downloadHref = $derived(entry ? (displayUrl + (displayUrl.includes('?') ? '&' : '?') + 'download=1') : '');
@@ -190,9 +164,9 @@
             </form>
           </div>
         {:else if isHtml}
-          <HtmlPreviewTabs url={entry.url} filename={entry.name} withFrame={true} highlightLang={resolvedLang} />
+          <HtmlPreviewTabs url={entry.url} filename={entry.name} withFrame={true} highlightLang={hlLangObj} />
         {:else if isText}
-          <HtmlPreviewTabs url={entry.url} filename={entry.name} withFrame={false} highlightLang={resolvedLang} />
+          <HtmlPreviewTabs url={entry.url} filename={entry.name} withFrame={false} highlightLang={hlLangObj} />
         {:else}
           <div class="unsupportedBox">
             <p>Unsupported type: {entry.mimeType}</p>

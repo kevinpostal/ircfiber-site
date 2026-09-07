@@ -9,7 +9,7 @@ import vibe.core.log : logWarn;
 import vibe.data.json : Json;
 
 import ircfiber.storage.redis : RedisStorage;
-import ircfiber.web.admin.helpers : jsonOk, jsonError, formString, jsonArray;
+import ircfiber.web.admin.helpers : jsonOk, jsonError, queryString, jsonArray;
 
 /// GET /api/admin/redis/info — full INFO document with sections.
 package void apiRedisInfo(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
@@ -81,7 +81,10 @@ package void apiRedisSummary(HTTPServerRequest, HTTPServerResponse res, RedisSto
 /// GET /api/admin/redis/keys?cursor=...&match=...&count=...
 package void apiRedisKeys(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     import std.conv : to;
-    auto match = formString(req, "match", "*");
+    // GET route: the parameters live in the query string. `formString`
+    // reads `req.form`, which is empty for a GET, so it silently pinned
+    // every request to match="*" / cursor="0" (no filter, no paging).
+    auto match = queryString(req, "match", "*");
     if (match.length == 0) match = "*";
     long count = 100;
     if (auto c = "count" in req.query) {
@@ -90,7 +93,7 @@ package void apiRedisKeys(HTTPServerRequest req, HTTPServerResponse res, RedisSt
     }
     if (count < 1) count = 1;
     if (count > 1000) count = 1000;
-    auto cursor = formString(req, "cursor", "0");
+    auto cursor = queryString(req, "cursor", "0");
     if (cursor.length == 0) cursor = "0";
 
     try {
@@ -144,37 +147,17 @@ package void apiRedisSlowlog(HTTPServerRequest req, HTTPServerResponse res, Redi
     Json data = Json.emptyObject;
     data["count"] = Json(count);
     try {
-        // vibe.d's RedisReply for SLOWLOG GET is a flat iterator that walks
-        // every entry as a sub-array. We parse by tracking depth: each top-
-        // level entry starts with id (long), then unixMs, then durationMicros,
-        // then a nested array of command tokens.
-        auto reply = redis.slowlog(count);
+        // `redis.slowlog` returns parsed entries: the reply's nested command
+        // arrays are flattened server-side (see storage/redis.d), because a
+        // flat read of them desynchronises the pooled connection.
         Json[] arr;
-        Json entry;
-        int state = 0;
-        string[] cmdParts;
-        foreach (item; reply) {
-            if (state == 0) {
-                entry = Json.emptyObject;
-                try entry["id"] = Json(item.to!long); catch (Exception) entry["id"] = Json(item);
-                state = 1;
-            } else if (state == 1) {
-                try entry["timestampMs"] = Json(item.to!long); catch (Exception) entry["timestampMs"] = Json(item);
-                state = 2;
-            } else if (state == 2) {
-                try entry["durationMicros"] = Json(item.to!long);
-                catch (Exception) entry["durationMicros"] = Json(item);
-                state = 3;
-            } else if (state == 3) {
-                // command parts — append until we see something that looks like an id (next entry)
-                cmdParts ~= item;
-                // We treat this as the last part of this entry; commit on the next call.
-                entry["command"] = jsonArray(cmdParts);
-                arr ~= entry;
-                entry = Json.emptyObject;
-                cmdParts = [];
-                state = 0;
-            }
+        foreach (e; redis.slowlog(count)) {
+            Json entry = Json.emptyObject;
+            entry["id"] = Json(e.id);
+            entry["timestampMs"] = Json(e.timestampMs);
+            entry["durationMicros"] = Json(e.durationMicros);
+            entry["command"] = jsonArray(e.command);
+            arr ~= entry;
         }
         data["entries"] = Json(arr);
         data["entryCount"] = Json(cast(long) arr.length);
@@ -190,7 +173,7 @@ package void apiRedisSlowlog(HTTPServerRequest req, HTTPServerResponse res, Redi
 package void apiRedisPubsub(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     Json data = Json.emptyObject;
     try {
-        auto pattern = formString(req, "pattern", "*");
+        auto pattern = queryString(req, "pattern", "*");
         if (pattern.length == 0) pattern = "*";
         data["channels"] = jsonArray(redis.pubsubChannels(pattern));
     } catch (Exception e) {

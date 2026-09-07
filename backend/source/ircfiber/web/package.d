@@ -10,6 +10,7 @@ import std.string : indexOf;
 import std.string : toLower;
 import std.regex : regex, replaceAll;
 import std.datetime : Clock;
+import core.time : MonoTime;
 import std.conv : to;
 import std.process : environment;
 
@@ -28,9 +29,11 @@ import ircfiber.default_network : ensureDefaultFiberNetwork;
 import ircfiber.services.accounts : isValidIrcNick, provisionServicesAccountAsync;
 import ircfiber.services.anope : NickRegistration, anopeNickRegistration, loadAnopeSettings;
 import ircfiber.models.user : User;
-import ircfiber.mail : MailSettings, MailException, loadMailSettings, sendMail;
+import ircfiber.mail : MailSettings, MailException, loadMailSettings, sendMail,
+    emailWellFormed;
 import ircfiber.signup : PendingSignup, PendingSignupStore, emailVerificationRequired,
     newSignupToken, pendingKey, verificationEmail, verificationLink;
+import ircfiber.mail_events : MailEvent, MailEventLog;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
 
     // Captures client IP, User-Agent, createdAt, and lastAccess on
@@ -368,13 +371,7 @@ final class WebController {
             return;
         }
 
-        // Whitespace and control characters are rejected outright: the email
-        // is interpolated into `NickServ REGISTER <password> <email>`, which
-        // is a space-delimited services command.
-        bool emailWellFormed = email.canFind('@') && email.canFind('.');
-        foreach (char c; email)
-            if (c <= 0x20 || c == 0x7F) emailWellFormed = false;
-        if (!emailWellFormed) {
+        if (!emailWellFormed(email)) {
             registerFail(req, res, 400, "That doesn't look like a valid email address.");
             return;
         }
@@ -545,8 +542,24 @@ final class WebController {
             return;
         }
         const link = verificationLink(environment.get("IRCFIBER_PUBLIC_URL", "https://ircfiber.com"), token);
-        try sendMail(mail, verificationEmail(username, email, link));
-        catch (Exception e) {
+        MailEvent ev;
+        ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+        ev.kind = "signup_verification";
+        ev.toEmail = email;
+        ev.username = username;
+        ev.provider = mail.provider;
+        ev.sourceIp = ip;
+        const sendStarted = MonoTime.currTime;
+        try {
+            sendMail(mail, verificationEmail(username, email, link));
+            ev.status = "sent";
+            ev.durationMs = (MonoTime.currTime - sendStarted).total!"msecs";
+            new MailEventLog(redis).record(ev);
+        } catch (Exception e) {
+            ev.status = "failed";
+            ev.error = e.msg;
+            ev.durationMs = (MonoTime.currTime - sendStarted).total!"msecs";
+            new MailEventLog(redis).record(ev);
             logError("register: sending verification email to %s failed: %s", email, e.msg);
             redis.del(pendingKey(token));   // a link nobody received must not stay live
             registerFail(req, res, 503, "We couldn't send the confirmation email. Please try again in a few minutes.");

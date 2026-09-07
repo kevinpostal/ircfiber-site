@@ -4,7 +4,7 @@
  * content-hashed CSS/JS URLs into views/index.dt.
  */
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync, brotliCompressSync } from 'node:zlib';
@@ -39,29 +39,16 @@ function findJsByFile(substr) {
 const mainCss = (entry.css && entry.css[0]) ? `/public/dist/${entry.css[0]}` : null;
 const mainJs = `/public/dist/${entry.file}`;
 
-const vendor = findJsByFile('vendor');
+// NOTE: match the chat vendor exactly — 'vendor-admin' (admin SPA only) also
+// contains the substring 'vendor' and must never be preloaded by the chat shell.
+const vendor = Object.values(manifest).find(v => v.file && v.file.endsWith('.js') && v.file.includes('vendor') && !v.file.includes('vendor-admin'));
 const vendorJs = vendor ? `/public/dist/${vendor.file}` : null;
 const vendorCss = vendor && vendor.css && vendor.css[0] ? `/public/dist/${vendor.css[0]}` : null;
 
-const chunkUpload = findJsByFile('chunk-upload');
-const chunkUploadJs = chunkUpload ? `/public/dist/${chunkUpload.file}` : null;
-const chunkUploadCss = chunkUpload && chunkUpload.css && chunkUpload.css[0] ? `/public/dist/${chunkUpload.css[0]}` : null;
-
-const chunkEditor = findJsByFile('chunk-editor');
-const chunkEditorJs = chunkEditor ? `/public/dist/${chunkEditor.file}` : null;
-const chunkEditorCss = chunkEditor && chunkEditor.css && chunkEditor.css[0] ? `/public/dist/${chunkEditor.css[0]}` : null;
-
-const chunkPages = findJsByFile('chunk-pages');
-const chunkPagesJs = chunkPages ? `/public/dist/${chunkPages.file}` : null;
-
-const chunkPanels = findJsByFile('chunk-panels');
-const chunkPanelsJs = chunkPanels ? `/public/dist/${chunkPanels.file}` : null;
-
-// CSS for every statically-imported chunk (manualChunks groups like
-// chunk-pages and chunk-panels, plus vendor) must be linked in the HTML shell:
-// Vite auto-injects CSS only for *dynamic* imports at runtime, so a component
-// pulled into a static manualChunks group had its stylesheet silently dropped
-// — the pastebin/settings/welcome pages rendered unstyled.
+// Eager CSS = the entry + its STATIC import closure. Feature chunks
+// (chunk-upload/pages/panels/editor) are dynamic import()s since the SPA
+// lazy-load split — Vite injects their stylesheets at runtime when the chunk
+// loads, so linking them here would force-download them on first paint.
 const staticCss = [];
 (function collect(key, seen = new Set()) {
   if (seen.has(key)) return;
@@ -75,7 +62,7 @@ const staticCss = [];
 // Build the new block scripts section
 let lines = [];
 lines.push('block scripts');
-lines.push('  // Preload the critical CSS/JS so the browser can start fetching before parsing');
+lines.push('  // Preload only the critical CSS/JS (entry + vendor); feature chunks load on demand');
 const injectedCss = new Set();
 function addCss(href) {
   if (!href || injectedCss.has(href)) return;
@@ -83,18 +70,10 @@ function addCss(href) {
   lines.push(`  link(rel="preload", href="${href}", as="style")`);
   lines.push(`  link(rel="stylesheet", href="${href}")`);
 }
-// main first (base cascade), then the eagerly-preloaded feature chunks, then
-// any remaining statically-imported chunk CSS (chunk-pages, chunk-panels, …).
 addCss(mainCss);
-addCss(chunkUploadCss);
-addCss(chunkEditorCss);
 for (const href of staticCss) addCss(href);
 console.log('inject-manifest: stylesheet links →', [...injectedCss].join(', '));
 if (vendorJs) lines.push(`  link(rel="modulepreload", href="${vendorJs}")`);
-if (chunkUploadJs) lines.push(`  link(rel="modulepreload", href="${chunkUploadJs}")`);
-if (chunkEditorJs) lines.push(`  link(rel="modulepreload", href="${chunkEditorJs}")`);
-if (chunkPagesJs) lines.push(`  link(rel="modulepreload", href="${chunkPagesJs}")`);
-if (chunkPanelsJs) lines.push(`  link(rel="modulepreload", href="${chunkPanelsJs}")`);
 lines.push(`  script(type="module", src="${mainJs}")`);
 
 const newBlock = lines.join('\n');
@@ -117,12 +96,44 @@ if (blockRegex.test(dt)) {
 }
 
 console.log(`inject-manifest: CSS → ${mainCss}`);
-if (chunkUploadCss) console.log(`inject-manifest: chunk-upload CSS → ${chunkUploadCss}`);
-if (chunkEditorCss) console.log(`inject-manifest: chunk-editor CSS → ${chunkEditorCss}`);
 console.log(`inject-manifest: JS  → ${mainJs}`);
 if (vendorJs) console.log(`inject-manifest: vendor → ${vendorJs}`);
-if (chunkUploadJs) console.log(`inject-manifest: chunk-upload → ${chunkUploadJs}`);
-if (chunkEditorJs) console.log(`inject-manifest: chunk-editor → ${chunkEditorJs}`);
+
+// Prune stale content-hashed bundles: every build emits new hashes, and
+// without pruning dist/assets accumulates all previous generations (1.2MB
+// vendor × N deploys). Keep exactly what this build's manifest references
+// (both entries + full import closures); delete anything else. The 1h
+// browser-cached shell window after a deploy is covered by the deploy's
+// old-hash alias step, not by shipping old bundles in the image.
+try {
+  const keep = new Set();
+  const seen = new Set();
+  function mark(key) {
+    if (seen.has(key)) return;
+    seen.add(key);
+    const node = manifest[key];
+    if (!node) return;
+    if (node.file) keep.add(node.file);
+    for (const c of node.css || []) keep.add(c);
+    for (const a of node.assets || []) keep.add(a);
+    for (const imp of node.imports || []) mark(imp);
+    for (const imp of node.dynamicImports || []) mark(imp);
+  }
+  mark('index.html');
+  mark('admin.html');
+  const assetsDir = resolve(projectRoot, 'public/dist/assets');
+  let pruned = 0;
+  for (const f of readdirSync(assetsDir)) {
+    const base = f.replace(/\.(gz|br|map)$/, '');
+    if (!/\.(js|css)$/.test(base)) continue;
+    if (keep.has(`assets/${base}`)) continue;
+    try { unlinkSync(resolve(assetsDir, f)); pruned++; }
+    catch {}
+  }
+  console.log(`inject-manifest: pruned ${pruned} stale asset file(s)`);
+} catch (e) {
+  console.warn('inject-manifest: prune skipped', e.message);
+}
 
 // Also emit .gz and .br for precompressed serving
 try {

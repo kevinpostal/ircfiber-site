@@ -2,45 +2,7 @@
   import { onMount } from 'svelte';
   import Highlight, { LineNumbers } from 'svelte-highlight';
   import 'svelte-highlight/styles/atom-one-dark.css';
-  import plaintext from 'svelte-highlight/languages/plaintext';
-  import python from 'svelte-highlight/languages/python';
-  import javascript from 'svelte-highlight/languages/javascript';
-  import typescript from 'svelte-highlight/languages/typescript';
-  import bash from 'svelte-highlight/languages/bash';
-  import json from 'svelte-highlight/languages/json';
-  import yaml from 'svelte-highlight/languages/yaml';
-  import markdown from 'svelte-highlight/languages/markdown';
-  import sql from 'svelte-highlight/languages/sql';
-  import xml from 'svelte-highlight/languages/xml';
-  import css from 'svelte-highlight/languages/css';
-  import scss from 'svelte-highlight/languages/scss';
-  import less from 'svelte-highlight/languages/less';
-  import java from 'svelte-highlight/languages/java';
-  import cpp from 'svelte-highlight/languages/cpp';
-  import csharp from 'svelte-highlight/languages/csharp';
-  import go from 'svelte-highlight/languages/go';
-  import rust from 'svelte-highlight/languages/rust';
-  import ruby from 'svelte-highlight/languages/ruby';
-  import php from 'svelte-highlight/languages/php';
-  import swift from 'svelte-highlight/languages/swift';
-  import kotlin from 'svelte-highlight/languages/kotlin';
-  import dart from 'svelte-highlight/languages/dart';
-  import ini from 'svelte-highlight/languages/ini';
-  import dockerfile from 'svelte-highlight/languages/dockerfile';
-  import makefile from 'svelte-highlight/languages/makefile';
-  import nginx from 'svelte-highlight/languages/nginx';
-  import lua from 'svelte-highlight/languages/lua';
-  import perl from 'svelte-highlight/languages/perl';
-  import powershell from 'svelte-highlight/languages/powershell';
-  import rlang from 'svelte-highlight/languages/r';
-  import graphql from 'svelte-highlight/languages/graphql';
-  import protobuf from 'svelte-highlight/languages/protobuf';
-  import twig from 'svelte-highlight/languages/twig';
-  import verilog from 'svelte-highlight/languages/verilog';
-  import vhdl from 'svelte-highlight/languages/vhdl';
-  import zig from 'svelte-highlight/languages/zig';
-  import toml from 'svelte-highlight/languages/toml';
-  import { fetchPastebinsOffset, updatePastebin, deletePastebin, pastebinRawUrl, type PasteEntry } from '../stores/api';
+  import { coreLanguage, ensureLanguage, languageNameForMode } from '../lib/highlightLanguages';
   import { ACE_MODES, aceModeLabel } from '../lib/aceModes';
   import { navigateToPastebin } from '../lib/routing';
   import CodeEditor from './CodeEditor.svelte';
@@ -155,36 +117,22 @@
     return Math.min(Math.max(entry.lines, 1), MAX_VISIBLE_LINES) * LINE_HEIGHT;
   }
 
+  // Grammar objects resolve via the shared registry: core hits are sync,
+  // rarer grammars upgrade from plaintext once fetched (cached thereafter).
+  const langObjs: Record<string, any> = $state({});
+  $effect(() => {
+    const modes = new Set(entries.map((e) => languageNameForMode(e.syntax ?? 'text')));
+    for (const name of modes) {
+      if (coreLanguage(name) || langObjs[name]) continue;
+      langObjs[name] = coreLanguage('plaintext');
+      void ensureLanguage(name).then((l) => { langObjs[name] = l; });
+    }
+  });
   function getHighlightLang(mode: string): any {
-    const m = mode.toLowerCase();
-    const map: Record<string, any> = {
-      text: plaintext, plaintext: plaintext, txt: plaintext,
-      html: xml, htm: xml, xhtml: xml, xml: xml, svg: xml,
-      javascript: javascript, js: javascript, jsx: javascript, mjs: javascript, cjs: javascript,
-      typescript: typescript, ts: typescript, tsx: typescript,
-      python: python, py: python,
-      java: java, c_cpp: cpp, c: cpp, cpp: cpp, cc: cpp, cxx: cpp, h: cpp, hpp: cpp,
-      csharp: csharp, cs: csharp,
-      go: go, golang: go,
-      rust: rust, rs: rust,
-      ruby: ruby, rb: ruby,
-      php: php,
-      swift: swift,
-      kotlin: kotlin, kt: kotlin,
-      dart: dart,
-      css: css, scss: scss, less: less,
-      json: json, json5: json,
-      yaml: yaml, yml: yaml,
-      markdown: markdown, md: markdown,
-      sql: sql, toml: toml, ini: ini,
-      sh: bash, bash: bash, shell: bash, zsh: bash,
-      lua: lua, perl: perl, powershell: powershell, r: rlang,
-      graphql: graphql, graphqlschema: graphql,
-      protobuf: protobuf,
-      twig: twig, verilog: verilog, vhdl: vhdl, zig: zig,
-      dockerfile: dockerfile, makefile: makefile, nginx: nginx,
-    };
-    return map[m] ?? null;
+    const n = languageNameForMode(mode ?? 'text');
+    const m = (mode || '').toLowerCase();
+    if (n === 'plaintext' && m !== 'text' && m !== 'txt' && m !== 'plaintext' && m !== 'log') return null;
+    return langObjs[n] ?? coreLanguage(n) ?? coreLanguage('plaintext');
   }
 
   function formatDate(ms: number): string {
