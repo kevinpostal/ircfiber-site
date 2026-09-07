@@ -20,6 +20,9 @@
   vars:
     engine_image_ref: "{{ ircfiber_engine_image_name }}:prod"   # overridden by -e
     ircfiber_engine_image_full: "ircfiber-engine:deploy"
+    # Also a role default; restated because post_tasks run outside the role
+    # and a role default is in scope only inside the role's own tasks.
+    engine_container_name: "ircfiber-engine-{{ ircfiber_engine_id }}"
   roles:
     - role: registry_login
   pre_tasks:
