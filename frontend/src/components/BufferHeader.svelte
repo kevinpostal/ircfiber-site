@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable, initiateRejoin, appendMessage } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage } from '../stores/ircStore.svelte';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { parseIrcFormatting } from '../lib/ircFormatting';
@@ -204,11 +204,11 @@
           label: '',
         });
       } else {
-        // User clicked Reconnect — clear the indefinite disconnect guard
-        // so the sync's 'connected' state can update the UI again.
-        clearUserDisconnected(net.networkId);
-
-        net.connectionState = 'connecting';
+        // User clicked Reconnect — one optimistic transition: clears the
+        // indefinite disconnect guard so the sync's state can update the UI
+        // again, marks the request pending so a lagging snapshot can't undo
+        // it, and drops the previous cycle's failure copy.
+        beginConnectAttempt(net.networkId);
         setActiveBuffer(net.networkId, '_server');
 
         // Push a synthetic `phase=queued` event into the _server buffer so

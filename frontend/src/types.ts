@@ -25,8 +25,19 @@ export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; cate
 // `ConnectionStatus.svelte` banner (see plan.yaml:966-981). W3-rev1
 // added `connected_ready` (post-handshake, waiting for a focus buffer),
 // `quitting` (user-initiated QUIT), and `ip_retry` (DNS / IP-resolve
-// retry after a connection failure). The engine emits these values
-// directly; the frontend renders them through ConnectionStatusBannerKind.
+// retry after a connection failure).
+//
+// The engine emits FIVE connection states — `disconnected`, `connecting`,
+// `connected`, `disconnecting`, `waiting_to_retry` (the enum at
+// engine/engine/source/ircfiber/irc/connection.d:62-74, stringified into
+// `net.status` by manager.d:219 and shipped verbatim by the gateway,
+// site/backend/source/ircfiber/api/websocket.d:481).
+// `connectionStateFromEngineStatus()` in `stores/ircStore.svelte.ts` is the
+// ONLY translation point from those strings into this type; everything else
+// is set by live event handlers or by optimistic local transitions.
+// `queued`, `connected_joining`, `connected_ready` and `ip_retry` have no
+// engine producer today: they keep their (inert) banner branches so adding
+// an engine emitter later needs no frontend change.
 export type ConnectionState =
   | 'disconnected'
   | 'waiting_to_retry'   // countdown timer before reconnect

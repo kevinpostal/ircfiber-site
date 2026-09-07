@@ -24,7 +24,7 @@
   // fail-state backgrounds until that token is added to the palette.
   // ─────────────────────────────────────────────────────────────────────
 
-  import { getActiveNetwork, setActiveBuffer } from '../stores/ircStore.svelte';
+  import { getActiveNetwork, setActiveBuffer, beginConnectAttempt } from '../stores/ircStore.svelte';
   import { sendRaw, requestSync } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork, disconnectNetwork } from '../stores/api';
   import { isFiberServer } from '../lib/fiberServer';
@@ -83,8 +83,8 @@
   // ── Headline text ────────────────────────────────────────────────
   //
   // Mirrors IRCCloud's `ConnectionStatusView.renderText`. The branches
-  // are mutually exclusive — we evaluate the rich fail-info first, then
-  // the live state, then fall through to a generic disconnect line.
+  // are mutually exclusive — we evaluate the live state first, then the
+  // rich fail-info, then fall through to a generic disconnect line.
   // W3-rev1 extended BannerKind to cover the full 11-state matrix lifted
   // from irccloud-webpack-study/app/src/view/connectionstatusview.js:64-123.
   type BannerKind =
@@ -124,6 +124,27 @@
       const hasSchedule = !!rs && (rs.nextRetryAtMs ?? 0) > 0;
       return hasSchedule ? 'retry' : 'retry-giveup';
     }
+    if (isQueued) return 'queued';
+    if (isJoining) return 'connected-joining';
+    if (isReadyWaiting) return 'connected-ready';
+    if (isQuitting) return 'quitting';
+    // Above `failInfo` on purpose: this branch reads `failInfo.ip`/`.reason`
+    // itself to render the "retrying with a new IP" copy.
+    if (isIpRetry) return 'ip-retry';
+    if (isConnecting) return 'connecting';
+    if (activeNetwork.connected) return 'connected';
+    // `failInfo` is HISTORY — the engine sets it on a disconnect and only
+    // clears it on the next success/give-up (emitZeroRetryStatus,
+    // connection.d:4261), never at the start of a new attempt
+    // (connection.d:4475). Testing it above the live state is what made the
+    // bar print "Disconnected: <old reason>" for the whole TCP+TLS+
+    // registration window, and again through its own hide animation (app.css
+    // animates max-height 200ms / opacity 150ms on `.connectionstatuscell`,
+    // so the content stays mounted while the strip collapses). A live
+    // `connecting`/`connected` state therefore always wins; the scheduled
+    // retry above wins too, because a retry outranks the failure that caused
+    // it. Measured pre-fix: store said connected at +2573ms, the bar still
+    // read "Disconnected:" until +2761ms.
     if (activeNetwork.failInfo) {
       const t = activeNetwork.failInfo.type;
       if (t === FAIL_TYPES.KILLED) return 'fail-killed';
@@ -132,22 +153,6 @@
       if (t === FAIL_TYPES.CONNECTING_FAILED) return 'fail-connecting';
       if (t === FAIL_TYPES.SOCKET_CLOSED) return 'fail-socket';
     }
-    if (isQueued) return 'queued';
-    if (isJoining) return 'connected-joining';
-    if (isReadyWaiting) return 'connected-ready';
-    if (isQuitting) return 'quitting';
-    if (isIpRetry) return 'ip-retry';
-    if (isConnecting) return 'connecting';
-    // A live connection is NOT a disconnect. Falling through to
-    // 'disconnected' here is what made the bar flash "Disconnected" for
-    // the ~200ms of its own hide animation (app.css animates max-height
-    // 200ms / opacity 150ms on `.connectionstatuscell`): the content stays
-    // mounted while the strip collapses, so the headline re-derived from
-    // `connected: true, connectionState: 'connected'` — a state no branch
-    // above claims — and printed the default disconnect line on the way
-    // out. Measured in a browser: store said connected at +2573ms, the bar
-    // still read "Disconnected:" until +2761ms.
-    if (activeNetwork.connected) return 'connected';
     return 'disconnected';
   });
 
@@ -331,7 +336,7 @@
     if (!activeNetwork) return;
     const net = activeNetwork;
 
-    net.connectionState = 'connecting';
+    beginConnectAttempt(net.networkId);
     setActiveBuffer(net.networkId, '_server');
     try {
       await onReconnect(net.networkId);

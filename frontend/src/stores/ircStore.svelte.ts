@@ -124,6 +124,28 @@ export function isUserDisconnected(networkId: string): boolean {
   return userDisconnectedAt.has(networkId);
 }
 
+/** Networks for which we asked the engine to connect and whose request the
+ *  engine has not acknowledged in a snapshot yet. Mirrors `userDisconnectedAt`
+ *  in shape; NOT persisted — a reload has no in-flight request, so the sync
+ *  is authoritative from boot. */
+const connectRequestedAt: Map<string, number> = new Map();
+/** Upper bound on the suppression window: one REST round-trip plus one full
+ *  engine snapshot cycle (10s, engine/engine/source/ircfiber/engine/state.d:37)
+ *  with margin. After it, a sync-reported disconnect lands normally. */
+const CONNECT_REQUEST_GRACE_MS = 20_000;
+export function isConnectRequested(networkId: string): boolean {
+  const t = connectRequestedAt.get(networkId);
+  if (t === undefined) return false;
+  if (Date.now() - t > CONNECT_REQUEST_GRACE_MS) {
+    connectRequestedAt.delete(networkId);
+    return false;
+  }
+  return true;
+}
+export function clearConnectRequested(networkId: string): void {
+  connectRequestedAt.delete(networkId);
+}
+
 export const ircState = $state({
   networks: [] as Network[],
   activeBuffer: { networkId: null, bufferName: null } as ActiveBuffer,
@@ -722,6 +744,7 @@ export function initiateRejoin(
   sendRaw(networkId, 'JOIN ' + normalized);
 
   if (opts.allowReconnect && !net.connected) {
+    beginConnectAttempt(networkId);
     reconnectNetwork(networkId).catch(() => {});
   }
 }
@@ -2286,6 +2309,26 @@ function pruneMissingNetworks(incoming: SyncNetwork[]): void {
   ircState.networks.splice(0, ircState.networks.length, ...kept);
 }
 
+/** Engine `ConnectionState` (stringified in
+ *  engine/engine/source/ircfiber/irc/manager.d:219 from the enum at
+ *  engine/engine/source/ircfiber/irc/connection.d:62-74) → frontend
+ *  `ConnectionState`. `connected` is the engine's separate boolean and only
+ *  breaks the tie for unknown/absent status strings (the gateway ships
+ *  `"unknown"` when a network has no snapshot — websocket.d:573).
+ *  `disconnecting` is the engine's QUIT-in-flight state, which the banner
+ *  renders as `quitting`. */
+function connectionStateFromEngineStatus(status: string, connected: boolean): ConnectionState {
+  switch (status) {
+    case 'connecting':       return 'connecting';
+    case 'waiting_to_retry': return 'waiting_to_retry';
+    case 'disconnecting':    return 'quitting';
+    // Engine says connected but the boolean hasn't caught up: treat as a
+    // transient connect, never as a disconnect.
+    case 'connected':        return connected ? 'connected' : 'connecting';
+    default:                 return connected ? 'connected' : 'disconnected';
+  }
+}
+
 /**
  * Applies the authoritative network list from a WS `sync`.
  *
@@ -2315,10 +2358,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
     if (existing) {
       // Map backend status to frontend ConnectionState so the UI reflects
       // the actual engine state (e.g. "connecting" right after restart).
-      const connectionState: ConnectionState =
-        net.status === 'connecting' ? 'connecting' :
-        net.connected             ? 'connected'   :
-                                     'disconnected';
+      const connectionState = connectionStateFromEngineStatus(net.status, net.connected);
 
       // Clear any stale disconnect reason from a previous session/event.
       // The sync is the authoritative snapshot from the server — if the
@@ -2336,31 +2376,27 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
       // returns (post-MOTD).  During this window the sync would downgrade
       // the live state back to disconnected, causing the red "Click to
       // reconnect" banner to appear while MOTD lines are still arriving.
-      //
-      // Similarly, the periodic snapshotter (10s interval) may still report
-      // status=connecting after the engine has already connected, which
-      // would overwrite the live connected state back to "Connecting...".
-      //
-      // Only adopt the sync's connection values if they're genuinely new
-      // (not just slower) — i.e. the sync says disconnected/connecting
-      // but the live state already confirms connected.
       const liveState = existing.connectionState;
       const isLiveConnected = existing.connected;
-      const syncIsNew =
-        connectionState === 'disconnected'
-          ? isLiveConnected
-            // Live says connected but sync says disconnected — this could
-            // be the race window.  Only downgrade if the sync has come
-            // back multiple times (the engine gives up), or if the live
-            // state has had time to settle.  For now, trust the live event-
-            // driven state over the periodic snapshot during handshake.
-            ? false
-            : liveState !== connectionState
-          : connectionState === 'connecting' && isLiveConnected
-            // Live says connected but sync says connecting — stale
-            // snapshot from before the engine finished registration.
-            ? false
-            : liveState !== connectionState;
+      // Any snapshot that no longer says `disconnected` is the engine
+      // acknowledging our connect request; from there on the sync is
+      // authoritative.
+      if (connectionState !== 'disconnected') clearConnectRequested(existing.networkId);
+      // A snapshot taken before the engine processed our reconnect must not
+      // overwrite the optimistic `connecting` state (every reconnect path
+      // fires requestSync() immediately). Bounded by
+      // CONNECT_REQUEST_GRACE_MS; a real failure arrives as a
+      // DISCONNECT/DISCONNECTED event, which clears the mark.
+      const staleDisconnect = connectionState === 'disconnected'
+        && liveState === 'connecting'
+        && isConnectRequested(existing.networkId);
+      // A snapshot can lag the live event stream by up to the engine's 10s
+      // snapshotter cadence (engine/engine/source/ircfiber/engine/state.d:37),
+      // so a non-connected sync state never overrides a live `connected`.
+      // Everything else is adopted when it differs from the live state.
+      const syncIsNew = isLiveConnected && connectionState !== 'connected'
+        ? false
+        : liveState !== connectionState;
 
       // Always sync metadata fields — these don't race with live events.
       existing.name = net.name;
@@ -2430,7 +2466,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
       // Connection state: only overwrite from sync when it represents
       // genuinely new info, not when the sync is just slower than live
       // IRC events (the race window described above).
-        if (syncIsNew) {
+        if (syncIsNew && !staleDisconnect) {
           // If the user clicked Disconnect, suppress sync overwrites to
           // 'connected' INDEFINITELY — until the user explicitly clicks
           // Reconnect (which calls clearUserDisconnected).  The engine
@@ -2447,17 +2483,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
             existing.connected = net.connected;
             existing.connectionState = connectionState;
           }
-          } else if (connectionState === 'connecting' && !isLiveConnected
-              && !userDisconnectedAt.has(existing.networkId)) {
-        // The sync confirms connection is in progress — this is new info
-        // that live events haven't provided yet (001 hasn't fired, or the
-        // engine is between attempts in its backoff loop). Show it so the
-        // user gets a "Disconnect" button to cancel the pending reconnect.
-        // If the user has explicitly disconnected (userDisconnectedAt set),
-        // suppress this — they don't want to see a "Connecting" pill and
-        // the synthetic attempt in ServerLog would create ghost phase rows.
-        existing.connectionState = connectionState;
-      }
+        }
       // Don't blindly overwrite currentNick from sync — the IRC NICK event
       // handler is the authoritative source for nick changes. Sync snapshots
       // are taken on a timer and may contain the old nick for a few seconds
@@ -3094,10 +3120,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
           }
         }
       }
-      net.connectionState =
-        net.status === 'connecting' ? 'connecting' :
-        net.connected               ? 'connected'   :
-                                      'disconnected';
+      net.connectionState = connectionStateFromEngineStatus(net.status, net.connected);
 
       // IRCCloud-style: pull message history out of the buffer objects
       // and into ircState.messages (avoids duplicating + eliminates the
@@ -3196,14 +3219,37 @@ export function handleConnect(cmd: string, networkId: string, text?: string): vo
     net.connected = true;
     net.connectionState = 'connected';
     net.disconnectReason = '';
+    clearConnectRequested(networkId);
+    // Same dual-clear the engine's zero CONNECTION_RETRY_STATUS triggers
+    // (emitZeroRetryStatus, connection.d:4261) — applied here so the banner
+    // never depends on that event's arrival order relative to 001.
+    applyRetryStatus(networkId, null);
   } else if (cmd === 'DISCONNECT' || cmd === 'DISCONNECTED') {
     net.connected = false;
     net.connectionState = 'disconnected';
     if (text) net.disconnectReason = text;
+    // The engine confirmed a real drop: stop suppressing sync downgrades.
+    clearConnectRequested(networkId);
   }
   // Any connect/disconnect event is fresh activity for the network —
   // update lastSeenAt so the stale indicator clears promptly.
   markNetworkSeen(networkId);
+}
+
+/** Optimistic local transition for a user- or UI-initiated connect request:
+ *  clears the indefinite user-disconnect guard, marks the request pending so
+ *  a stale sync can't undo it, and drops the previous cycle's failure copy so
+ *  the banner reads "Connecting to <host>…" instead of the old disconnect
+ *  reason. `connected` stays false — only 001 flips it. */
+export function beginConnectAttempt(networkId: string): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  clearUserDisconnected(networkId);
+  connectRequestedAt.set(networkId, Date.now());
+  net.connected = false;
+  net.connectionState = 'connecting';
+  net.disconnectReason = '';
+  applyRetryStatus(networkId, null);
 }
 
 /**

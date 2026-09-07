@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, clearUserDisconnected, getTempUnavailable, initiateRejoin, appendMessage } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage } from '../stores/ircStore.svelte';
   import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
@@ -548,8 +548,7 @@
 
   function ensureConnected(): void {
     if (!activeNetwork || activeNetwork.connected) return;
-    activeNetwork.connectionState = 'connecting';
-    activeNetwork.connected = true;
+    beginConnectAttempt(activeNetwork.networkId);
     setActiveBuffer(activeNetwork.networkId, '_server');
     updateRoute(activeNetwork.networkId, '_server');
     reconnectNetwork(activeNetwork.networkId);

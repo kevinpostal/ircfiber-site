@@ -380,9 +380,12 @@ describe('InputArea', () => {
 		expect(testBuf?.type).toBe('channel');
 		expect(testBuf?.isJoined).toBe(false);
 
-		// Verify connection state updated instantly
+		// Optimistic transition only: the store shows `connecting` and leaves
+		// `connected` false — claiming connected here used to hide the banner,
+		// show a bogus uptime and block every later sync correction until a
+		// DISCONNECT event arrived. Only 001 flips `connected`.
 		const updatedNet = ircState.networks.find(n => n.networkId === 'net1');
-		expect(updatedNet?.connected).toBe(true);
+		expect(updatedNet?.connected).toBe(false);
 		expect(updatedNet?.connectionState).toBe('connecting');
 
 		// The router percent-encodes the full buffer name (`#test` → `%23test`)

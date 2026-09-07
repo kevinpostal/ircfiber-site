@@ -1037,18 +1037,11 @@ let showEditNetwork: boolean = $state(false);
   // see docs/PREF_VERSION.md for the full design.
   let lastServerPrefVersion = $state(0);
 
-  // IRCCloud-style: handle networks message — populates the sidebar immediately
-  // with real network names before the full state dump arrives
-  function handleNetworks(obj: Record<string, unknown>): void {
-    performance.mark('networks');
-    const items = (obj.items || []) as Array<{ networkId: string; name: string }>;
-    if (items.length === 0) return;
-
-    // Pre-populate ircState.networks with skeleton Network objects so the
-    // sidebar renders network names immediately.  The subsequent sync
-    // message fills in buffers, users, topics, and connection status via
-    // Object.assign (matching on networkId).
-    const skeletons = items.map(item => ({
+  // Skeleton `Network` for a network this tab has never seen: renders the
+  // sidebar name immediately, with the following sync filling in buffers,
+  // users, topics and connection status (matched on networkId).
+  function makeSkeletonNetwork(item: { networkId: string; name: string }): Network {
+    return {
       networkId: item.networkId,
       name: item.name,
       host: '',
@@ -1084,8 +1077,32 @@ let showEditNetwork: boolean = $state(false);
       lagMs: null,
       connectedAtMs: null,
       tlsInfo: null,
-    }));
-    ircState.networks = skeletons as unknown as Network[];
+    } as unknown as Network;
+  }
+
+  // IRCCloud-style: handle networks message — populates the sidebar immediately
+  // with real network names before the full state dump arrives
+  function handleNetworks(obj: Record<string, unknown>): void {
+    performance.mark('networks');
+    const items = (obj.items || []) as Array<{ networkId: string; name: string }>;
+    if (items.length === 0) return;
+
+    // The gateway re-sends `networks` on EVERY WS boot, including mid-session
+    // socket reconnects (site/backend/source/ircfiber/api/websocket.d:241),
+    // so a skeleton may only ever INTRODUCE a network — replacing the array
+    // would discard live `connected`/`failInfo`/`retryStatus` and the buffer
+    // list of every already-known network for one or more frames. Removal
+    // stays owned by the sync's prune path (pruneMissingNetworks).
+    for (const item of items) {
+      const existing = ircState.networks.find(n => n.networkId === item.networkId);
+      if (existing) {
+        // A live network keeps its connection state, buffers and messages;
+        // the sync that follows this message is what updates them.
+        existing.name = item.name;
+        continue;
+      }
+      ircState.networks.push(makeSkeletonNetwork(item));
+    }
 
     // Cache the network names for the next page load
     writeCachedNetworks(ircState.networks);

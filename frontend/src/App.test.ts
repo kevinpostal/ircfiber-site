@@ -828,6 +828,57 @@ describe('App', () => {
     });
   });
 
+  describe('networks message (WS boot) is non-destructive', () => {
+    // The gateway re-sends `networks` on every WS boot, including mid-session
+    // socket reconnects (site/backend/source/ircfiber/api/websocket.d:241).
+    // Replacing the array there discarded live connection state and buffers
+    // for one or more frames — the skeleton may only introduce a network.
+    async function openSocket(): Promise<(d: unknown) => void> {
+      render(App);
+      const wsMock = connectWebSocket as unknown as { mock: { calls: Array<Array<(d: unknown) => void>> } };
+      await vi.waitFor(() => { expect(wsMock.mock.calls.length).toBeGreaterThan(0); });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+      return onMessage!;
+    }
+
+    it('keeps a live network connected and keeps its buffers', async () => {
+      const onMessage = await openSocket();
+      ircState.networks.length = 0;
+      const net = createNetwork({
+        networkId: 'wsboot1',
+        name: 'Libera',
+        connected: true,
+        connectionState: 'connected',
+      });
+      net.buffers.push(createBuffer({ name: '#general' }));
+      ircState.networks.push(net);
+      flushSync();
+
+      onMessage({ type: 'networks', items: [{ networkId: 'wsboot1', name: 'Libera' }] });
+      flushSync();
+
+      const live = ircState.networks.find(n => n.networkId === 'wsboot1');
+      expect(live?.connected).toBe(true);
+      expect(live?.connectionState).toBe('connected');
+      expect(live?.buffers.some(b => b.name === '#general')).toBe(true);
+    });
+
+    it('introduces an unknown network as a skeleton', async () => {
+      const onMessage = await openSocket();
+      ircState.networks.length = 0;
+      flushSync();
+
+      onMessage({ type: 'networks', items: [{ networkId: 'wsboot2', name: 'Fresh' }] });
+      flushSync();
+
+      const live = ircState.networks.find(n => n.networkId === 'wsboot2');
+      expect(live?.name).toBe('Fresh');
+      expect(live?.connected).toBe(false);
+      expect(live?.buffers.some(b => b.name === '_server')).toBe(true);
+    });
+  });
+
   describe('heartbeat send (IRCCloud sendState)', () => {
     // Every 2 s after the socket opens, dirty `seenEids` (buffers whose
     // lastSeen changed since the previous send) go out as

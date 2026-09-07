@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ircState, setActiveBuffer, getActiveNetwork, sortBuffers } from '../stores/ircStore.svelte';
+  import { ircState, setActiveBuffer, getActiveNetwork, sortBuffers, beginConnectAttempt } from '../stores/ircStore.svelte';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { ensureChannelPrefix } from '../lib/utils';
@@ -35,8 +35,7 @@
     const chan = ensureChannelPrefix(channel);
     const net = ircState.networks.find(n => n.networkId === networkId);
     if (net && !net.connected) {
-      net.connectionState = 'connecting';
-      net.connected = true;
+      beginConnectAttempt(networkId);
       setActiveBuffer(networkId, '_server');
       updateRoute(networkId, '_server');
       reconnectNetwork(networkId);

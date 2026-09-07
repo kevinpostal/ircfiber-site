@@ -253,6 +253,44 @@ describe('ConnectionStatus — banner states (W3-T01)', () => {
     expect(cell?.textContent ?? '').not.toMatch(/Check your host/i);
     expect(document.querySelector('.connectionStatus--disconnected')).toBeNull();
   });
+
+  /**
+   * `failInfo` is history: the engine sets it on a disconnect and clears it
+   * only on the next success/give-up (emitZeroRetryStatus), never when a new
+   * attempt starts. Testing it above the live state is what printed
+   * "Disconnected: <old reason>" for the whole TCP+TLS+registration window.
+   */
+  it('renders the connect-in-progress headline while a stale failInfo is still set', async () => {
+    pushNetwork({
+      connected: false,
+      connectionState: 'connecting',
+      isAway: false,
+      host: 'irc.example.com',
+      failInfo: { type: 'socket_closed', reason: 'econnreset' },
+    });
+    render(ConnectionStatus);
+
+    // `failInfo` present + live `connecting` → IRCCloud's "Reconnecting to"
+    // wording (isReconnectingLabel), never the disconnect line.
+    await expect.element(page.getByText(/Reconnecting to irc\.example\.com/)).toBeInTheDocument();
+    const cell = document.querySelector('.connectionstatuscell');
+    expect(cell?.textContent ?? '').not.toMatch(/Disconnect/i);
+  });
+
+  it('renders no disconnect copy while connected with a stale failInfo', async () => {
+    pushNetwork({
+      connected: true,
+      connectionState: 'connected',
+      isAway: false,
+      host: 'irc.example.com',
+      failInfo: { type: 'socket_closed', reason: 'econnreset' },
+    });
+    render(ConnectionStatus);
+
+    const cell = document.querySelector('.connectionstatuscell');
+    expect(cell?.classList.contains('show')).toBeFalsy();
+    expect(cell?.textContent ?? '').not.toMatch(/Disconnect/i);
+  });
 });
 
 describe('ConnectionStatus — transient state coverage (W3-rev1)', () => {

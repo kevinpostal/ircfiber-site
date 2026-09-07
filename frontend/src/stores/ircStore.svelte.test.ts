@@ -49,6 +49,7 @@ import {
 	applyChannelListChunk,
 	renameQueryBuffer,
 	findBufferByName,
+	beginConnectAttempt,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
@@ -879,6 +880,114 @@ describe('handleConnect', () => {
 		expect(updated?.connected).toBe(true);
 		expect(updated?.connectionState).toBe('connected');
 		expect(updated?.disconnectReason).toBe('');
+	});
+});
+
+describe('engine status mapping + in-flight connect guard', () => {
+	const live = (id: string) => ircState.networks.find((n) => n.networkId === id)!;
+
+	beforeEach(() => {
+		clearUserDisconnected('n1');
+	});
+
+	function pushLive(connectionState: Network['connectionState'], connected: boolean): void {
+		ircState.networks.push(createNetwork({ networkId: 'n1', connected, connectionState }));
+	}
+
+	function sync(status: string, connected: boolean): void {
+		const incoming = createNetwork({ networkId: 'n1' });
+		incoming.connected = connected;
+		incoming.status = status;
+		updateNetworkFromSync([incoming as unknown as SyncNetwork]);
+		flushSync();
+	}
+
+	// The engine's ConnectionState enum has five values; the frontend used to
+	// collapse everything that wasn't `connecting`/`connected` into
+	// `disconnected`, which made the retry countdown banner unreachable.
+	it('maps sync status=waiting_to_retry to connectionState waiting_to_retry', () => {
+		pushLive('connecting', false);
+		sync('waiting_to_retry', false);
+		expect(live('n1').connectionState).toBe('waiting_to_retry');
+	});
+
+	it('maps sync status=disconnecting to connectionState quitting', () => {
+		pushLive('connecting', false);
+		sync('disconnecting', false);
+		expect(live('n1').connectionState).toBe('quitting');
+	});
+
+	// The snapshotter lags the live event stream by up to 10s, so no
+	// non-connected sync state may downgrade a network 001 already confirmed.
+	it('a non-connected sync never downgrades a live-connected network', () => {
+		pushLive('connected', true);
+		sync('disconnecting', false);
+		expect(live('n1').connectionState).toBe('connected');
+		sync('waiting_to_retry', false);
+		expect(live('n1').connectionState).toBe('connected');
+	});
+
+	it('maps sync status=connected without the boolean to connecting, never disconnected', () => {
+		pushLive('disconnected', false);
+		sync('connected', false);
+		expect(live('n1').connectionState).toBe('connecting');
+	});
+
+	it('a stale disconnected sync does not undo an in-flight connect request', () => {
+		pushLive('disconnected', false);
+		beginConnectAttempt('n1');
+		flushSync();
+		expect(live('n1').connectionState).toBe('connecting');
+
+		// Snapshot taken before the engine processed the connect request.
+		sync('disconnected', false);
+		expect(live('n1').connectionState).toBe('connecting');
+
+		handleConnect('001', 'n1');
+		flushSync();
+		expect(live('n1').connected).toBe(true);
+		expect(live('n1').failInfo ?? null).toBeNull();
+		expect(live('n1').retryStatus ?? null).toBeNull();
+	});
+
+	it('an engine-confirmed disconnect ends the suppression', () => {
+		pushLive('disconnected', false);
+		beginConnectAttempt('n1');
+		handleConnect('DISCONNECT', 'n1', 'ECONNRESET');
+		flushSync();
+
+		sync('disconnected', false);
+		expect(live('n1').connectionState).toBe('disconnected');
+		expect(live('n1').connected).toBe(false);
+	});
+
+	it('beginConnectAttempt never claims connected and drops the previous failure copy', () => {
+		pushLive('disconnected', false);
+		applyFail('n1', { type: 'socket_closed', reason: 'econnreset' } as FailInfo);
+		applyRetryStatus('n1', { attemptCount: 2, nextRetryAtMs: Date.now() + 5000, delayMs: 5000 });
+		markUserDisconnected('n1');
+		flushSync();
+
+		beginConnectAttempt('n1');
+		flushSync();
+
+		expect(live('n1').connected).toBe(false);
+		expect(live('n1').connectionState).toBe('connecting');
+		expect(live('n1').disconnectReason).toBe('');
+		expect(live('n1').failInfo ?? null).toBeNull();
+		expect(live('n1').retryStatus ?? null).toBeNull();
+		expect(isUserDisconnected('n1')).toBe(false);
+	});
+
+	it('handleConnect(001) clears the failure copy left by the previous cycle', () => {
+		pushLive('connecting', false);
+		applyFail('n1', { type: 'socket_closed', reason: 'econnreset' } as FailInfo);
+		flushSync();
+
+		handleConnect('001', 'n1');
+		flushSync();
+		expect(live('n1').failInfo ?? null).toBeNull();
+		expect(live('n1').connectionState).toBe('connected');
 	});
 });
 
