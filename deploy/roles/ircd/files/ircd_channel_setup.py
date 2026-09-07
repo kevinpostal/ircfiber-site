@@ -18,6 +18,14 @@ existing network — `permchanneldb` writes the live modes back to
 config-defined <permchannels> tags, so the saved copy always wins. The
 mode lock changes the live channel, which the db then persists.
 
+A channel marked {"bot": true} additionally gets the network's own
+BotServ bot (IRCD_SERVICES_BOT, "FiberServ" in the role defaults) sitting
+in it with fantasy commands on — the same ChanServ machinery reached as
+`op nick in the channel instead of /msg ChanServ OP #chan nick. BotServ's
+`defaults = "greet fantasy"` only applies to channels at registration
+time, so fantasy is asserted here for the staff channels, which were
+registered before any bot existed.
+
 Environment:
   IRCD_HOST            host to connect to (default 127.0.0.1)
   IRCD_PORT            port (default 6697)
@@ -38,6 +46,9 @@ Environment:
                        "hop":[..],"vop":[..]} of NickServ accounts
   IRCD_CHANNEL_AUTOVOICE  JSON ["v:account:*", ...] autoop (+w) entries to
                        keep on the channel
+  IRCD_SERVICES_BOT    JSON {"nick","ident","host","realname"} for the
+                       BotServ bot assigned to channels marked
+                       {"bot": true}; {} or unset creates no bot
   IRCD_TIMEOUT         seconds to allow for the whole run (default 180)
 
 Exit status is 0 only when every channel reached the desired state.
@@ -344,18 +355,30 @@ def set_display(session: IrcSession, display: str) -> None:
         raise IrcError(f"NickServ SET DISPLAY {display} failed: {reply}")
 
 
+def info_fields(replies: list[str]) -> dict[str, str]:
+    """An Anope `INFO` reply as {lower-cased label: value}.
+
+    Every service prints INFO through the same InfoFormatter — one
+    `Label: value` NOTICE per field — so this reads ChanServ's Founder /
+    Mode lock / Options and BotServ's Bot nick / Options alike.
+    """
+    out: dict[str, str] = {}
+    for line in replies:
+        text = clean(line)
+        if ":" not in text:
+            continue
+        key, _, value = text.partition(":")
+        out[key.strip().lower()] = value.strip()
+    return out
+
+
 def chan_info(session: IrcSession, channel: str) -> dict[str, str]:
     """Parse `ChanServ INFO` into {founder, mode lock, options, ...}."""
-    out: dict[str, str] = {}
     replies = service_reply(session, "ChanServ", f"INFO {channel}", 4.0)
     if matches(replies, "isn't registered", "is not registered"):
-        return out
+        return {}
+    out = info_fields(replies)
     out["_registered"] = "yes"
-    for line in replies:
-        if ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        out[key.strip().lower()] = value.strip()
     return out
 
 
@@ -488,8 +511,103 @@ def sync_autovoice(session: IrcSession, channel: str,
     return changed
 
 
+def ensure_services_bot(session: IrcSession, bot: dict) -> bool:
+    """Create the network's BotServ bot, or converge its mask. True when
+    changed.
+
+    `BOT ADD` is the only way a bot comes into existence — loading the
+    botserv module creates none — and Anope Q-lines the nick as it does
+    so. When the bot is already there, `BOT CHANGE` to the *same* nick
+    lets Anope do the comparison: it answers "the old information is the
+    same" when nothing moved, so an ident/host/realname edit converges
+    without this script having to parse (and translate) `BOT INFO`.
+    Keeping the nick keeps the Q-line and every channel assignment.
+
+    Refuses rather than works around a nick that a NickServ account or a
+    live user already holds: Anope answers "already registered" / "is
+    currently in use", and both mean the deploy's idea of the bot's
+    identity is wrong.
+    """
+    nick = bot["nick"]
+    ident = bot.get("ident") or "services"
+    host = bot.get("host") or "services.host"
+    real = bot.get("realname") or nick
+    reply = service_reply(session, "BotServ",
+                          f"BOT ADD {nick} {ident} {host} {real}", 5.0)
+    if matches(reply, "added to the bot list"):
+        log(f"BotServ: created {nick}!{ident}@{host} ({real})")
+        return True
+    if not matches(reply, "already exists"):
+        raise IrcError(f"BotServ BOT ADD {nick} failed: {reply}")
+    reply = service_reply(
+        session, "BotServ",
+        f"BOT CHANGE {nick} {nick} {ident} {host} {real}", 5.0)
+    if matches(reply, "same as the new information"):
+        return False
+    if not matches(reply, "has been changed to"):
+        raise IrcError(f"BotServ BOT CHANGE {nick} failed: {reply}")
+    log(f"BotServ: {nick} -> {nick}!{ident}@{host} ({real})")
+    return True
+
+
+def sync_services_bot(session: IrcSession, channel: str, spec: dict,
+                      bot: dict) -> bool:
+    """Assign or unassign the services bot on one channel. True when
+    changed.
+
+    `bot: true` puts it in the channel and turns fantasy commands on;
+    dropping the flag takes it back out. Unassign only ever removes *our*
+    bot — one somebody assigned by hand is left alone, the same additive
+    rule the access list and the autovoice list follow.
+
+    Fantasy is set explicitly instead of relying on the botserv module's
+    `defaults = "greet fantasy"`: those apply when a channel is
+    registered, and the staff channels predate the bot. Note it still
+    only works for users with channel access (Anope requires the
+    FANTASIA privilege), so `+w v:account:*` voice alone does not grant
+    it — the founder and the access list get it, passers-by do not.
+    """
+    if not bot:
+        return False
+    nick = bot["nick"]
+    info = info_fields(service_reply(session, "BotServ",
+                                     f"INFO {channel}", 4.0))
+    # "not assigned yet" when the channel has no bot.
+    assigned = info.get("bot nick", "")
+
+    if not spec.get("bot"):
+        if assigned.lower() != nick.lower():
+            return False
+        reply = service_reply(session, "BotServ", f"UNASSIGN {channel}", 4.0)
+        if not matches(reply, "no bot assigned"):
+            raise IrcError(f"BotServ UNASSIGN {channel} failed: {reply}")
+        log(f"{channel}: unassigned {nick}")
+        return True
+
+    changed = False
+    if assigned.lower() != nick.lower():
+        reply = service_reply(session, "BotServ",
+                              f"ASSIGN {channel} {nick}", 5.0)
+        if not matches(reply, "has been assigned to"):
+            raise IrcError(
+                f"BotServ ASSIGN {channel} {nick} failed: {reply}")
+        log(f"{channel}: assigned {nick}")
+        changed = True
+
+    if "fantasy" not in info.get("options", "").lower():
+        reply = service_reply(session, "BotServ",
+                              f"SET FANTASY {channel} ON", 4.0)
+        if not matches(reply, "fantasy mode is now on"):
+            raise IrcError(
+                f"BotServ SET FANTASY {channel} ON failed: {reply}")
+        log(f"{channel}: fantasy commands ON")
+        changed = True
+    return changed
+
+
 def setup_channel(session: IrcSession, spec: dict, account: str,
-                  display: str, access: dict, autovoice: list) -> bool:
+                  display: str, access: dict, autovoice: list,
+                  bot: dict) -> bool:
     """Bring one channel to the desired state. Returns True when changed."""
     channel = spec["channel"]
     changed = False
@@ -629,6 +747,11 @@ def setup_channel(session: IrcSession, spec: dict, account: str,
     if sync_autovoice(session, channel, autovoice):
         changed = True
 
+    # The services bot last, because ASSIGN is what makes it join: by the
+    # time it arrives the channel is fully configured.
+    if sync_services_bot(session, channel, spec, bot):
+        changed = True
+
     session.send(f"PART {channel} :setup complete")
     session.collect(0.5)
     return changed
@@ -650,6 +773,7 @@ def main() -> int:
     display = os.environ.get("IRCD_ACCOUNT_DISPLAY") or account
     access = json.loads(os.environ.get("IRCD_CHANNEL_ACCESS") or "{}")
     autovoice = json.loads(os.environ.get("IRCD_CHANNEL_AUTOVOICE") or "[]")
+    services_bot = json.loads(os.environ.get("IRCD_SERVICES_BOT") or "{}")
     deadline = time.monotonic() + float(os.environ.get("IRCD_TIMEOUT", "180"))
 
     session = IrcSession(host, port, use_tls, verify, sni, deadline)
@@ -676,9 +800,16 @@ def main() -> int:
         if group_and_display(session, account, display, password):
             changed = True
 
+        # One BOT ADD covers the whole run; the per-channel step only
+        # assigns it. Skipped entirely when no channel asks for a bot, so
+        # a host with ircd_services_bot: {} never creates one.
+        if services_bot and any(c.get("bot") for c in channels):
+            if ensure_services_bot(session, services_bot):
+                changed = True
+
         for spec in channels:
             if setup_channel(session, spec, account, display, access,
-                             autovoice):
+                             autovoice, services_bot):
                 changed = True
             else:
                 log(f"{spec['channel']}: already configured")

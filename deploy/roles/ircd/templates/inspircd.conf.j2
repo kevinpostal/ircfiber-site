@@ -207,6 +207,12 @@
 <badnick nick="RPGSERV" reason="Reserved for services">
 <badnick nick="SASLSERV" reason="Reserved for services">
 <badnick nick="STATSERV" reason="Reserved for services">
+{% if ircd_services_bot %}
+# The network's own BotServ bot (ircd_services_bot). Anope Q-lines this
+# nick itself when the bot is created; reserving it here too keeps it
+# unsquattable while services are down, same as the block above.
+<badnick nick="{{ ircd_services_bot.nick | upper }}" reason="Reserved for services">
+{% endif %}
 
 #-#-#-#-#-#-#-#-#-#-  MISCELLANEOUS CONFIGURATION  -#-#-#-#-#-#-#-#-#-#
 

@@ -198,12 +198,15 @@ ircd_tor_autojoin: ""
 # text ChanServ REGISTER stores. `history` switches on chat-history replay
 # (`+H <lines>:<age>`, InspIRCd's chanhistory module) and must stay within
 # the <chanhistory maxlines/maxduration> caps in modules.conf.j2.
+# `bot: true` also assigns the services bot (ircd_services_bot below) to
+# the channel, so channel staff get fantasy commands in it.
 ircd_permanent_channels:
   - channel: "#ircfiber"
     modes: "nt"
     history: "50:1w"
     description: "IRC Fiber"
     topic: "Welcome to IRC Fiber — https://ircfiber.com"
+    bot: true
   - channel: "#welcome"
     modes: "nt"
     history: "50:1w"
@@ -214,6 +217,7 @@ ircd_permanent_channels:
     history: "50:1w"
     description: "IRC Fiber support requests"
     topic: "IRC Fiber support — report problems at https://ircfiber.com/?/feedback · FiberSupport announces new reports here"
+    bot: true
 
 # ChanServ registration of the staff channels above (roles/ircd/files/
 # ircd_channel_setup.py, run over TLS on the loopback TLS port). Set false
@@ -274,6 +278,35 @@ ircd_services_root_display: "Zodiac"
 # entries nobody listed are left alone.
 ircd_channel_autovoice:
   - "v:account:*"
+
+# The network's own in-channel services bot, created and assigned by
+# ircd_channel_setup.py to every channel above marked `bot: true`.
+#
+# This is Anope BotServ: `BOT ADD` creates a pseudo-client and `ASSIGN`
+# parks it in a registered channel, where it fronts the same ChanServ
+# machinery through fantasy commands — `op nick, `topic ..., `kick nick
+# (the backtick prefix is set in the fantasy module block of
+# services.conf.j2) instead of /msg ChanServ OP #channel nick. ChanServ
+# stays ChanServ network-wide; this is only the branded face of it in the
+# channels that carry the brand. With botserv `minusers = 0` the bot holds
+# the channel open instead of flapping in and out when it empties.
+#
+# Fantasy commands need channel access, not just voice: Anope requires the
+# FANTASIA privilege, which the founder and ircd_channel_access hold and
+# the `+w v:account:*` autovoice does not grant. Ordinary members see the
+# bot and can talk to it, but cannot drive it.
+#
+# ident/host match the other services (nickserv.conf.j2 uses
+# services@services.host), so FiberServ reads as services in a WHOIS
+# rather than as a user-run bot. Anope Q-lines the nick when it creates
+# the bot; inspircd.conf.j2 also reserves it with <badnick> so the
+# reservation survives services being down. Set to {} to create no bot
+# (the `bot: true` flags then do nothing).
+ircd_services_bot:
+  nick: "FiberServ"
+  ident: "services"
+  host: "services.host"
+  realname: "IRC Fiber Channel Services"
 
 # Server fingerprinting: VERSION replies show this instead of "InspIRCd-4",
 # and netsplit quits are hidden. Cosmetic; no protocol impact.

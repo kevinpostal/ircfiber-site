@@ -365,6 +365,22 @@ ansible-playbook playbooks/gateway.yml -t support-bot     # (re)creates ircfiber
 docker logs ircfiber-support-bot | grep 'joined #support' # then file a report at https://<domain>/?/feedback and watch #support
 ```
 
+### Channel services bot (`FiberServ` in `#ircfiber` and `#support`)
+
+`FiberServ` is an Anope **BotServ** pseudo-client, not a container: `roles/ircd/files/ircd_channel_setup.py` runs `BOT ADD` once and `ASSIGN` for every channel in `ircd_permanent_channels` marked `bot: true`, so the bot list is deploy state rather than something an oper typed once. It is defined by `ircd_services_bot` (`nick`, `ident`, `host`, `realname`) in `roles/ircd/defaults/main.yml`; `inspircd.conf.j2` also reserves the nick with `<badnick>` so it stays unsquattable while services are down (Anope Q-lines it too, but only while it is running).
+
+In the channel it holds `&` (botserv `botmodes = "ao"`) and `minusers = 0` keeps it there when the channel empties. It fronts the whole ChanServ command set through fantasy commands prefixed with a **backtick** (`` `help ``, `` `voice nick ``, `` `topic … ``, `` `kick nick `` — the prefix is the `fantasy` module block in `services.conf.j2`, chosen so it collides with neither `FiberSupport`'s `!` commands nor a sentence starting with `.`). ChanServ itself is unchanged and still answers `/msg ChanServ` network-wide; this is only the branded in-channel face of it.
+
+Two behaviours worth knowing before someone reports them as bugs: fantasy commands need channel *access* (Anope's `FANTASIA` privilege), so the founder and `ircd_channel_access` can drive the bot and a passer-by with `+v` from `ircd_channel_autovoice` cannot; and `` `op <nick> `` on a user with no access is undone immediately, because the staff channels run with ChanServ `SECUREOPS` on. Use `` `voice `` for regulars, or add the account to `ircd_channel_access`.
+
+```bash
+ansible-playbook playbooks/ircd.yml -t chanserv    # BOT ADD + ASSIGN + fantasy; idempotent, prints one line per change
+# expect on a first run:  BotServ: created FiberServ!services@services.host (IRC Fiber Channel Services)
+#                         #ircfiber: assigned FiberServ
+```
+
+Renaming the bot (`ircd_services_bot.nick`) is a `BOT ADD` of a new nick, not a rename — Anope keeps the old bot until it is deleted by hand (`/msg BotServ BOT DEL <oldnick>`), and the old `<badnick>` reservation disappears from the rendered config on the next `playbooks/ircd.yml` run. Changing only `ident`/`host`/`realname` converges in place via `BOT CHANGE`. Dropping `bot: true` from a channel unassigns the bot from it; `ircd_services_bot: {}` creates no bot at all.
+
 ## Tailscale ACL recommendation
 
 In the Tailscale admin console → ACLs, restrict the `ircfiber` tag to:

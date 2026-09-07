@@ -119,8 +119,11 @@ include { type = "file"; name = "chanserv.example.conf" }
  * are permanent anyway (+P), and stops the bot flapping in and out of a
  * quiet channel.
  *
- * Loading BotServ does not create any bots. bs_autoassign ships commented
- * out, so nothing happens until an oper runs `BOT ADD` and `ASSIGN`.
+ * Loading BotServ creates no bots, and bs_autoassign ships commented
+ * out. The role's channel setup script runs `BOT ADD` and `ASSIGN`
+ * instead (ircd_services_bot plus `bot: true` on a channel in
+ * ircd_permanent_channels), so the bot list is deploy state rather than
+ * something an oper typed once.
  */
 module
 {
