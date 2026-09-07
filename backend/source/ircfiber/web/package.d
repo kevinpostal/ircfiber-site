@@ -408,7 +408,22 @@ final class WebController {
         u.passwordHash = hashPassword(password);
         u.signupIp = getClientIp(req);
         u.createdAt = Clock.currTime;
-        repo.create(u);
+        try {
+            repo.create(u);
+        } catch (Exception e) {
+            // Backstop for the race the check above cannot see: two
+            // simultaneous signups for case-variants of one name both pass
+            // `findByUsernameCI`, and the loser's insert hits the
+            // `username_ci_unique` index (E11000). That is a taken username,
+            // not a server error.
+            if (e.msg.canFind("duplicate key")) {
+                authError = "That username is already taken. Please choose another.";
+                res.statusCode = 409;
+                res.render!("register.dt", authError)();
+                return;
+            }
+            throw e;
+        }
 
         // Provision the default IRC Fiber network (irc.ircfiber.com:6697).
         // Idempotent — existing-user migration runs the same helper on login.
@@ -433,7 +448,9 @@ final class WebController {
         persistSessionCookie(res, req.session.id);
         req.session.set("sessionUserId", u.id.toString());
         captureSessionMeta(req);
-        res.redirect("/");
+        // Land on the post-signup welcome page (sidebar + Fiber channel chips +
+        // add-another-network form). The SPA reads the ?/add-network=welcome route.
+        res.redirect("/?/add-network=welcome");
     }
 
     private void logout(HTTPServerRequest req, HTTPServerResponse res) {

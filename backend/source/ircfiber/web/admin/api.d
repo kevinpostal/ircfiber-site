@@ -809,7 +809,9 @@ package void apiUserCreate(HTTPServerRequest req, HTTPServerResponse res) {
             throw new Exception("All fields are required");
 
         auto repo = new UserRepository();
-        const existing = repo.findByUsername(username);
+        // Case-insensitive like public signup: `Zodiac` and `zodiac` are one
+        // IRC identity and must never become two website accounts.
+        const existing = repo.findByUsernameCI(username);
         if (existing.username.length > 0) throw new Exception("Username already taken");
 
         User u;

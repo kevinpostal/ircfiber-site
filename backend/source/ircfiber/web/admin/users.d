@@ -66,7 +66,9 @@ package void adminUserCreate(HTTPServerRequest req, HTTPServerResponse res) {
         return;
     }
 
-    const existing = repo.findByUsername(username);
+    // Case-insensitive like public signup: `Zodiac` and `zodiac` are one
+    // IRC identity and must never become two website accounts.
+    const existing = repo.findByUsernameCI(username);
     if (existing.username.length > 0) {
         message = "Username already taken";
         res.render!("admin/user_new.dt", message)();
