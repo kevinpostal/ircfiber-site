@@ -30,7 +30,7 @@
   import { utf8Length } from '../../lib/messageSplitter';
   import { type Recipe, defaultRecipe, parseRecipe, renderRecipe, fontsLabel } from '../lib/motdRecipe';
   import {
-    fetchMotd, createMotd, updateMotd, deleteMotd, rotateMotd, batchMotd, maxColumns,
+    fetchMotd, createMotd, updateMotd, deleteMotd, rotateMotd, batchMotd, pinMotd, unpinMotd, maxColumns,
     type MotdState, type MotdTemplate, type MotdTemplateInput,
   } from '../stores/motd';
 
@@ -221,6 +221,22 @@
     }
   }
 
+  /** Pin = served to everyone (engine on every connect + ircd file) until unpinned. */
+  async function pin(id: string | null) {
+    if (rotating) return;
+    rotating = true;
+    try {
+      data = id ? await pinMotd(id) : await unpinMotd();
+      toastSuccess(id ? 'Pinned — every connect gets this template until you unpin' : 'Unpinned — back to a random template per connect');
+    } catch (e) {
+      toastError(errMsg(e));
+    } finally {
+      rotating = false;
+    }
+  }
+  const pinnedId = $derived(data?.rotation.pinnedId ?? '');
+  const pinned = $derived(templates.find((t) => t.id === pinnedId) ?? null);
+
 
   function onBuilderRendered(rendered: string) {
     if (rendered !== body) { body = rendered; dirty = true; }
@@ -306,7 +322,9 @@
                     {#if t.recipe}
                       <StatusBadge label="built" tone="primary" size="sm" dot={false} />
                     {/if}
-                    {#if data.rotation.current?.id === t.id}
+                    {#if pinnedId === t.id}
+                      <StatusBadge label="pinned" tone="warn" size="sm" dot={false} />
+                    {:else if data.rotation.current?.id === t.id}
                       <StatusBadge label="on ircd" tone="info" size="sm" dot={false} />
                     {/if}
                     <StatusBadge label={t.enabled ? 'enabled' : 'off'} tone={t.enabled ? 'success' : 'muted'} size="sm" />
@@ -318,11 +336,15 @@
         {/if}
       </Card>
 
-      <Card title="IRCd rotation">
+      <Card title="Serving">
         <dl class="space-y-2 text-sm">
           <div class="flex justify-between gap-4">
-            <dt class="text-muted">Serving</dt>
-            <dd class="truncate font-mono">{data.rotation.current?.name ?? '— (file unchanged)'}</dd>
+            <dt class="text-muted">On connect</dt>
+            <dd class="truncate font-mono">{pinned ? `pinned: ${pinned.name}` : `random of ${enabledCount}`}</dd>
+          </div>
+          <div class="flex justify-between gap-4">
+            <dt class="text-muted">IRCd file</dt>
+            <dd class="truncate font-mono">{data.rotation.current?.name ?? '— (unchanged)'}</dd>
           </div>
           <div class="flex justify-between gap-4">
             <dt class="text-muted">Rotated</dt>
@@ -330,15 +352,20 @@
           </div>
           <div class="flex justify-between gap-4">
             <dt class="text-muted">Interval</dt>
-            <dd class="font-mono">{Math.round(data.rotation.intervalMs / 60000)} min + every save</dd>
+            <dd class="font-mono">{pinned ? 'paused while pinned' : `${Math.round(data.rotation.intervalMs / 60000)} min + every save`}</dd>
           </div>
           <div class="flex justify-between gap-4">
             <dt class="text-muted">File</dt>
             <dd class="truncate font-mono text-xs">{data.rotation.file}</dd>
           </div>
         </dl>
+        {#if pinned}
+          <button type="button" onclick={() => void pin(null)} disabled={rotating} class="mt-3 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40">
+            Unpin
+          </button>
+        {/if}
         <p class="mt-3 text-xs text-muted">
-          InspIRCd caches the MOTD per REHASH, so native clients see the rotated file; users on IRC Fiber get a fresh random pick on each connect regardless.
+          Users on IRC Fiber get the pinned template, or a random enabled one, on every connect. Native clients see the ircd file, which follows the pin or rotates hourly and on every save.
         </p>
       </Card>
     </div>
@@ -353,12 +380,12 @@
           {#if selected}
             <button
               type="button"
-              onclick={() => void rotate(selected.id)}
-              disabled={rotating || !selected.enabled || dirty}
+              onclick={() => void pin(pinnedId === selected.id ? null : selected.id)}
+              disabled={rotating || (!selected.enabled && pinnedId !== selected.id) || dirty}
               class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
-              title={dirty ? 'Save first' : 'Write this template into the ircd MOTD file and REHASH'}
+              title={dirty ? 'Save first' : pinnedId === selected.id ? 'Back to a random template per connect' : 'Serve this template to everyone (engine + ircd) until unpinned'}
             >
-              Serve on ircd
+              {pinnedId === selected.id ? 'Unpin' : 'Pin'}
             </button>
             <button
               type="button"

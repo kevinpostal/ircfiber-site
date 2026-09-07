@@ -52,7 +52,7 @@ import ircfiber.web.admin.emails : apiEmailsOverview, apiEmailsTest,
     apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
-    apiMotdDelete, apiMotdRotate, apiMotdBatch;
+    apiMotdDelete, apiMotdRotate, apiMotdBatch, apiMotdPin, apiMotdUnpin;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -161,6 +161,8 @@ final class AdminController {
         router.post("/api/admin/motd", &adminWrap!apiMotdCreateRoute);
         router.post("/api/admin/motd/rotate", &adminWrap!apiMotdRotateRoute);
         router.post("/api/admin/motd/batch", &adminWrap!apiMotdBatchRoute);
+        router.post("/api/admin/motd/unpin", &adminWrap!apiMotdUnpinRoute);
+        router.post("/api/admin/motd/:id/pin", &adminWrap!apiMotdPinRoute);
         router.post("/api/admin/motd/:id", &adminWrap!apiMotdUpdateRoute);
         router.post("/api/admin/motd/:id/delete", &adminWrap!apiMotdDeleteRoute);
 
@@ -288,6 +290,8 @@ private:
     void apiMotdDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdDelete(req, res, redis); }
     void apiMotdRotateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdRotate(req, res, redis); }
     void apiMotdBatchRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdBatch(req, res, redis); }
+    void apiMotdPinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdPin(req, res, redis); }
+    void apiMotdUnpinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdUnpin(req, res, redis); }
     // Needs redis: the inventory response also reports provisioning health
     // (outcome counters, orphan pending credentials, unprovisioned users).
     void apiNsAccountsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsAccounts(req, res, redis); }

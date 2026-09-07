@@ -25,6 +25,8 @@ export interface MotdRotation {
   current: { id: string; name: string; at: number } | null;
   file: string;
   intervalMs: number;
+  /** Template served to everyone until unpinned ("" = random per connect). */
+  pinnedId: string;
   /** Failure of the rotation that ran as part of the last write ("" = ok). */
   error: string;
 }
@@ -57,6 +59,8 @@ export const deleteMotd = (id: string) =>
   api.post<MotdState>(`/api/admin/motd/${encodeURIComponent(id)}/delete`, {});
 /** Replaces every template in `group` with `items` (one rotation, one REHASH). */
 export const batchMotd = (input: MotdBatchInput) => api.post<MotdState>('/api/admin/motd/batch', input);
+export const pinMotd = (id: string) => api.post<MotdState>(`/api/admin/motd/${encodeURIComponent(id)}/pin`, {});
+export const unpinMotd = () => api.post<MotdState>('/api/admin/motd/unpin', {});
 export const rotateMotd = (id?: string) => api.post<MotdState>('/api/admin/motd/rotate', id ? { id } : {});
 
 /** Longest visible line in cells (colour codes stripped; code points, so

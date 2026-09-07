@@ -112,11 +112,32 @@ private string rotateTo(RedisStorage redis, MotdTemplateRecord t) {
     return "";
 }
 
-/// Picks a random enabled template (never the one currently served when
-/// there is a choice) and rotates the ircd to it. Returns "" on success.
+/// Id of the admin-pinned template ("" when none).
+private string pinnedId(RedisStorage redis) {
+    try { return redis.getDb().get(RedisKeys.motdPinned()); } catch (Exception) { return ""; }
+}
+
+private void setPinned(RedisStorage redis, string id) {
+    try {
+        if (id.length) redis.getDb().set(RedisKeys.motdPinned(), id);
+        else redis.getDb().del(RedisKeys.motdPinned());
+    } catch (Exception e) {
+        logWarn("motd: failed to update pinned template: %s", e.msg);
+    }
+}
+
+/// Rotates the ircd to the pinned template when one is set and enabled,
+/// else to a random enabled template (never the one currently served when
+/// there is a choice). Returns "" on success.
 package string rotateRandom(RedisStorage redis, MotdTemplateRepository repo) {
     auto pool = repo.enabled();
     if (pool.length == 0) return "no enabled templates";
+    auto pin = pinnedId(redis);
+    if (pin.length) {
+        foreach (t; pool) if (t.id == pin) return rotateTo(redis, t);
+        // Pinned template deleted or disabled: the pin is void.
+        setPinned(redis, "");
+    }
     auto cur = currentJson(redis);
     string curId = cur.type == Json.Type.object ? jsonStr(cur, "id") : "";
     if (pool.length > 1 && curId.length) {
@@ -141,6 +162,7 @@ private Json listJson(RedisStorage redis, MotdTemplateRepository repo, string ro
     data["templates"] = arr;
     Json rot = Json.emptyObject;
     rot["current"] = currentJson(redis);
+    rot["pinnedId"] = Json(pinnedId(redis));
     rot["file"] = Json(motdFilePath());
     rot["intervalMs"] = Json(MOTD_ROTATION_MS);
     rot["error"] = Json(rotationError);
@@ -252,6 +274,26 @@ package void apiMotdBatch(HTTPServerRequest req, HTTPServerResponse res, RedisSt
         currentAdmin(req).username, group, removed, records.length);
     jsonOk(res, listJson(redis, repo, afterWrite(redis, repo)));
 }
+/// POST /api/admin/motd/:id/pin — serve this template to everyone: the
+/// engine picks it on every connect and the ircd file holds it until unpin.
+package void apiMotdPin(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto repo = new MotdTemplateRepository();
+    auto t = repo.getById(req.params["id"]);
+    if (t.id.length == 0) { jsonError(res, 404, "not found"); return; }
+    if (!t.enabled) { jsonError(res, 400, "enable the template before pinning it"); return; }
+    setPinned(redis, t.id);
+    logInfo("Admin %s pinned MOTD template '%s'", currentAdmin(req).username, t.name);
+    jsonOk(res, listJson(redis, repo, rotateTo(redis, t)));
+}
+
+/// POST /api/admin/motd/unpin — back to a random template per connect.
+package void apiMotdUnpin(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto repo = new MotdTemplateRepository();
+    setPinned(redis, "");
+    logInfo("Admin %s unpinned the MOTD template", currentAdmin(req).username);
+    jsonOk(res, listJson(redis, repo, rotateRandom(redis, repo)));
+}
+
 /// POST /api/admin/motd/rotate — body `{id?}`: rotate the ircd to that
 /// template, or to a random enabled one when omitted.
 package void apiMotdRotate(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
