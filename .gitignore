@@ -6,6 +6,11 @@ backend/irc-fiber
 *.a
 public/dist/.vite/
 frontend/.vitest-attachments/
+# vitest browser-mode auto-generated failure/run screenshots (App.test.ts
+# etc.) — the comment above already documented this as ignored; the
+# pattern itself was missing, so `_require_clean` tripped on every leftover
+# test run (2026-09-07: 3 stray dirs blocked `make deploy-blue`).
+**/__screenshots__/
 # Ansible vault password — local secret, never committed.
 deploy/.vault_pass.txt
 
