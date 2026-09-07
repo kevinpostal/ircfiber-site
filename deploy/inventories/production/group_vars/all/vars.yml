@@ -185,7 +185,10 @@ ircfiber_admin_password: "{{ vault_ircfiber_admin_password }}"  # set in vault.y
 
 # --- Signup email verification -------------------------------------------
 ircfiber_email_verification: true
-ircfiber_mail_provider: "sender"
+# "resend" | "sender" | "log" (ircfiber.mail). Resend's ircfiber.com is
+# verified (DKIM + the send-subdomain SPF/MX live in host_vars'
+# cloudflare_records); the sender.net account it replaced is suspended.
+ircfiber_mail_provider: "resend"
 ircfiber_mail_from: "no-reply@ircfiber.com"
 ircfiber_mail_from_name: "IRC Fiber"
 ircfiber_public_url: "https://ircfiber.com"
