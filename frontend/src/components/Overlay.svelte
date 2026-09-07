@@ -8,7 +8,7 @@
   import { updateRoute } from '../lib/routing';
   import { deleteNetwork } from '../stores/api';
 import Dialog from './Dialog.svelte';
-  import { parseIrcFormatting } from '../lib/ircFormatting';
+  import { parseIrcFormatting, IRC_COLORS } from '../lib/ircFormatting';
   import { autolinkHtml } from '../lib/autolinker';
   import type { WhoisData, BanListData, ChannelDeleteConfirmData, SetTopicData, InviteData, IgnoreListData, ChannelListData, ChannelListRow } from '../types';
 
@@ -72,26 +72,6 @@ import Dialog from './Dialog.svelte';
     updateRoute(nid, name);
     close();
   }
-
-  // mIRC color palette (codes 0-15) — standard 16 colors
-  const IRC_COLORS: { code: number; name: string; hex: string }[] = [
-    { code: 0, name: 'White', hex: '#ffffff' },
-    { code: 1, name: 'Black', hex: '#000000' },
-    { code: 2, name: 'Navy', hex: '#00007f' },
-    { code: 3, name: 'Green', hex: '#009300' },
-    { code: 4, name: 'Red', hex: '#ff0000' },
-    { code: 5, name: 'Maroon', hex: '#7f0000' },
-    { code: 6, name: 'Purple', hex: '#9c009c' },
-    { code: 7, name: 'Olive', hex: '#fc7f00' },
-    { code: 8, name: 'Yellow', hex: '#ffff00' },
-    { code: 9, name: 'Lime', hex: '#00fc00' },
-    { code: 10, name: 'Teal', hex: '#009393' },
-    { code: 11, name: 'Aqua', hex: '#00ffff' },
-    { code: 12, name: 'Blue', hex: '#0000fc' },
-    { code: 13, name: 'Fuchsia', hex: '#ff00ff' },
-    { code: 14, name: 'Gray', hex: '#7f7f7f' },
-    { code: 15, name: 'Silver', hex: '#d2d2d2' },
-  ];
 
   function close(): void {
     if (ircState.overlay.type === 'ignore_list') {

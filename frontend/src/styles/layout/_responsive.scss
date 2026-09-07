@@ -318,6 +318,7 @@
   }
   /* Thumb targets — 44pt Apple HIG */
   .bufferinputcell .emojicell,
+  .bufferinputcell .stylecell,
   .bufferinputcell .uploadcell,
   .bufferinputcell .lockcell {
     width: 40px;
@@ -329,6 +330,7 @@
     font-size: 18px;
   }
   .bufferinputcell .emojicell:hover,
+  .bufferinputcell .stylecell:hover,
   .bufferinputcell .uploadcell:hover { background: rgba(255,255,255,0.08); }
   /* Send button — iOS blue circle, visible only on phones */
   .bufferinputcell .sendcell {
@@ -393,7 +395,8 @@
   .overlay-panel.network-form-panel,
   .overlay-panel.topic-prompt,
   .overlay-panel.invite-prompt,
-  .overlay-panel.channellist-panel {
+  .overlay-panel.channellist-panel,
+  .overlay-panel.compose-style-panel {
     width: calc(100vw - 16px);
     min-width: 0;
     max-width: calc(100vw - 16px);

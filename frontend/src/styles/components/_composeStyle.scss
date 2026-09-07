@@ -1,0 +1,223 @@
+/* ── Compose text-style dialog (gear next to the input) ── */
+$cs-accent: #1e72ff;
+$cs-border: #2c2f35;
+$cs-muted: #8b949e;
+$cs-text: #c9d1d9;
+
+/* [open] lifts specificity above Dialog.svelte's scoped `dialog.overlay-panel` width rule. */
+dialog.overlay-panel.compose-style-panel[open] {
+  width: min(560px, 92vw);
+  min-width: 0;
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 20px 24px;
+  color: $cs-text;
+  font-size: 13px;
+}
+
+.compose-style-panel {
+  .cs-body { display: flex; flex-direction: column; }
+
+  .cs-section {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 12px;
+    align-items: start;
+    padding: 12px 0;
+    border-top: 1px solid $cs-border;
+    min-width: 0;
+    > div:last-child { min-width: 0; }
+  }
+  .cs-preview-section { border-top: none; padding-top: 4px; }
+
+  .cs-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: $cs-muted;
+    padding-top: 7px;
+  }
+  .cs-sub {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: $cs-muted;
+    margin: 10px 0 6px;
+  }
+  .cs-inline-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: $cs-muted;
+    margin-left: 12px;
+  }
+  .cs-note { font-size: 12px; color: $cs-muted; margin-top: 8px; }
+  .cs-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .warn { color: #f0883e; }
+  .muted { color: $cs-muted; }
+
+  /* Preview */
+  .cs-preview {
+    height: 96px;
+    overflow: auto;
+    background: #0d1117;
+    border: 1px solid $cs-border;
+    border-radius: 4px;
+    padding: 8px;
+    font: 11px/11px "Hack", "SF Mono", Menlo, Consolas, monospace;
+    white-space: pre;
+    color: #d9d9d9;
+  }
+  .cs-status { font-size: 11px; color: $cs-muted; margin-top: 6px; min-height: 14px; }
+
+  /* Segmented control */
+  .cs-seg {
+    display: inline-flex;
+    border: 1px solid $cs-border;
+    border-radius: 4px;
+    overflow: hidden;
+    vertical-align: middle;
+    button {
+      height: 28px;
+      padding: 0 12px;
+      background: transparent;
+      border: none;
+      border-right: 1px solid $cs-border;
+      color: $cs-text;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      &:last-child { border-right: none; }
+      &:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); }
+      &.selected { background: $cs-accent; color: #fff; }
+      &:disabled { opacity: 0.35; cursor: not-allowed; }
+    }
+  }
+
+  /* Toggle chips */
+  .cs-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cs-chip {
+    height: 28px;
+    padding: 0 12px;
+    background: transparent;
+    border: 1px solid $cs-border;
+    border-radius: 4px;
+    color: $cs-text;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    &:hover { background: rgba(255, 255, 255, 0.06); }
+    &[aria-pressed='true'] { background: $cs-accent; border-color: $cs-accent; color: #fff; }
+    code { font-family: "Hack", "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
+  }
+  .cs-chip-reverse[aria-pressed='true'] { background: #fff; color: #0d1117; border-color: #fff; }
+
+  /* Swatches: 0–15 fill the first row; 16–98 wrap 12 per row (hue rings). */
+  .cs-swatches {
+    display: grid;
+    grid-template-columns: repeat(16, 18px);
+    &.with-none { grid-template-columns: repeat(17, 18px); }
+    &.disabled { opacity: 0.35; pointer-events: none; }
+  }
+  .cs-swatch {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+    &.ring { grid-column-start: 1; }
+    &.selected { outline: 2px solid $cs-accent; outline-offset: 1px; }
+    &:disabled { opacity: 0.35; cursor: not-allowed; }
+    &.none { background: transparent; color: $cs-muted; font-size: 14px; line-height: 18px; }
+  }
+  .cs-swatch-order {
+    position: absolute;
+    inset: 0;
+    font-size: 10px;
+    line-height: 18px;
+    text-align: center;
+    color: #fff;
+    text-shadow: 0 0 2px #000, 0 0 2px #000;
+    pointer-events: none;
+  }
+
+  /* Font lists */
+  .cs-filter {
+    width: 100%;
+    box-sizing: border-box;
+    height: 28px;
+    margin-top: 10px;
+    padding: 0 8px;
+    background: #0d1117;
+    border: 1px solid $cs-border;
+    border-radius: 4px;
+    color: $cs-text;
+    font: inherit;
+    font-size: 12px;
+    &:focus { outline: none; border-color: $cs-accent; }
+  }
+  .cs-list {
+    list-style: none;
+    margin: 6px 0 0;
+    padding: 0;
+    border: 1px solid $cs-border;
+    border-radius: 4px;
+    max-height: 160px;
+    overflow: auto;
+    li { margin: 0; }
+    li.selected button { color: $cs-accent; background: #161b22; }
+    button {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      width: 100%;
+      height: 26px;
+      padding: 0 10px;
+      background: transparent;
+      border: none;
+      color: $cs-text;
+      font: inherit;
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      &:hover { background: rgba(255, 255, 255, 0.06); }
+    }
+  }
+  .cs-list-meta { font-size: 11px; color: $cs-muted; }
+
+  /* Footer */
+  .cs-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 16px;
+    border-top: 1px solid $cs-border;
+  }
+  .cs-apply,
+  .cs-reset {
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 4px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .cs-apply { background: $cs-accent; border: 1px solid $cs-accent; color: #fff; &:hover { background: #3a86ff; } }
+  .cs-reset { background: transparent; border: 1px solid transparent; color: $cs-muted; &:hover { color: $cs-text; } }
+}
+
+@media (max-width: 600px) {
+  .overlay-panel.compose-style-panel { padding: 16px; }
+  .compose-style-panel {
+    .cs-section { grid-template-columns: 1fr; gap: 6px; }
+    .cs-label { padding-top: 0; }
+    .cs-swatches, .cs-swatches.with-none { grid-template-columns: repeat(12, 18px); }
+    .cs-swatch.ring { grid-column-start: auto; }
+  }
+}

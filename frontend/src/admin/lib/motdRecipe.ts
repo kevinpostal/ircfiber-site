@@ -5,9 +5,9 @@
  * resolved at render time, which is what "Generate N variants" repeats.
  */
 import { FIGLET_FONT_NAMES, renderFiglet } from '../../lib/figlet';
-import { parseTdf, renderTdfFont, type TdfFont } from '../../lib/tdf';
-import tdfIndex from './tdf-fonts.json';
-import { colorize, stripMirc, visibleWidth } from './mirc';
+import { listTdfFonts, renderTdf } from '../../lib/tdf';
+import { stripIrcFormatting } from '../../lib/ircFormatting';
+import { colorizeLine } from '../../lib/textEffects';
 
 export type Align = 'left' | 'center';
 
@@ -40,7 +40,24 @@ export interface Recipe {
 
 export const RULE_CHARS = ['─', '═', '━', '=', '-', '#', '~', '·', '▀', '▄', '░', '▒'];
 
-export const TDF_FONT_NAMES: string[] = (tdfIndex as { name: string; height: number }[]).map((f) => f.name);
+/** Every packed TheDraw font name; the pack loads on first render. */
+let tdfNamesCache: string[] | null = null;
+export async function tdfFontNames(): Promise<string[]> {
+  if (!tdfNamesCache) tdfNamesCache = (await listTdfFonts()).map((f) => f.name);
+  return tdfNamesCache;
+}
+
+/** Visible width in cells (colour codes stripped; code points). */
+function visibleWidth(s: string): number {
+  return [...stripIrcFormatting(s)].length;
+}
+
+/** Wraps `text` in a foreground colour; `null` leaves it uncoloured. */
+function colorize(text: string, fg: number | null): string {
+  if (fg === null || !text) return text;
+  const colored = colorizeLine(text, { kind: 'solid', fg, bg: null });
+  return colored.includes('\x03') ? `${colored}\x0F` : colored;
+}
 export { FIGLET_FONT_NAMES };
 
 export function defaultRecipe(): Recipe {
@@ -79,19 +96,6 @@ export function parseRecipe(json: string): Recipe | null {
   }
 }
 
-const tdfCache = new Map<string, Promise<TdfFont>>();
-function loadTdf(name: string): Promise<TdfFont> {
-  let p = tdfCache.get(name);
-  if (!p) {
-    p = fetch(`/api/admin/motd/tdf/${encodeURIComponent(name)}`).then(async (r) => {
-      if (!r.ok) throw new Error(`font ${name}: HTTP ${r.status}`);
-      return parseTdf(await r.arrayBuffer());
-    });
-    tdfCache.set(name, p);
-  }
-  return p;
-}
-
 function pick<T>(arr: T[], rng: () => number): T {
   return arr[Math.floor(rng() * arr.length) % arr.length];
 }
@@ -110,11 +114,13 @@ export interface RenderResult {
 
 /** Renders a banner block; returns its lines and the font used. */
 async function renderBanner(b: BannerBlock, rng: () => number): Promise<{ lines: string[]; font: string }> {
-  const all = b.engine === 'tdf' ? TDF_FONT_NAMES : FIGLET_FONT_NAMES;
+  const all = b.engine === 'tdf' ? await tdfFontNames() : FIGLET_FONT_NAMES;
   const pool = b.pool.filter((f) => all.includes(f));
   const font = b.font === 'random' ? pick(pool.length ? pool : all, rng) : b.font;
   if (b.engine === 'tdf') {
-    return { lines: renderTdfFont(await loadTdf(font), b.text), font };
+    // Saved recipes predate the pack and store the source file stem;
+    // renderTdf resolves stems as well as font names.
+    return { lines: await renderTdf(b.text, font), font };
   }
   const art = await renderFiglet(b.text, font);
   return { lines: art.split('\n').map((l) => colorize(l, b.color)), font };
@@ -171,7 +177,7 @@ function frame(lines: string[], kind: Frame, color: number | null, width: number
   for (const l of lines) {
     const pad = Math.max(0, inner - visibleWidth(l));
     // A colour run must not leak into the border: reset before the padding.
-    const safe = /\x03/.test(l) && !l.endsWith('\x03') ? l + '\x03' : l;
+    const safe = /\x03/.test(l) && !l.endsWith('\x0F') ? `${l}\x0F` : l;
     out.push(`${side(f.v)} ${safe}${' '.repeat(pad)} ${side(f.v)}`);
   }
   out.push(side(f.bl + f.h.repeat(inner + 2) + f.br));
@@ -185,5 +191,5 @@ export function fontsLabel(fonts: string[]): string {
 
 /** Longest visible line of a rendered body, in cells. */
 export function bodyWidth(body: string): number {
-  return Math.max(0, ...body.split('\n').map((l) => [...stripMirc(l)].length));
+  return Math.max(0, ...body.split('\n').map((l) => visibleWidth(l)));
 }

@@ -1,6 +1,6 @@
 // WASM evaluated 2026-08-13 — DOM-bound, not adopted; see frontend/wasm-message-history-report.md (Steps 1–2). Keep JIT regex + LRU memo; do not port parseIrcFormatting to WASM.
 // Extended mIRC color palette: codes 16-98 map to hex RGB
-const EXTENDED_COLORS: Record<number, string> = {
+export const EXTENDED_COLORS: Record<number, string> = {
   16: '#470000', 17: '#472100', 18: '#474700', 19: '#324700', 20: '#004700',
   21: '#00472c', 22: '#004747', 23: '#002747', 24: '#000047', 25: '#2e0047',
   26: '#470047', 27: '#47002a', 28: '#740000', 29: '#743a00', 30: '#747400',
@@ -24,12 +24,38 @@ const EXTENDED_COLORS: Record<number, string> = {
 // uses these names — emitting them lets our markup match theirs
 // byte-for-byte (e.g. `<span class="irccolor teal">`) and lets the
 // IRCCloud color CSS we ship work without per-numeric overrides.
-const COLOR_NAMES: Record<number, string> = {
+export const COLOR_NAMES: Record<number, string> = {
   0: 'white',   1: 'black',  2: 'navy',   3: 'green',
   4: 'red',     5: 'maroon', 6: 'purple', 7: 'orange',
   8: 'yellow',  9: 'lime',  10: 'teal',  11: 'cyan',
   12: 'blue',  13: 'magenta',14: 'grey', 15: 'silver',
 };
+
+/** mIRC 0–15 palette (hex matches app.css .irccolor rules). */
+export const IRC_COLORS: { code: number; name: string; hex: string }[] = [
+  { code: 0, name: 'White', hex: '#ffffff' },
+  { code: 1, name: 'Black', hex: '#000000' },
+  { code: 2, name: 'Navy', hex: '#00007f' },
+  { code: 3, name: 'Green', hex: '#009300' },
+  { code: 4, name: 'Red', hex: '#ff0000' },
+  { code: 5, name: 'Maroon', hex: '#7f0000' },
+  { code: 6, name: 'Purple', hex: '#9c009c' },
+  { code: 7, name: 'Olive', hex: '#fc7f00' },
+  { code: 8, name: 'Yellow', hex: '#ffff00' },
+  { code: 9, name: 'Lime', hex: '#00fc00' },
+  { code: 10, name: 'Teal', hex: '#009393' },
+  { code: 11, name: 'Aqua', hex: '#00ffff' },
+  { code: 12, name: 'Blue', hex: '#0000fc' },
+  { code: 13, name: 'Fuchsia', hex: '#ff00ff' },
+  { code: 14, name: 'Gray', hex: '#7f7f7f' },
+  { code: 15, name: 'Silver', hex: '#d2d2d2' },
+];
+
+/** Hex for any spec colour 0–98; 99 → null (default/transparent). */
+export function colorHex(code: number): string | null {
+  if (code >= 0 && code <= 15) return IRC_COLORS[code].hex;
+  return EXTENDED_COLORS[code] ?? null;
+}
 
 /**
  * Parse IRC formatting codes and produce safe HTML.

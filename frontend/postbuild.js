@@ -55,7 +55,7 @@ try {
   let pruned = 0;
   for (const f of readdirSync(assetsDir)) {
     const base = f.replace(/\.(gz|br|map)$/, '');
-    if (!/\.(js|css)$/.test(base)) continue;
+    if (!/\.(js|css|bin)$/.test(base)) continue;
     if (keep.has(`assets/${base}`)) continue;
     try { unlinkSync(resolve(assetsDir, f)); pruned++; }
     catch {}
@@ -73,7 +73,7 @@ try {
     const full = resolve(assetsDir, f);
     if (!existsSync(full)) continue;
     const data = readFileSync(full);
-    if (!/\.(js|css|svg|html|json|wasm)$/.test(f)) continue;
+    if (!/\.(js|css|svg|html|json|wasm|bin)$/.test(f)) continue;
     const gzPath = full + '.gz';
     const brPath = full + '.br';
     try { writeFileSync(gzPath, gzipSync(data, { level: 9 })); } catch {}

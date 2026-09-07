@@ -6,10 +6,11 @@
    * changes the seed so `random` fonts get re-picked.
    */
   import {
-    type Recipe, type Block, type BannerBlock, RULE_CHARS, TDF_FONT_NAMES, FIGLET_FONT_NAMES,
+    type Recipe, type Block, type BannerBlock, RULE_CHARS, tdfFontNames, FIGLET_FONT_NAMES,
     renderRecipe,
   } from '../lib/motdRecipe';
-  import { MIRC_PALETTE } from '../lib/mirc';
+  import { IRC_COLORS } from '../../lib/ircFormatting';
+  import { onMount } from 'svelte';
 
   interface Props {
     recipe: Recipe;
@@ -22,6 +23,8 @@
   let rendering = $state(false);
   let renderError = $state<string | null>(null);
   let poolOpen = $state<number | null>(null);
+  let tdfNames = $state<string[]>([]);
+  onMount(() => { void tdfFontNames().then((names) => { tdfNames = names; }); });
 
   /** Small deterministic PRNG so the preview only changes on Reroll. */
   function mulberry32(a: number): () => number {
@@ -73,12 +76,12 @@
     const [b] = recipe.blocks.splice(i, 1);
     recipe.blocks.splice(j, 0, b);
   }
-  function fontsFor(b: BannerBlock): string[] { return b.engine === 'tdf' ? TDF_FONT_NAMES : FIGLET_FONT_NAMES; }
+  function fontsFor(b: BannerBlock): string[] { return b.engine === 'tdf' ? tdfNames : FIGLET_FONT_NAMES; }
   function togglePool(b: BannerBlock, f: string) {
     const i = b.pool.indexOf(f);
     if (i === -1) b.pool.push(f); else b.pool.splice(i, 1);
   }
-  const COLORS = MIRC_PALETTE.map((hex, i) => ({ i, hex }));
+  const COLORS = IRC_COLORS.map((c) => ({ i: c.code, hex: c.hex, name: c.name }));
 </script>
 
 {#snippet colorPick(value: number | null, set: (v: number | null) => void, label = 'Colour')}
@@ -91,11 +94,11 @@
     >
       <option value="">none</option>
       {#each COLORS as c (c.i)}
-        <option value={String(c.i)}>{c.i} {c.hex}</option>
+        <option value={String(c.i)}>{c.i} {c.name}</option>
       {/each}
     </select>
     {#if value !== null}
-      <span class="inline-block h-3 w-3 rounded-sm border border-border" style="background:{MIRC_PALETTE[value]}"></span>
+      <span class="inline-block h-3 w-3 rounded-sm border border-border" style="background:{IRC_COLORS[value].hex}"></span>
     {/if}
   </label>
 {/snippet}
@@ -151,6 +154,9 @@
               <option value="random">random{b.pool.length ? ` (${b.pool.length} in pool)` : ' (all)'}</option>
               {#each fontsFor(b) as f (f)}<option value={f}>{f}</option>{/each}
             </select>
+            {#if b.engine === 'tdf' && tdfNames.length === 0}
+              <span class="text-[11px] text-muted">Loading 1,071 fonts…</span>
+            {/if}
             {#if b.font === 'random'}
               <button type="button" onclick={() => { poolOpen = poolOpen === i ? null : i; }} class="rounded border border-border px-2 py-0.5 text-xs">
                 {poolOpen === i ? 'close pool' : 'edit pool'}
@@ -171,6 +177,9 @@
                   class="rounded px-1.5 py-0.5 font-mono text-[11px] {b.pool.includes(f) ? 'bg-primary/20 text-primary' : 'bg-surface-2 text-muted'}">{f}</button>
               {/each}
               <span class="w-full pt-1 text-[11px] text-muted">Empty pool = every font. Selected fonts are picked from on each reroll / variant.</span>
+              {#if b.engine === 'tdf' && tdfNames.length === 0}
+                <span class="w-full pt-1 text-[11px] text-muted">Loading 1,071 fonts…</span>
+              {/if}
             </div>
           {/if}
         {:else if b.kind === 'text'}

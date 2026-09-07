@@ -52,7 +52,7 @@ import ircfiber.web.admin.emails : apiEmailsOverview, apiEmailsTest,
     apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
-    apiMotdDelete, apiMotdRotate, apiMotdBatch, apiMotdTdfFont;
+    apiMotdDelete, apiMotdRotate, apiMotdBatch;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -161,7 +161,6 @@ final class AdminController {
         router.post("/api/admin/motd", &adminWrap!apiMotdCreateRoute);
         router.post("/api/admin/motd/rotate", &adminWrap!apiMotdRotateRoute);
         router.post("/api/admin/motd/batch", &adminWrap!apiMotdBatchRoute);
-        router.get("/api/admin/motd/tdf/:name", &adminWrap!apiMotdTdfFont);
         router.post("/api/admin/motd/:id", &adminWrap!apiMotdUpdateRoute);
         router.post("/api/admin/motd/:id/delete", &adminWrap!apiMotdDeleteRoute);
 

@@ -4,6 +4,7 @@
 import { normalizeChannelName } from '../lib/utils';
 import { parseIgnoreList } from '../lib/ignore';
 import type { IgnoreMap } from '../lib/ignore';
+import { DEFAULT_COMPOSE_STYLE, type ComposeStyle } from '../lib/composeStyle';
 
 
 /** TTL for localStorage-backed caches. Anything older than this on
@@ -57,6 +58,8 @@ export interface GlobalPrefs {
   inlineReddit: boolean;
   inlineSocial: boolean;
   defaultScrollPreset: number;
+  /** Outgoing-message styling picked in the compose gear dialog. */
+  composeStyle: ComposeStyle;
   // W0-T01: feature-flag namespace gating Wave 1/2 protocol changes.
   // Most flags still default OFF for safe rollout; usePrefVersion
   // flips to ON in Wave 2 (prefVersion last-write-wins resolution).
@@ -96,6 +99,7 @@ export const DEFAULT_PREFS: GlobalPrefs = {
 		idleEvents: { enabled: true },
 		xhrFallback: { enabled: true },
 	},
+  composeStyle: DEFAULT_COMPOSE_STYLE,
 };
 export const globalPrefs = $state<GlobalPrefs>(
   mergeDefaults(getStorageItem('ircfiber:globalPrefs', {}), DEFAULT_PREFS)
@@ -160,6 +164,9 @@ function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): Glob
 		xhrFallback: { ...defaultsFf.xhrFallback, ...(savedFf.xhrFallback ?? {}) },
     };
   }
+  // The colour/font unions are replaced wholesale: a saved object always
+  // carries a complete `kind`, so a shallow merge over the defaults is enough.
+  out.composeStyle = { ...defaults.composeStyle, ...(saved.composeStyle ?? {}) };
   return out;
 }
 

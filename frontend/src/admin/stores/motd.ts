@@ -4,7 +4,7 @@
  * is replaced wholesale after each call.
  */
 import { api } from '../lib/api-client';
-import { visibleWidth } from '../lib/mirc';
+import { stripIrcFormatting } from '../../lib/ircFormatting';
 
 export interface MotdTemplate {
   id: string;
@@ -64,7 +64,7 @@ export const rotateMotd = (id?: string) => api.post<MotdState>('/api/admin/motd/
 export function maxColumns(body: string): number {
   let max = 0;
   for (const line of body.split('\n')) {
-    const n = visibleWidth(line);
+    const n = [...stripIrcFormatting(line)].length;
     if (n > max) max = n;
   }
   return max;

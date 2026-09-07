@@ -84,3 +84,45 @@ html, body {
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* MOTD preview: parseIrcFormatting() emits chat-client classes; the admin
+ * entry never loads the chat stylesheet, so bridge the 0–15 palette here.
+ * Hexes match IRC_COLORS in src/lib/ircFormatting.ts. */
+.motd-preview .bold { font-weight: 700; }
+.motd-preview .italic { font-style: italic; }
+.motd-preview .underline { text-decoration: underline; }
+.motd-preview .strikethrough { text-decoration: line-through; }
+.motd-preview .monospace { font-family: var(--font-mono); }
+.motd-preview .reverse { filter: invert(1); }
+.motd-preview .irccolor.color-0 { color: #ffffff; }
+.motd-preview .irccolor.color-1 { color: #000000; }
+.motd-preview .irccolor.color-2 { color: #00007f; }
+.motd-preview .irccolor.color-3 { color: #009300; }
+.motd-preview .irccolor.color-4 { color: #ff0000; }
+.motd-preview .irccolor.color-5 { color: #7f0000; }
+.motd-preview .irccolor.color-6 { color: #9c009c; }
+.motd-preview .irccolor.color-7 { color: #fc7f00; }
+.motd-preview .irccolor.color-8 { color: #ffff00; }
+.motd-preview .irccolor.color-9 { color: #00fc00; }
+.motd-preview .irccolor.color-10 { color: #009393; }
+.motd-preview .irccolor.color-11 { color: #00ffff; }
+.motd-preview .irccolor.color-12 { color: #0000fc; }
+.motd-preview .irccolor.color-13 { color: #ff00ff; }
+.motd-preview .irccolor.color-14 { color: #7f7f7f; }
+.motd-preview .irccolor.color-15 { color: #d2d2d2; }
+.motd-preview .irccolor-bg.bg-0 { background-color: #ffffff; }
+.motd-preview .irccolor-bg.bg-1 { background-color: #000000; }
+.motd-preview .irccolor-bg.bg-2 { background-color: #00007f; }
+.motd-preview .irccolor-bg.bg-3 { background-color: #009300; }
+.motd-preview .irccolor-bg.bg-4 { background-color: #ff0000; }
+.motd-preview .irccolor-bg.bg-5 { background-color: #7f0000; }
+.motd-preview .irccolor-bg.bg-6 { background-color: #9c009c; }
+.motd-preview .irccolor-bg.bg-7 { background-color: #fc7f00; }
+.motd-preview .irccolor-bg.bg-8 { background-color: #ffff00; }
+.motd-preview .irccolor-bg.bg-9 { background-color: #00fc00; }
+.motd-preview .irccolor-bg.bg-10 { background-color: #009393; }
+.motd-preview .irccolor-bg.bg-11 { background-color: #00ffff; }
+.motd-preview .irccolor-bg.bg-12 { background-color: #0000fc; }
+.motd-preview .irccolor-bg.bg-13 { background-color: #ff00ff; }
+.motd-preview .irccolor-bg.bg-14 { background-color: #7f7f7f; }
+.motd-preview .irccolor-bg.bg-15 { background-color: #d2d2d2; }

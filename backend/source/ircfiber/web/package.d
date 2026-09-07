@@ -105,7 +105,6 @@ final class WebController {
         router.get("/public/landing.html", &serveLanding);
         router.get("/app-screenshot.png", &serveAppScreenshot);
         router.get("/glyphs.json", &serveGlyphs);
-        router.get("/figlet-fonts.json", &serveFigletFonts);
         // Root-level icons + web app manifest referenced from index.html
         // (<link rel=icon>, apple-touch-icon, <link rel=manifest>). They
         // live in public/ (the Vite publicDir) but nothing served them.
@@ -635,16 +634,6 @@ final class WebController {
             res.writeBody(cast(const(ubyte)[])read("public/glyphs.json"), "application/json");
         } catch (Exception e) {
             logWarn("Failed to serve glyphs.json: %s", e.msg);
-            res.statusCode = 404;
-        }
-    }
-
-    private void serveFigletFonts(HTTPServerRequest, HTTPServerResponse res) {
-        try {
-            res.headers["Cache-Control"] = "public, max-age=86400";
-            res.writeBody(cast(const(ubyte)[])read("public/figlet-fonts.json"), "application/json");
-        } catch (Exception e) {
-            logWarn("Failed to serve figlet-fonts.json: %s", e.msg);
             res.statusCode = 404;
         }
     }

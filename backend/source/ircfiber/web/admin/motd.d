@@ -252,24 +252,6 @@ package void apiMotdBatch(HTTPServerRequest req, HTTPServerResponse res, RedisSt
         currentAdmin(req).username, group, removed, records.length);
     jsonOk(res, listJson(redis, repo, afterWrite(redis, repo)));
 }
-
-/// GET /api/admin/motd/tdf/:name — one curated TheDraw font file
-/// (`public/tdf/<name>.tdf`) for the builder's in-browser renderer.
-package void apiMotdTdfFont(HTTPServerRequest req, HTTPServerResponse res) {
-    import std.file : exists, isFile, read;
-    import std.regex : matchFirst, regex;
-    auto name = req.params["name"];
-    if (name.length == 0 || name.length > 32 || !matchFirst(name, regex(`^[A-Za-z0-9_-]+$`))) {
-        jsonError(res, 400, "invalid font name");
-        return;
-    }
-    auto path = buildPath("public", "tdf", name ~ ".tdf");
-    if (!exists(path) || !isFile(path)) { jsonError(res, 404, "no such font"); return; }
-    res.headers["Content-Type"] = "application/octet-stream";
-    res.headers["Cache-Control"] = "private, max-age=86400";
-    res.writeBody(cast(const(ubyte)[]) read(path));
-}
-
 /// POST /api/admin/motd/rotate — body `{id?}`: rotate the ircd to that
 /// template, or to a random enabled one when omitted.
 package void apiMotdRotate(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {

@@ -26,8 +26,8 @@
   import { ApiError } from '../lib/api-client';
   import { toastSuccess, toastError } from '../stores/ui';
   import { relative } from '../lib/format';
-  import { FIGLET_FONT_NAMES, renderFiglet } from '../../lib/figlet';
-  import { mircToHtml, maxLineBytes } from '../lib/mirc';
+  import { parseIrcFormatting } from '../../lib/ircFormatting';
+  import { utf8Length } from '../../lib/messageSplitter';
   import { type Recipe, defaultRecipe, parseRecipe, renderRecipe, fontsLabel } from '../lib/motdRecipe';
   import {
     fetchMotd, createMotd, updateMotd, deleteMotd, rotateMotd, batchMotd, maxColumns,
@@ -60,12 +60,6 @@
   let variantGroup = $state('');
   let generating = $state(false);
 
-  // FIGlet insert helper (raw mode)
-  let figText = $state('IRC Fiber');
-  let figFont = $state('ANSI Shadow');
-  let figOut = $state('');
-  let figBusy = $state(false);
-  const fontNames = FIGLET_FONT_NAMES;
 
   const templates = $derived(data?.templates ?? []);
   const selected = $derived(templates.find((t) => t.id === selectedId) ?? null);
@@ -74,8 +68,14 @@
   const lineCount = $derived(body.replace(/\n+$/, '').split('\n').length);
   const tooWide = $derived(cols > 80);
   const bytes = $derived(maxLineBytes(body));
+  /** Longest line in bytes (UTF-8, codes included) — what the IRC line limit sees. */
+  function maxLineBytes(text: string): number {
+    let max = 0;
+    for (const line of text.split('\n')) max = Math.max(max, utf8Length(line));
+    return max;
+  }
   const tooLong = $derived(bytes > LINE_BYTE_BUDGET);
-  const previewHtml = $derived(mircToHtml(body || ' '));
+  const previewHtml = $derived(parseIrcFormatting(body || ' '));
   const groups = $derived.by(() => {
     const m = new Map<string, number>();
     for (const t of templates) if (t.group) m.set(t.group, (m.get(t.group) ?? 0) + 1);
@@ -221,35 +221,6 @@
     }
   }
 
-  async function generate() {
-    if (figBusy || !figText.trim()) return;
-    figBusy = true;
-    try {
-      figOut = await renderFiglet(figText, figFont);
-    } catch (e) {
-      toastError(errMsg(e));
-    } finally {
-      figBusy = false;
-    }
-  }
-
-  /** Inserts the generated art at the textarea cursor (or at the top). */
-  function insertArt() {
-    if (!figOut) return;
-    const el = textarea;
-    const at = el ? el.selectionStart : 0;
-    const before = body.slice(0, at);
-    const after = body.slice(at);
-    const chunk = figOut + '\n';
-    body = before + (before && !before.endsWith('\n') ? '\n' : '') + chunk + after;
-    dirty = true;
-    queueMicrotask(() => {
-      if (!el) return;
-      const pos = at + chunk.length + (before && !before.endsWith('\n') ? 1 : 0);
-      el.focus();
-      el.setSelectionRange(pos, pos);
-    });
-  }
 
   function onBuilderRendered(rendered: string) {
     if (rendered !== body) { body = rendered; dirty = true; }
@@ -475,44 +446,6 @@
             </button>
             <span class="text-xs text-muted">Replaces every template in the group; duplicates (same fonts) are skipped.</span>
           </div>
-        </Card>
-      {:else}
-        <Card title="FIGlet banner" subtitle="Generate ASCII art and insert it at the cursor">
-          <div class="mb-3 flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              bind:value={figText}
-              placeholder="IRC Fiber"
-              class="w-56 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
-            />
-            <select bind:value={figFont} class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm">
-              {#each fontNames as f (f)}
-                <option value={f}>{f}</option>
-              {/each}
-            </select>
-            <button
-              type="button"
-              onclick={() => void generate()}
-              disabled={figBusy || !figText.trim()}
-              class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
-            >
-              {figBusy ? 'Rendering…' : 'Generate'}
-            </button>
-            <button
-              type="button"
-              onclick={insertArt}
-              disabled={!figOut}
-              class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-40"
-            >
-              Insert at cursor
-            </button>
-            {#if figOut}
-              <span class="text-xs text-muted">{maxColumns(figOut)} cols</span>
-            {/if}
-          </div>
-          {#if figOut}
-            <pre class="motd-preview overflow-x-auto rounded-md border border-border bg-black px-3 py-2 font-mono text-[12px] leading-[1.25] text-[#e6edf3]">{figOut}</pre>
-          {/if}
         </Card>
       {/if}
     </div>

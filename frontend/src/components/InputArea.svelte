@@ -13,9 +13,11 @@
   import UploadMenu from './UploadMenu.svelte';
   // Lazy: PastebinDialog pulls CodeEditor + highlight.js (~hundreds of KB).
   // Loaded on demand via {#await} at the usage site below.
-  import { MESSAGE_LENGTH_TRIGGER } from '../lib/messageSplitter';
+  import { MESSAGE_LENGTH_TRIGGER, ircPayloadBudget } from '../lib/messageSplitter';
   import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
   import { getPastebinDisablePrompt, globalPrefs } from '../stores/preferences.svelte';
+  import { isComposeStyleActive } from '../lib/composeStyle';
+  import type { IRCMessage } from '../types';
   import { updateRoute } from '../lib/routing';
   import { tick } from 'svelte';
   // emoji-picker-element is loaded on demand in toggleEmoji() below so its
@@ -33,6 +35,8 @@
   let inputValue = $state('');
   let editTarget = $state<{ eid?: number; msgid?: string; label: string } | null>(null);
   let uploadMenuOpen = $state(false);
+  let styleOpen = $state(false);
+  const styleActive = $derived(isComposeStyleActive(globalPrefs.composeStyle));
   const tabEngine = new TabCompletionEngine();
   // IRCCloud-style tab completion popup — shows original fragment + all matches
   // with the current selection highlighted. Only visible while cycling.
@@ -676,7 +680,15 @@
       const handler = getSlashHandler(cmd);
       if (handler) {
         try {
-          handler(args, networkId, target, activeNetwork);
+          if (cmd === 'me' && styleActive) {
+            // 9 = bytes of "\x01ACTION " + "\x01" the /me handler wraps around each line.
+            const { renderComposeLines } = await import('../lib/composePipeline');
+            const budget = ircPayloadBudget(activeNetwork?.isupport, '', target) - 9;
+            const { lines } = await renderComposeLines(args.join(' '), globalPrefs.composeStyle, budget);
+            for (const line of lines) handler([line], networkId, target, activeNetwork);
+          } else {
+            handler(args, networkId, target, activeNetwork);
+          }
         } catch (e: unknown) {
           const err = e as Error;
           console.error('Slash command error:', err.message);
@@ -685,6 +697,14 @@
         ensureConnected();
         onSendRaw(networkId, text.slice(1));
       }
+    } else if (styleActive) {
+      ensureConnected();
+      // Styled sends bypass the pastebin prompt: multi-line output is the point.
+      const { renderComposeLines } = await import('../lib/composePipeline');
+      const budget = ircPayloadBudget(activeNetwork?.isupport, '', target);
+      const { lines } = await renderComposeLines(text, globalPrefs.composeStyle, budget);
+      for (const line of lines) sendPlainLine(networkId, target, line);
+      requestForceScrollToBottom();
     } else {
       ensureConnected();
 
@@ -705,45 +725,50 @@
         return;
       }
 
-      const label = generateLabel();
-      onSendMessage(networkId, target, text, label);
+      sendPlainLine(networkId, target, text);
       // Always snap MessageList to the bottom when the user sends — they
       // pressed Enter to chat, not to lurk in the scrollback. The
       // MessageList effect bumps forceScrollToBottomNonce and overrides
       // the cachedAtBottom guard.
       requestForceScrollToBottom();
-
-      const optimistic: IRCMessage = {
-        timestamp: new Date().toISOString(),
-        t: Date.now(),
-        nick: myNick,
-        text,
-        command: 'PRIVMSG',
-        label,
-        pendingState: 'pending',
-      };
-      ircState.optimisticMessages.set(label, optimistic);
-      const key = `${networkId}:${target}`;
-      const list = ircState.messages[key] ?? [];
-      // See comment above: only label equality. Text-based check
-      // here incorrectly dropped rapid "a" sends within 5s.
-      if (list.some(m => m.label === label)) {
-        ircState.optimisticMessages.delete(label);
-      } else {
-        list.push(optimistic);
-        ircState.messages[key] = list;
-        // Keep the processed cache in sync so MessageList renders the optimistic row immediately.
-        if (ircState.processedMessages[key]) {
-          ircState.processedMessages[key] = appendToProcessed(ircState.processedMessages[key], [optimistic]);
-        } else {
-          ircState.processedMessages[key] = buildProcessedBuffer(list);
-        }
-      }
-      recordSentMessage(networkId, target, { label, body: text });
     }
 
     inputValue = '';
     void autoResizeAfterClear();
+  }
+
+  /** Sends one PRIVMSG line and inserts its optimistic row. */
+  function sendPlainLine(networkId: string, target: string, text: string): void {
+    const label = generateLabel();
+    onSendMessage(networkId, target, text, label);
+
+    const optimistic: IRCMessage = {
+      timestamp: new Date().toISOString(),
+      t: Date.now(),
+      nick: myNick,
+      text,
+      command: 'PRIVMSG',
+      label,
+      pendingState: 'pending',
+    };
+    ircState.optimisticMessages.set(label, optimistic);
+    const key = `${networkId}:${target}`;
+    const list = ircState.messages[key] ?? [];
+    // See comment above: only label equality. Text-based check
+    // here incorrectly dropped rapid "a" sends within 5s.
+    if (list.some(m => m.label === label)) {
+      ircState.optimisticMessages.delete(label);
+    } else {
+      list.push(optimistic);
+      ircState.messages[key] = list;
+      // Keep the processed cache in sync so MessageList renders the optimistic row immediately.
+      if (ircState.processedMessages[key]) {
+        ircState.processedMessages[key] = appendToProcessed(ircState.processedMessages[key], [optimistic]);
+      } else {
+        ircState.processedMessages[key] = buildProcessedBuffer(list);
+      }
+    }
+    recordSentMessage(networkId, target, { label, body: text });
   }
 
   // IRCCloud parity: shouldPaste — newline OR >1080 chars.
@@ -1004,6 +1029,13 @@
            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void toggleEmoji(); } }}>
         <i class="fa-regular fa-face-smile" aria-hidden="true"></i>
       </div>
+      <div class="stylecell" class:engaged={styleActive} role="button" tabindex="0"
+           aria-label="Text style" aria-expanded={styleOpen} aria-haspopup="dialog"
+           title={styleActive ? 'Text style (active)' : 'Text style'}
+           onclick={() => { styleOpen = true; }}
+           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); styleOpen = true; } }}>
+        <i class="fa-solid fa-gear" aria-hidden="true"></i>
+      </div>
       <div class="uploadcell {ringState()}" class:engaged={uploadState.active.length > 0}
            role="button" tabindex="0" aria-label="Uploads" title="Uploads"
            onclick={() => { uploadMenuOpen = !uploadMenuOpen; }}
@@ -1040,6 +1072,11 @@
         onclose={onPastebinClose}
         onsent={onPastebinSent}
       />
+    {/await}
+  {/if}
+  {#if styleOpen}
+    {#await import('./ComposeStyleDialog.svelte') then { default: ComposeStyleDialog }}
+      <ComposeStyleDialog sampleText={inputValue} onClose={() => { styleOpen = false; textarea?.focus(); }} />
     {/await}
   {/if}
   <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>

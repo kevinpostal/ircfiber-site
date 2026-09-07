@@ -11,17 +11,15 @@
  *   25..212  94 × u16 LE glyph offsets for "!".."~" (0xffff = missing)
  *   213..    glyph data: width, height, then cells (CP437 char, attr) with
  *            0x0d as row break and 0x00 terminating the glyph.
- *
  * Attribute byte: low nibble fg, high nibble bg, in TheDraw's (CGA)
  * order; mapped to mIRC colour numbers exactly as tdfiglet does.
  *
- * Two sources: the admin MOTD builder fetches single files from
- * /api/admin/motd/tdf/:name (`parseTdf`); the compose dialog reads records
- * out of the packed `tdf-fonts.bin` built by scripts/pack-tdf.mjs.
+ * Single source: the packed `tdf-fonts.bin` built by scripts/pack-tdf.mjs.
+ * Lookups accept the TheDraw font name or the source file stem (saved MOTD
+ * recipes predate the pack and store stems).
  */
 import packUrl from './tdf-fonts.bin?url';
 
-const MAGIC = '\x13TheDraw FONTS file\x1a';
 const CHARLIST = '!"#$%&\'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~';
 const NUM_CHARS = 94;
 const RECORD_HEADER = 213;
@@ -101,14 +99,6 @@ export function parseTdfRecord(b: Uint8Array): TdfFont {
   return { name, spacing, height, glyphs };
 }
 
-/** Parses the first colour font in a .TDF file buffer. Throws on bad magic or other types. */
-export function parseTdf(buf: ArrayBuffer): TdfFont {
-  const b = new Uint8Array(buf);
-  for (let i = 0; i < MAGIC.length; i++) {
-    if (b[i] !== MAGIC.charCodeAt(i)) throw new Error('not a TheDraw font file');
-  }
-  return parseTdfRecord(b.subarray(MAGIC.length));
-}
 
 /** Always two digits per index so a following digit glyph can't extend the code. */
 function mircCode(attr: number): string {
@@ -213,15 +203,15 @@ export async function listTdfFonts(): Promise<TdfFontMeta[]> {
 
 const parsed = new Map<string, TdfFont>();
 
-/** Renders `text` in the packed font called `name`; IRC-coloured lines. */
+/** Renders `text` in a packed font (TheDraw name or source file stem); IRC-coloured lines. */
 export async function renderTdf(text: string, name: string): Promise<string[]> {
-  let font = parsed.get(name);
+  const { fonts, data } = await loadPack();
+  const meta = fonts.find((f) => f.name === name || f.file === name);
+  if (!meta) throw new Error(`unknown TheDraw font: ${name}`);
+  let font = parsed.get(meta.name);
   if (!font) {
-    const { fonts, data } = await loadPack();
-    const meta = fonts.find((f) => f.name === name);
-    if (!meta) throw new Error(`unknown TheDraw font: ${name}`);
     font = parseTdfRecord(data.subarray(meta.off, meta.off + meta.len));
-    parsed.set(name, font);
+    parsed.set(meta.name, font);
   }
   return renderTdfFont(font, text);
 }

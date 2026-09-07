@@ -218,6 +218,7 @@
 }
 
 .bufferinputcell .emojicell,
+.bufferinputcell .stylecell,
 .bufferinputcell .uploadcell {
   width: 24px;
   height: 24px;
@@ -233,10 +234,13 @@
 }
 
 .bufferinputcell .emojicell:hover,
+.bufferinputcell .stylecell:hover,
 .bufferinputcell .uploadcell:hover {
   background: rgba(255,255,255,0.06);
   color: #d1d5db;
 }
+
+.bufferinputcell .stylecell.engaged { color: #1e72ff; }
 
 .bufferinputcell .timestampcell {
   display: flex;
