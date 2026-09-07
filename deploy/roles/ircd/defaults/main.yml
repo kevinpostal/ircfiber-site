@@ -128,8 +128,15 @@ ircd_kicklen: 390
 ircd_topiclen: 390
 ircd_softlimit: 20000
 
-# Oper (IRCd oper + Anope "Services Root"). Password from vault.
-ircd_oper_name: "admin"
+# Oper. `ircd_oper_name` is BOTH the /OPER login name in opers.conf.j2 and
+# the Anope `oper {}` block name in services.conf.j2 — and Anope resolves
+# oper blocks by the account's *group display*, so this has to be the
+# display (`ircd_services_root_display`), not the account name. The
+# NickServ account itself is still `admin`
+# (`ircd_services_root_account`), which is what IDENTIFY and the gateway's
+# privileged NickServ commands use; the two are independent on purpose.
+# Password from vault (also the account's NickServ password).
+ircd_oper_name: "Zodiac"
 ircd_oper_vhost: "staff"
 ircd_oper_sslonly: true
 
@@ -140,12 +147,10 @@ ircd_oper_sslonly: true
 # name in opers.conf are independent.
 ircd_services_root_extra_accounts:
   - "sq"
-  # Same account as ircd_services_root_account; named here so the Anope
-  # oper{} block matches after the display rename below (Anope resolves
-  # opers by group display, not by nick alias). Both blocks are rendered,
-  # so Services Root survives whichever display is current — an oper block
-  # naming an account that does not exist is inert.
-  - "Zodiac"
+  # The account name behind the `Zodiac` display. Keeping a block for it
+  # means Services Root survives a display rename in either direction; an
+  # oper block naming an account that does not exist is inert.
+  - "admin"
 
 # uid:gid the anope/anope image runs its services process as. The gid is
 # `nogroup`, deliberately unrelated to the uid, so it cannot be derived —
@@ -229,7 +234,11 @@ ircd_chanserv_setup_enabled: true
 # its password is vault_ircd_oper_password — but an oper block only becomes
 # usable once the account it names actually exists in NickServ, which is
 # exactly what the setup script registers on its first run.
-ircd_services_root_account: "{{ ircd_oper_name }}"
+# The NickServ account is `admin` — `Zodiac` is its group display (see
+# ircd_services_root_display), and IDENTIFY/ChanServ REGISTER use the
+# account name. Deliberately NOT ircd_oper_name: that one carries the
+# display, because Anope matches oper blocks against it.
+ircd_services_root_account: "admin"
 # Used only when the account still has to be registered. Anope runs with
 # usemail = no, so no confirmation mail is ever sent to it.
 ircd_services_root_email: "{{ ircd_admins[0].email }}"
