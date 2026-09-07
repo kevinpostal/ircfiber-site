@@ -138,7 +138,12 @@
     env:
       TS_AUTHKEY: "{{ vault_tailscale_authkey }}"
       TS_HOSTNAME: "ovh-mullvad-{{ item.name }}"
-      TS_EXTRA_ARGS: "--exit-node={{ item.exit_node }} --exit-node-allow-lan-access=true --advertise-tags={{ tailscale_tags }}"
+      # NOTE: --accept-routes must be listed even though we never change it.
+      # tailscaled persists it in state, and since v1.102 `tailscale up`
+      # hard-fails ("requires mentioning all non-default flags") when a stored
+      # non-default pref is missing from argv — which crash-looped all three
+      # sidecars on 2026-09-07 and took every proxied IRC connection offline.
+      TS_EXTRA_ARGS: "--exit-node={{ item.exit_node }} --exit-node-allow-lan-access=true --advertise-tags={{ tailscale_tags }} --accept-routes"
       TS_USERSPACE: "true"
       TS_SOCKS5_SERVER: ":{{ item.port | default(mullvad_sidecar_socks_port) }}"
       TS_STATE_DIR: "/var/lib/tailscale"
