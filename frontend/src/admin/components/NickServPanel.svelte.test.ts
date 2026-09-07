@@ -19,6 +19,9 @@
  * 10. Ownership: an account no platform user can be tied to is badged, the
  *     filter narrows the table to exactly those rows, and a gateway that
  *     does not report ownership renders no badges at all.
+ * 11. A table row can be dropped without looking it up first: the row's Drop
+ *     names that row's nick in the confirmation, posts only once confirmed,
+ *     and is refused outright for a staff (oper) account.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -666,6 +669,59 @@ describe('NickServPanel.svelte — NickServ account management', () => {
 
     await page.getByLabelText('Only accounts with no platform user').click();
     await vi.waitFor(() => expect(bodyRows().length).toBe(4));
+  });
+
+  /// Dropping used to require a lookup first, so the fastest path to
+  /// deleting an account was also the one where the nick on screen and the
+  /// nick being dropped could disagree. The row's own button names its own
+  /// nick — and still goes through the confirmation, never straight to the
+  /// endpoint.
+  it("a row's Drop confirms with that row's nick and posts only once confirmed", async () => {
+    mockOwnership();
+    mockedPost.mockResolvedValue({ nick: 'dnsk', dropped: true, reprovisioning: false });
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(4));
+    const accountReads = mockedGet.mock.calls.filter((c) => c[0] === ACCOUNTS).length;
+
+    // `dnsk` is the fourth row: a lookup was never performed, so nothing but
+    // the row itself can be naming it.
+    await page.getByTestId('ns-drop-dnsk').click();
+    await expect.element(page.getByText('Drop this NickServ account?')).toBeInTheDocument();
+    await expect.element(page.getByText(/^dnsk is deleted from services/)).toBeInTheDocument();
+    // An unowned row is the irreversible one, and the dialog says so.
+    await expect.element(page.getByText(/nobody to ask first/)).toBeInTheDocument();
+    expect(api.post).not.toHaveBeenCalled();
+
+    await page.getByRole('button', { name: 'Drop account' }).click();
+    await vi.waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/nickserv/drop', {
+        nick: 'dnsk',
+        confirm: true,
+      }),
+    );
+    expect(mockedPost).toHaveBeenCalledTimes(1);
+    // The inventory is up to five minutes stale, so the dropped row only
+    // disappears if the table is re-read.
+    await vi.waitFor(() =>
+      expect(mockedGet.mock.calls.filter((c) => c[0] === ACCOUNTS).length).toBeGreaterThan(
+        accountReads,
+      ),
+    );
+  });
+
+  /// `Zodiac` holds an Anope oper block (the support bot is classified the
+  /// same way). Dropping one from a table click is not offered at all.
+  it('refuses to drop a staff account from the table', async () => {
+    mockOwnership();
+    render(NickServPanel);
+    await vi.waitFor(() => expect(bodyRows().length).toBe(4));
+
+    const staff = document.querySelector('[data-testid="ns-drop-Zodiac"]') as HTMLButtonElement;
+    expect(staff.disabled).toBe(true);
+    expect(staff.title).toBe('An oper account cannot be dropped from here.');
+    // The rows a human may actually decide about stay actionable.
+    expect((document.querySelector('[data-testid="ns-drop-dnsk"]') as HTMLButtonElement).disabled)
+      .toBe(false);
   });
 
   /// The gateway may be older than the ownership fields. Guessing "unowned"

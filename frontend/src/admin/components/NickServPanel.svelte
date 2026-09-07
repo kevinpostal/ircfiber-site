@@ -21,8 +21,9 @@
    * drift between Anope and Mongo is visible instead of inferred: most
    * accounts predate credential linking, and dropping one nobody can be
    * traced to is the one irreversible mistake here. Nothing on this page
-   * drops an account in bulk — the per-account Drop button stays the only
-   * way, deliberately.
+   * drops an account in bulk: the table's per-row Drop and the manage card's
+   * both take exactly one account through the same confirmation, deliberately
+   * — there is no multi-select.
    */
   import { onMount } from 'svelte';
   import Card from './Card.svelte';
@@ -148,7 +149,15 @@
   let suspendExpiry = $state('');
   let newPassword = $state('');
   let passwordSynced = $state(true);
-  let confirmDrop = $state(false);
+  /// The account a Drop is being confirmed for, null when none is pending:
+  /// either the manage card's nick or the table row whose Drop was pressed.
+  /// The row's ownership rides along so the confirmation can restate what
+  /// makes an unowned nick the irreversible case. One account at a time by
+  /// construction — this is a single target, not a selection.
+  let dropTarget = $state<{ nick: string; ownership?: NsAccount['ownership'] } | null>(null);
+  /// Which nick the running drop is for, so only the row that started it
+  /// shows "Loading…" and cannot be pressed again.
+  let droppingNick = $state('');
   let confirmReset = $state(false);
 
   // Linking a website user to this NickServ account. The join the table shows
@@ -426,10 +435,23 @@
     }
   }
 
+  /// The inventory row for a nick, so the manage card's confirmation carries
+  /// the same ownership warning the table's does. Accounts are grouped, so a
+  /// lookup by display account has to match too.
+  function rowFor(nick: string): NsAccount | undefined {
+    const n = nick.toLowerCase();
+    return accounts.find((a) => a.nick.toLowerCase() === n || a.account.toLowerCase() === n);
+  }
+
+  /// Drops whichever single account the confirmation named — a table row or
+  /// the manage card's. Reachable only from `ConfirmDialog`: the buttons set
+  /// `dropTarget` and nothing else posts.
   async function drop() {
-    const nick = infoNick;
-    confirmDrop = false;
+    const nick = dropTarget?.nick ?? '';
+    dropTarget = null;
+    if (!nick) return;
     acting = 'drop';
+    droppingNick = nick;
     actionError = null;
     try {
       const r = await api.post<{ nick: string; dropped: boolean; reprovisioning: boolean }>(
@@ -437,10 +459,14 @@
       );
       toastSuccess('Dropped ' + nick);
       if (r.reprovisioning) toastInfo('A replacement account is being provisioned for the owner.');
-      info = null;
-      infoNick = '';
-      lookupNick = '';
-      newPassword = '';
+      // Only clear the manage card when it is showing the account that just
+      // went away: dropping a table row must not wipe an unrelated lookup.
+      if (nick.toLowerCase() === infoNick.toLowerCase()) {
+        info = null;
+        infoNick = '';
+        lookupNick = '';
+        newPassword = '';
+      }
       await loadAccounts();
       await loadUnprovisioned();
     } catch (e) {
@@ -448,6 +474,7 @@
       toastError(actionError);
     } finally {
       acting = '';
+      droppingNick = '';
     }
   }
 
@@ -885,7 +912,31 @@
                 {/if}
               </td>
               <td class="py-2 text-right">
-                <button type="button" onclick={() => void lookup(a.nick)} class={btn}>Manage</button>
+                <div class="flex items-center justify-end gap-1">
+                  <button type="button" onclick={() => void lookup(a.nick)} class={btn}>Manage</button>
+                  <!--
+                    Deleting an account straight from the inventory: looking it
+                    up first was the only way, and the row already carries the
+                    evidence the decision needs. Still one account, still
+                    behind the same confirmation. A staff row holds an Anope
+                    oper block (or is the support bot) and is never droppable
+                    from a table click.
+                  -->
+                  <button
+                    type="button"
+                    data-testid="ns-drop-{a.nick}"
+                    aria-label="Drop {a.nick}"
+                    title={a.ownership === 'staff'
+                      ? 'An oper account cannot be dropped from here.'
+                      : `Drop ${a.nick} from services`}
+                    disabled={a.ownership === 'staff' ||
+                      (acting === 'drop' && droppingNick === a.nick)}
+                    onclick={() => (dropTarget = { nick: a.nick, ownership: a.ownership })}
+                    class="rounded-md border border-danger/40 px-2.5 py-1 text-xs text-danger hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
+                    {acting === 'drop' && droppingNick === a.nick ? 'Loading…' : 'Drop'}
+                  </button>
+                </div>
               </td>
             </tr>
           {/each}
@@ -1139,7 +1190,7 @@
       </button>
       <button
         type="button"
-        onclick={() => (confirmDrop = true)}
+        onclick={() => (dropTarget = { nick: infoNick, ownership: rowFor(infoNick)?.ownership })}
         class="rounded-md border border-danger/40 px-2.5 py-1 text-xs text-danger hover:bg-danger/10"
       >
         {acting === 'drop' ? 'Loading…' : 'Drop'}
@@ -1204,13 +1255,17 @@
   onCancel={() => (confirmReset = false)}
 />
 <ConfirmDialog
-  open={confirmDrop}
+  open={dropTarget !== null}
   tone="danger"
   title="Drop this NickServ account?"
-  message={`${infoNick} is deleted from services and the nickname becomes free. This cannot be undone.`}
+  message={`${dropTarget?.nick ?? ''} is deleted from services and the nickname becomes free. This cannot be undone.${
+    dropTarget?.ownership === 'unowned'
+      ? ' No IRC Fiber account matches this one, so there is nobody to ask first: the nick may still be in use by its owner on IRC.'
+      : ''
+  }`}
   confirmLabel="Drop account"
   onConfirm={drop}
-  onCancel={() => (confirmDrop = false)}
+  onCancel={() => (dropTarget = null)}
 />
 <ConfirmDialog
   open={confirmLinkRotate}
