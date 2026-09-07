@@ -150,6 +150,14 @@ export default defineConfig({
           if (id.includes('highlight.js/lib/common') || id.includes('highlight.js/lib/languages/') || id.includes('highlight.js/es/common') || id.includes('highlight.js/es/languages/')) return 'chunk-editor';
           // Admin-only heavy deps — the chat entry must not download these
           if (id.includes('node_modules/layerchart') || id.includes('node_modules/mode-watcher')) return 'vendor-admin';
+          // FIGlet (admin MOTD editor): the renderer rides with the admin
+          // vendor chunk; each font is its own lazy chunk, fetched only when
+          // the admin picks it — 23 fonts would otherwise add ~300 KB to the
+          // vendor chunk the chat entry downloads.
+          if (id.includes('node_modules/figlet/importable-fonts/')) {
+            return 'font-' + id.slice(id.lastIndexOf('/') + 1).replace(/\.js$/, '').replace(/[^\w-]+/g, '_').toLowerCase();
+          }
+          if (id.includes('node_modules/figlet/')) return 'vendor-admin';
           // Keep vendor as single chunk to avoid circular deps (svelte + highlights share graph)
           if (id.includes('node_modules')) return 'vendor';
         },

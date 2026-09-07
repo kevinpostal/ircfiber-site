@@ -216,7 +216,9 @@
 
 #-#-#-#-#-#-#-#-#-#-  MISCELLANEOUS CONFIGURATION  -#-#-#-#-#-#-#-#-#-#
 
-<files motd="motd">
+# motd.d/ is the one conf subdir the gateway may write (admin MOTD
+# rotation, REHASHed through the oper session).
+<files motd="motd.d/motd">
 
 <dns timeout="5">
 

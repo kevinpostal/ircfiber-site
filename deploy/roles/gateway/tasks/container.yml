@@ -52,6 +52,10 @@
       # Read-only mount of the rendered InspIRCd config for the admin
       # dashboard's redacted config viewer (values never leave redacted).
       - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
+      # Read-write mount of just the MOTD subdir: the admin MOTD page writes
+      # a rotated template there and REHASHes (web/admin/motd.d). Nested
+      # under the :ro mount above so opers.conf & co stay untouchable.
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}/motd.d:/etc/ircfiber/ircd/motd.d"
       # Read-only mount of Anope's data volume for the admin NickServ
       # account inventory. anope.db is mode 0600 owned by uid 10000; the
       # gateway runs as uid 0, so :ro is sufficient and nothing writes here.

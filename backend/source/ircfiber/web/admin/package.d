@@ -51,6 +51,8 @@ import ircfiber.web.admin.emails : apiEmailsOverview, apiEmailsTest,
     apiEmailsPendingResend, apiEmailsPendingRevoke, apiEmailsCooldownClear,
     apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
+import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
+    apiMotdDelete, apiMotdRotate;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -153,6 +155,13 @@ final class AdminController {
         router.post("/api/admin/support/bot/reconnect", &adminWrap!apiSupportBotReconnectRoute);
         router.post("/api/admin/support/bot/rejoin", &adminWrap!apiSupportBotRejoinRoute);
         router.post("/api/admin/support/bot/announce", &adminWrap!apiSupportBotAnnounceRoute);
+
+        // MOTD templates (served per connect by the engine, rotated into the ircd)
+        router.get("/api/admin/motd", &adminWrap!apiMotdListRoute);
+        router.post("/api/admin/motd", &adminWrap!apiMotdCreateRoute);
+        router.post("/api/admin/motd/rotate", &adminWrap!apiMotdRotateRoute);
+        router.post("/api/admin/motd/:id", &adminWrap!apiMotdUpdateRoute);
+        router.post("/api/admin/motd/:id/delete", &adminWrap!apiMotdDeleteRoute);
 
         // Bouncer: attached clients + accounts with a bouncer password
         router.get("/api/admin/bnc", &adminWrap!apiBncOverviewRoute);
@@ -272,6 +281,11 @@ private:
     void apiIrcdBanDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdBanDelete(req, res); }
     void apiIrcdRehashRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdRehash(req, res); }
     void apiIrcdConfigRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfig(req, res); }
+    void apiMotdListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdList(req, res, redis); }
+    void apiMotdCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdCreate(req, res, redis); }
+    void apiMotdUpdateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdUpdate(req, res, redis); }
+    void apiMotdDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdDelete(req, res, redis); }
+    void apiMotdRotateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdRotate(req, res, redis); }
     // Needs redis: the inventory response also reports provisioning health
     // (outcome counters, orphan pending credentials, unprovisioned users).
     void apiNsAccountsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiNsAccounts(req, res, redis); }

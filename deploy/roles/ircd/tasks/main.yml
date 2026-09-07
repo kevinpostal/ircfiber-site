@@ -114,19 +114,43 @@
     path: "{{ ircd_conf_dir }}/ircd.yaml"
     state: absent
 
+# The MOTD lives in its own subdir so the gateway can be handed write
+# access to just that (rw bind mount of motd.d, see roles/gateway/tasks/
+# container.yml) for the admin MOTD rotation, without ever being able to
+# touch opers.conf & co. The ircd (uid 10000) only needs to read it, and
+# the gateway writes as root, hence world-readable dir + file.
+- name: Ensure InspIRCd motd.d exists
+  ansible.builtin.file:
+    path: "{{ ircd_conf_dir }}/motd.d"
+    state: directory
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0755"
+  tags: [ircdconf]
+
+- name: Remove legacy top-level motd
+  ansible.builtin.file:
+    path: "{{ ircd_conf_dir }}/motd"
+    state: absent
+  tags: [ircdconf]
+
 - name: Render InspIRCd config
   ansible.builtin.template:
     src: "{{ item.src }}"
     dest: "{{ ircd_conf_dir }}/{{ item.dest }}"
     owner: "{{ ircd_container_uid }}"
     group: "{{ ircd_container_uid }}"
-    mode: "0640"
+    mode: "{{ item.mode | default('0640') }}"
+    # Rendered once; after that the gateway's MOTD rotation owns the file.
+    force: "{{ item.force | default(true) }}"
   loop:
     - { src: inspircd.conf.j2, dest: inspircd.conf }
     - { src: custom.conf.j2, dest: custom.conf }
     - { src: modules.conf.j2, dest: modules.conf }
     - { src: opers.conf.j2, dest: opers.conf }
-    - { src: motd.j2, dest: motd }
+    # 0644, like the file the gateway's MOTD rotation writes in its place;
+    # never re-rendered over a rotated MOTD.
+    - { src: motd.j2, dest: motd.d/motd, mode: "0644", force: false }
   loop_control:
     label: "{{ item.dest }}"
   # Tagged so the config can be re-rendered and rehashed on its own:

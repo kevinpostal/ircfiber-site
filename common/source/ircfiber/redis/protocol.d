@@ -200,6 +200,14 @@ struct RedisKeys {
     /// because `mongo:7` carries no redis-cli.
     static string backupRuns() { return "irc:backup:runs"; }
 
+    /// Enabled MOTD templates for the IRC Fiber network: JSON array of
+    /// `{id,name,body}` written by the gateway on every admin edit
+    /// (`ircfiber.db.motd_templates.publishMotdTemplates`) and read by the
+    /// engine on each connect to irc.ircfiber.com, which serves one at
+    /// random in place of the ircd's static file. Empty/absent = pass the
+    /// ircd MOTD through unchanged.
+    static string motdTemplates() { return "irc:config:motdTemplates"; }
+
     /// Protocol version key. Written by engine heartbeat (see
     /// `ircfiber.engine.state.writeStateSnapshots`). Gateways and
     /// future Python implementations read this at startup to assert

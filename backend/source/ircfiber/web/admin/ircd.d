@@ -856,26 +856,57 @@ package void apiIrcdBanDelete(HTTPServerRequest req, HTTPServerResponse res) {
     });
 }
 
+/// Sends REHASH on `client` and returns the confirmed file name plus the
+/// raw reply lines. Throws IrcdError when the ircd refuses or never confirms.
+private string rehashOn(IrcdClient client, out string[] lines) {
+    lines = client.transact("REHASH", ["382", "481", "491"], 10_000);
+    string file = "inspircd.conf";
+    bool ok = false;
+    foreach (line; lines) {
+        auto l = parseIrcLine(line);
+        if (!l.valid) continue;
+        if (l.command == "382") { ok = true; if (l.params.length > 1) file = l.params[1]; }
+        if (l.command == "481" || l.command == "491")
+            throw new IrcdError("IRCd refused REHASH (oper privileges).", 403);
+    }
+    if (!ok) throw new IrcdError("REHASH sent but no 382 confirmation arrived.");
+    return file;
+}
+
 /// POST /api/admin/ircd/rehash — reload ircd config (connected users stay up).
 package void apiIrcdRehash(HTTPServerRequest req, HTTPServerResponse res) {
     withIrcd(req, res, (client) {
-        auto lines = client.transact("REHASH", ["382", "481", "491"], 10_000);
-        string file = "inspircd.conf";
-        bool ok = false;
-        foreach (line; lines) {
-            auto l = parseIrcLine(line);
-            if (!l.valid) continue;
-            if (l.command == "382") { ok = true; if (l.params.length > 1) file = l.params[1]; }
-            if (l.command == "481" || l.command == "491")
-                throw new IrcdError("IRCd refused REHASH (oper privileges).", 403);
-        }
-        if (!ok) throw new IrcdError("REHASH sent but no 382 confirmation arrived.");
+        string[] lines;
+        auto file = rehashOn(client, lines);
         logInfo("Admin rehashed ircd (%s)", file);
         auto data = Json.emptyObject;
         data["rehashed"] = Json(file);
         data["notices"] = ircdNotices(lines);
         jsonOk(res, data);
     });
+}
+
+/// REHASH over the shared oper session outside an HTTP handler (the MOTD
+/// rotation timer). Same one-retry-on-stale-session policy as `withIrcd`;
+/// must run on the main thread that owns the session. Returns the
+/// confirmed file name; throws IrcdError / Exception on failure.
+package string rehashIrcdNow() {
+    auto settings = loadIrcdSettings();
+    if (!settings.configured())
+        throw new IrcdError("IRCd oper credentials are not configured.", 503);
+    foreach (attempt; 0 .. 2) {
+        bool reused;
+        auto client = acquireSession(settings, reused);
+        try {
+            string[] lines;
+            return rehashOn(client, lines);
+        } catch (Exception e) {
+            dropSession();
+            if (reused && attempt == 0) continue;
+            throw e;
+        }
+    }
+    assert(0);
 }
 
 /// Config files viewable (read-only) from the dashboard.
@@ -896,7 +927,8 @@ package void apiIrcdConfig(HTTPServerRequest req, HTTPServerResponse res) {
     }
     import std.file : exists, isFile, readText;
     import std.path : buildPath;
-    auto path = buildPath(settings.confDir, name);
+    // The MOTD moved into the gateway-writable motd.d/ (admin rotation).
+    auto path = name == "motd" ? buildPath(settings.confDir, "motd.d", "motd") : buildPath(settings.confDir, name);
     if (!exists(path) || !isFile(path)) {
         jsonError(res, 503, "Config file is not visible to the gateway (" ~ path ~
             "). Mount the ircd conf dir read-only to enable the config viewer.");

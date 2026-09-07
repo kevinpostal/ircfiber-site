@@ -15,6 +15,7 @@
   import Servers from './pages/Servers.svelte';
   import ServerHost from './pages/ServerHost.svelte';
   import Ircd from './pages/Ircd.svelte';
+  import Motd from './pages/Motd.svelte';
   import Sessions from './pages/Sessions.svelte';
   import Bouncer from './pages/Bouncer.svelte';
   import Users from './pages/Users.svelte';
@@ -54,6 +55,7 @@
     if (hostMatch) return { kind: 'servers-host', host: hostMatch.host } as const;
     if (match('/servers', path)) return { kind: 'servers' } as const;
     if (match('/ircd', path)) return { kind: 'ircd' } as const;
+    if (match('/motd', path)) return { kind: 'motd' } as const;
     if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
     if (match('/backups', path)) return { kind: 'backups' } as const;
     if (match('/emails', path)) return { kind: 'emails' } as const;
@@ -93,6 +95,8 @@
         <Servers />
       {:else if page?.kind === 'ircd'}
         <Ircd />
+      {:else if page?.kind === 'motd'}
+        <Motd />
       {:else if page?.kind === 'mullvad'}
         <Mullvad />
       {:else if page?.kind === 'backups'}

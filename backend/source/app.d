@@ -318,6 +318,20 @@ void main() {
     logInfo("IRC Fiber Gateway listening on http://localhost:8090");
     startFiberWatchdog();
     logInfo("Fiber watchdog started");
+    // MOTD templates: seed the launch set once, mirror to Redis for the
+    // engine's per-connect pick, and rotate the ircd file hourly.
+    {
+        import ircfiber.db.motd_templates : MotdTemplateRepository, seedDefaultMotdTemplates;
+        import ircfiber.web.admin.motd : publishMotdTemplates, startMotdRotation;
+        try {
+            auto motdRepo = new MotdTemplateRepository();
+            seedDefaultMotdTemplates(motdRepo);
+            publishMotdTemplates(redis, motdRepo);
+        } catch (Exception e) {
+            logWarn("motd: boot seed/publish failed: %s", e.msg);
+        }
+        startMotdRotation(redis);
+    }
 
     cast(void) new ServerRegistry(redis);
     // Run engine health monitor on g_bgPool with its own Redis connection
