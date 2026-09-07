@@ -160,6 +160,21 @@ describe('getUserModePrefix', () => {
     expect(result.prefix).toBe('*');
   });
 
+  // multi-prefix sends every prefix, server rank order first, and
+  // InspIRCd's operprefix outranks channel modes — an opered founder is
+  // `*~@Zodiac` and belongs under Owner, not Oper.
+  it('prefers channel status over the operprefix', () => {
+    expect(getUserModePrefix('*~@Zodiac').category).toBe('OWNER');
+    expect(getUserModePrefix('*~@Zodiac').prefix).toBe('~');
+    expect(getUserModePrefix('*@bob').category).toBe('OP');
+    expect(getUserModePrefix('!+carol').category).toBe('VOICED');
+  });
+
+  it('still reports OPER when the oper mark is the only prefix', () => {
+    expect(getUserModePrefix('*Zodiac').category).toBe('OPER');
+    expect(getUserModePrefix('!enforcer').category).toBe('OPER');
+  });
+
   it('returns OWNER for ~ prefix', () => {
     const result = getUserModePrefix('~alice');
     expect(result.category).toBe('OWNER');

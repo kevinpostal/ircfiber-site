@@ -339,10 +339,30 @@ export function getDisplayName(channelName: string, isupport?: Record<string, st
   return channelName;
 }
 
+/**
+ * The mode a member is listed under, from the run of prefix chars a nick
+ * carries.
+ *
+ * With `multi-prefix` (which the engine requests) the server sends every
+ * prefix a member holds, highest rank first — an opered founder arrives as
+ * `*~@Zodiac`. Rank order is the *server's*, and InspIRCd's operprefix
+ * (`*`, and ojoin's `!`) outranks every channel mode, so taking the first
+ * char alone filed the channel owner under "Oper". A channel member list
+ * is about channel status, so the highest **channel** prefix wins and the
+ * oper marks only decide the section when a member has nothing else.
+ */
 export function getUserModePrefix(nick: string): { prefix: string; cls: string; category: ModeCategory; mode: string; title: string } {
-  const first = nick.charAt(0);
-  if (first in MODE_PREFIX_MAP) return MODE_PREFIX_MAP[first];
-  return { prefix: '', cls: '', category: 'MEMBER', mode: '', title: '' };
+  let operOnly: (typeof MODE_PREFIX_MAP)[string] | null = null;
+  for (const ch of nick) {
+    const entry = MODE_PREFIX_MAP[ch];
+    if (!entry) break;
+    if (entry.category === 'OPER') {
+      operOnly ??= entry;
+      continue;
+    }
+    return entry;
+  }
+  return operOnly ?? { prefix: '', cls: '', category: 'MEMBER', mode: '', title: '' };
 }
 
 export function stripPrefix(nick: string): string {
