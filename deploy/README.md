@@ -326,7 +326,29 @@ ansible-playbook playbooks/cloudflare.yml
 # Or let site.yml do it automatically as part of the full deploy.
 ```
 
-The role manages apex (`@`) and `www` records by default; override `cloudflare_record_prefixes` in `group_vars/all.yml` (or set `cloudflare_records` directly per host) to manage a different set. `cloudflare_proxied: true` flips CF into "orange cloud" mode (CF proxies traffic and terminates TLS at the edge); `false` keeps CF as authoritative DNS only.
+The role manages apex (`@`) and `www` records by default; override `cloudflare_record_prefixes` in `group_vars/all.yml` (or set `cloudflare_records` directly per host) to manage a different set. Records other than `A` carry their content in `value`, and `solo: true` makes a record the only one of its name+type — required for SPF and DMARC, because the module keys TXT records on their value and would otherwise leave the old policy in place beside the new one (two SPF records at one name is a permerror, not a merge). `cloudflare_proxied: true` flips CF into "orange cloud" mode (CF proxies traffic and terminates TLS at the edge); `false` keeps CF as authoritative DNS only. TXT/MX records are always forced DNS-only, and `cloudflare_target_ip` is only required when the managed set actually contains an `A` record — `vps-efb4b52d` manages only mail records, since its apex and `www` are proxied and must not be pointed at the origin IP.
+
+### Outbound mail (signup verification)
+
+`IRCFIBER_EMAIL_VERIFICATION=1` makes a new account unusable until the user clicks the link in a verification e-mail, so a broken mail path blocks *all* signups. `IRCFIBER_MAIL_PROVIDER=sender` sends through sender.net's transactional API (`backend/source/ircfiber/mail.d`, token in `IRCFIBER_SENDER_API_TOKEN_FILE`); `log` is the local-dev provider that just logs the link, and anything else throws.
+
+sender.net refuses a message outright until the sending domain's DNS is complete — the failure surfaces as `register: sending verification email to … failed: sender.net rejected the message: HTTP 400 …`. Ask it what it wants rather than guessing:
+
+```bash
+ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'T=$(cat /etc/ircfiber/gateway/secrets/sender_api_token); \
+  curl -s https://api.sender.net/v2/domains -H "Authorization: Bearer $T"'"'"''
+# spf_verified / dkim_verified / dmarc are its per-check state,
+# merged_spf_record is the SPF string it wants, expected_dkim_value the DKIM target.
+```
+
+All three live in `host_vars/vps-efb4b52d.yml` as `cloudflare_records` (`ansible-playbook playbooks/cloudflare.yml`): the SPF include (`include:sendersrv.com`, alongside Cloudflare Email Routing's include for inbound), `sender._domainkey` CNAME → `dkim.sendersrv.com`, and a `_dmarc` TXT policy. sender.net has no API to re-run the checks, and its resolver caches the previous negative answer, so a new record takes up to the zone's negative TTL (1800 s on `ircfiber.com`) to take effect. Verify with a real send before declaring it fixed:
+
+```bash
+ssh <host> 'sudo docker exec ircfiber-gateway sh -lc '"'"'T=$(cat /etc/ircfiber/gateway/secrets/sender_api_token); \
+  curl -s -w "\nHTTP %{http_code}\n" -X POST https://api.sender.net/v2/message/send \
+    -H "Authorization: Bearer $T" -H "Content-Type: application/json" \
+    -d "{\"from\":{\"email\":\"no-reply@ircfiber.com\",\"name\":\"IRC Fiber\"},\"to\":{\"email\":\"you@example.org\"},\"subject\":\"probe\",\"text\":\"probe\"}"'"'"''
+```
 
 ### Bouncer (`bnc.<domain>:7000`, "Connect with another client…")
 
