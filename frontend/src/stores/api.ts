@@ -441,7 +441,7 @@ export async function addNetwork(data: {
   name: string; host: string; port: number; tls: string;
   nick: string; realName: string; autoJoinChannels: string; nspass?: string;
   commands?: string; sasl?: string; saslUsername?: string; saslPassword?: string;
-  autoJoinDelaySeconds?: number; egressNodeId?: string;
+  autoJoinDelaySeconds?: number; egressNodeId?: string; operUsername?: string; operPassword?: string;
 }): Promise<Record<string, unknown>> {
   const payload = {
     ...data,

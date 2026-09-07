@@ -61,7 +61,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect.element(page.getByText('#general')).toBeInTheDocument();
@@ -78,7 +78,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		expect(document.querySelector('#member-count')).toHaveTextContent('2');
@@ -93,7 +93,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect.element(page.getByText('Welcome to #general')).toBeInTheDocument();
@@ -108,7 +108,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		// IRCCloud: channels only show member count + options gear
@@ -127,7 +127,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect.element(page.getByRole('button', { name: /edit/i })).toBeInTheDocument();
@@ -142,7 +142,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect.element(page.getByRole('button', { name: /connect/i })).toBeInTheDocument();
@@ -158,7 +158,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers, memberPanelOpen: true },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers, memberPanelOpen: true },
 		});
 
 		const btn = page.getByRole('button', { name: /members list/i });
@@ -176,7 +176,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		const connectBtn = page.getByRole('button', { name: /connect/i });
@@ -206,7 +206,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		const btn = page.getByRole('button', { name: /disconnect/i });
@@ -222,7 +222,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		const btn = page.getByRole('button', { name: /disconnect/i });
@@ -245,7 +245,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		const btn = page.getByRole('button', { name: /disconnect/i });
@@ -264,7 +264,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect(page.getByRole('button', { name: /disconnect/i })).not.toBeInTheDocument();
@@ -279,7 +279,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		const rejoinBtn = page.getByRole('button', { name: /^rejoin$/i });
@@ -296,7 +296,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		const rejoinBtn = page.getByRole('button', { name: /^rejoin$/i });
@@ -326,7 +326,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		// BufferHeader.svelte renders `Joining {channelName}…` (line 164) when
@@ -344,7 +344,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect(page.getByRole('button', { name: /^rejoin$/i })).not.toBeInTheDocument();
@@ -361,7 +361,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect.element(page.getByText(/Server busy/i)).toBeInTheDocument();
@@ -380,7 +380,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		// join-error chip with the banned copy
@@ -400,7 +400,7 @@ describe('BufferHeader', () => {
 		flushSync();
 
 		render(BufferHeader, {
-			props: { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
+			props: { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() },
 		});
 
 		await expect.element(page.getByRole('button', { name: /Members list/i })).toBeInTheDocument();
@@ -409,7 +409,7 @@ describe('BufferHeader', () => {
 	});
 
 	describe('server-buffer live pill', () => {
-		const props = { onAddNetwork: vi.fn(), onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() };
+		const props = { onEditNetwork: vi.fn(), onJoinChannel: vi.fn(), onToggleMembers: vi.fn() };
 		const pill = () => document.querySelector('[data-testid="server-pill"]');
 		const kv = () => document.querySelector('[data-testid="server-kv"]');
 

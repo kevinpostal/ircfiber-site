@@ -235,12 +235,28 @@ describe('NetworkForm', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('shows validation for required fields', async () => {
+  it('requires a hostname and a nickname', async () => {
     render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
-    const form = document.querySelector('form') as HTMLFormElement;
-    expect(form.checkValidity()).toBe(false);
-    const nameInput = page.getByLabelText('Network name');
-    expect((nameInput.element() as HTMLInputElement).required).toBe(true);
+    await userEvent.click(page.getByRole('button', { name: 'Join network' }));
+    await expect.element(page.getByText('Please provide a hostname and nickname')).toBeInTheDocument();
+    expect(mockAddNetwork).not.toHaveBeenCalled();
+  });
+
+  it('defaults a blank network name to the hostname', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.type(page.getByLabelText('Hostname'), 'irc.libera.chat');
+    await userEvent.fill(page.getByLabelText('Nickname'), 'landing1');
+    await userEvent.click(page.getByRole('button', { name: 'Join network' }));
+    expect(mockAddNetwork).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'irc.libera.chat', host: 'irc.libera.chat', nick: 'landing1' })
+    );
+  });
+
+  it('fills the hostname and port from the preset picker', async () => {
+    render(NetworkForm, { props: { mode: 'add', networkId: null, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.selectOptions(page.getByLabelText('Network', { exact: true }), 'irc.libera.chat');
+    await expect.element(page.getByLabelText('Hostname')).toHaveValue('irc.libera.chat');
+    await expect.element(page.getByLabelText('Network name')).toHaveValue('Libera.Chat');
   });
 
   it('Advanced section starts collapsed', async () => {
@@ -288,6 +304,8 @@ describe('NetworkForm', () => {
     expect(call[1]).not.toHaveProperty('commands');
     expect(call[1]).not.toHaveProperty('nspass');
     expect(call[1]).not.toHaveProperty('serverPass');
+    expect(call[1]).not.toHaveProperty('operUsername');
+    expect(call[1]).not.toHaveProperty('operPassword');
   });
 
   it('Update mode sends a newly typed NickServ password, server password and commands', async () => {
@@ -303,6 +321,21 @@ describe('NetworkForm', () => {
     expect(call[1]).toHaveProperty('nspass', 'hunter2');
     expect(call[1]).toHaveProperty('serverPass', 'srvpass');
     expect(call[1]).toHaveProperty('commands', 'OPER admin secret');
+  });
+
+  it('Update mode sends oper login and password together when typed', async () => {
+    const network = createNetwork();
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
+    await expect.element(page.getByLabelText(/Oper login/)).toBeInTheDocument();
+    await expect.element(page.getByLabelText(/Oper password/)).toBeInTheDocument();
+    await userEvent.type(page.getByLabelText(/Oper login/), 'opername');
+    await userEvent.fill(page.getByLabelText(/Oper password/), 's3cr3t');
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    const call = mockUpdateNetwork.mock.calls[0];
+    expect(call[1]).toHaveProperty('operUsername', 'opername');
+    expect(call[1]).toHaveProperty('operPassword', 's3cr3t');
   });
 
   it('Update mode includes autoJoinDelaySeconds in payload', async () => {
@@ -384,13 +417,16 @@ describe('NetworkForm', () => {
     await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
     const nickservInput = page.getByLabelText(/NickServ password/).element() as HTMLInputElement;
     const serverInput = page.getByLabelText(/Server password/).element() as HTMLInputElement;
+    const operInput = page.getByLabelText(/Oper password/).element() as HTMLInputElement;
     expect(nickservInput.type).toBe('password');
     expect(serverInput.type).toBe('password');
+    expect(operInput.type).toBe('password');
     const reveals = document.querySelectorAll('.passwordRow .reveal input');
-    expect(reveals.length).toBe(2);
+    expect(reveals.length).toBe(3);
     await userEvent.click(reveals[1] as HTMLElement);
     expect(nickservInput.type).toBe('password');
     expect(serverInput.type).toBe('text');
+    expect(operInput.type).toBe('password');
   });
 
   it('Escape key closes the form', async () => {

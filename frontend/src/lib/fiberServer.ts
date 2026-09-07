@@ -9,6 +9,13 @@ export function isFiberServer(net: Pick<Network, 'host' | 'systemManaged'>): boo
 }
 
 /**
+ * Channels every IRC Fiber network auto-joins. Mirrors
+ * DEFAULT_FIBER_CHANNELS in common/source/ircfiber/default_network.d —
+ * keep both lists identical.
+ */
+export const FIBER_DEFAULT_CHANNELS = ['#support', '#ircfiber'];
+
+/**
  * Whether the IRC Fiber server should be hidden from the sidebar.
  *
  * Previously auto-hid on any disconnect/failure (retryStatus, failInfo, etc.)

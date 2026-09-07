@@ -151,6 +151,10 @@ export const ircState = $state({
   settingsTab: 'design' as SettingsTab,
   showShortcuts: false,
   showFeedback: false,
+  // Full-page add-network surface (/?/add-network). `addNetworkWelcome`
+  // adds the post-signup hero + Fiber channel chips (/?/add-network=welcome).
+  showAddNetwork: false,
+  addNetworkWelcome: false,
   // Nicks the user has explicitly requested WHOIS for (via /whois or the
   // user-popup "Whois" action). The server also sends automatic WHOIS
   // queries on JOIN to discover realnames (see ircfiber/irc/connection.d),

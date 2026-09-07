@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isFiberServer, isFiberServerDown } from './fiberServer';
+import { isFiberServer, isFiberServerDown, FIBER_DEFAULT_CHANNELS } from './fiberServer';
 import type { Network } from '../types';
 
 function makeNet(overrides: Partial<Network> = {}): Network {
@@ -39,6 +39,15 @@ describe('isFiberServer', () => {
     expect(isFiberServer(makeNet({ host: 'irc.libera.chat', systemManaged: false } as Partial<Network>))).toBe(false);
     expect(isFiberServer(makeNet({ host: 'irc.ircfiber.com', systemManaged: false } as Partial<Network>))).toBe(false);
     expect(isFiberServer(makeNet({ host: 'irc.libera.chat', systemManaged: true } as Partial<Network>))).toBe(false);
+  });
+});
+
+// Mirrors DEFAULT_FIBER_CHANNELS in common/source/ircfiber/default_network.d.
+// Asserted literally so the two lists cannot silently diverge: the chips on
+// the welcome page and the Fiber auto-join lock both read this constant.
+describe('FIBER_DEFAULT_CHANNELS', () => {
+  it('matches the backend auto-join set', () => {
+    expect(FIBER_DEFAULT_CHANNELS).toEqual(['#support', '#ircfiber']);
   });
 });
 

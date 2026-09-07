@@ -13,7 +13,7 @@ import { ircState } from '../stores/ircStore.svelte';
  * and on Escape; this one now matches.
  */
 function open(): HTMLElement {
-  render(AccountMenu, { props: { onAddNetwork: vi.fn() } });
+  render(AccountMenu, { props: {} });
   const gear = document.querySelector('.accountMenu__button') as HTMLElement;
   gear.click();
   return gear;

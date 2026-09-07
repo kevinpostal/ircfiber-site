@@ -508,4 +508,4 @@
     Add a network
   </button>
 </div>
-<AccountMenu {onAddNetwork} />
+<AccountMenu />

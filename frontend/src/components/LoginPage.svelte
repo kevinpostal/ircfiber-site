@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { navigateAddNetwork } from '../lib/routing';
   /**
    *
    * Renders as a centered modal on top of a dimmed backdrop, with the
@@ -74,6 +75,10 @@
         // reload and re-mount on auth change.
         const probe = await fetch('/api/me', { credentials: 'same-origin' });
         if (probe.ok) {
+          // Mirror registerPost's redirect: a fresh signup lands on the
+          // welcome add-network page. The SPA never reloads here, so push
+          // the URL ourselves before the parent reads the route.
+          if (mode === 'register') navigateAddNetwork(true);
           onAuthenticated();
           return;
         }

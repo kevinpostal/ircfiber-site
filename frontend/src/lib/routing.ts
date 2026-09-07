@@ -112,6 +112,29 @@ export function navigateBackFromFeedback(): void {
   }
 }
 
+export function navigateAddNetwork(welcome = false): void {
+  history.pushState({ addNetwork: true }, '', welcome ? '/?/add-network=welcome' : '/?/add-network');
+}
+
+export function isAddNetworkUrl(): boolean {
+  return /^\?\/add-network(?:=welcome)?$/.test(window.location.search);
+}
+
+export function isAddNetworkWelcome(): boolean {
+  return /^\?\/add-network=welcome$/.test(window.location.search);
+}
+
+export function navigateBackFromAddNetwork(): void {
+  const net = ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId);
+  if (net && ircState.activeBuffer.bufferName) {
+    updateRoute(ircState.activeBuffer.networkId, ircState.activeBuffer.bufferName);
+  } else if (ircState.networks.length > 0) {
+    updateRoute(ircState.networks[0].networkId, '_server');
+  } else {
+    window.location.href = '/';
+  }
+}
+
 export function navigateToFileViewer(id: string): void {
   history.pushState({ fileView: true, id }, '', `/?/view=${encodeURIComponent(id)}`);
 }

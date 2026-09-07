@@ -1,22 +1,81 @@
 <script lang="ts">
-  import { ircState, setActiveBuffer } from '../stores/ircStore.svelte';
+  import { ircState } from '../stores/ircStore.svelte';
   import { addNetwork, updateNetwork, fetchEgress, type EgressInfo, type EgressSlot } from '../stores/api';
   import { sendRaw } from '../stores/wsConnection.svelte.ts';
-  import { collapsedMap } from '../stores/preferences.svelte';
-  import { updateRoute } from '../lib/routing';
+  import { adoptNetwork } from '../lib/adoptNetwork';
   import { parseChannelList, stripPrefix } from '../lib/utils';
-  import { isFiberServer } from '../lib/fiberServer';
+  import { isFiberServer, FIBER_DEFAULT_CHANNELS } from '../lib/fiberServer';
   import { normalizeHost, parseHostUrl } from '../lib/host';
 
   interface Props {
     mode: 'add' | 'edit';
     networkId: string | null;
     onClose: () => void;
+    /// The full-page add surface renders its own header, so it hides this one.
+    showHeading?: boolean;
     onAddNetwork?: (...args: any[]) => any;
     onUpdateNetwork?: (...args: any[]) => any;
     onSendRaw?: (networkId: string, line: string) => void;
   }
-  let { mode, networkId, onClose, onAddNetwork = addNetwork, onUpdateNetwork = updateNetwork, onSendRaw = sendRaw }: Props = $props();
+  let {
+    mode, networkId, onClose, showHeading = true,
+    onAddNetwork = addNetwork, onUpdateNetwork = updateNetwork, onSendRaw = sendRaw,
+  }: Props = $props();
+
+  interface NetworkPreset {
+    name: string;
+    host: string;
+    port: number;
+    tls: 'enabled' | 'disabled' | 'required';
+    nick?: string;
+  }
+
+  const PRESETS: NetworkPreset[] = [
+    { name: 'IRCCloud', host: 'irc.irccloud.com', port: 6697, tls: 'required' },
+    { name: 'Libera.Chat', host: 'irc.libera.chat', port: 6697, tls: 'required' },
+    { name: 'IRCNet', host: 'open.ircnet.net', port: 6697, tls: 'required' },
+    { name: 'Undernet', host: 'irc.undernet.org', port: 6697, tls: 'required' },
+    { name: 'OFTC', host: 'irc.oftc.net', port: 6697, tls: 'required' },
+    { name: 'EFnet', host: 'irc.efnet.org', port: 6697, tls: 'required' },
+    { name: 'GeekShed', host: 'irc.geekshed.net', port: 6697, tls: 'required' },
+    { name: 'Rizon', host: 'irc.rizon.net', port: 6697, tls: 'required' },
+    { name: 'QuakeNet', host: 'irc.quakenet.org', port: 6667, tls: 'disabled' },
+    { name: 'DALNet', host: 'irc.dal.net', port: 6667, tls: 'disabled' },
+    { name: 'GameSurge', host: 'irc.gamesurge.net', port: 6667, tls: 'disabled' },
+    { name: 'hackint', host: 'irc.hackint.org', port: 6697, tls: 'required' },
+    { name: 'Espernet', host: 'irc.esper.net', port: 6697, tls: 'required' },
+    { name: 'synIRC', host: 'irc.synirc.net', port: 6697, tls: 'required' },
+    { name: 'P2P-NET', host: 'irc.p2p-net.net', port: 6697, tls: 'required' },
+    { name: 'euIRCnet', host: 'irc.euirc.net', port: 6697, tls: 'required' },
+    { name: 'SlashNET', host: 'irc.slashnet.org', port: 6697, tls: 'required' },
+    { name: 'Atrum', host: 'irc.atrum.org', port: 6697, tls: 'required' },
+    { name: 'tilde.chat', host: 'tilde.chat', port: 6697, tls: 'required' },
+    { name: 'IRCNow', host: 'irc.ircnow.org', port: 6697, tls: 'required' },
+    { name: 'BRASnet', host: 'irc.brasnet.org', port: 6697, tls: 'required' },
+    { name: 'ChatHUB', host: 'irc.chathub.org', port: 6697, tls: 'required' },
+    { name: 'LibertaCasa', host: 'irc.libertacasa.com', port: 6697, tls: 'required' },
+    { name: 'TwiT', host: 'irc.twit.tv', port: 6697, tls: 'required' },
+    { name: 'Snoonet', host: 'irc.snoonet.org', port: 6697, tls: 'required' },
+    { name: 'BLCKND', host: 'irc.blcknd.network', port: 6697, tls: 'required' },
+    { name: 'SUPERNETS', host: 'irc.supernets.org', port: 6697, tls: 'required' },
+  ];
+
+  function selectPreset(preset: NetworkPreset): void {
+    name = preset.name;
+    host = preset.host;
+    port = preset.port;
+    tls = preset.tls;
+    if (!nick) nick = preset.nick || '';
+  }
+
+  // First-run nicety on the add surface: the account name is almost always
+  // the wanted nick. Only fills an untouched field — a typed nick is never
+  // overwritten.
+  $effect(() => {
+    if (mode !== 'add') return;
+    const username = ircState.me?.username;
+    if (username && !nick) nick = username;
+  });
 
   const existing = $derived(
     mode === 'edit' && networkId
@@ -47,6 +106,9 @@
   let saslUsername = $state('');
   let saslPassword = $state('');
   let revealSaslPassword = $state(false);
+  let operUsername = $state('');
+  let operPassword = $state('');
+  let revealOperPassword = $state(false);
   let error = $state('');
   let busy = $state(false);
   // "Connect via": '' automatic, 'direct' bare host IP, a country code
@@ -137,6 +199,8 @@
       autoJoinDelaySeconds = existing.autoJoinDelaySeconds ?? 0;
       nspass = '';
       serverPass = '';
+      operUsername = '';
+      operPassword = '';
       commands = '';
       saslMechanism = (existing.sasl as 'none' | 'plain' | 'external' | 'scramSha256') || 'none';
       saslUsername = existing.saslUsername || '';
@@ -152,6 +216,8 @@
       autoJoinChannels = '';
       autoJoinDelaySeconds = 0;
       nspass = '';
+      operUsername = '';
+      operPassword = '';
       serverPass = '';
       commands = '';
       saslMechanism = 'none';
@@ -194,7 +260,7 @@
         if (!realName || realName === existing?.realName) realName = fu;
       }
       // Keep auto-join locked to defaults — merge before parse
-      const required = ['#welcome', '#ircfiber'];
+      const required = FIBER_DEFAULT_CHANNELS;
       const lower = autoJoinChannels.toLowerCase();
       for (const ch of required) {
         if (!lower.includes(ch)) autoJoinChannels = autoJoinChannels ? autoJoinChannels + ', ' + ch : ch;
@@ -221,8 +287,11 @@
         realName = fiberUsername;
       }
     }
+    // Add mode: the network name is optional — default it to the hostname
+    // (the old landing-page form derived it the same way).
+    if (mode === 'add' && !name.trim()) name = effectiveHost;
     if (!name || !effectiveHost || !nick) {
-      error = 'Please provide a valid network name, hostname, and nickname';
+      error = 'Please provide a hostname and nickname';
       return;
     }
     busy = true;
@@ -231,63 +300,13 @@
       if (mode === 'add') {
         const result = await onAddNetwork({
           name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
-          autoJoinChannels, autoJoinDelaySeconds, nspass, serverPass, commands, egressNodeId,
+          autoJoinChannels, autoJoinDelaySeconds, nspass, serverPass, commands, egressNodeId, operUsername, operPassword,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
           saslPassword: saslMechanism !== 'none' ? saslPassword : undefined,
         });
-        // Immediately add the network to the UI so it shows up even if the
-        // IRC engine can't connect (bad address, server down, etc.). The
-        // periodic sync will later update the state with real connection info.
-        if (result && result.id) {
-          const net: import('../types').Network = {
-            networkId: result.id as string,
-            name: result.name as string,
-            host: result.host as string,
-            port: result.port as number,
-            tls: (result.tls as string) || 'enabled',
-            nick: result.nick as string,
-            realName: (result.realName as string) || (result.nick as string),
-            currentNick: result.nick as string,
-            sasl: (result.sasl as string) || 'none',
-            saslUsername: (result.saslUsername as string) || '',
-            saslPassword: '',
-            connected: false,
-            connecting: true,
-            connectionState: 'connecting',
-            status: 'unknown',
-            disconnectReason: '',
-            isAway: false,
-            awayMessage: '',
-            autoJoinChannels: (result.autoJoinChannels as string[]) ?? [],
-            autoJoinDelaySeconds: (result.autoJoinDelaySeconds as number) ?? 0,
-            egressNodeId: (result.egressNodeId as string) ?? '',
-            buffers: [{
-              name: '_server', type: 'server' as const, isJoined: true,
-              unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
-              topic: '', topicSetBy: '', topicSetAt: 0, users: [],
-              lastSeenMsgTime: null, firstUnseenMsgIndex: null,
-              lastSeen: null, bottomSeen: null, clearedAt: null, modeFlags: {},
-            }],
-            awayNicks: new Set(),
-            capabilities: new Set(),
-            isupport: {},
-            chanTypes: '#',
-            egressLabel: null,
-            egressHost: null,
-            egressIp: null,
-            egressLocation: null,
-            lagMs: null,
-            connectedAtMs: null,
-            tlsInfo: null,
-          };
-          ircState.networks.push(net);
-          // Ensure the new server starts expanded in the sidebar
-          collapsedMap[net.networkId] = false;
-          // Navigate to the new network's server buffer
-          setActiveBuffer(net.networkId, '_server');
-          updateRoute(net.networkId, '_server');
-        }
+        // Show the network immediately even if the engine cannot connect yet.
+        adoptNetwork(result);
         onClose();
       } else if (networkId) {
         // Capture the nick BEFORE the API call so we can detect a change
@@ -308,6 +327,7 @@
         if (nspass) writeOnly.nspass = nspass;
         if (serverPass) writeOnly.serverPass = serverPass;
         if (commands) writeOnly.commands = commands;
+        if (operPassword) { writeOnly.operUsername = operUsername; writeOnly.operPassword = operPassword; }
 
         await onUpdateNetwork(networkId, {
           name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
@@ -392,9 +412,11 @@
 
 <div class="add-network-prompt">
   <div class="overlaycontents">
-    <h2 class="addNetworkHeading mainHeading">
-      {mode === 'add' ? 'Join a new network' : 'Edit network'}
-    </h2>
+    {#if showHeading}
+      <h2 class="addNetworkHeading mainHeading">
+        {mode === 'add' ? 'Join a new network' : 'Edit network'}
+      </h2>
+    {/if}
     <form class="addNetworkForm" onsubmit={handleSubmit} novalidate>
       <table class="form addNetworkCells" cellpadding="0" cellspacing="0">
         <tbody>
@@ -406,7 +428,7 @@
           <tr>
             <td class="netname" colspan="2">
               <input id="add-network-name" class="input" type="text"
-                     bind:value={name} placeholder="e.g. Libera" required />
+                     bind:value={name} placeholder="e.g. Libera" required={mode === 'edit'} />
             </td>
           </tr>
         </tbody>
@@ -414,6 +436,24 @@
 
       <table class="form networkEditorCells networkEditorCells__network" cellpadding="0" cellspacing="0">
         <tbody>
+          {#if mode === 'add'}
+            <tr>
+              <th class="hostname" colspan="3"><label for="add-network-preset">Network</label></th>
+            </tr>
+            <tr>
+              <td class="hostname" colspan="3">
+                <select id="add-network-preset" class="input" onchange={(e) => {
+                  const p = PRESETS.find(x => x.host === (e.currentTarget as HTMLSelectElement).value);
+                  if (p) selectPreset(p);
+                }}>
+                  <option value="">Choose a network…</option>
+                  {#each PRESETS as preset (preset.host)}
+                    <option value={preset.host}>{preset.name}</option>
+                  {/each}
+                </select>
+              </td>
+            </tr>
+          {/if}
           <tr>
             <th class="hostname"><label for="add-network-host">Hostname</label></th>
             <th class="port" colspan="2"><label for="add-network-port">Port</label></th>
@@ -492,7 +532,7 @@
                         placeholder="e.g. #chat, #feedback&#10;#superbowl&#10;#Zod"></textarea>
               {#if isFiber}
                 <p class="fiberLockNote" style="margin: 6px 0 0; font-size: 12px; color: var(--text-muted, #888);">
-                  #welcome and #ircfiber are required for IRC Fiber and will always be joined.
+                  {FIBER_DEFAULT_CHANNELS.join(', ')} are required for IRC Fiber and will always be joined.
                 </p>
               {/if}
             </td>
@@ -622,6 +662,34 @@
                              placeholder={mode === 'edit' ? 'Leave blank to keep current' : ''} />
                       <label class="reveal">
                         <input type="checkbox" class="reveal" bind:checked={revealServerPass} />
+                        <span>Reveal</span>
+                      </label>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <th class="operlogin optional" colspan="2">
+                    <label for="add-network-oper-user">
+                      Oper login <small class="explanation">— auto-sends <code>OPER name password</code> on connect (and every reconnect); leave blank for none</small>
+                    </label>
+                  </th>
+                </tr>
+                <tr>
+                  <td class="operlogin optional" colspan="2">
+                    <input id="add-network-oper-user" class="input" type="text"
+                           bind:value={operUsername} autocomplete="off"
+                           placeholder={mode === 'edit' ? 'Leave blank to keep current' : 'oper name'} />
+                  </td>
+                </tr>
+                <tr>
+                  <td class="operpass optional" colspan="2">
+                    <div class="passwordRow">
+                      <input id="add-network-oper-pass" class="input" aria-label="Oper password"
+                             type={revealOperPassword ? 'text' : 'password'}
+                             bind:value={operPassword} autocomplete="new-password"
+                             placeholder={mode === 'edit' ? 'Leave blank to keep current' : 'oper password'} />
+                      <label class="reveal">
+                        <input type="checkbox" class="reveal" bind:checked={revealOperPassword} />
                         <span>Reveal</span>
                       </label>
                     </div>

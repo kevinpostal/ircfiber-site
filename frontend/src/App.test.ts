@@ -273,6 +273,29 @@ describe('App', () => {
     await expect.element(page.getByText('Edit network')).toBeInTheDocument();
   });
 
+  it('opens the add-network page (not a dialog) from the sidebar button', async () => {
+    const network = createNetwork({ networkId: 'net1', name: 'Libera' });
+    network.buffers.push(createBuffer({ name: '_server' }));
+    ircState.networks.push(network);
+    flushSync();
+
+    render(App);
+
+    const addBtn = await vi.waitFor(() => {
+      const el = document.querySelector('#add-network-btn');
+      expect(el).toBeTruthy();
+      return el;
+    }, { timeout: 2000, interval: 50 });
+    await userEvent.click(addBtn);
+
+    await vi.waitFor(() => expect(document.querySelector('#addNetworkPage')).toBeTruthy(),
+      { timeout: 2000, interval: 50 });
+    expect(window.location.search).toBe('?/add-network');
+    // The add surface is a full page next to the sidebar, never a modal.
+    expect(document.querySelector('dialog[open]')).toBeNull();
+    expect(document.querySelector('aside#sidebar')).toBeTruthy();
+  });
+
   it('member panel state updates in real-time when another tab toggles it via storage event', async () => {
     // Setup: connect to a channel so the member panel is rendered
     const net = createNetwork({ networkId: 'net1' });

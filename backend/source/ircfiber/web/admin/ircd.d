@@ -22,19 +22,24 @@ module ircfiber.web.admin.ircd;
 ///   the dash form is treated as a literal mask and never matches).
 /// - REHASH -> numeric 382 plus a "*** Successfully rehashed" NOTICE.
 ///
-/// Blocking sockets with select() timeouts are used inline in the
-/// handler, the same pattern as _probeSocks in web.admin.api (admin
-/// endpoints are low-traffic; a transaction lasts a few seconds at most).
+/// vibe TCP sockets (fiber-blocking, like the support bot) with an
+/// optional TLS layer. The ircd serves a self-signed cert on 6697, so
+/// peer validation is off and the Docker network is the trust boundary —
+/// still strictly better than plaintext (no oper password on the wire
+/// for passive sniffers). Admin endpoints are low-traffic; a transaction
+/// lasts a few seconds at most.
 /// Secrets (oper password) never appear in logs or error strings.
 ///
-
 import std.algorithm : canFind, startsWith, endsWith;
 import std.array : split;
 import std.conv : to;
 import std.datetime : dur;
 import std.exception : enforce;
-import std.socket : TcpSocket, Socket, getAddress, SocketSet;
 import std.string : strip, indexOf, lastIndexOf, replace, toLower;
+import vibe.core.net : TCPConnection, WaitForDataStatus, connectTCP;
+import vibe.core.stream : IOMode;
+import vibe.stream.tls : TLSContextKind, TLSPeerValidationMode, TLSStream, TLSStreamState,
+    createTLSContext, createTLSStream;
 
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 import vibe.core.log : logInfo, logWarn;
@@ -50,7 +55,8 @@ import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody;
 /// secret is ever committed; empty host means "not configured".
 struct IrcdSettings {
     string host;
-    ushort port = 6667;
+    ushort port = 6697;
+    bool tls = true;
     string operName;
     string operPassword;
     string confDir = "/etc/ircfiber/ircd";
@@ -65,9 +71,18 @@ IrcdSettings loadIrcdSettings() {
     import ircfiber.env : envSecret;
     IrcdSettings s;
     s.host = environment.get("IRCFIBER_IRCD_HOST", "").strip();
+    bool explicitPort = false;
     try {
-        s.port = environment.get("IRCFIBER_IRCD_PORT", "6667").strip().to!ushort;
-    } catch (Exception) { s.port = 6667; }
+        auto rawPort = environment.get("IRCFIBER_IRCD_PORT", "").strip();
+        if (rawPort.length) { s.port = rawPort.to!ushort; explicitPort = true; }
+    } catch (Exception) { s.port = 6697; }
+    // TLS by default (the ircd TLS listener). IRCFIBER_IRCD_TLS=0 keeps
+    // plaintext for local dev; when the flag is unset a legacy explicit
+    // 6667 keeps meaning plaintext so a new binary + old env still works
+    // until redeploy renders 6697.
+    auto rawTls = environment.get("IRCFIBER_IRCD_TLS", "").strip().toLower();
+    if (rawTls.length == 0) s.tls = !(explicitPort && s.port == 6667);
+    else s.tls = !(rawTls == "0" || rawTls == "false" || rawTls == "no" || rawTls == "off");
     s.operName = environment.get("IRCFIBER_IRCD_OPER", "").strip();
     // Oper password: file-backed in prod (IRCFIBER_IRCD_OPER_PASSWORD_FILE)
     // so `docker inspect` cannot hand out ircd oper rights.
@@ -245,10 +260,11 @@ class IrcdError : Exception {
 /// One authed IRC session. Construct, run commands; kept open and
 /// reused by the shared-session code below.
 final class IrcdClient {
-    private TcpSocket _sock;
+    private TCPConnection _conn;
+    private TLSStream _tls;
+    private bool _open;
     private string _nick;
     private string _readBuf;
-    private long _ioTimeoutMs = 5000;
 
     this(IrcdSettings s) {
         if (!s.configured())
@@ -256,48 +272,30 @@ final class IrcdClient {
                 "IRCFIBER_IRCD_HOST / IRCFIBER_IRCD_OPER / " ~
                 "IRCFIBER_IRCD_OPER_PASSWORD on the gateway.", 503);
         scope (failure) close();
-        auto addrs = getAddress(s.host, s.port);
-        if (addrs.length == 0)
-            throw new IrcdError("IRCd host does not resolve: " ~ s.host);
-        // Try every resolved address with a matching socket family.
-        // A fixed AF_INET socket cannot connect to a v6 address (EAFNOSUPPORT
-        // fails sync with SO_ERROR left at 0, which used to look like success
-        // and died later as "broke while sending" on dual-stack networks).
-        Exception lastErr;
-        foreach (addr; addrs) {
-            import std.socket : AddressFamily;
-            auto probe = new TcpSocket(addr.addressFamily());
-            probe.blocking = false;
-            try {
-                probe.connect(addr);
-                _sock = probe;
-                break;
-            } catch (Exception e) {
-                lastErr = e;
-                if (!waitWritable(probe, 5000)) { probe.close(); continue; }
-                int errVal = 0;
-                import std.socket : SocketOptionLevel, SocketOption;
-                probe.getOption(SocketOptionLevel.SOCKET, SocketOption.ERROR, errVal);
-                if (errVal != 0) {
-                    probe.close();
-                    continue;
-                }
-                _sock = probe;
-                break;
-            }
-        }
-        if (_sock is null) {
-            if (lastErr !is null)
-                throw new IrcdError("IRCd connection refused: " ~ s.host ~ ":" ~
-                    s.port.to!string);
-            throw new IrcdError("IRCd connection timed out: " ~ s.host ~ ":" ~
+        import core.time : seconds;
+        try {
+            _conn = connectTCP(s.host, s.port, null, 0, 10.seconds);
+        } catch (Exception) {
+            throw new IrcdError("IRCd connection refused: " ~ s.host ~ ":" ~
                 s.port.to!string);
         }
-        _sock.blocking = true;
-        import std.socket : SocketOptionLevel, SocketOption;
-        import std.datetime : dur;
-        _sock.setOption(SocketOptionLevel.SOCKET, SocketOption.RCVTIMEO, dur!"msecs"(_ioTimeoutMs));
-        _sock.setOption(SocketOptionLevel.SOCKET, SocketOption.SNDTIMEO, dur!"msecs"(_ioTimeoutMs));
+        _conn.tcpNoDelay = true;
+        _open = true;
+        if (s.tls) {
+            try {
+                auto ctx = createTLSContext(TLSContextKind.client);
+                // Self-signed ircd cert (generated on first boot; LE mode
+                // is opt-in) — same no-verify policy as the support bot
+                // and engine IRC connections. The Docker network is the
+                // trust boundary; TLS still hides the oper password from
+                // passive sniffers.
+                ctx.peerValidationMode = TLSPeerValidationMode.none;
+                _tls = createTLSStream(_conn, ctx, TLSStreamState.connecting, s.host);
+            } catch (Exception) {
+                throw new IrcdError("IRCd TLS handshake failed: " ~ s.host ~ ":" ~
+                    s.port.to!string);
+            }
+        }
 
         import std.datetime : Clock;
         // Unique per session: the page fires status/channels/bans concurrently
@@ -327,19 +325,23 @@ final class IrcdClient {
     }
 
     void close() {
-        if (_sock !is null) {
-            try { _sock.close(); } catch (Exception) {}
-            _sock = null;
+        if (_tls !is null) {
+            try { _tls.finalize(); } catch (Exception) {}
+            _tls = null;
+        }
+        if (_open) {
+            _open = false;
+            try { _conn.close(); } catch (Exception) {}
         }
     }
 
     void sendLine(string line) {
-        auto data = (line ~ "\r\n").dup;
-        size_t sent = 0;
-        while (sent < data.length) {
-            auto n = _sock.send(data[sent .. $]);
-            if (n <= 0) throw new IrcdError("IRCd connection broke while sending.");
-            sent += cast(size_t) n;
+        try {
+            auto data = cast(const(ubyte)[])(line ~ "\r\n");
+            if (_tls !is null) { _tls.write(data); _tls.flush(); }
+            else { _conn.write(data); _conn.flush(); }
+        } catch (Exception) {
+            throw new IrcdError("IRCd connection broke while sending.");
         }
     }
 
@@ -362,15 +364,32 @@ final class IrcdClient {
             }
             auto remain = deadline - monoMs();
             if (remain <= 0) return null;
-            auto rset = new SocketSet(1);
-            rset.add(_sock);
-            int sel;
-            try { sel = Socket.select(rset, null, null, msecs(remain > 1000 ? 1000 : remain)); }
-            catch (Exception) { return null; }
-            if (sel <= 0) continue;
+            bool ready;
+            try {
+                ready = _tls !is null ? _tls.dataAvailableForRead : _conn.dataAvailableForRead;
+            } catch (Exception) { return null; }
+            if (!ready) {
+                auto waitMs = remain > 1000 ? 1000 : remain;
+                try {
+                    final switch (_conn.waitForDataEx(msecs(waitMs))) {
+                        case WaitForDataStatus.dataAvailable: ready = true; break;
+                        case WaitForDataStatus.timeout: continue;
+                        case WaitForDataStatus.noMoreData: return null;
+                    }
+                } catch (Exception) { return null; }
+            }
+            if (!ready) continue;
             ubyte[8192] chunk;
-            auto n = _sock.receive(chunk);
-            if (n <= 0) return null;
+            long n;
+            try {
+                n = cast(long)(_tls !is null ? _tls.read(chunk[], IOMode.once)
+                    : _conn.read(chunk[], IOMode.once));
+            } catch (Exception) { return null; }
+            if (n <= 0) {
+                try { if (!_conn.connected) return null; }
+                catch (Exception) { return null; }
+                continue;
+            }
             _readBuf ~= cast(string) chunk[0 .. cast(size_t) n].idup;
         }
     }
@@ -393,19 +412,15 @@ final class IrcdClient {
     /// PINGs — answered inline) so it never leaks into the next transact.
     /// Returns false when the peer has closed the socket.
     bool drainPending() {
-        import core.time : msecs;
-        while (true) {
-            auto rset = new SocketSet(1);
-            rset.add(_sock);
-            int sel;
-            try { sel = Socket.select(rset, null, null, msecs(0)); }
-            catch (Exception) { return false; }
-            if (sel <= 0) break;
-            ubyte[8192] chunk;
-            auto n = _sock.receive(chunk);
-            if (n <= 0) return false;
-            _readBuf ~= cast(string) chunk[0 .. cast(size_t) n].idup;
-        }
+        try {
+            while (_tls !is null ? _tls.dataAvailableForRead : _conn.dataAvailableForRead) {
+                ubyte[8192] chunk;
+                auto n = _tls !is null ? _tls.read(chunk[], IOMode.once)
+                    : _conn.read(chunk[], IOMode.once);
+                if (n == 0) return _conn.connected;
+                _readBuf ~= cast(string) chunk[0 .. cast(size_t) n].idup;
+            }
+        } catch (Exception) { return false; }
         while (true) {
             auto nl = _readBuf.indexOf('\n');
             if (nl < 0) break;
@@ -413,10 +428,12 @@ final class IrcdClient {
             _readBuf = _readBuf[nl + 1 .. $];
             if (line.startsWith("PING")) {
                 auto sp = line.indexOf(' ');
-                sendLine("PONG" ~ (sp >= 0 ? line[sp .. $] : ""));
+                try sendLine("PONG" ~ (sp >= 0 ? line[sp .. $] : ""));
+                catch (Exception) return false;
             }
         }
-        return true;
+        try return _conn.connected;
+        catch (Exception) return false;
     }
 
     /// Send a command; collect lines until a numeric in `stopNumerics`
@@ -435,17 +452,6 @@ final class IrcdClient {
         return out_;
     }
 
-    private bool waitWritable(Socket sock, long timeoutMs) {
-        import core.time : msecs;
-        auto wset = new SocketSet(1);
-        auto eset = new SocketSet(1);
-        wset.add(sock);
-        eset.add(sock);
-        try {
-            auto sel = Socket.select(null, wset, eset, msecs(timeoutMs));
-            return sel > 0 && wset.isSet(sock);
-        } catch (Exception) { return false; }
-    }
 
     /// Wall-clock milliseconds (SysTime hnsecs → ms). Only used for
     /// timeout arithmetic, never for absolute time.
@@ -473,12 +479,11 @@ private Json ircdNotices(string[] lines) {
 // Shared oper session
 // ---------------------------------------------------------------------------
 //
-// Handlers run on the HTTP thread and never yield while talking to the
-// socket (std.socket is blocking, and every handler finishes its IRC I/O
-// before writing the response), so one module-level session needs no
-// lock. A 30s timer on the same thread answers idle PINGs so the ircd
-// never ping-times-out the session while nobody is on the admin page,
-// and detects a closed socket so the next request reconnects.
+// Handlers run on vibe fibers and every handler finishes its IRC I/O
+// before writing the response, so one module-level session needs no
+// lock. A 30s timer answers idle PINGs so the ircd never ping-times-out
+// the session while nobody is on the admin page, and detects a closed
+// socket so the next request reconnects.
 
 private IrcdClient _session;
 private bool _keepaliveStarted;

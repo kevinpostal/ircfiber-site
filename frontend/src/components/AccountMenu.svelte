@@ -2,11 +2,6 @@
   import { ircState, type SettingsTab } from '../stores/ircStore.svelte';
   import { navigateSettings, navigateShortcuts, navigateFeedback } from '../lib/routing';
 
-  interface Props {
-    onAddNetwork: () => void;
-  }
-  let { onAddNetwork }: Props = $props();
-
   let open = $state(false);
   /// The popup and its trigger — a click in either is "inside".
   let menuEl: HTMLDivElement | undefined = $state();

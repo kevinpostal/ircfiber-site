@@ -42,8 +42,8 @@
 # Dashboard: exactly what the admin web UI needs and nothing else —
 # REHASH plus G/K/Z-LINE management and the STATS letters that list
 # them. No Shutdown (DIE/RESTART), no SA* overrides, no host changes.
-# Usable only from the Docker network (host mask) over plaintext, since
-# the gateway connects to ircd:6667 without TLS on the trusted subnet.
+# Usable only from the Docker network (host mask); the gateway connects
+# to ircd:6697 over TLS on the trusted subnet.
 <class name="Dashboard"
        commands="REHASH STATS GLINE KLINE ZLINE"
        privs="servers/auspex">

@@ -13,7 +13,6 @@
   import LiveElapsed from './LiveElapsed.svelte';
 
   interface Props {
-    onAddNetwork: () => void;
     onEditNetwork: () => void;
     onJoinChannel: (e?: MouseEvent) => void;
     onToggleMembers: () => void;

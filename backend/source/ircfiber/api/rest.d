@@ -251,7 +251,7 @@ final class RESTAPI {
         }
 
         cfg.autoJoinChannels = dedupChannels(deserializeJson!(string[])(bodyJson["autoJoinChannels"]));
-        // Fiber lock: auto-join must include #welcome and #ircfiber for irc.ircfiber.com
+        // Fiber lock: auto-join must include #support and #ircfiber for irc.ircfiber.com
         if (cfg.host == DEFAULT_FIBER_HOST) {
             bool[string] _seen; foreach (c; cfg.autoJoinChannels) _seen[c] = true;
             foreach (ch; DEFAULT_FIBER_CHANNELS) if (ch !in _seen) cfg.autoJoinChannels ~= ch;
@@ -274,6 +274,10 @@ final class RESTAPI {
             cfg.commands = bodyJson["commands"].get!string;
         if (bodyJson["serverPass"].type != Json.Type.undefined)
             cfg.serverPass = bodyJson["serverPass"].get!string;
+        if (bodyJson["operUsername"].type != Json.Type.undefined)
+            cfg.operUsername = bodyJson["operUsername"].get!string;
+        if (bodyJson["operPassword"].type != Json.Type.undefined)
+            cfg.operPassword = bodyJson["operPassword"].get!string;
 
         // Auto-join delay (seconds after connect before JOINs are sent).
         // 0 = join immediately after registration (legacy behavior).
@@ -383,6 +387,10 @@ final class RESTAPI {
             cfg.commands = bodyJson["commands"].get!string;
         if (bodyJson["serverPass"].type != Json.Type.undefined)
             cfg.serverPass = bodyJson["serverPass"].get!string;
+        if (bodyJson["operUsername"].type != Json.Type.undefined)
+            cfg.operUsername = bodyJson["operUsername"].get!string;
+        if (bodyJson["operPassword"].type != Json.Type.undefined)
+            cfg.operPassword = bodyJson["operPassword"].get!string;
 
         // Auto-join delay (seconds after connect before JOINs are sent).
         // 0 = join immediately after registration (legacy behavior).
