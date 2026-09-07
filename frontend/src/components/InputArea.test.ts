@@ -8,6 +8,7 @@ import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, buff
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 import { bufferNameFromChannelPart } from '../lib/routing';
+import { DEFAULT_COMPOSE_STYLE } from '../lib/composeStyle';
 
 vi.mock('/src/stores/api', () => ({
   // uploadFlow imports these; a factory mock must name every export the
@@ -658,5 +659,47 @@ describe('InputArea', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('gear turns an engaged style off, and the next click opens the editor on it', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		ircState.showComposeStyle = false;
+		globalPrefs.composeStyle = {
+			...DEFAULT_COMPOSE_STYLE,
+			bold: true,
+			color: { kind: 'solid', fg: 4, bg: null },
+		};
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		flushSync();
+
+		// Direct dispatchEvent for the same reason as the emoji test above:
+		// vitest-browser reports toolbar cells as "not visible" headless.
+		const gear = () => document.querySelector('.stylecell') as HTMLElement;
+		expect(gear().getAttribute('aria-label')).toBe('Turn text style off');
+
+		// Engaged: the click is a switch, not a trip through the editor.
+		gear().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		flushSync();
+		expect(globalPrefs.composeStyle.bold).toBe(false);
+		expect(globalPrefs.composeStyle.color.kind).toBe('none');
+		expect(ircState.showComposeStyle).toBe(false);
+		// …and the style it switched off is remembered for the editor.
+		expect(globalPrefs.composeStyleLast.bold).toBe(true);
+		expect(globalPrefs.composeStyleLast.color.kind).toBe('solid');
+
+		// Off: the same gear now routes to the editor.
+		expect(gear().getAttribute('aria-label')).toBe('Text style');
+		gear().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		flushSync();
+		expect(ircState.showComposeStyle).toBe(true);
+		expect(window.location.search).toBe('?/text-style');
+
+		ircState.showComposeStyle = false;
+		history.replaceState({}, '', '/');
 	});
 });

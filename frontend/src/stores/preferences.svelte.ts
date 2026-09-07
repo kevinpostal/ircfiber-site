@@ -58,8 +58,14 @@ export interface GlobalPrefs {
   inlineReddit: boolean;
   inlineSocial: boolean;
   defaultScrollPreset: number;
-  /** Outgoing-message styling picked in the compose gear dialog. */
+  /** Outgoing-message styling picked in the compose gear editor. */
   composeStyle: ComposeStyle;
+  /**
+   * The style the gear last switched off. Clicking an engaged gear clears
+   * `composeStyle` in one gesture; this keeps the settings so re-opening the
+   * editor starts from them instead of a blank slate.
+   */
+  composeStyleLast: ComposeStyle;
   // W0-T01: feature-flag namespace gating Wave 1/2 protocol changes.
   // Most flags still default OFF for safe rollout; usePrefVersion
   // flips to ON in Wave 2 (prefVersion last-write-wins resolution).
@@ -100,6 +106,7 @@ export const DEFAULT_PREFS: GlobalPrefs = {
 		xhrFallback: { enabled: true },
 	},
   composeStyle: DEFAULT_COMPOSE_STYLE,
+  composeStyleLast: DEFAULT_COMPOSE_STYLE,
 };
 export const globalPrefs = $state<GlobalPrefs>(
   mergeDefaults(getStorageItem('ircfiber:globalPrefs', {}), DEFAULT_PREFS)
@@ -167,6 +174,7 @@ function mergeDefaults(saved: Partial<GlobalPrefs>, defaults: GlobalPrefs): Glob
   // The colour/font unions are replaced wholesale: a saved object always
   // carries a complete `kind`, so a shallow merge over the defaults is enough.
   out.composeStyle = { ...defaults.composeStyle, ...(saved.composeStyle ?? {}) };
+  out.composeStyleLast = { ...defaults.composeStyleLast, ...(saved.composeStyleLast ?? {}) };
   return out;
 }
 

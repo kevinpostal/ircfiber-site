@@ -16,7 +16,7 @@
   import { MESSAGE_LENGTH_TRIGGER, ircPayloadBudget } from '../lib/messageSplitter';
   import { appendToProcessed, buildProcessedBuffer } from '../lib/messageBuilder';
   import { getPastebinDisablePrompt, globalPrefs } from '../stores/preferences.svelte';
-  import { isComposeStyleActive } from '../lib/composeStyle';
+  import { DEFAULT_COMPOSE_STYLE, isComposeStyleActive } from '../lib/composeStyle';
   import type { IRCMessage } from '../types';
   import { updateRoute, navigateComposeStyle } from '../lib/routing';
   import { tick } from 'svelte';
@@ -49,6 +49,19 @@
     navigateComposeStyle();
   }
   const styleActive = $derived(isComposeStyleActive(globalPrefs.composeStyle));
+
+  /// An engaged gear is a switch: the first click turns styling off (the
+  /// settings are remembered, so the next click re-opens the editor on them
+  /// rather than on a blank style). Sending a plain line is the common case
+  /// and must not cost a round trip through the editor.
+  function onGearClick(): void {
+    if (styleActive) {
+      globalPrefs.composeStyleLast = structuredClone($state.snapshot(globalPrefs.composeStyle));
+      globalPrefs.composeStyle = structuredClone(DEFAULT_COMPOSE_STYLE);
+      return;
+    }
+    openStylePage();
+  }
   const tabEngine = new TabCompletionEngine();
   // IRCCloud-style tab completion popup — shows original fragment + all matches
   // with the current selection highlighted. Only visible while cycling.
@@ -1042,10 +1055,11 @@
         <i class="fa-regular fa-face-smile" aria-hidden="true"></i>
       </div>
       <div class="stylecell" class:engaged={styleActive} role="button" tabindex="0"
-           aria-label="Text style"
-           title={styleActive ? 'Text style (active)' : 'Text style'}
-           onclick={openStylePage}
-           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openStylePage(); } }}>
+           aria-label={styleActive ? 'Turn text style off' : 'Text style'}
+           aria-pressed={styleActive}
+           title={styleActive ? 'Text style on — click to turn it off' : 'Text style'}
+           onclick={onGearClick}
+           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onGearClick(); } }}>
         <i class="fa-solid fa-gear" aria-hidden="true"></i>
       </div>
       <div class="uploadcell {ringState()}" class:engaged={uploadState.active.length > 0}

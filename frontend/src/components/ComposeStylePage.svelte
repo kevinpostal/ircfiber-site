@@ -51,7 +51,12 @@
   const UNICODE_STYLES: UnicodeStyle[] = ['fullwidth', 'bold', 'italic', 'boldItalic', 'script', 'fraktur', 'doubleStruck', 'monospace', 'circled', 'smallCaps', 'upsideDown'];
   const CASE_LABEL: Record<ComposeStyle['caseMode'], string> = { none: '', upper: 'UPPER', lower: 'lower', mocking: 'mOcKiNg' };
 
-  let draft = $state<ComposeStyle>(structuredClone($state.snapshot(globalPrefs.composeStyle)));
+  /// Styling off? Start from whatever the gear last switched off, so turning
+  /// it back on is one Apply rather than rebuilding the whole style.
+  const seed = isComposeStyleActive(globalPrefs.composeStyle)
+    ? globalPrefs.composeStyle
+    : globalPrefs.composeStyleLast;
+  let draft = $state<ComposeStyle>(structuredClone($state.snapshot(seed)));
   let tab = $state<Tab>('text');
   let previewText = $state(sampleText.trim() || SAMPLE);
 
