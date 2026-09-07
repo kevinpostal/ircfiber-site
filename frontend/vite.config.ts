@@ -6,7 +6,7 @@ import { createLogger } from 'vite';
 // Lib modules used ONLY by lazy UI (or workers/admin). Everything else under
 // src/lib + src/stores is forced into chunk-core (startup) so Rollup can't
 // home shared logic in the async chunk and defeat the split.
-const LAZY_LIB_RE = /lib\/(aceModes|aristotleGlyphs|blockKind|codeLines|emoji|glyphCatalog|helpText|htmlInline|img2irc|notificationPolicy|segmentation|textFiles|uniform)\b/;
+const LAZY_LIB_RE = /lib\/(aceModes|aristotleGlyphs|blockKind|codeLines|composePipeline|emoji|figlet|glyphCatalog|helpText|htmlInline|img2irc|notificationPolicy|segmentation|tdf|textEffects|textFiles|uniform)\b/;
 
 // Backend URL for the dev server's API + WS proxy. Override via env vars
 // to point at a non-local backend (e.g. the tailnet gateway or Python gateway):
@@ -150,14 +150,13 @@ export default defineConfig({
           if (id.includes('highlight.js/lib/common') || id.includes('highlight.js/lib/languages/') || id.includes('highlight.js/es/common') || id.includes('highlight.js/es/languages/')) return 'chunk-editor';
           // Admin-only heavy deps — the chat entry must not download these
           if (id.includes('node_modules/layerchart') || id.includes('node_modules/mode-watcher')) return 'vendor-admin';
-          // FIGlet (admin MOTD editor): the renderer rides with the admin
-          // vendor chunk; each font is its own lazy chunk, fetched only when
-          // the admin picks it — 23 fonts would otherwise add ~300 KB to the
-          // vendor chunk the chat entry downloads.
+          // FIGlet (compose style dialog + admin MOTD editor): the renderer
+          // is its own lazy chunk; each font is its own lazy chunk, fetched
+          // only when picked — 300 fonts would otherwise add megabytes.
           if (id.includes('node_modules/figlet/importable-fonts/')) {
             return 'font-' + id.slice(id.lastIndexOf('/') + 1).replace(/\.js$/, '').replace(/[^\w-]+/g, '_').toLowerCase();
           }
-          if (id.includes('node_modules/figlet/')) return 'vendor-admin';
+          if (id.includes('node_modules/figlet/')) return 'chunk-figlet';
           // Keep vendor as single chunk to avoid circular deps (svelte + highlights share graph)
           if (id.includes('node_modules')) return 'vendor';
         },

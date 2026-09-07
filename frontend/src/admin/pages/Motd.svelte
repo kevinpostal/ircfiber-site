@@ -10,8 +10,11 @@
    *    MOTD file and REHASHed on every save and hourly, so native clients
    *    connecting straight to the ircd cycle through the set too.
    *
-   * Editor: monospace textarea with an 80-column guide, live preview, and a
-   * FIGlet generator that inserts banner art at the cursor.
+   * Two editors: Raw (monospace textarea) and Builder (block recipe —
+   * TheDraw/FIGlet banners, text, rules, key/value rows, frame). A recipe
+   * is saved on the template so it reopens in the builder; "Generate
+   * variants" renders the recipe N times with fresh random fonts and
+   * replaces the variant group in one request.
    */
   import { onMount } from 'svelte';
   import PageHeader from '../components/PageHeader.svelte';
@@ -19,16 +22,22 @@
   import EmptyState from '../components/EmptyState.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
+  import MotdBuilder from '../components/MotdBuilder.svelte';
   import { ApiError } from '../lib/api-client';
   import { toastSuccess, toastError } from '../stores/ui';
   import { relative } from '../lib/format';
-  import { FIGLET_FONTS, renderFiglet } from '../lib/figlet';
+  import { FIGLET_FONT_NAMES, renderFiglet } from '../../lib/figlet';
+  import { mircToHtml, maxLineBytes } from '../lib/mirc';
+  import { type Recipe, defaultRecipe, parseRecipe, renderRecipe, fontsLabel } from '../lib/motdRecipe';
   import {
-    fetchMotd, createMotd, updateMotd, deleteMotd, rotateMotd, maxColumns,
+    fetchMotd, createMotd, updateMotd, deleteMotd, rotateMotd, batchMotd, maxColumns,
     type MotdState, type MotdTemplate, type MotdTemplateInput,
   } from '../stores/motd';
 
-  let state = $state<MotdState | null>(null);
+  /** Bytes a 372 line may carry after `:server 372 <nick> :- `. */
+  const LINE_BYTE_BUDGET = 450;
+
+  let data = $state<MotdState | null>(null);
   let loadError = $state<string | null>(null);
   let loading = $state(false);
 
@@ -37,25 +46,41 @@
   let name = $state('');
   let body = $state('');
   let enabled = $state(true);
+  let group = $state('');
+  let mode = $state<'raw' | 'builder'>('raw');
+  let recipe = $state<Recipe>(defaultRecipe());
   let dirty = $state(false);
   let saving = $state(false);
   let rotating = $state(false);
   let askDelete = $state<MotdTemplate | null>(null);
   let textarea = $state<HTMLTextAreaElement | null>(null);
 
-  // FIGlet generator
+  // Variants
+  let variantCount = $state(6);
+  let variantGroup = $state('');
+  let generating = $state(false);
+
+  // FIGlet insert helper (raw mode)
   let figText = $state('IRC Fiber');
   let figFont = $state('ANSI Shadow');
   let figOut = $state('');
   let figBusy = $state(false);
-  const fontNames = Object.keys(FIGLET_FONTS);
+  const fontNames = FIGLET_FONT_NAMES;
 
-  const templates = $derived(state?.templates ?? []);
+  const templates = $derived(data?.templates ?? []);
   const selected = $derived(templates.find((t) => t.id === selectedId) ?? null);
   const enabledCount = $derived(templates.filter((t) => t.enabled).length);
   const cols = $derived(maxColumns(body));
   const lineCount = $derived(body.replace(/\n+$/, '').split('\n').length);
   const tooWide = $derived(cols > 80);
+  const bytes = $derived(maxLineBytes(body));
+  const tooLong = $derived(bytes > LINE_BYTE_BUDGET);
+  const previewHtml = $derived(mircToHtml(body || ' '));
+  const groups = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const t of templates) if (t.group) m.set(t.group, (m.get(t.group) ?? 0) + 1);
+    return m;
+  });
 
   function errMsg(e: unknown): string {
     return e instanceof ApiError ? e.message : (e as Error).message;
@@ -66,6 +91,11 @@
     name = t?.name ?? '';
     body = t?.body ?? '';
     enabled = t?.enabled ?? true;
+    group = t?.group ?? '';
+    const r = parseRecipe(t?.recipe ?? '');
+    recipe = r ?? defaultRecipe();
+    mode = r ? 'builder' : 'raw';
+    variantGroup = t?.group || t?.name || '';
     dirty = false;
   }
 
@@ -74,19 +104,21 @@
     load(t);
   }
 
-  function startNew() {
+  function startNew(withBuilder: boolean) {
     if (dirty && !confirm('Discard unsaved changes?')) return;
     load(null);
-    name = 'New template';
+    name = withBuilder ? 'Built MOTD' : 'New template';
+    variantGroup = name;
+    mode = withBuilder ? 'builder' : 'raw';
     dirty = true;
   }
 
-  async function refresh(spinner = state === null) {
+  async function refresh(spinner = data === null) {
     if (spinner) loading = true;
     loadError = null;
     try {
-      state = await fetchMotd();
-      if (selectedId === null && !dirty && state.templates.length) load(state.templates[0]);
+      data = await fetchMotd();
+      if (selectedId === null && !dirty && data.templates.length) load(data.templates[0]);
     } catch (e) {
       loadError = errMsg(e);
     } finally {
@@ -97,31 +129,68 @@
 
   /** Applies a write result; the server returns the whole list each time. */
   function apply(next: MotdState, okMsg: string) {
-    state = next;
+    data = next;
     if (next.rotation.error) toastError(`${okMsg} — ircd rotation failed: ${next.rotation.error}`);
     else toastSuccess(okMsg);
   }
 
+  function input(): MotdTemplateInput {
+    return {
+      name: name.trim(), body, enabled, group,
+      recipe: mode === 'builder' ? JSON.stringify($state.snapshot(recipe)) : '',
+    };
+  }
+
   async function save() {
     if (saving) return;
-    const input: MotdTemplateInput = { name: name.trim(), body, enabled };
-    if (!input.name) { toastError('Name is required'); return; }
+    const inp = input();
+    if (!inp.name) { toastError('Name is required'); return; }
+    if (tooLong) { toastError(`A line is ${bytes} bytes; keep every line under ${LINE_BYTE_BUDGET} bytes (fewer colour runs or a narrower banner).`); return; }
     saving = true;
     try {
       if (selectedId === null) {
-        const next = await createMotd(input);
+        const next = await createMotd(inp);
         const created = next.templates.find((t) => !templates.some((p) => p.id === t.id));
         apply(next, 'Template created');
         if (created) load(created);
         else dirty = false;
       } else {
-        apply(await updateMotd(selectedId, input), 'Template saved');
+        apply(await updateMotd(selectedId, inp), 'Template saved');
         dirty = false;
       }
     } catch (e) {
       toastError(errMsg(e));
     } finally {
       saving = false;
+    }
+  }
+
+  /** Renders the recipe N times with fresh random picks → one variant group. */
+  async function generateVariants() {
+    if (generating) return;
+    const g = variantGroup.trim();
+    if (!g) { toastError('Group name is required'); return; }
+    const n = Math.max(1, Math.min(50, variantCount));
+    generating = true;
+    try {
+      const items: { name: string; body: string; enabled: boolean }[] = [];
+      const seen = new Set<string>();
+      for (let i = 0; i < n; i++) {
+        const r = await renderRecipe($state.snapshot(recipe), Math.random);
+        if (seen.has(r.body)) continue; // same fonts twice → same MOTD; skip duplicates
+        seen.add(r.body);
+        if (maxLineBytes(r.body) > LINE_BYTE_BUDGET) continue;
+        items.push({ name: `${g} · ${fontsLabel(r.fonts)}`, body: r.body, enabled: true });
+      }
+      if (!items.length) { toastError('Every variant exceeded the line byte budget; narrow the banner.'); return; }
+      const next = await batchMotd({ group: g, recipe: JSON.stringify($state.snapshot(recipe)), items });
+      apply(next, `Generated ${items.length} variant${items.length === 1 ? '' : 's'} in "${g}"`);
+      const first = next.templates.find((t) => t.group === g);
+      if (first) load(first);
+    } catch (e) {
+      toastError(errMsg(e));
+    } finally {
+      generating = false;
     }
   }
 
@@ -143,7 +212,7 @@
     if (rotating) return;
     rotating = true;
     try {
-      state = await rotateMotd(id);
+      data = await rotateMotd(id);
       toastSuccess(id ? 'IRCd now serves this template' : 'IRCd rotated to a random template');
     } catch (e) {
       toastError(errMsg(e));
@@ -182,6 +251,16 @@
     });
   }
 
+  function onBuilderRendered(rendered: string) {
+    if (rendered !== body) { body = rendered; dirty = true; }
+  }
+  function switchMode(m: 'raw' | 'builder') {
+    if (m === mode) return;
+    if (m === 'raw' && !confirm('Switch to the raw editor? The block recipe is kept on this template until you save from raw mode.')) return;
+    mode = m;
+    dirty = true;
+  }
+
   function onBodyInput() { dirty = true; }
   function onKeydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); }
@@ -217,10 +296,10 @@
 
 {#if loadError}
   <Card><p class="text-sm text-danger">{loadError}</p></Card>
-{:else if state}
-  {#if state.rotation.error}
+{:else if data}
+  {#if data.rotation.error}
     <div class="mb-4 rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-text" role="alert">
-      Last ircd rotation failed: {state.rotation.error}. Per-connect MOTDs are unaffected; native clients keep the previous file.
+      Last ircd rotation failed: {data.rotation.error}. Per-connect MOTDs are unaffected; native clients keep the previous file.
     </div>
   {/if}
 
@@ -228,12 +307,11 @@
     <div class="space-y-4">
       <Card title="Templates" subtitle="{enabledCount} of {templates.length} enabled">
         {#snippet actions()}
-          <button
-            type="button"
-            onclick={startNew}
-            class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40"
-          >
-            New
+          <button type="button" onclick={() => startNew(true)} class="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-white hover:bg-primary/90">
+            Build
+          </button>
+          <button type="button" onclick={() => startNew(false)} class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40">
+            Raw
           </button>
         {/snippet}
         {#if templates.length === 0}
@@ -249,10 +327,15 @@
                 >
                   <span class="min-w-0">
                     <span class="block truncate font-medium text-heading">{t.name}</span>
-                    <span class="block truncate text-xs text-muted">{maxColumns(t.body)} cols · {t.body.replace(/\n+$/, '').split('\n').length} lines · {relative(t.updatedAt)}</span>
+                    <span class="block truncate text-xs text-muted">
+                      {maxColumns(t.body)} cols · {t.body.replace(/\n+$/, '').split('\n').length} lines · {relative(t.updatedAt)}{t.group ? ` · ${t.group}` : ''}
+                    </span>
                   </span>
                   <span class="flex shrink-0 items-center gap-1.5">
-                    {#if state.rotation.current?.id === t.id}
+                    {#if t.recipe}
+                      <StatusBadge label="built" tone="primary" size="sm" dot={false} />
+                    {/if}
+                    {#if data.rotation.current?.id === t.id}
                       <StatusBadge label="on ircd" tone="info" size="sm" dot={false} />
                     {/if}
                     <StatusBadge label={t.enabled ? 'enabled' : 'off'} tone={t.enabled ? 'success' : 'muted'} size="sm" />
@@ -268,19 +351,19 @@
         <dl class="space-y-2 text-sm">
           <div class="flex justify-between gap-4">
             <dt class="text-muted">Serving</dt>
-            <dd class="truncate font-mono">{state.rotation.current?.name ?? '— (file unchanged)'}</dd>
+            <dd class="truncate font-mono">{data.rotation.current?.name ?? '— (file unchanged)'}</dd>
           </div>
           <div class="flex justify-between gap-4">
             <dt class="text-muted">Rotated</dt>
-            <dd class="font-mono">{state.rotation.current ? relative(state.rotation.current.at) : '—'}</dd>
+            <dd class="font-mono">{data.rotation.current ? relative(data.rotation.current.at) : '—'}</dd>
           </div>
           <div class="flex justify-between gap-4">
             <dt class="text-muted">Interval</dt>
-            <dd class="font-mono">{Math.round(state.rotation.intervalMs / 60000)} min + every save</dd>
+            <dd class="font-mono">{Math.round(data.rotation.intervalMs / 60000)} min + every save</dd>
           </div>
           <div class="flex justify-between gap-4">
             <dt class="text-muted">File</dt>
-            <dd class="truncate font-mono text-xs">{state.rotation.file}</dd>
+            <dd class="truncate font-mono text-xs">{data.rotation.file}</dd>
           </div>
         </dl>
         <p class="mt-3 text-xs text-muted">
@@ -292,6 +375,10 @@
     <div class="space-y-4">
       <Card title={selectedId === null ? 'New template' : 'Edit template'}>
         {#snippet actions()}
+          <span class="mr-2 inline-flex overflow-hidden rounded-md border border-border text-xs">
+            <button type="button" onclick={() => switchMode('builder')} class="px-2.5 py-1 {mode === 'builder' ? 'bg-primary/20 text-primary' : 'bg-surface-2 text-muted'}">Builder</button>
+            <button type="button" onclick={() => switchMode('raw')} class="px-2.5 py-1 {mode === 'raw' ? 'bg-primary/20 text-primary' : 'bg-surface-2 text-muted'}">Raw</button>
+          </span>
           {#if selected}
             <button
               type="button"
@@ -335,67 +422,99 @@
             <input type="checkbox" bind:checked={enabled} onchange={() => { dirty = true; }} />
             <span>Enabled</span>
           </label>
-          <span class="text-xs {tooWide ? 'text-warn' : 'text-muted'}">
-            {lineCount} lines · {cols} cols{tooWide ? ' — wider than 80, will wrap in most clients' : ''}
+          <span class="text-xs {tooLong ? 'text-danger' : tooWide ? 'text-warn' : 'text-muted'}">
+            {lineCount} lines · {cols} cols · {bytes} B/line max{tooLong ? ` — over the ${LINE_BYTE_BUDGET} B line budget` : tooWide ? ' — wider than 80, will wrap in most clients' : ''}
           </span>
         </div>
 
-        <div class="grid gap-3 2xl:grid-cols-2">
-          <div class="relative">
-            <textarea
-              bind:this={textarea}
-              bind:value={body}
-              oninput={onBodyInput}
-              spellcheck="false"
-              wrap="off"
-              rows="26"
-              class="motd-edit w-full resize-y rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-[12px] leading-[1.25]"
-            ></textarea>
+        {#if mode === 'builder'}
+          <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <MotdBuilder bind:recipe onRendered={onBuilderRendered} />
+            <div>
+              <div class="mb-1 text-xs uppercase tracking-wider text-muted">Preview</div>
+              <pre class="motd-preview overflow-x-auto rounded-md border border-border bg-black px-3 py-2 font-mono text-[12px] leading-[1.25] text-[#d2d2d2]">{@html previewHtml}</pre>
+            </div>
           </div>
-          <div>
-            <div class="mb-1 text-xs uppercase tracking-wider text-muted">Preview</div>
-            <pre class="motd-preview overflow-x-auto rounded-md border border-border bg-black px-3 py-2 font-mono text-[12px] leading-[1.25] text-[#e6edf3]">{body || ' '}</pre>
+        {:else}
+          <div class="grid gap-3 2xl:grid-cols-2">
+            <div class="relative">
+              <textarea
+                bind:this={textarea}
+                bind:value={body}
+                oninput={onBodyInput}
+                spellcheck="false"
+                wrap="off"
+                rows="26"
+                class="motd-edit w-full resize-y rounded-md border border-border bg-surface-1 px-3 py-2 font-mono text-[12px] leading-[1.25]"
+              ></textarea>
+            </div>
+            <div>
+              <div class="mb-1 text-xs uppercase tracking-wider text-muted">Preview</div>
+              <pre class="motd-preview overflow-x-auto rounded-md border border-border bg-black px-3 py-2 font-mono text-[12px] leading-[1.25] text-[#d2d2d2]">{@html previewHtml}</pre>
+            </div>
           </div>
-        </div>
-      </Card>
-
-      <Card title="FIGlet banner" subtitle="Generate ASCII art and insert it at the cursor">
-        <div class="mb-3 flex flex-wrap items-center gap-2">
-          <input
-            type="text"
-            bind:value={figText}
-            placeholder="IRC Fiber"
-            class="w-56 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
-          />
-          <select bind:value={figFont} class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm">
-            {#each fontNames as f (f)}
-              <option value={f}>{f}</option>
-            {/each}
-          </select>
-          <button
-            type="button"
-            onclick={() => void generate()}
-            disabled={figBusy || !figText.trim()}
-            class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
-          >
-            {figBusy ? 'Rendering…' : 'Generate'}
-          </button>
-          <button
-            type="button"
-            onclick={insertArt}
-            disabled={!figOut}
-            class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-40"
-          >
-            Insert at cursor
-          </button>
-          {#if figOut}
-            <span class="text-xs text-muted">{maxColumns(figOut)} cols</span>
-          {/if}
-        </div>
-        {#if figOut}
-          <pre class="motd-preview overflow-x-auto rounded-md border border-border bg-black px-3 py-2 font-mono text-[12px] leading-[1.25] text-[#e6edf3]">{figOut}</pre>
         {/if}
       </Card>
+
+      {#if mode === 'builder'}
+        <Card title="Variants" subtitle="Render this recipe several times with fresh random fonts and keep them all as one group">
+          <div class="flex flex-wrap items-center gap-2 text-sm">
+            <label class="flex items-center gap-1.5 text-xs text-muted">
+              count <input type="number" min="1" max="50" bind:value={variantCount} class="w-16 rounded border border-border bg-surface-2 px-1.5 py-0.5 text-sm" />
+            </label>
+            <label class="flex items-center gap-1.5 text-xs text-muted">
+              group <input type="text" bind:value={variantGroup} maxlength="80" class="w-56 rounded border border-border bg-surface-2 px-2 py-0.5 text-sm" />
+            </label>
+            <button
+              type="button"
+              onclick={() => void generateVariants()}
+              disabled={generating}
+              class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-40"
+            >
+              {generating ? 'Generating…' : groups.has(variantGroup.trim()) ? `Regenerate (${groups.get(variantGroup.trim())} in group)` : 'Generate variants'}
+            </button>
+            <span class="text-xs text-muted">Replaces every template in the group; duplicates (same fonts) are skipped.</span>
+          </div>
+        </Card>
+      {:else}
+        <Card title="FIGlet banner" subtitle="Generate ASCII art and insert it at the cursor">
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              bind:value={figText}
+              placeholder="IRC Fiber"
+              class="w-56 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+            />
+            <select bind:value={figFont} class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm">
+              {#each fontNames as f (f)}
+                <option value={f}>{f}</option>
+              {/each}
+            </select>
+            <button
+              type="button"
+              onclick={() => void generate()}
+              disabled={figBusy || !figText.trim()}
+              class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
+            >
+              {figBusy ? 'Rendering…' : 'Generate'}
+            </button>
+            <button
+              type="button"
+              onclick={insertArt}
+              disabled={!figOut}
+              class="rounded-md bg-primary px-3 py-1 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-40"
+            >
+              Insert at cursor
+            </button>
+            {#if figOut}
+              <span class="text-xs text-muted">{maxColumns(figOut)} cols</span>
+            {/if}
+          </div>
+          {#if figOut}
+            <pre class="motd-preview overflow-x-auto rounded-md border border-border bg-black px-3 py-2 font-mono text-[12px] leading-[1.25] text-[#e6edf3]">{figOut}</pre>
+          {/if}
+        </Card>
+      {/if}
     </div>
   </div>
 {/if}

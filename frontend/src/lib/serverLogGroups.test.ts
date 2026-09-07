@@ -137,6 +137,42 @@ describe('groupServerLog', () => {
     expect(attempts[0].notices).toEqual([notice]);
   });
 
+  // With IRCv3 server-time a few ms ahead of the engine clock, the 001–004
+  // numerics and the MOTD sort after the engine's `welcome` phase row.
+  // They belong to the attempt that just ended, not to a synthetic one that
+  // the next `connecting` would swallow (that handed a whole MOTD to the
+  // following, failed, connect).
+  it('welcome numerics and MOTD that trail the welcome phase fold into that attempt', () => {
+    const messages = [
+      m({ phase: 'connecting', text: 'Connecting to 10.0.0.1:6697', t: 1_000_000 }),
+      m({ phase: 'welcome', text: 'Connection registered', t: 1_001_585 }),
+      m({ command: '001', text: 'Welcome to the network', t: 1_001_591 }),
+      m({ command: '375', text: 'irc.test message of the day', t: 1_001_591 }),
+      m({ command: '372', text: '- hello', t: 1_001_591 }),
+      m({ command: 'MODE', text: '+x', t: 1_001_591 }),
+      m({ phase: 'connecting', text: 'Connecting to 10.0.0.1:6697', t: 1_020_000 }),
+      m({ command: 'DISCONNECTED', text: 'Closing link', t: 1_020_500 }),
+    ];
+    const attempts = groupServerLog(messages);
+    expect(attempts.length).toBe(2);
+    expect(attempts[0].motd.length).toBe(2);
+    expect(attempts[0].welcome.length).toBe(1);
+    expect(attempts[1].motd.length).toBe(0);
+    expect(attempts[1].start.t).toBe(1_020_000);
+  });
+
+  it('a connecting after a lone DISCONNECTED row starts its own attempt', () => {
+    const messages = [
+      m({ command: 'DISCONNECTED', text: 'Connection lost', t: 1_000_000 }),
+      m({ phase: 'connecting', text: 'Connecting to 10.0.0.1:6697', t: 1_256_000 }),
+      m({ phase: 'welcome', text: 'Registered', t: 1_257_500 }),
+    ];
+    const attempts = groupServerLog(messages);
+    expect(attempts.length).toBe(2);
+    expect(attempts[1].start.t).toBe(1_256_000);
+    expect(attemptDuration(attempts[1])).toBe(1_500);
+  });
+
   it('groups a full attempt from connecting through welcome', () => {
     const messages = [
       m({ phase: 'connecting', text: 'Connecting to irc.example.org:6697...' }),

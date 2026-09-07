@@ -131,12 +131,13 @@ function isStartPhase(msg: IRCMessage, current: ServerLogAttempt | null): boolea
   if (START_PHASES.has(msg.phase)) return true;
   if (msg.phase !== 'connecting') return false;
   if (!current) return true;
-  // A synthetic attempt seeded by chatter (no phase yet) is not a connect
-  // in progress: `connecting` starts the real one. Folding it in made the
-  // attempt start at the chatter's timestamp, so every phase offset and the
-  // "Connected" duration tag measured from there (+26m34s for a 1.5 s
-  // connect when the loaded backlog began mid-session).
-  if (current.phases.length === 0) return true;
+  // A synthetic attempt seeded by chatter, or one holding only a lifecycle
+  // row (a lone DISCONNECTED), is not a connect in progress: `connecting`
+  // starts the real one. Folding it in made the attempt start at the
+  // chatter's timestamp, so every phase offset and the "Connected" duration
+  // tag measured from there (+26m34s for a 1.5 s connect when the loaded
+  // backlog began mid-session; +4m16s after a disconnect row).
+  if (!current.phases.some((p) => !!p.phase)) return true;
   return current.phases.some((p) => !!p.phase && CONNECT_BODY_PHASES.has(p.phase));
 }
 
@@ -386,9 +387,14 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
     // cards. 'welcome' is excluded so the second welcome is treated
     // as the end of the new attempt (its end timestamp).
     const prev: ServerLogAttempt | null = readAttempt(lastAttempt);
+    // `welcome` here is the 001–003 numerics and `self` the post-registration
+    // MODE/NICK echo: with IRCv3 server-time a few ms ahead of the engine
+    // clock they sort *after* the engine's welcome phase row, and opening a
+    // synthetic attempt for them handed the whole MOTD to the next connect.
     const isPostAttemptChatter =
       current === null && prev !== null && prev.end !== null &&
-      (kind === 'motd' || kind === 'cap' || kind === 'numeric' || kind === 'notice');
+      (kind === 'motd' || kind === 'cap' || kind === 'numeric' || kind === 'notice'
+        || kind === 'welcome' || kind === 'self');
 
     if (isPostAttemptChatter) {
       // Reopen the previous attempt so the chatter folds into it.

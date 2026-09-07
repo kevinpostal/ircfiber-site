@@ -4,6 +4,7 @@
  * is replaced wholesale after each call.
  */
 import { api } from '../lib/api-client';
+import { visibleWidth } from '../lib/mirc';
 
 export interface MotdTemplate {
   id: string;
@@ -11,6 +12,10 @@ export interface MotdTemplate {
   body: string;
   enabled: boolean;
   sortOrder: number;
+  /** Builder recipe JSON ("" for hand-written templates). */
+  recipe: string;
+  /** Variant group ("" = standalone). */
+  group: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -34,6 +39,14 @@ export interface MotdTemplateInput {
   body: string;
   enabled: boolean;
   sortOrder?: number;
+  recipe?: string;
+  group?: string;
+}
+
+export interface MotdBatchInput {
+  group: string;
+  recipe: string;
+  items: { name: string; body: string; enabled: boolean }[];
 }
 
 export const fetchMotd = () => api.get<MotdState>('/api/admin/motd');
@@ -42,13 +55,16 @@ export const updateMotd = (id: string, input: MotdTemplateInput) =>
   api.post<MotdState>(`/api/admin/motd/${encodeURIComponent(id)}`, input);
 export const deleteMotd = (id: string) =>
   api.post<MotdState>(`/api/admin/motd/${encodeURIComponent(id)}/delete`, {});
+/** Replaces every template in `group` with `items` (one rotation, one REHASH). */
+export const batchMotd = (input: MotdBatchInput) => api.post<MotdState>('/api/admin/motd/batch', input);
 export const rotateMotd = (id?: string) => api.post<MotdState>('/api/admin/motd/rotate', id ? { id } : {});
 
-/** Longest line, in characters (code points, so box-drawing art counts as 1 per cell). */
+/** Longest visible line in cells (colour codes stripped; code points, so
+ *  box-drawing art counts as 1 per cell). */
 export function maxColumns(body: string): number {
   let max = 0;
   for (const line of body.split('\n')) {
-    const n = [...line].length;
+    const n = visibleWidth(line);
     if (n > max) max = n;
   }
   return max;

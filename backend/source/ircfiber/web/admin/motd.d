@@ -170,6 +170,10 @@ private string readTemplateBody(HTTPServerRequest req, ref MotdTemplateRecord r)
     r.body_ = body_;
     if (j["enabled"].type == Json.Type.bool_) r.enabled = j["enabled"].get!bool;
     if (j["sortOrder"].type == Json.Type.int_) r.sortOrder = j["sortOrder"].get!long;
+    if (j["recipe"].type == Json.Type.string) r.recipe = j["recipe"].get!string;
+    if (j["group"].type == Json.Type.string) r.group = jsonStr(j, "group").strip;
+    if (r.recipe.length > 64_000) return "recipe is too large";
+    if (r.group.length > 80) return "group is too long";
     return "";
 }
 
@@ -193,7 +197,7 @@ package void apiMotdUpdate(HTTPServerRequest req, HTTPServerResponse res, RedisS
     if (r.id.length == 0) { jsonError(res, 404, "not found"); return; }
     auto why = readTemplateBody(req, r);
     if (why.length) { jsonError(res, 400, why); return; }
-    repo.update(r.id, r.name, r.body_, r.enabled, r.sortOrder);
+    repo.update(r.id, r.name, r.body_, r.enabled, r.sortOrder, r.recipe, r.group);
     logInfo("Admin %s updated MOTD template '%s'", currentAdmin(req).username, r.name);
     jsonOk(res, listJson(redis, repo, afterWrite(redis, repo)));
 }
@@ -207,6 +211,63 @@ package void apiMotdDelete(HTTPServerRequest req, HTTPServerResponse res, RedisS
     repo.remove(id);
     logInfo("Admin %s deleted MOTD template '%s'", currentAdmin(req).username, r.name);
     jsonOk(res, listJson(redis, repo, afterWrite(redis, repo)));
+}
+
+/// POST /api/admin/motd/batch — body `{group, recipe, items:[{name, body,
+/// enabled?}]}`: replaces every template in `group` with `items` (variants
+/// the builder generated from one recipe), then mirrors + rotates once.
+/// One round-trip instead of N deletes + M creates each REHASHing the ircd.
+package void apiMotdBatch(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto repo = new MotdTemplateRepository();
+    auto j = readJsonBody(req);
+    if (j.type != Json.Type.object) { jsonError(res, 400, "invalid body"); return; }
+    auto group = jsonStr(j, "group").strip;
+    if (group.length == 0 || group.length > 80) { jsonError(res, 400, "group is required"); return; }
+    auto recipe = jsonStr(j, "recipe");
+    if (recipe.length > 64_000) { jsonError(res, 400, "recipe is too large"); return; }
+    auto items = j["items"];
+    if (items.type != Json.Type.array || items.length == 0 || items.length > 50) {
+        jsonError(res, 400, "items must hold 1–50 templates");
+        return;
+    }
+    MotdTemplateRecord[] records;
+    foreach (i; 0 .. items.length) {
+        auto item = items[i];
+        if (item.type != Json.Type.object) { jsonError(res, 400, "invalid item"); return; }
+        MotdTemplateRecord r;
+        r.name = jsonStr(item, "name").strip;
+        if (r.name.length == 0 || r.name.length > 80) { jsonError(res, 400, "item " ~ (i + 1).to!string ~ ": name is required"); return; }
+        r.body_ = jsonStr(item, "body");
+        auto why = validateMotdBody(r.body_);
+        if (why.length) { jsonError(res, 400, "item " ~ (i + 1).to!string ~ ": " ~ why); return; }
+        r.enabled = item["enabled"].type == Json.Type.bool_ ? item["enabled"].get!bool : true;
+        r.recipe = recipe;
+        r.group = group;
+        records ~= r;
+    }
+    auto removed = repo.removeGroup(group);
+    auto base = (repo.count() + 1) * 10;
+    foreach (i, ref r; records) { r.sortOrder = base + i * 10; r = repo.insert(r); }
+    logInfo("Admin %s regenerated MOTD group '%s': %d removed, %d created",
+        currentAdmin(req).username, group, removed, records.length);
+    jsonOk(res, listJson(redis, repo, afterWrite(redis, repo)));
+}
+
+/// GET /api/admin/motd/tdf/:name — one curated TheDraw font file
+/// (`public/tdf/<name>.tdf`) for the builder's in-browser renderer.
+package void apiMotdTdfFont(HTTPServerRequest req, HTTPServerResponse res) {
+    import std.file : exists, isFile, read;
+    import std.regex : matchFirst, regex;
+    auto name = req.params["name"];
+    if (name.length == 0 || name.length > 32 || !matchFirst(name, regex(`^[A-Za-z0-9_-]+$`))) {
+        jsonError(res, 400, "invalid font name");
+        return;
+    }
+    auto path = buildPath("public", "tdf", name ~ ".tdf");
+    if (!exists(path) || !isFile(path)) { jsonError(res, 404, "no such font"); return; }
+    res.headers["Content-Type"] = "application/octet-stream";
+    res.headers["Cache-Control"] = "private, max-age=86400";
+    res.writeBody(cast(const(ubyte)[]) read(path));
 }
 
 /// POST /api/admin/motd/rotate — body `{id?}`: rotate the ircd to that
