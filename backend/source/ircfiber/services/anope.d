@@ -311,6 +311,19 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
                 req.method = HTTPMethod.POST;
                 req.headers["Connection"] = "close";
                 req.headers["Content-Type"] = "text/xml";
+                // Frame the body explicitly. Without it vibe.d sends
+                // neither Content-Length nor chunked encoding and lets
+                // the body run to connection close; m_httpd's naive
+                // parser then reads whatever has arrived so far, and when
+                // headers and body land in separate TCP segments it parses
+                // an empty body and answers 404 "Unrecognized query".
+                // Observed 2026-09-06/07 on prod: curl (which always sets
+                // Content-Length) never failed while back-to-back gateway
+                // calls failed intermittently — REGISTER would land and the
+                // checkAuthentication right behind it 404, orphaning the
+                // credential. Proven by capturing vibe.d's exact bytes
+                // (no Content-Length present) against a dump server.
+                req.headers["Content-Length"] = payload.length.to!string;
                 req.bodyWriter.write(cast(const(ubyte)[]) payload);
             },
             (scope HTTPClientResponse res) {

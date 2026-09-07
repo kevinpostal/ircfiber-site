@@ -87,16 +87,14 @@
     onClose();
   }
 
-  async function sendArt(art: string): Promise<void> {
+  function sendArt(art: string): void {
     const nid=ircState.activeBuffer.networkId, target=ircState.activeBuffer.bufferName;
     if (!nid||!target) return;
-    const lines=art.split('\n');
-    const BURST=5, BD=35, SD=110;
-    for(let i=0;i<lines.length;i++){
-      const line=lines[i];
+    // Same deal as the dialog's send(): no inter-line sleep. Flood
+    // protection is the engine pacer's job (reactive, arms on complaint).
+    for(const line of art.split('\n')){
       if(!line.replace(/[\x03\x04\x0f0-9,a-fA-F ]/g,'').trim() && line.trim()==='') continue;
       sendMessage(nid, target, line, generateLabel());
-      if(i<lines.length-1) await new Promise(r=>setTimeout(r, i<BURST?BD:SD));
     }
   }
 

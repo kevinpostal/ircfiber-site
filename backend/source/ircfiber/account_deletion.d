@@ -66,7 +66,10 @@ void purgeUserAccount(User user, RedisStorage redis, ServerRegistry serverRegist
 
     // Services first: the account names live on the network documents, so a
     // failure here must not have already deleted the only record of them.
-    auto networks = netRepo.findByUserId(id);
+    // Direct Mongo enumeration, never the cached read: a stale/empty cache
+    // entry (or an open circuit breaker, which also reads as []) would make
+    // this loop a no-op and orphan every network and NickServ account.
+    auto networks = netRepo.findByUserIdDirect(id);
     dropServicesAccounts(user, networks);
     foreach (net; networks) {
         purgeNetworkRuntimeState(net.id, redis, serverRegistry);

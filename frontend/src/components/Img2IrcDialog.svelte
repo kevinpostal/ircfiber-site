@@ -10,7 +10,6 @@
   import { HELP } from '../lib/helpText';
   import { sendMessage } from '../stores/wsConnection.svelte';
   import { ircState } from '../stores/ircStore.svelte';
-  import { globalPrefs } from '../stores/preferences.svelte';
   import { generateLabel } from '../lib/utils';
   import { createIrcArtSave, updateIrcArtSave } from '../stores/api';
   interface Props { file: File|Blob; filename:string; onClose:()=>void; onBack?:()=>void; initialParams?: Record<string, unknown>; initialName?: string; editId?: string; onSaved?:()=>void; initialArt?: string; thumbnailUrl?: string; }
@@ -29,26 +28,12 @@
   let filter=$state('nearest');
   let fontKey=$state('local:iosevka-fixed-extended');
   let accFont=$state(false);
-  let scrollPreset=$state(globalPrefs.defaultScrollPreset ?? 2);
-  const SCROLL_PRESETS = [
-    { label: 'Instant', bd: 0, sd: 0, hint: '0ms · instant' },
-    { label: 'Fast',    bd: 18, sd: 60, hint: '60ms/line' },
-    { label: 'Normal',  bd: 35, sd: 110, hint: '110ms · default' },
-    { label: 'Smooth',  bd: 55, sd: 220, hint: '220ms · gentle' },
-    { label: 'Cinema',  bd: 90, sd: 450, hint: '450ms · dramatic' },
-  ] as const;
-  // Persist user’s default scroll speed (cross-tab via globalPrefs storage event)
-  $effect(()=>{
-    const v = scrollPreset;
-    if (v !== globalPrefs.defaultScrollPreset) globalPrefs.defaultScrollPreset = v;
-  });
   let dither=$derived(ditherMode !== 'none');
   // Viterbi for all modes including truecolor (quantized palette) — enterprise, WASM where it helps
   let compressionDisabled=$derived(pixelMode==='smart');
   let accTone=$state(false);
   let accFx=$state(false);
   let accOut=$state(false);
-  let accScroll=$state(false);
   let showAdvanced=$state(false);
   let _initApplied=$state(false);
   // Smart migration: saved midgardMode==='smart' → pixelMode smart
@@ -188,7 +173,7 @@
       return {};
     } catch (e) { glyphError = e instanceof Error ? e.message : String(e); throw e; }
   }
-  let art=$state(initialArt ?? ''), htmlPreview=$state(initialArt ? initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('') : ''), loading=$state(initialArt ? false : true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false), sending=$state(false), sentCount=$state(0);
+  let art=$state(initialArt ?? ''), htmlPreview=$state(initialArt ? initialArt.split('\n').map(l=>`<div class="ircArtLine">${parseIrcFormatting(l)}</div>`).join('') : ''), loading=$state(initialArt ? false : true), isConverting=$state(false), error=$state<string|null>(null), copied=$state(false);
   let saving=$state(false), saveError=$state<string|null>(null), saveOk=$state(false), saveName=$state((initialName ?? filename.replace(/\.[^.]+$/,'')) || 'IRC Art');
   // Smart detail offline glyph alphabet (per-image, cached)
   let smartGlyphAlphabet=$state<string|undefined>(undefined);
@@ -663,23 +648,19 @@
       const ta=document.getElementById('ircArtRaw') as HTMLTextAreaElement|null; if(ta){ ta.select(); document.execCommand('copy'); copied=true; setTimeout(()=>copied=false,1200);}
     }
   }
-  async function send(){
+  function send(){
     if(!art||!activeNetworkId||!activeTarget) return;
-    sending=true; sentCount=0;
-    const lines=art.split('\n');
-    const { bd: BD, sd: SD } = SCROLL_PRESETS[scrollPreset];
-    const BURST=5;
-    for(let i=0;i<lines.length;i++){
-      const line=lines[i];
+    // Dispatch every line back-to-back with no inter-line sleep: the old
+    // SCROLL_PRESETS burst delays (5×35ms then 110ms/line) were pure UI
+    // pacing, not flood protection — a 40-line paste waited ~4s here before
+    // a single byte moved. Real flood protection lives in the engine's
+    // FakeLagPacer (engine/.../irc/pacer.d), which sends at wire speed
+    // until the server itself complains, so nothing here needs to guess.
+    for(const line of art.split('\n')){
       if(!line.replace(/[\x03\x04\x0f0-9,a-fA-F ]/g,'').trim() && line.trim()==='') continue;
       sendMessage(activeNetworkId, activeTarget, line, generateLabel());
-      sentCount=i+1;
-      if(i<lines.length-1){
-        const delay = i<BURST ? BD : SD;
-        if(delay>0) await new Promise(r=>setTimeout(r, delay));
-      }
     }
-    sending=false; onClose();
+    onClose();
   }
   async function makeThumbnailBlob(): Promise<Blob|null> {
     try {
@@ -724,8 +705,8 @@
     pixelMode='half';
     midgardMode='xterm256';
     brightness=0; contrast=0; saturation=0; hue=0; gamma=0; blur=0; pixelize=0;
-    grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; autoGeometries=['half','quarter','braille','polygon']; scrollPreset=2;
-    accTone=false; accFx=false; accOut=false; accScroll=false;
+    grayscale=false; invert=false; sepia=false; normalize=false; ditherMode='none'; colorMatching='oklab'; nograyscale=false; flipH=false; flipV=false; rotate='0'; filter='linear'; viterbiW=0; autoGeometries=['half','quarter','braille','polygon'];
+    accTone=false; accFx=false; accOut=false;
     accGlyphs=false; glyphBraille=false; glyphBlocks=[]; glyphInclude=''; glyphExclude=''; glyphIncludeRanges=''; glyphExcludeRanges=''; glyphError=null;
     transparencyEnabled = hasAlpha; matteColor = null;
     smartGlyphAlphabet=undefined; smartGlyphCache.clear();
@@ -915,22 +896,6 @@
               <p class="acc-note">Dithering breaks color runs and is byte-adverse with compression — prefer shade blocks for the same tones.</p>
             </div>
           {/if}
-          <button class="acc-head" onclick={()=>accScroll=!accScroll} aria-expanded={accScroll}><span class="chev">{accScroll?'▾':'▸'}</span> Scroll <span class="acc-hint">{SCROLL_PRESETS[scrollPreset].label} · {SCROLL_PRESETS[scrollPreset].hint}</span></button>
-          {#if accScroll}
-            <div class="acc-body">
-              <div class="scroll-card">
-                <div class="scroll-head">
-                  <input class="slider scroll" type="range" min="0" max="4" step="1" bind:value={scrollPreset} />
-                  <span class="scroll-badge" data-testid="scroll-label">{SCROLL_PRESETS[scrollPreset].label}</span>
-                </div>
-                <div class="scroll-ticks">
-                  {#each SCROLL_PRESETS as p,i}
-                    <button class="tick" class:on={i===scrollPreset} onclick={()=>scrollPreset=i} title={p.hint}>{p.label}</button>
-                  {/each}
-                </div>
-              </div>
-            </div>
-          {/if}
         </div>
         <details class="raw"><summary>Raw {renderMode==='ansi24'?'\x04':'\x03'} codes</summary><textarea id="ircArtRaw" readonly value={art} rows={Math.min(10, art.split('\n').length+1)}></textarea></details>
         </div>
@@ -941,8 +906,8 @@
           {#if overBudget}<span class="saveErr">{pixelMode==='smart' ? 'Smart fitting to 512B…' : 'Fit to 512 first'}</span>{/if}
           <div class="sendRow">
             <button class="btn" data-testid="left-copy" onclick={copy} disabled={!art||loading}>{copied?'Copied!':'Copy'}</button>
-            <button class="btn primary" data-testid="left-send" onclick={send} disabled={!art||loading||sending||!activeTarget}>
-              {#if sending}Sending {sentCount}/{stats.lines}…{:else}Send to {activeTarget||'channel'} ({stats.lines}){/if}
+            <button class="btn primary" data-testid="left-send" onclick={send} disabled={!art||loading||!activeTarget}>
+              Send to {activeTarget||'channel'} ({stats.lines})
             </button>
           </div>
         </div>
@@ -969,11 +934,11 @@
     <footer class="footBar">
       {#if onBack}<button class="btn" onclick={onBack}>← Back</button>{/if}
       <div class="foot-left">
-        <span class="hint">{renderMode==='ansi24'?'True-Color':renderMode==='ansi'?'256-color':'99-color'} · {pixelMode} · {SCROLL_PRESETS[scrollPreset].label} · {SCROLL_PRESETS[scrollPreset].sd===0 ? 'instant' : `burst 5×${SCROLL_PRESETS[scrollPreset].bd}ms then ${SCROLL_PRESETS[scrollPreset].sd}ms`}</span>
+        <span class="hint">{renderMode==='ansi24'?'True-Color':renderMode==='ansi'?'256-color':'99-color'} · {pixelMode} · instant send</span>
       </div>
       <button class="btn" onclick={copy} disabled={!art||loading}>{copied?'Copied!':'Copy'}</button>
-      <button class="btn primary" onclick={send} disabled={!art||loading||sending||!activeTarget}>
-        {#if sending}Sending {sentCount}/{stats.lines}…{:else}Send to {activeTarget||'channel'} ({stats.lines}){/if}
+      <button class="btn primary" onclick={send} disabled={!art||loading||!activeTarget}>
+        Send to {activeTarget||'channel'} ({stats.lines})
       </button>
       <button class="btn ghost" onclick={onClose}>Close</button>
     </footer>
@@ -1011,14 +976,6 @@
   .p-group.span-2{grid-column:span 2}
   .p-group.actions{flex-direction:row;flex-wrap:wrap;gap:6px;align-items:center}
   .p-group.actions .btn-ghost,.p-group.actions .btn-fit{flex:1 1 auto}
-  .scroll-card{background:#0a0c0f;border:1px solid #1e232b;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
-  .scroll-head{display:flex;align-items:center;gap:10px}
-  .scroll{flex:1;min-width:0}
-  .scroll-badge{font-size:10px;font-weight:600;color:#e6edf3;background:#1a1f29;border:1px solid #232a36;border-radius:999px;padding:3px 8px;white-space:nowrap;flex-shrink:0}
-  .scroll-ticks{display:flex;gap:4px;flex-wrap:wrap;justify-content:space-between}
-  .tick{flex:1 1 0;min-width:0;text-align:center;font-size:9px;font-weight:500;padding:4px 4px;border-radius:999px;border:1px solid #232a36;background:transparent;color:#7d8590;cursor:pointer;transition:all .14s;line-height:1}
-  .tick:hover{border-color:#2d3648;color:#c9d1d9;background:#141821}
-  .tick.on{background:#e6edf3;border-color:#e6edf3;color:#0f1115;font-weight:600}
   .p-hint{font-size:10px;color:#4d555f;margin-left:4px;white-space:nowrap}
   .pill{font-size:11px;font-weight:500;padding:5px 10px;border-radius:999px;border:1px solid #232a36;background:#141821;color:#9aa4b2;cursor:pointer;transition:all .14s}
   .pill.on{background:#e6edf3;color:#0f1115;border-color:#e6edf3;font-weight:600;box-shadow:0 1px 8px rgba(230,237,243,.15)}
