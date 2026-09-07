@@ -163,52 +163,54 @@
 .account-menu-item:hover { background: #21252b; text-decoration: none; }
 .account-menu-signout { color: #f85149; }
 
-.memberwrapper { flex: 1; overflow-y: auto; padding: 0 0 0.5rem 0; min-width: 0; background-color: #1b2432; }
+/* Wrapper and bands are IRCCloud's `_theme-dark.scss` values verbatim
+   (`div.memberwrapper`, `ul.memberList li.<category>`), so the sidebar
+   reads exactly like its dark theme. */
+.memberwrapper {
+  flex: 1; overflow-y: auto; padding: 0 0 0.5rem 0; min-width: 0;
+  box-shadow: inset 3px 0 0 0 hsl(221, 32%, 25%);
+  border-color: hsl(221, 55%, 23%);
+  background-color: hsl(217, 30%, 15%);
+}
 .memberList { list-style: none; margin: 0; padding: 0; }
+/* Per-category band. `li.category` is the default (Members); every other
+   class overrides it. Verbatim from IRCCloud's dark theme — without the
+   oper/owner/admin bands an `&` services bot such as FiberServ landed in
+   the red Ops band and the Admins section was invisible. */
 .memberList .category {
   margin-bottom: 0;
   padding: 0 0 0 5px;
-}
-
-/* One band per category, in IRCCloud's hue for it — its light theme uses
-   orange for `oper`, yellow for `owner`, purple for `admin`, red for
-   `ops`, amber for `halfops`, green for `voiced` and blue-grey for
-   `members`; these are the dark-theme equivalents. Without the first
-   three, an `&` services bot such as FiberServ landed in the red Ops
-   band and the Admins section was invisible. */
-.memberList .category.oper {
-  box-shadow: inset 3px 0 0 0 hsl(9, 80%, 28%);
-  border-bottom: 1px solid hsl(9, 50%, 36%);
-  background-color: hsl(9, 45%, 15%);
-}
-.memberList .category.owner {
-  box-shadow: inset 3px 0 0 0 hsl(44, 85%, 26%);
-  border-bottom: 1px solid hsl(44, 50%, 32%);
-  background-color: hsl(44, 40%, 14%);
-}
-.memberList .category.admin {
-  box-shadow: inset 3px 0 0 0 hsl(277, 80%, 32%);
-  border-bottom: 1px solid hsl(277, 40%, 36%);
-  background-color: hsl(277, 38%, 17%);
-}
-.memberList .category.members {
   box-shadow: inset 3px 0 0 0 hsl(221, 32%, 25%);
   border-bottom: 1px solid hsl(221, 32%, 25%);
-  background-color: #1b2432;
+}
+.memberList .category.oper {
+  box-shadow: inset 3px 0 0 0 hsl(24, 97%, 26%);
+  border-bottom-color: hsl(30, 85%, 25%);
+  background-color: hsl(27, 64%, 16%);
+}
+.memberList .category.owner {
+  box-shadow: inset 3px 0 0 0 hsl(56, 97%, 23%);
+  border-bottom-color: hsl(47, 68%, 25%);
+  background-color: hsl(45, 29%, 19%);
+}
+.memberList .category.admin {
+  box-shadow: inset 3px 0 0 0 hsl(280, 58%, 33%);
+  border-bottom-color: hsl(265, 44%, 36%);
+  background-color: hsl(276, 27%, 15%);
 }
 .memberList .category.ops {
   box-shadow: inset 3px 0 0 0 hsl(10, 71%, 25%);
-  border-bottom: 1px solid hsl(0, 36%, 38%);
-  background-color: #451c1c;
+  border-bottom-color: hsl(0, 36%, 38%);
+  background-color: hsl(0, 42%, 19%);
 }
 .memberList .category.halfops {
   box-shadow: inset 3px 0 0 0 hsl(40, 71%, 25%);
-  border-bottom: 1px solid hsl(37, 45%, 28%);
+  border-bottom-color: hsl(37, 45%, 28%);
   background-color: hsl(37, 26%, 17%);
 }
 .memberList .category.voiced {
   box-shadow: inset 3px 0 0 0 hsl(95, 85%, 21%);
-  border-bottom: 1px solid hsl(85, 100%, 17%);
+  border-bottom-color: hsl(85, 100%, 17%);
   background-color: hsl(94, 25%, 16%);
 }
 .memberList .category:last-child {
@@ -225,25 +227,25 @@
   padding: 8px 8px 1px;
 }
 
-/* Header, count and symbol colour per category. These are IRCCloud's
-   `li.<category> h2 span.memberCount` tints rather than its `h2` colours:
-   the h2 colours (#6500a5 admin, #ba1719 ops, …) are meant for its light
-   theme and go nearly invisible on these dark bands, while the count
-   tints are the same hues at usable contrast. `color: inherit` on the
-   symbol overrides the global `.mode_prefix.mode_*` rules, which keep the
-   strong values for message rows and the user popup. */
-.memberList .category h2,
-.memberList .category .memberExtras,
-.memberList .category h2 .mode_prefix {
-  color: inherit;
-}
-.memberList .category.oper { color: #fd8d4a; }
-.memberList .category.owner { color: #fed85c; }
-.memberList .category.admin { color: #b580ff; }
-.memberList .category.ops { color: #fcadaf; }
-.memberList .category.halfops { color: #fdcc9a; }
-.memberList .category.voiced { color: #9eeb4a; }
-.memberList .category.members { color: #b3b3b3; }
+/* Header and count colour per category, again IRCCloud's dark theme: the
+   heading is its base mode colour lightened 40% (`lighten(#6500A5, 40%)`
+   → #c872ff), and every count lightens past white. The default category
+   uses its grey text ramp. The mode symbol keeps the global
+   `.mode_prefix.mode_*` colour, which is what IRCCloud does too. */
+.memberList .category h2 { color: #b3b3b3; }
+.memberList .category h2 .memberCount { color: #999; }
+.memberList .category.oper h2 { color: #fdbeb4; }
+.memberList .category.owner h2 { color: #ffebb4; }
+.memberList .category.admin h2 { color: #c872ff; }
+.memberList .category.ops h2 { color: #f4a9aa; }
+.memberList .category.halfops h2 { color: #ffbf82; }
+.memberList .category.voiced h2 { color: #99ff7e; }
+.memberList .category.oper h2 .memberCount,
+.memberList .category.owner h2 .memberCount,
+.memberList .category.admin h2 .memberCount,
+.memberList .category.ops h2 .memberCount,
+.memberList .category.halfops h2 .memberCount,
+.memberList .category.voiced h2 .memberCount { color: #fff; }
 
 .memberExtras { display: inline-flex; align-items: center; gap: 4px; }
 .mode_symbol { font-weight: 600; }
