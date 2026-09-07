@@ -36,6 +36,8 @@ Environment:
                        {"channel","description","topic","history","modes"}
   IRCD_CHANNEL_ACCESS  JSON {"qop":[..],"sop":[..],"aop":[..],
                        "hop":[..],"vop":[..]} of NickServ accounts
+  IRCD_CHANNEL_AUTOVOICE  JSON ["v:account:*", ...] autoop (+w) entries to
+                       keep on the channel
   IRCD_TIMEOUT         seconds to allow for the whole run (default 180)
 
 Exit status is 0 only when every channel reached the desired state.
@@ -443,8 +445,51 @@ def sync_access(session: IrcSession, channel: str, access: dict) -> bool:
     return changed
 
 
+def autovoice_list(session: IrcSession, channel: str) -> set[str]:
+    """Live +w (autoop) entries on the channel.
+
+    InspIRCd answers `MODE #chan w` with one `910 <me> <chan> <entry>
+    <setter> :<ts>` per entry plus a trailing 911. Parsed positionally —
+    entry is the token after the channel — so no prose matching.
+    """
+    out: set[str] = set()
+    session.send(f"MODE {channel} w")
+    for line in session.collect(2.0):
+        tokens = clean(line).split()
+        if (len(tokens) >= 6 and tokens[1] == "910"
+                and tokens[3].lower() == channel.lower()):
+            out.add(tokens[4])
+    return out
+
+
+def sync_autovoice(session: IrcSession, channel: str,
+                   entries: list) -> bool:
+    """Keep every wanted +w entry on the channel. True when changed.
+
+    `v:account:*` voices any NickServ-identified user on join and nobody
+    else (proved on a throwaway channel: identified got `+v`, stranger got
+    nothing). Applied with SAMODE — the script is opered but not opped in
+    the channel, same reason the mode-lock repair uses SAMODE — and verified
+    by re-listing, because SAMODE answers nothing on success. Additive:
+    entries nobody listed (a hand-added `o:` grant) are left alone.
+    """
+    changed = False
+    current = autovoice_list(session, channel)
+    for entry in entries or []:
+        if entry in current:
+            continue
+        session.send(f"SAMODE {channel} +w {entry}")
+        session.collect(1.5)
+        if entry not in autovoice_list(session, channel):
+            raise IrcError(
+                f"SAMODE {channel} +w {entry} did not stick")
+        log(f"{channel}: +w += {entry}")
+        changed = True
+    return changed
+
+
 def setup_channel(session: IrcSession, spec: dict, account: str,
-                  display: str, access: dict) -> bool:
+                  display: str, access: dict, autovoice: list) -> bool:
     """Bring one channel to the desired state. Returns True when changed."""
     channel = spec["channel"]
     changed = False
@@ -578,6 +623,12 @@ def setup_channel(session: IrcSession, spec: dict, account: str,
     if sync_access(session, channel, access):
         changed = True
 
+    # Auto-voice list, same place for the same reason: it only exists on
+    # the live channel (Anope's mode lock cannot hold list modes), so a
+    # recreation wipes it and the next run must put it back.
+    if sync_autovoice(session, channel, autovoice):
+        changed = True
+
     session.send(f"PART {channel} :setup complete")
     session.collect(0.5)
     return changed
@@ -598,6 +649,7 @@ def main() -> int:
     channels = json.loads(os.environ["IRCD_CHANNELS"])
     display = os.environ.get("IRCD_ACCOUNT_DISPLAY") or account
     access = json.loads(os.environ.get("IRCD_CHANNEL_ACCESS") or "{}")
+    autovoice = json.loads(os.environ.get("IRCD_CHANNEL_AUTOVOICE") or "[]")
     deadline = time.monotonic() + float(os.environ.get("IRCD_TIMEOUT", "180"))
 
     session = IrcSession(host, port, use_tls, verify, sni, deadline)
@@ -625,7 +677,8 @@ def main() -> int:
             changed = True
 
         for spec in channels:
-            if setup_channel(session, spec, account, display, access):
+            if setup_channel(session, spec, account, display, access,
+                             autovoice):
                 changed = True
             else:
                 log(f"{spec['channel']}: already configured")

@@ -263,6 +263,18 @@ ircd_channel_access:
 # applies (kill = 60s) to anyone using it without identifying.
 ircd_services_root_display: "Zodiac"
 
+# Auto-voice (+w) entries asserted on every channel in
+# ircd_permanent_channels (ircd_channel_setup.py). `v:account:*` voices any
+# user identified to NickServ on join — and only them (verified on prod: an
+# identified join got `+v`, an unidentified join got nothing). This is
+# InspIRCd's autoop list mode, not a ChanServ access tier: Anope's mode lock
+# cannot hold list modes (LOCK ADD +ntP+w stored only +ntP), so the script
+# re-asserts the live list on every run instead, the same way it repairs
+# live channel modes after a recreation. Additive like the access tiers:
+# entries nobody listed are left alone.
+ircd_channel_autovoice:
+  - "v:account:*"
+
 # Server fingerprinting: VERSION replies show this instead of "InspIRCd-4",
 # and netsplit quits are hidden. Cosmetic; no protocol impact.
 ircd_custom_version: "IRC Fiber"
