@@ -197,6 +197,13 @@ ircfiber_ipv6_pool_host: ""
 ircfiber_gateway_log_level: "info"
 ircfiber_admin_password: "{{ vault_ircfiber_admin_password }}"  # set in vault.yml — no default
 
+# --- Signup email verification -------------------------------------------
+ircfiber_email_verification: true
+ircfiber_mail_provider: "sender"
+ircfiber_mail_from: "no-reply@ircfiber.com"
+ircfiber_mail_from_name: "IRC Fiber"
+ircfiber_public_url: "https://ircfiber.com"
+
 # --- IRCd (InspIRCd 4 + Anope 2 services) --------------------------------------
 # Pinned upstream images (multi-arch). Anope 2.0.x links to InspIRCd 4 via
 # its inspircd3 protocol module.

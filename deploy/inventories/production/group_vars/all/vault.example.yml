@@ -16,3 +16,6 @@
 # auto-decrypt the vault using vault_password_file from ansible.cfg.
 
 vault_signoz_admin_password: "CHANGE_ME"
+# sender.net → Account settings → API access tokens. Feeds the gateway
+# sender_api_token secret file for signup email verification.
+vault_sender_api_token: "CHANGE_ME"

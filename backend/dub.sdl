@@ -145,3 +145,18 @@ configuration "services-test" {
     versions "VibeUseFibers"
     buildOptions "unittests"
 }
+
+// Pure-code unit test for the signup email verification helpers
+// (ircfiber.mail sender.net payload/verdict, ircfiber.signup token/link/
+// email/pending-record shapes; no Redis, Mongo or network needed):
+//   dub --root=backend build --config=signup-test && ./backend/signup-test
+configuration "signup-test" {
+    targetType "executable"
+    targetName "signup-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/mail.d" "source/ircfiber/signup.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d"
+    mainSourceFile "tests/signup_test.d"
+    versions "VibeUseFibers"
+    buildOptions "unittests"
+}

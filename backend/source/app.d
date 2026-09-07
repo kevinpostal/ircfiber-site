@@ -40,6 +40,8 @@ import ircfiber.threadpool : initThreadPools, shutdownThreadPools,
     g_httpPool, g_ircPool, g_bgPool, g_stgPool;
 import ircfiber.db.redis_pool : initRedisPool, shutdownRedisPool;
 import ircfiber.env : envSecret;
+import ircfiber.mail : loadMailSettings;
+import ircfiber.signup : emailVerificationRequired;
 __gshared WebSocketGateway g_wsGateway;
 
 void main() {
@@ -116,6 +118,13 @@ void main() {
                 sleep(1.seconds);
             }
         }
+    }
+
+    {
+        auto mail = loadMailSettings();
+        logInfo("signup: email verification %s (mail provider: %s)",
+            emailVerificationRequired(mail) ? "REQUIRED" : "off",
+            mail.provider.length ? mail.provider : "none");
     }
 
     NetworkRepository.initRedis(redis);

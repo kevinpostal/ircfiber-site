@@ -3,7 +3,7 @@ import { untrack } from 'svelte';
 import { shouldBypassBatcher, unpackEvent, processIrcEvent } from './messageHandler';
 import type { IRCMessage, WhoisData } from '../types';
 import { ircState } from '../stores/ircStore.svelte';
-import { createNetwork, createBuffer, createMessage } from '../test/factories';
+import { createNetwork, createBuffer, createMessage, createMember } from '../test/factories';
 
 function makeMsg(overrides: Partial<IRCMessage> = {}): IRCMessage {
   return {
@@ -317,5 +317,69 @@ describe('WHOIS accumulation feeds the overlay', () => {
       { c: '318', p: ['me', 'maknho'], x: 'End of /WHOIS list.', network: 'libera' },
     ]);
     expect((last as { whoisData?: WhoisData }).whoisData?.special).toEqual(['is keepin it 100']);
+  });
+});
+
+// ACCOUNT notify ("nick logged in as account") used to fan out into every
+// shared channel's timeline. It now routes to the server log while the
+// member rows update in place.
+describe('ACCOUNT routes to the server log', () => {
+  beforeEach(() => {
+    ircState.networks.length = 0;
+    ircState.activeBuffer.networkId = null;
+    ircState.activeBuffer.bufferName = null;
+    ircState.messages = {};
+    ircState.processedMessages = {};
+  });
+
+  function runAccount(lines: Array<Record<string, unknown>>) {
+    const net = createNetwork({ networkId: 'n1', name: 'supernets', currentNick: 'me' });
+    const chan = createBuffer({ name: '#chan' });
+    chan.users = [createMember({ nick: 'pv6109' })];
+    net.buffers.push(chan, createBuffer({ name: '_server', type: 'server' }));
+    ircState.networks.push(net);
+    const accum = { whoisAcc: null, whoisAccs: new Map(), banAcc: [], banTargetChannel: '' };
+    for (const l of lines) {
+      processIrcEvent(l, { value: 0 }, accum as never, { switchToBuffer: () => {} },
+        () => {});
+    }
+    // _server bypasses the message batcher (shouldBypassBatcher is true for
+    // every command there), so rows land in the real store, not a collector.
+    const serverRows = untrack(() => ircState.messages['n1:_server'] ?? []);
+    const chanRows = untrack(() => ircState.messages['n1:#chan'] ?? []);
+    return { net, serverRows, chanRows };
+  }
+
+  it('files a per-channel ACCOUNT event into _server, not the channel', () => {
+    // Old-engine fan-out shape: the event names the shared channel.
+    const { serverRows, chanRows } = runAccount([
+      { command: 'ACCOUNT', nick: 'pv6109', params: ['pv6109'], text: 'pv6109', channel: '#chan', nid: 'n1', t: 2000 },
+    ]);
+    expect(serverRows).toHaveLength(1);
+    expect(serverRows[0].text).toBe('pv6109');
+    expect(chanRows).toHaveLength(0);
+  });
+
+  it('updates the member account row from params when text is empty', () => {
+    // Colon-less `ACCOUNT acct` parses with empty text; account is params[0].
+    const { net, serverRows, chanRows } = runAccount([
+      { command: 'ACCOUNT', nick: 'pv6109', params: ['pv6109'], text: '', channel: '#chan', nid: 'n1', t: 2000 },
+    ]);
+    expect(serverRows).toHaveLength(1);
+    expect(serverRows[0].text).toBe('pv6109');
+    expect(chanRows).toHaveLength(0);
+    const member = net.buffers.find((b) => b.name === '#chan')!.users!.find((u) => u.nick === 'pv6109')!;
+    expect(member.account).toBe('pv6109');
+  });
+
+  it('clears the member account on logout (*)', () => {
+    const { net, serverRows, chanRows } = runAccount([
+      { command: 'ACCOUNT', nick: 'pv6109', params: ['pv6109'], text: 'pv6109', channel: '#chan', nid: 'n1', t: 2000 },
+      { command: 'ACCOUNT', nick: 'pv6109', params: ['*'], text: '*', channel: '#chan', nid: 'n1', t: 3000 },
+    ]);
+    expect(serverRows).toHaveLength(2);
+    expect(chanRows).toHaveLength(0);
+    const member = net.buffers.find((b) => b.name === '#chan')!.users!.find((u) => u.nick === 'pv6109')!;
+    expect(member.account).toBe('');
   });
 });

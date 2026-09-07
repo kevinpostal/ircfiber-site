@@ -11,8 +11,9 @@
    * Two modes share the same component: `signin` (default) and `register`.
    * The form POSTs to /login or /register respectively. On success the
    * SPA reloads; on failure the response is parsed and an inline error
-   * banner is shown (no full page reload).
-   *
+   * banner is shown (no full page reload). A register that answers 202
+   * `verification_sent` (email verification required) switches the card
+   * to a "check your email" state instead of signing in.
    * Props:
    *   onAuthenticated — invoked after a successful login or register so
    *                     the parent can flip its `isAuthenticated` flag
@@ -32,6 +33,9 @@
   let error = $state('');
   let busy = $state(false);
   let usernameEl: HTMLInputElement | undefined = $state(undefined);
+  // Set after POST /register answers 202 `verification_sent`: the card
+  // switches to the "check your email" state instead of probing /api/me.
+  let sentTo = $state('');
 
   onMount(() => {
     usernameEl?.focus();
@@ -42,6 +46,7 @@
     if (mode === next) return;
     mode = next;
     error = '';
+    sentTo = '';
   }
 
   async function submit(event: SubmitEvent): Promise<void> {
@@ -59,11 +64,17 @@
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
         body: body.toString(),
         credentials: 'same-origin',
         redirect: 'manual',
       });
+
+      const isJson = (res.headers.get('content-type') ?? '').includes('application/json');
+      if (res.status === 202 && isJson) {
+        const data = await res.json();
+        if (data.status === 'verification_sent') { sentTo = data.email ?? email; return; }
+      }
 
       // 2xx and opaque-redirect (0) are both success — the server sets
       // the session cookie via Set-Cookie and either responds 200 (when
@@ -87,6 +98,19 @@
         error = mode === 'signin'
           ? 'Sign-in did not complete. Please try again.'
           : 'Account created but sign-in failed. Please try signing in.';
+        return;
+      }
+
+      // 4xx — JSON when the request asked for it (register with
+      // Accept: application/json), otherwise the server re-rendered the
+      // diet page with an inline error banner. Pull the authError text
+      // out of the rendered HTML so we can show the same message inline.
+      if (isJson) {
+        try {
+          error = (await res.json()).error ?? 'We could not create your account. Please check the details and retry.';
+        } catch {
+          error = 'We could not create your account. Please check the details and retry.';
+        }
         return;
       }
 
@@ -138,7 +162,12 @@
           <span>{error}</span>
         </div>
       {/if}
-
+      {#if sentTo}
+        <h1 class="noauth-heading">Check your email</h1>
+        <p class="noauth-sub">We sent a confirmation link to <strong>{sentTo}</strong>. It expires in 24 hours.</p>
+        <p class="noauth-sub">Didn't get it? Check spam, or <button type="button" class="noauth-link" onclick={() => { sentTo = ''; }}>sign up again</button> for a new link.</p>
+        <div class="noauth-meta"><span>Already confirmed?</span><button type="button" class="noauth-link" onclick={() => { sentTo = ''; setMode('signin'); }}>Sign in →</button></div>
+      {:else}
       <form class="noauth-form" onsubmit={submit} autocomplete="on" novalidate>
         <div class="noauth-field">
           <label for="noauth-username">Username</label>
@@ -211,6 +240,7 @@
           </button>
         {/if}
       </div>
+      {/if}
 
       <p class="noauth-foot">// fibre.always.connected</p>
     </div>

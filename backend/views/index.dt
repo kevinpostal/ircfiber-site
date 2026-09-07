@@ -41,11 +41,12 @@ block scripts
   link(rel="preload", href="/public/dist/assets/chunk-pages-7PvP9X31.css", as="style")
   link(rel="stylesheet", href="/public/dist/assets/chunk-pages-7PvP9X31.css")
   link(rel="modulepreload", href="/public/dist/assets/vendor-Dt7JUYQn.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-DULIkVp6.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-upload-BugpPQIG.js")
   link(rel="modulepreload", href="/public/dist/assets/chunk-editor-7RKjI0bQ.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-lMXytcV5.js")
-  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-Cqt6qkBk.js")
-  script(type="module", src="/public/dist/assets/main-BWDmg1kZ.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-pages-B6E-lRJx.js")
+  link(rel="modulepreload", href="/public/dist/assets/chunk-panels-BAA4Hj_w.js")
+  script(type="module", src="/public/dist/assets/main-14Wh5orF.js")
+
 
 
 

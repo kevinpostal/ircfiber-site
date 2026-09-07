@@ -3,7 +3,7 @@ import { WHOIS_FAMILY } from './serverLogGroups';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
-         checkHighlight, isMessageUnseen, applySetname, markRedacted,
+         checkHighlight, isMessageUnseen, applySetname, applyAccountChange, markRedacted,
          findBufferByName, isSelfMessage, renameQueryBuffer, isSessionFocused } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getLastSeen, getBottomSeen } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand, messageHostmask } from './utils';
@@ -174,7 +174,7 @@ export function processIrcEvent(
   // IRCCloud-style: track maxEid for stream resume
   setMaxEid(msg.eid ?? 0);
   const rawChannel = ((data.channel || data.ch || '_server') as string);
-  const channel = normalizeChannelName(rawChannel);
+  let channel = normalizeChannelName(rawChannel);
 
   // Look up by network UUID (nid) — NOT display name — so events from one
   // network never leak channels into another network's sidebar. The compact
@@ -588,6 +588,18 @@ export function processIrcEvent(
       const redactBuf = normalizeChannelName(msg.params[0] || channel);
       if (markRedacted(networkId, redactBuf, targetMsgid, reason)) return {};
     }
+  }
+  // ── ACCOUNT — server-log only ──
+  // "nick logged in as account" rows spammed every shared channel's
+  // timeline. Route them to _server (like the WHOIS numerics) and refresh
+  // the member rows in place so identity stays live without the noise.
+  if (cmd === 'ACCOUNT' && msg.nick) {
+    const account = msg.text || (msg.params?.[0] ?? '');
+    if (account) applyAccountChange(networkId, msg.nick, account);
+    // Colon-less `ACCOUNT acct` parses with empty text; the row renders
+    // msg.text, so normalize it (new engines already send it populated).
+    if (!msg.text && account) msg.text = account;
+    channel = '_server';
   }
   // ── Message append + notification ──
   if (!isSkippedCommand(cmd)) {

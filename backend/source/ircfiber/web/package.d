@@ -4,8 +4,10 @@ import std.file : readText, exists, isFile, read;
 import std.path : buildPath;
 import std.uuid : randomUUID;
 import std.string : strip;
+import std.typecons : Nullable;
 import std.algorithm : startsWith, canFind, endsWith;
 import std.string : indexOf;
+import std.string : toLower;
 import std.regex : regex, replaceAll;
 import std.datetime : Clock;
 import std.conv : to;
@@ -26,6 +28,9 @@ import ircfiber.default_network : ensureDefaultFiberNetwork;
 import ircfiber.services.accounts : isValidIrcNick, provisionServicesAccountAsync;
 import ircfiber.services.anope : NickRegistration, anopeNickRegistration, loadAnopeSettings;
 import ircfiber.models.user : User;
+import ircfiber.mail : MailSettings, MailException, loadMailSettings, sendMail;
+import ircfiber.signup : PendingSignup, PendingSignupStore, emailVerificationRequired,
+    newSignupToken, pendingKey, verificationEmail, verificationLink;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
 
     // Captures client IP, User-Agent, createdAt, and lastAccess on
@@ -90,6 +95,8 @@ final class WebController {
         router.post("/login", &loginPost);
         router.get("/register", &registerPage);
         router.post("/register", &registerPost);
+        router.get("/verify", &verifyGet);
+        router.post("/verify", &verifyPost);
         router.get("/logout", &logout);
         router.get("/public/landing.html", &serveLanding);
         router.get("/app-screenshot.png", &serveAppScreenshot);
@@ -320,13 +327,23 @@ final class WebController {
         }
     }
 
+    /// The SPA overlay sends `Accept: application/json`; the diet form does not.
+    private static bool wantsJson(HTTPServerRequest req) {
+        return req.headers.get("Accept", "").canFind("application/json");
+    }
+
+    private void registerFail(HTTPServerRequest req, HTTPServerResponse res, int status, string msg) {
+        res.statusCode = status;
+        if (wantsJson(req)) { res.writeJsonBody(Json(["error": Json(msg)])); return; }
+        string authError = msg;
+        res.render!("register.dt", authError)();
+    }
+
     private void registerPost(HTTPServerRequest req, HTTPServerResponse res) {
         auto repo = new UserRepository();
         auto username = req.form.get("username", "").strip();
         auto email = req.form.get("email", "").strip();
         auto password = req.form.get("password", "").strip();
-
-        string authError;
 
         // Landing page sign-up sends email + password only.
         if (username.length == 0 && email.length > 0) {
@@ -347,9 +364,7 @@ final class WebController {
         }
 
         if (username.length == 0 || email.length == 0 || password.length == 0) {
-            authError = "Username, email and password are all required.";
-            res.statusCode = 400;
-            res.render!("register.dt", authError)();
+            registerFail(req, res, 400, "Username, email and password are all required.");
             return;
         }
 
@@ -360,9 +375,7 @@ final class WebController {
         foreach (char c; email)
             if (c <= 0x20 || c == 0x7F) emailWellFormed = false;
         if (!emailWellFormed) {
-            authError = "That doesn't look like a valid email address.";
-            res.statusCode = 400;
-            res.render!("register.dt", authError)();
+            registerFail(req, res, 400, "That doesn't look like a valid email address.");
             return;
         }
 
@@ -370,44 +383,38 @@ final class WebController {
         // (ircfiber.services.accounts) — all three are the same string, so
         // reject anything the ircd would refuse.
         if (!isValidIrcNick(username)) {
-            authError = "Usernames must be a valid IRC nickname: letters, digits, - _ [ ] \\ ` ^ { | }, "
-                      ~ "starting with a letter, at most 32 characters.";
-            res.statusCode = 400;
-            res.render!("register.dt", authError)();
+            registerFail(req, res, 400, "Usernames must be a valid IRC nickname: letters, digits, - _ [ ] \\ ` ^ { | }, "
+                ~ "starting with a letter, at most 32 characters.");
             return;
         }
 
         if (password.length < 8) {
-            authError = "Password must be at least 8 characters.";
-            res.statusCode = 400;
-            res.render!("register.dt", authError)();
+            registerFail(req, res, 400, "Password must be at least 8 characters.");
             return;
         }
 
         // Case-insensitive: the username is also the IRC nick, and IRC nicks
         // are case-insensitive, so `Alice` and `alice` are one identity.
         if (repo.findByUsernameCI(username).username.length > 0) {
-            authError = "That username is already taken. Please choose another.";
-            res.statusCode = 409;
-            res.render!("register.dt", authError)();
+            registerFail(req, res, 409, "That username is already taken. Please choose another.");
             return;
         }
 
         string claimedWhy;
         if (ircNickIsClaimed(username, claimedWhy)) {
-            authError = claimedWhy;
-            res.statusCode = 409;
-            res.render!("register.dt", authError)();
+            registerFail(req, res, 409, claimedWhy);
             return;
         }
 
-        User u;
-        u.id = randomUUID();
-        u.username = username;
-        u.email = email;
-        u.passwordHash = hashPassword(password);
-        u.signupIp = getClientIp(req);
-        u.createdAt = Clock.currTime;
+        registerPostVerified(req, res, username, email, password);
+    }
+
+    /// Inserts `u`, provisions the Fiber network + NickServ (both fire-and-forget,
+    /// as today), starts the session and 302s to the welcome route.
+    /// Returns false without writing a response when the username is taken
+    /// (E11000) — the caller decides how to say so.
+    private bool createAccountAndLogin(HTTPServerRequest req, HTTPServerResponse res, User u) {
+        auto repo = new UserRepository();
         try {
             repo.create(u);
         } catch (Exception e) {
@@ -417,10 +424,7 @@ final class WebController {
             // `username_ci_unique` index (E11000). That is a taken username,
             // not a server error.
             if (e.msg.canFind("duplicate key")) {
-                authError = "That username is already taken. Please choose another.";
-                res.statusCode = 409;
-                res.render!("register.dt", authError)();
-                return;
+                return false;
             }
             throw e;
         }
@@ -451,6 +455,110 @@ final class WebController {
         // Land on the post-signup welcome page (sidebar + Fiber channel chips +
         // add-another-network form). The SPA reads the ?/add-network=welcome route.
         res.redirect("/?/add-network=welcome");
+        return true;
+    }
+
+    private void renderVerify(HTTPServerResponse res, int status, string stage,
+            string email, string token, string message) {
+        res.statusCode = status;
+        res.render!("verify.dt", stage, email, token, message)();
+    }
+
+    private void verifyGet(HTTPServerRequest req, HTTPServerResponse res) {
+        const token = req.query.get("token", "").strip();
+        auto store = new PendingSignupStore(redis);
+        if (token.length == 0 || !store.exists(token)) {
+            renderVerify(res, 410, "error", "", "",
+                "This confirmation link has expired or was already used. "
+                ~ "Please create your account again to get a new one.");
+            return;
+        }
+        renderVerify(res, 200, "confirm", "", token, "");
+    }
+
+    private void verifyPost(HTTPServerRequest req, HTTPServerResponse res) {
+        const token = req.form.get("token", "").strip();
+        auto store = new PendingSignupStore(redis);
+        auto pending = token.length ? store.take(token) : Nullable!PendingSignup.init;
+        if (pending.isNull) {
+            renderVerify(res, 410, "error", "", "",
+                "This confirmation link has expired or was already used. "
+                ~ "Please create your account again to get a new one.");
+            return;
+        }
+        auto p = pending.get;
+        User u;
+        u.id = randomUUID();
+        u.username = p.username;
+        u.email = p.email;
+        u.passwordHash = p.passwordHash;
+        u.signupIp = p.signupIp;
+        u.createdAt = Clock.currTime;
+        if (!createAccountAndLogin(req, res, u)) {
+            renderVerify(res, 409, "error", "", "",
+                "The username \"" ~ p.username
+                ~ "\" was taken while this link was waiting. "
+                ~ "Please create your account again with a different username.");
+            return;
+        }
+        logInfo("register: %s verified %s and was created", u.username, u.email);
+    }
+
+    private void registerPostVerified(HTTPServerRequest req, HTTPServerResponse res,
+            string username, string email, string password) {
+        auto mail = loadMailSettings();
+        if (!emailVerificationRequired(mail)) {
+            User u;
+            u.id = randomUUID();
+            u.username = username;
+            u.email = email;
+            u.passwordHash = hashPassword(password);
+            u.signupIp = getClientIp(req);
+            u.createdAt = Clock.currTime;
+            if (!createAccountAndLogin(req, res, u))
+                registerFail(req, res, 409, "That username is already taken. Please choose another.");
+            return;
+        }
+        if (!mail.configured) {
+            logError("register: email verification required but no mail provider is configured");
+            registerFail(req, res, 503, "Signups are temporarily unavailable. Please try again later.");
+            return;
+        }
+        auto store = new PendingSignupStore(redis);
+        const ip = getClientIp(req);
+        if (store.ipLimitHit(ip)) {
+            registerFail(req, res, 429, "Too many signups from your network. Please try again later.");
+            return;
+        }
+        const emailLower = email.toLower();
+        if (store.emailCooldownHit(emailLower)) {
+            registerFail(req, res, 429, "We already sent a confirmation link to that address. "
+                ~ "Check your inbox (and spam), then try again in a minute.");
+            return;
+        }
+        PendingSignup p = { username, email, hashPassword(password), ip, Clock.currTime.toUnixTime() };
+        const token = newSignupToken();
+        try store.put(token, p);
+        catch (Exception e) {
+            logError("register: storing pending signup for %s failed: %s", username, e.msg);
+            registerFail(req, res, 503, "Signups are temporarily unavailable. Please try again later.");
+            return;
+        }
+        const link = verificationLink(environment.get("IRCFIBER_PUBLIC_URL", "https://ircfiber.com"), token);
+        try sendMail(mail, verificationEmail(username, email, link));
+        catch (Exception e) {
+            logError("register: sending verification email to %s failed: %s", email, e.msg);
+            redis.del(pendingKey(token));   // a link nobody received must not stay live
+            registerFail(req, res, 503, "We couldn't send the confirmation email. Please try again in a few minutes.");
+            return;
+        }
+        logInfo("register: verification email sent for %s (%s) from %s", username, email, ip);
+        if (wantsJson(req)) {
+            res.statusCode = 202;
+            res.writeJsonBody(Json(["status": Json("verification_sent"), "email": Json(email)]));
+            return;
+        }
+        renderVerify(res, 200, "sent", email, "", "");
     }
 
     private void logout(HTTPServerRequest req, HTTPServerResponse res) {

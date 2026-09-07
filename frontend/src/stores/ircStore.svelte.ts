@@ -816,6 +816,28 @@ export function applySetname(networkId: string, nick: string, realname: string):
 }
 
 /**
+ * Apply a live ACCOUNT login/logout change: refresh every member row for
+ * the nick across all buffers. `*` means logged out — clear the badge
+ * rather than displaying a literal star.
+ */
+export function applyAccountChange(networkId: string, nick: string, account: string): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  const bare = stripPrefix(nick);
+  if (!bare) return;
+  const next = account === '*' ? '' : account;
+  for (const b of net.buffers) {
+    if (!b.users) continue;
+    for (const u of b.users) {
+      if (stripPrefix(u.nick).toLowerCase() === bare.toLowerCase()) {
+        u.account = next;
+      }
+    }
+  }
+  markNetworkSeen(networkId);
+}
+
+/**
  * Tombstone a message redacted via draft/message-redaction
  * (`REDACT <target> <msgid> [<reason>]`). Returns true when a row with
  * the msgid was found and replaced (caller then skips appending the
