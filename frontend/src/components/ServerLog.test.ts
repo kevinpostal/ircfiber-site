@@ -275,10 +275,13 @@ describe('ServerLog', () => {
 
     const headers = document.querySelectorAll('.row.dateChange');
     expect(headers.length).toBe(2);
-    // The second header sits right before the second attempt's first row.
+    // The second header sits right before the second attempt's session
+    // divider, which in turn opens its rail.
     const second = headers[1];
-    expect(second.nextElementSibling?.getAttribute('data-phase')).toBe('queued');
-    expect(Number(second.nextElementSibling?.getAttribute('data-time'))).toBe(DAY);
+    const divider = second.nextElementSibling!;
+    expect(divider.classList.contains('sessionChange')).toBe(true);
+    expect(Number(divider.getAttribute('data-time'))).toBe(DAY);
+    expect(divider.nextElementSibling?.getAttribute('data-phase')).toBe('queued');
   });
 
   it('never renders engine state events or the self QUIT echo', async () => {
@@ -512,5 +515,76 @@ describe('ServerLog', () => {
     const visiblePhases = document.querySelectorAll('.serverLog > .row.phase, .serverLog .row.phase');
     expect(visiblePhases.length).toBe(2);
     expect(document.querySelector('.row.phase[data-phase="connecting"]')?.classList.contains('live')).toBe(true);
+  });
+
+  // ── Session dividers + token highlighting ──
+  it('opens every connect attempt with a session divider carrying its outcome', async () => {
+    const network = setupServerBuffer(false);
+    network.connectionState = 'ip_retry';
+    const msgs = [
+      // Tail of a session the backlog cut off: chatter with no phases.
+      createMessage({ command: '481', nick: 'irc.test.com', text: 'Permission Denied', t: DAY - 3_600_000, eid: 1 }),
+      ...connectSequence(DAY, 10),
+      createMessage({ command: 'DISCONNECTED', nick: undefined, text: 'Connection reset by peer', t: DAY + 100_000, eid: 20 }),
+      ...failedAttempt(DAY + 200_000, 30),
+      phase('queued', 'Queued for connection', DAY + 400_000, 40),
+      phase('connecting', 'Connecting to 10.0.0.1:6697', DAY + 400_020, 41),
+    ];
+    render(ServerLog, { props: { messages: msgs, network } });
+
+    const sessions = Array.from(document.querySelectorAll('.row.sessionChange'));
+    expect(sessions.map((s) => s.querySelector('.badge')?.textContent)).toEqual(['connected in 1.2s', 'failed', 'connecting…']);
+    expect(sessions.map((s) => s.classList.contains('ok'))).toEqual([true, false, false]);
+    expect(sessions[1].classList.contains('bad')).toBe(true);
+    expect(sessions[2].classList.contains('live')).toBe(true);
+    // The divider sits directly above its rail; chatter-only tails and the
+    // DISCONNECTED row get none.
+    const all = Array.from(document.querySelectorAll('.serverLog > .row'));
+    expect(all[0].classList.contains('dateChange')).toBe(true);
+    expect(all[1].getAttribute('data-cmd')).toBe('481');
+    const firstSession = all.indexOf(sessions[0]);
+    expect(firstSession).toBe(2);
+    expect(all[firstSession + 1].getAttribute('data-phase')).toBe('queued');
+    const disco = all.find((r) => r.getAttribute('data-cmd') === 'DISCONNECTED')!;
+    expect(all[all.indexOf(disco) - 1].classList.contains('part')).toBe(true);
+    // A phase-less tail never inherits the following connect's start: the
+    // rail still measures from its own queued event.
+    expect(document.querySelector('.row.phase[data-phase="welcome"] .tag')?.textContent).toBe('1.2s');
+  });
+
+  it('highlights hosts, ports, addresses, numbers and protocol words in prose rows', async () => {
+    const network = setupServerBuffer();
+    const msgs = [
+      phase('queued', 'Queued for connection', DAY, 1),
+      phase('connecting', 'Connecting to irc.test.com:6697 (TLS)...', DAY + 20, 2),
+      phase('tcp_open', 'TCP connection established to irc.test.com:6697 [2001:db8::7] (direct) from 10.0.0.4.', DAY + 300, 3),
+      phase('tls_done', 'TLS handshake complete — TLSv1.3 · TLS_AES_256_GCM_SHA384 · cert irc.test.com (expires 2026-12-02)', DAY + 340, 4),
+      phase('welcome', 'Registered', DAY + 1240, 5),
+      createMessage({ command: '003', nick: 'irc.test.com', params: ['zodiac'], text: 'This server was created on 06 Sep 2026 at 19:36:34 UTC', t: DAY + 1250, eid: 6 }),
+      createMessage({ command: '251', nick: 'irc.test.com', params: ['zodiac'], text: 'There are 16 users and 4 invisible on 3 servers', t: DAY + 1251, eid: 7 }),
+      createMessage({ command: '481', nick: 'irc.test.com', params: ['zodiac'], text: 'Permission Denied - You do not have the required operator privileges', t: DAY + 1252, eid: 8 }),
+      createMessage({ command: 'DISCONNECTED', nick: undefined, text: 'Connection reset by peer after <script>', t: DAY + 100_000, eid: 9 }),
+    ];
+    render(ServerLog, { props: { messages: msgs, network } });
+
+    const texts = (sel: string) => Array.from(document.querySelectorAll(sel)).map((e) => e.textContent);
+    const connecting = '.row.phase[data-phase="connecting"]';
+    expect(texts(`${connecting} .logHost`)).toEqual(['irc.test.com']);
+    expect(texts(`${connecting} .logNum`)).toEqual(['6697']);
+    expect(texts(`${connecting} .logKw`)).toEqual(['TLS']);
+    expect(texts('.row.phase[data-phase="tcp_open"] .logIp')).toEqual(['2001:db8::7', '10.0.0.4']);
+    expect(texts('.row.phase[data-phase="tls_done"] .logKw')).toEqual(['TLS', 'TLSv1.3', 'TLS_AES_256_GCM_SHA384']);
+    expect(texts('.row.phase[data-phase="tls_done"] .logNum')).toEqual(['2026-12-02']);
+    // A clock time is not an IPv6 literal.
+    expect(document.querySelector('.row.status[data-cmd="003"] .logIp')).toBeNull();
+    expect(document.querySelector('.row.status[data-cmd="003"]')?.textContent).toContain('19:36:34 UTC');
+    expect(texts('.row.status[data-cmd="251"] .logNum')).toEqual(['16', '4', '3']);
+    // ERR numerics carry the error tone on the row.
+    expect(document.querySelector('.row.status[data-cmd="481"]')?.classList.contains('logError')).toBe(true);
+    expect(document.querySelector('.row.status[data-cmd="251"]')?.classList.contains('logError')).toBe(false);
+    // Highlighting never un-escapes the reason.
+    const disco = document.querySelector('.row.status[data-cmd="DISCONNECTED"] .disco')!;
+    expect(disco.textContent).toBe('Disconnected: Connection reset by peer after <script>');
+    expect(disco.querySelector('script')).toBeNull();
   });
 });

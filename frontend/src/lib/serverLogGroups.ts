@@ -131,8 +131,30 @@ function isStartPhase(msg: IRCMessage, current: ServerLogAttempt | null): boolea
   if (START_PHASES.has(msg.phase)) return true;
   if (msg.phase !== 'connecting') return false;
   if (!current) return true;
+  // A synthetic attempt seeded by chatter (no phase yet) is not a connect
+  // in progress: `connecting` starts the real one. Folding it in made the
+  // attempt start at the chatter's timestamp, so every phase offset and the
+  // "Connected" duration tag measured from there (+26m34s for a 1.5 s
+  // connect when the loaded backlog began mid-session).
+  if (current.phases.length === 0) return true;
   return current.phases.some((p) => !!p.phase && CONNECT_BODY_PHASES.has(p.phase));
 }
+
+/** Newest timestamp across an attempt's buckets — where its chatter ends. */
+function lastMessageT(a: ServerLogAttempt): number {
+  let t = a.start.t ?? 0;
+  for (const bucket of [a.phases, a.motd, a.welcome, a.cap, a.notices, a.numeric]) {
+    for (const m of bucket) if ((m.t ?? 0) > t) t = m.t ?? 0;
+  }
+  return t;
+}
+
+/**
+ * Chatter that arrived within this window before a START phase belongs to
+ * that connect (a raw server NOTICE that beat the engine's `connecting`);
+ * anything older is the tail of a previous session the backlog cut off.
+ */
+const PRE_ATTEMPT_CHATTER_MS = 60_000;
 
 /**
  * Phases / commands that mark the END of an attempt. After this we close
@@ -283,8 +305,11 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
       // START into it instead of splitting. A `connecting` that follows a
       // completed connect body is a real new attempt (isStartPhase) and
       // must NOT merge — otherwise the previous card swallows the new
-      // connection's phases and the timeline stops being live.
-      if (current && current.end === null && current.status === 'pending' && msg.phase !== 'connecting') {
+      // connection's phases and the timeline stops being live. Nor does a
+      // chatter-seeded attempt (no phases) count as in flight: merging
+      // into it made the attempt start at the chatter's timestamp.
+      if (current && current.end === null && current.status === 'pending'
+          && current.phases.length > 0 && msg.phase !== 'connecting') {
         current.phases.push(msg);
         continue;
       }
@@ -307,9 +332,13 @@ export function groupServerLog(messages: IRCMessage[]): ServerLogAttempt[] {
       // and would stay frozen on "Connecting…" forever after the real
       // connection events start flowing into the new card. Transfer
       // any pre-attachment chatter (MOTD, welcome, caps, notices,
-      // numerics into the real attempt so nothing is lost).
+      // numerics into the real attempt so nothing is lost). Chatter
+      // older than PRE_ATTEMPT_CHATTER_MS is a previous session's tail
+      // (the backlog started after its phases): it stays its own
+      // attempt so it is not attributed to the connect that follows.
       let discarded: ServerLogAttempt | null = null;
-      if (current && current.phases.length === 0 && current.end === null) {
+      if (current && current.phases.length === 0 && current.end === null
+          && (msg.t ?? 0) - lastMessageT(current) <= PRE_ATTEMPT_CHATTER_MS) {
         discarded = current;
       } else {
         pushCurrent();
@@ -589,17 +618,25 @@ export function isupportTokens(msg: IRCMessage): string[] {
  * by command type only — the engine, holder daemon, and handleServerError()
  * can each emit a DISCONNECTED with different text for the same disconnect,
  * and those all represent the same logical event.
+ *
+ * The window is per attempt, not per stream: duplicates of one connect all
+ * land before its `welcome` (or its failure), so once an attempt has ended
+ * the next start phase opens a fresh window. Without that, a disconnect +
+ * reconnect inside 60 s lost the whole second phase rail — its texts are
+ * byte-identical to the first's — and the log read as one long session.
  */
 export function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
   const DUP_WINDOW_MS = 60_000;
+  const ATTEMPT_START = new Set(['queued', 'resolving', 'connecting']);
   const lastSeen = new Map<string, number>();
   const lifecycleLastSeen = new Map<string, number>();
+  let attemptEnded = false;
   const out: IRCMessage[] = [];
   for (const msg of messages) {
     const cmd = msg.command ?? '';
-    const isLifecycle = cmd === 'CONNECT' || cmd === 'CONNECTED'
-      || cmd === 'DISCONNECT' || cmd === 'DISCONNECTED';
-    if (!msg.phase && !isLifecycle) {
+    const isDisconnect = cmd === 'DISCONNECT' || cmd === 'DISCONNECTED';
+    const isConnect = cmd === 'CONNECT' || cmd === 'CONNECTED';
+    if (!msg.phase && !isDisconnect && !isConnect) {
       out.push(msg);
       continue;
     }
@@ -607,13 +644,23 @@ export function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
     // Three different code paths can emit DISCONNECTED for the same drop
     // (handleServerError, handleDisconnection, holder onDisconnected) with
     // different text strings. They all mean the same thing — one disconnect.
-    if (isLifecycle) {
+    if (isDisconnect || isConnect) {
       const now = msg.t ?? 0;
       const last = lifecycleLastSeen.get(cmd);
       if (last !== undefined && (now - last) < DUP_WINDOW_MS) continue;
       lifecycleLastSeen.set(cmd, now);
+      // A real transition makes the opposite transition real again.
+      for (const k of isDisconnect ? ['CONNECT', 'CONNECTED'] : ['DISCONNECT', 'DISCONNECTED']) {
+        lifecycleLastSeen.delete(k);
+      }
+      if (isDisconnect) attemptEnded = true;
       out.push(msg);
       continue;
+    }
+    const phase = msg.phase ?? '';
+    if (attemptEnded && ATTEMPT_START.has(phase)) {
+      lastSeen.clear();
+      attemptEnded = false;
     }
     // Normalise text so "via holder" and "established" resolve to the same key
     const rawText = (msg.text ?? '');
@@ -623,11 +670,16 @@ export function dedupPhaseEvents(messages: IRCMessage[]): IRCMessage[] {
       .replace(/to \S+:\d+/i, '')  // strip host:port so TLS connects to
       .replace(/for \S+/i, '')      // different hosts don't collide
       .trim();
-    const key = `${msg.phase ?? ''}|${canonText.slice(0, 60)}`;
+    const key = `${phase}|${canonText.slice(0, 60)}`;
     const last = lastSeen.get(key);
     const now = msg.t ?? 0;
     if (last !== undefined && (now - last) < DUP_WINDOW_MS) continue;
     lastSeen.set(key, now);
+    if (phase === 'welcome' || phase === 'error' || phase === 'attempt_fail') {
+      attemptEnded = true;
+      lifecycleLastSeen.delete('DISCONNECT');
+      lifecycleLastSeen.delete('DISCONNECTED');
+    }
     out.push(msg);
   }
   return out;

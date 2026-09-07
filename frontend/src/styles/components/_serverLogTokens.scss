@@ -23,6 +23,31 @@
   --log-value-fg: #e6edf3;
   --log-arg-fg: #8b949e;
   --log-sep-fg: #3d444d;
+  // Prose tokens picked out by `highlightLogText` (lib/serverLogRows.ts).
+  // GitHub-dark syntax hues, same family as the tags above.
+  --log-host-fg: #e6edf3;
+  --log-ip-fg: #79c0ff;
+  --log-num-fg: #d2a8ff;
+  --log-kw-fg: #ffa657;
+  --log-error-fg: #ff8f8a;
+}
+
+// Prose highlighting — applies to the sentence rows (status numerics,
+// disconnect reasons) and to the phase rail, which is not a messageRow.
+.row.messageRow.status.monospace,
+.row.phase {
+  .logHost { color: var(--log-host-fg); font-weight: 500; }
+  .logIp { color: var(--log-ip-fg); }
+  .logNum { color: var(--log-num-fg); font-variant-numeric: tabular-nums; }
+  .logKw { color: var(--log-kw-fg); }
+  .logMask b { color: var(--log-value-fg); font-weight: 500; }
+  .logMask .logArg { color: var(--log-arg-fg); }
+}
+
+// ERR_* numerics: the whole sentence in the failure tone, values keep
+// their own colour so the reason still scans.
+.row.messageRow.status.monospace.logError .content {
+  color: var(--log-error-fg);
 }
 
 // CAP rows are a three-column grid so a 30-capability list wraps under

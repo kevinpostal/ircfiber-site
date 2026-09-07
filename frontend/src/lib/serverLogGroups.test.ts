@@ -111,6 +111,32 @@ describe('groupServerLog', () => {
     expect(groupServerLog([])).toEqual([]);
   });
 
+  // A backlog that starts mid-session opens with chatter and no phases. The
+  // `connecting` that follows must start its own attempt; folding it into
+  // the chatter-seeded one made every offset and the "Connected" duration
+  // measure from the chatter (+26m34s for a 1.5 s connect).
+  it('a bare connecting after stale chatter starts its own attempt', () => {
+    const chatter = m({ command: '481', text: 'Permission Denied', t: 1_000_000 });
+    const connecting = m({ phase: 'connecting', text: 'Connecting to 10.0.0.1:6697', t: 1_000_000 + 26 * 60_000 });
+    const welcome = m({ phase: 'welcome', text: 'Registered', t: connecting.t! + 1_500 });
+    const attempts = groupServerLog([chatter, connecting, welcome]);
+    expect(attempts.length).toBe(2);
+    expect(attempts[0].numeric).toEqual([chatter]);
+    expect(attempts[0].phases).toEqual([]);
+    expect(attempts[1].start).toBe(connecting);
+    expect(attemptDuration(attempts[1])).toBe(1_500);
+  });
+
+  it('chatter that just beat the connecting event folds into that attempt', () => {
+    const notice = m({ text: '*** Looking up your hostname...', t: 1_000_000 });
+    const connecting = m({ phase: 'connecting', text: 'Connecting to 10.0.0.1:6697', t: 1_000_500 });
+    const welcome = m({ phase: 'welcome', text: 'Registered', t: 1_002_000 });
+    const attempts = groupServerLog([notice, connecting, welcome]);
+    expect(attempts.length).toBe(1);
+    expect(attempts[0].start).toBe(connecting);
+    expect(attempts[0].notices).toEqual([notice]);
+  });
+
   it('groups a full attempt from connecting through welcome', () => {
     const messages = [
       m({ phase: 'connecting', text: 'Connecting to irc.example.org:6697...' }),
@@ -317,6 +343,35 @@ describe('groupServerLog', () => {
     expect(commands.filter((c) => c === 'DISCONNECTED')).toHaveLength(1);
     const phases = attempts.flatMap((a) => a.phases.map((p) => p.phase));
     expect(phases.filter((p) => p === 'queued')).toHaveLength(1);
+  });
+
+  it('keeps a full second phase rail for a reconnect inside the 60 s window', () => {
+    // A manual disconnect + reconnect 26 s apart replays byte-identical
+    // phase texts. Those are a new attempt, not engine/holder duplicates —
+    // the duplicates of one connect all land before its welcome.
+    const rail = (base: number) => [
+      m({ t: base, phase: 'connecting', text: 'Connecting to irc.ircfiber.com:6697 (TLS)...' }),
+      m({ t: base + 5, phase: 'tcp_open', text: 'TCP connection established to irc.ircfiber.com:6697.' }),
+      m({ t: base + 50, phase: 'tls_done', text: 'TLS handshake complete' }),
+      m({ t: base + 1500, phase: 'welcome', text: 'Registered' }),
+    ];
+    const messages = [
+      ...rail(1_000_000),
+      // Engine + holder duplicate of the first connect's welcome: still dropped.
+      m({ t: 1_001_500, phase: 'welcome', text: 'Registered' }),
+      m({ t: 1_020_000, command: 'DISCONNECTED', text: 'You disconnected' }),
+      ...rail(1_026_000),
+      m({ t: 1_040_000, command: 'DISCONNECTED', text: 'You disconnected' }),
+    ];
+    const attempts = groupServerLog(messages);
+    expect(attempts).toHaveLength(2);
+    for (const a of attempts) {
+      expect(a.phases.filter((p) => p.phase).map((p) => p.phase))
+        .toEqual(['connecting', 'tcp_open', 'tls_done', 'welcome']);
+    }
+    // The second DISCONNECTED (14 s after the second welcome) is a real drop.
+    expect(attempts[1].status).toBe('disconnected');
+    expect(attempts[1].end?.command).toBe('DISCONNECTED');
   });
 
   it('does not dedup chat-shaped messages that share text naturally', () => {

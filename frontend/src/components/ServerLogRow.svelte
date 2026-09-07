@@ -44,7 +44,13 @@
   <span class="date"><span class="timestamp" title={s.title}>{s.time}</span></span>
 {/snippet}
 
-{#if row.kind === 'phase'}
+{#if row.kind === 'session'}
+  <div class="row sessionChange {row.outcome}" data-time={row.msg.t}>
+    <span class="rule"></span>
+    <span class="label">Connection{#if row.badge}<span class="badge">{row.badge}</span>{/if}</span>
+    <span class="rule"></span>
+  </div>
+{:else if row.kind === 'phase'}
   <div
     class="row phase {row.state}"
     class:first={row.first}
@@ -53,7 +59,7 @@
     data-time={row.msg.t}
   >
     <span class="glyph"></span>
-    <span class="content">{row.text}{#if row.tag}<span class="tag ok">{row.tag}</span>{/if}</span>
+    <span class="content">{@html row.html}{#if row.tag}<span class="tag ok">{row.tag}</span>{/if}</span>
     <span class="offs" class:hot={row.state === 'live'}>
       {#if row.state === 'live' && row.startT}
         <LiveElapsed since={row.startT} format={liveOffset} interval={100} />
@@ -253,6 +259,49 @@
     font-weight: 400;
   }
   .tag.ok { color: #7ee2a8; }
+
+  /* ── session divider: one per connection attempt ─────────────────
+     A labelled rule with breathing room above it, so the seam between
+     two connections is visible at scroll speed instead of the phase
+     rail simply restarting mid-stream. The badge carries the attempt's
+     outcome so a session can be judged without reading its rail. */
+  .row.sessionChange {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 18px;
+    padding: 0 16px 6px var(--row-gutter-left);
+    font: 11px/16px var(--font-mono);
+    color: var(--text-tertiary);
+    user-select: none;
+  }
+  .row.sessionChange .rule {
+    flex: 1;
+    height: 1px;
+    background: var(--border, #2f3336);
+  }
+  .row.sessionChange .label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .row.sessionChange .badge {
+    padding: 0 6px;
+    border-radius: 3px;
+    background: #1e2126;
+    letter-spacing: 0;
+    text-transform: none;
+    color: #9cbfe2;
+  }
+  .row.sessionChange.ok .badge { color: #7ee2a8; }
+  .row.sessionChange.bad .badge { color: #ff8f8a; }
+  .row.sessionChange.live .badge { color: #9cc7ff; }
+  .row.sessionChange.ok .rule { background: rgba(63, 185, 80, 0.28); }
+  .row.sessionChange.bad .rule { background: rgba(248, 81, 73, 0.28); }
+  .row.sessionChange.live .rule { background: color-mix(in srgb, var(--accent) 35%, transparent); }
 
   /* ── grouped MOTD block ──────────────────────────────────────────
      Card geometry, colour and the 10px row padding are IRCCloud's and

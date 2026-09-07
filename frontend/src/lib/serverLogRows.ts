@@ -23,6 +23,18 @@ import { discoSentence } from './messageBuilder';
 export type ServerLogRow =
   | { kind: 'date'; key: string; date: string }
   | {
+      /** Divider opening one connection attempt — the visual seam between
+       *  sessions in a log that otherwise reads as one unbroken stream. */
+      kind: 'session';
+      key: string;
+      /** Attempt start — data-time / disco head timestamp. */
+      msg: IRCMessage;
+      /** How the attempt ended (or is going): drives the badge tone. */
+      outcome: 'ok' | 'bad' | 'live' | 'none';
+      /** Badge copy (`connected in 1.6s`, `failed`, `connecting…`); '' hides it. */
+      badge: string;
+    }
+  | {
       kind: 'phase';
       key: string;
       msg: IRCMessage;
@@ -32,7 +44,8 @@ export type ServerLogRow =
       last: boolean;
       /** Attempt start `t` — the `+offset` origin. */
       startT: number | undefined;
-      text: string;
+      /** Escaped, token-highlighted phase text. */
+      html: string;
       tag: string | null;
     }
   | { kind: 'part'; key: string }
@@ -60,6 +73,92 @@ export type ServerLogRow =
       /** The swallowed rows, rendered inside the collapse group. */
       rows: ServerLogRow[];
     };
+
+/**
+ * Token highlighter for the prose lines of the log — phase text, numeric
+ * bodies, disconnect reasons. The engine writes sentences ("TCP connection
+ * established to irc.example.org:6697 [2001:db8::7] (direct) from
+ * 2001:db8::4."); the values inside them are what a reader scans for, so
+ * each recognised token is wrapped in a class the token stylesheet
+ * (styles/components/_serverLogTokens.scss) colours by kind:
+ *
+ *   logMask  nick!user@host            nick bright, the rest dim
+ *   logIp    v4 / v6 literal (+port)
+ *   logHost  dotted hostname (+port)   port rendered as a number
+ *   logNum   number, duration (1.6s, 26m35s, 300ms), ISO date
+ *   logKw    protocol word: CAP, NICK, SASL, PLAIN, TLSv1.3, TLS_AES_…
+ *
+ * Everything else is escaped verbatim. Alternation order is precedence:
+ * a mask beats the host inside it, a host:port beats its trailing digits.
+ * The v6 branch admits any colon-run and is validated afterwards so clock
+ * times ("19:36:34") fall through to plain text instead of reading as
+ * addresses.
+ */
+// Case-sensitive on purpose: the keyword branch must not eat mixed-case
+// words, and `TLSv1.3` has to match as one token (an `i` flag lets the
+// `[A-Z0-9_]+` run swallow the `v1` and strand the `.3`).
+// Trailing lookaheads reject a continuing word or `.word`, but let a
+// sentence-ending period through ("… from 10.0.0.4.").
+const LOG_TOKEN = new RegExp(
+  [
+    /(?<mask>[^\s!@<>()]+![^\s@]+@[^\s,;)]+)/.source,
+    /(?<ip6>(?<![\w:])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,8}(?![\w:]))/.source,
+    /(?<ip4>(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?!\w|\.\w))/.source,
+    /(?<host>(?<![\w.@-])(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}(?::\d{1,5})?(?![\w-]|\.\w))/.source,
+    /(?<date>(?<![\w.:-])\d{4}-\d{2}-\d{2}(?![\w:-]|\.\w))/.source,
+    /(?<dur>(?<![\w.:-])\d+(?:\.\d+)?(?:ms|[hmsd])(?:\d+(?:ms|[hmsd]))*(?![\w:-]|\.\w))/.source,
+    /(?<num>(?<![\w.:-])\d+(?:[.,]\d+)*(?![\w:-]|\.\w))/.source,
+    /(?<kw>(?<![\w.-])[A-Z][A-Z0-9_]+(?:v\d+(?:\.\d+)?)?(?![\w-]|\.\w))/.source,
+  ].join('|'),
+  'g',
+);
+
+/** A colon-run is an IPv6 literal only when it could not be a clock time. */
+function isIpv6(s: string): boolean {
+  if (!s.includes('::') && !/[a-f]/i.test(s)) return false;
+  return s.split(':').every((g) => g.length <= 4);
+}
+
+function hostPortHtml(cls: string, tok: string): string {
+  const colon = tok.lastIndexOf(':');
+  const hasPort = cls === 'logHost' && colon !== -1;
+  if (!hasPort) return `<span class="${cls}">${escapeHtml(tok)}</span>`;
+  return `<span class="${cls}">${escapeHtml(tok.slice(0, colon))}</span>`
+    + `:<span class="logNum">${escapeHtml(tok.slice(colon + 1))}</span>`;
+}
+
+export function highlightLogText(text: string): string {
+  let out = '';
+  let last = 0;
+  LOG_TOKEN.lastIndex = 0;
+  for (let m = LOG_TOKEN.exec(text); m !== null; m = LOG_TOKEN.exec(text)) {
+    const g = m.groups!;
+    let html: string;
+    if (g.mask !== undefined) {
+      const bang = g.mask.indexOf('!');
+      html = `<span class="logMask"><b>${escapeHtml(g.mask.slice(0, bang))}</b>`
+        + `<span class="logArg">${escapeHtml(g.mask.slice(bang))}</span></span>`;
+    } else if (g.ip6 !== undefined) {
+      if (!isIpv6(g.ip6)) {
+        // A clock time, not an address: leave it and resume one char on.
+        LOG_TOKEN.lastIndex = m.index + 1;
+        continue;
+      }
+      html = hostPortHtml('logIp', g.ip6);
+    } else if (g.ip4 !== undefined) {
+      html = hostPortHtml('logIp', g.ip4);
+    } else if (g.host !== undefined) {
+      html = hostPortHtml('logHost', g.host);
+    } else if (g.kw !== undefined) {
+      html = `<span class="logKw">${escapeHtml(g.kw)}</span>`;
+    } else {
+      html = `<span class="logNum">${escapeHtml(m[0])}</span>`;
+    }
+    out += escapeHtml(text.slice(last, m.index)) + html;
+    last = m.index + m[0].length;
+  }
+  return out + escapeHtml(text.slice(last));
+}
 
 /**
  * CAP subcommand → (label, tone). The labels deliberately avoid "Server
@@ -165,20 +264,13 @@ export function numericStatusHtml(msg: IRCMessage): string {
   const lead = params.slice(1).filter((p) => p.trim() !== text);
   const value = lead[0] ?? '';
   const b = (s: string): string => `<b>${escapeHtml(s)}</b>`;
-  // Counts are the payload of the LUSER family, but only 252/253/254 put
-  // them in a parameter — 251/255/265/266 bury them mid-sentence. Split on
-  // the digit runs and escape each piece separately: escaping first and
-  // then matching would also hit the `039` inside `&#039;`.
-  const counts = (s: string): string => s
-    .split(/(\d[\d,]*)/)
-    .map((part, i) => (i % 2 === 1 ? `<b>${escapeHtml(part)}</b>` : escapeHtml(part)))
-    .join('');
+  const hl = highlightLogText;
   switch (msg.command) {
     // RPL_LUSEROP / LUSERUNKNOWN / LUSERCHANNELS — the count is the point.
     case '252':
     case '253':
     case '254':
-      return value ? `${b(value)} ${escapeHtml(text)}` : escapeHtml(text);
+      return value ? `${hl(value)} ${hl(text)}` : hl(text);
     // RPL_HOSTHIDDEN — the host is the point.
     case '396':
       return value ? `${b(value)} ${escapeHtml(text || 'is your hostname')}` : escapeHtml(text);
@@ -187,20 +279,26 @@ export function numericStatusHtml(msg: IRCMessage): string {
       return value ? `Your unique ID is ${b(value)}` : escapeHtml(text);
     // ERR_UNKNOWNCOMMAND — which command was refused.
     case '421':
-      return value ? `${b(value)}: ${escapeHtml(text)}` : escapeHtml(text);
+      return value ? `${b(value)}: ${hl(text)}` : hl(text);
     // ERR_NEEDMOREPARAMS
     case '461':
       return value ? `Missing parameters for command: ${b(value)}` : escapeHtml(text);
     // RPL_LUSERCLIENT / LUSERME / LOCALUSERS / GLOBALUSERS — the counts
-    // are inside the sentence the server wrote, so emphasise them there.
+    // are inside the sentence the server wrote; the highlighter picks
+    // them out there.
     case '251':
     case '255':
     case '265':
     case '266':
-      return counts(text || numericBody(msg));
+      return hl(text || numericBody(msg));
     default:
-      return escapeHtml(numericBody(msg));
+      return hl(numericBody(msg));
   }
+}
+
+/** ERR_* numerics (400–599) — the lines a reader is usually hunting for. */
+function isErrorNumeric(command: string | undefined): boolean {
+  return !!command && /^[45]\d\d$/.test(command);
 }
 
 /** Server-originated notice: no nick, a `*` placeholder, a hostname, or a `***` body. */
@@ -284,11 +382,40 @@ export function buildServerLogRows(
   const rowAttempt = new Map<ServerLogRow, ServerLogAttempt | null>();
   let curAttempt: ServerLogAttempt | null = null;
 
+  // The attempt whose session divider was last emitted. One divider opens
+  // every attempt that has a real phase (a connect the engine narrated);
+  // chatter-only tail attempts and lone DISCONNECTED rows get none, so a
+  // session reads as: divider, phase rail, everything until the next one.
+  let sessionAttempt: ServerLogAttempt | null = null;
+  let sessionCount = 0;
+  const sessionRow = (a: ServerLogAttempt): ServerLogRow => {
+    const welcome = a.phases.find((p) => p.phase === 'welcome');
+    let outcome: 'ok' | 'bad' | 'live' | 'none' = 'none';
+    let badge = '';
+    if (welcome) {
+      outcome = 'ok';
+      badge = a.start.t && welcome.t ? `connected in ${formatDuration(Math.max(0, welcome.t - a.start.t))}` : 'connected';
+    } else if (a === liveAttempt) {
+      outcome = 'live';
+      badge = 'connecting…';
+    } else if (a.end !== null) {
+      outcome = 'bad';
+      badge = 'failed';
+    }
+    return { kind: 'session', key: `s${a.start.t ?? 0}-${sessionCount++}`, msg: a.start, outcome, badge };
+  };
+
   const push = (m: IRCMessage, row: ServerLogRow): void => {
     const d = getMsgDate(m);
     if (d && d !== lastDate) {
       rows.push({ kind: 'date', key: `d${d}`, date: d });
       lastDate = d;
+    }
+    if (curAttempt && curAttempt !== sessionAttempt && curAttempt.phases.some((p) => !!p.phase)) {
+      const s = sessionRow(curAttempt);
+      rowAttempt.set(s, curAttempt);
+      rows.push(s);
+      sessionAttempt = curAttempt;
     }
     rowAttempt.set(row, curAttempt);
     rows.push(row);
@@ -327,7 +454,7 @@ export function buildServerLogRows(
           first: phases[0] === msg,
           last,
           startT: attempt?.start.t,
-          text,
+          html: highlightLogText(text),
           tag,
         });
         return;
@@ -337,7 +464,7 @@ export function buildServerLogRows(
         if (cmd === 'DISCONNECT' || cmd === 'DISCONNECTED') {
           const key = keyOf(msg, i);
           push(msg, { kind: 'part', key: `${key}-part` });
-          let html = `<span class="disco">Disconnected${msg.text ? ': ' + escapeHtml(msg.text) : ''}</span>`;
+          let html = `<span class="disco">Disconnected${msg.text ? ': ' + highlightLogText(msg.text) : ''}</span>`;
           if (lastWelcomeT && msg.t && msg.t > lastWelcomeT) {
             html += ` <span class="kv">after <b>${formatDuration(msg.t - lastWelcomeT)}</b></span>`;
           }
@@ -350,7 +477,7 @@ export function buildServerLogRows(
         }
         // CONNECT / CONNECTED: the `welcome` phase row already says it.
         if (attempt?.phases.some((p) => p.phase === 'welcome')) return;
-        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: escapeHtml(msg.text || 'Connected'), cls: getIrcCloudTypeClass(msg.command, msg.params) });
+        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: highlightLogText(msg.text || 'Connected'), cls: getIrcCloudTypeClass(msg.command, msg.params) });
         return;
       }
       case 'welcome': {
@@ -358,7 +485,7 @@ export function buildServerLogRows(
           kind: 'status',
           key: keyOf(msg, i),
           msg,
-          html: escapeHtml(numericBody(msg)),
+          html: highlightLogText(numericBody(msg)),
           cls: getIrcCloudTypeClass(msg.command, msg.params),
         });
         return;
@@ -480,7 +607,14 @@ export function buildServerLogRows(
         }
         const body = numericBody(msg);
         if (lastDisconnectText && body.trim() === lastDisconnectText) return;
-        push(msg, { kind: 'status', key: keyOf(msg, i), msg, html: numericStatusHtml(msg), cls: getIrcCloudTypeClass(msg.command, msg.params) });
+        const cls = getIrcCloudTypeClass(msg.command, msg.params);
+        push(msg, {
+          kind: 'status',
+          key: keyOf(msg, i),
+          msg,
+          html: numericStatusHtml(msg),
+          cls: isErrorNumeric(msg.command) ? `${cls} logError`.trim() : cls,
+        });
         return;
       }
     }
