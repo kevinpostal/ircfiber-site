@@ -268,12 +268,21 @@ ircd_chanserv_setup_timeout: 420
 # NOT listed here; qop is for additional owners.
 # Additive: entries listed here are added or moved to the right tier, and
 # entries nobody listed (hand-granted ops, #dmz-style hostmask entries) are
-# left alone.
+# left alone. A channel in ircd_permanent_channels can add its own tiers on
+# top with an `access:` map (see #support), which wins for the names it
+# lists.
+#
+# `hop` is the **Staff** group: `+h` on every staff channel, which the
+# member list renders as its own "Staff" section. Halfop can kick, set the
+# topic and voice people, but cannot op, deop or touch the access list —
+# which is the whole point of handing it out rather than `aop`.
 ircd_channel_access:
   qop: []
   sop:
     - "sq"
   aop: []
+  # Staff (+h). NickServ account displays; each must be registered or the
+  # setup task fails naming it.
   hop: []
   vop: []
 

@@ -32,7 +32,7 @@
   const modeClass = $derived(member?.prefix ? MODE_PREFIX_MAP[member.prefix]?.cls ?? '' : '');
   const modeTitle = $derived.by(() => {
     if (!member?.category || member.category === 'MEMBER') return '';
-    const titles: Record<ModeCategory, string> = { OPER: 'IRC Operator', OWNER: 'Owner', ADMIN: 'Admin', OP: 'Op', HALFOP: 'Halfop', VOICED: 'Voiced', MEMBER: '' };
+    const titles: Record<ModeCategory, string> = { OPER: 'IRC Operator', OWNER: 'Owner', ADMIN: 'Admin', OP: 'Op', HALFOP: 'Staff', VOICED: 'Voiced', MEMBER: '' };
     return titles[member.category] ?? '';
   });
 

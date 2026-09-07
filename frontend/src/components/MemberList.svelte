@@ -16,16 +16,22 @@
     return stripPrefix(net?.currentNick ?? net?.nick ?? '');
   });
 
-  // Section headings and symbols, verbatim from IRCCloud's member list
+  // Section headings and symbols, from IRCCloud's member list
   // (`li.category > h2`): Oper, Owner, Admins, Ops, Half ops, Voiced,
   // Members. `*` is this network's operprefix char (see MODE_PREFIX_MAP);
   // Members carries no symbol there, only a count.
+  //
+  // One deliberate divergence: halfop reads as "Staff" here. On IRC Fiber
+  // `+h` is what the staff group holds (ircd_channel_access.hop in the
+  // ircd role), so the section says who they are rather than which mode
+  // letter they were given. The prefix char stays `%` and the band keeps
+  // the `halfops` class, so nothing else has to know.
   const CATEGORY_LABELS: Record<ModeCategory, string> = {
     OPER: 'Oper',
     OWNER: 'Owner',
     ADMIN: 'Admins',
     OP: 'Ops',
-    HALFOP: 'Half ops',
+    HALFOP: 'Staff',
     VOICED: 'Voiced',
     MEMBER: 'Members',
   };

@@ -53,7 +53,7 @@ describe('MemberList', () => {
     await expect.element(page.getByRole('heading', { name: /^Owner/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Admins/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Ops/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /^Half ops/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Staff/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Voiced/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Members/ })).toBeInTheDocument();
   });

@@ -15,7 +15,7 @@ export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; cate
   '~': { prefix: '~', cls: 'mode_OWNER',  category: 'OWNER',  mode: 'q', title: 'Channel owner' },
   '&': { prefix: '&', cls: 'mode_ADMIN',  category: 'ADMIN',  mode: 'a', title: 'Channel admin' },
   '@': { prefix: '@', cls: 'mode_OP',     category: 'OP',     mode: 'o', title: 'Channel operator' },
-  '%': { prefix: '%', cls: 'mode_HALFOP', category: 'HALFOP', mode: 'h', title: 'Half ops' },
+  '%': { prefix: '%', cls: 'mode_HALFOP', category: 'HALFOP', mode: 'h', title: 'Staff' },
   '+': { prefix: '+', cls: 'mode_VOICED', category: 'VOICED', mode: 'v', title: 'Voiced' },
 };
 
