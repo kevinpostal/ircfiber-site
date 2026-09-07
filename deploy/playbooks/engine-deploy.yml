@@ -35,6 +35,7 @@
     # image" — before anything is stopped.
     - name: Resolve requested image id
       ansible.builtin.command: docker image inspect -f '{{ "{{" }}.Id{{ "}}" }}' {{ engine_image_ref }}
+      check_mode: false
       register: engine_image_id
       changed_when: false
 
