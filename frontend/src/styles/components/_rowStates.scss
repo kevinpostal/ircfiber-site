@@ -19,7 +19,6 @@
 
 :root {
   --row-self-bg:      transparent;
-  --row-notice-bg:    #1a3b5b;
   --row-highlight-bg: #1d4063;
   --row-warning-bg:   #b2b234;
   --row-status-bg:    #1a1a1a;
@@ -29,16 +28,21 @@
   --log-fg:           #737373;
   // .monospace .content, .notice .content, .groupedLines.
   --row-mono-fg:      #bfbfbf;
+  // IRCCloud `div.log div.groupedLines` background — the MOTD/INFO card.
+  // Default is its theme-ash/theme-midnight value.
+  --grouped-lines-bg: #404040;
   --prefix-fg:        #b3b3b3;
 }
 
 #app.midnight-theme {
-  --row-notice-bg:    #262626;
   --row-highlight-bg: #2b2b2b;
 }
 
 .row.messageRow.self     { background-color: var(--row-self-bg); }
-.row.messageRow.notice   { background-color: var(--row-notice-bg); }
+/* IRCCloud gives notices a text tier only — `div.notice` carries no
+   background in any of its themes (verified against
+   build/common-002a6024.css), so a tinted band here read as a highlight
+   on half the server log. */
 .row.messageRow.notice .content { color: var(--row-notice-fg); }
 .row.messageRow.highlight { background-color: var(--row-highlight-bg); }
 .row.messageRow.highlight .date { color: #ffe0e0; }

@@ -254,20 +254,16 @@
   }
   .tag.ok { color: #7ee2a8; }
 
-  /* ── grouped MOTD block (IRCCloud groupedLines) ─────────────────── */
-  /* The card's 8px inset is subtracted so its text starts on the shared
-     left edge (mirrors the global rule in _joinPartRows.scss). */
-  .row.type_motd_response { padding: 4px 12px 4px calc(var(--row-gutter-left) - 8px); }
+  /* ── grouped MOTD block ──────────────────────────────────────────
+     Card geometry, colour and the 10px row padding are IRCCloud's and
+     live in styles/components/{_groupedLines,_joinPartRows}.scss; only
+     the server log's own additions (mono heading with the hide toggle,
+     clipped lines, the collapsed state) are scoped here. */
   .groupedLines {
-    display: block;
     position: relative;
-    background: var(--row-status-bg);
-    border-radius: 3px;
-    padding: 5px 8px;
     color: var(--row-mono-fg);
   }
   .groupedLines h2 {
-    margin: 0 0 6px;
     font: 600 14px/19px var(--font-mono);
     color: #fff;
     display: flex;

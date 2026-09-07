@@ -50,13 +50,13 @@
   padding-right: 118px;
 }
 
-/* Full-width MOTD/info rows matching IRCCloud. The card's own 8px inset
-   is subtracted from the row gutter so its text starts on the shared
-   left edge instead of 10px from the viewport. */
+/* MOTD / INFO blocks, IRCCloud values: `#mainwrapper div.log
+   div.type_motd_response, div.type_info_response { padding:10px }`. The
+   10px deliberately overrides the row gutters — IRCCloud renders these
+   as a near-full-width block, not as a line in the message column — and
+   the background/radius live on the inner .groupedLines card. */
 .row.messageRow.type_motd_response {
-  padding: 10px 10px 10px calc(var(--row-gutter-left) - 8px);
-  border-radius: 3px;
-  background: #404040;
+  padding: 10px;
 }
 .row.messageRow.type_info_response {
   padding: 10px;

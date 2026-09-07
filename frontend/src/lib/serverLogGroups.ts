@@ -58,6 +58,17 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   if (cmd === 'ISUPPORT' || cmd === 'CONNECTION_RETRY_STATUS' || cmd === 'CONNECTION_FAIL' || cmd === 'CHANNEL_LIST') return 'skip';
   // Our own QUIT echo duplicates the DISCONNECTED lifecycle row.
   if (cmd === 'QUIT') return 'skip';
+  // Wire-protocol and self-echo events that a numeric already reports.
+  // Each of these has `nick` set to our own nick, so the default
+  // 'notice' fallback below rendered them as an author row — avatar,
+  // `<nick>`, and the raw payload as the message body — immediately
+  // above the numeric that says the same thing in prose:
+  //   CHGHOST      → 396 RPL_HOSTHIDDEN ("… is now your displayed host")
+  //   ACCOUNT      → 900 RPL_LOGGEDIN / 903 SASL success
+  //   AUTHENTICATE → the SASL challenge/response base64 itself
+  //   TAGMSG       → tag-only message (typing notifications), no body
+  // IRCCloud renders none of them in the server buffer.
+  if (cmd === 'CHGHOST' || cmd === 'ACCOUNT' || cmd === 'AUTHENTICATE' || cmd === 'TAGMSG') return 'skip';
   if (cmd === 'CONNECT' || cmd === 'DISCONNECT' || cmd === 'CONNECTED' || cmd === 'DISCONNECTED') {
     return 'lifecycle';
   }

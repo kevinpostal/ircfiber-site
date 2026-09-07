@@ -90,6 +90,17 @@ describe('classifyServerLog', () => {
     expect(classifyServerLog(m({ command: '671' }))).toBe('skip');
   });
 
+  // Each of these carries our own nick, so the notice fallback rendered
+  // them as an avatar + `<nick>` author row holding the raw payload,
+  // directly above the numeric that says the same thing (396 for the
+  // hidden host, 900/903 for the SASL login).
+  it('drops self-echo and wire-protocol events a numeric already reports', () => {
+    expect(classifyServerLog(m({ command: 'CHGHOST', nick: 'me', text: 'my.new.host' }))).toBe('skip');
+    expect(classifyServerLog(m({ command: 'ACCOUNT', nick: 'me', text: 'me' }))).toBe('skip');
+    expect(classifyServerLog(m({ command: 'AUTHENTICATE', nick: 'me', text: '+' }))).toBe('skip');
+    expect(classifyServerLog(m({ command: 'TAGMSG', nick: 'me', text: '' }))).toBe('skip');
+  });
+
   it('falls back to notice for unknown commands', () => {
     expect(classifyServerLog(m({ command: 'SOMETHING' }))).toBe('notice');
   });

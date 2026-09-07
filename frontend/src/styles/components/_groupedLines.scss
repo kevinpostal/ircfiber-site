@@ -1,13 +1,22 @@
-/* Grouped lines (MOTD, etc.) */
+/* Grouped lines (MOTD, INFO) — IRCCloud's `div.groupedLines` card.
+   Geometry and colour copied from build/common-002a6024.css:
+     div.log div.groupedLines      { padding:5px; border-radius:3px;
+                                     background-color:<theme> }
+     div.log div.groupedLines h2   { margin:0 0 8px }
+     div.log .groupedLines__line   { min-height:17px }
+   The card carries the background; the row around it is only padded
+   (see .row.messageRow.type_motd_response in _joinPartRows.scss). */
 .groupedLines {
   display: flex;
   flex-direction: column;
-  background: transparent;
-  padding: 0;
+  padding: 5px;
+  border-radius: 3px;
+  background: var(--grouped-lines-bg);
 }
 
 .groupedLines__line {
   display: block;
+  min-height: 17px;
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--font-mono);
@@ -21,6 +30,7 @@
 h2.groupedLines__line {
   font-size: inherit;
   font-weight: 600;
+  margin: 0 0 8px;
 }
 
 /* Legacy message structure overrides */
