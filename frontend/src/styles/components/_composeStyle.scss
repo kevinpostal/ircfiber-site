@@ -1,35 +1,134 @@
-/* ── Compose text-style dialog (gear next to the input) ── */
+/* ── Compose text styling — full-page editor behind the input-row gear ── */
 $cs-accent: #1e72ff;
 $cs-border: #2c2f35;
 $cs-muted: #8b949e;
 $cs-text: #c9d1d9;
+$cs-bg: #0d1117;
+$cs-surface: #161b22;
 
-/* [open] lifts specificity above Dialog.svelte's scoped `dialog.overlay-panel` width rule. */
-dialog.overlay-panel.compose-style-panel[open] {
-  width: min(560px, 92vw);
-  min-width: 0;
-  max-height: 85vh;
-  overflow-y: auto;
-  padding: 20px 24px;
+/* [open] lifts specificity above Dialog.svelte's scoped `dialog` rules. */
+dialog.compose-style-page[open] {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  width: 100vw;
+  max-width: none;
+  height: 100dvh;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  overflow: hidden;
+  z-index: 100;
+  background: $cs-bg;
   color: $cs-text;
   font-size: 13px;
 }
 
-.compose-style-panel {
-  .cs-body { display: flex; flex-direction: column; }
-
-  .cs-section {
-    display: grid;
-    grid-template-columns: 96px 1fr;
-    gap: 12px;
-    align-items: start;
-    padding: 12px 0;
-    border-top: 1px solid $cs-border;
-    min-width: 0;
-    > div:last-child { min-width: 0; }
+.compose-style-page {
+  .csp {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
   }
-  .cs-preview-section { border-top: none; padding-top: 4px; }
 
+  /* Header */
+  .csp-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 20px;
+    border-bottom: 1px solid $cs-border;
+    background: #1a1d21;
+    flex-shrink: 0;
+  }
+  .csp-headline { min-width: 0; }
+  .csp-headline h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: $cs-text;
+  }
+  .csp-summary {
+    margin: 3px 0 0;
+    font-size: 12px;
+    color: $cs-muted;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    &.active { color: $cs-accent; }
+  }
+  .csp-actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .csp-btn {
+    height: 30px;
+    padding: 0 14px;
+    background: transparent;
+    border: 1px solid $cs-border;
+    border-radius: 4px;
+    color: $cs-text;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    &:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); }
+    &:disabled { opacity: 0.35; cursor: not-allowed; }
+    &.primary { background: $cs-accent; border-color: $cs-accent; color: #fff; &:hover { background: #3a86ff; } }
+    &.small { height: 26px; padding: 0 10px; }
+  }
+
+  /* Tabs */
+  .csp-tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 12px;
+    border-bottom: 1px solid $cs-border;
+    background: #1a1d21;
+    flex-shrink: 0;
+    button {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: $cs-muted;
+      font: inherit;
+      font-size: 13px;
+      padding: 10px 14px;
+      cursor: pointer;
+      &:hover { color: $cs-text; }
+      &.active { color: $cs-text; border-bottom-color: $cs-accent; }
+    }
+  }
+
+  /* Body: controls left, live preview right */
+  .csp-main { display: flex; flex: 1; min-height: 0; }
+  .csp-panel { flex: 1; min-width: 0; overflow-y: auto; padding: 4px 20px 24px; }
+  .csp-side {
+    width: 380px;
+    flex-shrink: 0;
+    border-left: 1px solid $cs-border;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
+
+  /* Groups */
+  .cs-group {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+    padding: 16px 0;
+    border-bottom: 1px solid $cs-border;
+    max-width: 900px;
+    &:last-child { border-bottom: none; }
+    /* Segmented controls and chip rows hug their content, not the column. */
+    > .cs-seg,
+    > .cs-chips { justify-self: start; }
+  }
   .cs-label {
     font-size: 11px;
     text-transform: uppercase;
@@ -37,30 +136,25 @@ dialog.overlay-panel.compose-style-panel[open] {
     color: $cs-muted;
     padding-top: 7px;
   }
+  .cs-group > .cs-label { padding-top: 7px; }
   .cs-sub {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: $cs-muted;
-    margin: 10px 0 6px;
+    margin: 12px 0 6px;
+    &:first-child { margin-top: 0; }
   }
-  .cs-inline-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: $cs-muted;
-    margin-left: 12px;
-  }
-  .cs-note { font-size: 12px; color: $cs-muted; margin-top: 8px; }
-  .cs-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .cs-note { font-size: 12px; color: $cs-muted; margin-top: 8px; max-width: 60ch; }
   .warn { color: #f0883e; }
   .muted { color: $cs-muted; }
 
-  /* Preview */
-  .cs-preview {
-    height: 96px;
+  /* Preview pane */
+  .csp-preview {
+    flex: 0 1 auto;
+    min-height: 132px;
     overflow: auto;
-    background: #0d1117;
+    background: #000;
     border: 1px solid $cs-border;
     border-radius: 4px;
     padding: 8px;
@@ -68,7 +162,9 @@ dialog.overlay-panel.compose-style-panel[open] {
     white-space: pre;
     color: #d9d9d9;
   }
-  .cs-status { font-size: 11px; color: $cs-muted; margin-top: 6px; min-height: 14px; }
+  .csp-status { font-size: 11px; color: $cs-muted; min-height: 14px; }
+  .csp-artline { min-height: 11px; }
+  .csp-artnote { color: $cs-muted; font-style: italic; }
 
   /* Segmented control */
   .cs-seg {
@@ -77,6 +173,7 @@ dialog.overlay-panel.compose-style-panel[open] {
     border-radius: 4px;
     overflow: hidden;
     vertical-align: middle;
+    flex-shrink: 0;
     button {
       height: 28px;
       padding: 0 12px;
@@ -110,12 +207,45 @@ dialog.overlay-panel.compose-style-panel[open] {
     &[aria-pressed='true'] { background: $cs-accent; border-color: $cs-accent; color: #fff; }
     code { font-family: "Hack", "SF Mono", Menlo, Consolas, monospace; font-size: 11px; }
   }
-  .cs-chip-reverse[aria-pressed='true'] { background: #fff; color: #0d1117; border-color: #fff; }
+  .cs-chip-reverse[aria-pressed='true'] { background: #fff; color: $cs-bg; border-color: #fff; }
+
+  /* Text inputs */
+  .cs-input {
+    width: 100%;
+    box-sizing: border-box;
+    height: 28px;
+    padding: 0 8px;
+    background: $cs-bg;
+    border: 1px solid $cs-border;
+    border-radius: 4px;
+    color: $cs-text;
+    font: inherit;
+    font-size: 12px;
+    &:focus { outline: none; border-color: $cs-accent; }
+  }
+  .csp-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 140px;
+    .cs-label { padding-top: 0; }
+    &.wide { width: 100%; }
+  }
+  .csp-bar {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    input.cs-input { width: 200px; }
+  }
+  .csp-count { font-size: 11px; color: $cs-muted; padding-bottom: 7px; margin-left: auto; }
 
   /* Swatches: 0–15 fill the first row; 16–98 wrap 12 per row (hue rings). */
   .cs-swatches {
     display: grid;
+    gap: 2px;
     grid-template-columns: repeat(16, 18px);
+    width: max-content;
     &.with-none { grid-template-columns: repeat(17, 18px); }
     &.disabled { opacity: 0.35; pointer-events: none; }
   }
@@ -144,35 +274,21 @@ dialog.overlay-panel.compose-style-panel[open] {
     pointer-events: none;
   }
 
-  /* Font lists */
-  .cs-filter {
-    width: 100%;
-    box-sizing: border-box;
-    height: 28px;
-    margin-top: 10px;
-    padding: 0 8px;
-    background: #0d1117;
-    border: 1px solid $cs-border;
-    border-radius: 4px;
-    color: $cs-text;
-    font: inherit;
-    font-size: 12px;
-    &:focus { outline: none; border-color: $cs-accent; }
-  }
+  /* Font list */
   .cs-list {
     list-style: none;
-    margin: 6px 0 0;
+    margin: 8px 0 0;
     padding: 0;
     border: 1px solid $cs-border;
     border-radius: 4px;
-    max-height: 160px;
+    max-height: 46vh;
     overflow: auto;
     li { margin: 0; }
-    li.selected button { color: $cs-accent; background: #161b22; }
+    li.selected button { color: $cs-accent; background: $cs-surface; }
     button {
       display: flex;
       align-items: baseline;
-      gap: 8px;
+      gap: 10px;
       width: 100%;
       height: 26px;
       padding: 0 10px;
@@ -183,41 +299,68 @@ dialog.overlay-panel.compose-style-panel[open] {
       font-size: 12px;
       text-align: left;
       cursor: pointer;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
       &:hover { background: rgba(255, 255, 255, 0.06); }
     }
   }
-  .cs-list-meta { font-size: 11px; color: $cs-muted; }
+  .cs-list-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cs-list-meta { font-size: 11px; color: $cs-muted; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cs-list-rows { margin-left: auto; font-size: 11px; color: $cs-muted; flex-shrink: 0; }
 
-  /* Footer */
-  .cs-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding-top: 16px;
-    border-top: 1px solid $cs-border;
-  }
-  .cs-apply,
-  .cs-reset {
-    height: 32px;
-    padding: 0 16px;
+  /* Gallery */
+  .csp-gal { display: flex; flex-direction: column; height: 100%; min-height: 0; padding-top: 12px; }
+  .csp-gal .csp-bar { padding-bottom: 12px; border-bottom: 1px solid $cs-border; }
+  .csp-cards { flex: 1; min-height: 0; overflow: auto; padding: 4px 0 24px; }
+  .csp-card {
+    border: 1px solid $cs-border;
+    border-left: 2px solid transparent;
     border-radius: 4px;
-    font: inherit;
-    font-size: 13px;
+    margin: 8px 0 0;
+    padding: 8px 10px;
     cursor: pointer;
+    background: transparent;
+    &:hover { background: rgba(255, 255, 255, 0.03); }
+    &.selected { border-left-color: $cs-accent; background: $cs-surface; }
+    &:focus-visible { outline: 1px solid $cs-accent; outline-offset: 1px; }
   }
-  .cs-apply { background: $cs-accent; border: 1px solid $cs-accent; color: #fff; &:hover { background: #3a86ff; } }
-  .cs-reset { background: transparent; border: 1px solid transparent; color: $cs-muted; &:hover { color: $cs-text; } }
+  .csp-card-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+  }
+  .csp-card-name { color: $cs-text; }
+  .csp-card-note { font-size: 11px; color: $cs-muted; }
+  .csp-card-rows { margin-left: auto; font-size: 11px; color: $cs-muted; }
+  .csp-card-art {
+    overflow-x: auto;
+    font: 11px/11px "Hack", "SF Mono", Menlo, Consolas, monospace;
+    white-space: pre;
+    color: #d9d9d9;
+  }
 }
 
-@media (max-width: 600px) {
-  .overlay-panel.compose-style-panel { padding: 16px; }
-  .compose-style-panel {
-    .cs-section { grid-template-columns: 1fr; gap: 6px; }
-    .cs-label { padding-top: 0; }
+/* Narrow screens: preview on top, single-column groups. */
+@media (max-width: 900px) {
+  .compose-style-page {
+    .csp-main { flex-direction: column-reverse; }
+    .csp-side {
+      width: auto;
+      border-left: none;
+      border-bottom: 1px solid $cs-border;
+      max-height: 34vh;
+      padding: 12px 16px;
+    }
+    .csp-panel { padding: 4px 16px 24px; }
+    .cs-group { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+    .cs-label, .cs-group > .cs-label { padding-top: 0; }
     .cs-swatches, .cs-swatches.with-none { grid-template-columns: repeat(12, 18px); }
     .cs-swatch.ring { grid-column-start: auto; }
+    .csp-preview { min-height: 96px; }
+    .csp-bar input.cs-input { width: 100%; }
+    /* Toolbar fields wrap onto their own row instead of squeezing to nothing;
+       the preview pane's field must stay content-height. */
+    .csp-bar .csp-field { min-width: 0; flex: 1 1 160px; }
+    .csp-count { margin-left: 0; }
   }
 }

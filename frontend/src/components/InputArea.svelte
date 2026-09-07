@@ -1075,8 +1075,8 @@
     {/await}
   {/if}
   {#if styleOpen}
-    {#await import('./ComposeStyleDialog.svelte') then { default: ComposeStyleDialog }}
-      <ComposeStyleDialog sampleText={inputValue} onClose={() => { styleOpen = false; textarea?.focus(); }} />
+    {#await import('./ComposeStylePage.svelte') then { default: ComposeStylePage }}
+      <ComposeStylePage sampleText={inputValue} onClose={() => { styleOpen = false; textarea?.focus(); }} />
     {/await}
   {/if}
   <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>

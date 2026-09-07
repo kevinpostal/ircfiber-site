@@ -3,10 +3,39 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { playwright } from '@vitest/browser-playwright';
 import tailwindcss from '@tailwindcss/vite';
 import { createLogger } from 'vite';
+import { readdir, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 // Lib modules used ONLY by lazy UI (or workers/admin). Everything else under
 // src/lib + src/stores is forced into chunk-core (startup) so Rollup can't
 // home shared logic in the async chunk and defeat the split.
-const LAZY_LIB_RE = /lib\/(aceModes|aristotleGlyphs|blockKind|codeLines|composePipeline|emoji|figlet|glyphCatalog|helpText|htmlInline|img2irc|notificationPolicy|segmentation|tdf|textEffects|textFiles|uniform)\b/;
+const LAZY_LIB_RE = /lib\/(aceModes|aristotleGlyphs|blockKind|codeLines|composePipeline|emoji|figlet|fontCatalog|glyphCatalog|helpText|htmlInline|img2irc|notificationPolicy|segmentation|tdf|textEffects|textFiles|uniform)\b/;
+
+// `virtual:figlet-meta` — each figlet font's row height, read from the font
+// headers at build time (`flf2a$ <height> …`, `tlf2a$ <height> …` for the
+// toilet fonts the package also ships). The font pickers sort by row size;
+// 11 MB of font files must not ship to the client to learn one number.
+function figletMetaPlugin() {
+  const id = 'virtual:figlet-meta';
+  const resolved = '\0' + id;
+  return {
+    name: 'ircfiber-figlet-meta',
+    resolveId(source: string) {
+      return source === id ? resolved : null;
+    },
+    async load(loadId: string) {
+      if (loadId !== resolved) return null;
+      const dir = fileURLToPath(new URL('./node_modules/figlet/importable-fonts/', import.meta.url));
+      const rows: Record<string, number> = {};
+      for (const file of (await readdir(dir)).sort()) {
+        if (!file.endsWith('.js')) continue;
+        const head = (await readFile(dir + file, 'utf8')).slice(0, 160);
+        const m = /[ft]lf2a.\s+(-?\d+)/.exec(head);
+        rows[file.slice(0, -3)] = m ? Number(m[1]) : 0;
+      }
+      return `export default ${JSON.stringify(rows)};`;
+    },
+  };
+}
 
 // Backend URL for the dev server's API + WS proxy. Override via env vars
 // to point at a non-local backend (e.g. the tailnet gateway or Python gateway):
@@ -69,7 +98,7 @@ export default defineConfig({
   customLogger: _viteLogger,
   cacheDir: isICloud ? '/tmp/vite-ircfiber' : undefined,
   assetsInclude: ['**/*.wasm'],
-  plugins: [tailwindcss(), svelte({
+  plugins: [tailwindcss(), figletMetaPlugin(), svelte({
     onwarn(warning, handler) {
       // Suppress a11y warnings that we've reviewed as acceptable:
       // - aria-disabled on <li> is fine for our context menus

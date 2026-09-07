@@ -5,6 +5,7 @@
  */
 import figlet from 'figlet';
 import type { FontName } from 'figlet';
+import FIGLET_ROWS from 'virtual:figlet-meta';
 
 const modules = import.meta.glob<{ default: string }>('/node_modules/figlet/importable-fonts/*.js');
 
@@ -14,6 +15,11 @@ export const FIGLET_FONTS: Record<string, () => Promise<{ default: string }>> = 
 );
 
 export const FIGLET_FONT_NAMES: string[] = Object.keys(FIGLET_FONTS).sort((a, b) => a.localeCompare(b));
+
+/** Rows a font's glyphs occupy (the .flf header height); 0 if unknown. */
+export function figletRows(font: string): number {
+  return FIGLET_ROWS[font] ?? 0;
+}
 
 const loaded = new Set<string>();
 
