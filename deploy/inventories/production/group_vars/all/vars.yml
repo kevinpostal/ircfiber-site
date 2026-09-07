@@ -7,13 +7,13 @@ ircfiber_version: "0.3.0"
 ircfiber_session_ttl_days: 90
 
 # --- Image registry ------------------------------------------------------------
-# Docker Hub: set url to "docker.io" (or ""), namespace to your Docker Hub username.
-# GHCR: set url to "ghcr.io" and namespace to your GitHub user/org.
-# Private: set url to "registry.example.com" etc.
-# Leave url empty ("") to skip the registry and build images directly on the target host.
-docker_registry_url: ""
-docker_registry_namespace: "kevindpostal"
-docker_image_tag: "{{ ircfiber_version }}"
+# Images are built on the builder host (`make ship` / `make ship-engine` in
+# ircfiber-infra) and pushed to GHCR; prod only ever pulls. Deploys address
+# images by digest; `:prod` is the tag `ship` promotes after a successful swap
+# and is what provisioning (site.yml) pulls.
+docker_registry_url: "ghcr.io"
+docker_registry_namespace: "kevinpostal"
+docker_image_tag: "prod"
 
 # --- Public-facing ------------------------------------------------------------
 ircfiber_domain: "ircfiber.com"
@@ -150,26 +150,12 @@ backup_s3_prefix: "ircfiber/"
 common_upgrade: false
 image_prune_keep_count: 3
 
-# --- Image build (control node) -----------------------------------------------
-# The directory containing the IRC Fiber repo (with Containerfile, source/, public/, views/)
-# Playbooks live in deploy/playbooks/, so the repo root is two levels up.
-ircfiber_repo_root: "{{ playbook_dir }}/../.."
-ircfiber_build_target: "release"
-
-# Gateway image (D / full app)
-ircfiber_gateway_containerfile: "Containerfile.site"
-ircfiber_gateway_build_args:
-  LDC_VERSION: "1.41.0"
-  TARGETARCH: "{{ 'amd64' if ansible_architecture == 'x86_64' else ('arm64' if ansible_architecture == 'aarch64' else ansible_architecture) }}"
+# --- Images -------------------------------------------------------------------
 ircfiber_gateway_image_name: >-
   {{ (docker_registry_url + '/' if (docker_registry_url | length > 0) else '')
      + docker_registry_namespace + '/irc-fiber-gateway' }}
 ircfiber_gateway_image_full: "{{ ircfiber_gateway_image_name }}:{{ docker_image_tag }}"
 
-# Engine image (D — same Containerfile as gateway, builds both binaries)
-ircfiber_engine_containerfile: "Containerfile"
-ircfiber_engine_build_args:
-  TARGETARCH: "{{ 'amd64' if ansible_architecture == 'x86_64' else ('arm64' if ansible_architecture == 'aarch64' else ansible_architecture) }}"
 ircfiber_engine_image_name: >-
   {{ (docker_registry_url + '/' if (docker_registry_url | length > 0) else '')
      + docker_registry_namespace + '/ircfiber-engine' }}

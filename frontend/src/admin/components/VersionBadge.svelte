@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { version, fetchVersion } from '../stores/version';
-  import { BUILD_INFO } from '../../lib/buildInfo';
 
   let data = $state<any>(null);
   let err: string | null = null;
@@ -17,12 +16,12 @@
     return () => unsub();
   });
 
-  const gatewayShort = $derived(data?.gateway?.short ?? data?.short ?? BUILD_INFO.short);
-  const gatewayBranch = $derived(data?.gateway?.branch ?? data?.branch ?? BUILD_INFO.branch);
+  const gatewayShort = $derived(data?.gateway?.short ?? data?.short ?? '…');
+  const gatewayBranch = $derived(data?.gateway?.branch ?? data?.branch ?? '…');
   const tooltip = $derived.by(() => {
-    if (!data?.gateway) return `Frontend\n  Commit: ${BUILD_INFO.short} (${BUILD_INFO.branch})\n  Full: ${BUILD_INFO.commit}\n  Describe: ${BUILD_INFO.describe}\n  Version: v${BUILD_INFO.version}\n  Built: ${BUILD_INFO.builtAt} on ${BUILD_INFO.builtHost}\n— gateway not yet fetched`;
+    if (!data?.gateway) return 'Gateway — not yet fetched';
     const g = data.gateway;
-    return `Gateway\n  Commit: ${g.short} (${g.branch})\n  Full: ${g.commit}\n  Describe: ${g.describe} · v${g.version}\n  Built: ${g.builtAt} on ${g.builtHost}\nFrontend\n  Commit: ${BUILD_INFO.short} (${BUILD_INFO.branch})\n  Full: ${BUILD_INFO.commit}\n  Describe: ${BUILD_INFO.describe} · v${BUILD_INFO.version}\n  Built: ${BUILD_INFO.builtAt} on ${BUILD_INFO.builtHost}`;
+    return `Gateway\n  Commit: ${g.short} (${g.branch})\n  Full: ${g.commit}\n  Describe: ${g.describe} · v${g.version}\n  Built: ${g.builtAt} on ${g.builtHost}`;
   });
 </script>
 

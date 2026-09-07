@@ -1,0 +1,56 @@
+---
+# Engine deploy — pull the requested image ref, tag it locally as
+# ircfiber-engine:deploy, and run the engine role against that tag. The role's
+# community.docker.docker_container compares image ids, not tag strings, so a
+# new id under the same tag recreates the container (engine deploys are a
+# restart; there is no blue/green for the engine).
+#
+# The image is built on the builder host and pushed to GHCR by
+# `make ship-engine` (ircfiber-infra/Makefile).
+#
+#   engine_image_ref  anything `docker image inspect` resolves:
+#     ghcr.io/…@sha256:…   make ship-engine  (by digest)
+#     ghcr.io/…:prod       default (the promoted tag)
+- name: Deploy irc-fiber engine(s) from the registry
+  hosts: ircfiber_engines
+  become: true
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  vars:
+    engine_image_ref: "{{ ircfiber_engine_image_name }}:prod"   # overridden by -e
+    ircfiber_engine_image_full: "ircfiber-engine:deploy"
+  roles:
+    - role: registry_login
+  pre_tasks:
+    - name: Pull engine image (registry refs only)
+      ansible.builtin.command: docker pull {{ engine_image_ref }}
+      when: "'/' in engine_image_ref"
+      changed_when: true
+
+    # A ref that does not resolve fails here with docker's own "No such
+    # image" — before anything is stopped.
+    - name: Resolve requested image id
+      ansible.builtin.command: docker image inspect -f '{{ "{{" }}.Id{{ "}}" }}' {{ engine_image_ref }}
+      register: engine_image_id
+      changed_when: false
+
+    - name: Tag requested image as the deploy tag
+      ansible.builtin.command: docker tag {{ engine_image_id.stdout }} {{ ircfiber_engine_image_full }}
+      changed_when: true
+
+  tasks:
+    - name: Run the engine role against the deploy tag
+      ansible.builtin.include_role:
+        name: engine
+
+  post_tasks:
+    - name: Assert the running engine is the requested image
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.Image{{ "}}" }}' {{ engine_container_name }}
+      register: running_image_id
+      changed_when: false
+      failed_when: running_image_id.stdout != engine_image_id.stdout
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ engine_container_name }} runs {{ engine_image_ref }} ({{ engine_image_id.stdout[:19] }})"

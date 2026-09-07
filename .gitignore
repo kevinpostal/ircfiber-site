@@ -21,9 +21,6 @@ backend/parser-test
 backend/support-format-test
 backend/services-test
 
-# Image tarball staged between the remote builder and the deploy target
-.deploy-cache/
-
 # macOS finder droppings — untracked junk otherwise trips the deploy clean-tree guard
 .DS_Store
 

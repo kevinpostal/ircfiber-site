@@ -7,7 +7,7 @@
     "dev": "vite",
     "dev:local": "vite",
     "dev:tailnet": "VITE_BACKEND_URL=http://127.0.0.1:18090 vite",
-    "build": "vite build && node inject-manifest.js",
+    "build": "vite build && node postbuild.js",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",

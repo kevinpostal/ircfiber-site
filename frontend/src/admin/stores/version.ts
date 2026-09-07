@@ -11,9 +11,6 @@ export interface VersionInfo {
   builtHost: string;
   message?: string;
   commitUrl?: string;
-  deployedFrontend?: string;
-  deployedEngine?: string;
-  deployed?: string;
 }
 
 export interface EngineVersion {
@@ -54,30 +51,15 @@ export async function fetchVersion(): Promise<void> {
   try {
     const res = await fetch('/api/version', { credentials: 'include' });
     if (res.status === 404) {
-      // Gateway too old — fallback to frontend build info, don't show error
-      const { BUILD_INFO } = await import('../../lib/buildInfo');
+      // Gateway too old to have /api/version — show a placeholder, not an error
+      const dev = {
+        version: 'dev', commit: 'dev', short: 'dev', describe: 'dev', branch: 'dev',
+        builtAt: 'dev', message: '', commitUrl: '',
+      };
       const fallback: VersionResponse = {
-        gateway: {
-          service: 'irc-fiber-gateway',
-          version: BUILD_INFO.version,
-          commit: BUILD_INFO.commit,
-          short: BUILD_INFO.short,
-          describe: BUILD_INFO.describe,
-          branch: BUILD_INFO.branch,
-          builtAt: BUILD_INFO.builtAt,
-          builtHost: BUILD_INFO.builtHost,
-          message: (BUILD_INFO as any).message ?? BUILD_INFO.describe,
-          commitUrl: (BUILD_INFO as any).commitUrl ?? '',
-        },
+        gateway: { service: 'irc-fiber-gateway', builtHost: 'dev', ...dev },
         engines: [],
-        commit: BUILD_INFO.commit,
-        short: BUILD_INFO.short,
-        describe: BUILD_INFO.describe,
-        branch: BUILD_INFO.branch,
-        builtAt: BUILD_INFO.builtAt,
-        version: BUILD_INFO.version,
-        message: (BUILD_INFO as any).message ?? BUILD_INFO.describe,
-        commitUrl: (BUILD_INFO as any).commitUrl ?? '',
+        ...dev,
       };
       version.set(fallback);
       versionError.set(null);

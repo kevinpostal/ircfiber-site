@@ -35,6 +35,7 @@ import ircfiber.signup : PendingSignup, PendingSignupStore, emailVerificationReq
     newSignupToken, pendingKey, verificationEmail, verificationLink;
 import ircfiber.mail_events : MailEvent, MailEventLog;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
+import ircfiber.web.assets : siteAssets;
 
     // Captures client IP, User-Agent, createdAt, and lastAccess on
     // the active session. Mirrors the helper in AdminController so
@@ -150,7 +151,8 @@ final class WebController {
             // routes (see App.svelte), and the viewer fetches the
             // public /api/pastebins/:id endpoint.
             if (path == "/" && req.queryString.startsWith("/pastebin=")) {
-                res.render!("index.dt")();
+                auto assets = siteAssets();
+                res.render!("index.dt", assets)();
                 return;
             }
             serveLanding(req, res);
@@ -211,7 +213,8 @@ final class WebController {
             }
         }
 
-        res.render!("index.dt")();
+        auto assets = siteAssets();
+        res.render!("index.dt", assets)();
     }
 
     private void loginPage(HTTPServerRequest, HTTPServerResponse res) {

@@ -1,0 +1,240 @@
+---
+# Blue/green gateway deploy — zero-downtime, engine untouched.
+#
+# The image is built on the builder host and pushed to GHCR by `make ship`
+# (ircfiber-infra/Makefile). This play pulls the requested ref, tags it
+# locally as irc-fiber-gateway:deploy, starts green from it, waits for
+# /health, swaps, and finally asserts the running container is that exact
+# image id — so "deployed" can never again mean "unchanged".
+#
+#   gateway_image_ref  anything `docker image inspect` resolves:
+#     ghcr.io/…@sha256:…          make ship      (by digest)
+#     ghcr.io/…:prod              make swap      (the promoted tag; default)
+#     irc-fiber-gateway:blue-prev make rollback  (local, no pull)
+#
+# Caddy is folded in so one invocation does the whole deploy: one SSH
+# setup, one vault decrypt.
+- import_playbook: caddy.yml
+
+- name: Blue/green gateway deploy
+  hosts: ircfiber_gw
+  become: true
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  vars:
+    gateway_bluegreen_enabled: true
+    gateway_green_name: ircfiber-gateway-green
+    gateway_http_port: 8090
+    gateway_uploads_volume: ircfiber_uploads
+    gateway_logs_volume: ircfiber_logs
+    docker_ircfiber_network: ircfiber_net
+    gateway_image_ref: "{{ ircfiber_gateway_image_name }}:prod"   # overridden by -e
+    # The container tasks always get this plain local tag; the requested ref
+    # is resolved to an image id and tagged onto it below, so
+    # community.docker.docker_container never has to interpret a digest ref.
+    ircfiber_gateway_image_full: "irc-fiber-gateway:deploy"
+    # Also a gateway role default. Declared here because the stop / rename /
+    # verify tasks below live outside the role, and a role default pulled in
+    # by include_role is in scope only inside that role's own tasks.
+    # Deliberately NOT sourced by adding roles/gateway/defaults/main.yml to
+    # vars_files: play vars_files rank *above* inventory group_vars while
+    # role defaults rank at the very bottom, so that would invert precedence
+    # for every gateway_* variable and let a role default silently beat a
+    # deliberate group_vars override — a second source of truth that
+    # disagrees under one invocation, which is exactly the class of bug the
+    # shared container spec was factored out to kill.
+    gateway_container_name: ircfiber-gateway
+  roles:
+    - role: registry_login
+  tasks:
+    - name: Pull gateway image (registry refs only)
+      ansible.builtin.command: docker pull {{ gateway_image_ref }}
+      when: "'/' in gateway_image_ref"
+      changed_when: true
+
+    # A ref that does not resolve fails here with docker's own "No such
+    # image" — before anything is stopped.
+    - name: Resolve requested image id
+      ansible.builtin.command: docker image inspect -f '{{ "{{" }}.Id{{ "}}" }}' {{ gateway_image_ref }}
+      register: gateway_image_id
+      changed_when: false
+
+    - name: Tag requested image as the deploy tag
+      ansible.builtin.command: docker tag {{ gateway_image_id.stdout }} {{ ircfiber_gateway_image_full }}
+      changed_when: true
+
+    - name: Discover this host's Tailscale IPv4 address
+      ansible.builtin.command: tailscale ip -4
+      register: tailscale_ip_raw
+      changed_when: false
+      failed_when: tailscale_ip_raw.rc != 0
+      check_mode: false
+
+    - name: Set host_tailscale_ip fact
+      ansible.builtin.set_fact:
+        host_tailscale_ip: "{{ tailscale_ip_raw.stdout | trim | split('\n') | first | trim }}"
+
+    - name: Resolve backend Tailscale IP (where mongo & redis live)
+      ansible.builtin.set_fact:
+        backend_tailscale_ip: >-
+          {{ hostvars[groups['ircfiber_backend'][0]]['backend_tailscale_ip']
+             | default(hostvars[groups['ircfiber_backend'][0]]['host_tailscale_ip']
+                | default(host_tailscale_ip)) }}
+
+    - name: Ensure ircfiber config dir exists (for env)
+      ansible.builtin.file:
+        path: /etc/ircfiber/gateway
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    # env.j2 emits only `<VAR>_FILE` paths for secrets, so the files have to
+    # exist before a container that mounts them starts. This playbook renders
+    # the env itself instead of running the whole gateway role, so without
+    # this include a blue/green deploy would start green with an
+    # IRCFIBER_MONGO_URL_FILE pointing at nothing — envSecret falls back to
+    # the inline value, which env.j2 no longer emits, so the gateway would
+    # boot with no Mongo URL at all. include_role (not include_tasks) so the
+    # role's own defaults — gateway_secrets_dir — resolve at role precedence.
+    - name: Materialise the secret files the env only references by path
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: secrets.yml
+
+    - name: Render gateway env file (so green gets current env)
+      ansible.builtin.template:
+        src: ../roles/gateway/templates/env.j2
+        dest: /etc/ircfiber/gateway/env
+        owner: root
+        group: root
+        mode: "0640"
+
+    - name: Slurp gateway env file
+      ansible.builtin.slurp:
+        src: /etc/ircfiber/gateway/env
+      register: _gw_env_raw
+
+    - name: Parse gateway env into dict
+      vars:
+        _raw_lines: "{{ (_gw_env_raw.content | b64decode).split('\n') | reject('match', '^\\s*#') | map('trim') | reject('equalto', '') | list }}"
+        _pairs: "{{ _raw_lines | map('split', '=', 1) | list }}"
+      ansible.builtin.set_fact:
+        _gateway_env: "{{ dict(_pairs) }}"
+
+    - name: Ensure uploads & logs volumes exist
+      community.docker.docker_volume:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - "{{ gateway_uploads_volume }}"
+        - "{{ gateway_logs_volume }}"
+
+    - name: Resolve ircfiber networks for gateway
+      ansible.builtin.set_fact:
+        ircfiber_networks_for_gateway:
+          - name: "{{ docker_ircfiber_network }}"
+          - name: ircfiber_logging
+
+    # One definition, two call sites in this playbook and three in the role:
+    # roles/gateway/tasks/container.yml. Nothing about the env, mounts,
+    # ulimits, security options, limits or probe is restated here. The copy
+    # that used to live in this file drifted from the role and silently
+    # dropped the /etc/ircfiber/ircd:ro mount on every swap, which broke the
+    # admin config viewer in prod for weeks.
+    #
+    # include_role (not include_tasks) so the role's defaults come in at
+    # role-defaults precedence — i.e. still below inventory group_vars, the
+    # same way they rank when the role runs normally. ansible.cfg sets
+    # roles_path = roles, so `name: gateway` resolves when this playbook is
+    # invoked standalone from site/deploy/.
+    - name: Start green gateway (new image, same env)
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: container.yml
+      vars:
+        gateway_spec_name: "{{ gateway_green_name }}"
+        gateway_spec_component: "gateway-green"
+        # Deliberately faster than the role's 30s interval / 40s start
+        # period: Docker's own probe still gates docker_container's
+        # readiness, and the 1s /health poll below is what we actually wait on.
+        gateway_spec_healthcheck_interval: 10s
+        gateway_spec_healthcheck_timeout: 5s
+        gateway_spec_healthcheck_retries: 3
+        gateway_spec_healthcheck_start_period: 10s
+
+    - name: Wait for green to answer /health
+      ansible.builtin.command: >-
+        docker exec {{ gateway_green_name }}
+        curl -fsS http://127.0.0.1:{{ gateway_http_port }}/health
+      register: green_health
+      until: green_health.rc == 0
+      retries: 60
+      delay: 1
+      changed_when: false
+
+    - name: Stop and remove blue gateway (old)
+      community.docker.docker_container:
+        name: "{{ gateway_container_name }}"
+        state: absent
+
+    - name: Rename green to blue (atomic swap)
+      ansible.builtin.command: docker rename {{ gateway_green_name }} {{ gateway_container_name }}
+      register: rename_result
+      failed_when: false
+      changed_when: rename_result.rc == 0
+
+    # Same shared spec, now under the blue name and label. As before, the
+    # promoted container differs from this spec in its label and (fast)
+    # probe, so the module normalises it here — the label is what the rest
+    # of the fleet filters on.
+    - name: Ensure blue is started (after rename, ensure it stays up)
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: container.yml
+      vars:
+        gateway_spec_name: "{{ gateway_container_name }}"
+        gateway_spec_component: "gateway"
+
+    - name: Reload Caddy to clear DNS cache and re-resolve gateway IP
+      ansible.builtin.shell: docker exec ircfiber-caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | head -n 20; echo reload_done
+      register: caddy_reload
+      failed_when: false
+      changed_when: false
+
+    - name: Verify Caddy proxy is serving gateway (no 503)
+      ansible.builtin.shell: |
+        curl -fsS -H "Host: ircfiber.com" http://127.0.0.1:80/health >/dev/null 2>&1 || curl -kfsS --resolve ircfiber.com:443:127.0.0.1 https://ircfiber.com/health >/dev/null 2>&1
+      register: caddy_proxy_check
+      retries: 10
+      delay: 1
+      until: caddy_proxy_check.rc == 0
+      failed_when: false
+      changed_when: false
+
+    - name: Verify gateway health (inside container)
+      ansible.builtin.command: docker exec {{ gateway_container_name }} sh -c "curl -fsS http://127.0.0.1:{{ gateway_http_port }}/health"
+      register: health_check
+      retries: 10
+      delay: 1
+      until: health_check.rc == 0
+      changed_when: false
+
+    - name: Report engine untouched
+      ansible.builtin.shell: docker ps --format "{{ '{{' }}.Names{{ '}}' }} {{ '{{' }}.Status{{ '}}' }}" | grep -E "engine"
+      register: engine_status
+      changed_when: false
+      failed_when: false
+
+    # /health only proves something is answering — on 2026-09-06 it was
+    # green and healthy while running the previous binary.
+    - name: Assert the running gateway is the requested image
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.Image{{ "}}" }}' {{ gateway_container_name }}
+      register: running_image_id
+      changed_when: false
+      failed_when: running_image_id.stdout != gateway_image_id.stdout
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "Blue/green swap done — {{ gateway_container_name }} runs {{ gateway_image_ref }} ({{ gateway_image_id.stdout[:19] }}). Engine: {{ engine_status.stdout }} | Health: {{ health_check.stdout | default('ok') }}"

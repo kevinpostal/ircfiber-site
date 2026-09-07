@@ -5,7 +5,7 @@
 # health probe. This file is INCLUDED with vars — never copy-pasted — by:
 #
 #   * tasks/main.yml                            (replicas, bnc, support-bot)
-#   * playbooks/gateway-bluegreen.yml           (green start, post-rename blue)
+#   * playbooks/gateway-deploy.yml           (green start, post-rename blue)
 #
 # It exists because that playbook used to re-declare the entire container
 # independently of this role, and the two copies drifted: the
@@ -16,7 +16,7 @@
 # in one place only.
 #
 # The playbook is invoked directly (ansible-playbook
-# playbooks/gateway-bluegreen.yml), so it never runs this role and does not
+# playbooks/gateway-deploy.yml), so it never runs this role and does not
 # get its defaults through the role machinery; it loads
 # roles/gateway/defaults/main.yml through vars_files instead. Every variable
 # read below must therefore either live in those defaults or carry an explicit

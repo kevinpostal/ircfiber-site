@@ -62,7 +62,7 @@ AR := →
 # Resolve site dir whether invoked as `make -f Makefile.k8s` (PWD=site) or
 # `make -C site -f Makefile.k8s` (also PWD=site) — source dir is always .
 SITE_DIR := $(CURDIR)
-ifeq ($(wildcard $(SITE_DIR)/Containerfile.site),)
+ifeq ($(wildcard $(SITE_DIR)/Containerfile),)
   SITE_DIR := .
 endif
 ENGINE_CTF := $(SITE_DIR)/../engine/Containerfile.engine
@@ -137,14 +137,14 @@ k8s-registry-check: k8s-tunnel-check ## K8s > Alias for k8s-tunnel-check
 # ----------------------------------------------------------------------------
 .PHONY: k8s-build k8s-build-gateway k8s-build-engine k8s-push k8s-push-gateway k8s-push-engine k8s-push-deploy k8s-up
 
-# Single place to compute git hash (site repo) — used as CACHE_BUST/GIT_HASH for Containerfile
+# Single place to compute git hash (site repo) — feeds the metadata-only GIT_* ENV layer
 GIT_HASH  := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 GIT_SHORT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 k8s-build-gateway: ## K8s > Build gateway image → $(REGISTRY_HOST)/ircfiber-gateway:dev (no push)
 	@printf '\n\033[46m\033[30m\033[1m  k8s build gateway  \033[0m \033[2m$(GIT_SHORT) → $(GATEWAY_IMAGE) [linux/amd64, no provenance]$(R)\n'
-	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --provenance=false --sbom=false -f Containerfile.site -t $(GATEWAY_IMAGE) --target runtime-gateway \
-		--build-arg CACHE_BUST=$(GIT_HASH) --build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) .
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --provenance=false --sbom=false -f Containerfile -t $(GATEWAY_IMAGE) --target runtime-gateway \
+		--build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) .
 
 k8s-build-engine: ## K8s > Build engine image → $(REGISTRY_HOST)/ircfiber-engine:dev (no push)
 	@if [ ! -f "$(ENGINE_CTF)" ]; then \
@@ -152,7 +152,7 @@ k8s-build-engine: ## K8s > Build engine image → $(REGISTRY_HOST)/ircfiber-engi
 	fi
 	@printf '\n\033[46m\033[30m\033[1m  k8s build engine  \033[0m \033[2m$(GIT_SHORT) → $(ENGINE_IMAGE) [linux/amd64, no provenance]$(R)\n'
 	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --provenance=false --sbom=false -f $(ENGINE_CTF) -t $(ENGINE_IMAGE) --target runtime-engine \
-		--build-arg CACHE_BUST=$(GIT_HASH) --build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) \
+		--build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) \
 		$(SITE_DIR)/..
 
 k8s-build: k8s-build-gateway k8s-build-engine ## K8s > Build both images (no push)

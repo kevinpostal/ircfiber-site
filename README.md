@@ -23,7 +23,7 @@ At **National Services Group** I built `Django`/`DRF` gateways for 6 brands (50K
 
 * **HTTP/WS + Auth:** `backend/source/ircfiber/api/{rest,websocket,session,auth}.d` — login, sessions (Redis 14d), `Diet` templates, static `public/dist`. Same as `Django` + `DRF` + `Celery` + `Redis` I shipped.
 * **Frontend:** `frontend/src/{components,lib,stores}` — `Svelte 5` runes, `Vite`, `TypeScript`, `SCSS`, WebSocket stores (`ircStore`, `preferences`). Maps 1:1 to `React` hooks I used at **AMP Agency** (LinkedIn, Amazon, FX) and **Woven** (85M+ monthly).
-* **Ops:** `Containerfile.site` (`base` → `builder-common` → `builder-backend` → `frontend-builder` → `runtime-gateway`) **never compiles `engine/`** — site deploys via `ansible-playbook deploy-site.yml -l vps-efb4b52d` without restarting `engine` PID 7.
+* **Ops:** `Containerfile` (`base` → `builder-common` → `builder-backend` → `frontend-builder` → `runtime-gateway`) **never compiles `engine/`** — site deploys via `make ship` (ircfiber-infra: build on the builder, GHCR, blue/green by digest) without restarting `engine` PID 7.
 
 Part of [kevinpostal/irc-fiber](https://github.com/kevinpostal/irc-fiber) superproject — `git clone --recursive` gets `site` + `engine` + `common`.
 
@@ -43,7 +43,7 @@ dub --root=common build && dub --root=backend build
 ### Docker
 
 ```bash
-docker compose up -d          # gateway + redis + mongo + ircd (Containerfile.site)
+docker compose up -d          # gateway + redis + mongo + ircd (Containerfile)
 docker compose logs -f gateway
 ```
 
@@ -57,8 +57,8 @@ ircfiber-site/
  backend/views/                               # Diet templates
  common/source/ircfiber/{redis,models,db,storage} # duplicated, see ircfiber-common
  public/dist/                                 # Vite output
- Containerfile.site + Makefile.site + docker-compose.yml
- deploy/playbooks/deploy-site.yml             # src_root=/opt/ircfiber-site, no engine touch
+ Containerfile + Makefile.site + docker-compose.yml
+ deploy/playbooks/gateway-deploy.yml          # blue/green swap by digest, no engine touch
 ```
 
 ## Configuration
@@ -79,11 +79,11 @@ ansible-vault edit deploy/inventories/production/group_vars/vault.yml
 Decoupled — site never restarts engine:
 
 ```bash
-ansible-playbook deploy/playbooks/deploy-site.yml -l vps-efb4b52d
-# BuildKit --target runtime-gateway, GIT_HASH injection, restarts ircfiber-gateway only
+make -C .. ship                # from ircfiber-infra: build on ubuntu-docker, push GHCR, blue/green swap by digest
+# gates on /api/version == HEAD; restarts ircfiber-gateway only
 ```
 
-Host: `vps-efb4b52d` → `/opt/ircfiber-site` (`Containerfile.site`), `/opt/ircfiber-engine` separate.
+Host: `vps-efb4b52d` pulls `ghcr.io/kevinpostal/irc-fiber-gateway` and `…/ircfiber-engine`; nothing is built there.
 
 ## Testing
 

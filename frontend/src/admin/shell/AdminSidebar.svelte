@@ -6,7 +6,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { current, onChange, href } from '../lib/router';
   import { sidebarCollapsed } from '../stores/ui';
-  import { BUILD_INFO } from '../../lib/buildInfo';
+  import { version } from '../stores/version';
 
   interface NavItem {
     label: string;
@@ -109,7 +109,7 @@
     {#if !$sidebarCollapsed}
       <a href="#/version" class="flex items-center gap-1.5 hover:text-text" title="View build versions">
         <span class="h-2 w-2 rounded-full bg-success"></span>
-        <span>frontend {BUILD_INFO.short}</span>
+        <span>gateway {$version?.gateway?.short ?? '…'}</span>
       </a>
       <div class="mt-1 text-[9px] leading-none">tap for gateway + engines</div>
     {:else}

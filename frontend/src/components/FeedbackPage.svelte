@@ -4,7 +4,6 @@
   import { navigateBackFromFeedback, navigateShortcuts } from '../lib/routing';
   import { isFiberServer } from '../lib/fiberServer';
   import { uploadFile } from '../lib/upload';
-  import { BUILD_INFO } from '../lib/buildInfo';
   import {
     joinChannel, submitSupportIssue, fetchMySupportIssues, addSupportIssueComment,
     type SupportIssueEntry, type SupportIssueKind, type SupportIssueStatus,
@@ -113,8 +112,14 @@
         }).promise;
         attachments.push(res.url);
       }
+      const appVersion = includeDiagnostics
+        ? await fetch('/api/version', { credentials: 'include' })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((v) => (v?.describe as string | undefined) ?? 'unknown')
+            .catch(() => 'unknown')
+        : '';
       const context = includeDiagnostics ? {
-        appVersion: BUILD_INFO.describe,
+        appVersion,
         userAgent: navigator.userAgent,
         url: location.href,
         networkId: ircState.activeBuffer.networkId ?? '',

@@ -2,10 +2,8 @@ services:
   ircfiber-gateway:
     build:
       context: .
-      dockerfile: Containerfile.site
+      dockerfile: Containerfile
       target: runtime-gateway
-      args:
-        CACHE_BUST: ${CACHE_BUST:-fixed}
     container_name: ircfiber-gateway
     restart: unless-stopped
     command: ["/app/irc-fiber"]

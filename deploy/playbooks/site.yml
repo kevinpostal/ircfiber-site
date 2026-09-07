@@ -90,18 +90,25 @@
     - role: registry_login
     - role: firewall
 
-- name: Build & push irc-fiber image
-  # When a registry is configured, the build runs on the control node
-  # (via delegate_to: localhost inside the role) and the target pulls.
-  # When no registry is configured, the build runs on the target host
-  # so the image ends up in the target's local docker daemon.
+- name: Pull the released irc-fiber images
+  # Images are built on the builder host (`make ship` / `make ship-engine` in
+  # ircfiber-infra) and pushed to GHCR; `:prod` is the tag `ship` promotes
+  # after a successful swap. Provisioning only ever pulls.
   hosts: ircfiber
   become: true
   gather_facts: true
   vars_files:
     - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
   roles:
-    - role: ircfiber_image
+    - role: registry_login
+  tasks:
+    - name: Pull gateway image
+      ansible.builtin.command: docker pull {{ ircfiber_gateway_image_full }}
+      changed_when: true
+
+    - name: Pull engine image
+      ansible.builtin.command: docker pull {{ ircfiber_engine_image_full }}
+      changed_when: true
 
 - name: Manage Cloudflare DNS records pointing at the backend host(s)
   # Runs BEFORE Caddy/LE so that ACME HTTP-01 challenges for the

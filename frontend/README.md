@@ -28,12 +28,12 @@ npm install
 npm run dev              # Vite HMR, proxies /api + /ws to http://127.0.0.1:8090
 npm run dev:local
 npm run dev:tailnet
-npm run build            # Vite build → ../public/dist + inject-manifest.js → ../engine/views/index.dt
+npm run build            # Vite build → ../public/dist (+ postbuild.js: prune stale hashes, emit .gz/.br)
 npm run check            # svelte-check
 npm test                 # vitest
 ```
 
 ## Integration
-- `vite.config.ts` builds to `../public/dist` (shared with engine).
-- `inject-manifest.js` post-build injects hashed asset URLs into `../engine/views/index.dt`.
+- `vite.config.ts` builds to `../public/dist`.
+- `postbuild.js` prunes stale content-hashed bundles and precompresses assets. The gateway reads `public/dist/.vite/manifest.json` at runtime to link the current bundle from `backend/views/index.dt` — the template is never rewritten.
 - Top-level `make frontend` and `make frontend-dev` delegate here.

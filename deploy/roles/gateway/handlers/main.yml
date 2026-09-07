@@ -9,5 +9,5 @@
   # one that mounts the new files. Flushing this handler there would restart
   # the container we just promoted, turning a zero-downtime deploy into a
   # few seconds of 502 for no benefit. Set only by
-  # playbooks/gateway-bluegreen.yml, so a plain role run still restarts.
+  # playbooks/gateway-deploy.yml, so a plain role run still restarts.
   when: not (gateway_bluegreen_enabled | default(false) | bool)

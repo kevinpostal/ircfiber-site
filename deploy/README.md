@@ -59,7 +59,6 @@ deploy/
 │   ├── site.yml                # full stack
 │   ├── docker.yml              # install Docker CE
 │   ├── tailscale.yml           # install + auth Tailscale
-│   ├── image.yml               # build & push irc-fiber image
 │   ├── mongo.yml               # deploy Mongo only
 │   ├── redis.yml               # deploy Redis only
 │   ├── caddy.yml               # deploy Caddy only
@@ -245,8 +244,8 @@ ansible-playbook playbooks/tailscale.yml -l newengine.example.com
 ansible-playbook playbooks/engine.yml   -l newengine.example.com
 # The gateway sees the new engine register in <10s (one heartbeat).
 
-# Update to a new image version
-ansible-playbook playbooks/update.yml -e ircfiber_version=0.4.0
+# Deploy a new build (from the ircfiber-infra root)
+make -C ../.. ship            # gateway (blue/green);  make -C ../.. ship-engine  # engine
 
 # Status & logs
 ansible-playbook playbooks/status.yml

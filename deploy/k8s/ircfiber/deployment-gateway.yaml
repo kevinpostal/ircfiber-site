@@ -1,5 +1,5 @@
 # Real ircfiber gateway (D vibe.d) — template for k3s
-# Build image first: DOCKER_BUILDKIT=1 docker build -f Containerfile.site --target runtime-gateway -t localhost:5000/ircfiber-gateway:dev . && docker push localhost:5000/ircfiber-gateway:dev
+# Build image first: DOCKER_BUILDKIT=1 docker build -f Containerfile --target runtime-gateway -t localhost:5000/ircfiber-gateway:dev . && docker push localhost:5000/ircfiber-gateway:dev
 # Then apply: kubectl --context ubuntu-docker apply -f deployment-gateway.yaml
 # Requires redis + mongo (see redis-mongo-dev.yaml) — deploy those first.
 apiVersion: apps/v1

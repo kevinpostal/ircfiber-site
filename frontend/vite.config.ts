@@ -6,7 +6,7 @@ import { createLogger } from 'vite';
 // Lib modules used ONLY by lazy UI (or workers/admin). Everything else under
 // src/lib + src/stores is forced into chunk-core (startup) so Rollup can't
 // home shared logic in the async chunk and defeat the split.
-const LAZY_LIB_RE = /lib\/(aceModes|aristotleGlyphs|blockKind|buildInfo|codeLines|emoji|glyphCatalog|helpText|htmlInline|img2irc|notificationPolicy|segmentation|textFiles|uniform)\b/;
+const LAZY_LIB_RE = /lib\/(aceModes|aristotleGlyphs|blockKind|codeLines|emoji|glyphCatalog|helpText|htmlInline|img2irc|notificationPolicy|segmentation|textFiles|uniform)\b/;
 
 // Backend URL for the dev server's API + WS proxy. Override via env vars
 // to point at a non-local backend (e.g. the tailnet gateway or Python gateway):

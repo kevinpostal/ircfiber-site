@@ -11,7 +11,7 @@
       ansible.builtin.shell:
         cmd: |
           set -o pipefail
-          docker images {{ docker_registry_url }}/{{ docker_registry_namespace }}/irc-fiber \
+          docker images {{ ircfiber_gateway_image_name }} \
             --format '{{ "{{" }}.Tag{{ "}}" }}\t{{ "{{" }}.CreatedAt{{ "}}" }}\t{{ "{{" }}.ID{{ "}}" }}' \
             | grep -v 'latest' \
             | sort -k2 -r
@@ -32,7 +32,7 @@
              | list }}
 
     - name: Prune tags
-      ansible.builtin.command: docker rmi {{ docker_registry_url }}/{{ docker_registry_namespace }}/irc-fiber:{{ item }}
+      ansible.builtin.command: docker rmi {{ ircfiber_gateway_image_name }}:{{ item }}
       loop: "{{ images_to_remove }}"
       when: images_to_remove | length > 0
       changed_when: true
@@ -43,3 +43,16 @@
         images: true
         images_filters:
           dangling: true
+
+    # BuildKit cache only under pressure. The blanket post-deploy
+    # `docker builder prune -af` that used to run guaranteed every next build
+    # was cold; prod sits at ~47% of 72 GB so this normally never fires.
+    - name: Read /var/lib/docker usage
+      ansible.builtin.command: df --output=pcent /var/lib/docker
+      register: docker_df
+      changed_when: false
+
+    - name: Prune BuildKit cache (only above 80% disk)
+      ansible.builtin.command: docker builder prune -af --keep-storage 20GB
+      when: (docker_df.stdout_lines | last | trim | regex_replace('%', '') | int) > 80
+      changed_when: true

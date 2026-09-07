@@ -21,7 +21,6 @@
     name: "{{ signoz_bridge_image }}"
     source: pull
     state: present
-  when: docker_registry_url | length == 0
 
 - name: Ensure ircfiber_net network exists (gateway/engine live here)
   community.docker.docker_network:

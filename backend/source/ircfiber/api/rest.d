@@ -34,7 +34,7 @@ import std.path : buildPath;
 import std.string : strip, indexOf, lastIndexOf;
 import ircfiber.auth : requireAuth;
 import ircfiber.api.image_proxy : handleImageProxy;
-import ircfiber.build_version : GIT_HASH, GIT_SHORT, GIT_DESCRIBE, GIT_BRANCH, BUILD_TIME, BUILD_HOST, VERSION, GIT_MESSAGE, GIT_COMMIT_URL;
+import ircfiber.build_info : buildInfo;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.irc.server : ConnectionServer;
@@ -3407,26 +3407,19 @@ final class RESTAPI {
     }
 
     private void versionCheck(HTTPServerRequest req, HTTPServerResponse res) {
-        // Gateway's own build info (baked via ircfiber.build_version)
+        // Gateway's own build info (from the IRCFIBER_BUILD_* env the image sets)
+        auto bi = buildInfo();
         auto gateway = Json.emptyObject;
         gateway["service"] = Json("irc-fiber-gateway");
-        gateway["version"] = Json(VERSION);
-        gateway["commit"] = Json(GIT_HASH);
-        gateway["short"] = Json(GIT_SHORT);
-        gateway["describe"] = Json(GIT_DESCRIBE);
-        gateway["branch"] = Json(GIT_BRANCH);
-        gateway["builtAt"] = Json(BUILD_TIME);
-        gateway["builtHost"] = Json(BUILD_HOST);
-        gateway["message"] = Json(GIT_MESSAGE);
-        gateway["commitUrl"] = Json(GIT_COMMIT_URL);
-        try {
-            if (exists("/opt/ircfiber/.frontend-deploy-hash"))
-                gateway["deployedFrontend"] = Json(readText("/opt/ircfiber/.frontend-deploy-hash").strip());
-            if (exists("/opt/ircfiber/.engine-deploy-hash"))
-                gateway["deployedEngine"] = Json(readText("/opt/ircfiber/.engine-deploy-hash").strip());
-            if (exists("/opt/ircfiber/.deploy-hash"))
-                gateway["deployed"] = Json(readText("/opt/ircfiber/.deploy-hash").strip());
-        } catch (Exception) {}
+        gateway["version"] = Json(bi.version_);
+        gateway["commit"] = Json(bi.commit);
+        gateway["short"] = Json(bi.shortHash);
+        gateway["describe"] = Json(bi.describe);
+        gateway["branch"] = Json(bi.branch);
+        gateway["builtAt"] = Json(bi.builtAt);
+        gateway["builtHost"] = Json(bi.builtHost);
+        gateway["message"] = Json(bi.message);
+        gateway["commitUrl"] = Json(bi.commitUrl);
         Json[] enginesJson;
         try {
             auto servers = serverRegistry.getAllServers();
@@ -3449,14 +3442,14 @@ final class RESTAPI {
         auto result = Json.emptyObject;
         result["gateway"] = gateway;
         result["engines"] = Json(enginesJson);
-        result["commit"] = Json(GIT_HASH);
-        result["short"] = Json(GIT_SHORT);
-        result["describe"] = Json(GIT_DESCRIBE);
-        result["branch"] = Json(GIT_BRANCH);
-        result["builtAt"] = Json(BUILD_TIME);
-        result["version"] = Json(VERSION);
-        result["message"] = Json(GIT_MESSAGE);
-        result["commitUrl"] = Json(GIT_COMMIT_URL);
+        result["commit"] = Json(bi.commit);
+        result["short"] = Json(bi.shortHash);
+        result["describe"] = Json(bi.describe);
+        result["branch"] = Json(bi.branch);
+        result["builtAt"] = Json(bi.builtAt);
+        result["version"] = Json(bi.version_);
+        result["message"] = Json(bi.message);
+        result["commitUrl"] = Json(bi.commitUrl);
         result["versionScheme"] = Json(2);
         res.writeJsonBody(result);
     }

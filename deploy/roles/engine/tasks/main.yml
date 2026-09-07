@@ -31,14 +31,15 @@
          | default(hostvars[groups['ircfiber_backend'][0]]['host_tailscale_ip']
             | default(host_tailscale_ip)) }}
 
-- name: Pull ircfiber-engine image (registry configured)
+- name: Pull ircfiber-engine image (registry-qualified ref only)
   community.docker.docker_image:
     name: "{{ ircfiber_engine_image_full }}"
     source: pull
     state: present
-  when: docker_registry_url | length > 0
-  # Note: when docker_registry_url is empty, the ircfiber_image role has
-  # already built the image on this host via docker build.
+  # engine-deploy.yml hands this role a plain local tag
+  # (ircfiber-engine:deploy) it has already pulled by digest and tagged;
+  # a pull of that would go to Docker Hub and fail.
+  when: "'/' in ircfiber_engine_image_full"
 
 - name: Ensure engine config dir exists
   ansible.builtin.file:
