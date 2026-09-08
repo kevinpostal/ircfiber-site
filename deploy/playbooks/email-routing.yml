@@ -34,7 +34,7 @@
     email_routing_address: "{{ vault_ipintel_email | default('ops@' ~ email_routing_zone) }}"
     email_routing_destination: "{{ vault_ipintel_forward_to | default('zod32@me.com') }}"
     email_routing_rule_name: "ops forward"
-    _cf_token: "{{ vault_cloudflare_email_token | default(vault_cloudflare_api_token) }}"
+    _cf_token: "{{ (vault_cloudflare_email_token | default('')) or vault_cloudflare_api_token }}"
     _cf_headers:
       Authorization: "Bearer {{ _cf_token }}"
       Content-Type: application/json
