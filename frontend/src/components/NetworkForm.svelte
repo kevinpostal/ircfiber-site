@@ -183,7 +183,18 @@
     return runningSlots.some((r) => r.pin === p) ? '' : p;
   });
 
+  /// Seed-once guard: `existing` is a live derived lookup over
+  /// ircState.networks, so a bare effect re-runs on every background sync
+  /// (and on the save-mirror below) and wipes the write-only password
+  /// boxes — operUsername/operPassword included — while the user is typing,
+  /// which then submits as "leave alone" and looks like save is broken.
+  /// Key on mode + network + whether the record has resolved, so a late
+  /// arrival still seeds but later syncs never re-seed.
+  let seededFor: string | null = $state(null);
   $effect(() => {
+    const seedKey = mode + ':' + (networkId ?? '') + ':' + (existing ? '1' : '0');
+    if (seededFor === seedKey) return;
+    seededFor = seedKey;
     if (existing) {
       name = existing.name;
       host = existing.host;

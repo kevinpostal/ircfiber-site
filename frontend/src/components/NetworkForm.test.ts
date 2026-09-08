@@ -323,6 +323,28 @@ describe('NetworkForm', () => {
     expect(call[1]).toHaveProperty('commands', 'OPER admin secret');
   });
 
+  it('keeps typed oper credentials across a background sync and submits them', async () => {
+    const network = createNetwork({ name: 'SyncNet', host: 'irc.sync.net', nick: 'SyncNick' });
+    ircState.networks.push(network);
+    render(NetworkForm, { props: { mode: 'edit', networkId: network.networkId, onClose: vi.fn(), onAddNetwork: mockAddNetwork, onUpdateNetwork: mockUpdateNetwork } });
+    await userEvent.click(page.getByRole('button', { name: /Advanced options/ }));
+    await userEvent.type(page.getByLabelText(/Oper login/), 'opername');
+    await userEvent.type(page.getByLabelText('Oper password'), 'operpass');
+    // A background engine sync mutates the live record while the dialog is
+    // open. The seed effect must not re-run and wipe the typed boxes —
+    // that wipe submitted as "leave alone" and read as save being broken.
+    // (Mutate through the store proxy: the raw factory object bypasses
+    // reactivity and would not re-trigger the effect at all.)
+    ircState.networks[0].nick = 'SyncNick2';
+    await expect.element(page.getByLabelText(/Oper login/)).toHaveValue('opername');
+    await expect.element(page.getByLabelText('Oper password')).toHaveValue('operpass');
+    await userEvent.click(page.getByRole('button', { name: 'Save' }));
+    expect(mockUpdateNetwork).toHaveBeenCalledWith(
+      network.networkId,
+      expect.objectContaining({ operUsername: 'opername', operPassword: 'operpass' }),
+    );
+  });
+
   it('Update mode sends oper login and password together when typed', async () => {
     const network = createNetwork();
     ircState.networks.push(network);
