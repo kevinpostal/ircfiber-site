@@ -135,8 +135,8 @@ ircd_k8s_link_port: 7001
 ircd_k8s_link_enabled: false
 
 # Rendered config and InspIRCd state live on the k3s node and are hostPath
-# mounted: PVCs do not bind under the node's disk-pressure taint, and a k8s
-# Secret cannot be created at all (rancher.cattle.io webhook fails closed).
+# mounted: PVCs do not bind under the node's disk-pressure taint. (Secrets
+# can be created again; k8s_leaf.yml makes the ghcr-pull one for the image.)
 ircd_k8s_conf_dir: "/var/lib/ircfiber/ircd-k8s/conf"
 ircd_k8s_data_dir: "/var/lib/ircfiber/ircd-k8s/data"
 ircd_k8s_context: "ubuntu-docker"

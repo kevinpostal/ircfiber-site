@@ -3,9 +3,14 @@
 # Config is deliberately NOT in this file. playbooks/ircd-k8s-leaf.yml renders
 # the same Jinja templates the OVH hub uses — link password and cloak key come
 # from ansible-vault — onto the node at /var/lib/ircfiber/ircd-k8s/conf, and
-# this Deployment hostPath-mounts them. A Secret is impossible on this cluster:
-# the rancher.cattle.io validating webhook has failurePolicy Fail on `secrets`
-# and its service has no endpoints, so every secret create/update is refused.
+# this Deployment hostPath-mounts them. (The rancher.cattle.io webhook that
+# once refused every Secret on this cluster no longer does; the playbook
+# creates the ghcr-pull secret below, but the conf stays a hostPath so the
+# node keeps working even if that regresses.)
+#
+# Image: the same digest the OVH hub runs (our InspIRCd build with the
+# motdpool module, `make ship-ircd`). The leaf shares the hub's
+# modules.conf.j2, so it must carry every module that template loads.
 #
 # Apply: cd site/deploy && ansible-playbook playbooks/ircd-k8s-leaf.yml
 apiVersion: apps/v1
@@ -37,9 +42,11 @@ spec:
         - key: node.kubernetes.io/disk-pressure
           operator: Exists
           effect: NoSchedule
+      imagePullSecrets:
+        - name: ghcr-pull
       containers:
         - name: inspircd
-          image: inspircd/inspircd-docker:4.11.0
+          image: ghcr.io/kevinpostal/irc-fiber-ircd@sha256:5e1de0829c8bbb1acae8d57c0882f86b9ec91324239a632168aec0570322243e
           imagePullPolicy: IfNotPresent
           env:
             - name: INSP_TLS_CN

@@ -40,6 +40,25 @@
     label: "{{ item.dest }}"
   notify: Rehash k8s ircd
 
+# The leaf runs our own ircd image (ghcr.io/…/irc-fiber-ircd, private
+# package), so the pod needs a pull secret. Same GHCR credentials the
+# registry_login role uses on OVH. `create --dry-run | apply` makes the task
+# idempotent; the manifest references it as imagePullSecrets ghcr-pull.
+- name: Ensure the GHCR pull secret exists in the leaf namespace
+  ansible.builtin.shell: >-
+    kubectl --context {{ ircd_k8s_context }} --namespace {{ ircd_k8s_namespace }}
+    create secret docker-registry ghcr-pull
+    --docker-server={{ docker_registry_url }}
+    --docker-username={{ vault_docker_registry_username | quote }}
+    --docker-password={{ vault_docker_registry_password | quote }}
+    --dry-run=client -o yaml
+    | kubectl --context {{ ircd_k8s_context }} --namespace {{ ircd_k8s_namespace }} apply -f -
+  delegate_to: localhost
+  become: false
+  register: ircd_k8s_pull_secret
+  changed_when: "'configured' in ircd_k8s_pull_secret.stdout or 'created' in ircd_k8s_pull_secret.stdout"
+  no_log: true
+
 - name: Apply the leaf manifests
   ansible.builtin.command:
     argv:
