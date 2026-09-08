@@ -52,9 +52,21 @@ const heartbeat = {
   bansPlaced: 0, bansObserved: 2, activeZlines: 0,
   accountLookups: 5, geoFilled: 4,
   lastError: '', lastErrorAt: 0, hostname: 'ircfiber-fibereye', pid: 1, updatedAt: Date.now() - 2000,
-  thresholds: { windowSeconds: 60, connects: 10, nicks: 6, churn: 6, shortMs: 20_000, banSeconds: 3_600 },
-  ignoreClasses: ['ircfiber-engine', 'localhost'],
-  exemptIps: [],
+  rules: {
+    windowSeconds: 60, connects: 10, connectsEnabled: true,
+    nicks: 6, nicksEnabled: true, churn: 6, churnEnabled: true,
+    shortMs: 20_000, banSeconds: 3_600,
+    ignoreClasses: ['ircfiber-engine', 'localhost'], exemptIps: [],
+    updatedAtMs: 0, updatedBy: '',
+  },
+  rulesDeployed: {
+    windowSeconds: 60, connects: 10, connectsEnabled: true,
+    nicks: 6, nicksEnabled: true, churn: 6, churnEnabled: true,
+    shortMs: 20_000, banSeconds: 3_600,
+    ignoreClasses: ['ircfiber-engine', 'localhost'], exemptIps: [],
+    updatedAtMs: 0, updatedBy: '',
+  },
+  rulesSource: 'deployed',
 };
 
 const candidate = {
@@ -90,19 +102,43 @@ const session = (over: Record<string, unknown> = {}) => ({
   realname: 'Windows 11 user', connClass: 'main', port: 6697, tls: true, account: 'zeta',
   quitTs: 0, quitReason: '', durationMs: 0,
   geoCity: 'Dallas', geoRegion: 'Texas', geoCountry: 'US', geoOrg: 'AS7018 AT&T',
-  geoTimezone: 'America/Chicago', geoPrivacy: '', geoPending: false,
+  geoTimezone: 'America/Chicago', geoPending: false,
+  intelAsn: 'AS7018', intelFlags: '', intelOperator: '', intelPrefix: '76.32.0.0/11', intelRisk: 0, intelAt: Date.now() - 20_000,
   ...over,
 });
 
 const paged = (rows: unknown[]) => ({ rows, total: rows.length, page: 0, limit: 50 });
 
-/** Routes every endpoint the page (and its nested bot card) fetches. */
+const rulesPayload = {
+  effective: heartbeat.rules,
+  deployed: heartbeat.rulesDeployed,
+  stored: null,
+  source: 'deployed',
+  bounds: {
+    windowMin: 5, windowMax: 3_600, countMin: 2, countMax: 100_000,
+    shortMsMin: 1_000, shortMsMax: 600_000,
+    banSecondsMin: 60, banSecondsMax: 2_592_000, listMax: 64,
+  },
+  audit: [],
+};
+
+const ircdRules = {
+  available: true,
+  path: '/etc/ircfiber/ircd/modules.conf',
+  connectban: { threshold: '8', banduration: '5m', ipv4cidr: '32', ipv6cidr: '64' },
+  connflood: { maxconns: '60', period: '30', timeout: '30' },
+  reason: '',
+};
+
+/** Routes every endpoint the page (and its nested cards) fetches. */
 function routeGet(sessions: unknown[] = [session()]) {
   mockedGet.mockImplementation((path: string) => {
     if (path === '/api/admin/fibereye') return Promise.resolve(overview());
     if (path === '/api/admin/fibereye/sessions') return Promise.resolve(paged(sessions));
     if (path === '/api/admin/fibereye/ips') return Promise.resolve(paged([]));
     if (path === '/api/admin/fibereye/bans') return Promise.resolve(paged([candidate]));
+    if (path === '/api/admin/fibereye/rules') return Promise.resolve(rulesPayload);
+    if (path === '/api/admin/fibereye/ircd-rules') return Promise.resolve(ircdRules);
     return Promise.resolve({});
   });
 }

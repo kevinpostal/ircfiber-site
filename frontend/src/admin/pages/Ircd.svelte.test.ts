@@ -172,7 +172,7 @@ describe('Ircd.svelte — IRCD management page', () => {
     // fourth service was added, which is not a behaviour change.
     expect(expr).toContain('service.name IN (');
     for (const svc of ['ircfiber-ircd', 'ircfiber-services', 'ircfiber-support-bot',
-      'ircfiber-logs-bot', 'ircfiber-fibereye']) {
+      'ircfiber-fibereye']) {
       expect(expr).toContain(`'${svc}'`);
     }
     await expect.element(page.getByText(/Connection to irc\.netcrave\.chat started/)).toBeInTheDocument();

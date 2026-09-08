@@ -16,6 +16,7 @@
   import StatusBadge from '../components/StatusBadge.svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import FiberEyeBotCard from '../components/FiberEyeBotCard.svelte';
+  import FiberEyeRulesCard from '../components/FiberEyeRulesCard.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { toastSuccess, toastError } from '../stores/ui';
   import { startPolling } from '../stores/polling';
@@ -41,14 +42,18 @@
     port: number; tls: boolean; account: string;
     quitTs: number; quitReason: string; durationMs: number;
     geoCity: string; geoRegion: string; geoCountry: string; geoOrg: string;
-    geoTimezone: string; geoPrivacy: string; geoPending: boolean;
+    geoTimezone: string; geoPending: boolean;
+    intelAsn: string; intelFlags: string; intelOperator: string; intelPrefix: string;
+    intelRisk: number; intelAt: number;
   }
   interface IpRow {
     ipGroup: string; ip: string; ipVersion: number;
     firstSeen: number; lastSeen: number; connects: number; shortSessions: number;
     lastNick: string; lastAccount: string; lastRealname: string; lastClass: string;
     geoCity: string; geoRegion: string; geoCountry: string; geoOrg: string;
-    geoTimezone: string; geoPrivacy: string; geoPending: boolean;
+    geoTimezone: string; geoPending: boolean;
+    intelAsn: string; intelFlags: string; intelOperator: string; intelPrefix: string;
+    intelRisk: number; intelAt: number;
     strikes: number; bannedUntil: number; lastBanId: string;
   }
   interface Overview {
@@ -70,6 +75,17 @@
   let overview = $state<Overview | null>(null);
   let overviewError = $state<string | null>(null);
   let loading = $state(false);
+
+  /// The ircd's own connect limits, read from its rendered config. Fetched
+  /// once: these are deploy artifacts, not runtime state.
+  interface IrcdRules {
+    available: boolean;
+    path: string;
+    connectban: Record<string, string>;
+    connflood: Record<string, string>;
+    reason: string;
+  }
+  let ircdRules = $state<IrcdRules | null>(null);
 
   type Tab = 'sessions' | 'ips' | 'bans';
   let tab = $state<Tab>('sessions');
@@ -108,6 +124,7 @@
       async () => { await fetchOverview(false); },
       { intervalMs: 30_000 },
     );
+    void fetchIrcdRules();
   });
   onDestroy(() => {
     if (qDebounce) clearTimeout(qDebounce);
@@ -126,6 +143,16 @@
     } catch (e) {
       overviewError = errMsg(e);
     } finally { loading = false; }
+  }
+
+  /// Never fails the page: the endpoint answers 200 with `available:false`
+  /// when the ircd conf dir is not mounted into the gateway.
+  async function fetchIrcdRules() {
+    try {
+      ircdRules = await api.get<IrcdRules>('/api/admin/fibereye/ircd-rules');
+    } catch {
+      ircdRules = null;
+    }
   }
 
   async function fetchTab(kind: Tab, p: number, needle: string) {
@@ -175,7 +202,16 @@
     const place = [r.geoCity, r.geoCountry].filter(Boolean).join(', ');
     if (place) return place;
     if (r.geoOrg) return r.geoOrg;
-    return r.geoPending ? 'geo pending' : '—';
+    return r.geoPending ? 'intel pending' : '—';
+  }
+
+  /** `vpn(Mullvad)+tor+hosting` → one chip per confirmed flag, toned by severity. */
+  function flagChips(label: string): { text: string; tone: 'primary' | 'danger' | 'muted' }[] {
+    if (!label) return [];
+    return label.split('+').filter(Boolean).map((f) => ({
+      text: f,
+      tone: f.startsWith('vpn') ? 'primary' : f === 'tor' || f === 'proxy' || f === 'residential-proxy' ? 'danger' : 'muted',
+    }));
   }
 
   function ipHref(ipGroup: string): string {
@@ -279,6 +315,41 @@
   </div>
 
   <FiberEyeBotCard />
+
+  <div class="mt-4">
+    <FiberEyeRulesCard />
+  </div>
+
+  {#if ircdRules}
+    <div class="mt-4">
+      <Card
+        title="The ircd's own limits"
+        subtitle="InspIRCd refuses floods before FiberEye ever sees them. Rendered by the deploy — read-only here."
+      >
+        {#if ircdRules.available}
+          <div class="grid gap-4 text-sm md:grid-cols-2">
+            <dl class="space-y-1">
+              <div class="flex justify-between gap-4"><dt class="text-muted">&lt;connectban&gt; threshold</dt><dd class="font-mono">{ircdRules.connectban.threshold ?? '—'}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">ban duration</dt><dd class="font-mono">{ircdRules.connectban.banduration ?? '—'}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">v4 / v6 grouping</dt><dd class="font-mono">/{ircdRules.connectban.ipv4cidr ?? '?'} · /{ircdRules.connectban.ipv6cidr ?? '?'}</dd></div>
+            </dl>
+            <dl class="space-y-1">
+              <div class="flex justify-between gap-4"><dt class="text-muted">&lt;connflood&gt; maxconns</dt><dd class="font-mono">{ircdRules.connflood.maxconns ?? '—'}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">period</dt><dd class="font-mono">{ircdRules.connflood.period ?? '—'}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">lockout</dt><dd class="font-mono">{ircdRules.connflood.timeout ?? '—'}</dd></div>
+            </dl>
+          </div>
+          <p class="mt-3 border-t border-border pt-3 text-xs text-muted">
+            Rendered into the ircd config by the deploy and changed with <code class="font-mono">make deploy-ircd</code>;
+            <code class="font-mono">&lt;connflood&gt;</code> is server-wide, <code class="font-mono">&lt;connectban&gt;</code> is per address group.
+            <a class="ml-1 text-primary hover:underline" href={href('/ircd')}>Open the config viewer</a>
+          </p>
+        {:else}
+          <p class="text-xs text-muted">{ircdRules.reason}</p>
+        {/if}
+      </Card>
+    </div>
+  {/if}
 
   {#if overview.candidates.length > 0}
     <div class="mt-4">
@@ -442,7 +513,12 @@
                     <td class="py-2 pr-4 font-mono text-muted">{relative(row.firstSeen)}</td>
                     <td class="py-2 pr-4 font-mono text-muted">{relative(row.lastSeen)}</td>
                     <td class="py-2 pr-4 font-mono">{row.lastNick || '—'}</td>
-                    <td class="max-w-xs truncate py-2 pr-4 text-xs text-muted" title={row.geoOrg}>{geoShort(row)}</td>
+                    <td class="max-w-xs py-2 pr-4 text-xs text-muted" title={row.geoOrg}>
+                      <span class="truncate">{geoShort(row)}</span>
+                      {#each flagChips(row.intelFlags) as chip (chip.text)}
+                        <span class="ml-1"><StatusBadge label={chip.text} tone={chip.tone} size="sm" dot={false} /></span>
+                      {/each}
+                    </td>
                     <td class="py-2 pr-4">
                       {#if row.bannedUntil > Date.now()}
                         <StatusBadge label="Banned" tone="danger" size="sm" />

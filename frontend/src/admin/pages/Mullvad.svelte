@@ -86,7 +86,17 @@
   /// `AS39351 · 31173.se` — the AS number, plus the operator's domain when
   /// the Lite endpoint supplied one.
   const ispMeta = (p?: MullvadProxy) =>
-    [p?.ipinfo?.asn, p?.ipinfo?.asnDomain].filter((v) => !!v).join(' · ');
+    [p?.ipinfo?.asn, p?.ipinfo?.asnDomain,
+     p?.ipinfo?.prefix ? `${p.ipinfo.prefix}${p.ipinfo.rpki ? ' · RPKI ' + p.ipinfo.rpki : ''}` : '']
+      .filter((v) => !!v).join(' · ');
+  /// `vpn(Mullvad)+tor+hosting` → one chip per confirmed flag (record vote,
+  /// never a single vendor's word): VPN in primary, Tor/proxy in danger,
+  /// everything else muted.
+  const ispFlags = (p?: MullvadProxy): { text: string; tone: 'primary' | 'danger' | 'muted' }[] =>
+    (p?.ipinfo?.flags ?? '').split('+').filter(Boolean).map((f) => ({
+      text: f,
+      tone: f.startsWith('vpn') ? 'primary' : f === 'tor' || f === 'proxy' || f === 'residential-proxy' ? 'danger' : 'muted',
+    }));
 
   async function doSwapExit(label: string) {
     const locationId = exitPick[label] ?? '';
@@ -377,6 +387,11 @@
                 {#if ispName(p)}
                   <div class="font-medium">{ispName(p)}</div>
                   {#if ispMeta(p)}<div class="font-mono text-[10px] text-muted">{ispMeta(p)}</div>{/if}
+                  {#if ispFlags(p).length}
+                    <div class="mt-0.5 flex flex-wrap gap-1">
+                      {#each ispFlags(p) as chip (chip.text)}<StatusBadge label={chip.text} tone={chip.tone} size="sm" dot={false} />{/each}
+                    </div>
+                  {/if}
                 {:else}
                   <span class="text-muted">—</span>
                 {/if}
@@ -593,6 +608,11 @@
                 {#if ispName(p)}
                   <div>{ispName(p)}</div>
                   {#if ispMeta(p)}<div class="font-mono text-[10px] text-muted">{ispMeta(p)}</div>{/if}
+                  {#if ispFlags(p).length}
+                    <div class="mt-0.5 flex flex-wrap gap-1">
+                      {#each ispFlags(p) as chip (chip.text)}<StatusBadge label={chip.text} tone={chip.tone} size="sm" dot={false} />{/each}
+                    </div>
+                  {/if}
                 {:else}
                   <span class="text-muted">—</span>
                 {/if}

@@ -11,7 +11,7 @@
   import KpiCard from '../components/KpiCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import SupportBotCard from '../components/SupportBotCard.svelte';
-  import LogsBotCard from '../components/LogsBotCard.svelte';
+  import FiberEyeBotCard from '../components/FiberEyeBotCard.svelte';
   import NickServPanel from '../components/NickServPanel.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { queryRange } from '../../lib/signoz';
@@ -61,7 +61,7 @@
   // container_name). ircd, services and the three bots share this tab.
   const ircdServices = [
     'ircfiber-ircd', 'ircfiber-services',
-    'ircfiber-support-bot', 'ircfiber-logs-bot', 'ircfiber-fibereye',
+    'ircfiber-support-bot', 'ircfiber-fibereye',
   ];
   let logRows = $state<LogEntry[]>([]);
   let logsError = $state<string | null>(null);
@@ -323,7 +323,7 @@
     />
   </Card>
   <div class="mt-4"><SupportBotCard /></div>
-  <div class="mt-4"><LogsBotCard /></div>
+  <div class="mt-4"><FiberEyeBotCard /></div>
 {:else}
   <div class="mb-4 flex gap-1 border-b border-border">
     {#each tabs as t}
@@ -382,7 +382,7 @@
       <Card><p class="text-sm text-muted">Loading…</p></Card>
     {/if}
     <div class="mt-4"><SupportBotCard /></div>
-    <div class="mt-4"><LogsBotCard /></div>
+    <div class="mt-4"><FiberEyeBotCard /></div>
   {:else if tab === 'channels'}
     <Card>
       <div class="mb-3 flex items-center justify-between">

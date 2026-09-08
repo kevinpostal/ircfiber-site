@@ -52,6 +52,7 @@ const slot = (over: Record<string, unknown> = {}) => ({
     ip: '151.241.171.69', city: 'Berlin', region: '', country: 'Germany', loc: '',
     org: 'AS39351 31173 Services AB', postal: '', timezone: '', hostname: '',
     asn: 'AS39351', asnName: '31173 Services AB', asnDomain: '31173.se',
+    prefix: '185.65.134.0/24', rpki: 'valid', flags: 'vpn(Mullvad)+hosting', vpnOperator: 'Mullvad', riskScore: 73,
   },
   healthy: true, error: '', lastTestedAt: new Date().toISOString(),
   mullvadExit: true, mullvadHostname: 'de-ber-wg-003', organization: 'Mullvad VPN AB',
@@ -173,7 +174,12 @@ describe('Mullvad.svelte', () => {
     expect(body).toContain('31173 Services AB');
     expect(body).toContain('AS39351');
     expect(body).toContain('31173.se');
-    // The ch slot has no Lite answer, only ipinfo's raw `org` — still shown.
+    // From the IP-intelligence record: the announced prefix with its RPKI
+    // state, and the voted anonymiser flags as chips.
+    expect(body).toContain('185.65.134.0/24 · RPKI valid');
+    expect(body).toContain('vpn(Mullvad)');
+    expect(body).toContain('hosting');
+    // The ch slot has no record yet, only ipinfo's raw `org` — still shown, no invented chips.
     expect(body).toContain('AS25369 Hostinger International Limited');
   });
 

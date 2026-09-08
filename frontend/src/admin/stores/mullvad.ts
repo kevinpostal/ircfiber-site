@@ -20,8 +20,16 @@ export interface MullvadIpInfo {
   asn?: string;
   /** Operator of that AS, i.e. the ISP behind the exit (`31173 Services AB`). */
   asnName?: string;
-  /** Operator domain (`31173.se`); only the ipinfo Lite endpoint returns it. */
+  /** Operator domain (`31173.se`). */
   asnDomain?: string;
+  /** From the IP-intelligence record (`ircfiber.ipintel`): the announced
+   *  prefix, its RPKI state, the confirmed anonymiser flags
+   *  (`vpn(Mullvad)+hosting`), the VPN operator and proxycheck's risk (-1 unknown). */
+  prefix?: string;
+  rpki?: string;
+  flags?: string;
+  vpnOperator?: string;
+  riskScore?: number;
 }
 export interface MullvadProxy {
   id: string;
