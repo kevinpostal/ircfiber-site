@@ -70,7 +70,7 @@ module ircfiber.fibereye.bot;
 
 import std.conv : to;
 import std.process : environment;
-import std.string : indexOf, strip, toLower;
+import std.string : indexOf, startsWith, strip, toLower;
 import std.array : split;
 import std.typecons : Nullable, Tuple;
 import std.uni : icmp;
@@ -180,6 +180,7 @@ private IrcBotConfig coreConfig(const FiberEyeConfig c) {
     if (c.channels.length) chs = c.channels.split(",");
     else if (c.channel.length) chs = [c.channel];
     b.channels = chs;
+    logInfo("FiberEye: channels array: %s", chs);
     b.redisUrl = c.redisUrl;
     b.heartbeatKey = fiberEyeBotKey();
     b.controlKey = fiberEyeControlKey();
@@ -219,6 +220,10 @@ final class FiberEyeBot : IrcBot {
 
     /// Masks the ircd currently lists in `STATS Z`, refreshed by the sweep.
     private bool[string] activeZlines;
+    /// Masks FiberEye itself ZLINE'd recently (mask → send time, unix ms),
+    /// so the ircd's own X-line notice for our placement doesn't
+    /// double-announce the ban `enforceBan` already reported.
+    private long[string] ownBanAt;
     private XLine[string] pendingStats;
     private bool statsLoopStarted;
 
@@ -388,9 +393,11 @@ final class FiberEyeBot : IrcBot {
     }
 
     /// A server notice: a connect notice (snomask `c`), a local quit
-    /// notice (`q`), or an X-line notice (`x`, logged only — placements are
-    /// confirmed by the `STATS Z` sweep, which is the only truthful oracle
-    /// from inside a read loop).
+    /// notice (`q`), or an X-line notice (`x`). Our own placements are
+    /// announced by `enforceBan` itself; anything else the ircd reports
+    /// (connectban automatics, oper/human bans) is announced here so
+    /// #staff sees every ban. Removals and expiries stay quiet — the
+    /// sweep already logs those and they would double the noise.
     protected override void onServerNotice(string text) {
         auto c = parseConnectNotice(text);
         if (c.ok) { onConnect(c); return; }
@@ -399,6 +406,34 @@ final class FiberEyeBot : IrcBot {
         const t = text.strip();
         if (t.indexOf("Z-line") >= 0 || t.indexOf("Z:line") >= 0 || t.indexOf("ZLINE") >= 0)
             logInfo("FiberEye: xline notice: %s", t);
+        if (t.indexOf("XLINE:") < 0 || t.indexOf("added a ") < 0) return;
+        // Mask sits between " on " and the next comma:
+        // "... added a timed Z-line on 203.0.113.7, expires in ...: <reason>".
+        // If it won't parse, announce anyway — a duplicate of our own ban
+        // (when the map below misses) beats a silent foreign one.
+        string mask;
+        const onPos = t.indexOf(" on ");
+        if (onPos >= 0) {
+            const rest = t[onPos + 4 .. $];
+            const comma = rest.indexOf(",");
+            if (comma > 0)
+                mask = rest[0 .. comma].strip();
+        }
+        if (mask.length) {
+            if (auto at = mask in ownBanAt) {
+                if (nowMs() - *at < 120_000) return; // ours — already announced
+                ownBanAt.remove(mask);
+            }
+        }
+        string shown = t;
+        if (shown.startsWith("*** "))
+            shown = shown[4 .. $].strip();
+        LogEvent banEv;
+        banEv.type = "notice";
+        banEv.ts = nowMs();
+        banEv.actor = "FiberEye";
+        banEv.text = shown;
+        pushLogEvent(pushRedis, banEv);
     }
 
     private void onConnect(ConnectNotice c) {
@@ -666,6 +701,17 @@ final class FiberEyeBot : IrcBot {
             redis.setJson(fiberEyeAppealKey(token), appeal.toJson(), seconds_ + 86_400);
 
         sendLine("ZLINE " ~ b.mask ~ " " ~ seconds_.to!string ~ " :" ~ b.reason);
+        // Remember our own placement so the ircd's X-line notice for it
+        // (arriving ~instantly on snomask `x`) doesn't double-announce.
+        // Prune here — the map only ever holds a handful of masks.
+        // Two passes: removing mid-iteration is not safe.
+        ownBanAt[b.mask] = now;
+        string[] stale;
+        foreach (m, at; ownBanAt)
+            if (now - at > 3_600_000)
+                stale ~= m;
+        foreach (m; stale)
+            ownBanAt.remove(m);
         bansPlaced++;
         store.setIpBan(group, b.expiresAtMs, banId, strikes);
         logInfo("FiberEye: ZLINE %s for %ss (%s, strike %s)", b.mask, seconds_, rule, strikes);
