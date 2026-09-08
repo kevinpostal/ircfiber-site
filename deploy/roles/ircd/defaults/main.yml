@@ -271,6 +271,11 @@ ircd_permanent_channels:
     description: "IRC Fiber"
     topic: "Welcome to IRC Fiber — https://ircfiber.com"
     bot: true
+    # FiberEye sits in #staff and #ircfiber as halfop: visible staff presence
+    # without op powers it never uses. Scoped per channel.
+    access:
+      hop:
+        - "FiberEye"
   - channel: "#welcome"
     modes: "nt"
     history: "50:1w"
