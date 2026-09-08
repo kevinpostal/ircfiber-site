@@ -17,9 +17,10 @@
  *   - refresh the Tor exit set hourly;
  *   - count connects, distinct nicks and short sessions per IP group in
  *     Redis sorted sets, and ask `ircfiber.fibereye.rules` for a verdict;
- *   - place a timed `ZLINE` when a rule trips *and* enforcement is armed
- *     (`fibereye:armed` = "1", flipped from the admin page — the bot ships
- *     disarmed and merely records what it would have done);
+  *   - place a timed `ZLINE` when a rule trips *and* enforcement is armed
+  *     (`fibereye:armed` = "1", flipped from the admin page — the bot ships
+  *     disarmed and merely records what it would have done), and announce
+  *     every placed ban in `#staff` through the logs outbox;
  *   - confirm its own placements with a periodic `STATS Z` sweep, because
  *     InspIRCd answers a successful `ZLINE` with silence.
  *
@@ -70,6 +71,7 @@ module ircfiber.fibereye.bot;
 import std.conv : to;
 import std.process : environment;
 import std.string : indexOf, strip, toLower;
+import std.array : split;
 import std.typecons : Nullable, Tuple;
 import std.uni : icmp;
 import core.time : minutes, seconds;
@@ -102,8 +104,9 @@ struct FiberEyeConfig {
     ushort port = 6667;
     bool tls;
     string nick = "FiberEye";
-    /// The oper-only announcements channel (signups, mail, connects, backups).
     string channel = "#staff";
+    /// Comma-separated list of channels to join (supports multiple).
+    string channels = "#staff,#ircfiber";
     string nickservPassword;
     string operName;
     string operPassword;
@@ -130,6 +133,7 @@ void startFiberEye() {
     cfg.tls = botEnvFlag("FIBEREYE", "TLS", "", false);
     cfg.nick = botEnvStr("FIBEREYE", "NICK", "", cfg.nick);
     cfg.channel = botEnvStr("FIBEREYE", "CHANNEL", "", cfg.channel);
+    cfg.channels = botEnvStr("FIBEREYE", "CHANNELS", "", cfg.channels);
     // File-backed in prod so the credentials are not readable from
     // `docker inspect ircfiber-fibereye`.
     cfg.nickservPassword = envSecret("IRCFIBER_FIBEREYE_NICKSERV_PASSWORD", "");
@@ -172,7 +176,10 @@ private IrcBotConfig coreConfig(const FiberEyeConfig c) {
     b.operPassword = c.operPassword;
     // `c` connects, `C` remote connects (announced), `q` local quits, `x` X-line notices.
     b.snomasks = "cCqx";
-    if (c.channel.length) b.channels = [c.channel];
+    string[] chs;
+    if (c.channels.length) chs = c.channels.split(",");
+    else if (c.channel.length) chs = [c.channel];
+    b.channels = chs;
     b.redisUrl = c.redisUrl;
     b.heartbeatKey = fiberEyeBotKey();
     b.controlKey = fiberEyeControlKey();
@@ -662,6 +669,17 @@ final class FiberEyeBot : IrcBot {
         bansPlaced++;
         store.setIpBan(group, b.expiresAtMs, banId, strikes);
         logInfo("FiberEye: ZLINE %s for %ss (%s, strike %s)", b.mask, seconds_, rule, strikes);
+        // Every placed ban is announced in #staff through the same outbox
+        // as connects/signups — a "notice" needs no schema change and the
+        // formatter already renders it. Only placed bans announce: disarmed
+        // observes and not-opered failures set nothing, so they stay quiet.
+        LogEvent banEv;
+        banEv.type = "notice";
+        banEv.ts = now;
+        banEv.actor = "FiberEye";
+        banEv.text = "ZLINE " ~ b.mask ~ " for " ~ seconds_.to!string ~ "s ("
+            ~ rule ~ ", strike " ~ strikes.to!string ~ ")";
+        pushLogEvent(pushRedis, banEv);
         // InspIRCd answers a successful ZLINE with silence, so the sweep is
         // what flips `placed`.
         sleep(3.seconds);
