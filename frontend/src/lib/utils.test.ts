@@ -18,6 +18,7 @@ import {
   nickColorIndex,
   parseChannelList,
   getDisplayName,
+  getMsgDate,
 } from './utils';
 
 describe('escapeHtml', () => {
@@ -614,5 +615,34 @@ describe('equalNicks', () => {
     expect(equalNicks('bob', 'bob_')).toBe(false);
     expect(equalNicks('bob', 'alic')).toBe(false);
     expect(equalNicks('[foo', '{foo')).toBe(true);
+  });
+});
+
+describe('getMsgDate (day divider is the viewer\'s day)', () => {
+  const origTz = process.env.TZ;
+  const withTz = <T>(tz: string, fn: () => T): T => {
+    process.env.TZ = tz;
+    try { return fn(); } finally { process.env.TZ = origTz; }
+  };
+  const msg = (over: Record<string, unknown>) =>
+    ({ command: 'PRIVMSG', params: [], ...over }) as never;
+
+  it('keys an instant past UTC midnight to the still-current local day', () => {
+    const t = Date.parse('2026-09-08T00:01:00Z'); // 17:01 Sep 7 in Los Angeles
+    expect(withTz('America/Los_Angeles', () => getMsgDate(msg({ t })))).toBe('2026-09-07');
+  });
+
+  it('keys an instant before UTC midnight to the already-next local day', () => {
+    const t = Date.parse('2026-09-07T23:00:00Z'); // 08:00 Sep 8 in Tokyo
+    expect(withTz('Asia/Tokyo', () => getMsgDate(msg({ t })))).toBe('2026-09-08');
+  });
+
+  it('falls back to the ISO timestamp when there is no unix-ms field', () => {
+    expect(withTz('America/Los_Angeles', () => getMsgDate(msg({ timestamp: '2026-09-08T00:01:00.000Z' }))))
+      .toBe('2026-09-07');
+  });
+
+  it('returns an empty key for a message with no time at all', () => {
+    expect(getMsgDate(msg({}))).toBe('');
   });
 });

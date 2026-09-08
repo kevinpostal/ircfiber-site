@@ -70,15 +70,24 @@ const samples = new Map<string, string[]>();
 /**
  * Renders `text` in one font: plain lines for FIGlet, mIRC-coloured lines for
  * TheDraw (those fonts carry their own colours).
+ *
+ * `opts.width` is the FIGlet wrap column — chat samples stay effectively
+ * unwrapped at 400, MOTD banners must be rendered at the 80-column budget they
+ * are inserted into. TheDraw glyphs are fixed-size, so it has no effect there.
  */
-export async function renderFontSample(entry: FontEntry, text: string): Promise<string[]> {
-  const key = `${entry.kind}\u0000${entry.name}\u0000${text}`;
+export async function renderFontSample(
+  entry: FontEntry,
+  text: string,
+  opts: { width?: number } = {},
+): Promise<string[]> {
+  const width = opts.width ?? 400;
+  const key = `${entry.kind}\u0000${entry.name}\u0000${width}\u0000${text}`;
   const hit = samples.get(key);
   if (hit) return hit;
   let lines: string[];
   if (entry.kind === 'figlet') {
     const { renderFiglet } = await import('./figlet');
-    lines = (await renderFiglet(text, entry.name, { width: 400 })).split('\n');
+    lines = (await renderFiglet(text, entry.name, { width })).split('\n');
   } else {
     const { renderTdf } = await import('./tdf');
     lines = await renderTdf(text, entry.name);

@@ -10,6 +10,8 @@
     renderRecipe,
   } from '../lib/motdRecipe';
   import { IRC_COLORS } from '../../lib/ircFormatting';
+  import MotdFontPicker from './MotdFontPicker.svelte';
+  import { type FontEntry } from '../../lib/fontCatalog';
   import { onMount } from 'svelte';
 
   interface Props {
@@ -23,6 +25,7 @@
   let rendering = $state(false);
   let renderError = $state<string | null>(null);
   let poolOpen = $state<number | null>(null);
+  let browseOpen = $state<number | null>(null);
   let tdfNames = $state<string[]>([]);
   onMount(() => { void tdfFontNames().then((names) => { tdfNames = names; }); });
 
@@ -162,6 +165,9 @@
                 {poolOpen === i ? 'close pool' : 'edit pool'}
               </button>
             {/if}
+            <button type="button" onclick={() => { browseOpen = browseOpen === i ? null : i; }} class="rounded border border-border px-2 py-0.5 text-xs">
+              {browseOpen === i ? 'close' : 'Browse…'}
+            </button>
             <select bind:value={b.align} class="rounded border border-border bg-surface-2 px-1.5 py-0.5 text-xs">
               <option value="left">left</option>
               <option value="center">center</option>
@@ -180,6 +186,17 @@
               {#if b.engine === 'tdf' && tdfNames.length === 0}
                 <span class="w-full pt-1 text-[11px] text-muted">Loading 1,071 fonts…</span>
               {/if}
+            </div>
+          {/if}
+          {#if browseOpen === i}
+            <div class="mt-2 rounded border border-border/60 p-2">
+              <MotdFontPicker
+                action="pick"
+                kind={b.engine === 'figlet' ? 'figlet' : 'tdf'}
+                sample={b.text || 'IRC Fiber'}
+                selected={b.font === 'random' ? null : { kind: b.engine, name: b.font }}
+                onPick={(e: FontEntry) => { b.engine = e.kind; b.font = e.name; browseOpen = null; }}
+              />
             </div>
           {/if}
         {:else if b.kind === 'text'}

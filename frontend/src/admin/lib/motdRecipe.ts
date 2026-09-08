@@ -53,7 +53,7 @@ function visibleWidth(s: string): number {
 }
 
 /** Wraps `text` in a foreground colour; `null` leaves it uncoloured. */
-function colorize(text: string, fg: number | null): string {
+export function colorize(text: string, fg: number | null): string {
   if (fg === null || !text) return text;
   const colored = colorizeLine(text, { kind: 'solid', fg, bg: null });
   return colored.includes('\x03') ? `${colored}\x0F` : colored;

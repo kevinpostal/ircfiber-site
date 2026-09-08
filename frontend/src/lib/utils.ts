@@ -199,9 +199,27 @@ export function formatRelativeTime(isoDate: string): string {
   return 'just now';
 }
 
+/** Calendar-day key (`YYYY-MM-DD`) for a message, in the *viewer's* timezone.
+ *
+ *  A message carries an absolute instant — `t` (unix ms) and/or an ISO
+ *  `timestamp` derived from it / the server-time tag — so the day a message
+ *  belongs to is a display decision. Slicing the UTC ISO text (the old
+ *  behaviour) rendered UTC days: at 17:01 PDT the divider read "Tuesday,
+ *  September 8th" with a "just now" relative time, because `formatDate` /
+ *  `formatRelativeTime` re-parse this key as *local* midnight. Row times
+ *  (`formatTime12Hour`) were local all along, so the divider was the only
+ *  UTC surface. Prefer `t`: an ISO string without a `Z`/offset would be
+ *  parsed as local by `Date.parse`.
+ */
 export function getMsgDate(msg: IRCMessage): string {
-  const ts = msg.timestamp || (msg.t ? new Date(msg.t).toISOString() : null);
-  return ts ? ts.split('T')[0] : '';
+  const ms = typeof msg.t === 'number' && Number.isFinite(msg.t)
+    ? msg.t
+    : (msg.timestamp ? Date.parse(msg.timestamp) : NaN);
+  if (!Number.isFinite(ms)) return '';
+  const d = new Date(ms);
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mo}-${day}`;
 }
 
 /** Short relative time span used in chatter bars (e.g. "a day", "an hour", "less than a minute").

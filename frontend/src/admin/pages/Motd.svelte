@@ -23,12 +23,15 @@
   import StatusBadge from '../components/StatusBadge.svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import MotdBuilder from '../components/MotdBuilder.svelte';
+  import MotdFontPicker from '../components/MotdFontPicker.svelte';
   import { ApiError } from '../lib/api-client';
   import { toastSuccess, toastError } from '../stores/ui';
   import { relative } from '../lib/format';
   import { parseIrcFormatting } from '../../lib/ircFormatting';
   import { utf8Length } from '../../lib/messageSplitter';
   import { type Recipe, defaultRecipe, parseRecipe, renderRecipe, fontsLabel } from '../lib/motdRecipe';
+  import { insertBanner } from '../lib/motdInsert';
+  import { type ArtFontKind, type FontEntry } from '../../lib/fontCatalog';
   import {
     fetchMotd, createMotd, updateMotd, deleteMotd, rotateMotd, batchMotd, pinMotd, unpinMotd, maxColumns,
     type MotdState, type MotdTemplate, type MotdTemplateInput,
@@ -59,6 +62,13 @@
   let variantCount = $state(6);
   let variantGroup = $state('');
   let generating = $state(false);
+
+  // Banner font picker (raw mode). Mounted only while open: the TheDraw pack
+  // is a single multi-megabyte asset fetched on the picker's first render.
+  let fontOpen = $state(false);
+  let fontKind = $state<ArtFontKind>('tdf');
+  let fontSample = $state('IRC Fiber');
+  let lastFont = $state<{ kind: ArtFontKind; name: string } | null>(null);
 
 
   const templates = $derived(data?.templates ?? []);
@@ -249,6 +259,22 @@
   }
 
   function onBodyInput() { dirty = true; }
+
+  /** Splices a rendered banner into the body at the caret and re-focuses it. */
+  function insertFont(entry: FontEntry, lines: string[]) {
+    const el = textarea;
+    const at = el ? el.selectionStart : body.length;
+    const next = insertBanner(body, at, lines);
+    body = next.body;
+    dirty = true;
+    lastFont = { kind: entry.kind, name: entry.name };
+    fontKind = entry.kind;
+    toastSuccess(`Inserted ${entry.name} (${lines.length} lines)`);
+    queueMicrotask(() => {
+      el?.focus();
+      el?.setSelectionRange(next.caret, next.caret);
+    });
+  }
   function onKeydown(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); void save(); }
   }
@@ -473,6 +499,31 @@
             </button>
             <span class="text-xs text-muted">Replaces every template in the group; duplicates (same fonts) are skipped.</span>
           </div>
+        </Card>
+      {:else}
+        <Card title="Banner font" subtitle="Insert FIGlet or TheDraw art at the cursor">
+          {#snippet actions()}
+            <button
+              type="button"
+              onclick={() => { fontOpen = !fontOpen; }}
+              class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40"
+            >
+              {fontOpen ? 'Close' : 'Browse fonts'}
+            </button>
+          {/snippet}
+          {#if fontOpen}
+            <MotdFontPicker
+              action="insert"
+              kind={fontKind}
+              sample={fontSample}
+              selected={lastFont}
+              onPick={insertFont}
+            />
+          {:else}
+            <p class="text-xs text-muted">
+              {lastFont ? `Last inserted: ${lastFont.name}.` : 'Browse every FIGlet and TheDraw font as a live sample of your own word.'}
+            </p>
+          {/if}
         </Card>
       {/if}
     </div>
