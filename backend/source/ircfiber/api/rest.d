@@ -1565,11 +1565,15 @@ final class RESTAPI {
         try {
             auto store = new RedisSessionStore(redis);
             foreach (sid; store.listAllSessionIds()) {
-                const fields = store.getSessionFields(sid);
+                // Not `const`: `getSessionFields` documents that the caller
+                // owns the returned AA, and on the release toolchain
+                // `const(string[string]).dup` yields `const(string)[string]`,
+                // which will not convert back to `string[string]`.
+                auto fields = store.getSessionFields(sid);
                 if (fields is null) continue;
                 auto uidPtr = "sessionUserId" in fields;
                 if (!uidPtr || stripJsonStr(*uidPtr) != uid) continue;
-                owned[sid] = fields.dup;
+                owned[sid] = fields;
             }
         } catch (Exception e) {
             logWarn("ownedSessions: session read failed for %s: %s", user.username, e.msg);
