@@ -108,6 +108,18 @@
     mode: "0755"
   tags: [ircdconf]
 
+  # Timestamped pre-save backups for the admin Config tab
+  # (POST /api/admin/ircd/config, see web/admin/ircd.d). The gateway writes
+  # as root, same as the motd.d pool writes, hence root-owned 0750.
+- name: Ensure InspIRCd admin-bak exists
+  ansible.builtin.file:
+    path: "{{ ircd_conf_dir }}/admin-bak"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [ircdconf]
+
 - name: Remove legacy top-level motd
   ansible.builtin.file:
     path: "{{ ircd_conf_dir }}/motd"
@@ -124,9 +136,7 @@
     # Rendered once; after that the gateway's MOTD rotation owns the file.
     force: "{{ item.force | default(true) }}"
   loop:
-    - { src: inspircd.conf.j2, dest: inspircd.conf }
     - { src: custom.conf.j2, dest: custom.conf }
-    - { src: modules.conf.j2, dest: modules.conf }
     - { src: opers.conf.j2, dest: opers.conf }
     - { src: rules.j2, dest: rules.txt }
     # 0644, like the file the gateway's MOTD rotation writes in its place;
@@ -142,6 +152,20 @@
   # changes must never need a window.
   tags: [ircdconf]
   notify: Rehash ircd
+
+  # inspircd.conf / modules.conf are editable from the admin Config tab, so
+  # they render through guarded_conf.yml: never installed over admin edits
+  # unless ircd_config_force=true (see defaults/main.yml). motd.d/motd keeps
+  # force:false above and needs nothing.
+- name: Render guarded InspIRCd config
+  ansible.builtin.include_tasks: guarded_conf.yml
+  loop:
+    - { src: inspircd.conf.j2, dest: inspircd.conf }
+    - { src: modules.conf.j2, dest: modules.conf }
+  loop_control:
+    loop_var: conf
+    label: "{{ conf.dest }}"
+  tags: [ircdconf]
 
 - name: Render Anope config
   ansible.builtin.template:

@@ -56,6 +56,15 @@
       # a rotated template there and REHASHes (web/admin/motd.d). Nested
       # under the :ro mount above so opers.conf & co stay untouchable.
       - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}/motd.d:/etc/ircfiber/ircd/motd.d"
+      # Read-write mounts of exactly the two editable root files: the admin
+      # Config tab saves inspircd.conf / modules.conf in place (same inode)
+      # and REHASHes (web/admin/ircd.d). Per-file so opers.conf & co stay
+      # untouchable; the backend allowlist is the second layer.
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}/inspircd.conf:/etc/ircfiber/ircd/inspircd.conf:rw"
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}/modules.conf:/etc/ircfiber/ircd/modules.conf:rw"
+      # Read-write mount of the admin backup dir: timestamped pre-save
+      # copies (web/admin/ircd.d). The gateway writes as root.
+      - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}/admin-bak:/etc/ircfiber/ircd/admin-bak:rw"
       # Read-only mount of Anope's data volume for the admin NickServ
       # account inventory. anope.db is mode 0600 owned by uid 10000; the
       # gateway runs as uid 0, so :ro is sufficient and nothing writes here.

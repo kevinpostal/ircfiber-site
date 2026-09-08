@@ -1,0 +1,92 @@
+---
+# Guarded render of one InspIRCd config file (looped from main.yml with
+# `conf = { src, dest }`). inspircd.conf / modules.conf are editable from
+# the admin Config tab (POST /api/admin/ircd/config), so a re-render must
+# never silently clobber admin edits: render to staging, compare the live
+# file against the .ansible.<file>.sha256 sidecar, and skip the install
+# with a visible warning when they differ — unless ircd_config_force=true.
+#
+# Sidecar contract (shared with the gateway's drifted flag in
+# web/admin/ircd.d): the sidecar holds the hex sha256 of the last content
+# Ansible installed. Missing sidecar = first render, install unconditionally.
+
+- name: "Render {{ conf.dest }} to staging"
+  ansible.builtin.template:
+    src: "{{ conf.src }}"
+    dest: "{{ ircd_conf_dir }}/.ansible.{{ conf.dest }}.new"
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0640"
+  tags: [ircdconf]
+
+- name: "Stat live {{ conf.dest }}"
+  ansible.builtin.stat:
+    path: "{{ ircd_conf_dir }}/{{ conf.dest }}"
+    checksum_algorithm: sha256
+  register: guarded_live
+  tags: [ircdconf]
+
+- name: "Stat staged {{ conf.dest }}"
+  ansible.builtin.stat:
+    path: "{{ ircd_conf_dir }}/.ansible.{{ conf.dest }}.new"
+    checksum_algorithm: sha256
+  register: guarded_staged
+  tags: [ircdconf]
+
+- name: "Read {{ conf.dest }} sidecar"
+  ansible.builtin.slurp:
+    path: "{{ ircd_conf_dir }}/.ansible.{{ conf.dest }}.sha256"
+  register: guarded_sidecar
+  failed_when: false
+  tags: [ircdconf]
+
+- name: "Evaluate {{ conf.dest }} drift"
+  ansible.builtin.set_fact:
+    guarded_sidecar_text: "{{ (guarded_sidecar.content | default('') | b64decode).strip() }}"
+    guarded_live_checksum: "{{ guarded_live.stat.checksum | default('') }}"
+  tags: [ircdconf]
+
+- name: "Warn on drifted {{ conf.dest }}"
+  ansible.builtin.debug:
+    msg: >-
+      SKIPPING {{ conf.dest }}: edited in admin (live checksum differs from
+      {{ ircd_conf_dir }}/.ansible.{{ conf.dest }}.sha256).
+      The Ansible-rendered candidate is staged at
+      {{ ircd_conf_dir }}/.ansible.{{ conf.dest }}.new.
+      Re-run with -e ircd_config_force=true to overwrite (admin edits lost).
+  when:
+    - guarded_sidecar is not failed
+    - guarded_sidecar_text != ""
+    - guarded_sidecar_text != guarded_live_checksum
+    - not (ircd_config_force | default(false) | bool)
+  tags: [ircdconf]
+
+- name: "Install {{ conf.dest }}"
+  ansible.builtin.copy:
+    src: "{{ ircd_conf_dir }}/.ansible.{{ conf.dest }}.new"
+    dest: "{{ ircd_conf_dir }}/{{ conf.dest }}"
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0640"
+    remote_src: true
+  when: >-
+    (guarded_sidecar is failed or guarded_sidecar_text == "" or
+    guarded_sidecar_text == guarded_live_checksum or
+    (ircd_config_force | default(false) | bool))
+  notify:
+    - Rehash ircd
+    - Recreate gateway for ircd conf
+  tags: [ircdconf]
+
+- name: "Refresh {{ conf.dest }} sidecar"
+  ansible.builtin.copy:
+    content: "{{ guarded_staged.stat.checksum }}"
+    dest: "{{ ircd_conf_dir }}/.ansible.{{ conf.dest }}.sha256"
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0640"
+  when: >-
+    (guarded_sidecar is failed or guarded_sidecar_text == "" or
+    guarded_sidecar_text == guarded_live_checksum or
+    (ircd_config_force | default(false) | bool))
+  tags: [ircdconf]
