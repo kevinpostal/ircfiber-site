@@ -132,6 +132,13 @@
 <div class="chat-body">
   <article class="messages-area" class:switching role="log" aria-label="Chat messages" aria-live="polite" aria-atomic="false">
     <MessageList {onNickClick} onLoadMore={handleLoadMore} />
+    {#if ircState.showComposeStyle}
+      {#await import('./ComposeStylePage.svelte') then { default: ComposeStylePage }}
+        <div class="compose-style-overlay" role="dialog" aria-label="Text style">
+          <ComposeStylePage />
+        </div>
+      {/await}
+    {/if}
   </article>
   <ConnectionStatus />
   <InputArea />

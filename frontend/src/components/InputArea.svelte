@@ -35,11 +35,10 @@
   let inputValue = $state('');
   let editTarget = $state<{ eid?: number; msgid?: string; label: string } | null>(null);
   let uploadMenuOpen = $state(false);
-  /// The style editor is a full-page surface owned by App (it swaps the chat
-  /// column, like settings), so the gear only routes to it. This component
-  /// unmounts with the chat column, and nothing persists `inputValue` on
-  /// unmount — so park the half-typed message in the per-buffer draft the
-  /// same way a buffer switch does, and it is back in the box on return.
+  /// The style editor is a window inside `.messages-area` (owned by
+  /// ChatArea), so the gear only routes to it. The half-typed message is
+  /// still parked in the per-buffer draft the same way a buffer switch
+  /// does, and `composeStyleSample` seeds the editor preview.
   function openStylePage(): void {
     const netId = ircState.activeBuffer.networkId;
     const bufName = ircState.activeBuffer.bufferName;

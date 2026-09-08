@@ -315,6 +315,10 @@
     white-space: pre;
     min-height: 1.15em;
   }
+  /* parseIrcFormatting plants <wbr> at every colour boundary for chat
+     wrapping; a <wbr> breaks even inside white-space: pre, so coloured
+     samples would wrap inside the card. Cards scroll instead. */
+  pre :global(wbr) { display: none; }
   pre :global(.fp-note) {
     color: var(--color-muted, #7f7f7f);
     font-style: italic;

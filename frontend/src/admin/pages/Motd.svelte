@@ -556,4 +556,8 @@
     tab-size: 4;
     white-space: pre;
   }
+  /* parseIrcFormatting plants <wbr> at every colour boundary for chat
+     wrapping; a <wbr> breaks even inside white-space: pre, so coloured
+     art would wrap here. The preview must never wrap — it scrolls. */
+  .motd-preview wbr { display: none; }
 </style>

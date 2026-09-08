@@ -173,10 +173,11 @@ export const ircState = $state({
   settingsTab: 'design' as SettingsTab,
   showShortcuts: false,
   showFeedback: false,
-  // Full-page text-style editor (/?/text-style), opened by the gear in the
-  // input row. It replaces the chat column the way settings does, so the
-  // sidebar stays put; `composeStyleSample` carries whatever was typed at
-  // the time so the preview starts from the user's own words.
+  // Text-style editor (/?/text-style), opened by the gear in the input row.
+  // ChatArea renders it as a window inside `.messages-area`, so the sidebar,
+  // topic header, member list and input box stay on screen;
+  // `composeStyleSample` carries whatever was typed at the time so the
+  // preview starts from the user's own words.
   showComposeStyle: false,
   composeStyleSample: '',
   // Full-page add-network surface (/?/add-network). `addNetworkWelcome`

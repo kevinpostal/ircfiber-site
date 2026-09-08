@@ -1,9 +1,9 @@
 <script lang="ts">
   /**
    * Compose text styling editor (the gear in the input row). It is a
-   * full-page surface in the sense settings is: App swaps it into
-   * `.main-area`, so the sidebar and its buffer list stay on screen and the
-   * chat column is what gets replaced.
+   * window inside `.messages-area`: ChatArea mounts it as an absolutely
+   * positioned overlay over the message list, so the sidebar, buffer
+   * header (topic), member list and input box all stay on screen.
    *
    * Edits a draft copy of globalPrefs.composeStyle; Apply commits, Cancel and
    * Escape discard. Heavy work (effects, fonts, the 1 000-font TheDraw pack) is

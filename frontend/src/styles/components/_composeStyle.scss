@@ -1,11 +1,36 @@
-/* ── Compose text styling — the editor the gear swaps into the chat area ──
-   Not an overlay: App renders it inside `.main-area` exactly where the
-   buffer header + chat column would be, so the sidebar stays visible. */
+/* ── Compose text styling — the editor behind the input-row gear ──
+   A window inside `.messages-area`: ChatArea renders it as an absolutely
+   positioned overlay over the message list, so the sidebar, buffer header
+   (topic), member list and input box all stay on screen. */
 $cs-accent: #1e72ff;
 $cs-border: #2c2f35;
 $cs-muted: #8b949e;
 $cs-text: #c9d1d9;
 $cs-bg: #0d1117;
+/* Single-column stacking shared by the viewport media query and the chat
+   column container query below (selectors are relative to
+   `.compose-style-page`). */
+@mixin csp-narrow {
+  .csp-main { flex-direction: column-reverse; }
+  .csp-side {
+    width: auto;
+    border-left: none;
+    border-bottom: 1px solid $cs-border;
+    max-height: 34vh;
+    padding: 12px 16px;
+  }
+  .csp-panel { padding: 4px 16px 24px; }
+  .cs-group { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .cs-label, .cs-group > .cs-label { padding-top: 0; }
+  .cs-swatches, .cs-swatches.with-none { grid-template-columns: repeat(12, 18px); }
+  .cs-swatch.ring { grid-column-start: auto; }
+  .csp-preview { min-height: 96px; }
+  .csp-bar input.cs-input { width: 100%; }
+  /* Toolbar fields wrap onto their own row instead of squeezing to nothing;
+     the preview pane's field must stay content-height. */
+  .csp-bar .csp-field { min-width: 0; flex: 1 1 160px; }
+  .csp-count { margin-left: 0; }
+}
 $cs-surface: #161b22;
 
 .compose-style-page {
@@ -90,7 +115,7 @@ $cs-surface: #161b22;
   .csp-main { display: flex; flex: 1; min-height: 0; }
   .csp-panel { flex: 1; min-width: 0; overflow-y: auto; padding: 4px 20px 24px; }
   .csp-side {
-    width: 380px;
+    width: 480px;
     flex-shrink: 0;
     border-left: 1px solid $cs-border;
     padding: 16px;
@@ -136,8 +161,8 @@ $cs-surface: #161b22;
 
   /* Preview pane */
   .csp-preview {
-    flex: 0 1 auto;
-    min-height: 132px;
+    flex: 1 1 auto;
+    min-height: 220px;
     overflow: auto;
     background: #000;
     border: 1px solid $cs-border;
@@ -325,27 +350,30 @@ $cs-surface: #161b22;
   }
 }
 
+/* The editor is a window inside `.messages-area` (ChatArea mounts it there
+   when the gear opens it), not a full-page swap: sidebar, topic header,
+   member list and input box stay visible around it. */
+.messages-area { position: relative; }
+.compose-style-overlay {
+  position: absolute;
+  inset: 8px;
+  z-index: 30;
+  display: flex;
+  overflow: hidden;
+  background: $cs-bg;
+  border: 1px solid $cs-border;
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+.compose-style-overlay > .compose-style-page { flex: 1; min-height: 0; }
+
 /* Narrow screens: preview on top, single-column groups. */
 @media (max-width: 900px) {
-  .compose-style-page {
-    .csp-main { flex-direction: column-reverse; }
-    .csp-side {
-      width: auto;
-      border-left: none;
-      border-bottom: 1px solid $cs-border;
-      max-height: 34vh;
-      padding: 12px 16px;
-    }
-    .csp-panel { padding: 4px 16px 24px; }
-    .cs-group { grid-template-columns: minmax(0, 1fr); gap: 8px; }
-    .cs-label, .cs-group > .cs-label { padding-top: 0; }
-    .cs-swatches, .cs-swatches.with-none { grid-template-columns: repeat(12, 18px); }
-    .cs-swatch.ring { grid-column-start: auto; }
-    .csp-preview { min-height: 96px; }
-    .csp-bar input.cs-input { width: 100%; }
-    /* Toolbar fields wrap onto their own row instead of squeezing to nothing;
-       the preview pane's field must stay content-height. */
-    .csp-bar .csp-field { min-width: 0; flex: 1 1 160px; }
-    .csp-count { margin-left: 0; }
-  }
+  .compose-style-page { @include csp-narrow; }
+}
+
+/* The overlay can be narrow while the viewport is wide (sidebar + member
+   list take the chat column), so stack per container too. */
+@container chat (max-width: 55rem) {
+  .compose-style-overlay .compose-style-page { @include csp-narrow; }
 }

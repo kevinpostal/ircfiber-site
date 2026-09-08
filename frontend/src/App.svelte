@@ -1768,7 +1768,7 @@ let showEditNetwork: boolean = $state(false);
   {/if}
 {/if}
 
-<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings && !ircState.showComposeStyle} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings && !ircState.showComposeStyle} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle || ircState.showAddNetwork || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
+<div bind:this={wrapEl} id="wrap" class:has-members={hasMembers && !ircState.showSettings} class:members-collapsed={hasMembers && !memberPanelOpen && !ircState.showSettings} class:sidebar-open={sidebarDrawerOpen} class:mobile-members-open={mobileMembersOpen} class:has-sidebar={ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle || ircState.showAddNetwork || !isBootLoading} class:unauthenticated={isAuthenticated === false} class:sidebar-collapsed={sidebarCollapsed && !isNarrow}>
   <div class="main-area">
     {#if pasteViewerId !== null}
       {#await import('./components/PasteViewerPage.svelte') then { default: PasteViewerPage }}
@@ -1789,10 +1789,6 @@ let showEditNetwork: boolean = $state(false);
     {:else if ircState.showFeedback}
       {#await import('./components/FeedbackPage.svelte') then { default: FeedbackPage }}
         <FeedbackPage />
-      {/await}
-    {:else if ircState.showComposeStyle}
-      {#await import('./components/ComposeStylePage.svelte') then { default: ComposeStylePage }}
-        <ComposeStylePage />
       {/await}
     {:else if ircState.showAddNetwork}
       <AddNetworkPage welcome={ircState.addNetworkWelcome}
