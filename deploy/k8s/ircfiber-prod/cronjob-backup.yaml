@@ -64,6 +64,11 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
+      # Hard cap on total job time: 3 attempts × 900s dump timeout plus
+      # backoffs fit inside the hour. Without it a hung transfer stalls
+      # every retry and the job sits Failed-but-running for hours (the
+      # 20260908 runs took ~4h to go Failed). Healthy runs take ~2min.
+      activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
@@ -107,7 +112,16 @@ spec:
                     # Fail with instructions rather than handing mongodump an
                     # empty --uri, which errors out unrecognisably.
                     : "${MONGO_URL:?not set — create the ircfiber-backup-conn Secret, or (while the Rancher webhook is down and blocks Secret writes) kubectl -n ircfiber-prod set env cronjob/ircfiber-mongo-backup MONGO_URL=...}"
-                    STAGE=dump;   mongodump --uri "$MONGO_URL" --gzip --archive="$OUT" --quiet; test -s "$OUT"
+                    # Each stage ends `|| return 1`: without `set -e` a failed
+                    # dump would fall through into verify (reporting the wrong
+                    # stage and burying the root cause), and a failed prune
+                    # would still land on STAGE=done. `timeout 900` bounds a
+                    # blackholed transfer (the 20260908 scheduled run hung ~1h
+                    # per attempt over 4h): TERM exits 124, reported as
+                    # failed/dump, and backoffLimit retries while the stall
+                    # lasts. Healthy dumps take ~100s. The top level stays
+                    # `set -e`-free so the run record is always published.
+                    STAGE=dump;   timeout 900 mongodump --uri "$MONGO_URL" --gzip --archive="$OUT" --quiet && test -s "$OUT" || return 1
                     # A backup nobody has restored is a guess. A dry run reads
                     # the archive end to end and writes nothing, so the job only
                     # succeeds once the file has been proven parseable AND to
@@ -118,7 +132,7 @@ spec:
                                     || { echo "FAILED: $ns missing from $OUT"; tail -20 /tmp/verify.log; return 1; }; done
                     # Retention: 14 dailies. Pruning only after a verified dump
                     # means a broken one can never evict a good one.
-                    STAGE=prune;  find /backups -maxdepth 1 -name 'mongo-*.archive.gz' -mtime +14 -print -delete
+                    STAGE=prune;  find /backups -maxdepth 1 -name 'mongo-*.archive.gz' -mtime +14 -print -delete || return 1
                     STAGE=done
                   }
 
@@ -136,7 +150,7 @@ spec:
                   set -- $(df -P /backups | tail -1)   # $2 total, $3 used, $4 avail — 1K blocks
                   VOL="{\"totalBytes\":$(($2*1024)),\"usedBytes\":$(($3*1024)),\"availBytes\":$(($4*1024))}"
                   STATUS=ok; [ "$RC" -eq 0 ] || STATUS=failed
-                  MSG=$(tail -3 /tmp/run.log | tr -d '"\\\n\r' | cut -c1-300)
+                  MSG=$(tail -3 /tmp/run.log | tr -d '"\\' | tr '\n\r' ' ' | cut -c1-300)
                   REC="{\"schema\":1,\"kind\":\"$KIND\",\"status\":\"$STATUS\",\"stage\":\"$STAGE\",\
                   \"startedAt\":$((START*1000)),\"finishedAt\":$((END*1000)),\"durationMs\":$(((END-START)*1000)),\
                   \"file\":\"$(basename "$OUT")\",\"bytes\":$BYTES,\"node\":\"$(hostname)\",\
@@ -148,8 +162,10 @@ spec:
                   # JS object literal and every interpolated value is numeric
                   # or a [a-z0-9.-] filename. A publish failure must never
                   # change the job's own verdict — hence `|| echo warn`.
-                  # 90-day history cap; the message tail is stripped of quotes,
-                  # backslashes and newlines above so no log line can corrupt
+                  # 90-day history cap; the message tail has quotes and
+                  # backslashes stripped and newlines spaced above (deleting
+                  # newlines glued errors together — "refusedhead" on the
+                  # 20260907 redis run) so no log line can corrupt
                   # the record. Full detail stays in the pod log, which the
                   # admin Backups page can tail.
                   mongosh "$MONGO_URL" --quiet --eval "db.backup_runs.insertOne($REC); db.backup_runs.deleteMany({startedAt:{\$lt:$(( (START-7776000)*1000 ))}})" || echo "warn: publish failed"
@@ -207,6 +223,9 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
+      # Hard cap on total job time — see the Mongo job above. Healthy redis
+      # dumps take ~10s; the 20260908 run still took 3h42m to go Failed.
+      activeDeadlineSeconds: 3600
       template:
         metadata:
           labels:
@@ -236,12 +255,22 @@ spec:
 
                   work() {
                     : "${REDIS_URL:?not set — see the Secret note on the Mongo job above}"
-                    STAGE=dump;   redis-cli -u "$REDIS_URL" --rdb "$OUT"; test -s "$OUT"
+                    # Each stage ends `|| return 1`: without `set -e` a failed
+                    # dump would fall through into verify (reporting the wrong
+                    # stage and burying the root cause — seen live on the
+                    # 20260907-040212 run), and a failed prune would still land
+                    # on STAGE=done. `timeout 900` bounds a blackholed transfer
+                    # (the 20260908 scheduled run hung ~1h per attempt over 4h;
+                    # redis-cli has no built-in connect timeout): TERM exits
+                    # 124, reported as failed/dump. Healthy dumps take ~10s.
+                    # The top level stays `set -e`-free so the run record is
+                    # always published.
+                    STAGE=dump;   timeout 900 redis-cli -u "$REDIS_URL" --rdb "$OUT" && test -s "$OUT" || return 1
                     # An RDB file starts with the magic "REDIS"; anything else
                     # means we saved an error, not a database.
                     STAGE=verify; head -c 5 "$OUT" | grep -q REDIS \
                                     || { echo "FAILED: $OUT is not an RDB"; return 1; }
-                    STAGE=prune;  find /backups -maxdepth 1 -name 'redis-*.rdb' -mtime +14 -print -delete
+                    STAGE=prune;  find /backups -maxdepth 1 -name 'redis-*.rdb' -mtime +14 -print -delete || return 1
                     STAGE=done
                   }
 
@@ -259,7 +288,7 @@ spec:
                   set -- $(df -P /backups | tail -1)   # $2 total, $3 used, $4 avail — 1K blocks
                   VOL="{\"totalBytes\":$(($2*1024)),\"usedBytes\":$(($3*1024)),\"availBytes\":$(($4*1024))}"
                   STATUS=ok; [ "$RC" -eq 0 ] || STATUS=failed
-                  MSG=$(tail -3 /tmp/run.log | tr -d '"\\\n\r' | cut -c1-300)
+                  MSG=$(tail -3 /tmp/run.log | tr -d '"\\' | tr '\n\r' ' ' | cut -c1-300)
                   REC="{\"schema\":1,\"kind\":\"$KIND\",\"status\":\"$STATUS\",\"stage\":\"$STAGE\",\
                   \"startedAt\":$((START*1000)),\"finishedAt\":$((END*1000)),\"durationMs\":$(((END-START)*1000)),\
                   \"file\":\"$(basename "$OUT")\",\"bytes\":$BYTES,\"node\":\"$(hostname)\",\
@@ -268,8 +297,10 @@ spec:
                   # has redis-cli; mongo:7 has none, so the mongo job writes to
                   # the backup_runs collection instead). A publish failure must
                   # never change the job's own verdict. LPUSH + LTRIM 0 59 keeps
-                  # the last 60 records; the message tail is stripped of quotes,
-                  # backslashes and newlines above so no log line can corrupt
+                  # the last 60 records; the message tail has quotes and
+                  # backslashes stripped and newlines spaced above (deleting
+                  # newlines glued errors together — "refusedhead" on the
+                  # 20260907 run) so no log line can corrupt
                   # the record. Full detail stays in the pod log, which the
                   # admin Backups page can tail.
                   redis-cli -u "$REDIS_URL" LPUSH irc:backup:runs "$REC" >/dev/null || echo "warn: publish failed"
