@@ -11,6 +11,8 @@
   import StatusBadge from '../components/StatusBadge.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import { api, ApiError } from '../lib/api-client';
+  import { fibereyeIpHref, ipFamily, chipGeo, chipFlags, hasChip } from '../lib/ipIntelLink';
+  import type { IpChip } from '../lib/ipIntelLink';
   import { toastSuccess, toastError } from '../stores/ui';
   import { relative } from '../lib/format';
 
@@ -55,6 +57,7 @@
     loading = true; error = null;
     try {
       data = await api.get<SessionsResponse>('/api/admin/sessions');
+      void fetchChips((data?.sessions ?? []).map((s) => s.clientIp));
     } catch (e) {
       error = e instanceof ApiError ? e.message : (e as Error).message;
     } finally { loading = false; }
@@ -129,10 +132,18 @@
     if (id.length > 12) return id.slice(0, 12) + '…';
     return id;
   }
-
-  // Helper: detect IPv6 from address string
-  function isIPv6(ip: string): boolean {
-    return ip.includes(':');
+  // Cached geo/flag chips (progressive enhancement over the intel links):
+  // fetched once for the rendered IPs in cached mode — never a network call.
+  let chips = $state<Record<string, IpChip>>({});
+  async function fetchChips(ips: string[]) {
+    const distinct = [...new Set(ips.map((x) => (x || '').trim()).filter((x) => fibereyeIpHref(x)))];
+    if (!distinct.length) return;
+    try {
+      const r = await api.get<{ results: IpChip[] }>('/api/admin/fibereye/ip/batch', { ips: distinct.slice(0, 50).join(',') });
+      const next: Record<string, IpChip> = {};
+      for (const c of r.results ?? []) next[c.ip] = c;
+      chips = next;
+    } catch { /* links still work; chips stay hidden */ }
   }
 </script>
 
@@ -212,6 +223,8 @@
         <tbody>
           {#each filtered as s (s.sessionId)}
             {@const idleMs = s.lastAccess > 0 ? now - s.lastAccess : Infinity}
+            {@const ipLink = fibereyeIpHref(s.clientIp)}
+            {@const chip = chips[(s.clientIp || '').trim()]}
             <tr class="border-b border-border/40 hover:bg-surface/40 {s.isCurrent ? 'bg-primary/5' : ''}">
               <td class="py-3 pr-2">
                 <div class="flex items-center gap-2.5">
@@ -238,9 +251,20 @@
                 <span class="font-mono text-xs text-text" title={s.sessionId}>{shortSid(s.sessionId)}</span>
               </td>
               <td class="py-3 px-2 hidden md:table-cell">
-                <span class="font-mono text-xs">{s.clientIp || '—'}</span>
-                {#if s.clientIp && isIPv6(s.clientIp)}
+                {#if ipLink}
+                  <a href={ipLink} class="font-mono text-xs text-primary hover:underline">{s.clientIp}</a>
+                {:else}
+                  <span class="font-mono text-xs">{s.clientIp || '—'}</span>
+                {/if}
+                {#if s.clientIp && ipFamily(s.clientIp) === 'IPv6'}
                   <span class="ml-1 rounded bg-warn/15 px-1 py-0.5 text-[10px] font-medium text-warn">IPv6</span>
+                {/if}
+                {#if hasChip(chip)}
+                  <div class="mt-0.5 text-[11px] text-muted">{chipGeo(chip)}
+                    {#each chipFlags(chip.intelFlags) as f (f.text)}
+                      <span class="ml-1"><StatusBadge label={f.text} tone={f.tone} size="sm" dot={false} /></span>
+                    {/each}
+                  </div>
                 {/if}
               </td>
               <td class="py-3 px-2 hidden lg:table-cell max-w-[260px] truncate" title={s.userAgent}>

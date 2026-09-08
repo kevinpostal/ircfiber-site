@@ -101,6 +101,26 @@ string networkSlug(string name) @safe pure {
     return app.data;
 }
 
+/// Slugs for a user's network names, unique within the list: a repeated
+/// name gets `-2`, `-3`, … in list order and an empty slug becomes
+/// `network`. The identity `<user>/<slug>` must name exactly one network,
+/// so every caller (binding, BouncerServ, `/api/me/bouncer`) derives the
+/// slugs from the same ordered list with this function.
+string[] networkSlugs(const(string)[] names) @safe pure {
+    string[] result;
+    result.reserve(names.length);
+    bool[string] taken;
+    foreach (name; names) {
+        string base = networkSlug(name);
+        if (!base.length) base = "network";
+        string slug = base;
+        for (uint n = 2; slug in taken; n++) slug = base ~ "-" ~ n.to!string;
+        taken[slug] = true;
+        result ~= slug;
+    }
+    return result;
+}
+
 /// Decoded SASL PLAIN payload (`authzid\0authcid\0passwd`).
 struct SaslPlain {
     /// Authentication identity (our `BncIdentity` grammar).

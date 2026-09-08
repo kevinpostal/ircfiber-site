@@ -29,7 +29,7 @@ vi.mock('/src/admin/stores/ui', () => ({
   toastError: vi.fn(),
 }));
 
-vi.mock('/src/admin/lib/router', () => ({ navigate: vi.fn() }));
+vi.mock('/src/admin/lib/router', () => ({ navigate: vi.fn(), href: (p: string) => '#' + p }));
 
 const mockedGet = api.get as unknown as ReturnType<typeof vi.fn>;
 const mockedPost = api.post as unknown as ReturnType<typeof vi.fn>;

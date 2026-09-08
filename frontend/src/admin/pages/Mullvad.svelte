@@ -29,7 +29,7 @@
     clearServerEgress,
   } from '../stores/mullvad';
   import type { MullvadLiveConn, MullvadProxy } from '../stores/mullvad';
-
+  import { fibereyeIpHref } from '../lib/ipIntelLink';
   let data = $state($mullvadStatus);
   let loading = $state($mullvadLoading);
   let error = $state($mullvadError);
@@ -336,6 +336,9 @@
         </thead>
         <tbody>
           {#each data?.pool ?? [] as p}
+            {@const resolvedLink = fibereyeIpHref(p.ip)}
+            {@const exitIp = p?.tailscaleExitNode || p?.ipinfo?.ip || ''}
+            {@const exitLink = fibereyeIpHref(exitIp)}
             <tr class="border-b border-border/50 hover:bg-surface">
               <td class="px-3 py-2 text-xs">
                 <div class="font-medium">{p.city ? `${p.city}, ${p.country}` : p.label.toUpperCase()}</div>
@@ -356,8 +359,20 @@
                 {#if p.containerStatus}<div class="mt-1 text-[10px] text-muted">{p.containerStatus.slice(0, 80)}</div>{/if}
               </td>
               <td class="px-3 py-2 font-mono text-xs">{p.socksUrl}</td>
-              <td class="px-3 py-2 font-mono text-xs">{p.ip || '—'}</td>
-              <td class="px-3 py-2 font-mono text-xs">{p?.tailscaleExitNode || p?.ipinfo?.ip || '—'}</td>
+              <td class="px-3 py-2 font-mono text-xs">
+                {#if resolvedLink}
+                  <a href={resolvedLink} class="text-primary hover:underline">{p.ip}</a>
+                {:else}
+                  <span>{p.ip || '—'}</span>
+                {/if}
+              </td>
+              <td class="px-3 py-2 font-mono text-xs">
+                {#if exitLink}
+                  <a href={exitLink} class="text-primary hover:underline">{exitIp}</a>
+                {:else}
+                  <span>{exitIp || '—'}</span>
+                {/if}
+              </td>
               <td class="px-3 py-2 text-xs">
                 {#if p.mullvadExit === true}
                   <StatusBadge label="Mullvad" tone="success" size="sm" />
@@ -590,13 +605,21 @@
         <tbody>
           {#each (liveFlat() ?? []) as c}
             {@const p = data?.pool.find((x) => x.label === c?.activeEgressLabel)}
+            {@const liveExitIp = c?.activeEgressIp || p?.ipinfo?.ip || p?.tailscaleExitNode || ''}
+            {@const liveExitLink = fibereyeIpHref(liveExitIp)}
             <tr class="border-b border-border/50 hover:bg-surface">
               <td class="px-3 py-2 font-mono text-xs">{c?.serverId || '—'}</td>
               <td class="px-3 py-2"><a href="#/servers" class="text-primary hover:underline">{c?.networkName || '—'}</a></td>
               <td class="px-3 py-2 font-mono text-xs">{c?.host || '—'}</td>
               <td class="px-3 py-2 font-mono text-xs">{c?.nick || '—'}</td>
               <td class="px-3 py-2 font-mono text-xs">{c?.activeEgressLabel || '—'} <span class="text-muted">({c?.activeEgressHost || '—'})</span></td>
-              <td class="px-3 py-2 font-mono text-xs">{c?.activeEgressIp || p?.ipinfo?.ip || p?.tailscaleExitNode || '—'}</td>
+              <td class="px-3 py-2 font-mono text-xs">
+                {#if liveExitLink}
+                  <a href={liveExitLink} class="text-primary hover:underline">{liveExitIp}</a>
+                {:else}
+                  <span>{liveExitIp || '—'}</span>
+                {/if}
+              </td>
               <td class="px-3 py-2 text-xs">
                 {#if p?.ipinfo?.city || p?.ipinfo?.country || p?.ipinfo?.loc}
                   <div>{p?.ipinfo?.city || p?.ipinfo?.loc?.split(',')[0] || '—'}{p?.ipinfo?.region ? `, ${p?.ipinfo?.region}` : ''} {p?.ipinfo?.country ? `(${p?.ipinfo?.country})` : ''}</div>

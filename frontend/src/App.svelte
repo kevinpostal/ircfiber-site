@@ -25,9 +25,9 @@
     resetPendingState,
     isUserDisconnected,
     isMessageUnseen, setLastSeenMessage, readBuffer, markAllAsRead,
-    dirtySeenEids, requestChannelList
+    dirtySeenEids, flushSeenEids, requestChannelList
   } from './stores/ircStore.svelte';
-  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, sendJson, wsState } from './stores/wsConnection.svelte.ts';
+  import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
   import { normalizeChannelName, isSkippedCommand, stripPrefix, banListKey } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
@@ -408,9 +408,12 @@ let showEditNetwork: boolean = $state(false);
     syncPasteViewer();
   }
 
-  // IRCCloud heartbeat (rEXR): every 2 s, if any buffer's lastSeen changed
-  // since the last send, POST the dirty `seenEids` and clear them. Sent
-  // over the WS as `cmd:"heartbeat"`; the gateway persists and echoes.
+  // Read-marker sync, IRCCloud event-driven shape: discrete read actions
+  // (buffer open, mark-all-read) push immediately via `flushSeenEids` in
+  // ircStore so the gateway persists and fans heartbeat_echo out to the
+  // user's other sessions at once. This 2 s timer is only the coalescing
+  // backstop for scroll-driven marks, which fire many times per second
+  // while paging through backlog. Sent over the WS as `cmd:"heartbeat"`.
   function scheduleSendState(): void {
     if (heartbeatTimeout) clearTimeout(heartbeatTimeout);
     heartbeatTimeout = setTimeout(sendState, 2000);
@@ -418,18 +421,7 @@ let showEditNetwork: boolean = $state(false);
 
   function sendState(): void {
     heartbeatTimeout = undefined;
-    if (Object.keys(dirtySeenEids).length > 0 && ircState.wsConnected) {
-      const seenEids: Record<string, Record<string, number>> = {};
-      for (const nid of Object.keys(dirtySeenEids)) {
-        seenEids[nid] = { ...dirtySeenEids[nid] };
-        delete dirtySeenEids[nid];
-      }
-      try {
-        if (typeof localStorage !== 'undefined')
-          localStorage.setItem('ircfiber:dirtySeen', JSON.stringify(dirtySeenEids));
-      } catch {}
-      sendJson({ cmd: 'heartbeat', seenEids });
-    }
+    flushSeenEids();
     scheduleSendState();
   }
 

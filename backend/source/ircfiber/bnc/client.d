@@ -711,9 +711,15 @@ final class BncClient {
         }
     }
 
+    private static string[] slugsOf(NetworkConfig[] nets) {
+        string[] names;
+        names.reserve(nets.length);
+        foreach (ref n; nets) names ~= n.name;
+        return networkSlugs(names);
+    }
+
     private static string slugList(NetworkConfig[] nets) {
-        string[] slugs;
-        foreach (ref n; nets) slugs ~= networkSlug(n.name);
+        auto slugs = slugsOf(nets);
         return slugs.length ? slugs.join(", ") : "none";
     }
 
@@ -734,9 +740,10 @@ final class BncClient {
             }
         } else if (networkSel.length) {
             const wantSlug = networkSlug(networkSel);
+            const slugs = slugsOf(nets);
             foreach (ref cfg; nets) if (cfg.id.toString() == networkSel) { chosen = cfg; break; }
             if (chosen.id == UUID.init && wantSlug.length)
-                foreach (ref cfg; nets) if (networkSlug(cfg.name) == wantSlug) { chosen = cfg; break; }
+                foreach (i, ref cfg; nets) if (slugs[i] == wantSlug) { chosen = cfg; break; }
             if (chosen.id == UUID.init)
                 foreach (ref cfg; nets) if (icmp(cfg.host, networkSel) == 0) { chosen = cfg; break; }
             if (chosen.id == UUID.init) {
@@ -1603,8 +1610,9 @@ final class BncClient {
         } else if (sub == "network" || sub == "networks") {
             auto nets = userNetworks();
             if (!nets.length) reply("No networks yet — BOUNCER ADDNETWORK host=<server> or add one on the website");
-            foreach (ref cfg; nets) {
-                const slug = networkSlug(cfg.name);
+            const slugs = slugsOf(nets);
+            foreach (i, ref cfg; nets) {
+                const slug = slugs[i];
                 string state;
                 foreach (p; networkAttrs(cfg)) if (p[0] == "state") state = p[1];
                 reply(slug ~ " — " ~ cfg.name ~ " " ~ cfg.host ~ ":" ~ cfg.port.to!string

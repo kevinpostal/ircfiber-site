@@ -17,6 +17,7 @@
   import StatusBadge from '../components/StatusBadge.svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api-client';
+  import { fibereyeIpHref } from '../lib/ipIntelLink';
   import { toastSuccess, toastError } from '../stores/ui';
   import { startPolling } from '../stores/polling';
   import { duration, relative } from '../lib/format';
@@ -366,11 +367,13 @@
                 <th class="py-2 pr-4">User</th>
                 <th class="py-2 pr-4">Provider</th>
                 <th class="py-2 pr-4">Took</th>
+                <th class="py-2 pr-4">Source IP</th>
                 <th class="py-2 pr-4">Error</th>
               </tr>
             </thead>
             <tbody>
               {#each overview.events as e, i (`${e.atMs}-${i}`)}
+                {@const srcLink = fibereyeIpHref(e.sourceIp)}
                 <tr class="border-b border-border/50 last:border-0">
                   <td class="py-2 pr-4 font-mono text-muted">{relative(e.atMs)}</td>
                   <td class="py-2 pr-4">
@@ -381,6 +384,13 @@
                   <td class="py-2 pr-4 font-mono text-muted">{e.username || '—'}</td>
                   <td class="py-2 pr-4 font-mono text-muted">{e.provider || '—'}</td>
                   <td class="py-2 pr-4 font-mono">{duration(e.durationMs)}</td>
+                  <td class="py-2 pr-4 font-mono">
+                    {#if srcLink}
+                      <a href={srcLink} class="text-primary hover:underline">{e.sourceIp}</a>
+                    {:else}
+                      <span class="text-muted">{e.sourceIp || '—'}</span>
+                    {/if}
+                  </td>
                   <td class="max-w-xs truncate py-2 pr-4 text-xs text-danger" title={e.error}>{e.error}</td>
                 </tr>
               {/each}
@@ -491,8 +501,15 @@
               </thead>
               <tbody>
                 {#each overview.ipCounters as row (row.ip)}
+                  {@const counterLink = fibereyeIpHref(row.ip)}
                   <tr class="border-b border-border/50 last:border-0">
-                    <td class="py-2 pr-4 font-mono">{row.ip}</td>
+                    <td class="py-2 pr-4 font-mono">
+                      {#if counterLink}
+                        <a href={counterLink} class="text-primary hover:underline">{row.ip}</a>
+                      {:else}
+                        <span>{row.ip}</span>
+                      {/if}
+                    </td>
                     <td class="py-2 pr-4 font-mono">{row.count}</td>
                     <td class="py-2 pr-4 font-mono text-muted">{duration(row.ttlSeconds * 1000)}</td>
                     <td class="py-2 text-right">

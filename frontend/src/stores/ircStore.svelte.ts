@@ -6,7 +6,7 @@ import { isMessageIgnored } from '../lib/ignorePolicy';
 import { closeNotification } from '../lib/notifications';
 import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
-import { sendRaw } from './wsConnection.svelte';
+import { sendRaw, sendJson } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 
@@ -1620,6 +1620,23 @@ export function markSeenEidDirty(networkId: string, bufferName: string, t: numbe
   nets[normalizeChannelName(bufferName)] = t;
   persistDirtySeen();
 }
+/** IRCCloud event-driven heartbeat: push dirty read markers NOW instead of
+ *  waiting for App's coalescing timer. Called after discrete read actions
+ *  (buffer open, mark-all-read) so the gateway persists and fans the
+ *  heartbeat_echo out to the user's other sessions instantly; scroll-driven
+ *  marks keep coalescing on the timer. No-op when nothing is dirty or the
+ *  stream is down (the timer picks it up on reconnect). */
+export function flushSeenEids(): boolean {
+  if (Object.keys(dirtySeenEids).length === 0 || !ircState.wsConnected) return false;
+  const seenEids: Record<string, Record<string, number>> = {};
+  for (const nid of Object.keys(dirtySeenEids)) {
+    seenEids[nid] = { ...dirtySeenEids[nid] };
+    delete dirtySeenEids[nid];
+  }
+  persistDirtySeen();
+  sendJson({ cmd: 'heartbeat', seenEids });
+  return true;
+}
 
 /** IRCCloud `Buffer.setLastSeen(m)`.
  *
@@ -1673,6 +1690,7 @@ export function markAllAsRead(): void {
       readBuffer(net.networkId, buf.name);
     }
   }
+  flushSeenEids();
 }
 
 /** IRCCloud `Buffer.resetLastSeen()`: recompute unseen state from the
@@ -2051,6 +2069,7 @@ export function markBufferOpenRead(networkId: string, bufferName: string): void 
   // nothing seen yet pins 0 so the divider sits above the first message.
   if (!(key in ircState.openSeen)) ircState.openSeen[key] = before ?? 0;
   setLastSeenMessage(networkId, bufferName, t);
+  flushSeenEids();
 }
 
 export function countMessagesBetween(networkId: string, bufferName: string, startMsg?: IRCMessage | null, endMsg?: IRCMessage | null): number {
@@ -2083,15 +2102,24 @@ export function countImportantMessagesBetween(networkId: string, bufferName: str
 // Persisted `unseen`/`unseenHighlights` are restored from localStorage
 // before the sync payload and history arrive and may be stale (read on
 // another device, backlog older than lastSeen). Once messages and
-// lastSeen are both present, recompute the truth in one pass so no
-// "badges then no badges" frame is ever painted.
+// lastSeen are both present, recompute the truth in one pass. Until history
+// loads there is nothing to validate against, so the persisted badge is
+// kept — wiping it is what cleared every unread counter on refresh.
 function reconcileBuffer(net: Network, buf: Buffer): void {
   if (buf.name === '_server') return;
   const key = bufferKey(net.networkId, buf.name);
   const msgs = ircState.messages[key];
-  if (!msgs || msgs.length === 0) {
-    // Nothing loaded yet — a stale badge can't be validated, so hide it
-    // until history lands and the next reconcile recomputes it.
+  if (msgs === undefined) {
+    // History not loaded yet (fresh boot, or a background buffer whose
+    // history is only fetched on open) — there is nothing to validate the
+    // persisted badge against, so keep it. Wiping here cleared every unread
+    // counter on refresh; the next reconcile after history lands recomputes
+    // the truth. Note `[]` (loaded and truly empty) still falls through and
+    // zeroes a stale badge below.
+    return;
+  }
+  if (msgs.length === 0) {
+    // Loaded and empty — no message could be unread.
     setUnseen(net.networkId, buf.name, 0);
     writeUnseenHighlights(net.networkId, buf.name, buf, []);
     return;

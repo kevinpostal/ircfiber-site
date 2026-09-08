@@ -12,6 +12,7 @@
   import StatusBadge from '../components/StatusBadge.svelte';
   import ConfirmDialog from '../components/ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api-client';
+  import { fibereyeIpHref } from '../lib/ipIntelLink';
 
   interface UserRow {
     id: string;
@@ -247,11 +248,13 @@
                 Created {sortKey === 'createdAt' ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
               </button>
             </th>
+            <th class="py-2 text-left font-semibold hidden sm:table-cell">Signup IP</th>
             <th class="py-2 text-right font-semibold">Actions</th>
           </tr>
         </thead>
         <tbody>
           {#each paged as u (u.id)}
+            {@const signupLink = fibereyeIpHref(u.signupIp)}
             <tr class="border-b border-border/40 hover:bg-surface/40 {selected.has(u.id) ? 'bg-primary/5' : ''}">
               <td class="py-2">
                 <input
@@ -273,6 +276,13 @@
               </td>
               <td class="py-2 text-xs text-muted hidden sm:table-cell">
                 {u.createdAt ? new Date(u.createdAt * 1000).toLocaleDateString() : '—'}
+              </td>
+              <td class="py-2 font-mono text-xs hidden sm:table-cell">
+                {#if signupLink}
+                  <a href={signupLink} class="text-primary hover:underline">{u.signupIp}</a>
+                {:else}
+                  <span class="text-muted">{u.signupIp || '—'}</span>
+                {/if}
               </td>
               <td class="py-2 text-right">
                 <a href="#/users/{u.id}" class="text-xs text-primary hover:underline">View →</a>

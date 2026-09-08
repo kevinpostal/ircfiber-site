@@ -20,7 +20,7 @@
 module ircfiber.web.admin.fibereye;
 
 import std.process : environment;
-import std.string : strip, toLower;
+import std.string : split, strip, toLower;
 import std.conv : to;
 
 import vibe.core.log : logInfo, logWarn;
@@ -452,6 +452,57 @@ package void apiFiberEyeIpDeep(HTTPServerRequest req, HTTPServerResponse res, Re
     data["intel"] = rec.toJson();
     jsonOk(res, data);
 }
+
+/// GET /api/admin/fibereye/ip/batch?ips=<csv> — cached-only chip data for
+/// table rows. Parses `ips`, dedupes, caps at 50 entries (400 over cap: one
+/// wide table must not fan out per-row lookups without bound). Private
+/// addresses answer `{ip, bogon: true}` with no lookup; the rest go through
+/// `IpIntelService.lookup(ip, LookupMode.cached)`, which never makes a
+/// network call and never burns quota counters. Each entry carries the
+/// denormalized chip fields `sessionJson`/`ipJson` already expose — no new
+/// JSON keys. (The literal `…/fibereye/ips?ips=` path is the paged list
+/// endpoint, so batch lives beside the other single-IP routes instead.)
+package void apiFiberEyeIpBatch(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    const raw = queryString(req, "ips", "");
+    string[] ips;
+    bool[string] seen;
+    foreach (part; raw.split(',')) {
+        const ip = part.strip();
+        if (!ip.length || (ip in seen)) continue;
+        seen[ip] = true;
+        ips ~= ip;
+    }
+    if (ips.length > 50) { jsonError(res, 400, "at most 50 IPs per request."); return; }
+    IpIntelStore store;
+    try store = new IpIntelStore();
+    catch (Exception) { store = null; }
+    auto svc = new IpIntelService(redis, store, loadIpIntelSettings());
+    auto results = Json.emptyArray;
+    foreach (ip; ips) {
+        auto o = Json.emptyObject;
+        o["ip"] = Json(ip);
+        if (isPrivateIp(ip)) { o["bogon"] = Json(true); results ~= o; continue; }
+        o["bogon"] = Json(false);
+        IpIntel rec;
+        try rec = svc.lookup(ip, LookupMode.cached);
+        catch (Exception e) {
+            logWarn("FiberEye admin: batch lookup failed for %s: %s", ip, e.msg);
+            results ~= o;
+            continue;
+        }
+        o["geoCity"] = Json(rec.geo.city);
+        o["geoRegion"] = Json(rec.geo.region);
+        o["geoCountry"] = Json(rec.geo.countryCode);
+        o["geoOrg"] = Json(rec.network.org);
+        o["intelFlags"] = Json(rec.flagsLabel());
+        o["intelRisk"] = Json(rec.reputation.riskScore);
+        o["geoPending"] = Json(false);
+        results ~= o;
+    }
+    auto data = Json.emptyObject;
+    data["results"] = results;
+    jsonOk(res, data);
+  }
 
 /// GET /api/admin/fibereye/bans?state=active|observed|released|all&page=&limit=
 package void apiFiberEyeBans(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {

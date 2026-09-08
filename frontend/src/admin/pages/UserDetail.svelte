@@ -11,6 +11,8 @@
   import FilterHorizontal from '../components/FilterHorizontal.svelte';
   import { adminUser } from '../stores/auth';
   import { api, ApiError } from '../lib/api-client';
+  import { fibereyeIpHref, chipGeo, chipFlags, hasChip } from '../lib/ipIntelLink';
+  import type { IpChip } from '../lib/ipIntelLink';
   import { toastSuccess, toastError } from '../stores/ui';
   import { navigate } from '../lib/router';
   import { bytes, relative } from '../lib/format';
@@ -105,10 +107,28 @@
       user = data;
       editEmail = data.email;
       editRoles = [...data.roles];
+      void fetchChips([data.signupIp, data.lastLoginIp, ...(data.loginIps ?? [])]);
     } catch (e) {
       error = e instanceof ApiError ? e.message : (e as Error).message;
     } finally { loading = false; }
   }
+
+  // Cached geo/flag chips over the rendered IPs — cached mode only, links work without them.
+  let chips = $state<Record<string, IpChip>>({});
+  async function fetchChips(ips: (string | undefined)[]) {
+    const distinct = [...new Set(ips.map((x) => (x || '').trim()).filter((x) => fibereyeIpHref(x)))];
+    if (!distinct.length) return;
+    try {
+      const r = await api.get<{ results: IpChip[] }>('/api/admin/fibereye/ip/batch', { ips: distinct.slice(0, 50).join(',') });
+      const next: Record<string, IpChip> = {};
+      for (const c of r.results ?? []) next[c.ip] = c;
+      chips = next;
+    } catch { /* links still work; chips stay hidden */ }
+  }
+  const signupLink = $derived(fibereyeIpHref(user?.signupIp));
+  const signupChip = $derived(chips[(user?.signupIp || '').trim()]);
+  const loginLink = $derived(fibereyeIpHref(user?.lastLoginIp));
+  const loginChip = $derived(chips[(user?.lastLoginIp || '').trim()]);
 
   async function loadRoles() {
     try {
@@ -348,7 +368,20 @@
     <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div>
         <dt class="text-xs font-semibold uppercase tracking-wider text-muted">Signup IP</dt>
-        <dd class="font-mono text-sm text-text">{user.signupIp || '—'}</dd>
+        <dd class="font-mono text-sm text-text">
+          {#if signupLink}
+            <a href={signupLink} class="text-primary hover:underline">{user.signupIp}</a>
+          {:else}
+            <span>{user.signupIp || '—'}</span>
+          {/if}
+          {#if hasChip(signupChip)}
+            <span class="ml-2 text-xs text-muted">{chipGeo(signupChip)}
+              {#each chipFlags(signupChip.intelFlags) as f (f.text)}
+                <span class="ml-1"><StatusBadge label={f.text} tone={f.tone} size="sm" dot={false} /></span>
+              {/each}
+            </span>
+          {/if}
+        </dd>
       </div>
       <div>
         <dt class="text-xs font-semibold uppercase tracking-wider text-muted">Signup Date</dt>
@@ -356,7 +389,20 @@
       </div>
       <div>
         <dt class="text-xs font-semibold uppercase tracking-wider text-muted">Last Login IP</dt>
-        <dd class="font-mono text-sm text-text">{user.lastLoginIp || '—'}</dd>
+        <dd class="font-mono text-sm text-text">
+          {#if loginLink}
+            <a href={loginLink} class="text-primary hover:underline">{user.lastLoginIp}</a>
+          {:else}
+            <span>{user.lastLoginIp || '—'}</span>
+          {/if}
+          {#if hasChip(loginChip)}
+            <span class="ml-2 text-xs text-muted">{chipGeo(loginChip)}
+              {#each chipFlags(loginChip.intelFlags) as f (f.text)}
+                <span class="ml-1"><StatusBadge label={f.text} tone={f.tone} size="sm" dot={false} /></span>
+              {/each}
+            </span>
+          {/if}
+        </dd>
       </div>
       <div>
         <dt class="text-xs font-semibold uppercase tracking-wider text-muted">All Login IPs</dt>
@@ -364,7 +410,22 @@
           {#if user.loginIps?.length}
             <div class="space-y-0.5">
               {#each user.loginIps as ip}
-                <div class="font-mono text-sm text-text">{ip}</div>
+                {@const lineLink = fibereyeIpHref(ip)}
+                {@const lineChip = chips[(ip || '').trim()]}
+                <div class="font-mono text-sm text-text">
+                  {#if lineLink}
+                    <a href={lineLink} class="text-primary hover:underline">{ip}</a>
+                  {:else}
+                    <span>{ip}</span>
+                  {/if}
+                  {#if hasChip(lineChip)}
+                    <span class="ml-2 text-xs text-muted">{chipGeo(lineChip)}
+                      {#each chipFlags(lineChip.intelFlags) as f (f.text)}
+                        <span class="ml-1"><StatusBadge label={f.text} tone={f.tone} size="sm" dot={false} /></span>
+                      {/each}
+                    </span>
+                  {/if}
+                </div>
               {/each}
             </div>
           {:else}

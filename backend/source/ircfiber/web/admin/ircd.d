@@ -34,8 +34,8 @@ import std.algorithm : canFind, startsWith, endsWith;
 import std.array : split;
 import std.conv : to;
 import std.datetime : dur;
-import std.exception : enforce;
 import std.string : strip, indexOf, lastIndexOf, replace, toLower;
+import std.typecons : Tuple;
 import vibe.core.net : TCPConnection, WaitForDataStatus, connectTCP;
 import vibe.core.stream : IOMode;
 import vibe.stream.tls : TLSContextKind, TLSPeerValidationMode, TLSStream, TLSStreamState,
@@ -309,6 +309,106 @@ public string redactConfText(string text) {
     }
     import std.array : join;
     return out_.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Secret-preserving save (covered by unit tests — no I/O here)
+// ---------------------------------------------------------------------------
+
+/// One quoted secret occurrence and its byte offset on the line.
+private struct SecretHit {
+    size_t pos;
+    string value;
+}
+
+/// Every quoted secret value on `line` (`key`/`sendpass`/`recvpass`/
+/// `password`, single or double quotes) in left-to-right order, so a line
+/// carrying several secrets refills its redacted markers positionally.
+private string[] extractSecretValues(string line) {
+    SecretHit[] hits;
+    foreach (attr; _secretAttrs) {
+        foreach (q; ['"', '\'']) {
+            string needle = attr ~ "=" ~ q;
+            size_t from = 0;
+            while (from < line.length) {
+                auto rel = line[from .. $].indexOf(needle);
+                if (rel < 0) break;
+                auto at = from + cast(size_t) rel;
+                auto vs = at + needle.length;
+                auto erel = line[vs .. $].indexOf(q);
+                if (erel < 0) break;
+                auto end = vs + cast(size_t) erel;
+                hits ~= SecretHit(at, line[vs .. end]);
+                from = end + 1;
+            }
+        }
+    }
+    import std.algorithm : sort;
+    hits.sort!((a, b) => a.pos < b.pos);
+    string[] out_;
+    out_.reserve(hits.length);
+    foreach (h; hits) out_ ~= h.value;
+    return out_;
+}
+
+/// Result of `restoreSecrets`: `error` is "" on success.
+public struct RestoreSecretsResult {
+    string restored;
+    string error;
+}
+
+private enum _redactedMarker = "***REDACTED***";
+
+private string fillRedactedMarkers(string line, string[] secrets) {
+    auto res = line;
+    foreach (s; secrets) {
+        auto at = res.indexOf(_redactedMarker);
+        assert(at >= 0);
+        res = res[0 .. cast(size_t) at] ~ s ~ res[cast(size_t) at + _redactedMarker.length .. $];
+    }
+    return res;
+}
+
+/// Re-inject live secrets into submitted (redacted) config text. The editor
+/// buffer is the redacted dump, so every submitted line still carrying the
+/// marker is matched against the live file by its redacted form
+/// (`redactConfText`): exactly one live line may match, and its secret
+/// count must equal the marker count, otherwise the submission is rejected
+/// naming the 1-based line number — never a guess. Lines without the
+/// marker pass through untouched (so a value pasted from the Ansible vault
+/// is kept verbatim).
+public RestoreSecretsResult restoreSecrets(string liveText, string submittedText) {
+    import std.array : join;
+    // Redacted line -> one secret list per live line redacting to it. Two
+    // live lines redacting alike (even with equal values) leave two
+    // candidates and therefore reject: ambiguity must not guess.
+    string[][][string] liveMap;
+    foreach (line; liveText.split("\n")) {
+        auto secrets = extractSecretValues(line);
+        if (secrets.length == 0) continue;
+        liveMap[redactConfText(line)] ~= secrets;
+    }
+    string[] out_;
+    out_.reserve(submittedText.length / 64 + 1);
+    foreach (idx, line; submittedText.split("\n")) {
+        if (line.indexOf(_redactedMarker) < 0) { out_ ~= line; continue; }
+        auto cands = liveMap.get(redactConfText(line), null);
+        size_t markers = 0;
+        if (cands !is null && cands.length == 1) {
+            size_t from = 0;
+            while (from < line.length) {
+                auto rel = line[from .. $].indexOf(_redactedMarker);
+                if (rel < 0) break;
+                markers++;
+                from += cast(size_t) rel + _redactedMarker.length;
+            }
+        }
+        if (cands is null || cands.length != 1 || markers != cands[0].length)
+            return RestoreSecretsResult("", "line " ~ (idx + 1).to!string ~
+                ": redacted secret has no unique live match \u2014 copy the real value from the Ansible vault");
+        out_ ~= fillRedactedMarkers(line, cands[0]);
+    }
+    return RestoreSecretsResult(out_.join("\n"), "");
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,6 +1172,9 @@ public void removeXlineNow(string type, string mask) {
 /// Config files viewable (read-only) from the dashboard.
 private immutable string[] _viewableConf = ["inspircd.conf", "modules.conf", "opers.conf", "motd"];
 
+/// Files editable through the save endpoint (opers.conf stays in Ansible).
+private immutable string[] _editableConf = ["inspircd.conf", "modules.conf", "motd"];
+
 /// GET /api/admin/ircd/config?file=inspircd.conf — redacted config text.
 /// Reads the host-exposed conf dir (mounted read-only into the gateway).
 package void apiIrcdConfig(HTTPServerRequest req, HTTPServerResponse res) {
@@ -1102,10 +1205,171 @@ package void apiIrcdConfig(HTTPServerRequest req, HTTPServerResponse res) {
         return;
     }
     if (text.length > 200_000) { jsonError(res, 400, "Config file too large to display."); return; }
+    bool editable = _editableConf.canFind(name);
+    // drifted: sha256 of live file != content of sidecar .ansible.<file>.sha256
+    bool drifted = false;
+    if (editable) {
+        import std.digest : toHexString;
+        import std.digest.sha : sha256Of;
+        auto sidecar = buildPath(settings.confDir, ".ansible." ~ name ~ ".sha256");
+        if (exists(sidecar) && isFile(sidecar)) {
+            try {
+                auto sidecarHash = readText(sidecar).strip();
+                auto liveHash = toHexString(sha256Of(cast(const(char)[]) text));
+                drifted = (sidecarHash != liveHash);
+            } catch (Exception) {
+                // missing/unreadable sidecar -> not drifted
+            }
+        }
+    }
     auto data = Json.emptyObject;
     data["file"] = Json(name);
     data["redacted"] = Json(true);
     data["content"] = Json(redactConfText(text));
+    data["editable"] = Json(editable);
+    data["drifted"] = Json(drifted);
     jsonOk(res, data);
+}
+
+/// Helper: in-place write to live path (same inode — gateway sees it
+/// through a per-file rw bind mount; rename would orphan the mount).
+/// Returns "" on success or the error reason.
+private string writeIrcdFileInPlace(string path, string text) {
+    import std.file : write;
+    try write(path, text);
+    catch (Exception e) return "cannot write " ~ path ~ ": " ~ e.msg;
+    return "";
+}
+
+/// Helper: write timestamped backup to admin-bak dir, then prune to
+/// newest 5 per file. Returns (backupPath, error) — error "" on success.
+private Tuple!(string, string) writeBackup(string confDir, string file, string text) {
+    import std.file : exists, isDir, write, remove, dirEntries, SpanMode;
+    import std.path : buildPath, baseName;
+    import std.algorithm : sort;
+    import std.datetime : Clock;
+    import std.conv : to;
+    auto bakDir = buildPath(confDir, "admin-bak");
+    if (!exists(bakDir) || !isDir(bakDir))
+        return Tuple!(string, string)("", "admin-bak dir not mounted (mount the ircd conf dir with admin-bak rw)");
+    auto ms = Clock.currTime.stdTime;
+    auto bakPath = buildPath(bakDir, file ~ "." ~ ms.to!string ~ ".bak");
+    try write(bakPath, text);
+    catch (Exception e) return Tuple!(string, string)("", "cannot write backup " ~ bakPath ~ ": " ~ e.msg);
+    string[] bakFiles;
+    try {
+        foreach (de; dirEntries(bakDir, SpanMode.shallow)) {
+            if (de.isFile) bakFiles ~= baseName(de.name);
+        }
+    } catch (Exception) {}
+    string prefix = file ~ ".";
+    string[] matching;
+    foreach (f; bakFiles) if (f.startsWith(prefix) && f.endsWith(".bak")) matching ~= f;
+    matching.sort!((a, b) => a > b); // newest first (ms timestamp in name)
+    if (matching.length > 5) {
+        foreach (i; 5 .. matching.length)
+            try remove(buildPath(bakDir, matching[i])); catch (Exception) {}
+    }
+    return Tuple!(string, string)(bakPath, "");
+}
+
+/// POST /api/admin/ircd/config — save config + rehash
+package void apiIrcdConfigSave(HTTPServerRequest req, HTTPServerResponse res) {
+    auto body = readJsonBody(req);
+    if (body.type != Json.Type.object) {
+        jsonError(res, 400, "Request body must be JSON {file, content}.");
+        return;
+    }
+    string name = body["file"].type == Json.Type.string ? body["file"].get!string.strip() : "";
+    string content = body["content"].type == Json.Type.string ? body["content"].get!string : "";
+    if (!_editableConf.canFind(name)) {
+        jsonError(res, 400, "opers.conf stays in Ansible");
+        return;
+    }
+    if (content.length == 0 || content.length > 200_000) {
+        jsonError(res, 400, "Config content empty or too large (max 200000).");
+        return;
+    }
+    auto settings = loadIrcdSettings();
+    import std.file : exists, isFile, readText;
+    import std.path : buildPath;
+    // Resolve path exactly as GET does
+    auto path = name == "motd" ? buildPath(settings.confDir, "motd.d", "motd") : buildPath(settings.confDir, name);
+    if (!exists(path) || !isFile(path)) {
+        jsonError(res, 503, "Config file is not visible to the gateway (" ~ path ~
+            "). Mount the ircd conf dir read-only to enable the config viewer.");
+        return;
+    }
+    // Read live text for secret restore
+    string liveText;
+    try liveText = readText(path);
+    catch (Exception e) {
+        jsonError(res, 500, "Could not read live config file.");
+        return;
+    }
+    // Restore secrets
+    auto restored = restoreSecrets(liveText, content);
+    if (restored.error.length > 0) {
+        jsonError(res, 400, restored.error);
+        return;
+    }
+    // Write backup
+    auto backup = writeBackup(settings.confDir, name, liveText);
+    if (backup[1].length > 0) {
+        jsonError(res, 503, backup[1]);
+        return;
+    }
+    // Write in place
+    auto writeErr = writeIrcdFileInPlace(path, restored.restored);
+    if (writeErr.length > 0) {
+        jsonError(res, 500, writeErr);
+        return;
+    }
+    // REHASH
+    withIrcd(req, res, (IrcdClient client) {
+        string[] lines;
+        string file;
+        bool rehashFailed = false;
+        string rehashError = "";
+        try {
+            file = rehashOn(client, lines);
+        } catch (IrcdError e) {
+            rehashFailed = true;
+            rehashError = e.msg;
+        } catch (Exception e) {
+            rehashFailed = true;
+            rehashError = e.msg;
+        }
+        if (rehashFailed) {
+            // Restore backup in place (best effort, never retried in a loop)
+            bool restoreOk = false;
+            try {
+                auto restoreErr = writeIrcdFileInPlace(path, liveText);
+                restoreOk = restoreErr.length == 0;
+                if (!restoreOk) logWarn("IRCd config rollback failed for %s: %s", path, restoreErr);
+            } catch (Exception e) logWarn("IRCd config rollback failed for %s: %s", path, e.msg);
+            // Best-effort rehash after restore
+            try {
+                string[] _;
+                rehashOn(client, _);
+            } catch (Exception) {}
+            auto payload = Json.emptyObject;
+            payload["ok"] = Json(false);
+            payload["restored"] = Json(restoreOk);
+            payload["error"] = Json(rehashError ~ (restoreOk ?
+                " — previous content restored" :
+                " — automatic restore failed; recover from admin-bak/ on the host"));
+            res.headers["Content-Type"] = "application/json; charset=utf-8";
+            res.statusCode = 502;
+            res.writeBody(payload.toString());
+            return;
+        }
+        logInfo("Admin saved %s and rehashed ircd (%s)", name, file);
+        auto data = Json.emptyObject;
+        data["file"] = Json(name);
+        data["rehashed"] = Json(file);
+        data["notices"] = ircdNotices(lines);
+        jsonOk(res, data);
+    });
 }
 

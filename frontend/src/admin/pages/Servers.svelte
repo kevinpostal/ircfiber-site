@@ -13,6 +13,7 @@
   import { toastSuccess, toastError } from '../stores/ui';
   import { startPolling } from '../stores/polling';
   import { relative, duration } from '../lib/format';
+  import { fibereyeIpHref, ipFamily } from '../lib/ipIntelLink';
 
   interface Engine {
     serverId: string;
@@ -105,10 +106,7 @@
     } catch {}
   }
 
-  /** Address family of a bare IP literal from the engine snapshot. */
-  function ipFamily(ip: string): 'IPv6' | 'IPv4' {
-    return ip.includes(':') ? 'IPv6' : 'IPv4';
-  }
+
 
   async function setEgress(networkId: string, label: string, egressNodeId: string) {
     try {
@@ -482,7 +480,12 @@
                     </span>
                     <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressHost}</span>
                     {#if a.activeEgressIp}
-                      <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressIp}</span>
+                      {@const egressLink = fibereyeIpHref(a.activeEgressIp)}
+                      {#if egressLink}
+                        <a href={egressLink} class="font-mono text-[10px] leading-tight text-primary hover:underline">{a.activeEgressIp}</a>
+                      {:else}
+                        <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressIp}</span>
+                      {/if}
                     {/if}
                   </div>
                 {:else}
@@ -500,10 +503,20 @@
                       {/if}
                     </span>
                     {#if a.peerIp}
-                      <span class="font-mono text-[10px] leading-tight text-muted" title="Remote IRC server address">→ {a.peerIp}</span>
+                      {@const peerLink = fibereyeIpHref(a.peerIp)}
+                      {#if peerLink}
+                        <a href={peerLink} class="font-mono text-[10px] leading-tight text-primary hover:underline" title="Remote IRC server address">→ {a.peerIp}</a>
+                      {:else}
+                        <span class="font-mono text-[10px] leading-tight text-muted" title="Remote IRC server address">→ {a.peerIp}</span>
+                      {/if}
                     {/if}
                     {#if a.localIp}
-                      <span class="font-mono text-[10px] leading-tight text-muted" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</span>
+                      {@const localLink = fibereyeIpHref(a.localIp)}
+                      {#if localLink}
+                        <a href={localLink} class="font-mono text-[10px] leading-tight text-primary hover:underline" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</a>
+                      {:else}
+                        <span class="font-mono text-[10px] leading-tight text-muted" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</span>
+                      {/if}
                     {/if}
                   </div>
                 {/if}

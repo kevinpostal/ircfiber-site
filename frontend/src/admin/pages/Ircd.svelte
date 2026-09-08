@@ -16,7 +16,7 @@
   import { api, ApiError } from '../lib/api-client';
   import { queryRange } from '../../lib/signoz';
   import { highlightIrcdConf } from '../lib/ircd-highlight';
-  import { toastSuccess, toastError } from '../stores/ui';
+  import { toastSuccess, toastError, toastInfo } from '../stores/ui';
   import { startPolling } from '../stores/polling';
 
   interface IrcdUsers {
@@ -73,6 +73,11 @@
   let confContent = $state<string | null>(null);
   let confError = $state<string | null>(null);
   let confLoading = $state(false);
+  let confEditable = $state(false);
+  let confDrifted = $state(false);
+  let confEditing = $state(false);
+  let confDraft = $state('');
+  let confSaving = $state(false);
 
   let stop: (() => void) | null = null;
   onMount(() => {
@@ -257,12 +262,29 @@
 
   async function fetchConfig() {
     confLoading = true; confError = null; confContent = null;
+    confEditing = false;
     try {
-      const r = await api.get<{ content: string }>('/api/admin/ircd/config', { file: confFile });
+      const r = await api.get<{ content: string; editable?: boolean; drifted?: boolean }>('/api/admin/ircd/config', { file: confFile });
       confContent = r.content;
+      confEditable = r.editable === true;
+      confDrifted = r.drifted === true;
     } catch (e) {
       confError = errMsg(e);
     } finally { confLoading = false; }
+  }
+
+  async function saveConfig() {
+    if (!confirm(`Save ${confFile} and rehash ircd? Connected users stay online.`)) return;
+    confSaving = true;
+    try {
+      const r = await api.post<{ file: string; rehashed: string; notices: string[] }>('/api/admin/ircd/config', { file: confFile, content: confDraft });
+      toastSuccess(`Saved ${r.file}, rehashed ${r.rehashed}`);
+      if (Array.isArray(r.notices) && r.notices.length > 0) toastInfo(r.notices.join('\n'));
+      confEditing = false;
+      await fetchConfig();
+    } catch (e) {
+      toastError(errMsg(e));
+    } finally { confSaving = false; }
   }
 
   function fmtDuration(secs: number): string {
@@ -578,10 +600,58 @@
         >
           {confLoading ? 'Loading…' : 'Reload'}
         </button>
-        <span class="text-xs text-muted">Read-only · secrets shown as <code>***REDACTED***</code> · edits stay in Ansible</span>
+        {#if confEditable && !confEditing && confContent !== null}
+          <button
+            type="button"
+            onclick={() => { confDraft = confContent ?? ''; confEditing = true; }}
+            class="rounded-md border border-primary/40 px-2.5 py-1.5 text-xs text-primary hover:bg-primary/10"
+          >
+            Edit
+          </button>
+        {/if}
+        {#if confEditing}
+          <button
+            type="button"
+            onclick={() => void saveConfig()}
+            disabled={confSaving}
+            class="rounded-md bg-primary px-2.5 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90 disabled:opacity-50"
+          >
+            {confSaving ? 'Saving…' : 'Save & rehash'}
+          </button>
+          <button
+            type="button"
+            onclick={() => { confEditing = false; }}
+            disabled={confSaving}
+            class="rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs hover:border-primary/40 disabled:opacity-50"
+          >
+            Discard
+          </button>
+        {/if}
+        {#if confFile === 'opers.conf'}
+          <span class="text-xs text-muted">Read-only · secrets shown as <code>***REDACTED***</code> · edits stay in Ansible</span>
+        {:else}
+          <span class="text-xs text-muted">Secrets shown as <code>***REDACTED***</code> · kept automatically unless replaced with the real value</span>
+        {/if}
       </div>
+      {#if confEditable && confContent !== null && !confError}
+        <p class="mb-2 text-xs text-muted">
+          {#if confDrifted}
+            Edited in admin — Ansible skips re-rendering this file until forced (see deploy).
+          {:else}
+            Matches the last Ansible render — saving here will make Ansible skip it on future deploys.
+          {/if}
+        </p>
+      {/if}
       {#if confError}
         <p class="text-sm text-danger">{confError}</p>
+      {:else if confEditing}
+        <textarea
+          bind:value={confDraft}
+          rows={24}
+          spellcheck={false}
+          aria-label="Config editor"
+          class="max-h-[60vh] min-h-[40vh] w-full overflow-auto whitespace-pre rounded-md border border-border bg-surface-2 p-2 font-mono text-xs leading-relaxed text-text"
+        ></textarea>
       {:else if confContent !== null}
         <pre class="max-h-[60vh] overflow-auto whitespace-pre font-mono text-xs leading-relaxed text-text">{@html highlightIrcdConf(confContent)}</pre>
       {:else}

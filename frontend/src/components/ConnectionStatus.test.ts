@@ -23,6 +23,7 @@ import {
 // the test-file's transform pass.
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   sendRaw: vi.fn(),
+  sendJson: vi.fn(),
   requestSync: vi.fn(),
   setMaxEid: vi.fn(),
   requestSwitchBuffer: vi.fn(),

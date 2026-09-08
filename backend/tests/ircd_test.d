@@ -12,7 +12,7 @@ import std.string : indexOf;
 
 import ircfiber.web.admin.ircd : parseIrcLine, parseStatsXLine, parseListLine,
     parseNamesLine, stripStatusPrefix, redactAttr, redactConfText,
-    validBanMask, XLine, ChanInfo, NamesInfo;
+    restoreSecrets, validBanMask, XLine, ChanInfo, NamesInfo;
 
 private int failures;
 
@@ -94,6 +94,44 @@ private void testRedact() {
         "structure preserved");
 }
 
+private void testRestoreSecrets() {
+    // (a) redacted sendpass line restores live password byte-for-byte
+    auto live = "      sendpass=\"secret123\"";
+    auto submitted = "      sendpass=\"***REDACTED***\"";
+    auto r = restoreSecrets(live, submitted);
+    check(r.error.length == 0 && r.restored == live, "restore single secret");
+
+    // (b) untouched lines pass through
+    live = "      sendpass=\"secret123\"\n      other=\"value\"";
+    submitted = "      sendpass=\"***REDACTED***\"\n      other=\"value\"";
+    r = restoreSecrets(live, submitted);
+    check(r.error.length == 0 && r.restored == live, "untouched lines pass");
+
+    // (c) submitted placeholder with no live match -> error naming line
+    live = "      other=\"value\"";
+    submitted = "      sendpass=\"***REDACTED***\"";
+    r = restoreSecrets(live, submitted);
+    check(r.error.length > 0 && r.error.indexOf("line 1") >= 0, "no match -> error");
+
+    // (d) two identical live secret lines (ambiguous) -> error, never a guess
+    live = "      sendpass=\"secret1\"\n      sendpass=\"secret2\"";
+    submitted = "      sendpass=\"***REDACTED***\"";
+    r = restoreSecrets(live, submitted);
+    check(r.error.length > 0 && r.error.indexOf("line 1") >= 0, "ambiguous -> error");
+
+    // (e) multi-secret line positional refill
+    live = `<link name="s" sendpass="A" recvpass="B">`;
+    submitted = `<link name="s" sendpass="***REDACTED***" recvpass="***REDACTED***">`;
+    r = restoreSecrets(live, submitted);
+    check(r.error.length == 0 && r.restored == live, "multi-secret positional");
+
+    // (f) line without marker keeps submitted value (Ansible vault paste)
+    live = "      sendpass=\"secret123\"";
+    submitted = "      sendpass=\"vault-copied-value\"";
+    r = restoreSecrets(live, submitted);
+    check(r.error.length == 0 && r.restored == submitted, "vault paste kept");
+}
+
 private void testValidBanMask() {
     check(validBanMask("*@*.example"), "wildcard mask ok");
     check(validBanMask("192.0.2.99"), "IP ok");
@@ -109,6 +147,7 @@ void main() {
     testParseListLine();
     testParseNamesLine();
     testRedact();
+    testRestoreSecrets();
     testValidBanMask();
     if (failures) {
         writefln("ircd tests: %d FAILED", failures);

@@ -40,6 +40,7 @@ import {
 	isUserDisconnected,
 	initiateRejoin,
 	resetPendingState,
+	flushSeenEids,
 	clearPendingNickChanges, clearPendingMemberRemovals,
 	applyRetryStatus,
 	applyFail,
@@ -52,7 +53,7 @@ import {
 	beginConnectAttempt,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
-import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
+import { sendRaw, sendJson } from '/src/stores/wsConnection.svelte.ts';
 import { stripPrefix } from '../lib/utils';
 import type { Network, Member, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import type { SyncNetwork, SyncBuffer } from './ircStore.svelte';
@@ -593,6 +594,75 @@ describe('updateNetworkFromSync', () => {
 		const updated = ircState.networks.find((n) => n.networkId === 'net1');
 		expect(updated?.name).toBe('new');
 		expect(updated?.host).toBe('new.host');
+	});
+
+	/**
+	 * Refresh wiped every unread badge: the boot sync runs before any history
+	 * is loaded, and reconcile treated "no messages yet" as "nothing unread",
+	 * deleting the persisted unseen maps. Reported 2026-09-08 as the unread
+	 * notification counter disappearing on refresh.
+	 */
+	function syncWireBuffer(name: string): SyncBuffer {
+		// Real engine sync buffers carry no client-owned unseen/lastSeen keys;
+		// adoptSyncedUnseen restores those from the persisted maps.
+		const raw = createBuffer({ name });
+		for (const k of ['unseen', 'unseenCount', 'unseenHighlights', 'lastSeen', 'bottomSeen'] as const)
+			delete (raw as Record<string, unknown>)[k];
+		return raw as SyncBuffer;
+	}
+
+	it('keeps persisted unread until history loads to validate it', () => {
+		unseenMap['net1:#dev'] = 3;
+		unseenHighlightsMap['net1:#dev'] = [2000];
+		setLastSeen('net1', '#dev', 1000);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncWireBuffer('#dev')];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		expect(liveBuf('net1', '#dev')?.unseen).toBe(true);
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(3);
+		expect(getUnseenMessageStats()).toBe(1);
+		expect(unseenMap['net1:#dev']).toBe(3);
+	});
+
+	it('recomputes the badge from history once it lands', () => {
+		unseenMap['net1:#dev'] = 3;
+		unseenHighlightsMap['net1:#dev'] = [2000];
+		setLastSeen('net1', '#dev', 1000);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncWireBuffer('#dev')];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		setMessages('net1', '#dev', [
+			createMessage({ t: 500, nick: 'alice', text: 'old' }),
+			createMessage({ t: 2000, nick: 'bob', text: 'new one' }),
+			createMessage({ t: 3000, nick: 'carol', text: 'new two' }),
+		]);
+		flushSync();
+
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(2);
+		expect(unseenMap['net1:#dev']).toBe(2);
+	});
+
+	it('clears a stale badge when loaded history shows nothing new', () => {
+		unseenMap['net1:#dev'] = 3;
+		setLastSeen('net1', '#dev', 1000);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncWireBuffer('#dev')];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+		expect(liveBuf('net1', '#dev')?.unseen).toBe(true);
+
+		setMessages('net1', '#dev', [createMessage({ t: 500, nick: 'alice', text: 'old' })]);
+		flushSync();
+
+		expect(liveBuf('net1', '#dev')?.unseen).toBe(false);
+		expect('net1:#dev' in unseenMap).toBe(false);
 	});
 
 	/**
@@ -1624,6 +1694,43 @@ describe('read tracking helpers', () => {
 		expect(getLastSeen('net1', '#a')).toBe(5000);
 		expect(liveBuf('net1', '#a')?.unseen).toBe(false);
 	});
+
+	it('pushes the heartbeat the moment a buffer is opened', () => {
+		const origFocus = document.hasFocus;
+		document.hasFocus = () => true;
+		ircState.wsConnected = true;
+		try {
+			const net = createNetwork({ networkId: 'net1' });
+			net.buffers.push(createBuffer({ name: '#dev' }), createBuffer({ name: '#other' }));
+			ircState.networks.push(net);
+			ircState.messages['net1:#dev'] = [createMessage({ t: 1000, nick: 'bob', text: 'hi' })];
+			setLastSeen('net1', '#dev', 500);
+			vi.mocked(sendJson).mockClear();
+			setActiveBuffer('net1', '#dev');
+			flushSync();
+			expect(vi.mocked(sendJson)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(sendJson)).toHaveBeenCalledWith({ cmd: 'heartbeat', seenEids: { net1: { '#dev': 1000 } } });
+			expect(dirtySeenEids).toEqual({});
+		} finally {
+			document.hasFocus = origFocus;
+			ircState.wsConnected = false;
+		}
+	});
+
+	it('holds dirty markers for the timer when the stream is down', () => {
+		ircState.wsConnected = false;
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#a' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#a'] = [createMessage({ t: 1000, nick: 'bob', text: 'hi' })];
+		vi.mocked(sendJson).mockClear();
+		markAllAsRead();
+		flushSync();
+		expect(vi.mocked(sendJson)).not.toHaveBeenCalled();
+		expect(dirtySeenEids['net1']?.['#a']).toBe(1000);
+		expect(flushSeenEids()).toBe(false);
+	});
+
 });
 
 describe('PART/KICK/JOIN isJoined lifecycle', () => {

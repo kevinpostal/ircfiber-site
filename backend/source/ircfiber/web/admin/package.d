@@ -39,7 +39,7 @@ import ircfiber.web.admin.replication : apiReplicationStatus;
 import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
     apiBncSeenClear, apiBncSeenForget;
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
-    apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig;
+    apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig, apiIrcdConfigSave;
 import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
     apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink,
     apiNsUnprovisioned, apiNsCreate;
@@ -48,7 +48,7 @@ import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
 import ircfiber.web.admin.backups : apiBackupsOverview, apiBackupsRun, apiBackupsSuspend, apiBackupsLogs;
 import ircfiber.web.admin.fibereye : apiFiberEyeOverview, apiFiberEyeSessions,
-    apiFiberEyeIps, apiFiberEyeIp, apiFiberEyeBans, apiFiberEyeArm,
+    apiFiberEyeIps, apiFiberEyeIp, apiFiberEyeIpBatch, apiFiberEyeBans, apiFiberEyeArm,
     apiFiberEyeBanRelease, apiFiberEyeReconnect, apiFiberEyeRulesGet,
     apiFiberEyeRulesSet, apiFiberEyeRulesReset, apiFiberEyeIrcdRules,
     apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce;
@@ -166,6 +166,7 @@ final class AdminController {
         router.get("/api/admin/fibereye/sessions", &adminWrap!apiFiberEyeSessionsRoute);
         router.get("/api/admin/fibereye/ips", &adminWrap!apiFiberEyeIpsRoute);
         router.get("/api/admin/fibereye/ip", &adminWrap!apiFiberEyeIpRoute);
+        router.get("/api/admin/fibereye/ip/batch", &adminWrap!apiFiberEyeIpBatchRoute);
         router.post("/api/admin/fibereye/ip/deep", &adminWrap!apiFiberEyeIpDeepRoute);
         router.get("/api/admin/fibereye/bans", &adminWrap!apiFiberEyeBansRoute);
         router.post("/api/admin/fibereye/arm", &adminWrap!apiFiberEyeArmRoute);
@@ -245,6 +246,7 @@ final class AdminController {
         router.post("/api/admin/ircd/bans/delete", &adminWrap!apiIrcdBanDeleteRoute);
         router.post("/api/admin/ircd/rehash", &adminWrap!apiIrcdRehashRoute);
         router.get("/api/admin/ircd/config", &adminWrap!apiIrcdConfigRoute);
+        router.post("/api/admin/ircd/config", &adminWrap!apiIrcdConfigSaveRoute);
 
         // NickServ (Anope) account management, on the same IRCD page
         router.get("/api/admin/ircd/nickserv/accounts", &adminWrap!apiNsAccountsRoute);
@@ -309,6 +311,7 @@ private:
     void apiIrcdBanDeleteRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdBanDelete(req, res); }
     void apiIrcdRehashRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdRehash(req, res); }
     void apiIrcdConfigRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfig(req, res); }
+    void apiIrcdConfigSaveRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfigSave(req, res); }
     void apiMotdListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdList(req, res, redis); }
     void apiMotdCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdCreate(req, res, redis); }
     void apiMotdUpdateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdUpdate(req, res, redis); }
@@ -437,6 +440,7 @@ private:
     void apiFiberEyeSessionsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeSessions(req, res, redis); }
     void apiFiberEyeIpsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIps(req, res, redis); }
     void apiFiberEyeIpRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIp(req, res, redis); }
+    void apiFiberEyeIpBatchRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIpBatch(req, res, redis); }
     void apiFiberEyeBansRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeBans(req, res, redis); }
     void apiFiberEyeArmRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeArm(req, res, redis); }
     void apiFiberEyeBanReleaseRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeBanRelease(req, res, redis); }

@@ -46,7 +46,7 @@ import ircfiber.egress : DIRECT_EGRESS_ID, EgressView, egressView, matchingSlot,
 import ircfiber.services.accounts : provisionServicesAccountAsync, servicesSkipKey;
 import ircfiber.network_lifecycle : normalizeHost, provisionNetwork, updateOwnedNetwork, deleteOwnedNetwork;
 import ircfiber.db.user : UserRepository;
-import ircfiber.bnc.wire : networkSlug;
+import ircfiber.bnc.wire : networkSlugs;
 
 /**
  * Decentralized REST API
@@ -460,11 +460,15 @@ final class RESTAPI {
         const tlsFlag = environment.get("IRCFIBER_BNC_PUBLIC_TLS", "1") == "1";
         const token = userRepo.getBncToken(user.id);
         auto nets = Json.emptyArray;
-        foreach (ref cfg; networkRepo.findByUserId(user.id)) {
+        auto configs = networkRepo.findByUserId(user.id);
+        string[] names;
+        foreach (ref cfg; configs) names ~= cfg.name;
+        const slugs = networkSlugs(names);
+        foreach (i, ref cfg; configs) {
             nets ~= Json([
                 "id": Json(cfg.id.toString()),
                 "name": Json(cfg.name),
-                "slug": Json(networkSlug(cfg.name)),
+                "slug": Json(slugs[i]),
                 "host": Json(cfg.host),
                 "port": Json(cfg.port),
                 "connected": Json(loadSnapshot(cfg.id.toString()).connected)

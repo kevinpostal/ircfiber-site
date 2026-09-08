@@ -44,6 +44,8 @@ private void testParseBncPass() {
     check(networkSlug("IRC Fiber") == "irc-fiber", "slug basic: " ~ networkSlug("IRC Fiber"));
     check(networkSlug("  Libera.Chat ") == "libera-chat", "slug trims: " ~ networkSlug("  Libera.Chat "));
     check(networkSlug("!!") == "", "slug empty");
+    check(networkSlugs(["SuperNETs", "IRC Fiber", "supernets", "!!", "SuperNETs"])
+        == ["supernets", "irc-fiber", "supernets-2", "network", "supernets-3"], "duplicate names get unique slugs");
 
     import std.base64 : Base64;
     auto sp = parseSaslPlain(Base64.encode(cast(ubyte[]) "\0zodiac/libera\0tok".dup));

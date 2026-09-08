@@ -5,6 +5,7 @@ import { createNetwork, createBuffer } from '../test/factories';
 
 vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   sendRaw: vi.fn(),
+  sendJson: vi.fn(),
   setMaxEid: vi.fn(),
 }));
 

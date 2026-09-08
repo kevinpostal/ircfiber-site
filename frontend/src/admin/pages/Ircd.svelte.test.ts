@@ -177,4 +177,81 @@ describe('Ircd.svelte — IRCD management page', () => {
     }
     await expect.element(page.getByText(/Connection to irc\.netcrave\.chat started/)).toBeInTheDocument();
   });
+
+  describe('Config tab edit mode', () => {
+    const selectConfFile = (name: string) => {
+      const sel = document.querySelector('select[aria-label="Config file"]') as HTMLSelectElement | null;
+      if (!sel) throw new Error('config file select missing');
+      sel.value = name;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const fillEditor = (text: string) => {
+      const ta = document.querySelector('textarea[aria-label="Config editor"]') as HTMLTextAreaElement | null;
+      if (!ta) throw new Error('config editor missing');
+      ta.value = text;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const configGet = (path: string, query?: Record<string, unknown>) => {
+      if (path === '/api/admin/ircd/status') return Promise.resolve(statusFixture());
+      if (path === '/api/admin/ircd/channels') return Promise.resolve(channelsFixture());
+      if (path === '/api/admin/ircd/bans') return Promise.resolve(bansFixture());
+      if (path === '/api/admin/ircd/config') {
+        const file = (query as { file?: string } | undefined)?.file ?? 'inspircd.conf';
+        return Promise.resolve({
+          content: `# ${file}\n`,
+          editable: file !== 'opers.conf',
+          drifted: false,
+        });
+      }
+      return Promise.reject(new Error('unexpected GET ' + path));
+    };
+
+    it('opers.conf shows no Edit button and keeps the Ansible note', async () => {
+      mockedGet.mockImplementation(configGet);
+      render(Ircd);
+      await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/status'));
+      await page.getByRole('button', { name: 'Config' }).first().click();
+      await vi.waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/config', { file: 'inspircd.conf' });
+      });
+      selectConfFile('opers.conf');
+      await vi.waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/config', { file: 'opers.conf' });
+      });
+      await expect.element(page.getByText(/edits stay in Ansible/)).toBeInTheDocument();
+      await expect.element(page.getByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    });
+
+    it('editing modules.conf and confirming POSTs {file, content} and toasts', async () => {
+      mockedGet.mockImplementation(configGet);
+      mockedPost.mockImplementation((path: string) => {
+        if (path === '/api/admin/ircd/config') {
+          return Promise.resolve({ file: 'modules.conf', rehashed: 'modules.conf', notices: [] });
+        }
+        return Promise.resolve({ rehashed: 'inspircd.conf' });
+      });
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      render(Ircd);
+      await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/status'));
+      await page.getByRole('button', { name: 'Config' }).first().click();
+      await vi.waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/config', { file: 'inspircd.conf' });
+      });
+      selectConfFile('modules.conf');
+      await vi.waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/config', { file: 'modules.conf' });
+      });
+      await page.getByRole('button', { name: 'Edit' }).first().click();
+      fillEditor('# edited by admin test');
+      await page.getByRole('button', { name: 'Save & rehash' }).first().click();
+      await vi.waitFor(() => {
+        expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/config', {
+          file: 'modules.conf',
+          content: '# edited by admin test',
+        });
+      });
+      expect(mockedToastOk).toHaveBeenCalledWith('Saved modules.conf, rehashed modules.conf');
+      confirmSpy.mockRestore();
+    });
+  });
 });
