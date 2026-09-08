@@ -1,0 +1,50 @@
+---
+# One-shot: register the FiberEye bot nick with NickServ so nobody else can
+# take it. The oper class deliberately carries no <badnick> reservation
+# (FiberEye sends NICK before it can OPER, so a reservation would lock our
+# own bot out), which makes this registration the only thing protecting the
+# nick. Idempotent: a second run just gets "already registered".
+#
+#   ansible-playbook playbooks/fibereye-nick.yml
+- name: Register the FiberEye nick with NickServ
+  hosts: ircfiber_gw
+  become: true
+  tags: [fibereye]
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  tasks:
+    - name: Skip when no NickServ password is configured
+      ansible.builtin.meta: end_play
+      when: (vault_fibereye_nickserv_password | default('')) | length == 0
+
+    - name: Resolve the ircd container network
+      ansible.builtin.command:
+        cmd: >-
+          docker inspect -f
+          '{{ '{{' }} range $k, $v := .NetworkSettings.Networks {{ '}}' }}{{ '{{' }} $k {{ '}}' }}{{ '{{' }} end {{ '}}' }}'
+          ircfiber-ircd
+      register: _ircd_net
+      changed_when: false
+
+    - name: REGISTER the nick over a throwaway client
+      ansible.builtin.shell:
+        cmd: >-
+          docker run --rm --network {{ _ircd_net.stdout.split()[0] }} busybox sh -c
+          "(printf 'NICK {{ fibereye_nick | default('FiberEye') }}_reg\r\nUSER reg 0 * :registration\r\n';
+            sleep 6;
+            printf 'NICK {{ fibereye_nick | default('FiberEye') }}\r\n';
+            sleep 3;
+            printf 'PRIVMSG NickServ :REGISTER {{ vault_fibereye_nickserv_password }} eye@ircfiber.com\r\n';
+            sleep 5;
+            printf 'QUIT :done\r\n') | nc ircd {{ ircd_port_plain | default(6667) }}"
+      register: _reg
+      changed_when: "'registered' in (_reg.stdout | lower)"
+      no_log: true
+
+    - name: Report the outcome without leaking the password
+      ansible.builtin.debug:
+        msg: >-
+          {{ _reg.stdout_lines
+             | select('search', '(?i)nickserv|registered|already|denied|error')
+             | map('regex_replace', vault_fibereye_nickserv_password, '<redacted>')
+             | list }}
