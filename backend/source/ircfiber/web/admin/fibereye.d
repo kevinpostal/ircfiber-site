@@ -3,9 +3,12 @@
  *
  * FiberEye runs in its own container, so its live state reaches the admin
  * page through the heartbeat it publishes to Redis, and admin actions
- * travel back through its control list — same shape as the #staff log bot
- * (`ircfiber.web.admin.logs_bot`). The persisted sessions/IPs/bans come
- * straight out of Mongo through `ircfiber.fibereye.store`.
+ * travel back through its control list. The persisted sessions/IPs/bans
+ * come straight out of Mongo through `ircfiber.fibereye.store`; the IP
+ * intelligence record through `ircfiber.ipintel.store`.
+ *
+ * FiberEye is also the `#staff` announcer, so the announce / rejoin
+ * actions that used to belong to the retired FiberLogs bot live here.
  *
  * Two things deliberately do *not* go through the bot:
  *   - arming enforcement is a Redis key (`fibereye:armed`), not a command,
@@ -16,7 +19,6 @@
  */
 module ircfiber.web.admin.fibereye;
 
-import std.datetime : Clock;
 import std.process : environment;
 import std.string : strip, toLower;
 import std.conv : to;
@@ -26,15 +28,28 @@ import vibe.data.bson;
 import vibe.data.json : Json;
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 
-import ircfiber.fibereye.events : fiberEyeArmedKey, fiberEyeBotKey, fiberEyeControlKey;
+import ircfiber.bots.core : nowMs;
+
+import ircfiber.fibereye.events : fiberEyeArmedKey, fiberEyeBotKey, fiberEyeControlKey,
+    fiberEyeRulesKey;
 import ircfiber.fibereye.format : ipGroup, zlineMatches;
-import ircfiber.fibereye.rules : isAutoPlacedZline;
+import ircfiber.fibereye.rules : isAutoPlacedZline, RULE_WINDOW_MIN, RULE_WINDOW_MAX,
+    RULE_COUNT_MIN, RULE_COUNT_MAX, RULE_SHORT_MS_MIN, RULE_SHORT_MS_MAX,
+    RULE_BAN_SECONDS_MIN, RULE_BAN_SECONDS_MAX;
+import ircfiber.fibereye.ruleset : RuleSet, RULE_LIST_MAX, summarizeRuleChange, validateRuleSet;
 import ircfiber.fibereye.store;
+import ircfiber.ipintel.record : IpIntel;
+import ircfiber.ipintel.service : IpIntelService, LookupMode, loadIpIntelSettings;
+import ircfiber.ipintel.store : IpIntelStore;
+import ircfiber.logs.events : LogEvent, logsOutboxKey, pushLogEvent;
+import ircfiber.logs.format : isPrivateIp;
 import ircfiber.models.user : User;
 import ircfiber.storage.redis : RedisStorage;
+import ircfiber.support.json : sanitizeLine;
 import ircfiber.tracing : isEnvEnabled;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, queryString, readJsonBody;
 import ircfiber.web.admin.ircd : IrcdError, XLine, listXlinesNow, removeXlineNow;
+import ircfiber.web.admin.ircd : loadIrcdSettings, parseConfTag;
 
 /// Heartbeats older than this are reported as dead even if the key has not
 /// expired yet (the bot refreshes every ≤5 s with a 60 s TTL).
@@ -43,8 +58,6 @@ private enum FIBEREYE_STALE_MS = 60_000;
 /// The IP document deliberately stores no nick array — a nick-rotating bot
 /// would grow it without bound.
 private enum IP_DETAIL_SESSIONS = 200;
-
-private long nowMs() { return Clock.currTime.toUnixTime!long * 1000; }
 
 private User currentAdmin(HTTPServerRequest req) {
     if (auto p = "user" in req.context) return (*p).get!User;
@@ -118,8 +131,13 @@ private Json sessionJson(const SessionRecord r) {
     o["geoCountry"] = Json(r.geoCountry);
     o["geoOrg"] = Json(r.geoOrg);
     o["geoTimezone"] = Json(r.geoTimezone);
-    o["geoPrivacy"] = Json(r.geoPrivacy);
     o["geoPending"] = Json(r.geoPending);
+    o["intelAsn"] = Json(r.intelAsn);
+    o["intelFlags"] = Json(r.intelFlags);
+    o["intelOperator"] = Json(r.intelOperator);
+    o["intelPrefix"] = Json(r.intelPrefix);
+    o["intelRisk"] = Json(r.intelRisk);
+    o["intelAt"] = Json(r.intelAt);
     return o;
 }
 
@@ -141,8 +159,13 @@ private Json ipJson(const IpRecord r) {
     o["geoCountry"] = Json(r.geoCountry);
     o["geoOrg"] = Json(r.geoOrg);
     o["geoTimezone"] = Json(r.geoTimezone);
-    o["geoPrivacy"] = Json(r.geoPrivacy);
     o["geoPending"] = Json(r.geoPending);
+    o["intelAsn"] = Json(r.intelAsn);
+    o["intelFlags"] = Json(r.intelFlags);
+    o["intelOperator"] = Json(r.intelOperator);
+    o["intelPrefix"] = Json(r.intelPrefix);
+    o["intelRisk"] = Json(r.intelRisk);
+    o["intelAt"] = Json(r.intelAt);
     o["strikes"] = Json(r.strikes);
     o["bannedUntil"] = Json(r.bannedUntil);
     o["lastBanId"] = Json(r.lastBanId);
@@ -228,6 +251,14 @@ package void apiFiberEyeOverview(HTTPServerRequest req, HTTPServerResponse res, 
     // its first heartbeat.
     auto nick = environment.get("IRCFIBER_FIBEREYE_NICK", "").strip();
     data["expectedNick"] = Json(nick.length ? nick : "FiberEye");
+    auto channel = environment.get("IRCFIBER_FIBEREYE_CHANNEL", "").strip();
+    data["expectedChannel"] = Json(channel.length ? channel : "#staff");
+    // The `#staff` announcement queue and the admin control list.
+    long outboxDepth = -1, controlDepth = -1;
+    try outboxDepth = redis.getDb().llen(logsOutboxKey()); catch (Exception) {}
+    try controlDepth = redis.getDb().llen(fiberEyeControlKey()); catch (Exception) {}
+    data["outboxDepth"] = Json(outboxDepth);
+    data["controlDepth"] = Json(controlDepth);
 
     auto store = new FiberEyeStore();
     const since = nowMs() - 86_400_000;
@@ -384,6 +415,41 @@ package void apiFiberEyeIp(HTTPServerRequest req, HTTPServerResponse res, RedisS
         logWarn("FiberEye admin: STATS Z failed: %s", e.msg);
     }
     data["zline"] = zline;
+
+    // The canonical IP-intelligence record for the exact address, plus
+    // which sources this deployment can run (so the page can explain a
+    // missing field). Stored under the exact IP, not the group.
+    const exactIp = found.isNull || !found.get.ip.length ? raw.strip() : found.get.ip;
+    Json intel = Json(null);
+    try {
+        bool have;
+        auto rec = new IpIntelStore().get(exactIp, have);
+        if (have) intel = rec.toJson();
+    } catch (Exception e) {
+        logWarn("FiberEye admin: ipintel read failed for %s: %s", exactIp, e.msg);
+    }
+    data["intel"] = intel;
+    auto srcs = Json.emptyArray;
+    foreach (s; new IpIntelService(redis, null, loadIpIntelSettings()).activeSources()) srcs ~= Json(s);
+    data["intelSources"] = srcs;
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/fibereye/ip/deep — body `{ip}`; refetches every
+/// source and adds Shodan InternetDB (non-commercial: manual use only).
+/// Answers `{intel}` with the fresh record.
+package void apiFiberEyeIpDeep(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto body_ = readJsonBody(req);
+    const ip = body_.type == Json.Type.object ? body_["ip"].opt!string.strip() : "";
+    if (!ip.length || isPrivateIp(ip)) { jsonError(res, 400, "a public IP address is required."); return; }
+    IpIntelStore store;
+    try store = new IpIntelStore();
+    catch (Exception e) { jsonError(res, 502, "Mongo unavailable: " ~ e.msg); return; }
+    auto admin = currentAdmin(req);
+    auto rec = new IpIntelService(redis, store, loadIpIntelSettings()).lookup(ip, LookupMode.deep);
+    logInfo("Admin %s ran a deep IP lookup for %s (%s degraded)", admin.username, ip, rec.degraded.length);
+    auto data = Json.emptyObject;
+    data["intel"] = rec.toJson();
     jsonOk(res, data);
 }
 
@@ -422,8 +488,255 @@ package void apiFiberEyeArm(HTTPServerRequest req, HTTPServerResponse res, Redis
         return;
     }
     logInfo("FiberEye enforcement %s by %s", armed ? "ARMED" : "disarmed", admin.username);
+    // Arming shares the rule history the page shows: "who turned it on"
+    // belongs in the same list as "who lowered the threshold".
+    RuleAudit entry;
+    entry.atMs = nowMs();
+    entry.actor = admin.username;
+    entry.action = armed ? "arm" : "disarm";
+    entry.summary = armed ? "enforcement armed" : "enforcement disarmed";
+    (new FiberEyeStore()).insertAudit(entry);
     auto data = Json.emptyObject;
     data["armed"] = Json(armed);
+    jsonOk(res, data);
+}
+
+// ── ban rules ────────────────────────────────────────────────────────
+
+/// The bot's heartbeat, or `Json(null)` when there is none.
+private Json heartbeat(RedisStorage redis) {
+    try {
+        auto j = redis.getJson(fiberEyeBotKey());
+        if (j.type == Json.Type.object) return j;
+    } catch (Exception) {
+    }
+    return Json(null);
+}
+
+/// What the deploy asked for. The web process has no FiberEye env, so the
+/// only source for the env baseline is the heartbeat the bot publishes;
+/// without one, the built-in defaults are the honest answer.
+private RuleSet deployedBaseline(Json bot) {
+    RuleSet builtin;
+    if (bot.type == Json.Type.object && bot["rulesDeployed"].type == Json.Type.object)
+        return RuleSet.fromJson(bot["rulesDeployed"], builtin);
+    return builtin;
+}
+
+/// The rule set actually in force according to the last heartbeat.
+private RuleSet effectiveRules(Json bot, const RuleSet fallback) {
+    if (bot.type == Json.Type.object && bot["rules"].type == Json.Type.object)
+        return RuleSet.fromJson(bot["rules"], fallback);
+    return cast(RuleSet) fallback;
+}
+
+private Json auditJson(const RuleAudit a) {
+    auto o = Json.emptyObject;
+    o["id"] = Json(a.id);
+    o["atMs"] = Json(a.atMs);
+    o["actor"] = Json(a.actor);
+    o["action"] = Json(a.action);
+    o["summary"] = Json(a.summary);
+    return o;
+}
+
+/// The payload all three rule endpoints answer with, so the UI always
+/// replaces its whole state from the response of whatever it just did.
+private Json rulesPayload(RedisStorage redis, FiberEyeStore store) {
+    auto bot = heartbeat(redis);
+    auto data = Json.emptyObject;
+    data["effective"] = (bot.type == Json.Type.object && bot["rules"].type == Json.Type.object)
+        ? bot["rules"] : Json(null);
+    data["deployed"] = (bot.type == Json.Type.object && bot["rulesDeployed"].type == Json.Type.object)
+        ? bot["rulesDeployed"] : Json(null);
+    string source = "unknown";
+    if (bot.type == Json.Type.object) {
+        const s = bot["rulesSource"].opt!string;
+        if (s.length) source = s;
+    }
+    data["source"] = Json(source);
+
+    auto stored = store.loadRules();
+    if (stored.isNull) data["stored"] = Json(null);
+    else {
+        auto storedJson = stored.get.toJson();
+        data["stored"] = storedJson;
+        // Self-heal a lost mirror: Mongo is the source of truth, so a
+        // Redis wipe must not quietly leave the bot on the baseline
+        // while the page still shows a stored override.
+        try {
+            if (redis.getJson(fiberEyeRulesKey()).type != Json.Type.object) {
+                redis.setJson(fiberEyeRulesKey(), storedJson);
+                logInfo("FiberEye: republished the rules mirror from Mongo");
+            }
+        } catch (Exception e) {
+            logWarn("FiberEye admin: cannot republish the rules mirror: %s", e.msg);
+        }
+    }
+
+    auto bounds = Json.emptyObject;
+    bounds["windowMin"] = Json(cast(long) RULE_WINDOW_MIN);
+    bounds["windowMax"] = Json(cast(long) RULE_WINDOW_MAX);
+    bounds["countMin"] = Json(cast(long) RULE_COUNT_MIN);
+    bounds["countMax"] = Json(cast(long) RULE_COUNT_MAX);
+    bounds["shortMsMin"] = Json(cast(long) RULE_SHORT_MS_MIN);
+    bounds["shortMsMax"] = Json(cast(long) RULE_SHORT_MS_MAX);
+    bounds["banSecondsMin"] = Json(cast(long) RULE_BAN_SECONDS_MIN);
+    bounds["banSecondsMax"] = Json(cast(long) RULE_BAN_SECONDS_MAX);
+    bounds["listMax"] = Json(cast(long) RULE_LIST_MAX);
+    data["bounds"] = bounds;
+
+    auto audit = Json.emptyArray;
+    foreach (a; store.recentAudit(20)) audit ~= auditJson(a);
+    data["audit"] = audit;
+    return data;
+}
+
+/// GET /api/admin/fibereye/rules — what is in force, what the deploy
+/// asked for, what an admin stored, the bounds the UI enforces and the
+/// recent history.
+package void apiFiberEyeRulesGet(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto store = new FiberEyeStore();
+    jsonOk(res, rulesPayload(redis, store));
+}
+
+/// POST /api/admin/fibereye/rules — body is the canonical RuleSet JSON.
+/// `updatedAtMs`/`updatedBy` from the body are ignored and set here.
+package void apiFiberEyeRulesSet(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto body_ = readJsonBody(req);
+    if (body_.type != Json.Type.object) {
+        jsonError(res, 400, "A rule set object is required.");
+        return;
+    }
+    auto admin = currentAdmin(req);
+    auto store = new FiberEyeStore();
+    auto bot = heartbeat(redis);
+    const baseline = deployedBaseline(bot);
+
+    auto next = RuleSet.fromJson(body_, baseline);
+    next.updatedAtMs = nowMs();
+    next.updatedBy = admin.username;
+
+    auto errs = validateRuleSet(next);
+    if (errs.length) {
+        // `jsonError` carries one string, but the form wants every reason
+        // at once, so this one case writes the envelope directly.
+        auto payload = Json.emptyObject;
+        payload["ok"] = Json(false);
+        payload["error"] = Json(errs[0]);
+        auto list = Json.emptyArray;
+        foreach (e; errs) list ~= Json(e);
+        payload["errors"] = list;
+        res.headers["Content-Type"] = "application/json; charset=utf-8";
+        res.statusCode = 400;
+        res.writeBody(payload.toString());
+        return;
+    }
+
+    auto storedBefore = store.loadRules();
+    const previous = storedBefore.isNull ? effectiveRules(bot, baseline) : storedBefore.get;
+
+    store.saveRules(next);
+    try redis.setJson(fiberEyeRulesKey(), next.toJson());
+    catch (Exception e) {
+        // Stored but not mirrored: the bot is still on the old rules until
+        // the next GET republishes, so say so instead of reporting success.
+        logWarn("FiberEye admin: rules stored but the mirror failed: %s", e.msg);
+        jsonError(res, 502, "Rules stored, but Redis is unavailable so the bot has not picked them up.");
+        return;
+    }
+
+    const summary = summarizeRuleChange(previous, next);
+    RuleAudit a;
+    a.atMs = next.updatedAtMs;
+    a.actor = admin.username;
+    a.action = "rules_update";
+    a.summary = summary.length ? summary : "no effective change";
+    a.before = previous.toJson().toString();
+    a.after = next.toJson().toString();
+    store.insertAudit(a);
+    logInfo("FiberEye: rules updated by %s (%s)", admin.username, a.summary);
+
+    jsonOk(res, rulesPayload(redis, store));
+}
+
+/// POST /api/admin/fibereye/rules/reset — drop the override so the
+/// deployed baseline takes over again within one sideband tick.
+package void apiFiberEyeRulesReset(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto admin = currentAdmin(req);
+    auto store = new FiberEyeStore();
+    auto bot = heartbeat(redis);
+    const baseline = deployedBaseline(bot);
+    auto storedBefore = store.loadRules();
+    const previous = storedBefore.isNull ? effectiveRules(bot, baseline) : storedBefore.get;
+
+    store.clearRules();
+    try redis.getDb().del(fiberEyeRulesKey());
+    catch (Exception e) {
+        logWarn("FiberEye admin: cannot delete the rules mirror: %s", e.msg);
+        jsonError(res, 502, "Override cleared in the database, but Redis is unavailable so the bot still has it.");
+        return;
+    }
+
+    const summary = summarizeRuleChange(previous, baseline);
+    RuleAudit a;
+    a.atMs = nowMs();
+    a.actor = admin.username;
+    a.action = "rules_reset";
+    a.summary = summary.length ? summary : "restored the deployed baseline";
+    a.before = previous.toJson().toString();
+    a.after = baseline.toJson().toString();
+    store.insertAudit(a);
+    logInfo("FiberEye: rules reset to the deployed baseline by %s (%s)", admin.username, a.summary);
+
+    jsonOk(res, rulesPayload(redis, store));
+}
+
+/// GET /api/admin/fibereye/ircd-rules — the ircd's own first line of
+/// defence, read-only, so every ban rule is visible in one place. These
+/// tags are ansible-rendered deploy artifacts; changing them needs a
+/// config render plus a rehash, which is why nothing here writes.
+///
+/// Answers 200 with `available:false` and a reason when the file is not
+/// readable, so the panel degrades instead of failing the page.
+package void apiFiberEyeIrcdRules(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    import std.file : exists, isFile, readText;
+    import std.path : buildPath;
+
+    auto settings = loadIrcdSettings();
+    const path = buildPath(settings.confDir, "modules.conf");
+    auto data = Json.emptyObject;
+    data["path"] = Json(path);
+
+    if (!exists(path) || !isFile(path)) {
+        data["available"] = Json(false);
+        data["reason"] = Json("The ircd config dir is not mounted into the gateway (" ~ path ~ ").");
+        jsonOk(res, data);
+        return;
+    }
+    string text;
+    try text = readText(path);
+    catch (Exception e) {
+        logWarn("FiberEye admin: cannot read %s: %s", path, e.msg);
+        data["available"] = Json(false);
+        data["reason"] = Json("The ircd config file could not be read.");
+        jsonOk(res, data);
+        return;
+    }
+
+    static Json tagJson(string[string] attrs) {
+        auto o = Json.emptyObject;
+        foreach (k, v; attrs) o[k] = Json(v);
+        return o;
+    }
+    auto connectban = parseConfTag(text, "connectban");
+    auto connflood = parseConfTag(text, "connflood");
+    data["available"] = Json(connectban.length > 0 || connflood.length > 0);
+    data["connectban"] = tagJson(connectban);
+    data["connflood"] = tagJson(connflood);
+    if (!connectban.length && !connflood.length)
+        data["reason"] = Json("No <connectban> or <connflood> tag is present in " ~ path ~ ".");
+    else data["reason"] = Json("");
     jsonOk(res, data);
 }
 
@@ -465,13 +778,13 @@ package void apiFiberEyeBanRelease(HTTPServerRequest req, HTTPServerResponse res
     jsonOk(res, data);
 }
 
-/// POST /api/admin/fibereye/reconnect — drop and re-establish the bot's
-/// IRC session. The bot drops commands older than 60 s, so a request made
-/// while it is down does not fire on its next start.
-package void apiFiberEyeReconnect(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+/// Queues `cmd` for the bot; it drops commands older than 60 s, so a
+/// request made while the bot is down does not fire on its next start.
+private void queueFiberEyeCommand(HTTPServerRequest req, HTTPServerResponse res,
+                                  RedisStorage redis, string cmd) {
     auto admin = currentAdmin(req);
     auto entry = Json([
-        "cmd": Json("reconnect"), "by": Json(admin.username), "ts": Json(nowMs()),
+        "cmd": Json(cmd), "by": Json(admin.username), "ts": Json(nowMs()),
     ]);
     try {
         auto db = redis.getDb();
@@ -481,8 +794,42 @@ package void apiFiberEyeReconnect(HTTPServerRequest req, HTTPServerResponse res,
         jsonError(res, 502, "Redis unavailable: " ~ e.msg);
         return;
     }
-    logInfo("Admin %s queued FiberEye command reconnect", admin.username);
+    logInfo("Admin %s queued FiberEye command %s", admin.username, cmd);
     auto data = Json.emptyObject;
-    data["queued"] = Json("reconnect");
+    data["queued"] = Json(cmd);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/fibereye/reconnect — drop and re-establish the bot's IRC session.
+package void apiFiberEyeReconnect(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    queueFiberEyeCommand(req, res, redis, "reconnect");
+}
+
+/// POST /api/admin/fibereye/rejoin — re-send JOIN for `#staff`.
+package void apiFiberEyeRejoin(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    queueFiberEyeCommand(req, res, redis, "rejoin");
+}
+
+/// POST /api/admin/fibereye/announce — body `{text}`; the bot says
+/// `Notice from <admin>: <text>` in `#staff` (via the outbox, so it is
+/// delivered once the bot is back if it is currently away).
+package void apiFiberEyeAnnounce(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto body_ = readJsonBody(req);
+    const text = body_.type == Json.Type.object ? sanitizeLine(body_["text"].opt!string) : "";
+    if (text.length < 1 || text.length > 300) {
+        jsonError(res, 400, "text must be 1–300 characters");
+        return;
+    }
+    auto admin = currentAdmin(req);
+    LogEvent ev;
+    ev.type = "notice";
+    ev.text = text;
+    ev.actor = admin.username;
+    ev.ts = nowMs();
+    pushLogEvent(redis, ev);
+    logInfo("Admin %s queued #staff notice (%d chars)", admin.username, text.length);
+    auto data = Json.emptyObject;
+    data["queued"] = Json(true);
+    data["text"] = Json(text);
     jsonOk(res, data);
 }

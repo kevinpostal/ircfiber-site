@@ -28,6 +28,7 @@ import vibe.core.log;
 import vibe.data.json : Json;
 
 import ircfiber.api.session : WS_SESSION_KEY_PREFIX;
+import ircfiber.bnc.control : publishBncRevoked;
 import ircfiber.storage.session : RedisSessionStore;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.uploads : UploadRepository;
@@ -75,6 +76,9 @@ void purgeUserAccount(User user, RedisStorage redis, ServerRegistry serverRegist
         purgeNetworkRuntimeState(net.id, redis, serverRegistry);
         netRepo.deleteById(net.id);
     }
+    // Bouncer sessions that are not bound to any network survive the
+    // per-network purge above; an empty network id drops them all.
+    publishBncRevoked(redis, userId, "");
 
     try db.del("prefs:" ~ userId);
     catch (Exception e) logWarn("purge %s: deleting prefs failed: %s", user.username, e.msg);

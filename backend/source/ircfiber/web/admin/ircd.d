@@ -161,6 +161,71 @@ public bool parseStatsXLine(IrcLine l, out XLine x) {
     return true;
 }
 
+/// Attribute map of the first `<tag …>` in an InspIRCd config text.
+///
+/// Handles the multi-line form the templates render (one attribute per
+/// line) and quoted values containing `>`; comment lines are dropped
+/// first, because the rendered config discusses tags in prose
+/// ("# … leaves the per-IP judgement to <connectban> below") and a
+/// comment must never be read as the tag itself. Empty when absent.
+public string[string] parseConfTag(string confText, string tag) @safe pure {
+    import std.string : splitLines;
+
+    string[string] attrs;
+    if (!tag.length) return attrs;
+
+    string text;
+    foreach (line; confText.splitLines()) {
+        if (line.strip().startsWith("#")) continue;
+        text ~= line ~ "\n";
+    }
+
+    static bool isSpace(char c) @safe pure {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+    }
+
+    // `<connectban` must not match `<connectbanfoo`.
+    const open = "<" ~ tag;
+    ptrdiff_t start = -1;
+    for (ptrdiff_t p = text.indexOf(open); p >= 0;) {
+        const size_t after = cast(size_t)(p + open.length);
+        if (after < text.length && (isSpace(text[after]) || text[after] == '>')) {
+            start = cast(ptrdiff_t) after;
+            break;
+        }
+        const next = text[after .. $].indexOf(open);
+        if (next < 0) break;
+        p = cast(ptrdiff_t)(after + next);
+    }
+    if (start < 0) return attrs;
+
+    size_t end = text.length;
+    bool quoted;
+    for (size_t j = cast(size_t) start; j < text.length; j++) {
+        if (text[j] == '"') quoted = !quoted;
+        else if (text[j] == '>' && !quoted) { end = j; break; }
+    }
+
+    const inner = text[cast(size_t) start .. end];
+    size_t k;
+    while (k < inner.length) {
+        while (k < inner.length && isSpace(inner[k])) k++;
+        const nameStart = k;
+        while (k < inner.length && inner[k] != '=' && !isSpace(inner[k])) k++;
+        if (k >= inner.length || inner[k] != '=') break;
+        const name = inner[nameStart .. k];
+        k++;
+        if (k >= inner.length || inner[k] != '"') break;
+        k++;
+        const valStart = k;
+        while (k < inner.length && inner[k] != '"') k++;
+        const value = inner[valStart .. k];
+        if (k < inner.length) k++;
+        if (name.length) attrs[name] = value;
+    }
+    return attrs;
+}
+
 /// One LIST row, numeric 322:
 /// `:server 322 nick <channel> <users> :[<modes>] <topic>`
 public struct ChanInfo {

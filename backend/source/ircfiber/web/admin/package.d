@@ -46,12 +46,12 @@ import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
-import ircfiber.web.admin.logs_bot : apiLogsBotStatus, apiLogsBotReconnect,
-    apiLogsBotRejoin, apiLogsBotAnnounce;
 import ircfiber.web.admin.backups : apiBackupsOverview, apiBackupsRun, apiBackupsSuspend, apiBackupsLogs;
 import ircfiber.web.admin.fibereye : apiFiberEyeOverview, apiFiberEyeSessions,
     apiFiberEyeIps, apiFiberEyeIp, apiFiberEyeBans, apiFiberEyeArm,
-    apiFiberEyeBanRelease, apiFiberEyeReconnect;
+    apiFiberEyeBanRelease, apiFiberEyeReconnect, apiFiberEyeRulesGet,
+    apiFiberEyeRulesSet, apiFiberEyeRulesReset, apiFiberEyeIrcdRules,
+    apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce;
 import ircfiber.web.admin.emails : apiEmailsOverview, apiEmailsTest,
     apiEmailsPendingResend, apiEmailsPendingRevoke, apiEmailsCooldownClear,
     apiEmailsIpLimitClear;
@@ -160,22 +160,26 @@ final class AdminController {
         router.post("/api/admin/support/bot/reconnect", &adminWrap!apiSupportBotReconnectRoute);
         router.post("/api/admin/support/bot/rejoin", &adminWrap!apiSupportBotRejoinRoute);
         router.post("/api/admin/support/bot/announce", &adminWrap!apiSupportBotAnnounceRoute);
-        // #staff log bot (heartbeat + control; shown on the IRCD page)
-        router.get("/api/admin/logs-bot", &adminWrap!apiLogsBotStatusRoute);
-        router.post("/api/admin/logs-bot/reconnect", &adminWrap!apiLogsBotReconnectRoute);
-        router.post("/api/admin/logs-bot/rejoin", &adminWrap!apiLogsBotRejoinRoute);
-        router.post("/api/admin/logs-bot/announce", &adminWrap!apiLogsBotAnnounceRoute);
-
         // FiberEye connection watch (sessions/IPs/automatic Z-lines;
         // see web.admin.fibereye). Enforcement is armed from here.
         router.get("/api/admin/fibereye", &adminWrap!apiFiberEyeOverviewRoute);
         router.get("/api/admin/fibereye/sessions", &adminWrap!apiFiberEyeSessionsRoute);
         router.get("/api/admin/fibereye/ips", &adminWrap!apiFiberEyeIpsRoute);
         router.get("/api/admin/fibereye/ip", &adminWrap!apiFiberEyeIpRoute);
+        router.post("/api/admin/fibereye/ip/deep", &adminWrap!apiFiberEyeIpDeepRoute);
         router.get("/api/admin/fibereye/bans", &adminWrap!apiFiberEyeBansRoute);
         router.post("/api/admin/fibereye/arm", &adminWrap!apiFiberEyeArmRoute);
         router.post("/api/admin/fibereye/bans/release", &adminWrap!apiFiberEyeBanReleaseRoute);
         router.post("/api/admin/fibereye/reconnect", &adminWrap!apiFiberEyeReconnectRoute);
+        // FiberEye is the #staff announcer (the retired FiberLogs' role).
+        router.post("/api/admin/fibereye/rejoin", &adminWrap!apiFiberEyeRejoinRoute);
+        router.post("/api/admin/fibereye/announce", &adminWrap!apiFiberEyeAnnounceRoute);
+        // Ban rules: editable from the page, picked up by the bot within
+        // one sideband tick. The ircd's own tags are read-only here.
+        router.get("/api/admin/fibereye/rules", &adminWrap!apiFiberEyeRulesGetRoute);
+        router.post("/api/admin/fibereye/rules", &adminWrap!apiFiberEyeRulesSetRoute);
+        router.post("/api/admin/fibereye/rules/reset", &adminWrap!apiFiberEyeRulesResetRoute);
+        router.get("/api/admin/fibereye/ircd-rules", &adminWrap!apiFiberEyeIrcdRulesRoute);
 
         // MOTD templates (served per connect by the engine, rotated into the ircd)
         router.get("/api/admin/motd", &adminWrap!apiMotdListRoute);
@@ -190,7 +194,7 @@ final class AdminController {
         // Bouncer: attached clients + accounts with a bouncer password
         router.get("/api/admin/bnc", &adminWrap!apiBncOverviewRoute);
         router.post("/api/admin/bnc/clients/:sid/kick", &adminWrap!apiBncKickRoute);
-        router.post("/api/admin/bnc/networks/:id/revoke", &adminWrap!apiBncRevokeRoute);
+        router.post("/api/admin/bnc/users/:id/revoke", &adminWrap!apiBncRevokeRoute);
         router.post("/api/admin/bnc/networks/:id/seen/clear", &adminWrap!apiBncSeenClearRoute);
         router.post("/api/admin/bnc/networks/:id/seen/:clientId/forget", &adminWrap!apiBncSeenForgetRoute);
 
@@ -428,12 +432,6 @@ private:
     void apiSupportBotRejoinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotRejoin(req, res, redis); }
     void apiSupportBotAnnounceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotAnnounce(req, res, redis); }
 
-    // #staff log bot
-    void apiLogsBotStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotStatus(req, res, redis); }
-    void apiLogsBotReconnectRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotReconnect(req, res, redis); }
-    void apiLogsBotRejoinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotRejoin(req, res, redis); }
-    void apiLogsBotAnnounceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotAnnounce(req, res, redis); }
-
     // FiberEye connection watch
     void apiFiberEyeOverviewRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeOverview(req, res, redis); }
     void apiFiberEyeSessionsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeSessions(req, res, redis); }
@@ -443,6 +441,13 @@ private:
     void apiFiberEyeArmRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeArm(req, res, redis); }
     void apiFiberEyeBanReleaseRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeBanRelease(req, res, redis); }
     void apiFiberEyeReconnectRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeReconnect(req, res, redis); }
+    void apiFiberEyeIpDeepRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIpDeep(req, res, redis); }
+    void apiFiberEyeRejoinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeRejoin(req, res, redis); }
+    void apiFiberEyeAnnounceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeAnnounce(req, res, redis); }
+    void apiFiberEyeRulesGetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeRulesGet(req, res, redis); }
+    void apiFiberEyeRulesSetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeRulesSet(req, res, redis); }
+    void apiFiberEyeRulesResetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeRulesReset(req, res, redis); }
+    void apiFiberEyeIrcdRulesRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIrcdRules(req, res, redis); }
 
     // Mongo
     void apiMongoStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMongoStatus(req, res); }

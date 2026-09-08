@@ -24,8 +24,9 @@ import ircfiber.storage.session : RedisSessionStore;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody, formString, jsonArray, stripJsonStr;
 import ircfiber.web.admin.servers : AssignmentRow, loadNetworkSnapshot;
 import ircfiber.redis.protocol : NetworkStateSnapshot, RedisKeys, ControlMessage;
-import ircfiber.logs.format : AsnInfo, asnFromOrg;
-import ircfiber.logs.geo : loadGeoSettings, lookupAsn;
+import ircfiber.ipintel.record : IpIntel;
+import ircfiber.ipintel.service : IpIntelService, LookupMode, loadIpIntelSettings;
+import ircfiber.ipintel.store : IpIntelStore;
 
 /// Escape a string for JSON output
 private string escapeJson(string s) {
@@ -1572,11 +1573,12 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         string mullvadHostname;
         /// `organization`, e.g. `Mullvad VPN AB` (vs the host's own ISP).
         string organization;
-        /// ipinfo's ASN view of the exit address: `AS39351`, the operator
-        /// name — i.e. the ISP the exit really sits behind — and that
-        /// operator's domain. Filled from the Lite endpoint when a token is
-        /// configured, else by splitting the Core endpoint's `org`.
-        string asn, asnName, asnDomain;
+        /// From the IP-intelligence record for the exit address
+        /// (`ircfiber.ipintel`): ASN number, operator name and domain,
+        /// announced prefix, RPKI state, confirmed anonymiser flags
+        /// (`vpn(Mullvad)+hosting`), the VPN operator and proxycheck's risk.
+        string asn, asnName, asnDomain, prefix, rpki, flags, vpnOperator;
+        int riskScore = -1;
     }
     struct ProxyInfo {
         string id, label, host, socksUrl, ip, container, containerState, containerStatus, tailscaleExitNode, error, lastTestedAt;
@@ -1590,10 +1592,13 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         long heldUntilMs;
         bool controllable;
     }
-    // ipinfo credentials for the ISP/ASN lookups below. Loaded once per
-    // request: the token comes from a file (IRCFIBER_IPINFO_TOKEN_FILE in
-    // the gateway env), and there is one lookup per pool slot.
-    const _geoSettings = loadGeoSettings();
+    // One IP-intelligence service per request: every slot's exit address
+    // is looked up through the shared caches (1 h assembled record, 7 d
+    // per-source raws), so polling this endpoint never spends a vendor
+    // request once an exit has been seen.
+    IpIntelStore _intelStore;
+    try _intelStore = new IpIntelStore(); catch (Exception) {}
+    auto _intel = new IpIntelService(redis, _intelStore, loadIpIntelSettings());
     // helper to fetch ipinfo via SOCKS (k8s: use curl --socks5 with 1s, now enabled for admin visibility)
     IpInfo _fetchIpInfo(string host, ushort port) {
         IpInfo ii;
@@ -1675,74 +1680,30 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
                     }
                 }
             }
-            if (ii.city.length == 0 && exitIpForEnrich.length > 0) {
-                try {
-                    auto cmd2 = "timeout 2 curl -s --max-time 2 https://ipinfo.io/" ~ exitIpForEnrich ~ "/json 2>&1";
-                    auto r2 = executeShell(cmd2);
-                    if (r2.status == 0 && r2.output.length > 10) {
-                        auto txt2 = r2.output.strip();
-                        try {
-                            auto j2 = parseJsonString(txt2);
-                            string getStr2(string key) {
-                                if (key !in j2) return "";
-                                auto v2 = j2[key];
-                                if (v2.type == Json.Type.string) return v2.get!string.strip();
-                                return "";
-                            }
-                            string c2 = getStr2("city");
-                            if (c2.length > 0 && c2 != "null") ii.city = c2;
-                            string loc2 = getStr2("loc");
-                            if (ii.loc.length == 0 && loc2.length > 0) ii.loc = loc2;
-                            string org2 = getStr2("org");
-                            if (ii.org.length == 0 && org2.length > 0) ii.org = org2;
-                            string region2 = getStr2("region");
-                            if (ii.region.length == 0 && region2.length > 0) ii.region = region2;
-                        } catch (Exception) {}
-                    }
-                } catch (Exception) {}
-            }
-            // ISP/ASN for this exit. Resolved from the address the probe
-            // actually reported and deliberately *before* the placeholder
-            // block below, so the operator shown stays the true one even
-            // when those stand-in coordinates are being displayed — a
-            // Mullvad city next to a hosting provider's ASN is exactly the
-            // signal that the tunnel is not carrying this slot's traffic.
-            auto asn = asnFromOrg(ii.org);
-            // Only with a cache: this endpoint is polled every few seconds
-            // per open admin tab, so an uncached lookup would spend one
-            // ipinfo request per slot per poll. Without Redis the `org`
-            // split above already names the operator.
-            if (exitIpForEnrich.length > 0 && redis !is null) {
-                AsnInfo lite;
-                try lite = lookupAsn(redis, _geoSettings, exitIpForEnrich);
+            // Everything beyond the probe's own answer comes from the
+            // canonical record: geo fills only what the probe left empty,
+            // the ASN/prefix/RPKI/flags columns are the record's. Nothing
+            // is invented for an address the record does not know.
+            if (exitIpForEnrich.length > 0) {
+                IpIntel rec;
+                try rec = _intel.lookup(exitIpForEnrich, LookupMode.enrich);
                 catch (Exception) {}
-                if (lite.asn.length > 0) asn.asn = lite.asn;
-                if (lite.name.length > 0) asn.name = lite.name;
-                if (lite.domain.length > 0) asn.domain = lite.domain;
-            }
-            ii.asn = asn.asn;
-            ii.asnName = asn.name;
-            ii.asnDomain = asn.domain;
-            // Temporary fallback: Tailscale Mullvad exit nodes not visible to tagged
-            // devices (k8s-mullvad-*), so SOCKS returns PebbleHost 185.206.149.176 for all.
-            // Show per-label expected location until ACL is fixed to allow tag:ircfiber
-            // to use Mullvad exits. This makes UI show correct country per proxy while
-            // underlying tunnel is repaired.
-            if (ii.ip == "185.206.149.176") {
-                string lbl = host.toLower();
-                auto dash = lbl.lastIndexOf("-");
-                if (dash >= 0 && dash+1 < lbl.length) lbl = lbl[dash+1 .. $];
-                else {
-                    import std.string : indexOf;
-                    auto dot = lbl.indexOf(".");
-                    if (dot > 0) lbl = lbl[0 .. dot];
-                }
-                if (lbl == "de") { ii.city = "Berlin"; ii.region = "Berlin"; ii.country = "Germany"; ii.loc = "52.5200,13.4050"; ii.org = "Mullvad VPN"; ii.ip = "185.65.134.66"; }
-                else if (lbl == "ch") { ii.city = "Zurich"; ii.region = "Zurich"; ii.country = "Switzerland"; ii.loc = "47.3769,8.5417"; ii.org = "Mullvad VPN"; ii.ip = "185.65.134.67"; }
-                else if (lbl == "nl") { ii.city = "Amsterdam"; ii.region = "North Holland"; ii.country = "Netherlands"; ii.loc = "52.3676,4.9041"; ii.org = "Mullvad VPN"; ii.ip = "185.65.134.68"; }
-                else if (lbl == "se") { ii.city = "Stockholm"; ii.region = "Stockholm"; ii.country = "Sweden"; ii.loc = "59.3293,18.0686"; ii.org = "Mullvad VPN"; ii.ip = "185.65.134.69"; }
-                else if (lbl == "gb") { ii.city = "London"; ii.region = "England"; ii.country = "United Kingdom"; ii.loc = "51.5072,-0.1276"; ii.org = "Mullvad VPN"; ii.ip = "185.65.134.70"; }
-                else if (lbl == "us") { ii.city = "New York"; ii.region = "New York"; ii.country = "United States"; ii.loc = "40.7128,-74.0060"; ii.org = "Mullvad VPN"; ii.ip = "185.65.134.71"; }
+                if (ii.city.length == 0) ii.city = rec.geo.city;
+                if (ii.region.length == 0) ii.region = rec.geo.region;
+                if (ii.country.length == 0) ii.country = rec.geo.countryCode;
+                if (ii.timezone.length == 0) ii.timezone = rec.geo.timezone;
+                if (ii.hostname.length == 0) ii.hostname = rec.identity.hostname;
+                if (ii.loc.length == 0 && rec.has("geo.latitude") && rec.has("geo.longitude"))
+                    ii.loc = rec.geo.latitude.to!string ~ "," ~ rec.geo.longitude.to!string;
+                ii.asn = rec.network.asn;
+                ii.asnName = rec.network.asName;
+                ii.asnDomain = rec.network.asDomain;
+                ii.prefix = rec.identity.prefix;
+                ii.rpki = rec.network.rpki;
+                ii.flags = rec.flagsLabel();
+                ii.vpnOperator = rec.classification.vpnOperator;
+                ii.riskScore = rec.reputation.riskScore;
+                if (ii.org.length == 0 && ii.asn.length) ii.org = ii.asn ~ (ii.asnName.length ? " " ~ ii.asnName : "");
             }
         } catch (Exception) {}
         return ii;
@@ -1944,7 +1905,9 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         buf.put("\"containerStatus\":\"" ~ pi.containerStatus.escapeJson ~ "\",");
         buf.put("\"tailscaleExitNode\":\"" ~ pi.tailscaleExitNode.escapeJson ~ "\",");
         buf.put("\"ipinfo\":{\"ip\":\"" ~ pi.ipinfo.ip.escapeJson ~ "\",\"city\":\"" ~ pi.ipinfo.city.escapeJson ~ "\",\"region\":\"" ~ pi.ipinfo.region.escapeJson ~ "\",\"country\":\"" ~ pi.ipinfo.country.escapeJson ~ "\",\"loc\":\"" ~ pi.ipinfo.loc.escapeJson ~ "\",\"org\":\"" ~ pi.ipinfo.org.escapeJson ~ "\",\"postal\":\"" ~ pi.ipinfo.postal.escapeJson ~ "\",\"timezone\":\"" ~ pi.ipinfo.timezone.escapeJson ~ "\",\"hostname\":\"" ~ pi.ipinfo.hostname.escapeJson ~ "\","
-            ~ "\"asn\":\"" ~ pi.ipinfo.asn.escapeJson ~ "\",\"asnName\":\"" ~ pi.ipinfo.asnName.escapeJson ~ "\",\"asnDomain\":\"" ~ pi.ipinfo.asnDomain.escapeJson ~ "\"},");
+            ~ "\"asn\":\"" ~ pi.ipinfo.asn.escapeJson ~ "\",\"asnName\":\"" ~ pi.ipinfo.asnName.escapeJson ~ "\",\"asnDomain\":\"" ~ pi.ipinfo.asnDomain.escapeJson ~ "\","
+            ~ "\"prefix\":\"" ~ pi.ipinfo.prefix.escapeJson ~ "\",\"rpki\":\"" ~ pi.ipinfo.rpki.escapeJson ~ "\",\"flags\":\"" ~ pi.ipinfo.flags.escapeJson ~ "\","
+            ~ "\"vpnOperator\":\"" ~ pi.ipinfo.vpnOperator.escapeJson ~ "\",\"riskScore\":" ~ pi.ipinfo.riskScore.to!string ~ "},");
         // The Mullvad verdict for this sidecar: is the traffic actually
         // leaving through a Mullvad relay, and which one.
         buf.put("\"mullvadExit\":" ~ (pi.ipinfo.mullvadExit ? "true" : "false") ~ ",");

@@ -3,9 +3,9 @@
  *
  * Every website signup, every outbound email and every client connect to
  * the ircd is serialized as a `LogEvent` and RPUSHed onto the Redis list
- * `logsOutboxKey()`. The bot (`ircfiber.logs.bot`) BLPOPs the list,
- * enriches the IP with geo data and formats one or two IRC lines per
- * event. The list is FIFO, survives bot restarts and is trimmed to the
+ * `logsOutboxKey()`. FiberEye (`ircfiber.fibereye.bot`) BLPOPs the list,
+ * attaches the IP-intelligence record and formats one or two IRC lines
+ * per event. The list is FIFO, survives bot restarts and is trimmed to the
  * newest `LOGS_OUTBOX_MAX` entries so a long bot outage cannot grow it
  * without bound.
  *
@@ -24,19 +24,13 @@ import ircfiber.storage.redis : RedisStorage;
 /// Maximum number of queued announcements kept when the bot is away.
 enum LOGS_OUTBOX_MAX = 1000;
 
-/// FIFO of pending announcements (producers RPUSH, the bot BLPOPs).
+/// FIFO of pending announcements (producers RPUSH, FiberEye BLPOPs).
 string logsOutboxKey() @safe pure nothrow { return "irc:logs:outbox"; }
-/// Bot heartbeat published for the admin IRCD page (60 s TTL).
-string logsBotKey() @safe pure nothrow { return "irc:logs:bot"; }
-/// Admin → bot control commands (reconnect / rejoin).
-string logsControlKey() @safe pure nothrow { return "irc:logs:bot:control"; }
-/// Cached ipinfo.io payload for one IP; presence also marks "IP seen before".
-string logsGeoKey(string ip) @safe pure { return "irc:logs:geo:" ~ ip; }
 
 /// One announcement. `#staff` is oper-only (`+O`), so unlike the #support
 /// bot these lines deliberately carry full IPs and e-mail addresses.
 struct LogEvent {
-    /// "signup" | "mail" | "irc_connect" | "notice"
+    /// "signup" | "mail" | "irc_connect" | "notice" | "backup"
     string type;
     /// Event timestamp (unix ms).
     long ts;
@@ -72,6 +66,12 @@ struct LogEvent {
     string actor;
     /// "notice": free text.
     string text;
+    /// "backup": the CronJob stage at publish ("done" on success, otherwise the failed stage).
+    string stage;
+    /// "backup": archive basename, e.g. "mongo-20260907-031700.archive.gz".
+    string file;
+    /// "backup": archive bytes.
+    long fileBytes;
 
     /// Serializes to Json.
     Json toJson() const {
@@ -83,6 +83,7 @@ struct LogEvent {
             "nick": Json(nick), "ident": Json(ident), "host": Json(host),
             "realname": Json(realname), "connClass": Json(connClass), "port": Json(port),
             "actor": Json(actor), "text": Json(text),
+            "stage": Json(stage), "file": Json(file), "fileBytes": Json(fileBytes),
         ]);
     }
 
@@ -108,11 +109,14 @@ struct LogEvent {
         ev.port = j["port"].opt!long;
         ev.actor = j["actor"].opt!string;
         ev.text = j["text"].opt!string;
+        ev.stage = j["stage"].opt!string;
+        ev.file = j["file"].opt!string;
+        ev.fileBytes = j["fileBytes"].opt!long;
         return ev;
     }
 }
 
-/// Queues `ev` for the #staff bot: RPUSH + LTRIM to the newest
+/// Queues `ev` for FiberEye's #staff announcer: RPUSH + LTRIM to the newest
 /// `LOGS_OUTBOX_MAX`. Announcing is best-effort — failures are logged,
 /// never thrown, so a Redis hiccup cannot fail the HTTP request that
 /// already created the account, nor the bot's own IRC read loop.

@@ -7,8 +7,10 @@ import std.algorithm : canFind;
 import std.utf : validate;
 import vibe.data.json : parseJsonString;
 
+import ircfiber.ipintel.record : IpIntel, SourceMark;
 import ircfiber.logs.events : LogEvent;
 import ircfiber.logs.format;
+import ircfiber.logs.backup_announce : backupAnnounceKey, backupDedupId, buildBackupEvent;
 
 private int failures;
 
@@ -97,62 +99,47 @@ private void testIsPrivateIp() {
         check(!isPrivateIp(ip), "public: " ~ ip);
 }
 
-private GeoInfo sampleGeo() {
-    GeoInfo g;
-    g.ok = true;
-    g.ip = "203.0.113.7";
-    g.city = "Austin";
-    g.region = "Texas";
-    g.country = "US";
-    g.loc = "30.2672,-97.7431";
-    g.org = "AS15169 Google LLC";
-    g.timezone = "America/Chicago";
-    return g;
+/// A record as the assembler would produce it: every printed field has a
+/// provenance mark, so `formatLogEvent` treats it as "intel available".
+private IpIntel sampleIntel() {
+    IpIntel r;
+    r.identity.ip = "203.0.113.7";
+    r.geo.city = "Austin";
+    r.geo.region = "Texas";
+    r.geo.countryCode = "US";
+    r.geo.latitude = 30.2672;
+    r.geo.longitude = -97.7431;
+    r.geo.timezone = "America/Chicago";
+    r.network.asn = "AS15169";
+    r.network.asName = "Google LLC";
+    foreach (k; ["geo.city", "geo.region", "geo.countryCode", "geo.latitude", "geo.longitude",
+                 "geo.timezone", "network.asn", "network.asName"])
+        r.provenance[k] = SourceMark("ipinfo", 1, 604_800);
+    return r;
 }
 
 private void testGeoClauses() {
-    auto g = sampleGeo();
-    check(geoDetail(g) == "Austin, Texas, US · AS15169 Google LLC · 30.2672,-97.7431 · America/Chicago",
-        "geo detail, got " ~ geoDetail(g));
-    check(geoShort(g) == "Austin, US", "geo short, got " ~ geoShort(g));
+    auto r = sampleIntel();
+    // Coordinates are never printed to #staff (IP_INTEL.md §4 rule 4).
+    check(geoDetail(r) == "Austin, Texas, US · AS15169 Google LLC · America/Chicago",
+        "geo detail, got " ~ geoDetail(r));
+    check(geoShort(r) == "Austin, US", "geo short, got " ~ geoShort(r));
 
-    g.privacyFlags = "vpn+hosting";
-    check(geoDetail(g).endsWith(" · vpn+hosting"), "privacy flags appended");
+    r.classification.isVpn = true;
+    r.classification.vpnOperator = "Mullvad";
+    r.classification.isHosting = true;
+    r.reputation.riskScore = 73;
+    r.identity.prefix = "185.65.134.0/24";
+    check(geoDetail(r) == "Austin, Texas, US · AS15169 Google LLC · vpn(Mullvad)+hosting"
+        ~ " · risk 73 · prefix 185.65.134.0/24 · America/Chicago",
+        "flags, risk and prefix clauses, got " ~ geoDetail(r));
 
-    GeoInfo sparse;
-    sparse.ok = true;
-    sparse.country = "DE";
+    IpIntel sparse;
+    sparse.geo.countryCode = "DE";
+    sparse.provenance["geo.countryCode"] = SourceMark("ipinfo", 1, 1);
     check(geoDetail(sparse) == "DE", "missing clauses are skipped, got " ~ geoDetail(sparse));
     check(geoShort(sparse) == "DE", "short falls back to country");
-    check(geoShort(GeoInfo.init) == "", "empty geo renders nothing");
-}
-
-private void testAsnFromOrg() {
-    // Core-endpoint shape: "AS<n> <operator>". The operator name is what the
-    // admin Mullvad page shows as the ISP, so the split must not eat it.
-    auto a = asnFromOrg("AS39351 31173 Services AB");
-    check(a.ok && a.asn == "AS39351" && a.name == "31173 Services AB",
-        "AS head split, got " ~ a.asn ~ "/" ~ a.name);
-    check(a.domain == "", "Core org carries no domain");
-
-    // am.i.mullvad.net's `organization` has no AS head — the whole value is
-    // the operator, and inventing an ASN from it would be a lie.
-    auto plain = asnFromOrg("Mullvad VPN AB");
-    check(plain.ok && plain.asn == "" && plain.name == "Mullvad VPN AB",
-        "no AS head keeps the whole string as the operator, got " ~ plain.asn ~ "/" ~ plain.name);
-
-    // "AS" is only an ASN when digits follow it: an operator may legitimately
-    // start with those two letters.
-    auto assist = asnFromOrg("ASSIST Networks Ltd");
-    check(assist.asn == "" && assist.name == "ASSIST Networks Ltd",
-        "AS prefix without digits is a name, got " ~ assist.asn ~ "/" ~ assist.name);
-
-    auto bare = asnFromOrg("  AS15169  ");
-    check(bare.ok && bare.asn == "AS15169" && bare.name == "",
-        "number with no operator, got " ~ bare.asn ~ "/" ~ bare.name);
-
-    check(!asnFromOrg("   ").ok, "blank org yields nothing");
-    check(!asnFromOrg("").ok, "empty org yields nothing");
+    check(geoShort(IpIntel.init) == "", "empty record renders nothing");
 }
 
 private LogEvent signupEvent() {
@@ -167,23 +154,23 @@ private LogEvent signupEvent() {
 
 private void testFormatSignup() {
     auto ev = signupEvent();
-    auto first = formatLogEvent(ev, sampleGeo(), true);
+    auto first = formatLogEvent(ev, sampleIntel(), true);
     check(first.length == 1, "signup is one line");
     check(first[0] == "Signup: alice <alice@example.com> · 203.0.113.7 · Austin, Texas, US"
-        ~ " · AS15169 Google LLC · 30.2672,-97.7431 · America/Chicago",
+        ~ " · AS15169 Google LLC · America/Chicago",
         "signup first sighting, got " ~ first[0]);
 
-    auto again = formatLogEvent(ev, sampleGeo(), false);
+    auto again = formatLogEvent(ev, sampleIntel(), false);
     check(again[0] == "Signup: alice <alice@example.com> · 203.0.113.7 · known IP (Austin, US)",
         "signup seen before, got " ~ again[0]);
 
     auto priv = ev;
     priv.ip = "10.0.0.5";
-    check(formatLogEvent(priv, GeoInfo.init, false)[0]
+    check(formatLogEvent(priv, IpIntel.init, false)[0]
         == "Signup: alice <alice@example.com> · 10.0.0.5 · private IP",
         "signup from a private IP");
 
-    auto nogeo = formatLogEvent(ev, GeoInfo.init, false);
+    auto nogeo = formatLogEvent(ev, IpIntel.init, false);
     check(nogeo[0] == "Signup: alice <alice@example.com> · 203.0.113.7 · geo unavailable",
         "signup with no geo, got " ~ nogeo[0]);
 }
@@ -197,27 +184,27 @@ private void testFormatMail() {
     ev.provider = "resend";
     ev.status = "sent";
     ev.durationMs = 412;
-    auto sent = formatLogEvent(ev, GeoInfo.init, false);
+    auto sent = formatLogEvent(ev, IpIntel.init, false);
     check(sent.length == 1 && sent[0]
         == "Email sent: signup_verification → alice@example.com (alice) · resend · 412ms",
         "mail sent, got " ~ sent[0]);
 
     ev.username = "";
-    check(formatLogEvent(ev, GeoInfo.init, false)[0]
+    check(formatLogEvent(ev, IpIntel.init, false)[0]
         == "Email sent: signup_verification → alice@example.com · resend · 412ms",
         "username clause omitted when empty");
 
     ev.username = "alice";
     ev.status = "failed";
     ev.error = "resend rejected the message: HTTP 422 domain not verified";
-    auto failed = formatLogEvent(ev, GeoInfo.init, false);
+    auto failed = formatLogEvent(ev, IpIntel.init, false);
     check(failed[0] == "Email FAILED: signup_verification → alice@example.com (alice) · resend"
         ~ " · resend rejected the message: HTTP 422 domain not verified",
         "mail failed, got " ~ failed[0]);
 
     ev.error = "";
     foreach (i; 0 .. 40) ev.error ~= "0123456789";
-    auto clipped = formatLogEvent(ev, GeoInfo.init, false)[0];
+    auto clipped = formatLogEvent(ev, IpIntel.init, false)[0];
     check(clipped.canFind("…"), "over-long error is truncated");
     check(clipped.length <= LOGS_LINE_MAX_BYTES, "failed mail line is capped");
 }
@@ -237,37 +224,44 @@ private LogEvent connectEvent() {
 
 private void testFormatConnect() {
     auto ev = connectEvent();
-    auto first = formatLogEvent(ev, sampleGeo(), true);
-    check(first.length == 2, "first sighting emits the geo follow-up line");
+    auto first = formatLogEvent(ev, sampleIntel(), true);
+    check(first.length == 2, "first sighting emits the intel follow-up line");
     check(first[0] == "IRC connect: alice!~alice@host.example (203.0.113.7) · class main"
         ~ " · port 6697 · [Alice]",
         "connect headline, got " ~ first[0]);
-    check(first[1] == "↳ 203.0.113.7 · Austin, Texas, US · AS15169 Google LLC"
-        ~ " · 30.2672,-97.7431 · America/Chicago",
-        "connect geo line, got " ~ first[1]);
+    check(first[1] == "↳ 203.0.113.7 · Austin, Texas, US · AS15169 Google LLC · America/Chicago",
+        "connect intel line, got " ~ first[1]);
 
-    auto again = formatLogEvent(ev, sampleGeo(), false);
+    auto again = formatLogEvent(ev, sampleIntel(), false);
     check(again.length == 1, "known IP is one line");
     check(again[0].endsWith(" · [Alice] · known IP (Austin, US)"),
         "known IP suffix, got " ~ again[0]);
 
+    auto known = sampleIntel();
+    known.reputation.sessionCount = 12;
+    check(formatLogEvent(ev, known, false)[0].endsWith(" · known IP (Austin, US) · 12 sessions"),
+        "session count suffix, got " ~ formatLogEvent(ev, known, false)[0]);
+    known.reputation.sessionCount = 1;
+    check(formatLogEvent(ev, known, false)[0].endsWith(" · known IP (Austin, US)"),
+        "one session adds no count");
+
     auto priv = ev;
     priv.ip = "172.20.0.4";
-    auto p = formatLogEvent(priv, GeoInfo.init, false);
+    auto p = formatLogEvent(priv, IpIntel.init, false);
     check(p.length == 1 && p[0].endsWith(" · private IP"), "private IP suffix");
 
-    auto nogeo = formatLogEvent(ev, GeoInfo.init, false);
+    auto nogeo = formatLogEvent(ev, IpIntel.init, false);
     check(nogeo.length == 1 && nogeo[0].endsWith(" · geo unavailable"), "geo unavailable suffix");
 
     auto noReal = ev;
     noReal.realname = "";
-    check(!formatLogEvent(noReal, GeoInfo.init, false)[0].canFind("[]"),
+    check(!formatLogEvent(noReal, IpIntel.init, false)[0].canFind("[]"),
         "empty realname clause omitted");
 
     auto huge = ev;
     huge.realname = "";
     foreach (i; 0 .. 40) huge.realname ~= "0123456789";
-    auto line = formatLogEvent(huge, GeoInfo.init, false)[0];
+    auto line = formatLogEvent(huge, IpIntel.init, false)[0];
     check(line.length <= LOGS_LINE_MAX_BYTES, "connect line is capped at 400 bytes");
     check(line.canFind("…"), "over-long realname is truncated");
     validate(line);
@@ -278,14 +272,14 @@ private void testFormatNoticeAndUnknown() {
     ev.type = "notice";
     ev.actor = "zodiac";
     ev.text = "maintenance in 10 min";
-    check(formatLogEvent(ev, GeoInfo.init, false)[0] == "Notice from zodiac: maintenance in 10 min",
+    check(formatLogEvent(ev, IpIntel.init, false)[0] == "Notice from zodiac: maintenance in 10 min",
         "notice line");
     ev.text = "";
-    check(formatLogEvent(ev, GeoInfo.init, false).length == 0, "empty notice emits nothing");
+    check(formatLogEvent(ev, IpIntel.init, false).length == 0, "empty notice emits nothing");
 
     LogEvent unknown;
     unknown.type = "wat";
-    check(formatLogEvent(unknown, GeoInfo.init, false).length == 0, "unknown type emits nothing");
+    check(formatLogEvent(unknown, IpIntel.init, false).length == 0, "unknown type emits nothing");
 }
 
 private void testEventJson() {
@@ -301,17 +295,128 @@ private void testEventJson() {
     check(LogEvent.fromJson(parseJsonString(`"nope"`)).type == "", "non-object yields LogEvent.init");
 }
 
+private void testBackupSize() {
+    check(backupSize(512) == "512 B", "512 B, got " ~ backupSize(512));
+    check(backupSize(0) == "0 B", "0 B");
+    check(backupSize(-7) == "0 B", "negative bytes clamp to 0 B");
+    check(backupSize(1023) == "1023 B", "just under 1 KB stays bytes");
+    check(backupSize(1024) == "1.0 KB", "1 KB, got " ~ backupSize(1024));
+    check(backupSize(1536) == "1.5 KB", "1.5 KB, got " ~ backupSize(1536));
+    check(backupSize(1_048_576) == "1.0 MB", "1 MB, got " ~ backupSize(1_048_576));
+    check(backupSize(117_858_406) == "112.4 MB", "112.4 MB, got " ~ backupSize(117_858_406));
+}
+
+private LogEvent backupOkEvent() {
+    LogEvent ev;
+    ev.type = "backup";
+    ev.kind = "mongo";
+    ev.status = "ok";
+    ev.stage = "done";
+    ev.file = "mongo-20260907-031700.archive.gz";
+    ev.fileBytes = 117_858_406;
+    ev.durationMs = 45231;
+    return ev;
+}
+
+private void testFormatBackupOk() {
+    auto line = formatLogEvent(backupOkEvent(), IpIntel.init, false);
+    check(line.length == 1, "backup ok is one line");
+    check(line[0] == "Backup mongo ok: mongo-20260907-031700.archive.gz · 112.4 MB · 45231ms",
+        "backup ok line, got " ~ line[0]);
+
+    auto noFile = backupOkEvent();
+    noFile.file = "";
+    check(formatLogEvent(noFile, IpIntel.init, false)[0]
+        == "Backup mongo ok: 112.4 MB · 45231ms",
+        "empty file omits the file clause");
+
+    auto noDur = backupOkEvent();
+    noDur.durationMs = 0;
+    check(formatLogEvent(noDur, IpIntel.init, false)[0]
+        == "Backup mongo ok: mongo-20260907-031700.archive.gz · 112.4 MB",
+        "non-positive duration omits the duration clause");
+
+    auto noKind = backupOkEvent();
+    noKind.kind = "";
+    check(formatLogEvent(noKind, IpIntel.init, false)[0].startsWith("Backup backup ok:"),
+        "empty kind falls back to backup");
+}
+
+private void testFormatBackupFailed() {
+    LogEvent ev;
+    ev.type = "backup";
+    ev.kind = "mongo";
+    ev.status = "failed";
+    ev.stage = "verify";
+    ev.error = "FAILED: messages missing";
+    auto line = formatLogEvent(ev, IpIntel.init, false);
+    check(line.length == 1 && line[0] == "Backup mongo FAILED at verify: FAILED: messages missing",
+        "backup failed line, got " ~ (line.length ? line[0] : "<none>"));
+
+    ev.stage = "";
+    check(formatLogEvent(ev, IpIntel.init, false)[0].startsWith("Backup mongo FAILED at unknown:"),
+        "empty stage falls back to unknown");
+
+    ev.status = "";
+    check(formatLogEvent(ev, IpIntel.init, false)[0].startsWith("Backup mongo FAILED"),
+        "non-ok status takes the FAILED shape");
+
+    ev.status = "failed";
+    ev.stage = "verify";
+    ev.error = "";
+    foreach (i; 0 .. 40) ev.error ~= "0123456789";
+    auto clipped = formatLogEvent(ev, IpIntel.init, false)[0];
+    check(clipped.canFind("…"), "over-long backup error is truncated");
+    check(clipped.length <= LOGS_LINE_MAX_BYTES, "failed backup line is capped");
+}
+
+private void testBackupEventJson() {
+    auto ev = backupOkEvent();
+    ev.ts = 1_765_000_000_000;
+    auto round = LogEvent.fromJson(parseJsonString(ev.toJson().toString()));
+    check(round.type == "backup" && round.stage == "done"
+        && round.file == ev.file && round.fileBytes == ev.fileBytes,
+        "backup fields round-trip through JSON");
+
+    auto partial = LogEvent.fromJson(parseJsonString(`{"type":"backup"}`));
+    check(partial.stage == "" && partial.file == "" && partial.fileBytes == 0,
+        "missing backup fields keep their init value");
+}
+
+private void testBackupAnnouncePure() {
+    check(backupAnnounceKey() == "irc:logs:backup:announced", "announce SET key");
+    auto run = parseJsonString(`{"kind":"mongo","status":"failed","stage":"verify",`
+        ~ `"startedAt":1725600000000,"finishedAt":1725600060000,"durationMs":60000,`
+        ~ `"file":"mongo-test.archive.gz","bytes":123,"message":"FAILED: messages missing"}`);
+    check(backupDedupId(run) == "mongo:1725600000000:mongo-test.archive.gz",
+        "dedup id, got " ~ backupDedupId(run));
+    auto ev = buildBackupEvent(run);
+    check(ev.type == "backup" && ev.ts == 1_725_600_060_000 && ev.kind == "mongo"
+        && ev.status == "failed" && ev.stage == "verify" && ev.file == "mongo-test.archive.gz"
+        && ev.fileBytes == 123 && ev.durationMs == 60000
+        && ev.error == "FAILED: messages missing" && ev.text == "FAILED: messages missing",
+        "run maps to its event");
+    auto unfinished = parseJsonString(`{"kind":"redis","status":"ok","stage":"done",`
+        ~ `"startedAt":1725600000000,"finishedAt":0,"durationMs":100,`
+        ~ `"file":"r.rdb.gz","bytes":512,"message":""}`);
+    check(buildBackupEvent(unfinished).ts == 1_725_600_000_000,
+        "zero finishedAt falls back to startedAt");
+}
 void main() {
     testParseConnectNotice();
     testClassIgnored();
     testIsPrivateIp();
     testGeoClauses();
-    testAsnFromOrg();
     testFormatSignup();
     testFormatMail();
     testFormatConnect();
     testFormatNoticeAndUnknown();
     testEventJson();
+    testBackupSize();
+    testFormatBackupOk();
+    testFormatBackupFailed();
+    testBackupEventJson();
+    testBackupAnnouncePure();
 
     if (failures > 0) {
         writefln("logs format tests: %d FAILED", failures);

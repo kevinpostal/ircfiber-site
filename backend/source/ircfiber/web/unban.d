@@ -32,7 +32,6 @@
 module ircfiber.web.unban;
 
 import std.conv : to;
-import std.datetime : Clock;
 import std.process : environment;
 import std.string : strip;
 import core.time : seconds;
@@ -45,6 +44,7 @@ import vibe.http.server : HTTPServerRequest, HTTPServerResponse, render;
 import vibe.stream.operations : readAll;
 import vibe.textfilter.urlencode : urlEncode;
 
+import ircfiber.bots.core : nowMs;
 import ircfiber.env : envSecret;
 import ircfiber.fibereye.events : Appeal, fiberEyeAppealKey, fiberEyeReleaseGrpKey,
     fiberEyeReleaseIpKey;
@@ -59,8 +59,6 @@ import ircfiber.web.common : getClientIp;
 private enum RELEASE_IP_LIMIT = 3;
 /// Successful releases per IP group per week.
 private enum RELEASE_GROUP_LIMIT = 2;
-
-private long nowMs() { return Clock.currTime.toUnixTime!long * 1000; }
 
 /// What the visitor is being offered, resolved from either the token or
 /// their own address.

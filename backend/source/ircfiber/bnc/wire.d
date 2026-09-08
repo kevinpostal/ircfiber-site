@@ -4,20 +4,22 @@
  */
 module ircfiber.bnc.wire;
 
-import std.string : indexOf, toUpper, split, strip, startsWith;
+import std.string : indexOf, toUpper, toLower, split, strip, startsWith;
 import std.conv : to;
 import std.array : appender, Appender;
 import std.algorithm : canFind, max;
 import vibe.data.json : Json;
 
-/// Parsed `PASS` value. IRCCloud accepts `bnc:<token>` and
-/// `bnc@<clientid>:<token>`.
-struct BncPass {
+/// `<username>[/<network>][@<clientid>]` — the soju/ZNC identity suffix
+/// carried by `USER`, SASL PLAIN authcid or the left side of `PASS`.
+struct BncIdentity {
+    /// IRC Fiber username (case-insensitive lookup).
+    string username;
+    /// Network selector (slug, id or host) or "" for none.
+    string network;
     /// Optional per-device id used for backlog replay ("" when absent).
     string clientId;
-    /// Network password token.
-    string token;
-    /// False when the value does not match either accepted form.
+    /// False when the value does not parse.
     bool ok;
 }
 
@@ -27,27 +29,145 @@ private bool isClientIdChar(char c) @safe pure nothrow @nogc {
         || c == '_' || c == '.' || c == ':' || c == '-';
 }
 
-/// Splits a raw `PASS` argument into clientid + token.
+/// Splits an identity: first `@` → clientid, then first `/` → network.
+BncIdentity parseBncIdentity(string raw) @safe pure {
+    BncIdentity r;
+    if (!raw.length) return r;
+    string left = raw;
+    const at = raw.indexOf("@");
+    if (at >= 0) {
+        const cid = raw[at + 1 .. $];
+        if (cid.length == 0 || cid.length > 64) return r;
+        foreach (c; cid) if (!isClientIdChar(c)) return r;
+        r.clientId = cid;
+        left = raw[0 .. at];
+    }
+    const slash = left.indexOf("/");
+    if (slash >= 0) {
+        r.network = left[slash + 1 .. $];
+        if (!r.network.length) return r;
+        left = left[0 .. slash];
+    }
+    if (!left.length || left.canFind(' ')) return r;
+    r.username = left;
+    r.ok = true;
+    return r;
+}
+
+/// Parsed `PASS` value: `<identity>:<token>` (ZNC style) or a bare token
+/// (identity then comes from `USER`).
+struct BncPass {
+    /// Identity from the left side of the first `:` (valid when `hasIdentity`).
+    BncIdentity identity;
+    /// True when the value carried an identity prefix.
+    bool hasIdentity;
+    /// Bouncer password.
+    string token;
+    /// False when the value does not match either accepted form.
+    bool ok;
+}
+
+/// Splits a raw `PASS` argument into identity + token.
 BncPass parseBncPass(string raw) @safe pure {
     BncPass r;
     const colon = raw.indexOf(":");
-    if (colon < 0) return r;
-    const left = raw[0 .. colon];
-    const token = raw[colon + 1 .. $];
-    if (!token.length) return r;
-    if (left == "bnc") {
-        r.token = token;
+    if (colon < 0) {
+        if (!raw.length) return r;
+        r.token = raw;
         r.ok = true;
         return r;
     }
-    if (!left.startsWith("bnc@")) return r;
-    const cid = left[4 .. $];
-    if (cid.length == 0 || cid.length > 64) return r;
-    foreach (c; cid) if (!isClientIdChar(c)) return r;
-    r.clientId = cid;
-    r.token = token;
+    r.token = raw[colon + 1 .. $];
+    if (!r.token.length) return r;
+    r.identity = parseBncIdentity(raw[0 .. colon]);
+    if (!r.identity.ok) return r;
+    r.hasIdentity = true;
     r.ok = true;
     return r;
+}
+
+/// Lower-cases `name`, collapses runs of non-`[a-z0-9]` to `-` and trims
+/// the dashes; "" when nothing remains. `IRC Fiber` → `irc-fiber`.
+string networkSlug(string name) @safe pure {
+    auto app = appender!string();
+    app.reserve(name.length);
+    bool pendingDash;
+    foreach (char c; name.toLower()) {
+        const keep = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (!keep) { pendingDash = app.data.length > 0; continue; }
+        if (pendingDash) { app.put('-'); pendingDash = false; }
+        app.put(c);
+    }
+    return app.data;
+}
+
+/// Decoded SASL PLAIN payload (`authzid\0authcid\0passwd`).
+struct SaslPlain {
+    /// Authentication identity (our `BncIdentity` grammar).
+    string authcid;
+    /// Bouncer password.
+    string password;
+    /// False on bad base64, wrong part count or empty authcid/passwd.
+    bool ok;
+}
+
+/// Decodes a base64 SASL PLAIN payload.
+SaslPlain parseSaslPlain(string b64) @safe {
+    import std.base64 : Base64;
+    SaslPlain r;
+    ubyte[] raw;
+    try raw = Base64.decode(b64);
+    catch (Exception) return r;
+    auto parts = (() @trusted => cast(string) raw)().split("\0");
+    if (parts.length != 3) return r;
+    r.authcid = parts[1];
+    r.password = parts[2];
+    r.ok = r.authcid.length > 0 && r.password.length > 0;
+    return r;
+}
+
+/// Inverse of `escapeTagValue`. A trailing lone backslash is dropped.
+string unescapeTagValue(string v) @safe pure {
+    auto app = appender!string();
+    app.reserve(v.length);
+    for (size_t i = 0; i < v.length; i++) {
+        if (v[i] != '\\') { app.put(v[i]); continue; }
+        if (i + 1 >= v.length) break;
+        i++;
+        switch (v[i]) {
+            case ':': app.put(';'); break;
+            case 's': app.put(' '); break;
+            case '\\': app.put('\\'); break;
+            case 'r': app.put('\r'); break;
+            case 'n': app.put('\n'); break;
+            default: app.put(v[i]);
+        }
+    }
+    return app.data;
+}
+
+/// Parses a `k=v;k2=v2` bouncer-networks attribute list (message-tag
+/// escaping on values). A bare key maps to "".
+string[string] parseBouncerAttrs(string raw) @safe pure {
+    string[string] r;
+    foreach (item; raw.split(";")) {
+        if (!item.length) continue;
+        const eq = item.indexOf("=");
+        if (eq < 0) { r[item] = ""; continue; }
+        r[item[0 .. eq]] = unescapeTagValue(item[eq + 1 .. $]);
+    }
+    return r;
+}
+
+/// Serialises ordered pairs as `k=v;...` (empty value → bare key).
+string formatBouncerAttrs(const(string[2])[] pairs) @safe pure {
+    auto app = appender!string();
+    foreach (i, p; pairs) {
+        if (i) app.put(';');
+        app.put(p[0]);
+        if (p[1].length) { app.put('='); app.put(escapeTagValue(p[1])); }
+    }
+    return app.data;
 }
 
 /// Command + params of a line the client sent (tags/prefix discarded).

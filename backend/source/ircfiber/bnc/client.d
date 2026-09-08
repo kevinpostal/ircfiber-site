@@ -1,11 +1,15 @@
 /**
- * One attached bouncer client (IRCCloud "Connect with another client…").
+ * One attached bouncer client (soju `bouncer-networks` model).
  *
- * The client registers with `PASS bnc[@clientid]:<token>`, receives a
- * synthesized registration burst built from the engine's state snapshot
- * (ZNC `CIRCNetwork::ClientConnected` / `CChan::AttachUser`), then live
- * traffic from the user's Redis event channel. Everything it sends goes
- * out through the owning engine's command queue, exactly like the web UI.
+ * The client authenticates with the IRC Fiber username and the account's
+ * bouncer password (SASL PLAIN or `PASS [<identity>:]<password>`), picks a
+ * network with `BOUNCER BIND` or the `<username>/<network>[@<clientid>]`
+ * identity suffix, receives a synthesized registration burst built from
+ * the engine's state snapshot (ZNC `CIRCNetwork::ClientConnected` /
+ * `CChan::AttachUser`), then live traffic from the user's Redis event
+ * channel. Everything it sends goes out through the owning engine's
+ * command queue, exactly like the web UI. An unbound connection only
+ * sees the `BOUNCER` command surface.
  *
  * Fiber layout per client (all on the listener thread):
  *   - `run()`      reader loop on the accepting fiber
@@ -15,9 +19,10 @@
  */
 module ircfiber.bnc.client;
 
-import std.uuid : UUID, randomUUID;
+import std.uuid : UUID, randomUUID, parseUUID;
 import std.conv : to;
 import std.datetime : Clock;
+import std.digest : secureEqual;
 import std.string : indexOf, split, strip, startsWith, join, toUpper, toLower;
 import std.algorithm : canFind, max, min;
 import std.uni : icmp;
@@ -36,21 +41,26 @@ import vibe.db.redis.redis : RedisSubscriber;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.db.network : NetworkRepository;
+import ircfiber.db.user : UserRepository;
 import ircfiber.db.messages : MessageRepository;
 import ircfiber.db.preferences : PreferencesRepository, clampBncPlaybackLines;
 import ircfiber.storage.buffer : BufferManager;
 import ircfiber.models.irc_event : IRCRawEvent;
+import ircfiber.models.network : NetworkConfig, TLSMode;
+import ircfiber.network_lifecycle : normalizeHost, provisionNetwork, updateOwnedNetwork, deleteOwnedNetwork;
 import ircfiber.redis.protocol : RedisKeys, IRCCommand, NetworkStateSnapshot;
 import ircfiber.api.websocket : loadNetworkStateSnapshot, routeEngineCommand;
 import ircfiber.bnc.wire;
 import ircfiber.bnc.format : FormatCtx, RecentOwn, formatEvent, formatChannelListEvent;
-import ircfiber.bnc.control : BNC_EVENT_REVOKED, BNC_EVENT_KICK;
+import ircfiber.bnc.control : BNC_EVENT_REVOKED, BNC_EVENT_KICK, BNC_EVENT_NETWORKS;
 
 /// Shared services handed to every client by the listener.
 struct BncContext {
     RedisStorage redis;
     ServerRegistry registry;
     NetworkRepository networkRepo;
+    /// Bouncer password lookup (`users.bncToken`).
+    UserRepository userRepo;
     MessageRepository messageRepo;
     /// Per-user settings (bouncer playback size).
     PreferencesRepository prefsRepo;
@@ -65,7 +75,7 @@ struct BncContext {
     bool trace;
 }
 
-/// CAPs the bouncer offers (ZNC core set).
+/// CAPs the bouncer offers (ZNC core set + soju bouncer-networks).
 immutable string[] OFFERED_CAPS = [
     "server-time", "batch", "message-tags", "echo-message", "multi-prefix",
     "userhost-in-names", "away-notify", "account-notify", "account-tag",
@@ -74,6 +84,8 @@ immutable string[] OFFERED_CAPS = [
     // On-demand history (soju-style). Clients that negotiate it get no
     // attach playback and pull what they need with CHATHISTORY.
     "draft/chathistory",
+    // Account login (PLAIN only) and the multi-network surface.
+    "sasl", "soju.im/bouncer-networks", "soju.im/bouncer-networks-notify",
 ];
 
 /// File-backed bouncer MOTD (soju `motd` directive parity). Read fresh on
@@ -160,7 +172,19 @@ final class BncClient {
         bool socketClosed;
 
         // Registration
-        bool gotPass, gotNick, gotUser, inCap, registered;
+        bool gotNick, gotUser, inCap, registered;
+        /// `PASS` value, validated at registration (not on receipt).
+        bool gotPass; string passRaw;
+        /// `USER <username>` first param — the identity when PASS is bare.
+        string userParam;
+        /// Canonical `User.username` once authenticated.
+        bool authed; string authUsername;
+        /// Network selector from the identity suffix (slug / id / host) or "".
+        string networkSel;
+        /// `BOUNCER BIND <netid>` received before registration completed.
+        string pendingBindId;
+        /// Sent `AUTHENTICATE +`, waiting for the PLAIN payload.
+        bool saslPlainPending;
         string clientNick = "*";
         bool[string] caps;
         bool cap302;
@@ -175,6 +199,9 @@ final class BncClient {
         string prefixChars = "~&@%+";
         uint seq;
         RecentOwn recentOwn;
+        /// Last `state=` sent per network id for `-notify` clients; an
+        /// engine retry loop emits DISCONNECT/CONNECTION_FAIL every cycle.
+        string[string] lastNetState;
 
         // Live stream
         RedisStorage subRedis;
@@ -384,6 +411,7 @@ final class BncClient {
             auto j = Json.emptyObject;
             j["sid"] = sessionId;
             j["userId"] = userId;
+            j["username"] = authUsername;
             j["networkId"] = networkId;
             j["networkName"] = networkName;
             j["clientId"] = clientId;
@@ -458,7 +486,7 @@ final class BncClient {
         stopSubscriber();
         if (!revoked) flushCursor(true);
         clearPresence();
-        if (registered) {
+        if (registered && networkId.length) {
             const secs = (nowMs() - attachedAtMs) / 1000;
             emitStatusEvent("Bouncer client disconnected " ~ clientDescription()
                 ~ " after " ~ formatDuration(secs) ~ (revoked ? " (password revoked)" : ""));
@@ -524,7 +552,9 @@ final class BncClient {
         switch (pl.command) {
             case "PASS":
                 if (!pl.params.length) { numeric("461", ["PASS", "Not enough parameters"]); return; }
-                handlePass(pl.params[0]);
+                passRaw = pl.params[0];
+                gotPass = true;
+                tryRegister();
                 break;
             case "NICK":
                 if (!pl.params.length) { numeric("431", ["No nickname given"]); return; }
@@ -533,18 +563,56 @@ final class BncClient {
                 tryRegister();
                 break;
             case "USER":
+                userParam = pl.params.length ? pl.params[0] : "";
                 gotUser = true;
-                if (!gotPass) {
-                    numeric("464", ["Password required"]);
-                    send(formatLine(null, src, "NOTICE", [displayNick(),
-                        "*** Set your server password to bnc:<password> (or bnc@<clientid>:<password>)"]));
-                }
                 tryRegister();
                 break;
+            case "AUTHENTICATE":
+                handleAuthenticate(pl.params.length ? pl.params[0] : "");
+                break;
+            case "BOUNCER": {
+                const sub = pl.params.length ? pl.params[0].toUpper() : "";
+                if (sub == "BIND") {
+                    if (pl.params.length < 2 || !pl.params[1].length) {
+                        send(formatLine(null, src, "FAIL", ["BOUNCER", "INVALID_NETID", "BIND", "*", "Network not found"]));
+                        return;
+                    }
+                    pendingBindId = pl.params[1];
+                } else {
+                    send(formatLine(null, src, "FAIL", ["BOUNCER", "ACCOUNT_REQUIRED", sub.length ? sub : "*", "Authentication required"]));
+                }
+                break;
+            }
             default:
                 // Anything else before registration is ignored.
                 break;
         }
+    }
+
+    /// Pre-registration SASL PLAIN. Failure leaves the connection open so
+    /// the client can retry or fall back to PASS.
+    private void handleAuthenticate(string param) {
+        if (!has("sasl")) { numeric("904", ["SASL authentication failed"]); return; }
+        if (saslPlainPending) {
+            saslPlainPending = false;
+            if (param == "*") { numeric("906", ["SASL authentication aborted"]); return; }
+            auto p = parseSaslPlain(param);
+            if (!p.ok || !authenticate(parseBncIdentity(p.authcid), p.password)) {
+                numeric("904", ["SASL authentication failed"]);
+                return;
+            }
+            numeric("900", [displayNick() ~ "!" ~ authUsername ~ "@" ~ src, authUsername,
+                "You are now logged in as " ~ authUsername]);
+            numeric("903", ["SASL authentication successful"]);
+            return;
+        }
+        if (param.toUpper() == "PLAIN") {
+            send("AUTHENTICATE +");
+            saslPlainPending = true;
+            return;
+        }
+        numeric("908", ["PLAIN", "are available SASL mechanisms"]);
+        numeric("904", ["SASL authentication failed"]);
     }
 
     private void handleCap(string[] params) {
@@ -557,7 +625,9 @@ final class BncClient {
                 int ver = 0;
                 try ver = arg.length ? arg.to!int : 0; catch (Exception) {}
                 cap302 = ver >= 302;
-                send(formatLine(null, src, "CAP", [displayNick(), "LS", OFFERED_CAPS.join(" ")]));
+                string[] offered;
+                foreach (c; OFFERED_CAPS) offered ~= (c == "sasl" && cap302) ? "sasl=PLAIN" : c;
+                send(formatLine(null, src, "CAP", [displayNick(), "LS", offered.join(" ")]));
                 break;
             case "REQ": {
                 inCap = true;
@@ -594,31 +664,94 @@ final class BncClient {
         }
     }
 
-    private void handlePass(string raw) {
-        auto p = parseBncPass(raw);
-        if (!p.ok) {
-            numeric("464", ["Password must be bnc:<password> or bnc@<clientid>:<password>"]);
-            send("ERROR :Closing link: Invalid password format");
-            markClosing("bad-password-format");
-            return;
-        }
-        auto info = ctx.networkRepo.findByBncToken(p.token);
-        if (info.config.id == UUID.init) {
-            numeric("464", ["Invalid password"]);
-            send("ERROR :Closing link: Invalid password");
-            markClosing("bad-password");
-            return;
-        }
-        userId = info.userId.toString();
-        networkId = info.config.id.toString();
-        networkName = info.config.name;
-        clientId = p.clientId;
-        gotPass = true;
-        tryRegister();
+    /// Looks the identity up and checks the bouncer password. On success
+    /// sets `userId`, `authUsername`, `clientId` and `networkSel`.
+    private bool authenticate(BncIdentity id, string token) {
+        if (!id.ok || !token.length) return false;
+        auto u = ctx.userRepo.findByUsernameCI(id.username);
+        if (u.id == UUID.init) return false;
+        auto stored = ctx.userRepo.getBncToken(u.id);
+        if (!stored.length || stored.length != token.length
+            || !secureEqual(cast(const(ubyte)[]) stored, cast(const(ubyte)[]) token)) return false;
+        userId = u.id.toString();
+        authUsername = u.username;
+        clientId = id.clientId;
+        networkSel = id.network;
+        authed = true;
+        return true;
     }
 
     private void tryRegister() {
-        if (gotPass && gotNick && gotUser && !inCap && !registered) attach();
+        if (inCap || registered || !gotNick || !gotUser) return;
+        if (!authed) {
+            if (!gotPass) {
+                numeric("464", ["Password required"]);
+                send("ERROR :Closing link: Password required");
+                markClosing("no-password");
+                return;
+            }
+            auto p = parseBncPass(passRaw);
+            auto ident = p.hasIdentity ? p.identity : parseBncIdentity(userParam);
+            if (!p.ok || !authenticate(ident, p.token)) {
+                numeric("464", ["Invalid username or bouncer password"]);
+                send("ERROR :Closing link: Invalid password");
+                markClosing("bad-password");
+                return;
+            }
+        }
+        if (!resolveBinding()) return;
+        attach();
+    }
+
+    private NetworkConfig[] userNetworks() {
+        try return ctx.networkRepo.findByUserId(parseUUID(userId.idup));
+        catch (Exception e) {
+            logWarn("bnc: sid=%s network list failed for %s: %s", sessionId, userId, e.msg);
+            return null;
+        }
+    }
+
+    private static string slugList(NetworkConfig[] nets) {
+        string[] slugs;
+        foreach (ref n; nets) slugs ~= networkSlug(n.name);
+        return slugs.length ? slugs.join(", ") : "none";
+    }
+
+    /// Picks the network for this connection: `BOUNCER BIND`, then the
+    /// identity suffix, then the ZNC convenience of a lone network for
+    /// clients without `bouncer-networks`. Returns false after sending the
+    /// error and closing.
+    private bool resolveBinding() {
+        auto nets = userNetworks();
+        NetworkConfig chosen;
+        if (pendingBindId.length) {
+            foreach (ref cfg; nets) if (cfg.id.toString() == pendingBindId) { chosen = cfg; break; }
+            if (chosen.id == UUID.init) {
+                send(formatLine(null, src, "FAIL", ["BOUNCER", "INVALID_NETID", "BIND", pendingBindId, "Network not found"]));
+                send("ERROR :Closing link: Unknown network");
+                markClosing("bad-bind");
+                return false;
+            }
+        } else if (networkSel.length) {
+            const wantSlug = networkSlug(networkSel);
+            foreach (ref cfg; nets) if (cfg.id.toString() == networkSel) { chosen = cfg; break; }
+            if (chosen.id == UUID.init && wantSlug.length)
+                foreach (ref cfg; nets) if (networkSlug(cfg.name) == wantSlug) { chosen = cfg; break; }
+            if (chosen.id == UUID.init)
+                foreach (ref cfg; nets) if (icmp(cfg.host, networkSel) == 0) { chosen = cfg; break; }
+            if (chosen.id == UUID.init) {
+                send("ERROR :Closing link: Unknown network \"" ~ networkSel ~ "\" — yours: " ~ slugList(nets));
+                markClosing("bad-network");
+                return false;
+            }
+        } else if (!has("soju.im/bouncer-networks") && nets.length == 1) {
+            chosen = nets[0];
+        }
+        if (chosen.id != UUID.init) {
+            networkId = chosen.id.toString();
+            networkName = chosen.name;
+        }
+        return true;
     }
 
     private bool has(string cap) const nothrow {
@@ -644,6 +777,7 @@ final class BncClient {
         // Subscribe first so nothing published during the burst is lost;
         // events are parked in `pendingLive` until the replay cursor is known.
         startSubscriber();
+        if (networkId.length == 0) { attachUnbound(); return; }
 
         auto serverId = ctx.registry.getServerForNetwork(networkId);
         auto snap = loadNetworkStateSnapshot(ctx.redis, ctx.registry, networkId);
@@ -657,10 +791,7 @@ final class BncClient {
             if (letters.length) chanModes = letters;
         }
 
-        send(formatLine(null, src, "001", [clientNick, "Welcome to the IRC Fiber bouncer, " ~ clientNick]));
-        send(formatLine(null, src, "002", [clientNick, "Your host is " ~ src ~ ", running IRC Fiber"]));
-        send(formatLine(null, src, "003", [clientNick, "This server was created for you"]));
-        send(formatLine(null, src, "004", [clientNick, src, "irc-fiber-bnc", "iw", chanModes]));
+        sendWelcome(chanModes);
         {
             string[] toks;
             foreach (k, v; snap.isupport) {
@@ -670,29 +801,18 @@ final class BncClient {
             }
             toks ~= "CHATHISTORY=" ~ CHATHISTORY_MAX.to!string;
             toks ~= "MSGREFTYPES=timestamp,msgid";
+            // Clients without bouncer-networks ignore the unknown token.
+            toks ~= "BOUNCER_NETID=" ~ networkId;
             foreach (i; 0 .. (toks.length + 12) / 13) {
                 auto slice = toks[i * 13 .. min(toks.length, (i + 1) * 13)];
                 send(formatLine(null, src, "005", [clientNick] ~ slice ~ ["are supported by this server"]));
             }
         }
-        // soju parity: bouncer-level (no network) gets the bouncer MOTD
-        // from IRCFIBER_BNC_MOTD_PATH (re-read per connection, so HUP /
-        // config reload is implicit — no restart needed); network-attached
-        // (the common case) gets a hint so /MOTD fetches the live MOTD
-        // from the actual upstream the BNC is connected to. TLS certs are
-        // likewise read per-connection in listener.d, so HUP reloads both.
-        if (networkId.length == 0) {
-            auto motdLines = loadBouncerMotd();
-            send(formatLine(null, src, "375", [clientNick, "- " ~ src ~ " Message of the Day -"]));
-            foreach (line; motdLines)
-                send(formatLine(null, src, "372", [clientNick, "- " ~ line]));
-            send(formatLine(null, src, "376", [clientNick, "End of /MOTD command"]));
-        } else {
-            // Network-attached: don't fake the upstream; let /MOTD
-            // fetch the real server MOTD via the engine (handleClientLine
-            // routes "MOTD" as raw -> engine -> ircd -> 372/376 live).
-            send(formatLine(null, src, "422", [clientNick, "MOTD File is missing - Use /MOTD to read the message of the day from " ~ networkName]));
-        }
+        // Network-attached: don't fake the upstream; let /MOTD fetch the
+        // real server MOTD via the engine (handleClientLine routes "MOTD"
+        // as raw -> engine -> ircd -> 372/376 live).
+        send(formatLine(null, src, "422", [clientNick, "MOTD File is missing - Use /MOTD to read the message of the day from " ~ networkName]));
+        if (has("soju.im/bouncer-networks-notify")) sendNetworkList();
         if (clientNick != currentNick) {
             send(formatLine(null, clientNick ~ "!" ~ clientNick ~ "@" ~ src, "NICK", [currentNick]));
         }
@@ -739,6 +859,188 @@ final class BncClient {
         keepaliveTask = runTask(&keepaliveLoop);
         logInfo("bnc: attached sid=%s user=%s network=%s client=%s nick=%s peer=%s caps=%s",
             sessionId, userId, networkId, clientId.length ? clientId : "-", currentNick, peer, caps.keys.join(","));
+    }
+
+    private void sendWelcome(string chanModes) {
+        send(formatLine(null, src, "001", [clientNick, "Welcome to the IRC Fiber bouncer, " ~ clientNick]));
+        send(formatLine(null, src, "002", [clientNick, "Your host is " ~ src ~ ", running IRC Fiber"]));
+        send(formatLine(null, src, "003", [clientNick, "This server was created for you"]));
+        send(formatLine(null, src, "004", [clientNick, src, "irc-fiber-bnc", "iw", chanModes]));
+    }
+
+    /// Bouncer-level registration (soju "no network" connection): the
+    /// bouncer MOTD from IRCFIBER_BNC_MOTD_PATH (re-read per connection so
+    /// editing the file needs no restart), no 005, no channels — only the
+    /// BOUNCER command surface until the client binds on a new connection.
+    private void attachUnbound() {
+        currentNick = clientNick;
+        sendWelcome("");
+        send(formatLine(null, src, "375", [clientNick, "- " ~ src ~ " Message of the Day -"]));
+        foreach (line; loadBouncerMotd())
+            send(formatLine(null, src, "372", [clientNick, "- " ~ line]));
+        send(formatLine(null, src, "376", [clientNick, "End of /MOTD command"]));
+        if (has("soju.im/bouncer-networks-notify")) sendNetworkList();
+        status("Not bound to a network — use BOUNCER BIND, or connect with username "
+            ~ authUsername ~ "/<network>. Your networks: " ~ slugList(userNetworks()));
+        liveReady = true;
+        pendingLive = null;
+        attachedAtMs = nowMs();
+        writePresence();
+        keepaliveTask = runTask(&keepaliveLoop);
+        logInfo("bnc: attached sid=%s user=%s network=- client=%s nick=%s peer=%s caps=%s",
+            sessionId, userId, clientId.length ? clientId : "-", currentNick, peer, caps.keys.join(","));
+    }
+
+    // ── soju.im/bouncer-networks ─────────────────────────────────────
+
+    /// Attribute pairs for one network, spec names: name host port tls
+    /// nickname realname [state].
+    private string[2][] networkAttrs(ref const NetworkConfig cfg, bool withState = true) {
+        string[2][] pairs = [
+            ["name", cfg.name],
+            ["host", cfg.host],
+            ["port", cfg.port.to!string],
+            ["tls", cfg.tls == TLSMode.disabled ? "0" : "1"],
+            ["nickname", cfg.nick],
+            ["realname", cfg.realName],
+        ];
+        if (withState) {
+            auto snap = loadNetworkStateSnapshot(ctx.redis, ctx.registry, cfg.id.toString());
+            const st = snap.connected ? "connected"
+                : (snap.status == "connecting" ? "connecting" : "disconnected");
+            lastNetState[cfg.id.toString()] = st;
+            pairs ~= ["state", st];
+        }
+        return pairs;
+    }
+
+    private void sendBouncerNetwork(string netid, string attrsOrStar, string batchRef = "") {
+        string[string] tags;
+        if (batchRef.length) tags["batch"] = batchRef;
+        send(formatLine(tags, src, "BOUNCER", ["NETWORK", netid, attrsOrStar]));
+    }
+
+    /// `LISTNETWORKS` body and the initial list for `-notify` clients.
+    private void sendNetworkList() {
+        auto nets = userNetworks();
+        string batchRef;
+        if (has("batch")) {
+            batchRef = "bn" ~ (++seq).to!string;
+            send(formatLine(null, src, "BATCH", ["+" ~ batchRef, "soju.im/bouncer-networks"]));
+        }
+        foreach (ref cfg; nets)
+            sendBouncerNetwork(cfg.id.toString(), formatBouncerAttrs(networkAttrs(cfg)), batchRef);
+        if (batchRef.length) send(formatLine(null, src, "BATCH", ["-" ~ batchRef]));
+    }
+
+    private void bouncerFail(string code, string[] params, string text) {
+        send(formatLine(null, src, "FAIL", ["BOUNCER", code] ~ params ~ [text]));
+    }
+
+    /// Loads a network the authenticated user owns; `UUID.init` id (after
+    /// the FAIL reply) when unknown or someone else's.
+    private NetworkConfig ownedNetwork(string sub, string netid) {
+        NetworkConfig none;
+        UUID id;
+        try id = parseUUID(netid.idup);
+        catch (Exception) { bouncerFail("INVALID_NETID", [sub, netid], "Network not found"); return none; }
+        auto info = ctx.networkRepo.findByIdWithUser(id);
+        if (info.config.id == UUID.init || (info.userId != UUID.init && info.userId.toString() != userId)) {
+            bouncerFail("INVALID_NETID", [sub, netid], "Network not found");
+            return none;
+        }
+        return info.config;
+    }
+
+    /// Attribute keys a client may set; `username`/`state` are read-only.
+    private static immutable string[] WRITABLE_ATTRS = ["name", "host", "port", "tls", "nickname", "realname", "pass"];
+
+    /// Applies `attrs` onto `cfg`. Returns false after a FAIL reply.
+    private bool applyNetworkAttrs(string sub, string netidParam, ref NetworkConfig cfg, string[string] attrs) {
+        foreach (k, v; attrs) {
+            if (k == "username" || k == "state") {
+                bouncerFail("READ_ONLY_ATTRIBUTE", [sub, netidParam, k], "Read-only attribute");
+                return false;
+            }
+            if (!WRITABLE_ATTRS.canFind(k)) {
+                bouncerFail("UNKNOWN_ATTRIBUTE", [sub, netidParam, k], "Unknown attribute");
+                return false;
+            }
+        }
+        if (auto v = "tls" in attrs) {
+            if (*v == "1") cfg.tls = TLSMode.required;
+            else if (*v == "0") cfg.tls = TLSMode.disabled;
+            else { bouncerFail("INVALID_ATTRIBUTE", [sub, netidParam, "tls"], "tls must be 0 or 1"); return false; }
+        }
+        if (auto v = "host" in attrs) {
+            cfg.host = normalizeHost(*v);
+            if (!cfg.host.length) { bouncerFail("INVALID_ATTRIBUTE", [sub, netidParam, "host"], "Invalid host"); return false; }
+        }
+        if (auto v = "port" in attrs) {
+            int port = 0;
+            try port = (*v).to!int; catch (Exception) port = 0;
+            if (port <= 0 || port > 65_535) { bouncerFail("INVALID_ATTRIBUTE", [sub, netidParam, "port"], "Invalid port"); return false; }
+            cfg.port = cast(ushort) port;
+        }
+        if (auto v = "name" in attrs) if ((*v).strip().length) cfg.name = (*v).strip();
+        if (auto v = "nickname" in attrs) if ((*v).strip().length) cfg.nick = (*v).strip();
+        if (auto v = "realname" in attrs) cfg.realName = *v;
+        if (auto v = "pass" in attrs) cfg.serverPass = *v;
+        return true;
+    }
+
+    /// Post-registration `BOUNCER` dispatcher. Works unbound.
+    private void handleBouncer(string[] p) {
+        const sub = p.length ? p[0].toUpper() : "";
+        switch (sub) {
+            case "LISTNETWORKS":
+                sendNetworkList();
+                return;
+            case "BIND":
+                bouncerFail("REGISTRATION_IS_COMPLETED", ["BIND"], "Cannot bind to a network after registration");
+                return;
+            case "ADDNETWORK": {
+                auto attrs = parseBouncerAttrs(p.length > 1 ? p[1] : "");
+                if ("host" !in attrs) { bouncerFail("NEED_ATTRIBUTE", ["ADDNETWORK", "host"], "Missing required attribute"); return; }
+                NetworkConfig cfg;
+                cfg.id = randomUUID();
+                cfg.tls = TLSMode.required;
+                cfg.autoJoinChannels = [];
+                if (!applyNetworkAttrs("ADDNETWORK", "*", cfg, attrs)) return;
+                if ("port" !in attrs) cfg.port = cfg.tls == TLSMode.disabled ? 6667 : 6697;
+                if (!cfg.name.length) cfg.name = cfg.host;
+                if (!cfg.nick.length) cfg.nick = authUsername;
+                if (!cfg.realName.length) cfg.realName = cfg.nick;
+                auto serverId = provisionNetwork(cfg, parseUUID(userId.idup), ctx.networkRepo, ctx.redis, ctx.registry);
+                if (!serverId.length) { bouncerFail("TEMPORARILY_UNAVAILABLE", ["ADDNETWORK"], "No healthy connection servers available"); return; }
+                send(formatLine(null, src, "BOUNCER", ["ADDNETWORK", cfg.id.toString()]));
+                return;
+            }
+            case "CHANGENETWORK": {
+                if (p.length < 2) { bouncerFail("INVALID_NETID", ["CHANGENETWORK", "*"], "Network not found"); return; }
+                auto cfg = ownedNetwork("CHANGENETWORK", p[1]);
+                if (cfg.id == UUID.init) return;
+                auto attrs = parseBouncerAttrs(p.length > 2 ? p[2] : "");
+                if (!attrs.length) { bouncerFail("NEED_ATTRIBUTE", ["CHANGENETWORK", "*"], "No attributes"); return; }
+                if (!applyNetworkAttrs("CHANGENETWORK", p[1], cfg, attrs)) return;
+                auto serverId = updateOwnedNetwork(cfg, parseUUID(userId.idup), false, ctx.networkRepo, ctx.redis, ctx.registry);
+                if (!serverId.length) { bouncerFail("TEMPORARILY_UNAVAILABLE", ["CHANGENETWORK", p[1]], "No healthy connection servers available"); return; }
+                send(formatLine(null, src, "BOUNCER", ["CHANGENETWORK", p[1]]));
+                return;
+            }
+            case "DELNETWORK": {
+                if (p.length < 2) { bouncerFail("INVALID_NETID", ["DELNETWORK", "*"], "Network not found"); return; }
+                auto cfg = ownedNetwork("DELNETWORK", p[1]);
+                if (cfg.id == UUID.init) return;
+                if (cfg.systemManaged) { bouncerFail("READ_ONLY_NETWORK", ["DELNETWORK", p[1]], "This network is provisioned by IRC Fiber"); return; }
+                deleteOwnedNetwork(cfg.id, parseUUID(userId.idup), ctx.networkRepo, ctx.redis, ctx.registry);
+                send(formatLine(null, src, "BOUNCER", ["DELNETWORK", p[1]]));
+                return;
+            }
+            default:
+                bouncerFail("UNKNOWN_COMMAND", [sub.length ? sub : "*"], "Unknown subcommand");
+                return;
+        }
     }
 
     private void dumpChannels(ref NetworkStateSnapshot snap) {
@@ -1203,7 +1505,7 @@ final class BncClient {
         const type = ev["type"].type == Json.Type.string ? ev["type"].get!string : "";
         if (type == BNC_EVENT_REVOKED) {
             const nid = ev["networkId"].type == Json.Type.string ? ev["networkId"].get!string : "";
-            if (nid == networkId) {
+            if (nid.length == 0 || nid == networkId) {
                 revoked = true;
                 logInfo("bnc: sid=%s password revoked, closing", sessionId);
                 send("ERROR :Closing link: Bouncer password revoked");
@@ -1222,7 +1524,56 @@ final class BncClient {
             }
             return;
         }
+        if (type == BNC_EVENT_NETWORKS) {
+            if (!has("soju.im/bouncer-networks-notify")) return;
+            const id = ev["networkId"].type == Json.Type.string ? ev["networkId"].get!string : "";
+            if (!id.length) return;
+            if (ev["removed"].type == Json.Type.bool_ && ev["removed"].get!bool) {
+                sendBouncerNetwork(id, "*");
+                return;
+            }
+            if (ev["state"].type == Json.Type.string) {
+                const st = ev["state"].get!string;
+                if (st.length && lastNetState.get(id, "") != st) {
+                    lastNetState[id] = st;
+                    sendBouncerNetwork(id, "state=" ~ st);
+                }
+                return;
+            }
+            NetworkConfig cfg;
+            try cfg = ctx.networkRepo.findById(parseUUID(id.idup)); catch (Exception) {}
+            if (cfg.id == UUID.init) return;
+            sendBouncerNetwork(id, formatBouncerAttrs(networkAttrs(cfg)));
+            return;
+        }
         const nid = ev["nid"].type == Json.Type.string ? ev["nid"].get!string : "";
+        if (has("soju.im/bouncer-networks-notify") && nid.length
+            && ev["c"].type == Json.Type.string) {
+            // The engine marks success with 001 / the `welcome` server-log
+            // phase, an attempt with the `connecting` phase or a retry
+            // status, and failure with DISCONNECTED / CONNECTION_FAIL.
+            string st;
+            const phase = ev["phase"].type == Json.Type.string ? ev["phase"].get!string : "";
+            switch (ev["c"].get!string) {
+                case "001", "CONNECTED": st = "connected"; break;
+                case "CONNECTION_RETRY_STATUS":
+                    // All-zero `rs` is the "retry cleared" form sent after a
+                    // successful connect; only a scheduled attempt is connecting.
+                    if (ev["rs"].type == Json.Type.object && ev["rs"]["attemptCount"].type == Json.Type.int_
+                        && ev["rs"]["attemptCount"].get!long > 0) st = "connecting";
+                    break;
+                case "DISCONNECT", "DISCONNECTED", "CONNECTION_FAIL": st = "disconnected"; break;
+                case "NOTICE":
+                    if (phase == "welcome") st = "connected";
+                    else if (phase == "connecting" || phase == "queued") st = "connecting";
+                    break;
+                default: break;
+            }
+            if (st.length && lastNetState.get(nid, "") != st) {
+                lastNetState[nid] = st;
+                sendBouncerNetwork(nid, "state=" ~ st);
+            }
+        }
         if (nid != networkId) return;
         if (!liveReady) {
             if (pendingLive.length < PENDING_LIVE_MAX) pendingLive ~= ev;
@@ -1231,26 +1582,37 @@ final class BncClient {
         deliverLive(ev);
     }
 
-    // BouncerServ (soju service.go minimal parity): HELP + VERSION.
-    // Full network add/update/delete stays in the web UI; the service
-    // exists so clients get a useful answer instead of "No such nick".
+    // BouncerServ (soju service.go parity): HELP, VERSION and a
+    // human-readable network list; management goes through BOUNCER.
     private void handleBouncerServ(string text) {
         auto parts = text.strip().split(" ");
         string sub = parts.length ? parts[0].toLower() : "help";
+        void reply(string line) {
+            send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), line]));
+        }
         if (sub == "help") {
             foreach (line; [
-                "BouncerServ commands: HELP VERSION NETWORKS",
+                "BouncerServ commands: HELP VERSION NETWORK",
                 "HELP — this help",
                 "VERSION — bouncer version",
-                "NETWORKS — list your networks (use /JOIN to re-attach detached)",
+                "NETWORK LIST — your networks and the username that binds each one",
                 "PART #chan detach — detach (keep backlog, stop live)",
-            ]) send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), line]));
+            ]) reply(line);
         } else if (sub == "version") {
-            send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), "IRC Fiber bouncer 0.3.0 (soju-parity: detach/BouncerServ/MOTD)"]));
-        } else if (sub == "networks") {
-            send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), "Attached network: " ~ (networkName.length ? networkName : networkId)]));
+            reply("IRC Fiber bouncer 0.4.0 (bouncer-networks)");
+        } else if (sub == "network" || sub == "networks") {
+            auto nets = userNetworks();
+            if (!nets.length) reply("No networks yet — BOUNCER ADDNETWORK host=<server> or add one on the website");
+            foreach (ref cfg; nets) {
+                const slug = networkSlug(cfg.name);
+                string state;
+                foreach (p; networkAttrs(cfg)) if (p[0] == "state") state = p[1];
+                reply(slug ~ " — " ~ cfg.name ~ " " ~ cfg.host ~ ":" ~ cfg.port.to!string
+                    ~ " [" ~ state ~ "]  (username " ~ authUsername ~ "/" ~ slug ~ ")");
+            }
+            reply("BOUNCER ADDNETWORK/DELNETWORK or the website Settings → Bouncer page manage networks");
         } else {
-            send(formatLine(null, "BouncerServ!bouncerserv@" ~ src, "NOTICE", [displayNick(), "Unknown command " ~ sub ~ " (try HELP)"]));
+            reply("Unknown command " ~ sub ~ " (try HELP)");
         }
     }
 
@@ -1348,12 +1710,27 @@ final class BncClient {
             case "AUTHENTICATE":
                 numeric("904", ["SASL not available"]);
                 return;
+            case "BOUNCER":
+                handleBouncer(pl.params);
+                return;
             case "CHATHISTORY":
                 // Served from our own store; works even while the engine is down.
                 handleChatHistory(pl.params);
                 return;
             default:
                 break;
+        }
+        // BouncerServ is answered locally (soju service.go parity) — before
+        // the generic PRIVMSG path so `/msg BouncerServ` never reaches the
+        // engine, and before the unbound gate so it works without a network.
+        if ((pl.command == "PRIVMSG" || pl.command == "NOTICE") && pl.params.length >= 2
+            && icmp(pl.params[0], "BouncerServ") == 0) {
+            handleBouncerServ(pl.params[1]);
+            return;
+        }
+        if (networkId.length == 0) {
+            numeric("421", [pl.command, "Not bound to a network — BOUNCER BIND <netid> or username " ~ authUsername ~ "/<network>"]);
+            return;
         }
 
         auto serverId = ctx.registry.getServerForNetwork(networkId);
@@ -1418,20 +1795,12 @@ final class BncClient {
             }
             // Fall through to raw forwarding below
         }
-        // BouncerServ: PRIVMSG/NOTICE to BouncerServ is answered locally
-        // (soju service.go parity, minimal: HELP + VERSION). Anything
-        // else falls through to engine forwarding.
-        if ((pl.command == "PRIVMSG" || pl.command == "NOTICE") && pl.params.length >= 2) {
-            if (pl.params[0].toLower() == "bouncerserv") {
-                handleBouncerServ(pl.params[1]);
-                return;
-            }
-            // Admin broadcast: /NOTICE $<host|*> text (soju: NOTICE $host).
-            // Only admins may broadcast; non-admins get 481.
-            if (pl.params[0].length > 1 && pl.params[0][0] == '$') {
-                handleAdminBroadcast(pl.params[0], pl.params[1]);
-                return;
-            }
+        // Admin broadcast: /NOTICE $<host|*> text (soju: NOTICE $host).
+        // Only admins may broadcast; non-admins get 481.
+        if ((pl.command == "PRIVMSG" || pl.command == "NOTICE") && pl.params.length >= 2
+            && pl.params[0].length > 1 && pl.params[0][0] == '$') {
+            handleAdminBroadcast(pl.params[0], pl.params[1]);
+            return;
         }
         // Everything else goes out verbatim (minus tags/prefix), the same
         // path the web JoinModal uses (`sendRaw`).

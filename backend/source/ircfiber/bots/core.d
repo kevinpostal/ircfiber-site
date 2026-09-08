@@ -181,6 +181,12 @@ abstract class IrcBot {
     protected void onJoined(string channel) {}
     /// A control entry other than `reconnect` / `rejoin`.
     protected void onControl(string cmd, Json entry) {}
+    /// Once per sideband tick (every ≤5 s), before the heartbeat is built,
+    /// on the sideband fiber. `side` is the sideband's own Redis
+    /// connection. This is the place for periodic Redis reads a bot needs
+    /// to act on — `extendStatus` only reports and must stay side-effect
+    /// free.
+    protected void onSidebandTick(RedisStorage side) {}
     /// Add bot-specific heartbeat fields. `side` is the sideband's own
     /// Redis connection, for fields that read Redis.
     protected void extendStatus(ref Json status, RedisStorage side) {}
@@ -516,6 +522,7 @@ abstract class IrcBot {
                 side = new RedisStorage();
                 side.connectFromUrl(cfg.redisUrl);
                 while (true) {
+                    onSidebandTick(side);
                     side.setJson(cfg.heartbeatKey, statusJson(side), 60);
                     if (!cfg.controlKey.length) { sleep(5.seconds); continue; }
                     Nullable!(Tuple!(string, string)) popped;

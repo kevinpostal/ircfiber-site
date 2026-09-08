@@ -26,7 +26,8 @@ import vibe.data.bson;
 import vibe.db.mongo.mongo;
 
 import ircfiber.db.mongo : AppMongoConnection;
-import ircfiber.logs.format : GeoInfo;
+import ircfiber.ipintel.record : IpIntel;
+import ircfiber.fibereye.ruleset : RuleSet;
 
 /// Retention for `fibereye_sessions`, enforced by a TTL index on `tsAt`.
 /// Changing this on a live deployment needs a manual
@@ -117,9 +118,14 @@ struct SessionRecord {
     string quitReason;
     /// Session length, 0 while open.
     long durationMs;
-    /// Geo, filled in from the #staff bot's cache.
-    string geoCity, geoRegion, geoCountry, geoOrg, geoTimezone, geoPrivacy;
-    /// True until the geo cache answered for this session's IP.
+    /// Geo, from the IP-intelligence record (`geoOrg` = `AS<n> <name>`).
+    string geoCity, geoRegion, geoCountry, geoOrg, geoTimezone;
+    /// From the same record: ASN, confirmed flags label, VPN operator,
+    /// announced prefix, proxycheck risk (-1 unknown), assembly time.
+    string intelAsn, intelFlags, intelOperator, intelPrefix;
+    int intelRisk = -1;
+    long intelAt;
+    /// True until the record was attached to this session's IP.
     bool geoPending;
 
     /// Serializes to Bson. `tsAt` is the TTL index field and carries the
@@ -137,7 +143,10 @@ struct SessionRecord {
             "durationMs": Bson(durationMs),
             "geoCity": Bson(geoCity), "geoRegion": Bson(geoRegion),
             "geoCountry": Bson(geoCountry), "geoOrg": Bson(geoOrg),
-            "geoTimezone": Bson(geoTimezone), "geoPrivacy": Bson(geoPrivacy),
+            "geoTimezone": Bson(geoTimezone),
+            "intelAsn": Bson(intelAsn), "intelFlags": Bson(intelFlags),
+            "intelOperator": Bson(intelOperator), "intelPrefix": Bson(intelPrefix),
+            "intelRisk": Bson(intelRisk), "intelAt": Bson(intelAt),
             "geoPending": Bson(geoPending),
         ]);
     }
@@ -166,7 +175,12 @@ struct SessionRecord {
         r.geoCountry = bstr(b, "geoCountry");
         r.geoOrg = bstr(b, "geoOrg");
         r.geoTimezone = bstr(b, "geoTimezone");
-        r.geoPrivacy = bstr(b, "geoPrivacy");
+        r.intelAsn = bstr(b, "intelAsn");
+        r.intelFlags = bstr(b, "intelFlags");
+        r.intelOperator = bstr(b, "intelOperator");
+        r.intelPrefix = bstr(b, "intelPrefix");
+        r.intelRisk = b.tryIndex("intelRisk").isNull ? -1 : cast(int) blong(b, "intelRisk");
+        r.intelAt = blong(b, "intelAt");
         r.geoPending = bbool(b, "geoPending");
         return r;
     }
@@ -191,9 +205,14 @@ struct IpRecord {
     long connects, shortSessions;
     /// Most recent nick / account / GECOS / connect class.
     string lastNick, lastAccount, lastRealname, lastClass;
-    /// Geo, filled in from the #staff bot's cache.
-    string geoCity, geoRegion, geoCountry, geoOrg, geoTimezone, geoPrivacy;
-    /// True until the geo cache answered.
+    /// Geo, from the IP-intelligence record (`geoOrg` = `AS<n> <name>`).
+    string geoCity, geoRegion, geoCountry, geoOrg, geoTimezone;
+    /// From the same record: ASN, confirmed flags label, VPN operator,
+    /// announced prefix, proxycheck risk (-1 unknown), assembly time.
+    string intelAsn, intelFlags, intelOperator, intelPrefix;
+    int intelRisk = -1;
+    long intelAt;
+    /// True until the record was attached.
     bool geoPending;
     /// Strike count (mirrors the Redis counter, for display).
     long strikes;
@@ -221,7 +240,12 @@ struct IpRecord {
         r.geoCountry = bstr(b, "geoCountry");
         r.geoOrg = bstr(b, "geoOrg");
         r.geoTimezone = bstr(b, "geoTimezone");
-        r.geoPrivacy = bstr(b, "geoPrivacy");
+        r.intelAsn = bstr(b, "intelAsn");
+        r.intelFlags = bstr(b, "intelFlags");
+        r.intelOperator = bstr(b, "intelOperator");
+        r.intelPrefix = bstr(b, "intelPrefix");
+        r.intelRisk = b.tryIndex("intelRisk").isNull ? -1 : cast(int) blong(b, "intelRisk");
+        r.intelAt = blong(b, "intelAt");
         r.geoPending = bbool(b, "geoPending");
         r.strikes = blong(b, "strikes");
         r.bannedUntil = blong(b, "bannedUntil");
@@ -326,18 +350,63 @@ struct BanRecord {
     }
 }
 
-/// Persistence for FiberEye; collections `fibereye_sessions`,
-/// `fibereye_ips` and `fibereye_bans`. Instantiated per call site, like
-/// every other repository here — no module singleton, no DI.
-final class FiberEyeStore {
-    private MongoCollection sessions, ips, bans;
+/// One entry of the rule-change history the admin page shows.
+///
+/// History lives in Mongo, not in a Redis list like `RedisKeys.janitorEvents`:
+/// a Redis wipe is exactly the event that silently reverts the rules, so it
+/// must not also erase the record of what they were.
+struct RuleAudit {
+    /// UUID string (`_id`).
+    string id;
+    /// When the change was made (unix ms).
+    long atMs;
+    /// Admin username that made it.
+    string actor;
+    /// `rules_update` | `rules_reset` | `arm` | `disarm`.
+    string action;
+    /// One line naming what changed.
+    string summary;
+    /// RuleSet JSON before/after; "" for arm/disarm.
+    string before, after;
 
-    /// Binds the three collections and ensures their indexes.
+    /// Serializes to Bson.
+    Bson toBson() const @trusted {
+        return Bson([
+            "_id": Bson(id), "atMs": Bson(atMs), "actor": Bson(actor),
+            "action": Bson(action), "summary": Bson(summary),
+            "before": Bson(before), "after": Bson(after),
+        ]);
+    }
+
+    /// Deserializes from Bson; missing fields keep their init value.
+    static RuleAudit fromBson(Bson b) @trusted {
+        RuleAudit a;
+        a.id = bstr(b, "_id");
+        a.atMs = blong(b, "atMs");
+        a.actor = bstr(b, "actor");
+        a.action = bstr(b, "action");
+        a.summary = bstr(b, "summary");
+        a.before = bstr(b, "before");
+        a.after = bstr(b, "after");
+        return a;
+    }
+}
+
+/// Persistence for FiberEye; collections `fibereye_sessions`,
+/// `fibereye_ips`, `fibereye_bans`, `fibereye_rules` and `fibereye_audit`.
+/// Instantiated per call site, like every other repository here — no
+/// module singleton, no DI.
+final class FiberEyeStore {
+    private MongoCollection sessions, ips, bans, rules, audit;
+
+    /// Binds the collections and ensures their indexes.
     this() {
         auto db = AppMongoConnection.getDb();
         sessions = db["fibereye_sessions"];
         ips = db["fibereye_ips"];
         bans = db["fibereye_bans"];
+        rules = db["fibereye_rules"];
+        audit = db["fibereye_audit"];
         ensureIndexes();
     }
 
@@ -361,6 +430,8 @@ final class FiberEyeStore {
         idx(bans, Bson(["placedAtMs": Bson(-1)]), "bans placedAtMs");
         idx(bans, Bson(["ipGroup": Bson(1), "placedAtMs": Bson(-1)]), "bans ipGroup");
         idx(bans, Bson(["token": Bson(1)]), "bans token");
+        // `fibereye_rules` holds one document reached by `_id`, so it needs none.
+        idx(audit, Bson(["atMs": Bson(-1)]), "audit atMs");
 
         // A connection log must age out on its own; this is the only TTL
         // index in the codebase. Re-running createIndex with a different
@@ -416,36 +487,32 @@ final class FiberEyeStore {
         }
     }
 
-    private static Bson geoSet(const GeoInfo g) @trusted {
+    private static Bson intelSet(const IpIntel r) @trusted {
+        string org = r.network.asn;
+        if (r.network.asName.length) org = org.length ? org ~ " " ~ r.network.asName : r.network.asName;
         return Bson([
-            "geoCity": Bson(g.city), "geoRegion": Bson(g.region),
-            "geoCountry": Bson(g.country), "geoOrg": Bson(g.org),
-            "geoTimezone": Bson(g.timezone), "geoPrivacy": Bson(g.privacyFlags),
+            "geoCity": Bson(r.geo.city), "geoRegion": Bson(r.geo.region),
+            "geoCountry": Bson(r.geo.countryCode), "geoOrg": Bson(org),
+            "geoTimezone": Bson(r.geo.timezone),
+            "intelAsn": Bson(r.network.asn), "intelFlags": Bson(r.flagsLabel()),
+            "intelOperator": Bson(r.classification.vpnOperator),
+            "intelPrefix": Bson(r.identity.prefix),
+            "intelRisk": Bson(r.reputation.riskScore), "intelAt": Bson(r.assembledAt),
             "geoPending": Bson(false),
         ]);
     }
 
-    /// Fills one session's geo fields and clears its pending flag.
-    void fillSessionGeo(string id, const GeoInfo g) @trusted {
-        if (!id.length) return;
-        try {
-            sessions.updateOne(Bson(["_id": Bson(id)]), Bson(["$set": geoSet(g)]));
-        } catch (Exception e) {
-            logWarn("FiberEye: fillSessionGeo failed: %s", e.msg);
-        }
-    }
-
-    /// Fills every pending session row of one IP group at once — the geo
-    /// answer is per IP, so a per-session sweep would re-read the same
-    /// cache entry once per connect of a flood.
-    void fillGroupGeo(string ipGroup, const GeoInfo g) @trusted {
+    /// Attaches the record's display fields to every pending session row
+    /// of one IP group at once — the record is per IP, so a per-session
+    /// sweep would re-read the same record once per connect of a flood.
+    void fillGroupIntel(string ipGroup, const IpIntel r) @trusted {
         if (!ipGroup.length) return;
         try {
             sessions.updateMany(
                 Bson(["ipGroup": Bson(ipGroup), "geoPending": Bson(true)]),
-                Bson(["$set": geoSet(g)]));
+                Bson(["$set": intelSet(r)]));
         } catch (Exception e) {
-            logWarn("FiberEye: fillGroupGeo failed: %s", e.msg);
+            logWarn("FiberEye: fillGroupIntel failed: %s", e.msg);
         }
     }
 
@@ -491,7 +558,9 @@ final class FiberEyeStore {
                 "lastNick": Bson(r.nick), "lastAccount": Bson(""),
                 "lastRealname": Bson(r.realname), "lastClass": Bson(r.connClass),
                 "geoCity": Bson(""), "geoRegion": Bson(""), "geoCountry": Bson(""),
-                "geoOrg": Bson(""), "geoTimezone": Bson(""), "geoPrivacy": Bson(""),
+                "geoOrg": Bson(""), "geoTimezone": Bson(""),
+                "intelAsn": Bson(""), "intelFlags": Bson(""), "intelOperator": Bson(""),
+                "intelPrefix": Bson(""), "intelRisk": Bson(-1), "intelAt": Bson(0L),
                 "geoPending": Bson(true),
                 "strikes": Bson(0L), "bannedUntil": Bson(0L), "lastBanId": Bson(""),
             ]));
@@ -528,13 +597,13 @@ final class FiberEyeStore {
         }
     }
 
-    /// Fills an IP rollup's geo fields and clears its pending flag.
-    void setIpGeo(string ipGroup, const GeoInfo g) @trusted {
+    /// Attaches the record's display fields to an IP rollup and clears its pending flag.
+    void setIpIntel(string ipGroup, const IpIntel r) @trusted {
         if (!ipGroup.length) return;
         try {
-            ips.updateOne(Bson(["_id": Bson(ipGroup)]), Bson(["$set": geoSet(g)]));
+            ips.updateOne(Bson(["_id": Bson(ipGroup)]), Bson(["$set": intelSet(r)]));
         } catch (Exception e) {
-            logWarn("FiberEye: setIpGeo failed: %s", e.msg);
+            logWarn("FiberEye: setIpIntel failed: %s", e.msg);
         }
     }
 
@@ -740,7 +809,7 @@ final class FiberEyeStore {
         return rows;
     }
 
-    /// IP groups still waiting for a geo answer, newest activity first.
+    /// IP groups still waiting for a record, newest activity first (admin "pending" filter).
     IpRecord[] pendingGeoIps(int limit) @trusted {
         IpRecord[] rows;
         try {
@@ -842,5 +911,102 @@ final class FiberEyeStore {
             logWarn("FiberEye: countBans failed: %s", e.msg);
             return 0;
         }
+    }
+
+    /// The admin-set rule override (`fibereye_rules`, `_id: "current"`),
+    /// or null when the deployed baseline is in force.
+    ///
+    /// Fields absent from the stored document fall back to the built-in
+    /// defaults here rather than to the env baseline, which the store has
+    /// no access to; the caller re-merges over its own baseline.
+    Nullable!RuleSet loadRules() @trusted {
+        Nullable!RuleSet result;
+        try {
+            auto doc = rules.findOne(Bson(["_id": Bson("current")]));
+            if (doc.isNull) return result;
+            auto v = doc.tryIndex("rules");
+            if (v.isNull || v.get.type != Bson.Type.object) return result;
+            RuleSet builtin;
+            result = RuleSet.fromJson(v.get.toJson(), builtin);
+        } catch (Exception e) {
+            logWarn("FiberEye: loadRules failed: %s", e.msg);
+        }
+        return result;
+    }
+
+    /// Stores the override. Update-then-insert for the same reason
+    /// `upsertIp` documents: a vibe-d 0.10.3 upsert that *creates* a
+    /// document with a string `_id` throws after the write committed.
+    void saveRules(const RuleSet r) @trusted {
+        auto selector = Bson(["_id": Bson("current")]);
+        Bson payload;
+        try {
+            payload = Bson.fromJson(r.toJson());
+        } catch (Exception e) {
+            logWarn("FiberEye: saveRules encode failed: %s", e.msg);
+            return;
+        }
+        auto update = Bson(["$set": Bson([
+            "rules": payload,
+            "updatedAtMs": Bson(r.updatedAtMs),
+            "updatedBy": Bson(r.updatedBy),
+        ])]);
+        try {
+            if (rules.updateOne(selector, update).matchedCount > 0) return;
+        } catch (Exception e) {
+            logWarn("FiberEye: saveRules update failed: %s", e.msg);
+            return;
+        }
+        try {
+            rules.insertOne(Bson([
+                "_id": Bson("current"),
+                "rules": payload,
+                "updatedAtMs": Bson(r.updatedAtMs),
+                "updatedBy": Bson(r.updatedBy),
+            ]));
+        } catch (Exception e) {
+            // Lost a race with a second admin: the document exists now, so
+            // this save still has to land.
+            try {
+                if (rules.updateOne(selector, update).matchedCount > 0) return;
+            } catch (Exception) {
+            }
+            logWarn("FiberEye: saveRules insert failed: %s", e.msg);
+        }
+    }
+
+    /// Drops the override so the deployed baseline takes over again.
+    void clearRules() @trusted {
+        try {
+            rules.deleteOne(Bson(["_id": Bson("current")]));
+        } catch (Exception e) {
+            logWarn("FiberEye: clearRules failed: %s", e.msg);
+        }
+    }
+
+    /// Appends a history row and returns its id (empty on failure).
+    string insertAudit(RuleAudit a) @trusted {
+        if (!a.id.length) a.id = randomUUID().toString();
+        try {
+            audit.insertOne(a.toBson());
+            return a.id;
+        } catch (Exception e) {
+            logWarn("FiberEye: insertAudit failed: %s", e.msg);
+            return "";
+        }
+    }
+
+    /// Newest-first rule history.
+    RuleAudit[] recentAudit(int limit) @trusted {
+        RuleAudit[] rows;
+        try {
+            FindOptions opts;
+            opts.sort = Bson(["atMs": Bson(-1)]);
+            opts.limit = limit;
+            foreach (doc; audit.find(Bson.emptyObject, opts)) rows ~= RuleAudit.fromBson(doc);
+        } catch (Exception e) {
+            logWarn("FiberEye: recentAudit failed: %s", e.msg);
+        }
+        return rows;
     }
 }

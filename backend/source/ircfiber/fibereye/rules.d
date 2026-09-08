@@ -25,6 +25,43 @@ struct Thresholds {
     long shortMs        = 20_000;
     /// First-strike ban duration.
     long banSeconds     = 3_600;
+    /// Per-rule switches. Turning a rule off preserves its threshold, so
+    /// re-enabling it restores what the admin last chose instead of the
+    /// value they had to type to disable it.
+    bool connectsEnabled = true;
+    bool nicksEnabled    = true;
+    bool churnEnabled    = true;
+}
+
+/// Bounds every stored rule set is held to. They live here, next to the
+/// engine that consumes them, so the admin API and the bot enforce one
+/// definition; `web/admin/fibereye.d` also serves them to the UI rather
+/// than letting TypeScript keep a second copy.
+enum RULE_WINDOW_MIN      = 5,     RULE_WINDOW_MAX      = 3_600;
+/// A threshold of 1 bans on the first connect from any non-exempt
+/// address, which is indistinguishable from an outage — hence a floor of 2.
+enum RULE_COUNT_MIN       = 2,     RULE_COUNT_MAX       = 100_000;
+enum RULE_SHORT_MS_MIN    = 1_000, RULE_SHORT_MS_MAX    = 600_000;
+enum RULE_BAN_SECONDS_MIN = 60,    RULE_BAN_SECONDS_MAX = 2_592_000;
+
+/// Human-readable reasons `t` is not a usable rule set; empty result means
+/// it is storable. A disabled rule's threshold is still range-checked, so
+/// re-enabling it can never bring back a nonsense value.
+string[] validateThresholds(const Thresholds t) @safe pure {
+    string[] errs;
+    if (t.windowSeconds < RULE_WINDOW_MIN || t.windowSeconds > RULE_WINDOW_MAX)
+        errs ~= "window must be between 5 and 3600 seconds";
+    if (t.connects < RULE_COUNT_MIN || t.connects > RULE_COUNT_MAX)
+        errs ~= "connect threshold must be between 2 and 100000";
+    if (t.nicks < RULE_COUNT_MIN || t.nicks > RULE_COUNT_MAX)
+        errs ~= "nick threshold must be between 2 and 100000";
+    if (t.churn < RULE_COUNT_MIN || t.churn > RULE_COUNT_MAX)
+        errs ~= "short-session threshold must be between 2 and 100000";
+    if (t.shortMs < RULE_SHORT_MS_MIN || t.shortMs > RULE_SHORT_MS_MAX)
+        errs ~= "short session must be between 1000 and 600000 ms";
+    if (t.banSeconds < RULE_BAN_SECONDS_MIN || t.banSeconds > RULE_BAN_SECONDS_MAX)
+        errs ~= "first ban must be between 60 and 2592000 seconds";
+    return errs;
 }
 
 /// The window counts for one IP group at the moment of a connect.
@@ -43,9 +80,12 @@ struct Verdict {
 /// for an observation that exceeds several thresholds at once:
 /// connect_flood > nick_churn > session_churn.
 Verdict evaluate(const Observation o, const Thresholds t) @safe pure {
-    if (t.connects > 0 && o.connects >= t.connects) return Verdict(true, "connect_flood");
-    if (t.nicks > 0 && o.nicks >= t.nicks) return Verdict(true, "nick_churn");
-    if (t.churn > 0 && o.churn >= t.churn) return Verdict(true, "session_churn");
+    // The `> 0` guards stay: a rule that is on but carries a stored 0 (an
+    // override written before the bounds existed) must not fire on every
+    // connect.
+    if (t.connectsEnabled && t.connects > 0 && o.connects >= t.connects) return Verdict(true, "connect_flood");
+    if (t.nicksEnabled && t.nicks > 0 && o.nicks >= t.nicks) return Verdict(true, "nick_churn");
+    if (t.churnEnabled && t.churn > 0 && o.churn >= t.churn) return Verdict(true, "session_churn");
     return Verdict(false, "");
 }
 

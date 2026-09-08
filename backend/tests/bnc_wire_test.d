@@ -18,13 +18,43 @@ private void check(bool cond, string what, string file = __FILE__, size_t line =
 }
 
 private void testParseBncPass() {
-    auto a = parseBncPass("bnc:abc");
-    check(a.ok && a.clientId == "" && a.token == "abc", "bnc:abc");
-    auto b = parseBncPass("bnc@laptop:abc");
-    check(b.ok && b.clientId == "laptop" && b.token == "abc", "bnc@laptop:abc");
-    check(!parseBncPass("bnc@my id:abc").ok, "space in clientid rejected");
-    check(!parseBncPass("znc:abc").ok, "znc prefix rejected");
-    check(!parseBncPass("bnc:").ok, "empty token rejected");
+    auto a = parseBncPass("abc");
+    check(a.ok && !a.hasIdentity && a.token == "abc", "bare token");
+    auto b = parseBncPass("zodiac:abc");
+    check(b.ok && b.hasIdentity && b.identity.username == "zodiac" && b.identity.network == ""
+        && b.identity.clientId == "" && b.token == "abc", "zodiac:abc");
+    auto c = parseBncPass("zodiac/libera:abc");
+    check(c.ok && c.identity.username == "zodiac" && c.identity.network == "libera" && c.token == "abc", "zodiac/libera:abc");
+    auto d = parseBncPass("zodiac/libera@laptop:abc");
+    check(d.ok && d.identity.username == "zodiac" && d.identity.network == "libera"
+        && d.identity.clientId == "laptop" && d.token == "abc", "zodiac/libera@laptop:abc");
+    check(parseBncPass("zodiac@laptop:1:x").token == "1:x", "token keeps later colons");
+    check(!parseBncPass("zodiac/:abc").ok, "empty network rejected");
+    check(!parseBncPass("zodiac@:abc").ok, "empty clientid rejected");
+    check(!parseBncPass("zodiac@my id:abc").ok, "space in clientid rejected");
+    check(!parseBncPass(":abc").ok, "empty username rejected");
+    check(!parseBncPass("zodiac:").ok, "empty token rejected");
+
+    auto i1 = parseBncIdentity("zodiac");
+    check(i1.ok && i1.username == "zodiac" && i1.network == "" && i1.clientId == "", "identity bare");
+    auto i2 = parseBncIdentity("zodiac/IRC-Fiber@phone");
+    check(i2.ok && i2.username == "zodiac" && i2.network == "IRC-Fiber" && i2.clientId == "phone", "identity full");
+    check(!parseBncIdentity("").ok, "empty identity rejected");
+
+    check(networkSlug("IRC Fiber") == "irc-fiber", "slug basic: " ~ networkSlug("IRC Fiber"));
+    check(networkSlug("  Libera.Chat ") == "libera-chat", "slug trims: " ~ networkSlug("  Libera.Chat "));
+    check(networkSlug("!!") == "", "slug empty");
+
+    import std.base64 : Base64;
+    auto sp = parseSaslPlain(Base64.encode(cast(ubyte[]) "\0zodiac/libera\0tok".dup));
+    check(sp.ok && sp.authcid == "zodiac/libera" && sp.password == "tok", "sasl plain round trip");
+    check(!parseSaslPlain("***").ok, "sasl bad base64 rejected");
+    check(!parseSaslPlain(Base64.encode(cast(ubyte[]) "zodiac\0tok".dup)).ok, "sasl 2-part rejected");
+
+    auto attrs = parseBouncerAttrs("name=My\\sNet;host=irc.x;tls");
+    check(attrs["name"] == "My Net" && attrs["host"] == "irc.x" && attrs["tls"] == "", "parseBouncerAttrs");
+    check(formatBouncerAttrs([["name", "My Net"], ["port", "6697"]]) == "name=My\\sNet;port=6697", "formatBouncerAttrs");
+    check(unescapeTagValue("a\\:b\\sc\\\\d") == "a;b c\\d", "unescapeTagValue");
 
     // server-time round trip and CHATHISTORY refs
     check(parseServerTime("2026-09-02T14:03:11.412Z") == 1788357791412L, "parseServerTime ms");
@@ -41,9 +71,6 @@ private void testParseBncPass() {
     check(!parseHistoryRef("msgid=").ok, "ref empty msgid");
     check(!parseHistoryRef("2026-09-02T14:03:11Z").ok, "ref without kind");
     check(playbackTimePrefix(1788357791412L) == "[14:03:11] ", "playback prefix");
-    check(!parseBncPass("bnc@:abc").ok, "empty clientid rejected");
-    check(!parseBncPass("abc").ok, "no colon rejected");
-    check(parseBncPass("bnc@a.b-c_d:1:x").token == "1:x", "token keeps later colons");
 }
 
 private void testParseClientLine() {

@@ -153,7 +153,7 @@ configuration "logs-format-test" {
     targetName "logs-format-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/events.d" "source/ircfiber/support/json.d"
+    sourceFiles "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/logs/backup_announce.d" "source/ircfiber/web/admin/backups.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d" "source/ircfiber/env.d" "source/ircfiber/support/format.d" "source/ircfiber/support/events.d" "source/ircfiber/support/json.d" "source/ircfiber/ipintel/record.d" "source/ircfiber/ipintel/assemble.d" "source/ircfiber/ipintel/cidr.d"
     mainSourceFile "tests/logs_format_test.d"
     versions "VibeUseFibers"
 }
@@ -167,8 +167,22 @@ configuration "fibereye-test" {
     targetName "fibereye-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/fibereye/format.d" "source/ircfiber/fibereye/rules.d" "source/ircfiber/fibereye/events.d" "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/json.d"
+    sourceFiles "source/ircfiber/fibereye/format.d" "source/ircfiber/fibereye/rules.d" "source/ircfiber/fibereye/events.d" "source/ircfiber/fibereye/ruleset.d" "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/json.d" "source/ircfiber/ipintel/record.d" "source/ircfiber/ipintel/assemble.d" "source/ircfiber/ipintel/cidr.d"
     mainSourceFile "tests/fibereye_test.d"
+    versions "VibeUseFibers"
+}
+
+// Pure-code unit test for the IP-intelligence assembler: per-source
+// mappers, field ownership, the classification vote, the record JSON round
+// trip and the CIDR matcher (no Redis/Mongo/network needed):
+//   dub --root=backend build --config=ipintel-test && ./backend/ipintel-test
+configuration "ipintel-test" {
+    targetType "executable"
+    targetName "ipintel-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/ipintel/record.d" "source/ircfiber/ipintel/assemble.d" "source/ircfiber/ipintel/cidr.d"
+    mainSourceFile "tests/ipintel_test.d"
     versions "VibeUseFibers"
 }
 

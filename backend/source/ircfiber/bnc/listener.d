@@ -26,6 +26,7 @@ import vibe.stream.tls : TLSContext, TLSContextKind, TLSStream, TLSStreamState,
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.db.network : NetworkRepository;
+import ircfiber.db.user : UserRepository;
 import ircfiber.db.messages : MessageRepository;
 import ircfiber.db.preferences : PreferencesRepository;
 import ircfiber.storage.buffer : BufferManager;
@@ -57,6 +58,7 @@ void startBncListener(RedisStorage redis) {
     g_ctx.redis = redis;
     g_ctx.registry = new ServerRegistry(redis);
     g_ctx.networkRepo = new NetworkRepository();
+    g_ctx.userRepo = new UserRepository();
     g_ctx.messageRepo = new MessageRepository();
     g_ctx.prefsRepo = new PreferencesRepository(redis);
     g_ctx.bufferManager = new BufferManager(redis);

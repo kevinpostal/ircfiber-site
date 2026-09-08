@@ -56,7 +56,7 @@ import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
 import ircfiber.services.anope_db : AnopeAccount, AnopeInventory, asciiLowerStr,
     classifyAccountOwnership, readAnopeInventory;
 import ircfiber.support.bot : SupportBotConfig;
-import ircfiber.logs.bot : LogsBotConfig;
+import ircfiber.fibereye.bot : FiberEyeConfig;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
 
@@ -672,9 +672,9 @@ private bool[string] staffAccountsLower(const ref AnopeInventory inv) {
     auto botNick = environment.get("IRCFIBER_SUPPORT_BOT_NICK", "").strip();
     if (!botNick.length) botNick = SupportBotConfig.init.nick;
     if (botNick.length) staff[asciiLowerStr(botNick)] = true;
-    auto logsNick = environment.get("IRCFIBER_LOGS_BOT_NICK", "").strip();
-    if (!logsNick.length) logsNick = LogsBotConfig.init.nick;
-    if (logsNick.length) staff[asciiLowerStr(logsNick)] = true;
+    auto eyeNick = environment.get("IRCFIBER_FIBEREYE_NICK", "").strip();
+    if (!eyeNick.length) eyeNick = FiberEyeConfig.init.nick;
+    if (eyeNick.length) staff[asciiLowerStr(eyeNick)] = true;
 
     // Alias → display. A grouped account is one identity wearing several
     // nicks, so flagging only the nick the oper block happens to name would

@@ -1,13 +1,13 @@
 module ircfiber.web.admin.bnc;
 
-/// Admin JSON API for the bouncer ("Connect with another client…").
+/// Admin JSON API for the bouncer (Settings → Bouncer).
 ///
 /// Two kinds of rows:
 ///   * clients  — live attachments: the `irc:bnc:clients` set of session ids
 ///                and the `irc:bnc:client:<sid>` presence records the bnc
 ///                process refreshes every 15 s;
-///   * accounts — every network that has a bouncer password (Mongo
-///                `bncToken`), joined with its owner, its attached clients
+///   * accounts — every user that has a bouncer password (Mongo
+///                `users.bncToken`) with their networks, attached clients
 ///                and the per-clientid replay cursors (`irc:bnc:seen:<net>`).
 /// Actions cross the process boundary via `ircfiber.bnc.control`.
 
@@ -30,7 +30,7 @@ import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody;
 
 /// One attached client as stored by `BncClient.writePresence`.
 private struct ClientRow {
-    string sid, userId, networkId, networkName, clientId, nick, peer, caps;
+    string sid, userId, username, networkId, networkName, clientId, nick, peer, caps;
     bool tls;
     long attachedAt, lastRecvMs, lastSendMs, cursor, linesIn, linesOut;
     /// TTL left on the presence key; stale rows (< 0) are dropped.
@@ -68,6 +68,7 @@ private ClientRow[] loadClients(RedisStorage redis) {
             }
             c.sid = str(j, "sid");
             c.userId = str(j, "userId");
+            c.username = str(j, "username");
             c.networkId = str(j, "networkId");
             c.networkName = str(j, "networkName");
             c.clientId = str(j, "clientId");
@@ -91,11 +92,11 @@ private ClientRow[] loadClients(RedisStorage redis) {
     return rows;
 }
 
-private Json clientJson(const ref ClientRow c, string username) {
+private Json clientJson(const ref ClientRow c) {
     auto j = Json.emptyObject;
     j["sid"] = c.sid;
     j["userId"] = c.userId;
-    j["username"] = username;
+    j["username"] = c.username.length ? c.username : "unknown";
     j["networkId"] = c.networkId;
     j["networkName"] = c.networkName;
     j["clientId"] = c.clientId;
@@ -113,72 +114,61 @@ private Json clientJson(const ref ClientRow c, string username) {
     return j;
 }
 
-/// Resolves usernames once per distinct user id.
-private string[string] usernamesFor(string[] userIds) {
-    string[string] names;
-    auto users = new UserRepository();
-    foreach (uid; userIds) {
-        if (uid in names) continue;
-        try {
-            // `.idup`: vibe.d's parseUUID aliases (and can blank) the source slice.
-            auto u = users.findById(parseUUID(uid.idup));
-            names[uid] = u.username.length ? u.username : "unknown";
-        } catch (Exception) {
-            names[uid] = "unknown";
-        }
-    }
-    return names;
-}
-
 /// GET /api/admin/bnc
 package void apiBncOverview(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     auto clients = loadClients(redis);
-    auto networks = new NetworkRepository();
-    auto accounts = networks.listWithBncToken();
-
-    string[] uids;
-    foreach (c; clients) uids ~= c.userId;
-    foreach (a; accounts) uids ~= a.userId.toString();
-    auto names = usernamesFor(uids);
+    auto networkRepo = new NetworkRepository();
+    auto accounts = new UserRepository().listWithBncToken();
 
     int[string] attachedPerNetwork;
-    foreach (c; clients) attachedPerNetwork[c.networkId]++;
+    int[string] attachedPerUser;
+    foreach (c; clients) {
+        attachedPerNetwork[c.networkId]++;
+        attachedPerUser[c.userId]++;
+    }
 
     auto clientsArr = Json.emptyArray;
-    foreach (ref c; clients) clientsArr ~= clientJson(c, names.get(c.userId, "unknown"));
+    foreach (ref c; clients) clientsArr ~= clientJson(c);
 
     auto accountsArr = Json.emptyArray;
     const nowMs = Clock.currTime.toUnixTime!long * 1000;
     int seenTotal = 0;
-    foreach (a; accounts) {
-        const nid = a.config.id.toString();
+    foreach (u; accounts) {
+        const uid = u.id.toString();
         auto j = Json.emptyObject;
-        j["networkId"] = nid;
-        j["networkName"] = a.config.name;
-        j["host"] = a.config.host;
-        j["nick"] = a.config.nick;
-        j["disabled"] = a.config.disabled;
-        j["userId"] = a.userId.toString();
-        j["username"] = names.get(a.userId.toString(), "unknown");
-        j["attached"] = attachedPerNetwork.get(nid, 0);
-        auto seen = Json.emptyArray;
-        try {
-            foreach (cid, cur; redis.hgetAll(RedisKeys.bncSeen(nid))) {
-                auto s = Json.emptyObject;
-                s["clientId"] = cid;
-                long eid = 0;
-                try eid = cur.to!long; catch (Exception) {}
-                s["cursor"] = eid;
-                bool online = false;
-                foreach (c; clients) if (c.networkId == nid && c.clientId == cid) { online = true; break; }
-                s["online"] = online;
-                seen ~= s;
-                seenTotal++;
+        j["userId"] = uid;
+        j["username"] = u.username;
+        j["attached"] = attachedPerUser.get(uid, 0);
+        auto nets = Json.emptyArray;
+        foreach (ref cfg; networkRepo.findByUserId(u.id)) {
+            const nid = cfg.id.toString();
+            auto n = Json.emptyObject;
+            n["networkId"] = nid;
+            n["networkName"] = cfg.name;
+            n["host"] = cfg.host;
+            n["disabled"] = cfg.disabled;
+            n["attached"] = attachedPerNetwork.get(nid, 0);
+            auto seen = Json.emptyArray;
+            try {
+                foreach (cid, cur; redis.hgetAll(RedisKeys.bncSeen(nid))) {
+                    auto s = Json.emptyObject;
+                    s["clientId"] = cid;
+                    long eid = 0;
+                    try eid = cur.to!long; catch (Exception) {}
+                    s["cursor"] = eid;
+                    bool online = false;
+                    foreach (c; clients) if (c.networkId == nid && c.clientId == cid) { online = true; break; }
+                    s["online"] = online;
+                    seen ~= s;
+                    seenTotal++;
+                }
+            } catch (Exception e) {
+                logWarn("apiBncOverview: seen hash read failed for %s: %s", nid, e.msg);
             }
-        } catch (Exception e) {
-            logWarn("apiBncOverview: seen hash read failed for %s: %s", nid, e.msg);
+            n["seen"] = seen;
+            nets ~= n;
         }
-        j["seen"] = seen;
+        j["networks"] = nets;
         accountsArr ~= j;
     }
 
@@ -247,18 +237,23 @@ private bool loadNetwork(HTTPServerRequest req, HTTPServerResponse res, NetworkR
     return true;
 }
 
-/// POST /api/admin/bnc/networks/:id/revoke — clears the password, drops
-/// replay cursors, disconnects attached clients (same as the user's own revoke).
+/// POST /api/admin/bnc/users/:id/revoke — clears the user's bouncer
+/// password, drops every replay cursor and disconnects attached clients
+/// (same as the user's own revoke).
 package void apiBncRevoke(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
-    auto repo = new NetworkRepository();
-    UUID id, owner;
-    if (!loadNetwork(req, res, repo, id, owner)) return;
-    repo.setBncToken(id, "");
-    redis.del(RedisKeys.bncSeen(id.toString()));
-    if (owner != UUID.init) publishBncRevoked(redis, owner.toString(), id.toString());
-    logInfo("Admin revoked bnc password for network %s (owner %s)", id.toString(), owner.toString());
+    UUID id;
+    try id = parseUUID(req.params["id"].idup);
+    catch (Exception) { jsonError(res, 400, "Invalid user id"); return; }
+    auto users = new UserRepository();
+    auto user = users.findById(id);
+    if (user.id == UUID.init) { jsonError(res, 404, "User not found"); return; }
+    users.setBncToken(id, "");
+    foreach (ref cfg; new NetworkRepository().findByUserId(id))
+        redis.del(RedisKeys.bncSeen(cfg.id.toString()));
+    publishBncRevoked(redis, id.toString(), "");
+    logInfo("Admin revoked bnc password for user %s (%s)", user.username, id.toString());
     auto out_ = Json.emptyObject;
-    out_["networkId"] = id.toString();
+    out_["userId"] = id.toString();
     jsonOk(res, out_);
 }
 

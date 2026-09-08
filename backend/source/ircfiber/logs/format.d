@@ -1,8 +1,8 @@
 /**
- * Pure parsing and formatting for the #staff log bot: the InspIRCd connect
- * server-notice parser, the private-IP test, the geo clause builders and
- * one IRC line (or two) per outbox event. No IO — covered by
- * `tests/logs_format_test.d`.
+ * Pure parsing and formatting for the `#staff` announcements: the
+ * InspIRCd connect server-notice parser, the private-IP test, the
+ * IP-intelligence clause builders and one IRC line (or two) per outbox
+ * event. No IO — covered by `tests/logs_format_test.d`.
  *
  * `#staff` is oper-only (`+O`), so unlike the #support bot these lines
  * deliberately carry the full IP, the full e-mail address and the geo/ASN
@@ -16,6 +16,7 @@ import std.conv : to;
 import std.string : endsWith, indexOf, lastIndexOf, split, startsWith, strip, toLower;
 import std.uni : icmp;
 
+import ircfiber.ipintel.record : IpIntel;
 import ircfiber.logs.events : LogEvent;
 import ircfiber.support.format : clipBytes, truncateText;
 import ircfiber.support.json : sanitizeLine;
@@ -41,61 +42,6 @@ struct ConnectNotice {
     string ip;
     /// GECOS.
     string realname;
-}
-
-/// An ipinfo.io answer (or the empty/unavailable state).
-struct GeoInfo {
-    /// True when the lookup produced at least a city, country or org.
-    bool ok;
-    /// True when the answer came from the Redis cache (IP seen before).
-    bool cached;
-    string ip, city, region, country, loc, org, timezone, postal, hostname;
-    /// `vpn+proxy+tor+hosting+relay` subset that is true (paid tier only).
-    string privacyFlags;
-}
-
-/// ipinfo's ASN view of an address: the number, the operator (i.e. the ISP)
-/// and, from the Lite endpoint only, that operator's domain.
-struct AsnInfo {
-    /// True when at least the number or the operator name is known.
-    bool ok;
-    /// `AS39351`, carrying the `AS` prefix exactly as ipinfo writes it.
-    string asn;
-    /// Operator name, e.g. `31173 Services AB`.
-    string name;
-    /// Operator domain, e.g. `31173.se`. Lite endpoint only.
-    string domain;
-}
-
-/// Splits ipinfo's `org` field into number and operator:
-/// `"AS39351 31173 Services AB"` → `AS39351` + `31173 Services AB`.
-///
-/// `org` is the only ASN carrier the Core endpoint (`/<ip>/json`) offers on
-/// the token tier this deployment has: an `asn` object is a paid add-on and
-/// `ipinfo.io/AS<n>/json` answers *Token does not have access to this API*.
-/// `ircfiber.logs.geo.lookupAsn` reads the number, name and domain as
-/// separate Lite-endpoint fields; this parser is what answers when no token
-/// is configured, when the value came back through a SOCKS exit probe, or
-/// when the string carries no `AS<digits>` head at all (`"Mullvad VPN AB"`),
-/// in which case the whole value is the operator name.
-AsnInfo asnFromOrg(string org) @safe pure {
-    AsnInfo a;
-    const s = org.strip();
-    if (!s.length) return a;
-    const sp = s.indexOf(' ');
-    const head = sp < 0 ? s : s[0 .. sp];
-    bool asHead = head.length > 2 && head[0 .. 2] == "AS";
-    if (asHead)
-        foreach (ch; head[2 .. $])
-            if (ch < '0' || ch > '9') { asHead = false; break; }
-    if (asHead) {
-        a.asn = head;
-        a.name = sp < 0 ? "" : s[sp + 1 .. $].strip();
-    } else {
-        a.name = s;
-    }
-    a.ok = a.asn.length > 0 || a.name.length > 0;
-    return a;
 }
 
 /// Parses an InspIRCd 4 connect server notice as delivered to an opered
@@ -240,37 +186,64 @@ private string joinClauses(const string[] parts, string sep) @safe pure {
     return out_;
 }
 
-/// `Austin, Texas, US · AS15169 Google LLC · 30.2672,-97.7431 · America/Chicago · vpn`
+/// `Austin, Texas, US · AS15169 Google LLC · vpn(Mullvad)+hosting · risk 73 · prefix 185.65.134.0/24 · America/Chicago`
 /// Missing fields are skipped rather than rendered as empty separators.
-string geoDetail(const GeoInfo g) @safe pure {
-    const place = joinClauses([sanitizeLine(g.city), sanitizeLine(g.region), sanitizeLine(g.country)], ", ");
-    return joinClauses([place, sanitizeLine(g.org), sanitizeLine(g.loc),
-        sanitizeLine(g.timezone), sanitizeLine(g.privacyFlags)], " · ");
+/// No coordinates: `docs/IP_INTEL.md` §4 rule 4.
+string geoDetail(const IpIntel r) @safe pure {
+    const place = joinClauses([sanitizeLine(r.geo.city), sanitizeLine(r.geo.region),
+        sanitizeLine(r.geo.countryCode)], ", ");
+    const asn = joinClauses([sanitizeLine(r.network.asn), sanitizeLine(r.network.asName)], " ");
+    const risk = r.reputation.riskScore >= 0 ? "risk " ~ r.reputation.riskScore.to!string : "";
+    const prefix = r.identity.prefix.length ? "prefix " ~ sanitizeLine(r.identity.prefix) : "";
+    return joinClauses([place, asn, sanitizeLine(r.flagsLabel()), risk, prefix,
+        sanitizeLine(r.geo.timezone)], " · ");
 }
 
 /// `Austin, US` / `US` / `Austin` / `""`.
-string geoShort(const GeoInfo g) @safe pure {
-    return joinClauses([sanitizeLine(g.city), sanitizeLine(g.country)], ", ");
+string geoShort(const IpIntel r) @safe pure {
+    return joinClauses([sanitizeLine(r.geo.city), sanitizeLine(r.geo.countryCode)], ", ");
 }
 
-/// The trailing geo clause of a one-line event (signup) or of the connect
-/// headline. `detailWhenFirst` is false for `irc_connect`, whose detail is
-/// carried by the follow-up `↳` line instead.
-private string geoClause(string ip, const GeoInfo g, bool firstSighting, bool detailWhenFirst) @safe pure {
+/// True when the record carries anything worth printing.
+private bool hasIntel(const IpIntel r) @safe pure nothrow {
+    return r.provenance.length > 0;
+}
+
+/// The trailing intel clause of a one-line event (signup) or of the
+/// connect headline. `detailWhenFirst` is false for `irc_connect`, whose
+/// detail is carried by the follow-up `↳` line instead.
+private string geoClause(string ip, const IpIntel r, bool firstSighting, bool detailWhenFirst) @safe pure {
     if (!ip.strip().length) return "";
     if (isPrivateIp(ip)) return " · private IP";
-    if (!g.ok) return " · geo unavailable";
+    if (!hasIntel(r)) return " · geo unavailable";
     if (firstSighting) {
         if (!detailWhenFirst) return "";
-        const d = geoDetail(g);
+        const d = geoDetail(r);
         return d.length ? " · " ~ d : "";
     }
-    const s = geoShort(g);
-    return s.length ? " · known IP (" ~ s ~ ")" : " · known IP";
+    const s = geoShort(r);
+    string out_ = s.length ? " · known IP (" ~ s ~ ")" : " · known IP";
+    if (r.reputation.sessionCount > 1) out_ ~= " · " ~ r.reputation.sessionCount.to!string ~ " sessions";
+    return out_;
 }
 
 private string finish(string line) @safe pure nothrow @nogc {
     return clipBytes(line, LOGS_LINE_MAX_BYTES);
+}
+
+/// Human size for a backup archive: `112.4 MB` / `1.5 KB` / `512 B`
+/// (one decimal at MB/KB, integer bytes below 1 KB, `0 B` when negative).
+string backupSize(long bytes) @safe pure {
+    if (bytes < 0) bytes = 0;
+    if (bytes >= 1024 * 1024) {
+        const tenths = (bytes * 10 + 524_288) / 1_048_576;
+        return (tenths / 10).to!string ~ "." ~ (tenths % 10).to!string ~ " MB";
+    }
+    if (bytes >= 1024) {
+        const tenths = (bytes * 10 + 512) / 1024;
+        return (tenths / 10).to!string ~ "." ~ (tenths % 10).to!string ~ " KB";
+    }
+    return bytes.to!string ~ " B";
 }
 
 private string ircName(string name) @safe pure {
@@ -286,7 +259,9 @@ private string ircName(string name) @safe pure {
 /// - irc_connect: `IRC connect: alice!~alice@h.example (203.0.113.7) · class main · port 6697 · [Alice]`
 ///                plus `↳ 203.0.113.7 · <geo detail>` the first time the IP is seen
 /// - notice:      `Notice from zodiac: maintenance in 10 min`
-string[] formatLogEvent(const LogEvent ev, const GeoInfo geo, bool firstSighting) @safe pure {
+/// - backup:      `Backup mongo ok: mongo-20260907-031700.archive.gz · 112.4 MB · 45231ms`
+///                `Backup mongo FAILED at verify: <error>`
+string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighting) @safe pure {
     const ip = sanitizeLine(ev.ip);
     switch (ev.type) {
         case "signup": {
@@ -294,7 +269,7 @@ string[] formatLogEvent(const LogEvent ev, const GeoInfo geo, bool firstSighting
             const email = sanitizeLine(ev.email);
             if (email.length) line ~= " <" ~ email ~ ">";
             if (ip.length) line ~= " · " ~ ip;
-            line ~= geoClause(ip, geo, firstSighting, true);
+            line ~= geoClause(ip, intel, firstSighting, true);
             return [finish(line)];
         }
         case "mail": {
@@ -331,10 +306,10 @@ string[] formatLogEvent(const LogEvent ev, const GeoInfo geo, bool firstSighting
             if (ev.port > 0) line ~= " · port " ~ ev.port.to!string;
             const real_ = truncateText(sanitizeLine(ev.realname), LOGS_REALNAME_MAX_CHARS);
             if (real_.length) line ~= " · [" ~ real_ ~ "]";
-            line ~= geoClause(ip, geo, firstSighting, false);
+            line ~= geoClause(ip, intel, firstSighting, false);
             string[] lines = [finish(line)];
-            if (ip.length && firstSighting && geo.ok && !isPrivateIp(ip)) {
-                const d = geoDetail(geo);
+            if (ip.length && firstSighting && hasIntel(intel) && !isPrivateIp(ip)) {
+                const d = geoDetail(intel);
                 if (d.length) lines ~= finish("↳ " ~ ip ~ " · " ~ d);
             }
             return lines;
@@ -343,6 +318,23 @@ string[] formatLogEvent(const LogEvent ev, const GeoInfo geo, bool firstSighting
             const text = sanitizeLine(ev.text);
             if (!text.length) return [];
             return [finish("Notice from " ~ ircName(ev.actor) ~ ": " ~ text)];
+        }
+        case "backup": {
+            const kind = sanitizeLine(ev.kind);
+            const label = kind.length ? kind : "backup";
+            if (sanitizeLine(ev.status) == "ok") {
+                string line = "Backup " ~ label ~ " ok:";
+                const file = sanitizeLine(ev.file);
+                if (file.length) line ~= " " ~ file ~ " ·";
+                line ~= " " ~ backupSize(ev.fileBytes);
+                if (ev.durationMs > 0) line ~= " · " ~ ev.durationMs.to!string ~ "ms";
+                return [finish(line)];
+            }
+            const stage = sanitizeLine(ev.stage);
+            const msg = truncateText(sanitizeLine(ev.error.length ? ev.error : ev.text),
+                LOGS_ERROR_MAX_CHARS);
+            return [finish("Backup " ~ label ~ " FAILED at "
+                ~ (stage.length ? stage : "unknown") ~ ": " ~ msg)];
         }
         default:
             return [];

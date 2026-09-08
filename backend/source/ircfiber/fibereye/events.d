@@ -27,6 +27,11 @@ string fiberEyeControlKey() @safe pure nothrow { return "fibereye:bot:control"; 
 /// Enforcement switch: `"1"` arms, anything else (including a missing
 /// key) leaves FiberEye observing. A Redis wipe therefore fails safe.
 string fiberEyeArmedKey() @safe pure nothrow { return "fibereye:armed"; }
+/// Admin-set rule override, mirrored from Mongo (`fibereye_rules`) as the
+/// canonical `RuleSet` JSON, no TTL. A missing or invalid value means "use
+/// the deployed env baseline", so a Redis wipe fails safe the same way
+/// `fibereye:armed` does.
+string fiberEyeRulesKey() @safe pure nothrow { return "fibereye:rules"; }
 
 /// Sorted set of connects in the current window for one IP group
 /// (score = unix ms, member = `<ms>:<nick>` so repeats never collapse).

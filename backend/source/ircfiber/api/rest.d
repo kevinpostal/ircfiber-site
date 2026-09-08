@@ -44,37 +44,9 @@ import ircfiber.tracing : withSpan, Span;
 import ircfiber.egress : DIRECT_EGRESS_ID, EgressView, egressView, matchingSlot,
     normalizeEgressId, isKnownEgressId;
 import ircfiber.services.accounts : provisionServicesAccountAsync, servicesSkipKey;
-import ircfiber.account_deletion : purgeNetworkRuntimeState;
-private string normalizeHost(string host) @safe pure {
-    host = host.strip();
-    auto schemeSep = host.indexOf("://");
-    if (schemeSep >= 0) {
-        host = host[schemeSep + 3 .. $];
-        auto slash = host.indexOf("/");
-        if (slash >= 0) host = host[0 .. slash];
-        auto bracketClose = host.indexOf("]");
-        if (bracketClose >= 0) {
-            auto open = host.indexOf("[");
-            if (open >= 0) host = host[open .. bracketClose + 1];
-            else host = host[0 .. bracketClose + 1];
-        } else {
-            auto colon = host.lastIndexOf(":");
-            if (colon >= 0) {
-                auto after = host[colon + 1 .. $];
-                bool allDigits = after.length > 0;
-                foreach (c; after) if (c < '0' || c > '9') { allDigits = false; break; }
-                bool looksLikeIPv6 = host.canFind("::") || host.countUntil(":") != host.lastIndexOf(":");
-                if (allDigits && !looksLikeIPv6) host = host[0 .. colon];
-            }
-        }
-        host = host.strip();
-    }
-    if (host.length >= 2 && host[0] == '[') {
-        auto close = host.indexOf("]");
-        if (close > 0) return host[1 .. close];
-    }
-    return host;
-}
+import ircfiber.network_lifecycle : normalizeHost, provisionNetwork, updateOwnedNetwork, deleteOwnedNetwork;
+import ircfiber.db.user : UserRepository;
+import ircfiber.bnc.wire : networkSlug;
 
 /**
  * Decentralized REST API
@@ -87,6 +59,7 @@ final class RESTAPI {
     private {
         BufferManager bufferManager;
         NetworkRepository networkRepo;
+        UserRepository userRepo;
         PreferencesRepository prefsRepo;
         UploadRepository uploadRepo;
         PastebinRepository pastebinRepo;
@@ -103,6 +76,7 @@ final class RESTAPI {
         this.redis = redis;
         this.sessionManager = sm;
         this.networkRepo = new NetworkRepository();
+        this.userRepo = new UserRepository();
         this.prefsRepo = new PreferencesRepository(redis);
         this.uploadRepo = new UploadRepository();
         this.pastebinRepo = new PastebinRepository();
@@ -127,9 +101,9 @@ final class RESTAPI {
         router.post("/api/networks/:id/disconnect", &disconnectNetwork);
         router.post("/api/networks/:id/reconnect", &reconnectNetwork);
         router.post("/api/networks/:id/buffers/clear", &clearNetworkBuffer);
-        router.get("/api/networks/:id/bouncer", &getBouncer);
-        router.post("/api/networks/:id/bouncer", &generateBouncer);
-        router.delete_("/api/networks/:id/bouncer", &revokeBouncer);
+        router.get("/api/me/bouncer", &getBouncer);
+        router.post("/api/me/bouncer", &generateBouncer);
+        router.delete_("/api/me/bouncer", &revokeBouncer);
         router.get("/api/me", &getMe);
         router.delete_("/api/me", &deleteMe);
         router.get("/api/me/irc-account", &getIrcAccount);
@@ -297,21 +271,12 @@ final class RESTAPI {
             cfg.egressNodeId = eg;
         }
 
-        networkRepo.save(cfg, user.id);
-        redis.del(RedisKeys.userNetworks(user.id.toString()));
-
-        // NEW: Assign to a healthy server and route to server-specific queue
-        string serverId = serverRegistry.assignNetwork(cfg.id.toString());
+        string serverId = provisionNetwork(cfg, user.id, networkRepo, redis, serverRegistry);
         if (serverId.length == 0) {
-            logError("Failed to assign network to server — no healthy connection servers");
             res.statusCode = 503;
             res.writeJsonBody(Json(["error": Json("No healthy connection servers available")]));
             return;
         }
-
-        auto msg = ControlMessage("addNetwork", cfg.id.toString(), user.id.toString(), cfg.toJson());
-        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
-        redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
 
         res.writeJsonBody(cfg.toJson());
     }
@@ -348,7 +313,13 @@ final class RESTAPI {
 
         auto id = parseUUID(req.params["id"]);
         auto bodyJson = req.json;
-        auto cfg = networkRepo.findById(id);
+        auto info = networkRepo.findByIdWithUser(id);
+        if (info.userId != UUID.init && info.userId != req.context["user"].get!User.id) {
+            res.statusCode = 403;
+            res.writeJsonBody(Json(["error": Json("Not your network")]));
+            return;
+        }
+        auto cfg = info.config;
 
         if (bodyJson["name"].type != Json.Type.undefined) cfg.name = bodyJson["name"].get!string;
         if (bodyJson["host"].type != Json.Type.undefined) cfg.host = normalizeHost(bodyJson["host"].get!string);
@@ -426,26 +397,12 @@ final class RESTAPI {
             cfg.tls = TLSMode.required;
             cfg.host = DEFAULT_FIBER_HOST;
         }
-        networkRepo.save(cfg, user.id);
-        redis.del(RedisKeys.userNetworks(user.id.toString()));
-
-        // NEW: Route to assigned server
-        auto serverId = serverRegistry.getServerForNetwork(cfg.id.toString());
+        auto serverId = updateOwnedNetwork(cfg, user.id, egressChanged, networkRepo, redis, serverRegistry);
         if (serverId.length == 0) {
-            serverId = serverRegistry.assignNetwork(cfg.id.toString());
-        }
-        if (serverId.length == 0) {
-            logError("Cannot update network %s — no healthy connection servers", cfg.id);
             res.statusCode = 503;
             res.writeJsonBody(Json(["error": Json("No healthy connection servers available")]));
             return;
         }
-
-        auto msg = egressChanged
-            ? ControlMessage("reconnectNetwork", cfg.id.toString(), user.id.toString(), cfg.toJson())
-            : ControlMessage("updateConfig", cfg.id.toString(), "", cfg.toJson());
-        msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
-        redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
         if (egressChanged)
             logInfo("Network %s egress changed '%s' → '%s' by %s — reconnect pushed to %s",
                 cfg.id, priorEgress, cfg.egressNodeId, user.username, serverId);
@@ -458,11 +415,17 @@ final class RESTAPI {
         if (res.headerWritten) return;
 
         auto id = parseUUID(req.params["id"]);
+        auto user = req.context["user"].get!User;
+        const info = networkRepo.findByIdWithUser(id);
+        if (info.userId != UUID.init && info.userId != user.id) {
+            res.statusCode = 403;
+            res.writeJsonBody(Json(["error": Json("Not your network")]));
+            return;
+        }
 
         // Refuse to delete platform-provisioned networks. Admins can
         // still remove them via the admin tools which bypass this API.
-        const existing = networkRepo.findById(id);
-        if (existing.id != UUID.init && existing.systemManaged) {
+        if (info.config.id != UUID.init && info.config.systemManaged) {
             res.statusCode = 403;
             res.writeJsonBody(Json([
                 "error": Json("This network is provisioned by IRC Fiber and cannot be removed"),
@@ -471,72 +434,50 @@ final class RESTAPI {
             return;
         }
 
-        // Capture owner userId before deleting, for cache invalidation.
-        auto ownerId = networkRepo.findByIdWithUser(id).userId;
-
-        // One teardown, shared with account deletion
-        // (`ircfiber.account_deletion`): tell the engine to drop the socket,
-        // then erase the scrollback, dedup sets, assignment, state snapshot,
-        // retry marker, lease and persisted nick.
-        //
-        // This route used to push `removeNetwork`, clear only the `_server`
-        // buffer and stop — leaving the assignment and a state snapshot that
-        // still said `connected: true`, plus every channel's scrollback on a
-        // 30-day TTL. That is what let a deleted network keep answering at
-        // `/irc/<name>/channel/%23chan` while the sidebar no longer listed
-        // it (reported 2026-09-06 for BLCKND/#blcknd).
-        purgeNetworkRuntimeState(id, redis, serverRegistry);
-
-        networkRepo.deleteById(id);
-        if (ownerId != UUID.init)
-            redis.del(RedisKeys.userNetworks(ownerId.toString()));
-        // Drop any attached bouncer clients and their replay cursors.
-        redis.del(RedisKeys.bncSeen(id.toString()));
-        if (ownerId != UUID.init) publishBncRevoked(ownerId, id);
+        // One teardown, shared with account deletion and the bouncer's
+        // DELNETWORK: engine socket, runtime state, document, caches,
+        // replay cursors, attached bouncer clients. This route used to
+        // leave the assignment and a `connected: true` snapshot behind,
+        // which let a deleted network keep answering at
+        // `/irc/<name>/channel/%23chan` (reported 2026-09-06).
+        deleteOwnedNetwork(id, info.userId, networkRepo, redis, serverRegistry);
         res.writeJsonBody(Json(["status": Json("deleted")]));
     }
 
-    // ── Bouncer ("Connect with another client…") ─────────────────────
+    // ── Bouncer (Settings → Bouncer) ─────────────────────────────────
 
-    /// Loads `:id` and checks the calling user owns it. Writes a 404/403
-    /// response and returns false when the caller must bail out.
-    private bool loadOwnedNetwork(HTTPServerRequest req, HTTPServerResponse res, out UUID id, out User user) {
-        requireAuth(req, res);
-        if (res.headerWritten) return false;
-        user = req.context["user"].get!User;
-        id = parseUUID(req.params["id"].idup);
-        const info = networkRepo.findByIdWithUser(id);
-        if (info.config.name.length == 0) {
-            res.statusCode = 404;
-            res.writeJsonBody(Json(["error": Json("Network not found")]));
-            return false;
-        }
-        if (info.userId != UUID.init && info.userId != user.id) {
-            res.statusCode = 403;
-            res.writeJsonBody(Json(["error": Json("Not your network")]));
-            return false;
-        }
-        return true;
-    }
-
-    /// Public bouncer endpoint description plus the network's password and
-    /// the caller's playback setting.
-    private Json bouncerJson(string token, UUID userId) {
+    /// Public bouncer endpoint description plus the account's password,
+    /// the networks it reaches and the caller's playback setting.
+    private Json bouncerJson(User user) {
         import std.process : environment;
         import ircfiber.db.preferences : BNC_PLAYBACK_MAX;
         int playback = 0;
-        try playback = prefsRepo.load(userId).bncPlaybackLines; catch (Exception) {}
+        try playback = prefsRepo.load(user.id).bncPlaybackLines; catch (Exception) {}
         const host = environment.get("IRCFIBER_BNC_PUBLIC_HOST", "");
         int port = 7000;
         try port = environment.get("IRCFIBER_BNC_PUBLIC_PORT", "7000").to!int;
         catch (Exception) {}
         const tlsFlag = environment.get("IRCFIBER_BNC_PUBLIC_TLS", "1") == "1";
+        const token = userRepo.getBncToken(user.id);
+        auto nets = Json.emptyArray;
+        foreach (ref cfg; networkRepo.findByUserId(user.id)) {
+            nets ~= Json([
+                "id": Json(cfg.id.toString()),
+                "name": Json(cfg.name),
+                "slug": Json(networkSlug(cfg.name)),
+                "host": Json(cfg.host),
+                "port": Json(cfg.port),
+                "connected": Json(loadSnapshot(cfg.id.toString()).connected)
+            ]);
+        }
         return Json([
             "enabled": Json(host.length > 0),
             "host": Json(host),
             "port": Json(port),
             "tls": Json(tlsFlag),
-            "password": token.length ? Json("bnc:" ~ token) : Json(null),
+            "username": Json(user.username),
+            "password": token.length ? Json(token) : Json(null),
+            "networks": nets,
             "playbackLines": Json(playback),
             "playbackMax": Json(BNC_PLAYBACK_MAX)
         ]);
@@ -564,10 +505,13 @@ final class RESTAPI {
         res.writeJsonBody(Json(["value": Json(value)]));
     }
 
-    /// Tells attached bouncer clients of this network to drop.
-    private void publishBncRevoked(UUID userId, UUID networkId) {
+    /// Drops every attached bouncer client of the user and their replay
+    /// cursors (the password they authenticated with is gone).
+    private void dropBouncerClients(User user) {
         import ircfiber.bnc.control : publishBncRevoked;
-        publishBncRevoked(redis, userId.toString(), networkId.toString());
+        foreach (ref cfg; networkRepo.findByUserId(user.id))
+            redis.del(RedisKeys.bncSeen(cfg.id.toString()));
+        publishBncRevoked(redis, user.id.toString(), "");
     }
 
     /// 48 lowercase hex chars from the kernel CSPRNG.
@@ -580,18 +524,19 @@ final class RESTAPI {
         return toHexString!(LetterCase.lower)(buf).idup;
     }
 
-    /// GET /api/networks/:id/bouncer
+    /// GET /api/me/bouncer
     private void getBouncer(HTTPServerRequest req, HTTPServerResponse res) {
-        UUID id; User user;
-        if (!loadOwnedNetwork(req, res, id, user)) return;
-        res.writeJsonBody(bouncerJson(networkRepo.getBncToken(id), user.id));
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        res.writeJsonBody(bouncerJson(req.context["user"].get!User));
     }
 
-    /// POST /api/networks/:id/bouncer — (re)generate. Clients attached with
-    /// the previous password are disconnected (IRCCloud semantics).
+    /// POST /api/me/bouncer — (re)generate. Clients attached with the
+    /// previous password are disconnected.
     private void generateBouncer(HTTPServerRequest req, HTTPServerResponse res) {
-        UUID id; User user;
-        if (!loadOwnedNetwork(req, res, id, user)) return;
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
         string token;
         try token = generateBncToken();
         catch (Exception e) {
@@ -600,19 +545,18 @@ final class RESTAPI {
             res.writeJsonBody(Json(["error": Json("token generation failed")]));
             return;
         }
-        networkRepo.setBncToken(id, token);
-        redis.del(RedisKeys.bncSeen(id.toString()));
-        publishBncRevoked(user.id, id);
-        res.writeJsonBody(bouncerJson(token, user.id));
+        userRepo.setBncToken(user.id, token);
+        dropBouncerClients(user);
+        res.writeJsonBody(bouncerJson(user));
     }
 
-    /// DELETE /api/networks/:id/bouncer
+    /// DELETE /api/me/bouncer
     private void revokeBouncer(HTTPServerRequest req, HTTPServerResponse res) {
-        UUID id; User user;
-        if (!loadOwnedNetwork(req, res, id, user)) return;
-        networkRepo.setBncToken(id, "");
-        redis.del(RedisKeys.bncSeen(id.toString()));
-        publishBncRevoked(user.id, id);
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        userRepo.setBncToken(user.id, "");
+        dropBouncerClients(user);
         res.statusCode = 204;
         res.writeVoidBody();
     }
@@ -690,6 +634,12 @@ final class RESTAPI {
             msg.reason = quitReason;
             msg.timestampMs = Clock.currTime.toUnixTime!long * 1000;
             redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+        }
+        // The engine drops the client without an event on the user channel;
+        // bouncer-networks clients still need to see the state flip.
+        {
+            import ircfiber.bnc.control : publishBncNetworkState;
+            publishBncNetworkState(redis, user.id.toString(), id.toString(), "disconnected");
         }
 
         res.writeJsonBody(Json(["status": Json("disconnected")]));

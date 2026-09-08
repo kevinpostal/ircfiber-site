@@ -1,13 +1,20 @@
 /**
- * FiberEye — the connection-intelligence bot.
+ * FiberEye — the connection-intelligence bot and the `#staff` announcer.
  *
  * An opered IRC connection that runs inside the same gateway image but
  * only in the process that sets `IRCFIBER_FIBEREYE_ENABLED=1` (prod: the
  * dedicated `ircfiber-fibereye` container).
  *
- * It joins no channel and sends no PRIVMSG. Everything it does is:
- *   - subscribe to snomasks `+s +cqx` and persist every connect and quit
+ * What it does:
+ *   - subscribe to snomasks `+s +cCqx` and persist every connect and quit
  *     to Mongo (`ircfiber.fibereye.store`);
+ *   - for every public connect, count the sighting and assemble the IP
+ *     intelligence record (`ircfiber.ipintel`), attach it to the FiberEye
+ *     rollups, then queue the `irc_connect` announcement;
+ *   - sit in `#staff` and announce the Redis outbox (`logsOutboxKey()`):
+ *     signups, mail, connects, admin notices, backup runs — each connect
+ *     with its record (`ircfiber.logs.format`);
+ *   - refresh the Tor exit set hourly;
  *   - count connects, distinct nicks and short sessions per IP group in
  *     Redis sorted sets, and ask `ircfiber.fibereye.rules` for a verdict;
  *   - place a timed `ZLINE` when a rule trips *and* enforcement is armed
@@ -21,7 +28,7 @@
  * (`ircfiber.web.admin.ircd.removeXlineNow`), which is where both the
  * admin Release button and the public `/unban` page live.
  *
- * The IRC client skeleton (reconnects, OPER, sideband) is
+ * The IRC client skeleton (reconnects, OPER, JOIN, sideband) is
  * `ircfiber.bots.core.IrcBot`; this module is only the FiberEye logic.
  *
  * Env:
@@ -30,6 +37,7 @@
  *   IRCFIBER_FIBEREYE_PORT                 ircd port (default IRCFIBER_IRCD_PORT, then 6667)
  *   IRCFIBER_FIBEREYE_TLS                  "1" → TLS client connection
  *   IRCFIBER_FIBEREYE_NICK                 default FiberEye
+ *   IRCFIBER_FIBEREYE_CHANNEL              announcements channel (default #staff)
  *   IRCFIBER_FIBEREYE_NICKSERV_PASSWORD    optional (also _FILE); IDENTIFY after 001
  *   IRCFIBER_FIBEREYE_OPER                 oper account; unset → no OPER, so no
  *                                          notices and no bans
@@ -46,19 +54,23 @@
  *   IRCFIBER_FIBEREYE_BAN_SECONDS          first-strike ban duration (default 3600)
  *   IRCFIBER_FIBEREYE_RETENTION_DAYS       session TTL, days (default 90; see store.d)
  *   IRCFIBER_PUBLIC_URL                    appeal link base (default https://ircfiber.com)
- *   IRCFIBER_REDIS_URL                     counters, heartbeat and control
+ *   IRCFIBER_REDIS_URL                     counters, heartbeat, control, outbox
+ *   IRCFIBER_IPINFO_TOKEN, IRCFIBER_PROXYCHECK_KEY, IRCFIBER_IPAPI_IS_KEY,
+ *   IRCFIBER_IPHUB_KEY (all _FILE), IRCFIBER_IPINTEL_*   see ircfiber.ipintel.sources
  */
 module ircfiber.fibereye.bot;
 
 import std.conv : to;
 import std.process : environment;
 import std.string : indexOf, strip, toLower;
+import std.typecons : Nullable, Tuple;
 import std.uni : icmp;
-import core.time : seconds;
+import core.time : minutes, seconds;
 
 import vibe.core.core : runTask, sleep;
 import vibe.core.log;
-import vibe.data.json : Json;
+import vibe.core.task : Task;
+import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.bots.core;
 import ircfiber.env : envSecret;
@@ -66,7 +78,12 @@ import ircfiber.fibereye.events;
 import ircfiber.fibereye.format;
 import ircfiber.fibereye.rules;
 import ircfiber.fibereye.store;
-import ircfiber.logs.geo : cachedGeo;
+import ircfiber.fibereye.ruleset;
+import ircfiber.ipintel.record : IpIntel;
+import ircfiber.ipintel.service : IpIntelService, LookupMode, loadIpIntelSettings;
+import ircfiber.ipintel.store : IpIntelStore;
+import ircfiber.logs.events : LogEvent, logsOutboxKey, pushLogEvent;
+import ircfiber.logs.format : formatLogEvent;
 import ircfiber.services.accounts : generateServicesPassword;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.tracing : isEnvEnabled;
@@ -78,6 +95,8 @@ struct FiberEyeConfig {
     ushort port = 6667;
     bool tls;
     string nick = "FiberEye";
+    /// The oper-only announcements channel (signups, mail, connects, backups).
+    string channel = "#staff";
     string nickservPassword;
     string operName;
     string operPassword;
@@ -103,6 +122,7 @@ void startFiberEye() {
     cfg.port = botEnvPort("FIBEREYE", "PORT", "IRCD_PORT", 6667);
     cfg.tls = botEnvFlag("FIBEREYE", "TLS", "", false);
     cfg.nick = botEnvStr("FIBEREYE", "NICK", "", cfg.nick);
+    cfg.channel = botEnvStr("FIBEREYE", "CHANNEL", "", cfg.channel);
     // File-backed in prod so the credentials are not readable from
     // `docker inspect ircfiber-fibereye`.
     cfg.nickservPassword = envSecret("IRCFIBER_FIBEREYE_NICKSERV_PASSWORD", "");
@@ -124,9 +144,9 @@ void startFiberEye() {
 
     auto bot = new FiberEyeBot(cfg);
     runTask(&bot.run);
-    logInfo("FiberEye starting: %s:%s (%s) nick=%s oper=%s window=%ss "
+    logInfo("FiberEye starting: %s:%s (%s) nick=%s channel=%s oper=%s window=%ss "
         ~ "connects=%s nicks=%s churn=%s ban=%ss ignore=%s exempt=%s",
-        cfg.host, cfg.port, cfg.tls ? "TLS" : "plaintext", cfg.nick,
+        cfg.host, cfg.port, cfg.tls ? "TLS" : "plaintext", cfg.nick, cfg.channel,
         cfg.operName.length ? cfg.operName : "none",
         cfg.thresholds.windowSeconds, cfg.thresholds.connects, cfg.thresholds.nicks,
         cfg.thresholds.churn, cfg.thresholds.banSeconds, cfg.ignoreClasses, cfg.exemptIps);
@@ -143,8 +163,9 @@ private IrcBotConfig coreConfig(const FiberEyeConfig c) {
     b.nickservPassword = c.nickservPassword;
     b.operName = c.operName;
     b.operPassword = c.operPassword;
-    // `c` connects, `q` local quits, `x` X-line notices.
-    b.snomasks = "cqx";
+    // `c` connects, `C` remote connects (announced), `q` local quits, `x` X-line notices.
+    b.snomasks = "cCqx";
+    if (c.channel.length) b.channels = [c.channel];
     b.redisUrl = c.redisUrl;
     b.heartbeatKey = fiberEyeBotKey();
     b.controlKey = fiberEyeControlKey();
@@ -155,7 +176,7 @@ private IrcBotConfig coreConfig(const FiberEyeConfig c) {
 /// The FiberEye logic on top of the shared IRC client skeleton.
 final class FiberEyeBot : IrcBot {
     private enum STATS_INTERVAL = 60;
-    private enum GEO_INTERVAL = 60;
+    private enum TOR_REFRESH = 60;
     /// Open-session map cap. A flood must not grow it without bound; the
     /// oldest insertion is evicted, which only costs a `durationMs` on a
     /// session that has been open longer than 20 000 others.
@@ -165,6 +186,12 @@ final class FiberEyeBot : IrcBot {
     /// Redis connection owned by the reader fiber (each loop owns its own).
     private RedisStorage redis;
     private FiberEyeStore store;
+    /// IP intelligence: fan-out, caches, sightings.
+    private IpIntelService intel;
+    /// Producer connection for `pushLogEvent` (the outbox consumer owns its own).
+    private RedisStorage pushRedis;
+    private Task outboxTask;
+    private bool torLoopStarted;
 
     /// nick\0ip → open session id, so a quit can close its own row.
     private string[string] openSessions;
@@ -180,7 +207,6 @@ final class FiberEyeBot : IrcBot {
     private bool[string] activeZlines;
     private XLine[string] pendingStats;
     private bool statsLoopStarted;
-    private bool geoLoopStarted;
 
     // ── status published to Redis for the admin FiberEye page ──
     private long connectsSeen;
@@ -189,11 +215,64 @@ final class FiberEyeBot : IrcBot {
     private long bansPlaced;
     private long bansObserved;
     private long accountLookups;
-    private long geoFilled;
+    private long announcedCount;
+    private string lastAnnouncement;
+    private long lastAnnouncementAt;
+    private long intelLookups;
+    private long intelFailures;
+
+    // ── rules in force ───────────────────────────────────────────────
+    /// The env baseline captured at construction; never mutated, and the
+    /// value an admin "Reset to deployed" falls back to.
+    private RuleSet deployedRules;
+    /// What is actually enforced right now. Replaced wholesale by
+    /// `onSidebandTick`; the reader fiber cannot observe a torn value
+    /// because vibe fibers are cooperatively scheduled and the assignment
+    /// contains no yield point.
+    private RuleSet liveRules;
+    /// True while an admin override is in force (vs. the env baseline).
+    private bool rulesFromOverride;
 
     this(FiberEyeConfig cfg) {
         super(coreConfig(cfg));
         this.fe = cfg;
+        deployedRules.thresholds = cfg.thresholds;
+        deployedRules.ignoreClasses = cfg.ignoreClasses.dup;
+        deployedRules.exemptIps = cfg.exemptIps.dup;
+        liveRules = deployedRules;
+    }
+
+    /// Picks up an admin rule change within one tick (≤5 s), no redeploy.
+    ///
+    /// Mongo is the source of truth but the bot polls the Redis mirror:
+    /// one GET per 5 s beats a Mongo round trip, and a missing mirror is
+    /// the fail-safe "use the deployed baseline" signal.
+    protected override void onSidebandTick(RedisStorage side) {
+        if (side is null) return;
+        RuleSet next = deployedRules;
+        bool fromOverride = false;
+        Json j = Json(null);
+        try j = side.getJson(fiberEyeRulesKey());
+        catch (Exception e) {
+            logWarn("FiberEye: cannot read stored rules: %s", e.msg);
+            return;                                  // keep what is in force
+        }
+        if (j.type == Json.Type.object) {
+            auto candidate = RuleSet.fromJson(j, deployedRules);
+            auto errs = validateRuleSet(candidate);
+            if (errs.length)
+                logWarn("FiberEye: ignoring stored rules (%s); using the deployed baseline", errs[0]);
+            else {
+                next = candidate;
+                fromOverride = true;
+            }
+        }
+        const summary = summarizeRuleChange(liveRules, next);
+        if (summary.length)
+            logInfo("FiberEye: rules changed (%s) by %s", summary,
+                next.updatedBy.length ? next.updatedBy : "deploy");
+        liveRules = next;
+        rulesFromOverride = fromOverride;
     }
 
     protected override void onStart() {
@@ -209,6 +288,21 @@ final class FiberEyeBot : IrcBot {
             store = null;
             logWarn("FiberEye: Mongo unavailable: %s", e.msg);
         }
+        try {
+            pushRedis = new RedisStorage();
+            pushRedis.connectFromUrl(fe.redisUrl);
+        } catch (Exception e) {
+            pushRedis = null;
+            logWarn("FiberEye: producer Redis unavailable: %s", e.msg);
+        }
+        IpIntelStore intelStore;
+        try intelStore = new IpIntelStore();
+        catch (Exception e) {
+            intelStore = null;
+            logWarn("FiberEye: ipintel Mongo unavailable: %s", e.msg);
+        }
+        intel = new IpIntelService(redis, intelStore, loadIpIntelSettings());
+        logInfo("FiberEye: ipintel sources: %s", intel.activeSources());
     }
 
     // ── inbound protocol ─────────────────────────────────────────────
@@ -232,14 +326,29 @@ final class FiberEyeBot : IrcBot {
         }
     }
 
-    /// FiberEye joins no channel: `+s +cqx` is its entire subscription.
+    /// `+s +cCqx` for the notices; the STATS sweep needs oper. The Tor
+    /// exit list refresh is per process, not per session.
     protected override void onReady() {
         if (isOpered()) {
             if (!statsLoopStarted) { statsLoopStarted = true; runTask(&statsLoop); }
         } else {
             logWarn("FiberEye: not opered — no connect notices and no bans");
         }
-        if (!geoLoopStarted) { geoLoopStarted = true; runTask(&geoLoop); }
+        if (!torLoopStarted) { torLoopStarted = true; runTask(&torListLoop); }
+    }
+
+    /// In `#staff`: start draining the announcement outbox.
+    protected override void onJoined(string channel) {
+        if (icmp(channel, fe.channel) != 0) return;
+        if (outboxTask == Task.init || !outboxTask.running) outboxTask = runTask(&outboxLoop);
+    }
+
+    /// The outbox consumer ends with the session; the next session starts a fresh one.
+    protected override void onSessionEnd() {
+        if (outboxTask != Task.init) {
+            try outboxTask.join(); catch (Exception) {}
+            outboxTask = Task.init;
+        }
     }
 
     // ── connect / quit observation ───────────────────────────────────
@@ -279,7 +388,7 @@ final class FiberEyeBot : IrcBot {
     }
 
     private void onConnect(ConnectNotice c) {
-        if (classIgnored(c.connClass, fe.ignoreClasses)) {
+        if (classIgnored(c.connClass, liveRules.ignoreClasses)) {
             connectsIgnored++;
             return;
         }
@@ -310,14 +419,23 @@ final class FiberEyeBot : IrcBot {
         }
         if (id.length) rememberOpen(openKey(c.nick, c.ip), id, r.ts);
 
+        // Sighting + record + `#staff` announcement, off the read loop. The
+        // announcement is queued only after the record is assembled, so the
+        // outbox consumer always hits the 1 h cache. Private addresses are
+        // persisted but neither looked up nor announced.
+        if (!isPrivateIp(c.ip)) {
+            long ts = r.ts;
+            runTask(&intelTask, c, group, ts);
+        }
+
         // A trusted-subnet container address must never be banned: that
         // would take the whole platform offline. Persist it, count nothing.
         if (isPrivateIp(c.ip) || exempt(c.ip, group)) return;
 
         Observation o;
-        o.windowSeconds = fe.thresholds.windowSeconds;
+        o.windowSeconds = liveRules.thresholds.windowSeconds;
         if (!countConnect(group, c.nick, r.ts, o)) return;
-        const v = evaluate(o, fe.thresholds);
+        const v = evaluate(o, liveRules.thresholds);
         if (!v.trip) {
             // Account enrichment is best-effort and must never compete
             // with an enforcement line for the 1-line-per-second budget,
@@ -366,7 +484,7 @@ final class FiberEyeBot : IrcBot {
             store.closeSession(id, ts, q.reason, duration);
         }
         openedAt.remove(id);
-        if (duration > 0 && duration < fe.thresholds.shortMs) {
+        if (duration > 0 && duration < liveRules.thresholds.shortMs) {
             const group = ipGroup(q.ip);
             if (!isPrivateIp(q.ip) && !exempt(q.ip, group)) {
                 countChurn(group, ts);
@@ -385,7 +503,7 @@ final class FiberEyeBot : IrcBot {
     /// match would silently ignore a `/24` entry, which is the sort of
     /// exemption that only gets tested the day it fails to hold.
     private bool exempt(string ip, string group) {
-        foreach (e; fe.exemptIps) {
+        foreach (e; liveRules.exemptIps) {
             if (e == group || e == ip) return true;
             if (zlineMatches(e, ip)) return true;
         }
@@ -417,9 +535,9 @@ final class FiberEyeBot : IrcBot {
     /// unavailable — no counters means no verdict, which fails safe.
     private bool countConnect(string group, string nick_, long ts, ref Observation o) {
         if (redis is null) return false;
-        const windowMs = fe.thresholds.windowSeconds * 1000;
+        const windowMs = liveRules.thresholds.windowSeconds * 1000;
         const cutoff = ts - windowMs;
-        const ttl = fe.thresholds.windowSeconds * 4;
+        const ttl = liveRules.thresholds.windowSeconds * 4;
         try {
             auto db = redis.getDb();
             const ck = fiberEyeConnKey(group);
@@ -450,7 +568,7 @@ final class FiberEyeBot : IrcBot {
             auto db = redis.getDb();
             const hk = fiberEyeChurnKey(group);
             db.zadd(hk, ts, ts.to!string);
-            db.expire(hk, fe.thresholds.windowSeconds * 4);
+            db.expire(hk, liveRules.thresholds.windowSeconds * 4);
         } catch (Exception e) {
             logWarn("FiberEye: churn counter failed for %s: %s", group, e.msg);
         }
@@ -488,7 +606,7 @@ final class FiberEyeBot : IrcBot {
                 strikes = 1;
             }
         }
-        const seconds_ = banDurationFor(strikes, fe.thresholds.banSeconds);
+        const seconds_ = banDurationFor(strikes, liveRules.thresholds.banSeconds);
         const token = generateServicesPassword(40);
         const appealUrl = fe.publicBase ~ "/unban/" ~ token;
 
@@ -582,30 +700,105 @@ final class FiberEyeBot : IrcBot {
         }
     }
 
-    // ── geo backfill ─────────────────────────────────────────────────
+    // ── IP intelligence + `#staff` announcements ─────────────────────
 
-    /// Cache-only geo backfill. FiberEye never performs an ipinfo lookup:
-    /// `lookupGeo` sets the "first sighting" marker the #staff bot's
-    /// `↳ <ip> · <geo detail>` follow-up line depends on, and whichever bot
-    /// won the race would steal it.
-    private void geoLoop() nothrow {
-        while (true) {
-            try {
-                sleep(GEO_INTERVAL.seconds);
-                if (store is null || redis is null) continue;
-                foreach (ip; store.pendingGeoIps(20)) {
-                    const addr = ip.ip.length ? ip.ip : ip.ipGroup;
-                    auto g = cachedGeo(redis, addr);
-                    if (!g.ok) continue;
-                    store.setIpGeo(ip.ipGroup, g);
-                    store.fillGroupGeo(ip.ipGroup, g);
-                    geoFilled++;
-                }
-            } catch (Exception e) {
-                try logWarn("FiberEye: geo backfill failed: %s", e.msg); catch (Exception) {}
-                try sleep(5.seconds); catch (Exception) {}
+    /// Sighting counter, record assembly, FiberEye rollup fields, then
+    /// the `irc_connect` outbox entry. Named nothrow so nothing escapes
+    /// into the scheduler.
+    private void intelTask(ConnectNotice c, string group, long ts) nothrow {
+        try {
+            bool first;
+            intel.recordSighting(c.ip, ts, first);
+            auto rec = intel.lookup(c.ip, LookupMode.enrich);
+            intelLookups++;
+            if (rec.degraded.length) intelFailures++;
+            if (store !is null) {
+                store.setIpIntel(group, rec);
+                store.fillGroupIntel(group, rec);
             }
+            LogEvent ev;
+            ev.type = "irc_connect";
+            ev.ts = ts;
+            ev.nick = c.nick;
+            ev.ident = c.ident;
+            ev.host = c.host;
+            ev.ip = c.ip;
+            ev.realname = c.realname;
+            ev.connClass = c.connClass;
+            ev.port = c.port;
+            pushLogEvent(pushRedis, ev);
+        } catch (Exception e) {
+            try logWarn("FiberEye: intel task failed for %s: %s", c.ip, e.msg); catch (Exception) {}
         }
+    }
+
+    /// Hourly Tor bulk exit list → `irc:ipintel:torexits` (and once at start).
+    private void torListLoop() nothrow {
+        while (true) {
+            try intel.refreshTorExits();
+            catch (Exception e) {
+                try logWarn("FiberEye: tor list refresh failed: %s", e.msg); catch (Exception) {}
+            }
+            try sleep(TOR_REFRESH.minutes); catch (Exception) {}
+        }
+    }
+
+    /// Drains `logsOutboxKey()` while connected and in `#staff`. On a send
+    /// failure the entry goes back to the head of the list and the loop
+    /// ends; the next session starts a fresh consumer.
+    private void outboxLoop() nothrow {
+        RedisStorage box;
+        try {
+            box = new RedisStorage();
+            box.connectFromUrl(fe.redisUrl);
+            const key = logsOutboxKey();
+            while (isAlive()) {
+                if (!joined(fe.channel)) { sleep(1.seconds); continue; }
+                Nullable!(Tuple!(string, string)) popped;
+                try popped = box.getDb().blpop!string(key, 5);
+                catch (Exception e) {
+                    logWarn("FiberEye: outbox BLPOP failed: %s", e.msg);
+                    sleep(5.seconds);
+                    continue;
+                }
+                if (popped.isNull) continue;
+                const raw = popped.get[1];
+                LogEvent ev;
+                try ev = LogEvent.fromJson(parseJsonString(raw));
+                catch (Exception e) {
+                    logWarn("FiberEye: dropping malformed outbox entry: %s", e.msg);
+                    continue;
+                }
+                bool first = false;
+                IpIntel rec;
+                if (ev.ip.strip().length && !isPrivateIp(ev.ip)) {
+                    // A signup is its own sighting; a connect was counted by
+                    // `intelTask` before it was queued.
+                    if (ev.type == "signup") intel.recordSighting(ev.ip, ev.ts, first);
+                    rec = intel.lookup(ev.ip, LookupMode.enrich);
+                    intelLookups++;
+                    if (rec.degraded.length) intelFailures++;
+                    if (ev.type == "irc_connect") first = rec.reputation.sessionCount <= 1;
+                }
+                auto lines = formatLogEvent(ev, rec, first);
+                if (!lines.length) {
+                    logWarn("FiberEye: dropping outbox entry of unknown type %s", ev.type);
+                    continue;
+                }
+                try say(fe.channel, lines);
+                catch (Exception e) {
+                    try box.getDb().lpush(key, raw); catch (Exception) {}
+                    throw e;
+                }
+                announcedCount++;
+                lastAnnouncement = lines[0];
+                lastAnnouncementAt = nowMs();
+                logInfo("FiberEye: announced %s", ev.type);
+            }
+        } catch (Exception e) {
+            try logWarn("FiberEye: outbox loop ended: %s", e.msg); catch (Exception) {}
+        }
+        if (box !is null) box.close();
     }
 
     // ── Redis sideband: heartbeat for the admin page + control ───────
@@ -623,21 +816,17 @@ final class FiberEyeBot : IrcBot {
         j["bansObserved"] = Json(bansObserved);
         j["activeZlines"] = Json(cast(long) activeZlines.length);
         j["accountLookups"] = Json(accountLookups);
-        j["geoFilled"] = Json(geoFilled);
-        auto t = Json.emptyObject;
-        t["windowSeconds"] = Json(fe.thresholds.windowSeconds);
-        t["connects"] = Json(fe.thresholds.connects);
-        t["nicks"] = Json(fe.thresholds.nicks);
-        t["churn"] = Json(fe.thresholds.churn);
-        t["shortMs"] = Json(fe.thresholds.shortMs);
-        t["banSeconds"] = Json(fe.thresholds.banSeconds);
-        j["thresholds"] = t;
-        auto ignore = Json.emptyArray;
-        foreach (c; fe.ignoreClasses) ignore ~= Json(c);
-        j["ignoreClasses"] = ignore;
-        auto exemptJson = Json.emptyArray;
-        foreach (e; fe.exemptIps) exemptJson ~= Json(e);
-        j["exemptIps"] = exemptJson;
+        j["announced"] = Json(announcedCount);
+        j["lastAnnouncement"] = Json(lastAnnouncement);
+        j["lastAnnouncementAt"] = Json(lastAnnouncementAt);
+        j["intelLookups"] = Json(intelLookups);
+        j["intelFailures"] = Json(intelFailures);
+        auto srcs = Json.emptyArray;
+        if (intel !is null) foreach (s; intel.activeSources()) srcs ~= Json(s);
+        j["intelSources"] = srcs;
+        j["rules"] = liveRules.toJson();
+        j["rulesDeployed"] = deployedRules.toJson();
+        j["rulesSource"] = Json(rulesFromOverride ? "override" : "deployed");
     }
 
     protected override void onControl(string cmd, Json entry) {

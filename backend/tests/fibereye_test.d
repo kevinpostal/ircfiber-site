@@ -10,11 +10,19 @@ module fibereye_test;
 
 import std.stdio : writeln, writefln;
 
-import ircfiber.fibereye.format : parseQuitNotice, ipGroup, expandIpv6, zlineMatches;
+import std.algorithm : canFind;
+import std.conv : to;
+import std.string : indexOf;
+
+import ircfiber.fibereye.format : parseQuitNotice, ipGroup, expandIpv6, zlineMatches,
+    validExemptEntry;
 import ircfiber.fibereye.rules : Observation, Thresholds, evaluate, banDurationFor,
-    isAutoPlacedZline, banReason;
-import ircfiber.fibereye.events : Appeal, fiberEyeAppealKey, fiberEyeConnKey;
+    isAutoPlacedZline, banReason, validateThresholds;
+import ircfiber.fibereye.ruleset : RuleSet, validateRuleSet, summarizeRuleChange;
+import ircfiber.fibereye.events : Appeal, fiberEyeAppealKey, fiberEyeConnKey, fiberEyeRulesKey;
 import ircfiber.logs.format : parseConnectNotice;
+
+import vibe.data.json : Json, parseJsonString;
 
 private int failures;
 
@@ -111,6 +119,157 @@ private void testRules() {
     check(banDurationFor(9, 3600) == 604_800, "escalation stops at a week");
 }
 
+/// The point of the per-rule flags: switching a rule off preserves its
+/// threshold, so turning it back on restores what the admin chose rather
+/// than the 0 they used to have to type to disable it.
+private void testRuleToggles() {
+    Thresholds t;
+    t.connects = 4;
+    t.connectsEnabled = false;
+    auto v = evaluate(Observation(9, 0, 0, 60), t);
+    check(!v.trip, "a disabled connect rule does not trip even far over its threshold");
+    t.connectsEnabled = true;
+    v = evaluate(Observation(9, 0, 0, 60), t);
+    check(v.trip && v.rule == "connect_flood", "re-enabling restores the preserved threshold of 4");
+
+    t = Thresholds.init;
+    t.nicksEnabled = false;
+    check(!evaluate(Observation(0, 99, 0, 60), t).trip, "nick_churn respects its flag");
+    t = Thresholds.init;
+    t.churnEnabled = false;
+    check(!evaluate(Observation(0, 0, 99, 60), t).trip, "session_churn respects its flag");
+
+    // A stored 0 must not fire on every connect even with the rule on.
+    t = Thresholds.init;
+    t.connects = 0;
+    check(!evaluate(Observation(1, 0, 0, 60), t).trip, "an enabled rule with a 0 threshold never fires");
+}
+
+private void testValidateThresholds() {
+    check(validateThresholds(Thresholds.init).length == 0, "the shipped defaults are a valid rule set");
+
+    Thresholds t;
+    t.windowSeconds = 1;
+    auto errs = validateThresholds(t);
+    check(errs.length == 1 && errs[0] == "window must be between 5 and 3600 seconds",
+        "the window message is the exact text the API returns");
+
+    t = Thresholds.init;
+    t.connects = 1;
+    check(validateThresholds(t).canFind("connect threshold must be between 2 and 100000"),
+        "a threshold of 1 bans on the first connect and is refused");
+
+    // A disabled rule is still range-checked, so re-enabling it can never
+    // bring back a nonsense value.
+    t = Thresholds.init;
+    t.nicks = 1;
+    t.nicksEnabled = false;
+    check(validateThresholds(t).canFind("nick threshold must be between 2 and 100000"),
+        "a disabled rule's threshold is validated too");
+
+    t = Thresholds.init;
+    t.shortMs = 900;
+    t.banSeconds = 30;
+    errs = validateThresholds(t);
+    check(errs.canFind("short session must be between 1000 and 600000 ms"), "shortMs floor");
+    check(errs.canFind("first ban must be between 60 and 2592000 seconds"), "banSeconds floor");
+}
+
+/// An exemption is a permanent hole — an exempt group is never counted, so
+/// it can never be banned however hard it floods.
+private void testExemptEntries() {
+    check(validExemptEntry("76.32.236.21"), "a production exemption is storable");
+    check(validExemptEntry("2603:8001:98f0:1530::/64"), "the production /64 is storable");
+    check(validExemptEntry("198.51.100.0/24"), "a /24 is storable");
+    check(!validExemptEntry("*"), "a catch-all glob is refused");
+    check(!validExemptEntry("0.0.0.0/0"), "0.0.0.0/0 is refused");
+    check(!validExemptEntry("::/0"), "::/0 is refused");
+    check(!validExemptEntry("10.0.0.0/8"), "a /8 is wider than /16 and refused");
+    check(!validExemptEntry("2603:8001::/16"), "a v6 prefix wider than /32 is refused");
+    check(!validExemptEntry("76.32.236.*"), "a glob is refused even though zlineMatches honours it");
+    check(!validExemptEntry("1.2.3.4 "), "a trailing space is refused");
+    check(!validExemptEntry("1.2.3.4,5.6.7.8"), "a comma-joined pair is refused");
+    check(!validExemptEntry(""), "empty is refused");
+    check(!validExemptEntry("not an ip"), "unparsable input is refused");
+}
+
+private void testRuleSetJson() {
+    RuleSet baseline;
+    baseline.thresholds.connects = 11;
+    baseline.thresholds.windowSeconds = 45;
+    baseline.ignoreClasses = ["ircfiber-engine"];
+    baseline.exemptIps = ["76.32.236.21"];
+
+    // A stored override written before a future field existed must degrade
+    // to the deployed baseline for that field, not invalidate the whole set.
+    const merged = RuleSet.fromJson(Json.emptyObject, baseline);
+    check(merged.thresholds.connects == 11 && merged.thresholds.windowSeconds == 45,
+        "missing numeric fields inherit the baseline");
+    check(merged.ignoreClasses == baseline.ignoreClasses && merged.exemptIps == baseline.exemptIps,
+        "missing lists inherit the baseline");
+    check(merged.thresholds.churnEnabled, "missing flags inherit the baseline");
+
+    const roundTrip = RuleSet.fromJson(baseline.toJson(), RuleSet.init);
+    check(roundTrip.thresholds == baseline.thresholds, "thresholds survive a JSON round trip");
+    check(roundTrip.exemptIps == baseline.exemptIps, "exemptions survive a JSON round trip");
+
+    // An explicitly empty array clears a list; that is an edit, not a gap.
+    const cleared = RuleSet.fromJson(parseJsonString(`{"exemptIps":[]}`), baseline);
+    check(cleared.exemptIps.length == 0, "an explicit empty array clears the list");
+
+    // Duplicates are canonicalised rather than rejected.
+    const deduped = RuleSet.fromJson(
+        parseJsonString(`{"ignoreClasses":["main","MAIN"," main "],"exemptIps":["1.2.3.4","1.2.3.4"]}`),
+        baseline);
+    check(deduped.ignoreClasses == ["main"], "ignore classes de-duplicate case-insensitively");
+    check(deduped.exemptIps == ["1.2.3.4"], "exemptions de-duplicate exactly");
+
+    // A wrong type is a missing field, not a zero.
+    const mistyped = RuleSet.fromJson(parseJsonString(`{"connects":"lots"}`), baseline);
+    check(mistyped.thresholds.connects == 11, "a mistyped field falls back to the baseline");
+}
+
+private void testValidateRuleSet() {
+    RuleSet r;
+    check(validateRuleSet(r).length == 0, "the built-in defaults are storable");
+
+    r.exemptIps = ["*"];
+    check(validateRuleSet(r).canFind(
+            "invalid exemption (use an address or a CIDR no wider than /16 or /32): *"),
+        "a catch-all exemption is refused with the message the UI shows");
+
+    r = RuleSet.init;
+    r.ignoreClasses = ["main class"];
+    check(validateRuleSet(r).canFind("invalid connect class: main class"), "a class with a space is refused");
+
+    r = RuleSet.init;
+    foreach (i; 0 .. 65) r.exemptIps ~= "10.0." ~ (i / 256).to!string ~ "." ~ (i % 256).to!string ~ "/32";
+    check(validateRuleSet(r).canFind("exemptIps has more than 64 entries"), "the list cap is enforced");
+}
+
+private void testSummarizeRuleChange() {
+    RuleSet before;
+    auto after = before;
+    check(summarizeRuleChange(before, after) == "", "identical rule sets summarise to nothing");
+
+    after.thresholds.connects = 4;
+    after.thresholds.churnEnabled = false;
+    after.exemptIps = ["203.0.113.7"];
+    const s = summarizeRuleChange(before, after);
+    check(s.indexOf("connects 10 -> 4") >= 0, "a threshold change is named with both values");
+    check(s.indexOf("session_churn disabled") >= 0, "a rule being switched off is named");
+    check(s.indexOf("exemptIps +1") >= 0, "a list addition is counted");
+
+    // updatedAtMs/updatedBy always differ between baseline and override and
+    // must not register as a rule change.
+    auto stamped = before;
+    stamped.updatedAtMs = 1_700_000_000_000;
+    stamped.updatedBy = "ruleadmin";
+    check(summarizeRuleChange(before, stamped) == "", "metadata alone is not a rule change");
+
+    check(fiberEyeRulesKey() == "fibereye:rules", "rules mirror key shape");
+}
+
 private void testAutoPlacedPredicate() {
     check(isAutoPlacedZline(banReason("connect_flood", "https://ircfiber.com/unban/tok")),
         "FiberEye's own reason is recognised");
@@ -156,6 +315,12 @@ void main() {
     testZlineMatches();
     testRules();
     testAutoPlacedPredicate();
+    testRuleToggles();
+    testValidateThresholds();
+    testExemptEntries();
+    testRuleSetJson();
+    testValidateRuleSet();
+    testSummarizeRuleChange();
     testAppealRoundTrip();
     if (failures) {
         writefln("%d check(s) failed", failures);

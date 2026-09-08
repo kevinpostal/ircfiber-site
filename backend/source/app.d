@@ -178,10 +178,10 @@ void main() {
     // IRCFIBER_SUPPORT_BOT_ENABLED=1 (prod: the ircfiber-support-bot container).
     import ircfiber.support.bot : startSupportBot;
     startSupportBot();
-    // #staff log bot — same image, only runs where
-    // IRCFIBER_LOGS_BOT_ENABLED=1 (prod: the ircfiber-logs-bot container).
-    import ircfiber.logs.bot : startLogsBot;
-    startLogsBot();
+    // Backup run announcements → #staff via the logs outbox. Self-gates on
+    // IRCFIBER_FIBEREYE_ENABLED, so it runs exactly where FiberEye does.
+    import ircfiber.logs.backup_announce : startBackupAnnounceLoop;
+    startBackupAnnounceLoop();
     // FiberEye connection watch — same image, only runs where
     // IRCFIBER_FIBEREYE_ENABLED=1 (prod: the ircfiber-fibereye container).
     import ircfiber.fibereye.bot : startFiberEye;

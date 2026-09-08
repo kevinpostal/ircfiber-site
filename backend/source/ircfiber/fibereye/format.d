@@ -18,8 +18,9 @@ import std.string : indexOf, lastIndexOf, split, startsWith, endsWith, strip, to
 
 import ircfiber.support.json : sanitizeLine;
 
+public import ircfiber.ipintel.cidr : expandIpv6, parseIpv4, hextetString, sameIpv6Prefix;
 public import ircfiber.logs.format : parseConnectNotice, ConnectNotice, classIgnored,
-    isPrivateIp, GeoInfo;
+    isPrivateIp;
 
 /// A parsed `*** QUIT: Client exiting: nick!ident@host (ip) [reason]`
 /// server notice (snomask `q`).
@@ -89,105 +90,6 @@ QuitNotice parseQuitNotice(string text) @safe pure {
     return q;
 }
 
-/// Parses a dotted-quad into its four octets. False for anything else.
-private bool parseIpv4(string ip, out ubyte[4] octets) @safe pure {
-    auto parts = ip.strip().split('.');
-    if (parts.length != 4) return false;
-    foreach (i, p; parts) {
-        if (!p.length || p.length > 3) return false;
-        foreach (ch; p) if (ch < '0' || ch > '9') return false;
-        uint v;
-        try v = p.to!uint;
-        catch (Exception) return false;
-        if (v > 255) return false;
-        octets[i] = cast(ubyte) v;
-    }
-    return true;
-}
-
-/// Expands an IPv6 textual address (including the `::` elision and a
-/// trailing embedded IPv4 quad) to eight hextets. False when `ip` is not
-/// a well-formed IPv6 address.
-bool expandIpv6(string ip, out ushort[8] parts) @safe pure {
-    parts[] = 0;
-    auto s = ip.strip().toLower();
-    if (!s.length) return false;
-    // Drop a zone index ("fe80::1%eth0") — irrelevant to grouping.
-    const pct = s.indexOf('%');
-    if (pct >= 0) s = s[0 .. pct];
-    if (s.indexOf(':') < 0) return false;
-
-    // A trailing dotted quad is rewritten as its two hextets, so the
-    // generic `::`-elision path below handles every remaining form.
-    const lastColon = s.lastIndexOf(':');
-    if (lastColon >= 0 && s[lastColon + 1 .. $].indexOf('.') >= 0) {
-        ubyte[4] o;
-        if (!parseIpv4(s[lastColon + 1 .. $], o)) return false;
-        s = s[0 .. lastColon + 1]
-            ~ hextetString(cast(ushort)((o[0] << 8) | o[1])) ~ ":"
-            ~ hextetString(cast(ushort)((o[2] << 8) | o[3]));
-    }
-
-    string head = s, tailStr;
-    bool elided;
-    const dc = s.indexOf("::");
-    if (dc >= 0) {
-        elided = true;
-        head = s[0 .. dc];
-        tailStr = s[dc + 2 .. $];
-        // A second "::" is invalid.
-        if (tailStr.indexOf("::") >= 0) return false;
-    }
-
-    static bool hextets(string spec, out ushort[] outParts) @safe pure {
-        outParts = null;
-        if (!spec.length) return true;
-        foreach (piece; spec.split(':')) {
-            if (!piece.length || piece.length > 4) return false;
-            ushort v;
-            foreach (ch; piece) {
-                int d;
-                if (ch >= '0' && ch <= '9') d = ch - '0';
-                else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
-                else return false;
-                v = cast(ushort)((v << 4) | d);
-            }
-            outParts ~= v;
-        }
-        return true;
-    }
-
-    ushort[] left, right;
-    if (!hextets(head, left)) return false;
-    if (!hextets(tailStr, right)) return false;
-
-    const total = left.length + right.length;
-    if (elided) {
-        if (total > 7) return false;   // "::" must stand for at least one group
-    } else {
-        if (total != 8) return false;
-    }
-
-    foreach (i, v; left) parts[i] = v;
-    foreach (i, v; right) parts[8 - right.length + i] = v;
-    return true;
-}
-
-private string hextetString(ushort v) @safe pure {
-    static immutable digits = "0123456789abcdef";
-    if (v == 0) return "0";
-    char[4] buf;
-    size_t n;
-    bool started;
-    foreach_reverse (shift; 0 .. 4) {
-        const nib = (v >> (shift * 4)) & 0xF;
-        if (!started && nib == 0) continue;
-        started = true;
-        buf[n++] = digits[nib];
-    }
-    return buf[0 .. n].idup;
-}
-
 /// The unit FiberEye counts and bans: the exact address for IPv4, the
 /// `/64` for IPv6 — the observed flood rotates addresses inside one /64.
 ///
@@ -215,19 +117,6 @@ string ipGroup(string ip) @safe pure {
     if (p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 0) return s;
     return hextetString(p[0]) ~ ":" ~ hextetString(p[1]) ~ ":"
         ~ hextetString(p[2]) ~ ":" ~ hextetString(p[3]) ~ "::/64";
-}
-
-/// True when the two addresses share their first `bits` bits.
-private bool sameIpv6Prefix(const ushort[8] a, const ushort[8] b, int bits) @safe pure nothrow @nogc {
-    int left = bits;
-    foreach (i; 0 .. 8) {
-        if (left <= 0) break;
-        const take = left >= 16 ? 16 : left;
-        const mask = cast(ushort)(take == 16 ? 0xFFFF : ~((1 << (16 - take)) - 1));
-        if ((a[i] & mask) != (b[i] & mask)) return false;
-        left -= take;
-    }
-    return true;
 }
 
 /// True when an ircd Z-line mask covers `ip`. Handles an exact address, a
@@ -278,4 +167,46 @@ bool zlineMatches(string mask, string ip) @safe pure {
         if (expandIpv6(m, a) && expandIpv6(target, b)) return a == b;
     }
     return false;
+}
+
+/// True when `entry` is storable in the admin-managed exemption list: an
+/// exact IP address, or a CIDR no wider than `/16` (v4) or `/32` (v6).
+///
+/// An exemption is a permanent hole — an exempt group is never counted, so
+/// it can never be banned however hard it floods. Globs and catch-alls are
+/// rejected even though `zlineMatches` would honour them at match time,
+/// because a stored `*` would silently disable FiberEye for the whole
+/// network. Only the API path validates; the env baseline comes from the
+/// reviewed deploy and is trusted as written.
+bool validExemptEntry(string entry) @safe pure {
+    const e = entry.strip();
+    if (!e.length || e.length > 128) return false;
+    if (e != entry) return false;                    // stray surrounding space
+    foreach (dchar c; e) {
+        if (c <= ' ' || c == 0x7F) return false;     // whitespace + control
+        if (c == ',' || c == '*' || c == '?') return false;
+    }
+
+    const slash = e.lastIndexOf('/');
+    if (slash < 0) {
+        ubyte[4] v4;
+        if (parseIpv4(e, v4)) return true;
+        ushort[8] v6;
+        return e.indexOf(':') >= 0 && expandIpv6(e, v6);
+    }
+
+    const net = e[0 .. slash];
+    const bitsText = e[slash + 1 .. $];
+    if (!net.length || !bitsText.length) return false;
+    int bits;
+    try bits = bitsText.to!int;
+    catch (Exception) return false;
+    if (net.indexOf(':') >= 0) {
+        ushort[8] v6;
+        if (!expandIpv6(net, v6)) return false;
+        return bits >= 32 && bits <= 128;
+    }
+    ubyte[4] v4;
+    if (!parseIpv4(net, v4)) return false;
+    return bits >= 16 && bits <= 32;
 }
