@@ -1,17 +1,10 @@
 /**
- * Admin JSON API for MOTD templates (`/api/admin/motd`) and the two ways
- * they reach users:
- *
- *  - Redis mirror (`RedisKeys.motdTemplates`): rewritten after every edit;
- *    the engine reads it on each connect to irc.ircfiber.com and serves a
- *    random enabled template in place of the ircd's 372 lines (per-connect
- *    randomness for everyone connecting through IRC Fiber).
- *  - IRCd pool: every enabled template is written into the ircd's
- *    `motd.d/pool` (the conf dir is bind-mounted into the gateway) and the
- *    ircd's motdpool module draws one block per connect, substituting
- *    per-user `{placeholders}` from `motd.d/profiles` (motd_profiles.d).
- *    The module re-reads the file on its own cache interval, so there is no
- *    REHASH and nothing to rotate.
+ * Admin JSON API for MOTD templates (`/api/admin/motd`): Mongo is the
+ * source of truth and every edit rewrites the ircd's `motd.d/pool`
+ * (`writePool`), from which the ircd's motdpool module draws one block per
+ * connect with per-user `{placeholders}` from `motd.d/profiles`
+ * (motd_profiles.d). No REHASH, no rotation, no Redis mirror — the ircd is
+ * the only MOTD renderer.
  */
 module ircfiber.web.admin.motd;
 
@@ -26,7 +19,7 @@ import vibe.core.log : logInfo, logWarn;
 import vibe.data.json : Json;
 
 import ircfiber.db.motd_templates : MotdTemplateRepository, MotdTemplateRecord,
-    motdTemplatesToJson, validateMotdBody, seedDefaultMotdTemplates;
+    validateMotdBody, seedDefaultMotdTemplates;
 import ircfiber.models.user : User;
 import ircfiber.redis.protocol : RedisKeys;
 import ircfiber.storage.redis : RedisStorage;
@@ -48,16 +41,6 @@ private string jsonStr(Json j, string key) {
     return v.type == Json.Type.string ? v.get!string : "";
 }
 
-/// Rewrites the Redis mirror from Mongo. Best effort: a Redis outage must
-/// not fail the admin edit (Mongo is the source of truth).
-public void publishMotdTemplates(RedisStorage redis, MotdTemplateRepository repo) {
-    try {
-        redis.getDb().set(RedisKeys.motdTemplates(), motdTemplatesToJson(repo.all()));
-    } catch (Exception e) {
-        logWarn("motd: failed to publish templates to Redis: %s", e.msg);
-    }
-}
-
 /// Path of the ircd MOTD pool inside the gateway container. `motd.d/` is
 /// the one conf subdir mounted read-write (roles/gateway/tasks/container.yml).
 package string motdPoolPath() {
@@ -66,7 +49,15 @@ package string motdPoolPath() {
 
 /// Atomic write (tmp + rename) of `text` to `path`, so the ircd's periodic
 /// re-read never sees a half-written file. "" on success or the reason.
+/// Afterwards the file is chowned to the ircd's uid/gid (10000, the
+/// `--uid/--gid` our Containerfile.ircd builds with and the owner of the
+/// conf dir): the gateway runs as root, and every `ReadFile` open of a
+/// root-owned file logs a "Possible configuration error" ownership warning
+/// — 4 lines a minute once pool + profiles both exist. A failed chown is
+/// ignored: the file stays world-readable and the ircd serves it anyway.
 package string writeIrcdFile(string path, string text) {
+    import core.sys.posix.unistd : chown;
+    import std.string : toStringz;
     auto dir = dirName(path);
     if (!exists(dir) || !isDir(dir)) return "ircd MOTD dir " ~ dir ~ " is not mounted";
     auto tmp = path ~ ".tmp";
@@ -77,6 +68,7 @@ package string writeIrcdFile(string path, string text) {
         try if (exists(tmp)) remove(tmp); catch (Exception) {}
         return "cannot write " ~ path ~ ": " ~ e.msg;
     }
+    try chown(path.toStringz, 10000, 10000); catch (Exception) {}
     return "";
 }
 
@@ -131,10 +123,9 @@ public string writePool(RedisStorage redis, MotdTemplateRepository repo) {
     return "";
 }
 
-/// Everything a write does after Mongo: mirror to Redis, rewrite the pool.
-/// Returns the pool error ("" when it went through) for the response.
+/// Everything a write does after Mongo: rewrite the pool. Returns the pool
+/// error ("" when it went through) for the response.
 private string afterWrite(RedisStorage redis, MotdTemplateRepository repo) {
-    publishMotdTemplates(redis, repo);
     return writePool(redis, repo);
 }
 
@@ -158,7 +149,7 @@ private Json listJson(RedisStorage redis, MotdTemplateRepository repo, string po
 /// Seeds the launch defaults into an empty collection.
 package void apiMotdList(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     auto repo = new MotdTemplateRepository();
-    if (seedDefaultMotdTemplates(repo) > 0) publishMotdTemplates(redis, repo);
+    seedDefaultMotdTemplates(repo);
     jsonOk(res, listJson(redis, repo, ""));
 }
 

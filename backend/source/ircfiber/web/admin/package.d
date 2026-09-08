@@ -181,7 +181,7 @@ final class AdminController {
         router.post("/api/admin/fibereye/rules/reset", &adminWrap!apiFiberEyeRulesResetRoute);
         router.get("/api/admin/fibereye/ircd-rules", &adminWrap!apiFiberEyeIrcdRulesRoute);
 
-        // MOTD templates (served per connect by the engine, rotated into the ircd)
+        // MOTD templates (the ircd draws one pool block per connect)
         router.get("/api/admin/motd", &adminWrap!apiMotdListRoute);
         router.post("/api/admin/motd", &adminWrap!apiMotdCreateRoute);
         router.post("/api/admin/motd/rotate", &adminWrap!apiMotdRotateRoute);
