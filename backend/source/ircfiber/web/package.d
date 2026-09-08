@@ -428,6 +428,19 @@ final class WebController {
             throw e;
         }
 
+        // Announce the signup in #staff (oper-only, so the full e-mail and
+        // IP may be shown). Best-effort: `pushLogEvent` never throws.
+        {
+            import ircfiber.logs.events : LogEvent, pushLogEvent;
+            LogEvent le;
+            le.type = "signup";
+            le.ts = Clock.currTime.toUnixTime!long * 1000;
+            le.username = u.username;
+            le.email = u.email;
+            le.ip = u.signupIp;
+            pushLogEvent(redis, le);
+        }
+
         // Provision the default IRC Fiber network (irc.ircfiber.com:6697).
         // Idempotent — existing-user migration runs the same helper on login.
         // We swallow exceptions here so a Mongo/Redis hiccup doesn't lose

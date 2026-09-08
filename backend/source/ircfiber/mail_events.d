@@ -24,6 +24,7 @@ import vibe.data.json : Json, parseJsonString;
 import vibe.db.redis.redis : RedisDatabase, RedisReply;
 
 import ircfiber.storage.redis : RedisStorage;
+import ircfiber.logs.events : LogEvent, pushLogEvent;
 
 /// LTRIM window: how many send attempts stay readable.
 enum mailEventsCap = 500;
@@ -194,8 +195,8 @@ final class MailEventLog {
         return redis.getDb();
     }
 
-    /// LPUSH + LTRIM + EXPIRE. Never throws: an unrecordable event must
-    /// not fail the send it describes.
+    /// LPUSH + LTRIM + EXPIRE, then announce in #staff. Never throws: an
+    /// unrecordable event must not fail the send it describes.
     void record(MailEvent e) {
         try {
             auto d = db();
@@ -205,6 +206,21 @@ final class MailEventLog {
         } catch (Exception ex) {
             logWarn("mail-events: recording %s send to %s failed: %s", e.status, e.toEmail, ex.msg);
         }
+        // This is the choke point every sendMail caller already passes
+        // through on success and on failure, so the #staff feed is fed
+        // here rather than at the three send sites.
+        LogEvent le;
+        le.type = "mail";
+        le.ts = e.atMs;
+        le.kind = e.kind;
+        le.email = e.toEmail;
+        le.username = e.username;
+        le.provider = e.provider;
+        le.status = e.status;
+        le.error = e.error;
+        le.durationMs = e.durationMs;
+        le.ip = e.sourceIp;
+        pushLogEvent(this.redis, le);
     }
 
     /// Newest first (LRANGE order). Unparseable entries are skipped;

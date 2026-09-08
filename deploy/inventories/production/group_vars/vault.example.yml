@@ -69,6 +69,24 @@ vault_ircd_dashboard_password: "REPLACE-WITH-STRONG-PASSWORD"
 # `PRIVMSG NickServ :IDENTIFY FiberSupport <password>` after 001. Leave empty
 # to skip IDENTIFY (the bot then falls back to FiberSupport_ on a 433).
 vault_support_bot_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD"
+# NickServ password of the #staff log bot nick (logs_bot_nick, default
+# FiberLogs). Register the nick once from the prod host before the first
+# deploy (see the logs-bot rollout notes); the bot sends
+# `PRIVMSG NickServ :IDENTIFY FiberLogs <password>` after 001. Leave empty
+# to skip IDENTIFY (the bot then falls back to FiberLogs_ on a 433).
+vault_logs_bot_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD"
+# Log-bot oper password: the #staff log bot OPERs as the command-less
+# "fiberlogs" oper (ircd_logs_oper_name) purely to receive connect server
+# notices (umode +s, snomasks c/C), host-locked to the Docker network. The
+# ircd role renders it as an InspIRCd hmac-sha256 hash and the gateway
+# receives it as IRCFIBER_LOGS_BOT_OPER_PASSWORD. Use a distinct random
+# value — never reuse the dashboard or human admin oper password.
+vault_ircd_logs_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
+# ipinfo.io API token, used by the #staff log bot for the geo/ASN report on
+# signup and IRCd-connect IPs (7-day Redis cache). Optional: an empty value
+# makes every connect/signup line render `geo unavailable` and nothing else
+# degrades.
+vault_ipinfo_token: "REPLACE-WITH-IPINFO-TOKEN"
 
 # --- SigNoz query API (admin Logs page) --------------------------------------
 # Service-account API key for the k8s SigNoz (mint in SigNoz UI →

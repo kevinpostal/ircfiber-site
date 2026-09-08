@@ -123,6 +123,21 @@ support_bot_container_name: "ircfiber-support-bot"
 support_bot_nick: "FiberSupport"
 support_bot_channel: "#support"
 support_bot_public_url: "https://{{ ircfiber_domain }}"
+# --- #staff log bot (same gateway image, dedicated container) ---------------
+# Only the process with IRCFIBER_LOGS_BOT_ENABLED=1 connects to the ircd as
+# FiberLogs, OPERs as {{ logs_bot_oper_name }} for connect server notices and
+# reports signups, outbound email and IRCd connects in #staff. Never set on
+# the blue/green gateway replicas. Secrets: vault_logs_bot_nickserv_password,
+# vault_ircd_logs_oper_password, vault_ipinfo_token.
+logs_bot_enabled: true
+logs_bot_container_name: "ircfiber-logs-bot"
+logs_bot_nick: "FiberLogs"
+logs_bot_channel: "#staff"
+logs_bot_oper_name: "fiberlogs"
+# Connect classes whose connects are not announced: the engine multiplexes
+# every platform user through container IPs (useless geo) and loopback is the
+# ircd's own healthcheck.
+logs_bot_ignore_classes: "ircfiber-engine,ircfiber-engine-v6,localhost"
 # --- SigNoz query API (admin Logs page, gateway-side proxy) ------------------
 # The gateway container has no Tailscale MagicDNS, so the URL is the
 # tailnet IP with a Host-header override for the SNI-routed Traefik

@@ -46,6 +46,8 @@ import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
+import ircfiber.web.admin.logs_bot : apiLogsBotStatus, apiLogsBotReconnect,
+    apiLogsBotRejoin, apiLogsBotAnnounce;
 import ircfiber.web.admin.backups : apiBackupsOverview, apiBackupsRun, apiBackupsSuspend, apiBackupsLogs;
 import ircfiber.web.admin.emails : apiEmailsOverview, apiEmailsTest,
     apiEmailsPendingResend, apiEmailsPendingRevoke, apiEmailsCooldownClear,
@@ -155,6 +157,11 @@ final class AdminController {
         router.post("/api/admin/support/bot/reconnect", &adminWrap!apiSupportBotReconnectRoute);
         router.post("/api/admin/support/bot/rejoin", &adminWrap!apiSupportBotRejoinRoute);
         router.post("/api/admin/support/bot/announce", &adminWrap!apiSupportBotAnnounceRoute);
+        // #staff log bot (heartbeat + control; shown on the IRCD page)
+        router.get("/api/admin/logs-bot", &adminWrap!apiLogsBotStatusRoute);
+        router.post("/api/admin/logs-bot/reconnect", &adminWrap!apiLogsBotReconnectRoute);
+        router.post("/api/admin/logs-bot/rejoin", &adminWrap!apiLogsBotRejoinRoute);
+        router.post("/api/admin/logs-bot/announce", &adminWrap!apiLogsBotAnnounceRoute);
 
         // MOTD templates (served per connect by the engine, rotated into the ircd)
         router.get("/api/admin/motd", &adminWrap!apiMotdListRoute);
@@ -406,6 +413,12 @@ private:
     void apiSupportBotReconnectRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotReconnect(req, res, redis); }
     void apiSupportBotRejoinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotRejoin(req, res, redis); }
     void apiSupportBotAnnounceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSupportBotAnnounce(req, res, redis); }
+
+    // #staff log bot
+    void apiLogsBotStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotStatus(req, res, redis); }
+    void apiLogsBotReconnectRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotReconnect(req, res, redis); }
+    void apiLogsBotRejoinRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotRejoin(req, res, redis); }
+    void apiLogsBotAnnounceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLogsBotAnnounce(req, res, redis); }
 
     // Mongo
     void apiMongoStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMongoStatus(req, res); }

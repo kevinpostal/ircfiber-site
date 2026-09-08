@@ -192,3 +192,36 @@
     gateway_spec_cpus: "{{ support_bot_cpus }}"
     gateway_spec_oom_score_adj: "{{ support_bot_oom_score_adj }}"
   when: support_bot_enabled | default(false) | bool
+
+# #staff log bot: same image, dedicated container (not part of blue/green,
+# no published ports). Only this process sets IRCFIBER_LOGS_BOT_ENABLED; it
+# reaches the ircd through the docker alias already rendered as
+# IRCFIBER_IRCD_HOST/PORT in the gateway env. Its NickServ password, oper
+# password and ipinfo token are NOT injected here: env.j2 renders the
+# *_FILE paths and the values live in 0400 files under
+# {{ gateway_secrets_dir }}, so they stay out of `docker inspect`.
+- name: Run ircfiber-logs-bot
+  tags: [logs-bot]
+  ansible.builtin.include_tasks:
+    file: container.yml
+    apply:
+      tags: [logs-bot]
+  vars:
+    gateway_spec_name: "{{ logs_bot_container_name }}"
+    gateway_spec_component: "logs-bot"
+    gateway_spec_env_extra:
+      IRCFIBER_LOGS_BOT_ENABLED: "1"
+      # Same trap as the support bot: the port falls back to
+      # IRCFIBER_IRCD_PORT (the TLS port) while the bot's own TLS flag
+      # defaults to off, so without this it dials 6697 in plaintext.
+      IRCFIBER_LOGS_BOT_TLS: "{{ _gateway_env['IRCFIBER_IRCD_TLS'] | default('0') }}"
+      IRCFIBER_LOGS_BOT_NICK: "{{ logs_bot_nick }}"
+      IRCFIBER_LOGS_BOT_CHANNEL: "{{ logs_bot_channel }}"
+      IRCFIBER_LOGS_BOT_IGNORE_CLASSES: "{{ logs_bot_ignore_classes }}"
+    # Base mounts only — no ircd config, no Anope data, no cert store.
+    gateway_spec_volumes_extra: []
+    gateway_spec_memory: "{{ logs_bot_memory_limit }}"
+    gateway_spec_memory_reservation: "{{ logs_bot_memory_reservation }}"
+    gateway_spec_cpus: "{{ logs_bot_cpus }}"
+    gateway_spec_oom_score_adj: "{{ logs_bot_oom_score_adj }}"
+  when: logs_bot_enabled | default(false) | bool

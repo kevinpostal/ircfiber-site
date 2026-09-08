@@ -11,6 +11,7 @@
   import KpiCard from '../components/KpiCard.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import SupportBotCard from '../components/SupportBotCard.svelte';
+  import LogsBotCard from '../components/LogsBotCard.svelte';
   import NickServPanel from '../components/NickServPanel.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { queryRange } from '../../lib/signoz';
@@ -57,8 +58,8 @@
   interface LogEntry { ts: number; service: string; severity: string; body: string; }
 
   // service.name is the Docker container name (fluent-bit promotes
-  // container_name). ircd, services and the #support bot share this tab.
-  const ircdServices = ['ircfiber-ircd', 'ircfiber-services', 'ircfiber-support-bot'];
+  // container_name). ircd, services and the two bots share this tab.
+  const ircdServices = ['ircfiber-ircd', 'ircfiber-services', 'ircfiber-support-bot', 'ircfiber-logs-bot'];
   let logRows = $state<LogEntry[]>([]);
   let logsError = $state<string | null>(null);
   let logsLoading = $state(false);
@@ -319,6 +320,7 @@
     />
   </Card>
   <div class="mt-4"><SupportBotCard /></div>
+  <div class="mt-4"><LogsBotCard /></div>
 {:else}
   <div class="mb-4 flex gap-1 border-b border-border">
     {#each tabs as t}
@@ -377,6 +379,7 @@
       <Card><p class="text-sm text-muted">Loading…</p></Card>
     {/if}
     <div class="mt-4"><SupportBotCard /></div>
+    <div class="mt-4"><LogsBotCard /></div>
   {:else if tab === 'channels'}
     <Card>
       <div class="mb-3 flex items-center justify-between">

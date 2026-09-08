@@ -178,6 +178,10 @@ void main() {
     // IRCFIBER_SUPPORT_BOT_ENABLED=1 (prod: the ircfiber-support-bot container).
     import ircfiber.support.bot : startSupportBot;
     startSupportBot();
+    // #staff log bot — same image, only runs where
+    // IRCFIBER_LOGS_BOT_ENABLED=1 (prod: the ircfiber-logs-bot container).
+    import ircfiber.logs.bot : startLogsBot;
+    startLogsBot();
 
     auto adminController = new AdminController(redis);
     adminController.registerRoutes(router);

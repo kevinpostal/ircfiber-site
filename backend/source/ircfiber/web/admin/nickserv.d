@@ -56,6 +56,7 @@ import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
 import ircfiber.services.anope_db : AnopeAccount, AnopeInventory, asciiLowerStr,
     classifyAccountOwnership, readAnopeInventory;
 import ircfiber.support.bot : SupportBotConfig;
+import ircfiber.logs.bot : LogsBotConfig;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
 
@@ -657,10 +658,10 @@ package void apiNsCreate(HTTPServerRequest req, HTTPServerResponse res,
  *     privileged commands as. It is an oper by construction, and adding it
  *     unconditionally means an unreachable Anope cannot make it look
  *     droppable;
- *   * the support bot's nick — `FiberSupport` is *not* an Anope oper
- *     (verified: its `NickServ INFO` has no "is a Services Operator" line),
- *     it is infrastructure this codebase owns and identifies as, so nothing
- *     in Mongo will ever claim it.
+ *   * the bots' nicks — `FiberSupport` and `FiberLogs` are *not* Anope
+ *     opers (verified: their `NickServ INFO` has no "is a Services
+ *     Operator" line), they are infrastructure this codebase owns and
+ *     identifies as, so nothing in Mongo will ever claim them.
  */
 private bool[string] staffAccountsLower(const ref AnopeInventory inv) {
     import std.process : environment;
@@ -671,6 +672,9 @@ private bool[string] staffAccountsLower(const ref AnopeInventory inv) {
     auto botNick = environment.get("IRCFIBER_SUPPORT_BOT_NICK", "").strip();
     if (!botNick.length) botNick = SupportBotConfig.init.nick;
     if (botNick.length) staff[asciiLowerStr(botNick)] = true;
+    auto logsNick = environment.get("IRCFIBER_LOGS_BOT_NICK", "").strip();
+    if (!logsNick.length) logsNick = LogsBotConfig.init.nick;
+    if (logsNick.length) staff[asciiLowerStr(logsNick)] = true;
 
     // Alias → display. A grouped account is one identity wearing several
     // nicks, so flagging only the nick the oper block happens to name would

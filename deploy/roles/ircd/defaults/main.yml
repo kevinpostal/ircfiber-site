@@ -165,6 +165,11 @@ ircd_services_gid: 65533
 # password from vault_ircd_dashboard_password via IRCFIBER_IRCD_OPER_PASSWORD.
 ircd_dashboard_oper_name: "dashboard"
 
+# Oper account the #staff log bot uses. It exists only to receive connect
+# server notices (umode +s, snomasks c/C) — the LogBot type below grants
+# no commands at all. Password: vault_ircd_logs_oper_password.
+ircd_logs_oper_name: "{{ logs_bot_oper_name | default('fiberlogs') }}"
+
 # Host cloaking. Must match linked servers exactly (method + key +
 # prefix + suffix) or spanningtree CAPAB refuses the link. Aligned with
 # irc.netcrave.chat: no prefix, "hidden" suffix. Empty prefix omits the
@@ -234,6 +239,12 @@ ircd_permanent_channels:
     access:
       aop:
         - "FiberSupport"
+  - channel: "#staff"
+    modes: "ntO"
+    history: "200:1w"
+    description: "IRC Fiber staff log feed"
+    topic: "IRC Fiber operations log — FiberLogs reports signups, outbound email and IRCd connects · oper-only (+O)"
+    bot: true
 
 # ChanServ registration of the staff channels above (roles/ircd/files/
 # ircd_channel_setup.py, run over TLS on the loopback TLS port). Set false

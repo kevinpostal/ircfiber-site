@@ -130,6 +130,20 @@ configuration "support-format-test" {
     versions "VibeUseFibers"
 }
 
+// Pure-code unit test for the #staff log bot: the InspIRCd connect-notice
+// parser, the private-IP test and the announcement formatter, plus the
+// outbox event JSON (no Redis/Mongo/IRCd/ipinfo needed):
+//   dub --root=backend build --config=logs-format-test && ./backend/logs-format-test
+configuration "logs-format-test" {
+    targetType "executable"
+    targetName "logs-format-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/events.d" "source/ircfiber/support/json.d"
+    mainSourceFile "tests/logs_format_test.d"
+    versions "VibeUseFibers"
+}
+
 // Pure-code unit test for the Anope XML-RPC wire helpers plus the NickServ
 // account/nick/password helpers (built with -unittest so the `@("…")`
 // unittest blocks in services/accounts.d run before main; no Anope, Redis
@@ -155,7 +169,7 @@ configuration "signup-test" {
     targetName "signup-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/mail.d" "source/ircfiber/mail_events.d" "source/ircfiber/signup.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d"
+    sourceFiles "source/ircfiber/mail.d" "source/ircfiber/mail_events.d" "source/ircfiber/logs/events.d" "source/ircfiber/signup.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d"
     mainSourceFile "tests/signup_test.d"
     versions "VibeUseFibers"
     buildOptions "unittests"
