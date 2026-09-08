@@ -1,0 +1,39 @@
+---
+# IRC Fiber — InspIRCd 4 spanningtree LEAF on the ubuntu-docker k3s cluster.
+#
+#   cd site/deploy && ansible-playbook playbooks/ircd-k8s-leaf.yml
+#
+# The leaf renders the OVH hub's own templates in leaf mode, so the module,
+# mode, codepage and cloak sets CAPAB compares cannot drift apart. The hub
+# side (<link> + <autoconnect>) is enabled by ircd_k8s_link_enabled and
+# applied with `playbooks/ircd.yml -t ircdconf`.
+- name: InspIRCd k3s leaf
+  hosts: ircfiber_k3s
+  become: true
+  gather_facts: false
+  # Same as every other playbook here: the real vault is not in a
+  # group_vars/<group> path, so each play loads it explicitly.
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  vars:
+    ircd_is_leaf: true
+    ircd_server_name: "{{ ircd_k8s_leaf_name }}"
+    ircd_server_id: "{{ ircd_k8s_leaf_id }}"
+    ircd_server_description: "{{ ircd_k8s_leaf_description }}"
+    # Engine pods reach the leaf from the k3s pod CIDR, not the OVH docker
+    # bridge; this drives the ircfiber-engine connect class and the
+    # dashboard/logbot oper host masks in opers.conf.j2.
+    ircd_trusted_subnet: "10.42.0.0/16"
+    # Channels arrive in the netburst from the hub; seeding them locally
+    # would create them with a fresh TS before the link comes up.
+    ircd_permanent_channels: []
+    # No Anope here, and the setup script dials 127.0.0.1 on the hub.
+    ircd_chanserv_setup_enabled: false
+    # No Caddy/LE cert on this node; the image entrypoint generates a
+    # self-signed cert.pem/key.pem/dhparams.pem into the conf dir.
+    ircd_tls_mode: "selfsigned"
+  tasks:
+    - name: Deploy the leaf
+      ansible.builtin.include_role:
+        name: ircd
+        tasks_from: k8s_leaf.yml

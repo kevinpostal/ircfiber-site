@@ -141,6 +141,62 @@ export async function retryIrcAccount(): Promise<void> {
   }
 }
 
+/** One live WebSocket client (an open tab) of a login session. */
+export interface LoginSessionClient {
+  /** Opaque handle; the server never sends real session ids. */
+  ref: string;
+  connectedAt: number;
+  clientIp: string;
+  userAgent: string;
+  /** True for the tab that made the request. */
+  current: boolean;
+}
+
+/** One login session: a browser that signed in, plus the tabs it has open. */
+export interface LoginSession {
+  ref: string;
+  /** Login time (unix ms). */
+  createdAt: number;
+  /** Last authenticated request (unix ms). */
+  lastAccess: number;
+  /** Unix ms the session lapses, or 0 when it has no expiry. Slides forward
+   *  on every request, so it is "now + remaining TTL", not "login + TTL". */
+  expiresAt: number;
+  clientIp: string;
+  userAgent: string;
+  current: boolean;
+  clientCount: number;
+  clients: LoginSessionClient[];
+}
+
+export interface LoginSessionsInfo {
+  sessions: LoginSession[];
+  total: number;
+  liveClients: number;
+  /** Server clock (unix ms) — relative times are computed against it so a
+   *  skewed browser clock cannot render "in 3 hours ago". */
+  now: number;
+}
+
+/** `GET /api/me/sessions`. `clientId` is this tab's WebSocket session id
+ *  (`getWsSessionId()`); passing it lets the server mark which client row is
+ *  the tab you are looking at. */
+export async function fetchLoginSessions(clientId = ''): Promise<LoginSessionsInfo> {
+  const qs = clientId ? `?client=${encodeURIComponent(clientId)}` : '';
+  const r = await fetch(`${API_BASE}/me/sessions${qs}`);
+  if (!r.ok) throw new Error(await serverError(r, 'Failed to load your login sessions'));
+  return r.json();
+}
+
+/** `DELETE /api/me/sessions/<ref>` — signs another of your browsers out and
+ *  cuts any tab it still has connected. `ref` is the opaque handle from the
+ *  listing; the server refuses the session making the request (409). */
+export async function revokeLoginSession(ref: string): Promise<{ clientsDropped: number }> {
+  const r = await fetch(`${API_BASE}/me/sessions/${encodeURIComponent(ref)}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await serverError(r, 'Could not revoke that session'));
+  return r.json();
+}
+
 export async function pinChannel(networkId: string, channel: string): Promise<void> {
   const r = await fetch(`${API_BASE}/me/pins`, {
     method: 'POST',

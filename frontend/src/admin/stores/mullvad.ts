@@ -11,10 +11,17 @@ export interface MullvadIpInfo {
   region: string;
   country: string;
   loc: string;
+  /** ipinfo's raw `org`, e.g. `AS39351 31173 Services AB`. */
   org: string;
   postal: string;
   timezone: string;
   hostname: string;
+  /** `AS39351` — the autonomous system the exit IP is announced from. */
+  asn?: string;
+  /** Operator of that AS, i.e. the ISP behind the exit (`31173 Services AB`). */
+  asnName?: string;
+  /** Operator domain (`31173.se`); only the ipinfo Lite endpoint returns it. */
+  asnDomain?: string;
 }
 export interface MullvadProxy {
   id: string;

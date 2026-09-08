@@ -24,6 +24,8 @@ import ircfiber.storage.session : RedisSessionStore;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody, formString, jsonArray, stripJsonStr;
 import ircfiber.web.admin.servers : AssignmentRow, loadNetworkSnapshot;
 import ircfiber.redis.protocol : NetworkStateSnapshot, RedisKeys, ControlMessage;
+import ircfiber.logs.format : AsnInfo, asnFromOrg;
+import ircfiber.logs.geo : loadGeoSettings, lookupAsn;
 
 /// Escape a string for JSON output
 private string escapeJson(string s) {
@@ -1570,6 +1572,11 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         string mullvadHostname;
         /// `organization`, e.g. `Mullvad VPN AB` (vs the host's own ISP).
         string organization;
+        /// ipinfo's ASN view of the exit address: `AS39351`, the operator
+        /// name — i.e. the ISP the exit really sits behind — and that
+        /// operator's domain. Filled from the Lite endpoint when a token is
+        /// configured, else by splitting the Core endpoint's `org`.
+        string asn, asnName, asnDomain;
     }
     struct ProxyInfo {
         string id, label, host, socksUrl, ip, container, containerState, containerStatus, tailscaleExitNode, error, lastTestedAt;
@@ -1583,6 +1590,10 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         long heldUntilMs;
         bool controllable;
     }
+    // ipinfo credentials for the ISP/ASN lookups below. Loaded once per
+    // request: the token comes from a file (IRCFIBER_IPINFO_TOKEN_FILE in
+    // the gateway env), and there is one lookup per pool slot.
+    const _geoSettings = loadGeoSettings();
     // helper to fetch ipinfo via SOCKS (k8s: use curl --socks5 with 1s, now enabled for admin visibility)
     IpInfo _fetchIpInfo(string host, ushort port) {
         IpInfo ii;
@@ -1690,6 +1701,28 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
                     }
                 } catch (Exception) {}
             }
+            // ISP/ASN for this exit. Resolved from the address the probe
+            // actually reported and deliberately *before* the placeholder
+            // block below, so the operator shown stays the true one even
+            // when those stand-in coordinates are being displayed — a
+            // Mullvad city next to a hosting provider's ASN is exactly the
+            // signal that the tunnel is not carrying this slot's traffic.
+            auto asn = asnFromOrg(ii.org);
+            // Only with a cache: this endpoint is polled every few seconds
+            // per open admin tab, so an uncached lookup would spend one
+            // ipinfo request per slot per poll. Without Redis the `org`
+            // split above already names the operator.
+            if (exitIpForEnrich.length > 0 && redis !is null) {
+                AsnInfo lite;
+                try lite = lookupAsn(redis, _geoSettings, exitIpForEnrich);
+                catch (Exception) {}
+                if (lite.asn.length > 0) asn.asn = lite.asn;
+                if (lite.name.length > 0) asn.name = lite.name;
+                if (lite.domain.length > 0) asn.domain = lite.domain;
+            }
+            ii.asn = asn.asn;
+            ii.asnName = asn.name;
+            ii.asnDomain = asn.domain;
             // Temporary fallback: Tailscale Mullvad exit nodes not visible to tagged
             // devices (k8s-mullvad-*), so SOCKS returns PebbleHost 185.206.149.176 for all.
             // Show per-label expected location until ACL is fixed to allow tag:ircfiber
@@ -1910,7 +1943,8 @@ package void apiMullvadStatus(HTTPServerRequest req, HTTPServerResponse res, Red
         buf.put("\"containerState\":\"" ~ pi.containerState.escapeJson ~ "\",");
         buf.put("\"containerStatus\":\"" ~ pi.containerStatus.escapeJson ~ "\",");
         buf.put("\"tailscaleExitNode\":\"" ~ pi.tailscaleExitNode.escapeJson ~ "\",");
-        buf.put("\"ipinfo\":{\"ip\":\"" ~ pi.ipinfo.ip.escapeJson ~ "\",\"city\":\"" ~ pi.ipinfo.city.escapeJson ~ "\",\"region\":\"" ~ pi.ipinfo.region.escapeJson ~ "\",\"country\":\"" ~ pi.ipinfo.country.escapeJson ~ "\",\"loc\":\"" ~ pi.ipinfo.loc.escapeJson ~ "\",\"org\":\"" ~ pi.ipinfo.org.escapeJson ~ "\",\"postal\":\"" ~ pi.ipinfo.postal.escapeJson ~ "\",\"timezone\":\"" ~ pi.ipinfo.timezone.escapeJson ~ "\",\"hostname\":\"" ~ pi.ipinfo.hostname.escapeJson ~ "\"},");
+        buf.put("\"ipinfo\":{\"ip\":\"" ~ pi.ipinfo.ip.escapeJson ~ "\",\"city\":\"" ~ pi.ipinfo.city.escapeJson ~ "\",\"region\":\"" ~ pi.ipinfo.region.escapeJson ~ "\",\"country\":\"" ~ pi.ipinfo.country.escapeJson ~ "\",\"loc\":\"" ~ pi.ipinfo.loc.escapeJson ~ "\",\"org\":\"" ~ pi.ipinfo.org.escapeJson ~ "\",\"postal\":\"" ~ pi.ipinfo.postal.escapeJson ~ "\",\"timezone\":\"" ~ pi.ipinfo.timezone.escapeJson ~ "\",\"hostname\":\"" ~ pi.ipinfo.hostname.escapeJson ~ "\","
+            ~ "\"asn\":\"" ~ pi.ipinfo.asn.escapeJson ~ "\",\"asnName\":\"" ~ pi.ipinfo.asnName.escapeJson ~ "\",\"asnDomain\":\"" ~ pi.ipinfo.asnDomain.escapeJson ~ "\"},");
         // The Mullvad verdict for this sidecar: is the traffic actually
         // leaving through a Mullvad relay, and which one.
         buf.put("\"mullvadExit\":" ~ (pi.ipinfo.mullvadExit ? "true" : "false") ~ ",");

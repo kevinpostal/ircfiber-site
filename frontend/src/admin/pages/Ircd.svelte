@@ -58,8 +58,11 @@
   interface LogEntry { ts: number; service: string; severity: string; body: string; }
 
   // service.name is the Docker container name (fluent-bit promotes
-  // container_name). ircd, services and the two bots share this tab.
-  const ircdServices = ['ircfiber-ircd', 'ircfiber-services', 'ircfiber-support-bot', 'ircfiber-logs-bot'];
+  // container_name). ircd, services and the three bots share this tab.
+  const ircdServices = [
+    'ircfiber-ircd', 'ircfiber-services',
+    'ircfiber-support-bot', 'ircfiber-logs-bot', 'ircfiber-fibereye',
+  ];
   let logRows = $state<LogEntry[]>([]);
   let logsError = $state<string | null>(null);
   let logsLoading = $state(false);

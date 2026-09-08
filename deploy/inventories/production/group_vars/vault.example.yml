@@ -54,6 +54,9 @@ vault_ircd_services_link_password: "REPLACE-WITH-RANDOM-32-CHARS"
 # Shared secret for the InspIRCd <-> irc.netcrave.chat server link
 # (custom.conf). Must match the remote side's recvpass/sendpass.
 vault_ircd_netcrave_link_password: "REPLACE-WITH-NETCRAVE-LINK-SECRET"
+# Server-link password for the k3s spanningtree leaf (k8s.ircfiber.com).
+# Shared sendpass/recvpass on both sides of the OVH<->k3s link.
+vault_ircd_k8s_link_password: "REPLACE-WITH-K8S-LINK-SECRET"
 # Host-cloak HMAC key (>= 30 chars). Changing it invalidates existing
 # cloak-based channel bans.
 vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"
@@ -83,10 +86,34 @@ vault_logs_bot_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD"
 # value — never reuse the dashboard or human admin oper password.
 vault_ircd_logs_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
 # ipinfo.io API token, used by the #staff log bot for the geo/ASN report on
-# signup and IRCd-connect IPs (7-day Redis cache). Optional: an empty value
-# makes every connect/signup line render `geo unavailable` and nothing else
-# degrades.
+# signup and IRCd-connect IPs, and by the admin Mullvad page for the ISP/ASN
+# column of each egress slot (both 7-day Redis caches, separate keys).
+# Optional: an empty value makes every connect/signup line render
+# `geo unavailable`, and the Mullvad ISP column falls back to splitting
+# ipinfo's unauthenticated `org` string. Nothing else degrades.
 vault_ipinfo_token: "REPLACE-WITH-IPINFO-TOKEN"
+# NickServ password of the FiberEye nick (fibereye_nick, default FiberEye).
+# Register the nick once from the prod host before the first deploy (see the
+# FiberEye rollout notes); the bot sends
+# `PRIVMSG NickServ :IDENTIFY FiberEye <password>` after 001. Leave empty to
+# skip IDENTIFY (the bot then falls back to FiberEye_ on a 433).
+vault_fibereye_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD"
+# FiberEye oper password: the connection watch OPERs as the "fibereye" oper
+# (ircd_fibereye_oper_name), whose EyeWatch class grants ZLINE + STATS only
+# plus umode +s with snomasks c/q/x, host-locked to the Docker network. The
+# ircd role renders it as an InspIRCd hmac-sha256 hash and the gateway
+# receives it as IRCFIBER_FIBEREYE_OPER_PASSWORD. Use a distinct random
+# value — never reuse the dashboard, log-bot or human admin oper password.
+vault_ircd_fibereye_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
+# Cloudflare Turnstile keypair for the public /unban page (Cloudflare
+# dashboard → Turnstile → Add widget, for the site's own hostname). The site
+# key is rendered into the page and the secret is used server-side for the
+# siteverify call, so both are needed: with either missing the page refuses
+# to release anything and says self-service unban is not configured. Test
+# pair that always passes: 1x00000000000000000000AA /
+# 1x0000000000000000000000000000000AA.
+vault_turnstile_site_key: "REPLACE-WITH-TURNSTILE-SITE-KEY"
+vault_turnstile_secret: "REPLACE-WITH-TURNSTILE-SECRET"
 
 # --- SigNoz query API (admin Logs page) --------------------------------------
 # Service-account API key for the k8s SigNoz (mint in SigNoz UI →

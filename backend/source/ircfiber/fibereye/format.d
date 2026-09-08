@@ -1,0 +1,281 @@
+/**
+ * Pure parsing, IP grouping and Z-line mask matching for FiberEye.
+ *
+ * The connect-notice parser, the connect-class filter and the private-IP
+ * test are reused from `ircfiber.logs.format` rather than re-implemented —
+ * both bots read the same InspIRCd snotices. What is new here is the quit
+ * notice (snomask `q`, which the #staff bot never subscribed to), the IPv6
+ * `/64` grouping FiberEye counts and bans on, and the predicate that
+ * decides whether a live Z-line covers a given visitor's address.
+ *
+ * No IO — covered by `tests/fibereye_test.d`.
+ */
+module ircfiber.fibereye.format;
+
+import std.conv : to;
+import std.path : globMatch;
+import std.string : indexOf, lastIndexOf, split, startsWith, endsWith, strip, toLower;
+
+import ircfiber.support.json : sanitizeLine;
+
+public import ircfiber.logs.format : parseConnectNotice, ConnectNotice, classIgnored,
+    isPrivateIp, GeoInfo;
+
+/// A parsed `*** QUIT: Client exiting: nick!ident@host (ip) [reason]`
+/// server notice (snomask `q`).
+struct QuitNotice {
+    /// True when the notice was a local quit notice and yielded a nick.
+    bool ok;
+    /// Client mask parts.
+    string nick, ident, host;
+    /// Real (uncloaked) IP as the ircd sees it.
+    string ip;
+    /// Quit reason, brackets stripped (may be empty).
+    string reason;
+}
+
+/// Parses an InspIRCd 4 local-quit server notice as delivered to an opered
+/// client with snomask `q`:
+///
+///   `*** QUIT: Client exiting: alice!~alice@h.example (203.0.113.7) [Quit: leaving]`
+///
+/// The reason and the IP are peeled off the tail before the mask is split,
+/// in the same order as `parseConnectNotice`, so an IPv6 address and a
+/// reason containing brackets or parentheses both survive. Anything else
+/// — a connect notice, a remote quit, an unrelated snotice — returns
+/// `ok = false`.
+QuitNotice parseQuitNotice(string text) @safe pure {
+    QuitNotice q;
+    auto t = text.strip();
+    if (t.startsWith("*** ")) t = t[4 .. $].strip();
+    if (t.startsWith("QUIT: ")) t = t["QUIT: ".length .. $].strip();
+
+    enum PREFIX = "Client exiting: ";
+    if (!t.startsWith(PREFIX)) return q;
+    auto tail = t[PREFIX.length .. $].strip();
+
+    // First, not last: the mask and the IP contain no spaces, so the first
+    // " [" after them opens the reason — which may itself contain brackets
+    // and parentheses ("[Quit: bye (really)]").
+    const lb = tail.indexOf(" [");
+    if (lb >= 0 && tail.endsWith("]")) {
+        auto rn = tail[lb + 2 .. $ - 1];
+        // InspIRCd terminates attacker-supplied text with \x0F (reset).
+        while (rn.length && rn[$ - 1] == '\x0F') rn = rn[0 .. $ - 1];
+        q.reason = rn;
+        tail = tail[0 .. lb].strip();
+    }
+
+    const lp = tail.indexOf(" (");
+    if (lp >= 0 && tail.endsWith(")")) {
+        q.ip = tail[lp + 2 .. $ - 1];
+        tail = tail[0 .. lp].strip();
+    }
+
+    const mask = tail.strip();
+    const bang = mask.indexOf('!');
+    const at = mask.lastIndexOf('@');
+    if (!(bang > 0 && bang < at)) return q;
+    q.nick = mask[0 .. bang];
+    q.ident = mask[bang + 1 .. at];
+    q.host = mask[at + 1 .. $];
+
+    q.nick = sanitizeLine(q.nick);
+    q.ident = sanitizeLine(q.ident);
+    q.host = sanitizeLine(q.host);
+    q.ip = sanitizeLine(q.ip);
+    q.reason = sanitizeLine(q.reason);
+    q.ok = q.nick.length > 0;
+    return q;
+}
+
+/// Parses a dotted-quad into its four octets. False for anything else.
+private bool parseIpv4(string ip, out ubyte[4] octets) @safe pure {
+    auto parts = ip.strip().split('.');
+    if (parts.length != 4) return false;
+    foreach (i, p; parts) {
+        if (!p.length || p.length > 3) return false;
+        foreach (ch; p) if (ch < '0' || ch > '9') return false;
+        uint v;
+        try v = p.to!uint;
+        catch (Exception) return false;
+        if (v > 255) return false;
+        octets[i] = cast(ubyte) v;
+    }
+    return true;
+}
+
+/// Expands an IPv6 textual address (including the `::` elision and a
+/// trailing embedded IPv4 quad) to eight hextets. False when `ip` is not
+/// a well-formed IPv6 address.
+bool expandIpv6(string ip, out ushort[8] parts) @safe pure {
+    parts[] = 0;
+    auto s = ip.strip().toLower();
+    if (!s.length) return false;
+    // Drop a zone index ("fe80::1%eth0") — irrelevant to grouping.
+    const pct = s.indexOf('%');
+    if (pct >= 0) s = s[0 .. pct];
+    if (s.indexOf(':') < 0) return false;
+
+    // A trailing dotted quad is rewritten as its two hextets, so the
+    // generic `::`-elision path below handles every remaining form.
+    const lastColon = s.lastIndexOf(':');
+    if (lastColon >= 0 && s[lastColon + 1 .. $].indexOf('.') >= 0) {
+        ubyte[4] o;
+        if (!parseIpv4(s[lastColon + 1 .. $], o)) return false;
+        s = s[0 .. lastColon + 1]
+            ~ hextetString(cast(ushort)((o[0] << 8) | o[1])) ~ ":"
+            ~ hextetString(cast(ushort)((o[2] << 8) | o[3]));
+    }
+
+    string head = s, tailStr;
+    bool elided;
+    const dc = s.indexOf("::");
+    if (dc >= 0) {
+        elided = true;
+        head = s[0 .. dc];
+        tailStr = s[dc + 2 .. $];
+        // A second "::" is invalid.
+        if (tailStr.indexOf("::") >= 0) return false;
+    }
+
+    static bool hextets(string spec, out ushort[] outParts) @safe pure {
+        outParts = null;
+        if (!spec.length) return true;
+        foreach (piece; spec.split(':')) {
+            if (!piece.length || piece.length > 4) return false;
+            ushort v;
+            foreach (ch; piece) {
+                int d;
+                if (ch >= '0' && ch <= '9') d = ch - '0';
+                else if (ch >= 'a' && ch <= 'f') d = ch - 'a' + 10;
+                else return false;
+                v = cast(ushort)((v << 4) | d);
+            }
+            outParts ~= v;
+        }
+        return true;
+    }
+
+    ushort[] left, right;
+    if (!hextets(head, left)) return false;
+    if (!hextets(tailStr, right)) return false;
+
+    const total = left.length + right.length;
+    if (elided) {
+        if (total > 7) return false;   // "::" must stand for at least one group
+    } else {
+        if (total != 8) return false;
+    }
+
+    foreach (i, v; left) parts[i] = v;
+    foreach (i, v; right) parts[8 - right.length + i] = v;
+    return true;
+}
+
+private string hextetString(ushort v) @safe pure {
+    static immutable digits = "0123456789abcdef";
+    if (v == 0) return "0";
+    char[4] buf;
+    size_t n;
+    bool started;
+    foreach_reverse (shift; 0 .. 4) {
+        const nib = (v >> (shift * 4)) & 0xF;
+        if (!started && nib == 0) continue;
+        started = true;
+        buf[n++] = digits[nib];
+    }
+    return buf[0 .. n].idup;
+}
+
+/// The unit FiberEye counts and bans: the exact address for IPv4, the
+/// `/64` for IPv6 — the observed flood rotates addresses inside one /64.
+///
+/// An IPv4-mapped IPv6 address is reduced to the embedded IPv4 address,
+/// and loopback/private/unparsable input is returned stripped but
+/// otherwise unchanged, so a bad parse can never widen into a mask that
+/// covers more than the address it came from.
+///
+///   `76.32.236.21`                              -> `76.32.236.21`
+///   `2603:8001:98f0:1530:691d:b048:970e:1304`   -> `2603:8001:98f0:1530::/64`
+///   `::1`                                       -> `::1`
+string ipGroup(string ip) @safe pure {
+    const s = ip.strip();
+    if (!s.length) return s;
+    if (s.indexOf(':') < 0) return s;               // IPv4 or a hostname
+    // ::ffff:203.0.113.7 → the embedded v4 address is the real client.
+    const lastColon = s.lastIndexOf(':');
+    if (lastColon >= 0 && s[lastColon + 1 .. $].indexOf('.') >= 0) {
+        ubyte[4] o;
+        if (parseIpv4(s[lastColon + 1 .. $], o)) return s[lastColon + 1 .. $].strip();
+    }
+    if (isPrivateIp(s)) return s;
+    ushort[8] p;
+    if (!expandIpv6(s, p)) return s;
+    if (p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 0) return s;
+    return hextetString(p[0]) ~ ":" ~ hextetString(p[1]) ~ ":"
+        ~ hextetString(p[2]) ~ ":" ~ hextetString(p[3]) ~ "::/64";
+}
+
+/// True when the two addresses share their first `bits` bits.
+private bool sameIpv6Prefix(const ushort[8] a, const ushort[8] b, int bits) @safe pure nothrow @nogc {
+    int left = bits;
+    foreach (i; 0 .. 8) {
+        if (left <= 0) break;
+        const take = left >= 16 ? 16 : left;
+        const mask = cast(ushort)(take == 16 ? 0xFFFF : ~((1 << (16 - take)) - 1));
+        if ((a[i] & mask) != (b[i] & mask)) return false;
+        left -= take;
+    }
+    return true;
+}
+
+/// True when an ircd Z-line mask covers `ip`. Handles an exact address, a
+/// `*`/`?` glob and an `a:b:c:d::/64` or `198.51.100.0/24` CIDR.
+///
+/// A catch-all mask is rejected outright: `*`, `0.0.0.0/0` and `::/0` all
+/// return false, because the tokenless `/unban` page treats a match as
+/// "this visitor's own ban" and must never offer to lift a network-wide
+/// Z-line on behalf of one visitor.
+bool zlineMatches(string mask, string ip) @safe pure {
+    const m = mask.strip();
+    const target = ip.strip();
+    if (!m.length || !target.length) return false;
+    if (m == "*" || m == "*@*" || m == "*!*@*") return false;
+
+    const slash = m.lastIndexOf('/');
+    if (slash > 0) {
+        const net = m[0 .. slash].strip();
+        const bitsText = m[slash + 1 .. $].strip();
+        int bits;
+        try bits = bitsText.to!int;
+        catch (Exception) return false;
+        if (bits <= 0) return false;                 // catch-all
+        if (net.indexOf(':') >= 0) {
+            if (bits > 128) return false;
+            ushort[8] a, b;
+            if (!expandIpv6(net, a)) return false;
+            if (!expandIpv6(target, b)) return false;
+            return sameIpv6Prefix(a, b, bits);
+        }
+        if (bits > 32) return false;
+        ubyte[4] na, nb;
+        if (!parseIpv4(net, na)) return false;
+        if (!parseIpv4(target, nb)) return false;
+        const uint va = (na[0] << 24) | (na[1] << 16) | (na[2] << 8) | na[3];
+        const uint vb = (nb[0] << 24) | (nb[1] << 16) | (nb[2] << 8) | nb[3];
+        const uint bitmask = bits == 32 ? 0xFFFF_FFFFu : ~((1u << (32 - bits)) - 1);
+        return (va & bitmask) == (vb & bitmask);
+    }
+
+    if (m.indexOf('*') >= 0 || m.indexOf('?') >= 0) return globMatch(target, m);
+
+    if (m == target) return true;
+    // Two spellings of the same IPv6 address ("2001:db8::1" vs the
+    // expanded form the ircd may print) still describe one host.
+    if (m.indexOf(':') >= 0 && target.indexOf(':') >= 0) {
+        ushort[8] a, b;
+        if (expandIpv6(m, a) && expandIpv6(target, b)) return a == b;
+    }
+    return false;
+}

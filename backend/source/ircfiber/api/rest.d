@@ -134,6 +134,8 @@ final class RESTAPI {
         router.delete_("/api/me", &deleteMe);
         router.get("/api/me/irc-account", &getIrcAccount);
         router.post("/api/me/irc-account/retry", &retryIrcAccount);
+        router.get("/api/me/sessions", &getMySessions);
+        router.delete_("/api/me/sessions/:ref", &revokeMySession);
         router.post("/api/me/pins", &pinChannel);
         router.delete_("/api/me/pins/:network/:channel", &unpinChannel);
         router.post("/api/me/members-collapsed", &updateMembersCollapsed);
@@ -1484,6 +1486,158 @@ final class RESTAPI {
             // payload or skip the merge in favour of its locally-tracked
             // state. See docs/PREF_VERSION.md.
             "prefVersion": Json(prefs.prefVersion)
+        ]));
+    }
+
+    /**
+     * GET /api/me/sessions — the caller's own login sessions, each with the
+     * live WebSocket clients it opened nested underneath (Settings →
+     * Sessions, modelled on IRCCloud's login-sessions table).
+     *
+     * Reads the same `session:<id>` Redis hashes as the admin sessions page
+     * but filtered to `sessionUserId == caller`; the admin route
+     * (`/api/admin/sessions`) deliberately does not filter, so it cannot be
+     * reused here.
+     *
+     * Session ids never leave the server — the id IS the cookie value, so
+     * rows are keyed by the opaque `ref` from `ircfiber.web.sessions_view`.
+     * `?client=<ws session id>` is the caller's own WebSocket session id,
+     * handed to it in the `header` frame, and marks the "Current" client.
+     */
+    private void getMySessions(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.storage.session : RedisSessionStore;
+        import ircfiber.web.admin.helpers : stripJsonStr, parseLongField;
+        import ircfiber.web.sessions_view : LoginSessionRow, LoginClientRow,
+            loginSessionsJson;
+
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        const uid = user.id.toString();
+        const currentSid = req.session ? req.session.id : "";
+        const currentClient = req.query.get("client", "");
+
+        LoginSessionRow[] rows;
+        // Only reached with a live `redis` — `ownedSessions` is empty without one.
+        auto store = new RedisSessionStore(redis);
+        foreach (sid, fields; ownedSessions(user)) {
+            LoginSessionRow row;
+            row.sessionId = sid;
+            if (auto p = "clientIp" in fields) row.clientIp = stripJsonStr(*p);
+            if (auto p = "userAgent" in fields) row.userAgent = stripJsonStr(*p);
+            if (auto p = "createdAt" in fields) row.createdAtMs = parseLongField(*p);
+            if (auto p = "lastAccess" in fields) row.lastAccessMs = parseLongField(*p);
+            row.ttlSeconds = store.sessionTtl(sid);
+            row.current = currentSid.length > 0 && sid == currentSid;
+            rows ~= row;
+        }
+
+        LoginClientRow[] clients;
+        if (sessionManager !is null) {
+            foreach (ref c; sessionManager.clientsForUser(user.id)) {
+                LoginClientRow lc;
+                lc.wsSessionId = c.id.toString();
+                lc.webSessionId = c.webSessionId;
+                lc.connectedAtMs = c.connectedAt.toUnixTime!long * 1000L;
+                lc.clientIp = c.clientIp;
+                lc.userAgent = c.userAgent;
+                lc.current = currentClient.length > 0 && lc.wsSessionId == currentClient;
+                clients ~= lc;
+            }
+        }
+
+        res.writeJsonBody(loginSessionsJson(rows, clients,
+            Clock.currTime.toUnixTime!long * 1000L));
+    }
+
+    /// The login sessions `user` owns, keyed by session id, with the raw
+    /// (still JSON-quoted) hash fields. One `KEYS session:*` + HGETALL per
+    /// key, the same scan the admin sessions page runs; both the listing and
+    /// the revoke path go through here so neither can forget the ownership
+    /// filter.
+    private string[string][string] ownedSessions(User user) {
+        import ircfiber.storage.session : RedisSessionStore;
+        import ircfiber.web.admin.helpers : stripJsonStr;
+
+        string[string][string] owned;
+        if (redis is null) return owned;
+        const uid = user.id.toString();
+        try {
+            auto store = new RedisSessionStore(redis);
+            foreach (sid; store.listAllSessionIds()) {
+                const fields = store.getSessionFields(sid);
+                if (fields is null) continue;
+                auto uidPtr = "sessionUserId" in fields;
+                if (!uidPtr || stripJsonStr(*uidPtr) != uid) continue;
+                owned[sid] = fields.dup;
+            }
+        } catch (Exception e) {
+            logWarn("ownedSessions: session read failed for %s: %s", user.username, e.msg);
+        }
+        return owned;
+    }
+
+    /**
+     * DELETE /api/me/sessions/:ref — sign one of the caller's other browsers
+     * out ("Revoke" in Settings → Sessions).
+     *
+     * `:ref` is the opaque handle from the listing; it is resolved against
+     * the caller's own session ids only (`sessionIdForRef`), so a guessed or
+     * borrowed ref cannot reach someone else's login and no real session id
+     * has to travel to the browser.
+     *
+     * The current session is refused (409) — "sign out" is the button for
+     * that, and killing your own cookie mid-request would leave the page
+     * half-authenticated. Live sockets of the revoked login are cut, because
+     * a WebSocket authenticates once at the handshake and would otherwise
+     * outlive the login it was opened with.
+     */
+    private void revokeMySession(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.storage.session : RedisSessionStore;
+        import ircfiber.web.sessions_view : sessionIdForRef;
+
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+
+        const ref_ = req.params.get("ref", "");
+        if (redis is null) {
+            res.statusCode = 503;
+            res.writeJsonBody(Json(["error": Json("The session store is unavailable")]));
+            return;
+        }
+
+        auto owned = ownedSessions(user);
+        const target = sessionIdForRef(owned.keys, ref_);
+        if (target.length == 0) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("That session no longer exists")]));
+            return;
+        }
+        if (req.session && target == req.session.id) {
+            res.statusCode = 409;
+            res.writeJsonBody(Json([
+                "error": Json("This is the browser you are using — sign out to end it")
+            ]));
+            return;
+        }
+
+        size_t clients;
+        try {
+            (new RedisSessionStore(redis)).destroy(target);
+            if (sessionManager !is null)
+                clients = sessionManager.dropClientsForWebSession(target);
+        } catch (Exception e) {
+            logWarn("revokeMySession: %s failed to revoke a session: %s", user.username, e.msg);
+            res.statusCode = 500;
+            res.writeJsonBody(Json(["error": Json("Could not revoke that session")]));
+            return;
+        }
+        logInfo("user %s revoked login session %s (%s live client(s) dropped)",
+            user.username, ref_, clients);
+        res.writeJsonBody(Json([
+            "revoked": Json(true),
+            "clientsDropped": Json(cast(long) clients)
         ]));
     }
 

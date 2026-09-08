@@ -32,6 +32,8 @@
   import Mullvad from './pages/Mullvad.svelte';
   import Backups from './pages/Backups.svelte';
   import Emails from './pages/Emails.svelte';
+  import FiberEye from './pages/FiberEye.svelte';
+  import FiberEyeIp from './pages/FiberEyeIp.svelte';
   import ToastViewport from './components/ToastViewport.svelte';
   import { current, onChange, navigate, match } from './lib/router';
   import { adminUser, loadMe } from './stores/auth';
@@ -59,6 +61,9 @@
     if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
     if (match('/backups', path)) return { kind: 'backups' } as const;
     if (match('/emails', path)) return { kind: 'emails' } as const;
+    const eyeIpMatch = match('/fibereye/ip/:ip', path);
+    if (eyeIpMatch) return { kind: 'fibereye-ip', ip: decodeURIComponent(eyeIpMatch.ip) } as const;
+    if (match('/fibereye', path)) return { kind: 'fibereye' } as const;
     if (match('/replication', path)) return { kind: 'replication' } as const;
     if (match('/sessions', path)) return { kind: 'sessions' } as const;
     if (match('/bouncer', path)) return { kind: 'bouncer' } as const;
@@ -111,6 +116,10 @@
         <Bouncer />
       {:else if page?.kind === 'logs'}
         <Logs />
+      {:else if page?.kind === 'fibereye-ip'}
+        <FiberEyeIp ip={page.ip} />
+      {:else if page?.kind === 'fibereye'}
+        <FiberEye />
       {:else if page?.kind === 'users-new'}
         <UserNew />
       {:else if page?.kind === 'users-detail'}

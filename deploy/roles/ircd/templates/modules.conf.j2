@@ -76,7 +76,10 @@
 
 <module name="spanningtree">
 
+{% if not ircd_is_leaf %}
 # Incoming link from Anope (container alias "{{ ircd_services_net_alias }}").
+# Leaf servers omit this: the single Anope links to the hub only, and the
+# leaf reaches it across the hub link (<services>/<sasl> below stay on).
 <link name="{{ ircd_services_name }}"
       ipaddr="{{ ircd_services_net_alias }}"
       port="{{ ircd_link_port }}"
@@ -84,6 +87,7 @@
       hidden="no"
       sendpass="{{ vault_ircd_services_link_password }}"
       recvpass="{{ vault_ircd_services_link_password }}">
+{% endif %}
 
 <services server="{{ ircd_services_name }}" silent="yes">
 
@@ -107,11 +111,18 @@
 #-#-#-#-#-#-#-#-#-#-#-#-#-#-#  CHANNELS  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
 
 <module name="permchannels">
+{% if not ircd_is_leaf %}
+# Hub only. A leaf must not persist channels locally: on boot it would
+# re-create them with a fresh TS before the netburst arrives, and the older
+# hub TS would then wipe the local modes. The permchannels module above stays
+# loaded on both sides regardless — chanmode +P is in the mode list CAPAB
+# compares.
 <permchanneldb filename="/inspircd/data/permchannels.conf"
                listmodes="yes"
                saveperiod="5s"
                operonly="yes">
 <include file="/inspircd/data/permchannels.conf" missingokay="yes">
+{% endif %}
 # Seeds these channels on a fresh host only: permchanneldb writes the live
 # modes back to /inspircd/data/permchannels.conf, which is <include>d above
 # (i.e. before these tags) and LoadDatabase skips channels that already
@@ -155,13 +166,36 @@
 
 <module name="connflood">
 <module name="connectban">
-<connectban banmessage="Filtered for connection hammering; wait 64 seconds to retry"
+# The ircd's own first line of defence, retuned to actually fire: at the
+# stock threshold="32" a client can reconnect 31 times per bootwait window
+# and never trip, which is exactly how the observed connect flood sailed
+# through. 8 connects in the window is well above anything a human client
+# does and the ban is short (5m), so a flapping link self-heals.
+# ipv6cidr="64" matches FiberEye's own grouping: the flood rotates
+# addresses inside one /64, so banning a single /128 bans nothing.
+#
+# The key is `banduration`, NOT `duration`. InspIRCd 4 renamed it
+# (examples/modules.example.conf: `banduration="6h"`), and an unknown
+# attribute is ignored SILENTLY with no config warning — verified against
+# 4.11.0, where `duration="300"` and `duration="5m"` both produced a
+# 21600-second Z-line, i.e. the 6-hour default. A five-minute intent
+# would have shipped as a six-hour ban on eight connects.
+#
+# The banmessage MUST keep starting with the literal `FiberEye:` — the
+# backend predicate isAutoPlacedZline() keys on that prefix, and it is
+# what lets the public /unban page lift a machine-placed Z-line while
+# never touching one a human oper set by hand.
+# Safe for our own infrastructure: the ircfiber-engine (inspircd.conf.j2:75),
+# ircfiber-engine-v6 (:104), localhost (:145) and localhost-v6 (:166)
+# connect classes all set useconnectban="no", which is what keeps the
+# ircd's healthcheck from Z-lining the ircd's own source address.
+<connectban banmessage="FiberEye: connection flood detected. Appeal: {{ ircd_appeal_url }}"
+            banduration="5m"
             bootwait="128"
-            duration="64"
             ipv4cidr="32"
-            ipv6cidr="128"
+            ipv6cidr="64"
             splitwait="128"
-            threshold="32">
+            threshold="8">
 <module name="messageflood">
 <messageflood notice="1.0" privmsg="1.0" tagmsg="0.2">
 <module name="joinflood">
@@ -363,3 +397,56 @@
 <override enableumode="yes" noisy="yes" requirekey="yes">
 <module name="showwhois">
 <showwhois opersonly="no" showfromopers="yes">
+
+#-#-#-#-#-#-#-#-#-  ADD-NOW (2026-09-08)  -#-#-#-#-#-#-#-#
+# Approved 2026-09-08. All link-safe: no new chan/user modes, no
+# link-data change (CHANMODES/USERMODES CAPAB diff stays empty).
+# gateway demoted to Consider (engine sends no WEBIRC); vhost dropped
+# (Anope HostServ present); maphide lives on <security> in inspircd.conf.
+<module name="alltime">
+<module name="help">
+<helptopic key="start" title="IRC Fiber Help" value="
+Welcome to IRC Fiber. Useful topics:
+/HELP REGISTER  -  protect your nick with NickServ
+/HELP CHANNELS  -  join and use channels
+/HELP RULES     -  channel rules (same as /RULES)
+/HELP INDEX     -  list all help topics
+">
+<helptopic key="register" title="Registering your nick" value="
+Protect your nickname with NickServ:
+    /msg NickServ REGISTER <password> [email]
+    /msg NickServ HELP
+Once registered, identify on connect:
+    /msg NickServ IDENTIFY <password>
+">
+<helptopic key="channels" title="Using channels" value="
+Join a channel: /join #channelname
+Talk: just type. Commands start with /.
+Found your own: /join #name then /msg ChanServ REGISTER #name
+Support: /join #support
+">
+<helptopic key="rules" title="Channel rules" value="
+Same text as /RULES. Be respectful; no spam, flooding, or abuse;
+no harassment; respect staff decisions. Full list: /RULES
+">
+<module name="hostcycle">
+<module name="httpd">
+<bind address="127.0.0.1" port="8081" type="httpd">
+<module name="httpd_acl">
+# Bind is already loopback-only; the whitelist is defense in depth.
+<httpdacl path="/*" types="whitelist" whitelist="127.0.0.1,::1">
+<module name="httpd_stats">
+<module name="maphide">
+<module name="ircv3_sts">
+# STS verified live 2026-09-08 (CAP LS advertises sts=port=6697); enforcement on.
+<sts host="{{ ircd_server_name }}" port="{{ ircd_port_tls }}" duration="30d" preload="no">
+<module name="ircv3_utf8only">
+<module name="operlog">
+# Server log only (fluent-bit ships it to SigNoz); no snomask noise.
+<operlog tosnomask="no">
+<module name="securelist">
+<securelist exemptregistered="yes" showmsg="yes" waittime="60s">
+<module name="seenicks">
+<module name="showfile">
+<showfile name="RULES" file="/inspircd/conf/rules.txt">
+<module name="starttls">

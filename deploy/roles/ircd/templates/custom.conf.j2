@@ -1,11 +1,12 @@
 # {{ ansible_managed }}
-# Local server links (hub-specific). Included from inspircd.conf.
+# Local server links. Included from inspircd.conf.
 # Rehash (SIGHUP) picks up changes; no restart needed.
 #
 # NOTE: sslprofile must be "main" — it is the only sslprofile defined
 # (modules.conf). There is no "defaultssl" profile; referencing one would
 # fail config parse and the link would never establish.
 
+{% if not ircd_is_leaf %}
 <bind address="*"
       port="4445"
       sslprofile="main"
@@ -25,6 +26,57 @@
 
 <autoconnect period="16s"
              server="irc.netcrave.chat">
+{% if ircd_k8s_link_enabled %}
+
+#-#-#-#-#-#-#-#-#-#-#  k3s LEAF LINK ({{ ircd_k8s_leaf_name }})  -#-#-#-#-#-#-#
+#
+# This hub is the connecting side, so no new <bind> is added here and the
+# link comes up on a plain SIGHUP rehash — no container recreate, no client
+# disconnects. The leaf listens on the k3s node's tailnet address only, so
+# the path is WireGuard-encrypted before InspIRCd's own TLS is applied.
+<link allowmask="{{ ircd_k8s_leaf_ipaddr }}"
+      ipaddr="{{ ircd_k8s_leaf_ipaddr }}"
+      port="{{ ircd_k8s_link_port }}"
+      hidden="no"
+      name="{{ ircd_k8s_leaf_name }}"
+      recvpass="{{ vault_ircd_k8s_link_password }}"
+      sendpass="{{ vault_ircd_k8s_link_password }}"
+      statshidden="no"
+      sslprofile="main"
+      timeout="8s">
+
+<autoconnect period="16s"
+             server="{{ ircd_k8s_leaf_name }}">
+{% endif %}
+{% else %}
+#-#-#-#-#-#-#-#-#-#-#-#-#  HUB LINK ({{ ircd_hub_name }})  -#-#-#-#-#-#-#-#-#-#
+#
+# Leaf side. There is deliberately no <autoconnect> here: the hub dials us,
+# and two autoconnects racing produce a link collision.
+#
+# The listener binds every pod interface, but only the node's tailnet address
+# is mapped to it (Deployment hostPort with hostIP {{ ircd_k8s_leaf_ipaddr }}),
+# so the port is unreachable except from tailnet peers.
+#
+# allowmask lists three ranges because the source address a hostPort
+# connection presents to the pod depends on whether the CNI portmap chain
+# SNATs it: the hub's tailnet address, the k3s pod CIDR, the DinD bridge.
+<bind address="0.0.0.0"
+      port="{{ ircd_k8s_link_port }}"
+      sslprofile="main"
+      type="servers">
+
+<link allowmask="100.64.0.0/10 10.42.0.0/16 172.26.0.0/16"
+      ipaddr="{{ ircd_hub_ipaddr }}"
+      port="{{ ircd_k8s_link_port }}"
+      hidden="no"
+      name="{{ ircd_hub_name }}"
+      recvpass="{{ vault_ircd_k8s_link_password }}"
+      sendpass="{{ vault_ircd_k8s_link_password }}"
+      statshidden="no"
+      sslprofile="main"
+      timeout="8s">
+{% endif %}
 
 {% if ircd_tor_enabled %}
 #-#-#-#-#-#-#-#-#-#-#-#-#  TOR INGRESS (Paige's pattern)  -#-#-#-#-#-#-#

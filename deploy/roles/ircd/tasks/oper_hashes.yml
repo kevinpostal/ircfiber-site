@@ -1,0 +1,103 @@
+---
+# InspIRCd oper password hashes, computed on the controller. Imported by
+# tasks/main.yml (OVH hub) and tasks/k8s_leaf.yml (k3s leaf): the hmac salt
+# label embeds the server name, so every server hashes the same passwords
+# into its own values.
+
+# InspIRCd stores oper passwords as base64(salt)$base64(hmac-sha256).
+# Computed on the controller with the stdlib helper (deterministic salt →
+# stable config → no restart on every deploy).
+- name: Compute InspIRCd hmac-sha256 oper password hash
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/inspircd_hmac.py"
+  environment:
+    INSP_PASSWORD: "{{ vault_ircd_oper_password }}"
+    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_oper_name }}"
+  delegate_to: localhost
+  become: false
+  register: ircd_oper_hash_raw
+  changed_when: false
+  no_log: true
+  # opers.conf is part of the `ircdconf` config-only run, so the hashes it
+  # renders must be computed on that path too.
+  tags: [ircdconf]
+
+- name: Set oper password hash fact
+  ansible.builtin.set_fact:
+    ircd_oper_password_hash: "{{ ircd_oper_hash_raw.stdout | trim }}"
+  no_log: true
+  tags: [ircdconf]
+
+# Dashboard oper (least-privilege class for the admin web UI). Separate
+# credential from the human admin oper so it can be rotated independently;
+# deterministic salt keeps the rendered config stable across deploys.
+- name: Compute InspIRCd hmac-sha256 dashboard oper password hash
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/inspircd_hmac.py"
+  environment:
+    INSP_PASSWORD: "{{ vault_ircd_dashboard_password }}"
+    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_dashboard_oper_name }}"
+  delegate_to: localhost
+  become: false
+  register: ircd_dashboard_oper_hash_raw
+  changed_when: false
+  no_log: true
+  tags: [ircdconf]
+
+- name: Set dashboard oper password hash fact
+  ansible.builtin.set_fact:
+    ircd_dashboard_oper_hash: "{{ ircd_dashboard_oper_hash_raw.stdout | trim }}"
+  no_log: true
+  tags: [ircdconf]
+
+# #staff log bot oper (Snotices class: no commands at all, only umode +s
+# with snomasks c/C so it receives connect server notices). Rotated
+# independently of the human and dashboard opers.
+- name: Compute InspIRCd hmac-sha256 logs oper password hash
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/inspircd_hmac.py"
+  environment:
+    INSP_PASSWORD: "{{ vault_ircd_logs_oper_password }}"
+    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_logs_oper_name }}"
+  delegate_to: localhost
+  become: false
+  register: ircd_logs_oper_hash_raw
+  changed_when: false
+  no_log: true
+  tags: [ircdconf]
+
+- name: Set logs oper password hash fact
+  ansible.builtin.set_fact:
+    ircd_logs_oper_hash: "{{ ircd_logs_oper_hash_raw.stdout | trim }}"
+  no_log: true
+  tags: [ircdconf]
+
+# FiberEye connection-watch oper (EyeWatch class: ZLINE + STATS only, plus
+# umode +s with snomasks c/q/x so it sees every connect and quit). Rotated
+# independently of the human, dashboard and log-bot opers.
+- name: Compute InspIRCd hmac-sha256 FiberEye oper password hash
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/inspircd_hmac.py"
+  environment:
+    INSP_PASSWORD: "{{ vault_ircd_fibereye_oper_password }}"
+    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_fibereye_oper_name }}"
+  delegate_to: localhost
+  become: false
+  register: ircd_fibereye_oper_hash_raw
+  changed_when: false
+  no_log: true
+  tags: [ircdconf]
+
+- name: Set FiberEye oper password hash fact
+  ansible.builtin.set_fact:
+    ircd_fibereye_oper_hash: "{{ ircd_fibereye_oper_hash_raw.stdout | trim }}"
+  no_log: true
+  tags: [ircdconf]

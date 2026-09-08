@@ -1,0 +1,151 @@
+# Nightly disk janitor for the ubuntu-docker node.
+#
+# Why this exists: on 2026-09-07 the node's 1.7T filesystem — shared with the
+# odysseus host, which we have no root on — hit 100%. kubelet raised
+# DiskPressure and every pod on the cluster went Pending for hours (signoz,
+# ircfiber-prod mongo/redis, the backup CronJobs), and the InspIRCd leaf could
+# not schedule at all. Of the space we actually own, ~15G was docker build
+# cache and unused images from native amd64 builds on this node
+# (skill: k3s-remote-native-build) that nothing ever reclaimed.
+#
+# IMPORTANT — this job is PREVENTIVE, not curative. Once DiskPressure is
+# active, kubelet's eviction admission handler rejects every non-critical pod
+# regardless of tolerations ("Pod was rejected: The node had condition:
+# [DiskPressure]"), and a user-defined PriorityClass cannot reach the
+# 2000000000 threshold that marks a pod critical. The toleration below only
+# covers the window where the taint lingers but the condition has already
+# flipped back. Recovering from an active DiskPressure is still manual:
+#   ssh ubuntu@ubuntu-docker "sudo docker builder prune -af; sudo docker image prune -af"
+#
+# What it deliberately does NOT touch:
+#   * volumes — `docker volume prune` would eat the local registry's data
+#     volume, which is the push target for the k8s dev workflow.
+#   * containerd/k3s images — kubelet has its own image GC (imagefs high
+#     threshold), and pruning behind its back only causes re-pulls.
+#   * local-path PVC directories — those are live data (irc3 postgres,
+#     signoz), and stale ones can only be told apart by inspecting PVCs.
+#
+# Namespace is ircfiber-prod for the same reason as cronjob-backup.yaml: the
+# rancher.cattle.io validating webhook fails closed, so no new namespace can
+# be created on this cluster.
+#
+# Apply:   make -f Makefile.k8s k8s-prod-janitor-apply
+# Run now: kubectl -n ircfiber-prod create job --from=cronjob/node-disk-janitor manual-$(date +%s)
+# Log:     kubectl -n ircfiber-prod logs job/<name>
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: node-disk-janitor
+  namespace: ircfiber-prod
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: node-janitor
+spec:
+  schedule: "37 4 * * *"          # 04:37 UTC daily, clear of the 03:17/03:37 backups
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600   # still runs after a node reboot within the hour
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            component: node-janitor
+        spec:
+          restartPolicy: OnFailure
+          # See the header: this only helps while the taint outlives the
+          # condition, but a disk janitor is exactly the workload that must
+          # not wait for headroom.
+          tolerations:
+            - key: node.kubernetes.io/disk-pressure
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: prune
+              # docker CLI only (~15 MB); the daemon is the node's, reached
+              # through the mounted socket.
+              image: docker:27-cli
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -uo pipefail
+                  echo "== before =="
+                  df -h /host-root | tail -1
+
+                  # Build cache is the biggest and safest win: every native
+                  # amd64 build on this node leaves layers behind. 72h keeps
+                  # the cache useful for a day-to-day rebuild loop.
+                  echo "== builder cache (unused > 72h) =="
+                  docker builder prune -af --filter unused-for=72h 2>&1 | tail -2
+
+                  # Images no container references and that are older than a
+                  # week. Anything in active use is untouched, and anything
+                  # needed again is re-pullable or re-buildable.
+                  echo "== images (dangling + unused, older than 168h) =="
+                  docker image prune -af --filter until=168h 2>&1 | tail -2
+
+                  # Exited build/debug containers.
+                  echo "== containers (exited > 24h) =="
+                  docker container prune -f --filter until=24h 2>&1 | tail -2
+
+                  # k3s on this node is started by /usr/local/bin/start.sh as
+                  # `nohup k3s server > /var/log/k3s.log 2>&1 &` — no systemd,
+                  # no journald, and the node ships no logrotate binary, so
+                  # this file grows forever (118M and ~15M/day when measured).
+                  # Truncating in place is safe for an O_APPEND writer: the fd
+                  # stays valid and k3s keeps logging from offset 0.
+                  LOG=/host-log/k3s.log
+                  if [ -f "$LOG" ]; then
+                    SZ=$(wc -c < "$LOG")
+                    echo "== k3s.log: $((SZ / 1048576))Mi =="
+                    if [ "$SZ" -gt 536870912 ]; then
+                      tail -c 33554432 "$LOG" > /tmp/k3s.tail
+                      cat /tmp/k3s.tail > "$LOG"
+                      rm -f /tmp/k3s.tail
+                      echo "k3s.log truncated to its last 32Mi"
+                    fi
+                  fi
+
+                  echo "== after =="
+                  df -h /host-root | tail -1
+                  # Loud, greppable line for the node's own history.
+                  AVAIL=$(df -Pk /host-root | tail -1 | awk '{print $4}')
+                  echo "node-disk-janitor: done, $((AVAIL / 1048576))Gi available on /"
+              volumeMounts:
+                - name: docker-sock
+                  mountPath: /var/run/docker.sock
+                - name: host-root
+                  mountPath: /host-root
+                  readOnly: true
+                - name: host-log
+                  mountPath: /host-log
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: "1"
+                  memory: 256Mi
+          volumes:
+            # The node's DinD engine. Mounting its socket is equivalent to
+            # root on the node, which is why this job runs nothing but prune
+            # subcommands with explicit age filters.
+            - name: docker-sock
+              hostPath:
+                path: /var/run/docker.sock
+                type: Socket
+            # Read-only, only so df reports the node filesystem rather than
+            # the container's own overlay.
+            - name: host-root
+              hostPath:
+                path: /
+                type: Directory
+            # Read-write, and ONLY /var/log: the k3s.log truncation above is
+            # the single mutation this job makes outside the docker engine.
+            - name: host-log
+              hostPath:
+                path: /var/log
+                type: Directory

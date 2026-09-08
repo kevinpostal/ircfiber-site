@@ -5,6 +5,7 @@
   import SettingsAccount from './SettingsAccount.svelte';
   import SettingsNotifications from './SettingsNotifications.svelte';
   import SettingsChat from './SettingsChat.svelte';
+  import SettingsSessions from './SettingsSessions.svelte';
 
 
   let tab = $state<SettingsTab>(ircState.settingsTab);
@@ -61,6 +62,13 @@
         class:active={tab === 'chat'}
         onclick={() => switchTab('chat')}
       >Chat &amp; embeds</button>
+      <button
+        role="tab"
+        aria-selected={tab === 'sessions'}
+        class="settings-tab"
+        class:active={tab === 'sessions'}
+        onclick={() => switchTab('sessions')}
+      >Sessions</button>
 
     </div>
     <button class="settings-done" onclick={close}>Done</button>
@@ -69,11 +77,15 @@
     {#if tab === 'design'}
       <SettingsDesign />
     {:else if tab === 'account'}
-      <SettingsAccount />
+      <!-- `switchTab` so the Account card's "Login sessions" button opens the
+           Sessions tab (and its URL) instead of navigating away. -->
+      <SettingsAccount onNavigate={switchTab} />
     {:else if tab === 'notifications'}
       <SettingsNotifications />
     {:else if tab === 'chat'}
       <SettingsChat />
+    {:else if tab === 'sessions'}
+      <SettingsSessions />
     {/if}
   </div>
 </div>

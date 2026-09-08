@@ -1,0 +1,100 @@
+---
+# IRC Fiber — kubelet tuning for the ubuntu-docker k3s node.
+#
+#   cd site/deploy && ansible-playbook playbooks/k3s-node-tune.yml
+#
+# Why this exists (2026-09-07): the node's root filesystem is the odysseus
+# host's 1.7T disk, which we do not control and which routinely sits above
+# 95%. kubelet's eviction threshold is a PERCENTAGE of that whole disk, so
+# "5% free" means 93G — more than everything the cluster itself stores. When
+# it trips, kubelet raises DiskPressure and rejects EVERY non-critical pod
+# (tolerations do not help: the eviction admission handler only exempts pods
+# with priority >= 2000000000, which no user-defined PriorityClass can reach),
+# and the whole cluster sits Pending until someone frees host space.
+#
+# `kubelet-arg: eviction-hard=...` in /etc/rancher/k3s/config.yaml does NOT
+# work here and was already tried: k3s renders its own kubelet config into
+# /var/lib/rancher/k3s/agent/etc/kubelet.conf.d/00-k3s-defaults.conf with
+# `evictionHard: {nodefs.available: 5%, imagefs.available: 5%}`, and that
+# config-dir value wins over the deprecated flag. Verified: with the 3% flag
+# in place, the eviction manager was still reclaiming ephemeral-storage at
+# 4.76% free. The supported override is another drop-in that sorts after it.
+#
+# k3s on this node is not under systemd — /usr/local/bin/start.sh launches it
+# with `nohup k3s server > /var/log/k3s.log 2>&1 &` — so the restart handler
+# reproduces exactly that, then waits for the API to answer.
+- name: Tune kubelet eviction on the k3s node
+  hosts: ircfiber_k3s
+  become: true
+  gather_facts: false
+  vars:
+    k3s_kubelet_conf_d: /var/lib/rancher/k3s/agent/etc/kubelet.conf.d
+  tasks:
+    - name: Install the kubelet eviction drop-in
+      ansible.builtin.copy:
+        dest: "{{ k3s_kubelet_conf_d }}/10-ircfiber-eviction.conf"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # Managed by playbooks/k3s-node-tune.yml — see that file for why.
+          #
+          # Sorts after 00-k3s-defaults.conf, so these values replace k3s'
+          # 5%/5%. 2% of this 1.87T filesystem is still a ~37G reserve, which
+          # is more than the entire cluster's own footprint, while 5% (93G)
+          # was unreachable on a disk shared with the odysseus host.
+          # nodefs.inodesFree is carried explicitly: setting evictionHard
+          # replaces the whole map, and an inode-exhaustion guard is worth
+          # keeping.
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          evictionHard:
+            nodefs.available: 2%
+            imagefs.available: 2%
+            nodefs.inodesFree: 3%
+      notify: Restart k3s
+
+    # The drop-in only takes effect on a kubelet start, so allow an explicit
+    # bounce when the file is already correct but the running kubelet is not:
+    #   ansible-playbook playbooks/k3s-node-tune.yml -e k3s_force_restart=true
+    - name: Request a k3s restart
+      ansible.builtin.command:
+        argv: [/bin/true]
+      changed_when: true
+      notify: Restart k3s
+      when: k3s_force_restart | default(false) | bool
+
+  handlers:
+    # kubelet reads its config once at start-up; k3s embeds kubelet, so the
+    # whole server has to come back. Everything on this node is a Deployment,
+    # StatefulSet or CronJob, so nothing is lost by the bounce.
+    - name: Restart k3s
+      ansible.builtin.shell:
+        cmd: |
+          set -u
+          # The process' comm is "k3s-server", NOT "k3s": `pkill -x k3s`
+          # matches nothing and silently leaves the old kubelet running with
+          # the old config (observed 2026-09-07). Match the full argv instead.
+          pkill -f '^/usr/local/bin/k3s server$' || true
+          for i in $(seq 1 60); do
+            pgrep -f '^/usr/local/bin/k3s server$' >/dev/null || break
+            sleep 1
+          done
+          if pgrep -f '^/usr/local/bin/k3s server$' >/dev/null; then
+            echo "k3s still running after SIGTERM; refusing to start a second one"
+            exit 1
+          fi
+          # Exactly how /usr/local/bin/start.sh launches it (no systemd here).
+          nohup k3s server >> /var/log/k3s.log 2>&1 &
+          for i in $(seq 1 120); do
+            if k3s kubectl get --raw /readyz >/dev/null 2>&1; then
+              echo "k3s ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "k3s did not answer /readyz within 120s"
+          tail -n 30 /var/log/k3s.log
+          exit 1
+        executable: /bin/bash
+      changed_when: true

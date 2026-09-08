@@ -26,6 +26,7 @@
 # entrypoint on first boot (self-signed, CN={{ ircd_server_name }}).
 <bind address="" port="{{ ircd_port_tls }}" type="clients" sslprofile="main">
 
+{% if not ircd_is_leaf %}
 # Server-to-server listener for the Anope link. Not published to the
 # host; only reachable from {{ docker_ircfiber_subnet }}.
 <bind address="" port="{{ ircd_link_port }}" type="servers">
@@ -41,7 +42,10 @@
       port="{{ ircd_link_port }}"
       sendpass="{{ vault_ircd_services_link_password }}"
       recvpass="{{ vault_ircd_services_link_password }}">
+{% endif %}
 
+# <uline> must be declared on every server on the network, leaf included:
+# it is what grants Anope SVSJOIN/SASL/kill-shield rights here.
 <uline server="{{ ircd_services_name }}">
 
 #-#-#-#-#-#-#-#-#-#-  CONNECTIONS CONFIGURATION  -#-#-#-#-#-#-#-#-#-#-#
@@ -70,6 +74,7 @@
          usednsbl="no"
          useconnectban="no"
          useconnflood="no"
+         usests="no"
 {% if ircd_require_sasl %}
          requireaccount="yes"
 {% endif %}
@@ -98,6 +103,7 @@
          usednsbl="no"
          useconnectban="no"
          useconnflood="no"
+         usests="no"
 {% if ircd_require_sasl %}
          requireaccount="yes"
 {% endif %}
@@ -254,6 +260,7 @@
           hideservicekills="yes"
           hideulines="yes"
           customversion="{{ ircd_custom_version }}"
+          maphide="https://ircfiber.com/network"
           maxtargets="20"
           restrictbannedusers="yes"
           genericoper="no"

@@ -11,6 +11,7 @@ import std.process : environment;
 import std.string : indexOf, replace, split;
 
 import core.sync.mutex : Mutex;
+import core.time : seconds;
 
 import vibe.core.log;
 import vibe.core.sync : createSharedManualEvent, ManualEvent;
@@ -28,7 +29,11 @@ import ircfiber.models.network : Network;
 /// a user being erased — they are keyed by session id, not by user.
 enum WS_SESSION_KEY_PREFIX = "ws_session:";
 package enum JWT_TTL_SECONDS = 90 * 24 * 60 * 60; // 90 days — matches RedisSessionStore.TTL_SECONDS
-private enum WS_SESSION_TTL_SECONDS = 90 * 24 * 60 * 60;
+/// A client whose last inbound frame is older than this is treated as gone
+/// by `SessionManager.clientsForUser`. The frontend acks unconditionally
+/// every 5 s (`startAckTimer`), so this is 30 missed beats — long enough
+/// that a throttled background tab is never mistaken for a dead one.
+private enum CLIENT_STALE_AFTER = 150.seconds;
 
 /// Returns JWT TTL from centralized config (single source of truth)
 long getJwtTtlSeconds() @trusted {
@@ -316,6 +321,19 @@ struct SessionStats {
     size_t ghosts;
 }
 
+/// One live WebSocket connection of a user, as reported to that user by
+/// `GET /api/me/sessions`. A flat copy taken under the manager's mutex so
+/// callers never touch the live map (or the socket) off-fiber.
+struct LiveClientInfo {
+    /// WebSocket session id — not a credential, unlike the login session id.
+    UUID id;
+    /// Login session the socket authenticated with; "" when unknown.
+    string webSessionId;
+    string clientIp;
+    string userAgent;
+    SysTime connectedAt;
+}
+
 /// Active WebSocket session for a user.
 struct UserSession {
     /// Session unique identifier.
@@ -336,6 +354,23 @@ struct UserSession {
     string activeNetworkId;
     /// Currently selected channel name.
     string activeChannel;
+    /// Login (vibe.d) session id this socket authenticated with — i.e. the
+    /// browser that owns the connection. Empty when the handshake carried no
+    /// session cookie. `GET /api/me/sessions` groups live clients under the
+    /// login session that opened them, the way IRCCloud nests its client
+    /// rows under a login row.
+    string webSessionId;
+    /// Client IP of the WebSocket handshake, proxy-aware (`getClientIp`).
+    /// Distinct from the login IP: a session outlives the network it was
+    /// created on, so the tab connected from may sit behind another address.
+    string clientIp;
+    /// `User-Agent` sent with the WebSocket handshake.
+    string userAgent;
+    /// Last inbound frame from this client (the 5 s `ack` heartbeat, or any
+    /// command). `SysTime.init` while the client has sent nothing yet.
+    /// Only used to decide whether the socket is a live tab or a half-open
+    /// leftover; see `SessionManager.clientsForUser`.
+    SysTime lastSeenAt;
     /// Cross-thread notification fired by `sendToSession` after each
     /// `outbound.put()`. The drainer pump in
     /// `ircfiber.api.websocket.drainOutboundBatch` waits on this
@@ -414,7 +449,13 @@ final class SessionManager {
 
     /// Creates a new session for a user.
     /// If Redis is configured, the session is also persisted to Redis with TTL.
-    UserSession createSession(User user, WebSocket ws) {
+    ///
+    /// `webSessionId` / `clientIp` / `userAgent` describe the handshake that
+    /// opened the socket; they are what the user's own "Login sessions" page
+    /// shows as an active client. Defaulted so non-HTTP callers (tests) stay
+    /// unchanged.
+    UserSession createSession(User user, WebSocket ws, string webSessionId = "",
+                              string clientIp = "", string userAgent = "") {
         auto session = UserSession(
             id: randomUUID(),
             user: user,
@@ -422,6 +463,9 @@ final class SessionManager {
             connectedAt: Clock.currTime,
             lastSequence: 0,
             isActive: true,
+            webSessionId: webSessionId,
+            clientIp: clientIp,
+            userAgent: userAgent,
             lastDeliveredEid: 0,
             lastEnqueuedEid: 0,
             outbound: RingBuffer!string(65_536),
@@ -506,6 +550,83 @@ final class SessionManager {
         synchronized (m_mutex) {
             return id in sessions;
         }
+    }
+
+    /// Live WebSocket connections owned by `userId`, newest first.
+    ///
+    /// Read from the in-memory map, never from the `ws_session:*` Redis
+    /// blobs: those are written at create time with a 90-day TTL and only
+    /// deleted on a clean disconnect, so a crashed gateway would leave them
+    /// claiming clients that are long gone.
+    ///
+    /// `isActive` alone is not enough either: a page that goes away without
+    /// a close frame leaves a ghost entry (the same ones `/api/health`
+    /// counts) whose flag is still true and whose socket keeps reporting
+    /// `connected` until TCP gives up. So a client counts as live only while
+    /// its last inbound frame — the frontend's unconditional 5 s `ack`
+    /// heartbeat — is inside `CLIENT_STALE_AFTER`, measured from the
+    /// handshake until the first frame lands.
+    ///
+    /// Single-process view: with `gateway_replica_count > 1` each replica
+    /// only sees the sockets it terminates.
+    LiveClientInfo[] clientsForUser(UUID userId) {
+        LiveClientInfo[] out_;
+        const now = Clock.currTime;
+        synchronized (m_mutex) {
+            foreach (ref s; sessions.byValue) {
+                if (s.user.id != userId || !s.isActive) continue;
+                bool live = false;
+                try live = s.socket !is null && s.socket.connected;
+                catch (Exception) {}
+                if (!live) continue;
+                const seen = s.lastSeenAt == SysTime.init ? s.connectedAt : s.lastSeenAt;
+                if (now - seen > CLIENT_STALE_AFTER) continue;
+                out_ ~= LiveClientInfo(s.id, s.webSessionId, s.clientIp,
+                                       s.userAgent, s.connectedAt);
+            }
+        }
+        import std.algorithm.sorting : sort;
+        out_.sort!((a, b) => a.connectedAt > b.connectedAt);
+        return out_;
+    }
+
+    /// Records an inbound frame from a client. Called from the WebSocket
+    /// read loop, so it must stay cheap: one map lookup under the mutex.
+    void touchClient(UUID sessionId) {
+        const now = Clock.currTime;
+        synchronized (m_mutex) {
+            if (auto p = sessionId in sessions) p.lastSeenAt = now;
+        }
+    }
+
+    /// Cuts every live client that authenticated with `webSessionId`, for
+    /// "Revoke" in Settings → Sessions. Returns how many sockets were closed.
+    ///
+    /// Destroying the Redis login row alone is not enough: a WebSocket is
+    /// authenticated once, at the handshake, so an already-open tab would
+    /// keep streaming and keep sending commands on a login the user just
+    /// revoked. The socket is closed with 1008 (policy violation), the same
+    /// code the handshake uses when it rejects a bad session, so the client
+    /// treats it as an auth failure rather than a transient drop.
+    size_t dropClientsForWebSession(string webSessionId) {
+        if (webSessionId.length == 0) return 0;
+        UUID[] doomed;
+        WebSocket[] sockets;
+        synchronized (m_mutex) {
+            foreach (ref s; sessions.byValue) {
+                if (s.webSessionId != webSessionId) continue;
+                doomed ~= s.id;
+                if (s.socket !is null) sockets ~= s.socket;
+            }
+        }
+        // Outside the mutex: destroySession takes it, and closing a socket
+        // wakes the fiber blocked in its read loop.
+        foreach (id; doomed) destroySession(id);
+        foreach (sock; sockets) {
+            try sock.close(1008, "Session revoked");
+            catch (Exception e) logDebug("dropClientsForWebSession: close failed: %s", e.msg);
+        }
+        return doomed.length;
     }
 
     /// Restores a session from Redis into the in-memory map.

@@ -13,6 +13,29 @@
       - "{{ ircd_container_name }}"
   changed_when: true
 
+# Same contract as `Rehash ircd`, addressed through kubectl: config lives on
+# the node as a hostPath, so the pod already sees the new bytes and only
+# needs the signal. Handlers flush after the rollout task, so the pod is
+# Ready by the time this runs.
+- name: Rehash k8s ircd
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --context
+      - "{{ ircd_k8s_context }}"
+      - --namespace
+      - "{{ ircd_k8s_namespace }}"
+      - exec
+      - deployment/ircfiber-ircd-k8s
+      - --
+      - pkill
+      - -HUP
+      - -x
+      - inspircd
+  delegate_to: localhost
+  become: false
+  changed_when: true
+
 - name: Restart services
   community.docker.docker_container:
     name: "{{ ircd_services_container_name }}"

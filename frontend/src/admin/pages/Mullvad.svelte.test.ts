@@ -47,7 +47,12 @@ const slot = (over: Record<string, unknown> = {}) => ({
   id: 'de', label: 'de', host: 'tailscale-mullvad-de', port: 1055,
   socksUrl: 'socks5://tailscale-mullvad-de:1055', ip: '10.0.0.5',
   container: 'tailscale-mullvad-de', containerState: 'running', containerStatus: 'Up 2 hours',
-  tailscaleExitNode: '', ipinfo: { ip: '151.241.171.69', city: 'Berlin', region: '', country: 'Germany', loc: '', org: '', postal: '', timezone: '', hostname: '' },
+  tailscaleExitNode: '',
+  ipinfo: {
+    ip: '151.241.171.69', city: 'Berlin', region: '', country: 'Germany', loc: '',
+    org: 'AS39351 31173 Services AB', postal: '', timezone: '', hostname: '',
+    asn: 'AS39351', asnName: '31173 Services AB', asnDomain: '31173.se',
+  },
   healthy: true, error: '', lastTestedAt: new Date().toISOString(),
   mullvadExit: true, mullvadHostname: 'de-ber-wg-003', organization: 'Mullvad VPN AB',
   locationId: 'de-ber', city: 'Berlin', country: 'Germany', state: 'ready',
@@ -56,7 +61,17 @@ const slot = (over: Record<string, unknown> = {}) => ({
 });
 
 const fixture = (over: Record<string, unknown> = {}) => ({
-  pool: [slot(), slot({ id: 'ch', label: 'ch', container: 'tailscale-mullvad-ch', locationId: 'ch-zrh', city: 'Zurich', country: 'Switzerland', activeConns: 0, mullvadExit: false, organization: 'PebbleHost Ltd', mullvadHostname: '' })],
+  pool: [slot(), slot({
+    id: 'ch', label: 'ch', container: 'tailscale-mullvad-ch', locationId: 'ch-zrh',
+    city: 'Zurich', country: 'Switzerland', activeConns: 0, mullvadExit: false,
+    organization: 'PebbleHost Ltd', mullvadHostname: '',
+    // No token / Lite answer for this slot: only the Core `org` string, which
+    // the page must still show rather than falling back to a dash.
+    ipinfo: {
+      ip: '185.206.149.176', city: 'Zurich', region: '', country: 'Switzerland', loc: '',
+      org: 'AS25369 Hostinger International Limited', postal: '', timezone: '', hostname: '',
+    },
+  })],
   count: 2,
   poolRaw: 'socks5://de@tailscale-mullvad-de:1055,socks5://ch@tailscale-mullvad-ch:1055',
   poolCount: 2, desiredCount: 2,
@@ -147,6 +162,19 @@ describe('Mullvad.svelte', () => {
     expect(body).toContain('PebbleHost Ltd');
     // Header stat: 1 of 2 verified.
     expect(body).toContain('1/2');
+  });
+
+  it('names the ISP and AS number behind every exit', async () => {
+    await mount();
+
+    // The point of the column: "which operator does the world see this exit
+    // as", which is how a slot silently leaving the tunnel gets caught.
+    const body = document.body.innerText;
+    expect(body).toContain('31173 Services AB');
+    expect(body).toContain('AS39351');
+    expect(body).toContain('31173.se');
+    // The ch slot has no Lite answer, only ipinfo's raw `org` — still shown.
+    expect(body).toContain('AS25369 Hostinger International Limited');
   });
 
   it('drives a real IRC registration through a slot and reports the server', async () => {

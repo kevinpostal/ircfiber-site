@@ -1,0 +1,116 @@
+extends layout
+
+block head
+  link(rel="stylesheet", href="/public/style.css")
+  //- Only the overlay + auth-card subset of the landing CSS: this page has
+  //- no business rendering a fake channel behind a ban notice. login.dt,
+  //- register.dt and verify.dt each carry their own copy of this block;
+  //- duplicating the needed subset is the house pattern.
+  style.
+    :root {
+      --bg:           #000;
+      --surface:      #111;
+      --line:         #222;
+      --ink:          #d1d5db;
+      --ink-soft:     #8b949e;
+      --ink-muted:    #525252;
+      --accent:       #3291ff;
+      --green:        #3fb950;
+      --orange:       #d29922;
+    }
+    html, body {
+      background: var(--bg); color: var(--ink);
+      margin: 0; padding: 0; overflow: hidden; height: 100%;
+    }
+    * { font-family: 'Hack', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace; }
+
+    .landing-overlay {
+      position: fixed; inset: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      animation: fade-in 0.2s ease-out;
+    }
+    .auth-card {
+      width: 100%; max-width: 400px;
+      background: #0a0a0a;
+      border: 1px solid var(--line);
+      padding: 2.5rem;
+      animation: rise 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .auth-brand { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 2rem; text-decoration: none; }
+    .auth-brand svg { display: block; }
+    .auth-brand .t { font-size: 18px; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; }
+    .auth-brand .f { color: var(--accent); }
+    .auth-heading { text-align: center; font-size: 16px; font-weight: 700; color: var(--ink); margin: 0 0 4px; letter-spacing: -0.01em; }
+    .auth-sub { text-align: center; font-size: 12px; color: var(--ink-muted); margin: 0 0 2rem; line-height: 1.5; }
+    .auth-error { display: flex; align-items: flex-start; gap: 6px; padding: 8px 10px; margin-bottom: 16px; background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.2); color: #f87171; font-size: 11px; line-height: 1.4; }
+    .auth-error::before { content: "!"; flex: 0 0 16px; width: 16px; height: 16px; border-radius: 50%; background: #f87171; color: #000; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 10px; }
+    .auth-form { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+    .auth-button { width: 100%; padding: 10px 16px; margin-top: 6px; background: var(--accent); color: #fff; border: none; font-size: 13px; font-weight: 700; cursor: pointer; letter-spacing: 0.02em; transition: background 0.15s ease; }
+    .auth-button:hover { background: #4a9eff; }
+    .auth-button:active { opacity: 0.9; }
+    .auth-meta { display: flex; align-items: center; justify-content: center; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-muted); }
+    .auth-meta a { color: var(--accent); text-decoration: none; }
+    .auth-meta a:hover { text-decoration: underline; }
+    .auth-foot { text-align: center; margin-top: 1.5rem; font-size: 10px; color: var(--ink-muted); letter-spacing: 0.05em; }
+    .unban-mask { display: block; text-align: center; margin: 0 0 1.5rem; padding: 8px 10px; background: #000; border: 1px solid var(--line); color: var(--ink); font-size: 12px; word-break: break-all; }
+    .unban-ok { text-align: center; font-size: 12px; color: var(--green); margin: 0 0 1rem; line-height: 1.5; }
+
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 640px) { .auth-card { padding: 1.5rem; } }
+    @media (prefers-reduced-motion: reduce) { .landing-overlay, .auth-card { animation: none !important; } }
+
+block body
+  .landing-overlay
+    .auth-card
+      .auth-brand
+        svg(width="22", height="22", viewBox="0 0 20 20", fill="none", xmlns="http://www.w3.org/2000/svg")
+          rect(x="1", y="3", width="18", height="14", rx="2", fill="#3291ff", opacity="0.9")
+          path(d="M5 7h10M5 10h7M5 13h4", stroke="#000", stroke-width="1.5", stroke-linecap="round")
+        span.t IRC&thinsp;<span class="f">Fiber</span>
+      - if (stage == "offer")
+        h1.auth-heading Remove your ban
+        p.auth-sub Your address was banned automatically for connecting too often. Confirm you're human and we'll lift it right away.
+        code.unban-mask #{mask}
+        - if (expires.length)
+          p.auth-sub Left alone, it would expire on its own in #{expires}.
+        - if (message.length)
+          .auth-error(role="alert") #{message}
+        - if (siteKey.length)
+          form.auth-form(method="POST", action=formAction)
+            .cf-turnstile(data-sitekey=siteKey)
+            button.auth-button(type="submit") Remove the ban
+        - else
+          p.auth-sub Self-service unban is not enabled on this server. Please ask staff in #support to lift it.
+        .auth-meta
+          a(href="/") Back to IRC Fiber &rarr;
+      - else if (stage == "released")
+        h1.auth-heading Ban removed
+        p.unban-ok #{message}
+        code.unban-mask #{mask}
+        .auth-meta
+          a(href="/") Open IRC Fiber &rarr;
+      - else if (stage == "limited")
+        h1.auth-heading Too many attempts
+        .auth-error(role="alert") #{message}
+        .auth-meta
+          a(href="/") Back to IRC Fiber &rarr;
+      - else if (stage == "none")
+        h1.auth-heading Nothing to remove
+        p.auth-sub #{message}
+        .auth-meta
+          a(href="/") Open IRC Fiber &rarr;
+      - else
+        h1.auth-heading Something went wrong
+        .auth-error(role="alert") #{message}
+        .auth-meta
+          a(href="/") Back to IRC Fiber &rarr;
+
+      p.auth-foot // fibre.always.connected
+
+block scripts
+  script(src="https://challenges.cloudflare.com/turnstile/v0/api.js", async, defer)

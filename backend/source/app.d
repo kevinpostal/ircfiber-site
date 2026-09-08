@@ -182,6 +182,10 @@ void main() {
     // IRCFIBER_LOGS_BOT_ENABLED=1 (prod: the ircfiber-logs-bot container).
     import ircfiber.logs.bot : startLogsBot;
     startLogsBot();
+    // FiberEye connection watch — same image, only runs where
+    // IRCFIBER_FIBEREYE_ENABLED=1 (prod: the ircfiber-fibereye container).
+    import ircfiber.fibereye.bot : startFiberEye;
+    startFiberEye();
 
     auto adminController = new AdminController(redis);
     adminController.registerRoutes(router);

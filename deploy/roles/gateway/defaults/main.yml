@@ -82,3 +82,10 @@ logs_bot_memory_limit: "256m"
 logs_bot_memory_reservation: "64m"
 logs_bot_cpus: 0.5
 logs_bot_oom_score_adj: 500
+
+# Same shape as the log bot: one IRC connection plus Mongo writes per
+# connect, so the same half core and 256 MiB cap.
+fibereye_memory_limit: "256m"
+fibereye_memory_reservation: "64m"
+fibereye_cpus: 0.5
+fibereye_oom_score_adj: 500

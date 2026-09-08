@@ -127,6 +127,34 @@ private void testGeoClauses() {
     check(geoShort(GeoInfo.init) == "", "empty geo renders nothing");
 }
 
+private void testAsnFromOrg() {
+    // Core-endpoint shape: "AS<n> <operator>". The operator name is what the
+    // admin Mullvad page shows as the ISP, so the split must not eat it.
+    auto a = asnFromOrg("AS39351 31173 Services AB");
+    check(a.ok && a.asn == "AS39351" && a.name == "31173 Services AB",
+        "AS head split, got " ~ a.asn ~ "/" ~ a.name);
+    check(a.domain == "", "Core org carries no domain");
+
+    // am.i.mullvad.net's `organization` has no AS head — the whole value is
+    // the operator, and inventing an ASN from it would be a lie.
+    auto plain = asnFromOrg("Mullvad VPN AB");
+    check(plain.ok && plain.asn == "" && plain.name == "Mullvad VPN AB",
+        "no AS head keeps the whole string as the operator, got " ~ plain.asn ~ "/" ~ plain.name);
+
+    // "AS" is only an ASN when digits follow it: an operator may legitimately
+    // start with those two letters.
+    auto assist = asnFromOrg("ASSIST Networks Ltd");
+    check(assist.asn == "" && assist.name == "ASSIST Networks Ltd",
+        "AS prefix without digits is a name, got " ~ assist.asn ~ "/" ~ assist.name);
+
+    auto bare = asnFromOrg("  AS15169  ");
+    check(bare.ok && bare.asn == "AS15169" && bare.name == "",
+        "number with no operator, got " ~ bare.asn ~ "/" ~ bare.name);
+
+    check(!asnFromOrg("   ").ok, "blank org yields nothing");
+    check(!asnFromOrg("").ok, "empty org yields nothing");
+}
+
 private LogEvent signupEvent() {
     LogEvent ev;
     ev.type = "signup";
@@ -278,6 +306,7 @@ void main() {
     testClassIgnored();
     testIsPrivateIp();
     testGeoClauses();
+    testAsnFromOrg();
     testFormatSignup();
     testFormatMail();
     testFormatConnect();

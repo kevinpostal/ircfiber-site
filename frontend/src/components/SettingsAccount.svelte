@@ -1,9 +1,15 @@
 <script lang="ts">
-  import { ircState } from '../stores/ircStore.svelte';
+  import { ircState, type SettingsTab } from '../stores/ircStore.svelte';
   import { highlightWords } from '../stores/preferences.svelte';
   import { onMount } from 'svelte';
   import { changePassword, deleteAccount, uploadAvatar, removeAvatar, fetchIrcAccount, retryIrcAccount, type IrcAccountInfo } from '../stores/api';
   import SettingsSection from './SettingsSection.svelte';
+
+  // Supplied by SettingsPage so the row below can switch to the Sessions tab
+  // (and its `?/settings=sessions` URL). Defaults to a no-op because the
+  // component is also mounted bare in tests.
+  let { onNavigate = (_tab: SettingsTab) => {} }:
+    { onNavigate?: (tab: SettingsTab) => void } = $props();
 
   let highlightInput = $state('');
   let showDeleteConfirm = $state(false);
@@ -184,6 +190,16 @@
       </div>
       <div class="settings-control">
         <span class="settings-value">{ircState.me?.email || '…'}</span>
+      </div>
+    </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span class="settings-label-text">Login sessions</span>
+        <span class="settings-label-desc">See every browser signed in to this account, its login IP and the tabs it has connected</span>
+      </div>
+      <div class="settings-control">
+        <button class="settings-btn settings-btn--secondary settings-btn--small"
+                onclick={() => onNavigate('sessions')}>Review sessions</button>
       </div>
     </div>
   </div>

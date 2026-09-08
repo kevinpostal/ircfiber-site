@@ -428,7 +428,36 @@ ansible-playbook playbooks/gateway.yml -t logs-bot         # (re)creates ircfibe
 docker logs ircfiber-logs-bot | grep -E 'opered|joined #staff'
 ```
 
-`vault_ipinfo_token` is optional: without it every geo clause reads `geo unavailable` and nothing else degrades. `vault_ircd_logs_oper_password` is **not** optional — the ircd role asserts it, so a missing value fails the play before anything is rendered.
+`vault_ipinfo_token` is optional: without it every geo clause reads `geo unavailable` and the admin Mullvad page's ISP/ASN column degrades to whatever the unauthenticated `org` string carried — nothing else. The token feeds two endpoints: Core (`/<ip>/json`) for the geo report here, and Lite (`api.ipinfo.io/lite/<ip>`) for that ISP/ASN column, each with its own Redis key so the admin page can never consume the log bot's "first sighting" marker. `vault_ircd_logs_oper_password` is **not** optional — the ircd role asserts it, so a missing value fails the play before anything is rendered.
+
+### Connection watch (`FiberEye`, automatic flood bans, `/unban`)
+
+`FiberEye` is a second, *opered* IRC connection out of the same gateway image; it runs only where `IRCFIBER_FIBEREYE_ENABLED=1`, which the `gateway` role gives to the dedicated `ircfiber-fibereye` container (`fibereye_*` in `group_vars/all/vars.yml`). It joins **no channel** — it does not announce anything, and `FiberLogs` is untouched by it. What it does is persist every connect and every quit into Mongo (`fibereye_sessions`, `fibereye_ips`, `fibereye_bans`): nick, ident, cloaked host, real IP, GECOS, connect class, port, TLS, NickServ account (from numeric `330`), the geo/ASN already cached by the log bot, and the session duration once the quit arrives. Sessions age out after 90 days through a TTL index on `tsAt`; changing `IRCFIBER_FIBEREYE_RETENTION_DAYS` on a live deployment needs `db.fibereye_sessions.dropIndex("tsAt_1")` first, because MongoDB refuses to re-create a TTL index with a different expiry (the role logs the conflict rather than failing).
+
+On top of that it evaluates three rules per **IP group** — the exact address for IPv4, the `/64` for IPv6, because the observed flood rotates addresses inside one `/64` — over a rolling window: too many connects (`fibereye_connect_threshold`), too many distinct nicks (`fibereye_nick_threshold`), too many sessions shorter than `fibereye_short_ms` (`fibereye_churn_threshold`). A trip places a timed **Z-line** with an escalating duration (`fibereye_ban_seconds`, then ×24, then ×168). Classes in `fibereye_ignore_classes` and private addresses are never counted and never banned — `localhost-v6` is in that list on purpose, one entry more than `logs_bot_ignore_classes`, because Z-lining the ircd's own healthcheck source takes the whole platform offline.
+
+It opers as `ircd_fibereye_oper_name` (`fibereye`), whose `EyeWatch` class in `opers.conf.j2` grants exactly **`ZLINE` and `STATS`** plus `privs="servers/auspex"` and umode `+s` with snomasks `c`/`q`/`x`, host-locked to the Docker network. No `KILL`, no `GLINE`, no `KLINE`, no `REHASH`: seeing connects and placing a Z-line is the entire job, so a leak of that credential buys nothing else. The one priv is not optional — `commands="STATS"` alone lets the oper issue the command while the restricted STATS letters stay gated, so `STATS Z` answers `Stats 'Z' denied` (verified on InspIRCd 4.11.0) and FiberEye could place a Z-line but never see one, leaving every placement unconfirmed and every standing ban reconciled away as already gone. It is the same read-only visibility the `Dashboard` class needs. *Removing* a Z-line is deliberately not its capability — the admin Release button and the public unban page both go through the existing dashboard-oper session in the web process, and any oper may remove any X-line. `STATS Z` every 60 s is what confirms a placement actually landed (the ircd answers `ZLINE` with silence) and what reconciles bans the ircd has already expired.
+
+The admin page is **`#/fibereye`**: a heartbeat card on `fibereye:bot` (60 s TTL — no heartbeat = **Offline**; connected but un-opered is badged *not opered*, which means no notices and no bans), KPI counters, and searchable Sessions / IPs / Bans tables with a per-IP detail page. It **ships disarmed**: enforcement is gated by the Redis key `fibereye:armed`, a missing key means disarmed, and the page's **Arm** button is the only thing that sets it. Until it is armed every trip is written as an `observeOnly` ban row — a "would ban" candidate — and no Z-line is placed. Arm only after reading real candidates and retuning the thresholds.
+
+Banned users get an appeal URL in the ban reason and lift the ban themselves at **`/unban`** (`/unban/<token>` from the reason, or tokenless from the banned address itself) after a Cloudflare Turnstile challenge — `vault_turnstile_site_key` / `vault_turnstile_secret` in the shared gateway env, rate-limited to 3 attempts per address per day and 2 successful releases per group per week. The page only ever lifts a Z-line whose reason starts with the literal `FiberEye:`, which is why the `<connectban banmessage>` in `modules.conf.j2` carries the same prefix (that tag is also retuned here: `threshold="8"`, `banduration="5m"`, `ipv6cidr="64"` — the stock 32 is why the flood sailed through, and the key is `banduration`, not `duration`, which InspIRCd 4 ignores silently and falls back to a **6 hour** ban). A Z-line an oper set by hand is never touched.
+
+Rollout (each step idempotent):
+
+```bash
+ansible-playbook playbooks/ircd.yml -t ircdconf             # EyeWatch/FiberEye oper + retuned connectban (SIGHUP rehash, nobody dropped)
+# register the bot nick once, from the prod host (Anope: usemail=no):
+ssh <host> 'sudo docker run --rm --network ircfiber_net busybox sh -c \
+  "(printf \"NICK FiberEye\\r\\nUSER fibereye 0 * :bot\\r\\n\"; sleep 5; \
+    printf \"PRIVMSG NickServ :REGISTER <vault_fibereye_nickserv_password> eye@<domain>\\r\\n\"; sleep 5; \
+    printf \"QUIT\\r\\n\") | nc ircd 6667"'
+make ship                                                   # the image that carries the bot code and the /unban page
+ansible-playbook playbooks/gateway.yml -t fibereye          # (re)creates ircfiber-fibereye; not part of blue/green
+make deploy-ircd                                            # render + rehash the ircd config
+docker logs ircfiber-fibereye | grep -E 'opered|FiberEye'
+```
+
+`vault_ircd_fibereye_oper_password` is **not** optional — the ircd role asserts it, so a missing value fails the play before anything is rendered. `vault_fibereye_nickserv_password` is optional (empty skips `IDENTIFY`; on a collision the bot runs as `FiberEye_`), and so is the Turnstile pair — without it `/unban` says self-service unban is not configured and releases nothing, which is the safe direction.
 
 ### Channel services bot (`FiberServ` in `#ircfiber` and `#support`)
 

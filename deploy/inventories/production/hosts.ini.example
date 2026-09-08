@@ -33,3 +33,6 @@ vps-efb4b52d
 [ircfiber_engines]
 vps-efb4b52d ircfiber_engine_id=ovh ircfiber_engine_bind_address=0.0.0.0 ircfiber_engine_admin_port=8091
 # Example — replace 203.0.113.10 with your host
+
+[ircfiber_k3s]
+ubuntu-docker ansible_host=100.94.116.56 ansible_user=ubuntu

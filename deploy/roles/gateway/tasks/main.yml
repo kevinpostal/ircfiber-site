@@ -24,7 +24,7 @@
   # Every side-container tag needs this too: without the pull, `-t <bot>`
   # builds the container from whatever :prod the host happens to have
   # cached, which is the release *before* the one just shipped.
-  tags: [gateway, bnc, support-bot, logs-bot]
+  tags: [gateway, bnc, support-bot, logs-bot, fibereye]
   community.docker.docker_image:
     name: "{{ ircfiber_gateway_image_full }}"
     source: pull
@@ -229,3 +229,44 @@
     gateway_spec_cpus: "{{ logs_bot_cpus }}"
     gateway_spec_oom_score_adj: "{{ logs_bot_oom_score_adj }}"
   when: logs_bot_enabled | default(false) | bool
+
+# FiberEye connection watch: same image, dedicated container (not part of
+# blue/green, no published ports). Only this process sets
+# IRCFIBER_FIBEREYE_ENABLED; it opens a second, opered IRC connection to the
+# ircd through the docker alias already rendered as IRCFIBER_IRCD_HOST/PORT
+# in the gateway env, joins no channel, and persists every connect and quit.
+# Its NickServ and oper passwords are NOT injected here: env.j2 renders the
+# *_FILE paths and the values live in 0400 files under
+# {{ gateway_secrets_dir }}, so they stay out of `docker inspect`.
+# Enforcement is still gated at runtime by the Redis key `fibereye:armed`;
+# creating this container arms nothing.
+- name: Run ircfiber-fibereye
+  tags: [fibereye]
+  ansible.builtin.include_tasks:
+    file: container.yml
+    apply:
+      tags: [fibereye]
+  vars:
+    gateway_spec_name: "{{ fibereye_container_name }}"
+    gateway_spec_component: "fibereye"
+    gateway_spec_env_extra:
+      IRCFIBER_FIBEREYE_ENABLED: "1"
+      # Same trap as the support and log bots: the port falls back to
+      # IRCFIBER_IRCD_PORT (the TLS port) while the bot's own TLS flag
+      # defaults to off, so without this it dials 6697 in plaintext.
+      IRCFIBER_FIBEREYE_TLS: "{{ _gateway_env['IRCFIBER_IRCD_TLS'] | default('0') }}"
+      IRCFIBER_FIBEREYE_NICK: "{{ fibereye_nick }}"
+      IRCFIBER_FIBEREYE_IGNORE_CLASSES: "{{ fibereye_ignore_classes }}"
+      IRCFIBER_FIBEREYE_WINDOW: "{{ fibereye_window | string }}"
+      IRCFIBER_FIBEREYE_CONNECT_THRESHOLD: "{{ fibereye_connect_threshold | string }}"
+      IRCFIBER_FIBEREYE_NICK_THRESHOLD: "{{ fibereye_nick_threshold | string }}"
+      IRCFIBER_FIBEREYE_CHURN_THRESHOLD: "{{ fibereye_churn_threshold | string }}"
+      IRCFIBER_FIBEREYE_SHORT_MS: "{{ fibereye_short_ms | string }}"
+      IRCFIBER_FIBEREYE_BAN_SECONDS: "{{ fibereye_ban_seconds | string }}"
+    # Base mounts only — no ircd config, no Anope data, no cert store.
+    gateway_spec_volumes_extra: []
+    gateway_spec_memory: "{{ fibereye_memory_limit }}"
+    gateway_spec_memory_reservation: "{{ fibereye_memory_reservation }}"
+    gateway_spec_cpus: "{{ fibereye_cpus }}"
+    gateway_spec_oom_score_adj: "{{ fibereye_oom_score_adj }}"
+  when: fibereye_enabled | default(false) | bool

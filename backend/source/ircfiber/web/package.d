@@ -36,6 +36,7 @@ import ircfiber.signup : PendingSignup, PendingSignupStore, emailVerificationReq
 import ircfiber.mail_events : MailEvent, MailEventLog;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
 import ircfiber.web.assets : siteAssets;
+import ircfiber.web.unban : unbanGet, unbanPost;
 
     // Captures client IP, User-Agent, createdAt, and lastAccess on
     // the active session. Mirrors the helper in AdminController so
@@ -101,6 +102,13 @@ final class WebController {
         router.post("/register", &registerPost);
         router.get("/verify", &verifyGet);
         router.post("/verify", &verifyPost);
+        // Public self-service ban appeal. Registered here, before every
+        // static and catch-all route, because the ban reason itself is the
+        // only channel a Z-lined visitor has (see web.unban).
+        router.get("/unban", &unbanGetRoute);
+        router.post("/unban", &unbanPostRoute);
+        router.get("/unban/:token", &unbanGetRoute);
+        router.post("/unban/:token", &unbanPostRoute);
         router.get("/logout", &logout);
         router.get("/public/landing.html", &serveLanding);
         router.get("/app-screenshot.png", &serveAppScreenshot);
@@ -468,6 +476,17 @@ final class WebController {
         // add-another-network form). The SPA reads the ?/add-network=welcome route.
         res.redirect("/?/add-network=welcome");
         return true;
+    }
+
+    // Public ban appeal — the handlers live in web.unban because they
+    // need the FiberEye store and the ircd oper session, neither of which
+    // belongs in the page controller.
+    private void unbanGetRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        unbanGet(req, res, redis);
+    }
+
+    private void unbanPostRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        unbanPost(req, res, redis);
     }
 
     private void renderVerify(HTTPServerResponse res, int status, string stage,

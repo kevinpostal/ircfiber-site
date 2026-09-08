@@ -44,8 +44,11 @@ function startAckTimer(): void {
     ackInterval = setInterval(() => {
         if (ackSendInFlight) return;
         if (!isConnected()) return;
+        // Sent even at eid 0 (an account with no events yet): the server
+        // treats a lower eid as a no-op (`acknowledgeEid` only moves the
+        // cursor forward) and uses the frame as this client's heartbeat, so
+        // skipping it made idle tabs look dead in Settings → Sessions.
         const eid = maxEidTracker.value;
-        if (eid <= 0) return;
         ackSendInFlight = true;
         try {
             sendJson({ cmd: 'ack', eid });
@@ -210,7 +213,39 @@ export function sendRequest(cmd: string, payload: Record<string, unknown> = {}):
   });
 }
 
+/** WebSocket session id of THIS tab, from the server's `header` frame.
+ *  Settings → Sessions passes it to `GET /api/me/sessions` so the server can
+ *  mark which of the login's live clients is this tab — the session cookie is
+ *  shared by every tab of the browser and cannot tell them apart. */
+let wsSessionId = '';
+
+export function getWsSessionId(): string {
+  return wsSessionId;
+}
+
+/** Resolves once the `header` frame has told us this tab's session id, or
+ *  after `timeoutMs` with ''. A page loaded straight into Settings →
+ *  Sessions otherwise races the handshake and the server cannot mark which
+ *  client row is this tab. */
+export async function waitForWsSessionId(timeoutMs = 2000): Promise<string> {
+  if (wsSessionId) return wsSessionId;
+  // No socket has ever been opened (settings rendered outside the app shell),
+  // so no header is coming and there is nothing to wait for.
+  if (!socket) return '';
+  const deadline = Date.now() + timeoutMs;
+  while (!wsSessionId && Date.now() < deadline) {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    setTimeout(resolve, 50);
+    await promise;
+  }
+  return wsSessionId;
+}
+
 function handleResponse(data: Record<string, unknown>): void {
+  if (data.type === 'header' && typeof data.session === 'string') {
+    wsSessionId = data.session;
+    // Falls through: the header is still handed to the message callback.
+  }
   const reqid = data._reqid as string | undefined;
   if (reqid && pendingRequests.has(reqid)) {
     const pending = pendingRequests.get(reqid)!;

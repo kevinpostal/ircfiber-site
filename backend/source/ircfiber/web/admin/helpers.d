@@ -12,7 +12,10 @@ import ircfiber.web.common : getClientIp;
 /// Strip a single layer of JSON quoting when reading back, gracefully
 /// leaving the value unchanged if it isn't quoted (so the helper is safe
 /// to call on raw, non-JSON data such as the numeric timestamp we now store).
-package string stripJsonStr(string raw) {
+// `package(ircfiber)`, not `package`: `ircfiber.api.rest` reads the same
+// session hashes for the user-facing `GET /api/me/sessions`, and one parser
+// for vibe's JSON-quoted session fields beats a second copy of the rule.
+package(ircfiber) string stripJsonStr(string raw) {
     if (raw.length >= 2 && raw[0] == '"' && raw[$-1] == '"')
         return raw[1 .. $-1];
     return raw;
@@ -21,7 +24,7 @@ package string stripJsonStr(string raw) {
 /// Parse a numeric field that may be stored either as a plain decimal
 /// string ("1782093504000") or as a JSON-quoted string because of legacy
 /// write paths. Returns 0 if the field is empty or unparseable — never throws.
-package long parseLongField(string raw) {
+package(ircfiber) long parseLongField(string raw) {
     auto s = stripJsonStr(raw);
     if (s.length == 0) return 0;
     try return s.to!long;

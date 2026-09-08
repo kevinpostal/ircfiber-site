@@ -628,3 +628,113 @@
     background: rgba(63, 185, 80, 0.1);
   }
 }
+
+/* ── Login sessions table (Settings → Sessions) ──
+   The settings surface had no table rules; these follow the panel palette
+   (#161b22 heads, #2c2f35 borders, #8b949e secondary text) so the table
+   reads as part of a settings card rather than an overlay. */
+.settings-sessions {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.settings-sessions-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  th,
+  td {
+    padding: 6px 10px;
+    text-align: left;
+    vertical-align: top;
+    white-space: nowrap;
+  }
+
+  thead th {
+    background: #161b22;
+    border-bottom: 1px solid #2c2f35;
+    color: #8b949e;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  tbody {
+    border-bottom: 1px solid #2c2f35;
+  }
+}
+
+.settings-sessions-session td {
+  color: #d1d5db;
+}
+
+/* The nested "Client start / IP / user agent" head, repeated per session
+   the way IRCCloud repeats it above each session's clients. */
+.settings-sessions-subhead th {
+  color: #6e7681;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.settings-sessions-client td {
+  color: #8b949e;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+/* Indent the client rows under their login row. */
+.settings-sessions-subhead th:first-child,
+.settings-sessions-client td:first-child {
+  padding-left: 24px;
+}
+
+.settings-sessions-ip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* The user agent is the one column allowed to wrap/clip: the raw string is
+   in the cell's title, the summary is what the column shows. */
+.settings-sessions-ua {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-sessions-count {
+  text-align: right;
+}
+
+/* Revoke column: right-aligned, and the buttons sit on one line. */
+.settings-sessions-actions {
+  text-align: right;
+  white-space: nowrap;
+
+  .settings-btn + .settings-btn {
+    margin-left: 4px;
+  }
+}
+
+.settings-sessions-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid rgba(63, 185, 80, 0.4);
+  border-radius: 10px;
+  background: rgba(63, 185, 80, 0.12);
+  color: #3fb950;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.settings-sessions-mine .settings-sessions-session td {
+  color: #f0f6fc;
+}

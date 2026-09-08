@@ -54,6 +54,50 @@ struct GeoInfo {
     string privacyFlags;
 }
 
+/// ipinfo's ASN view of an address: the number, the operator (i.e. the ISP)
+/// and, from the Lite endpoint only, that operator's domain.
+struct AsnInfo {
+    /// True when at least the number or the operator name is known.
+    bool ok;
+    /// `AS39351`, carrying the `AS` prefix exactly as ipinfo writes it.
+    string asn;
+    /// Operator name, e.g. `31173 Services AB`.
+    string name;
+    /// Operator domain, e.g. `31173.se`. Lite endpoint only.
+    string domain;
+}
+
+/// Splits ipinfo's `org` field into number and operator:
+/// `"AS39351 31173 Services AB"` → `AS39351` + `31173 Services AB`.
+///
+/// `org` is the only ASN carrier the Core endpoint (`/<ip>/json`) offers on
+/// the token tier this deployment has: an `asn` object is a paid add-on and
+/// `ipinfo.io/AS<n>/json` answers *Token does not have access to this API*.
+/// `ircfiber.logs.geo.lookupAsn` reads the number, name and domain as
+/// separate Lite-endpoint fields; this parser is what answers when no token
+/// is configured, when the value came back through a SOCKS exit probe, or
+/// when the string carries no `AS<digits>` head at all (`"Mullvad VPN AB"`),
+/// in which case the whole value is the operator name.
+AsnInfo asnFromOrg(string org) @safe pure {
+    AsnInfo a;
+    const s = org.strip();
+    if (!s.length) return a;
+    const sp = s.indexOf(' ');
+    const head = sp < 0 ? s : s[0 .. sp];
+    bool asHead = head.length > 2 && head[0 .. 2] == "AS";
+    if (asHead)
+        foreach (ch; head[2 .. $])
+            if (ch < '0' || ch > '9') { asHead = false; break; }
+    if (asHead) {
+        a.asn = head;
+        a.name = sp < 0 ? "" : s[sp + 1 .. $].strip();
+    } else {
+        a.name = s;
+    }
+    a.ok = a.asn.length > 0 || a.name.length > 0;
+    return a;
+}
+
 /// Parses an InspIRCd 4 connect server notice as delivered to an opered
 /// client with snomask `c`:
 ///

@@ -103,6 +103,45 @@ ircd_services_description: "IRC Fiber Services"
 # published to the host; reachable only on the Docker network.
 ircd_link_port: 7000
 
+# --- k3s spanningtree leaf (playbooks/ircd-k8s-leaf.yml) ---------------------
+# `ircd_is_leaf` switches the shared templates from hub to leaf. A leaf runs
+# no Anope, does not open the Anope link port and seeds no permanent channels
+# (they arrive in the netburst) — but keeps every module, mode, codepage and
+# cloak tag, because spanningtree CAPAB compares those and refuses the link on
+# any drift (see the LINK COMPAT block in modules.conf.j2).
+ircd_is_leaf: false
+
+# Hub coordinates, as seen from the leaf. Literals, not references to
+# ircd_server_name: the leaf play overrides that with its own name.
+ircd_hub_name: "irc.ircfiber.com"
+ircd_hub_ipaddr: "100.94.72.103"
+
+# Leaf identity. The SID must be unique across the whole network, which now
+# includes irc.netcrave.chat.
+ircd_k8s_leaf_name: "k8s.ircfiber.com"
+ircd_k8s_leaf_id: "2FB"
+ircd_k8s_leaf_description: "IRC Fiber (k8s leaf)"
+
+# Tailnet address of the k3s node. The leaf's link listener is mapped to this
+# address only (Deployment hostPort/hostIP), so the port exists for tailnet
+# peers and nobody else.
+ircd_k8s_leaf_ipaddr: "100.94.116.56"
+
+# Distinct from 7000 (Anope, container-internal) and 4445 (netcrave) so the
+# three links stay unambiguous in logs, allowmasks and netpol rules.
+ircd_k8s_link_port: 7001
+
+# The hub renders <link>/<autoconnect> for the leaf only when this is true.
+ircd_k8s_link_enabled: false
+
+# Rendered config and InspIRCd state live on the k3s node and are hostPath
+# mounted: PVCs do not bind under the node's disk-pressure taint, and a k8s
+# Secret cannot be created at all (rancher.cattle.io webhook fails closed).
+ircd_k8s_conf_dir: "/var/lib/ircfiber/ircd-k8s/conf"
+ircd_k8s_data_dir: "/var/lib/ircfiber/ircd-k8s/data"
+ircd_k8s_context: "ubuntu-docker"
+ircd_k8s_namespace: "ircfiber-prod"
+
 # Trusted subnet: IRC Fiber engine containers multiplex every platform
 # user through a handful of IPs here, so it gets no clone limits, no DNS
 # lookups and no throttling.
@@ -169,6 +208,17 @@ ircd_dashboard_oper_name: "dashboard"
 # server notices (umode +s, snomasks c/C) — the LogBot type below grants
 # no commands at all. Password: vault_ircd_logs_oper_password.
 ircd_logs_oper_name: "{{ logs_bot_oper_name | default('fiberlogs') }}"
+
+# Oper account the FiberEye connection watch uses. Its EyeWatch class grants
+# exactly ZLINE + STATS plus umode +s with snomasks c/q/x — enough to see
+# every connect/quit and to place a timed Z-line, nothing else.
+# Password: vault_ircd_fibereye_oper_password.
+ircd_fibereye_oper_name: "{{ fibereye_oper_name | default('fibereye') }}"
+
+# Where a banned user appeals. Rendered into the <connectban banmessage>, so
+# the ircd's own flood bans point at the same self-service page FiberEye's
+# bans do; the gateway serves it at /unban.
+ircd_appeal_url: "https://ircfiber.com/unban"
 
 # Host cloaking. Must match linked servers exactly (method + key +
 # prefix + suffix) or spanningtree CAPAB refuses the link. Aligned with

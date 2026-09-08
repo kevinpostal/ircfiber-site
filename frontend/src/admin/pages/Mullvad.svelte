@@ -28,7 +28,7 @@
     setServerEgress,
     clearServerEgress,
   } from '../stores/mullvad';
-  import type { MullvadLiveConn } from '../stores/mullvad';
+  import type { MullvadLiveConn, MullvadProxy } from '../stores/mullvad';
 
   let data = $state($mullvadStatus);
   let loading = $state($mullvadLoading);
@@ -79,6 +79,14 @@
     return groups;
   });
   const cityName = (id: string) => data?.locations?.find((l) => l.id === id)?.city ?? id;
+  /// The ISP the exit really sits behind: ipinfo's ASN operator when the Lite
+  /// endpoint answered, else whatever the Core endpoint's `org` carried (that
+  /// string is `AS<n> <operator>`, and the backend splits it).
+  const ispName = (p?: MullvadProxy) => p?.ipinfo?.asnName || p?.ipinfo?.org || '';
+  /// `AS39351 · 31173.se` — the AS number, plus the operator's domain when
+  /// the Lite endpoint supplied one.
+  const ispMeta = (p?: MullvadProxy) =>
+    [p?.ipinfo?.asn, p?.ipinfo?.asnDomain].filter((v) => !!v).join(' · ');
 
   async function doSwapExit(label: string) {
     const locationId = exitPick[label] ?? '';
@@ -309,7 +317,8 @@
             <th class="px-3 py-2">Resolved IP</th>
             <th class="px-3 py-2">Exit IP</th>
             <th class="px-3 py-2">Mullvad</th>
-            <th class="px-3 py-2">Location / ISP</th>
+            <th class="px-3 py-2">Location</th>
+            <th class="px-3 py-2">ISP / ASN</th>
             <th class="px-3 py-2">Healthy</th>
             <th class="px-3 py-2">Swap exit</th>
             <th class="px-3 py-2">Actions</th>
@@ -354,10 +363,20 @@
                 {/if}
               </td>
               <td class="px-3 py-2 text-xs">
-                {#if p?.ipinfo?.city || p?.ipinfo?.country || p?.ipinfo?.loc || p?.ipinfo?.org}
+                {#if p?.ipinfo?.city || p?.ipinfo?.country || p?.ipinfo?.loc}
                   <div class="font-medium">{p?.ipinfo?.city || p?.ipinfo?.loc?.split(',')[0] || '—'}{p?.ipinfo?.region ? `, ${p?.ipinfo?.region}` : ''} {p?.ipinfo?.country ? `(${p?.ipinfo?.country})` : ''}</div>
-                  <div class="text-[10px] text-muted">{p?.ipinfo?.org || '—'}</div>
-                  {#if p?.ipinfo?.loc && p?.ipinfo?.city && p?.ipinfo?.loc !== p?.ipinfo?.city}<div class="text-[10px] text-muted">{p?.ipinfo?.loc}</div>{:else if p?.ipinfo?.loc && !p?.ipinfo?.city}<div class="text-[10px] text-muted">{p?.ipinfo?.loc}</div>{/if}
+                  {#if p?.ipinfo?.loc && p?.ipinfo?.loc !== p?.ipinfo?.city}<div class="text-[10px] text-muted">{p?.ipinfo?.loc}</div>{/if}
+                {:else}
+                  <span class="text-muted">—</span>
+                {/if}
+              </td>
+              <!-- Who announces the exit address, as ipinfo sees it. A hosting
+                   provider's ASN next to a Mullvad city is the signal that the
+                   tunnel is not carrying this slot's traffic. -->
+              <td class="px-3 py-2 text-xs">
+                {#if ispName(p)}
+                  <div class="font-medium">{ispName(p)}</div>
+                  {#if ispMeta(p)}<div class="font-mono text-[10px] text-muted">{ispMeta(p)}</div>{/if}
                 {:else}
                   <span class="text-muted">—</span>
                 {/if}
@@ -456,7 +475,7 @@
             </tr>
             <!-- per-proxy usage collapsed row -->
             <tr class="border-b border-border/30 bg-bg/30">
-              <td colspan="10" class="px-3 py-2">
+              <td colspan="11" class="px-3 py-2">
                 <button
                   onclick={() => (expandedUsage[p.label] = !expandedUsage[p.label])}
                   class="text-[11px] font-medium text-primary hover:underline"
@@ -548,7 +567,8 @@
             <th class="px-3 py-2">Nick</th>
             <th class="px-3 py-2">Proxy</th>
             <th class="px-3 py-2">Exit IP</th>
-            <th class="px-3 py-2">Location / ISP</th>
+            <th class="px-3 py-2">Location</th>
+            <th class="px-3 py-2">ISP / ASN</th>
             <th class="px-3 py-2">Connected Since</th>
           </tr>
         </thead>
@@ -565,7 +585,14 @@
               <td class="px-3 py-2 text-xs">
                 {#if p?.ipinfo?.city || p?.ipinfo?.country || p?.ipinfo?.loc}
                   <div>{p?.ipinfo?.city || p?.ipinfo?.loc?.split(',')[0] || '—'}{p?.ipinfo?.region ? `, ${p?.ipinfo?.region}` : ''} {p?.ipinfo?.country ? `(${p?.ipinfo?.country})` : ''}</div>
-                  <div class="text-[10px] text-muted">{p?.ipinfo?.org || '—'}</div>
+                {:else}
+                  <span class="text-muted">—</span>
+                {/if}
+              </td>
+              <td class="px-3 py-2 text-xs">
+                {#if ispName(p)}
+                  <div>{ispName(p)}</div>
+                  {#if ispMeta(p)}<div class="font-mono text-[10px] text-muted">{ispMeta(p)}</div>{/if}
                 {:else}
                   <span class="text-muted">—</span>
                 {/if}

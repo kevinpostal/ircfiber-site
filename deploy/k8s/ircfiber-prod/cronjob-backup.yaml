@@ -70,12 +70,16 @@ spec:
             component: backup
         spec:
           restartPolicy: OnFailure
-          # The node carries node.kubernetes.io/disk-pressure:NoSchedule (the
-          # 1.7T filesystem it shares with the odysseus host sits at 93%, and
-          # kubelet's default threshold is 10% free). A backup is precisely the
-          # workload that must still run when the disk is tight, and its
-          # archives are ~100 MB, so it tolerates the taint rather than waiting
-          # for headroom that nothing here controls.
+          # The node can carry node.kubernetes.io/disk-pressure:NoSchedule —
+          # its 1.7T filesystem is shared with the odysseus host and sits
+          # above 95%. The threshold is now 2% (playbooks/k3s-node-tune.yml;
+          # k3s' own kubelet drop-in says 5%, and the `kubelet-arg` in
+          # /etc/rancher/k3s/config.yaml does NOT override it). A backup is
+          # precisely the workload that must still run when the disk is
+          # tight, and its archives are ~100 MB, so it tolerates the taint
+          # rather than waiting for headroom that nothing here controls.
+          # NOTE: a toleration is not enough once DiskPressure is actually
+          # True — kubelet then rejects every pod that is not critical.
           tolerations:
             - key: node.kubernetes.io/disk-pressure
               operator: Exists

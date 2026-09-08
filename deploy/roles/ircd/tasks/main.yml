@@ -17,6 +17,9 @@
       - vault_ircd_netcrave_link_password is defined
       - vault_ircd_netcrave_link_password | length >= 16
       - vault_ircd_netcrave_link_password != "REPLACE-WITH-NETCRAVE-LINK-SECRET"
+      - vault_ircd_k8s_link_password is defined
+      - vault_ircd_k8s_link_password | length >= 16
+      - vault_ircd_k8s_link_password != "REPLACE-WITH-K8S-LINK-SECRET"
       - vault_ircd_cloak_key is defined
       - vault_ircd_cloak_key | length >= 30
       - vault_ircd_dashboard_password is defined
@@ -25,89 +28,27 @@
       - vault_ircd_logs_oper_password is defined
       - vault_ircd_logs_oper_password | length > 0
       - vault_ircd_logs_oper_password != "REPLACE-WITH-STRONG-PASSWORD"
+      - vault_ircd_fibereye_oper_password is defined
+      - vault_ircd_fibereye_oper_password | length > 0
+      - vault_ircd_fibereye_oper_password != "REPLACE-WITH-STRONG-PASSWORD"
     fail_msg: |
       vault_ircd_oper_password, vault_ircd_services_link_password (>=16 chars),
       vault_ircd_netcrave_link_password (>=16 chars, not the placeholder),
+      vault_ircd_k8s_link_password (>=16 chars, not the placeholder; the
+      OVH hub <-> k3s leaf spanningtree link),
       vault_ircd_cloak_key (>=30 chars), vault_ircd_dashboard_password
-      (admin dashboard oper, used by the gateway IRCFIBER_IRCD_OPER_PASSWORD)
-      and vault_ircd_logs_oper_password (#staff log bot oper, used by the
+      (admin dashboard oper, used by the gateway IRCFIBER_IRCD_OPER_PASSWORD),
+      vault_ircd_logs_oper_password (#staff log bot oper, used by the
       ircfiber-logs-bot container)
+      and vault_ircd_fibereye_oper_password (FiberEye connection-watch oper,
+      used by the ircfiber-fibereye container)
       must be set in inventories/production/group_vars/vault.yml:
         ansible-vault edit inventories/production/group_vars/vault.yml
 
-# InspIRCd stores oper passwords as base64(salt)$base64(hmac-sha256).
-# Computed on the controller with the stdlib helper (deterministic salt →
-# stable config → no restart on every deploy).
-- name: Compute InspIRCd hmac-sha256 oper password hash
-  ansible.builtin.command:
-    argv:
-      - python3
-      - "{{ role_path }}/files/inspircd_hmac.py"
-  environment:
-    INSP_PASSWORD: "{{ vault_ircd_oper_password }}"
-    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_oper_name }}"
-  delegate_to: localhost
-  become: false
-  register: ircd_oper_hash_raw
-  changed_when: false
-  no_log: true
-  # opers.conf is part of the `ircdconf` config-only run, so the hashes it
-  # renders must be computed on that path too.
-  tags: [ircdconf]
-
-- name: Set oper password hash fact
-  ansible.builtin.set_fact:
-    ircd_oper_password_hash: "{{ ircd_oper_hash_raw.stdout | trim }}"
-  no_log: true
-  tags: [ircdconf]
-
-# Dashboard oper (least-privilege class for the admin web UI). Separate
-# credential from the human admin oper so it can be rotated independently;
-# deterministic salt keeps the rendered config stable across deploys.
-- name: Compute InspIRCd hmac-sha256 dashboard oper password hash
-  ansible.builtin.command:
-    argv:
-      - python3
-      - "{{ role_path }}/files/inspircd_hmac.py"
-  environment:
-    INSP_PASSWORD: "{{ vault_ircd_dashboard_password }}"
-    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_dashboard_oper_name }}"
-  delegate_to: localhost
-  become: false
-  register: ircd_dashboard_oper_hash_raw
-  changed_when: false
-  no_log: true
-  tags: [ircdconf]
-
-- name: Set dashboard oper password hash fact
-  ansible.builtin.set_fact:
-    ircd_dashboard_oper_hash: "{{ ircd_dashboard_oper_hash_raw.stdout | trim }}"
-  no_log: true
-  tags: [ircdconf]
-
-# #staff log bot oper (Snotices class: no commands at all, only umode +s
-# with snomasks c/C so it receives connect server notices). Rotated
-# independently of the human and dashboard opers.
-- name: Compute InspIRCd hmac-sha256 logs oper password hash
-  ansible.builtin.command:
-    argv:
-      - python3
-      - "{{ role_path }}/files/inspircd_hmac.py"
-  environment:
-    INSP_PASSWORD: "{{ vault_ircd_logs_oper_password }}"
-    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_logs_oper_name }}"
-  delegate_to: localhost
-  become: false
-  register: ircd_logs_oper_hash_raw
-  changed_when: false
-  no_log: true
-  tags: [ircdconf]
-
-- name: Set logs oper password hash fact
-  ansible.builtin.set_fact:
-    ircd_logs_oper_hash: "{{ ircd_logs_oper_hash_raw.stdout | trim }}"
-  no_log: true
-  tags: [ircdconf]
+# Oper password hashes. Extracted so the k3s leaf play can reuse them: the
+# salt label embeds the server name, so each server hashes its own.
+- name: Compute InspIRCd oper password hashes
+  ansible.builtin.import_tasks: oper_hashes.yml
 
 - name: Ensure data volumes exist
   community.docker.docker_volume:
@@ -183,6 +124,7 @@
     - { src: custom.conf.j2, dest: custom.conf }
     - { src: modules.conf.j2, dest: modules.conf }
     - { src: opers.conf.j2, dest: opers.conf }
+    - { src: rules.j2, dest: rules.txt }
     # 0644, like the file the gateway's MOTD rotation writes in its place;
     # never re-rendered over a rotated MOTD.
     - { src: motd.j2, dest: motd.d/motd, mode: "0644", force: false }

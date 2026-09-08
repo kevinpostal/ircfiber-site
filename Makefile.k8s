@@ -243,6 +243,20 @@ k8s-prod-backups-token: ## K8s > Print the gateway's backup ServiceAccount token
 	@$(KUBECTL) -n ircfiber-prod get secret ircfiber-backup-admin-token \
 	  -o jsonpath='{.data.token}' | base64 -d; echo
 
+# The InspIRCd spanningtree leaf lives in ircfiber-prod too. It is deployed by
+# `make deploy-ircd-k8s` (ansible renders its config onto the node); this is
+# the read-only status view.
+k8s-prod-ircd-status: ## K8s > Show the InspIRCd leaf pod, Service and link listener
+	$(KUBECTL) -n ircfiber-prod get pods,svc,netpol -l app=ircfiber-ircd-k8s
+	$(KUBECTL) -n ircfiber-prod logs deployment/ircfiber-ircd-k8s --tail=40
+
+# Nightly docker build-cache/image prune on the node. Preventive: once
+# kubelet raises DiskPressure it rejects non-critical pods outright, so the
+# job has to run before the disk gets tight (see the manifest header).
+k8s-prod-janitor-apply: ## K8s > Apply the nightly node disk janitor CronJob
+	$(KUBECTL) -n ircfiber-prod apply -f $(K8S_PROD_DIR)/cronjob-node-janitor.yaml
+	$(KUBECTL) -n ircfiber-prod get cronjob node-disk-janitor -o wide
+
 # ----------------------------------------------------------------------------
 # Observability — status, logs, shell, events, port-forward
 # ----------------------------------------------------------------------------

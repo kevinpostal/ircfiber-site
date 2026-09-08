@@ -138,6 +138,35 @@ logs_bot_oper_name: "fiberlogs"
 # every platform user through container IPs (useless geo) and loopback is the
 # ircd's own healthcheck.
 logs_bot_ignore_classes: "ircfiber-engine,ircfiber-engine-v6,localhost"
+# --- FiberEye connection watch (same gateway image, dedicated container) ----
+# Only the process with IRCFIBER_FIBEREYE_ENABLED=1 opens a second, opered IRC
+# connection to the ircd as FiberEye. It joins no channel: it OPERs as
+# {{ fibereye_oper_name }} for connect/quit server notices, persists every
+# session in Mongo behind the admin #/fibereye page, and places timed Z-lines
+# on connect floods. Never set on the blue/green gateway replicas.
+# Enforcement ships DISARMED — the Redis key `fibereye:armed` arms it, and the
+# admin page's Arm button is the only thing that sets it. Secrets:
+# vault_fibereye_nickserv_password, vault_ircd_fibereye_oper_password.
+fibereye_enabled: true
+fibereye_container_name: "ircfiber-fibereye"
+fibereye_nick: "FiberEye"
+fibereye_oper_name: "fibereye"
+# Connect classes whose connects are never counted or banned. Same rationale
+# as logs_bot_ignore_classes, plus localhost-v6: banning the ircd's own
+# healthcheck source would take the whole platform offline.
+fibereye_ignore_classes: "ircfiber-engine,ircfiber-engine-v6,localhost,localhost-v6"
+# Detection window and the three rules evaluated inside it, per IP group (the
+# exact address for IPv4, the /64 for IPv6). Opening values chosen against the
+# 2026-09 flood sample; the admin card shows what is actually in force, so
+# retune from real candidates before arming.
+fibereye_window: 60
+fibereye_connect_threshold: 10
+fibereye_nick_threshold: 6
+fibereye_churn_threshold: 6
+# A session shorter than this counts towards the churn rule.
+fibereye_short_ms: 20000
+# First strike; the second is x24 and the third and later x168.
+fibereye_ban_seconds: 3600
 # --- SigNoz query API (admin Logs page, gateway-side proxy) ------------------
 # The gateway container has no Tailscale MagicDNS, so the URL is the
 # tailnet IP with a Host-header override for the SNI-routed Traefik
@@ -234,6 +263,14 @@ ircd_services_rpc_port: 8080
 # play (hosts: ircfiber_engines) where the ircd role's defaults are not in
 # scope at all.
 ircd_server_name: "irc.ircfiber.com"
+
+# Link the k3s spanningtree leaf (playbooks/ircd-k8s-leaf.yml). The hub is
+# the connecting side, so this needs only a rehash, never a restart.
+ircd_k8s_link_enabled: true
+# Leaf server name, here for the same reason as ircd_server_name above:
+# roles/engine's env.j2 names it in IRCFIBER_FLOOD_TRUSTED_HOSTS and runs in
+# a play where roles/ircd defaults are not in scope.
+ircd_k8s_leaf_name: "k8s.ircfiber.com"
 
 # Flood parameters of the InspIRCd `ircfiber-engine` connect class. Single
 # source of truth: consumed BOTH by roles/ircd (inspircd.conf.j2, the actual

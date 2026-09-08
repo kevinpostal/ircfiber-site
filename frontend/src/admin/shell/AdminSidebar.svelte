@@ -38,6 +38,7 @@
         { label: 'Sessions', path: '/sessions', icon: '🔑' },
         { label: 'Bouncer', path: '/bouncer', icon: '🔌' },
         { label: 'Logs', path: '/logs', icon: '📜' },
+        { label: 'FiberEye', path: '/fibereye', icon: '👁️' },
       ],
     },
     {

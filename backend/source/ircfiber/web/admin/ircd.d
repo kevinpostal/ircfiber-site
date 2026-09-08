@@ -731,15 +731,23 @@ private Json xlineToJson(XLine x) {
     return o;
 }
 
-private Json listBans(IrcdClient client, string type) {
+/// Active X-lines of one type on `client`. The single place the `STATS`
+/// verb choice and the numeric-210 parsing live.
+private XLine[] xlinesOn(IrcdClient client, string type) {
     auto letter = xlineLetter(type);
     auto cmd = type == "zline" ? "STATS Z" : "STATS " ~ letter;
-    auto arr = Json.emptyArray;
+    XLine[] rows;
     foreach (line; client.transact(cmd, ["219"], 8000)) {
         XLine x;
         if (!parseStatsXLine(parseIrcLine(line), x)) continue;
-        arr ~= xlineToJson(x);
+        rows ~= x;
     }
+    return rows;
+}
+
+private Json listBans(IrcdClient client, string type) {
+    auto arr = Json.emptyArray;
+    foreach (x; xlinesOn(client, type)) arr ~= xlineToJson(x);
     return arr;
 }
 
@@ -903,6 +911,93 @@ package string rehashIrcdNow() {
         } catch (Exception e) {
             dropSession();
             if (reused && attempt == 0) continue;
+            throw e;
+        }
+    }
+    assert(0);
+}
+
+/// Active X-lines of one type, read over the shared dashboard-oper
+/// session outside any HTTP request. Same one-retry-on-stale-session
+/// policy as `withIrcd`; must run on the main thread that owns the
+/// session. Throws IrcdError when the ircd is not configured or refuses.
+///
+/// Public rather than `package` because `ircfiber.web.unban` — the public
+/// self-service ban-appeal page — is not in the `ircfiber.web.admin`
+/// package and needs to see whether the visitor's own address is banned.
+public XLine[] listXlinesNow(string type) {
+    if (xlineLetter(type).length == 0)
+        throw new IrcdError("type must be gline, kline or zline.", 400);
+    auto settings = loadIrcdSettings();
+    if (!settings.configured())
+        throw new IrcdError("IRCd oper credentials are not configured.", 503);
+    foreach (attempt; 0 .. 2) {
+        bool reused;
+        auto client = acquireSession(settings, reused);
+        try
+            return xlinesOn(client, type);
+        catch (Exception e) {
+            dropSession();
+            if (reused && attempt == 0) continue;
+            throw e;
+        }
+    }
+    assert(0);
+}
+
+/// Removes one X-line over the shared dashboard-oper session outside any
+/// HTTP request, and confirms the removal by re-listing — InspIRCd answers
+/// a successful removal with silence, so absence from `STATS` is the only
+/// proof. Deletion is the bare mask (no duration): the dash form is
+/// treated as a literal mask and never matches.
+///
+/// Any oper may remove any X-line, which is why the release path lives in
+/// the web process (which holds a `ZLINE`-capable oper session) rather
+/// than in FiberEye, which has no session here.
+public void removeXlineNow(string type, string mask) {
+    if (xlineLetter(type).length == 0)
+        throw new IrcdError("type must be gline, kline or zline.", 400);
+    if (!validBanMask(mask))
+        throw new IrcdError("mask is required (max 100 chars, no spaces).", 400);
+    auto settings = loadIrcdSettings();
+    if (!settings.configured())
+        throw new IrcdError("IRCd oper credentials are not configured.", 503);
+    auto verb = type == "gline" ? "GLINE" : type == "kline" ? "KLINE" : "ZLINE";
+    foreach (attempt; 0 .. 2) {
+        bool reused;
+        // An answer from the ircd — an error NOTICE or a mask still
+        // listed — is a verdict, not a stale socket, so it is never
+        // retried on a fresh connection.
+        bool answered;
+        auto client = acquireSession(settings, reused);
+        try {
+            client.sendLine(verb ~ " " ~ mask);
+            // Success is silent; an error arrives as a NOTICE.
+            auto deadline = IrcdClient.monoMs() + 2500;
+            string errNotice;
+            while (IrcdClient.monoMs() < deadline) {
+                auto line = client.readLine(deadline - IrcdClient.monoMs());
+                if (line is null) break;
+                auto l = parseIrcLine(line);
+                if (l.valid && l.command == "NOTICE" && l.params.length > 0) {
+                    errNotice = l.params[$ - 1];
+                    break;
+                }
+            }
+            if (errNotice.length) {
+                answered = true;
+                throw new IrcdError("IRCd: " ~ errNotice, 404);
+            }
+            foreach (x; xlinesOn(client, type))
+                if (x.mask == mask) {
+                    answered = true;
+                    throw new IrcdError("Ban removal sent but still listed.");
+                }
+            logInfo("Removed %s %s", verb, mask);
+            return;
+        } catch (Exception e) {
+            if (!answered) dropSession();
+            if (reused && attempt == 0 && !answered) continue;
             throw e;
         }
     }

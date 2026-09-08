@@ -1,0 +1,183 @@
+# IRC Fiber — InspIRCd 4 spanningtree LEAF (k8s side of the OVH hub link).
+#
+# Config is deliberately NOT in this file. playbooks/ircd-k8s-leaf.yml renders
+# the same Jinja templates the OVH hub uses — link password and cloak key come
+# from ansible-vault — onto the node at /var/lib/ircfiber/ircd-k8s/conf, and
+# this Deployment hostPath-mounts them. A Secret is impossible on this cluster:
+# the rancher.cattle.io validating webhook has failurePolicy Fail on `secrets`
+# and its service has no endpoints, so every secret create/update is refused.
+#
+# Apply: cd site/deploy && ansible-playbook playbooks/ircd-k8s-leaf.yml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ircfiber-ircd-k8s
+  namespace: ircfiber-prod
+  labels:
+    app: ircfiber-ircd-k8s
+    component: ircd-leaf
+spec:
+  replicas: 1
+  # Recreate, never RollingUpdate: the link listener uses a hostPort and a
+  # second pod would sit Pending on the port conflict forever.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ircfiber-ircd-k8s
+  template:
+    metadata:
+      labels:
+        app: ircfiber-ircd-k8s
+        component: ircd-leaf
+    spec:
+      # The node carries node.kubernetes.io/disk-pressure:NoSchedule; without
+      # this the pod never schedules (same reason as the backup CronJobs).
+      tolerations:
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: inspircd
+          image: inspircd/inspircd-docker:4.11.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: INSP_TLS_CN
+              value: k8s.ircfiber.com
+            - name: INSP_TLS_MAIL
+              value: admin@ircfiber.com
+            - name: INSP_TLS_ORG
+              value: IRC Fiber
+            - name: INSP_TLS_UNIT
+              value: IRCd
+            - name: INSP_TLS_DURATION
+              value: "3650"
+          ports:
+            - name: irc-plain
+              containerPort: 6667
+            - name: irc-tls
+              containerPort: 6697
+            - name: link
+              containerPort: 7001
+              # hostIP pins the listener to the tailnet interface, so the link
+              # port exists only for tailnet peers (the hub dials
+              # 100.94.116.56:7001). hostPort reachability from OVH on this
+              # node is proven by the SigNoz otel-agent on :4318.
+              hostIP: 100.94.116.56
+              hostPort: 7001
+          volumeMounts:
+            - name: conf
+              mountPath: /inspircd/conf
+            - name: data
+              mountPath: /inspircd/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
+          # exec, never tcpSocket: m_connectban counts every inbound TCP
+          # connection per source and only clears hourly, so a periodic TCP
+          # probe Z-lines the prober for hours — the loopback incident the
+          # ircd role documents.
+          #
+          # Two details, both verified inside this container (2026-09-07):
+          #  * `pgrep -x inspircd` matches NOTHING here, and `pgrep -f` would
+          #    match the probe's own shell. InspIRCd is PID 1 (the image runs
+          #    `/inspircd/bin/inspircd --nofork`), so read /proc/1/comm.
+          #  * Ports in /proc/net/tcp* are hex, and the table depends on the
+          #    bind: the client listeners use <bind address=""> which is the
+          #    IPv6 wildcard, so 6667 (:1A0B) appears only in tcp6, while the
+          #    link listener is address="0.0.0.0" so 7001 (:1B59) is in tcp.
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - '[ "$(cat /proc/1/comm)" = inspircd ] && grep -q ":1A0B" /proc/net/tcp6'
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - '[ "$(cat /proc/1/comm)" = inspircd ] && grep -q ":1A0B" /proc/net/tcp6'
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - '[ "$(cat /proc/1/comm)" = inspircd ] && grep -q ":1B59" /proc/net/tcp'
+            periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        # hostPath, not a PVC: local-path's helper pod carries no
+        # disk-pressure toleration, so claims never bind on this node.
+        - name: conf
+          hostPath:
+            path: /var/lib/ircfiber/ircd-k8s/conf
+            type: Directory
+        - name: data
+          hostPath:
+            path: /var/lib/ircfiber/ircd-k8s/data
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ircfiber-ircd-k8s
+  namespace: ircfiber-prod
+  labels:
+    app: ircfiber-ircd-k8s
+spec:
+  selector:
+    app: ircfiber-ircd-k8s
+  ports:
+    - name: irc-plain
+      port: 6667
+      targetPort: 6667
+    - name: irc-tls
+      port: 6697
+      targetPort: 6697
+---
+# Additive to allow-ovh-prod-db-and-mullvad, whose ingress admits only 8091.
+# NetworkPolicies union, so this only widens the leaf pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ircd-leaf
+  namespace: ircfiber-prod
+spec:
+  podSelector:
+    matchLabels:
+      app: ircfiber-ircd-k8s
+  policyTypes: [Ingress]
+  ingress:
+    # Server link from the OVH hub over the tailnet. Three CIDRs because the
+    # source address a hostPort connection presents to the pod depends on
+    # whether the CNI portmap chain SNATs it: tailnet peer, pod CIDR, DinD
+    # bridge.
+    - from:
+        - ipBlock:
+            cidr: 100.64.0.0/10
+        - ipBlock:
+            cidr: 10.42.0.0/16
+        - ipBlock:
+            cidr: 172.26.0.0/16
+      ports:
+        - port: 7001
+          protocol: TCP
+    # In-cluster clients via the ClusterIP Service.
+    - from:
+        - ipBlock:
+            cidr: 10.42.0.0/16
+      ports:
+        - port: 6667
+          protocol: TCP
+        - port: 6697
+          protocol: TCP

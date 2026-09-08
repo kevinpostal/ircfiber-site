@@ -23,6 +23,7 @@ import ircfiber.api.session : SessionManager, UserSession,
 import ircfiber.storage.buffer : BufferManager, sanitizeUtf8;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.auth : authenticateRequest;
+import ircfiber.web.common : getClientIp;
 import ircfiber.db.user : UserRepository;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.preferences : PreferencesRepository, UserPreferences;
@@ -129,6 +130,13 @@ final class WebSocketGateway {
         // new tab — fall through to the fresh-session path so the new tab
         // gets its own outbound queue, socket, and ack cursor.
         auto req = socket.request;
+        // Login-session bookkeeping for the user's own "Login sessions" page:
+        // which browser (vibe.d session) opened this socket, and from where.
+        // Captured here because `socket.request` is the only place the
+        // handshake's headers and peer address are still reachable.
+        const webSessionId = req.session ? req.session.id : "";
+        const handshakeIp = getClientIp(req);
+        const handshakeUa = req.headers.get("User-Agent", "");
         if (req.session) {
             auto jwtToken = req.session.get("ws_session_jwt", "");
             if (jwtToken.length > 0) {
@@ -147,6 +155,12 @@ final class WebSocketGateway {
                                 // Re-attach the live WebSocket to the restored session
                                 restored.socket = socket;
                                 restored.isActive = true;
+                                // The blob predates this handshake: re-stamp
+                                // the client metadata so the sessions page
+                                // reports where the socket really came from.
+                                restored.webSessionId = webSessionId;
+                                restored.clientIp = handshakeIp;
+                                restored.userAgent = handshakeUa;
                                 session = *restored;
                                 logInfo("WebSocket session %s restored from Redis for user %s",
                                     session.id, user.username);
@@ -168,7 +182,8 @@ final class WebSocketGateway {
 
         // If no restore happened, create a fresh session (hot path).
         if (session.id == UUID.init) {
-            session = sessionManager.createSession(user, socket);
+            session = sessionManager.createSession(user, socket, webSessionId,
+                handshakeIp, handshakeUa);
             logInfo("WebSocket session %s created for user %s", session.id, user.username);
 
             // Generate JWT for this session and store in the vibe.d session.
@@ -338,6 +353,11 @@ final class WebSocketGateway {
         msg["time"] = Json(Clock.currTime.toUnixTime!long * 1000L);
         msg["idle_interval"] = Json(idleIntervalMs);
         msg["sinceEid"] = Json(session.sinceEid);  // echo back for client sanity check
+        // This tab's WebSocket session id. The client hands it back to
+        // `GET /api/me/sessions?client=<id>` so the sessions page can mark
+        // which of its own live clients is the tab you are looking at —
+        // the cookie alone cannot tell two tabs of one browser apart.
+        msg["session"] = Json(session.id.toString());
         try {
             socket.send(sanitizeUtf8(msg.toString()));
         } catch (Exception e) {
@@ -1104,6 +1124,12 @@ final class WebSocketGateway {
         while (socket.connected) {
             try {
                 auto msg = socket.receiveText();
+                // Any inbound frame (the 5s `ack` heartbeat, or a command)
+                // proves the tab is still there. Half-open sockets — laptop
+                // lid closed, Wi-Fi dropped — keep `socket.connected` true
+                // until TCP gives up, so this stamp is what keeps the user's
+                // own "Active clients" list from listing dead tabs.
+                sessionManager.touchClient(session.id);
                 if (msg.length > 0) {
                     handleClientMessage(session, msg);
                 }
