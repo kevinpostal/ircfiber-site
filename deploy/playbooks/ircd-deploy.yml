@@ -1,0 +1,71 @@
+---
+# IRCd image deploy — pull the requested image ref, tag it locally as
+# ircfiber-ircd:deploy, and run the ircd role against that tag. The role's
+# community.docker.docker_container compares image ids, not tag strings, so a
+# new id under the same tag recreates the container. Recreating the ircd
+# drops every IRC client and relinks Anope: this is a maintenance-window
+# action, unlike `make deploy-ircd` (playbooks/ircd.yml: config render +
+# SIGHUP rehash, sockets stay up).
+#
+# The image is built on the builder host and pushed to GHCR by
+# `make ship-ircd` (ircfiber-infra/Makefile).
+#
+#   ircd_image_ref  anything `docker image inspect` resolves:
+#     ghcr.io/…@sha256:…   make ship-ircd  (by digest)
+#     ghcr.io/…:prod       default (the promoted tag)
+- name: Deploy the IRC daemon image from the registry
+  hosts: ircfiber_backend
+  become: true
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  vars:
+    ircd_image_ref: "{{ ircd_image_registry }}:prod"   # overridden by -e
+    # The role only ever sees this local tag, so its docker_image pull
+    # (guarded on a registry-qualified name) and docker_container never have
+    # to interpret a digest ref.
+    ircd_image: "ircfiber-ircd:deploy"
+  roles:
+    - role: registry_login
+  pre_tasks:
+    - name: Assert IRCd vault secrets are set
+      ansible.builtin.assert:
+        that:
+          - vault_ircd_oper_password is defined
+          - vault_ircd_oper_password | length > 0
+          - vault_ircd_services_link_password is defined
+          - vault_ircd_cloak_key is defined
+        fail_msg: "vault_ircd_oper_password, vault_ircd_services_link_password and vault_ircd_cloak_key must be set in vault.yml"
+
+    - name: Pull ircd image (registry refs only)
+      ansible.builtin.command: docker pull {{ ircd_image_ref }}
+      when: "'/' in ircd_image_ref"
+      changed_when: true
+
+    # A ref that does not resolve fails here with docker's own "No such
+    # image" — before anything is stopped.
+    - name: Resolve requested image id
+      ansible.builtin.command: docker image inspect -f '{{ "{{" }}.Id{{ "}}" }}' {{ ircd_image_ref }}
+      check_mode: false
+      register: ircd_image_id
+      changed_when: false
+
+    - name: Tag requested image as the deploy tag
+      ansible.builtin.command: docker tag {{ ircd_image_id.stdout }} {{ ircd_image }}
+      changed_when: true
+
+  tasks:
+    - name: Run the ircd role against the deploy tag
+      ansible.builtin.include_role:
+        name: ircd
+
+  post_tasks:
+    - name: Assert the running ircd is the requested image
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.Image{{ "}}" }}' {{ ircd_container_name }}
+      register: running_image_id
+      changed_when: false
+      failed_when: running_image_id.stdout != ircd_image_id.stdout
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ ircd_container_name }} runs {{ ircd_image_ref }} ({{ ircd_image_id.stdout[:19] }})"

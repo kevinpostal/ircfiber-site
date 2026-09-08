@@ -1,0 +1,52 @@
+# IRC Fiber ircd image: upstream InspIRCd 4 plus one third-party module
+# (motdpool, deploy/roles/ircd/files/motdpool/m_motdpool.cpp).
+#
+# This is a pinned mirror of inspircd/inspircd-docker's Dockerfile at
+# DOCKER_REPO_COMMIT, not a `FROM inspircd/inspircd-docker` derivative: the
+# hub tags are rebuilt weekly on whatever alpine is current, so a derived
+# image would mix a daemon compiled against one musl/libstdc++ with runtime
+# libraries from another. Both stages pin the same alpine, the daemon is
+# built from the INSPIRCD_TAG tag, and conf/ + entrypoint.sh come from the
+# pinned inspircd-docker commit. Everything upstream (uid 10000, /conf
+# defaults, entrypoint, healthcheck) is kept; the only delta is
+# m_motdpool.so. When bumping, diff against upstream's Dockerfile at the new
+# commit and carry over any drift.
+#
+# Build context is the site repo root (what the root Makefile's SHIP_SH
+# passes), so the COPY path is repo-relative:
+#   docker build -f deploy/roles/ircd/files/Containerfile.ircd --target runtime-ircd .
+
+ARG INSPIRCD_TAG=v4.11.0
+ARG DOCKER_REPO_COMMIT=b56c7ca093a557a707702d51788f032d709eac38
+
+FROM alpine:3.24 AS builder-ircd
+ARG INSPIRCD_TAG
+ARG DOCKER_REPO_COMMIT
+RUN apk add --no-cache gcc g++ make git pkgconfig perl gnutls-dev
+RUN addgroup -g 10000 -S inspircd && adduser -u 10000 -h /inspircd/ -D -S -G inspircd inspircd
+RUN git clone --branch ${INSPIRCD_TAG} --depth 1 https://github.com/inspircd/inspircd.git /inspircd-src \
+ && git clone https://github.com/inspircd/inspircd-docker.git /inspircd-docker \
+ && git -C /inspircd-docker checkout --detach ${DOCKER_REPO_COMMIT}
+COPY deploy/roles/ircd/files/motdpool/m_motdpool.cpp /inspircd-src/src/modules/
+WORKDIR /inspircd-src
+# The two `test -f` lines are the build gate: m_motdpool.so proves the new
+# module compiled; m_ssl_gnutls.so proves configure auto-enabled the one
+# extra prod loads. Either failing to build would otherwise only surface as
+# a module load error in prod.
+RUN ./configure --prefix /inspircd --example-dir /inspircd/examples --uid 10000 --gid 10000 \
+ && make -j"$(getconf _NPROCESSORS_ONLN)" install \
+ && test -f /inspircd/modules/m_motdpool.so \
+ && test -f /inspircd/modules/m_ssl_gnutls.so \
+ && rm -rf /inspircd/conf/*
+
+FROM alpine:3.24 AS runtime-ircd
+RUN apk add --no-cache libgcc libstdc++ gnutls gnutls-utils \
+ && addgroup -g 10000 -S inspircd && adduser -u 10000 -h /inspircd/ -D -S -G inspircd inspircd
+COPY --from=builder-ircd --chown=inspircd:inspircd /inspircd-docker/conf/ /conf/
+COPY --from=builder-ircd --chown=inspircd:inspircd /inspircd-docker/entrypoint.sh /entrypoint.sh
+COPY --from=builder-ircd --chown=inspircd:inspircd /inspircd/ /inspircd/
+USER inspircd
+EXPOSE 6667 6697 7000 7001
+WORKDIR /
+ENTRYPOINT ["/entrypoint.sh"]
+HEALTHCHECK --interval=60s --timeout=3s --start-period=60s --retries=3 CMD /usr/bin/nc -z localhost 6667

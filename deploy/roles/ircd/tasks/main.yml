@@ -58,7 +58,7 @@
     - "{{ ircd_data_volume }}"
     - "{{ ircd_services_data_volume }}"
 
-- name: Pull images
+- name: Pull images (registry-qualified refs only)
   community.docker.docker_image:
     name: "{{ item }}"
     source: pull
@@ -66,6 +66,10 @@
   loop:
     - "{{ ircd_image }}"
     - "{{ ircd_services_image }}"
+  # ircd-deploy.yml hands this role a plain local tag (ircfiber-ircd:deploy)
+  # it has already pulled by digest and tagged; a pull of that would go to
+  # Docker Hub and fail.
+  when: "'/' in item"
 
 # The InspIRCd image runs as uid 10000 and its entrypoint writes the
 # self-signed cert/key/dhparams into the conf dir on first boot.

@@ -258,7 +258,14 @@ ircfiber_public_url: "https://ircfiber.com"
 # its inspircd3 protocol module.
 ircd_port_plain: 6667
 ircd_port_tls: 6697
-ircd_image: "inspircd/inspircd-docker:4.11.0"
+# Our own build of InspIRCd 4 (roles/ircd/files/Containerfile.ircd): upstream
+# v4.11.0 plus exactly one third-party module, motdpool
+# (roles/ircd/files/motdpool/m_motdpool.cpp). Built and promoted to :prod by
+# `make ship-ircd`, which deploys by digest via playbooks/ircd-deploy.yml.
+ircd_image_registry: >-
+  {{ (docker_registry_url + '/' if (docker_registry_url | length > 0) else '')
+     + docker_registry_namespace + '/irc-fiber-ircd' }}
+ircd_image: "{{ ircd_image_registry }}:{{ docker_image_tag }}"
 ircd_container_name: "ircfiber-ircd"
 # /inspircd/data — xline.db, permchannels.conf. (The old Ergo volume
 # ircfiber_ircd_data is left in place untouched for rollback.)
