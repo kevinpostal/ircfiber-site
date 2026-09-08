@@ -1,0 +1,47 @@
+---
+# Throwaway verification of the public /unban offer stage against the live
+# ircd: place a machine-marked Z-line on a TEST-NET-2 address nobody uses,
+# so the tokenless resolution path has something to find, then remove it.
+# Placing and removing both go through the dashboard oper, exactly as the
+# admin Release button and the unban page do.
+#
+#   ansible-playbook playbooks/fibereye-unban-check.yml -e state=place
+#   ansible-playbook playbooks/fibereye-unban-check.yml -e state=remove
+- name: Place or remove a marked Z-line for the /unban render check
+  hosts: ircfiber_gw
+  become: true
+  gather_facts: false
+  vars:
+    state: place
+    probe_ip: 198.51.100.42
+  tasks:
+    - name: Resolve the ircd container network
+      ansible.builtin.shell:
+        cmd: docker inspect ircfiber-ircd | python3 -c 'import json,sys; print(list(json.load(sys.stdin)[0]["NetworkSettings"]["Networks"])[0])'
+      register: _net
+      changed_when: false
+
+    - name: Drive the dashboard oper over a throwaway client
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          PW=$(cat /etc/ircfiber/gateway/secrets/ircd_oper_password)
+          OP=$(grep -oE '^IRCFIBER_IRCD_OPER=.*' /etc/ircfiber/gateway/env | cut -d= -f2)
+          {% if state == 'place' %}
+          CMD="ZLINE {{ probe_ip }} 300 :FiberEye: unban render check"
+          {% else %}
+          CMD="ZLINE {{ probe_ip }}"
+          {% endif %}
+          docker run --rm --network {{ _net.stdout }} busybox sh -c \
+            "(printf 'NICK zlchk\r\nUSER z 0 * :z\r\n'; sleep 3; \
+              printf 'OPER '\"\$OP\"' '\"\$PW\"'\r\n'; sleep 3; \
+              printf '$CMD\r\n'; sleep 3; \
+              printf 'STATS Z\r\n'; sleep 3) | nc ircd 6667" \
+            | grep -E ' 381 | 210 ' | sed "s|\$PW|<redacted>|g"
+      register: _out
+      changed_when: true
+      no_log: true
+
+    - name: Show the oper reply and the resulting Z-line list
+      ansible.builtin.debug:
+        var: _out.stdout_lines
