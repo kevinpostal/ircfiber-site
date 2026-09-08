@@ -1,0 +1,154 @@
+---
+# Cloudflare Email Routing: forward ops@<zone> to a real mailbox.
+#
+# The IP intelligence vendor accounts (proxycheck.io, IPHub, ipapi.is —
+# `vault_ipintel_accounts`) are registered to `vault_ipintel_email`
+# (ops@ircfiber.com). Email Routing is already enabled on the zone (MX →
+# route{1,2,3}.mx.cloudflare.net, SPF includes _spf.mx.cloudflare.net); this
+# playbook only adds the destination address and the routing rule, and is
+# idempotent: an existing rule with the same `to` matcher is left alone.
+#
+# Token: `vault_cloudflare_email_token`, scoped to
+#   Zone    → Email Routing Rules: Edit
+#   Account → Email Routing Addresses: Edit
+# (the DNS token in `vault_cloudflare_api_token` has Zone:DNS:Edit only and
+# answers 403 here). Falls back to the DNS token when the email token is
+# unset, so a token that happens to carry both scopes still works.
+#
+# A destination address must be verified once: Cloudflare mails the
+# destination a link on creation, and the rule silently drops mail until
+# it is clicked. The play reports `verified: false` and stops there.
+#
+#   ansible-playbook playbooks/email-routing.yml
+#   ansible-playbook playbooks/email-routing.yml -e email_routing_destination=someone@example.com
+
+- name: Route ops@ mail to the operator's mailbox
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+    - "{{ playbook_dir }}/../inventories/production/group_vars/all/vars.yml"
+  vars:
+    email_routing_zone: "{{ cloudflare_zone | default('ircfiber.com') }}"
+    email_routing_address: "{{ vault_ipintel_email | default('ops@' ~ email_routing_zone) }}"
+    email_routing_destination: "{{ vault_ipintel_forward_to | default('zod32@me.com') }}"
+    email_routing_rule_name: "ops forward"
+    _cf_token: "{{ vault_cloudflare_email_token | default(vault_cloudflare_api_token) }}"
+    _cf_headers:
+      Authorization: "Bearer {{ _cf_token }}"
+      Content-Type: application/json
+    _cf_api: https://api.cloudflare.com/client/v4
+  tasks:
+    - name: Verify Cloudflare vault variables are present
+      ansible.builtin.assert:
+        that:
+          - _cf_token | length > 0
+          - _cf_token != "REPLACE-WITH-CF-API-TOKEN"
+          - vault_cloudflare_account_id is defined
+          - vault_cloudflare_account_id | length > 0
+        fail_msg: |
+          vault_cloudflare_email_token (or vault_cloudflare_api_token) and
+          vault_cloudflare_account_id must be set:
+            ansible-vault edit inventories/production/group_vars/vault.yml
+
+    - name: Look up the zone id
+      ansible.builtin.uri:
+        url: "{{ _cf_api }}/zones?name={{ email_routing_zone }}"
+        headers: "{{ _cf_headers }}"
+      register: _zone
+      failed_when: not _zone.json.success or (_zone.json.result | length) == 0
+
+    - name: Set the zone id
+      ansible.builtin.set_fact:
+        _zone_id: "{{ _zone.json.result[0].id }}"
+
+    - name: Read the account's destination addresses
+      ansible.builtin.uri:
+        url: "{{ _cf_api }}/accounts/{{ vault_cloudflare_account_id }}/email/routing/addresses?per_page=50"
+        headers: "{{ _cf_headers }}"
+        status_code: [200, 403]
+      register: _addresses
+
+    - name: Stop when the token cannot read Email Routing addresses
+      ansible.builtin.fail:
+        msg: |
+          HTTP {{ _addresses.status }} listing destination addresses — the
+          token lacks "Account → Email Routing Addresses: Edit". Mint a token
+          with that scope plus "Zone → Email Routing Rules: Edit" and store
+          it as vault_cloudflare_email_token.
+      when: _addresses.status != 200
+
+    - name: Find the destination among them
+      ansible.builtin.set_fact:
+        _dest: "{{ _addresses.json.result | selectattr('email', 'equalto', email_routing_destination) | list | first | default({}) }}"
+
+    - name: Add the destination address (Cloudflare mails it a verification link)
+      ansible.builtin.uri:
+        url: "{{ _cf_api }}/accounts/{{ vault_cloudflare_account_id }}/email/routing/addresses"
+        method: POST
+        headers: "{{ _cf_headers }}"
+        body_format: json
+        body: { email: "{{ email_routing_destination }}" }
+      register: _dest_created
+      when: _dest | length == 0
+      changed_when: true
+
+    - name: Refresh the destination record
+      ansible.builtin.set_fact:
+        _dest: "{{ _dest_created.json.result }}"
+      when: _dest | length == 0
+
+    - name: Report an unverified destination
+      ansible.builtin.debug:
+        msg: >-
+          {{ email_routing_destination }} is not verified yet — click the link
+          Cloudflare mailed to it, then re-run this playbook. The rule below is
+          still created; mail to {{ email_routing_address }} is dropped until
+          the address is verified.
+      when: not (_dest.verified | default(''))
+
+    - name: Read the zone's routing rules
+      ansible.builtin.uri:
+        url: "{{ _cf_api }}/zones/{{ _zone_id }}/email/routing/rules?per_page=50"
+        headers: "{{ _cf_headers }}"
+        status_code: [200, 403]
+      register: _rules
+
+    - name: Stop when the token cannot read Email Routing rules
+      ansible.builtin.fail:
+        msg: |
+          HTTP {{ _rules.status }} listing routing rules — the token lacks
+          "Zone → Email Routing Rules: Edit". See the header of this playbook.
+      when: _rules.status != 200
+
+    - name: Find an existing rule for the address
+      ansible.builtin.set_fact:
+        _existing: >-
+          {{ _rules.json.result
+             | selectattr('matchers', 'defined')
+             | selectattr('matchers', 'search', email_routing_address)
+             | list }}
+
+    - name: Create the forwarding rule
+      ansible.builtin.uri:
+        url: "{{ _cf_api }}/zones/{{ _zone_id }}/email/routing/rules"
+        method: POST
+        headers: "{{ _cf_headers }}"
+        body_format: json
+        body:
+          name: "{{ email_routing_rule_name }}"
+          enabled: true
+          matchers:
+            - { type: literal, field: to, value: "{{ email_routing_address }}" }
+          actions:
+            - { type: forward, value: ["{{ email_routing_destination }}"] }
+      when: _existing | length == 0
+      changed_when: true
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ email_routing_address }} → {{ email_routing_destination }}
+          ({{ 'rule already present' if _existing | length else 'rule created' }};
+          destination {{ 'verified' if _dest.verified | default(false) else 'NOT verified' }})

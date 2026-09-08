@@ -123,37 +123,30 @@ support_bot_container_name: "ircfiber-support-bot"
 support_bot_nick: "FiberSupport"
 support_bot_channel: "#support"
 support_bot_public_url: "https://{{ ircfiber_domain }}"
-# --- #staff log bot (same gateway image, dedicated container) ---------------
-# Only the process with IRCFIBER_LOGS_BOT_ENABLED=1 connects to the ircd as
-# FiberLogs, OPERs as {{ logs_bot_oper_name }} for connect server notices and
-# reports signups, outbound email and IRCd connects in #staff. Never set on
-# the blue/green gateway replicas. Secrets: vault_logs_bot_nickserv_password,
-# vault_ircd_logs_oper_password, vault_ipinfo_token.
-logs_bot_enabled: true
-logs_bot_container_name: "ircfiber-logs-bot"
-logs_bot_nick: "FiberLogs"
-logs_bot_channel: "#staff"
-logs_bot_oper_name: "fiberlogs"
-# Connect classes whose connects are not announced: the engine multiplexes
-# every platform user through container IPs (useless geo) and loopback is the
-# ircd's own healthcheck.
-logs_bot_ignore_classes: "ircfiber-engine,ircfiber-engine-v6,localhost"
-# --- FiberEye connection watch (same gateway image, dedicated container) ----
-# Only the process with IRCFIBER_FIBEREYE_ENABLED=1 opens a second, opered IRC
-# connection to the ircd as FiberEye. It joins no channel: it OPERs as
-# {{ fibereye_oper_name }} for connect/quit server notices, persists every
-# session in Mongo behind the admin #/fibereye page, and places timed Z-lines
-# on connect floods. Never set on the blue/green gateway replicas.
+# --- FiberEye connection watch + #staff announcer (dedicated container) -----
+# Only the process with IRCFIBER_FIBEREYE_ENABLED=1 opens an opered IRC
+# connection to the ircd as FiberEye. It OPERs as {{ fibereye_oper_name }}
+# with snomasks cCqx (connects, remote connects, quits, X-lines), persists
+# every session in Mongo behind the admin #/fibereye page, assembles the IP
+# intelligence record for every public connect, places timed Z-lines on
+# connect floods, and sits in {{ fibereye_channel }} announcing the Redis
+# outbox: signups, outbound mail, connects (with the record), admin notices
+# and backup runs. It replaced the FiberLogs bot (ircfiber-logs-bot). Never
+# set on the blue/green gateway replicas.
 # Enforcement ships DISARMED — the Redis key `fibereye:armed` arms it, and the
 # admin page's Arm button is the only thing that sets it. Secrets:
-# vault_fibereye_nickserv_password, vault_ircd_fibereye_oper_password.
+# vault_fibereye_nickserv_password, vault_ircd_fibereye_oper_password,
+# vault_ipinfo_token and the optional vault_proxycheck_key / vault_iphub_key /
+# vault_ipapi_is_key.
 fibereye_enabled: true
 fibereye_container_name: "ircfiber-fibereye"
 fibereye_nick: "FiberEye"
+fibereye_channel: "#staff"
 fibereye_oper_name: "fibereye"
-# Connect classes whose connects are never counted or banned. Same rationale
-# as logs_bot_ignore_classes, plus localhost-v6: banning the ircd's own
-# healthcheck source would take the whole platform offline.
+# Connect classes whose connects are never counted, banned or announced: the
+# engine multiplexes every platform user through container IPs (useless geo),
+# loopback is the ircd's own healthcheck, and localhost-v6 is there because
+# banning the healthcheck source would take the whole platform offline.
 fibereye_ignore_classes: "ircfiber-engine,ircfiber-engine-v6,localhost,localhost-v6"
 # IP groups that are recorded but never counted and never banned. Entries may
 # be an IP group verbatim, any CIDR covering the address, a glob or a bare

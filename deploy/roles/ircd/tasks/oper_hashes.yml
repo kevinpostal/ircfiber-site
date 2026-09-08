@@ -54,33 +54,9 @@
   no_log: true
   tags: [ircdconf]
 
-# #staff log bot oper (Snotices class: no commands at all, only umode +s
-# with snomasks c/C so it receives connect server notices). Rotated
-# independently of the human and dashboard opers.
-- name: Compute InspIRCd hmac-sha256 logs oper password hash
-  ansible.builtin.command:
-    argv:
-      - python3
-      - "{{ role_path }}/files/inspircd_hmac.py"
-  environment:
-    INSP_PASSWORD: "{{ vault_ircd_logs_oper_password }}"
-    INSP_SALT_LABEL: "{{ ircd_server_name }}/{{ ircd_logs_oper_name }}"
-  delegate_to: localhost
-  become: false
-  register: ircd_logs_oper_hash_raw
-  changed_when: false
-  no_log: true
-  tags: [ircdconf]
-
-- name: Set logs oper password hash fact
-  ansible.builtin.set_fact:
-    ircd_logs_oper_hash: "{{ ircd_logs_oper_hash_raw.stdout | trim }}"
-  no_log: true
-  tags: [ircdconf]
-
-# FiberEye connection-watch oper (EyeWatch class: ZLINE + STATS only, plus
-# umode +s with snomasks c/q/x so it sees every connect and quit). Rotated
-# independently of the human, dashboard and log-bot opers.
+# FiberEye connection-watch + #staff announcer oper (EyeWatch class: ZLINE +
+# STATS only, plus umode +s with snomasks c/C/q/x so it sees every connect
+# and quit). Rotated independently of the human and dashboard opers.
 - name: Compute InspIRCd hmac-sha256 FiberEye oper password hash
   ansible.builtin.command:
     argv:

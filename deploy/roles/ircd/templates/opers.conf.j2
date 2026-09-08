@@ -64,37 +64,17 @@
       host="*@{{ ircd_trusted_subnet }} *@{{ ircd_trusted_subnet_v6 }}"
       type="Dashboard">
 
-# FiberLogs: the #staff log bot. It needs exactly one capability an
-# ordinary client lacks — receiving connect server notices — so the class
-# grants no commands and no privs, only umode +s with snomasks c/C.
-# Host-locked to the Docker network like the dashboard oper (both
-# families: a v6 source does not match the v4 subnet).
-# Deliberately no <badnick nick="FIBERLOGS">: unlike FiberServ (a BotServ
-# pseudo-client), FiberLogs is a real client that sends NICK before it can
-# OPER, so a reservation would lock our own bot out. The nick is protected
-# by NickServ registration instead, exactly like FiberSupport.
-<class name="Snotices"
-       usermodes="s"
-       snomasks="cC">
-<type name="LogBot"
-      classes="Snotices"
-      vhost="logs&netsuffix;"
-      modes="+s +cC">
-<oper name="{{ ircd_logs_oper_name }}"
-      hash="hmac-sha256"
-      password="{{ ircd_logs_oper_hash }}"
-      host="*@{{ ircd_trusted_subnet }} *@{{ ircd_trusted_subnet_v6 }}"
-      type="LogBot">
-
-# FiberEye: the connection-watch bot. Two capabilities beyond an ordinary
-# client, and nothing else: connect/quit/X-line server notices (umode +s
-# with snomasks c/q/x) and the ability to place and list a Z-line. That is
-# the whole job, so the class carries ZLINE and STATS only — deliberately
-# no KILL, no GLINE, no KLINE and no REHASH, because a bot that bans
-# automatically must not be able to do anything else if its credentials
-# leak. Removing a Z-line is not its job either: the admin Release button
-# and the public /unban page go through the Dashboard oper in the web
-# process, and any oper may remove any X-line.
+# FiberEye: the connection-watch bot and the #staff announcer (it replaced
+# the FiberLogs log bot, whose Snotices/LogBot oper is gone). Two
+# capabilities beyond an ordinary client, and nothing else: connect/remote
+# connect/quit/X-line server notices (umode +s with snomasks c/C/q/x) and
+# the ability to place and list a Z-line. That is the whole job, so the
+# class carries ZLINE and STATS only — deliberately no KILL, no GLINE, no
+# KLINE and no REHASH, because a bot that bans automatically must not be
+# able to do anything else if its credentials leak. Removing a Z-line is
+# not its job either: the admin Release button and the public /unban page
+# go through the Dashboard oper in the web process, and any oper may
+# remove any X-line.
 #
 # privs="servers/auspex" is REQUIRED, not incidental: `commands="STATS"`
 # alone lets the oper issue the command but the restricted STATS letters
@@ -105,21 +85,21 @@
 # standing ban as already gone. It is the same read-only visibility the
 # Dashboard class above needs for exactly the same reason.
 #
-# Host-locked to the Docker network like the dashboard and log-bot opers
-# (both families: a v6 source does not match the v4 subnet).
-# Deliberately no <badnick nick="FIBEREYE">, for the same reason as
-# FiberLogs above: FiberEye is a real client that sends NICK before it can
+# Host-locked to the Docker network like the dashboard oper (both
+# families: a v6 source does not match the v4 subnet).
+# Deliberately no <badnick nick="FIBEREYE">: unlike FiberServ (a BotServ
+# pseudo-client), FiberEye is a real client that sends NICK before it can
 # OPER, so a reservation would lock our own bot out. The nick is protected
-# by NickServ registration instead.
+# by NickServ registration instead, exactly like FiberSupport.
 <class name="EyeWatch"
        commands="ZLINE STATS"
        privs="servers/auspex"
        usermodes="s"
-       snomasks="cqx">
+       snomasks="cCqx">
 <type name="FiberEye"
       classes="EyeWatch"
       vhost="eye&netsuffix;"
-      modes="+s +cqx">
+      modes="+s +cCqx">
 <oper name="{{ ircd_fibereye_oper_name }}"
       hash="hmac-sha256"
       password="{{ ircd_fibereye_oper_hash }}"

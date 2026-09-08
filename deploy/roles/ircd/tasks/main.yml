@@ -25,9 +25,6 @@
       - vault_ircd_dashboard_password is defined
       - vault_ircd_dashboard_password | length > 0
       - vault_ircd_dashboard_password != "REPLACE-WITH-STRONG-PASSWORD"
-      - vault_ircd_logs_oper_password is defined
-      - vault_ircd_logs_oper_password | length > 0
-      - vault_ircd_logs_oper_password != "REPLACE-WITH-STRONG-PASSWORD"
       - vault_ircd_fibereye_oper_password is defined
       - vault_ircd_fibereye_oper_password | length > 0
       - vault_ircd_fibereye_oper_password != "REPLACE-WITH-STRONG-PASSWORD"
@@ -38,10 +35,8 @@
       OVH hub <-> k3s leaf spanningtree link),
       vault_ircd_cloak_key (>=30 chars), vault_ircd_dashboard_password
       (admin dashboard oper, used by the gateway IRCFIBER_IRCD_OPER_PASSWORD),
-      vault_ircd_logs_oper_password (#staff log bot oper, used by the
-      ircfiber-logs-bot container)
-      and vault_ircd_fibereye_oper_password (FiberEye connection-watch oper,
-      used by the ircfiber-fibereye container)
+      and vault_ircd_fibereye_oper_password (FiberEye connection-watch and
+      #staff announcer oper, used by the ircfiber-fibereye container)
       must be set in inventories/production/group_vars/vault.yml:
         ansible-vault edit inventories/production/group_vars/vault.yml
 
