@@ -137,6 +137,16 @@ final class WebSocketGateway {
         const webSessionId = req.session ? req.session.id : "";
         const handshakeIp = getClientIp(req);
         const handshakeUa = req.headers.get("User-Agent", "");
+        // The engine forwards this address to irc.ircfiber.com via WEBIRC so
+        // the ircd sees the user's own IP (connect class, cloak, connectban,
+        // FiberEye and the per-user MOTD all key on it). Written on every
+        // handshake so engine-initiated reconnects never need the gateway;
+        // failures are logged and ignored — no IP simply means no WEBIRC.
+        try {
+            redis.getDb().setEX(RedisKeys.webircIp(user.id.toString()), 2_592_000, handshakeIp);
+        } catch (Exception e) {
+            logWarn("WebSocket: failed to record webirc ip for %s: %s", user.username, e.msg);
+        }
         if (req.session) {
             auto jwtToken = req.session.get("ws_session_jwt", "");
             if (jwtToken.length > 0) {

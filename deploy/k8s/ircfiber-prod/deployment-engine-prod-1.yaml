@@ -53,6 +53,12 @@ spec:
               # dash/dot label heuristic would collapse all three to "100" and
               # the slot registry would see a single slot.
               value: "socks5://de@100.94.116.56:1080,socks5://ch@100.94.116.56:1081,socks5://us@100.94.116.56:1082"
+            # IRCFIBER_IRCD_WEBIRC_PASSWORD is deliberately absent: this pod
+            # dials the OVH ircd from outside the docker subnets the
+            # <gateway type="webirc"> mask admits, so a WEBIRC from here
+            # would be refused (snotice per connect) and the session would
+            # keep this pod's address anyway. To enable it, widen the mask
+            # and add the vault value as a Secret-backed env var.
           resources:
             requests:
               cpu: 200m

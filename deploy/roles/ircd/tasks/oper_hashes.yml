@@ -77,3 +77,26 @@
     ircd_fibereye_oper_hash: "{{ ircd_fibereye_oper_hash_raw.stdout | trim }}"
   no_log: true
   tags: [ircdconf]
+
+# WEBIRC password the engine presents to <gateway type="webirc"> (not an
+# oper, but the same hmac-sha256 storage). One secret, one use.
+- name: Compute InspIRCd hmac-sha256 WEBIRC password hash
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/files/inspircd_hmac.py"
+  environment:
+    INSP_PASSWORD: "{{ vault_ircd_webirc_password }}"
+    INSP_SALT_LABEL: "{{ ircd_server_name }}/webirc"
+  delegate_to: localhost
+  become: false
+  register: ircd_webirc_hash_raw
+  changed_when: false
+  no_log: true
+  tags: [ircdconf]
+
+- name: Set WEBIRC password hash fact
+  ansible.builtin.set_fact:
+    ircd_webirc_password_hash: "{{ ircd_webirc_hash_raw.stdout | trim }}"
+  no_log: true
+  tags: [ircdconf]

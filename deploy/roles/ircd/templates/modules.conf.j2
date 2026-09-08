@@ -72,6 +72,22 @@
 
 <module name="haproxy">
 
+# WEBIRC: the IRC Fiber engine sends `WEBIRC <password> ircfiber <ip> <ip>`
+# on every connection to this network so the user's own browser address
+# replaces the engine's docker address — connect class, cloak, connectban,
+# FiberEye and the per-user MOTD all key on it. Authorised by source mask
+# (the engine dials from the docker network) plus the hashed
+# vault_ircd_webirc_password (password_hash + sha2 above make hmac-sha256
+# verifiable). The <connect name="ircfiber-web" webirc="ircfiber"> class in
+# inspircd.conf is matched the instant this module swaps the address, and
+# is enforced by THIS module: unload it and that class would catch every
+# native client (allow="*" ahead of main), so the two go together.
+<module name="gateway">
+<gateway type="webirc"
+         mask="{{ ircd_trusted_subnet }} {{ ircd_trusted_subnet_v6 }}"
+         password="{{ ircd_webirc_password_hash }}"
+         hash="hmac-sha256">
+
 #-#-#-#-#-#-#-#-#-#-#-#-#  SERVICES / SASL  -#-#-#-#-#-#-#-#-#-#-#-#-#-#
 
 <module name="spanningtree">
@@ -433,7 +449,7 @@
 #-#-#-#-#-#-#-#-#-  ADD-NOW (2026-09-08)  -#-#-#-#-#-#-#-#
 # Approved 2026-09-08. All link-safe: no new chan/user modes, no
 # link-data change (CHANMODES/USERMODES CAPAB diff stays empty).
-# gateway demoted to Consider (engine sends no WEBIRC); vhost dropped
+# gateway (WEBIRC) lives in the REVERSE PROXY section above; vhost dropped
 # (Anope HostServ present); maphide lives on <security> in inspircd.conf.
 <module name="alltime">
 <module name="help">

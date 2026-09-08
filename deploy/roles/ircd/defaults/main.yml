@@ -158,6 +158,11 @@ ircd_require_sasl: false
 # Limits
 ircd_max_channels_per_account: 100
 ircd_ip_limits_connections: 5
+# Per-IP clone limit for the ircfiber-web class (web sessions after the
+# WEBIRC swap). Higher than main's: web sessions and native clients from one
+# household share an address, and main's figure is measured for native
+# clients only.
+ircd_web_class_ip_limit: 8
 ircd_public_class_limit: 5000
 ircd_nicklen: 32
 ircd_identlen: 20
@@ -291,6 +296,14 @@ ircd_permanent_channels:
     description: "IRC Fiber staff log feed"
     topic: "IRC Fiber operations log — FiberLogs reports signups, outbound email and IRCd connects · oper-only (+O)"
     bot: true
+    # FiberEye reads as staff in the member list: HOP (+h) can kick, set
+    # the topic and manage voice — enough for an enforcement bot to be
+    # visibly on duty — but cannot op/deop or touch the access list.
+    # Scoped to this channel like the support bot's AOP: it has no
+    # business holding status elsewhere.
+    access:
+      hop:
+        - "FiberEye"
 
 # ChanServ registration of the staff channels above (roles/ircd/files/
 # ircd_channel_setup.py, run over TLS on the loopback TLS port). Set false

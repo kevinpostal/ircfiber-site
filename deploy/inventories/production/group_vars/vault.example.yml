@@ -116,6 +116,12 @@ vault_fibereye_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD-MAX-32-CHARS"
 # distinct random value — never reuse the dashboard, log-bot or human admin
 # oper password.
 vault_ircd_fibereye_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
+# WEBIRC password: one secret, one use. The engine sends it as the WEBIRC
+# password on every connection to irc.ircfiber.com (env
+# IRCFIBER_IRCD_WEBIRC_PASSWORD) so the ircd sees each web user's own IP;
+# the ircd role stores it as an hmac-sha256 hash in <gateway type="webirc">.
+# Nothing else consumes it. Generate: openssl rand -base64 32
+vault_ircd_webirc_password: "REPLACE-WITH-STRONG-PASSWORD"
 # Cloudflare Turnstile keypair for the public /unban page. Either mint it in
 # the dashboard (Turnstile -> Add widget, mode "managed", the site's own
 # hostnames) or over the API with the token already in this vault:

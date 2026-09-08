@@ -109,6 +109,47 @@
 {% endif %}
          modes="+x">
 
+# Web sessions after the WEBIRC address swap: matched only for users the
+# gateway module has tagged with gateway name "ircfiber" (modules.conf
+# <gateway type="webirc">). m_gateway sets that tag BEFORE it changes the
+# address, and LocalUser::ChangeRemoteAddress re-runs the class match at
+# that instant, so the constraint is satisfied exactly when it is checked
+# (a password= gate would not be: PASS arrives after WEBIRC). Engine bursts
+# (autojoin, NAMES/WHO sweeps, backlog replay) still need engine-sized
+# queues and no fakelag; per-IP limits and connectban now apply to the
+# user's real address, which is the point. useconnflood stays off: it is a
+# server-wide throttle checked against the post-swap class, and an engine
+# restart reconnects every web user inside a few seconds.
+#
+# Enforced by the gateway module: without it the webirc= attribute is
+# ignored and this allow="*" class ahead of "main" would catch every
+# native client. Both live and die together.
+<connect name="ircfiber-web"
+         allow="*"
+         webirc="ircfiber"
+         maxchans="{{ ircd_max_channels_per_account }}"
+         timeout="60"
+         pingfreq="2m"
+         hardsendq="4M"
+         softsendq="1M"
+         recvq="64K"
+         threshold="{{ ircd_engine_threshold }}"
+         commandrate="{{ ircd_engine_commandrate }}"
+         fakelag="no"
+         localmax="{{ ircd_web_class_ip_limit }}"
+         globalmax="{{ ircd_web_class_ip_limit }}"
+         limit="{{ ircd_engine_class_limit }}"
+         resolvehostnames="no"
+         useident="no"
+         usednsbl="no"
+         useconnectban="yes"
+         useconnflood="no"
+         usests="no"
+{% if ircd_require_sasl %}
+         requireaccount="yes"
+{% endif %}
+         modes="+x">
+
 # Loopback (127.0.0.1 / ::1) — the container's own healthcheck, and nothing
 # else: only a process inside the ircd container can source from loopback, so
 # exempting it grants the network nothing.
