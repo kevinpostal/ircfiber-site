@@ -56,6 +56,11 @@
     if (name) return languageNameForFile(name);
     return null;
   });
+  // What the badge shows while editing: the core grammar's display name
+  // when it is one, else the canonical name itself (rare grammars load
+  // lazily and have no display name until then).
+  let editHlLang: { name: string } | null = $derived(
+    editHlName ? { name: coreLanguage(editHlName)?.name ?? editHlName } : null);
   onMount(async () => {
     try { const me = await fetchMe(); meId = me.id; } catch {}
   });

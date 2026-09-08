@@ -66,6 +66,20 @@ const EXT_TO_NAME: Record<string, string> = {
   dockerfile: 'dockerfile', makefile: 'makefile', nginx: 'nginx',
 };
 
+/** Files identified by their whole (lower-cased) basename, where the
+ *  extension lookup would miss: no extension, a dotfile, or an extension
+ *  that names a different grammar (`nginx.conf`, `CMakeLists.txt`). */
+const BASENAME_TO_NAME: Record<string, string> = {
+  dockerfile: 'dockerfile', containerfile: 'dockerfile',
+  makefile: 'makefile', gnumakefile: 'makefile',
+  'nginx.conf': 'nginx',
+  'package.json': 'json', 'package-lock.json': 'json', 'tsconfig.json': 'json',
+  'cargo.toml': 'toml', 'pyproject.toml': 'toml',
+  '.bashrc': 'bash', '.bash_profile': 'bash', '.zshrc': 'bash', '.profile': 'bash',
+  '.gitignore': 'plaintext', '.env': 'ini', '.editorconfig': 'ini',
+  'readme': 'markdown', 'license': 'plaintext',
+};
+
 /** Canonical grammar name for a filename/URL. Synchronous, pure. */
 export function languageNameForFile(filename: string): string {
   const lower = (filename || '').toLowerCase();

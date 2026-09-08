@@ -22,9 +22,9 @@ import MessageList from './MessageList.svelte';
 import { createMessage, createNetwork, createBuffer } from '../test/factories';
 import { ircState, prependMessages } from '../stores/ircStore.svelte';
 import { clearedAtMap } from '../stores/preferences.svelte';
-import { gatewayAvailable, GATEWAY_SKIP_REASON } from '../test/backendProbe';
+import { e2eReady, loginE2E, E2E_SKIP_REASON } from '../test/backendProbe';
 
-const gatewayUp = await gatewayAvailable();
+const e2eUp = await e2eReady();
 
 function reset() {
   ircState.networks.length = 0;
@@ -40,18 +40,12 @@ function reset() {
   Object.keys(clearedAtMap).forEach(k => delete (clearedAtMap as Record<string, any>)[k]);
 }
 
-describe.skipIf(!gatewayUp)(`superbowl history scroll (${GATEWAY_SKIP_REASON})`, () => {
+describe.skipIf(!e2eUp)(`superbowl history scroll (${E2E_SKIP_REASON})`, () => {
   beforeEach(reset);
 
   it('can scroll all the way to start without snapping to bottom', async () => {
-    // Verify .env creds work (admin/REDACTED) – used for e2e history fetch
-    const loginRes = await fetch('/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ username: 'admin', password: 'REDACTED' } as any),
-      credentials: 'include',
-    });
-    expect(loginRes.ok || loginRes.status === 302).toBe(true);
+    // The dev-stack login (VITE_E2E_USER/PASSWORD) – used for the history fetch
+    expect(await loginE2E()).toBe(true);
 
     const net = createNetwork({ networkId: 'net1' });
     net.buffers.push(createBuffer({ name: '#superbowl', type: 'channel' }));

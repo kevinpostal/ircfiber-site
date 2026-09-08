@@ -24,9 +24,9 @@ import { createNetwork, createBuffer } from '../test/factories';
 import { ircState, prependMessages } from '../stores/ircStore.svelte';
 import { loadHistoryWithMeta } from '../stores/api';
 import { clearedAtMap } from '../stores/preferences.svelte';
-import { gatewayAvailable, GATEWAY_SKIP_REASON } from '../test/backendProbe';
+import { e2eReady, loginE2E, E2E_SKIP_REASON } from '../test/backendProbe';
 
-const gatewayUp = await gatewayAvailable();
+const e2eUp = await e2eReady();
 
 function reset() {
   ircState.networks.length = 0;
@@ -38,11 +38,11 @@ function reset() {
   ircState.backlogDivider = {};
 }
 
-describe.skipIf(!gatewayUp)(`yesterday scroll - real DB (${GATEWAY_SKIP_REASON})`, () => {
+describe.skipIf(!e2eUp)(`yesterday scroll - real DB (${E2E_SKIP_REASON})`, () => {
   beforeEach(reset);
   it('finds yesterdays message in DB and scrolls back to see it', async () => {
     // Use .env creds
-    await fetch('/login', { method: 'POST', headers: {'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({username:'admin', password:'REDACTED'} as any), credentials:'include' });
+    expect(await loginE2E()).toBe(true);
     const nets: any = await fetch('/api/networks', {credentials:'include'}).then(r=>r.json());
     const superNet = nets.find((n:any) => n.name === 'Super Nets' || n.host === 'irc.supernets.org');
     expect(superNet).toBeDefined();

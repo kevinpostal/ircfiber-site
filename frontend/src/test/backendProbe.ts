@@ -29,6 +29,37 @@ export const GATEWAY_URL = '127.0.0.1:8090';
 export const GATEWAY_SKIP_REASON =
   `needs the IRC Fiber gateway + Mongo/Redis on ${GATEWAY_URL}`;
 
+// The dev-stack login the suites use. The password is never in the repo (the
+// public split scrubbed it to a placeholder, which made every suite red the
+// moment a gateway was listening): supply it with
+//   VITE_E2E_USER=admin VITE_E2E_PASSWORD=… npx vitest run --project=client src/components/<suite>.e2e.test.ts
+// Without it the suites skip, exactly as they do without the gateway.
+export const E2E_USER: string = (import.meta.env.VITE_E2E_USER as string | undefined) || 'admin';
+export const E2E_PASSWORD: string = (import.meta.env.VITE_E2E_PASSWORD as string | undefined) || '';
+
+/** Reason shown when the gateway is up but no login was supplied. */
+export const E2E_SKIP_REASON =
+  `${GATEWAY_SKIP_REASON}, plus VITE_E2E_PASSWORD for the ${E2E_USER} user`;
+
+/** True when the gateway answers AND a password was supplied — the suites can log in. */
+export async function e2eReady(): Promise<boolean> {
+  return E2E_PASSWORD.length > 0 && await gatewayAvailable();
+}
+
+/** POST /login with the supplied dev-stack credentials; true on success. */
+export async function loginE2E(): Promise<boolean> {
+  const res = await fetch('/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: E2E_USER, password: E2E_PASSWORD }),
+    credentials: 'include',
+    redirect: 'manual',
+  });
+  // The gateway answers a form login with a 302 into the SPA; `manual`
+  // surfaces that as an opaque redirect (status 0, type 'opaqueredirect').
+  return res.ok || res.status === 302 || res.type === 'opaqueredirect';
+}
+
 const PROBE_TIMEOUT_MS = 1500;
 
 let probe: Promise<boolean> | null = null;

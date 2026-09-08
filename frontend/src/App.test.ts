@@ -16,10 +16,14 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
   // syncReceived && backlogReady) flips to false right after render().
   // Simulate the minimal boot: open → stat_user → boot sync. The sync
   // message is what sets syncReceived=true and backlogReady=true in App.
+  // It deliberately carries NO `networks` key: a `networks` array is the
+  // server's authoritative list and `updateNetworkFromSync` deletes every
+  // network missing from it — which would wipe the state each test seeds
+  // into ircState before render().
   connectWebSocket: vi.fn((onMessage, onOpen) => {
     onOpen?.();
     onMessage?.({ type: 'stat_user', username: 'tester', email: 'tester@test.local' });
-    onMessage?.({ type: 'sync', networks: [] });
+    onMessage?.({ type: 'sync' });
   }),
   disconnectWebSocket: vi.fn(),
   sendRaw: vi.fn(),
