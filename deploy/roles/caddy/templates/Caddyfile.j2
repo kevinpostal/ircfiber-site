@@ -218,11 +218,18 @@
         #  - wss:// for the gateway WebSocket connection
         #  - data: URIs for inline images and font fallbacks
         #  - frame-ancestors 'none' so other sites cannot embed /admin
-        #  - frame-src for YouTube inline previews (IRCCloud parity)
+        #  - frame-src for YouTube inline previews (IRCCloud parity) and for
+        #    the Cloudflare Turnstile widget on /unban
         # script-src allows static.cloudflareinsights.com: Cloudflare injects its
         # Web Analytics beacon (beacon.min.js) into proxied HTML; without the
         # allowance every page load logs a CSP violation in the console.
-        Content-Security-Policy "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; connect-src 'self' wss: https:; frame-src 'self' https://www.youtube.com https://youtube.com https://youtu.be https://www.youtube-nocookie.com https://m.youtube.com https://music.youtube.com; frame-ancestors 'none'"
+        # script-src + frame-src allow challenges.cloudflare.com: the public
+        # /unban ban-appeal page gates the release on a Turnstile challenge,
+        # which loads api.js and then renders itself inside an iframe. Without
+        # BOTH allowances the widget never initialises, the page shows no
+        # challenge, and a banned user can never appeal -- verified against
+        # prod, where the widget div rendered but the challenge did not.
+        Content-Security-Policy "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://challenges.cloudflare.com; connect-src 'self' wss: https:; frame-src 'self' https://challenges.cloudflare.com https://www.youtube.com https://youtube.com https://youtu.be https://www.youtube-nocookie.com https://m.youtube.com https://music.youtube.com; frame-ancestors 'none'"
     }
 
     log {
