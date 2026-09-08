@@ -171,6 +171,19 @@ configuration "fibereye-test" {
     mainSourceFile "tests/fibereye_test.d"
     versions "VibeUseFibers"
 }
+// Pure-code unit test for the gateway bot nick reclaim: the Guest-nick
+// detector, the NickServ notice classifier and the +r MODE grant check
+// (no Redis/Mongo/IRCd needed):
+//   dub --root=backend build --config=bot-nick-test && ./backend/bot-nick-test
+configuration "bot-nick-test" {
+    targetType "executable"
+    targetName "bot-nick-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/bots/nick.d"
+    mainSourceFile "tests/bot_nick_test.d"
+    versions "VibeUseFibers"
+}
 
 // Pure-code unit test for the IP-intelligence assembler: per-source
 // mappers, field ownership, the classification vote, the record JSON round

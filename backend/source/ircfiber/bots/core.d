@@ -33,6 +33,8 @@ import vibe.data.json : Json, parseJsonString;
 import vibe.stream.tls : TLSContextKind, TLSPeerValidationMode, TLSStream, TLSStreamState,
     createTLSContext, createTLSStream;
 
+import ircfiber.bots.nick : IDENTIFY_RESEND_MIN_MS, NICK_RECLAIM_EVERY_MS, NickServNote,
+    classifyNickServNotice, modeGrantsRegistered, nickNeedsReclaim;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.support.format : clipBytes;
 import ircfiber.web.admin.ircd : IrcLine, parseIrcLine;
@@ -136,6 +138,12 @@ abstract class IrcBot {
     private bool socketClosed;
     private string nick;
     private int nickAttempts;
+    /// NickServ identification state. Anope SVSNICKs an unidentified holder
+    /// of a registered nick to GuestNNNN (killprotect, 20 s killquick), so
+    /// without active reclaim the bot keeps the Guest nick until a restart.
+    private bool identified;
+    private long lastReclaimMs;
+    private long lastIdentifyMs;
     private bool registered;
     private bool opered;
     private bool readyDone;
@@ -239,6 +247,9 @@ abstract class IrcBot {
         registered = false;
         opered = false;
         readyDone = false;
+        identified = false;
+        lastReclaimMs = 0;
+        lastIdentifyMs = 0;
         alive = true;
         nick = cfg.nick;
         nickAttempts = 0;
@@ -332,6 +343,14 @@ abstract class IrcBot {
         const idle = nowMs() - lastRecvMs;
         if (idle > DEAD_AFTER_MS) throw new Exception("ping timeout (" ~ (idle / 1000).to!string ~ "s silent)");
         if (idle > KEEPALIVE_AFTER_MS && nowMs() - lastSendMs > 30_000) sendLine("PING :keepalive");
+        // Lost the configured nick (NickServ enforce SVSNICKs to Guest) with
+        // no NICK/433 resolving it: retry the NICK at most every 30 s.
+        if (registered && nickNeedsReclaim(registered, nick, cfg.nick)
+            && nowMs() - lastReclaimMs >= NICK_RECLAIM_EVERY_MS) {
+            lastReclaimMs = nowMs();
+            logWarn("%s: holding %s, wanted %s — sending NICK", cfg.logPrefix, nick, cfg.nick);
+            sendLine("NICK " ~ cfg.nick);
+        }
     }
 
     /// Writes one line. Serialized across fibers (reader + the bot's own
@@ -402,14 +421,23 @@ abstract class IrcBot {
                 }
                 break;
             case "433":
-                if (registered) break;
-                if (++nickAttempts >= MAX_NICK_ATTEMPTS) throw new Exception("nick unavailable");
-                nick ~= "_";
-                logWarn("%s: nick in use, retrying as %s", cfg.logPrefix, nick);
-                sendLine("NICK " ~ nick);
+                if (!registered) {
+                    if (++nickAttempts >= MAX_NICK_ATTEMPTS) throw new Exception("nick unavailable");
+                    nick ~= "_";
+                    logWarn("%s: nick in use, retrying as %s", cfg.logPrefix, nick);
+                    sendLine("NICK " ~ nick);
+                    break;
+                }
+                // Post-registration 433: our reclaim NICK was refused (a ghost
+                // holds the nick). The idle check retries with backoff.
+                logWarn("%s: reclaim of %s refused (433) — retrying", cfg.logPrefix, cfg.nick);
+                lastReclaimMs = 0;
                 break;
             case "NICK":
-                if (l.params.length && isMe(l.prefix)) nick = l.params[0];
+                if (l.params.length && isMe(l.prefix)) {
+                    nick = l.params[0];
+                    if (registered) onOwnNickChange();
+                }
                 break;
             case "JOIN":
                 if (l.params.length && isMe(l.prefix) && isMyChannel(l.params[0])) {
@@ -435,9 +463,20 @@ abstract class IrcBot {
                 }
                 break;
             case "NOTICE":
-                // Only server notices carry connect/quit reports; a user
-                // prefix contains '!'.
-                if (l.params.length >= 2 && l.prefix.indexOf('!') < 0) onServerNotice(l.params[$ - 1]);
+                if (l.params.length >= 2) {
+                    if (handleNickServNotice(l.prefix, l.params[$ - 1])) break;
+                    // Only server notices carry connect/quit reports; a user
+                    // prefix contains '!'.
+                    if (l.prefix.indexOf('!') < 0) onServerNotice(l.params[$ - 1]);
+                }
+                break;
+            case "MODE":
+                // Anope sets +r on IDENTIFY (modeonid=yes): the confirmation.
+                // Our own `MODE <me> +B` and the snomask `+s` carry no +r.
+                if (registered && modeGrantsRegistered(nick, l.params)) {
+                    if (!identified) logInfo("%s: NickServ identification confirmed (+r)", cfg.logPrefix);
+                    identified = true;
+                }
                 break;
             case "ERROR":
                 throw new Exception("server ERROR: " ~ (l.params.length ? l.params[$ - 1] : ""));
@@ -448,10 +487,10 @@ abstract class IrcBot {
 
     private void onWelcome(IrcLine l) {
         registered = true;
+        identified = false;
         if (l.params.length && l.params[0].length) nick = l.params[0];
         logInfo("%s: registered as %s", cfg.logPrefix, nick);
-        if (cfg.nickservPassword.length)
-            sendLine("PRIVMSG NickServ :IDENTIFY " ~ cfg.nick ~ " " ~ cfg.nickservPassword);
+        sendIdentify();
         sendLine("MODE " ~ nick ~ " +B");
         if (cfg.operName.length && cfg.operPassword.length) {
             // Snomasks and +O channels wait for 381 or an OPER refusal, so
@@ -461,6 +500,56 @@ abstract class IrcBot {
         }
         logWarn("%s: no oper credentials — running un-opered", cfg.logPrefix);
         becomeReady();
+    }
+
+    /// Sends IDENTIFY for the configured nick when a password exists and
+    /// stamps the resend guard. Called at 001, when a reclaim lands, and on
+    /// NickServ's "please identify" notice — the three moments IDENTIFY can
+    /// succeed (at 001 services may still be re-linking after an ircd restart).
+    private void sendIdentify() {
+        if (!cfg.nickservPassword.length) return;
+        sendLine("PRIVMSG NickServ :IDENTIFY " ~ cfg.nick ~ " " ~ cfg.nickservPassword);
+        lastIdentifyMs = nowMs();
+    }
+
+    /// Our nick changed mid-session: an enforce SVSNICK to Guest, or our own
+    /// reclaim landing. Re-IDENTIFY on arrival, schedule a retry on loss —
+    /// without this the bot keeps a Guest nick until the next restart.
+    private void onOwnNickChange() {
+        if (icmp(nick, cfg.nick) == 0) {
+            logInfo("%s: nick reclaimed (%s) — identifying", cfg.logPrefix, nick);
+            identified = false;
+            sendIdentify();
+        } else {
+            logWarn("%s: nick changed to %s (wanted %s) — reclaiming", cfg.logPrefix, nick, cfg.nick);
+            identified = false;
+            lastReclaimMs = 0;
+        }
+    }
+
+    /// Consumes a NOTICE from NickServ. Returns false for anything else.
+    private bool handleNickServNotice(string prefix, string text) {
+        final switch (classifyNickServNotice(prefix, text)) {
+            case NickServNote.none:
+                return false;
+            case NickServNote.identifyOk:
+                identified = true;
+                logInfo("%s: NickServ identification confirmed", cfg.logPrefix);
+                return true;
+            case NickServNote.identifyBad:
+                // Wrong vault password: resending only burns Anope's
+                // identification throttle, so say so loudly and wait for a human.
+                identified = false;
+                lastIdentifyMs = nowMs();
+                logWarn("%s: NickServ rejected the IDENTIFY password — fix the vault nickserv secret", cfg.logPrefix);
+                return true;
+            case NickServNote.identifyRequest:
+                if (identified || !cfg.nickservPassword.length) return true;
+                if (nowMs() - lastIdentifyMs < IDENTIFY_RESEND_MIN_MS) return true;
+                logInfo("%s: NickServ asks for IDENTIFY — resending", cfg.logPrefix);
+                sendIdentify();
+                return true;
+        }
     }
 
     /// Everything that must happen once the oper question is settled:
