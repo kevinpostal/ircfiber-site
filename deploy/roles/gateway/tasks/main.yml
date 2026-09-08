@@ -21,10 +21,10 @@
             | default(host_tailscale_ip)) }}
 
 - name: Pull irc-fiber image (registry-qualified ref only)
-  # logs-bot is tagged here too: without the pull, `-t logs-bot` builds the
-  # container from whatever :prod the host happens to have cached, which is
-  # the release *before* the one just shipped.
-  tags: [gateway, bnc, logs-bot]
+  # Every side-container tag needs this too: without the pull, `-t <bot>`
+  # builds the container from whatever :prod the host happens to have
+  # cached, which is the release *before* the one just shipped.
+  tags: [gateway, bnc, support-bot, logs-bot]
   community.docker.docker_image:
     name: "{{ ircfiber_gateway_image_full }}"
     source: pull
