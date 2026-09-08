@@ -14,9 +14,17 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /**
+   * Every reason the request was refused, when the endpoint reports more
+   * than one (`{ok:false,error,errors:[…]}`). A validation form has to
+   * show all of them at once, not just the first; `message` stays the
+   * first entry so existing single-message call sites are unaffected.
+   */
+  errors: string[];
+  constructor(message: string, status: number, errors: string[] = []) {
     super(message);
     this.status = status;
+    this.errors = errors;
     this.name = 'ApiError';
   }
 }
@@ -82,14 +90,17 @@ export async function request<T = unknown>(path: string, opts: RequestOptions = 
   const raw = await res.text();
   // Workaround for gateway mullvad/status stray `]` bug (]]}} vs ]}}): strip the extra bracket before parse
   const fixedRaw = raw.replace(/\]\]}}/g, ']}}');
-  let parsed: { ok?: boolean; data?: T; error?: string } | null = null;
+  let parsed: { ok?: boolean; data?: T; error?: string; errors?: unknown } | null = null;
   try { parsed = fixedRaw ? JSON.parse(fixedRaw) : null; } catch { try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; } }
+  const details = Array.isArray(parsed?.errors)
+    ? (parsed.errors as unknown[]).filter((e): e is string => typeof e === 'string')
+    : [];
   if (!res.ok) {
     const msg = parsed?.error || `HTTP ${res.status}`;
-    throw new ApiError(msg, res.status);
+    throw new ApiError(msg, res.status, details);
   }
   if (parsed && parsed.ok === false) {
-    throw new ApiError(parsed.error || 'Unknown error', res.status);
+    throw new ApiError(parsed.error || 'Unknown error', res.status, details);
   }
   if (parsed && 'data' in parsed) return parsed.data as T;
   // Legacy: server returned the data directly (no envelope)

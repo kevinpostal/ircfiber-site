@@ -351,3 +351,228 @@ three-IP corpus used to measure the providers above (`185.65.134.66`, `198.98.51
 | Tor bulk exit list | 1 344 entries |
 | DroneBL | 0/40 Tor exits listed — proxy/drone list, not a Tor list |
 | ip.guide / BGPView | ip.guide answered (ASN+CIDR+RIR, no flags); BGPView `HTTP 000` from here |
+
+---
+
+## 8. Paid accounts — what the money actually buys
+
+Two vendor statements reframe the whole question, and both are on the vendors' own pages:
+
+- **proxycheck.io**: paid tiers add quota only, *zero* extra fields. Starter is $3.99/mo for
+  10 k/day.
+- **ipapi.is**: *"Is the API output different between free and paid plans? **No.** The free tier
+  provides exactly the same data quality as paid plans. The only difference is the query
+  volume."* Basic is $20/mo for 20 k/day.
+
+And the free proxycheck v3 payload is far richer than its docs summary suggests — **verified**
+for `185.65.134.66` with no key at all:
+
+```jsonc
+"network":    { "type": "Hosting", "range": "185.65.134.66/25", "provider": "31173 Services AB" },
+"detections": { "vpn": true, "tor": false, "hosting": true, "anonymous": true,
+                "risk": 50, "confidence": 100,
+                "first_seen": "2026-06-26T22:13:55Z", "last_seen": "2026-09-08T05:12:03Z",
+                "times_seen": 2379 },
+"operator":   { "name": "Mullvad", "url": "https://mullvad.net/",
+                "anonymity": "high", "popularity": "high",
+                "services": ["datacenter_vpns"], "protocols": ["WireGuard", "OpenVPN"],
+                "policies": { "logging": false, "crypto_payments": true, "paid_access": true,
+                              "port_forwarding": false, "traceable_ownership": true } },
+"detection_history": { "delisted": false, "delist_datetime": "2026-09-15T05:12:03Z" },
+"device_estimate":   { "address": 10, "subnet": 620 }
+```
+
+Named operator, confidence, first/last seen, sighting count, protocols, logging policy and a
+delist ETA — for free. That is the payload Spur charges $125/mo and ipinfo $62/mo to approach.
+**So most paid tiers buy us nothing.** What remains genuinely paid-only:
+
+| Capability | Cheapest source | Price (documented) | Worth it for us? |
+|---|---|---|---|
+| **Residential-proxy detection** (a botnet/SDK exit on a Comcast IP — invisible to every free source) | Scamalytics Essential + *Residential Proxy Data* add-on (`residential_proxy_DBI.{score,proxy_type,last_proxy_provider}`) · IPHub Professional (`proxyType.residentialProxy`) · MaxMind Anonymous IP (`is_residential_proxy`) | $25 + $100/mo · $29/mo for 5 k/mo · sales-only | **The one real gap.** IPHub Pro is the cheap probe; 5 k/mo suits cache-miss volume |
+| **Cross-customer behavioural risk** (has this IP misbehaved at *other* operators recently) | MaxMind **minFraud Score** `ip_address.risk` | **$0.005/query**, pay-as-you-go, no commitment | Maybe — pay-per-query means a $5 experiment, no subscription |
+| **Confidence + recency + operator in one hosted call** | MaxMind **GeoIP Insights** `anonymizer.{confidence, provider_name, network_last_seen, residential{…}}`, `traits.{user_type, static_ip_score, user_count, connection_type, isp}`, per-field geo `confidence` | **$0.002/query**, pay-as-you-go | Best paid value on the list; no monthly floor |
+| **Named operator + confidence + recency *offline*** (user IPs never leave our infra — the GDPR-cleanest option) | MaxMind **Anonymous Plus** DB (`provider_name`, `anonymizer_confidence` 30/50/99, `network_last_seen`) · IPinfo Privacy Detection DB (`service`) | no public price, enterprise sales | Only when a DPA/transfer review makes per-query disclosure unacceptable |
+| **Tunnel topology + device population** (`tunnels[].entries` = the operator's entry IPs for this exit; `client.{count,countries,spread,concentration,behaviors,proxies}`) | **Spur.us** Context API | $125/mo entry ($200/mo for the 50 k-call bundle) | No. Nothing in our flood/strike logic consumes it |
+| **Typed abuse history with timestamps** (`abuse_events[]`, `abuse_velocity`) | IPQS Startup / SMB+ | $99/mo · $999/mo (residential) | No. StopForumSpam + AbuseIPDB report counts are enough |
+| **A commercial-use licence** for data we already read | **AbuseIPDB Basic** | $25/mo (10 k checks/day) | Only if the admin page stops being staff-internal |
+| More `is_*` booleans, unattributed | ipwhois.io Business · ipbase Medium · ip-api PRO | $39.99 · $39.99 · €13.30/mo | No — strictly worse than free proxycheck |
+| City geo + `traits.isp`/`connection_type` offline | MaxMind GeoIP City DB (+ ISP DB) | $135.67/mo annual (+ $44.92/mo) | No. GeoLite2 + DB-IP Lite are adequate for staff display |
+
+### 8.1 Licence traps in the paid products
+
+- **MaxMind database EULA** restricts use to *"Internal Restricted Business Purposes"* and
+  forbids *"displaying geolocation pairing information … to anyone other than you or your
+  employees"*. Our oper-only admin page is inside that; anything user-facing is not — for that
+  MaxMind's **web services** (Insights/City Plus) may be shown and sublicensed. Old DB copies
+  must be destroyed within 30 days of a release.
+- **MaxMind Anonymous IP / Anonymous Plus** additionally bar use *"for any purpose unrelated to
+  detecting security incidents or protecting against malicious, deceptive, fraudulent, or
+  illegal activity"* — Z-lines and flood rules qualify; product analytics do not.
+- **AbuseIPDB free** forbids commercial use at any volume; the $25/mo Basic tier is a licence
+  purchase, not a feature purchase.
+- **ipinfo Plus** ($62/mo, the tier that names the VPN operator) has **no card on the current
+  pricing page** — only a launch-post figure. Confirm before budgeting. Core is $26/mo annual
+  and gives one flat `is_anonymous` boolean with no operator name.
+
+### 8.2 Recommendation
+
+1. **Buy nothing on a subscription today.** Free keyed proxycheck + IPHub + ipapi.is already
+   deliver the whole record in §2 except `is_residential_proxy`.
+2. **Spend ~$5 on experiments, not commitments**: MaxMind Insights at $0.002/query and minFraud
+   Score at $0.005/query are pay-as-you-go. 1 000 lookups across our known-good corpus tells us
+   whether `anonymizer.confidence`, `provider_name`, `network_last_seen`, `user_type` and
+   `ip_address.risk` disagree with the free stack often enough to matter.
+3. **The only subscription with a real gap behind it is residential-proxy detection** — IPHub
+   Professional at $29/mo (5 k/mo, matched to cache-miss volume). Buy it the first time a flood
+   arrives from residential space that every free source calls clean.
+4. **Revisit MaxMind Anonymous Plus** (offline, sales-quoted) if the privacy review in §4 rules
+   out per-query disclosure of user IPs. It is the only product that gives operator + confidence
+   + recency without any IP leaving our infra.
+
+---
+
+## 9. Sample print — free stack vs paid, same three IPs
+
+Free-column values are **real**, captured 2026-09-08 from the keyless/token sources.
+Paid-column values are the vendors' **documented** field names; where a value for *our* IP is
+not knowable without an account it is marked `‹paid-only slot›`. Nothing here is invented.
+
+### 9.1 Archetype A — our own Mullvad exit `185.65.134.66`
+
+```text
+┌ IP 185.65.134.66 ──────────────────────────── FREE STACK (verified) ─────────┐
+│ Identity   185.65.134.66 · v4 · rDNS —                                      │
+│ Prefix     185.65.134.0/24   (Cymru)      RPKI valid (RIPEstat)             │
+│ ASN        AS39351 · 31173 Services AB · 31173.se · ESAB-AS · SE · ripencc  │
+│            AS allocated 2006-02-06 · prefix allocated 2014-07-30            │
+│ Registry   NET-31173-185-65-134-0-24 · ASSIGNED PA · parent 185.65.132.0/22 │
+│            roles: registrant ESAB-MNT / ORG-SN336-RIPE · abuse SN9014-RIPE  │
+│ Abuse ctc  abuse-cust-nl@31173.se        (RIPEstat abuse-contact-finder)     │
+│ Geo        Amsterdam, North Holland, NL · 52.3740,4.8897 · Europe/Amsterdam │
+│ Class      VPN ✓  hosting ✓  anonymous ✓  tor ✗  proxy ✗   risk 50/100      │
+│            operator MULLVAD · anonymity high · WireGuard,OpenVPN            │
+│            no-logging: yes · crypto payments: yes · datacenter_vpns         │
+│            confidence 100 · seen 2 379× · 2026-06-26 → 2026-09-08           │
+│            delists 2026-09-15 if it stops being seen                        │
+│ Density    ~10 devices on the address, ~620 on the /25   (proxycheck)       │
+│ Reputation DroneBL — · EFnet RBL — · Tor list ✗ · SFS appears 0 freq 0      │
+│            Shodan InternetDB: no data (no open ports observed)              │
+│ Dissent    ipquery.io says is_vpn=false, is_datacenter=true  ← outvoted 2:1 │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌ what a PAID account would add (documented fields) ───────────────────────────┐
+│ ipinfo Plus  $62/mo   anonymous.name ‹paid-only slot› · geo.radius km        │
+│ ipinfo Max   $163/mo  anonymous.last_seen · percent_days_seen (7-day window) │
+│ MM Insights  $0.002/q anonymizer.confidence (1-99) · anonymizer.provider_name│
+│                       anonymizer.network_last_seen · traits.user_type        │
+│                       traits.static_ip_score · traits.user_count             │
+│                       per-field geo confidence (city/postal/subdivision)     │
+│ minFraud     $0.005/q ip_address.risk — behaviour seen at other operators    │
+│ Spur         $125/mo  tunnels[].entries — the operator's ENTRY ips for this  │
+│                       exit · client.{count,countries,spread,concentration}   │
+│ Anon Plus    sales    same three fields as Insights, but OFFLINE             │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Verdict for consumer 1:** the free stack already answers the page's question — *VPN ✓,
+operator Mullvad, confidence 100, last seen today, 2 379 sightings*. Paid adds a second opinion
+and a *km* radius. Not worth a subscription.
+
+### 9.2 Archetype B — a live Tor exit `198.98.51.189`
+
+```text
+┌ IP 198.98.51.189 ─────────────────────────── FREE STACK (verified) ──────────┐
+│ Identity   198.98.51.189 · v4 · rDNS tor.teitel.net                         │
+│ Prefix     198.98.48.0/20 (Cymru) · RPKI valid · ARIN 2012-07-05            │
+│ ASN        AS53667 · FranTech Solutions · frantech.ca · PONYNET · US        │
+│ Registry   NET-198-98-48-0-1 · PONYNET-06 · DIRECT ALLOCATION               │
+│ Abuse ctc  admin@frantech.ca, fdias@frantech.ca                             │
+│ Geo        Piscataway, New Jersey, US (ipinfo) — proxycheck says Staten I.   │
+│            ← geo sources disagree; show city only, never a map pin          │
+│ Class      TOR ✓  hosting ✓  compromised ✓  anonymous ✓   risk 100/100      │
+│            operator TOR · Onion Routing · confidence 100                    │
+│            seen 7 924× · 2026-01-31 → 2026-09-08                            │
+│ Corrob.    Tor bulk exit list: LISTED (canonical, 1 344 entries)            │
+│            Shodan: ports 22,53,123,9030 — 9030 is the Tor dir port          │
+│            SFS: appears 1 · freq 9 · torexit 1 · last 2026-05-26            │
+│ Reputation DroneBL — · EFnet RBL — (both miss it: neither is a Tor list)    │
+│ Dissent    ipquery.io says is_tor=false  ← wrong; outvoted 3:1              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌ PAID delta ─────────────────────────────────────────────────────────────────┐
+│ Nothing decision-relevant. Four independent free sources already agree.     │
+│ Spur would add client.behaviors ["TOR_PROXY_USER"]-style labels; IPQS an     │
+│ abuse_events[] timeline. Neither changes the verdict or the action.          │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 9.3 Archetype C — residential `71.198.12.34` (where paid finally matters)
+
+```text
+┌ IP 71.198.12.34 ──────────────────────────── FREE STACK (verified) ──────────┐
+│ Identity   71.198.12.34 · v4 · rDNS c-71-198-12-34.hsd1.ca.comcast.net      │
+│ Prefix     71.192.0.0/12 (Cymru) · RPKI valid · ARIN 2005-07-27             │
+│ ASN        AS7922 · Comcast Cable Communications · comcast.com · COMCAST    │
+│ Registry   NET-71-198-0-0-1 · BAYAREA-19 · ASSIGNMENT                       │
+│ Abuse ctc  (none returned by RIPEstat for this ARIN range)                  │
+│ Geo        San Jose, California, US (ipinfo) / Pleasanton (proxycheck)      │
+│ Class      network.type Residential · every flag false · risk 0/100         │
+│            confidence 100 · never seen as an anonymiser                     │
+│ Density    ~39 devices on the /21   (proxycheck device_estimate)            │
+│ Reputation DroneBL — · EFnet RBL — · Tor ✗ · SFS appears 0 · Shodan no data │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌ PAID delta — the real gap ──────────────────────────────────────────────────┐
+│ IPHub Pro   $29/mo   proxyType.residentialProxy — is this Comcast line       │
+│                      actually renting itself out as a proxy exit?            │
+│ Scamalytics $125/mo  residential_proxy_DBI.{score,proxy_type,               │
+│                      last_proxy_provider} — NAMES the reseller               │
+│ MM Anon(+)  sales    is_residential_proxy (+ provider_name, confidence)      │
+│ minFraud    $0.005/q ip_address.risk — misbehaviour seen elsewhere           │
+│ Spur        $125/mo  client.proxies[] — which proxy brands resell this IP    │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+This is the archetype that justifies spending: a residential IP renting itself to a proxy
+network looks **completely clean** to every free source we measured, and it is exactly the
+shape of a flood we would otherwise mis-triage as a real user.
+
+### 9.4 The same data on each surface
+
+`#staff` (oper-only, 400-byte cap) — free stack, first sighting:
+
+```
+Connect: nn!~u@cloak (198.98.51.189) port 6697 class main [user]
+  ↳ 198.98.51.189 · Piscataway, US · AS53667 FranTech Solutions · tor+hosting · risk 100 · new IP
+```
+
+with paid, one clause changes: `· tor+hosting · risk 100 · ip_risk 45.5` — a number, not a new
+decision. Not worth a line on IRC.
+
+Admin → Mullvad column (free stack is enough):
+
+```
+ISP / ASN            CLASSIFICATION                    PREFIX
+31173 Services AB    VPN(Mullvad) hosting  conf 100    185.65.134.0/24  RPKI valid
+AS39351 · 31173.se   seen 2379× · last 2026-09-08
+```
+
+Admin → IP detail: render §9.1's free block as-is; put every paid field behind one
+`Deep lookup` button that spends a pay-as-you-go MaxMind Insights/minFraud query and stamps the
+result with `provenance.source = "maxmind-insights"` plus its cost. Per-click spend, no
+subscription, one disclosure per click, and the button is the audit trail.
+
+### 9.5 Coverage scorecard
+
+| Question the surfaces ask | Free stack | Paid adds |
+|---|---|---|
+| Which ASN/prefix/registry/abuse contact? | ✅ Cymru + RIPEstat + RDAP | nothing |
+| Is it a VPN, and whose? | ✅ proxycheck `operator.name` = `Mullvad` | second opinion (ipinfo Plus, Insights) |
+| Is it Tor? | ✅ Tor bulk list + proxycheck + SFS + Shodan port 9030 | nothing |
+| Is it hosting/datacenter? | ✅ proxycheck `network.type`, ipapi.is `is_datacenter` | `traits.user_type` nuance |
+| How confident, how recent? | ✅ `confidence`, `first_seen`/`last_seen`, `times_seen` | `anonymizer_confidence` + `network_last_seen` (independent) |
+| **Is it a residential proxy?** | ❌ **nothing free is reliable** | ✅ IPHub Pro / Scamalytics / MaxMind |
+| Has it misbehaved elsewhere? | ⚠️ SFS + AbuseIPDB free (non-commercial) | ✅ `ip_address.risk`, `abuse_events[]` |
+| City-level geo with error bars | ⚠️ city only, sources disagree | ✅ `geo.radius`, per-field `confidence` |
+| Tunnel topology / device population | ❌ | ✅ Spur only |
+| Zero-disclosure (IP never leaves) | ✅ offline sets, no flags | ✅ MaxMind Anonymous Plus (paid, offline) |

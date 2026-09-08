@@ -442,28 +442,42 @@ export async function disconnectNetwork(networkId: string, reason: string = ''):
   if (!r.ok) throw new Error('Disconnect failed');
 }
 
-/** GET/POST/DELETE /networks/:id/bouncer — "Connect with another client…". */
+/** One network as the bouncer sees it (GET /me/bouncer). */
+export interface BouncerNetwork {
+  id: string;
+  name: string;
+  /** URL-safe name used in the `<username>/<slug>` identity. */
+  slug: string;
+  host: string;
+  port: number;
+  connected: boolean;
+}
+
+/** GET/POST/DELETE /me/bouncer — Settings → Bouncer. */
 export interface BouncerInfo {
   enabled: boolean;
   host: string;
   port: number;
   tls: boolean;
-  /** `bnc:<token>` or null when no password has been generated. */
+  /** IRC Fiber username; the bouncer login. */
+  username: string;
+  /** The bouncer password, or null when none has been generated. */
   password: string | null;
+  networks: BouncerNetwork[];
   /** Lines per buffer replayed on attach for clients without CHATHISTORY (0 = none). */
   playbackLines: number;
   /** Server-side cap for `playbackLines`. */
   playbackMax: number;
 }
 
-export async function fetchBouncer(networkId: string): Promise<BouncerInfo> {
-  const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/bouncer`);
+export async function fetchBouncer(): Promise<BouncerInfo> {
+  const r = await fetch(`${API_BASE}/me/bouncer`);
   if (!r.ok) throw new Error('Could not load bouncer settings');
   return r.json();
 }
 
-export async function generateBouncerPassword(networkId: string): Promise<BouncerInfo> {
-  const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/bouncer`, { method: 'POST' });
+export async function generateBouncerPassword(): Promise<BouncerInfo> {
+  const r = await fetch(`${API_BASE}/me/bouncer`, { method: 'POST' });
   if (!r.ok) throw new Error('Could not generate bouncer password');
   return r.json();
 }
@@ -479,8 +493,8 @@ export async function updateBncPlaybackLines(value: number): Promise<number> {
   return (await r.json() as { value: number }).value;
 }
 
-export async function revokeBouncerPassword(networkId: string): Promise<void> {
-  const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/bouncer`, { method: 'DELETE' });
+export async function revokeBouncerPassword(): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/bouncer`, { method: 'DELETE' });
   if (!r.ok) throw new Error('Could not revoke bouncer password');
 }
 

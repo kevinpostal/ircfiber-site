@@ -31,6 +31,13 @@
  * The IRC client skeleton (reconnects, OPER, JOIN, sideband) is
  * `ircfiber.bots.core.IrcBot`; this module is only the FiberEye logic.
  *
+ * The rule env vars below are the *deployed baseline*, not the last word:
+ * an admin can override every threshold, flag and list from `#/fibereye`.
+ * The override lives in Mongo (`fibereye_rules`), is mirrored to
+ * `fibereye:rules` and is picked up by `onSidebandTick` within 5 s. A
+ * missing or invalid mirror falls back to this baseline, so a Redis wipe
+ * fails safe.
+ *
  * Env:
  *   IRCFIBER_FIBEREYE_ENABLED              "1"/"true" → run (unset → disabled)
  *   IRCFIBER_FIBEREYE_HOST                 ircd host (default IRCFIBER_IRCD_HOST, then irc.ircfiber.com)

@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
-   * Bouncer page — live attached IRC clients ("Connect with another
-   * client…") and the accounts (networks) that have a bouncer password.
+   * Bouncer page — live attached IRC clients (Settings → Bouncer) and the
+   * users that have a bouncer password, with the networks it reaches.
    *
    * Polls /api/admin/bnc every 5 s. Clients are presence records the bnc
    * process refreshes every 15 s (60 s TTL), so a row disappears at most a
@@ -43,16 +43,19 @@
     cursor: number;
     online: boolean;
   }
-  interface BncAccount {
+  interface BncAccountNetwork {
     networkId: string;
     networkName: string;
     host: string;
-    nick: string;
     disabled: boolean;
+    attached: number;
+    seen: BncSeen[];
+  }
+  interface BncAccount {
     userId: string;
     username: string;
     attached: number;
-    seen: BncSeen[];
+    networks: BncAccountNetwork[];
   }
   interface BncResponse {
     listener: { enabled: boolean; host: string; port: number; tls: boolean };
@@ -108,28 +111,28 @@
   }
 
   async function revoke(a: BncAccount) {
-    if (!confirm(`Revoke the bouncer password for ${a.username}'s network "${a.networkName}"?\n\n${a.attached} attached client(s) will be disconnected and every replay cursor dropped. The user must generate a new password from the web app to reconnect.`)) return;
-    busy[a.networkId] = true;
+    if (!confirm(`Revoke the bouncer password for ${a.username}? Every attached client is disconnected.\n\n${a.attached} attached client(s) will be dropped and every replay cursor cleared. The user must generate a new password in Settings → Bouncer to reconnect.`)) return;
+    busy[a.userId] = true;
     try {
-      await api.post(`/api/admin/bnc/networks/${encodeURIComponent(a.networkId)}/revoke`);
-      toastSuccess(`Revoked bouncer password for ${a.networkName}`);
+      await api.post(`/api/admin/bnc/users/${encodeURIComponent(a.userId)}/revoke`);
+      toastSuccess(`Revoked bouncer password for ${a.username}`);
       await fetchData();
     } catch (e) { toastError(errMsg(e)); }
-    finally { delete busy[a.networkId]; }
+    finally { delete busy[a.userId]; }
   }
 
-  async function clearSeen(a: BncAccount) {
-    if (!confirm(`Forget all ${a.seen.length} replay cursor(s) for "${a.networkName}"?\n\nAttached clients keep running; each clientid's next reconnect starts from "now" instead of replaying missed messages.`)) return;
+  async function clearSeen(n: BncAccountNetwork) {
+    if (!confirm(`Forget all ${n.seen.length} replay cursor(s) for "${n.networkName}"?\n\nAttached clients keep running; each clientid's next reconnect starts from "now" instead of replaying missed messages.`)) return;
     try {
-      await api.post(`/api/admin/bnc/networks/${encodeURIComponent(a.networkId)}/seen/clear`);
-      toastSuccess(`Cleared replay cursors for ${a.networkName}`);
+      await api.post(`/api/admin/bnc/networks/${encodeURIComponent(n.networkId)}/seen/clear`);
+      toastSuccess(`Cleared replay cursors for ${n.networkName}`);
       await fetchData();
     } catch (e) { toastError(errMsg(e)); }
   }
 
-  async function forgetSeen(a: BncAccount, s: BncSeen) {
+  async function forgetSeen(n: BncAccountNetwork, s: BncSeen) {
     try {
-      await api.post(`/api/admin/bnc/networks/${encodeURIComponent(a.networkId)}/seen/${encodeURIComponent(s.clientId)}/forget`);
+      await api.post(`/api/admin/bnc/networks/${encodeURIComponent(n.networkId)}/seen/${encodeURIComponent(s.clientId)}/forget`);
       toastSuccess(`Forgot cursor for ${s.clientId}`);
       await fetchData();
     } catch (e) { toastError(errMsg(e)); }
@@ -150,9 +153,9 @@
     if (!q) return data.accounts;
     const l = q.toLowerCase();
     return data.accounts.filter((a) =>
-      a.username.toLowerCase().includes(l) || a.networkName.toLowerCase().includes(l)
-      || a.host.toLowerCase().includes(l) || a.userId.toLowerCase().includes(l)
-      || a.seen.some((s) => s.clientId.toLowerCase().includes(l)));
+      a.username.toLowerCase().includes(l) || a.userId.toLowerCase().includes(l)
+      || a.networks.some((n) => n.networkName.toLowerCase().includes(l) || n.host.toLowerCase().includes(l)
+        || n.seen.some((s) => s.clientId.toLowerCase().includes(l))));
   });
 
   function idleClass(ms: number): string {
@@ -166,7 +169,7 @@
   }
 </script>
 
-<PageHeader title="Bouncer" subtitle="Third-party IRC clients attached via “Connect with another client…”">
+<PageHeader title="Bouncer" subtitle="Third-party IRC clients attached through Settings → Bouncer">
   {#snippet actions()}
     <RefreshIndicator {lastFetchedAt} {loading} />
   {/snippet}
@@ -181,7 +184,7 @@
 <div class="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
   <KpiCard label="Attached Clients" value={data?.stats.attachedClients ?? '—'} tone={data?.stats.attachedClients ? 'success' : 'muted'} icon="🔌" loading={loading && !data} />
   <KpiCard label="Users Online" value={data?.stats.usersOnline ?? '—'} icon="👥" loading={loading && !data} />
-  <KpiCard label="Accounts" value={data?.stats.accounts ?? '—'} hint="networks with a bouncer password" tone="info" icon="🔐" loading={loading && !data} />
+  <KpiCard label="Accounts" value={data?.stats.accounts ?? '—'} hint="users with a bouncer password" tone="info" icon="🔐" loading={loading && !data} />
   <KpiCard label="Replay Cursors" value={data?.stats.seenCursors ?? '—'} hint="clientids with a tracked position" icon="⏪" loading={loading && !data} />
   <KpiCard
     label="Listener"
@@ -252,9 +255,9 @@
               </td>
               <td class="py-3 px-2">
                 {#if c.clientId}
-                  <span class="font-mono text-xs text-text" title="bnc@{c.clientId}:… — replay tracked">{c.clientId}</span>
+                  <span class="font-mono text-xs text-text" title="…@{c.clientId} — replay tracked">{c.clientId}</span>
                 {:else}
-                  <span class="text-xs text-muted" title="bnc:… — no clientid, no replay on reconnect">anonymous</span>
+                  <span class="text-xs text-muted" title="no clientid, no replay on reconnect">anonymous</span>
                 {/if}
                 <div class="font-mono text-[10px] text-muted" title="bouncer session id">{c.sid}</div>
               </td>
@@ -304,7 +307,7 @@
   {/if}
 </Card>
 
-<Card title="Accounts" subtitle="Networks with a bouncer password set — the user's own “Connect with another client…” dialog">
+<Card title="Accounts" subtitle="Users with a bouncer password set — generated in the user's own Settings → Bouncer">
   {#if !loading && filteredAccounts.length === 0}
     {#if (data?.accounts?.length ?? 0) === 0}
       <EmptyState icon="🔐" title="No bouncer passwords" description="No user has generated a bouncer password yet." />
@@ -317,61 +320,71 @@
         <thead class="text-xs uppercase tracking-wider text-muted">
           <tr class="border-b border-border">
             <th class="py-2 pr-2 text-left font-semibold">User</th>
-            <th class="py-2 px-2 text-left font-semibold">Network</th>
-            <th class="py-2 px-2 text-left font-semibold hidden md:table-cell">Host</th>
+            <th class="py-2 px-2 text-left font-semibold">Networks</th>
             <th class="py-2 px-2 text-left font-semibold">Attached</th>
             <th class="py-2 px-2 text-left font-semibold">Replay cursors</th>
             <th class="py-2 pl-2 text-right font-semibold">Actions</th>
           </tr>
         </thead>
         <tbody>
-          {#each filteredAccounts as a (a.networkId)}
+          {#each filteredAccounts as a (a.userId)}
             <tr class="border-b border-border/40 hover:bg-surface/40" data-testid="bnc-account-row">
-              <td class="py-3 pr-2">
+              <td class="py-3 pr-2 align-top">
                 <a href={`#/users/${a.userId}`} class="font-semibold text-heading hover:text-primary">{a.username}</a>
                 <div class="font-mono text-[11px] text-muted" title={a.userId}>{a.userId.slice(0, 16)}…</div>
               </td>
-              <td class="py-3 px-2">
-                <div class="flex items-center gap-1.5">
-                  <span class="font-medium text-text">{a.networkName}</span>
-                  {#if a.disabled}<StatusBadge label="disabled" tone="muted" size="sm" dot={false} />{/if}
-                </div>
-                <div class="font-mono text-[11px] text-muted" title={a.networkId}>{a.nick} · {a.networkId.slice(0, 8)}…</div>
-              </td>
-              <td class="py-3 px-2 hidden md:table-cell font-mono text-xs">{a.host}</td>
-              <td class="py-3 px-2">
-                <StatusBadge label={String(a.attached)} tone={a.attached > 0 ? 'success' : 'muted'} size="sm" />
-              </td>
-              <td class="py-3 px-2">
-                {#if a.seen.length === 0}
-                  <span class="text-xs text-muted">none</span>
+              <td class="py-3 px-2 align-top">
+                {#if a.networks.length === 0}
+                  <span class="text-xs text-muted">no networks</span>
                 {:else}
-                  <div class="flex flex-wrap gap-1">
-                    {#each a.seen as s (s.clientId)}
-                      <span class="inline-flex items-center gap-1 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px]" title="last eid delivered to {s.clientId}: {s.cursor}">
-                        <span class="h-1.5 w-1.5 rounded-full {s.online ? 'bg-success' : 'bg-muted'}"></span>
-                        {s.clientId}
-                        <span class="text-muted">@{s.cursor}</span>
-                        <button type="button" onclick={() => forgetSeen(a, s)} title="Forget this cursor" class="ml-0.5 text-muted hover:text-danger" aria-label={`Forget cursor for ${s.clientId}`}>×</button>
-                      </span>
+                  <div class="flex flex-col gap-1.5">
+                    {#each a.networks as n (n.networkId)}
+                      <div class="flex items-center gap-1.5" data-testid="bnc-account-network">
+                        <span class="font-medium text-text">{n.networkName}</span>
+                        <span class="font-mono text-[11px] text-muted">({n.host})</span>
+                        {#if n.disabled}<StatusBadge label="disabled" tone="muted" size="sm" dot={false} />{/if}
+                        {#if n.attached > 0}<StatusBadge label={String(n.attached)} tone="success" size="sm" />{/if}
+                      </div>
                     {/each}
                   </div>
                 {/if}
               </td>
-              <td class="py-3 pl-2 text-right whitespace-nowrap">
-                <button
-                  type="button"
-                  onclick={() => clearSeen(a)}
-                  disabled={a.seen.length === 0}
-                  title="Drop every replay cursor for this network"
-                  class="mr-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40 disabled:opacity-30"
-                >
-                  Clear replay
-                </button>
+              <td class="py-3 px-2 align-top">
+                <StatusBadge label={String(a.attached)} tone={a.attached > 0 ? 'success' : 'muted'} size="sm" />
+              </td>
+              <td class="py-3 px-2 align-top">
+                <div class="flex flex-col gap-1.5">
+                  {#each a.networks as n (n.networkId)}
+                    <div class="flex flex-wrap items-center gap-1">
+                      {#if n.seen.length === 0}
+                        <span class="text-xs text-muted">{n.networkName}: none</span>
+                      {:else}
+                        {#each n.seen as s (s.clientId)}
+                          <span class="inline-flex items-center gap-1 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px]" title="last eid delivered to {s.clientId} on {n.networkName}: {s.cursor}">
+                            <span class="h-1.5 w-1.5 rounded-full {s.online ? 'bg-success' : 'bg-muted'}"></span>
+                            {s.clientId}
+                            <span class="text-muted">@{s.cursor}</span>
+                            <button type="button" onclick={() => forgetSeen(n, s)} title="Forget this cursor" class="ml-0.5 text-muted hover:text-danger" aria-label={`Forget cursor for ${s.clientId} on ${n.networkName}`}>×</button>
+                          </span>
+                        {/each}
+                        <button
+                          type="button"
+                          onclick={() => clearSeen(n)}
+                          title="Drop every replay cursor for {n.networkName}"
+                          class="rounded-md border border-border px-2 py-0.5 text-[11px] font-medium text-text hover:border-primary/40"
+                        >
+                          Clear replay
+                        </button>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              </td>
+              <td class="py-3 pl-2 text-right whitespace-nowrap align-top">
                 <button
                   type="button"
                   onclick={() => revoke(a)}
-                  disabled={!!busy[a.networkId]}
+                  disabled={!!busy[a.userId]}
                   title="Remove the password and disconnect attached clients"
                   class="rounded-md border border-danger/30 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/10 disabled:opacity-40"
                 >

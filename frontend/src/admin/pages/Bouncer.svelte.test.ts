@@ -6,7 +6,7 @@
  *  1. Renders one row per attached client and per account from /api/admin/bnc.
  *  2. Kick posts to /api/admin/bnc/clients/<sid>/kick after confirm, and
  *     not at all when the operator cancels.
- *  3. Revoke posts to /api/admin/bnc/networks/<id>/revoke.
+ *  3. Revoke posts to /api/admin/bnc/users/<id>/revoke.
  *  4. API failures surface as an error toast.
  *  5. Empty states render when nothing is attached / no passwords exist.
  */
@@ -63,9 +63,13 @@ const fixture = () => ({
   ],
   accounts: [
     {
-      networkId: NET, networkName: 'IRC Fiber', host: 'irc.ircfiber.com', nick: 'zodiac', disabled: false,
       userId: USER, username: 'zodiac', attached: 2,
-      seen: [{ clientId: 'laptop', cursor: 4242, online: true }],
+      networks: [
+        {
+          networkId: NET, networkName: 'IRC Fiber', host: 'irc.ircfiber.com', disabled: false, attached: 2,
+          seen: [{ clientId: 'laptop', cursor: 4242, online: true }],
+        },
+      ],
     },
   ],
 });
@@ -83,6 +87,7 @@ describe('Bouncer.svelte', () => {
     await vi.waitFor(() => {
       expect(document.querySelectorAll('[data-testid="bnc-client-row"]').length).toBe(2);
       expect(document.querySelectorAll('[data-testid="bnc-account-row"]').length).toBe(1);
+      expect(document.querySelectorAll('[data-testid="bnc-account-network"]').length).toBe(1);
     });
     expect(document.body.textContent).toContain('laptop');
     expect(document.body.textContent).toContain('anonymous');
@@ -110,13 +115,13 @@ describe('Bouncer.svelte', () => {
     confirmSpy.mockRestore();
   });
 
-  it('Revoke posts to /api/admin/bnc/networks/<id>/revoke', async () => {
+  it('Revoke posts to /api/admin/bnc/users/<id>/revoke', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(Bouncer);
     await vi.waitFor(() => expect(document.querySelectorAll('[data-testid="bnc-account-row"]').length).toBe(1));
     await page.getByRole('button', { name: 'Revoke' }).click();
     await vi.waitFor(() => {
-      expect(api.post).toHaveBeenCalledWith(`/api/admin/bnc/networks/${NET}/revoke`);
+      expect(api.post).toHaveBeenCalledWith(`/api/admin/bnc/users/${USER}/revoke`);
     });
     confirmSpy.mockRestore();
   });

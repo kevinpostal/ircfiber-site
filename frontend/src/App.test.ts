@@ -91,8 +91,8 @@ vi.mock('/src/stores/api', () => ({
   // path. The tests in this file don't drive the WebSocket sync payload,
   // so a pass-through stub is fine.
   normalizeMessage: vi.fn((m: unknown) => m),
-  fetchBouncer: vi.fn(async () => ({})),
-  generateBouncerPassword: vi.fn(async () => ({})),
+  fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: null, networks: [], playbackLines: 200, playbackMax: 1000 })),
+  generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: 'token', networks: [], playbackLines: 200, playbackMax: 1000 })),
   revokeBouncerPassword: vi.fn(async () => undefined),
   // Remaining api surface (dialogs/panels imported by App) — inert stubs.
   updateBncPlaybackLines: vi.fn(async () => undefined),

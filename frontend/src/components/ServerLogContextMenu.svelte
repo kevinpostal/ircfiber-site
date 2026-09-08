@@ -16,10 +16,9 @@
     onClose: () => void;
     onJoinChannel: (e?: MouseEvent) => void;
     onEditNetwork: () => void;
-    onBouncer?: () => void;
     onChannelList?: () => void;
   }
-  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onJoinChannel, onEditNetwork, onBouncer = () => {}, onChannelList = () => {} }: Props = $props();
+  let { x, y, anchorRight = false, anchorBottom = false, buf, networkId: propNetworkId, onClose, onJoinChannel, onEditNetwork, onChannelList = () => {} }: Props = $props();
 
   const network = $derived(
     propNetworkId ? (ircState.networks.find((n) => n.networkId === propNetworkId) ?? getActiveNetwork()) : getActiveNetwork()
@@ -125,10 +124,6 @@
   }
   function clickChannelList(): void {
     onChannelList();
-    onClose();
-  }
-  function clickBouncer(): void {
-    onBouncer();
     onClose();
   }
   function clickEdit(): void {
@@ -251,9 +246,6 @@
       </li>
       <li class="nickserv" class:inactive={!isConnected} aria-disabled={!isConnected} style:display={isConnected ? '' : 'none'}>
         <button class="contextMenu__item nickserv" class:contextMenu__item--disabled={!isConnected} disabled={!isConnected} onclick={clickIdentify}>Identify Nickname…</button>
-      </li>
-      <li class="bouncer">
-        <button class="contextMenu__item bouncer" onclick={clickBouncer}>Connect with another client…</button>
       </li>
       <li class="disconnect" class:inactive={isInactive || isFiber} aria-disabled={isInactive || isFiber} style:display={isInactive || isFiber ? 'none' : ''}>
         <button class="contextMenu__item disconnect" class:contextMenu__item--disabled={isInactive || isFiber} disabled={isInactive || isFiber} onclick={clickDisconnect}>Disconnect</button>

@@ -75,7 +75,6 @@ describe('ServerLogContextMenu', () => {
       'Channel list…',
       'Edit…',
       'Identify Nickname…',
-      'Connect with another client…',
       'Disconnect',
       'Ignore list…',
       'Download logs…',
@@ -215,20 +214,6 @@ describe('ServerLogContextMenu', () => {
     });
     await userEvent.click(page.getByRole('button', { name: 'Edit…' }));
     expect(onEditNetwork).toHaveBeenCalled();
-  });
-
-  it('Connect with another client… calls onBouncer then onClose', async () => {
-    setupConnectedNetwork();
-    const buf = ircState.networks[0].buffers[0];
-    const onBouncer = vi.fn();
-    const onClose = vi.fn();
-    render(ServerLogContextMenu, {
-      props: { x: 100, y: 100, buf, onClose, onJoinChannel: vi.fn(), onEditNetwork: vi.fn(), onBouncer },
-    });
-    await expect.element(page.getByRole('button', { name: 'Connect with another client…' })).toBeInTheDocument();
-    await userEvent.click(page.getByRole('button', { name: 'Connect with another client…' }));
-    expect(onBouncer).toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalled();
   });
 
   it('Join a channel… calls onJoinChannel', async () => {

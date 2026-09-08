@@ -6,6 +6,7 @@
   import SettingsNotifications from './SettingsNotifications.svelte';
   import SettingsChat from './SettingsChat.svelte';
   import SettingsSessions from './SettingsSessions.svelte';
+  import SettingsBouncer from './SettingsBouncer.svelte';
 
 
   let tab = $state<SettingsTab>(ircState.settingsTab);
@@ -69,6 +70,13 @@
         class:active={tab === 'sessions'}
         onclick={() => switchTab('sessions')}
       >Sessions</button>
+      <button
+        role="tab"
+        aria-selected={tab === 'bouncer'}
+        class="settings-tab"
+        class:active={tab === 'bouncer'}
+        onclick={() => switchTab('bouncer')}
+      >Bouncer</button>
 
     </div>
     <button class="settings-done" onclick={close}>Done</button>
@@ -86,6 +94,8 @@
       <SettingsChat />
     {:else if tab === 'sessions'}
       <SettingsSessions />
+    {:else if tab === 'bouncer'}
+      <SettingsBouncer />
     {/if}
   </div>
 </div>

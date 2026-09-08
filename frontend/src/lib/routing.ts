@@ -1,6 +1,6 @@
 import { ircState } from '../stores/ircStore.svelte';
 
-export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'sessions' | 'advanced';
+export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'sessions' | 'bouncer' | 'advanced';
 
 /**
  * Encode a channel buffer name for the `/channel/<part>` URL segment.
@@ -54,7 +54,7 @@ export function navigateSettings(tab: SettingsTab): void {
 }
 
 export function getSettingsTabFromUrl(): SettingsTab | null {
-  const m = window.location.search.match(/^\?\/settings(?:=(design|account|notifications|chat|sessions|advanced))?$/);
+  const m = window.location.search.match(/^\?\/settings(?:=(design|account|notifications|chat|sessions|bouncer|advanced))?$/);
   if (!m) return null;
   return (m[1] as SettingsTab) || 'design';
 }

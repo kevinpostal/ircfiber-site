@@ -41,7 +41,7 @@ function isNotInChannelText(text: string): boolean {
 
 
 // ── Single reactive state object ──
-export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'sessions' | 'advanced';
+export type SettingsTab = 'design' | 'account' | 'notifications' | 'chat' | 'sessions' | 'bouncer' | 'advanced';
 
 /** Tracks user-initiated disconnect per network so the sync handler never
  * overwrites the local 'disconnected' state back to 'connecting'/'connected'.

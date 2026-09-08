@@ -6,7 +6,6 @@
   import BufferHeader from './components/BufferHeader.svelte';
   import NetworkForm from './components/NetworkForm.svelte';
   import JoinModal from './components/JoinModal.svelte';
-  import BouncerDialog from './components/BouncerDialog.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
   import ChannelContextMenu from './components/ChannelContextMenu.svelte';
   import ServerLogContextMenu from './components/ServerLogContextMenu.svelte';
@@ -144,8 +143,6 @@ $effect(() => {
 let showEditNetwork: boolean = $state(false);
   let showJoinModal: boolean = $state(false);
   let joinModalNetworkId: string | null = $state(null);
-  let showBouncerDialog: boolean = $state(false);
-  let bouncerNetworkId: string | null = $state(null);
   $effect(() => { (window as any).__channelMenu = channelMenu; (window as any).__editNetworkId = editNetworkId; (window as any).__showEditNetwork = showEditNetwork; });
   let channelSwitcherOpen: boolean = $state(false);
   let localMsgIdCounter = 0;
@@ -233,7 +230,7 @@ let showEditNetwork: boolean = $state(false);
     navigateBackFromAddNetwork();
   }
 
-  const hasOpenDialog = $derived(!!ircState.overlay.type || showEditNetwork || showJoinModal || showBouncerDialog || !!uploadState.dialog || !!userPopup || !!channelMenu);
+  const hasOpenDialog = $derived(!!ircState.overlay.type || showEditNetwork || showJoinModal || !!uploadState.dialog || !!userPopup || !!channelMenu);
   let wrapEl: HTMLDivElement | null = $state(null);
   $effect(() => {
     if (!wrapEl) return;
@@ -664,7 +661,6 @@ let showEditNetwork: boolean = $state(false);
       // doesn't fall through to mark-read while the modal is open.
       if (showEditNetwork) { closedSomething = true; }
       if (showJoinModal) { showJoinModal = false; closedSomething = true; }
-      if (showBouncerDialog) { showBouncerDialog = false; bouncerNetworkId = null; closedSomething = true; }
       if (uploadState.dialog) { cancelDialog(); closedSomething = true; }
       if (uploadState.panelOpen) { uploadState.panelOpen = false; closedSomething = true; }
       if (uploadState.pastebinPanelOpen) { uploadState.pastebinPanelOpen = false; closedSomething = true; }
@@ -701,7 +697,7 @@ let showEditNetwork: boolean = $state(false);
       if (isTypingTarget) return;
       // Don't steal when any modal/overlay is open
       if (channelSwitcherOpen || ircState.showSettings || ircState.showShortcuts || ircState.showFeedback || ircState.showComposeStyle ||
-          ircState.overlay.type || showEditNetwork || showJoinModal || showBouncerDialog ||
+          ircState.overlay.type || showEditNetwork || showJoinModal ||
           ircState.contextMenu.visible || !!userPopup) return;
       if (ircState.activeBuffer.bufferName === '_server') return;
       const compose = document.getElementById('compose-input') as HTMLTextAreaElement | null;
@@ -1722,10 +1718,6 @@ let showEditNetwork: boolean = $state(false);
   <JoinModal networkId={joinModalNetworkId} onClose={() => { showJoinModal = false; joinModalNetworkId = null; }} />
 </Dialog>
 
-<Dialog open={showBouncerDialog} onClose={() => { showBouncerDialog = false; bouncerNetworkId = null; }} label="Connect with another client" centered class="overlay-panel">
-  <BouncerDialog networkId={bouncerNetworkId} onClose={() => { showBouncerDialog = false; bouncerNetworkId = null; }} />
-</Dialog>
-
 {#if uploadState.dialog}
   {#await import('./components/UploadDialog.svelte') then { default: UploadDialog }}
     <UploadDialog
@@ -1750,7 +1742,6 @@ let showEditNetwork: boolean = $state(false);
         onClose={closeChannelMenu}
         onJoinChannel={() => { const nid = channelMenu?.networkId; joinModalNetworkId = nid ?? null; showJoinModal = true; closeChannelMenu(); }}
         onEditNetwork={() => { (window as any).__testChannelMenuAtClick = channelMenu ? {networkId: channelMenu.networkId, bufferName: channelMenu.bufferName} : null; const nid = channelMenu?.networkId; (window as any).__testNidAtClick = nid; editNetworkId = nid ?? null; showEditNetwork = true; closeChannelMenu(); }}
-        onBouncer={() => { bouncerNetworkId = channelMenu?.networkId ?? null; showBouncerDialog = true; closeChannelMenu(); }}
         onChannelList={() => { const nid = channelMenu?.networkId; if (nid) requestChannelList(nid); closeChannelMenu(); }}
       />
     {:else}

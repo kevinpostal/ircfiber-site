@@ -202,6 +202,16 @@
                 onclick={() => onNavigate('sessions')}>Review sessions</button>
       </div>
     </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span class="settings-label-text">Bouncer</span>
+        <span class="settings-label-desc">Use a desktop or mobile IRC client (Halloy, Goguma, WeeChat…) through the IRC Fiber bouncer</span>
+      </div>
+      <div class="settings-control">
+        <button class="settings-btn settings-btn--secondary settings-btn--small"
+                onclick={() => onNavigate('bouncer')}>Set up bouncer</button>
+      </div>
+    </div>
   </div>
 </SettingsSection>
 
