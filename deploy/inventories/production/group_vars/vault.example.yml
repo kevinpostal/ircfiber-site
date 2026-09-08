@@ -93,25 +93,40 @@ vault_ircd_logs_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
 # ipinfo's unauthenticated `org` string. Nothing else degrades.
 vault_ipinfo_token: "REPLACE-WITH-IPINFO-TOKEN"
 # NickServ password of the FiberEye nick (fibereye_nick, default FiberEye).
-# Register the nick once from the prod host before the first deploy (see the
-# FiberEye rollout notes); the bot sends
+# Register the nick once with `ansible-playbook playbooks/fibereye-nick.yml`
+# before the first deploy; the bot sends
 # `PRIVMSG NickServ :IDENTIFY FiberEye <password>` after 001. Leave empty to
 # skip IDENTIFY (the bot then falls back to FiberEye_ on a 433).
-vault_fibereye_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD"
+# MUST be 32 characters or fewer: NickServ answers a longer one with
+# "Your password is too long. It must not exceed 32 characters." and the
+# registration silently does not happen.
+vault_fibereye_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD-MAX-32-CHARS"
 # FiberEye oper password: the connection watch OPERs as the "fibereye" oper
-# (ircd_fibereye_oper_name), whose EyeWatch class grants ZLINE + STATS only
-# plus umode +s with snomasks c/q/x, host-locked to the Docker network. The
-# ircd role renders it as an InspIRCd hmac-sha256 hash and the gateway
-# receives it as IRCFIBER_FIBEREYE_OPER_PASSWORD. Use a distinct random
-# value — never reuse the dashboard, log-bot or human admin oper password.
+# (ircd_fibereye_oper_name), whose EyeWatch class grants ZLINE + STATS plus
+# privs="servers/auspex" (required for STATS Z) and umode +s with snomasks
+# c/q/x, host-locked to the Docker network. The ircd role renders it as an
+# InspIRCd hmac-sha256 hash and the gateway receives it as
+# IRCFIBER_FIBEREYE_OPER_PASSWORD. No length limit (it is hashed). Use a
+# distinct random value — never reuse the dashboard, log-bot or human admin
+# oper password.
 vault_ircd_fibereye_oper_password: "REPLACE-WITH-STRONG-PASSWORD"
-# Cloudflare Turnstile keypair for the public /unban page (Cloudflare
-# dashboard → Turnstile → Add widget, for the site's own hostname). The site
-# key is rendered into the page and the secret is used server-side for the
-# siteverify call, so both are needed: with either missing the page refuses
-# to release anything and says self-service unban is not configured. Test
-# pair that always passes: 1x00000000000000000000AA /
-# 1x0000000000000000000000000000000AA.
+# Cloudflare Turnstile keypair for the public /unban page. Either mint it in
+# the dashboard (Turnstile -> Add widget, mode "managed", the site's own
+# hostnames) or over the API with the token already in this vault:
+#   POST /client/v4/accounts/<vault_cloudflare_account_id>/challenges/widgets
+#   {"name":"...","domains":["ircfiber.com"],"mode":"managed",
+#    "clearance_level":"no_clearance"}
+# The response carries both `sitekey` and `secret`.
+#
+# The site key is rendered into the page; the secret is used server-side for
+# the siteverify call. Both are needed: with either missing the page refuses
+# to release anything and says self-service unban is not configured — the
+# safe direction, but it leaves banned users with no appeal path.
+#
+# NEVER put Cloudflare's always-pass test pair (1x00000000000000000000AA /
+# 1x0000000000000000000000000000000AA) in a real deployment: that secret
+# accepts ANY response token, so anyone could lift any machine-placed
+# Z-line. Those values are for a local test rig only.
 vault_turnstile_site_key: "REPLACE-WITH-TURNSTILE-SITE-KEY"
 vault_turnstile_secret: "REPLACE-WITH-TURNSTILE-SECRET"
 

@@ -165,6 +165,26 @@
 # direct public connections in the "main" class.
 
 <module name="connflood">
+# m_connflood is a SERVER-WIDE throttle, not a per-IP one: once it trips it
+# refuses every new connection for `timeout`. It was loaded here with no
+# <connflood> tag at all, so InspIRCd's defaults applied — verified on
+# 4.11.0 as maxconns="3" per period="30", i.e. the 4th direct public
+# connection in any 30 second window locked out the whole network. Two
+# consequences, both measured: legitimate users were refused during any
+# small burst, and because the refusal happens BEFORE registration the
+# ircd emits no connect snotice, so FiberEye could not see those attempts
+# at all — which made its own connect_flood threshold unreachable.
+#
+# 60 per 30 s is ~2/s sustained, far above anything organic on a network
+# this size and far below a real mass-connect flood, and it leaves the
+# per-IP-group judgement to <connectban> below and to FiberEye, which can
+# both actually see the traffic. bootwait keeps it quiet while the ircd
+# comes up and clients reconnect in a herd.
+<connflood period="30"
+           maxconns="60"
+           timeout="30"
+           bootwait="2m"
+           quitmsg="The server is not accepting new connections right now. Please try again in a minute.">
 <module name="connectban">
 # The ircd's own first line of defence, retuned to actually fire: at the
 # stock threshold="32" a client can reconnect 31 times per bootwait window

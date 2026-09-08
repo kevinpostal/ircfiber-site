@@ -561,7 +561,7 @@ final class FiberEyeBot {
 
         // A trusted-subnet container address must never be banned: that
         // would take the whole platform offline. Persist it, count nothing.
-        if (isPrivateIp(c.ip) || exempt(group)) return;
+        if (isPrivateIp(c.ip) || exempt(c.ip, group)) return;
 
         Observation o;
         o.windowSeconds = cfg.thresholds.windowSeconds;
@@ -617,7 +617,7 @@ final class FiberEyeBot {
         openedAt.remove(id);
         if (duration > 0 && duration < cfg.thresholds.shortMs) {
             const group = ipGroup(q.ip);
-            if (!isPrivateIp(q.ip) && !exempt(group)) {
+            if (!isPrivateIp(q.ip) && !exempt(q.ip, group)) {
                 countChurn(group, ts);
                 if (store !is null) store.bumpShortSession(group);
             }
@@ -625,8 +625,20 @@ final class FiberEyeBot {
     }
 
 
-    private bool exempt(string group) {
-        foreach (e; cfg.exemptIps) if (e == group) return true;
+    /// True when this connect is on the never-count, never-ban list.
+    ///
+    /// An entry may be the IP group verbatim (`2603:8001:98f0:1530::/64`),
+    /// any CIDR that covers the address (`198.51.100.0/24`), a glob, or a
+    /// bare address — `zlineMatches` is the same predicate the unban page
+    /// uses, so an operator writes an exemption exactly like a Z-line mask
+    /// instead of having to guess the grouped form. An exact-string-only
+    /// match would silently ignore a `/24` entry, which is the sort of
+    /// exemption that only gets tested the day it fails to hold.
+    private bool exempt(string ip, string group) {
+        foreach (e; cfg.exemptIps) {
+            if (e == group || e == ip) return true;
+            if (zlineMatches(e, ip)) return true;
+        }
         return false;
     }
 

@@ -155,6 +155,16 @@ fibereye_oper_name: "fibereye"
 # as logs_bot_ignore_classes, plus localhost-v6: banning the ircd's own
 # healthcheck source would take the whole platform offline.
 fibereye_ignore_classes: "ircfiber-engine,ircfiber-engine-v6,localhost,localhost-v6"
+# IP groups that are recorded but never counted and never banned. Entries may
+# be an IP group verbatim, any CIDR covering the address, a glob or a bare
+# address -- matched with the same predicate as a Z-line mask.
+#
+# 2603:8001:98f0:1530::/64 is the operator's own home network. It is also the
+# /64 the 2026-09 sample was attributed to, which means that "flood" was very
+# likely our own client reconnecting -- so arming enforcement without this
+# entry would Z-line the operator out of their own network. Verified by
+# connecting from it: FiberEye grouped it to exactly this /64.
+fibereye_exempt_ips: "2603:8001:98f0:1530::/64"
 # Detection window and the three rules evaluated inside it, per IP group (the
 # exact address for IPv4, the /64 for IPv6). Opening values chosen against the
 # 2026-09 flood sample; the admin card shows what is actually in force, so
