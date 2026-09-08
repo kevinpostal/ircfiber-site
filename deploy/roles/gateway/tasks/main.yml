@@ -21,10 +21,14 @@
             | default(host_tailscale_ip)) }}
 
 - name: Pull irc-fiber image (registry-qualified ref only)
-  tags: [gateway, bnc]
+  # logs-bot is tagged here too: without the pull, `-t logs-bot` builds the
+  # container from whatever :prod the host happens to have cached, which is
+  # the release *before* the one just shipped.
+  tags: [gateway, bnc, logs-bot]
   community.docker.docker_image:
     name: "{{ ircfiber_gateway_image_full }}"
     source: pull
+    force_source: true
     state: present
   # gateway-deploy.yml hands this role a plain local tag
   # (irc-fiber-gateway:deploy) it has already pulled by digest and tagged;

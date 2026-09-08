@@ -405,6 +405,31 @@ ansible-playbook playbooks/gateway.yml -t support-bot     # (re)creates ircfiber
 docker logs ircfiber-support-bot | grep 'joined #support' # then file a report at https://<domain>/?/feedback and watch #support
 ```
 
+### Operations log bot (`FiberLogs` in `#staff`)
+
+`FiberLogs` is the third bot in the same gateway image; it runs only where `IRCFIBER_LOGS_BOT_ENABLED=1`, which the `gateway` role gives to the dedicated `ircfiber-logs-bot` container (`logs_bot_*` in `group_vars/all/vars.yml`). It announces three things in `#staff`: every website signup (username, e-mail, IP), every outbound e-mail (kind, recipient, provider, latency or the failure) and every client connect to the ircd (`nick!ident@host`, real IP, connect class, port, GECOS). Signup and connect IPs are enriched from ipinfo.io — the full city/region/country/ASN/timezone report the **first** time an IP is seen, then a compact `known IP (City, CC)` suffix, backed by a 7-day cache in `irc:logs:geo:<ip>`. Private, loopback and CGNAT addresses never cost a lookup.
+
+Because those lines carry full IPs and addresses, `#staff` is **oper-only**: `ircd_permanent_channels` gives it `+O` (`modes: "ntO"`, mode-locked `+ntOP` by `ircd_channel_setup.py`) and the bot must OPER before it can join. It opers as `ircd_logs_oper_name` (`fiberlogs`), a class in `opers.conf.j2` that grants **no commands at all** — only umode `+s` with snomasks `c`/`C`, which is how it sees connects. Connect classes in `logs_bot_ignore_classes` are counted but not announced; the engine classes are ignored by default because every platform user reaches the ircd through a container IP whose geo is meaningless (their signup is announced anyway).
+
+It is visible from the admin **IRCD** page (*Log bot* card): a ≤5 s heartbeat on `irc:logs:bot` (60 s TTL — no heartbeat = **Offline**), announcement/connect/geo counters, the outbox depth, and **Rejoin** / **Reconnect** / **Announce**, all through `irc:logs:bot:control` and the `irc:logs:outbox` list exactly like the support bot. A bot that is in the channel but failed to OPER is badged *In #staff, not opered* — it would silently see no connects.
+
+Rollout (each step idempotent):
+
+```bash
+ansible-playbook playbooks/ircd.yml -t ircdconf            # LogBot oper + #staff permchannel (SIGHUP rehash, nobody dropped)
+ansible-playbook playbooks/ircd.yml -t chanserv            # register + mode-lock #staff
+# register the bot nick once, from the prod host (Anope: usemail=no):
+ssh <host> 'sudo docker run --rm --network ircfiber_net busybox sh -c \
+  "(printf \"NICK FiberLogs\\r\\nUSER fiberlogs 0 * :bot\\r\\n\"; sleep 5; \
+    printf \"PRIVMSG NickServ :REGISTER <vault_logs_bot_nickserv_password> logs@<domain>\\r\\n\"; sleep 5; \
+    printf \"QUIT\\r\\n\") | nc ircd 6667"'
+make ship                                                  # the image that carries the bot code
+ansible-playbook playbooks/gateway.yml -t logs-bot         # (re)creates ircfiber-logs-bot; not part of blue/green
+docker logs ircfiber-logs-bot | grep -E 'opered|joined #staff'
+```
+
+`vault_ipinfo_token` is optional: without it every geo clause reads `geo unavailable` and nothing else degrades. `vault_ircd_logs_oper_password` is **not** optional — the ircd role asserts it, so a missing value fails the play before anything is rendered.
+
 ### Channel services bot (`FiberServ` in `#ircfiber` and `#support`)
 
 `FiberServ` is an Anope **BotServ** pseudo-client, not a container: `roles/ircd/files/ircd_channel_setup.py` runs `BOT ADD` once and `ASSIGN` for every channel in `ircd_permanent_channels` marked `bot: true`, so the bot list is deploy state rather than something an oper typed once. It is defined by `ircd_services_bot` (`nick`, `ident`, `host`, `realname`) in `roles/ircd/defaults/main.yml`; `inspircd.conf.j2` also reserves the nick with `<badnick>` so it stays unsquattable while services are down (Anope Q-lines it too, but only while it is running).
