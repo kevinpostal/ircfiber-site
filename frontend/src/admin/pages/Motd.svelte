@@ -558,6 +558,8 @@
   }
   /* parseIrcFormatting plants <wbr> at every colour boundary for chat
      wrapping; a <wbr> breaks even inside white-space: pre, so coloured
-     art would wrap here. The preview must never wrap — it scrolls. */
-  .motd-preview wbr { display: none; }
+     art would wrap here. The preview must never wrap — it scrolls.
+     :global — the <wbr> lives inside {@html}, which the compiler cannot
+     see; without it this rule is pruned as unused. */
+  .motd-preview :global(wbr) { display: none; }
 </style>
