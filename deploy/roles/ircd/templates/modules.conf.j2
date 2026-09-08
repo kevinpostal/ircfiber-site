@@ -290,6 +290,18 @@
 <module name="satopic">
 <module name="xline_db">
 
+#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  MOTD  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
+#
+# motdpool: draws one block per connect from motd.d/pool (written by the
+# gateway from the admin MOTD templates) and substitutes per-user values
+# from motd.d/profiles. An unreadable or empty pool falls through to the
+# core <files motd> text, so a failed write never yields an empty MOTD.
+# Our own module (roles/ircd/files/motdpool, built into ircd_image); VF_NONE,
+# so it never enters the spanningtree CAPAB compare and the leaf, whose
+# conf dir no gateway writes into, simply keeps serving motd.d/motd.
+<module name="motdpool">
+<motdpool pool="motd.d/pool" profiles="motd.d/profiles" cachetime="60" maxblocks="200">
+
 #-#-#-#-#-#-#-#-#-  SERVER LINK COMPAT (irc.netcrave.chat)  -#-#-#-#-#-#-#-#
 # Spanningtree CAPAB refuses a link unless both sides agree on three
 # things (src/modules/m_spanningtree/capab.cpp):

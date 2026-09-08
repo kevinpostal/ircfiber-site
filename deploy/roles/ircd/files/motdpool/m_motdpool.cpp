@@ -11,7 +11,7 @@
  *
  * Pool file (<motdpool:pool>, default motd.d/pool): UTF-8 text, blocks
  * separated by a line consisting of exactly "%%". A block whose first line
- * is "#id: <slug>" ([A-Za-z0-9_-]{1,32}) is named; the header line is never
+ * is "#id: <slug>" ([A-Za-z0-9_-]{1,64}) is named; the header line is never
  * sent. Whitespace-only blocks are dropped.
  *
  * Profiles file (<motdpool:profiles>, default motd.d/profiles): one record
@@ -72,7 +72,7 @@ private:
 
 	static bool IsBlockId(const std::string& id)
 	{
-		if (id.empty() || id.length() > 32)
+		if (id.empty() || id.length() > 64)
 			return false;
 		for (const auto chr : id)
 		{
@@ -186,6 +186,10 @@ private:
 			}
 			PushBlock(pool, current, path, warnedlines);
 		}
+		// The file's final newline yields one empty trailing token; it is
+		// not a line of the last block.
+		if (!current.empty() && current.back().empty() && !file.contents.empty() && file.contents.back() == '\n')
+			current.pop_back();
 		if (!current.empty() && pool.blocks.size() < maxblocks)
 			PushBlock(pool, current, path, warnedlines);
 

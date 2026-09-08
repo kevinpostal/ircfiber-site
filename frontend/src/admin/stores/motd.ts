@@ -1,7 +1,7 @@
 /**
- * MOTD templates — admin CRUD over /api/admin/motd plus the ircd rotation
- * state. Every write returns the full list + rotation state, so the store
- * is replaced wholesale after each call.
+ * MOTD templates — admin CRUD over /api/admin/motd plus the ircd pool
+ * state. Every write returns the full list + pool state, so the store is
+ * replaced wholesale after each call.
  */
 import { api } from '../lib/api-client';
 import { stripIrcFormatting } from '../../lib/ircFormatting';
@@ -21,13 +21,17 @@ export interface MotdTemplate {
 }
 
 export interface MotdRotation {
-  /** Template the ircd file currently holds, or null before first rotation. */
-  current: { id: string; name: string; at: number } | null;
-  file: string;
-  intervalMs: number;
   /** Template served to everyone until unpinned ("" = random per connect). */
   pinnedId: string;
-  /** Failure of the rotation that ran as part of the last write ("" = ok). */
+  /** ircd-side pool file every enabled template is written into. */
+  poolFile: string;
+  /** ircd-side per-user profiles file (geo + FiberEye rollup). */
+  profilesFile: string;
+  /** Blocks in the last successful pool write (1 while pinned). */
+  blocks: number;
+  /** Records in the last successful profiles write. */
+  profiles: number;
+  /** Failure of the pool write that ran as part of the last write ("" = ok). */
   error: string;
 }
 
@@ -57,11 +61,12 @@ export const updateMotd = (id: string, input: MotdTemplateInput) =>
   api.post<MotdState>(`/api/admin/motd/${encodeURIComponent(id)}`, input);
 export const deleteMotd = (id: string) =>
   api.post<MotdState>(`/api/admin/motd/${encodeURIComponent(id)}/delete`, {});
-/** Replaces every template in `group` with `items` (one rotation, one REHASH). */
+/** Replaces every template in `group` with `items` (one pool write). */
 export const batchMotd = (input: MotdBatchInput) => api.post<MotdState>('/api/admin/motd/batch', input);
 export const pinMotd = (id: string) => api.post<MotdState>(`/api/admin/motd/${encodeURIComponent(id)}/pin`, {});
 export const unpinMotd = () => api.post<MotdState>('/api/admin/motd/unpin', {});
-export const rotateMotd = (id?: string) => api.post<MotdState>('/api/admin/motd/rotate', id ? { id } : {});
+/** Rewrites the ircd pool from current state (pinned → one block, else all enabled). */
+export const rotateMotd = () => api.post<MotdState>('/api/admin/motd/rotate', {});
 
 /** Longest visible line in cells (colour codes stripped; code points, so
  *  box-drawing art counts as 1 per cell). */

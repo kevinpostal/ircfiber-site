@@ -327,18 +327,21 @@ void main() {
     startFiberWatchdog();
     logInfo("Fiber watchdog started");
     // MOTD templates: seed the launch set once, mirror to Redis for the
-    // engine's per-connect pick, and rotate the ircd file hourly.
+    // engine's per-connect pick, and write the ircd's motd.d/pool so it
+    // exists before the first connect after a deploy (the ircd's motdpool
+    // module re-reads it on its own cache interval; no rehash, no timer).
     {
         import ircfiber.db.motd_templates : MotdTemplateRepository, seedDefaultMotdTemplates;
-        import ircfiber.web.admin.motd : publishMotdTemplates, startMotdRotation;
+        import ircfiber.web.admin.motd : publishMotdTemplates, writePool;
         try {
             auto motdRepo = new MotdTemplateRepository();
             seedDefaultMotdTemplates(motdRepo);
             publishMotdTemplates(redis, motdRepo);
+            auto err = writePool(redis, motdRepo);
+            if (err.length) logWarn("motd: boot pool write failed: %s", err);
         } catch (Exception e) {
             logWarn("motd: boot seed/publish failed: %s", e.msg);
         }
-        startMotdRotation(redis);
     }
 
     cast(void) new ServerRegistry(redis);

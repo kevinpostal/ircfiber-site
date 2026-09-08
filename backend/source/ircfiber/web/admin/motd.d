@@ -6,25 +6,24 @@
  *    the engine reads it on each connect to irc.ircfiber.com and serves a
  *    random enabled template in place of the ircd's 372 lines (per-connect
  *    randomness for everyone connecting through IRC Fiber).
- *  - IRCd rotation: a random enabled template is rendered into the ircd's
- *    `motd` file (the conf dir is bind-mounted into the gateway) and the
- *    ircd is REHASHed, so clients connecting straight to the ircd also
- *    cycle through the set. Runs on every edit and hourly
- *    (`startMotdRotation`); InspIRCd caches the file per rehash, so this is
- *    the finest rotation the ircd itself supports.
+ *  - IRCd pool: every enabled template is written into the ircd's
+ *    `motd.d/pool` (the conf dir is bind-mounted into the gateway) and the
+ *    ircd's motdpool module draws one block per connect, substituting
+ *    per-user `{placeholders}` from `motd.d/profiles` (motd_profiles.d).
+ *    The module re-reads the file on its own cache interval, so there is no
+ *    REHASH and nothing to rotate.
  */
 module ircfiber.web.admin.motd;
 
 import std.conv : to;
-import std.datetime : Clock;
 import std.file : exists, isDir, write, rename, remove;
 import std.path : buildPath, dirName;
-import std.random : uniform;
-import std.string : strip;
+import std.string : strip, replace;
+import std.array : join;
 
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 import vibe.core.log : logInfo, logWarn;
-import vibe.data.json : Json, parseJsonString;
+import vibe.data.json : Json;
 
 import ircfiber.db.motd_templates : MotdTemplateRepository, MotdTemplateRecord,
     motdTemplatesToJson, validateMotdBody, seedDefaultMotdTemplates;
@@ -32,15 +31,12 @@ import ircfiber.models.user : User;
 import ircfiber.redis.protocol : RedisKeys;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody;
-import ircfiber.web.admin.ircd : loadIrcdSettings, rehashIrcdNow;
+import ircfiber.web.admin.ircd : loadIrcdSettings;
+import ircfiber.web.admin.motd_profiles : motdProfilesPath, motdProfileCount;
 
-private long nowMs() { return Clock.currTime.toUnixTime!long * 1000; }
-
-/// Redis key holding `{id,name,at}` of the template currently in the ircd
-/// file; shared across gateway instances so the hourly timer rotates once.
-private immutable string MOTD_CURRENT_KEY = "irc:config:motdCurrent";
-/// Hourly rotation cadence.
-private immutable long MOTD_ROTATION_MS = 3_600_000;
+/// Blocks in the last successful pool write (0 until one happens); shown in
+/// the admin UI as the size of the set the ircd draws from.
+private __gshared long motdPoolBlocks = 0;
 
 private User currentAdmin(HTTPServerRequest req) {
     if (auto p = "user" in req.context) return (*p).get!User;
@@ -62,53 +58,25 @@ public void publishMotdTemplates(RedisStorage redis, MotdTemplateRepository repo
     }
 }
 
-/// What the ircd is currently serving, as recorded by the last rotation.
-private Json currentJson(RedisStorage redis) {
-    try {
-        auto raw = redis.getDb().get(MOTD_CURRENT_KEY);
-        if (raw.length) return parseJsonString(raw);
-    } catch (Exception) {}
-    return Json(null);
-}
-
-/// Path of the ircd MOTD file inside the gateway container. `motd.d/` is
+/// Path of the ircd MOTD pool inside the gateway container. `motd.d/` is
 /// the one conf subdir mounted read-write (roles/gateway/tasks/container.yml).
-private string motdFilePath() {
-    return buildPath(loadIrcdSettings().confDir, "motd.d", "motd");
+package string motdPoolPath() {
+    return buildPath(loadIrcdSettings().confDir, "motd.d", "pool");
 }
 
-/// Renders `t` into the ircd MOTD file and REHASHes. Returns "" on success
-/// or the failure reason. The file is written atomically (rename) so a
-/// rehash racing the write never loads a half-written MOTD.
-private string rotateTo(RedisStorage redis, MotdTemplateRecord t) {
-    auto path = motdFilePath();
+/// Atomic write (tmp + rename) of `text` to `path`, so the ircd's periodic
+/// re-read never sees a half-written file. "" on success or the reason.
+package string writeIrcdFile(string path, string text) {
     auto dir = dirName(path);
     if (!exists(dir) || !isDir(dir)) return "ircd MOTD dir " ~ dir ~ " is not mounted";
     auto tmp = path ~ ".tmp";
     try {
-        string text;
-        foreach (l; t.lines()) text ~= l ~ "\n";
         write(tmp, text);
         rename(tmp, path);
     } catch (Exception e) {
         try if (exists(tmp)) remove(tmp); catch (Exception) {}
         return "cannot write " ~ path ~ ": " ~ e.msg;
     }
-    try {
-        rehashIrcdNow();
-    } catch (Exception e) {
-        return "MOTD file written but REHASH failed: " ~ e.msg;
-    }
-    try {
-        Json cur = Json.emptyObject;
-        cur["id"] = Json(t.id);
-        cur["name"] = Json(t.name);
-        cur["at"] = Json(nowMs());
-        redis.getDb().set(MOTD_CURRENT_KEY, cur.toString());
-    } catch (Exception e) {
-        logWarn("motd: rotated but failed to record current template: %s", e.msg);
-    }
-    logInfo("motd: ircd now serves template '%s' (%s)", t.name, t.id);
     return "";
 }
 
@@ -126,51 +94,67 @@ private void setPinned(RedisStorage redis, string id) {
     }
 }
 
-/// Rotates the ircd to the pinned template when one is set and enabled,
-/// else to a random enabled template (never the one currently served when
-/// there is a choice). Returns "" on success.
-package string rotateRandom(RedisStorage redis, MotdTemplateRepository repo) {
+/// Block id the pool carries for a template: the UUID without hyphens (32
+/// chars, inside the module's [A-Za-z0-9_-]{1,32} header rule). A profile
+/// record that pins a block (`motd=`) must use the same form.
+package string poolBlockId(string templateId) {
+    return templateId.replace("-", "");
+}
+
+/// Writes the ircd pool: every enabled template as one `#id:`-headed block
+/// separated by `%%` lines — or, while a template is pinned (and still
+/// enabled), only that block, which is what makes "pinned" mean "everyone
+/// sees this one". Returns "" on success or the failure reason.
+public string writePool(RedisStorage redis, MotdTemplateRepository repo) {
     auto pool = repo.enabled();
     if (pool.length == 0) return "no enabled templates";
     auto pin = pinnedId(redis);
     if (pin.length) {
-        foreach (t; pool) if (t.id == pin) return rotateTo(redis, t);
-        // Pinned template deleted or disabled: the pin is void.
-        setPinned(redis, "");
+        MotdTemplateRecord[] only;
+        foreach (t; pool) if (t.id == pin) only ~= t;
+        if (only.length) pool = only;
+        else setPinned(redis, ""); // Pinned template deleted or disabled: the pin is void.
     }
-    auto cur = currentJson(redis);
-    string curId = cur.type == Json.Type.object ? jsonStr(cur, "id") : "";
-    if (pool.length > 1 && curId.length) {
-        MotdTemplateRecord[] others;
-        foreach (t; pool) if (t.id != curId) others ~= t;
-        if (others.length) pool = others;
+    // Joined, not terminated: a final "\n" would read as one empty line at
+    // the end of the last block.
+    string[] rows;
+    foreach (i, t; pool) {
+        if (i) rows ~= "%%";
+        rows ~= "#id: " ~ poolBlockId(t.id);
+        rows ~= t.lines();
     }
-    return rotateTo(redis, pool[uniform(0, pool.length)]);
+    auto text = rows.join("\n");
+    auto err = writeIrcdFile(motdPoolPath(), text);
+    if (err.length) return err;
+    motdPoolBlocks = pool.length;
+    logInfo("motd: ircd pool holds %d template(s)%s", pool.length, pin.length ? " (pinned)" : "");
+    return "";
 }
 
-/// Everything a write does after Mongo: mirror to Redis, rotate the ircd.
-/// Returns the rotation error ("" when it went through) for the response.
+/// Everything a write does after Mongo: mirror to Redis, rewrite the pool.
+/// Returns the pool error ("" when it went through) for the response.
 private string afterWrite(RedisStorage redis, MotdTemplateRepository repo) {
     publishMotdTemplates(redis, repo);
-    return rotateRandom(redis, repo);
+    return writePool(redis, repo);
 }
 
-private Json listJson(RedisStorage redis, MotdTemplateRepository repo, string rotationError) {
+private Json listJson(RedisStorage redis, MotdTemplateRepository repo, string poolError) {
     Json data = Json.emptyObject;
     Json arr = Json.emptyArray;
     foreach (t; repo.all()) arr ~= t.toJson();
     data["templates"] = arr;
     Json rot = Json.emptyObject;
-    rot["current"] = currentJson(redis);
     rot["pinnedId"] = Json(pinnedId(redis));
-    rot["file"] = Json(motdFilePath());
-    rot["intervalMs"] = Json(MOTD_ROTATION_MS);
-    rot["error"] = Json(rotationError);
+    rot["poolFile"] = Json(motdPoolPath());
+    rot["profilesFile"] = Json(motdProfilesPath());
+    rot["blocks"] = Json(motdPoolBlocks);
+    rot["profiles"] = Json(motdProfileCount());
+    rot["error"] = Json(poolError);
     data["rotation"] = rot;
     return data;
 }
 
-/// GET /api/admin/motd — every template plus the ircd rotation state.
+/// GET /api/admin/motd — every template plus the ircd pool state.
 /// Seeds the launch defaults into an empty collection.
 package void apiMotdList(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     auto repo = new MotdTemplateRepository();
@@ -237,8 +221,8 @@ package void apiMotdDelete(HTTPServerRequest req, HTTPServerResponse res, RedisS
 
 /// POST /api/admin/motd/batch — body `{group, recipe, items:[{name, body,
 /// enabled?}]}`: replaces every template in `group` with `items` (variants
-/// the builder generated from one recipe), then mirrors + rotates once.
-/// One round-trip instead of N deletes + M creates each REHASHing the ircd.
+/// the builder generated from one recipe), then mirrors + writes the pool
+/// once. One round-trip instead of N deletes + M creates.
 package void apiMotdBatch(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     auto repo = new MotdTemplateRepository();
     auto j = readJsonBody(req);
@@ -275,7 +259,8 @@ package void apiMotdBatch(HTTPServerRequest req, HTTPServerResponse res, RedisSt
     jsonOk(res, listJson(redis, repo, afterWrite(redis, repo)));
 }
 /// POST /api/admin/motd/:id/pin — serve this template to everyone: the
-/// engine picks it on every connect and the ircd file holds it until unpin.
+/// engine picks it on every connect and the ircd pool holds only it until
+/// unpin.
 package void apiMotdPin(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     auto repo = new MotdTemplateRepository();
     auto t = repo.getById(req.params["id"]);
@@ -283,7 +268,7 @@ package void apiMotdPin(HTTPServerRequest req, HTTPServerResponse res, RedisStor
     if (!t.enabled) { jsonError(res, 400, "enable the template before pinning it"); return; }
     setPinned(redis, t.id);
     logInfo("Admin %s pinned MOTD template '%s'", currentAdmin(req).username, t.name);
-    jsonOk(res, listJson(redis, repo, rotateTo(redis, t)));
+    jsonOk(res, listJson(redis, repo, writePool(redis, repo)));
 }
 
 /// POST /api/admin/motd/unpin — back to a random template per connect.
@@ -291,46 +276,15 @@ package void apiMotdUnpin(HTTPServerRequest req, HTTPServerResponse res, RedisSt
     auto repo = new MotdTemplateRepository();
     setPinned(redis, "");
     logInfo("Admin %s unpinned the MOTD template", currentAdmin(req).username);
-    jsonOk(res, listJson(redis, repo, rotateRandom(redis, repo)));
+    jsonOk(res, listJson(redis, repo, writePool(redis, repo)));
 }
 
-/// POST /api/admin/motd/rotate — body `{id?}`: rotate the ircd to that
-/// template, or to a random enabled one when omitted.
+/// POST /api/admin/motd/rotate — rewrite the ircd pool from current state
+/// (pinned → that one block, else every enabled template). The recovery
+/// action when a write failed or the file was lost; 502 when it fails again.
 package void apiMotdRotate(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     auto repo = new MotdTemplateRepository();
-    auto j = readJsonBody(req);
-    string err;
-    auto id = j.type == Json.Type.object ? jsonStr(j, "id") : "";
-    if (id.length) {
-        auto t = repo.getById(id);
-        if (t.id.length == 0) { jsonError(res, 404, "not found"); return; }
-        err = rotateTo(redis, t);
-    } else {
-        err = rotateRandom(redis, repo);
-    }
+    auto err = writePool(redis, repo);
     if (err.length) { jsonError(res, 502, err); return; }
     jsonOk(res, listJson(redis, repo, ""));
-}
-
-/// Hourly ircd rotation, started once at gateway boot on the main thread
-/// (the oper session used by REHASH is main-thread state). Skips when
-/// another gateway instance rotated within the last interval, so a
-/// blue/green pair does not double the cadence. Also refreshes the Redis
-/// mirror so a Redis flush cannot silently disable per-connect MOTDs.
-public void startMotdRotation(RedisStorage redis) {
-    import vibe.core.core : setTimer;
-    import core.time : minutes;
-    setTimer(10.minutes, () @trusted nothrow {
-        try {
-            auto repo = new MotdTemplateRepository();
-            publishMotdTemplates(redis, repo);
-            auto cur = currentJson(redis);
-            long at = cur.type == Json.Type.object && cur["at"].type == Json.Type.int_ ? cur["at"].get!long : 0;
-            if (nowMs() - at < MOTD_ROTATION_MS - 60_000) return;
-            auto err = rotateRandom(redis, repo);
-            if (err.length) logWarn("motd: hourly rotation skipped: %s", err);
-        } catch (Exception e) {
-            logWarn("motd: rotation timer failed: %s", e.msg);
-        }
-    }, true);
 }

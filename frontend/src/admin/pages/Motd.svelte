@@ -6,9 +6,9 @@
    *  - Per connect: the engine picks a random enabled template on every
    *    connect to irc.ircfiber.com (through IRC Fiber) and serves it as the
    *    MOTD instead of the ircd's file.
-   *  - IRCd rotation: one random enabled template is written into the ircd's
-   *    MOTD file and REHASHed on every save and hourly, so native clients
-   *    connecting straight to the ircd cycle through the set too.
+   *  - IRCd pool: every enabled template is written into the ircd's
+   *    motd.d/pool on every save; the ircd's motdpool module draws one per
+   *    connect and fills per-user {placeholders} from motd.d/profiles.
    *
    * Two editors: Raw (monospace textarea) and Builder (block recipe —
    * TheDraw/FIGlet banners, text, rules, key/value rows, frame). A recipe
@@ -140,7 +140,7 @@
   /** Applies a write result; the server returns the whole list each time. */
   function apply(next: MotdState, okMsg: string) {
     data = next;
-    if (next.rotation.error) toastError(`${okMsg} — ircd rotation failed: ${next.rotation.error}`);
+    if (next.rotation.error) toastError(`${okMsg} — pool write failed: ${next.rotation.error}`);
     else toastSuccess(okMsg);
   }
 
@@ -218,12 +218,12 @@
     }
   }
 
-  async function rotate(id?: string) {
+  async function rotate() {
     if (rotating) return;
     rotating = true;
     try {
-      data = await rotateMotd(id);
-      toastSuccess(id ? 'IRCd now serves this template' : 'IRCd rotated to a random template');
+      data = await rotateMotd();
+      toastSuccess('IRCd pool rewritten');
     } catch (e) {
       toastError(errMsg(e));
     } finally {
@@ -284,7 +284,7 @@
 
 <PageHeader
   title="MOTD"
-  subtitle="Templates served at random on every connect to irc.ircfiber.com; one is rotated into the ircd hourly"
+  subtitle="Templates served at random on every connect to irc.ircfiber.com; the ircd draws one from the pool per connect"
 >
   {#snippet actions()}
     <button
@@ -292,9 +292,9 @@
       onclick={() => void rotate()}
       disabled={rotating || enabledCount === 0}
       class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
-      title="Write a random enabled template into the ircd MOTD file and REHASH"
+      title="Rewrite motd.d/pool from the enabled templates; the ircd draws one block per connect"
     >
-      {rotating ? 'Rotating…' : 'Rotate ircd now'}
+      {rotating ? 'Writing…' : 'Rewrite pool'}
     </button>
     <button
       type="button"
@@ -312,7 +312,7 @@
 {:else if data}
   {#if data.rotation.error}
     <div class="mb-4 rounded-md border border-warn/40 bg-warn/10 px-4 py-3 text-sm text-text" role="alert">
-      Last ircd rotation failed: {data.rotation.error}. Per-connect MOTDs are unaffected; native clients keep the previous file.
+      Last pool write failed: {data.rotation.error}. The ircd keeps drawing from the previous pool.
     </div>
   {/if}
 
@@ -350,8 +350,6 @@
                     {/if}
                     {#if pinnedId === t.id}
                       <StatusBadge label="pinned" tone="warn" size="sm" dot={false} />
-                    {:else if data.rotation.current?.id === t.id}
-                      <StatusBadge label="on ircd" tone="info" size="sm" dot={false} />
                     {/if}
                     <StatusBadge label={t.enabled ? 'enabled' : 'off'} tone={t.enabled ? 'success' : 'muted'} size="sm" />
                   </span>
@@ -366,23 +364,23 @@
         <dl class="space-y-2 text-sm">
           <div class="flex justify-between gap-4">
             <dt class="text-muted">On connect</dt>
-            <dd class="truncate font-mono">{pinned ? `pinned: ${pinned.name}` : `random of ${enabledCount}`}</dd>
+            <dd class="truncate font-mono">{pinned ? `pinned: ${pinned.name}` : `random of ${data.rotation.blocks}`}</dd>
           </div>
           <div class="flex justify-between gap-4">
-            <dt class="text-muted">IRCd file</dt>
-            <dd class="truncate font-mono">{data.rotation.current?.name ?? '— (unchanged)'}</dd>
+            <dt class="text-muted">Pool</dt>
+            <dd class="truncate font-mono text-xs">{data.rotation.poolFile}</dd>
           </div>
           <div class="flex justify-between gap-4">
-            <dt class="text-muted">Rotated</dt>
-            <dd class="font-mono">{data.rotation.current ? relative(data.rotation.current.at) : '—'}</dd>
+            <dt class="text-muted">Blocks</dt>
+            <dd class="font-mono">{data.rotation.blocks}</dd>
           </div>
           <div class="flex justify-between gap-4">
-            <dt class="text-muted">Interval</dt>
-            <dd class="font-mono">{pinned ? 'paused while pinned' : `${Math.round(data.rotation.intervalMs / 60000)} min + every save`}</dd>
+            <dt class="text-muted">Profiles</dt>
+            <dd class="font-mono">{data.rotation.profiles}</dd>
           </div>
           <div class="flex justify-between gap-4">
             <dt class="text-muted">File</dt>
-            <dd class="truncate font-mono text-xs">{data.rotation.file}</dd>
+            <dd class="truncate font-mono text-xs">{data.rotation.profilesFile}</dd>
           </div>
         </dl>
         {#if pinned}
@@ -391,7 +389,7 @@
           </button>
         {/if}
         <p class="mt-3 text-xs text-muted">
-          Users on IRC Fiber get the pinned template, or a random enabled one, on every connect. Native clients see the ircd file, which follows the pin or rotates hourly and on every save.
+          Users on IRC Fiber get the pinned template, or a random enabled one, on every connect. Native clients draw from the ircd pool, which holds every enabled template (or only the pinned one) and is rewritten on every save.
         </p>
       </Card>
     </div>
