@@ -1,10 +1,9 @@
 /**
  * FiberEye — the connection-intelligence bot.
  *
- * A second opered IRC connection (separate nick, separate oper class from
- * `FiberLogs`) that runs inside the same gateway image but only in the
- * process that sets `IRCFIBER_FIBEREYE_ENABLED=1` (prod: the dedicated
- * `ircfiber-fibereye` container).
+ * An opered IRC connection that runs inside the same gateway image but
+ * only in the process that sets `IRCFIBER_FIBEREYE_ENABLED=1` (prod: the
+ * dedicated `ircfiber-fibereye` container).
  *
  * It joins no channel and sends no PRIVMSG. Everything it does is:
  *   - subscribe to snomasks `+s +cqx` and persist every connect and quit
@@ -22,15 +21,13 @@
  * (`ircfiber.web.admin.ircd.removeXlineNow`), which is where both the
  * admin Release button and the public `/unban` page live.
  *
- * All IO is vibe.d fiber-aware (`connectTCP`, `waitForDataEx`,
- * `read(IOMode.once)`, `blpop`) — never `std.socket`.
+ * The IRC client skeleton (reconnects, OPER, sideband) is
+ * `ircfiber.bots.core.IrcBot`; this module is only the FiberEye logic.
  *
  * Env:
  *   IRCFIBER_FIBEREYE_ENABLED              "1"/"true" → run (unset → disabled)
- *   IRCFIBER_FIBEREYE_HOST                 ircd host (default IRCFIBER_LOGS_BOT_HOST,
- *                                          then IRCFIBER_IRCD_HOST, then irc.ircfiber.com)
- *   IRCFIBER_FIBEREYE_PORT                 ircd port (default IRCFIBER_LOGS_BOT_PORT,
- *                                          then IRCFIBER_IRCD_PORT, then 6667)
+ *   IRCFIBER_FIBEREYE_HOST                 ircd host (default IRCFIBER_IRCD_HOST, then irc.ircfiber.com)
+ *   IRCFIBER_FIBEREYE_PORT                 ircd port (default IRCFIBER_IRCD_PORT, then 6667)
  *   IRCFIBER_FIBEREYE_TLS                  "1" → TLS client connection
  *   IRCFIBER_FIBEREYE_NICK                 default FiberEye
  *   IRCFIBER_FIBEREYE_NICKSERV_PASSWORD    optional (also _FILE); IDENTIFY after 001
@@ -53,24 +50,17 @@
  */
 module ircfiber.fibereye.bot;
 
-import std.algorithm : min;
 import std.conv : to;
-import std.datetime : Clock;
 import std.process : environment;
-import std.string : indexOf, split, strip, toLower;
-import std.typecons : Nullable, Tuple;
+import std.string : indexOf, strip, toLower;
 import std.uni : icmp;
-import core.time : msecs, seconds, Duration;
+import core.time : seconds;
 
 import vibe.core.core : runTask, sleep;
 import vibe.core.log;
-import vibe.core.net : TCPConnection, connectTCP, WaitForDataStatus;
-import vibe.core.stream : IOMode;
-import vibe.core.sync : TaskMutex;
-import vibe.data.json : Json, parseJsonString;
-import vibe.stream.tls : TLSContextKind, TLSPeerValidationMode, TLSStream, TLSStreamState,
-    createTLSContext, createTLSStream;
+import vibe.data.json : Json;
 
+import ircfiber.bots.core;
 import ircfiber.env : envSecret;
 import ircfiber.fibereye.events;
 import ircfiber.fibereye.format;
@@ -79,9 +69,8 @@ import ircfiber.fibereye.store;
 import ircfiber.logs.geo : cachedGeo;
 import ircfiber.services.accounts : generateServicesPassword;
 import ircfiber.storage.redis : RedisStorage;
-import ircfiber.support.format : clipBytes;
 import ircfiber.tracing : isEnvEnabled;
-import ircfiber.web.admin.ircd : IrcLine, XLine, parseIrcLine, parseStatsXLine;
+import ircfiber.web.admin.ircd : IrcLine, XLine, parseStatsXLine;
 
 /// Bot settings, resolved once from the environment.
 struct FiberEyeConfig {
@@ -93,37 +82,14 @@ struct FiberEyeConfig {
     string operName;
     string operPassword;
     /// Connect classes never counted and never banned. `localhost-v6` is
-    /// in this list on purpose even though the #staff bot's default list
-    /// omits it: banning the ircd's own healthcheck source is the
-    /// documented self-Z-line trap.
+    /// in this list on purpose: banning the ircd's own healthcheck source
+    /// is the documented self-Z-line trap.
     string[] ignoreClasses = ["ircfiber-engine", "ircfiber-engine-v6", "localhost", "localhost-v6"];
     /// IP groups that are persisted but never counted or banned.
     string[] exemptIps;
     Thresholds thresholds;
     string publicBase = "https://ircfiber.com";
     string redisUrl = "redis://127.0.0.1:6379";
-}
-
-private long envLong(string name, long fallback) {
-    try {
-        const raw = environment.get(name, "").strip();
-        if (raw.length) return raw.to!long;
-    } catch (Exception) {
-    }
-    return fallback;
-}
-
-private string[] envList(string name, string[] fallback) {
-    // An explicitly empty value means "nothing", so only an unset variable
-    // keeps the defaults — same "\0" sentinel as the #staff bot.
-    const raw = environment.get(name, "\0");
-    if (raw == "\0") return fallback;
-    string[] items;
-    foreach (c; raw.split(',')) {
-        const s = c.strip();
-        if (s.length) items ~= s;
-    }
-    return items;
 }
 
 /// Starts the bot task when `IRCFIBER_FIBEREYE_ENABLED` is set; no-op otherwise.
@@ -133,30 +99,23 @@ void startFiberEye() {
         return;
     }
     FiberEyeConfig cfg;
-    cfg.host = environment.get("IRCFIBER_FIBEREYE_HOST",
-        environment.get("IRCFIBER_LOGS_BOT_HOST",
-            environment.get("IRCFIBER_IRCD_HOST", ""))).strip();
-    if (!cfg.host.length) cfg.host = "irc.ircfiber.com";
-    try cfg.port = environment.get("IRCFIBER_FIBEREYE_PORT",
-        environment.get("IRCFIBER_LOGS_BOT_PORT",
-            environment.get("IRCFIBER_IRCD_PORT", "6667"))).strip().to!ushort;
-    catch (Exception) cfg.port = 6667;
-    cfg.tls = environment.get("IRCFIBER_FIBEREYE_TLS", "0").strip() == "1";
-    auto nick = environment.get("IRCFIBER_FIBEREYE_NICK", "").strip();
-    if (nick.length) cfg.nick = nick;
+    cfg.host = botEnvStr("FIBEREYE", "HOST", "IRCD_HOST", "irc.ircfiber.com");
+    cfg.port = botEnvPort("FIBEREYE", "PORT", "IRCD_PORT", 6667);
+    cfg.tls = botEnvFlag("FIBEREYE", "TLS", "", false);
+    cfg.nick = botEnvStr("FIBEREYE", "NICK", "", cfg.nick);
     // File-backed in prod so the credentials are not readable from
     // `docker inspect ircfiber-fibereye`.
     cfg.nickservPassword = envSecret("IRCFIBER_FIBEREYE_NICKSERV_PASSWORD", "");
-    cfg.operName = environment.get("IRCFIBER_FIBEREYE_OPER", "").strip();
+    cfg.operName = botEnvStr("FIBEREYE", "OPER", "", "");
     cfg.operPassword = envSecret("IRCFIBER_FIBEREYE_OPER_PASSWORD", "");
-    cfg.ignoreClasses = envList("IRCFIBER_FIBEREYE_IGNORE_CLASSES", cfg.ignoreClasses);
-    cfg.exemptIps = envList("IRCFIBER_FIBEREYE_EXEMPT_IPS", null);
-    cfg.thresholds.windowSeconds = envLong("IRCFIBER_FIBEREYE_WINDOW", 60);
-    cfg.thresholds.connects = envLong("IRCFIBER_FIBEREYE_CONNECT_THRESHOLD", 10);
-    cfg.thresholds.nicks = envLong("IRCFIBER_FIBEREYE_NICK_THRESHOLD", 6);
-    cfg.thresholds.churn = envLong("IRCFIBER_FIBEREYE_CHURN_THRESHOLD", 6);
-    cfg.thresholds.shortMs = envLong("IRCFIBER_FIBEREYE_SHORT_MS", 20_000);
-    cfg.thresholds.banSeconds = envLong("IRCFIBER_FIBEREYE_BAN_SECONDS", 3_600);
+    cfg.ignoreClasses = botEnvList("IRCFIBER_FIBEREYE_IGNORE_CLASSES", cfg.ignoreClasses);
+    cfg.exemptIps = botEnvList("IRCFIBER_FIBEREYE_EXEMPT_IPS", null);
+    cfg.thresholds.windowSeconds = botEnvLong("IRCFIBER_FIBEREYE_WINDOW", 60);
+    cfg.thresholds.connects = botEnvLong("IRCFIBER_FIBEREYE_CONNECT_THRESHOLD", 10);
+    cfg.thresholds.nicks = botEnvLong("IRCFIBER_FIBEREYE_NICK_THRESHOLD", 6);
+    cfg.thresholds.churn = botEnvLong("IRCFIBER_FIBEREYE_CHURN_THRESHOLD", 6);
+    cfg.thresholds.shortMs = botEnvLong("IRCFIBER_FIBEREYE_SHORT_MS", 20_000);
+    cfg.thresholds.banSeconds = botEnvLong("IRCFIBER_FIBEREYE_BAN_SECONDS", 3_600);
     if (cfg.thresholds.windowSeconds <= 0) cfg.thresholds.windowSeconds = 60;
     auto base = environment.get("IRCFIBER_PUBLIC_URL", "https://ircfiber.com").strip();
     while (base.length && base[$ - 1] == '/') base = base[0 .. $ - 1];
@@ -173,14 +132,28 @@ void startFiberEye() {
         cfg.thresholds.churn, cfg.thresholds.banSeconds, cfg.ignoreClasses, cfg.exemptIps);
 }
 
-/// One long-lived IRC client; reconnects forever with exponential backoff.
-final class FiberEyeBot {
-    private enum MAX_LINE = 8192;
-    private enum KEEPALIVE_AFTER_MS = 240_000;
-    private enum DEAD_AFTER_MS = 300_000;
-    private enum SEND_INTERVAL_MS = 1000;
-    private enum IRC_LINE_MAX_BYTES = 510;
-    private enum MAX_NICK_ATTEMPTS = 3;
+private IrcBotConfig coreConfig(const FiberEyeConfig c) {
+    IrcBotConfig b;
+    b.host = c.host;
+    b.port = c.port;
+    b.tls = c.tls;
+    b.nick = c.nick;
+    b.username = "fibereye";
+    b.realname = "IRC Fiber connection watch";
+    b.nickservPassword = c.nickservPassword;
+    b.operName = c.operName;
+    b.operPassword = c.operPassword;
+    // `c` connects, `q` local quits, `x` X-line notices.
+    b.snomasks = "cqx";
+    b.redisUrl = c.redisUrl;
+    b.heartbeatKey = fiberEyeBotKey();
+    b.controlKey = fiberEyeControlKey();
+    b.logPrefix = "FiberEye";
+    return b;
+}
+
+/// The FiberEye logic on top of the shared IRC client skeleton.
+final class FiberEyeBot : IrcBot {
     private enum STATS_INTERVAL = 60;
     private enum GEO_INTERVAL = 60;
     /// Open-session map cap. A flood must not grow it without bound; the
@@ -188,20 +161,7 @@ final class FiberEyeBot {
     /// session that has been open longer than 20 000 others.
     private enum MAX_OPEN_SESSIONS = 20_000;
 
-    private FiberEyeConfig cfg;
-    private TCPConnection conn;
-    private TLSStream tls;
-    private bool haveConn;
-    private bool socketClosed;
-    private string nick;
-    private int nickAttempts;
-    private bool registered;
-    private bool opered;
-    private bool readyDone;
-    private bool alive;
-    private long lastRecvMs;
-    private long lastSendMs;
-    private TaskMutex sendMutex;
+    private FiberEyeConfig fe;
     /// Redis connection owned by the reader fiber (each loop owns its own).
     private RedisStorage redis;
     private FiberEyeStore store;
@@ -223,10 +183,6 @@ final class FiberEyeBot {
     private bool geoLoopStarted;
 
     // ── status published to Redis for the admin FiberEye page ──
-    private string hostName;
-    private long startedAtMs;
-    private long connectedSinceMs;
-    private long sessions;
     private long connectsSeen;
     private long connectsIgnored;
     private long quitsSeen;
@@ -234,259 +190,54 @@ final class FiberEyeBot {
     private long bansObserved;
     private long accountLookups;
     private long geoFilled;
-    private string lastError;
-    private long lastErrorAt;
-    /// Set by an admin `reconnect` command before the socket is closed so
-    /// the session's exit is logged as intentional and retried at once.
-    private string closeReason;
 
     this(FiberEyeConfig cfg) {
-        this.cfg = cfg;
-        this.sendMutex = new TaskMutex;
+        super(coreConfig(cfg));
+        this.fe = cfg;
     }
 
-    private static long nowMs() nothrow {
-        try return Clock.currTime.toUnixTime!long * 1000;
-        catch (Exception) return 0;
-    }
-
-    /// Reconnect loop: 1 s → 2 s → … → 60 s backoff, reset after a session
-    /// that stayed up for more than a minute or when an admin asked for the
-    /// reconnect. The Redis sideband (heartbeat + control) lives for the
-    /// whole process, independent of the IRC session.
-    void run() nothrow {
-        startedAtMs = nowMs();
-        try hostName = environment.get("HOSTNAME", ""); catch (Exception) {}
+    protected override void onStart() {
         try {
             redis = new RedisStorage();
-            redis.connectFromUrl(cfg.redisUrl);
+            redis.connectFromUrl(fe.redisUrl);
         } catch (Exception e) {
             redis = null;
-            try logWarn("FiberEye: Redis unavailable: %s", e.msg); catch (Exception) {}
+            logWarn("FiberEye: Redis unavailable: %s", e.msg);
         }
         try store = new FiberEyeStore();
         catch (Exception e) {
             store = null;
-            try logWarn("FiberEye: Mongo unavailable: %s", e.msg); catch (Exception) {}
-        }
-        runTask(&sidebandLoop);
-        Duration backoff = 1.seconds;
-        while (true) {
-            const startedAt = nowMs();
-            try session();
-            catch (Exception e) {
-                const reason = closeReason.length ? closeReason : e.msg;
-                try logWarn("FiberEye: %s", reason); catch (Exception) {}
-                lastError = reason;
-                lastErrorAt = nowMs();
-            }
-            if (nowMs() - startedAt > 60_000 || closeReason.length) backoff = 1.seconds;
-            closeReason = "";
-            try logInfo("FiberEye: reconnecting in %s", backoff); catch (Exception) {}
-            try sleep(backoff); catch (Exception) {}
-            backoff = min(backoff * 2, 60.seconds);
-        }
-    }
-
-    // ── connection lifecycle ─────────────────────────────────────────
-
-    private void session() {
-        registered = false;
-        opered = false;
-        readyDone = false;
-        alive = true;
-        nick = cfg.nick;
-        nickAttempts = 0;
-        tls = null;
-        haveConn = false;
-        socketClosed = false;
-        lastSendMs = 0;
-        sessions++;
-        scope (exit) teardown();
-
-        logInfo("FiberEye: connecting to %s:%s", cfg.host, cfg.port);
-        conn = connectTCP(cfg.host, cfg.port, null, 0, 15.seconds);
-        haveConn = true;
-        connectedSinceMs = nowMs();
-        conn.tcpNoDelay = true;
-        conn.keepAlive = true;
-        if (cfg.tls) {
-            auto ctx = createTLSContext(TLSContextKind.client);
-            // Same policy as the engine's IRC connections (self-signed
-            // internal ircd certs).
-            ctx.peerValidationMode = TLSPeerValidationMode.none;
-            tls = createTLSStream(conn, ctx, TLSStreamState.connecting, cfg.host);
-        }
-        lastRecvMs = nowMs();
-
-        sendLine("NICK " ~ nick);
-        sendLine("USER fibereye 0 * :IRC Fiber connection watch");
-
-        ubyte[4096] buf;
-        string partial;
-        while (true) {
-            bool ready = tls !is null ? tls.dataAvailableForRead : conn.dataAvailableForRead;
-            if (!ready) {
-                final switch (conn.waitForDataEx(30.seconds)) {
-                    case WaitForDataStatus.dataAvailable: ready = true; break;
-                    case WaitForDataStatus.timeout: break;
-                    case WaitForDataStatus.noMoreData: throw new Exception("connection closed by server");
-                }
-            }
-            if (!ready) { checkIdle(); continue; }
-
-            const n = tls !is null ? tls.read(buf[], IOMode.once) : conn.read(buf[], IOMode.once);
-            if (n == 0) {
-                if (!conn.connected) throw new Exception("EOF from server");
-                continue;
-            }
-            lastRecvMs = nowMs();
-            partial ~= cast(string) buf[0 .. n].idup;
-            ptrdiff_t idx;
-            while ((idx = partial.indexOf("\n")) >= 0) {
-                auto line = partial[0 .. idx];
-                partial = partial[idx + 1 .. $];
-                if (line.length && line[$ - 1] == '\r') line = line[0 .. $ - 1];
-                if (!line.length) continue;
-                handleLine(line);
-            }
-            if (partial.length > MAX_LINE) throw new Exception("over-long line from server");
-        }
-    }
-
-    private void closeSocket() nothrow {
-        if (socketClosed) return;
-        socketClosed = true;
-        if (tls !is null) {
-            try tls.finalize(); catch (Exception) {}
-            tls = null;
-        }
-        if (haveConn) {
-            try conn.close(); catch (Exception) {}
-        }
-    }
-
-    private void teardown() nothrow {
-        alive = false;
-        registered = false;
-        opered = false;
-        readyDone = false;
-        connectedSinceMs = 0;
-        closeSocket();
-        haveConn = false;
-    }
-
-    private void checkIdle() {
-        const idle = nowMs() - lastRecvMs;
-        if (idle > DEAD_AFTER_MS) throw new Exception("ping timeout (" ~ (idle / 1000).to!string ~ "s silent)");
-        if (idle > KEEPALIVE_AFTER_MS && nowMs() - lastSendMs > 30_000) sendLine("PING :keepalive");
-    }
-
-    /// Writes one line. Serialized across fibers (reader + sweeps + the
-    /// enforce task), paced to one line per second, clipped to 510 bytes.
-    private void sendLine(string line) {
-        synchronized (sendMutex) {
-            const wait = SEND_INTERVAL_MS - (nowMs() - lastSendMs);
-            if (wait > 0) sleep(wait.msecs);
-            if (line.length > IRC_LINE_MAX_BYTES) line = clipBytes(line, IRC_LINE_MAX_BYTES);
-            auto bytes = cast(const(ubyte)[])(line ~ "\r\n");
-            if (tls !is null) { tls.write(bytes); tls.flush(); }
-            else { conn.write(bytes); conn.flush(); }
-            lastSendMs = nowMs();
+            logWarn("FiberEye: Mongo unavailable: %s", e.msg);
         }
     }
 
     // ── inbound protocol ─────────────────────────────────────────────
 
-    private static string nickOf(string prefix) @safe pure {
-        auto bang = prefix.indexOf('!');
-        return bang >= 0 ? prefix[0 .. bang] : prefix;
-    }
-
-    private void handleLine(string raw) {
-        auto l = parseIrcLine(raw);
-        if (!l.valid) return;
+    protected override bool onLine(ref IrcLine l) {
         switch (l.command) {
-            case "PING":
-                sendLine("PONG :" ~ (l.params.length ? l.params[$ - 1] : ""));
-                break;
-            case "001":
-                onWelcome(l);
-                break;
-            case "381":   // RPL_YOUREOPER
-                opered = true;
-                logInfo("FiberEye: opered as %s", cfg.operName);
-                becomeReady();
-                break;
-            case "464":   // ERR_PASSWDMISMATCH
-            case "481":   // ERR_NOPRIVILEGES
-            case "491":   // ERR_NOOPERHOST
-                if (registered && !opered) {
-                    logWarn("FiberEye: OPER refused (%s %s) — no connect notices and no bans",
-                        l.command, l.params.length ? l.params[$ - 1] : "");
-                    becomeReady();
-                }
-                break;
-            case "433":
-                if (registered) break;
-                if (++nickAttempts >= MAX_NICK_ATTEMPTS) throw new Exception("nick unavailable");
-                nick ~= "_";
-                logWarn("FiberEye: nick in use, retrying as %s", nick);
-                sendLine("NICK " ~ nick);
-                break;
-            case "NICK":
-                if (l.params.length && icmp(nickOf(l.prefix), nick) == 0) nick = l.params[0];
-                break;
-            case "NOTICE":
-                // Only server notices carry connect/quit reports; a user
-                // prefix contains '!'.
-                if (l.params.length >= 2 && l.prefix.indexOf('!') < 0) onServerNotice(l.params[$ - 1]);
-                break;
             case "330":   // RPL_WHOISACCOUNT — [me, nick, account, "is logged in as"]
                 if (l.params.length >= 3) onWhoisAccount(l.params[1], l.params[2]);
-                break;
+                return true;
             case "210":   // one X-line row of a STATS sweep
                 {
                     XLine x;
                     if (parseStatsXLine(l, x) && x.type == "Z") pendingStats[x.mask] = x;
                 }
-                break;
+                return true;
             case "219":   // RPL_ENDOFSTATS — the sweep is complete
                 onStatsComplete();
-                break;
-            case "ERROR":
-                throw new Exception("server ERROR: " ~ (l.params.length ? l.params[$ - 1] : ""));
+                return true;
             default:
-                break;
+                return false;
         }
     }
 
-    private void onWelcome(IrcLine l) {
-        registered = true;
-        if (l.params.length && l.params[0].length) nick = l.params[0];
-        logInfo("FiberEye: registered as %s", nick);
-        if (cfg.nickservPassword.length)
-            sendLine("PRIVMSG NickServ :IDENTIFY " ~ cfg.nick ~ " " ~ cfg.nickservPassword);
-        sendLine("MODE " ~ nick ~ " +B");
-        if (cfg.operName.length && cfg.operPassword.length) {
-            // Snomasks (and therefore everything this bot does) wait for
-            // 381 or an OPER refusal, so the rest lives in becomeReady().
-            sendLine("OPER " ~ cfg.operName ~ " " ~ cfg.operPassword);
-            return;
-        }
-        logWarn("FiberEye: no oper credentials — no connect notices and no bans");
-        becomeReady();
-    }
-
-    /// Everything that must happen once the oper question is settled.
-    /// FiberEye joins no channel: `+s +cqx` is its entire subscription
-    /// (`c` connects, `q` local quits, `x` X-line notices).
-    private void becomeReady() {
-        if (readyDone) return;
-        readyDone = true;
-        if (opered) {
-            sendLine("MODE " ~ nick ~ " +s +cqx");
+    /// FiberEye joins no channel: `+s +cqx` is its entire subscription.
+    protected override void onReady() {
+        if (isOpered()) {
             if (!statsLoopStarted) { statsLoopStarted = true; runTask(&statsLoop); }
+        } else {
+            logWarn("FiberEye: not opered — no connect notices and no bans");
         }
         if (!geoLoopStarted) { geoLoopStarted = true; runTask(&geoLoop); }
     }
@@ -517,7 +268,7 @@ final class FiberEyeBot {
     /// notice (`q`), or an X-line notice (`x`, logged only — placements are
     /// confirmed by the `STATS Z` sweep, which is the only truthful oracle
     /// from inside a read loop).
-    private void onServerNotice(string text) {
+    protected override void onServerNotice(string text) {
         auto c = parseConnectNotice(text);
         if (c.ok) { onConnect(c); return; }
         auto q = parseQuitNotice(text);
@@ -528,7 +279,7 @@ final class FiberEyeBot {
     }
 
     private void onConnect(ConnectNotice c) {
-        if (classIgnored(c.connClass, cfg.ignoreClasses)) {
+        if (classIgnored(c.connClass, fe.ignoreClasses)) {
             connectsIgnored++;
             return;
         }
@@ -564,15 +315,15 @@ final class FiberEyeBot {
         if (isPrivateIp(c.ip) || exempt(c.ip, group)) return;
 
         Observation o;
-        o.windowSeconds = cfg.thresholds.windowSeconds;
+        o.windowSeconds = fe.thresholds.windowSeconds;
         if (!countConnect(group, c.nick, r.ts, o)) return;
-        const v = evaluate(o, cfg.thresholds);
+        const v = evaluate(o, fe.thresholds);
         if (!v.trip) {
             // Account enrichment is best-effort and must never compete
             // with an enforcement line for the 1-line-per-second budget,
             // so at most one WHOIS every 5 s and never for a tripping
             // group. A flood's nicks stay unenriched, which is fine.
-            if (opered && id.length && r.ts - lastWhoisMs >= 5_000) {
+            if (isOpered() && id.length && r.ts - lastWhoisMs >= 5_000) {
                 lastWhoisMs = r.ts;
                 sendLine("WHOIS " ~ c.nick);
             }
@@ -615,7 +366,7 @@ final class FiberEyeBot {
             store.closeSession(id, ts, q.reason, duration);
         }
         openedAt.remove(id);
-        if (duration > 0 && duration < cfg.thresholds.shortMs) {
+        if (duration > 0 && duration < fe.thresholds.shortMs) {
             const group = ipGroup(q.ip);
             if (!isPrivateIp(q.ip) && !exempt(q.ip, group)) {
                 countChurn(group, ts);
@@ -623,7 +374,6 @@ final class FiberEyeBot {
             }
         }
     }
-
 
     /// True when this connect is on the never-count, never-ban list.
     ///
@@ -635,7 +385,7 @@ final class FiberEyeBot {
     /// match would silently ignore a `/24` entry, which is the sort of
     /// exemption that only gets tested the day it fails to hold.
     private bool exempt(string ip, string group) {
-        foreach (e; cfg.exemptIps) {
+        foreach (e; fe.exemptIps) {
             if (e == group || e == ip) return true;
             if (zlineMatches(e, ip)) return true;
         }
@@ -667,9 +417,9 @@ final class FiberEyeBot {
     /// unavailable — no counters means no verdict, which fails safe.
     private bool countConnect(string group, string nick_, long ts, ref Observation o) {
         if (redis is null) return false;
-        const windowMs = cfg.thresholds.windowSeconds * 1000;
+        const windowMs = fe.thresholds.windowSeconds * 1000;
         const cutoff = ts - windowMs;
-        const ttl = cfg.thresholds.windowSeconds * 4;
+        const ttl = fe.thresholds.windowSeconds * 4;
         try {
             auto db = redis.getDb();
             const ck = fiberEyeConnKey(group);
@@ -700,7 +450,7 @@ final class FiberEyeBot {
             auto db = redis.getDb();
             const hk = fiberEyeChurnKey(group);
             db.zadd(hk, ts, ts.to!string);
-            db.expire(hk, cfg.thresholds.windowSeconds * 4);
+            db.expire(hk, fe.thresholds.windowSeconds * 4);
         } catch (Exception e) {
             logWarn("FiberEye: churn counter failed for %s: %s", group, e.msg);
         }
@@ -738,9 +488,9 @@ final class FiberEyeBot {
                 strikes = 1;
             }
         }
-        const seconds_ = banDurationFor(strikes, cfg.thresholds.banSeconds);
+        const seconds_ = banDurationFor(strikes, fe.thresholds.banSeconds);
         const token = generateServicesPassword(40);
-        const appealUrl = cfg.publicBase ~ "/unban/" ~ token;
+        const appealUrl = fe.publicBase ~ "/unban/" ~ token;
 
         BanRecord b;
         b.mask = group;
@@ -756,7 +506,7 @@ final class FiberEyeBot {
         b.observeOnly = !isArmed;
         b.evidence = ev;
         if (!isArmed) b.placeError = "";
-        else if (!cfg.operName.length || !opered) b.placeError = "not opered";
+        else if (!fe.operName.length || !isOpered()) b.placeError = "not opered";
         const banId = store.insertBan(b);
 
         if (!isArmed) {
@@ -766,7 +516,7 @@ final class FiberEyeBot {
                 group, rule, strikes, seconds_);
             return;
         }
-        if (!cfg.operName.length || !opered) {
+        if (!fe.operName.length || !isOpered()) {
             logWarn("FiberEye: %s tripped %s but the bot is not opered — no ZLINE placed",
                 group, rule);
             store.setIpBan(group, 0, banId, strikes);
@@ -799,7 +549,7 @@ final class FiberEyeBot {
         while (true) {
             try {
                 sleep(STATS_INTERVAL.seconds);
-                if (!alive || !opered) continue;
+                if (!isAlive() || !isOpered()) continue;
                 sendLine("STATS Z");
             } catch (Exception e) {
                 try logWarn("FiberEye: stats sweep failed: %s", e.msg); catch (Exception) {}
@@ -837,10 +587,7 @@ final class FiberEyeBot {
     /// Cache-only geo backfill. FiberEye never performs an ipinfo lookup:
     /// `lookupGeo` sets the "first sighting" marker the #staff bot's
     /// `↳ <ip> · <geo detail>` follow-up line depends on, and whichever bot
-    /// won the race would steal it. The #staff bot warms the cache within a
-    /// second of the same connect, so this normally fills on its first
-    /// pass; with FiberLogs off, geo simply stays pending and the UI shows
-    /// an em dash.
+    /// won the race would steal it.
     private void geoLoop() nothrow {
         while (true) {
             try {
@@ -863,25 +610,10 @@ final class FiberEyeBot {
 
     // ── Redis sideband: heartbeat for the admin page + control ───────
 
-    /// Snapshot published under `fiberEyeBotKey()` (60 s TTL). The arm
-    /// flag is read through the caller's own Redis connection so the
-    /// sideband fiber never shares a request with the reader fiber.
-    private Json statusJson(RedisStorage side) {
-        import std.process : thisProcessID;
-        auto j = Json.emptyObject;
-        j["nick"] = Json(nick.length ? nick : cfg.nick);
-        j["configuredNick"] = Json(cfg.nick);
-        j["host"] = Json(cfg.host);
-        j["port"] = Json(cast(int) cfg.port);
-        j["tls"] = Json(cfg.tls);
-        j["connected"] = Json(haveConn && !socketClosed);
-        j["registered"] = Json(registered);
-        j["opered"] = Json(opered);
-        j["startedAt"] = Json(startedAtMs);
-        j["connectedSince"] = Json(connectedSinceMs);
-        j["sessions"] = Json(sessions);
-        j["lastRecvAt"] = Json(lastRecvMs);
-        j["lastSendAt"] = Json(lastSendMs);
+    /// FiberEye's own heartbeat fields. The arm flag is read through the
+    /// sideband's own Redis connection so it never shares a request with
+    /// the reader fiber.
+    protected override void extendStatus(ref Json j, RedisStorage side) {
         j["armed"] = Json(armedOn(side));
         j["connectsSeen"] = Json(connectsSeen);
         j["connectsIgnored"] = Json(connectsIgnored);
@@ -892,82 +624,27 @@ final class FiberEyeBot {
         j["activeZlines"] = Json(cast(long) activeZlines.length);
         j["accountLookups"] = Json(accountLookups);
         j["geoFilled"] = Json(geoFilled);
-        j["lastError"] = Json(lastError);
-        j["lastErrorAt"] = Json(lastErrorAt);
-        j["hostname"] = Json(hostName);
-        j["pid"] = Json(cast(long) thisProcessID);
-        j["updatedAt"] = Json(nowMs());
         auto t = Json.emptyObject;
-        t["windowSeconds"] = Json(cfg.thresholds.windowSeconds);
-        t["connects"] = Json(cfg.thresholds.connects);
-        t["nicks"] = Json(cfg.thresholds.nicks);
-        t["churn"] = Json(cfg.thresholds.churn);
-        t["shortMs"] = Json(cfg.thresholds.shortMs);
-        t["banSeconds"] = Json(cfg.thresholds.banSeconds);
+        t["windowSeconds"] = Json(fe.thresholds.windowSeconds);
+        t["connects"] = Json(fe.thresholds.connects);
+        t["nicks"] = Json(fe.thresholds.nicks);
+        t["churn"] = Json(fe.thresholds.churn);
+        t["shortMs"] = Json(fe.thresholds.shortMs);
+        t["banSeconds"] = Json(fe.thresholds.banSeconds);
         j["thresholds"] = t;
         auto ignore = Json.emptyArray;
-        foreach (c; cfg.ignoreClasses) ignore ~= Json(c);
+        foreach (c; fe.ignoreClasses) ignore ~= Json(c);
         j["ignoreClasses"] = ignore;
         auto exemptJson = Json.emptyArray;
-        foreach (e; cfg.exemptIps) exemptJson ~= Json(e);
+        foreach (e; fe.exemptIps) exemptJson ~= Json(e);
         j["exemptIps"] = exemptJson;
-        return j;
     }
 
-
-    /// Process-lifetime task: every ≤5 s it refreshes the heartbeat and
-    /// drains one admin command from `fiberEyeControlKey()`. Redis outages
-    /// only pause it; it reconnects and keeps going.
-    private void sidebandLoop() nothrow {
-        while (true) {
-            RedisStorage side;
-            try {
-                side = new RedisStorage();
-                side.connectFromUrl(cfg.redisUrl);
-                const key = fiberEyeControlKey();
-                while (true) {
-                    side.setJson(fiberEyeBotKey(), statusJson(side), 60);
-                    Nullable!(Tuple!(string, string)) popped;
-                    popped = side.getDb().blpop!string(key, 5);
-                    if (popped.isNull) continue;
-                    handleControl(popped.get[1]);
-                }
-            } catch (Exception e) {
-                try logWarn("FiberEye: sideband loop error: %s", e.msg); catch (Exception) {}
-            }
-            if (side !is null) side.close();
-            try sleep(5.seconds); catch (Exception) {}
-        }
-    }
-
-    private void handleControl(string raw) {
-        Json j;
-        try j = parseJsonString(raw);
-        catch (Exception e) {
-            logWarn("FiberEye: dropping malformed control entry: %s", e.msg);
-            return;
-        }
-        if (j.type != Json.Type.object) return;
-        const cmd = j["cmd"].opt!string;
-        const by = j["by"].opt!string;
-        const ts = j["ts"].opt!long;
-        if (nowMs() - ts > 60_000) {
-            logInfo("FiberEye: dropping stale control command %s from %s", cmd, by);
-            return;
-        }
+    protected override void onControl(string cmd, Json entry) {
+        const by = entry["by"].opt!string;
         switch (cmd) {
-            case "reconnect":
-                if (!haveConn || socketClosed) {
-                    logInfo("FiberEye: reconnect requested by %s while disconnected — "
-                        ~ "the reconnect loop is already retrying", by);
-                    return;
-                }
-                closeReason = "reconnect requested by " ~ (by.length ? by : "admin");
-                logInfo("FiberEye: %s — closing connection", closeReason);
-                closeSocket();
-                break;
             case "stats":
-                if (!opered) {
+                if (!isOpered()) {
                     logInfo("FiberEye: stats requested by %s while not opered — ignored", by);
                     return;
                 }
