@@ -358,7 +358,7 @@
           <section>
             <h3 class="mb-2 text-xs uppercase tracking-wider text-muted">Network</h3>
             <dl class="space-y-1 text-sm">
-              <div class="flex justify-between gap-4"><dt class="text-muted">ASN</dt><dd class="font-mono text-right">{show('network.asn', intel.network.asn)}{#if has('network.asName')} <span class="text-xs text-muted">{intel.network.asName}</span>{/if}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">ASN</dt><dd class="font-mono text-right">{show('network.asn', intel.network.asn)}{#if has('network.asName')}<span class="ml-1 text-xs text-muted">{intel.network.asName}</span>{/if}</dd></div>
               <div class="flex justify-between gap-4"><dt class="text-muted">Domain / type</dt><dd class="font-mono text-xs text-right">{show('network.asDomain', intel.network.asDomain)} · {show('network.asType', intel.network.asType)}</dd></div>
               <div class="flex justify-between gap-4"><dt class="text-muted">ISP / org</dt><dd class="text-right text-xs">{show('network.isp', intel.network.isp)} · {show('network.org', intel.network.org)}</dd></div>
               <div class="flex justify-between gap-4"><dt class="text-muted">Prefix</dt><dd class="font-mono text-xs">{show('identity.prefix', intel.identity.prefix)}</dd></div>
@@ -371,7 +371,7 @@
               <div class="flex justify-between gap-4"><dt class="text-muted">Netname</dt><dd class="font-mono text-xs">{show('network.netname', intel.network.netname)}</dd></div>
               <div class="flex justify-between gap-4"><dt class="text-muted">Assignment</dt><dd class="font-mono text-xs">{show('network.assignment', intel.network.assignment)}</dd></div>
               <div class="flex justify-between gap-4"><dt class="text-muted">Allocated</dt><dd class="font-mono text-xs">{show('network.allocatedAt', intel.network.allocatedAt)}</dd></div>
-              <div class="flex justify-between gap-4"><dt class="text-muted">Abuse contact</dt><dd class="font-mono text-xs">{show('contact.abuseEmail', intel.contact.abuseEmail)}{#if has('contact.abuseEmail')} <span class="text-muted">({intel.contact.abuseSource})</span>{/if}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">Abuse contact</dt><dd class="font-mono text-xs">{show('contact.abuseEmail', intel.contact.abuseEmail)}{#if has('contact.abuseEmail')}<span class="ml-1 text-muted">({intel.contact.abuseSource})</span>{/if}</dd></div>
               <div class="flex justify-between gap-4"><dt class="text-muted">rDNS</dt><dd class="font-mono text-xs">{show('identity.hostname', intel.identity.hostname)}</dd></div>
             </dl>
           </section>
@@ -380,8 +380,8 @@
             <h3 class="mb-2 text-xs uppercase tracking-wider text-muted">Geo</h3>
             <dl class="space-y-1 text-sm">
               <div class="flex justify-between gap-4"><dt class="text-muted">City</dt><dd class="text-right">{show('geo.city', intel.geo.city)}</dd></div>
-              <div class="flex justify-between gap-4"><dt class="text-muted">Region</dt><dd class="text-right">{show('geo.region', intel.geo.region)}{#if has('geo.regionCode')} <span class="text-xs text-muted">({intel.geo.regionCode})</span>{/if}</dd></div>
-              <div class="flex justify-between gap-4"><dt class="text-muted">Country</dt><dd class="font-mono">{show('geo.countryCode', intel.geo.countryCode)}{#if has('geo.continentCode')} <span class="text-xs text-muted">· {intel.geo.continentCode}</span>{/if}{#if has('geo.isEu') && intel.geo.isEu} <span class="text-xs text-muted">· EU</span>{/if}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">Region</dt><dd class="text-right">{show('geo.region', intel.geo.region)}{#if has('geo.regionCode')}<span class="ml-1 text-xs text-muted">({intel.geo.regionCode})</span>{/if}</dd></div>
+              <div class="flex justify-between gap-4"><dt class="text-muted">Country</dt><dd class="font-mono">{show('geo.countryCode', intel.geo.countryCode)}{#if has('geo.continentCode')}<span class="ml-1 text-xs text-muted">· {intel.geo.continentCode}</span>{/if}{#if has('geo.isEu') && intel.geo.isEu}<span class="ml-1 text-xs text-muted">· EU</span>{/if}</dd></div>
               <div class="flex justify-between gap-4"><dt class="text-muted">Timezone</dt><dd class="font-mono text-xs">{show('geo.timezone', intel.geo.timezone)}</dd></div>
             </dl>
 
