@@ -20,7 +20,7 @@ import std.conv : to;
 import std.digest : toHexString;
 import std.digest.sha : sha256Of;
 import std.process : environment;
-import std.string : strip, toLower;
+import std.string : indexOf, strip, toLower;
 import std.uuid : randomUUID;
 import std.datetime : Clock;
 import core.time : MonoTime;
@@ -946,6 +946,71 @@ package void apiCampaignTest(HTTPServerRequest req, HTTPServerResponse res, Redi
     logInfo("admin-emails: %s sent a campaign test to %s via %s", actorName, toEmail, mail.provider);
     Json data = Json.emptyObject;
     data["sent"] = Json(true);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/emails/send — body `{toEmail, subject, text, html?}`.
+/// Direct operator mail: one address typed in the Compose tab, sent like a
+/// mail client (no audience filters, no campaign job row). Same
+/// subject/text/html bounds as send-now via `validateCampaignFields`.
+/// `{{email}}` substitutes the full recipient address, `{{username}}` the
+/// address local-part (text before the first `@`), `{{unsubscribe_url}}`
+/// substitutes `""` and `listUnsubscribeUrl` stays `""` — direct operator
+/// mail is not bulk mail, so no unsubscribe token is minted and no
+/// List-Unsubscribe header is sent.
+/// Deliberately NO throttle: single-recipient operator mail behind
+/// `adminWrap` (same trust as send-now, which is lock-paced not
+/// rate-limited); the `mailTestLockKey` 1/min throttle stays exclusive to
+/// the two test endpoints. If pacing is ever needed, reuse the
+/// `mailTestLockKey` SET NX EX shape under a NEW key
+/// (`irc:mail:direct:lock`) — never share the test key.
+package void apiEmailSend(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto body_ = readJsonBody(req);
+    const toEmail = bodyString(body_, "toEmail");
+    if (!emailWellFormed(toEmail)) {
+        jsonError(res, 400, "That doesn't look like a valid email address.");
+        return;
+    }
+    string subject, text, html;
+    const fieldErr = validateCampaignFields(body_, subject, text, html);
+    if (fieldErr.length > 0) {
+        jsonError(res, 400, fieldErr);
+        return;
+    }
+
+    auto mail = loadMailSettings();
+    if (!mail.configured) {
+        jsonError(res, 503, "No mail provider is configured.");
+        return;
+    }
+
+    string localPart = toEmail;
+    const at = toEmail.indexOf('@');
+    if (at > 0) localPart = toEmail[0 .. cast(size_t) at];
+    MailMessage m;
+    m.toEmail = toEmail;
+    m.subject = substituteCampaign(subject, localPart, toEmail, "");
+    m.text = substituteCampaign(text, localPart, toEmail, "");
+    m.html = html.length > 0
+        ? substituteCampaign(html, localPart, toEmail, "")
+        : campaignHtmlBody(m.text);
+
+    const actorName = adminActor(req);
+    const ip = getClientIp(req);
+    const started = MonoTime.currTime;
+    try
+        sendMail(mail, m);
+    catch (Exception e) {
+        recordSend(redis, "admin_direct", toEmail, actorName, mail, ip, started, e.msg);
+        logWarn("admin-emails: %s direct send to %s failed: %s", actorName, toEmail, e.msg);
+        jsonError(res, 502, e.msg);
+        return;
+    }
+    recordSend(redis, "admin_direct", toEmail, actorName, mail, ip, started, "");
+    logInfo("admin-emails: %s sent a direct email to %s via %s", actorName, toEmail, mail.provider);
+    Json data = Json.emptyObject;
+    data["sent"] = Json(true);
+    data["email"] = Json(toEmail);
     jsonOk(res, data);
 }
 // ────────────────────────────────────────────────────────────

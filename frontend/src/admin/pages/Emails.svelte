@@ -161,8 +161,9 @@
   let focusedEditor = $state<'text' | 'html'>('text');
   let textArea = $state<HTMLTextAreaElement | null>(null);
   let htmlArea = $state<HTMLTextAreaElement | null>(null);
-  let campaignTestEmail = $state('');
-  let campaignTesting = $state(false);
+  let toEmail = $state('');
+  let sending = $state(false);
+  let sendError = $state<string | null>(null);
   let campaignBusy = $state(false);
   let campaignError = $state<string | null>(null);
   let campaignNotice = $state<string | null>(null);
@@ -180,9 +181,6 @@
   const previewStale = $derived(previewKey === null || previewKey !== filterKey);
   const audienceCount = $derived(audience?.total ?? 0);
   const dryRun = $derived(dryRunChoice ?? audienceCount > 50);
-  let mockName = $state('subscriber');
-  let mockEmail = $state('subscriber@example.com');
-  let mockTouched = $state(false);
   let varMenu = $state<{ field: 'text' | 'html' } | null>(null);
   let varMenuIndex = $state(0);
   const VAR_ITEMS = [
@@ -191,6 +189,7 @@
     { token: '{{unsubscribe_url}}', desc: 'per-recipient unsubscribe link' },
   ] as const;
   type InsertToken = typeof VAR_ITEMS[number]['token'];
+  // Drafts persist the message only, never `toEmail`: a stale recipient is a mis-send risk.
   const DRAFT_KEY = 'emails.compose.draft.v1';
   let draftStatus = $state<'Unsaved' | 'Saving…' | 'Saved'>('Unsaved');
   let draftSavedAt = $state('');
@@ -385,14 +384,6 @@
     }, 800);
     return () => { if (draftTimer) clearTimeout(draftTimer); };
   });
-
-  $effect(() => {
-    if (!mockTouched && audience?.sample[0]) {
-      mockName = audience.sample[0].username;
-      mockEmail = audience.sample[0].email;
-    }
-  });
-
   $effect(() => {
     const active = tab === 'campaign' && campaigns.some(
       (j) => j.status === 'scheduled' || j.status === 'sending' || j.status === 'paused');
@@ -470,11 +461,11 @@
     else { subject = ''; bodyText = ''; }
     htmlBody = '';
   }
-
   function previewSubstitute(src: string): string {
-    const first = audience?.sample[0];
-    const name = mockName.trim() || first?.username || 'subscriber';
-    const mail = mockEmail.trim() || first?.email || 'subscriber@example.com';
+    const trimmed = toEmail.trim();
+    const at = trimmed.indexOf('@');
+    const name = at > 0 ? trimmed.slice(0, at) : 'subscriber';
+    const mail = trimmed || 'subscriber@example.com';
     return src
       .replaceAll('{{username}}', name)
       .replaceAll('{{email}}', mail)
@@ -527,27 +518,25 @@
     else if (e.key === 'ArrowUp') { e.preventDefault(); varMenuIndex = (varMenuIndex + VAR_ITEMS.length - 1) % VAR_ITEMS.length; }
   }
 
-  const composeValid = $derived(
-    subject.trim().length >= 1 && subject.trim().length <= 200
-    && (bodyText.trim() || htmlBody.trim())
-    && bodyText.length <= 20000 && htmlBody.length <= 50000,
-  );
-  const testEmailEffective = $derived(campaignTestEmail.trim() || mockEmail.trim());
-  const testSendDisabled = $derived(campaignTesting || !overview?.provider.configured || !composeValid || !testEmailEffective);
+  const sendDisabled = $derived(sending || !overview?.provider.configured || !composeValid || !toEmail.trim());
 
-  async function sendCampaignTest() {
-    if (campaignTesting) return;
-    campaignTesting = true;
+  async function sendDirect() {
+    if (sending || sendDisabled) return;
+    sending = true;
+    sendError = null;
     try {
-      await api.post('/api/admin/emails/campaign/test', {
-        toEmail: testEmailEffective,
+      const r = await api.post<{ sent: boolean; email: string }>('/api/admin/emails/send', {
+        toEmail: toEmail.trim(),
         subject,
         text: bodyText,
         html: htmlBody,
       });
-      toastSuccess(`Campaign test sent to ${testEmailEffective}`);
-    } catch (e) { toastError(errMsg(e)); }
-    finally { campaignTesting = false; }
+      toastSuccess(`Email sent to ${r.email}`);
+      await fetchOverview(false);
+    } catch (e) {
+      sendError = errMsg(e);
+      toastError(sendError);
+    } finally { sending = false; }
   }
 
   function useInCampaign() { tab = 'campaign'; wizardStep = 2; }
@@ -591,8 +580,7 @@
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && tab === 'compose') {
-      e.preventDefault();
-      if (!testSendDisabled) void sendCampaignTest();
+      if (!sendDisabled) void sendDirect();
     }
   }
 </script>
@@ -617,7 +605,7 @@
   <button type="button" role="tab" aria-selected={tab === 'compose'} onclick={() => void openCompose()} class="border-b-2 px-3 py-1.5 text-sm {tab === 'compose' ? 'border-primary text-text' : 'border-transparent text-muted hover:text-text'}">Compose</button>
   <button type="button" role="tab" aria-selected={tab === 'campaign'} onclick={() => void openCampaign()} class="border-b-2 px-3 py-1.5 text-sm {tab === 'campaign' ? 'border-primary text-text' : 'border-transparent text-muted hover:text-text'}">Campaign</button>
 </div>
-<p class="mb-4 mt-1 text-xs text-muted">Press / to focus search; Ctrl or Cmd plus Enter sends a test.</p>
+<p class="mb-4 mt-1 text-xs text-muted">Press / to focus search; Ctrl or Cmd plus Enter sends the email.</p>
 
 {#if overviewError}
   <Card><p class="text-sm text-danger">{overviewError}</p></Card>
@@ -635,14 +623,15 @@
       <div class="flex justify-between gap-4"><dt class="text-muted">Public URL</dt><dd class="font-mono">{overview.provider.publicUrl}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-muted">Verification</dt><dd class="font-mono">{overview.provider.verificationRequired ? 'required' : 'off'} ({overview.provider.verificationSource})</dd></div>
     </dl>
-    <div class="mt-4 border-t border-border pt-3">
-      <div class="flex flex-wrap items-center gap-2">
+    <details class="mt-4 border-t border-border pt-3">
+      <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wider text-muted">Provider test</summary>
+      <div class="mt-2 flex flex-wrap items-center gap-2">
         <input type="email" bind:value={testEmail} placeholder="you@example.com" class="w-64 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm" />
         <button type="button" onclick={confirmTest} disabled={testing || !testEmail} class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40">{testing ? 'Sending…' : 'Send test'}</button>
         <span class="text-xs text-muted">Sends a real message through the provider.</span>
       </div>
       {#if testError}<p class="mt-2 text-xs text-danger">{testError}</p>{/if}
-    </div>
+    </details>
   </Card>
 
   <div class="mb-4 mt-4 grid grid-cols-2 gap-3 md:grid-cols-3">
@@ -835,6 +824,10 @@
           <span class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">From</span>
           <p class="py-1 font-mono text-sm text-muted">{overview.provider.fromName} &lt;{overview.provider.fromEmail}&gt;</p>
         </div>
+      </div>
+      <div class="mt-3">
+        <label for="compose-to" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">To</label>
+        <input id="compose-to" type="email" bind:value={toEmail} placeholder="name@example.com" class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm" />
       </div>
       <div class="mt-3">
         <label for="campaign-subject" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Subject</label>

@@ -58,8 +58,8 @@ import ircfiber.web.admin.fibereye : apiFiberEyeOverview, apiFiberEyeSessions,
     apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce;
 import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignCancel, apiCampaignDetail,
     apiCampaignPause, apiCampaignResume, apiCampaignSend, apiCampaignTest, apiCampaignsCreate,
-    apiCampaignsList, apiEmailsOverview, apiEmailsTest, apiEmailsPendingResend, apiEmailsPendingRevoke,
-    apiEmailsCooldownClear, apiEmailsIpLimitClear;
+    apiCampaignsList, apiEmailSend, apiEmailsOverview, apiEmailsTest, apiEmailsPendingResend,
+    apiEmailsPendingRevoke, apiEmailsCooldownClear, apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
     apiMotdDelete, apiMotdRotate, apiMotdBatch, apiMotdPin, apiMotdUnpin;
@@ -241,6 +241,7 @@ final class AdminController {
         router.get("/api/admin/emails/campaign/audience", &adminWrap!apiCampaignAudienceRoute);
         router.post("/api/admin/emails/campaign/send", &adminWrap!apiCampaignSendRoute);
         router.post("/api/admin/emails/campaign/test", &adminWrap!apiCampaignTestRoute);
+        router.post("/api/admin/emails/send", &adminWrap!apiEmailSendRoute);
         // Scheduled campaigns (Campaign tab): job rows + worker.
         router.get("/api/admin/emails/campaigns", &adminWrap!apiCampaignsListRoute);
         router.post("/api/admin/emails/campaigns", &adminWrap!apiCampaignsCreateRoute);
@@ -534,6 +535,7 @@ private:
     void apiCampaignAudienceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignAudience(req, res); }
     void apiCampaignSendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignSend(req, res, redis); }
     void apiCampaignTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignTest(req, res, redis); }
+    void apiEmailSendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailSend(req, res, redis); }
     void apiCampaignsListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignsList(req, res, redis); }
     void apiCampaignsCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignsCreate(req, res, redis); }
     void apiCampaignDetailRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignDetail(req, res, redis); }

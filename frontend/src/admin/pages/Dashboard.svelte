@@ -211,8 +211,11 @@
             <span class="h-2 w-2 rounded-full {engine.healthy ? 'bg-success' : 'bg-danger'}"></span>
             <div class="min-w-0 flex-1">
               <div class="truncate font-mono text-sm text-text">{engine.serverId}</div>
-              <div class="text-xs text-muted">{engine.bindAddress}:{engine.port}</div>
+              <div class="text-xs text-muted">{engine.bindAddress}:{engine.port}{#if engine.holderVersion}<span class="font-mono"> · holder {engine.holderVersion.slice(0, 7)} · {engine.holderAttached ?? 0}/{engine.holderOpen ?? 0} attached{#if (engine.holderDetached ?? 0) > 0}<span class="text-warn"> · {engine.holderDetached} detached</span>{/if}</span>{/if}</div>
             </div>
+            {#if engine.hotswapActive}
+              <StatusBadge label="HOT SWAP" tone="warn" size="sm" />
+            {/if}
             <StatusBadge
               label="{engine.assignedNetworkCount} nets"
               tone={engine.healthy ? 'success' : 'danger'}

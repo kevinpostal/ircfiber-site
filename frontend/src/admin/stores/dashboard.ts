@@ -16,6 +16,16 @@ export interface Engine {
   healthy: boolean;
   lastHeartbeat: number;
   ageSeconds: number;
+  /** Unix ms of the engine's hot-swap detach stamp (0 = none). */
+  hotswapAt?: number;
+  /** True while the engine is detached for a hot swap (sessions held). */
+  hotswapActive?: boolean;
+  /** Holder build short hash; absent = pre-holder engine, no data. */
+  holderVersion?: string;
+  holderPid?: number;
+  holderOpen?: number;
+  holderAttached?: number;
+  holderDetached?: number;
 }
 
 export interface HostSummary {

@@ -129,6 +129,25 @@ package void apiDashboard(HTTPServerRequest, HTTPServerResponse res,
         const long nowMs = Clock.currTime.toUnixTime!long * 1000L;
         e["lastHeartbeat"] = Json(s.lastHeartbeat);
         e["ageSeconds"] = Json((nowMs - s.lastHeartbeat) / 1000);
+        // Hot-swap state + holder identity/counters (same fields as
+        // GET /api/admin/servers; absent on pre-holder engines).
+        e["hotswapAt"] = Json(s.hotswapAt);
+        e["hotswapActive"] = Json(s.hotswapAt > 0 && (nowMs - s.hotswapAt) < HOTSWAP_GRACE_MS);
+        string holderVersion;
+        long holderPid, holderOpen, holderAttached, holderDetached;
+        try {
+            auto hfields = redis.hgetAll(RedisKeys.server(s.serverId));
+            if (auto p = "holderVersion" in hfields) holderVersion = *p;
+            holderPid = holderFieldLong(hfields, "holderPid");
+            holderOpen = holderFieldLong(hfields, "holderOpen");
+            holderAttached = holderFieldLong(hfields, "holderAttached");
+            holderDetached = holderFieldLong(hfields, "holderDetached");
+        } catch (Exception) {}
+        e["holderVersion"] = Json(holderVersion);
+        e["holderPid"] = Json(holderPid);
+        e["holderOpen"] = Json(holderOpen);
+        e["holderAttached"] = Json(holderAttached);
+        e["holderDetached"] = Json(holderDetached);
         engArr ~= e;
     }
     data["engines"] = Json(engArr);
