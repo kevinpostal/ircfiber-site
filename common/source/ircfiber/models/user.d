@@ -19,6 +19,9 @@ struct User {
     string[] roles;
     /// The signup IP
     string signupIp;
+    /// How this account was provisioned: "" = normal signup,
+    /// "nickserv:<account>" = created by !adduser from a NickServ account.
+    string provisionedFrom;
     /// The IP used on last login
     string lastLoginIp;
     /// The time of last login
@@ -37,6 +40,7 @@ struct User {
             "passwordHash": Json(passwordHash),
             "roles": serializeToJson(roles),
             "signupIp": Json(signupIp),
+            "provisionedFrom": Json(provisionedFrom),
             "lastLoginIp": Json(lastLoginIp),
             "lastLoginAt": Json(lastLoginAt.toUnixTime()),
             "createdAt": Json(createdAt.toUnixTime()),
@@ -55,6 +59,8 @@ struct User {
             u.roles = deserializeJson!(string[])(*pr);
         if (auto pr = "signupIp" in json)
             u.signupIp = (*pr).get!string;
+        if (auto pr = "provisionedFrom" in json)
+            u.provisionedFrom = (*pr).get!string;
         if (auto pr = "lastLoginIp" in json)
             u.lastLoginIp = (*pr).get!string;
         if (auto pr = "lastLoginAt" in json) {

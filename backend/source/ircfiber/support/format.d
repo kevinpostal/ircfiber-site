@@ -141,7 +141,8 @@ struct BotCommand {
     bool ok;
 }
 
-/// Parses `!help`, `!issues [open|all]`, `!issue <n>`. Anything else is
+/// Parses `!help`, `!issues [open|all]`, `!issue <n>`, `!adduser <nick>`,
+/// `!nsinfo <nick>`. Anything else is
 /// returned with `ok=false`; unknown `!words` keep their `name` so the
 /// caller can stay silent for them.
 BotCommand parseBotCommand(string text) @safe pure {
@@ -163,10 +164,25 @@ BotCommand parseBotCommand(string text) @safe pure {
         case "issue":
             c.ok = c.arg.length > 0 && c.arg.length <= 9 && isDigits(c.arg) && c.arg != "0";
             break;
+        case "adduser":
+        case "nsinfo":
+            // Exactly one whitespace-free token, 1–32 chars. Charset is
+            // deliberately loose here; the handler enforces the strict
+            // `isValidIrcNick` gate signup uses. Arg case preserved.
+            c.ok = isSingleNickToken(c.arg);
+            break;
         default:
             break;
     }
     return c;
+}
+
+private bool isSingleNickToken(string s) @safe pure nothrow @nogc {
+    if (s.length == 0 || s.length > 32) return false;
+    foreach (ch; s) {
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\v' || ch == '\f') return false;
+    }
+    return true;
 }
 
 private bool isDigits(string s) @safe pure nothrow @nogc {
@@ -205,9 +221,9 @@ string[] formatIssueDetail(const SupportIssueRecord r, long nowMs, string public
 
 /// Bot help line.
 string[] formatHelp(string publicUrl) @safe pure {
-    return ["FiberSupport: !issues [open|all] — recent issues · !issue <n> — details · report problems at "
+    return ["FiberSupport: !issues [open|all] — recent issues · !issue <n> — details · !adduser <nick> — create a site account from a NickServ account, or send a signup link when there is none · !nsinfo <nick> — show NickServ account info (opers only) · report problems at "
         ~ feedbackUrl(publicUrl)];
 }
 
 /// Reply for a malformed `!issue` / `!issues`.
-enum SUPPORT_USAGE = "Usage: !issues [open|all] · !issue <n>";
+enum SUPPORT_USAGE = "Usage: !issues [open|all] · !issue <n> · !adduser <nick> · !nsinfo <nick> (last two: opers only)";

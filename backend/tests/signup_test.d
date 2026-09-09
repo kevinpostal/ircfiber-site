@@ -7,6 +7,7 @@ import std.string : indexOf;
 
 import ircfiber.mail;
 import ircfiber.signup;
+import ircfiber.invites;
 import ircfiber.mail_events;
 import vibe.data.json : parseJsonString;
 
@@ -142,11 +143,43 @@ private void testMailConfigured() {
     sender.apiToken = "tok";
     check(sender.configured, "sender with a token is configured");
 }
-
 private void testKeyShapes() {
     check(pendingKey("abc") == "signup:pending:abc", "pendingKey");
     check(sentKey("a@b.co") == "signup:sent:a@b.co", "sentKey");
     check(ipKey("1.2.3.4") == "signup:ip:1.2.3.4", "ipKey");
+    check(inviteKey("abc") == "signup:invite:abc", "inviteKey");
+}
+
+private void testInviteLink() {
+    check(inviteLink("https://ircfiber.com/", "abc")
+        == "https://ircfiber.com/invite?token=abc", "invite trailing slash stripped");
+    check(inviteLink("https://ircfiber.com", "abc")
+        == "https://ircfiber.com/invite?token=abc", "invite no trailing slash unchanged");
+}
+
+private void testInvitePendingJson() {
+    InvitePending p = { "freshnick", "oper1", 1788680000L };
+    auto rt = InvitePending.fromJson(p.toJson());
+    check(rt.nick == "freshnick", "invite nick round-trips");
+    check(rt.invitedBy == "oper1", "invite invitedBy round-trips");
+    check(rt.createdAt == 1788680000L, "invite createdAt round-trips");
+    bool threw = false;
+    try InvitePending.fromJson(parseJsonString(`{}`));
+    catch (Exception) threw = true;
+    check(threw, "invite fromJson of {} throws");
+}
+
+private void testInviteToken() {
+    const a = newInviteToken();
+    const b = newInviteToken();
+    check(a.length == 40, "invite token is 40 chars");
+    check(a != b, "two invite draws differ");
+    foreach (char c; a) {
+        if (!isAlphaNum(c)) {
+            check(false, "invite token is alnum only");
+            break;
+        }
+    }
 }
 
 private void testEmailWellFormed() {
@@ -242,6 +275,9 @@ void main() {
     testSignupToken();
     testMailConfigured();
     testKeyShapes();
+    testInviteLink();
+    testInvitePendingJson();
+    testInviteToken();
     testEmailWellFormed();
     testMailEventJson();
     testSummarize();

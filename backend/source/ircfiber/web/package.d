@@ -26,8 +26,8 @@ import ircfiber.db.user : UserRepository;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.default_network : ensureDefaultFiberNetwork;
-import ircfiber.services.accounts : isValidIrcNick, provisionServicesAccountAsync;
-import ircfiber.services.anope : NickRegistration, anopeNickRegistration, loadAnopeSettings;
+import ircfiber.services.accounts : isValidIrcNick, persistProvisionedAccount, provisionServicesAccountAsync;
+import ircfiber.services.anope : NickRegistration, anopeCheckAuthentication, anopeNickRegistration, loadAnopeSettings;
 import ircfiber.models.user : User;
 import ircfiber.mail : MailSettings, MailException, loadMailSettings, sendMail,
     emailWellFormed;
@@ -100,6 +100,8 @@ final class WebController {
         router.post("/login", &loginPost);
         router.get("/register", &registerPage);
         router.post("/register", &registerPost);
+        router.get("/invite", &inviteGet);
+        router.post("/invite", &invitePost);
         router.get("/verify", &verifyGet);
         router.post("/verify", &verifyPost);
         // Public self-service ban appeal. Registered here, before every
@@ -112,7 +114,6 @@ final class WebController {
         router.get("/logout", &logout);
         router.get("/public/landing.html", &serveLanding);
         router.get("/app-screenshot.png", &serveAppScreenshot);
-        router.get("/glyphs.json", &serveGlyphs);
         // Root-level icons + web app manifest referenced from index.html
         // (<link rel=icon>, apple-touch-icon, <link rel=manifest>). They
         // live in public/ (the Vite publicDir) but nothing served them.
@@ -277,6 +278,9 @@ final class WebController {
                 req.session.set("sessionUserId", user.id.toString());
                 captureSessionMeta(req);
                 res.redirect("/");
+            } else if (tryNickservLogin(repo, username, password, req, res)) {
+                // Fallback authenticated, upgraded the hash and started the
+                // session inside the helper. Nothing left to do.
             } else {
                 authError = "Incorrect username or password. Please try again.";
                 res.statusCode = 401;
@@ -292,6 +296,72 @@ final class WebController {
                 res.writeBody("An unexpected error occurred.", "text/plain; charset=utf-8");
             }
         }
+    }
+
+    /// NickServ-password fallback for `loginPost`: only when the local hash
+    /// check already failed. Verifies via Anope (`checkAuthentication`, the
+    /// SASL PLAIN path), upgrades the local hash to the presented password,
+    /// captures it as the Fiber network SASL credential, then logs in.
+    /// Returns true when it authenticated and already redirected.
+    private bool tryNickservLogin(UserRepository repo, string username, string password,
+            HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.default_network : DEFAULT_FIBER_HOST;
+        if (!username.length || !password.length) return false;
+        bool determined = false;
+        bool ok = false;
+        try {
+            ok = anopeCheckAuthentication(loadAnopeSettings(), username, password, determined);
+        } catch (Exception e) {
+            logWarn("login: NickServ fallback for %s failed: %s", username, e.msg);
+            return false;
+        }
+        if (!determined) {
+            logWarn("login: Anope unreachable during NickServ fallback — local result stands");
+            return false;
+        }
+        if (!ok) return false;
+        User user;
+        try user = repo.findByUsernameCI(username);
+        catch (Exception e) {
+            logWarn("login: NickServ fallback lookup for %s failed: %s", username, e.msg);
+            return false;
+        }
+        if (!user.username.length) return false;
+        // Hash upgrade: the presented NickServ password becomes the local
+        // site password, so the next login verifies locally.
+        user.passwordHash = hashPassword(password);
+        auto ip = getClientIp(req);
+        user.lastLoginIp = ip;
+        user.lastLoginAt = Clock.currTime;
+        if (!user.loginIps.canFind(ip)) user.loginIps ~= ip;
+        try repo.update(user);
+        catch (Exception e) {
+            logWarn("login: NickServ hash upgrade for %s failed: %s", user.username, e.msg);
+            return false;
+        }
+        auto netRepo = new NetworkRepository();
+        auto registry = new ServerRegistry(redis);
+        try ensureDefaultFiberNetwork(user, netRepo, redis, registry);
+        catch (Exception e) logWarn("Failed to ensure default network for %s on login: %s", user.username, e.msg);
+        // Capture as the Fiber network SASL credential so the engine
+        // identifies as the user's NickServ account from the next connect.
+        try {
+            foreach (ref cfg; netRepo.findByUserId(user.id)) {
+                if (cfg.host != DEFAULT_FIBER_HOST) continue;
+                persistProvisionedAccount(user, cfg, user.username, password, netRepo, redis, registry);
+                break;
+            }
+        } catch (Exception e) {
+            logWarn("login: NickServ SASL capture for %s failed: %s", user.username, e.msg);
+        }
+        try provisionServicesAccountAsync(user, redis);
+        catch (Exception e) logWarn("Failed to schedule NickServ registration for %s: %s", user.username, e.msg);
+        if (!req.session) req.session = res.startSession();
+        persistSessionCookie(res, req.session.id);
+        req.session.set("sessionUserId", user.id.toString());
+        captureSessionMeta(req);
+        res.redirect("/");
+        return true;
     }
 
     private void registerPage(HTTPServerRequest, HTTPServerResponse res) {
@@ -533,6 +603,94 @@ final class WebController {
             return;
         }
         logInfo("register: %s verified %s and was created", u.username, u.email);
+    }
+
+    private void inviteGet(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.invites : InviteStore;
+        const token = req.query.get("token", "").strip();
+        auto store = new InviteStore(redis);
+        if (!token.length || !store.exists(token)) {
+            renderVerify(res, 410, "error", "", "",
+                "This invitation link has expired or was already used. "
+                ~ "Ask an operator for a new one.");
+            return;
+        }
+        string nick = "";
+        try {
+            auto peeked = store.peek(token);
+            if (!peeked.isNull) nick = peeked.get.nick;
+        } catch (Exception) {}
+        string authError;
+        res.render!("invite.dt", nick, token, authError)();
+    }
+
+    private void invitePost(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.invites : InviteStore;
+        const token = req.form.get("token", "").strip();
+        auto store = new InviteStore(redis);
+        // Read WITHOUT consuming for validation; username locked to the record.
+        string nick = "";
+        if (token.length) {
+            try {
+                auto peeked = store.peek(token);
+                if (!peeked.isNull) nick = peeked.get.nick;
+            } catch (Exception) {}
+        }
+        if (!token.length || !nick.length) {
+            renderVerify(res, 410, "error", "", "",
+                "This invitation link has expired or was already used. "
+                ~ "Ask an operator for a new one.");
+            return;
+        }
+        auto email = req.form.get("email", "").strip();
+        auto password = req.form.get("password", "").strip();
+        void fail(string msg) {
+            string authError = msg;
+            res.statusCode = 400;
+            res.render!("invite.dt", nick, token, authError)();
+        }
+        if (!email.length || !emailWellFormed(email)) {
+            fail("That doesn't look like a valid email address.");
+            return;
+        }
+        if (password.length < 8) {
+            fail("Password must be at least 8 characters.");
+            return;
+        }
+        // Consume now; a raced double-submit sees the expired page.
+        auto taken = store.take(token);
+        if (taken.isNull) {
+            renderVerify(res, 410, "error", "", "",
+                "This invitation link has expired or was already used. "
+                ~ "Ask an operator for a new one.");
+            return;
+        }
+        const username = taken.get.nick;
+        auto repo = new UserRepository();
+        if (repo.findByUsernameCI(username).username.length > 0) {
+            renderVerify(res, 409, "error", "", "",
+                "The username \"" ~ username ~ "\" was taken while this link was waiting. "
+                ~ "Ask an operator for a new invite.");
+            return;
+        }
+        // Deliberately no ircNickIsClaimed: the nick is unregistered by
+        // construction, and the check fails open anyway. Email verification
+        // is bypassed: trust root is the oper request + PM delivery, and the
+        // invitee supplies a real email here.
+        User u;
+        u.id = randomUUID();
+        u.username = username;
+        u.email = email;
+        u.passwordHash = hashPassword(password);
+        u.signupIp = getClientIp(req);
+        u.createdAt = Clock.currTime;
+        if (!createAccountAndLogin(req, res, u)) {
+            renderVerify(res, 409, "error", "", "",
+                "The username \"" ~ username ~ "\" was taken while this link was waiting. "
+                ~ "Ask an operator for a new invite.");
+            return;
+        }
+        logInfo("invite: %s redeemed invite for %s", username, email);
     }
 
     private void registerPostVerified(HTTPServerRequest req, HTTPServerResponse res,

@@ -198,6 +198,7 @@ final class UserRepository {
         fields["passwordHash"] = Bson(u.passwordHash);
         fields["roles"] = Bson(u.roles.map!(r => Bson(r)).array);
         fields["signupIp"] = Bson(u.signupIp);
+        fields["provisionedFrom"] = Bson(u.provisionedFrom);
         fields["lastLoginIp"] = Bson(u.lastLoginIp);
         // Cast to double to avoid vibe.d BSON long_/double_ type mismatch
         fields["lastLoginAt"] = Bson(cast(double) u.lastLoginAt.toUnixTime);
@@ -231,6 +232,7 @@ final class UserRepository {
             u.roles = deserializeBson!(string[])(doc["roles"]);
         if (doc["signupIp"].type != Bson.Type.null_)
             u.signupIp = doc["signupIp"].get!string;
+        try { if (doc["provisionedFrom"].type != Bson.Type.null_) u.provisionedFrom = doc["provisionedFrom"].get!string; } catch (Exception) {}
         if (doc["lastLoginIp"].type != Bson.Type.null_)
             u.lastLoginIp = doc["lastLoginIp"].get!string;
         if (doc["lastLoginAt"].type != Bson.Type.null_) {
