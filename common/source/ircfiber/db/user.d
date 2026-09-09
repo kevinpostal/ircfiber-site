@@ -140,6 +140,22 @@ final class UserRepository {
         return cast(int) collection.countDocuments(Bson.emptyObject);
     }
 
+    /// Users created by `!adduser` (`provisionedFrom` non-empty), newest
+    /// first is left to the caller — Mongo returns natural order here and
+    /// the admin list is small. Legacy rows without the key never match
+    /// (`$exists` guard), so no migration is needed.
+    User[] listProvisioned(int limit = 200) {
+        User[] results;
+        FindOptions findOpts;
+        findOpts.limit = limit;
+        auto filter = Bson(["provisionedFrom": Bson(["$exists": Bson(true), "$ne": Bson("")])]);
+        foreach (doc; collection.find(filter, findOpts)) {
+            if (doc.isNull) continue;
+            results ~= docFromBson(doc);
+        }
+        return results;
+    }
+
     /// Finds all users with limit and offset.
     User[] findAll(int limit, int) {
         User[] results;

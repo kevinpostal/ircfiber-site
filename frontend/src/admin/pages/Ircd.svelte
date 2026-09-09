@@ -13,6 +13,7 @@
   import SupportBotCard from '../components/SupportBotCard.svelte';
   import FiberEyeBotCard from '../components/FiberEyeBotCard.svelte';
   import NickServPanel from '../components/NickServPanel.svelte';
+  import InvitesPanel from '../components/InvitesPanel.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { queryRange } from '../../lib/signoz';
   import { highlightIrcdConf } from '../lib/ircd-highlight';
@@ -35,8 +36,7 @@
     type: 'gline' | 'kline' | 'zline'; mask: string;
     setAt: number; durationSecs: number; setter: string; reason: string;
   }
-
-  type Tab = 'overview' | 'channels' | 'bans' | 'nickserv' | 'config' | 'logs';
+  type Tab = 'overview' | 'channels' | 'bans' | 'nickserv' | 'invites' | 'config' | 'logs';
   let tab = $state<Tab>('overview');
 
   let status = $state<StatusResponse | null>(null);
@@ -310,6 +310,7 @@
     { id: 'channels', label: 'Channels' },
     { id: 'bans', label: 'Bans' },
     { id: 'nickserv', label: 'NickServ' },
+    { id: 'invites', label: 'Invites' },
     { id: 'config', label: 'Config' },
     { id: 'logs', label: 'Logs' },
   ];
@@ -580,6 +581,8 @@
     </div>
   {:else if tab === 'nickserv'}
     <NickServPanel />
+  {:else if tab === 'invites'}
+    <InvitesPanel />
   {:else if tab === 'config'}
     <Card>
       <div class="mb-3 flex flex-wrap items-center gap-2">

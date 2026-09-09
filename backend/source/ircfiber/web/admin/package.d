@@ -43,6 +43,7 @@ import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
 import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
     apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink,
     apiNsUnprovisioned, apiNsCreate;
+import ircfiber.web.admin.invites : apiInvitesList, apiInviteRevoke, apiProvisionedList;
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
     apiSupportBotStatus, apiSupportBotReconnect, apiSupportBotRejoin, apiSupportBotAnnounce;
@@ -257,9 +258,12 @@ final class AdminController {
         router.post("/api/admin/ircd/nickserv/password", &adminWrap!apiNsResetPasswordRoute);
         router.post("/api/admin/ircd/nickserv/logout", &adminWrap!apiNsLogoutRoute);
         router.post("/api/admin/ircd/nickserv/link", &adminWrap!apiNsLinkRoute);
-        router.post("/api/admin/ircd/nickserv/unlink", &adminWrap!apiNsUnlinkRoute);
         router.get("/api/admin/ircd/nickserv/unprovisioned", &adminWrap!apiNsUnprovisionedRoute);
         router.post("/api/admin/ircd/nickserv/create", &adminWrap!apiNsCreateRoute);
+        // !adduser invites + provisioned accounts, on the same IRCD page
+        router.get("/api/admin/ircd/invites", &adminWrap!apiInvitesListRoute);
+        router.post("/api/admin/ircd/invites/revoke", &adminWrap!apiInviteRevokeRoute);
+        router.get("/api/admin/ircd/provisioned", &adminWrap!apiProvisionedListRoute);
 
         // Logs (SigNoz) — gateway-side proxy so the browser needs no
         // SigNoz route or key of its own (see web.admin.logs).
@@ -350,6 +354,13 @@ private:
     void apiNsCreateRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiNsCreate(req, res, redis, serverRegistry);
     }
+    void apiInvitesListRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiInvitesList(req, res, redis);
+    }
+    void apiInviteRevokeRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiInviteRevoke(req, res, redis);
+    }
+    void apiProvisionedListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiProvisionedList(req, res); }
     void apiDashboardRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiDashboard(req, res, redis, serverRegistry);
     }
