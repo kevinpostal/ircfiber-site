@@ -26,6 +26,16 @@
     healthy: boolean;
     lastHeartbeat: number;
     ageSeconds: number;
+    /** Unix ms of the engine's hot-swap detach stamp (0 = none). */
+    hotswapAt?: number;
+    /** True while the engine is detached for a hot swap (sessions held). */
+    hotswapActive?: boolean;
+    /** Holder build short hash; absent = pre-holder engine, no data. */
+    holderVersion?: string;
+    holderPid?: number;
+    holderOpen?: number;
+    holderAttached?: number;
+    holderDetached?: number;
   }
 
   interface HostEntry {
@@ -278,6 +288,9 @@
               tone={engine.healthy ? 'success' : 'danger'}
               size="sm"
             />
+            {#if engine.hotswapActive}
+              <StatusBadge label="HOT SWAP" tone="warn" size="sm" />
+            {/if}
             <span class="ml-auto text-xs text-muted">{engine.bindAddress}:{engine.port}</span>
           </div>
           <div class="flex flex-wrap items-center gap-4 px-5 pb-3 text-xs text-muted">
@@ -302,6 +315,17 @@
               Last heartbeat:
               <strong class="text-text">{duration(engine.ageSeconds * 1000)} ago</strong>
             </span>
+            {#if engine.holderVersion}
+              <span
+                class="font-mono text-[11px]"
+                title="Holder process {engine.holderPid ?? '—'} serving {engine.serverId}"
+              >
+                <span class="font-medium text-muted">Holder:</span>
+                {engine.holderVersion.slice(0, 7)} · pid {engine.holderPid ?? '—'} · {engine.holderOpen ?? 0} open / {engine.holderAttached ?? 0} attached{#if (engine.holderDetached ?? 0) > 0}<span class="text-warn"> · {engine.holderDetached} detached</span>{/if}
+              </span>
+            {:else}
+              <span class="text-muted">Holder: —</span>
+            {/if}
             <span class="font-mono text-[11px]" title="Full hash: {engine.gitHash ?? ''}">
               {#if engine.gitShort}
                 <span class="font-medium text-muted">Commit:</span> {engine.gitShort}

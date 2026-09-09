@@ -18,7 +18,7 @@ import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.uploads : UploadRepository;
 import ircfiber.models.network : NetworkConfig;
 import ircfiber.models.user : User;
-import ircfiber.irc.registry : ServerRegistry;
+import ircfiber.irc.registry : ServerRegistry, HOTSWAP_GRACE_MS;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.storage.session : RedisSessionStore;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody, formString, jsonArray, stripJsonStr;
@@ -31,6 +31,12 @@ import ircfiber.ipintel.store : IpIntelStore;
 /// Escape a string for JSON output
 private string escapeJson(string s) {
     return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t");
+}
+
+/// Tolerant long parse for optional Redis hash fields (absent → 0).
+private long holderFieldLong(string[string] h, string k) {
+    if (auto p = k in h) { try return (*p).to!long; catch (Exception) {} }
+    return 0;
 }
 
 /// GET /api/admin/me — current admin user (id, username, email, roles).
@@ -260,6 +266,28 @@ package void apiServers(HTTPServerRequest, HTTPServerResponse res,
         e["lastHeartbeat"] = Json(s.lastHeartbeat);
         const long nowMs = Clock.currTime.toUnixTime!long * 1000L;
         e["ageSeconds"] = Json((nowMs - s.lastHeartbeat) / 1000);
+        // Hot-swap state: stamped by the old engine's SIGTERM, cleared by
+        // the new engine's first heartbeat. While active the engine has no
+        // live process but its sessions are held, not lost.
+        e["hotswapAt"] = Json(s.hotswapAt);
+        e["hotswapActive"] = Json(s.hotswapAt > 0 && (nowMs - s.hotswapAt) < HOTSWAP_GRACE_MS);
+        // Holder identity/counters published by the engine heartbeat
+        // (absent on pre-holder engines — version "" means no data).
+        string holderVersion;
+        long holderPid, holderOpen, holderAttached, holderDetached;
+        try {
+            auto hfields = redis.hgetAll(RedisKeys.server(s.serverId));
+            if (auto p = "holderVersion" in hfields) holderVersion = *p;
+            holderPid = holderFieldLong(hfields, "holderPid");
+            holderOpen = holderFieldLong(hfields, "holderOpen");
+            holderAttached = holderFieldLong(hfields, "holderAttached");
+            holderDetached = holderFieldLong(hfields, "holderDetached");
+        } catch (Exception) {}
+        e["holderVersion"] = Json(holderVersion);
+        e["holderPid"] = Json(holderPid);
+        e["holderOpen"] = Json(holderOpen);
+        e["holderAttached"] = Json(holderAttached);
+        e["holderDetached"] = Json(holderDetached);
         engArr ~= e;
     }
     data["engines"] = Json(engArr);

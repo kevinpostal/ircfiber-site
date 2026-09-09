@@ -277,3 +277,54 @@ describe('Servers.svelte — Delete button (orphan-network fix)', () => {
     });
   });
 });
+
+describe('Servers.svelte — holder info (connection holder)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const holderEngine = {
+    serverId: 'ovh',
+    bindAddress: '0.0.0.0',
+    port: 8091,
+    priority: 0,
+    maxConnections: 0,
+    fallbackOnly: false,
+    assignedNetworks: ['8b508634-400d-4298-9d2b-6f27e1813272'],
+    healthy: true,
+    lastHeartbeat: Date.now(),
+    ageSeconds: 3,
+    hotswapAt: 0,
+    hotswapActive: false,
+    holderVersion: '99608b9a6e9e',
+    holderPid: 7,
+    holderOpen: 18,
+    holderAttached: 17,
+    holderDetached: 1,
+  };
+
+  it('renders the holder build, pid and session counts for an engine', async () => {
+    mockedGet.mockResolvedValue(baseFixture({ engines: [holderEngine] }));
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await expect.element(page.getByText(/99608b9/)).toBeInTheDocument();
+    await expect.element(page.getByText(/18 open \/ 17 attached/)).toBeInTheDocument();
+    await expect.element(page.getByText(/1 detached/)).toBeInTheDocument();
+  });
+
+  it('shows a HOT SWAP badge while the engine is detached for a hot swap', async () => {
+    mockedGet.mockResolvedValue(
+      baseFixture({ engines: [{ ...holderEngine, hotswapActive: true, hotswapAt: Date.now() }] })
+    );
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await expect.element(page.getByText('HOT SWAP', { exact: true })).toBeInTheDocument();
+  });
+
+  it('renders a dash placeholder when the engine predates the holder', async () => {
+    mockedGet.mockResolvedValue(baseFixture());
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await expect.element(page.getByText('Holder: —')).toBeInTheDocument();
+  });
+});
