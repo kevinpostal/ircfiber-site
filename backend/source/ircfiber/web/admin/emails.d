@@ -948,3 +948,528 @@ package void apiCampaignTest(HTTPServerRequest req, HTTPServerResponse res, Redi
     data["sent"] = Json(true);
     jsonOk(res, data);
 }
+// ────────────────────────────────────────────────────────────
+// Scheduled campaigns: job rows + worker (Campaign tab)
+// ────────────────────────────────────────────────────────────
+//
+/// Scheduled-campaign jobs build on the send-now fan-out above. `POST
+/// /campaigns` validates exactly like `apiCampaignSend`, resolves the
+/// audience ONCE, and persists a job row + recipient list; a gateway fiber
+/// (`bgMailCampaignTask`, started beside the janitor in app.d) fires due
+/// jobs in 10-recipient chunks with 1s sleeps. The send-now route stays
+/// synchronous — same 200-cap, same all-gate — for single-shot sends.
+import vibe.db.redis.redis : RedisReply;
+import ircfiber.mail_campaigns : CampaignJob, CampaignRecipient,
+    campaignIndexKey, campaignJobKey, campaignJobTtlSeconds, campaignRecipientsKey,
+    campaignTerminal, campaignTransition, recipientsFromJson, recipientsToJson;
+
+private void persistJob(RedisStorage redis, const ref CampaignJob job) {
+    auto db = redis.getDb();
+    db.setEX(campaignJobKey(job.id), campaignJobTtlSeconds, job.toJson().toString());
+}
+
+private bool loadJob(RedisStorage redis, string id, out CampaignJob job) {
+    try {
+        const raw = redis.getDb().get(campaignJobKey(id));
+        if (raw.length == 0) return false;
+        job = CampaignJob.fromJson(parseJsonString(raw));
+        return true;
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign %s read failed: %s", id, e.msg);
+        return false;
+    }
+}
+
+private string[] listJobIds(RedisStorage redis, long limit = 200) {
+    try {
+        auto reply = redis.getDb().request!(RedisReply!string)(
+            "LRANGE", campaignIndexKey(), "0", (limit - 1).to!string);
+        string[] ids;
+        foreach (raw; reply) {
+            string s = () @trusted { return cast(string) raw.idup; }();
+            if (s.length > 0) ids ~= s;
+        }
+        return ids;
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign index read failed: %s", e.msg);
+        return null;
+    }
+}
+
+/// Shared field validation with `apiCampaignSend`. Returns "" when valid.
+/// `htmlOut` carries the trimmed html (empty = fallback).
+private string validateCampaignFields(Json body_, out string subject, out string text, out string html) {
+    subject = bodyString(body_, "subject");
+    text = bodyString(body_, "text");
+    string htmlRaw = "";
+    try {
+        auto v = body_["html"];
+        if (v.type == Json.Type.string) htmlRaw = v.get!string;
+    } catch (Exception) {
+    }
+    const htmlErr = campaignHtmlError(htmlRaw);
+    if (htmlErr.length > 0) return htmlErr;
+    html = htmlRaw.strip();
+    if (subject.length == 0 || subject.length > 200)
+        return "Subject must be 1–200 characters.";
+    if ((text.length == 0 && html.length == 0) || text.length > 20000)
+        return "Body must be 1–20000 characters.";
+    return "";
+}
+
+/// POST /api/admin/emails/campaigns — body `{role?, createdAfterMs?,
+/// createdBeforeMs?, q?, all?, subject, text, html?, scheduleAtMs?, dryRun?}`.
+/// Validates like `apiCampaignSend` plus `scheduleAtMs >= now - 60s`.
+/// `{dryRun: true}` validates + resolves the audience and returns counts
+/// WITHOUT sending and WITHOUT persisting a job row (status never leaves draft).
+package void apiCampaignsCreate(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto body_ = readJsonBody(req);
+    const role = bodyString(body_, "role");
+    const afterMs = bodyLong(body_, "createdAfterMs");
+    const beforeMs = bodyLong(body_, "createdBeforeMs");
+    const q = bodyString(body_, "q");
+    const all = bodyBool(body_, "all");
+    const dryRun = bodyBool(body_, "dryRun");
+    string subject, text, html;
+    const fieldErr = validateCampaignFields(body_, subject, text, html);
+    if (fieldErr.length > 0) {
+        jsonError(res, 400, fieldErr);
+        return;
+    }
+    const narrowed = role.length > 0 || afterMs > 0 || beforeMs > 0 || q.length > 0;
+    if (!narrowed && !all) {
+        jsonError(res, 400, "Narrow the audience or confirm sending to everyone.");
+        return;
+    }
+    const nowMs = Clock.currTime.toUnixTime() * 1000L;
+    long scheduleAtMs = bodyLong(body_, "scheduleAtMs");
+    if (scheduleAtMs <= 0) scheduleAtMs = nowMs;
+    if (scheduleAtMs < nowMs - 60_000) {
+        jsonError(res, 400, "Schedule time is in the past.");
+        return;
+    }
+
+    auto mail = loadMailSettings();
+    if (!mail.configured) {
+        jsonError(res, 503, "No mail provider is configured.");
+        return;
+    }
+
+    User[] audience;
+    long total = 0, grandTotal = 0;
+    try {
+        auto repo = new UserRepository();
+        total = repo.countCampaignAudience(role, afterMs, beforeMs, q);
+        grandTotal = repo.countCampaignAudienceTotal(role, afterMs, beforeMs, q);
+        if (total > CAMPAIGN_MAX_RECIPIENTS) {
+            jsonError(res, 400, "That audience has " ~ total.to!string
+                ~ " addresses; narrow the filters (max "
+                ~ CAMPAIGN_MAX_RECIPIENTS.to!string ~ " per send).");
+            return;
+        }
+        audience = repo.fetchCampaignAudience(role, afterMs, beforeMs, q, CAMPAIGN_MAX_RECIPIENTS);
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign audience read failed: %s", e.msg);
+        jsonError(res, 503, "Could not read the audience. Try again shortly.");
+        return;
+    }
+    long skipped = grandTotal - total;
+    if (skipped < 0) skipped = 0;
+
+    if (dryRun) {
+        Json data = Json.emptyObject;
+        data["dryRun"] = Json(true);
+        data["total"] = Json(total);
+        data["skippedUnsubscribed"] = Json(skipped);
+        jsonOk(res, data);
+        return;
+    }
+
+    CampaignJob job;
+    job.id = randomUUID().toString();
+    job.subject = subject;
+    job.text = text;
+    job.html = html;
+    job.role = role;
+    job.q = q;
+    job.afterMs = afterMs;
+    job.beforeMs = beforeMs;
+    job.all = all;
+    job.scheduleAtMs = scheduleAtMs;
+    job.status = "scheduled";
+    job.createdBy = adminActor(req);
+    job.createdAtMs = nowMs;
+    job.skipped = skipped;
+    job.total = total;
+    CampaignRecipient[] recips;
+    foreach (ref u; audience)
+        recips ~= CampaignRecipient(u.username, u.email);
+    try {
+        auto db = redis.getDb();
+        db.setEX(campaignJobKey(job.id), campaignJobTtlSeconds, job.toJson().toString());
+        db.setEX(campaignRecipientsKey(job.id), campaignJobTtlSeconds,
+            recipientsToJson(recips).toString());
+        db.request!string("LPUSH", campaignIndexKey(), job.id);
+        db.request!string("LTRIM", campaignIndexKey(), "0", "199");
+        db.expire(campaignIndexKey(), campaignJobTtlSeconds);
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign persist failed: %s", e.msg);
+        jsonError(res, 503, "Could not save that campaign. Try again shortly.");
+        return;
+    }
+    logInfo("admin-emails: %s scheduled campaign %s to %s addresses", job.createdBy, job.id, total.to!string);
+    Json data = Json.emptyObject;
+    data["id"] = Json(job.id);
+    data["status"] = Json(job.status);
+    data["total"] = Json(total);
+    data["scheduleAtMs"] = Json(scheduleAtMs);
+    jsonOk(res, data);
+}
+
+/// GET /api/admin/emails/campaigns — job summaries newest-first, no bodies.
+package void apiCampaignsList(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    Json arr = Json.emptyArray;
+    foreach (id; listJobIds(redis)) {
+        CampaignJob job;
+        if (!loadJob(redis, id, job)) continue;
+        arr ~= job.toSummaryJson();
+    }
+    Json data = Json.emptyObject;
+    data["campaigns"] = arr;
+    jsonOk(res, data);
+}
+
+/// GET /api/admin/emails/campaigns/:id — counters + last 20 per-recipient
+/// errors, filtered from the send log by run window + recipient membership.
+package void apiCampaignDetail(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    const id = req.params.get("id", "");
+    CampaignJob job;
+    if (!loadJob(redis, id, job)) {
+        jsonError(res, 404, "That campaign no longer exists.");
+        return;
+    }
+    bool[string] members;
+    try {
+        const raw = redis.getDb().get(campaignRecipientsKey(id));
+        if (raw.length > 0)
+            foreach (ref r; recipientsFromJson(parseJsonString(raw)))
+                members[r.email] = true;
+    } catch (Exception) {
+    }
+    Json errors = Json.emptyArray;
+    size_t errorCount = 0;
+    try {
+        auto events = new MailEventLog(redis).recent(mailEventsCap);
+        foreach (const ref e; events) {
+            if (e.kind != "campaign" || e.status != "failed") continue;
+            if (job.startedAtMs > 0 && e.atMs < job.startedAtMs) continue;
+            if (job.finishedAtMs > 0 && e.atMs > job.finishedAtMs) continue;
+            if (members.length > 0 && !(e.toEmail in members)) continue;
+            if (errorCount >= 20) break;
+            errors ~= Json(["email": Json(e.toEmail), "error": Json(e.error)]);
+            errorCount++;
+        }
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign %s error read failed: %s", id, e.msg);
+    }
+    Json data = job.toJson();
+    data["errors"] = errors;
+    jsonOk(res, data);
+}
+
+private void campaignStateChange(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis, string to) {
+    const id = req.params.get("id", "");
+    CampaignJob job;
+    if (!loadJob(redis, id, job)) {
+        jsonError(res, 404, "That campaign no longer exists.");
+        return;
+    }
+    const reason = campaignTransition(job.status, to);
+    if (reason.length > 0) {
+        jsonError(res, 409, reason ~ " (now " ~ job.status ~ ")");
+        return;
+    }
+    job.status = to;
+    if (to == "cancelled") job.finishedAtMs = Clock.currTime.toUnixTime() * 1000L;
+    try {
+        persistJob(redis, job);
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign %s state save failed: %s", id, e.msg);
+        jsonError(res, 503, "Could not update that campaign. Try again shortly.");
+        return;
+    }
+    logInfo("admin-emails: %s moved campaign %s to %s", adminActor(req), id, to);
+    Json data = Json.emptyObject;
+    data["id"] = Json(id);
+    data["status"] = Json(to);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/emails/campaigns/:id/pause|resume|cancel.
+package void apiCampaignPause(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    campaignStateChange(req, res, redis, "paused");
+}
+
+package void apiCampaignResume(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    campaignStateChange(req, res, redis, "sending");
+}
+
+package void apiCampaignCancel(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    campaignStateChange(req, res, redis, "cancelled");
+}
+
+// ── Worker ──────────────────────────────────────────────────────
+//
+/// One chunk of a job: sends up to 10 recipients starting at the
+/// `sent + failed` cursor, then persists counters. Returns false when the
+/// job must stop (paused/cancelled/finished) so the caller yields the lock.
+private bool processCampaignChunk(RedisStorage redis, ref CampaignJob job,
+        CampaignRecipient[] recips, const MailSettings mail, string ip, string marker) {
+    // Refresh the global pace lock per chunk (same SET EX shape, no NX:
+    // we hold it — this only extends the lease).
+    try {
+        redis.getDb().request!string("SET", mailCampaignLockKey(), marker, "EX", "60");
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign lock refresh failed: %s", e.msg);
+    }
+    // Re-read status: Pause/Cancel lands between chunks.
+    CampaignJob fresh;
+    if (loadJob(redis, job.id, fresh)) {
+        if (fresh.status == "paused" || fresh.status == "cancelled") {
+            job = fresh;
+            return false;
+        }
+        job.sent = fresh.sent;
+        job.failed = fresh.failed;
+    }
+    size_t cursor = cast(size_t)(job.sent + job.failed);
+    if (cursor >= recips.length) return false;
+    size_t end = cursor + 10;
+    if (end > recips.length) end = recips.length;
+    auto eventLog = new MailEventLog(redis);
+    foreach (i; cursor .. end) {
+        // Stop promptly when the operator pauses mid-chunk window.
+        CampaignJob check;
+        if (loadJob(redis, job.id, check)
+            && (check.status == "paused" || check.status == "cancelled")) {
+            job = check;
+            try persistJob(redis, job); catch (Exception) {}
+            return false;
+        }
+        auto r = recips[i];
+        const started = MonoTime.currTime;
+        if (!emailWellFormed(r.email)) {
+            job.failed++;
+            MailEvent ev;
+            ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+            ev.kind = "campaign";
+            ev.toEmail = r.email;
+            ev.username = r.username;
+            ev.provider = mail.provider;
+            ev.status = "failed";
+            ev.error = "That doesn't look like a valid email address.";
+            ev.durationMs = (MonoTime.currTime - started).total!"msecs";
+            ev.sourceIp = ip;
+            eventLog.recordQuiet(ev);
+            continue;
+        }
+        const token = newSignupToken();
+        const unsubUrl = unsubscribeLink(publicUrl(), token);
+        try
+            redis.getDb().setEX(campaignUnsubKey(token), campaignUnsubTtlSeconds, r.email.toLower());
+        catch (Exception e) {
+            logWarn("admin-emails: campaign token store failed for %s: %s", r.email, e.msg);
+            job.failed++;
+            MailEvent ev;
+            ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+            ev.kind = "campaign";
+            ev.toEmail = r.email;
+            ev.username = r.username;
+            ev.provider = mail.provider;
+            ev.status = "failed";
+            ev.error = "Could not store the unsubscribe token. Try again shortly.";
+            ev.durationMs = (MonoTime.currTime - started).total!"msecs";
+            ev.sourceIp = ip;
+            eventLog.recordQuiet(ev);
+            continue;
+        }
+        const subj = substituteCampaign(job.subject, r.username, r.email, unsubUrl);
+        const txt = substituteCampaign(job.text, r.username, r.email, unsubUrl);
+        const htmlSub = job.html.length > 0
+            ? substituteCampaign(job.html, r.username, r.email, unsubUrl)
+            : campaignHtmlBody(txt);
+        MailMessage m;
+        m.toEmail = r.email;
+        m.subject = subj;
+        m.text = txt;
+        m.html = htmlSub;
+        m.listUnsubscribeUrl = unsubUrl;
+        try {
+            sendMail(mail, m);
+            job.sent++;
+            MailEvent ev;
+            ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+            ev.kind = "campaign";
+            ev.toEmail = r.email;
+            ev.username = r.username;
+            ev.provider = mail.provider;
+            ev.status = "sent";
+            ev.durationMs = (MonoTime.currTime - started).total!"msecs";
+            ev.sourceIp = ip;
+            eventLog.recordQuiet(ev);
+        } catch (Exception e) {
+            job.failed++;
+            MailEvent ev;
+            ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+            ev.kind = "campaign";
+            ev.toEmail = r.email;
+            ev.username = r.username;
+            ev.provider = mail.provider;
+            ev.status = "failed";
+            ev.error = e.msg;
+            ev.durationMs = (MonoTime.currTime - started).total!"msecs";
+            ev.sourceIp = ip;
+            eventLog.recordQuiet(ev);
+        }
+    }
+    try persistJob(redis, job); catch (Exception e)
+        logWarn("admin-emails: campaign %s counter save failed: %s", job.id, e.msg);
+    return true;
+}
+
+private void finishCampaign(RedisStorage redis, ref CampaignJob job, string actor, string ip,
+        const MailSettings mail, MonoTime startedAll) {
+    job.finishedAtMs = Clock.currTime.toUnixTime() * 1000L;
+    job.status = job.failed > 0 && job.sent == 0 ? "failed" : "done";
+    try persistJob(redis, job); catch (Exception e)
+        logWarn("admin-emails: campaign %s finish save failed: %s", job.id, e.msg);
+    const summary = "sent " ~ job.sent.to!string ~ " failed " ~ job.failed.to!string
+        ~ " skipped " ~ job.skipped.to!string;
+    LogEvent le;
+    le.type = "mail";
+    le.ts = job.finishedAtMs;
+    le.kind = "campaign_summary";
+    le.username = actor.length > 0 ? actor : job.createdBy;
+    le.provider = mail.provider;
+    le.status = job.failed == 0 ? "sent" : "failed";
+    le.error = summary;
+    le.durationMs = (MonoTime.currTime - startedAll).total!"msecs";
+    le.ip = ip;
+    try pushLogEvent(redis, le); catch (Exception e)
+        logWarn("admin-emails: campaign summary announce failed: %s", e.msg);
+    logInfo("admin-emails: campaign %s finished: %s", job.id, summary);
+}
+
+private void releaseCampaignLock(RedisStorage redis, string marker) {
+    try {
+        if (redis.getDb().get(mailCampaignLockKey()) == marker)
+            redis.getDb().del(mailCampaignLockKey());
+    } catch (Exception) {
+    }
+}
+
+private void processOneCampaign(RedisStorage redis, CampaignJob job) {
+    CampaignRecipient[] recips;
+    try {
+        const raw = redis.getDb().get(campaignRecipientsKey(job.id));
+        if (raw.length > 0) recips = recipientsFromJson(parseJsonString(raw));
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign %s recipients read failed: %s", job.id, e.msg);
+        return;
+    }
+    // Claim the global pace lock (same SET NX EX + read-back shape as
+    // apiCampaignSend): only one job sends at a time.
+    const marker = randomUUID().toString();
+    try {
+        auto db = redis.getDb();
+        db.request!string("SET", mailCampaignLockKey(), marker, "NX", "EX", "60");
+        if (db.get(mailCampaignLockKey()) != marker) return;
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign lock acquire failed: %s", e.msg);
+    }
+    scope (exit) releaseCampaignLock(redis, marker);
+
+    auto mail = loadMailSettings();
+    if (!mail.configured) {
+        job.status = "failed";
+        job.error = "No mail provider is configured.";
+        try persistJob(redis, job); catch (Exception) {}
+        return;
+    }
+    if (job.status == "scheduled") {
+        job.status = "sending";
+        job.startedAtMs = Clock.currTime.toUnixTime() * 1000L;
+        try persistJob(redis, job); catch (Exception) {}
+    }
+    const startedAll = MonoTime.currTime;
+    const ip = "127.0.0.1";
+    while (true) {
+        CampaignJob cur;
+        if (!loadJob(redis, job.id, cur)) return;
+        if (cur.status == "paused" || cur.status == "cancelled") return;
+        if (cur.sent + cur.failed >= cast(long) recips.length) {
+            finishCampaign(redis, cur, job.createdBy, ip, mail, startedAll);
+            return;
+        }
+        job = cur;
+        if (!processCampaignChunk(redis, job, recips, mail, ip, marker)) {
+            CampaignJob after;
+            if (loadJob(redis, job.id, after)
+                && after.sent + after.failed >= cast(long) recips.length
+                && (after.status == "sending")) {
+                finishCampaign(redis, after, job.createdBy, ip, mail, startedAll);
+            }
+            return;
+        }
+        // Few-per-second pace, under Resend 10 req/s without a new limiter.
+        import vibe.core.core : sleep;
+        import core.time : seconds;
+        sleep(1.seconds);
+    }
+}
+
+private void processDueCampaigns(RedisStorage redis) {
+    const nowMs = Clock.currTime.toUnixTime() * 1000L;
+    foreach (id; listJobIds(redis)) {
+        CampaignJob job;
+        if (!loadJob(redis, id, job)) continue;
+        // Crash recovery: a job stuck in `sending` (gateway restarted
+        // mid-run) resumes; paused jobs wait for Resume.
+        bool due = (job.status == "scheduled" && job.scheduleAtMs <= nowMs)
+            || job.status == "sending";
+        if (!due) continue;
+        processOneCampaign(redis, job);
+        return; // one job per tick — the lock serializes the rest
+    }
+}
+
+/// Gateway background fiber: fires due campaign jobs every 5s. Runs on the
+/// bg pool with its own Redis connection (same pattern as the heartbeat
+/// loop) so blocking provider POSTs never stall HTTP fibers. If the
+/// gateway has no fiber budget, future-dated jobs simply persist as
+/// `scheduled` rows — API and UI are unchanged.
+void bgMailCampaignTask() {
+    import vibe.core.core : sleep;
+    import core.time : seconds;
+    import std.process : environment;
+    import ircfiber.storage.redis : RedisStorage;
+    RedisStorage redis;
+    try {
+        redis = new RedisStorage();
+        redis.connectFromUrl(environment.get("IRCFIBER_REDIS_URL", "redis://127.0.0.1:6379"));
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign worker redis unavailable: %s", e.msg);
+        return;
+    }
+    logInfo("admin-emails: campaign worker started");
+    while (true) {
+        try {
+            processDueCampaigns(redis);
+        } catch (Exception e) {
+            logWarn("admin-emails: campaign worker tick failed: %s", e.msg);
+        } catch (Throwable t) {
+            logWarn("admin-emails: campaign worker tick threw: %s", t.msg);
+        }
+        sleep(5.seconds);
+    }
+}

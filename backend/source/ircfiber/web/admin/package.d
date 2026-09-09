@@ -56,8 +56,9 @@ import ircfiber.web.admin.fibereye : apiFiberEyeOverview, apiFiberEyeSessions,
     apiFiberEyeBanRelease, apiFiberEyeReconnect, apiFiberEyeRulesGet,
     apiFiberEyeRulesSet, apiFiberEyeRulesReset, apiFiberEyeIrcdRules,
     apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce;
-import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignSend, apiCampaignTest,
-    apiEmailsOverview, apiEmailsTest, apiEmailsPendingResend, apiEmailsPendingRevoke,
+import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignCancel, apiCampaignDetail,
+    apiCampaignPause, apiCampaignResume, apiCampaignSend, apiCampaignTest, apiCampaignsCreate,
+    apiCampaignsList, apiEmailsOverview, apiEmailsTest, apiEmailsPendingResend, apiEmailsPendingRevoke,
     apiEmailsCooldownClear, apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
@@ -240,6 +241,13 @@ final class AdminController {
         router.get("/api/admin/emails/campaign/audience", &adminWrap!apiCampaignAudienceRoute);
         router.post("/api/admin/emails/campaign/send", &adminWrap!apiCampaignSendRoute);
         router.post("/api/admin/emails/campaign/test", &adminWrap!apiCampaignTestRoute);
+        // Scheduled campaigns (Campaign tab): job rows + worker.
+        router.get("/api/admin/emails/campaigns", &adminWrap!apiCampaignsListRoute);
+        router.post("/api/admin/emails/campaigns", &adminWrap!apiCampaignsCreateRoute);
+        router.get("/api/admin/emails/campaigns/:id", &adminWrap!apiCampaignDetailRoute);
+        router.post("/api/admin/emails/campaigns/:id/pause", &adminWrap!apiCampaignPauseRoute);
+        router.post("/api/admin/emails/campaigns/:id/resume", &adminWrap!apiCampaignResumeRoute);
+        router.post("/api/admin/emails/campaigns/:id/cancel", &adminWrap!apiCampaignCancelRoute);
 
         // Engine janitor control plane
         router.get("/api/admin/janitor/status", &adminWrap!apiJanitorStatusRoute);
@@ -526,6 +534,12 @@ private:
     void apiCampaignAudienceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignAudience(req, res); }
     void apiCampaignSendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignSend(req, res, redis); }
     void apiCampaignTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignTest(req, res, redis); }
+    void apiCampaignsListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignsList(req, res, redis); }
+    void apiCampaignsCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignsCreate(req, res, redis); }
+    void apiCampaignDetailRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignDetail(req, res, redis); }
+    void apiCampaignPauseRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignPause(req, res, redis); }
+    void apiCampaignResumeRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignResume(req, res, redis); }
+    void apiCampaignCancelRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignCancel(req, res, redis); }
 
     // Janitor
     void apiJanitorStatusRoute(HTTPServerRequest req, HTTPServerResponse res) {

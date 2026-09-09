@@ -365,6 +365,13 @@ void main() {
     janitor.start();
     logInfo("EngineJanitor: started in gateway");
 
+    // Bulk-campaign worker — fires due `irc:mail:campaign:*` jobs in
+    // 10-recipient chunks (own Redis connection on the bg pool, so
+    // blocking provider POSTs never stall HTTP fibers).
+    import ircfiber.web.admin.emails : bgMailCampaignTask;
+    g_bgPool.runTask(&bgMailCampaignTask);
+    logInfo("MailCampaignWorker: started in gateway");
+
     // Initialize resource/instance ID from env var, with hostname fallback.
     // Attached to every HTTP request context for operational identification.
     resourceId();
