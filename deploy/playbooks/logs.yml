@@ -5,6 +5,14 @@
 #   ansible-playbook playbooks/logs.yml -e component=engine -l engine2.example.com
 #
 # Valid components: caddy, gateway, engine, mongo, redis
+# Silent-drop forensics (IRC keepalive plan):
+#   docker logs <engine-container> 2>&1 | grep 'component=connection' | grep 'network=<name>'
+#   SigNoz: service.name=ircfiber-engine + network=<name>.
+#   Look for the keepalive_missed → Disconnected (reason, pongAgeSecs,
+#   dataAgeSecs, lastError) → Reconnecting / CONNECTION_RETRY_STATUS
+#   sequence. keepalive_missed fires ~60 s after the last byte, the UI
+#   stale hint shows at data-age 90 s, and the PONG-timeout reconnect
+#   fires at ~120 s — total silent window under ~2.5 min.
 
 - name: Tail irc-fiber logs
   hosts: all

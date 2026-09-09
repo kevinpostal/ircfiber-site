@@ -637,3 +637,22 @@ describe('connectionWarnings helpers (W3-T01)', () => {
     });
   });
 });
+
+describe('ConnectionStatus — stale hint (silent-drop early warning)', () => {
+  it('shows a non-blocking "No data" chip while connected with dataAgeSecs >= 90', async () => {
+    pushNetwork({ connected: true, connectionState: 'connected', isAway: false, dataAgeSecs: 95 });
+    render(ConnectionStatus);
+
+    await expect.element(page.getByText(/No data for 95s — checking/)).toBeInTheDocument();
+    const cell = document.querySelector('.connectionstatuscell');
+    expect(cell?.textContent ?? '').not.toMatch(/Disconnect/i);
+  });
+
+  it('shows no chip while connected with a fresh data age', async () => {
+    pushNetwork({ connected: true, connectionState: 'connected', isAway: false, dataAgeSecs: 12 });
+    render(ConnectionStatus);
+
+    const cell = document.querySelector('.connectionstatuscell');
+    expect(cell?.textContent ?? '').not.toMatch(/No data for/);
+  });
+});

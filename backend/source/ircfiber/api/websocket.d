@@ -566,6 +566,8 @@ final class WebSocketGateway {
                 netObj["activeEgressLocation"] = Json(snap.activeEgressLocation);
                 netObj["lagMs"] = Json(snap.lagMs);
                 netObj["connectedAtMs"] = Json(snap.connectedAtMs);
+                netObj["dataAgeSecs"] = Json(snap.dataAgeSecs);
+                netObj["pongAgeSecs"] = Json(snap.pongAgeSecs);
                 if (snap.hasTlsInfo) netObj["tlsInfo"] = snap.tlsInfo.toJson();
 
                 // W1-T01-rev1: structured retry status from the engine's
@@ -609,6 +611,8 @@ final class WebSocketGateway {
                 netObj["activeEgressLocation"] = Json("");
                 netObj["lagMs"] = Json(-1L);
                 netObj["connectedAtMs"] = Json(0L);
+                netObj["dataAgeSecs"] = Json(0L);
+                netObj["pongAgeSecs"] = Json(0L);
             }
 
             string[string] topics;

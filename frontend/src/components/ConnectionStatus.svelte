@@ -80,6 +80,17 @@
   );
   const showStatus = $derived(isAway || isTransient);
 
+  // ── Stale hint (silent-drop early warning) ─────────────────────
+  // Non-blocking chip while connected but with no inbound data for
+  // ≥90 s. The 90 s threshold sits below the 120 s PONG-timeout reaper
+  // so the hint always precedes the reconnect. Clears on the next sync
+  // with a fresh age; any live DISCONNECTED event hides it immediately
+  // via `connected`.
+  const isStaleHint = $derived(
+    (activeNetwork?.connected ?? false) && (activeNetwork?.dataAgeSecs ?? 0) >= 90,
+  );
+  const staleText = $derived(`No data for ${activeNetwork?.dataAgeSecs ?? 0}s — checking…`);
+
   // ── Headline text ────────────────────────────────────────────────
   //
   // Mirrors IRCCloud's `ConnectionStatusView.renderText`. The branches
@@ -478,6 +489,11 @@
       {/if}
     </div>
   {/if}
+  {#if showHost && activeNetwork && isStaleHint && !showStatus}
+    <div class="connectionStatus connectionStatus--show connectionStatus--stale" role="status">
+      <span class="connectionStatus__row"><span class="connectionStatus__headline">{staleText}</span></span>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -588,6 +604,17 @@
   :global(.connectionStatus--fail.connectionStatus--clickable) .connectionStatus__row:not(:disabled):hover,
   :global(.connectionStatus--fail.connectionStatus--clickable) .connectionStatus__row:not(:disabled):focus-visible {
     background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  /* ── Stale hint (silent-drop early warning): calm fog-tone, never red ── */
+  :global(.connectionStatus--stale) {
+    background: transparent;
+    border-color: var(--fiber-line);
+    color: var(--fiber-fog);
+  }
+  :global(.connectionStatus--stale) .connectionStatus__headline {
+    font-size: 12px;
+    opacity: 0.85;
   }
 
   /* ── Inline warnings (rendered as a separate list below the

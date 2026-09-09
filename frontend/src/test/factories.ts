@@ -46,6 +46,8 @@ export function createNetwork(overrides: Partial<Network> = {}): Network {
     lagMs: null,
     connectedAtMs: null,
     tlsInfo: null,
+    dataAgeSecs: null,
+    pongAgeSecs: null,
     ...overrides,
   };
 }

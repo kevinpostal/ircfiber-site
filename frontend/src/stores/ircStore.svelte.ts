@@ -2209,6 +2209,9 @@ export interface SyncNetwork extends Network {
   activeEgressHost?: string;
   activeEgressIp?: string;
   activeEgressLocation?: string;
+  /** Seconds since last inbound byte / last PONG (gateway performStateDump ← NetworkStateSnapshot). */
+  dataAgeSecs?: number;
+  pongAgeSecs?: number;
 }
 
 /** Copy the sync's telemetry sentinels onto `target` as nullable fields. */
@@ -2220,6 +2223,8 @@ function applyTelemetryFromSync(target: Network, raw: SyncNetwork): void {
   target.egressLocation = str(raw.activeEgressLocation);
   target.lagMs = typeof raw.lagMs === 'number' && raw.lagMs >= 0 ? raw.lagMs : null;
   target.connectedAtMs = typeof raw.connectedAtMs === 'number' && raw.connectedAtMs > 0 ? raw.connectedAtMs : null;
+  target.dataAgeSecs = typeof raw.dataAgeSecs === 'number' && raw.dataAgeSecs >= 0 ? raw.dataAgeSecs : null;
+  target.pongAgeSecs = typeof raw.pongAgeSecs === 'number' && raw.pongAgeSecs >= 0 ? raw.pongAgeSecs : null;
   const tls = raw.tlsInfo;
   target.tlsInfo = tls && typeof tls === 'object'
     ? {

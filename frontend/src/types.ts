@@ -310,6 +310,10 @@ export interface Network {
   connectedAtMs: number | null;
   /** TLS session details; null when plaintext or unknown. */
   tlsInfo: TlsInfo | null;
+  /** Seconds since the last inbound byte; null when unknown. Drives the stale hint. */
+  dataAgeSecs: number | null;
+  /** Seconds since the last PONG; null when unknown. */
+  pongAgeSecs: number | null;
 }
 
 export interface Buffer {
