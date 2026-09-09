@@ -19,7 +19,7 @@ import vibe.http.router : URLRouter;
 import vibe.core.log;
 import vibe.data.json : Json, parseJsonString;
 
-import ircfiber.auth : verifyPassword, hashPassword, requireAuth;
+import ircfiber.auth : verifyPassword, hashPassword, requireAuth, authenticateRequest;
 import ircfiber.redis.protocol : RedisKeys, NetworkStateSnapshot;
 import ircfiber.storage.buffer : sanitizeUtf8;
 import ircfiber.db.user : UserRepository;
@@ -28,7 +28,7 @@ import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.default_network : ensureDefaultFiberNetwork;
 import ircfiber.services.accounts : isValidIrcNick, persistProvisionedAccount, provisionServicesAccountAsync;
 import ircfiber.services.anope : NickRegistration, anopeCheckAuthentication, anopeNickRegistration, loadAnopeSettings;
-import ircfiber.models.user : User;
+import ircfiber.models.user : User, OAuthIdentity;
 import ircfiber.mail : MailSettings, MailException, loadMailSettings, sendMail,
     emailWellFormed;
 import ircfiber.signup : PendingSignup, PendingSignupStore, emailVerificationRequired,
@@ -37,6 +37,9 @@ import ircfiber.mail_events : MailEvent, MailEventLog;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
 import ircfiber.web.assets : siteAssets;
 import ircfiber.web.unban : unbanGet, unbanPost;
+import ircfiber.oauth : oauthProvider, loadOAuthSettings, oauthRedirectUri,
+    oauthAuthorizeUrl, newOAuthState, OAuthStateStore, exchangeOAuthCode,
+    fetchOAuthProfile, deriveOAuthUsername;
 
     // Captures client IP, User-Agent, createdAt, and lastAccess on
     // the active session. Mirrors the helper in AdminController so
@@ -104,6 +107,11 @@ final class WebController {
         router.post("/invite", &invitePost);
         router.get("/verify", &verifyGet);
         router.post("/verify", &verifyPost);
+        // Social OAuth signup/signin (public; the callback is NOT under
+        // /api/ because it is a top-level provider redirect, not XHR).
+        router.get("/auth/:provider", &oauthStart);
+        router.get("/auth/:provider/callback", &oauthCallback);
+        router.get("/api/auth/providers", &oauthProviders);
         // Bulk-campaign List-Unsubscribe (public, NOT admin-gated: the
         // recipient clicks from their inbox with only the token).
         router.get("/unsubscribe", &unsubscribeGet);
@@ -234,6 +242,46 @@ final class WebController {
         res.render!("login.dt", authError)();
     }
 
+    /// Password-login success tail, shared verbatim with the OAuth callback:
+    /// record login IP/timestamp, lazy-provision the default Fiber network
+    /// and the NickServ account (both fire-and-forget, as in `loginPost`),
+    /// start the session and 302 to `/`.
+    private void startLoginSession(HTTPServerRequest req, HTTPServerResponse res,
+            UserRepository repo, User user) {
+        // Record login IP and timestamp on the user record
+        auto ip = getClientIp(req);
+        user.lastLoginIp = ip;
+        user.lastLoginAt = Clock.currTime;
+        if (!user.loginIps.canFind(ip)) {
+            user.loginIps ~= ip;
+        }
+        repo.update(user);
+
+        // Lazy migration: ensure the default IRC Fiber network exists
+        // for every logging-in user. Idempotent — skips if they
+        // already have one. Failures here don't block login.
+        try {
+            ensureDefaultFiberNetwork(user, new NetworkRepository(), redis, new ServerRegistry(redis));
+        } catch (Exception e) {
+            logWarn("Failed to ensure default network for %s on login: %s", user.username, e.msg);
+        }
+
+        // Backfill: claim this account's nick with NickServ if it
+        // isn't claimed yet. No-op once the Fiber network carries a
+        // SASL credential. Fire-and-forget — never blocks login.
+        try {
+            provisionServicesAccountAsync(user, redis);
+        } catch (Exception e) {
+            logWarn("Failed to schedule NickServ registration for %s: %s", user.username, e.msg);
+        }
+
+        if (!req.session) req.session = res.startSession();
+        persistSessionCookie(res, req.session.id);
+        req.session.set("sessionUserId", user.id.toString());
+        captureSessionMeta(req);
+        res.redirect("/");
+    }
+
     private void loginPost(HTTPServerRequest req, HTTPServerResponse res) {
         string authError;
         try {
@@ -250,38 +298,7 @@ final class WebController {
 
             auto user = repo.findByUsername(username);
             if (user.username.length > 0 && verifyPassword(password, user.passwordHash)) {
-                // Record login IP and timestamp on the user record
-                auto ip = getClientIp(req);
-                user.lastLoginIp = ip;
-                user.lastLoginAt = Clock.currTime;
-                if (!user.loginIps.canFind(ip)) {
-                    user.loginIps ~= ip;
-                }
-                repo.update(user);
-
-                // Lazy migration: ensure the default IRC Fiber network exists
-                // for every logging-in user. Idempotent — skips if they
-                // already have one. Failures here don't block login.
-                try {
-                    ensureDefaultFiberNetwork(user, new NetworkRepository(), redis, new ServerRegistry(redis));
-                } catch (Exception e) {
-                    logWarn("Failed to ensure default network for %s on login: %s", user.username, e.msg);
-                }
-
-                // Backfill: claim this account's nick with NickServ if it
-                // isn't claimed yet. No-op once the Fiber network carries a
-                // SASL credential. Fire-and-forget — never blocks login.
-                try {
-                    provisionServicesAccountAsync(user, redis);
-                } catch (Exception e) {
-                    logWarn("Failed to schedule NickServ registration for %s: %s", user.username, e.msg);
-                }
-
-                if (!req.session) req.session = res.startSession();
-                persistSessionCookie(res, req.session.id);
-                req.session.set("sessionUserId", user.id.toString());
-                captureSessionMeta(req);
-                res.redirect("/");
+                startLoginSession(req, res, repo, user);
             } else if (tryNickservLogin(repo, username, password, req, res)) {
                 // Fallback authenticated, upgraded the hash and started the
                 // session inside the helper. Nothing left to do.
@@ -293,6 +310,190 @@ final class WebController {
         } catch (Exception e) {
             logError("Login failed with exception: %s", e.msg);
             logError("Login stack trace: %s", e.toString());
+            authError = "An unexpected error occurred. Please try again.";
+            res.statusCode = 500;
+            try res.render!("login.dt", authError)();
+            catch (Exception) {
+                res.writeBody("An unexpected error occurred.", "text/plain; charset=utf-8");
+            }
+        }
+    }
+
+    /// Public provider list driving button visibility on the SPA auth
+    /// overlay: only providers with both credentials configured appear.
+    /// No auth required, same public posture as `/api/events`.
+    private void oauthProviders(HTTPServerRequest, HTTPServerResponse res) {
+        import std.algorithm : sort;
+        auto settings = loadOAuthSettings();
+        auto names = settings.keys;
+        names.sort();
+        Json[] rows;
+        foreach (name; names)
+            if (auto p = oauthProvider(name))
+                rows ~= Json(["name": Json(p.name), "label": Json(p.label)]);
+        res.writeJsonBody(Json(["providers": Json(rows)]));
+    }
+
+    /// `GET /auth/:provider`: mint a single-use state and 302 to the
+    /// provider's authorize URL. Unknown or unconfigured providers 404
+    /// (never advertise client IDs).
+    private void oauthStart(HTTPServerRequest req, HTTPServerResponse res) {
+        string provider;
+        try provider = req.params["provider"];
+        catch (Exception) {}
+        auto p = oauthProvider(provider);
+        auto settings = loadOAuthSettings();
+        if (p is null || provider !in settings) {
+            res.statusCode = 404;
+            res.writeBody("Unknown provider.", "text/plain; charset=utf-8");
+            return;
+        }
+        string state;
+        try {
+            state = newOAuthState();
+            new OAuthStateStore(redis).put(state);
+        } catch (Exception e) {
+            logError("oauth: issuing %s state failed: %s", provider, e.msg);
+            string authError = "Sign-in is temporarily unavailable. Please try again later.";
+            res.statusCode = 503;
+            res.render!("login.dt", authError)();
+            return;
+        }
+        res.redirect(oauthAuthorizeUrl(*p, settings[provider].clientId, state,
+            oauthRedirectUri(provider)));
+    }
+
+    /// `GET /auth/:provider/callback`: find-or-create the account through
+    /// the same session + provisioning path as a password login. All
+    /// failures render `login.dt` with `authError` (the SPA overlay is the
+    /// retry surface, so provider buttons are omitted there).
+    private void oauthCallback(HTTPServerRequest req, HTTPServerResponse res) {
+        string authError;
+        string provider;
+        try provider = req.params["provider"];
+        catch (Exception) {}
+        auto p = oauthProvider(provider);
+        auto settings = loadOAuthSettings();
+        if (p is null || provider !in settings) {
+            res.statusCode = 404;
+            res.writeBody("Unknown provider.", "text/plain; charset=utf-8");
+            return;
+        }
+        // Denied consent (or any provider-side refusal) lands here.
+        if (("error" in req.query) !is null) {
+            authError = "Sign-in with " ~ p.label ~ " failed. Please try again.";
+            res.statusCode = 400;
+            res.render!("login.dt", authError)();
+            return;
+        }
+        const code = req.query.get("code", "").strip();
+        const state = req.query.get("state", "").strip();
+        bool stateOk = false;
+        try stateOk = new OAuthStateStore(redis).take(state);
+        catch (Exception e) logWarn("oauth: taking %s state failed: %s", provider, e.msg);
+        if (code.length == 0 || state.length == 0 || !stateOk) {
+            authError = "Sign-in with " ~ p.label ~ " failed. Please try again.";
+            res.statusCode = 400;
+            res.render!("login.dt", authError)();
+            return;
+        }
+        auto token = exchangeOAuthCode(*p, settings[provider], code, oauthRedirectUri(provider));
+        if (token.error.length > 0) {
+            authError = token.error;
+            res.statusCode = 502;
+            res.render!("login.dt", authError)();
+            return;
+        }
+        auto prof = fetchOAuthProfile(*p, token.accessToken);
+        if (prof.error.length > 0) {
+            authError = prof.error;
+            res.statusCode = prof.error.canFind("verified email address") ? 400 : 502;
+            res.render!("login.dt", authError)();
+            return;
+        }
+        try {
+            auto repo = new UserRepository();
+            // Logged in already: clicking a provider button links it.
+            auto current = authenticateRequest(req, repo);
+            if (current.username.length > 0) {
+                bool present = false;
+                foreach (o; current.oauthIdentities)
+                    if (o.provider == provider && o.subject == prof.profile.subject) {
+                        present = true;
+                        break;
+                    }
+                if (!present) {
+                    current.oauthIdentities ~= OAuthIdentity(provider, prof.profile.subject);
+                    repo.update(current);
+                }
+                res.redirect("/");
+                return;
+            }
+            // Anonymous with a linked identity: the `loginPost` tail
+            // verbatim — same session, same provisioning, not the welcome
+            // redirect.
+            auto user = repo.findByOAuth(provider, prof.profile.subject);
+            if (user.username.length == 0) {
+                // Verified provider email matching an existing row adopts
+                // social login instead of growing a second account.
+                auto byEmail = repo.findByEmailCI(prof.profile.email);
+                if (byEmail.username.length > 0) {
+                    user = byEmail;
+                    user.oauthIdentities ~= OAuthIdentity(provider, prof.profile.subject);
+                    repo.update(user);
+                }
+            }
+            if (user.username.length > 0) {
+                startLoginSession(req, res, repo, user);
+                return;
+            }
+            // Brand-new account: auto-derived nick (numeric suffix on
+            // collision), created through the untouched
+            // `createAccountAndLogin` path. Email-verification bypass is
+            // correct: the provider already proved the address.
+            string base = deriveOAuthUsername(prof.profile.username, prof.profile.email);
+            if (base.length > 24) base = base[0 .. 24];
+            string username;
+            string claimedWhy;
+            foreach (i; 0 .. 50) {
+                string cand = i == 0 ? base : base ~ (i + 1).to!string;
+                if (repo.findByUsernameCI(cand).username.length > 0) continue;
+                if (ircNickIsClaimed(cand, claimedWhy)) continue;
+                username = cand;
+                break;
+            }
+            if (username.length == 0) {
+                authError = "That username is already taken. Please choose another.";
+                res.statusCode = 409;
+                res.render!("login.dt", authError)();
+                return;
+            }
+            User u;
+            u.id = randomUUID();
+            u.username = username;
+            u.email = prof.profile.email;
+            u.passwordHash = "";
+            u.signupIp = getClientIp(req);
+            u.provisionedFrom = "oauth:" ~ provider;
+            u.oauthIdentities = [OAuthIdentity(provider, prof.profile.subject)];
+            u.createdAt = Clock.currTime;
+            if (!createAccountAndLogin(req, res, u)) {
+                // Residual race (two callbacks, or a simultaneous signup):
+                // the winner's row is authoritative. A duplicate-key hit on
+                // the identity means the other callback won — log that user
+                // in instead of 500ing.
+                auto winner = repo.findByOAuth(provider, prof.profile.subject);
+                if (winner.username.length > 0) {
+                    startLoginSession(req, res, repo, winner);
+                    return;
+                }
+                authError = "That username is already taken. Please choose another.";
+                res.statusCode = 409;
+                res.render!("login.dt", authError)();
+                return;
+            }
+        } catch (Exception e) {
+            logError("oauth: %s callback failed: %s", provider, e.msg);
             authError = "An unexpected error occurred. Please try again.";
             res.statusCode = 500;
             try res.render!("login.dt", authError)();

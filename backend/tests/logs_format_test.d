@@ -282,6 +282,21 @@ private void testFormatNoticeAndUnknown() {
     check(formatLogEvent(unknown, IpIntel.init, false).length == 0, "unknown type emits nothing");
 }
 
+private void testXlineAttribution() {
+    check(xlineAttribution([], "") == "", "no attribution when nothing known");
+    check(xlineAttribution(["p34c3_e5eb"], "") == " · trigger: p34c3_e5eb",
+        "single nick, got " ~ xlineAttribution(["p34c3_e5eb"], ""));
+    check(xlineAttribution(["a", "b", "a", "", "c"], "alice") == " · trigger: a, b, c [alice]",
+        "dupes and blanks folded, account bracketed");
+    check(xlineAttribution([], "alice") == " · trigger: [alice]", "account alone");
+    check(xlineAttribution(["ALICE", "alice"], "") == " · trigger: ALICE",
+        "nick dedupe is case-insensitive");
+    check(xlineAttribution(["n1", "n2", "n3", "n4", "n5", "n6"], "")
+        == " · trigger: n1, n2, n3, n4, n5", "nick list capped at five");
+    check(xlineAttribution(["ev\x02il"], "") == " · trigger: ev il",
+        "control bytes sanitized");
+}
+
 private void testEventJson() {
     auto ev = connectEvent();
     ev.ts = 1_765_000_000_000;
@@ -417,6 +432,7 @@ void main() {
     testFormatBackupFailed();
     testBackupEventJson();
     testBackupAnnouncePure();
+    testXlineAttribution();
 
     if (failures > 0) {
         writefln("logs format tests: %d FAILED", failures);

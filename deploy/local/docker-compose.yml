@@ -220,6 +220,13 @@ services:
       # Same pool the engine reads: the gateway derives slot labels from it for
       # the SOCKS identity probe and for the pre-slot-registry fallback.
       IRCFIBER_MULLVAD_POOL: socks5://a@mullvad-slot-a:1080,socks5://b@mullvad-slot-b:1080
+      # Social OAuth local testing (ircfiber.oauth): inline ID + secret is the
+      # dev-convenience path envSecret explicitly supports. Uncomment for the
+      # providers under test, restart the gateway, then register a test OAuth
+      # app per provider with redirect URI
+      # http://localhost:8090/auth/<name>/callback.
+      # IRCFIBER_OAUTH_GITHUB_CLIENT_ID: "Iv1.xxxxx"
+      # IRCFIBER_OAUTH_GITHUB_CLIENT_SECRET: "xxxxx"
     depends_on:
       redis:
         condition: service_healthy

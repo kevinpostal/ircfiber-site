@@ -5,6 +5,12 @@ import std.datetime : DateTime, SysTime, Clock, unixTimeToStdTime;
 import vibe.data.json;
 import vibe.data.bson;
 
+/// One linked social-login identity: provider name ("github") plus the
+/// provider-side user id as a string.
+struct OAuthIdentity {
+    string provider;
+    string subject;
+}
 /// User account
 struct User {
     /// The user ID
@@ -30,12 +36,18 @@ struct User {
     /// subscribed; set via the List-Unsubscribe flow (no migration needed —
     /// missing key reads as false).
     bool emailUnsubscribed = false;
+    /// Linked social-login identities. Default [] keeps every existing row
+    /// unlinked with no migration; missing key reads as [].
+    OAuthIdentity[] oauthIdentities;
     /// The account creation time
     SysTime createdAt;
     /// IP history (de-duplicated list of login IPs)
     string[] loginIps;
     /// Serialize to JSON
     Json toJson() const {
+        Json[] ids;
+        foreach (o; oauthIdentities)
+            ids ~= Json(["provider": Json(o.provider), "subject": Json(o.subject)]);
         return Json([
             "id": Json(id.toString()),
             "username": Json(username),
@@ -48,7 +60,8 @@ struct User {
             "lastLoginAt": Json(lastLoginAt.toUnixTime()),
             "createdAt": Json(createdAt.toUnixTime()),
             "loginIps": serializeToJson(loginIps),
-            "emailUnsubscribed": Json(emailUnsubscribed)
+            "emailUnsubscribed": Json(emailUnsubscribed),
+            "oauthIdentities": Json(ids)
         ]);
     }
     
@@ -80,6 +93,13 @@ struct User {
         // Missing key (pre-campaign rows) reads as false: still subscribed.
         if (auto pr = "emailUnsubscribed" in json)
             u.emailUnsubscribed = (*pr).get!bool;
+        // Missing key (pre-OAuth rows) reads as []: unlinked.
+        if (auto pr = "oauthIdentities" in json) {
+            try {
+                foreach (e; (*pr).get!(Json[]))
+                    u.oauthIdentities ~= OAuthIdentity(e["provider"].get!string, e["subject"].get!string);
+            } catch (Exception) { u.oauthIdentities = []; }
+        }
         return u;
     }
 }

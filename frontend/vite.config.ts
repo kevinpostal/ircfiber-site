@@ -304,6 +304,15 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      // Social OAuth start (GET /auth/:provider 302s to the provider).
+      // The callback never lands here — redirect_uri is the gateway origin
+      // (IRCFIBER_PUBLIC_URL) — but the initial click from the dev page
+      // needs forwarding or local /auth/github clicks 404 on :5173.
+      '/auth': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: false,
+      },
       '/register': {
         target: BACKEND_URL,
         changeOrigin: true,

@@ -251,6 +251,31 @@ private string ircName(string name) @safe pure {
     return n.length ? n : "someone";
 }
 
+/// Attribution clause appended to a foreign (non-FiberEye) X-line
+/// announcement so #staff can see which nick(s) tripped the ban: the
+/// ircd's own `m_connectban` notice carries only the IP mask, never a nick.
+/// `nicks` is newest-first (still-connected sessions first, then the newest
+/// stored rows); comparison is case-insensitive because IRC nicks are, the
+/// list is capped at five, and every entry goes through `sanitizeLine`.
+/// Empty when nothing is known — the caller then appends nothing and the
+/// raw notice is announced as-is.
+string xlineAttribution(const string[] nicks, string account) @safe pure {
+    string[] uniq;
+    foreach (n; nicks) {
+        if (uniq.length >= 5) break;
+        const s = sanitizeLine(n);
+        if (!s.length) continue;
+        bool dup = false;
+        foreach (u; uniq) if (icmp(u, s) == 0) { dup = true; break; }
+        if (!dup) uniq ~= s;
+    }
+    const who = sanitizeLine(account);
+    if (!uniq.length && !who.length) return "";
+    string out_ = " · trigger: " ~ joinClauses(uniq, ", ");
+    if (who.length) out_ ~= (uniq.length ? " " : "") ~ "[" ~ who ~ "]";
+    return out_;
+}
+
 /// One or two IRC lines per event; empty for unknown event types.
 ///
 /// - signup:      `Signup: alice <alice@example.com> · 203.0.113.7 · Austin, Texas, US · AS15169 Google LLC · …`

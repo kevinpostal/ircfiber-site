@@ -25,3 +25,18 @@ vault_sender_api_token: "CHANGE_ME"
 # verified in Resend first, or every send answers HTTP 403 "domain is not
 # verified".
 vault_resend_api_key: "CHANGE_ME"
+# Social OAuth signup/signin (ircfiber.oauth). IDs stay empty (in vars.yml)
+# until the matching app is registered; secrets are filled here. An empty
+# secret removes the secret file and the provider reads as unconfigured.
+# GitHub → Settings → Developer settings → OAuth Apps (client secret).
+vault_oauth_github_client_id: ""
+vault_oauth_github_client_secret: "CHANGE_ME"
+# Google → Cloud console → Credentials → OAuth client (Web).
+vault_oauth_google_client_id: ""
+vault_oauth_google_client_secret: "CHANGE_ME"
+# Codeberg → Settings → Applications (confidential client).
+vault_oauth_codeberg_client_id: ""
+vault_oauth_codeberg_client_secret: "CHANGE_ME"
+# GitLab → User Settings → Applications (scopes read_user, openid, email).
+vault_oauth_gitlab_client_id: ""
+vault_oauth_gitlab_client_secret: "CHANGE_ME"

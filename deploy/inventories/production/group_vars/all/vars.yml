@@ -253,6 +253,19 @@ ircfiber_mail_from: "no-reply@ircfiber.com"
 ircfiber_mail_from_name: "IRC Fiber"
 ircfiber_public_url: "https://ircfiber.com"
 
+# --- Social OAuth signup/signin --------------------------------------------
+# One OAuth app per provider, each registered with redirect URI
+# https://ircfiber.com/auth/<name>/callback. All empty = all providers off
+# by default; secrets live in vault.yml (vault_oauth_<name>_client_secret).
+# GitHub: Settings → Developer settings → OAuth Apps; Google: Cloud console
+# → Credentials → OAuth client (Web); Codeberg: Settings → Applications
+# (confidential client); GitLab: User Settings → Applications (scopes
+# read_user, openid, email).
+ircfiber_oauth_github_client_id: ""
+ircfiber_oauth_google_client_id: ""
+ircfiber_oauth_codeberg_client_id: ""
+ircfiber_oauth_gitlab_client_id: ""
+
 # --- IRCd (InspIRCd 4 + Anope 2 services) --------------------------------------
 # Pinned upstream images (multi-arch). Anope 2.0.x links to InspIRCd 4 via
 # its inspircd3 protocol module.

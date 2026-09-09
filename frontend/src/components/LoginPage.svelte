@@ -36,9 +36,32 @@
   // Set after POST /register answers 202 `verification_sent`: the card
   // switches to the "check your email" state instead of probing /api/me.
   let sentTo = $state('');
+  // Social OAuth providers (GET /api/auth/providers). Empty on any failure
+  // or when no provider is configured — the section stays hidden and the
+  // card is password-only, exactly as today.
+  interface OAuthProviderEntry { name: string; label: string; }
+  let oauthProviders: OAuthProviderEntry[] = $state([]);
+
+  async function loadOAuthProviders(): Promise<void> {
+    try {
+      const res = await fetch('/api/auth/providers', { credentials: 'same-origin' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data?.providers)) {
+        oauthProviders = data.providers.filter(
+          (p: unknown): p is OAuthProviderEntry =>
+            typeof (p as OAuthProviderEntry)?.name === 'string' &&
+            typeof (p as OAuthProviderEntry)?.label === 'string',
+        );
+      }
+    } catch {
+      // Unconfigured providers mean password-only — not an error state.
+    }
+  }
 
   onMount(() => {
     usernameEl?.focus();
+    void loadOAuthProviders();
   });
   // Toggle modes and reset transient state so a failed submit on one
   // form doesn't carry an error into the other.
@@ -168,6 +191,16 @@
         <p class="noauth-sub">Didn't get it? Check spam, or <button type="button" class="noauth-link" onclick={() => { sentTo = ''; }}>sign up again</button> for a new link.</p>
         <div class="noauth-meta"><span>Already confirmed?</span><button type="button" class="noauth-link" onclick={() => { sentTo = ''; setMode('signin'); }}>Sign in →</button></div>
       {:else}
+      {#if oauthProviders.length > 0}
+        <div class="noauth-oauth">
+          {#each oauthProviders as p}
+            <a class="noauth-button noauth-oauth__button" href="/auth/{p.name}" rel="external" data-provider={p.name}>
+              Continue with {p.label}
+            </a>
+          {/each}
+          <div class="noauth-oauth__divider" aria-hidden="true"><span>or</span></div>
+        </div>
+      {/if}
       <form class="noauth-form" onsubmit={submit} autocomplete="on" novalidate>
         <div class="noauth-field">
           <label for="noauth-username">Username</label>
@@ -452,6 +485,42 @@
     opacity: 0.7;
     cursor: progress;
     box-shadow: none;
+  }
+
+  /* Social OAuth buttons: secondary variant of .noauth-button (same
+     radius/weight, surface background, border) stacked above the form. */
+  .noauth-oauth {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .noauth-oauth__button {
+    background: #0e1b26;
+    border-color: #2a3b4d;
+    color: #e6edf3;
+    font-weight: 600;
+    text-decoration: none;
+    margin-top: 0;
+  }
+  .noauth-oauth__button:hover {
+    background: #162635;
+    border-color: #67e8f9;
+    box-shadow: 0 0 16px rgba(103, 232, 249, 0.25);
+  }
+  .noauth-oauth__divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #4d5867;
+    font-size: 12px;
+    margin: 6px 0 2px;
+  }
+  .noauth-oauth__divider::before,
+  .noauth-oauth__divider::after {
+    content: '';
+    flex: 1;
+    border-top: 1px solid #22303f;
   }
 
   .noauth-spinner {

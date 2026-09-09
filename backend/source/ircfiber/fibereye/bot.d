@@ -92,7 +92,7 @@ import ircfiber.ipintel.record : IpIntel;
 import ircfiber.ipintel.service : IpIntelService, LookupMode, loadIpIntelSettings;
 import ircfiber.ipintel.store : IpIntelStore;
 import ircfiber.logs.events : LogEvent, logsOutboxKey, pushLogEvent;
-import ircfiber.logs.format : formatLogEvent;
+import ircfiber.logs.format : formatLogEvent, xlineAttribution;
 import ircfiber.services.accounts : generateServicesPassword;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.tracing : isEnvEnabled;
@@ -428,12 +428,45 @@ final class FiberEyeBot : IrcBot {
         string shown = t;
         if (shown.startsWith("*** "))
             shown = shown[4 .. $].strip();
+        // The ircd's own connectban notice carries only the IP mask — never
+        // the nick that tripped it. Attribute from what's still connected
+        // plus the newest stored sessions so #staff sees the trigger.
+        if (mask.length)
+            shown ~= attributeXline(mask);
         LogEvent banEv;
         banEv.type = "notice";
         banEv.ts = nowMs();
         banEv.actor = "FiberEye";
         banEv.text = shown;
         pushLogEvent(pushRedis, banEv);
+    }
+
+    /// Newest-first nicks behind `mask`: still-connected sessions first
+    /// (the in-memory map survives a Mongo outage), then the newest stored
+    /// rows with the rollup's services account. Both store reads are indexed
+    /// (`_id`, `ipGroup`+`ts`) and capped, and every store method already
+    /// fails soft internally — a flood must not stall the read loop.
+    private string attributeXline(string mask) {
+        string[] nicks;
+        string account;
+        try {
+            foreach (key, _; openSessions) {
+                const sep = key.indexOf('\0');
+                if (sep < 0) continue;
+                const ipPart = key[sep + 1 .. $];
+                if (ipPart != mask && ipGroup(ipPart) != mask) continue;
+                nicks ~= key[0 .. sep];
+                if (nicks.length >= 5) break;
+            }
+            if (store !is null) {
+                foreach (s; store.sessionsForGroup(mask, 6))
+                    nicks ~= s.nick;
+                auto rec = store.findIp(mask);
+                if (!rec.isNull && rec.get.lastAccount.length)
+                    account = rec.get.lastAccount;
+            }
+        } catch (Exception) {}
+        return xlineAttribution(nicks, account);
     }
 
     private void onConnect(ConnectNotice c) {

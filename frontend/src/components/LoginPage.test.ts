@@ -74,4 +74,47 @@ describe('LoginPage', () => {
     expect(onAuthenticated).not.toHaveBeenCalled();
     expect(window.location.search).toBe('');
   });
+  it('renders one Continue-with anchor per configured provider with exact hrefs', async () => {
+    const onAuthenticated = vi.fn();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/auth/providers')) {
+        return new Response(
+          JSON.stringify({ providers: [{ name: 'github', label: 'GitHub' }, { name: 'google', label: 'Google' }] }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    render(LoginPage, { props: { onAuthenticated } });
+    await vi.waitFor(() => expect(document.querySelector('a[data-provider="github"]')).toBeTruthy());
+    await vi.waitFor(() => expect(document.querySelector('a[data-provider="google"]')).toBeTruthy());
+    const github = document.querySelector('a[data-provider="github"]');
+    const google = document.querySelector('a[data-provider="google"]');
+    expect(github?.getAttribute('href')).toBe('/auth/github');
+    expect(google?.getAttribute('href')).toBe('/auth/google');
+    expect(github?.textContent).toContain('Continue with GitHub');
+    expect(onAuthenticated).not.toHaveBeenCalled();
+  });
+  it('shows no provider buttons when none are configured', async () => {
+    const onAuthenticated = vi.fn();
+    let providersHit = false;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/auth/providers')) {
+        providersHit = true;
+        return new Response(JSON.stringify({ providers: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    render(LoginPage, { props: { onAuthenticated } });
+    // Wait for the providers fetch to resolve before asserting absence —
+    // otherwise the check could pass before the section had a chance to render.
+    await vi.waitFor(() => expect(providersHit).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(document.querySelector('[data-provider]')).toBeNull();
+  });
 });

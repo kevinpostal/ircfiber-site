@@ -47,6 +47,12 @@ final class UserRepository {
         }
         try collection.createIndex(Bson(["bncToken": Bson(1)]));
         catch (Exception e) logWarn("users bncToken index: %s", e.msg);
+        try {
+            IndexOptions o;
+            o.unique = true;
+            o.sparse = true;
+            collection.createIndex(Bson(["oauthIdentities.provider": Bson(1), "oauthIdentities.subject": Bson(1)]), o);
+        } catch (Exception e) logWarn("users oauthIdentities index: %s", e.msg);
     }
 
     /// Finds a user by username.
@@ -82,6 +88,30 @@ final class UserRepository {
         return docFromBson(doc);
     }
 
+    /// Finds a user by linked OAuth identity. `$elemMatch` keeps provider
+    /// and subject bound to the same array element (dot-notation across
+    /// array elements could false-match across two identities).
+    User findByOAuth(string provider, string subject) {
+        if (provider.length == 0 || subject.length == 0) return User.init;
+        auto doc = collection.findOne(Bson(["oauthIdentities": Bson(["$elemMatch": Bson(["provider": Bson(provider), "subject": Bson(subject)])])]));
+        if (doc.isNull) return User.init;
+        return docFromBson(doc);
+    }
+
+    /// Finds a user whose email matches case-insensitively (anchored
+    /// literal regex, same idiom as `findByUsernameCI`). Used by social
+    /// signup to link a verified provider email onto an existing row.
+    User findByEmailCI(string email) {
+        if (email.length == 0) return User.init;
+        auto doc = collection.findOne(Bson([
+            "email": Bson([
+                "$regex": Bson("^" ~ escapeRegexLiteral(email) ~ "$"),
+                "$options": Bson("i")
+            ])
+        ]));
+        if (doc.isNull) return User.init;
+        return docFromBson(doc);
+    }
     /// Finds a user by ID.
     User findById(UUID id) {
         auto doc = collection.findOne(["id": id.toString()]);
@@ -272,6 +302,10 @@ final class UserRepository {
         fields["createdAt"] = Bson(cast(double) u.createdAt.toUnixTime);
         fields["loginIps"] = Bson(u.loginIps.map!(r => Bson(r)).array);
         fields["emailUnsubscribed"] = Bson(u.emailUnsubscribed);
+        Bson[] ids;
+        foreach (o; u.oauthIdentities)
+            ids ~= Bson(["provider": Bson(o.provider), "subject": Bson(o.subject)]);
+        fields["oauthIdentities"] = Bson(ids);
         return Bson(fields);
     }
 
@@ -316,6 +350,12 @@ final class UserRepository {
         // Missing key (pre-campaign rows) reads as false: still subscribed.
         // Tolerant: a wrongly typed value keeps false rather than throwing.
         try { if (doc["emailUnsubscribed"].type == Bson.Type.bool_) u.emailUnsubscribed = doc["emailUnsubscribed"].get!bool; } catch (Exception) {}
+        // Missing key (pre-OAuth rows) reads as []: unlinked.
+        try {
+            if (doc["oauthIdentities"].type == Bson.Type.array)
+                foreach (e; doc["oauthIdentities"])
+                    u.oauthIdentities ~= OAuthIdentity(e["provider"].get!string, e["subject"].get!string);
+        } catch (Exception) { u.oauthIdentities = []; }
         return u;
     }
 }

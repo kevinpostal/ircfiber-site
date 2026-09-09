@@ -517,6 +517,11 @@
     else if (e.key === 'ArrowDown') { e.preventDefault(); varMenuIndex = (varMenuIndex + 1) % VAR_ITEMS.length; }
     else if (e.key === 'ArrowUp') { e.preventDefault(); varMenuIndex = (varMenuIndex + VAR_ITEMS.length - 1) % VAR_ITEMS.length; }
   }
+  const composeValid = $derived(
+    subject.trim().length >= 1 && subject.trim().length <= 200
+    && (bodyText.trim() || htmlBody.trim())
+    && bodyText.length <= 20000 && htmlBody.length <= 50000,
+  );
 
   const sendDisabled = $derived(sending || !overview?.provider.configured || !composeValid || !toEmail.trim());
 
@@ -874,23 +879,15 @@
           {/if}
         </div>
       </div>
-      <div class="mt-3">
-        <button type="button" onclick={useInCampaign} disabled={!composeValid} class="rounded-md border border-primary/40 bg-surface-2 px-2.5 py-1 text-xs hover:border-primary disabled:opacity-40">Use in campaign →</button>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" onclick={() => void sendDirect()} disabled={sendDisabled} class="rounded-md border border-primary/40 bg-surface-2 px-2.5 py-1 text-xs hover:border-primary disabled:opacity-40">{sending ? 'Sending…' : 'Send'}</button>
+        <button type="button" onclick={useInCampaign} disabled={!composeValid} class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40">Use in campaign →</button>
       </div>
+      {#if sendError}<p class="mt-2 text-xs text-danger">{sendError}</p>{/if}
     </Card>
 
     <Card>
       <h3 class="mb-3 text-sm font-semibold text-heading">Preview</h3>
-      <div class="grid gap-3 sm:grid-cols-2">
-        <div>
-          <label for="mock-name" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Mock name</label>
-          <input id="mock-name" type="text" bind:value={mockName} oninput={() => { mockTouched = true; }} placeholder="subscriber" class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm" />
-        </div>
-        <div>
-          <label for="mock-email" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Mock email</label>
-          <input id="mock-email" type="email" bind:value={mockEmail} oninput={() => { mockTouched = true; }} placeholder="subscriber@example.com" class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm" />
-        </div>
-      </div>
       {#if subject || bodyText || htmlBody}
         <div class="mt-3 rounded-md border border-border bg-surface-2 px-3 py-2">
           <p class="mb-1 text-xs uppercase tracking-wider text-muted">Preview (mock user, stand-in unsubscribe link)</p>
@@ -901,12 +898,6 @@
           </div>
         </div>
       {/if}
-      <div class="mt-3 flex flex-wrap items-center gap-2">
-        <label for="campaign-test-email" class="text-xs font-semibold uppercase tracking-wider text-muted">Test send</label>
-        <input id="campaign-test-email" type="email" bind:value={campaignTestEmail} placeholder="you@example.com" class="w-64 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm" />
-        <button type="button" onclick={() => void sendCampaignTest()} disabled={testSendDisabled} class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40">{campaignTesting ? 'Sending…' : 'Send test'}</button>
-      </div>
-      {#if !testEmailEffective}<p class="mt-2 text-xs text-warn">Enter a test address.</p>{/if}
     </Card>
   </div>
   {:else}

@@ -229,3 +229,18 @@ configuration "signup-test" {
     versions "VibeUseFibers"
     buildOptions "unittests"
 }
+
+// Pure-code unit test for the social OAuth helpers (provider table,
+// settings gate, state shapes, username derivation, profile normalizer;
+// no Redis, Mongo or provider network needed):
+//   dub --root=backend build --config=oauth-test && ./backend/oauth-test
+configuration "oauth-test" {
+    targetType "executable"
+    targetName "oauth-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/oauth.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d"
+    mainSourceFile "tests/oauth_test.d"
+    versions "VibeUseFibers"
+    buildOptions "unittests"
+}
