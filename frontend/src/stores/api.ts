@@ -498,6 +498,40 @@ export async function revokeBouncerPassword(): Promise<void> {
   if (!r.ok) throw new Error('Could not revoke bouncer password');
 }
 
+/** One attached bouncer client of the caller (GET /me/bouncer/clients). */
+export interface BouncerClient {
+  sid: string;
+  networkId: string;
+  networkName: string;
+  clientId: string;
+  nick: string;
+  peer: string;
+  tls: boolean;
+  caps: string;
+  attachedAt: number;
+  lastRecvMs: number;
+  lastSendMs: number;
+  linesIn: number;
+  linesOut: number;
+  cursor: number;
+}
+
+export interface BouncerClientsInfo {
+  clients: BouncerClient[];
+  now: number;
+}
+
+export async function fetchBouncerClients(): Promise<BouncerClientsInfo> {
+  const r = await fetch(`${API_BASE}/me/bouncer/clients`);
+  if (!r.ok) throw new Error('Could not load bouncer sessions');
+  return r.json();
+}
+
+export async function disconnectBouncerClient(sid: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/bouncer/clients/${encodeURIComponent(sid)}/disconnect`, { method: 'POST' });
+  if (!r.ok) throw new Error('Could not disconnect that session');
+}
+
 export async function joinChannel(networkId: string, channel: string, key?: string): Promise<void> {
   const r = await fetch(`${API_BASE}/networks/${encodeURIComponent(networkId)}/join`, {
     method: 'POST',

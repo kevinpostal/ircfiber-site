@@ -132,7 +132,7 @@
         </thead>
         <tbody>
           {#each invites as inv (inv.id)}
-            <tr class="border-b border-border/50">
+            <tr class="border-b border-border/50 transition-opacity {revoking === inv.id ? 'opacity-40' : ''}">
               <td class="py-2 pr-3 font-medium text-heading">{inv.nick}</td>
               <td class="py-2 pr-3 text-text">{inv.invitedBy}</td>
               <td class="py-2 pr-3 text-muted">{fmtDate(inv.createdAt)}</td>

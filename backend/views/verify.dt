@@ -291,6 +291,22 @@ block body
         p.auth-sub Didn't get it? Check your spam folder, or #[a(href="/register") create your account again] to receive a new link.
         .auth-meta
           a(href="/login") Sign in &rarr;
+      - else if (stage == "unsub_confirm")
+        h1.auth-heading Unsubscribe from campaign mail?
+        p.auth-sub One click stops bulk campaign mail to #{email}. Signup and admin mail are unaffected.
+        form.auth-form(method="POST", action="/unsubscribe")
+          input(type="hidden", name="token", value=token)
+          button.auth-button(type="submit") Unsubscribe
+      - else if (stage == "unsub_done")
+        h1.auth-heading Unsubscribed
+        p.auth-sub #{email} will no longer receive bulk campaign mail.
+        .auth-meta
+          a(href="/login") Sign in &rarr;
+      - else if (stage == "unsub_error")
+        h1.auth-heading Link expired
+        .auth-error(role="alert") #{message}
+        .auth-meta
+          a(href="/login") Sign in &rarr;
       - else if (stage == "confirm")
         h1.auth-heading Confirm your email
         p.auth-sub One click and your IRC Fiber account is ready.

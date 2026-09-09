@@ -26,11 +26,14 @@ struct User {
     string lastLoginIp;
     /// The time of last login
     SysTime lastLoginAt;
+    /// Bulk-campaign opt-out. Default false keeps every existing row
+    /// subscribed; set via the List-Unsubscribe flow (no migration needed —
+    /// missing key reads as false).
+    bool emailUnsubscribed = false;
     /// The account creation time
     SysTime createdAt;
     /// IP history (de-duplicated list of login IPs)
     string[] loginIps;
-    
     /// Serialize to JSON
     Json toJson() const {
         return Json([
@@ -44,7 +47,8 @@ struct User {
             "lastLoginIp": Json(lastLoginIp),
             "lastLoginAt": Json(lastLoginAt.toUnixTime()),
             "createdAt": Json(createdAt.toUnixTime()),
-            "loginIps": serializeToJson(loginIps)
+            "loginIps": serializeToJson(loginIps),
+            "emailUnsubscribed": Json(emailUnsubscribed)
         ]);
     }
     
@@ -73,6 +77,9 @@ struct User {
         }
         if (auto pr = "loginIps" in json)
             u.loginIps = deserializeJson!(string[])(*pr);
+        // Missing key (pre-campaign rows) reads as false: still subscribed.
+        if (auto pr = "emailUnsubscribed" in json)
+            u.emailUnsubscribed = (*pr).get!bool;
         return u;
     }
 }

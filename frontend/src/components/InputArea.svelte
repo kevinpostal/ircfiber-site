@@ -908,6 +908,17 @@
         emojiPicker = el;
         el.addEventListener('emoji-click', onEmojiClick as EventListener);
       }
+      // Move focus into the picker's search box so typing filters emoji
+      // instead of landing in the compose input (its <input> lives in
+      // shadow DOM under #search; App's global autofocus now also leaves
+      // picker keys alone). Retry a few frames: the picker renders async
+      // after its emoji database loads.
+      const target = el ?? document.querySelector('#emoji-popover emoji-picker') as HTMLElement | null;
+      for (let i = 0; i < 10; i++) {
+        const search = target?.shadowRoot?.getElementById('search') as HTMLElement | null;
+        if (search) { search.focus(); break; }
+        await new Promise(r => requestAnimationFrame(r));
+      }
     }
   }
 
@@ -992,6 +1003,23 @@
     if (typeof document === 'undefined') return;
     document.addEventListener('mousedown', handleDocumentClick);
     return () => document.removeEventListener('mousedown', handleDocumentClick);
+  });
+
+  // Esc inside the picker search bubbles up composed; App's global handler
+  // now returns early for picker keys, so close here and put focus back.
+  $effect(() => {
+    if (!emojiOpen || typeof document === 'undefined') return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      const t = e.target as HTMLElement | null;
+      const inPicker = !!t?.closest?.('#emoji-popover, emoji-picker, .emoji-picker');
+      if (!inPicker) return;
+      e.stopPropagation();
+      emojiOpen = false;
+      textarea?.focus();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
   });
 </script>
 

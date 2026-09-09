@@ -32,7 +32,7 @@ import ircfiber.models.user : User;
 import ircfiber.mail : MailSettings, MailException, loadMailSettings, sendMail,
     emailWellFormed;
 import ircfiber.signup : PendingSignup, PendingSignupStore, emailVerificationRequired,
-    newSignupToken, pendingKey, verificationEmail, verificationLink;
+    newSignupToken, pendingKey, verificationEmail, verificationLink, campaignUnsubKey;
 import ircfiber.mail_events : MailEvent, MailEventLog;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
 import ircfiber.web.assets : siteAssets;
@@ -104,6 +104,10 @@ final class WebController {
         router.post("/invite", &invitePost);
         router.get("/verify", &verifyGet);
         router.post("/verify", &verifyPost);
+        // Bulk-campaign List-Unsubscribe (public, NOT admin-gated: the
+        // recipient clicks from their inbox with only the token).
+        router.get("/unsubscribe", &unsubscribeGet);
+        router.post("/unsubscribe", &unsubscribePost);
         // Public self-service ban appeal. Registered here, before every
         // static and catch-all route, because the ban reason itself is the
         // only channel a Z-lined visitor has (see web.unban).
@@ -603,6 +607,55 @@ final class WebController {
             return;
         }
         logInfo("register: %s verified %s and was created", u.username, u.email);
+    }
+
+    /// GET /unsubscribe?token= — peeks (never consumes) the campaign token
+    /// and renders the confirm page. Unknown/expired token → friendly page,
+    /// never a 500.
+    private void unsubscribeGet(HTTPServerRequest req, HTTPServerResponse res) {
+        const token = req.query.get("token", "").strip();
+        string email;
+        if (token.length > 0) {
+            try email = redis.getDb().get(campaignUnsubKey(token));
+            catch (Exception e) logWarn("unsubscribe: token lookup failed: %s", e.msg);
+        }
+        if (token.length == 0 || email.length == 0) {
+            renderVerify(res, 410, "unsub_error", "", "",
+                "This unsubscribe link has expired or was already used. "
+                ~ "If campaign mail still reaches you, use the link in the newest message.");
+            return;
+        }
+        renderVerify(res, 200, "unsub_confirm", email, token, "");
+    }
+
+    /// POST /unsubscribe — consumes the token (single use), flips
+    /// `emailUnsubscribed` on the matching user row, renders done. The DB
+    /// write runs before the token delete so a Mongo hiccup leaves the
+    /// token retryable instead of silently keeping the subscription.
+    private void unsubscribePost(HTTPServerRequest req, HTTPServerResponse res) {
+        const token = req.form.get("token", "").strip();
+        string email;
+        if (token.length > 0) {
+            try email = redis.getDb().get(campaignUnsubKey(token));
+            catch (Exception e) logWarn("unsubscribe: token lookup failed: %s", e.msg);
+        }
+        if (token.length == 0 || email.length == 0) {
+            renderVerify(res, 410, "unsub_error", "", "",
+                "This unsubscribe link has expired or was already used. "
+                ~ "If campaign mail still reaches you, use the link in the newest message.");
+            return;
+        }
+        try {
+            new UserRepository().setEmailUnsubscribed(email);
+            redis.getDb().del(campaignUnsubKey(token));
+        } catch (Exception e) {
+            logWarn("unsubscribe: opting out %s failed: %s", email, e.msg);
+            renderVerify(res, 503, "unsub_error", "", "",
+                "Unsubscribing failed for a moment. Please try again shortly.");
+            return;
+        }
+        logInfo("unsubscribe: %s opted out of campaign mail", email);
+        renderVerify(res, 200, "unsub_done", email, "", "");
     }
 
     private void inviteGet(HTTPServerRequest req, HTTPServerResponse res) {

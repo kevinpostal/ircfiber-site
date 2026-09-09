@@ -272,6 +272,14 @@ private void testOperReplies() {
     // leaves the old password working.
     check(nickServSetPasswordCommand("nsvictim", "Aa1Bb2Cc3") == "SASET PASSWORD nsvictim Aa1Bb2Cc3",
           "SASET takes the option before the nickname");
+
+    // Same shape on the channel side, and the same silent failure: the
+    // reversed `SET #chan FOUNDER acct` answers `Syntax: SET option channel
+    // parameters` with HTTP 200 and leaves the old founder in place
+    // (observed on 2.0.20 while verifying the admin ChanServ section).
+    check(chanServSetFounderCommand("#scratchchan", "victim")
+              == "SET FOUNDER #scratchchan victim",
+          "ChanServ SET takes the option before the channel");
 }
 
 /// Verbatim `db_flatfile` shape (`modules/database/db_flatfile.cpp:332-336`).
@@ -351,6 +359,138 @@ private void testAnopeAccounts() {
     check(ci[0].suspended, "NSSuspendInfo matches the nick case-insensitively");
 }
 
+/// Captured verbatim from prod services over XML-RPC (2026-09-09):
+///   command ChanServ admin "INFO #staff"
+private enum chanInfoReply =
+    "Information for channel #staff:\n"
+    ~ "     Founder: Zodiac\n"
+    ~ " Description: IRC Fiber staff log feed\n"
+    ~ "  Registered: Sep 08 00:31:41 2026 UTC (1 day, 8 hours, 54 minutes ago)\n"
+    ~ "   Last used: Sep 09 09:26:10 2026 UTC (now)\n"
+    ~ "    Ban type: 2\n"
+    ~ "   Mode lock: +ntOPH 200:1w\n"
+    ~ "     Options: Peace, Secure founder, Secure ops, Signed kicks, Persistent,"
+    ~ " No expire, Topic retention\n"
+    ~ "  Last topic: IRC Fiber operations log\n"
+    ~ "Topic set by: admin\n";
+
+/// ditto — command ChanServ admin "ACCESS #staff LIST"
+private enum chanAccessReply =
+    "Access list for #staff:\n"
+    ~ "Number  Level  Mask\n"
+    ~ "1       SOP    sq\n"
+    ~ "2       HOP    FiberEye\n"
+    ~ "End of access list\n";
+
+private void testChanInfo() {
+    auto info = parseChanInfo(chanInfoReply);
+    check(info.registered, "the header line decides that the channel is registered");
+    check(info.founder == "Zodiac", "Founder is extracted");
+    check(info.description == "IRC Fiber staff log feed", "Description is extracted");
+    check(info.fields.get("Mode lock", "") == "+ntOPH 200:1w",
+          "a value containing spaces and ':' is kept whole");
+    check(info.fields.get("Topic set by", "") == "admin", "the last line is a field too");
+    check(!info.suspended, "no Suspended field means not suspended");
+    check(info.lines.length == 10, "every reply line is kept for display");
+    foreach (k, _; info.fields)
+        check(k.indexOf("Information for channel") < 0,
+              "the header is never turned into a field: " ~ k);
+
+    auto free = parseChanInfo("Channel #nosuchchannel isn't registered.");
+    check(!free.registered, "Anope's refusal is not a registration");
+
+    // An oper INFO on a channel whose founder NickCore was dropped carries no
+    // Founder line at all, and that channel is still registered.
+    auto founderless = parseChanInfo(
+        "Information for channel #ghost:\n  Registered: Sep 08 00:31:41 2026 UTC\n");
+    check(founderless.registered, "the header, not the founder, decides");
+    check(founderless.founder.length == 0, "and the missing Founder is empty, not invented");
+
+    auto suspended = parseChanInfo(
+        "Information for channel #x:\n     Founder: sq\n   Suspended: [reason]\n");
+    check(suspended.suspended, "a Suspended field flags the channel");
+}
+
+private void testChanAccessList() {
+    auto rows = parseChanAccessList(chanAccessReply);
+    check(rows.length == 2, "one row per numbered line, headers and footer excluded");
+    check(rows[0].number == 1 && rows[0].level == "SOP" && rows[0].mask == "sq",
+          "columns are read positionally");
+    check(rows[1].number == 2 && rows[1].level == "HOP" && rows[1].mask == "FiberEye",
+          "and case is preserved");
+    check(parseChanAccessList("#x access list is empty.").length == 0,
+          "an empty list is an empty array, not an error");
+    check(parseChanAccessList("").length == 0, "so is an empty reply");
+}
+
+/// `ChannelInfo` shape verbatim from prod's anope.db, including the fact that
+/// 2.0.20 writes extensible flags bare (`CS_NO_EXPIRE`, not
+/// `extensible:CS_NO_EXPIRE`).
+private enum channelDbFixture =
+    "OBJECT ChannelInfo\n"
+    ~ "ID 3\n"
+    ~ "DATA name #staff\n"
+    ~ "DATA founder Zodiac\n"
+    ~ "DATA description IRC Fiber staff log feed\n"
+    ~ "DATA time_registered 1788491709\n"
+    ~ "DATA last_used 1788855122\n"
+    ~ "DATA last_topic IRC Fiber operations log\n"
+    ~ "DATA last_topic_setter admin\n"
+    ~ "DATA last_topic_time 1788676622\n"
+    ~ "DATA bantype 2\n"
+    ~ "DATA bi ChanServ\n"
+    ~ "DATA CS_NO_EXPIRE 1\n"
+    ~ "DATA PERSIST 1\n"
+    ~ "END\n"
+    ~ "OBJECT ChannelInfo\n"
+    ~ "DATA name #Abandoned\n"
+    ~ "DATA description\n"
+    ~ "DATA time_registered 1788491000\n"
+    ~ "END\n"
+    ~ "OBJECT CSSuspendInfo\n"
+    ~ "DATA chan #STAFF\n"
+    ~ "DATA by admin\n"
+    ~ "DATA reason spam wave\n"
+    ~ "DATA time 1788681000\n"
+    ~ "DATA expires 0\n"
+    ~ "END\n"
+    ~ "OBJECT ChanAccess\n"
+    ~ "DATA provider access/xop\nDATA ci #staff\nDATA mask sq\nDATA data SOP\nEND\n"
+    ~ "OBJECT ChanAccess\n"
+    ~ "DATA provider access/xop\nDATA ci #Staff\nDATA mask FiberEye\nDATA data HOP\nEND\n";
+
+private void testAnopeDbChannels() {
+    auto rows = anopeChannelsFromDb(channelDbFixture);
+    check(rows.length == 2, "one row per ChannelInfo");
+    check(rows[0].name == "#Abandoned" && rows[1].name == "#staff",
+          "sorted case-insensitively, so #Abandoned precedes #staff");
+
+    auto staff = rows[1];
+    check(staff.founder == "Zodiac" && staff.description == "IRC Fiber staff log feed",
+          "values containing spaces are kept whole");
+    check(staff.registeredAt == 1788491709 && staff.lastUsedAt == 1788855122,
+          "serialized unix times");
+    check(staff.lastTopic == "IRC Fiber operations log" && staff.lastTopicSetter == "admin"
+              && staff.lastTopicAt == 1788676622,
+          "the topic trio is carried through");
+    check(staff.bot == "ChanServ", "the assigned BotServ bot is reported");
+    check(staff.accessCount == 2, "ChanAccess rows are counted case-insensitively");
+    check(staff.noExpire && staff.persistent && !staff.isPrivate,
+          "bare extensible flags are read, and an absent one stays false");
+    check(staff.suspended && staff.suspendedBy == "admin"
+              && staff.suspendReason == "spam wave",
+          "CSSuspendInfo matches the channel case-insensitively");
+    check(staff.suspendedAt == 1788681000 && staff.suspendExpiresAt == 0,
+          "expires 0 means never");
+
+    auto abandoned = rows[0];
+    check(abandoned.founder.length == 0 && abandoned.successor.length == 0,
+          "a channel whose founder core is gone keeps empty names");
+    check(abandoned.description.length == 0, "an empty description parses as empty");
+    check(abandoned.accessCount == 0 && !abandoned.suspended,
+          "and neither join leaks onto it");
+}
+
 private void removeQuiet(string path) nothrow {
     import std.file : remove;
     try remove(path);
@@ -402,6 +542,9 @@ void main() {
     testAnopeDbRecords();
     testAnopeAccounts();
     testAnopeInventory();
+    testChanInfo();
+    testChanAccessList();
+    testAnopeDbChannels();
     if (failures) {
         writefln("services tests: %d failures", failures);
         import core.stdc.stdlib : exit;

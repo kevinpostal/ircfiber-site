@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { fetchBouncer, generateBouncerPassword, revokeBouncerPassword, updateBncPlaybackLines, type BouncerInfo } from '../stores/api';
+  import { onMount, onDestroy } from 'svelte';
+  import { fetchBouncer, generateBouncerPassword, revokeBouncerPassword, updateBncPlaybackLines, fetchBouncerClients, disconnectBouncerClient, type BouncerInfo, type BouncerClient } from '../stores/api';
+  import { formatShortRelativeTime } from '../lib/utils';
   import SettingsSection from './SettingsSection.svelte';
 
   let info = $state<BouncerInfo | null>(null);
@@ -20,6 +21,7 @@
     try {
       info = await fetchBouncer();
       playbackInput = String(info.playbackLines);
+      void loadClients();
     } catch (e: unknown) {
       loadError = (e as Error).message || 'Could not load bouncer settings';
     } finally {
@@ -27,13 +29,74 @@
     }
   }
 
+  // ── Active sessions (own attached BNC clients) ──────────────────────
+  // Same presence records the admin Bouncer page reads, scoped to the
+  // caller by GET /api/me/bouncer/clients. Polled on the presence refresh
+  // cadence (15 s) so a row disappears at most a minute after a client
+  // vanishes without a clean QUIT.
+  let clients = $state<BouncerClient[]>([]);
+  let clientsNow = $state(0);
+  let clientsError = $state('');
+  /** sid of the row whose Disconnect button is armed, then in flight. */
+  let disconnectArm = $state('');
+  let disconnectBusy = $state(false);
+
+  async function loadClients(): Promise<void> {
+    if (!info?.password) { clients = []; return; }
+    try {
+      const res = await fetchBouncerClients();
+      clients = res.clients;
+      clientsNow = res.now;
+      clientsError = '';
+    } catch (e: unknown) {
+      clientsError = (e as Error).message || 'Could not load active sessions';
+    }
+  }
+
+  let clientsTimer: ReturnType<typeof setInterval> | null = null;
+  onMount(() => {
+    void load();
+    clientsTimer = setInterval(() => { void loadClients(); }, 15_000);
+  });
+  onDestroy(() => { if (clientsTimer) clearInterval(clientsTimer); });
+
+  /** Difference between this browser's clock and the gateway's. */
+  let skew = $derived(clientsNow ? Date.now() - clientsNow : 0);
+
+  function ago(ms: number): string {
+    if (!ms) return '';
+    return `${formatShortRelativeTime(ms + skew)} ago`;
+  }
+
+  function clientName(c: BouncerClient): string {
+    if (c.clientId) return c.clientId;
+    if (c.nick) return c.nick;
+    return 'anonymous';
+  }
+
+  async function disconnect(c: BouncerClient): Promise<void> {
+    if (disconnectBusy) return;
+    if (disconnectArm !== c.sid) { disconnectArm = c.sid; return; }
+    disconnectBusy = true;
+    try {
+      await disconnectBouncerClient(c.sid);
+      disconnectArm = '';
+      await loadClients();
+    } catch (e: unknown) {
+      clientsError = (e as Error).message || 'Could not disconnect that session';
+    } finally {
+      disconnectBusy = false;
+    }
+  }
+
   async function generate(): Promise<void> {
     if (busy) return;
     busy = true;
     error = '';
-    confirmRevoke = false;
     try {
       info = await generateBouncerPassword();
+      disconnectArm = '';
+      void loadClients();
     } catch (e: unknown) {
       error = (e as Error).message || 'Could not generate bouncer password';
     } finally {
@@ -49,6 +112,7 @@
     try {
       await revokeBouncerPassword();
       confirmRevoke = false;
+      disconnectArm = '';
       await load();
     } catch (e: unknown) {
       error = (e as Error).message || 'Could not revoke bouncer password';
@@ -100,8 +164,7 @@
     (e.currentTarget as HTMLInputElement).select();
   }
 
-  onMount(() => { void load(); });
-</script>
+  </script>
 
 <SettingsSection heading="Bouncer">
   <div class="settings-rows">
@@ -200,6 +263,36 @@
       </div>
     </div>
   </SettingsSection>
+
+  {#if info.password}
+  <SettingsSection heading="Active sessions">
+    <div class="settings-rows">
+      {#if clientsError}
+        <div class="settings-error">{clientsError}</div>
+      {:else if clients.length === 0}
+        <div class="settings-empty">No clients connected through the bouncer right now.</div>
+      {:else}
+        {#each clients as c (c.sid)}
+          {@const lastMs = Math.max(c.lastRecvMs, c.lastSendMs)}
+          <div class="settings-row" data-testid="bnc-session-row">
+            <div class="settings-label">
+              <span class="settings-label-text settings-bouncer-mono">{clientName(c)}</span>
+              <span class="settings-label-desc settings-bouncer-mono">{c.networkName || 'bouncer'} · as {c.nick || '…'} · {c.peer || 'unknown peer'}{#if c.tls} · TLS{/if}</span>
+              <span class="settings-label-desc">connected {ago(c.attachedAt)}{#if lastMs} · active {ago(lastMs)}{/if}</span>
+            </div>
+            <div class="settings-control">
+              <button class="settings-btn settings-btn--danger settings-btn--small" disabled={disconnectBusy}
+                      onclick={() => void disconnect(c)}>{disconnectArm === c.sid ? 'Click again to disconnect' : 'Disconnect'}</button>
+            </div>
+          </div>
+        {/each}
+      {/if}
+      <div class="settings-label-desc">
+        Every IRC client currently attached with your bouncer password — the same live list the admin Bouncer page shows, scoped to your account. Disconnecting drops that client; it can reconnect immediately with the same password.
+      </div>
+    </div>
+  </SettingsSection>
+  {/if}
 
   <SettingsSection heading="History on connect">
     <div class="settings-rows">

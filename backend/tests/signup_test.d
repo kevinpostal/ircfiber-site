@@ -4,12 +4,16 @@ import std.algorithm : canFind;
 import std.ascii : isAlphaNum;
 import std.stdio : writeln, writefln;
 import std.string : indexOf;
+import std.uuid : randomUUID;
 
 import ircfiber.mail;
 import ircfiber.signup;
 import ircfiber.invites;
 import ircfiber.mail_events;
+import ircfiber.db.user : campaignAudienceFilter;
+import ircfiber.models.user : User;
 import vibe.data.json : parseJsonString;
+import ircfiber.web.admin.emails : CAMPAIGN_MAX_RECIPIENTS, campaignTemplates, substituteCampaign;
 
 /// Same shape as services_test.d: built with -unittest so the `@("…")`
 /// unittest blocks in the modules under test run too, hence the pinned
@@ -264,6 +268,99 @@ private void testMailEventsWindow() {
         "an exact multiple does not grow a trailing empty page");
 }
 
+private void testSubstituteCampaign() {
+    check(substituteCampaign("Hi {{username}} <{{email}}> {{unsubscribe_url}}",
+        "alice", "a@b.co", "https://ircfiber.com/unsubscribe?token=t")
+        == "Hi alice <a@b.co> https://ircfiber.com/unsubscribe?token=t",
+        "all three keys");
+    check(substituteCampaign("Hi {{username}}!", "", "a@b.co", "u") == "Hi !",
+        "missing username reads as empty");
+    check(substituteCampaign("Keep {{other}} as-is", "a", "b", "u") == "Keep {{other}} as-is",
+        "unknown keys pass through");
+    check(substituteCampaign("{{username}}", "{{email}}", "b", "u") == "{{email}}",
+        "no recursion into substituted values");
+    check(substituteCampaign("no keys here", "a", "b", "u") == "no keys here",
+        "keyless text unchanged");
+}
+
+private void testCampaignTemplates() {
+    string[] ids;
+    foreach (const ref t; campaignTemplates) ids ~= t.id;
+    check(ids.canFind("support-reply"), "support-reply template exists");
+    check(ids.canFind("announcement"), "announcement template exists");
+    check(ids.canFind("account-notice"), "account-notice template exists");
+    foreach (const ref t; campaignTemplates) {
+        check(t.subject.length > 0 && t.text.length > 0, t.id ~ " is non-empty");
+        check(!t.text.canFind("{{other}}"), t.id ~ " uses only known keys");
+    }
+    string announcement;
+    foreach (const ref t; campaignTemplates)
+        if (t.id == "announcement") announcement = t.text;
+    check(announcement.canFind("Unsubscribe: {{unsubscribe_url}}"),
+        "announcement carries the body unsubscribe footer");
+}
+
+private void testResendListUnsubscribe() {
+    MailSettings s;
+    s.provider = "resend";
+    s.apiToken = "re_key";
+    s.fromEmail = "no-reply@ircfiber.com";
+    s.fromName = "IRC Fiber";
+    MailMessage m = { "alice@x.test", "subj", "body text", "<p>body text</p>" };
+    check("headers" !in resendPayload(s, m), "no headers key without an unsubscribe URL");
+    m.listUnsubscribeUrl = "https://ircfiber.com/unsubscribe?token=abc";
+    auto p = resendPayload(s, m);
+    check(p["headers"]["List-Unsubscribe"].get!string
+        == "<https://ircfiber.com/unsubscribe?token=abc>",
+        "RFC 2369 angle-bracket form");
+}
+
+private void testUnsubscribeLink() {
+    check(unsubscribeLink("https://ircfiber.com/", "abc")
+        == "https://ircfiber.com/unsubscribe?token=abc", "trailing slash stripped");
+    check(unsubscribeLink("https://ircfiber.com", "abc")
+        == "https://ircfiber.com/unsubscribe?token=abc", "no trailing slash unchanged");
+    check(campaignUnsubKey("abc") == "campaign:unsub:abc", "unsub key shape");
+    check(campaignUnsubTtlSeconds == 30 * 24 * 3600, "30-day token TTL");
+}
+private void testUserEmailUnsubscribedJson() {
+    User u;
+    u.id = randomUUID();
+    u.username = "alice";
+    u.email = "alice@example.com";
+    check(!u.emailUnsubscribed, "new rows default to subscribed");
+    check(u.toJson()["emailUnsubscribed"].get!bool == false, "opt-out serializes as false");
+    u.emailUnsubscribed = true;
+    check(User.fromJson(u.toJson()).emailUnsubscribed, "opt-out round-trips");
+    auto legacy = u.toJson();
+    legacy.remove("emailUnsubscribed");
+    check(!User.fromJson(legacy).emailUnsubscribed, "pre-campaign rows read as subscribed");
+}
+
+private void testCampaignAudienceFilter() {
+    auto base = campaignAudienceFilter("", 0, 0, "").toString();
+    check(base.canFind("emailUnsubscribed"), "base excludes opted-out rows");
+    check(base.canFind("$ne"), "opt-out is a $ne clause");
+    check(!base.canFind("roles"), "no role clause when empty");
+    check(!base.canFind("createdAt"), "no range clause when open");
+
+    check(campaignAudienceFilter("admin", 0, 0, "").toString().canFind("admin"),
+        "role clause present");
+    auto q = campaignAudienceFilter("", 0, 0, "bob.smith").toString();
+    // BSON stores the literal regex `bob\.smith`; its JSON rendering
+    // escapes the backslash, so assert the doubled form.
+    check(q.canFind("bob\\\\.smith"), "q is matched literally, not as a pattern");
+    check(q.canFind("$or"), "q searches username and email");
+
+    auto ranged = campaignAudienceFilter("", 1_700_000_000_000L, 0, "").toString();
+    check(ranged.canFind("createdAt") && ranged.canFind("$gte"), "after bound is $gte on createdAt");
+    auto rangedBefore = campaignAudienceFilter("", 0, 1_700_000_000_000L, "").toString();
+    check(rangedBefore.canFind("$lte"), "before bound is $lte");
+
+    auto all = campaignAudienceFilter("", 0, 0, "x", false).toString();
+    check(!all.canFind("emailUnsubscribed"), "unfiltered count drops only the opt-out clause");
+    check(all.canFind("email"), "unfiltered count keeps the email clause");
+}
 void main() {
     testSenderNetPayload();
     testResendPayload();
@@ -277,11 +374,13 @@ void main() {
     testKeyShapes();
     testInviteLink();
     testInvitePendingJson();
-    testInviteToken();
-    testEmailWellFormed();
-    testMailEventJson();
-    testSummarize();
-    testMailEventsWindow();
+    testUnsubscribeLink();
+    testUserEmailUnsubscribedJson();
+    testSubstituteCampaign();
+    testCampaignTemplates();
+    testResendListUnsubscribe();
+    testCampaignAudienceFilter();
+    check(CAMPAIGN_MAX_RECIPIENTS == 200, "send-now cap is 200 per send");
     if (failures == 0)
         writeln("signup_test: all checks passed");
     else

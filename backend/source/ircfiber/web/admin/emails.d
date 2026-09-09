@@ -2,10 +2,10 @@
  * Admin Emails page API — signup-verification delivery.
  *
  * One overview route (provider/configuration state, the mail send log with
- * 24h counts, the live pending-signup queue, the per-email cooldowns and
- * per-IP signup counters) plus five actions: admin test send, per-pending
- * resend and revoke, and clearing either throttle.
- *
+ * 24h counts, the live pending-signup queue, the per-email cooldowns,
+ * per-IP signup counters and the campaign template table) plus seven
+ * actions: admin test send, per-pending resend and revoke, clearing either
+ * throttle, and the bulk-campaign audience preview + send-now fan-out.
  * Pending rows are identified by `sha256(token)[0..16]`, never by the token
  * itself: POST /verify with a token creates that account and signs the
  * poster in, so a token must never leave the gateway twice. Action routes
@@ -29,15 +29,17 @@ import vibe.core.log : logInfo, logWarn;
 import vibe.data.json : Json, parseJsonString;
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 
-import ircfiber.mail : MailSettings, adminTestEmail, emailWellFormed,
+import ircfiber.mail : MailMessage, MailSettings, adminTestEmail, emailWellFormed,
     loadMailSettings, sendMail;
-import ircfiber.mail_events : MailEvent, MailEventLog, mailEventsCap, mailEventsWindow,
+import ircfiber.mail_events : MailEvent, MailEventLog, mailCampaignLockKey, mailEventsCap, mailEventsWindow,
     mailTestLockKey, summarize;
+import ircfiber.db.user : UserRepository;
+import ircfiber.logs.events : LogEvent, pushLogEvent;
 import ircfiber.models.user : User;
-import ircfiber.signup : PendingSignup, emailVerificationRequired, ipKey, pendingKey,
-    sentKey, verificationEmail, verificationLink;
+import ircfiber.signup : PendingSignup, campaignUnsubKey, campaignUnsubTtlSeconds, emailVerificationRequired,
+    ipKey, newSignupToken, pendingKey, sentKey, unsubscribeLink, verificationEmail, verificationLink;
 import ircfiber.storage.redis : RedisStorage;
-import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
+import ircfiber.web.admin.helpers : jsonError, jsonOk, queryString, readJsonBody;
 import ircfiber.web.common : getClientIp;
 
 private enum pendingPrefix = "signup:pending:";
@@ -310,6 +312,7 @@ package void apiEmailsOverview(HTTPServerRequest req, HTTPServerResponse res, Re
         ipJson ~= j;
     }
     data["ipCounters"] = ipJson;
+    data["templates"] = campaignTemplatesJson();
     data["redisError"] = Json(redisError);
     jsonOk(res, data);
 }
@@ -472,5 +475,346 @@ package void apiEmailsIpLimitClear(HTTPServerRequest req, HTTPServerResponse res
     Json data = Json.emptyObject;
     data["cleared"] = Json(true);
     data["ip"] = Json(ip);
+    jsonOk(res, data);
+}
+
+// ────────────────────────────────────────────────────────────
+// Bulk campaigns (Compose tab): filtered-segment send-now fan-out
+// ────────────────────────────────────────────────────────────
+
+/// Max recipients per send-now run. Matches the existing in-request bulk
+/// precedent (`apiUsersBulkDelete` caps at 100 ids); 200 keeps the worst
+/// case at ~200 sequential blocking POSTs ≈ under 2 minutes and the send
+/// log's 500-cap intact. Audiences of 200–500 go out as repeated sends
+/// with narrowed filters; true bulk over background jobs is follow-up work.
+enum CAMPAIGN_MAX_RECIPIENTS = 200;
+
+/// Backend-owned template table (the compose picker source). Placeholders
+/// are exactly `{{username}}`, `{{email}}`, `{{unsubscribe_url}}`.
+struct CampaignTemplate {
+    string id;
+    string subject;
+    string text;
+}
+
+immutable CampaignTemplate[] campaignTemplates = [
+    CampaignTemplate("support-reply",
+        "Re: your support request",
+        "Hi {{username}},\n"
+        ~ "\n"
+        ~ "Thanks for writing to IRC Fiber support. Reply to this message and an operator will pick it up.\n"
+        ~ "\n"
+        ~ "— IRC Fiber support"),
+    CampaignTemplate("announcement",
+        "News from IRC Fiber",
+        "Hi {{username}},\n"
+        ~ "\n"
+        ~ "There is something new on IRC Fiber worth knowing about. Details follow in the next message.\n"
+        ~ "\n"
+        ~ "— The IRC Fiber team\n"
+        ~ "\n"
+        ~ "Unsubscribe: {{unsubscribe_url}}"),
+    CampaignTemplate("account-notice",
+        "A note about your IRC Fiber account",
+        "Hi {{username}} ({{email}}),\n"
+        ~ "\n"
+        ~ "Something about your IRC Fiber account needs your attention. Sign in to review it.\n"
+        ~ "\n"
+        ~ "— The IRC Fiber team"),
+];
+
+private Json campaignTemplatesJson() @safe {
+    Json arr = Json.emptyArray;
+    foreach (const ref t; campaignTemplates) {
+        Json j = Json.emptyObject;
+        j["id"] = Json(t.id);
+        j["subject"] = Json(t.subject);
+        j["text"] = Json(t.text);
+        arr ~= j;
+    }
+    return arr;
+}
+
+/// Replaces exactly `{{username}}`, `{{email}}`, `{{unsubscribe_url}}` —
+/// no other keys, no recursion (a value containing `{{…}}` is emitted as-is;
+/// single-pass scan, never re-scanned), empty username reads as `""`,
+/// unknown `{{other}}` keys pass through untouched.
+string substituteCampaign(string src, string username, string email, string unsubUrl) @safe pure {
+    string out_;
+    size_t i = 0;
+    while (i < src.length) {
+        if (i + 1 < src.length && src[i] == '{' && src[i + 1] == '{') {
+            size_t j = i + 2;
+            while (j + 1 < src.length && !(src[j] == '}' && src[j + 1] == '}')) j++;
+            if (j + 1 >= src.length) { out_ ~= src[i .. $]; break; }
+            auto key = src[i .. j + 2];
+            if (key == "{{username}}") out_ ~= username;
+            else if (key == "{{email}}") out_ ~= email;
+            else if (key == "{{unsubscribe_url}}") out_ ~= unsubUrl;
+            else out_ ~= key;
+            i = j + 2;
+        } else {
+            out_ ~= src[i];
+            i++;
+        }
+    }
+    return out_;
+}
+
+/// Plain-text campaign body → html: escaped paragraphs (`\n\n` → `<p>`,
+/// single `\n` → `<br>`), same pattern as `verificationEmail`.
+private string campaignHtmlBody(string text) @safe {
+    import std.array : join, split;
+    import vibe.textfilter.html : htmlEscape;
+    string[] paras;
+    foreach (p; text.split("\n\n")) {
+        string[] lines;
+        foreach (l; p.split("\n"))
+            lines ~= htmlEscape(l).idup;
+        paras ~= "<p>" ~ lines.join("<br>") ~ "</p>";
+    }
+    return paras.join("");
+}
+
+private long queryMs(HTTPServerRequest req, string key) {
+    try {
+        const raw = queryString(req, key);
+        if (raw.length == 0) return 0;
+        return raw.to!long;
+    } catch (Exception) {
+        return 0;
+    }
+}
+
+private long bodyLong(Json j, string key) {
+    try {
+        auto v = j[key];
+        if (v.type == Json.Type.int_) return v.get!long;
+        if (v.type == Json.Type.float_) return cast(long) v.get!double;
+    } catch (Exception) {
+    }
+    return 0;
+}
+
+private bool bodyBool(Json j, string key) {
+    try {
+        auto v = j[key];
+        if (v.type == Json.Type.bool_) return v.get!bool;
+    } catch (Exception) {
+    }
+    return false;
+}
+
+/// GET /api/admin/emails/campaign/audience?role&createdAfter&createdBefore&q&limit=10
+/// → `{total, sample: [{username, email, createdAt}]}`. Read-only, no throttle.
+package void apiCampaignAudience(HTTPServerRequest req, HTTPServerResponse res) {
+    const role = queryString(req, "role");
+    const afterMs = queryMs(req, "createdAfter");
+    const beforeMs = queryMs(req, "createdBefore");
+    const q = queryString(req, "q");
+    int limit = 10;
+    try {
+        const raw = queryString(req, "limit");
+        if (raw.length > 0) limit = raw.to!int;
+    } catch (Exception) {
+    }
+    if (limit < 1) limit = 1;
+    if (limit > 20) limit = 20;
+
+    long total = 0;
+    User[] sample;
+    try {
+        auto repo = new UserRepository();
+        total = repo.countCampaignAudience(role, afterMs, beforeMs, q);
+        sample = repo.fetchCampaignAudience(role, afterMs, beforeMs, q, limit);
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign audience read failed: %s", e.msg);
+        jsonError(res, 503, "Could not read the audience. Try again shortly.");
+        return;
+    }
+    Json rows = Json.emptyArray;
+    foreach (const ref u; sample) {
+        Json r = Json.emptyObject;
+        r["username"] = Json(u.username);
+        r["email"] = Json(u.email);
+        r["createdAt"] = Json(u.createdAt.toUnixTime() * 1000L);
+        rows ~= r;
+    }
+    Json data = Json.emptyObject;
+    data["total"] = Json(total);
+    data["sample"] = rows;
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/emails/campaign/send — body
+/// `{role?, createdAfterMs?, createdBeforeMs?, q?, all?, subject, text}`.
+/// Fans out server-side (one POST, never a client-side loop): per recipient
+/// the subject/text are substituted, a single-use unsubscribe token is
+/// minted, and `sendMail` runs in a per-recipient try/catch that never
+/// breaks the loop.
+package void apiCampaignSend(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto body_ = readJsonBody(req);
+    const role = bodyString(body_, "role");
+    const afterMs = bodyLong(body_, "createdAfterMs");
+    const beforeMs = bodyLong(body_, "createdBeforeMs");
+    const q = bodyString(body_, "q");
+    const all = bodyBool(body_, "all");
+    const subject = bodyString(body_, "subject");
+    const text = bodyString(body_, "text");
+
+    if (subject.length == 0 || subject.length > 200) {
+        jsonError(res, 400, "Subject must be 1–200 characters.");
+        return;
+    }
+    if (text.length == 0 || text.length > 20000) {
+        jsonError(res, 400, "Body must be 1–20000 characters.");
+        return;
+    }
+    const narrowed = role.length > 0 || afterMs > 0 || beforeMs > 0 || q.length > 0;
+    if (!narrowed && !all) {
+        jsonError(res, 400, "Narrow the audience or confirm sending to everyone.");
+        return;
+    }
+
+    // One send at a time globally: same SET NX EX + read-back-compare shape
+    // as apiEmailsTest. Redis failure fails open (logWarn, continue).
+    const marker = randomUUID().toString();
+    try {
+        auto db = redis.getDb();
+        db.request!string("SET", mailCampaignLockKey(), marker, "NX", "EX", "60");
+        if (db.get(mailCampaignLockKey()) != marker) {
+            jsonError(res, 429, "A campaign send is already running. Please wait a minute.");
+            return;
+        }
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign-send throttle failed: %s", e.msg);
+    }
+
+    auto mail = loadMailSettings();
+    if (!mail.configured) {
+        jsonError(res, 503, "No mail provider is configured.");
+        return;
+    }
+
+    User[] audience;
+    long total = 0, grandTotal = 0;
+    try {
+        auto repo = new UserRepository();
+        total = repo.countCampaignAudience(role, afterMs, beforeMs, q);
+        grandTotal = repo.countCampaignAudienceTotal(role, afterMs, beforeMs, q);
+        if (total > CAMPAIGN_MAX_RECIPIENTS) {
+            jsonError(res, 400, "That audience has " ~ total.to!string
+                ~ " addresses; narrow the filters (max "
+                ~ CAMPAIGN_MAX_RECIPIENTS.to!string ~ " per send).");
+            return;
+        }
+        audience = repo.fetchCampaignAudience(role, afterMs, beforeMs, q, CAMPAIGN_MAX_RECIPIENTS);
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign audience read failed: %s", e.msg);
+        jsonError(res, 503, "Could not read the audience. Try again shortly.");
+        return;
+    }
+
+    const ip = getClientIp(req);
+    const actor = adminActor(req);
+    const startedAll = MonoTime.currTime;
+    auto eventLog = new MailEventLog(redis);
+    long sent = 0, failed = 0;
+    Json errorsJson = Json.emptyArray;
+    void failOne(string email, string username, string msg) {
+        failed++;
+        errorsJson ~= Json(["email": Json(email), "error": Json(msg)]);
+        MailEvent ev;
+        ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+        ev.kind = "campaign";
+        ev.toEmail = email;
+        ev.username = username;
+        ev.provider = mail.provider;
+        ev.status = "failed";
+        ev.error = msg;
+        ev.sourceIp = ip;
+        eventLog.recordQuiet(ev);
+    }
+    foreach (ref u; audience) {
+        const started = MonoTime.currTime;
+        if (!emailWellFormed(u.email)) {
+            failOne(u.email, u.username, "That doesn't look like a valid email address.");
+            continue;
+        }
+        // Single-use token minted only for addresses actually mailed in
+        // this run. A Redis failure here fails THIS recipient (never send
+        // a campaign mail whose unsubscribe link is dead).
+        const token = newSignupToken();
+        const unsubUrl = unsubscribeLink(publicUrl(), token);
+        try
+            redis.getDb().setEX(campaignUnsubKey(token), campaignUnsubTtlSeconds, u.email.toLower());
+        catch (Exception e) {
+            logWarn("admin-emails: campaign token store failed for %s: %s", u.email, e.msg);
+            failOne(u.email, u.username, "Could not store the unsubscribe token. Try again shortly.");
+            continue;
+        }
+        // No sleep: sequential blocking POSTs already pace this loop at a
+        // few sends per second, under Resend's 10 req/s team limit.
+        const subj = substituteCampaign(subject, u.username, u.email, unsubUrl);
+        const txt = substituteCampaign(text, u.username, u.email, unsubUrl);
+        MailMessage m;
+        m.toEmail = u.email;
+        m.subject = subj;
+        m.text = txt;
+        m.html = campaignHtmlBody(txt);
+        m.listUnsubscribeUrl = unsubUrl;
+        try {
+            sendMail(mail, m);
+            sent++;
+            MailEvent ev;
+            ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+            ev.kind = "campaign";
+            ev.toEmail = u.email;
+            ev.username = u.username;
+            ev.provider = mail.provider;
+            ev.status = "sent";
+            ev.durationMs = (MonoTime.currTime - started).total!"msecs";
+            ev.sourceIp = ip;
+            eventLog.recordQuiet(ev);
+        } catch (Exception e) {
+            MailEvent ev;
+            ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+            ev.kind = "campaign";
+            ev.toEmail = u.email;
+            ev.username = u.username;
+            ev.provider = mail.provider;
+            ev.status = "failed";
+            ev.error = e.msg;
+            ev.durationMs = (MonoTime.currTime - started).total!"msecs";
+            ev.sourceIp = ip;
+            eventLog.recordQuiet(ev);
+            failed++;
+            errorsJson ~= Json(["email": Json(u.email), "error": Json(e.msg)]);
+        }
+    }
+
+    long skipped = grandTotal - total;
+    if (skipped < 0) skipped = 0;
+    const summary = "sent " ~ sent.to!string ~ " failed " ~ failed.to!string
+        ~ " skipped " ~ skipped.to!string;
+    LogEvent le;
+    le.type = "mail";
+    le.ts = Clock.currTime.toUnixTime() * 1000L;
+    le.kind = "campaign_summary";
+    le.username = actor;
+    le.provider = mail.provider;
+    le.status = failed == 0 ? "sent" : "failed";
+    le.error = summary;
+    le.durationMs = (MonoTime.currTime - startedAll).total!"msecs";
+    le.ip = ip;
+    pushLogEvent(redis, le);
+    logInfo("admin-emails: %s ran a campaign: %s", actor, summary);
+
+    Json data = Json.emptyObject;
+    data["sent"] = Json(sent);
+    data["failed"] = Json(failed);
+    data["skippedUnsubscribed"] = Json(skipped);
+    data["total"] = Json(total);
+    data["errors"] = errorsJson;
     jsonOk(res, data);
 }

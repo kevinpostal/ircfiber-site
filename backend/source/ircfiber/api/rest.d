@@ -104,6 +104,8 @@ final class RESTAPI {
         router.get("/api/me/bouncer", &getBouncer);
         router.post("/api/me/bouncer", &generateBouncer);
         router.delete_("/api/me/bouncer", &revokeBouncer);
+        router.get("/api/me/bouncer/clients", &getMyBouncerClients);
+        router.post("/api/me/bouncer/clients/:sid/disconnect", &disconnectMyBouncerClient);
         router.get("/api/me", &getMe);
         router.delete_("/api/me", &deleteMe);
         router.get("/api/me/irc-account", &getIrcAccount);
@@ -563,6 +565,115 @@ final class RESTAPI {
         dropBouncerClients(user);
         res.statusCode = 204;
         res.writeVoidBody();
+    }
+
+    /**
+     * GET /api/me/bouncer/clients — the caller's own attached bouncer
+     * clients ("Active sessions" in Settings → Bouncer).
+     *
+     * Same presence records the admin bouncer page reads
+     * (`irc:bnc:clients` + `irc:bnc:client:<sid>`, refreshed by the bnc
+     * process every 15 s with a 60 s TTL), filtered to the caller's user
+     * id. Never exposes other users' rows; the `sid` is included so the
+     * owner can disconnect that session via the endpoint below.
+     */
+    private void getMyBouncerClients(HTTPServerRequest req, HTTPServerResponse res) {
+        import std.algorithm : sort;
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        const uid = user.id.toString();
+        auto arr = Json.emptyArray;
+        if (redis !is null) {
+            try {
+                string[] sids;
+                foreach (sid; redis.getDb().smembers(RedisKeys.bncClients())) sids ~= sid;
+                struct Row { Json j; long attachedAt; }
+                Row[] rows;
+                foreach (sid; sids) {
+                    Json j;
+                    try j = redis.getJson(RedisKeys.bncClient(sid));
+                    catch (Exception) continue;
+                    if (j.type != Json.Type.object) continue;
+                    if (j["userId"].type != Json.Type.string) continue;
+                    if (j["userId"].get!string != uid) continue;
+                    static string str(Json x, string k) {
+                        return x[k].type == Json.Type.string ? x[k].get!string : "";
+                    }
+                    static long num(Json x, string k) {
+                        if (x[k].type == Json.Type.int_) return x[k].get!long;
+                        if (x[k].type == Json.Type.float_) return cast(long) x[k].get!double;
+                        return 0;
+                    }
+                    auto o = Json.emptyObject;
+                    o["sid"] = str(j, "sid");
+                    o["networkId"] = str(j, "networkId");
+                    o["networkName"] = str(j, "networkName");
+                    o["clientId"] = str(j, "clientId");
+                    o["nick"] = str(j, "nick");
+                    o["peer"] = str(j, "peer");
+                    o["tls"] = j["tls"].type == Json.Type.bool_ && j["tls"].get!bool;
+                    o["caps"] = str(j, "caps");
+                    o["attachedAt"] = num(j, "attachedAt");
+                    o["lastRecvMs"] = num(j, "lastRecvMs");
+                    o["lastSendMs"] = num(j, "lastSendMs");
+                    o["linesIn"] = num(j, "linesIn");
+                    o["linesOut"] = num(j, "linesOut");
+                    o["cursor"] = num(j, "cursor");
+                    if (!o["sid"].get!string.length) continue;
+                    rows ~= Row(o, o["attachedAt"].get!long);
+                }
+                sort!((a, b) => a.attachedAt > b.attachedAt)(rows);
+                foreach (ref r; rows) arr ~= r.j;
+            } catch (Exception e) {
+                logWarn("getMyBouncerClients: presence read failed for %s: %s", user.username, e.msg);
+            }
+        }
+        auto out_ = Json.emptyObject;
+        out_["clients"] = arr;
+        out_["now"] = Clock.currTime.toUnixTime!long * 1000L;
+        res.writeJsonBody(out_);
+    }
+
+    /**
+     * POST /api/me/bouncer/clients/:sid/disconnect — drop one of the
+     * caller's own attached clients ("Disconnect" in Settings → Bouncer).
+     *
+     * The presence record's `userId` must equal the caller, so a guessed
+     * sid cannot reach someone else's session (unknown/other-owner sids
+     * answer 404). Crosses to the bnc process via `publishBncKick`, the
+     * same path as the admin kick; the client can reconnect immediately
+     * with the same password.
+     */
+    private void disconnectMyBouncerClient(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.bnc.control : publishBncKick;
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        const uid = user.id.toString();
+        const sid = req.params.get("sid", "");
+        if (!sid.length) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("sid required")]));
+            return;
+        }
+        if (redis is null) {
+            res.statusCode = 503;
+            res.writeJsonBody(Json(["error": Json("The bouncer store is unavailable")]));
+            return;
+        }
+        Json j;
+        try j = redis.getJson(RedisKeys.bncClient(sid));
+        catch (Exception) {}
+        if (j.type != Json.Type.object || j["userId"].type != Json.Type.string
+                || j["userId"].get!string != uid) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("No attached client with that session id")]));
+            return;
+        }
+        publishBncKick(redis, uid, sid, "Disconnected by user");
+        logInfo("user %s disconnected bnc client sid=%s", user.username, sid);
+        res.writeJsonBody(Json(["disconnected": Json(true), "sid": Json(sid)]));
     }
 
     private void disconnectNetwork(HTTPServerRequest req, HTTPServerResponse res) {

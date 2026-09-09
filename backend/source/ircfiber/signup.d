@@ -80,6 +80,24 @@ string newSignupToken() {
     return generateServicesPassword(40);
 }
 
+/// Bulk-campaign List-Unsubscribe tokens, mirroring the PendingSignup
+/// pattern: per-recipient random token (same generator as signup tokens),
+/// Redis `campaign:unsub:<token>` → lowercased email, 30-day TTL, single
+/// use (consumed on POST). Created only for addresses actually mailed.
+enum campaignUnsubTtlSeconds = 30 * 24 * 3600;
+
+string campaignUnsubKey(string token) @safe pure {
+    return "campaign:unsub:" ~ token;
+}
+
+// `<base without trailing '/'>/unsubscribe?token=<token>`
+string unsubscribeLink(string publicBaseUrl, string token) @safe pure {
+    string base = publicBaseUrl;
+    while (base.length > 0 && base[$ - 1] == '/')
+        base = base[0 .. $ - 1];
+    return base ~ "/unsubscribe?token=" ~ token;
+}
+
 // `<base without trailing '/'>/verify?token=<token>`
 string verificationLink(string publicBaseUrl, string token) @safe pure {
     string base = publicBaseUrl;

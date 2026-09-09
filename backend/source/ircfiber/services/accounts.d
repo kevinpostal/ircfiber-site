@@ -76,6 +76,26 @@ bool isValidIrcNick(string s, size_t maxLen = IRC_MAX_NICK_LEN) @safe pure nothr
     return true;
 }
 
+/// Max channel length accepted by InspIRCd 4 in our config (`<limits maxchan>`).
+enum size_t IRC_MAX_CHANNEL_LEN = 64;
+
+/**
+ * `#name`: a '#' prefix, at least one more byte, no byte <= 0x20, no 0x7F and
+ * no ',' (the ircd's own target separator).
+ *
+ * '&' local channels are rejected on purpose: Anope refuses to register them,
+ * so accepting one here would only turn a 400 into a confusing services
+ * refusal.
+ */
+bool isValidIrcChannel(string s, size_t maxLen = IRC_MAX_CHANNEL_LEN) @safe pure nothrow @nogc {
+    if (s.length < 2 || s.length > maxLen) return false;
+    if (s[0] != '#') return false;
+    foreach (char c; s[1 .. $]) {
+        if (c <= 0x20 || c == 0x7F || c == ',') return false;
+    }
+    return true;
+}
+
 /**
  * Account names to try, in priority order: the username, then the
  * deterministic `<username>_<4 hex>` fallback, then `<username>_2` …
@@ -672,6 +692,22 @@ unittest {
     foreach (_; 0 .. 33) long_ ~= "a";
     assert(!isValidIrcNick(long_), "33 chars exceeds maxnick");
     assert(isValidIrcNick(long_[0 .. 32]));
+}
+
+@("isValidIrcChannel matches the ircd's own channel rule")
+unittest {
+    assert(isValidIrcChannel("#ops"));
+    assert(isValidIrcChannel("#a"));
+    assert(!isValidIrcChannel("ops"), "a channel needs its '#' prefix");
+    assert(!isValidIrcChannel("#"), "'#' alone is not a channel");
+    assert(!isValidIrcChannel(""));
+    assert(!isValidIrcChannel("&local"), "Anope refuses to register local channels");
+    assert(!isValidIrcChannel("#a b"), "a space would inject a services parameter");
+    assert(!isValidIrcChannel("#a,b"), "',' is the ircd's target separator");
+    string long_ = "#";
+    foreach (_; 0 .. 64) long_ ~= "a";
+    assert(!isValidIrcChannel(long_), "65 chars exceeds maxchan");
+    assert(isValidIrcChannel(long_[0 .. 64]));
 }
 
 @("classifyNickServReply distinguishes taken from registered")

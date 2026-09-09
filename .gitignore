@@ -26,6 +26,8 @@ backend/services-test
 
 # Compiled dub test-config binaries (services-test, ircd-test, logs-test, ...)
 backend/*-test
+# ditto for the vendored common package's dub test config
+common/irc-fiber-common-test-unittest
 
 # Local build outputs (the image rebuilds these; never deploy artifacts)
 /backend/irc-fiber-gateway

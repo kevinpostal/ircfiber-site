@@ -438,6 +438,34 @@ AnopeReply anopeOperCommand(AnopeSettings s, string command) {
 }
 
 /**
+ * Read-only ChanServ command run as the services-oper account, retried once.
+ * Same contract as `anopeOperQuery`: an unconfigured oper account is reported
+ * as a transport failure instead of being silently attempted.
+ */
+AnopeReply anopeChanServQuery(AnopeSettings s, string command) {
+    AnopeReply r;
+    if (!s.hasOper) {
+        r.transportError = "Anope oper account not configured";
+        return r;
+    }
+    return anopeQuery(s, "ChanServ", s.operAccount, command);
+}
+
+/**
+ * Mutating ChanServ command run as the services-oper account, sent exactly
+ * once: a retried SUSPEND/DROP/REGISTER may well be a second application of
+ * a command whose first attempt landed.
+ */
+AnopeReply anopeChanServCommand(AnopeSettings s, string command) {
+    AnopeReply r;
+    if (!s.hasOper) {
+        r.transportError = "Anope oper account not configured";
+        return r;
+    }
+    return anopeCommand(s, "ChanServ", s.operAccount, command);
+}
+
+/**
  * True when Anope refused the command for lack of privileges. This is NOT a
  * transport error: `Access denied.` (`include/language.h`'s ACCESS_DENIED)
  * arrives as an ordinary HTTP 200 `methodResponse`, so it has to be detected
@@ -558,6 +586,19 @@ bool[string] anopeOperAccounts(AnopeSettings s) {
  */
 string nickServSetPasswordCommand(string nick, string password) @safe pure {
     return "SASET PASSWORD " ~ nick ~ " " ~ password;
+}
+
+/**
+ * The `SET FOUNDER` command line for `channel`.
+ *
+ * `cs_set` is option-first too — `SET <option> <channel> <parameters>` —
+ * verified against 2.0.20: the reversed form `SET <#chan> FOUNDER <acct>`
+ * answers `Syntax: SET option channel parameters` and transfers nothing.
+ * Same silent shape as `SASET` above (HTTP 200, no `Access denied`, the old
+ * founder still owns the channel), so the order lives here with its evidence.
+ */
+string chanServSetFounderCommand(string channel, string founder) @safe pure {
+    return "SET FOUNDER " ~ channel ~ " " ~ founder;
 }
 
 /**
@@ -695,4 +736,92 @@ bool anopeCheckAuthentication(AnopeSettings s, string account, string password, 
     if (r.error.length)
         logWarn("anope rpc: checkAuthentication %s rejected: %s", account, r.error);
     return false;
+}
+
+/**
+ * One parsed `ChanServ INFO <#channel>` reply.
+ *
+ * `registered` is decided by the header line `cs_info` always emits
+ * (`Information for channel #x:`), never by the presence of a `Founder`
+ * line: an oper INFO on a channel whose founder NickCore was dropped carries
+ * no Founder at all, and that channel is still registered.
+ */
+struct ChanInfo {
+    bool registered;
+    string founder;       /// "Founder" field
+    string successor;     /// "Successor"
+    string description;   /// "Description"
+    bool suspended;       /// a "Suspended" field is present
+    string[string] fields;
+    string[] lines;
+}
+
+/**
+ * Parse a `ChanServ INFO <#channel>` reply. Feed it `AnopeReply.rawText`:
+ * `text` is newline-flattened and the reply is line-oriented.
+ *
+ * The header line is skipped rather than split on its ':' — otherwise
+ * `Information for channel #x` would become a bogus field label.
+ */
+ChanInfo parseChanInfo(string rawText) @safe pure {
+    import std.algorithm : canFind;
+    import std.string : splitLines, startsWith;
+    import std.uni : toLower;
+
+    ChanInfo info;
+    const flat = flattenReplyText(rawText).toLower();
+    const missing = flat.canFind("isn't registered") || flat.canFind("is not registered");
+    info.registered = flat.canFind("information for channel") && !missing;
+
+    foreach (line; rawText.splitLines()) {
+        const trimmed = line.strip();
+        if (!trimmed.length) continue;
+        info.lines ~= line;
+        if (trimmed.startsWith("Information for channel")) continue;
+        const colon = trimmed.indexOf(':');
+        if (colon > 0)
+            info.fields[trimmed[0 .. colon].strip()] = trimmed[colon + 1 .. $].strip();
+    }
+
+    if (auto p = "Founder" in info.fields) info.founder = *p;
+    if (auto p = "Successor" in info.fields) info.successor = *p;
+    if (auto p = "Description" in info.fields) info.description = *p;
+    info.suspended = ("Suspended" in info.fields) !is null;
+    return info;
+}
+
+/// One row of `ChanServ ACCESS <#channel> LIST`.
+struct ChanAccessEntry {
+    int number;
+    string level;
+    string mask;
+}
+
+/**
+ * Parse `ChanServ ACCESS <#channel> LIST` positionally, never by prose: a row
+ * is a line whose first whitespace-separated token is all digits and which has
+ * at least three tokens (`Number  Level  Mask`; masks never contain spaces).
+ *
+ * Everything else — the `Access list for …:` header, the column header, the
+ * `End of access list` footer and the `… access list is empty.` reply — yields
+ * no row, so an empty list is an empty array rather than an error.
+ */
+ChanAccessEntry[] parseChanAccessList(string rawText) @safe pure {
+    import std.algorithm : all, splitter;
+    import std.array : array;
+    import std.string : splitLines;
+
+    ChanAccessEntry[] rows;
+    foreach (line; rawText.splitLines()) {
+        auto tokens = line.strip().splitter().array();
+        if (tokens.length < 3) continue;
+        if (!tokens[0].length || !tokens[0].all!isDigit) continue;
+        ChanAccessEntry e;
+        try e.number = tokens[0].to!int;
+        catch (Exception) continue;   // a number too large for int is not a row
+        e.level = tokens[1];
+        e.mask = tokens[2];
+        rows ~= e;
+    }
+    return rows;
 }

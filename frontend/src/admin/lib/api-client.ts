@@ -108,9 +108,9 @@ export async function request<T = unknown>(path: string, opts: RequestOptions = 
 }
 
 export const api = {
-  get:    <T = unknown>(path: string, query?: RequestOptions['query']) => request<T>(path, { method: 'GET', query }),
-  post:   <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query']) => request<T>(path, { method: 'POST', body, query }),
-  put:    <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query']) => request<T>(path, { method: 'PUT', body, query }),
-  patch:  <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query']) => request<T>(path, { method: 'PATCH', body, query }),
-  delete: <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query']) => request<T>(path, { method: 'DELETE', body, query }),
+  get:    <T = unknown>(path: string, query?: RequestOptions['query'], opts?: Pick<RequestOptions, 'timeoutMs' | 'signal'>) => request<T>(path, { method: 'GET', query, ...opts }),
+  post:   <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query'], opts?: Pick<RequestOptions, 'timeoutMs' | 'signal'>) => request<T>(path, { method: 'POST', body, query, ...opts }),
+  put:    <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query'], opts?: Pick<RequestOptions, 'timeoutMs' | 'signal'>) => request<T>(path, { method: 'PUT', body, query, ...opts }),
+  patch:  <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query'], opts?: Pick<RequestOptions, 'timeoutMs' | 'signal'>) => request<T>(path, { method: 'PATCH', body, query, ...opts }),
+  delete: <T = unknown>(path: string, body?: unknown, query?: RequestOptions['query'], opts?: Pick<RequestOptions, 'timeoutMs' | 'signal'>) => request<T>(path, { method: 'DELETE', body, query, ...opts }),
 };

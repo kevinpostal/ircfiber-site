@@ -43,6 +43,9 @@ import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
 import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
     apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink,
     apiNsUnprovisioned, apiNsCreate;
+import ircfiber.web.admin.chanserv : apiCsChannels, apiCsChannel, apiCsSuspend,
+    apiCsUnsuspend, apiCsDrop, apiCsRegister, apiCsFounder, apiCsAccessAdd,
+    apiCsAccessDelete;
 import ircfiber.web.admin.invites : apiInvitesList, apiInviteRevoke, apiProvisionedList;
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
@@ -53,7 +56,7 @@ import ircfiber.web.admin.fibereye : apiFiberEyeOverview, apiFiberEyeSessions,
     apiFiberEyeBanRelease, apiFiberEyeReconnect, apiFiberEyeRulesGet,
     apiFiberEyeRulesSet, apiFiberEyeRulesReset, apiFiberEyeIrcdRules,
     apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce;
-import ircfiber.web.admin.emails : apiEmailsOverview, apiEmailsTest,
+import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignSend, apiEmailsOverview, apiEmailsTest,
     apiEmailsPendingResend, apiEmailsPendingRevoke, apiEmailsCooldownClear,
     apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
@@ -231,6 +234,9 @@ final class AdminController {
         router.post("/api/admin/emails/pending/:id/revoke", &adminWrap!apiEmailsPendingRevokeRoute);
         router.post("/api/admin/emails/cooldown/clear", &adminWrap!apiEmailsCooldownClearRoute);
         router.post("/api/admin/emails/ip-limit/clear", &adminWrap!apiEmailsIpLimitClearRoute);
+        // Bulk campaigns (Compose tab): audience preview + send-now fan-out.
+        router.get("/api/admin/emails/campaign/audience", &adminWrap!apiCampaignAudienceRoute);
+        router.post("/api/admin/emails/campaign/send", &adminWrap!apiCampaignSendRoute);
 
         // Engine janitor control plane
         router.get("/api/admin/janitor/status", &adminWrap!apiJanitorStatusRoute);
@@ -258,8 +264,20 @@ final class AdminController {
         router.post("/api/admin/ircd/nickserv/password", &adminWrap!apiNsResetPasswordRoute);
         router.post("/api/admin/ircd/nickserv/logout", &adminWrap!apiNsLogoutRoute);
         router.post("/api/admin/ircd/nickserv/link", &adminWrap!apiNsLinkRoute);
+        router.post("/api/admin/ircd/nickserv/unlink", &adminWrap!apiNsUnlinkRoute);
         router.get("/api/admin/ircd/nickserv/unprovisioned", &adminWrap!apiNsUnprovisionedRoute);
         router.post("/api/admin/ircd/nickserv/create", &adminWrap!apiNsCreateRoute);
+
+        // ChanServ (Anope) channel management, on the same IRCD page
+        router.get("/api/admin/ircd/chanserv/channels", &adminWrap!apiCsChannels);
+        router.get("/api/admin/ircd/chanserv/channel", &adminWrap!apiCsChannel);
+        router.post("/api/admin/ircd/chanserv/suspend", &adminWrap!apiCsSuspend);
+        router.post("/api/admin/ircd/chanserv/unsuspend", &adminWrap!apiCsUnsuspend);
+        router.post("/api/admin/ircd/chanserv/drop", &adminWrap!apiCsDrop);
+        router.post("/api/admin/ircd/chanserv/register", &adminWrap!apiCsRegister);
+        router.post("/api/admin/ircd/chanserv/founder", &adminWrap!apiCsFounder);
+        router.post("/api/admin/ircd/chanserv/access", &adminWrap!apiCsAccessAdd);
+        router.post("/api/admin/ircd/chanserv/access/delete", &adminWrap!apiCsAccessDelete);
         // !adduser invites + provisioned accounts, on the same IRCD page
         router.get("/api/admin/ircd/invites", &adminWrap!apiInvitesListRoute);
         router.post("/api/admin/ircd/invites/revoke", &adminWrap!apiInviteRevokeRoute);
@@ -489,7 +507,6 @@ private:
     void apiBackupsRunRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsRun(req, res); }
     void apiBackupsSuspendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsSuspend(req, res); }
     void apiBackupsLogsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBackupsLogs(req, res); }
-
     // Emails (signup verification delivery; all need redis)
     void apiEmailsOverviewRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsOverview(req, res, redis); }
     void apiEmailsTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsTest(req, res, redis); }
@@ -497,6 +514,8 @@ private:
     void apiEmailsPendingRevokeRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsPendingRevoke(req, res, redis); }
     void apiEmailsCooldownClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsCooldownClear(req, res, redis); }
     void apiEmailsIpLimitClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsIpLimitClear(req, res, redis); }
+    void apiCampaignAudienceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignAudience(req, res); }
+    void apiCampaignSendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignSend(req, res, redis); }
 
     // Janitor
     void apiJanitorStatusRoute(HTTPServerRequest req, HTTPServerResponse res) {

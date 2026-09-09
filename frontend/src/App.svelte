@@ -585,6 +585,23 @@ let showEditNetwork: boolean = $state(false);
     }
   }
 
+  // emoji-picker-element renders its search <input> inside shadow DOM, so
+  // keydown events retarget to the <emoji-picker> host (never an INPUT tag)
+  // and the global compose-autofocus below would yank focus back to
+  // #compose-input on every keystroke. Detect the picker via the retargeted
+  // target / composed path / active element and leave those keys alone.
+  function isEmojiPickerKey(e: KeyboardEvent): boolean {
+    const t = e.target as HTMLElement | null;
+    if (t?.closest?.('#emoji-popover, emoji-picker, .emoji-picker')) return true;
+    const path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    for (const el of path) {
+      if (el instanceof Element && (el.tagName === 'EMOJI-PICKER' || el.id === 'emoji-popover')) return true;
+    }
+    const active = document.activeElement as HTMLElement | null;
+    if (active?.closest?.('#emoji-popover, emoji-picker, .emoji-picker')) return true;
+    return false;
+  }
+
   function handleGlobalKeyboard(e: KeyboardEvent): void {
     // If the compose input already handled ArrowUp/Down for history/scroll,
     // don't also switch buffers (plain Arrow is handled in InputArea with
@@ -610,14 +627,18 @@ let showEditNetwork: boolean = $state(false);
       channelSwitcherOpen = true;
       return;
     }
-    if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEmojiPickerKey(e)) {
       const target = e.target as HTMLElement | null;
-      if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.isContentEditable !== true)) {
+      if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && target.tagName !== 'EMOJI-PICKER' && target.isContentEditable !== true)) {
         e.preventDefault();
         ircState.showShortcuts = true;
         history.pushState({ shortcuts: true }, '', '/?/shortcuts');
       }
     }
+    // Emoji picker search owns its keys: Esc closes the picker in InputArea
+    // (it bubbles here composed), and printable keys must never be stolen
+    // by the compose-autofocus below nor mark the buffer read.
+    if (isEmojiPickerKey(e)) return;
     if (e.key === 'Escape') {
       if (channelSwitcherOpen) {
         channelSwitcherOpen = false;

@@ -16,7 +16,7 @@ import { page } from 'vitest/browser';
 
 import Emails from './Emails.svelte';
 import * as ui from '/src/admin/stores/ui';
-import { api } from '/src/admin/lib/api-client';
+import { api, ApiError } from '/src/admin/lib/api-client';
 
 const mockedGet = api.get as unknown as Mock;
 const mockedPost = api.post as unknown as Mock;
@@ -54,6 +54,26 @@ vi.mock('/src/admin/stores/polling', () => ({
 const now = Date.now();
 const PENDING_ID = '0123456789abcdef';
 
+const templatesFixture = () => ([
+  {
+    id: 'announcement',
+    subject: 'News from IRC Fiber',
+    text: 'Hi {{username}},\n\nBody here.\n\nUnsubscribe: {{unsubscribe_url}}',
+  },
+  {
+    id: 'account-notice',
+    subject: 'A note about your account',
+    text: 'Hi {{username}} ({{email}})',
+  },
+]);
+
+const audienceFixture = () => ({
+  total: 2,
+  sample: [
+    { username: 'alice', email: 'alice@example.test', createdAt: now - 100_000 },
+    { username: 'bob', email: 'bob@example.test', createdAt: now - 200_000 },
+  ],
+});
 const overviewFixture = (provider?: Partial<Record<string, unknown>>) => ({
   provider: {
     provider: 'sender',
@@ -126,7 +146,11 @@ describe('Emails.svelte — signup verification delivery page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGet.mockImplementation((path: string) => {
-      if (path === '/api/admin/emails') return Promise.resolve(overviewFixture());
+      if (path === '/api/admin/emails')
+        return Promise.resolve({ ...overviewFixture(), templates: templatesFixture() });
+      if (path === '/api/admin/roles')
+        return Promise.resolve({ roles: [{ name: 'admin' }, { name: 'user' }] });
+      if (path === '/api/admin/emails/campaign/audience') return Promise.resolve(audienceFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     mockedPost.mockImplementation((path: string) => {
@@ -225,5 +249,85 @@ describe('Emails.svelte — signup verification delivery page', () => {
     await page.getByRole('button', { name: 'Previous page' }).click();
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+  });
+
+  it('Compose preview shows the audience count and sample, then enables Send', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await page.getByRole('tab', { name: 'Compose' }).click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/roles'));
+    // No preview for the current filters yet: Send stays disabled.
+    await expect.element(page.getByRole('button', { name: 'Send campaign' })).toBeDisabled();
+    await page.getByLabelText('Search').fill('example');
+    await page.getByRole('button', { name: 'Preview audience' }).click();
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails/campaign/audience', {
+        limit: 10, q: 'example',
+      }));
+    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
+    await expect.element(page.getByText('bob@example.test')).toBeInTheDocument();
+    await page.getByLabelText('Template').selectOptions('announcement');
+    await expect.element(page.getByRole('button', { name: 'Send campaign' })).toBeEnabled();
+  });
+
+  it('Send posts the raw fields once, renders the summary and re-fetches the log', async () => {
+    mockedPost.mockImplementation((path: string) => {
+      if (path === '/api/admin/emails/campaign/send')
+        return Promise.resolve({
+          sent: 2, failed: 0, skippedUnsubscribed: 1, total: 2, errors: [],
+        });
+      return Promise.reject(new Error('unexpected POST ' + path));
+    });
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await page.getByRole('tab', { name: 'Compose' }).click();
+    await page.getByLabelText('Search').fill('example');
+    await page.getByRole('button', { name: 'Preview audience' }).click();
+    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
+    await page.getByLabelText('Template').selectOptions('announcement');
+    await page.getByRole('button', { name: 'Send campaign' }).first().click();
+    await expect.element(page.getByText('Send this campaign?')).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Send campaign' }).last().click();
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    expect(api.post).toHaveBeenCalledWith('/api/admin/emails/campaign/send', {
+      role: '',
+      createdAfterMs: 0,
+      createdBeforeMs: 0,
+      q: 'example',
+      all: false,
+      subject: 'News from IRC Fiber',
+      text: 'Hi {{username}},\n\nBody here.\n\nUnsubscribe: {{unsubscribe_url}}',
+    }, { timeoutMs: 150_000 });
+    await expect.element(page.getByText(/sent 2.*failed 0.*skipped 1/)).toBeInTheDocument();
+    expect(mockedToastOk).toHaveBeenCalled();
+    // The campaign rows land in the send log: the overview is re-fetched.
+    await vi.waitFor(() => {
+      const overviews = mockedGet.mock.calls.filter((c) => c[0] === '/api/admin/emails');
+      expect(overviews.length).toBeGreaterThan(1);
+    });
+  });
+
+  it('an unfiltered send without the whole-audience confirm surfaces the backend refusal', async () => {
+    mockedPost.mockImplementation((path: string) => {
+      if (path === '/api/admin/emails/campaign/send')
+        return Promise.reject(
+          new ApiError('Narrow the audience or confirm sending to everyone.', 400));
+      return Promise.reject(new Error('unexpected POST ' + path));
+    });
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await page.getByRole('tab', { name: 'Compose' }).click();
+    await page.getByRole('button', { name: 'Preview audience' }).click();
+    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
+    await page.getByLabelText('Template').selectOptions('announcement');
+    await page.getByRole('button', { name: 'Send campaign' }).first().click();
+    await page.getByRole('button', { name: 'Send campaign' }).last().click();
+    await expect
+      .element(page.getByText('Narrow the audience or confirm sending to everyone.'))
+      .toBeInTheDocument();
+    expect(mockedToastErr).toHaveBeenCalled();
   });
 });

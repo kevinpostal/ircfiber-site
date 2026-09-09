@@ -38,6 +38,10 @@ string mailTestLockKey() @safe pure {
     return "irc:mail:test:lock";
 }
 
+string mailCampaignLockKey() @safe pure {
+    return "irc:mail:campaign:lock";
+}
+
 private string jsonStr(Json j, string key) @safe {
     try {
         auto v = j[key];
@@ -61,9 +65,11 @@ private long jsonLong(Json j, string key) @safe {
 
 /// One send attempt. `error` is the provider's own message on failure (the
 /// API token never reaches it — ircfiber.mail keeps it out of exceptions).
+/// `kind` is "signup_verification" | "admin_test" | "campaign" (one row per
+/// mailed recipient) | "campaign_summary" (one #staff-only line per send).
 struct MailEvent {
     long atMs;          /// unix ms
-    string kind;        /// "signup_verification" | "admin_test"
+    string kind;        /// "signup_verification" | "admin_test" | "campaign"
     string toEmail;
     string username;    /// "" for admin_test
     string provider;    /// MailSettings.provider at send time
@@ -198,14 +204,7 @@ final class MailEventLog {
     /// LPUSH + LTRIM + EXPIRE, then announce in #staff. Never throws: an
     /// unrecordable event must not fail the send it describes.
     void record(MailEvent e) {
-        try {
-            auto d = db();
-            d.request!string("LPUSH", mailEventsKey(), e.toJson().toString());
-            d.request!string("LTRIM", mailEventsKey(), "0", (mailEventsCap - 1).to!string);
-            d.expire(mailEventsKey(), mailEventTtlSeconds);
-        } catch (Exception ex) {
-            logWarn("mail-events: recording %s send to %s failed: %s", e.status, e.toEmail, ex.msg);
-        }
+        recordQuiet(e);
         // This is the choke point every sendMail caller already passes
         // through on success and on failure, so the #staff feed is fed
         // here rather than at the three send sites.
@@ -221,6 +220,22 @@ final class MailEventLog {
         le.durationMs = e.durationMs;
         le.ip = e.sourceIp;
         pushLogEvent(this.redis, le);
+    }
+
+    /// The Redis half of `record` WITHOUT the #staff announce. Campaign
+    /// sends log one row per recipient (up to 200): announcing each would
+    /// flood oper-only #staff and evict queued signup/connect announcements
+    /// from the 1000-entry outbox, so the campaign path records quietly and
+    /// pushes ONE `campaign_summary` line after the loop instead.
+    void recordQuiet(MailEvent e) {
+        try {
+            auto d = db();
+            d.request!string("LPUSH", mailEventsKey(), e.toJson().toString());
+            d.request!string("LTRIM", mailEventsKey(), "0", (mailEventsCap - 1).to!string);
+            d.expire(mailEventsKey(), mailEventTtlSeconds);
+        } catch (Exception ex) {
+            logWarn("mail-events: recording %s send to %s failed: %s", e.status, e.toEmail, ex.msg);
+        }
     }
 
     /// Newest first (LRANGE order). Unparseable entries are skipped;

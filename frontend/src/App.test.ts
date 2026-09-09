@@ -98,6 +98,8 @@ vi.mock('/src/stores/api', () => ({
   fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: null, networks: [], playbackLines: 200, playbackMax: 1000 })),
   generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: 'token', networks: [], playbackLines: 200, playbackMax: 1000 })),
   revokeBouncerPassword: vi.fn(async () => undefined),
+  fetchBouncerClients: vi.fn(async () => ({ clients: [], now: Date.now() })),
+  disconnectBouncerClient: vi.fn(async () => undefined),
   // Remaining api surface (dialogs/panels imported by App) — inert stubs.
   updateBncPlaybackLines: vi.fn(async () => undefined),
   updateNotificationPrefs: vi.fn(async () => undefined),

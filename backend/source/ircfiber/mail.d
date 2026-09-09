@@ -53,6 +53,8 @@ struct MailMessage {
     string subject;
     string text;
     string html;
+    /// One-click unsubscribe URL for bulk campaign mail. Empty = no header.
+    string listUnsubscribeUrl = "";
 }
 
 class MailException : Exception {
@@ -99,6 +101,10 @@ Json senderNetPayload(const MailSettings s, const MailMessage m) @safe {
 
 /// Pure: the exact JSON Resend expects. `from` is a single RFC 5322 address
 /// ("IRC Fiber <no-reply@…>"), and `to` is an array even for one recipient.
+/// A non-empty `listUnsubscribeUrl` adds `headers: {"List-Unsubscribe":
+/// "<url>"}` (angle brackets are the RFC 2369 form). sender.net gets no
+/// header: its template API has no verified headers surface, so campaign
+/// sends there carry the unsubscribe link in the body footer only.
 Json resendPayload(const MailSettings s, const MailMessage m) @safe {
     Json payload = Json.emptyObject;
     payload["from"] = Json(s.fromName.length > 0
@@ -108,6 +114,11 @@ Json resendPayload(const MailSettings s, const MailMessage m) @safe {
     payload["subject"] = Json(m.subject);
     payload["text"] = Json(m.text);
     payload["html"] = Json(m.html);
+    if (m.listUnsubscribeUrl.length > 0) {
+        Json headers = Json.emptyObject;
+        headers["List-Unsubscribe"] = Json("<" ~ m.listUnsubscribeUrl ~ ">");
+        payload["headers"] = headers;
+    }
     return payload;
 }
 

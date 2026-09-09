@@ -375,32 +375,176 @@ struct AnopeInventory {
     AnopeAccount[] accounts;
 }
 
-/// Read + parse `anope.db`. Never throws: every failure lands in `reason`.
-AnopeInventory readAnopeInventory() {
+/// Reads the configured flatfile. `reason` is the admin-facing explanation
+/// when it returns false; `mtime` is unix seconds so the UI can say "as of".
+private bool readAnopeDbFile(out string raw, out long mtime, out string reason) {
     import std.file : exists, getSize, read, timeLastModified;
 
-    AnopeInventory inv;
+    raw = "";
+    mtime = 0;
+    reason = "";
     const path = anopeDbPath();
     if (!path.length) {
-        inv.reason = "IRCFIBER_ANOPE_DB_PATH is not set";
-        return inv;
+        reason = "IRCFIBER_ANOPE_DB_PATH is not set";
+        return false;
     }
     try {
         if (!exists(path)) {
-            inv.reason = "anope.db not found at " ~ path;
-            return inv;
+            reason = "anope.db not found at " ~ path;
+            return false;
         }
         if (getSize(path) > ANOPE_DB_MAX_BYTES) {
-            inv.reason = "anope.db is larger than 32 MiB";
-            return inv;
+            reason = "anope.db is larger than 32 MiB";
+            return false;
         }
-        inv.fileMtime = timeLastModified(path).toUnixTime!long;
-        const raw = cast(string) read(path, cast(size_t) ANOPE_DB_MAX_BYTES);
+        mtime = timeLastModified(path).toUnixTime!long;
+        raw = cast(string) read(path, cast(size_t) ANOPE_DB_MAX_BYTES);
+        return true;
+    } catch (Exception e) {
+        raw = "";
+        mtime = 0;
+        reason = e.msg;
+        return false;
+    }
+}
+
+/// Read + parse `anope.db`. Never throws: every failure lands in `reason`.
+AnopeInventory readAnopeInventory() {
+    AnopeInventory inv;
+    string raw;
+    if (!readAnopeDbFile(raw, inv.fileMtime, inv.reason)) return inv;
+    try {
         inv.accounts = anopeAccountsFromDb(raw);
         inv.available = true;
     } catch (Exception e) {
         inv.available = false;
         inv.accounts = null;
+        inv.reason = e.msg;
+    }
+    return inv;
+}
+
+// ---------------------------------------------------------------------------
+// Channel inventory (admin ChanServ section)
+// ---------------------------------------------------------------------------
+
+/**
+ * One registered channel, as Anope's `db_flatfile` records it: an
+ * `OBJECT ChannelInfo` joined to any `OBJECT CSSuspendInfo` naming it and to
+ * the count of `OBJECT ChanAccess` records pointing at it.
+ *
+ * Anope 2.0.20 writes extensible flags as bare `DATA <FLAG> 1` lines (no
+ * `extensible:` prefix), which is what the flag reads below rely on.
+ */
+struct AnopeChannel {
+    string name;               /// ChannelInfo "name"
+    string founder;            /// "founder" — a NickCore display; "" when the core was dropped
+    string successor;          /// "successor"; absent in the file when unset
+    string description;        /// "description"; often empty
+    long registeredAt;         /// "time_registered", unix seconds, 0 when absent
+    long lastUsedAt;           /// "last_used"
+    string lastTopic;          /// "last_topic"
+    string lastTopicSetter;    /// "last_topic_setter"
+    long lastTopicAt;          /// "last_topic_time"
+    string bot;                /// "bi" — assigned BotServ bot, "" when none
+    long accessCount;          /// ChanAccess records whose "ci" is this channel
+    bool noExpire;             /// bare "CS_NO_EXPIRE" flag
+    bool isPrivate;            /// bare "CS_PRIVATE"
+    bool persistent;           /// bare "PERSIST"
+    bool suspended;            /// a CSSuspendInfo names this channel
+    string suspendedBy;        /// CSSuspendInfo "by"
+    string suspendReason;      /// "reason"
+    long suspendedAt;          /// "time"
+    long suspendExpiresAt;     /// "expires", 0 = never
+}
+
+/**
+ * Assemble the channel inventory. Both joins (`CSSuspendInfo.chan`,
+ * `ChanAccess.ci`) are ASCII case-insensitive because channel names are.
+ * Sorted by name, case-insensitively.
+ *
+ * A channel whose founder core is gone keeps an empty `founder` rather than
+ * dropping out: the admin needs to see that the registration exists.
+ */
+AnopeChannel[] anopeChannelsFromDb(string contents) @safe pure {
+    import std.algorithm.sorting : sort;
+
+    auto records = parseAnopeDb(contents);
+
+    AnopeDbRecord[string] suspensions;   // lower(chan) → CSSuspendInfo
+    long[string] accessCounts;           // lower(ci)   → ChanAccess rows
+    foreach (ref rec; records) {
+        switch (rec.type) {
+            case "CSSuspendInfo":
+                const chan = field(rec, "chan");
+                if (chan.length) suspensions[asciiLowerStr(chan)] = rec;
+                break;
+            case "ChanAccess":
+                const ci = field(rec, "ci");
+                if (ci.length) accessCounts[asciiLowerStr(ci)] += 1;
+                break;
+            default:
+                break;
+        }
+    }
+
+    AnopeChannel[] rows;
+    foreach (ref rec; records) {
+        if (rec.type != "ChannelInfo") continue;
+        const name = field(rec, "name");
+        if (!name.length) continue;
+
+        AnopeChannel c;
+        c.name = name;
+        c.founder = field(rec, "founder");
+        c.successor = field(rec, "successor");
+        c.description = field(rec, "description");
+        c.registeredAt = parseUnixTime(field(rec, "time_registered"));
+        c.lastUsedAt = parseUnixTime(field(rec, "last_used"));
+        c.lastTopic = field(rec, "last_topic");
+        c.lastTopicSetter = field(rec, "last_topic_setter");
+        c.lastTopicAt = parseUnixTime(field(rec, "last_topic_time"));
+        c.bot = field(rec, "bi");
+        c.noExpire = field(rec, "CS_NO_EXPIRE") == "1";
+        c.isPrivate = field(rec, "CS_PRIVATE") == "1";
+        c.persistent = field(rec, "PERSIST") == "1";
+
+        const key = asciiLowerStr(name);
+        if (auto n = key in accessCounts) c.accessCount = *n;
+        if (auto sus = key in suspensions) {
+            c.suspended = true;
+            c.suspendedBy = field(*sus, "by");
+            c.suspendReason = field(*sus, "reason");
+            c.suspendedAt = parseUnixTime(field(*sus, "time"));
+            c.suspendExpiresAt = parseUnixTime(field(*sus, "expires"));
+        }
+        rows ~= c;
+    }
+
+    sort!((a, b) => asciiICmp(a.name, b.name) < 0)(rows);
+    return rows;
+}
+
+/// Outcome of one channel-inventory read; `available == false` is an expected
+/// state the admin UI explains via `reason` instead of failing.
+struct AnopeChannelInventory {
+    bool available;
+    string reason;
+    long fileMtime;            /// unix seconds, so the UI can show "as of"
+    AnopeChannel[] channels;
+}
+
+/// Read + parse the channel side of `anope.db`. Never throws.
+AnopeChannelInventory readAnopeChannelInventory() {
+    AnopeChannelInventory inv;
+    string raw;
+    if (!readAnopeDbFile(raw, inv.fileMtime, inv.reason)) return inv;
+    try {
+        inv.channels = anopeChannelsFromDb(raw);
+        inv.available = true;
+    } catch (Exception e) {
+        inv.available = false;
+        inv.channels = null;
         inv.reason = e.msg;
     }
     return inv;

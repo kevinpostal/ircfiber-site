@@ -855,7 +855,7 @@
         </thead>
         <tbody data-testid="ns-accounts-rows">
           {#each paged as a}
-            <tr class="border-b border-border/50 last:border-0">
+            <tr class="border-b border-border/50 transition-opacity last:border-0 {droppingNick === a.nick ? 'opacity-40' : ''}">
               <td class="py-2 pr-4 font-mono font-semibold">{a.nick}</td>
               <td class="py-2 pr-4 font-mono text-muted">{a.account || '—'}</td>
               <td class="py-2 pr-4">

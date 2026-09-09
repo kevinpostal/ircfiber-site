@@ -61,6 +61,7 @@
     cooldowns: CooldownRow[];
     ipCounters: IpRow[];
     redisError: string;
+    templates?: CampaignTemplate[];
   }
 
   let overview = $state<Overview | null>(null);
@@ -80,7 +81,8 @@
   type Ask =
     | { action: 'test'; email: string }
     | { action: 'resend'; row: PendingRow }
-    | { action: 'revoke'; row: PendingRow };
+    | { action: 'revoke'; row: PendingRow }
+    | { action: 'campaign' };
   let ask = $state<Ask | null>(null);
   let acting = $state(false);
 
@@ -146,7 +148,8 @@
   const askTitle = $derived(
     ask?.action === 'test' ? 'Send a test email?'
       : ask?.action === 'resend' ? `Resend the link to ${ask.row.email}?`
-        : ask?.action === 'revoke' ? `Revoke the signup for ${ask.row.username}?` : '');
+        : ask?.action === 'revoke' ? `Revoke the signup for ${ask.row.username}?`
+          : ask?.action === 'campaign' ? 'Send this campaign?' : '');
   const askMessage = $derived(
     ask?.action === 'test'
       ? `A real message is sent to ${ask.email} through the configured provider.`
@@ -154,7 +157,9 @@
         ? `The same confirmation link is emailed again to ${ask.row.email}. The existing link keeps working.`
         : ask?.action === 'revoke'
           ? `The pending signup for ${ask.row.email} is dropped and its link stops working. The address can sign up again immediately.`
-          : '');
+          : ask?.action === 'campaign'
+            ? `Send "${subject}" to ${audienceCount} addresses from ${overview?.provider.fromName} <${overview?.provider.fromEmail}>? Every mail carries a List-Unsubscribe link.`
+            : '');
 
   async function doConfirm() {
     if (!ask || acting) return;
@@ -166,6 +171,23 @@
         testError = null;
         const r = await api.post<{ email: string }>('/api/admin/emails/test', { email: current.email });
         toastSuccess(`Test email sent to ${r.email}`);
+      } else if (current.action === 'campaign') {
+        sending = true;
+        composeError = null;
+        // This POST can run ~2 min at 200 recipients: a long timeout on
+        // THIS call only, via the per-call option (no global change).
+        const r = await api.post<SendResult>('/api/admin/emails/campaign/send', {
+          role: fRole,
+          createdAfterMs: dateToMs(fAfter, false),
+          createdBeforeMs: dateToMs(fBefore, true),
+          q: fQ.trim(),
+          all: sendAll,
+          subject,
+          text: bodyText,
+        }, { timeoutMs: 150_000 });
+        sendResult = r;
+        previewKey = null;
+        toastSuccess(`Campaign sent to ${r.sent} addresses`);
       } else if (current.action === 'resend') {
         const r = await api.post<{ email: string }>(
           `/api/admin/emails/pending/${current.row.id}/resend`);
@@ -180,10 +202,12 @@
     } catch (e) {
       const msg = errMsg(e);
       if (current.action === 'test') testError = msg;
+      if (current.action === 'campaign') composeError = msg;
       toastError(msg);
     } finally {
       acting = false;
       testing = false;
+      sending = false;
     }
   }
 
@@ -206,6 +230,114 @@
       toastError(errMsg(e));
     }
   }
+
+  let tab = $state<'delivery' | 'compose'>('delivery');
+
+  interface CampaignTemplate { id: string; subject: string; text: string; }
+  interface AudienceSample { username: string; email: string; createdAt: number; }
+  interface Audience { total: number; sample: AudienceSample[]; }
+  interface SendResult {
+    sent: number; failed: number; skippedUnsubscribed: number; total: number;
+    errors: { email: string; error: string }[];
+  }
+
+  let roleCatalog = $state<string[]>([]);
+  let rolesLoaded = false;
+  let fRole = $state('');
+  let fAfter = $state('');
+  let fBefore = $state('');
+  let fQ = $state('');
+  let sendAll = $state(false);
+  let audience = $state<Audience | null>(null);
+  let previewKey = $state<string | null>(null);
+  let previewing = $state(false);
+  let previewError = $state<string | null>(null);
+  let templateId = $state('blank');
+  let subject = $state('');
+  let bodyText = $state('');
+  let sending = $state(false);
+  let composeError = $state<string | null>(null);
+  let sendResult = $state<SendResult | null>(null);
+
+  const templates = $derived<CampaignTemplate[]>(overview?.templates ?? []);
+  const filterKey = $derived(JSON.stringify([fRole, fAfter, fBefore, fQ, sendAll]));
+  /// Send stays disabled until a preview ran for the current filter set.
+  const previewStale = $derived(previewKey === null || previewKey !== filterKey);
+  const audienceCount = $derived(audience?.total ?? 0);
+
+  function dateToMs(day: string, endOfDay: boolean): number {
+    if (!day) return 0;
+    const ms = Date.parse(day);
+    if (Number.isNaN(ms)) return 0;
+    return endOfDay ? ms + 86_399_999 : ms;
+  }
+
+  async function openCompose() {
+    tab = 'compose';
+    if (!rolesLoaded) {
+      rolesLoaded = true;
+      try {
+        const data = await api.get<{ roles: { name: string }[] }>('/api/admin/roles');
+        roleCatalog = (data.roles ?? []).map((r) => r.name);
+      } catch {
+        roleCatalog = [];
+      }
+    }
+  }
+
+  async function previewAudience() {
+    if (previewing) return;
+    previewing = true;
+    previewError = null;
+    try {
+      const params: Record<string, string | number> = { limit: 10 };
+      if (fRole) params.role = fRole;
+      const afterMs = dateToMs(fAfter, false);
+      const beforeMs = dateToMs(fBefore, true);
+      if (afterMs > 0) params.createdAfter = afterMs;
+      if (beforeMs > 0) params.createdBefore = beforeMs;
+      if (fQ.trim()) params.q = fQ.trim();
+      audience = await api.get<Audience>('/api/admin/emails/campaign/audience', params);
+      previewKey = filterKey;
+    } catch (e) {
+      previewError = errMsg(e);
+    } finally {
+      previewing = false;
+    }
+  }
+
+  function pickTemplate(id: string) {
+    templateId = id;
+    const t = templates.find((x) => x.id === id);
+    if (t) {
+      subject = t.subject;
+      bodyText = t.text;
+    } else {
+      subject = '';
+      bodyText = '';
+    }
+  }
+
+  /// Live preview: server-side substitution is authoritative; this mirrors
+  /// it with the first sample row (or neutral fallbacks) and a stand-in
+  /// token, labeled as a preview below.
+  function previewSubstitute(src: string): string {
+    const first = audience?.sample[0];
+    return src
+      .replaceAll('{{username}}', first?.username ?? 'subscriber')
+      .replaceAll('{{email}}', first?.email ?? 'subscriber@example.com')
+      .replaceAll(
+        '{{unsubscribe_url}}',
+        `${overview?.provider.publicUrl ?? ''}/unsubscribe?token=preview`,
+      );
+  }
+  const previewSubject = $derived(previewSubstitute(subject));
+  const previewBody = $derived(previewSubstitute(bodyText));
+
+  function confirmCampaign() {
+    if (!audience || previewStale || sending) return;
+    ask = { action: 'campaign' };
+  }
 </script>
 
 <PageHeader
@@ -224,9 +356,31 @@
   {/snippet}
 </PageHeader>
 
+<div class="mb-4 flex gap-1 border-b border-border" role="tablist" aria-label="Emails sections">
+  <button
+    type="button"
+    role="tab"
+    aria-selected={tab === 'delivery'}
+    onclick={() => { tab = 'delivery'; }}
+    class="border-b-2 px-3 py-1.5 text-sm {tab === 'delivery' ? 'border-primary text-text' : 'border-transparent text-muted hover:text-text'}"
+  >
+    Delivery
+  </button>
+  <button
+    type="button"
+    role="tab"
+    aria-selected={tab === 'compose'}
+    onclick={() => void openCompose()}
+    class="border-b-2 px-3 py-1.5 text-sm {tab === 'compose' ? 'border-primary text-text' : 'border-transparent text-muted hover:text-text'}"
+  >
+    Compose
+  </button>
+</div>
+
 {#if overviewError}
   <Card><p class="text-sm text-danger">{overviewError}</p></Card>
 {:else if overview}
+  {#if tab === 'delivery'}
   <Card>
     <div class="mb-3 flex items-center justify-between">
       <h3 class="text-sm font-semibold text-heading">Provider</h3>
@@ -530,6 +684,189 @@
       </div>
     </Card>
   </div>
+  {:else}
+    <Card>
+      <h3 class="mb-3 text-sm font-semibold text-heading">Audience</h3>
+      <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <label for="campaign-role" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Role</label>
+          <select
+            id="campaign-role"
+            bind:value={fRole}
+            class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+          >
+            <option value="">All roles</option>
+            {#each roleCatalog as r (r)}
+              <option value={r}>{r}</option>
+            {/each}
+          </select>
+        </div>
+        <div>
+          <label for="campaign-after" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Created after</label>
+          <input
+            id="campaign-after"
+            type="date"
+            bind:value={fAfter}
+            class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+          />
+        </div>
+        <div>
+          <label for="campaign-before" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Created before</label>
+          <input
+            id="campaign-before"
+            type="date"
+            bind:value={fBefore}
+            class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+          />
+        </div>
+        <div>
+          <label for="campaign-q" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Search</label>
+          <input
+            id="campaign-q"
+            type="search"
+            bind:value={fQ}
+            placeholder="username or email"
+            class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+          />
+        </div>
+      </div>
+      <div class="mt-3 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onclick={() => void previewAudience()}
+          disabled={previewing}
+          class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
+        >
+          {previewing ? 'Previewing…' : 'Preview audience'}
+        </button>
+        <label class="flex items-center gap-2 text-xs text-muted">
+          <input type="checkbox" bind:checked={sendAll} class="accent-primary" />
+          Send to the whole audience
+        </label>
+      </div>
+      {#if previewError}
+        <p class="mt-2 text-xs text-danger">{previewError}</p>
+      {/if}
+      {#if audience}
+        <p class="mt-3 text-sm">
+          <span class="font-mono font-semibold">{audience.total}</span>
+          <span class="text-muted"> {audience.total === 1 ? 'address' : 'addresses'}</span>
+          {#if previewStale}
+            <span class="ml-2 text-xs text-warn">Filters changed — preview again before sending.</span>
+          {/if}
+        </p>
+        {#if audience.sample.length > 0}
+          <div class="mt-2 overflow-x-auto">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="border-b border-border text-xs uppercase tracking-wider text-muted">
+                  <th class="py-2 pr-4">Username</th>
+                  <th class="py-2 pr-4">Email</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each audience.sample as s (s.email)}
+                  <tr class="border-b border-border/50 last:border-0">
+                    <td class="py-2 pr-4 font-mono">{s.username}</td>
+                    <td class="py-2 pr-4 font-mono text-muted">{s.email}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      {/if}
+    </Card>
+
+    <div class="mt-4">
+      <Card>
+        <h3 class="mb-3 text-sm font-semibold text-heading">Message</h3>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <div>
+            <label for="campaign-template" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Template</label>
+            <select
+              id="campaign-template"
+              value={templateId}
+              onchange={(e) => pickTemplate(e.currentTarget.value)}
+              class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+            >
+              <option value="blank">Blank</option>
+              {#each templates as t (t.id)}
+                <option value={t.id}>{t.id}</option>
+              {/each}
+            </select>
+          </div>
+          <div>
+            <span class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">From</span>
+            <p class="py-1 font-mono text-sm text-muted">{overview.provider.fromName} &lt;{overview.provider.fromEmail}&gt;</p>
+          </div>
+        </div>
+        <div class="mt-3">
+          <label for="campaign-subject" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Subject</label>
+          <input
+            id="campaign-subject"
+            type="text"
+            bind:value={subject}
+            oninput={() => { templateId = 'blank'; }}
+            placeholder="Subject (1–200 characters)"
+            class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+          />
+        </div>
+        <div class="mt-3">
+          <label for="campaign-body" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Body</label>
+          <textarea
+            id="campaign-body"
+            bind:value={bodyText}
+            oninput={() => { templateId = 'blank'; }}
+            rows={8}
+            placeholder="Body (1–20000 characters). Variables: {'{{username}}'} {'{{email}}'} {'{{unsubscribe_url}}'}"
+            class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 font-mono text-sm"
+          ></textarea>
+        </div>
+        {#if subject || bodyText}
+          <div class="mt-3 rounded-md border border-border bg-surface-2 px-3 py-2">
+            <p class="mb-1 text-xs uppercase tracking-wider text-muted">Preview (first recipient, stand-in unsubscribe link)</p>
+            <p class="text-sm font-semibold">{previewSubject || '—'}</p>
+            <p class="mt-1 whitespace-pre-wrap text-sm text-muted">{previewBody || '—'}</p>
+          </div>
+        {/if}
+        {#if composeError}
+          <p class="mt-2 text-xs text-danger">{composeError}</p>
+        {/if}
+        <div class="mt-3">
+          <button
+            type="button"
+            onclick={confirmCampaign}
+            disabled={sending || !audience || previewStale || !subject.trim() || !bodyText.trim()}
+            class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
+          >
+            {sending ? 'Sending…' : 'Send campaign'}
+          </button>
+        </div>
+      </Card>
+    </div>
+
+    {#if sendResult}
+      <div class="mt-4">
+        <Card>
+          <h3 class="mb-2 text-sm font-semibold text-heading">Result</h3>
+          <p class="text-sm">
+            sent {sendResult.sent} · failed {sendResult.failed} · unsubscribed skipped {sendResult.skippedUnsubscribed}
+          </p>
+          {#if sendResult.errors.length > 0}
+            <details class="mt-2">
+              <summary class="cursor-pointer text-xs text-muted">{sendResult.errors.length} errors</summary>
+              <ul class="mt-1 space-y-1 text-xs">
+                {#each sendResult.errors as row (row.email)}
+                  <li class="font-mono"><span class="text-danger">{row.email}</span> <span class="text-muted">{row.error}</span></li>
+                {/each}
+              </ul>
+            </details>
+          {/if}
+        </Card>
+      </div>
+    {/if}
+  {/if}
 {:else}
   <Card><p class="text-sm text-muted">Loading…</p></Card>
 {/if}
@@ -538,7 +875,7 @@
   open={ask !== null}
   title={askTitle}
   message={askMessage}
-  confirmLabel={acting ? 'Working…' : ask?.action === 'test' ? 'Send test' : ask?.action === 'resend' ? 'Resend' : 'Revoke'}
+  confirmLabel={acting ? 'Working…' : ask?.action === 'test' ? 'Send test' : ask?.action === 'resend' ? 'Resend' : ask?.action === 'campaign' ? 'Send campaign' : 'Revoke'}
   cancelLabel="Cancel"
   tone={ask?.action === 'revoke' ? 'danger' : 'primary'}
   onConfirm={doConfirm}

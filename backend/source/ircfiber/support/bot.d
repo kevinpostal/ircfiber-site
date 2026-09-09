@@ -335,11 +335,8 @@ final class SupportBot : IrcBot {
         import std.random : uniform;
         import std.uuid : randomUUID;
         import ircfiber.auth : hashPassword;
-        import ircfiber.db.network : NetworkRepository;
         import ircfiber.db.user : UserRepository;
-        import ircfiber.default_network : ensureDefaultFiberNetwork;
         import ircfiber.invites : InvitePending, InviteStore, inviteLink, newInviteToken;
-        import ircfiber.irc.registry : ServerRegistry;
         import ircfiber.logs.events : LogEvent, pushLogEvent;
         import ircfiber.mail : emailWellFormed;
         import ircfiber.models.user : User;
@@ -446,13 +443,17 @@ final class SupportBot : IrcBot {
             catch (Exception) {}
             return;
         }
-        // Idempotent Fiber network; never REGISTER a new NickServ account here.
+        // No Fiber network here: provisioning one would push an `addNetwork`
+        // control message and the engine would immediately connect as this
+        // nick — squatting a live IRC user (or riding `nick_` while they
+        // hold it), unidentified and without their consent. The network is
+        // created on first site login instead, where loginPost proves
+        // NickServ ownership and captures the SASL credential. Never
+        // REGISTER a new NickServ account here either.
         RedisStorage redis;
         try {
             redis = new RedisStorage();
             redis.connectFromUrl(sb.redisUrl);
-            try ensureDefaultFiberNetwork(u, new NetworkRepository(), redis, new ServerRegistry(redis));
-            catch (Exception e) logWarn("support bot: !adduser network for %s failed: %s", account, e.msg);
             // Staff feed: same signup event createAccountAndLogin emits.
             try {
                 LogEvent le;
