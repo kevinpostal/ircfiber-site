@@ -183,6 +183,15 @@ block head
     .auth-button { width: 100%; padding: 10px 16px; margin-top: 6px; background: var(--accent); color: #fff; border: none; font-size: 13px; font-weight: 700; cursor: pointer; letter-spacing: 0.02em; transition: background 0.15s ease; }
     .auth-button:hover { background: #4a9eff; }
     .auth-button:active { opacity: 0.9; }
+    /* Social OAuth buttons (rendered by the scripts-block fetch when a
+       provider is configured; the :empty rule keeps the card password-only
+       otherwise). Secondary variant of .auth-button. */
+    .auth-oauth { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+    .auth-oauth:empty { display: none; }
+    .auth-oauth__button { background: #111; color: var(--ink); border: 1px solid var(--line); text-decoration: none; text-align: center; margin-top: 0; }
+    .auth-oauth__button:hover { background: #161616; border-color: var(--accent); }
+    .auth-oauth__divider { display: flex; align-items: center; gap: 10px; color: var(--ink-muted); font-size: 11px; }
+    .auth-oauth__divider::before, .auth-oauth__divider::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
     .auth-meta { display: flex; align-items: center; justify-content: space-between; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink-muted); }
     .auth-meta a { color: var(--accent); text-decoration: none; }
     .auth-meta a:hover { text-decoration: underline; }
@@ -294,6 +303,7 @@ block body
 
       - if (authError.length > 0)
         .auth-error(role="alert") #{authError}
+      .auth-oauth#oauth-providers
 
       form.auth-form(method="POST", action="/login", autocomplete="on", novalidate)
         .auth-field
@@ -326,4 +336,33 @@ block scripts
           location.href = a.getAttribute('href');
         });
       });
+    })();
+    // Social OAuth buttons (progressive enhancement): fetch the configured
+    // providers and render Continue-with anchors above the form. Renders
+    // nothing when no provider is configured — the card stays password-only.
+    (function() {
+      var box = document.getElementById('oauth-providers');
+      if (!box || !window.fetch) return;
+      fetch('/api/auth/providers', { credentials: 'same-origin' }).then(function(res) {
+        if (!res.ok) return null;
+        return res.json();
+      }).then(function(data) {
+        if (!data || !Array.isArray(data.providers) || !data.providers.length) return;
+        data.providers.forEach(function(p) {
+          if (!p || typeof p.name !== 'string' || typeof p.label !== 'string') return;
+          var a = document.createElement('a');
+          a.className = 'auth-button auth-oauth__button';
+          a.href = '/auth/' + encodeURIComponent(p.name);
+          a.setAttribute('data-provider', p.name);
+          a.textContent = 'Continue with ' + p.label;
+          box.appendChild(a);
+        });
+        var div = document.createElement('div');
+        div.className = 'auth-oauth__divider';
+        div.setAttribute('aria-hidden', 'true');
+        var span = document.createElement('span');
+        span.textContent = 'or';
+        div.appendChild(span);
+        box.appendChild(div);
+      }).catch(function() {});
     })();

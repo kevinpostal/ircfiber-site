@@ -314,6 +314,22 @@
       flex-shrink: 0;
     }
     .topbar-signin:hover { color: var(--fiber-snow); background: var(--fiber-line-2); text-decoration: none; }
+    /* Social OAuth shortcuts (rendered by the bottom fetch when a provider
+       is configured; :empty keeps them out of the layout otherwise). */
+    .topbar-oauth { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .topbar-oauth:empty { display: none; }
+    .topbar-oauth a {
+      color: var(--fiber-fog);
+      font: 600 12px/1 var(--font-sans);
+      white-space: nowrap;
+      padding: 7px 10px;
+      border: 1px solid var(--fiber-line);
+      border-radius: 6px;
+      transition: color var(--t-fast), border-color var(--t-fast);
+    }
+    .topbar-oauth a:hover { color: var(--fiber-snow); border-color: var(--fiber-blue-dim); text-decoration: none; }
+    .cta-oauth { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; margin-top: var(--s-3); }
+    .cta-oauth:empty { display: none; }
 
     @media (max-width: 1280px) {
       .status-pill { display: none; }
@@ -323,6 +339,7 @@
        stays visible so existing users can still reach /login on mobile. */
     @media (max-width: 1080px) {
       .topbar-form { display: none; }
+      .topbar-oauth { display: none; }
       .topbar-signin { display: inline-flex; }
     }
     @media (max-width: 900px) {
@@ -1219,6 +1236,7 @@
         <input type="password" name="password" placeholder="Password" required autocomplete="current-password" />
         <button type="submit">Sign in</button>
       </form>
+      <span class="topbar-oauth" id="topbar-oauth"></span>
 
       <a class="topbar-signin" href="/login" aria-label="Sign in to IRC Fiber">Sign in</a>
 
@@ -1658,6 +1676,7 @@
             <a class="btn btn-primary lg" href="/register">Create account <span class="arrow">→</span></a>
             <a class="btn btn-ghost lg" href="#preview">Watch a tour</a>
           </div>
+          <div class="cta-oauth" id="cta-oauth"></div>
           <p class="cta-meta">no billing <span class="accent">·</span> all features <span class="accent">·</span> export your scrollback anytime</p>
         </div>
       </div>
@@ -1837,6 +1856,42 @@
       function boot() {
         buildIRCChat();
         rotateComposerHint();
+        renderOAuthProviders();
+      }
+      // Social OAuth shortcuts (progressive enhancement): fetch the
+      // configured providers and render compact topbar links plus
+      // Continue-with buttons in the signup CTA. Renders nothing when no
+      // provider is configured — the page is unchanged.
+      function renderOAuthProviders() {
+        if (!window.fetch) return;
+        var top = document.getElementById('topbar-oauth');
+        var cta = document.getElementById('cta-oauth');
+        if (!top && !cta) return;
+        fetch('/api/auth/providers', { credentials: 'same-origin' }).then(function (res) {
+          if (!res.ok) return null;
+          return res.json();
+        }).then(function (data) {
+          if (!data || !Array.isArray(data.providers) || !data.providers.length) return;
+          data.providers.forEach(function (p) {
+            if (!p || typeof p.name !== 'string' || typeof p.label !== 'string') return;
+            if (top) {
+              var t = document.createElement('a');
+              t.href = '/auth/' + encodeURIComponent(p.name);
+              t.setAttribute('data-provider', p.name);
+              t.setAttribute('aria-label', 'Sign in with ' + p.label);
+              t.textContent = p.label;
+              top.appendChild(t);
+            }
+            if (cta) {
+              var c = document.createElement('a');
+              c.className = 'btn btn-ghost lg';
+              c.href = '/auth/' + encodeURIComponent(p.name);
+              c.setAttribute('data-provider', p.name);
+              c.textContent = 'Continue with ' + p.label;
+              cta.appendChild(c);
+            }
+          });
+        }).catch(function () {});
       }
 
       if (document.readyState === 'loading') {
