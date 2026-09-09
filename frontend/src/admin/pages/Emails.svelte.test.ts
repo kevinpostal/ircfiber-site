@@ -1,18 +1,10 @@
 /**
- * Emails.svelte — admin Emails page (signup verification delivery).
- *
- * Coverage:
- *  1. Overview fixture with one failed send: the provider's rejection text
- *     renders and the Failed (24 h) KPI shows 1.
- *  2. Revoke on the pending row + confirm posts exactly
- *     /api/admin/emails/pending/<id>/revoke and toasts success.
- *  3. Verification required with no provider: the Not configured badge
- *     renders and Send test is disabled.
+ * Emails.svelte — Deliver | Compose | Campaign.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 
 import Emails from './Emails.svelte';
 import * as ui from '/src/admin/stores/ui';
@@ -22,18 +14,13 @@ const mockedGet = api.get as unknown as Mock;
 const mockedPost = api.post as unknown as Mock;
 const mockedToastOk = ui.toastSuccess as unknown as Mock;
 const mockedToastErr = ui.toastError as unknown as Mock;
+const mockedClipboard = () => (navigator.clipboard.writeText as unknown as Mock);
 
 vi.mock('/src/admin/lib/api-client', () => ({
-  api: {
-    get: vi.fn(),
-    post: vi.fn(),
-  },
+  api: { get: vi.fn(), post: vi.fn() },
   ApiError: class extends Error {
     readonly status: number;
-    constructor(m: string, s: number) {
-      super(m);
-      this.status = s;
-    }
+    constructor(m: string, s: number) { super(m); this.status = s; }
   },
 }));
 
@@ -74,17 +61,13 @@ const audienceFixture = () => ({
     { username: 'bob', email: 'bob@example.test', createdAt: now - 200_000 },
   ],
 });
+
 const overviewFixture = (provider?: Partial<Record<string, unknown>>) => ({
   provider: {
-    provider: 'sender',
-    configured: true,
-    tokenPresent: true,
-    fromEmail: 'no-reply@ircfiber.com',
-    fromName: 'IRC Fiber',
-    publicUrl: 'https://ircfiber.com',
-    verificationRequired: true,
-    verificationSource: 'auto',
-    ...(provider ?? {}),
+    provider: 'sender', configured: true, tokenPresent: true,
+    fromEmail: 'no-reply@ircfiber.com', fromName: 'IRC Fiber',
+    publicUrl: 'https://ircfiber.com', verificationRequired: true,
+    verificationSource: 'auto', ...(provider ?? {}),
   },
   stats: {
     sent24h: 1, failed24h: 1, sentWindow: 1, failedWindow: 1, windowSize: 2,
@@ -104,23 +87,15 @@ const overviewFixture = (provider?: Partial<Record<string, unknown>>) => ({
       durationMs: 210, sourceIp: '127.0.0.1',
     },
   ],
-  eventsTotal: 2,
-  eventsPage: 0,
-  eventsPageCount: 1,
-  eventsLimit: 50,
+  eventsTotal: 2, eventsPage: 0, eventsPageCount: 1, eventsLimit: 50,
   pending: [
-    {
-      id: PENDING_ID, username: 'mailadmin', email: 'mailadmin@example.test',
-      createdAt: now - 600_000, ttlSeconds: 85_800,
-    },
+    { id: PENDING_ID, username: 'mailadmin', email: 'mailadmin@example.test', createdAt: now - 600_000, ttlSeconds: 85_800 },
   ],
   cooldowns: [{ email: 'mailadmin@example.test', ttlSeconds: 42 }],
   ipCounters: [{ ip: '127.0.0.1', count: 3, ttlSeconds: 3400 }],
   redisError: '',
 });
 
-/// A 120-row log at 50/page. Each page carries one identifiable row so the
-/// table can be asserted on without counting.
 const pagedFixture = (servedPage: number) => ({
   ...overviewFixture(),
   events: [
@@ -130,10 +105,13 @@ const pagedFixture = (servedPage: number) => ({
       provider: 'resend', status: 'sent', error: '', durationMs: 200, sourceIp: '127.0.0.1',
     },
   ],
-  eventsTotal: 120,
-  eventsPage: servedPage,
-  eventsPageCount: 3,
-  eventsLimit: 50,
+  eventsTotal: 120, eventsPage: servedPage, eventsPageCount: 3, eventsLimit: 50,
+});
+
+const jobFixture = () => ({
+  id: 'job1', subject: 'News', role: '', q: '', scheduleAtMs: now,
+  status: 'sending', createdBy: 'admin', createdAtMs: now - 1000,
+  sent: 3, failed: 1, skipped: 0, total: 10,
 });
 
 function kpiValue(label: string): string {
@@ -142,15 +120,58 @@ function kpiValue(label: string): string {
   return match?.parentElement?.querySelector('div.text-3xl')?.textContent?.trim() ?? '';
 }
 
-describe('Emails.svelte — signup verification delivery page', () => {
+async function gotoCompose() {
+  await page.getByRole('tab', { name: 'Compose' }).click();
+  await expect.element(page.getByLabelText('Template')).toBeInTheDocument();
+}
+
+async function gotoCampaign() {
+  await page.getByRole('tab', { name: 'Campaign' }).click();
+  await expect.element(page.getByRole('button', { name: 'Preview audience' })).toBeInTheDocument();
+}
+
+async function composeTemplate() {
+  await gotoCompose();
+  await page.getByLabelText('Template').selectOptions('announcement');
+}
+
+async function campaignPreview() {
+  await gotoCampaign();
+  await page.getByLabelText('Search').fill('example');
+  await page.getByRole('button', { name: 'Preview audience' }).click();
+  await vi.waitFor(() =>
+    expect(api.get).toHaveBeenCalledWith('/api/admin/emails/campaign/audience', { limit: 10, q: 'example' }));
+  await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
+}
+
+async function walkToReview() {
+  await page.getByRole('button', { name: 'Next →' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+  await page.getByRole('button', { name: 'Next →' }).click();
+}
+
+const campaignPayload = (dryRun: boolean) => ({
+  role: '', createdAfterMs: 0, createdBeforeMs: 0, q: 'example', all: false,
+  subject: 'News from IRC Fiber',
+  text: 'Hi {{username}},\n\nBody here.\n\nUnsubscribe: {{unsubscribe_url}}',
+  html: '', scheduleAtMs: expect.any(Number), dryRun,
+});
+
+describe('Emails.svelte — Deliver | Compose | Campaign', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText: vi.fn().mockResolvedValue(undefined) },
+      configurable: true,
+    });
     mockedGet.mockImplementation((path: string) => {
       if (path === '/api/admin/emails')
         return Promise.resolve({ ...overviewFixture(), templates: templatesFixture() });
       if (path === '/api/admin/roles')
         return Promise.resolve({ roles: [{ name: 'admin' }, { name: 'user' }] });
       if (path === '/api/admin/emails/campaign/audience') return Promise.resolve(audienceFixture());
+      if (path === '/api/admin/emails/campaigns') return Promise.resolve({ campaigns: [] });
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     mockedPost.mockImplementation((path: string) => {
@@ -160,7 +181,19 @@ describe('Emails.svelte — signup verification delivery page', () => {
     });
   });
 
-  it("renders the failed send's provider error and the failure KPI", async () => {
+  it('shows exactly the Deliver | Compose | Campaign tabs with Deliver active', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await expect.element(page.getByRole('tab', { name: 'Deliver' })).toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Compose' })).toBeInTheDocument();
+    await expect.element(page.getByRole('tab', { name: 'Campaign' })).toBeInTheDocument();
+    expect(document.body.textContent ?? '').toContain(
+      'Transactional delivery, message authoring and bulk campaigns');
+    expect(document.body.textContent ?? '').not.toContain('Delivery');
+  });
+
+  it("renders the failed send's provider error, the failure KPI and the Last-failure box", async () => {
     render(Emails);
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
@@ -170,6 +203,48 @@ describe('Emails.svelte — signup verification delivery page', () => {
     await vi.waitFor(() => expect(kpiValue('Failed (24 h)')).toBe('1'));
     expect(kpiValue('Sent (24 h)')).toBe('1');
     expect(kpiValue('Pending')).toBe('1');
+    await expect.element(page.getByRole('alert').first()).toBeInTheDocument();
+  });
+
+  it('failed row expands to the full error with a Copy button wired to the clipboard', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await page.getByRole('button', { name: 'Failed ▸' }).click();
+    await expect.element(page.getByRole('button', { name: 'Copy', exact: true })).toBeInTheDocument();
+    const pre = document.querySelector('pre.whitespace-pre-wrap');
+    expect(pre?.textContent).toContain('sender.net rejected the message: HTTP 422 domain not verified');
+    await page.getByRole('button', { name: 'Copy', exact: true }).click();
+    await vi.waitFor(() => expect(mockedClipboard()).toHaveBeenCalledWith(
+      'sender.net rejected the message: HTTP 422 domain not verified'));
+    expect(mockedToastOk).toHaveBeenCalledWith('Error copied');
+  });
+
+  it('search narrows the loaded page, chips filter by status, Clear filters resets', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await expect.element(page.getByText('probe@example.test')).toBeInTheDocument();
+    await page.getByLabelText('Search').fill('422');
+    await expect.element(page.getByText('Showing 1 of 2 on this page')).toBeInTheDocument();
+    await page.getByLabelText('Search').fill('');
+    await page.getByRole('button', { name: 'Failed', exact: true }).click();
+    await expect.element(page.getByText('Showing 1 of 2 on this page')).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Failed', exact: true }).click();
+    await expect.element(page.getByText('Showing 2 of 2 on this page')).toBeInTheDocument();
+    await page.getByLabelText('Search').fill('zzz-no-match');
+    await expect.element(page.getByText('No matching sends')).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Clear filters' }).click();
+    await expect.element(page.getByText('Showing 2 of 2 on this page')).toBeInTheDocument();
+  });
+
+  it('hover copy buttons copy the address', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await page.getByRole('button', { name: 'Copy email' }).first().click();
+    await vi.waitFor(() => expect(mockedClipboard()).toHaveBeenCalledWith('probe@example.test'));
+    expect(mockedToastOk).toHaveBeenCalled();
   });
 
   it('Revoke on the pending row confirms then POSTs that row id', async () => {
@@ -192,6 +267,7 @@ describe('Emails.svelte — signup verification delivery page', () => {
         return Promise.resolve(overviewFixture({
           provider: '', configured: false, tokenPresent: false, verificationRequired: true,
         }));
+      if (path === '/api/admin/emails/campaigns') return Promise.resolve({ campaigns: [] });
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(Emails);
@@ -205,21 +281,19 @@ describe('Emails.svelte — signup verification delivery page', () => {
   it('pages the send log without touching the rest of the payload', async () => {
     mockedGet.mockImplementation((path: string, query?: { page?: number }) => {
       if (path === '/api/admin/emails') return Promise.resolve(pagedFixture(query?.page ?? 0));
+      if (path === '/api/admin/emails/campaigns') return Promise.resolve({ campaigns: [] });
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(Emails);
     await expect.element(page.getByText('page0@example.test')).toBeInTheDocument();
     await expect.element(page.getByText(/Showing 1–1 of 120/)).toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Previous page' })).toBeDisabled();
-
     await page.getByRole('button', { name: 'Next page' }).click();
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 1, limit: 50 }));
     await expect.element(page.getByText('page1@example.test')).toBeInTheDocument();
     await expect.element(page.getByText(/Showing 51–51 of 120/)).toBeInTheDocument();
-    // Pending/KPI sections are a full snapshot on every page.
     expect(kpiValue('Pending')).toBe('1');
-
     await page.getByRole('button', { name: 'Last page' }).click();
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 2, limit: 50 }));
@@ -227,16 +301,11 @@ describe('Emails.svelte — signup verification delivery page', () => {
   });
 
   it('follows the gateway back when the log is trimmed under the page being read', async () => {
-    // Asked for page 2, answered with page 1: the capped log shrank. The
-    // pager must land there instead of asking for the vanished page again.
     mockedGet.mockImplementation((path: string, query?: { page?: number }) => {
+      if (path === '/api/admin/emails/campaigns') return Promise.resolve({ campaigns: [] });
       if (path !== '/api/admin/emails') return Promise.reject(new Error('unexpected GET ' + path));
       const asked = query?.page ?? 0;
-      return Promise.resolve({
-        ...pagedFixture(Math.min(asked, 1)),
-        eventsTotal: 60,
-        eventsPageCount: 2,
-      });
+      return Promise.resolve({ ...pagedFixture(Math.min(asked, 1)), eventsTotal: 60, eventsPageCount: 2 });
     });
     render(Emails);
     await expect.element(page.getByText('page0@example.test')).toBeInTheDocument();
@@ -245,108 +314,86 @@ describe('Emails.svelte — signup verification delivery page', () => {
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 1, limit: 50 }));
     await expect.element(page.getByText('page1@example.test')).toBeInTheDocument();
     await expect.element(page.getByRole('button', { name: 'Next page' })).toBeDisabled();
-    // Previous still moves: the local page followed the served one.
     await page.getByRole('button', { name: 'Previous page' }).click();
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
   });
 
-  it('Compose preview shows the audience count and sample, then enables Send', async () => {
+  it('Compose has no audience UI and no Send button', async () => {
     render(Emails);
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
-    await page.getByRole('tab', { name: 'Compose' }).click();
-    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/roles'));
-    // No preview for the current filters yet: Send stays disabled.
-    await expect.element(page.getByRole('button', { name: 'Send campaign' })).toBeDisabled();
-    await page.getByLabelText('Search').fill('example');
-    await page.getByRole('button', { name: 'Preview audience' }).click();
-    await vi.waitFor(() =>
-      expect(api.get).toHaveBeenCalledWith('/api/admin/emails/campaign/audience', {
-        limit: 10, q: 'example',
-      }));
-    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
-    await expect.element(page.getByText('bob@example.test')).toBeInTheDocument();
-    await page.getByLabelText('Template').selectOptions('announcement');
-    await expect.element(page.getByRole('button', { name: 'Send campaign' })).toBeEnabled();
+    await gotoCompose();
+    await expect.element(page.getByRole('button', { name: 'Send test' })).toBeInTheDocument();
+    const body = () => document.body.textContent ?? '';
+    await vi.waitFor(() => expect(body()).toContain('Message'));
+    expect(body()).not.toContain('Preview audience');
+    expect(body()).not.toContain('Send campaign');
+    expect(body()).not.toContain('Send now');
+    expect(document.querySelector('#campaign-q')).toBeNull();
   });
 
-  it('Send posts the raw fields once, renders the summary and re-fetches the log', async () => {
+  it('Campaign has no textarea editors', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await gotoCampaign();
+    expect(document.querySelectorAll('textarea').length).toBe(0);
+  });
+
+  it('typing {{ opens the 3-item variable menu and Enter inserts at the caret', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await gotoCompose();
+    await page.getByLabelText('Text').fill('Hi {{');
+    await expect.element(page.getByRole('listbox', { name: 'Insert variable' })).toBeInTheDocument();
+    await expect.element(page.getByRole('option', { name: /{{username}}/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('option', { name: /{{email}}/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('option', { name: /{{unsubscribe_url}}/ })).toBeInTheDocument();
+    const body = document.body.textContent ?? '';
+    expect(body).not.toContain('user.email');
+    expect(body).not.toContain('confirmation_link');
+    page.getByLabelText('Text').element().focus();
+    await userEvent.keyboard('{Enter}');
+    await vi.waitFor(() => expect(
+      (document.getElementById('campaign-body') as HTMLTextAreaElement).value,
+    ).toContain('{{username}}'));
+  });
+
+  it('Ctrl+Enter in Compose posts the campaign test', async () => {
     mockedPost.mockImplementation((path: string) => {
-      if (path === '/api/admin/emails/campaign/send')
-        return Promise.resolve({
-          sent: 2, failed: 0, skippedUnsubscribed: 1, total: 2, errors: [],
-        });
+      if (path === '/api/admin/emails/campaign/test') return Promise.resolve({ sent: true });
       return Promise.reject(new Error('unexpected POST ' + path));
     });
     render(Emails);
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
-    await page.getByRole('tab', { name: 'Compose' }).click();
-    await page.getByLabelText('Search').fill('example');
-    await page.getByRole('button', { name: 'Preview audience' }).click();
-    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
-    await page.getByLabelText('Template').selectOptions('announcement');
-    await page.getByRole('button', { name: 'Send campaign' }).first().click();
-    await expect.element(page.getByText('Send this campaign?')).toBeInTheDocument();
-    await page.getByRole('button', { name: 'Send campaign' }).last().click();
+    await composeTemplate();
+    await page.getByLabelText('Test send').fill('me@example.test');
+    const area = page.getByLabelText('Text').element();
+    area.focus();
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
-    expect(api.post).toHaveBeenCalledWith('/api/admin/emails/campaign/send', {
-      role: '',
-      createdAfterMs: 0,
-      createdBeforeMs: 0,
-      q: 'example',
-      all: false,
+    expect(api.post).toHaveBeenCalledWith('/api/admin/emails/campaign/test', {
+      toEmail: 'me@example.test',
       subject: 'News from IRC Fiber',
       text: 'Hi {{username}},\n\nBody here.\n\nUnsubscribe: {{unsubscribe_url}}',
       html: '',
-    }, { timeoutMs: 150_000 });
-    expect(mockedToastOk).toHaveBeenCalled();
-    // The campaign rows land in the send log: the overview is re-fetched.
-    await vi.waitFor(() => {
-      const overviews = mockedGet.mock.calls.filter((c) => c[0] === '/api/admin/emails');
-      expect(overviews.length).toBeGreaterThan(1);
     });
+    expect(mockedToastOk).toHaveBeenCalledWith('Campaign test sent to me@example.test');
   });
 
-  it('an unfiltered send without the whole-audience confirm surfaces the backend refusal', async () => {
-    mockedPost.mockImplementation((path: string) => {
-      if (path === '/api/admin/emails/campaign/send')
-        return Promise.reject(
-          new ApiError('Narrow the audience or confirm sending to everyone.', 400));
-      return Promise.reject(new Error('unexpected POST ' + path));
-    });
+  it('HTML typing substitutes the mock user into the sandboxed iframe', async () => {
     render(Emails);
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
-    await page.getByRole('tab', { name: 'Compose' }).click();
-    await page.getByRole('button', { name: 'Preview audience' }).click();
-    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
-    await page.getByLabelText('Template').selectOptions('announcement');
-    await page.getByRole('button', { name: 'Send campaign' }).first().click();
-    await page.getByRole('button', { name: 'Send campaign' }).last().click();
-    await expect
-      .element(page.getByText('Narrow the audience or confirm sending to everyone.'))
-      .toBeInTheDocument();
-    expect(mockedToastErr).toHaveBeenCalled();
-  });
-
-  it('HTML tab typing substitutes the first recipient into the sandboxed iframe', async () => {
-    render(Emails);
-    await vi.waitFor(() =>
-      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
-    await page.getByRole('tab', { name: 'Compose' }).click();
-    await page.getByLabelText('Search').fill('example');
-    await page.getByRole('button', { name: 'Preview audience' }).click();
-    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
-    await page.getByLabelText('Template').selectOptions('announcement');
-    // Picking a template clears author HTML: the iframe falls back to the
-    // substituted text body until HTML is drafted.
+    await gotoCompose();
     await page.getByRole('button', { name: 'HTML', exact: true }).click();
     await page.getByLabelText('HTML').fill('<p>Hi {{username}}</p>');
     const frameSrc = () =>
       document.querySelector('iframe[title="HTML preview"]')?.getAttribute('srcdoc') ?? '';
-    await vi.waitFor(() => expect(frameSrc()).toContain('<p>Hi alice</p>'));
+    await vi.waitFor(() => expect(frameSrc()).toContain('<p>Hi subscriber</p>'));
     const sandbox =
       document.querySelector('iframe[title="HTML preview"]')?.getAttribute('sandbox') ?? '';
     expect(sandbox).not.toContain('allow-scripts');
@@ -355,18 +402,13 @@ describe('Emails.svelte — signup verification delivery page', () => {
 
   it('Send test POSTs the composed fields to the campaign test route and toasts', async () => {
     mockedPost.mockImplementation((path: string) => {
-      if (path === '/api/admin/emails/campaign/test')
-        return Promise.resolve({ sent: true });
+      if (path === '/api/admin/emails/campaign/test') return Promise.resolve({ sent: true });
       return Promise.reject(new Error('unexpected POST ' + path));
     });
     render(Emails);
     await vi.waitFor(() =>
       expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
-    await page.getByRole('tab', { name: 'Compose' }).click();
-    await page.getByLabelText('Search').fill('example');
-    await page.getByRole('button', { name: 'Preview audience' }).click();
-    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
-    await page.getByLabelText('Template').selectOptions('announcement');
+    await composeTemplate();
     await page.getByLabelText('Test send').fill('me@example.test');
     await page.getByRole('button', { name: 'Send test' }).click();
     await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
@@ -378,5 +420,136 @@ describe('Emails.svelte — signup verification delivery page', () => {
     });
     expect(mockedToastOk).toHaveBeenCalledWith('Campaign test sent to me@example.test');
     expect(mockedToastErr).not.toHaveBeenCalled();
+  });
+
+  it('Use in campaign hands the draft to wizard step 2 with an Edit back-link', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await composeTemplate();
+    await page.getByRole('button', { name: 'Use in campaign →' }).click();
+    await expect.element(page.getByText('News from IRC Fiber')).toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'Edit in compose →' })).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Edit in compose →' }).click();
+    await expect.element(page.getByLabelText('Template')).toBeInTheDocument();
+  });
+
+  it('wizard blocks Review until the audience preview is fresh, then walks to Review', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await composeTemplate();
+    await gotoCampaign();
+    await expect.element(page.getByRole('button', { name: '4. Review' })).toBeDisabled();
+    await expect.element(page.getByRole('button', { name: 'Next →' })).toBeDisabled();
+    await campaignPreview();
+    await walkToReview();
+    await expect.element(page.getByRole('button', { name: 'Send now' })).toBeInTheDocument();
+  });
+
+  it('dry run posts dryRun:true, shows counts and creates no job', async () => {
+    mockedPost.mockImplementation((path: string, body?: Record<string, unknown>) => {
+      if (path === '/api/admin/emails/campaigns' && body?.dryRun === true)
+        return Promise.resolve({ dryRun: true, total: 2, skippedUnsubscribed: 1 });
+      return Promise.reject(new Error('unexpected POST ' + path));
+    });
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await composeTemplate();
+    await campaignPreview();
+    await page.getByRole('button', { name: 'Next →' }).click();
+    await page.getByRole('button', { name: 'Next →' }).click();
+    await page.getByLabelText(/Dry run/).click();
+    await page.getByRole('button', { name: 'Next →' }).click();
+    await page.getByRole('button', { name: 'Run dry run' }).click();
+    await expect.element(page.getByText('Run a dry run?')).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Run dry run' }).last().click();
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    expect(api.post).toHaveBeenCalledWith('/api/admin/emails/campaigns', campaignPayload(true));
+    expect(mockedToastOk).toHaveBeenCalledWith('Dry run: 2 addresses');
+  });
+
+  it('live send requires the typed subject match before posting the campaign', async () => {
+    mockedPost.mockImplementation((path: string, body?: Record<string, unknown>) => {
+      if (path === '/api/admin/emails/campaigns' && body?.dryRun === false)
+        return Promise.resolve({ id: 'c1', status: 'scheduled', total: 2, scheduleAtMs: now });
+      return Promise.reject(new Error('unexpected POST ' + path));
+    });
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await composeTemplate();
+    await campaignPreview();
+    await walkToReview();
+    await page.getByRole('button', { name: 'Send now' }).click();
+    await expect.element(page.getByText('Send this campaign?')).toBeInTheDocument();
+    await expect.element(page.getByRole('button', { name: 'Send now' }).last()).toBeDisabled();
+    await page.getByLabelText('Type to confirm').fill('wrong subject');
+    await expect.element(page.getByRole('button', { name: 'Send now' }).last()).toBeDisabled();
+    await page.getByLabelText('Type to confirm').fill('News from IRC Fiber');
+    await expect.element(page.getByRole('button', { name: 'Send now' }).last()).toBeEnabled();
+    await page.getByRole('button', { name: 'Send now' }).last().click();
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    expect(api.post).toHaveBeenCalledWith('/api/admin/emails/campaigns', campaignPayload(false));
+    expect(mockedToastOk).toHaveBeenCalledWith('Campaign scheduled');
+  });
+
+  it('an unfiltered send without the whole-audience confirm surfaces the backend refusal', async () => {
+    mockedPost.mockImplementation((path: string) => {
+      if (path === '/api/admin/emails/campaigns')
+        return Promise.reject(new ApiError('Narrow the audience or confirm sending to everyone.', 400));
+      return Promise.reject(new Error('unexpected POST ' + path));
+    });
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await composeTemplate();
+    await campaignPreview();
+    await walkToReview();
+    await page.getByRole('button', { name: 'Send now' }).click();
+    await page.getByLabelText('Type to confirm').fill('News from IRC Fiber');
+    await page.getByRole('button', { name: 'Send now' }).last().click();
+    await expect
+      .element(page.getByText('Narrow the audience or confirm sending to everyone.'))
+      .toBeInTheDocument();
+    expect(mockedToastErr).toHaveBeenCalled();
+  });
+
+  it('job row shows a progressbar with the sent fraction and Pause posts /:id/pause', async () => {
+    mockedGet.mockImplementation((path: string) => {
+      if (path === '/api/admin/emails')
+        return Promise.resolve({ ...overviewFixture(), templates: templatesFixture() });
+      if (path === '/api/admin/roles') return Promise.resolve({ roles: [{ name: 'admin' }, { name: 'user' }] });
+      if (path === '/api/admin/emails/campaign/audience') return Promise.resolve(audienceFixture());
+      if (path === '/api/admin/emails/campaigns') return Promise.resolve({ campaigns: [jobFixture()] });
+      return Promise.reject(new Error('unexpected GET ' + path));
+    });
+    mockedPost.mockImplementation((path: string) => {
+      if (path === '/api/admin/emails/campaigns/job1/pause')
+        return Promise.resolve({ id: 'job1', status: 'paused' });
+      return Promise.reject(new Error('unexpected POST ' + path));
+    });
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await gotoCampaign();
+    await expect.element(page.getByRole('progressbar', { name: 'Progress for News' })).toBeInTheDocument();
+    await expect.element(page.getByText('3 / 10 sent · 1 failed · 0 skipped')).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Pause' }).first().click();
+    await expect.element(page.getByText('Pause "News"?')).toBeInTheDocument();
+    await page.getByRole('button', { name: 'Pause' }).last().click();
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith('/api/admin/emails/campaigns/job1/pause'));
+    expect(mockedToastOk).toHaveBeenCalledWith('Campaign paused');
+  });
+
+  it('/ focuses the Deliver search input', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await expect.element(page.getByLabelText('Search')).toBeInTheDocument();
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true }));
+    await vi.waitFor(() => expect(document.activeElement).toBe(document.getElementById('deliver-search')));
   });
 });
