@@ -9,6 +9,15 @@ engine_healthcheck_interval: 30s
 engine_healthcheck_timeout: 5s
 engine_healthcheck_retries: 3
 engine_healthcheck_start_period: 10s
+# Engine SIGTERM is a hot-swap detach (holder keeps the IRC sockets); the
+# detach budget is 10 s, so the container gets 30 s before SIGKILL.
+engine_stop_timeout: 30
+# Connection holder that owns this engine's IRC sockets (roles/holder). One
+# per engine id, paired by IRCFIBER_SERVER_ID over
+# unix:///run/ircfiber/holder.sock on the shared named volume (rw on the
+# holder, ro on the engine). Values mirror roles/holder/defaults.
+holder_container_name: "ircfiber-holder-{{ ircfiber_engine_id }}"
+holder_run_volume: "ircfiber-holder-run-{{ ircfiber_engine_id }}"
 # Mullvad sidecars — 2 on 1 VPS, scalable to 5 via extra entries.
 # Each entry: { name: "se", exit_node: "se-sto-wg-101.mullvad.ts.net", port: 1055 }
 # The engine's IRCFIBER_MULLVAD_POOL is derived as socks5://tailscale-mullvad-<name>:<port>

@@ -162,10 +162,9 @@ assigning networks to it. No gateway changes required.
 # Fast incremental binary deploy (daily use):
 make update                     # rsync + BuildKit → restart engine + gateway
 
-# Engine deploys are hard restart (brief disconnect, auto-reconnect). Handoff removed 2026-08-08.
-# See AGENTS.md Engine Lifecycle. Do not reintroduce SCM_RIGHTS / IRCFIBER_RELOAD_FROM_PID.
-make handoff                    # REMOVED — now hard restart (see above)
-make handoff-backup             # REMOVED
+# Engine deploys are hot swaps: the connection holder keeps every IRC socket,
+# the old engine detaches on SIGTERM and the new one reattaches (no QUIT).
+# See "Engine deploy (hot swap)" below and AGENTS.md Engine Lifecycle.
 
 # Full image rebuild (Containerfile from scratch):
 make update-full                # alias: make deploy
@@ -207,31 +206,44 @@ ansible-playbook playbooks/engine.yml
 > `ansible-playbook playbooks/gateway.yml` — engine untouched).
 
 
-### Engine deploy (hard restart)
+### Engine deploy (hot swap)
 
-Engine deploys use hard restart (`docker restart ircfiber-engine-ovh`).
-IRC connections briefly disconnect and auto-reconnect via backoff.
-`SCM_RIGHTS` handoff (`/tmp/ircfiber-handoff-<serverId>.sock`,
-`IRCFIBER_RELOAD_FROM_PID`) was removed 2026-08-08 as legacy — see
-`AGENTS.md#Engine Lifecycle` and `engine/source/ircfiber/engine/handoff.d`
-(deprecated stub).
+Every IRC TCP/SOCKS5/TLS socket is owned by a small, stable **connection
+holder** container (`ircfiber-holder-<id>`, `roles/holder`) that relays
+plaintext IRC to the engine over `unix:///run/ircfiber/holder.sock` on the
+shared `ircfiber-holder-run-<id>` volume (rw on the holder, ro on the
+engine). Recreating the engine container is therefore a **hot swap**: the
+old engine detaches on SIGTERM (no QUIT), the holder buffers inbound lines
+and auto-answers `PING` while no engine is attached, and the new engine
+reattaches on boot — the IRC server sees one continuous session (same
+signon time). Engine crashes (SIGKILL/OOM) survive the same way.
 
+```bash
+make -C ../.. ship-holder     # ONCE per host, and rarely: recreates the holder = full IRC reconnect
+make -C ../.. ship-engine     # every engine deploy: hot swap, IRC sockets kept
+make -C ../.. engine-status   # engine PID + holder --status (attached/open/detached)
+make -C ../.. engine-decommission   # SIGINT: QUIT all, unregister, irc:shutdown, remove both containers
 ```
-make update   # gateway+engine hard restart
-```
 
-What happens (hard restart):
-1. Builds the new engine binary via BuildKit (same as `make update`)
-2. Copies the new binary into the running container as `/app/irc-fiber-engine`
-3. Restarts the container (`docker restart ircfiber-engine-ovh`) — brief IRC
-   disconnect, auto-reconnect via engine backoff loop. DM/channel scrollback
-   survives via `storage/buffer.d` (30-day `scrollback:` keys, not FD transfer).
+What `engine-deploy.yml` checks:
+1. `pre_tasks`: the holder container is `healthy` (run `holder-deploy.yml`
+   first) and records `irc-fiber-holder --list` as the pre-swap session set.
+2. The engine role recreates only the engine (`stop_timeout: 30`; the detach
+   budget is 10 s).
+3. `post_tasks`: waits ≤ 90 s until `--status` shows `detached == 0` and
+   `attached == open`, then asserts every pre-swap `open` session is still
+   open with the same `id` and `connectedAtMs`.
 
-TLS connections soft-reconnect (1-2s CAP/SASL/JOIN); plain TCP also reconnects
-(previously zero-disconnect via `SCM_RIGHTS`, now same as TLS).
+Signals: engine **SIGTERM = detach** (hot swap), engine **SIGINT =
+decommission** (QUIT every network, unregister, publish `irc:shutdown` so
+the other engines/gateway reassign). Holder SIGTERM = QUIT every network
+(`IRCFIBER_HOLDER_QUIT_MSG`).
 
-The first run takes ~80-90s (BuildKit build). Subsequent runs take 5-15s
-(incremental recompilation via Dockers' dub cache mount).
+Multi-engine: a swapping engine stays healthy in the shared registry for a
+180 s grace (`hotswapAt`), so the gateway and the other engines never
+reassign its networks mid-swap. Rollout order for the grace itself:
+`make ship` (gateway) → `make ship-holder` → `make ship-engine`; afterwards
+swap one engine at a time.
 
 ```bash
 # Deploy/redeploy a single component

@@ -41,6 +41,8 @@ GATEWAY_IMAGE    ?= $(REGISTRY_HOST)/ircfiber-gateway:dev
 GATEWAY_IMAGE_NODE ?= $(REGISTRY_NODE)/ircfiber-gateway:dev
 ENGINE_IMAGE     ?= $(REGISTRY_HOST)/ircfiber-engine:dev
 ENGINE_IMAGE_NODE ?= $(REGISTRY_NODE)/ircfiber-engine:dev
+HOLDER_IMAGE     ?= $(REGISTRY_HOST)/ircfiber-holder:dev
+HOLDER_IMAGE_NODE ?= $(REGISTRY_NODE)/ircfiber-holder:dev
 MIRRORD_BIN      ?= $(HOME)/.local/bin/mirrord
 PF_PORT          ?= 18080
 
@@ -91,7 +93,7 @@ help: ## K8s > Show this help
 	@printf '\n\033[1mTargets\033[0m\n'
 	@awk 'BEGIN{FS=":.*##[ \t]*K8s[ \t]*>[ \\t]*"} /^[a-zA-Z0-9_.-]+:.*##[ \\t]*K8s[ \\t]*>/{printf "  \033[92m%-22s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST) | sort -u
 	@printf '\n\033[2mRegistry: Mac $(REGISTRY_HOST) —(ssh -L 5000)→ ubuntu-docker:5000 —(node pull)→ $(REGISTRY_NODE)\033[0m\n'
-	@printf '\033[2mImages:   gateway $(GATEWAY_IMAGE_NODE)  engine $(ENGINE_IMAGE_NODE)  (imagePullPolicy Always in k8s)\033[0m\n'
+	@printf '\033[2mImages:   gateway $(GATEWAY_IMAGE_NODE)  engine $(ENGINE_IMAGE_NODE)  holder $(HOLDER_IMAGE_NODE)  (imagePullPolicy Always in k8s)\033[0m\n'
 	@printf '\033[2mIngress:  https://ircfiber.ubuntu-docker.tail544547.ts.net  (traefik, ns $(KUBE_NS))\033[0m\n'
 	@printf '\033[2mOTEL:     signoz-otel-collector.signoz.svc.cluster.local:4318\033[0m\n'
 	@printf '\n'
@@ -135,7 +137,7 @@ k8s-registry-check: k8s-tunnel-check ## K8s > Alias for k8s-tunnel-check
 # ----------------------------------------------------------------------------
 # Build + push — DOCKER_BUILDKIT, multi-target, GIT_HASH passthrough
 # ----------------------------------------------------------------------------
-.PHONY: k8s-build k8s-build-gateway k8s-build-engine k8s-push k8s-push-gateway k8s-push-engine k8s-push-deploy k8s-up
+.PHONY: k8s-build k8s-build-gateway k8s-build-engine k8s-build-holder k8s-push k8s-push-gateway k8s-push-engine k8s-push-holder k8s-push-deploy k8s-up
 
 # Single place to compute git hash (site repo) — feeds the metadata-only GIT_* ENV layer
 GIT_HASH  := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
@@ -155,6 +157,19 @@ k8s-build-engine: ## K8s > Build engine image → $(REGISTRY_HOST)/ircfiber-engi
 		--build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) \
 		$(SITE_DIR)/..
 
+# The holder is the same Containerfile's runtime-holder stage. It is NOT part
+# of k8s-build/k8s-push/k8s-up: a holder rollout reconnects every IRC
+# network, so it is built, pushed and applied deliberately
+# (k8s-push-holder → k8s-apply-holder).
+k8s-build-holder: ## K8s > Build holder image → $(REGISTRY_HOST)/ircfiber-holder:dev (no push)
+	@if [ ! -f "$(ENGINE_CTF)" ]; then \
+		printf '%b\n' "$(Y)$(WR) no $(ENGINE_CTF) — skipping holder build$(R)"; exit 0; \
+	fi
+	@printf '\n\033[46m\033[30m\033[1m  k8s build holder  \033[0m \033[2m$(GIT_SHORT) → $(HOLDER_IMAGE) [linux/amd64, no provenance]$(R)\n'
+	DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --provenance=false --sbom=false -f $(ENGINE_CTF) -t $(HOLDER_IMAGE) --target runtime-holder \
+		--build-arg GIT_HASH=$(GIT_HASH) --build-arg GIT_SHORT=$(GIT_SHORT) \
+		$(SITE_DIR)/..
+
 k8s-build: k8s-build-gateway k8s-build-engine ## K8s > Build both images (no push)
 
 k8s-push-gateway: k8s-tunnel k8s-build-gateway ## K8s > Build + push gateway
@@ -169,15 +184,21 @@ k8s-push-engine: k8s-tunnel k8s-build-engine ## K8s > Build + push engine
 	docker push $(ENGINE_IMAGE)
 	@curl -s -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' http://$(REGISTRY_TAILSCALE)/v2/ircfiber-engine/manifests/dev 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); m=d.get('manifests',[{}])[0] if 'manifests' in d else d; arch=(m.get('platform',{}) or {}).get('architecture','') or d.get('architecture',''); print('  arch='+arch); sys.exit(0 if arch=='amd64' else 1)" && printf '%b\n' "$(BG)$(OK) engine amd64 in registry$(R)" || printf '%b\n' "$(Y)$(WR) engine not amd64 — check --platform and --provenance$(R)"
 
+k8s-push-holder: k8s-tunnel k8s-build-holder ## K8s > Build + push holder (apply with k8s-apply-holder — reconnects IRC)
+	@if [ ! -f "$(ENGINE_CTF)" ]; then printf '%b\n' "$(Y)$(WR) no engine Containerfile — skipping$(R)"; exit 0; fi
+	@printf '%b\n' "$(C)$(AR) pushing $(HOLDER_IMAGE) [amd64, verifying manifest]$(R)"
+	docker push $(HOLDER_IMAGE)
+	@curl -s -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json' http://$(REGISTRY_TAILSCALE)/v2/ircfiber-holder/manifests/dev 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); m=d.get('manifests',[{}])[0] if 'manifests' in d else d; arch=(m.get('platform',{}) or {}).get('architecture','') or d.get('architecture',''); print('  arch='+arch); sys.exit(0 if arch=='amd64' else 1)" && printf '%b\n' "$(BG)$(OK) holder amd64 in registry$(R)" || printf '%b\n' "$(Y)$(WR) holder not amd64 — check --platform and --provenance$(R)"
+
 k8s-push: k8s-push-gateway k8s-push-engine ## K8s > Build + push gateway + engine
 	@printf '\n%b\n' "$(BG)$(OK) k8s-push done — $(GIT_SHORT)$(R)"
 
 # ----------------------------------------------------------------------------
 # Deploy — apply manifests, fix pullPolicy, rollout
 # ----------------------------------------------------------------------------
-.PHONY: k8s-deploy k8s-apply k8s-restart k8s-rollout k8s-redeploy
+.PHONY: k8s-deploy k8s-apply k8s-apply-holder k8s-restart k8s-rollout k8s-redeploy
 
-k8s-apply: ## K8s > Apply namespace + networkpolicy + redis/mongo + mullvad sidecars + deployments
+k8s-apply: ## K8s > Apply namespace + networkpolicy + redis/mongo + mullvad sidecars + holder + deployments
 	@printf '\n\033[42m\033[30m\033[1m  k8s deploy → ns $(KUBE_NS)  \033[0m\n'
 	$(KUBECTL) apply -f $(K8S_DIR)/namespace.yaml
 	$(KUBECTL) apply -f $(K8S_DIR)/networkpolicy.yaml
@@ -200,6 +221,17 @@ k8s-apply: ## K8s > Apply namespace + networkpolicy + redis/mongo + mullvad side
 		    -e "s|imagePullPolicy:.*|imagePullPolicy: Always|g" \
 		    $(K8S_DIR)/deployment-gateway.yaml | $(KUBECTL) apply -f -; \
 	fi
+	@# The holder before the engine: the engine's boot attaches to it. The
+	@# holder Deployment is Recreate and its image rarely changes, so
+	@# re-applying an unchanged manifest is a no-op (no reconnect).
+	@if [ -f $(K8S_DIR)/deployment-holder.yaml ]; then \
+		printf '%b\n' "$(C)$(AR) applying holder$(R)"; \
+		sed -e "s|localhost:5000/ircfiber-holder:prod|$(REGISTRY_NODE)/ircfiber-holder:dev|g" \
+		    -e "s|host.docker.internal:5000/ircfiber-holder:dev|$(REGISTRY_NODE)/ircfiber-holder:dev|g" \
+		    -e "s|imagePullPolicy:.*|imagePullPolicy: Always|g" \
+		    $(K8S_DIR)/deployment-holder.yaml | $(KUBECTL) apply -f -; \
+		$(KUBECTL) rollout status deployment/ircfiber-holder -n $(KUBE_NS) --timeout=90s || true; \
+	fi
 	@if [ -f $(K8S_DIR)/deployment-engine.yaml ]; then \
 		printf '%b\n' "$(C)$(AR) applying engine$(R)"; \
 		sed -e "s|localhost:5000/ircfiber-engine:prod|$(REGISTRY_NODE)/ircfiber-engine:dev|g" \
@@ -215,8 +247,19 @@ k8s-apply: ## K8s > Apply namespace + networkpolicy + redis/mongo + mullvad side
 k8s-deploy: k8s-apply ## K8s > Alias for k8s-apply
 k8s-redeploy: k8s-apply ## K8s > Alias for k8s-apply
 
-k8s-rollout: ## K8s > Rollout restart gateway + engine (no rebuild)
-	@printf '%b\n' "$(C)$(AR) rollout restart gateway + engine$(R)"
+# Deliberate holder rollout: pulls the freshly pushed :dev image (Always)
+# and recreates the pod — every IRC network on this engine reconnects.
+k8s-apply-holder: ## K8s > Apply + restart the holder deployment only (⚠ reconnects every IRC network)
+	@printf '%b\n' "$(Y)$(WR) holder rollout → every IRC network on ircfiber-engine reconnects$(R)"
+	@sed -e "s|imagePullPolicy:.*|imagePullPolicy: Always|g" $(K8S_DIR)/deployment-holder.yaml | $(KUBECTL) apply -f -
+	@$(KUBECTL) rollout restart deployment/ircfiber-holder -n $(KUBE_NS)
+	@$(KUBECTL) rollout status deployment/ircfiber-holder -n $(KUBE_NS) --timeout=90s
+	@$(KUBECTL) exec deployment/ircfiber-holder -n $(KUBE_NS) -- /app/irc-fiber-holder --status
+
+# Engine only: a hot swap (the holder keeps the IRC sockets). The holder is
+# never restarted here — use k8s-apply-holder for that.
+k8s-rollout: ## K8s > Rollout restart gateway + engine (no rebuild; engine = hot swap, holder untouched)
+	@printf '%b\n' "$(C)$(AR) rollout restart gateway + engine (holder untouched)$(R)"
 	@$(KUBECTL) rollout restart deployment/ircfiber-gateway -n $(KUBE_NS) 2>/dev/null || true
 	@$(KUBECTL) rollout restart deployment/ircfiber-engine -n $(KUBE_NS) 2>/dev/null || true
 	@$(KUBECTL) rollout status deployment/ircfiber-gateway -n $(KUBE_NS) --timeout=60s || true
@@ -260,7 +303,7 @@ k8s-prod-janitor-apply: ## K8s > Apply the nightly node disk janitor CronJob
 # ----------------------------------------------------------------------------
 # Observability — status, logs, shell, events, port-forward
 # ----------------------------------------------------------------------------
-.PHONY: k8s-status k8s-pods k8s-logs k8s-logs-gateway k8s-logs-engine k8s-shell k8s-shell-engine k8s-events k8s-describe k8s-port-forward
+.PHONY: k8s-status k8s-pods k8s-logs k8s-logs-gateway k8s-logs-engine k8s-logs-holder k8s-holder-status k8s-shell k8s-shell-engine k8s-events k8s-describe k8s-port-forward
 
 k8s-status: ## K8s > Pods + deployments + svc + ingress + registry catalog
 	@printf '\n\033[1m k8s status \033[0m \033[2m$(KUBE_CONTEXT)/$(KUBE_NS)\033[0m\n'
@@ -286,6 +329,12 @@ k8s-logs-gateway: k8s-logs ## K8s > Alias: tail gateway
 
 k8s-logs-engine: ## K8s > Tail engine logs
 	@$(KUBECTL) logs -f deployment/ircfiber-engine -n $(KUBE_NS)
+
+k8s-logs-holder: ## K8s > Tail holder logs
+	@$(KUBECTL) logs -f deployment/ircfiber-holder -n $(KUBE_NS)
+
+k8s-holder-status: ## K8s > Holder STATUS JSON (open/attached/detached sessions)
+	@$(KUBECTL) exec deployment/ircfiber-holder -n $(KUBE_NS) -- /app/irc-fiber-holder --status
 
 k8s-shell: ## K8s > Shell into gateway pod
 	@$(KUBECTL) exec -it deployment/ircfiber-gateway -n $(KUBE_NS) -- sh

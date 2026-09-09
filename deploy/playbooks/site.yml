@@ -110,6 +110,10 @@
       ansible.builtin.command: docker pull {{ ircfiber_engine_image_full }}
       changed_when: true
 
+    - name: Pull holder image
+      ansible.builtin.command: docker pull {{ ircfiber_holder_image_full }}
+      changed_when: true
+
 - name: Manage Cloudflare DNS records pointing at the backend host(s)
   # Runs BEFORE Caddy/LE so that ACME HTTP-01 challenges for the
   # ircfiber_domain (and any caddy_extra_serve_hosts entries) resolve
@@ -163,6 +167,8 @@
   vars_files:
     - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
   roles:
+    # Holder (owns the IRC sockets) before the engine that attaches to it.
+    - role: holder
     - role: engine
 
 - name: Deploy IRC daemon (InspIRCd + Anope services)

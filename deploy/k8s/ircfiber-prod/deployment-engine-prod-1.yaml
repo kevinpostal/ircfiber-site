@@ -1,6 +1,9 @@
 # IRC Fiber engine — k8s PROD (distributed with OVH ovh)
 # Shares OVH prod DB via Tailscale (100.94.72.103) so OVH gateway sees this engine.
 # Mullvad pool via k8s sidecars in ircfiber namespace (tailscale-mullvad-* Services, FQDN).
+# IRC sockets live in ircfiber-holder-prod-1 (deployment-holder-prod-1.yaml, apply
+# it first): a rollout of this Deployment is a hot swap — the old pod detaches on
+# SIGTERM, the new one reattaches, no IRC reconnect.
 # Build image: DOCKER_BUILDKIT=1 docker build -f ../engine/Containerfile.engine -t localhost:5000/ircfiber-engine:dev --target runtime-engine .. && docker push localhost:5000/ircfiber-engine:dev
 # Apply: kubectl --context ubuntu-docker apply -f deployment-engine-prod-1.yaml
 # Verify: kubectl --context ubuntu-docker get pods -n ircfiber-prod -o wide; kubectl logs -n ircfiber-prod -l app=ircfiber-engine-prod-1
@@ -14,6 +17,10 @@ metadata:
     component: engine-prod
 spec:
   replicas: 1
+  # Stop-then-start, like docker: a rolling update would run two engines
+  # against one holder (ATTACH → ERR busy storm).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ircfiber-engine-prod-1
@@ -23,6 +30,8 @@ spec:
         app: ircfiber-engine-prod-1
         component: engine-prod
     spec:
+      # SIGTERM = hot-swap detach (10 s budget) before SIGKILL.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: engine
           image: localhost:5000/ircfiber-engine:dev
@@ -48,6 +57,13 @@ spec:
               value: "k8s-prod-1"
             - name: IRCFIBER_BIND_ADDRESS
               value: "0.0.0.0"
+            - name: IRCFIBER_HOLDER_ADDR
+              value: "tcp://ircfiber-holder-prod-1.ircfiber-prod.svc.cluster.local:7690"
+            - name: IRCFIBER_HOLDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ircfiber-holder-prod-1
+                  key: token
             - name: IRCFIBER_MULLVAD_POOL
               # Explicit <label>@ prefixes are required for bare-IP entries: the
               # dash/dot label heuristic would collapse all three to "100" and

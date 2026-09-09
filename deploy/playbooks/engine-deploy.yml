@@ -2,8 +2,13 @@
 # Engine deploy — pull the requested image ref, tag it locally as
 # ircfiber-engine:deploy, and run the engine role against that tag. The role's
 # community.docker.docker_container compares image ids, not tag strings, so a
-# new id under the same tag recreates the container (engine deploys are a
-# restart; there is no blue/green for the engine).
+# new id under the same tag recreates the container.
+#
+# The recreate is a HOT SWAP: the connection holder (holder-deploy.yml) owns
+# every IRC socket, the old engine detaches on SIGTERM and the new engine
+# reattaches on boot — the IRC server sees one continuous session. The
+# post_tasks prove it: every session the holder listed before the swap is
+# still there afterwards with the same id and connectedAtMs.
 #
 # The image is built on the builder host and pushed to GHCR by
 # `make ship-engine` (ircfiber-infra/Makefile).
@@ -20,12 +25,29 @@
   vars:
     engine_image_ref: "{{ ircfiber_engine_image_name }}:prod"   # overridden by -e
     ircfiber_engine_image_full: "ircfiber-engine:deploy"
-    # Also a role default; restated because post_tasks run outside the role
-    # and a role default is in scope only inside the role's own tasks.
+    # Also role defaults; restated because pre/post_tasks run outside the
+    # role and a role default is in scope only inside the role's own tasks.
     engine_container_name: "ircfiber-engine-{{ ircfiber_engine_id }}"
+    holder_container_name: "ircfiber-holder-{{ ircfiber_engine_id }}"
+    holder_bin: "docker exec {{ holder_container_name }} /app/irc-fiber-holder"
   roles:
     - role: registry_login
   pre_tasks:
+    - name: Require a healthy holder (run holder-deploy.yml first)
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.State.Health.Status{{ "}}" }}' {{ holder_container_name }}
+      register: holder_health
+      changed_when: false
+      failed_when: holder_health.rc != 0 or holder_health.stdout != 'healthy'
+      check_mode: false
+
+    # The sessions the holder holds right now. After the swap every `open`
+    # one must still be there with the same id and connectedAtMs.
+    - name: Record the holder's live sessions before the swap
+      ansible.builtin.command: "{{ holder_bin }} --list"
+      register: pre_list
+      changed_when: false
+      check_mode: false
+
     - name: Pull engine image (registry refs only)
       ansible.builtin.command: docker pull {{ engine_image_ref }}
       when: "'/' in engine_image_ref"
@@ -42,7 +64,6 @@
     - name: Tag requested image as the deploy tag
       ansible.builtin.command: docker tag {{ engine_image_id.stdout }} {{ ircfiber_engine_image_full }}
       changed_when: true
-
   tasks:
     - name: Run the engine role against the deploy tag
       ansible.builtin.include_role:
@@ -55,6 +76,65 @@
       changed_when: false
       failed_when: running_image_id.stdout != engine_image_id.stdout
 
+    # Boot + attach of every session. `detached == 0` and `attached == open`
+    # means the new engine has picked up everything the old one left.
+    - name: Wait (<= 90 s) until every held session is attached again
+      ansible.builtin.shell: |
+        set -o pipefail
+        for i in $(seq 1 90); do
+          status=$({{ holder_bin }} --status 2>/dev/null || true)
+          detached=$(printf '%s' "$status" | jq -r '.detached // empty' 2>/dev/null)
+          attached=$(printf '%s' "$status" | jq -r '.attached // empty' 2>/dev/null)
+          open=$(printf '%s' "$status" | jq -r '.open // empty' 2>/dev/null)
+          if [ -n "$detached" ] && [ "$detached" -eq 0 ] && [ "$attached" = "$open" ]; then
+            echo "attached=$attached open=$open detached=$detached after ${i}s"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "holder still has detached sessions after 90s: $status"
+        exit 1
+      args:
+        executable: /bin/bash
+      register: post_status_wait
+      changed_when: false
+
+    - name: List the holder's sessions after the swap
+      ansible.builtin.command: "{{ holder_bin }} --list"
+      register: post_list
+      changed_when: false
+
+    # The socket never dropped: every pre-swap `open` session is still
+    # open under the same id with the same connectedAtMs.
+    - name: Assert every pre-swap session survived with the same connectedAtMs
+      ansible.builtin.shell: |
+        set -o pipefail
+        lost=$(jq -n --argjson pre "$PRE" --argjson post "$POST" '
+          ($post.connections | map({key: .id, value: .}) | from_entries) as $now
+          | [ $pre.connections[] | select(.state == "open")
+              | . as $c | ($now[$c.id] // null) as $n
+              | select($n == null or $n.state != "open" or $n.connectedAtMs != $c.connectedAtMs)
+              | { id: $c.id, name: $c.tag.name,
+                  why: (if $n == null then "missing"
+                        elif $n.state != "open" then ("closed: " + ($n.closeReason // "?"))
+                        else "reconnected" end) } ]')
+        total=$(printf '%s' "$PRE" | jq '[.connections[] | select(.state == "open")] | length')
+        if [ "$(printf '%s' "$lost" | jq 'length')" -ne 0 ]; then
+          echo "hot swap dropped sessions: $lost"
+          exit 1
+        fi
+        echo "$total pre-swap session(s) still open with unchanged id/connectedAtMs"
+      args:
+        executable: /bin/bash
+      environment:
+        PRE: "{{ pre_list.stdout }}"
+        POST: "{{ post_list.stdout }}"
+      register: survival
+      changed_when: false
+
     - name: Show result
       ansible.builtin.debug:
-        msg: "{{ engine_container_name }} runs {{ engine_image_ref }} ({{ engine_image_id.stdout[:19] }})"
+        msg:
+          - "{{ engine_container_name }} runs {{ engine_image_ref }} ({{ engine_image_id.stdout[:19] }})"
+          - "{{ post_status_wait.stdout }}"
+          - "{{ survival.stdout }}"

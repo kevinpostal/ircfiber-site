@@ -1,0 +1,138 @@
+# IRC Fiber connection holder — k8s dev (ubuntu-docker), paired with engine k8s-engine-1
+# (deployment-engine.yaml). Owns every IRC TCP/SOCKS5/TLS socket of
+# that engine and relays plaintext IRC over tcp://:7690 (token-protected).
+# Engine rollouts never touch it: the engine detaches on SIGTERM and the new
+# pod reattaches, so the IRC server sees one continuous session. Recreating
+# THIS deployment reconnects every network — planned maintenance only.
+#
+# Secret (created out of band, shared with the engine manifest):
+#   kubectl -n ircfiber create secret generic ircfiber-holder \
+#     --from-literal=token=$(openssl rand -hex 32)
+# Build image: DOCKER_BUILDKIT=1 docker build -f ../engine/Containerfile.engine -t localhost:5000/ircfiber-holder:dev --target runtime-holder .. && docker push localhost:5000/ircfiber-holder:dev
+# Apply: kubectl --context ubuntu-docker apply -f deployment-holder.yaml
+# Verify: kubectl --context ubuntu-docker -n ircfiber exec deploy/ircfiber-holder -- /app/irc-fiber-holder --status
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ircfiber-holder
+  namespace: ircfiber
+  labels:
+    app: ircfiber-holder
+    component: holder
+spec:
+  replicas: 1
+  # Never two holders for one engine id: the old pod must be gone (its
+  # sessions QUIT) before the new one binds.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ircfiber-holder
+  template:
+    metadata:
+      labels:
+        app: ircfiber-holder
+        component: holder
+    spec:
+      # SIGTERM → QUIT every network, 1 s grace, exit 0.
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: holder
+          image: localhost:5000/ircfiber-holder:dev
+          imagePullPolicy: Always
+          command: ["/app/irc-fiber-holder"]
+          ports:
+            - containerPort: 7690
+              name: ipc
+          env:
+            - name: IRCFIBER_SERVER_ID
+              value: "k8s-engine-1"
+            - name: IRCFIBER_HOLDER_ADDR
+              value: "tcp://0.0.0.0:7690"
+            - name: IRCFIBER_HOLDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ircfiber-holder
+                  key: token
+            - name: IRCFIBER_LOG_LEVEL
+              value: "info"
+            - name: IRCFIBER_LOG_JSON
+              value: "1"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            exec:
+              command: ["/app/irc-fiber-holder", "--check"]
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["/app/irc-fiber-holder", "--check"]
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ircfiber-holder
+  namespace: ircfiber
+  labels:
+    app: ircfiber-holder
+spec:
+  selector:
+    app: ircfiber-holder
+  ports:
+    - name: ipc
+      port: 7690
+      targetPort: 7690
+---
+# Only the paired engine may reach the IPC port. The namespace egress
+# policy (networkpolicy.yaml: Mullvad 1055/1080-1082, DNS, 6667/6697)
+# already applies to every pod here, so the holder dials the same exits.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-holder-ipc
+  namespace: ircfiber
+spec:
+  podSelector:
+    matchLabels:
+      app: ircfiber-holder
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ircfiber-engine
+      ports:
+        - port: 7690
+          protocol: TCP
+---
+# The namespace egress allow-list has no 7690 entry, so the engine also
+# needs an explicit egress rule to reach the holder.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-engine-to-holder
+  namespace: ircfiber
+spec:
+  podSelector:
+    matchLabels:
+      app: ircfiber-engine
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: ircfiber-holder
+      ports:
+        - port: 7690
+          protocol: TCP

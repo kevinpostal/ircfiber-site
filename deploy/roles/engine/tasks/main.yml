@@ -110,8 +110,8 @@
 # and recreates it when env content drifts. With env_file: the module
 # never compares values, which is how the engine got stuck with a stale
 # MONGO_URL after a vault rotation on 2026-07-04 (real outage).
-# The engine uses graceful handoff to migrate IRC sockets during the
-# recreate, so users don't see a disconnect.
+# A recreate is a hot swap: SIGTERM detaches the engine from the holder,
+# which keeps every IRC socket; the new engine reattaches on boot.
 - name: Slurp engine env file from target
   ansible.builtin.slurp:
     src: "/etc/ircfiber/engine/env-{{ ircfiber_engine_id }}"
@@ -162,8 +162,10 @@
   loop_control:
     label: "{{ item.name }}"
 
-- name: Run ircfiber-engine (bridge mode, default when IPv6 per-user disabled)
-  when: ircfiber_ipv6_prefix is not defined or ircfiber_ipv6_prefix | length == 0
+# The engine always runs on the bridge: it opens no IRC sockets itself.
+# The holder (roles/holder) is the process that binds, so the per-user
+# IPv6 host-mode variant lives there.
+- name: Run ircfiber-engine
   community.docker.docker_container:
     name: "{{ engine_container_name }}"
     image: "{{ ircfiber_engine_image_full }}"
@@ -177,53 +179,19 @@
     # One control volume per local slot: <IRCFIBER_EGRESS_CONTROL_DIR>/<name>/
     # tailscaled.sock. A slot whose socket is absent stays static (never
     # retargeted). No docker socket is mounted; no-new-privileges stays on.
+    # The holder volume carries the IPC socket (holder.sock), read-only here.
     volumes: >-
-      {{ mullvad_sidecars | default([]) | selectattr('exit_node', 'defined')
-         | map(attribute='name')
-         | map('regex_replace', '^(.+)$', 'mullvad-\1-ctl:/egress/\1')
-         | list }}
+      {{ (mullvad_sidecars | default([]) | selectattr('exit_node', 'defined')
+          | map(attribute='name')
+          | map('regex_replace', '^(.+)$', 'mullvad-\1-ctl:/egress/\1')
+          | list)
+         + [holder_run_volume ~ ':/run/ircfiber:ro'] }}
     security_opts:
       - "no-new-privileges:true"
     ulimits:
       - "nofile:65536:65536"
-    healthcheck:
-      test: ["CMD-SHELL", "/usr/local/bin/ircfiber-engine-healthcheck.sh"]
-      interval: "{{ engine_healthcheck_interval }}"
-      timeout: "{{ engine_healthcheck_timeout }}"
-      retries: "{{ engine_healthcheck_retries }}"
-      start_period: "{{ engine_healthcheck_start_period }}"
-    labels:
-      com.ircfiber.component: "engine"
-      com.ircfiber.version: "{{ ircfiber_version }}"
-      com.ircfiber.engine_id: "{{ ircfiber_engine_id }}"
-
-- name: Run ircfiber-engine (host mode, for per-user IPv6 — preserves source IP)
-  when: ircfiber_ipv6_prefix is defined and ircfiber_ipv6_prefix | length > 0
-  community.docker.docker_container:
-    name: "{{ engine_container_name }}"
-    image: "{{ ircfiber_engine_image_full }}"
-    state: started
-    restart_policy: unless-stopped
-    command: ["/usr/local/bin/ircfiber-engine-entrypoint.sh"]
-    network_mode: host
-    # In host mode the container shares the host's network namespace, so the
-    # per-user IPv6 source addresses (ip -6 route add local <prefix>/64 dev lo)
-    # are directly bindable and the IRC server sees the real per-user /128
-    # instead of a NAT'd bridge IP. DNS for irc.ircfiber.com resolves via
-    # public IP → host-published 6667/6697 (hairpin), which is correct.
-    env: "{{ _engine_env }}"
-    # One control volume per local slot: <IRCFIBER_EGRESS_CONTROL_DIR>/<name>/
-    # tailscaled.sock. A slot whose socket is absent stays static (never
-    # retargeted). No docker socket is mounted; no-new-privileges stays on.
-    volumes: >-
-      {{ mullvad_sidecars | default([]) | selectattr('exit_node', 'defined')
-         | map(attribute='name')
-         | map('regex_replace', '^(.+)$', 'mullvad-\1-ctl:/egress/\1')
-         | list }}
-    security_opts:
-      - "no-new-privileges:true"
-    ulimits:
-      - "nofile:65536:65536"
+    # SIGTERM = hot-swap detach (10 s budget); SIGKILL only after this.
+    stop_timeout: "{{ engine_stop_timeout }}"
     healthcheck:
       test: ["CMD-SHELL", "/usr/local/bin/ircfiber-engine-healthcheck.sh"]
       interval: "{{ engine_healthcheck_interval }}"

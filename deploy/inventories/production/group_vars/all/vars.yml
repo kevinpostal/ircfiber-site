@@ -214,6 +214,13 @@ ircfiber_engine_image_name: >-
      + docker_registry_namespace + '/ircfiber-engine' }}
 ircfiber_engine_image_full: "{{ ircfiber_engine_image_name }}:{{ docker_image_tag }}"
 
+# Connection holder (owns the engine's IRC sockets; roles/holder). Built from
+# the same Containerfile.engine, stage runtime-holder, by `make ship-holder`.
+ircfiber_holder_image_name: >-
+  {{ (docker_registry_url + '/' if (docker_registry_url | length > 0) else '')
+     + docker_registry_namespace + '/ircfiber-holder' }}
+ircfiber_holder_image_full: "{{ ircfiber_holder_image_name }}:{{ docker_image_tag }}"
+
 # --- Engine defaults ----------------------------------------------------------
 # NOTE: ircfiber_engine_id has NO default — it MUST be set per-host in
 # host_vars/<hostname>.yml or via inline inventory vars. The old default

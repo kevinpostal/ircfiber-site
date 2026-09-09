@@ -12,4 +12,8 @@
   vars_files:
     - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
   roles:
+    # The holder first: it owns the IRC sockets and the engine attaches to
+    # it on boot. Re-running with an unchanged holder image/env is a no-op;
+    # a changed one recreates the holder = every IRC network reconnects.
+    - role: holder
     - role: engine

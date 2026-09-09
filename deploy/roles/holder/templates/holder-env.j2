@@ -1,0 +1,26 @@
+# {{ ansible_managed }}
+# IRC Fiber — connection holder env file (ircfiber-holder-{{ ircfiber_engine_id }})
+# The holder owns every IRC TCP/SOCKS5/TLS socket for engine
+# "{{ ircfiber_engine_id }}" and relays plaintext IRC to the engine over the
+# Unix socket below. No Redis/Mongo/tailscale: policy lives in the engine.
+# No IRCFIBER_HOLDER_TOKEN on docker — the holder volume's filesystem
+# permissions are the boundary (the engine mounts it read-only).
+IRCFIBER_SERVER_ID={{ ircfiber_engine_id }}
+IRCFIBER_HOLDER_ADDR=unix:///run/ircfiber/holder.sock
+IRCFIBER_LOG_LEVEL={{ holder_log_level | default(ircfiber_engine_log_level) }}
+IRCFIBER_LOG_JSON=1
+# QUIT message sent to every network when the holder itself is stopped
+# (planned maintenance only — engine deploys never touch the holder).
+IRCFIBER_HOLDER_QUIT_MSG={{ holder_quit_msg | default('IRC Fiber maintenance') }}
+{% if holder_detach_buffer_bytes is defined %}
+# Inbound bytes buffered per connection while no engine is attached.
+IRCFIBER_HOLDER_DETACH_BUFFER_BYTES={{ holder_detach_buffer_bytes }}
+{% endif %}
+{% if holder_detach_max_secs is defined %}
+# Seconds a connection may stay engine-less before the holder QUITs it.
+IRCFIBER_HOLDER_DETACH_MAX_SECS={{ holder_detach_max_secs }}
+{% endif %}
+{% if holder_closed_retain_secs is defined %}
+# Seconds a closed entry stays listable (closeReason) before it is dropped.
+IRCFIBER_HOLDER_CLOSED_RETAIN_SECS={{ holder_closed_retain_secs }}
+{% endif %}

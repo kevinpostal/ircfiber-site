@@ -1,0 +1,134 @@
+---
+# Connection holder for engine "{{ ircfiber_engine_id }}". Same preflight
+# as roles/engine: the holder pairs with the engine by IRCFIBER_SERVER_ID
+# (checked in HELLO), so a bogus id here would leave the engine unable to
+# attach to its own sockets.
+- name: Preflight — IRCFIBER_SERVER_ID must be set per-host
+  ansible.builtin.assert:
+    that:
+      - ircfiber_engine_id is defined
+      - ircfiber_engine_id | length > 0
+      - ircfiber_engine_id != inventory_hostname
+      - ircfiber_engine_id != inventory_hostname_short
+    fail_msg: >-
+      ircfiber_engine_id must be set per-host in host_vars/<hostname>.yml
+      or via inline inventory vars. The group default was removed because
+      '{{ inventory_hostname_short }}' would leak as a bogus server ID,
+      creating duplicate engine registrations in Redis.
+      Set ircfiber_engine_id explicitly for this host (e.g. 'ovh').
+
+- name: Pull ircfiber-holder image (registry-qualified ref only)
+  community.docker.docker_image:
+    name: "{{ ircfiber_holder_image_full }}"
+    source: pull
+    state: present
+  # holder-deploy.yml hands this role a plain local tag
+  # (ircfiber-holder:deploy) it has already pulled by digest and tagged;
+  # a pull of that would go to Docker Hub and fail.
+  when: "'/' in ircfiber_holder_image_full"
+
+- name: Ensure holder config dir exists
+  ansible.builtin.file:
+    path: "/etc/ircfiber/holder"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Render holder env file
+  ansible.builtin.template:
+    src: holder-env.j2
+    dest: "/etc/ircfiber/holder/env-{{ ircfiber_engine_id }}"
+    owner: root
+    group: root
+    mode: "0640"
+
+# Read env_file into a dict and pass via env: (NOT env_file:) so the
+# docker_container module compares values against the running container
+# and recreates it when env content drifts (same reasoning as the engine
+# role). A holder recreate reconnects every IRC network — the playbook
+# prints that banner before this role runs.
+- name: Slurp holder env file from target
+  ansible.builtin.slurp:
+    src: "/etc/ircfiber/holder/env-{{ ircfiber_engine_id }}"
+  register: _holder_env_raw
+
+- name: Parse holder env into a dict
+  vars:
+    _raw_lines: "{{ (_holder_env_raw.content | b64decode).split('\n') | reject('match', '^\\s*#') | map('trim') | reject('equalto', '') | list }}"
+    _pairs: "{{ _raw_lines | map('split', '=', 1) | list }}"
+  ansible.builtin.set_fact:
+    _holder_env: "{{ dict(_pairs) }}"
+
+# Shared with the engine container (ro there): carries holder.sock.
+- name: Ensure holder run volume exists
+  community.docker.docker_volume:
+    name: "{{ holder_run_volume }}"
+    state: present
+
+# Network placement = exactly where the engine used to dial from: the
+# Mullvad sidecars (tailscale-mullvad-<name>) and the ircd alias
+# irc.ircfiber.com live on docker_ircfiber_network, and WEBIRC trusts
+# that subnet.
+- name: Run ircfiber-holder (bridge mode, default when IPv6 per-user disabled)
+  when: ircfiber_ipv6_prefix is not defined or ircfiber_ipv6_prefix | length == 0
+  community.docker.docker_container:
+    name: "{{ holder_container_name }}"
+    image: "{{ ircfiber_holder_image_full }}"
+    state: started
+    restart_policy: unless-stopped
+    networks:
+      - name: "{{ docker_ircfiber_network }}"
+      - name: ircfiber_logging
+    env: "{{ _holder_env }}"
+    volumes:
+      - "{{ holder_run_volume }}:/run/ircfiber"
+    security_opts:
+      - "no-new-privileges:true"
+    ulimits:
+      - "nofile:65536:65536"
+    stop_timeout: "{{ holder_stop_timeout }}"
+    healthcheck:
+      test: ["CMD", "/app/irc-fiber-holder", "--check"]
+      interval: "{{ holder_healthcheck_interval }}"
+      timeout: "{{ holder_healthcheck_timeout }}"
+      retries: "{{ holder_healthcheck_retries }}"
+      start_period: "{{ holder_healthcheck_start_period }}"
+    labels:
+      com.ircfiber.component: "holder"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+      com.ircfiber.engine_id: "{{ ircfiber_engine_id }}"
+
+- name: Run ircfiber-holder (host mode, for per-user IPv6 — preserves source IP)
+  when: ircfiber_ipv6_prefix is defined and ircfiber_ipv6_prefix | length > 0
+  community.docker.docker_container:
+    name: "{{ holder_container_name }}"
+    image: "{{ ircfiber_holder_image_full }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: host
+    # In host mode the container shares the host's network namespace, so the
+    # per-user IPv6 source addresses (ip -6 route add local <prefix>/64 dev lo,
+    # configured by roles/engine) are directly bindable and the IRC server
+    # sees the real per-user /128 instead of a NAT'd bridge IP. DNS for
+    # irc.ircfiber.com resolves via public IP → host-published 6667/6697
+    # (hairpin), which is correct. The engine stays on the bridge; the IPC
+    # socket is a file on the shared volume, so no network is needed for it.
+    env: "{{ _holder_env }}"
+    volumes:
+      - "{{ holder_run_volume }}:/run/ircfiber"
+    security_opts:
+      - "no-new-privileges:true"
+    ulimits:
+      - "nofile:65536:65536"
+    stop_timeout: "{{ holder_stop_timeout }}"
+    healthcheck:
+      test: ["CMD", "/app/irc-fiber-holder", "--check"]
+      interval: "{{ holder_healthcheck_interval }}"
+      timeout: "{{ holder_healthcheck_timeout }}"
+      retries: "{{ holder_healthcheck_retries }}"
+      start_period: "{{ holder_healthcheck_start_period }}"
+    labels:
+      com.ircfiber.component: "holder"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+      com.ircfiber.engine_id: "{{ ircfiber_engine_id }}"

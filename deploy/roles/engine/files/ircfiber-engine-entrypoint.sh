@@ -3,9 +3,10 @@
 #
 # Ensures clean container state on every restart:
 #   1. Kill any leftover irc-fiber-engine processes (defensive — Docker
-#      should never leave them, but we've seen 3+ accumulate from
-#      accumulated graceful handoff invocations).
-#   2. Remove stale handoff socket / done markers from prior runs.
+#      should never leave them, but we've seen several accumulate in the
+#      past).
+#   2. Wait (<= 60 s) for the connection holder's Unix socket, so the
+#      engine's first attach never races the holder container coming up.
 #   3. exec the engine binary directly (replaces the shell so signals
 #      reach the engine process and tini reports correct PID).
 #
@@ -19,9 +20,8 @@ ENGINE_BIN=/app/irc-fiber-engine
 log() { printf '[engine-entrypoint] %s\n' "$*" >&2; }
 
 # ── 1. Kill stale engine processes ───────────────────────────────────────
-# pkill -f matches the full cmdline, which covers both the live binary
-# (`/app/irc-fiber-engine`) and any temp paths used by graceful handoff
-# (`/tmp/irc-fiber-engine.<pid>.<ts>`). -x avoids matching tini itself.
+# pkill -f matches the full cmdline (`/app/irc-fiber-engine`). -x avoids
+# matching tini itself.
 STALE=$(pgrep -f irc-fiber-engine || true)
 if [ -n "$STALE" ]; then
     log "Killing stale engine processes: $STALE"
@@ -38,13 +38,29 @@ if [ -n "$STALE" ]; then
     fi
 fi
 
-# ── 2. Remove stale handoff markers ─────────────────────────────────────
-# Successful handoff writes a done marker. Failed handoffs leave a
-# stale socket. Both must be cleaned up so the next deploy doesn't
-# short-circuit on a stale state.
-rm -f /tmp/ircfiber-handoff-*.sock \
-      /tmp/ircfiber-handoff-done-* \
-      /tmp/ircfiber-engine-handoff-child.log || true
+# ── 2. Wait for the connection holder socket ─────────────────────────────
+# IRCFIBER_HOLDER_ADDR is unix:///run/ircfiber/holder.sock on docker (the
+# holder volume, mounted read-only here). The engine itself retries the
+# HELLO for IRCFIBER_HOLDER_CONNECT_TIMEOUT_SECS; this wait just keeps the
+# boot log clean when the holder container is still starting. tcp://
+# addresses (k8s) have nothing to wait for on the filesystem.
+HOLDER_ADDR=${IRCFIBER_HOLDER_ADDR:-unix:///run/ircfiber/holder.sock}
+case "$HOLDER_ADDR" in
+    unix://*)
+        HOLDER_SOCK=${HOLDER_ADDR#unix://}
+        i=0
+        while [ ! -S "$HOLDER_SOCK" ] && [ "$i" -lt 60 ]; do
+            [ "$i" -eq 0 ] && log "Waiting for holder socket $HOLDER_SOCK"
+            i=$((i + 1))
+            sleep 1
+        done
+        if [ -S "$HOLDER_SOCK" ]; then
+            log "Holder socket present after ${i}s"
+        else
+            log "Holder socket $HOLDER_SOCK still missing after 60s — starting anyway (engine retries the HELLO)"
+        fi
+        ;;
+esac
 
 # ── 3. Exec the engine ─────────────────────────────────────────────────
 # `exec` replaces the shell so the engine becomes PID 1's child via

@@ -1,0 +1,110 @@
+---
+# Holder deploy — pull the requested image ref, tag it locally as
+# ircfiber-holder:deploy, and run the holder role against that tag. The
+# role's community.docker.docker_container compares image ids, so a new id
+# under the same tag recreates the container.
+#
+# A holder recreate is the ONE deploy that still reconnects every IRC
+# network: the holder owns the TCP/TLS sockets. Engine deploys
+# (engine-deploy.yml) are hot swaps and never touch it. The running engine
+# notices the lost holder, reconnects its control session and re-dials
+# every network through the new holder on its own — no engine restart.
+#
+# The image is built on the builder host and pushed to GHCR by
+# `make ship-holder` (ircfiber-infra/Makefile).
+#
+#   holder_image_ref  anything `docker image inspect` resolves:
+#     ghcr.io/…@sha256:…   make ship-holder  (by digest)
+#     ghcr.io/…:prod       default (the promoted tag)
+- name: Deploy irc-fiber connection holder(s) from the registry
+  hosts: ircfiber_engines
+  become: true
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  vars:
+    holder_image_ref: "{{ ircfiber_holder_image_name }}:prod"   # overridden by -e
+    ircfiber_holder_image_full: "ircfiber-holder:deploy"
+    # Also a role default; restated because pre/post_tasks run outside the
+    # role and a role default is in scope only inside the role's own tasks.
+    holder_container_name: "ircfiber-holder-{{ ircfiber_engine_id }}"
+    holder_status_cmd: "docker exec {{ holder_container_name }} /app/irc-fiber-holder --status"
+  roles:
+    - role: registry_login
+  pre_tasks:
+    - name: Banner — a holder recreate reconnects every IRC network
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: holder recreate reconnects every IRC network on
+          {{ inventory_hostname }} ({{ holder_container_name }}). Engine
+          deploys are hot swaps; this one is not. Run it in a quiet window.
+
+    - name: Pull holder image (registry refs only)
+      ansible.builtin.command: docker pull {{ holder_image_ref }}
+      when: "'/' in holder_image_ref"
+      changed_when: true
+
+    # A ref that does not resolve fails here with docker's own "No such
+    # image" — before anything is stopped.
+    - name: Resolve requested image id
+      ansible.builtin.command: docker image inspect -f '{{ "{{" }}.Id{{ "}}" }}' {{ holder_image_ref }}
+      check_mode: false
+      register: holder_image_id
+      changed_when: false
+
+    - name: Tag requested image as the deploy tag
+      ansible.builtin.command: docker tag {{ holder_image_id.stdout }} {{ ircfiber_holder_image_full }}
+      changed_when: true
+
+  tasks:
+    - name: Run the holder role against the deploy tag
+      ansible.builtin.include_role:
+        name: holder
+
+  post_tasks:
+    - name: Assert the running holder is the requested image
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.Image{{ "}}" }}' {{ holder_container_name }}
+      register: running_image_id
+      changed_when: false
+      failed_when: running_image_id.stdout != holder_image_id.stdout
+
+    # The engine (if one is running) reconnects to the new holder by itself.
+    # Wait until at least one session is attached again, i.e. the engine's
+    # dials are flowing through this holder. A host without a running
+    # engine has nothing to attach — accept that explicitly. So does an
+    # engine image from before the holder existed (no IRCFIBER_HOLDER_ADDR
+    # in its env): it keeps dialing directly until `make ship-engine`
+    # replaces it, which is the first-rollout order.
+    - name: Wait (<= 90 s) until the engine has reattached through the new holder
+      ansible.builtin.shell: |
+        set -o pipefail
+        engine=ircfiber-engine-{{ ircfiber_engine_id }}
+        if ! docker inspect -f '{{ "{{" }}.State.Running{{ "}}" }}' "$engine" 2>/dev/null | grep -q true; then
+          echo "no running engine on this host — nothing to attach"
+          exit 0
+        fi
+        if ! docker inspect -f '{{ "{{" }}range .Config.Env{{ "}}" }}{{ "{{" }}println .{{ "}}" }}{{ "{{" }}end{{ "}}" }}' "$engine" | grep -q '^IRCFIBER_HOLDER_ADDR='; then
+          echo "running engine predates the holder (no IRCFIBER_HOLDER_ADDR) — nothing attaches until make ship-engine"
+          exit 0
+        fi
+        for i in $(seq 1 90); do
+          status=$({{ holder_status_cmd }} 2>/dev/null || true)
+          attached=$(printf '%s' "$status" | jq -r '.attached // empty' 2>/dev/null)
+          if [ -n "$attached" ] && [ "$attached" -ge 1 ] 2>/dev/null; then
+            echo "attached=$attached after ${i}s: $status"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "holder reports no attached session after 90s: $status"
+        exit 1
+      args:
+        executable: /bin/bash
+      register: holder_attach_wait
+      changed_when: false
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg:
+          - "{{ holder_container_name }} runs {{ holder_image_ref }} ({{ holder_image_id.stdout[:19] }})"
+          - "{{ holder_attach_wait.stdout }}"

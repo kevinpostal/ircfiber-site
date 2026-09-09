@@ -1,4 +1,7 @@
 # IRC Fiber engine — k8s deployment for ubuntu-docker single-node
+# IRC sockets live in ircfiber-holder (deployment-holder.yaml, apply it first):
+# a rollout of this Deployment is a hot swap — the old pod detaches on SIGTERM,
+# the new one reattaches, no IRC reconnect.
 # Build image: DOCKER_BUILDKIT=1 docker build -f ../engine/Containerfile.engine -t localhost:5000/ircfiber-engine:dev --target runtime-engine .. && docker push localhost:5000/ircfiber-engine:dev
 # Then apply: kubectl --context ubuntu-docker apply -f deployment-engine.yaml
 apiVersion: apps/v1
@@ -10,6 +13,10 @@ metadata:
     app: ircfiber-engine
 spec:
   replicas: 1
+  # Stop-then-start, like docker: a rolling update would run two engines
+  # against one holder (ATTACH → ERR busy storm).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: ircfiber-engine
@@ -18,6 +25,8 @@ spec:
       labels:
         app: ircfiber-engine
     spec:
+      # SIGTERM = hot-swap detach (10 s budget) before SIGKILL.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: engine
           image: localhost:5000/ircfiber-engine:dev
@@ -43,6 +52,13 @@ spec:
               value: "k8s-engine-1"
             - name: IRCFIBER_BIND_ADDRESS
               value: "0.0.0.0"
+            - name: IRCFIBER_HOLDER_ADDR
+              value: "tcp://ircfiber-holder.ircfiber.svc.cluster.local:7690"
+            - name: IRCFIBER_HOLDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ircfiber-holder
+                  key: token
             - name: IRCFIBER_MULLVAD_POOL
               # Explicit <label>@ prefixes are required for bare-IP entries: the
               # dash/dot label heuristic would collapse all three to "100" and

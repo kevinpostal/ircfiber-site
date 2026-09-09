@@ -1,0 +1,19 @@
+---
+# Connection holder — one per engine id, co-located with the engine. Owns
+# every IRC TCP/SOCKS5/TLS socket for that engine and relays plaintext IRC
+# over unix:///run/ircfiber/holder.sock on holder_run_volume (rw here, ro
+# on the engine). Engine deploys never touch it; recreating the holder
+# reconnects every IRC network (holder-deploy.yml).
+holder_container_name: "ircfiber-holder-{{ ircfiber_engine_id }}"
+holder_run_volume: "ircfiber-holder-run-{{ ircfiber_engine_id }}"
+holder_no_new_privileges: true
+holder_healthcheck_interval: 15s
+holder_healthcheck_timeout: 5s
+holder_healthcheck_retries: 3
+holder_healthcheck_start_period: 5s
+# SIGTERM → QUIT every network (IRCFIBER_HOLDER_QUIT_MSG), 1 s grace, exit.
+holder_stop_timeout: 10
+holder_quit_msg: "IRC Fiber maintenance"
+# Optional knobs rendered into holder-env.j2 only when defined:
+#   holder_log_level, holder_detach_buffer_bytes (4194304),
+#   holder_detach_max_secs (600), holder_closed_retain_secs (3600).

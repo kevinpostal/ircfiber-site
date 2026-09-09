@@ -234,7 +234,7 @@ test-frontend: ## Root > Run frontend tests (site)
 # ----------------------------------------------------------------------------
 # Engine passthrough — IRC daemon (holds TCP/TLS)
 # ----------------------------------------------------------------------------
-.PHONY: engine engine-rebuild engine-handoff engine-restart engine-start engine-stop engine-down engine-up engine-logs engine-test
+.PHONY: engine engine-rebuild engine-restart engine-start engine-stop engine-down engine-up engine-logs engine-test holder-logs holder-status
 
 engine: ## Root > Engine in foreground (no auto-restart, engine)
 	@$(ENGINE_MAKE) engine
@@ -242,8 +242,11 @@ engine: ## Root > Engine in foreground (no auto-restart, engine)
 engine-rebuild: ## Root > Rebuild engine binary (engine)
 	@$(ENGINE_MAKE) engine-rebuild
 
-engine-handoff: ## Root > Hot-reload engine (REMOVED → hard restart, engine)
-	@$(ENGINE_MAKE) engine-handoff
+holder-logs: ## Root > Tail holder container logs (engine)
+	@$(ENGINE_MAKE) holder-logs
+
+holder-status: ## Root > Holder STATUS JSON — open/attached/detached sessions (engine)
+	@$(ENGINE_MAKE) holder-status
 
 engine-restart: ## Root > Restart engine (host supervisor, engine)
 	@$(ENGINE_MAKE) engine-restart

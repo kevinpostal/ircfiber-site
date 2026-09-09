@@ -233,12 +233,51 @@ services:
       start_period: 40s
 
   # -----------------------------------------------------------------------
-  # ircfiber-engine — IRC protocol engine (connects to ircd + real servers)
+  # ircfiber-holder — owns every IRC TCP/SOCKS5/TLS socket and relays
+  # plaintext IRC to the engine over unix:///run/ircfiber/holder.sock.
+  # Recreating the holder reconnects every network; recreating only the
+  # engine is a hot swap (sockets kept). The Mullvad fixtures below are
+  # reachable from here on ircfiber_local, so pinned networks dial through
+  # them exactly as the engine used to. Both images build from the engine
+  # repo (../../../engine/Containerfile.engine) — the sibling checkout
+  # inside ircfiber-infra.
+  # -----------------------------------------------------------------------
+  ircfiber-holder:
+    build:
+      context: ../../../engine
+      dockerfile: Containerfile.engine
+      target: runtime-holder
+    image: irc-fiber-holder:local
+    container_name: ircfiber-holder
+    restart: unless-stopped
+    networks:
+      - ircfiber_local
+    environment:
+      IRCFIBER_SERVER_ID: localdev1
+      IRCFIBER_HOLDER_ADDR: unix:///run/ircfiber/holder.sock
+      IRCFIBER_LOG_LEVEL: info
+    volumes:
+      - holder_run:/run/ircfiber
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD", "/app/irc-fiber-holder", "--check"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    stop_grace_period: 10s
+
+  # -----------------------------------------------------------------------
+  # ircfiber-engine — IRC protocol engine (all IRC logic; sockets live in
+  # ircfiber-holder). SIGTERM = hot-swap detach, SIGINT = decommission.
   # -----------------------------------------------------------------------
   ircfiber-engine:
     build:
-      context: ../..
-      dockerfile: Containerfile
+      context: ../../../engine
+      dockerfile: Containerfile.engine
       target: runtime-engine
     image: irc-fiber-engine:local
     container_name: ircfiber-engine
@@ -248,6 +287,7 @@ services:
     command: ["/app/irc-fiber-engine"]
     environment:
       IRCFIBER_SERVER_ID: localdev1
+      IRCFIBER_HOLDER_ADDR: unix:///run/ircfiber/holder.sock
       IRCFIBER_OTEL_ENABLED: "${IRCFIBER_OTEL_ENABLED:-0}"
       IRCFIBER_OTEL_ENDPOINT: "${IRCFIBER_OTEL_ENDPOINT:-http://otel-collector:4318}"
       IRCFIBER_REDIS_URL: redis://redis:6379/0
@@ -261,10 +301,13 @@ services:
       # needed locally. See local/egress-shim/tailscale-shim.
       IRCFIBER_EGRESS_TAILSCALE_BIN: /egress/bin/tailscale-shim
     volumes:
+      - holder_run:/run/ircfiber:ro
       - slot_a_ctl:/egress/a
       - slot_b_ctl:/egress/b
       - ./egress-shim:/egress/bin:ro
     depends_on:
+      ircfiber-holder:
+        condition: service_healthy
       redis:
         condition: service_healthy
       mongo:
@@ -277,6 +320,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    stop_grace_period: 30s
 
   # -----------------------------------------------------------------------
   # mullvad-slot-a / mullvad-slot-b — local egress slot fixtures.
@@ -360,4 +404,6 @@ volumes:
   slot_a_ctl:
     driver: local
   slot_b_ctl:
+    driver: local
+  holder_run:
     driver: local
