@@ -42,8 +42,13 @@
 
     # The sessions the holder holds right now. After the swap every `open`
     # one must still be there with the same id and connectedAtMs.
+    # META (the engine's per-session snapshot) is dropped on the host: the
+    # two lists ride to the assertion below as environment variables, and
+    # a few hundred KB of META per list breaks the SSH session.
     - name: Record the holder's live sessions before the swap
-      ansible.builtin.command: "{{ holder_bin }} --list"
+      ansible.builtin.shell: "set -o pipefail; {{ holder_bin }} --list | jq -c 'del(.connections[].meta)'"
+      args:
+        executable: /bin/bash
       register: pre_list
       changed_when: false
       check_mode: false
@@ -100,7 +105,9 @@
       changed_when: false
 
     - name: List the holder's sessions after the swap
-      ansible.builtin.command: "{{ holder_bin }} --list"
+      ansible.builtin.shell: "set -o pipefail; {{ holder_bin }} --list | jq -c 'del(.connections[].meta)'"
+      args:
+        executable: /bin/bash
       register: post_list
       changed_when: false
 
