@@ -563,7 +563,7 @@ string substituteCampaign(string src, string username, string email, string unsu
 
 /// Plain-text campaign body → html: escaped paragraphs (`\n\n` → `<p>`,
 /// single `\n` → `<br>`), same pattern as `verificationEmail`.
-private string campaignHtmlBody(string text) @safe {
+string campaignHtmlBody(string text) @safe {
     import std.array : join, split;
     import vibe.textfilter.html : htmlEscape;
     string[] paras;
@@ -574,6 +574,18 @@ private string campaignHtmlBody(string text) @safe {
         paras ~= "<p>" ~ lines.join("<br>") ~ "</p>";
     }
     return paras.join("");
+}
+
+/// Pure bounds check for the optional author-supplied campaign HTML,
+/// shared by `apiCampaignSend` and `apiCampaignTest` (same message, same
+/// envelope). Takes the raw unstripped field: empty/missing is valid (the
+/// caller falls back to `campaignHtmlBody`), explicitly whitespace-only or
+/// over 50000 chars after trim is not. Returns "" when valid.
+string campaignHtmlError(string htmlRaw) @safe pure {
+    const html = htmlRaw.strip();
+    if (htmlRaw.length > 0 && html.length == 0) return "HTML must be 1–50000 characters.";
+    if (html.length > 50000) return "HTML must be 1–50000 characters.";
+    return "";
 }
 
 private long queryMs(HTTPServerRequest req, string key) {
@@ -647,11 +659,18 @@ package void apiCampaignAudience(HTTPServerRequest req, HTTPServerResponse res) 
 }
 
 /// POST /api/admin/emails/campaign/send — body
-/// `{role?, createdAfterMs?, createdBeforeMs?, q?, all?, subject, text}`.
+/// `{role?, createdAfterMs?, createdBeforeMs?, q?, all?, subject, text, html?}`.
 /// Fans out server-side (one POST, never a client-side loop): per recipient
 /// the subject/text are substituted, a single-use unsubscribe token is
 /// minted, and `sendMail` runs in a per-recipient try/catch that never
 /// breaks the loop.
+///
+/// `html` is optional author-supplied markup: empty/missing keeps today's
+/// auto-generated `campaignHtmlBody` fallback, else it must be 1–50000
+/// chars after trim and is substituted per recipient with no escaping.
+/// `text` may be empty only when `html` is present (both fields still ride
+/// `MailMessage`, so text stays the deliverability fallback); otherwise the
+/// 1–20000 bound is unchanged.
 package void apiCampaignSend(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
     auto body_ = readJsonBody(req);
     const role = bodyString(body_, "role");
@@ -661,12 +680,26 @@ package void apiCampaignSend(HTTPServerRequest req, HTTPServerResponse res, Redi
     const all = bodyBool(body_, "all");
     const subject = bodyString(body_, "subject");
     const text = bodyString(body_, "text");
+    // Raw (unstripped) read: an explicitly whitespace-only field is a 400,
+    // while a missing/empty one keeps today's fallback behavior.
+    string htmlRaw = "";
+    try {
+        auto v = body_["html"];
+        if (v.type == Json.Type.string) htmlRaw = v.get!string;
+    } catch (Exception) {
+    }
+    const htmlErr = campaignHtmlError(htmlRaw);
+    if (htmlErr.length > 0) {
+        jsonError(res, 400, htmlErr);
+        return;
+    }
+    const html = htmlRaw.strip();
 
     if (subject.length == 0 || subject.length > 200) {
         jsonError(res, 400, "Subject must be 1–200 characters.");
         return;
     }
-    if (text.length == 0 || text.length > 20000) {
+    if ((text.length == 0 && html.length == 0) || text.length > 20000) {
         jsonError(res, 400, "Body must be 1–20000 characters.");
         return;
     }
@@ -757,11 +790,16 @@ package void apiCampaignSend(HTTPServerRequest req, HTTPServerResponse res, Redi
         // few sends per second, under Resend's 10 req/s team limit.
         const subj = substituteCampaign(subject, u.username, u.email, unsubUrl);
         const txt = substituteCampaign(text, u.username, u.email, unsubUrl);
+        // Author HTML is substituted with no escaping; empty/missing keeps
+        // today's auto-generated fallback. Text stays the fallback either way.
+        const htmlSub = html.length > 0
+            ? substituteCampaign(html, u.username, u.email, unsubUrl)
+            : campaignHtmlBody(txt);
         MailMessage m;
         m.toEmail = u.email;
         m.subject = subj;
         m.text = txt;
-        m.html = campaignHtmlBody(txt);
+        m.html = htmlSub;
         m.listUnsubscribeUrl = unsubUrl;
         try {
             sendMail(mail, m);
@@ -816,5 +854,97 @@ package void apiCampaignSend(HTTPServerRequest req, HTTPServerResponse res, Redi
     data["skippedUnsubscribed"] = Json(skipped);
     data["total"] = Json(total);
     data["errors"] = errorsJson;
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/emails/campaign/test — body `{toEmail, subject, text, html?}`.
+/// Sends the composed campaign once to the given address: same subject/text/html
+/// bounds as `apiCampaignSend`, variables substituted with the acting admin's
+/// own username/email and a stand-in `?token=preview` unsubscribe URL (never
+/// mints a real token). Rate-limited with the `mailTestLockKey` SET NX EX
+/// shape from `apiEmailsTest`, not a new key.
+package void apiCampaignTest(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    auto body_ = readJsonBody(req);
+    const toEmail = bodyString(body_, "toEmail");
+    const subject = bodyString(body_, "subject");
+    const text = bodyString(body_, "text");
+    string htmlRaw = "";
+    try {
+        auto v = body_["html"];
+        if (v.type == Json.Type.string) htmlRaw = v.get!string;
+    } catch (Exception) {
+    }
+    if (!emailWellFormed(toEmail)) {
+        jsonError(res, 400, "That doesn't look like a valid email address.");
+        return;
+    }
+    if (subject.length == 0 || subject.length > 200) {
+        jsonError(res, 400, "Subject must be 1–200 characters.");
+        return;
+    }
+    const htmlErr = campaignHtmlError(htmlRaw);
+    if (htmlErr.length > 0) {
+        jsonError(res, 400, htmlErr);
+        return;
+    }
+    const html = htmlRaw.strip();
+    if ((text.length == 0 && html.length == 0) || text.length > 20000) {
+        jsonError(res, 400, "Body must be 1–20000 characters.");
+        return;
+    }
+
+    // Same one-per-minute global throttle as apiEmailsTest. Redis failure
+    // fails open (logWarn, continue).
+    const marker = randomUUID().toString();
+    try {
+        auto db = redis.getDb();
+        db.request!string("SET", mailTestLockKey(), marker, "NX", "EX", "60");
+        if (db.get(mailTestLockKey()) != marker) {
+            jsonError(res, 429, "Please wait a minute between test sends.");
+            return;
+        }
+    } catch (Exception e) {
+        logWarn("admin-emails: campaign-test throttle failed: %s", e.msg);
+    }
+
+    auto mail = loadMailSettings();
+    if (!mail.configured) {
+        jsonError(res, 503, "No mail provider is configured.");
+        return;
+    }
+
+    const actorName = adminActor(req);
+    string actorEmail = "";
+    try {
+        auto u = req.context["user"].get!User;
+        actorEmail = u.email;
+    } catch (Exception) {
+    }
+    const unsubUrl = unsubscribeLink(publicUrl(), "preview");
+    MailMessage m;
+    m.toEmail = toEmail;
+    m.subject = substituteCampaign(subject, actorName, actorEmail, unsubUrl);
+    m.text = substituteCampaign(text, actorName, actorEmail, unsubUrl);
+    m.html = html.length > 0
+        ? substituteCampaign(html, actorName, actorEmail, unsubUrl)
+        : campaignHtmlBody(m.text);
+    // Mirrors a real campaign mail (header + body carry the stand-in link);
+    // `preview` is not a minted token, so it can never unsubscribe anyone.
+    m.listUnsubscribeUrl = unsubUrl;
+
+    const ip = getClientIp(req);
+    const started = MonoTime.currTime;
+    try
+        sendMail(mail, m);
+    catch (Exception e) {
+        recordSend(redis, "campaign-test", toEmail, actorName, mail, ip, started, e.msg);
+        logWarn("admin-emails: %s campaign-test to %s failed: %s", actorName, toEmail, e.msg);
+        jsonError(res, 502, e.msg);
+        return;
+    }
+    recordSend(redis, "campaign-test", toEmail, actorName, mail, ip, started, "");
+    logInfo("admin-emails: %s sent a campaign test to %s via %s", actorName, toEmail, mail.provider);
+    Json data = Json.emptyObject;
+    data["sent"] = Json(true);
     jsonOk(res, data);
 }

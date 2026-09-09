@@ -768,6 +768,46 @@ package void apiFiberConfigSet(HTTPServerRequest req, HTTPServerResponse res,
     if (errors.length > 0) data["errors"] = jsonArray(errors);
     jsonOk(res, data);
 }
+// ────────────────────────────────────────────────────────────
+// NickServ→site auto-sync toggle — GET + POST /api/admin/config/nickserv-sync
+// ────────────────────────────────────────────────────────────
+
+/// GET /api/admin/config/nickserv-sync — returns {enabled}
+package void apiNickservSyncConfig(HTTPServerRequest req, HTTPServerResponse res,
+                            RedisStorage redis) {
+    import ircfiber.services.nickserv_sync : isNickservSyncEnabled, NICKSERV_SYNC_CONFIG_KEY;
+    bool enabled = true;
+    try enabled = isNickservSyncEnabled(redis);
+    catch (Exception) {}
+    Json data = Json.emptyObject;
+    data["enabled"] = Json(enabled);
+    data["key"] = Json(NICKSERV_SYNC_CONFIG_KEY);
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/config/nickserv-sync — {enabled: bool}
+package void apiNickservSyncConfigSet(HTTPServerRequest req, HTTPServerResponse res,
+                               RedisStorage redis) {
+    import ircfiber.services.nickserv_sync : setNickservSyncEnabled;
+    auto body = readJsonBody(req);
+    bool enabled;
+    try {
+        enabled = body["enabled"].get!bool;
+    } catch (Exception e) {
+        jsonError(res, 400, "enabled boolean required");
+        return;
+    }
+    try {
+        setNickservSyncEnabled(redis, enabled);
+    } catch (Exception e) {
+        jsonError(res, 500, e.msg);
+        return;
+    }
+    Json data = Json.emptyObject;
+    data["enabled"] = Json(enabled);
+    jsonOk(res, data);
+}
+
 
 // ────────────────────────────────────────────────────────────
 // Users API

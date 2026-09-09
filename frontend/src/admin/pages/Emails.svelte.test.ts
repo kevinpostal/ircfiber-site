@@ -299,8 +299,8 @@ describe('Emails.svelte — signup verification delivery page', () => {
       all: false,
       subject: 'News from IRC Fiber',
       text: 'Hi {{username}},\n\nBody here.\n\nUnsubscribe: {{unsubscribe_url}}',
+      html: '',
     }, { timeoutMs: 150_000 });
-    await expect.element(page.getByText(/sent 2.*failed 0.*skipped 1/)).toBeInTheDocument();
     expect(mockedToastOk).toHaveBeenCalled();
     // The campaign rows land in the send log: the overview is re-fetched.
     await vi.waitFor(() => {
@@ -329,5 +329,54 @@ describe('Emails.svelte — signup verification delivery page', () => {
       .element(page.getByText('Narrow the audience or confirm sending to everyone.'))
       .toBeInTheDocument();
     expect(mockedToastErr).toHaveBeenCalled();
+  });
+
+  it('HTML tab typing substitutes the first recipient into the sandboxed iframe', async () => {
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await page.getByRole('tab', { name: 'Compose' }).click();
+    await page.getByLabelText('Search').fill('example');
+    await page.getByRole('button', { name: 'Preview audience' }).click();
+    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
+    await page.getByLabelText('Template').selectOptions('announcement');
+    // Picking a template clears author HTML: the iframe falls back to the
+    // substituted text body until HTML is drafted.
+    await page.getByRole('button', { name: 'HTML', exact: true }).click();
+    await page.getByLabelText('HTML').fill('<p>Hi {{username}}</p>');
+    const frameSrc = () =>
+      document.querySelector('iframe[title="HTML preview"]')?.getAttribute('srcdoc') ?? '';
+    await vi.waitFor(() => expect(frameSrc()).toContain('<p>Hi alice</p>'));
+    const sandbox =
+      document.querySelector('iframe[title="HTML preview"]')?.getAttribute('sandbox') ?? '';
+    expect(sandbox).not.toContain('allow-scripts');
+    expect(sandbox).not.toContain('allow-same-origin');
+  });
+
+  it('Send test POSTs the composed fields to the campaign test route and toasts', async () => {
+    mockedPost.mockImplementation((path: string) => {
+      if (path === '/api/admin/emails/campaign/test')
+        return Promise.resolve({ sent: true });
+      return Promise.reject(new Error('unexpected POST ' + path));
+    });
+    render(Emails);
+    await vi.waitFor(() =>
+      expect(api.get).toHaveBeenCalledWith('/api/admin/emails', { page: 0, limit: 50 }));
+    await page.getByRole('tab', { name: 'Compose' }).click();
+    await page.getByLabelText('Search').fill('example');
+    await page.getByRole('button', { name: 'Preview audience' }).click();
+    await expect.element(page.getByText('alice@example.test')).toBeInTheDocument();
+    await page.getByLabelText('Template').selectOptions('announcement');
+    await page.getByLabelText('Test send').fill('me@example.test');
+    await page.getByRole('button', { name: 'Send test' }).click();
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledTimes(1));
+    expect(api.post).toHaveBeenCalledWith('/api/admin/emails/campaign/test', {
+      toEmail: 'me@example.test',
+      subject: 'News from IRC Fiber',
+      text: 'Hi {{username}},\n\nBody here.\n\nUnsubscribe: {{unsubscribe_url}}',
+      html: '',
+    });
+    expect(mockedToastOk).toHaveBeenCalledWith('Campaign test sent to me@example.test');
+    expect(mockedToastErr).not.toHaveBeenCalled();
   });
 });

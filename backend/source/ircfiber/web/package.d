@@ -310,6 +310,7 @@ final class WebController {
     private bool tryNickservLogin(UserRepository repo, string username, string password,
             HTTPServerRequest req, HTTPServerResponse res) {
         import ircfiber.default_network : DEFAULT_FIBER_HOST;
+        import ircfiber.redis.protocol : RedisKeys;
         if (!username.length || !password.length) return false;
         bool determined = false;
         bool ok = false;
@@ -347,6 +348,16 @@ final class WebController {
         auto registry = new ServerRegistry(redis);
         try ensureDefaultFiberNetwork(user, netRepo, redis, registry);
         catch (Exception e) logWarn("Failed to ensure default network for %s on login: %s", user.username, e.msg);
+        // Ownership just proved against live services: lift any park
+        // (SASL-rejection auto-disable) or admin disable so the capture
+        // below actually connects. Mirrors the admin reconnect endpoint.
+        try {
+            foreach (ref cfg0; netRepo.findByUserId(user.id)) {
+                if (cfg0.host != DEFAULT_FIBER_HOST) continue;
+                netRepo.setDisabled(cfg0.id, false);
+            }
+            redis.del(RedisKeys.userNetworks(user.id.toString()));
+        } catch (Exception e) logWarn("login: re-enable networks for %s failed: %s", user.username, e.msg);
         // Capture as the Fiber network SASL credential so the engine
         // identifies as the user's NickServ account from the next connect.
         try {

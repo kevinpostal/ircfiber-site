@@ -182,6 +182,11 @@ void main() {
     // IRCFIBER_FIBEREYE_ENABLED, so it runs exactly where FiberEye does.
     import ircfiber.logs.backup_announce : startBackupAnnounceLoop;
     startBackupAnnounceLoop();
+    // NickServ → site auto-sync: mint parked site rows for IRC-first users.
+    // Self-gates on the anope.db mount (absent on support-bot/bnc) and the
+    // irc:config:nickservSync kill-switch; single-flight via Redis lock.
+    import ircfiber.services.nickserv_sync : startNickservSyncLoop;
+    startNickservSyncLoop();
     // FiberEye connection watch — same image, only runs where
     // IRCFIBER_FIBEREYE_ENABLED=1 (prod: the ircfiber-fibereye container).
     import ircfiber.fibereye.bot : startFiberEye;

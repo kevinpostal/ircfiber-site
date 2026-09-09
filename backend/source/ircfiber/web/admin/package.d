@@ -16,7 +16,7 @@ import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiServers, apiServerHost, apiReassignServer, apiReassignAssignment,
     apiRemoveAssignment, apiEngineConfig, apiHostDisconnect, apiHostReconnect,
     apiHostDeleteNetwork, apiAssignmentDelete, apiRouting,
-    apiFiberConfig, apiFiberConfigSet,
+    apiFiberConfig, apiFiberConfigSet, apiNickservSyncConfig, apiNickservSyncConfigSet,
     apiMullvadStatus, apiMullvadRestart, apiMullvadTest, apiMullvadIrcTest, apiMullvadTestAll, apiMullvadSlotExit,
     apiMullvadServerEgressSet, apiMullvadServerEgressClear, apiNetworkEgressSet,
     apiUsersList, apiUsersBulkDelete, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete, apiRolesList,
@@ -56,9 +56,9 @@ import ircfiber.web.admin.fibereye : apiFiberEyeOverview, apiFiberEyeSessions,
     apiFiberEyeBanRelease, apiFiberEyeReconnect, apiFiberEyeRulesGet,
     apiFiberEyeRulesSet, apiFiberEyeRulesReset, apiFiberEyeIrcdRules,
     apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce;
-import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignSend, apiEmailsOverview, apiEmailsTest,
-    apiEmailsPendingResend, apiEmailsPendingRevoke, apiEmailsCooldownClear,
-    apiEmailsIpLimitClear;
+import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignSend, apiCampaignTest,
+    apiEmailsOverview, apiEmailsTest, apiEmailsPendingResend, apiEmailsPendingRevoke,
+    apiEmailsCooldownClear, apiEmailsIpLimitClear;
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
     apiMotdDelete, apiMotdRotate, apiMotdBatch, apiMotdPin, apiMotdUnpin;
@@ -126,6 +126,8 @@ final class AdminController {
         router.post("/api/admin/servers/host/:host/delete-network/:networkId", &adminWrap!apiHostDeleteNetworkRoute);
         router.get("/api/admin/config/fiber", &adminWrap!apiFiberConfigRoute);
         router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
+        router.get("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigRoute);
+        router.post("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigSetRoute);
         router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
         router.post("/api/admin/mullvad/:label/restart", &adminWrap!apiMullvadRestartRoute);
         router.post("/api/admin/mullvad/:label/exit", &adminWrap!apiMullvadSlotExitRoute);
@@ -237,6 +239,7 @@ final class AdminController {
         // Bulk campaigns (Compose tab): audience preview + send-now fan-out.
         router.get("/api/admin/emails/campaign/audience", &adminWrap!apiCampaignAudienceRoute);
         router.post("/api/admin/emails/campaign/send", &adminWrap!apiCampaignSendRoute);
+        router.post("/api/admin/emails/campaign/test", &adminWrap!apiCampaignTestRoute);
 
         // Engine janitor control plane
         router.get("/api/admin/janitor/status", &adminWrap!apiJanitorStatusRoute);
@@ -421,6 +424,12 @@ private:
     void apiFiberConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiFiberConfigSet(req, res, redis, serverRegistry);
     }
+    void apiNickservSyncConfigRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNickservSyncConfig(req, res, redis);
+    }
+    void apiNickservSyncConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiNickservSyncConfigSet(req, res, redis);
+    }
     void apiMullvadStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadStatus(req, res, redis, serverRegistry); }
     void apiMullvadRestartRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadRestart(req, res, redis, serverRegistry); }
     void apiMullvadSlotExitRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadSlotExit(req, res, redis, serverRegistry); }
@@ -516,6 +525,7 @@ private:
     void apiEmailsIpLimitClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiEmailsIpLimitClear(req, res, redis); }
     void apiCampaignAudienceRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignAudience(req, res); }
     void apiCampaignSendRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignSend(req, res, redis); }
+    void apiCampaignTestRoute(HTTPServerRequest req, HTTPServerResponse res) { apiCampaignTest(req, res, redis); }
 
     // Janitor
     void apiJanitorStatusRoute(HTTPServerRequest req, HTTPServerResponse res) {

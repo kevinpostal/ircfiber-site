@@ -13,7 +13,8 @@ import ircfiber.mail_events;
 import ircfiber.db.user : campaignAudienceFilter;
 import ircfiber.models.user : User;
 import vibe.data.json : parseJsonString;
-import ircfiber.web.admin.emails : CAMPAIGN_MAX_RECIPIENTS, campaignTemplates, substituteCampaign;
+import ircfiber.web.admin.emails : CAMPAIGN_MAX_RECIPIENTS, campaignHtmlBody, campaignHtmlError,
+    campaignTemplates, substituteCampaign;
 
 /// Same shape as services_test.d: built with -unittest so the `@("…")`
 /// unittest blocks in the modules under test run too, hence the pinned
@@ -283,6 +284,30 @@ private void testSubstituteCampaign() {
         "keyless text unchanged");
 }
 
+private void testCampaignHtml() {
+    // Author HTML substitutes all three keys with no escaping, and unknown
+    // keys pass through exactly as in text.
+    check(substituteCampaign(`<p>Hi {{username}} ({{email}})</p><a href="{{unsubscribe_url}}">out</a>`,
+        "alice", "a@b.co", "https://ircfiber.com/unsubscribe?token=t")
+        == `<p>Hi alice (a@b.co)</p><a href="https://ircfiber.com/unsubscribe?token=t">out</a>`,
+        "html substitutes all three keys unescaped");
+    check(substituteCampaign("<p>{{other}}</p>", "a", "b", "u") == "<p>{{other}}</p>",
+        "html leaves unknown keys");
+    // Empty-html fallback is the same escaped-paragraph shape as text.
+    check(campaignHtmlBody("Hi alice") == "<p>Hi alice</p>", "single paragraph fallback");
+    check(campaignHtmlBody("a\nb\n\nc") == "<p>a<br>b</p><p>c</p>", "line-break fallback");
+    check(campaignHtmlBody("<b>x</b>") == "<p>&lt;b&gt;x&lt;/b&gt;</p>", "fallback escapes markup");
+    // Bounds: missing/empty is valid (fallback), whitespace-only or
+    // over-limit is rejected with the send-contract message.
+    check(campaignHtmlError("") == "", "missing html valid");
+    check(campaignHtmlError("   ") == "HTML must be 1–50000 characters.", "whitespace-only html rejected");
+    check(campaignHtmlError("\n\t ") == "HTML must be 1–50000 characters.", "blank-line html rejected");
+    string big;
+    foreach (_; 0 .. 50000) big ~= "x";
+    check(campaignHtmlError(big) == "", "50000 chars valid");
+    check(campaignHtmlError(big ~ "x") == "HTML must be 1–50000 characters.", "50001 chars rejected");
+}
+
 private void testCampaignTemplates() {
     string[] ids;
     foreach (const ref t; campaignTemplates) ids ~= t.id;
@@ -377,6 +402,7 @@ void main() {
     testUnsubscribeLink();
     testUserEmailUnsubscribedJson();
     testSubstituteCampaign();
+    testCampaignHtml();
     testCampaignTemplates();
     testResendListUnsubscribe();
     testCampaignAudienceFilter();

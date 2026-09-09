@@ -158,7 +158,7 @@
         : ask?.action === 'revoke'
           ? `The pending signup for ${ask.row.email} is dropped and its link stops working. The address can sign up again immediately.`
           : ask?.action === 'campaign'
-            ? `Send "${subject}" to ${audienceCount} addresses from ${overview?.provider.fromName} <${overview?.provider.fromEmail}>? Every mail carries a List-Unsubscribe link.`
+            ? `Send "${subject}" to ${audienceCount} addresses from ${overview?.provider.fromName} <${overview?.provider.fromEmail}>? Every mail carries a List-Unsubscribe link. Sends as text${htmlBody.trim() ? ' + HTML' : ' only'}.`
             : '');
 
   async function doConfirm() {
@@ -184,6 +184,7 @@
           all: sendAll,
           subject,
           text: bodyText,
+          html: htmlBody,
         }, { timeoutMs: 150_000 });
         sendResult = r;
         previewKey = null;
@@ -255,10 +256,19 @@
   let templateId = $state('blank');
   let subject = $state('');
   let bodyText = $state('');
+  // Author-supplied HTML starts blank and is cleared on template pick, so a
+  // campaign never ships stale markup from an earlier draft.
+  let htmlBody = $state('');
+  let editTab = $state<'text' | 'html' | 'split'>('text');
+  // Which editor receives variable inserts (last focused, text by default).
+  let focusedEditor = $state<'text' | 'html'>('text');
+  let textArea = $state<HTMLTextAreaElement | null>(null);
+  let htmlArea = $state<HTMLTextAreaElement | null>(null);
+  let campaignTestEmail = $state('');
+  let campaignTesting = $state(false);
   let sending = $state(false);
   let composeError = $state<string | null>(null);
   let sendResult = $state<SendResult | null>(null);
-
   const templates = $derived<CampaignTemplate[]>(overview?.templates ?? []);
   const filterKey = $derived(JSON.stringify([fRole, fAfter, fBefore, fQ, sendAll]));
   /// Send stays disabled until a preview ran for the current filter set.
@@ -306,6 +316,15 @@
     }
   }
 
+  // Human labels for the backend-owned template ids (unknown ids fall back
+  // to the raw id in the picker).
+  const TEMPLATE_LABELS: Record<string, string> = {
+    blank: 'Blank',
+    'support-reply': 'Support reply',
+    announcement: 'Announcement',
+    'account-notice': 'Account notice',
+  };
+
   function pickTemplate(id: string) {
     templateId = id;
     const t = templates.find((x) => x.id === id);
@@ -316,6 +335,9 @@
       subject = '';
       bodyText = '';
     }
+    // Author HTML always starts blank: a picked template must never carry
+    // markup drafted for an earlier campaign.
+    htmlBody = '';
   }
 
   /// Live preview: server-side substitution is authoritative; this mirrors
@@ -333,6 +355,62 @@
   }
   const previewSubject = $derived(previewSubstitute(subject));
   const previewBody = $derived(previewSubstitute(bodyText));
+
+  function escapeHtml(src: string): string {
+    return src.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  }
+
+  /// Text → HTML fallback mirroring the gateway's `campaignHtmlBody`
+  /// (escaped paragraphs, `\n\n` → `<p>`, single `\n` → `<br>`).
+  function campaignHtmlFallback(src: string): string {
+    return previewSubstitute(src)
+      .split('\n\n')
+      .map((p) => `<p>${p.split('\n').map(escapeHtml).join('<br>')}</p>`)
+      .join('');
+  }
+
+  /// Sandboxed iframe source: author HTML when drafted, else the same
+  /// auto-generated fallback the gateway sends. Never `allow-scripts` or
+  /// `allow-same-origin`.
+  const previewHtml = $derived(
+    htmlBody.trim() ? previewSubstitute(htmlBody) : campaignHtmlFallback(bodyText),
+  );
+
+  type InsertToken = '{{username}}' | '{{email}}' | '{{unsubscribe_url}}';
+
+  /// Appends a variable at the focused editor's caret (plain `setRangeText`,
+  /// no new dep) and drops back to a blank template exactly like typing.
+  function insertVar(token: InsertToken) {
+    const el = focusedEditor === 'html' ? htmlArea : textArea;
+    if (!el) return;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? start;
+    el.setRangeText(token, start, end, 'end');
+    const caret = start + token.length;
+    if (focusedEditor === 'html') htmlBody = el.value;
+    else bodyText = el.value;
+    templateId = 'blank';
+    el.focus();
+    el.setSelectionRange(caret, caret);
+  }
+
+  async function sendCampaignTest() {
+    if (campaignTesting) return;
+    campaignTesting = true;
+    try {
+      await api.post('/api/admin/emails/campaign/test', {
+        toEmail: campaignTestEmail.trim(),
+        subject,
+        text: bodyText,
+        html: htmlBody,
+      });
+      toastSuccess(`Campaign test sent to ${campaignTestEmail.trim()}`);
+    } catch (e) {
+      toastError(errMsg(e));
+    } finally {
+      campaignTesting = false;
+    }
+  }
 
   function confirmCampaign() {
     if (!audience || previewStale || sending) return;
@@ -790,9 +868,9 @@
               onchange={(e) => pickTemplate(e.currentTarget.value)}
               class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
             >
-              <option value="blank">Blank</option>
+              <option value="blank">{TEMPLATE_LABELS.blank}</option>
               {#each templates as t (t.id)}
-                <option value={t.id}>{t.id}</option>
+                <option value={t.id}>{TEMPLATE_LABELS[t.id] ?? t.id}</option>
               {/each}
             </select>
           </div>
@@ -813,23 +891,116 @@
           />
         </div>
         <div class="mt-3">
-          <label for="campaign-body" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Body</label>
-          <textarea
-            id="campaign-body"
-            bind:value={bodyText}
-            oninput={() => { templateId = 'blank'; }}
-            rows={8}
-            placeholder="Body (1–20000 characters). Variables: {'{{username}}'} {'{{email}}'} {'{{unsubscribe_url}}'}"
-            class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 font-mono text-sm"
-          ></textarea>
+          <span class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Body</span>
+          <div class="mb-2 flex flex-wrap items-center gap-1.5" role="group" aria-label="Editor mode">
+            <button
+              type="button"
+              onclick={() => { editTab = 'text'; }}
+              aria-pressed={editTab === 'text'}
+              class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 aria-pressed:border-primary aria-pressed:text-primary"
+            >Text</button>
+            <button
+              type="button"
+              onclick={() => { editTab = 'html'; }}
+              aria-pressed={editTab === 'html'}
+              class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 aria-pressed:border-primary aria-pressed:text-primary"
+            >HTML</button>
+            <button
+              type="button"
+              onclick={() => { editTab = 'split'; }}
+              aria-pressed={editTab === 'split'}
+              class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 aria-pressed:border-primary aria-pressed:text-primary"
+            >Split</button>
+            <span class="ml-1 flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                title="Insert {'{{username}}'} at caret"
+                onclick={() => insertVar('{{username}}')}
+                class="rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs hover:border-primary/40"
+              >{'{{username}}'}</button>
+              <button
+                type="button"
+                title="Insert {'{{email}}'} at caret"
+                onclick={() => insertVar('{{email}}')}
+                class="rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs hover:border-primary/40"
+              >{'{{email}}'}</button>
+              <button
+                type="button"
+                title="Insert {'{{unsubscribe_url}}'} at caret"
+                onclick={() => insertVar('{{unsubscribe_url}}')}
+                class="rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs hover:border-primary/40"
+              >{'{{unsubscribe_url}}'}</button>
+            </span>
+          </div>
+          <div class="grid gap-3 {editTab === 'split' ? 'sm:grid-cols-2' : ''}">
+            {#if editTab !== 'html'}
+              <div>
+                <label for="campaign-body" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">Text</label>
+                <textarea
+                  id="campaign-body"
+                  bind:this={textArea}
+                  bind:value={bodyText}
+                  oninput={() => { templateId = 'blank'; }}
+                  onfocus={() => { focusedEditor = 'text'; }}
+                  rows={8}
+                  placeholder="Body (1–20000 characters). Variables: {'{{username}}'} {'{{email}}'} {'{{unsubscribe_url}}'}"
+                  class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 font-mono text-sm"
+                ></textarea>
+              </div>
+            {/if}
+            {#if editTab !== 'text'}
+              <div>
+                <label for="campaign-html" class="mb-1 block text-xs font-semibold uppercase tracking-wider text-muted">HTML</label>
+                <textarea
+                  id="campaign-html"
+                  bind:this={htmlArea}
+                  bind:value={htmlBody}
+                  oninput={() => { templateId = 'blank'; }}
+                  onfocus={() => { focusedEditor = 'html'; }}
+                  rows={12}
+                  placeholder="Optional HTML (1–50000 characters). Same variables; sent as-is, no escaping."
+                  class="w-full rounded-md border border-border bg-surface-2 px-2.5 py-1 font-mono text-sm"
+                ></textarea>
+              </div>
+            {/if}
+          </div>
         </div>
-        {#if subject || bodyText}
+        {#if subject || bodyText || htmlBody}
           <div class="mt-3 rounded-md border border-border bg-surface-2 px-3 py-2">
             <p class="mb-1 text-xs uppercase tracking-wider text-muted">Preview (first recipient, stand-in unsubscribe link)</p>
             <p class="text-sm font-semibold">{previewSubject || '—'}</p>
-            <p class="mt-1 whitespace-pre-wrap text-sm text-muted">{previewBody || '—'}</p>
+            <div class={editTab === 'text' ? 'mt-2 grid gap-3' : 'mt-2 grid gap-3 sm:grid-cols-2'}>
+              <div>
+                <p class="mb-1 text-xs uppercase tracking-wider text-muted">Text</p>
+                <p class="whitespace-pre-wrap text-sm text-muted">{previewBody || '—'}</p>
+              </div>
+              <div>
+                <p class="mb-1 text-xs uppercase tracking-wider text-muted">HTML</p>
+                <div class="overflow-hidden rounded-md border border-border bg-white">
+                  <iframe title="HTML preview" sandbox="" srcdoc={previewHtml} class="block h-56 w-full bg-white"></iframe>
+                </div>
+              </div>
+            </div>
           </div>
         {/if}
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <label for="campaign-test-email" class="text-xs font-semibold uppercase tracking-wider text-muted">Test send</label>
+          <input
+            id="campaign-test-email"
+            type="email"
+            bind:value={campaignTestEmail}
+            placeholder="you@example.com"
+            class="w-64 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-sm"
+          />
+          <button
+            type="button"
+            onclick={() => void sendCampaignTest()}
+            disabled={campaignTesting || !overview?.provider.configured || !subject.trim() || (!bodyText.trim() && !htmlBody.trim())}
+            class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
+          >
+            {campaignTesting ? 'Sending…' : 'Send test'}
+          </button>
+        </div>
         {#if composeError}
           <p class="mt-2 text-xs text-danger">{composeError}</p>
         {/if}
@@ -837,7 +1008,7 @@
           <button
             type="button"
             onclick={confirmCampaign}
-            disabled={sending || !audience || previewStale || !subject.trim() || !bodyText.trim()}
+            disabled={sending || !audience || previewStale || !subject.trim() || (!bodyText.trim() && !htmlBody.trim())}
             class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-40"
           >
             {sending ? 'Sending…' : 'Send campaign'}

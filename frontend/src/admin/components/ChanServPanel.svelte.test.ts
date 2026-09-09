@@ -20,7 +20,7 @@ import { page } from 'vitest/browser';
 
 import ChanServPanel from './ChanServPanel.svelte';
 import { api, ApiError } from '/src/admin/lib/api-client';
-
+import { toastInfo } from '/src/admin/stores/ui';
 const mockedGet = api.get as unknown as Mock;
 const mockedPost = api.post as unknown as Mock;
 
@@ -46,12 +46,13 @@ vi.mock('/src/admin/stores/ui', () => ({
 
 const CHANNELS = '/api/admin/ircd/chanserv/channels';
 const CHANNEL = '/api/admin/ircd/chanserv/channel';
+const MEMBERS = '/api/admin/ircd/channel';
+const ACCOUNTS = '/api/admin/ircd/nickserv/accounts';
 const SUSPEND = '/api/admin/ircd/chanserv/suspend';
 const DROP = '/api/admin/ircd/chanserv/drop';
 const ACCESS = '/api/admin/ircd/chanserv/access';
 const ACCESS_DEL = '/api/admin/ircd/chanserv/access/delete';
 const REGISTER = '/api/admin/ircd/chanserv/register';
-
 const csChannel = (over: Record<string, unknown> = {}) => ({
   name: '#staff',
   founder: 'Zodiac',
@@ -131,6 +132,49 @@ function accessRows(): HTMLElement[] {
   return Array.from(
     document.querySelectorAll('[data-testid="cs-access-rows"] tr'),
   ) as HTMLElement[];
+}
+
+function memberRows(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll('[data-testid="cs-members-rows"] tr'),
+  ) as HTMLElement[];
+}
+
+/// Roster fixtures: Zodiac's nick resolves to a different account name (the
+/// nick→account translation the picker exists for), bob is unregistered.
+const membersFixture = () => ({
+  members: [
+    { nick: 'Zodiac', prefix: '@', raw: '@Zodiac' },
+    { nick: 'bob', prefix: '', raw: 'bob' },
+  ],
+});
+const rosterAccountsFixture = () => ({
+  accounts: [{ nick: 'Zodiac', account: 'Zodiac_A' }],
+});
+/// Access list where Zodiac's resolved account already holds SOP.
+const rosterInfoFixture = () => ({
+  ...infoFixture(),
+  access: [
+    { number: 1, level: 'SOP', mask: 'Zodiac_A' },
+    { number: 2, level: 'HOP', mask: 'FiberEye' },
+  ],
+});
+function mockRoster(over: {
+  info?: Record<string, unknown>;
+  members?: unknown;
+  membersError?: unknown;
+  accounts?: unknown;
+} = {}) {
+  mockedGet.mockImplementation((path: string) => {
+    if (path === CHANNELS) return Promise.resolve(channelsFixture());
+    if (path === CHANNEL) return Promise.resolve(over.info ?? rosterInfoFixture());
+    if (path === MEMBERS) {
+      if (over.membersError) return Promise.reject(over.membersError);
+      return Promise.resolve(over.members ?? membersFixture());
+    }
+    if (path === ACCOUNTS) return Promise.resolve(over.accounts ?? rosterAccountsFixture());
+    return Promise.reject(new Error('unexpected GET ' + path));
+  });
 }
 
 async function manageStaff() {
@@ -299,5 +343,64 @@ describe('ChanServPanel.svelte — ChanServ channel management', () => {
     await page.getByLabelText('Channel to register').fill('#new');
     await page.getByRole('button', { name: 'Register channel' }).click();
     await expect.element(page.getByText(/is already registered!/)).toBeInTheDocument();
+  });
+
+  it('renders the channel roster with resolved accounts and access badges', async () => {
+    mockRoster();
+    render(ChanServPanel);
+    await manageStaff();
+    await vi.waitFor(() => expect(memberRows().length).toBe(2));
+
+    const zodiac = memberRows().find((r) => r.textContent?.includes('Zodiac'))!;
+    expect(zodiac.textContent).toContain('@Zodiac');
+    expect(zodiac.textContent).toContain('Zodiac_A');
+    expect(zodiac.textContent).toContain('On list: SOP');
+
+    const bob = memberRows().find((r) => r.textContent?.includes('bob'))!;
+    expect(bob.textContent).toContain('unregistered nick');
+  });
+
+  it('filters the roster client-side without another members request', async () => {
+    mockRoster();
+    render(ChanServPanel);
+    await manageStaff();
+    await vi.waitFor(() => expect(memberRows().length).toBe(2));
+    const before = mockedGet.mock.calls.filter((c) => c[0] === MEMBERS).length;
+    expect(before).toBeGreaterThan(0);
+
+    await page.getByLabelText('Filter channel users').fill('zod');
+    await vi.waitFor(() => expect(memberRows().length).toBe(1));
+    expect(memberRows()[0].textContent).toContain('Zodiac');
+    expect(mockedGet.mock.calls.filter((c) => c[0] === MEMBERS).length).toBe(before);
+  });
+
+  it('click-to-fill inserts the resolved account and warns on unregistered nicks', async () => {
+    mockRoster();
+    render(ChanServPanel);
+    await manageStaff();
+    await vi.waitFor(() => expect(memberRows().length).toBe(2));
+
+    await page.getByRole('button', { name: 'Use Zodiac_A for access' }).click();
+    await vi.waitFor(() =>
+      expect(
+        (document.querySelector('input[aria-label="Account or mask"]') as HTMLInputElement).value,
+      ).toBe('Zodiac_A'),
+    );
+    expect(vi.mocked(toastInfo)).toHaveBeenCalledWith('Using account "Zodiac_A" for Zodiac.');
+
+    await page.getByRole('button', { name: 'Use bob for access' }).click();
+    await vi.waitFor(() =>
+      expect(
+        (document.querySelector('input[aria-label="Account or mask"]') as HTMLInputElement).value,
+      ).toBe('bob'),
+    );
+  });
+
+  it('renders a roster failure inline and keeps the access form usable', async () => {
+    mockRoster({ membersError: new ApiError('No such channel.', 404) });
+    render(ChanServPanel);
+    await manageStaff();
+    await expect.element(page.getByText('No such channel.')).toBeInTheDocument();
+    await expect.element(page.getByLabelText('Account or mask')).toBeInTheDocument();
   });
 });

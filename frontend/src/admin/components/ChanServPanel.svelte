@@ -28,8 +28,7 @@
   import EmptyState from './EmptyState.svelte';
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api-client';
-  import { toastSuccess, toastError } from '../stores/ui';
-
+  import { toastSuccess, toastError, toastInfo } from '../stores/ui';
   interface CsChannel {
     name: string; founder: string; successor: string; description: string;
     registeredAt: number; lastUsedAt: number;
@@ -113,7 +112,89 @@
 
   let accessTier = $state('SOP');
   let accessEntry = $state('');
+  let accessEntryEl = $state<HTMLInputElement | null>(null);
 
+  /// Live roster of who is actually in the managed channel (NAMES transact).
+  /// The access form takes a NickServ account, so each row resolves its nick
+  /// through the bulk accounts inventory — never per-nick INFO.
+  interface ChannelMember { nick: string; prefix: string; raw: string; }
+  interface NsAccountLite { nick: string; account: string; }
+  let members = $state<ChannelMember[]>([]);
+  let membersLoading = $state(false);
+  let membersError = $state<string | null>(null);
+  let memberFilter = $state('');
+  let nsAccounts = $state<NsAccountLite[]>([]);
+  let nsAccountsLoaded = $state(false);
+  let nsAccountsOk = $state(true);
+
+  const accountByNick = $derived.by(() => {
+    const m = new Map<string, string>();
+    for (const a of nsAccounts) m.set(a.nick.toLowerCase(), a.account);
+    return m;
+  });
+  function resolvedAccount(nick: string): string | null {
+    return accountByNick.get(nick.toLowerCase()) ?? null;
+  }
+  /// Access level when the nick or its resolved account already holds access.
+  function accessLevelFor(nick: string): string | null {
+    const resolved = resolvedAccount(nick);
+    for (const a of info?.access ?? []) {
+      if (a.mask.toLowerCase() === nick.toLowerCase()) return a.level;
+      if (resolved && a.mask.toLowerCase() === resolved.toLowerCase()) return a.level;
+    }
+    return null;
+  }
+  const filteredMembers = $derived.by(() => {
+    const q = memberFilter.trim().toLowerCase();
+    if (!q) return members;
+    return members.filter((m) => {
+      const resolved = (resolvedAccount(m.nick) ?? '').toLowerCase();
+      return m.nick.toLowerCase().includes(q) || resolved.includes(q);
+    });
+  });
+
+  async function ensureNsAccounts() {
+    if (nsAccountsLoaded) return;
+    try {
+      const r = await api.get<{ accounts: NsAccountLite[] }>(
+        '/api/admin/ircd/nickserv/accounts',
+      );
+      nsAccounts = r.accounts ?? [];
+      nsAccountsOk = true;
+    } catch {
+      nsAccounts = [];
+      nsAccountsOk = false;
+    } finally {
+      nsAccountsLoaded = true;
+    }
+  }
+  async function loadMembers(channel: string) {
+    membersLoading = true;
+    membersError = null;
+    try {
+      const r = await api.get<{ members: ChannelMember[] }>(
+        '/api/admin/ircd/channel',
+        { channel },
+      );
+      members = r.members ?? [];
+    } catch (e) {
+      members = [];
+      membersError = errMsg(e);
+    } finally {
+      membersLoading = false;
+    }
+  }
+  function useMember(nick: string) {
+    const resolved = resolvedAccount(nick);
+    const v = resolved ?? nick;
+    accessEntry = v;
+    if (resolved) {
+      if (resolved !== nick) toastInfo(`Using account "${v}" for ${nick}.`);
+    } else {
+      toastInfo(`${nick} is not a registered account — verify before adding.`);
+    }
+    accessEntryEl?.focus();
+  }
   let regChannel = $state('');
   let regDescription = $state('');
   let regFounder = $state('');
@@ -165,8 +246,12 @@
   async function lookup(channel: string) {
     const c = channel.trim();
     if (!c) return;
+    const changed = c !== infoChannel;
     infoChannel = c;
     lookupChannel = c;
+    if (changed) memberFilter = '';
+    members = [];
+    membersError = null;
     infoLoading = true;
     infoError = null;
     actionError = null;
@@ -178,6 +263,10 @@
       infoError = errMsg(e);
     } finally {
       infoLoading = false;
+    }
+    if (info?.registered) {
+      await ensureNsAccounts();
+      await loadMembers(c);
     }
   }
 
@@ -604,6 +693,91 @@
         </div>
       {/if}
 
+      <div class="mt-4">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-muted">
+          Channel users ({members.length})
+        </h4>
+        {#if membersLoading}
+          <p class="mt-1 text-sm text-muted">Loading…</p>
+        {:else if membersError}
+          <p class="mt-1 text-sm text-danger">{membersError}</p>
+        {:else if members.length === 0}
+          <p class="mt-1 text-sm text-muted">
+            Nobody in channel right now — type the account or mask manually.
+          </p>
+        {:else}
+          <div class="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="search"
+              bind:value={memberFilter}
+              placeholder="Filter channel users…"
+              aria-label="Filter channel users"
+              class="w-full max-w-[240px] {input}"
+            />
+          </div>
+          {#if filteredMembers.length === 0}
+            <p class="mt-2 text-sm text-muted">No channel user matches this filter.</p>
+          {:else}
+            <div class="mt-2 overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead>
+                  <tr class="border-b border-border text-xs uppercase tracking-wider text-muted">
+                    <th class="py-2 pr-4">Nick</th>
+                    <th class="py-2 pr-4">Account</th>
+                    <th class="py-2 pr-4">Access</th>
+                    <th class="py-2 text-right"></th>
+                  </tr>
+                </thead>
+                <tbody data-testid="cs-members-rows">
+                  {#each filteredMembers as m (m.nick)}
+                    {@const resolved = resolvedAccount(m.nick)}
+                    {@const level = accessLevelFor(m.nick)}
+                    {@const displayValue = resolved ?? m.nick}
+                    <tr class="border-b border-border/50 last:border-0">
+                      <td class="py-2 pr-4">
+                        <span
+                          class="rounded bg-border/40 px-2 py-0.5 font-mono text-xs"
+                          title={m.prefix ? `status: ${m.prefix}` : 'no status'}
+                        >
+                          {m.prefix}{m.nick}
+                        </span>
+                      </td>
+                      <td class="py-2 pr-4 font-mono text-xs">
+                        {#if !nsAccountsOk}
+                          <span class="text-muted">—</span>
+                        {:else if resolved}
+                          {resolved}
+                        {:else}
+                          <span class="text-muted">unregistered nick</span>
+                        {/if}
+                      </td>
+                      <td class="py-2 pr-4 font-mono text-xs">
+                        {#if level}
+                          On list: {level}
+                        {:else}
+                          <span class="text-muted">—</span>
+                        {/if}
+                      </td>
+                      <td class="py-2 text-right">
+                        <button
+                          type="button"
+                          data-testid="cs-member-use-{m.nick}"
+                          aria-label="Use {displayValue} for access"
+                          onclick={() => useMember(m.nick)}
+                          class={btn}
+                        >
+                          Use
+                        </button>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        {/if}
+      </div>
+
       <div class="mt-2 flex flex-wrap items-center gap-2">
         <select bind:value={accessTier} aria-label="Access level" class={input}>
           <option value="QOP">QOP</option>
@@ -613,6 +787,7 @@
           <option value="VOP">VOP</option>
         </select>
         <input
+          bind:this={accessEntryEl}
           bind:value={accessEntry}
           placeholder="account or mask"
           aria-label="Account or mask"
