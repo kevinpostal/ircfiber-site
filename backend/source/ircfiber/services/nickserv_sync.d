@@ -6,7 +6,9 @@
  * This loop reconciles the other direction from `!adduser`: every 10 minutes
  * it reads the Anope flatfile inventory (the gateway mounts it read-only;
  * RPC has no account enumeration) and mints a parked site row for every
- * NickServ account with no matching site user.
+ * NickServ account with no matching site user and no Fiber network
+ * credential link (`saslUsername` — the provisioner's collision-fallback
+ * accounts belong to an existing site user under a different name).
  *
  * Parked means exactly this: a normal `users` row with an unusable random
  * site password and NO Fiber network. The network is created on first site
@@ -93,7 +95,12 @@ void setNickservSyncEnabled(RedisStorage redis, bool enabled) @trusted {
 }
 
 /// Pure verdict for one inventory row. `haveUser` is whether a site row
-/// already exists for the account (ASCII case-insensitive, the house rule).
+/// already exists for the account (ASCII case-insensitive, the house rule);
+/// `havePlatformLink` is whether some Fiber network already carries the
+/// account as its `saslUsername` — i.e. the provisioner registered this as a
+/// collision-fallback credential for a site user whose username differs
+/// (e.g. site `p34c3` holding NickServ `p34c3_e5eb`). Minting a site row for
+/// it would duplicate that user, so it is skipped the same as `haveUser`.
 struct SyncDecision {
     bool create;
     string username;    /// canonical account display when create
@@ -101,7 +108,7 @@ struct SyncDecision {
     string skipReason;  /// set when !create, for the cycle log
 }
 
-SyncDecision decideNickservSync(const AnopeAccount a, bool haveUser) @safe pure {
+SyncDecision decideNickservSync(const AnopeAccount a, bool haveUser, bool havePlatformLink) @safe pure {
     SyncDecision d;
     string account = a.account.strip().length ? a.account.strip() : a.nick.strip();
     if (!account.length) {
@@ -124,6 +131,10 @@ SyncDecision decideNickservSync(const AnopeAccount a, bool haveUser) @safe pure 
     }
     if (haveUser) {
         d.skipReason = "site user exists";
+        return d;
+    }
+    if (havePlatformLink) {
+        d.skipReason = "linked as a Fiber network credential";
         return d;
     }
     const mail = a.email.strip();
@@ -198,6 +209,26 @@ private void nickservSyncOnce() {
         return;
     }
 
+    // Preload every NickServ account already held as a Fiber network
+    // credential. The provisioner registers collision-fallback accounts
+    // (`p34c3_e5eb` for site user `p34c3`) as `saslUsername`; without this
+    // the inventory row matches no site *username* and mints a duplicate
+    // site user. Same `listWithSaslAccount` source the admin NickServ page
+    // annotates with. A Mongo hiccup here must not mint dups, so fail the
+    // cycle like the user preload above.
+    bool[string] platformLinked;
+    try {
+        import ircfiber.db.network : NetworkRepository;
+        import ircfiber.default_network : DEFAULT_FIBER_HOST;
+        foreach (row; (new NetworkRepository()).listWithSaslAccount(DEFAULT_FIBER_HOST)) {
+            const acct = row.config.saslUsername.strip();
+            if (acct.length) platformLinked[asciiLowerStr(acct)] = true;
+        }
+    } catch (Exception e) {
+        logWarn("nickserv sync: platform link preload failed: %s", e.msg);
+        return;
+    }
+
     int created = 0, skipped = 0;
     foreach (ref a; inv.accounts) {
         if (created >= NICKSERV_SYNC_MAX_NEW_PER_RUN) {
@@ -206,7 +237,7 @@ private void nickservSyncOnce() {
             break;
         }
         const key = asciiLowerStr(a.account.length ? a.account : a.nick);
-        auto d = decideNickservSync(a, (key in haveUser) !is null);
+        auto d = decideNickservSync(a, (key in haveUser) !is null, (key in platformLinked) !is null);
         if (!d.create) {
             skipped++;
             continue;
@@ -294,7 +325,7 @@ unittest {
     a.nick = "lex0de";
     a.account = "lex0de";
     a.email = "";
-    auto d = decideNickservSync(a, false);
+    auto d = decideNickservSync(a, false, false);
     assert(d.create && d.username == "lex0de");
     assert(d.email == "lex0de@provisioned.irc.invalid");
 }
@@ -305,7 +336,7 @@ unittest {
     a.nick = "lex0de";
     a.account = "lex0de";
     a.email = "lex0de@tuta.com";
-    auto d = decideNickservSync(a, false);
+    auto d = decideNickservSync(a, false, false);
     assert(d.create && d.email == "lex0de@tuta.com");
 }
 
@@ -313,20 +344,36 @@ unittest {
 unittest {
     AnopeAccount a;
     a.account = "NickServ";
-    assert(!decideNickservSync(a, false).create);
+    assert(!decideNickservSync(a, false, false).create);
     a.account = "ADMIN";
-    assert(!decideNickservSync(a, false).create);
+    assert(!decideNickservSync(a, false, false).create);
 }
 
 @("sync skips existing users, bad nicks and suspended accounts")
 unittest {
     AnopeAccount a;
     a.account = "dnsk";
-    assert(!decideNickservSync(a, true).create);
+    assert(!decideNickservSync(a, true, false).create);
     a.account = "123bad";
-    assert(!decideNickservSync(a, false).create);
+    assert(!decideNickservSync(a, false, false).create);
     a.account = "goodnick";
     a.suspended = true;
-    auto d = decideNickservSync(a, false);
+    auto d = decideNickservSync(a, false, false);
     assert(!d.create && d.skipReason == "suspended in NickServ");
+}
+
+@("sync skips a fallback account held as a Fiber credential")
+unittest {
+    // Prod regression: site `p34c3` holds NickServ `p34c3_e5eb` as its
+    // network credential. No site *username* matches, but minting a row
+    // would duplicate the user.
+    AnopeAccount a;
+    a.nick = "p34c3_e5eb";
+    a.account = "p34c3_e5eb";
+    a.email = "p34c3@asylum.st";
+    auto d = decideNickservSync(a, false, true);
+    assert(!d.create && d.skipReason == "linked as a Fiber network credential");
+    // Case-insensitive like the house rule: the loop lowercases the key.
+    a.account = "P34C3_E5EB";
+    assert(!decideNickservSync(a, false, true).create);
 }
