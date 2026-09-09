@@ -103,21 +103,121 @@ struct OAuthSettings {
 
 /// Per-provider `IRCFIBER_OAUTH_<NAME>_CLIENT_ID` (inline; IDs are public —
 /// they appear in the authorize URL) and `IRCFIBER_OAUTH_<NAME>_CLIENT_SECRET`
-/// via `envSecret` (file wins). Only configured providers are returned.
-OAuthSettings[string] loadOAuthSettings() {
+/// via `envSecret` (file wins). Either half may instead come from the admin
+/// override store below (Redis; fills only halves the environment leaves
+/// empty, so deployed env always wins). Only configured providers are
+/// returned.
+OAuthSettings[string] loadOAuthSettings(RedisStorage redis = null) {
     OAuthSettings[string] result;
+    OAuthConfigStore store = redis is null ? null : new OAuthConfigStore(redis);
     foreach (p; oauthProviders) {
         string prefix = "IRCFIBER_OAUTH_" ~ p.name.toUpper ~ "_";
         string id = "";
         try id = environment.get(prefix ~ "CLIENT_ID", "");
         catch (Exception) {}
         string secret = envSecret(prefix ~ "CLIENT_SECRET");
+        if ((id.length == 0 || secret.length == 0) && store !is null) {
+            try {
+                auto ov = store.get(p.name);
+                if (!ov.isNull) {
+                    if (id.length == 0) id = ov.get.clientId;
+                    if (secret.length == 0) secret = ov.get.clientSecret;
+                }
+            } catch (Exception e) {
+                logWarn("oauth: reading %s override failed: %s", p.name, e.msg);
+            }
+        }
         if (id.length > 0 && secret.length > 0)
             result[p.name] = OAuthSettings(id, secret);
     }
     return result;
 }
 
+/// Redis key for a provider's admin override.
+string oauthConfigKey(string provider) @safe pure {
+    return "oauth:config:" ~ provider;
+}
+
+/// Admin-saved credentials for one provider. Serialized as
+/// `{"clientId":…, "clientSecret":…}` under `oauthConfigKey`.
+struct OAuthConfigOverride {
+    string clientId;
+    string clientSecret;
+
+    Json toJson() const {
+        return Json(["clientId": Json(clientId), "clientSecret": Json(clientSecret)]);
+    }
+
+    static OAuthConfigOverride fromJson(Json j) {
+        OAuthConfigOverride o;
+        if (auto pv = "clientId" in j) o.clientId = pv.get!string;
+        if (auto pv = "clientSecret" in j) o.clientSecret = pv.get!string;
+        return o;
+    }
+}
+
+/// Admin credential overrides on Redis (the secrets dir is root-owned and
+/// the container env is immutable at runtime, so there is no file/env
+/// write path; Redis matches the `setFiberEnabled` runtime-config
+/// precedent). `put`/`remove` throw on Redis failure (the caller turns it
+/// into 503); `get` returns null on absent or unparseable rows. A restart
+/// that loses Redis fails safe: providers read as unconfigured and their
+/// buttons hide.
+final class OAuthConfigStore {
+    private RedisStorage redis;
+
+    this(RedisStorage redis) {
+        this.redis = redis;
+    }
+
+    private RedisDatabase db() @trusted {
+        return redis.getDb();
+    }
+
+    Nullable!OAuthConfigOverride get(string provider) {
+        try {
+            auto raw = db().get(oauthConfigKey(provider));
+            if (raw.length == 0) return Nullable!OAuthConfigOverride.init;
+            return nullable(OAuthConfigOverride.fromJson(parseJsonString(raw)));
+        } catch (Exception e) {
+            logWarn("oauth: reading %s override failed: %s", provider, e.msg);
+            return Nullable!OAuthConfigOverride.init;
+        }
+    }
+
+    /// Throws on Redis failure.
+    void put(string provider, OAuthConfigOverride o) {
+        db().set(oauthConfigKey(provider), o.toJson().toString());
+    }
+
+    /// Throws on Redis failure.
+    void remove(string provider) {
+        db().del(oauthConfigKey(provider));
+    }
+}
+
+/// Pure admin status-row assembly (the handler supplies the inputs; the
+/// secret itself never enters the row — `hasSecret` only).
+Json oauthStatusRow(const OAuthProvider p, bool live, string envId,
+        bool envSecretPresent, string ovId, bool ovSecretPresent, string redirectUri) {
+    string source = "off";
+    if (live) {
+        bool envBoth = envId.length > 0 && envSecretPresent;
+        bool anyEnv = envId.length > 0 || envSecretPresent;
+        source = envBoth ? "env" : (anyEnv ? "mixed" : "override");
+    }
+    return Json([
+        "name": Json(p.name),
+        "label": Json(p.label),
+        "configured": Json(live),
+        "source": Json(source),
+        "clientId": Json(envId.length > 0 ? envId : ovId),
+        "hasSecret": Json(envSecretPresent || ovSecretPresent),
+        "envId": Json(envId),
+        "envHasSecret": Json(envSecretPresent),
+        "redirectUri": Json(redirectUri),
+    ]);
+}
 /// The registered callback for a provider. Derived, never configured, so
 /// there is exactly one URI to register on every provider app page.
 string oauthRedirectUri(string provider) {
@@ -638,4 +738,41 @@ unittest {
         parseJsonString(`{"sub": "79", "username": "u9", "email": "u@x.co"}`),
         parseJsonString(`{"confirmed_at": null}`));
     assert(unconfirmed.error.canFind("verified email address"));
+}
+
+@("oauth config override key shape and JSON round-trip")
+unittest {
+    assert(oauthConfigKey("github") == "oauth:config:github");
+    OAuthConfigOverride o = { "Iv1.abc", "s3cret" };
+    auto rt = OAuthConfigOverride.fromJson(o.toJson());
+    assert(rt.clientId == "Iv1.abc");
+    assert(rt.clientSecret == "s3cret");
+    // Missing halves read as "": an ID-only row configures nothing.
+    auto bare = OAuthConfigOverride.fromJson(parseJsonString(`{"clientId": "x"}`));
+    assert(bare.clientId == "x" && bare.clientSecret == "");
+}
+
+@("oauth status row classifies env/override/mixed/off and never leaks the secret")
+unittest {
+    const github = oauthProvider("github");
+    // Off: nothing anywhere.
+    auto off = oauthStatusRow(*github, false, "", false, "", false, "https://ircfiber.com/auth/github/callback");
+    assert(off["source"].get!string == "off");
+    assert(!off["configured"].get!bool);
+    // Env: both halves deployed.
+    auto env = oauthStatusRow(*github, true, "EID", true, "", false, "cb");
+    assert(env["source"].get!string == "env");
+    assert(env["clientId"].get!string == "EID");
+    // Override: env empty, admin store filled.
+    auto ov = oauthStatusRow(*github, true, "", false, "AID", true, "cb");
+    assert(ov["source"].get!string == "override");
+    assert(ov["clientId"].get!string == "AID");
+    assert(ov["hasSecret"].get!bool);
+    // Mixed: env ID plus admin secret.
+    auto mixed = oauthStatusRow(*github, true, "EID", false, "", true, "cb");
+    assert(mixed["source"].get!string == "mixed");
+    // The secret value itself never appears in the serialized row.
+    OAuthConfigOverride o = { "AID", "super-secret-value" };
+    auto leak = oauthStatusRow(*github, true, "", false, o.clientId, true, "cb");
+    assert(!leak.toString().canFind("super-secret-value"));
 }

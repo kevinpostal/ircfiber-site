@@ -32,6 +32,7 @@
   import Mullvad from './pages/Mullvad.svelte';
   import Backups from './pages/Backups.svelte';
   import Emails from './pages/Emails.svelte';
+  import OAuth from './pages/OAuth.svelte';
   import FiberEye from './pages/FiberEye.svelte';
   import FiberEyeIp from './pages/FiberEyeIp.svelte';
   import ToastViewport from './components/ToastViewport.svelte';
@@ -61,6 +62,7 @@
     if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
     if (match('/backups', path)) return { kind: 'backups' } as const;
     if (match('/emails', path)) return { kind: 'emails' } as const;
+    if (match('/oauth', path)) return { kind: 'oauth' } as const;
     const eyeIpMatch = match('/fibereye/ip/:ip', path);
     if (eyeIpMatch) return { kind: 'fibereye-ip', ip: decodeURIComponent(eyeIpMatch.ip) } as const;
     if (match('/fibereye', path)) return { kind: 'fibereye' } as const;
@@ -108,6 +110,8 @@
         <Backups />
       {:else if page?.kind === 'emails'}
         <Emails />
+      {:else if page?.kind === 'oauth'}
+        <OAuth />
       {:else if page?.kind === 'replication'}
         <Replication />
       {:else if page?.kind === 'sessions'}

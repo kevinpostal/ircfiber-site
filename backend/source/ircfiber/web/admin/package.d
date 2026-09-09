@@ -63,6 +63,7 @@ import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignCancel, apiCa
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
     apiMotdDelete, apiMotdRotate, apiMotdBatch, apiMotdPin, apiMotdUnpin;
+import ircfiber.web.admin.oauth : apiOAuthStatus, apiOAuthSave, apiOAuthClear;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -129,6 +130,9 @@ final class AdminController {
         router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
         router.get("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigRoute);
         router.post("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigSetRoute);
+        router.get("/api/admin/oauth/status", &adminWrap!apiOAuthStatusRoute);
+        router.post("/api/admin/oauth/:provider", &adminWrap!apiOAuthSaveRoute);
+        router.delete_("/api/admin/oauth/:provider", &adminWrap!apiOAuthClearRoute);
         router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
         router.post("/api/admin/mullvad/:label/restart", &adminWrap!apiMullvadRestartRoute);
         router.post("/api/admin/mullvad/:label/exit", &adminWrap!apiMullvadSlotExitRoute);
@@ -439,6 +443,9 @@ private:
     void apiNickservSyncConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiNickservSyncConfigSet(req, res, redis);
     }
+    void apiOAuthStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthStatus(req, res, redis); }
+    void apiOAuthSaveRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthSave(req, res, redis); }
+    void apiOAuthClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthClear(req, res, redis); }
     void apiMullvadStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadStatus(req, res, redis, serverRegistry); }
     void apiMullvadRestartRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadRestart(req, res, redis, serverRegistry); }
     void apiMullvadSlotExitRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadSlotExit(req, res, redis, serverRegistry); }

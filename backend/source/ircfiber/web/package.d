@@ -324,7 +324,7 @@ final class WebController {
     /// No auth required, same public posture as `/api/events`.
     private void oauthProviders(HTTPServerRequest, HTTPServerResponse res) {
         import std.algorithm : sort;
-        auto settings = loadOAuthSettings();
+        auto settings = loadOAuthSettings(redis);
         auto names = settings.keys;
         names.sort();
         Json[] rows;
@@ -342,7 +342,7 @@ final class WebController {
         try provider = req.params["provider"];
         catch (Exception) {}
         auto p = oauthProvider(provider);
-        auto settings = loadOAuthSettings();
+        auto settings = loadOAuthSettings(redis);
         if (p is null || provider !in settings) {
             res.statusCode = 404;
             res.writeBody("Unknown provider.", "text/plain; charset=utf-8");
@@ -373,7 +373,7 @@ final class WebController {
         try provider = req.params["provider"];
         catch (Exception) {}
         auto p = oauthProvider(provider);
-        auto settings = loadOAuthSettings();
+        auto settings = loadOAuthSettings(redis);
         if (p is null || provider !in settings) {
             res.statusCode = 404;
             res.writeBody("Unknown provider.", "text/plain; charset=utf-8");
