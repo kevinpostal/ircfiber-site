@@ -218,6 +218,13 @@ export const ircState = $state({
   // boolean) ensures the same value incrementing again still triggers
   // a re-run if needed (e.g. multiple sends in the same micro-task).
   forceScrollToBottomNonce: 0,
+  // Per-buffer typing state: bufferKey -> (nick -> timestamp of last TAGMSG).
+  // Read/written by setTyping, clearTyping, clearTypingForNick and
+  // getTypersForBuffer; every one of them indexes this map directly, so it
+  // MUST exist on the initial state (dropping it threw
+  // "Cannot read properties of undefined" on the first TAGMSG and killed
+  // the whole SPA boot).
+  typing: {} as Record<string, Record<string, number>>,
   // Per (buffer, nick) typing-spam streaks: `${networkId}:${channel}:${nick}`
   // -> { episodes, actives }. An episode starts on each fresh `active`
   // (first sighting, post-`done`, or post-expiry); heartbeats inside a live
