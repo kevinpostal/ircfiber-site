@@ -105,7 +105,7 @@ describe('OAuth admin page', () => {
     await setInput(inputs[1] as HTMLInputElement, 'g-secret');
     await click(ed.querySelector('button') as HTMLButtonElement);
     await vi.waitFor(() =>
-      expect(mockedPost).toHaveBeenCalledWith('/admin/oauth/google', {
+      expect(mockedPost).toHaveBeenCalledWith('/api/admin/oauth/google', {
         clientId: 'GID-123',
         clientSecret: 'g-secret',
       }),
@@ -120,7 +120,7 @@ describe('OAuth admin page', () => {
     await setInput(inputs[0] as HTMLInputElement, 'Iv1.new');
     await click(ed.querySelector('button') as HTMLButtonElement);
     await vi.waitFor(() =>
-      expect(mockedPost).toHaveBeenCalledWith('/admin/oauth/github', { clientId: 'Iv1.new' }),
+      expect(mockedPost).toHaveBeenCalledWith('/api/admin/oauth/github', { clientId: 'Iv1.new' }),
     );
   });
 
@@ -137,6 +137,6 @@ describe('OAuth admin page', () => {
     );
     if (!confirmBtn) throw new Error('no confirm button');
     await click(confirmBtn as HTMLButtonElement);
-    await vi.waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('/admin/oauth/github'));
+    await vi.waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('/api/admin/oauth/github'));
   });
 });

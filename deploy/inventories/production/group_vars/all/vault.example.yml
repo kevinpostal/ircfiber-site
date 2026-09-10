@@ -30,13 +30,13 @@ vault_resend_api_key: "CHANGE_ME"
 # secret removes the secret file and the provider reads as unconfigured.
 # GitHub → Settings → Developer settings → OAuth Apps (client secret).
 vault_oauth_github_client_id: ""
-vault_oauth_github_client_secret: "CHANGE_ME"
+vault_oauth_github_client_secret: ""
 # Google → Cloud console → Credentials → OAuth client (Web).
 vault_oauth_google_client_id: ""
-vault_oauth_google_client_secret: "CHANGE_ME"
+vault_oauth_google_client_secret: ""
 # Codeberg → Settings → Applications (confidential client).
 vault_oauth_codeberg_client_id: ""
-vault_oauth_codeberg_client_secret: "CHANGE_ME"
+vault_oauth_codeberg_client_secret: ""
 # GitLab → User Settings → Applications (scopes read_user, openid, email).
 vault_oauth_gitlab_client_id: ""
-vault_oauth_gitlab_client_secret: "CHANGE_ME"
+vault_oauth_gitlab_client_secret: ""

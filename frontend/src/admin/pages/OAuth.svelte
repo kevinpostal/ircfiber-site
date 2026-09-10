@@ -76,7 +76,7 @@
     loading = true;
     error = '';
     try {
-      const data = await api.get<{ providers: OAuthRow[] }>('/admin/oauth/status');
+      const data = await api.get<{ providers: OAuthRow[] }>('/api/admin/oauth/status');
       rows = data.providers ?? [];
       for (const r of rows) {
         if (!(r.name in clientEdits)) clientEdits[r.name] = r.clientId;
@@ -97,7 +97,7 @@
     }
     saving[name] = true;
     try {
-      await api.post(`/admin/oauth/${name}`, { clientId: id, ...(secret ? { clientSecret: secret } : {}) });
+      await api.post(`/api/admin/oauth/${name}`, { clientId: id, ...(secret ? { clientSecret: secret } : {}) });
       secretEdits[name] = '';
       toastSuccess(`${name}: credentials saved — provider is live if both halves are set.`);
       await load();
@@ -111,7 +111,7 @@
   async function clear(name: string): Promise<void> {
     clearing[name] = true;
     try {
-      await api.delete(`/admin/oauth/${name}`);
+      await api.delete(`/api/admin/oauth/${name}`);
       confirmClear = null;
       toastSuccess(`${name}: admin override cleared.`);
       await load();
