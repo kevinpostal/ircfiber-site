@@ -290,14 +290,18 @@ Manual-tier lookups (§3 step 5) are buttons here, never automatic — each clic
 
 ```
 Connect: alice!~a@cloak (203.0.113.7) port 6697 class main [Alice]
-  ↳ 203.0.113.7 · Austin, Texas, US · AS15169 Google LLC · hosting · abuse 0/100 · new IP
-  ↳ 203.0.113.7 · known IP (Austin, US) · 12 sessions since 2026-08-14
+  ↳ 203.0.113.7 · Austin, Texas, US · AS15169 Google LLC · hosting · risk 73 · listed dronebl:5 · prefix 185.65.134.0/24 · America/Chicago
+  ↳ 203.0.113.7 · known IP (Austin, US) · hosting · 12 sessions
 ```
 
-First sighting gets the full clause; later ones the compact form — the behaviour
-`lookupGeo`'s first-sighting marker already implements. Add at most **one** word-set:
-`vpn`/`tor`/`hosting`/`proxy` when confirmed by ≥2 voters, plus `abuse <score>/100` when
-`abuseScore ≥ 25`. Unconfirmed single votes never reach IRC; they belong on the detail page.
+First sighting gets the full clause; later ones the compact form — which still
+carries the confirmed flags and the network type, so a returning VPN/hosting IP
+never looks like a clean residential one. Confirmed `vpn`/`tor`/`hosting`/`proxy`
+need ≥2 voters; alongside them the line may carry single-source facts labeled as
+such: `net <type>` (proxycheck `network.type`), `org <name>` (registry/org fallback
+when it differs from the ASN name), `risk <score>`, `listed <dnsbl>` and
+`sfs freq <n>`. Unconfirmed single votes never reach IRC *as flags*; they belong on
+the detail page.
 
 ### 5.4 Connect-time enforcement (InspIRCd, not the gateway)
 

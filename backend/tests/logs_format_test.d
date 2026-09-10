@@ -138,6 +138,46 @@ private void testGeoClauses() {
         ~ " · risk 73 · prefix 185.65.134.0/24 · America/Chicago",
         "flags, risk and prefix clauses, got " ~ geoDetail(r));
 
+    IpIntel net;
+    net.geo.countryCode = "US";
+    net.classification.networkType = "residential";
+    net.provenance["geo.countryCode"] = SourceMark("proxycheck", 1, 1);
+    check(geoDetail(net) == "US · net residential",
+        "raw network type renders, got " ~ geoDetail(net));
+
+    net.classification.networkType = "hosting";
+    check(geoDetail(net) == "US · net hosting",
+        "unconfirmed hosting surfaces as network type, got " ~ geoDetail(net));
+    net.classification.isHosting = true;
+    check(geoDetail(net) == "US · hosting",
+        "confirmed flag absorbs the net clause, got " ~ geoDetail(net));
+
+    IpIntel org;
+    org.geo.countryCode = "DE";
+    org.network.asn = "AS39351";
+    org.network.asName = "31173 Services AB";
+    org.network.org = "Mullvad VPN AB";
+    org.provenance["geo.countryCode"] = SourceMark("ipapi_is", 1, 1);
+    check(geoDetail(org) == "DE · AS39351 31173 Services AB · org Mullvad VPN AB",
+        "org clause, got " ~ geoDetail(org));
+    org.network.org = "31173 services ab";
+    check(geoDetail(org) == "DE · AS39351 31173 Services AB",
+        "org matching asName adds nothing, got " ~ geoDetail(org));
+    org.network.org = "";
+    org.network.isp = "Mullvad";
+    check(geoDetail(org) == "DE · AS39351 31173 Services AB · org Mullvad",
+        "isp falls back as org, got " ~ geoDetail(org));
+
+    IpIntel rep;
+    rep.geo.countryCode = "DE";
+    rep.reputation.dnsbl = ["dronebl:5"];
+    rep.provenance["geo.countryCode"] = SourceMark("dronebl", 1, 1);
+    check(geoDetail(rep) == "DE · listed dronebl:5",
+        "dnsbl clause, got " ~ geoDetail(rep));
+    rep.reputation.sfsFrequency = 9;
+    check(geoDetail(rep) == "DE · listed dronebl:5 · sfs freq 9",
+        "sfs clause, got " ~ geoDetail(rep));
+
     IpIntel sparse;
     sparse.geo.countryCode = "DE";
     sparse.provenance["geo.countryCode"] = SourceMark("ipinfo", 1, 1);
@@ -256,6 +296,20 @@ private void testFormatConnect() {
     known.reputation.sessionCount = 1;
     check(formatLogEvent(ev, known, false)[0].endsWith(" · known IP (Austin, US)"),
         "one session adds no count");
+
+    auto flagged = sampleIntel();
+    flagged.classification.isVpn = true;
+    flagged.classification.vpnOperator = "Mullvad";
+    flagged.classification.isHosting = true;
+    flagged.reputation.sessionCount = 12;
+    check(formatLogEvent(ev, flagged, false)[0].endsWith(
+        " · known IP (Austin, US) · vpn(Mullvad)+hosting · 12 sessions"),
+        "repeat connect keeps its flags, got " ~ formatLogEvent(ev, flagged, false)[0]);
+
+    auto netOnly = sampleIntel();
+    netOnly.classification.networkType = "residential";
+    check(formatLogEvent(ev, netOnly, false)[0].endsWith(" · known IP (Austin, US) · net residential"),
+        "repeat connect keeps its network type, got " ~ formatLogEvent(ev, netOnly, false)[0]);
 
     auto priv = ev;
     priv.ip = "172.20.0.4";

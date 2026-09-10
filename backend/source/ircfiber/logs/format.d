@@ -186,7 +186,7 @@ private string joinClauses(const string[] parts, string sep) @safe pure {
     return out_;
 }
 
-/// `Austin, Texas, US · AS15169 Google LLC · vpn(Mullvad)+hosting · risk 73 · prefix 185.65.134.0/24 · America/Chicago`
+/// `Austin, Texas, US · AS15169 Google LLC · vpn(Mullvad)+hosting · risk 73 · listed dronebl:5 · prefix 185.65.134.0/24 · America/Chicago`
 /// Missing fields are skipped rather than rendered as empty separators.
 /// No coordinates: `docs/IP_INTEL.md` §4 rule 4.
 string geoDetail(const IpIntel r) @safe pure {
@@ -195,8 +195,48 @@ string geoDetail(const IpIntel r) @safe pure {
     const asn = joinClauses([sanitizeLine(r.network.asn), sanitizeLine(r.network.asName)], " ");
     const risk = r.reputation.riskScore >= 0 ? "risk " ~ r.reputation.riskScore.to!string : "";
     const prefix = r.identity.prefix.length ? "prefix " ~ sanitizeLine(r.identity.prefix) : "";
-    return joinClauses([place, asn, sanitizeLine(r.flagsLabel()), risk, prefix,
-        sanitizeLine(r.geo.timezone)], " · ");
+    return joinClauses([place, asn, orgClause(r), sanitizeLine(r.flagsLabel()), netClause(r),
+        risk, listedClause(r), prefix, sanitizeLine(r.geo.timezone)], " · ");
+}
+
+/// `net hosting` / `net residential` / `net business` from proxycheck's
+/// single-source `network.type`. Skipped when a confirmed flag already says
+/// it, so the ↳ line never prints `hosting · net hosting`. An unconfirmed
+/// `net hosting` still prints: it is labeled as the network type, never as a
+/// confirmed flag (`docs/IP_INTEL.md` §5.3: single votes never reach IRC as flags).
+private string netClause(const IpIntel r) @safe pure {
+    const t = sanitizeLine(r.classification.networkType);
+    if (!t.length) return "";
+    if (t == "hosting" && r.classification.isHosting) return "";
+    if (t == "residential" && r.classification.isResidentialProxy) return "";
+    return "net " ~ t;
+}
+
+/// `org <name>` — the registry/org fallback when it names someone the ASN
+/// clause doesn't (case-insensitive, so `Google LLC` beside `Google LLC`
+/// adds nothing).
+private string orgClause(const IpIntel r) @safe pure {
+    string o = sanitizeLine(r.network.org);
+    if (!o.length) o = sanitizeLine(r.network.isp);
+    if (!o.length) return "";
+    if (icmp(o, sanitizeLine(r.network.asName)) == 0) return "";
+    return "org " ~ o;
+}
+
+/// `listed dronebl:5+efnetrbl:3` and/or `sfs freq 9` — vendor reputation
+/// beyond the proxycheck risk score. Empty when nothing is listed.
+private string listedClause(const IpIntel r) @safe pure {
+    string[] hits;
+    foreach (e; r.reputation.dnsbl) {
+        const s = sanitizeLine(e);
+        if (s.length) hits ~= s;
+    }
+    string out_ = hits.length ? "listed " ~ joinClauses(hits, "+") : "";
+    if (r.reputation.sfsFrequency > 0) {
+        const s = "sfs freq " ~ r.reputation.sfsFrequency.to!string;
+        out_ = out_.length ? out_ ~ " · " ~ s : s;
+    }
+    return out_;
 }
 
 /// `Austin, US` / `US` / `Austin` / `""`.
@@ -223,6 +263,13 @@ private string geoClause(string ip, const IpIntel r, bool firstSighting, bool de
     }
     const s = geoShort(r);
     string out_ = s.length ? " · known IP (" ~ s ~ ")" : " · known IP";
+    // Repeat connects used to hide every flag: a returning VPN/hosting IP
+    // looked identical to a clean residential one. Confirmed flags (and the
+    // raw network type) ride along so #staff triage sees them at a glance.
+    const fl = sanitizeLine(r.flagsLabel());
+    if (fl.length) out_ ~= " · " ~ fl;
+    const nt = netClause(r);
+    if (nt.length) out_ ~= " · " ~ nt;
     if (r.reputation.sessionCount > 1) out_ ~= " · " ~ r.reputation.sessionCount.to!string ~ " sessions";
     return out_;
 }
