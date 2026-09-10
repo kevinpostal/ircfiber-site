@@ -1572,6 +1572,45 @@ describe('updateChannelUsers', () => {
 		expect(foundBuf?.users[0].category).toBe('OP');
 		expect(foundBuf?.users[0].nick).toBe('@alice');
 	});
+
+	it('keeps +h when the same line also removes -o for the same nick', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: '@GURU', prefix: '@', category: 'OP' })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		// Reported bug: `MODE #chan +h-o GURU GURU` demoted GURU to MEMBER
+		// instead of leaving them at halfop.
+		updateChannelUsers('net1', '#chan', 'MODE', '', ['#chan', '+h-o', 'GURU', 'GURU']);
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.users).toHaveLength(1);
+		expect(foundBuf?.users[0].prefix).toBe('%');
+		expect(foundBuf?.users[0].category).toBe('HALFOP');
+		expect(foundBuf?.users[0].nick).toBe('%GURU');
+	});
+
+	it('falls back to a held lower prefix when -o strips a multi-prefix nick', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		const buf = createBuffer({
+			name: '#chan',
+			users: [createMember({ nick: '@%GURU', prefix: '@', category: 'OP' })],
+		});
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', 'MODE', '', ['#chan', '-o', 'GURU']);
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')?.buffers.find((b) => b.name === '#chan');
+		expect(foundBuf?.users[0].prefix).toBe('%');
+		expect(foundBuf?.users[0].category).toBe('HALFOP');
+		expect(foundBuf?.users[0].nick).toBe('%GURU');
+	});
 });
 
 describe('checkHighlight', () => {

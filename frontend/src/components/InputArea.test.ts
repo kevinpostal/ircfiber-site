@@ -702,4 +702,117 @@ describe('InputArea', () => {
 		ircState.showComposeStyle = false;
 		history.replaceState({}, '', '/');
 	});
+
+	describe('typing heartbeat (stuck-indicator regression)', () => {
+		// "p34c3 is typing" stuck for hours: the heartbeat re-sent `active`
+		// every 3s as long as the compose box was non-empty, with no idle
+		// cutoff, no blur handling, and `done` aimed at the wrong buffer on
+		// switch. Typing sends go through the onSendRaw prop so the mock
+		// observes the exact wire text.
+		function setupTyping() {
+			const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+			net.buffers.push(createBuffer({ name: '#general' }));
+			net.buffers.push(createBuffer({ name: '#random' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#general';
+			flushSync();
+			render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+			return page.getByRole('textbox', { name: /message input/i });
+		}
+		const tagmsg = (v: string, buf = '#general') => `@+typing=${v} TAGMSG ${buf}`;
+
+		it('sends active on first input and done when the text is cleared', async () => {
+			const textarea = setupTyping();
+			await textarea.fill('hi');
+			flushSync();
+			expect(mockSendRaw).toHaveBeenCalledWith('net1', tagmsg('active'));
+			await textarea.fill('');
+			flushSync();
+			expect(mockSendRaw).toHaveBeenCalledWith('net1', tagmsg('done'));
+		});
+
+		it('stops the heartbeat after 10s without a keystroke and sends done', async () => {
+			const textarea = setupTyping();
+			try {
+				vi.useFakeTimers();
+				await textarea.fill('hi');
+				flushSync();
+				expect(mockSendRaw).toHaveBeenCalledTimes(1);
+				vi.advanceTimersByTime(3000);
+				expect(mockSendRaw).toHaveBeenCalledTimes(2);
+				// Heartbeats at +6s/+9s are still inside the window; the
+				// bow-out fires at +12s. Advance to it exactly.
+				vi.advanceTimersByTime(9000);
+				expect(mockSendRaw).toHaveBeenLastCalledWith('net1', tagmsg('done'));
+				const calls = mockSendRaw.mock.calls.length;
+				vi.advanceTimersByTime(9000);
+				expect(mockSendRaw.mock.calls.length).toBe(calls);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('a keystroke inside the window keeps the heartbeat alive', async () => {
+			const textarea = setupTyping();
+			try {
+				vi.useFakeTimers();
+				await textarea.fill('hi');
+				flushSync();
+				vi.advanceTimersByTime(9000);
+				// Still typing at 9s: refresh, no done.
+				await textarea.fill('hi there');
+				flushSync();
+				vi.advanceTimersByTime(3000);
+				expect(mockSendRaw).toHaveBeenLastCalledWith('net1', tagmsg('active'));
+				expect(mockSendRaw).not.toHaveBeenCalledWith('net1', tagmsg('done'));
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('sends done to the old buffer on switch, not the new one', async () => {
+			setupTyping();
+			const textarea = page.getByRole('textbox', { name: /message input/i });
+			await textarea.fill('hi');
+			flushSync();
+			expect(mockSendRaw).toHaveBeenCalledWith('net1', tagmsg('active'));
+			ircState.activeBuffer.bufferName = '#random';
+			flushSync();
+			expect(mockSendRaw).toHaveBeenCalledWith('net1', tagmsg('done'));
+			expect(mockSendRaw).not.toHaveBeenCalledWith('net1', expect.stringContaining('TAGMSG #random'));
+		});
+
+		it('sends done and stops on window blur', async () => {
+			const textarea = setupTyping();
+			try {
+				vi.useFakeTimers();
+				await textarea.fill('hi');
+				flushSync();
+				window.dispatchEvent(new Event('blur'));
+				flushSync();
+				expect(mockSendRaw).toHaveBeenLastCalledWith('net1', tagmsg('done'));
+				const calls = mockSendRaw.mock.calls.length;
+				vi.advanceTimersByTime(9000);
+				expect(mockSendRaw.mock.calls.length).toBe(calls);
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it('sends nothing while sharing is off, and bows out when switched off mid-draft', async () => {
+			const textarea = setupTyping();
+			globalPrefs.typingIndicator = false;
+			await textarea.fill('hi');
+			flushSync();
+			expect(mockSendRaw).not.toHaveBeenCalledWith('net1', expect.stringContaining('TAGMSG'));
+			globalPrefs.typingIndicator = true;
+			await textarea.fill('hi!');
+			flushSync();
+			expect(mockSendRaw).toHaveBeenCalledWith('net1', tagmsg('active'));
+			globalPrefs.typingIndicator = false;
+			flushSync();
+			expect(mockSendRaw).toHaveBeenLastCalledWith('net1', tagmsg('done'));
+		});
+	});
 });

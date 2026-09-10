@@ -3893,54 +3893,128 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
         'y': { prefix: '*', category: 'OPER' },
         'Y': { prefix: '!', category: 'OPER' },
       };
-      const targets = params.slice(2);
-      let adding = true;
-      let targetIdx = 0;
-      for (const ch of modeStr) {
-        if (ch === '+') { adding = true; continue; }
-        if (ch === '-') { adding = false; continue; }
-        if (ch in PREFIX_MODES && targetIdx < targets.length) {
-          const targetNick = targets[targetIdx++];
-          const member = buf.users.find(u => stripPrefix(u.nick) === targetNick);
-          const pm = PREFIX_MODES[ch];
-          if (member && adding && pm) {
-            member.prefix = pm.prefix;
-            member.category = pm.category;
-            member.nick = pm.prefix + stripPrefix(member.nick);
-          } else if (member && !adding) {
-            member.prefix = '';
-            member.category = 'MEMBER';
-            member.nick = stripPrefix(member.nick);
-          } else if (!member && adding && pm) {
-            // MODE arrived before the user was in the list (or user joined via services). Add them so the new prefix is visible immediately.
-            buf.users.push({
-              nick: pm.prefix + targetNick,
-              prefix: pm.prefix,
-              category: pm.category,
-              ident: '',
-              realname: '',
-              isAway: false,
-              awayMessage: '',
-              lastSpoke: 0,
-              lastHighlighted: 0,
-              account: ''
-            });
-          }
+      // Highest-rank-first, mirroring MODE_HIERARCHY (OPER > OWNER > ADMIN
+      // > OP > HALFOP > VOICED). Used to pick the displayed prefix and to
+      // rebuild the stored prefix run in deterministic order.
+      const MODE_RANK = ['y', 'Y', 'q', 'a', 'o', 'h', 'v'];
+      const PREFIX_TO_MODE: Record<string, string> = {
+        '~': 'q', '&': 'a', '@': 'o', '%': 'h', '+': 'v', '*': 'y', '!': 'Y',
+      };
+      const MODE_TO_PREFIX: Record<string, string> = {
+        'q': '~', 'a': '&', 'o': '@', 'h': '%', 'v': '+', 'y': '*', 'Y': '!',
+      };
+      // Modes the member held before this line, recovered from the stored
+      // nick's prefix run (multi-prefix NAMES keeps every char, e.g.
+      // `@%GURU`). Falls back to the single `prefix` field for entries
+      // whose run was collapsed by an earlier single-prefix update.
+      const heldModesFor = (nickStr: string, fallbackPrefix: string): Set<string> => {
+        const held = new Set<string>();
+        for (const ch of nickStr) {
+          const m = PREFIX_TO_MODE[ch];
+          if (!m) break;
+          held.add(m);
         }
-      }
-      // Channel mode flags (IRCCloud-style CSS classes)
+        if (held.size === 0 && fallbackPrefix) {
+          const m = PREFIX_TO_MODE[fallbackPrefix];
+          if (m) held.add(m);
+        }
+        return held;
+      };
       if (!buf.modeFlags) buf.modeFlags = {};
       const channelModeMap: Record<string, keyof typeof buf.modeFlags> = {
         's': 'secret', 'p': 'private', 'm': 'moderated',
         'i': 'inviteOnly', 'k': 'password', 't': 'topicControl',
         'n': 'noExternal', 'l': 'limited',
       };
+      // First pass: collect per-nick adds/removes so one MODE line applies
+      // atomically. `+h-o GURU GURU` means add h AND remove o for GURU —
+      // the old code mutated the member on `+h` then demoted it to MEMBER
+      // on `-o`, losing the just-added halfop. Set arithmetic
+      // ((held ∪ adds) − removes) keeps it.
+      const targets = params.slice(2);
+      let adding = true;
+      let targetIdx = 0;
+      const addsByNick = new Map<string, Set<string>>();
+      const remsByNick = new Map<string, Set<string>>();
+      const canonicalByNick = new Map<string, string>();
+      const takeTarget = (): string | null => {
+        if (targetIdx >= targets.length) return null;
+        return targets[targetIdx++];
+      };
       for (const ch of modeStr) {
-        if (ch === '+' || ch === '-') continue;
-        const flag = channelModeMap[ch];
-        if (flag && !(ch in PREFIX_MODES)) {
-          buf.modeFlags[flag] = adding;
+        if (ch === '+') { adding = true; continue; }
+        if (ch === '-') { adding = false; continue; }
+        if (ch in PREFIX_MODES) {
+          const targetNick = takeTarget();
+          if (!targetNick) continue;
+          const key = stripPrefix(targetNick).toLowerCase();
+          if (!key) continue;
+          if (!canonicalByNick.has(key)) canonicalByNick.set(key, stripPrefix(targetNick) || targetNick);
+          const bucket = (adding ? addsByNick : remsByNick);
+          let set = bucket.get(key);
+          if (!set) { set = new Set<string>(); bucket.set(key, set); }
+          set.add(ch);
+          continue;
         }
+        const flag = channelModeMap[ch];
+        if (flag) {
+          // k/l take a parameter when adding (+k key, +l limit); -k/-l
+          // take none, so only consume a target on add. Every other flag
+          // here is parameterless — applying per-char `adding` (not the
+          // line-final value) is what keeps `+m-o` from clearing +m.
+          if ((ch === 'k' || ch === 'l') && adding) takeTarget();
+          buf.modeFlags[flag] = adding;
+          continue;
+        }
+        // Ban/exempt/invite lists always carry a mask parameter.
+        if (ch === 'b' || ch === 'e' || ch === 'I') takeTarget();
+      }
+      for (const [key, canon] of canonicalByNick) {
+        const adds = addsByNick.get(key) ?? new Set<string>();
+        const rems = remsByNick.get(key) ?? new Set<string>();
+        const member = buf.users.find(u => stripPrefix(u.nick).toLowerCase() === key);
+        if (member) {
+          const bare = stripPrefix(member.nick);
+          const held = heldModesFor(member.nick, member.prefix);
+          for (const m of adds) held.add(m);
+          for (const m of rems) held.delete(m);
+          if (held.size === 0) {
+            member.prefix = '';
+            member.category = 'MEMBER';
+            member.nick = bare;
+          } else {
+            const ordered = MODE_RANK.filter(m => held.has(m));
+            const top = ordered[0];
+            const pm = PREFIX_MODES[top];
+            member.prefix = pm.prefix;
+            member.category = pm.category;
+            member.nick = ordered.map(m => MODE_TO_PREFIX[m]).join('') + bare;
+          }
+        } else if (adds.size > 0) {
+          // MODE arrived before the user was in the list (or user joined
+          // via services). Add them only when something remains after
+          // set arithmetic — a pure removal (or +o-o net zero) must not
+          // conjure a MEMBER row for a nick we have never seen.
+          const remaining = new Set<string>(adds);
+          for (const m of rems) remaining.delete(m);
+          if (remaining.size === 0) continue;
+          const ordered = MODE_RANK.filter(m => remaining.has(m));
+          const top = ordered[0];
+          const pm = PREFIX_MODES[top];
+          buf.users.push({
+            nick: ordered.map(m => MODE_TO_PREFIX[m]).join('') + canon,
+            prefix: pm.prefix,
+            category: pm.category,
+            ident: '',
+            realname: '',
+            isAway: false,
+            awayMessage: '',
+            lastSpoke: 0,
+            lastHighlighted: 0,
+            account: '', isBot: false
+          });
+        }
+        // Absent member + pure removal: no-op (never tracked them).
       }
     }
   }

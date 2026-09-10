@@ -212,29 +212,41 @@
   });
 
   // ── Send typing notifications ──
+  // IRCv3 typing spec: `active` on first keystroke, re-sent every ~3s
+  // *while the user is making updates*; receivers expire the indicator
+  // ~10s after the last tag (ours: 6.5s). A compose box left non-empty is
+  // NOT "making updates" — without an idle cutoff one abandoned draft
+  // broadcasts `active` forever and every peer shows "X is typing" for
+  // hours. So the heartbeat below stops under four conditions, all of
+  // which mean "no longer composing here": the text is cleared/sent, no
+  // keystroke for TYPING_IDLE_MS, the window is backgrounded, or the
+  // buffer is switched. The next keystroke restarts it.
+  const TYPING_RESEND_MS = 3000;
+  const TYPING_IDLE_MS = 10_000;
   let typingTimer: ReturnType<typeof setInterval> | null = null;
+  /// The buffer the running heartbeat announces for. Captured at start:
+  /// by the time a `done` is due the active buffer may be a different
+  /// one, and announcing `done` there would leave the old buffer stuck
+  /// (until its 6.5s expiry) while clearing nothing.
+  let typingTarget: { netId: string; buf: string } | null = null;
+  let lastKeystroke = 0;
   let wasTyping = $state(false);
 
+  function sendTypingTo(target: { netId: string; buf: string } | null, value: 'active' | 'done'): void {
+    if (!target) return;
+    onSendRaw(target.netId, `@+typing=${value} TAGMSG ${target.buf}`);
+  }
+
   function sendTypingActive(): void {
-    if (inputDisabled) return;
-    const netId = ircState.activeBuffer.networkId;
-    const buf = ircState.activeBuffer.bufferName;
-    if (!netId || !buf || buf.startsWith('_')) return;
-    // TAGMSG with +typing=active — IRCCloud sends this every ~3s while typing
-    sendRaw(netId, `@+typing=active TAGMSG ${buf}`);
+    if (inputDisabled || globalPrefs.typingIndicator === false) return;
+    sendTypingTo(typingTarget, 'active');
   }
 
   function sendTypingDone(): void {
     const netId = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
     if (!netId || !buf || buf.startsWith('_')) return;
-    sendRaw(netId, `@+typing=done TAGMSG ${buf}`);
-  }
-
-  function startTypingTimer(): void {
-    if (typingTimer) return;
-    sendTypingActive();
-    typingTimer = setInterval(sendTypingActive, 3000);
+    onSendRaw(netId, `@+typing=done TAGMSG ${buf}`);
   }
 
   function stopTypingTimer(): void {
@@ -242,6 +254,39 @@
       clearInterval(typingTimer);
       typingTimer = null;
     }
+    typingTarget = null;
+  }
+
+  function startTypingTimer(): void {
+    if (typingTimer || globalPrefs.typingIndicator === false) return;
+    const netId = ircState.activeBuffer.networkId;
+    const buf = ircState.activeBuffer.bufferName;
+    if (!netId || !buf || buf.startsWith('_')) return;
+    typingTarget = { netId, buf };
+    lastKeystroke = Date.now();
+    sendTypingActive();
+    typingTimer = setInterval(typingHeartbeat, TYPING_RESEND_MS);
+  }
+
+  /// 3s heartbeat: refresh while the user is making updates, bow out once
+  /// the draft goes idle so peers expire us instead of showing "X is
+  /// typing" until the tab closes.
+  function typingHeartbeat(): void {
+    if (Date.now() - lastKeystroke > TYPING_IDLE_MS) {
+      sendTypingTo(typingTarget, 'done');
+      stopTypingTimer();
+      return;
+    }
+    sendTypingActive();
+  }
+
+  /// Every keystroke (and programmatic insert) refreshes the idle clock
+  /// and restarts a stopped heartbeat when there is text to announce.
+  function noteKeystroke(): void {
+    lastKeystroke = Date.now();
+    if (typingTimer || inputDisabled || globalPrefs.typingIndicator === false) return;
+    const v = inputValue;
+    if (v.length > 0 && !v.startsWith('/')) startTypingTimer();
   }
 
   $effect(() => {
@@ -250,18 +295,49 @@
     if (isTyping && !wasTyping) {
       startTypingTimer();
     } else if (!isTyping && wasTyping) {
-      sendTypingDone();
+      // `done` goes to the buffer that was being typed in (the heartbeat
+      // target), which the buffer switch below may already have moved
+      // away from — announcing to the new buffer would clear nothing.
+      sendTypingTo(typingTarget, 'done');
+      if (!typingTarget) sendTypingDone();
       stopTypingTimer();
     }
     wasTyping = isTyping;
   });
 
-  // Cleanup typing timer on destroy
+  // Switching "Share typing status" off mid-draft bows out immediately
+  // instead of leaving peers showing us typing until their expiry.
   $effect(() => {
-    return () => {
+    if (globalPrefs.typingIndicator === false && typingTimer) {
+      sendTypingTo(typingTarget, 'done');
+      stopTypingTimer();
+    }
+  });
+
+  // A backgrounded tab with a draft is not "making updates": stop the
+  // heartbeat and bow out. wasTyping stays true (the text is still
+  // there) so refocusing alone does not restart — the next keystroke
+  // does, via noteKeystroke.
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const bowOut = () => {
       if (typingTimer) {
-        clearInterval(typingTimer);
-        typingTimer = null;
+        sendTypingTo(typingTarget, 'done');
+        stopTypingTimer();
+      }
+    };
+    const onBlur = () => bowOut();
+    const onVis = () => { if (document.hidden) bowOut(); };
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVis);
+      // Unmounting with a live heartbeat (navigation away) must not
+      // leave peers showing us typing until their expiry either.
+      if (typingTimer) {
+        sendTypingTo(typingTarget, 'done');
+        stopTypingTimer();
       }
     };
   });
@@ -284,6 +360,14 @@
   );
   $effect(() => {
     const newKey = currentBufferKey;
+    // Leaving a buffer mid-draft: bow out there (typingTarget still names
+    // the old buffer) and let the input watcher restart the heartbeat for
+    // the new buffer if its restored text warrants it.
+    if (lastBufferKey && lastBufferKey !== newKey && typingTimer) {
+      sendTypingTo(typingTarget, 'done');
+      stopTypingTimer();
+      wasTyping = false;
+    }
     // Save old buffer's text before switching
     if (lastBufferKey && lastBufferKey !== newKey) {
       const [nid, bname] = lastBufferKey.split(/:(.+)/);
@@ -784,8 +868,6 @@
       ircState.optimisticMessages.delete(label);
     } else {
       list.push(optimistic);
-      ircState.messages[key] = list;
-      // Keep the processed cache in sync so MessageList renders the optimistic row immediately.
       if (ircState.processedMessages[key]) {
         ircState.processedMessages[key] = appendToProcessed(ircState.processedMessages[key], [optimistic]);
       } else {
@@ -862,6 +944,7 @@
 
   function handleInput(): void {
     autoResize();
+    noteKeystroke();
   }
 
   function handleNickClick(): void {
@@ -938,7 +1021,9 @@
     const start = textarea.selectionStart ?? inputValue.length;
     const end = textarea.selectionEnd ?? inputValue.length;
     inputValue = inputValue.slice(0, start) + text + inputValue.slice(end);
-    // Move caret to after the inserted text on next tick
+    // Programmatic (emoji picker): no input event fires, so refresh the
+    // typing heartbeat explicitly.
+    noteKeystroke();
     queueMicrotask(() => {
       const pos = start + text.length;
       textarea!.setSelectionRange(pos, pos);
