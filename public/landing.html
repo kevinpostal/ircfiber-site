@@ -11,6 +11,7 @@
   <meta property="og:description" content="A cloud bouncer that keeps you connected and your history searchable. Access your IRC conversations from any device, anytime." />
   <meta property="og:site_name" content="IRC Fiber" />
   <meta property="og:url" content="https://ircfiber.com" />
+  <link rel="canonical" href="https://ircfiber.com/" />
   <meta property="og:image" content="https://ircfiber.com/app-screenshot.png" />
   <meta property="og:image:secure_url" content="https://ircfiber.com/app-screenshot.png" />
   <meta property="og:image:type" content="image/png" />
@@ -246,6 +247,7 @@
     @keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
     .topbar-nav { display: flex; align-items: center; gap: var(--s-4); margin-left: auto; flex-shrink: 0; }
+    a:focus-visible, button:focus-visible { outline: 2px solid var(--fiber-blue); outline-offset: 2px; border-radius: 4px; }
     .topbar-nav a {
       color: var(--fiber-fog);
       font-size: 13.5px;
@@ -359,6 +361,7 @@
     }
     .cta-oauth { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; margin-top: var(--s-3); }
     .cta-oauth:empty { display: none; }
+    .cta-oauth a.btn { flex: 0 1 300px; justify-content: center; }
 
     @media (max-width: 1280px) {
       .status-pill { display: none; }
@@ -381,6 +384,7 @@
          clearer hierarchy on phones. */
       .topbar-signin { order: 3; margin-left: auto; }
       .topbar-cta { order: 5; width: 100%; justify-content: center; margin-top: var(--s-2); margin-left: 0; }
+      .cta-oauth a.btn { flex: 1 1 100%; }
     }
     @media (max-width: 380px) {
       /* Very narrow phones — wrap the brand + sign-in row so the
@@ -1228,6 +1232,7 @@
       .hero-fibers .fiber::after, .fiber-rule .pulse, .irc-input .placeholder::after, .form-mock .cursor::after, .brand-mark .fiber-pulse, .led { animation: none !important; }
     }
   </style>
+  <noscript><style>.reveal,.reveal-stagger>*{opacity:1 !important;transform:none !important;}</style></noscript>
 </head>
 <body>
   <header class="topbar">
@@ -1286,7 +1291,7 @@
       <span class="marquee-item">IRCNet</span>
       <span class="marquee-item">Rizon</span>
       <span class="marquee-item">100+</span>
-      <span class="marquee-label"><span class="acc">&gt;</span>networks</span>
+      <span aria-hidden="true" style="display:contents"><span class="marquee-label"><span class="acc">&gt;</span>networks</span>
       <span class="marquee-item">Libera</span>
       <span class="marquee-item">OFTC</span>
       <span class="marquee-item">hackint</span>
@@ -1296,7 +1301,7 @@
       <span class="marquee-item">DALnet</span>
       <span class="marquee-item">IRCNet</span>
       <span class="marquee-item">Rizon</span>
-      <span class="marquee-item">100+</span>
+      <span class="marquee-item">100+</span></span>
     </div>
   </div>
 
