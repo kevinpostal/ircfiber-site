@@ -208,3 +208,111 @@ final class PendingSignupStore {
         }
     }
 }
+
+// Password reset: single-use 1-hour token mailed as a `/reset?token=` link.
+// Mirrors the PendingSignup pattern (same Redis idiom, generator, link
+// builder). Created only for addresses that belong to an account; the
+// request handler always answers success so the endpoint is not an
+// account-enumeration oracle. Reuses newSignupToken() and the
+// PendingSignupStore throttle instances — no new randomness or
+// rate-limit code.
+struct PasswordReset {
+    string email; // lowercased at request time
+    long createdAt; // unix seconds
+
+    // Keys: email,createdAt.
+    Json toJson() const @safe {
+        Json j = Json.emptyObject;
+        j["email"] = Json(email);
+        j["createdAt"] = Json(createdAt);
+        return j;
+    }
+
+    // Throws on missing keys.
+    static PasswordReset fromJson(Json j) @safe {
+        PasswordReset p;
+        p.email = j["email"].get!string;
+        p.createdAt = j["createdAt"].get!long;
+        return p;
+    }
+}
+
+enum resetTtlSeconds = 3600;
+
+string resetKey(string token) @safe pure {
+    return "reset:pending:" ~ token;
+}
+
+// `<base without trailing '/'>/reset?token=<token>`
+string resetLink(string publicBaseUrl, string token) @safe pure {
+    string base = publicBaseUrl;
+    while (base.length > 0 && base[$ - 1] == '/')
+        base = base[0 .. $ - 1];
+    return base ~ "/reset?token=" ~ token;
+}
+
+// Builds the email. `username` is escaped in the html body; the link
+// is alnum-only but goes through htmlAttribEscape in the href regardless.
+MailMessage resetEmail(string username, string email, string link) @safe {
+    MailMessage m;
+    m.toEmail = email;
+    m.subject = "Reset your IRC Fiber password";
+    m.text = "Hi " ~ username ~ ",\n"
+        ~ "\n"
+        ~ "Follow the link below to set a new IRC Fiber password:\n"
+        ~ "\n"
+        ~ link ~ "\n"
+        ~ "\n"
+        ~ "This link expires in 1 hour. If you did not ask for a reset, "
+        ~ "ignore this email: your password is unchanged.\n";
+    const safeUser = htmlEscape(username).idup;
+    const safeLink = htmlAttribEscape(link).idup;
+    m.html = "<p>Hi " ~ safeUser ~ ",</p>"
+        ~ "<p>Follow the link below to set a new IRC Fiber password:</p>"
+        ~ "<p><a href=\"" ~ safeLink ~ "\">" ~ safeLink ~ "</a></p>"
+        ~ "<p>This link expires in 1 hour. If you did not ask for a reset, "
+        ~ "ignore this email: your password is unchanged.</p>";
+    return m;
+}
+
+// Reset-token store on Redis (1h TTL, no Mongo collection).
+final class PasswordResetStore {
+    private RedisStorage redis;
+
+    this(RedisStorage redis) {
+        this.redis = redis;
+    }
+
+    private RedisDatabase db() @trusted {
+        return redis.getDb();
+    }
+
+    // Throws on Redis failure (the caller turns it into 503; a reset
+    // must not report "sent" when nothing was stored).
+    void put(string token, PasswordReset p) {
+        db().setEX(resetKey(token), resetTtlSeconds, p.toJson().toString());
+    }
+
+    bool exists(string token) {
+        try {
+            return db().exists(resetKey(token));
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    // GET+DEL (not GETDEL): a lost race here only means the second take
+    // sees nothing; the loser of a concurrent double-submit fails
+    // harmlessly.
+    Nullable!PasswordReset take(string token) {
+        try {
+            auto raw = db().get(resetKey(token));
+            if (raw.length == 0) return Nullable!PasswordReset.init;
+            db().del(resetKey(token));
+            return nullable(PasswordReset.fromJson(parseJsonString(raw)));
+        } catch (Exception e) {
+            logWarn("reset: taking pending reset failed: %s", e.msg);
+            return Nullable!PasswordReset.init;
+        }
+    }
+}

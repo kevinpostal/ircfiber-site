@@ -136,6 +136,40 @@ private void testSignupToken() {
     }
 }
 
+private void testPasswordResetJson() {
+    PasswordReset p = { "a@b.co", 1788680000L };
+    auto rt = PasswordReset.fromJson(p.toJson());
+    check(rt.email == "a@b.co", "reset email round-trips");
+    check(rt.createdAt == 1788680000L, "reset createdAt round-trips");
+    bool threw = false;
+    try PasswordReset.fromJson(parseJsonString(`{}`));
+    catch (Exception) threw = true;
+    check(threw, "reset fromJson of {} throws");
+}
+
+private void testResetKeyLink() {
+    check(resetKey("abc") == "reset:pending:abc", "resetKey");
+    check(resetTtlSeconds == 3600, "1-hour reset TTL");
+    check(resetLink("https://ircfiber.com/", "abc")
+        == "https://ircfiber.com/reset?token=abc", "reset trailing slash stripped");
+    check(resetLink("https://ircfiber.com", "abc")
+        == "https://ircfiber.com/reset?token=abc", "reset no trailing slash unchanged");
+}
+
+private void testResetEmail() {
+    const link = "https://ircfiber.com/reset?token=TOKEN123";
+    auto m = resetEmail("al<ice", "al@x.test", link);
+    check(m.toEmail == "al@x.test", "reset toEmail set");
+    check(m.subject == "Reset your IRC Fiber password", "reset subject exact");
+    check(m.text.canFind(link), "reset text carries the raw link");
+    check(m.text.canFind("al<ice"), "reset text greets the raw username");
+    check(m.text.canFind("expires in 1 hour"), "reset text names the expiry");
+    check(m.html.canFind("al&lt;ice"), "reset html escapes the username");
+    check(!m.html.canFind("al<ice"), "reset html carries no raw angle bracket");
+    check(m.html.canFind(`href="` ~ link ~ `"`), "reset html links the token URL");
+    check(m.html.canFind("expires in 1 hour"), "reset html names the expiry");
+}
+
 private void testMailConfigured() {
     MailSettings empty;
     check(!empty.configured, "empty provider is not configured");
@@ -389,7 +423,9 @@ private void testCampaignAudienceFilter() {
 void main() {
     testSenderNetPayload();
     testResendPayload();
-    testResendAccepted();
+    testPasswordResetJson();
+    testResetKeyLink();
+    testResetEmail();
     testSenderNetAccepted();
     testVerificationLink();
     testVerificationEmail();

@@ -40,7 +40,7 @@ struct LogEvent {
     string email;
     /// Source IP (signup, mail, irc_connect) — geo-enriched by the bot.
     string ip;
-    /// Mail kind: "signup_verification" | "admin_test" | …
+    /// Mail kind: "signup_verification" | "password_reset" | "admin_test" | …
     string kind;
     /// Mail provider: "resend" | "sender" | "log".
     string provider;

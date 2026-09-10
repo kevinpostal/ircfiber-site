@@ -318,6 +318,7 @@ block body
       .auth-meta
         span No account?
         a(href="/register") Register &rarr;
+        a(href="/forgot") Forgot password?
 
       p.auth-foot // fibre.always.connected
 
@@ -329,7 +330,7 @@ block scripts
     (function() {
       if (!document.startViewTransition) return;
       document.addEventListener('click', function(e) {
-        var a = e.target.closest('a[href="/register"], a[href="/login"]');
+        var a = e.target.closest('a[href="/register"], a[href="/login"], a[href="/forgot"]');
         if (!a || e.metaKey || e.ctrlKey || e.shiftKey) return;
         e.preventDefault();
         document.startViewTransition(function() {

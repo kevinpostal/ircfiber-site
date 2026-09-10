@@ -8,12 +8,15 @@
    * `#noAuth` / `.noAuthOverlay.noAuthSignin` pattern — the SPA always
    * boots, and the overlay sits on top until the session is established.
    *
-   * Two modes share the same component: `signin` (default) and `register`.
-   * The form POSTs to /login or /register respectively. On success the
-   * SPA reloads; on failure the response is parsed and an inline error
-   * banner is shown (no full page reload). A register that answers 202
-   * `verification_sent` (email verification required) switches the card
-   * to a "check your email" state instead of signing in.
+   * Three modes share the same component: `signin` (default), `register`,
+   * and `forgot`. The form POSTs to /login, /register, or /forgot
+   * respectively. On success the SPA reloads; on failure the response is
+   * parsed and an inline error banner is shown (no full page reload). A
+   * register that answers 202 `verification_sent` (email verification
+   * required) switches the card to a "check your email" state instead of
+   * signing in; a forgot that answers 202 `reset_sent` switches to a
+   * reset check-email state. The emailed /reset?token= link itself is a
+   * top-level diet flow (like /verify?token=) — no SPA reset-form route.
    * Props:
    *   onAuthenticated — invoked after a successful login or register so
    *                     the parent can flip its `isAuthenticated` flag
@@ -24,7 +27,7 @@
   }
   let { onAuthenticated }: Props = $props();
 
-  type Mode = 'signin' | 'register';
+  type Mode = 'signin' | 'register' | 'forgot';
 
   let mode: Mode = $state('signin');
   let username = $state('');
@@ -36,6 +39,10 @@
   // Set after POST /register answers 202 `verification_sent`: the card
   // switches to the "check your email" state instead of probing /api/me.
   let sentTo = $state('');
+  // Set after POST /forgot answers 202 `reset_sent`: the card switches
+  // to the reset check-email state (same success copy whether or not the
+  // address belongs to an account — the endpoint is not an oracle).
+  let resetDone = $state(false);
   // Social OAuth providers (GET /api/auth/providers). Empty on any failure
   // or when no provider is configured — the section stays hidden and the
   // card is password-only, exactly as today.
@@ -70,6 +77,7 @@
     mode = next;
     error = '';
     sentTo = '';
+    resetDone = false;
   }
 
   async function submit(event: SubmitEvent): Promise<void> {
@@ -78,11 +86,15 @@
     error = '';
     busy = true;
 
-    const endpoint = mode === 'signin' ? '/login' : '/register';
+    const endpoint = mode === 'signin' ? '/login' : mode === 'register' ? '/register' : '/forgot';
     const body = new URLSearchParams();
-    body.set('username', mode === 'signin' ? username : username);
-    body.set('password', password);
-    if (mode === 'register') body.set('email', email);
+    if (mode === 'forgot') {
+      body.set('email', email);
+    } else {
+      body.set('username', username);
+      body.set('password', password);
+      if (mode === 'register') body.set('email', email);
+    }
 
     try {
       const res = await fetch(endpoint, {
@@ -97,6 +109,16 @@
       if (res.status === 202 && isJson) {
         const data = await res.json();
         if (data.status === 'verification_sent') { sentTo = data.email ?? email; return; }
+        if (data.status === 'reset_sent') { resetDone = true; return; }
+      }
+
+      // Forgot mode never starts a session: any 2xx means the request
+      // was accepted (202 reset_sent above; a diet-HTML 200 fallback
+      // below). Skip the /api/me probe, which would only clear a live
+      // session's state.
+      if (mode === 'forgot') {
+        if (res.ok) { resetDone = true; return; }
+        // Else fall through to the 4xx handling below.
       }
 
       // 2xx and opaque-redirect (0) are both success — the server sets
@@ -124,30 +146,33 @@
         return;
       }
 
-      // 4xx — JSON when the request asked for it (register with
-      // Accept: application/json), otherwise the server re-rendered the
-      // diet page with an inline error banner. Pull the authError text
-      // out of the rendered HTML so we can show the same message inline.
+      // 4xx — JSON when the request asked for it (Accept:
+      // application/json), otherwise the server re-rendered the diet page
+      // with an inline error banner. Pull the error text out of the
+      // rendered HTML so we can show the same message inline.
+      const fallbackError = mode === 'forgot'
+        ? 'We could not send a reset link. Please check the address and retry.'
+        : mode === 'signin'
+          ? 'Incorrect username or password. Please try again.'
+          : 'We could not create your account. Please check the details and retry.';
       if (isJson) {
         try {
-          error = (await res.json()).error ?? 'We could not create your account. Please check the details and retry.';
+          error = (await res.json()).error ?? fallbackError;
         } catch {
-          error = 'We could not create your account. Please check the details and retry.';
+          error = fallbackError;
         }
         return;
       }
 
       // 4xx — the server re-rendered the diet page with an inline
-      // error banner. Pull the authError text out of the rendered HTML
+      // error banner. Pull the error text out of the rendered HTML
       // so we can show the same message inline.
       const html = await res.text();
       const m = html.match(/<div[^>]*class="[^"]*auth-error[^"]*"[^>]*>([\s\S]*?)<\/div>/);
       if (m && m[1]) {
         error = stripHtml(m[1]).trim();
       } else {
-        error = mode === 'signin'
-          ? 'Incorrect username or password. Please try again.'
-          : 'We could not create your account. Please check the details and retry.';
+        error = fallbackError;
       }
     } catch (e) {
       error = 'Network error — please check your connection and try again.';
@@ -161,7 +186,7 @@
   }
 </script>
 
-<div class="noauth" role="dialog" aria-modal="true" aria-label={mode === 'signin' ? 'Sign in to IRC Fiber' : 'Create your IRC Fiber account'}>
+<div class="noauth" role="dialog" aria-modal="true" aria-label={mode === 'signin' ? 'Sign in to IRC Fiber' : mode === 'register' ? 'Create your IRC Fiber account' : 'Reset your IRC Fiber password'}>
   <div class="noauth-shade" aria-hidden="true"></div>
 
   <div class="noauth-overlay">
@@ -174,9 +199,12 @@
       {#if mode === 'signin'}
         <h1 class="noauth-heading">Sign in to IRC Fiber</h1>
         <p class="noauth-sub">Welcome back — pick up where you left off.</p>
-      {:else}
+      {:else if mode === 'register'}
         <h1 class="noauth-heading">Create your account</h1>
         <p class="noauth-sub">Always connected from any device.</p>
+      {:else}
+        <h1 class="noauth-heading">Reset your password</h1>
+        <p class="noauth-sub">Enter the email address on your account.</p>
       {/if}
 
       {#if error}
@@ -190,6 +218,10 @@
         <p class="noauth-sub">We sent a confirmation link to <strong>{sentTo}</strong>. It expires in 24 hours.</p>
         <p class="noauth-sub">Didn't get it? Check spam, or <button type="button" class="noauth-link" onclick={() => { sentTo = ''; }}>sign up again</button> for a new link.</p>
         <div class="noauth-meta"><span>Already confirmed?</span><button type="button" class="noauth-link" onclick={() => { sentTo = ''; setMode('signin'); }}>Sign in →</button></div>
+      {:else if resetDone}
+        <h1 class="noauth-heading">Check your email</h1>
+        <p class="noauth-sub">If an account exists for <strong>{email}</strong>, we sent it a reset link. It expires in 1 hour.</p>
+        <div class="noauth-meta"><button type="button" class="noauth-link" onclick={() => setMode('signin')}>Back to sign in →</button></div>
       {:else}
       {#if oauthProviders.length > 0}
         <div class="noauth-oauth">
@@ -202,6 +234,7 @@
         </div>
       {/if}
       <form class="noauth-form" onsubmit={submit} autocomplete="on" novalidate>
+        {#if mode !== 'forgot'}
         <div class="noauth-field">
           <label for="noauth-username">Username</label>
           <input
@@ -217,8 +250,9 @@
             disabled={busy}
           />
         </div>
+        {/if}
 
-        {#if mode === 'register'}
+        {#if mode !== 'signin'}
           <div class="noauth-field">
             <label for="noauth-email">Email</label>
             <input
@@ -235,6 +269,7 @@
           </div>
         {/if}
 
+        {#if mode !== 'forgot'}
         <div class="noauth-field">
           <label for="noauth-password">Password</label>
           <input
@@ -249,13 +284,18 @@
             disabled={busy}
           />
         </div>
+        {/if}
+
+        {#if mode === 'signin'}
+          <button type="button" class="noauth-link" onclick={() => setMode('forgot')} data-testid="forgot-link">Forgot password?</button>
+        {/if}
 
         <button class="noauth-button" type="submit" disabled={busy}>
           {#if busy}
             <span class="noauth-spinner" aria-hidden="true"></span>
-            <span>{mode === 'signin' ? 'Signing in…' : 'Creating account…'}</span>
+            <span>{mode === 'signin' ? 'Signing in…' : mode === 'register' ? 'Creating account…' : 'Sending…'}</span>
           {:else}
-            {mode === 'signin' ? 'Sign in' : 'Create account'}
+            {mode === 'signin' ? 'Sign in' : mode === 'register' ? 'Create account' : 'Send reset link'}
           {/if}
         </button>
       </form>
@@ -266,10 +306,15 @@
           <button type="button" class="noauth-link" onclick={() => setMode('register')}>
             Create one →
           </button>
-        {:else}
+        {:else if mode === 'register'}
           <span>Already have an account?</span>
           <button type="button" class="noauth-link" onclick={() => setMode('signin')}>
             Sign in →
+          </button>
+        {:else}
+          <span>Remembered it?</span>
+          <button type="button" class="noauth-link" onclick={() => setMode('signin')}>
+            Back to sign in →
           </button>
         {/if}
       </div>

@@ -313,6 +313,41 @@ block body
         form.auth-form(method="POST", action="/verify")
           input(type="hidden", name="token", value=token)
           button.auth-button(type="submit") Confirm and sign in
+      - else if (stage == "reset_request")
+        h1.auth-heading Reset your password
+        p.auth-sub Enter the email address on your account and we'll send you a reset link. It expires in 1 hour.
+        - if (message.length > 0)
+          .auth-error(role="alert") #{message}
+        form.auth-form(method="POST", action="/forgot", novalidate)
+          .auth-field
+            label(for="email") Email
+            input#email(type="email", name="email", placeholder="you@example.com", required, autofocus, autocomplete="email", spellcheck="false")
+          button.auth-button(type="submit") Send reset link
+        .auth-meta
+          a(href="/login") Sign in &rarr;
+          a(href="/register") Register &rarr;
+      - else if (stage == "reset_sent")
+        h1.auth-heading Check your email
+        p.auth-sub If an account exists for #{email}, we sent it a reset link. It expires in 1 hour.
+        p.auth-sub Didn't get it? Check your spam folder, then #[a(href="/forgot") request a new link].
+        .auth-meta
+          a(href="/login") Sign in &rarr;
+      - else if (stage == "reset_form")
+        h1.auth-heading Choose a new password
+        p.auth-sub At least 8 characters.
+        - if (message.length > 0)
+          .auth-error(role="alert") #{message}
+        form.auth-form(method="POST", action="/reset", autocomplete="on", novalidate)
+          input(type="hidden", name="token", value=token)
+          .auth-field
+            label(for="password") New password
+            input#password(type="password", name="password", placeholder="at least 8 characters", required, autofocus, autocomplete="new-password", minlength="8")
+          button.auth-button(type="submit") Set new password
+      - else if (stage == "reset_done")
+        h1.auth-heading Password updated
+        p.auth-sub Your password has been set. Sign in with your new password.
+        .auth-meta
+          a(href="/login") Sign in &rarr;
       - else
         h1.auth-heading Link expired
         .auth-error(role="alert") #{message}
@@ -326,8 +361,7 @@ block scripts
   script.
     (function() {
       if (!document.startViewTransition) return;
-      document.addEventListener('click', function(e) {
-        var a = e.target.closest('a[href="/register"], a[href="/login"]');
+      var a = e.target.closest('a[href="/register"], a[href="/login"], a[href="/forgot"]');
         if (!a || e.metaKey || e.ctrlKey || e.shiftKey) return;
         e.preventDefault();
         document.startViewTransition(function() {

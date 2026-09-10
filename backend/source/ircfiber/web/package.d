@@ -32,7 +32,8 @@ import ircfiber.models.user : User, OAuthIdentity;
 import ircfiber.mail : MailSettings, MailException, loadMailSettings, sendMail,
     emailWellFormed;
 import ircfiber.signup : PendingSignup, PendingSignupStore, emailVerificationRequired,
-    newSignupToken, pendingKey, verificationEmail, verificationLink, campaignUnsubKey;
+    newSignupToken, pendingKey, verificationEmail, verificationLink, campaignUnsubKey,
+    PasswordReset, PasswordResetStore, resetKey, resetLink, resetEmail;
 import ircfiber.mail_events : MailEvent, MailEventLog;
 import ircfiber.web.common : getClientIp, persistSessionCookie;
 import ircfiber.web.assets : siteAssets;
@@ -107,6 +108,14 @@ final class WebController {
         router.post("/invite", &invitePost);
         router.get("/verify", &verifyGet);
         router.post("/verify", &verifyPost);
+        // Self-service password reset (public; the emailed link is a
+        // top-level navigation like /verify, and the SPA request form
+        // uses Accept: application/json content negotiation on the
+        // same paths).
+        router.get("/forgot", &forgotGet);
+        router.post("/forgot", &forgotPost);
+        router.get("/reset", &resetGet);
+        router.post("/reset", &resetPost);
         // Social OAuth signup/signin (public; the callback is NOT under
         // /api/ because it is a top-level provider redirect, not XHR).
         router.get("/auth/:provider", &oauthStart);
@@ -819,6 +828,165 @@ final class WebController {
             return;
         }
         logInfo("register: %s verified %s and was created", u.username, u.email);
+    }
+
+    private void resetFail(HTTPServerRequest req, HTTPServerResponse res,
+            int status, string msg, string token = "") {
+        res.statusCode = status;
+        if (wantsJson(req)) { res.writeJsonBody(Json(["error": Json(msg)])); return; }
+        if (token.length > 0) {
+            renderVerify(res, status, "reset_form", "", token, msg);
+            return;
+        }
+        renderVerify(res, status, "reset_request", "", "", msg);
+    }
+
+    private void forgotGet(HTTPServerRequest, HTTPServerResponse res) {
+        renderVerify(res, 200, "reset_request", "", "", "");
+    }
+
+    // Always answers success (202 reset_sent / diet check-email page),
+    // whether or not the address belongs to an account, so the endpoint
+    // is not an account-enumeration oracle. Throttle literals mirror
+    // register with "confirmation" swapped for "reset".
+    private void forgotPost(HTTPServerRequest req, HTTPServerResponse res) {
+        const email = req.form.get("email", "").strip();
+        if (!emailWellFormed(email)) {
+            resetFail(req, res, 400, "That doesn't look like a valid email address.");
+            return;
+        }
+        auto throttle = new PendingSignupStore(redis);
+        const ip = getClientIp(req);
+        if (throttle.ipLimitHit(ip)) {
+            resetFail(req, res, 429, "Too many requests from your network. Please try again later.");
+            return;
+        }
+        const emailLower = email.toLower();
+        if (throttle.emailCooldownHit(emailLower)) {
+            resetFail(req, res, 429, "We already sent a reset link to that address. "
+                ~ "Check your inbox (and spam), then try again in a minute.");
+            return;
+        }
+        auto repo = new UserRepository();
+        User found;
+        try found = repo.findByEmailCI(email);
+        catch (Exception e) {
+            logWarn("reset: email lookup failed: %s", e.msg);
+            resetFail(req, res, 503, "Password reset is temporarily unavailable. Please try again later.");
+            return;
+        }
+        auto mail = loadMailSettings();
+        if (found.username.length > 0 && mail.configured) {
+            auto store = new PasswordResetStore(redis);
+            const token = newSignupToken();
+            try store.put(token, PasswordReset(emailLower, Clock.currTime.toUnixTime()));
+            catch (Exception e) {
+                logError("reset: storing reset token for %s failed: %s", found.username, e.msg);
+                resetFail(req, res, 503, "Password reset is temporarily unavailable. Please try again later.");
+                return;
+            }
+            const link = resetLink(environment.get("IRCFIBER_PUBLIC_URL", "https://ircfiber.com"), token);
+            MailEvent ev;
+            ev.atMs = Clock.currTime.toUnixTime() * 1000L;
+            ev.kind = "password_reset";
+            ev.toEmail = found.email;
+            ev.username = found.username;
+            ev.provider = mail.provider;
+            ev.sourceIp = ip;
+            const sendStarted = MonoTime.currTime;
+            try {
+                sendMail(mail, resetEmail(found.username, found.email, link));
+                ev.status = "sent";
+                ev.durationMs = (MonoTime.currTime - sendStarted).total!"msecs";
+                new MailEventLog(redis).record(ev);
+            } catch (Exception e) {
+                ev.status = "failed";
+                ev.error = e.msg;
+                ev.durationMs = (MonoTime.currTime - sendStarted).total!"msecs";
+                new MailEventLog(redis).record(ev);
+                logError("reset: sending reset email to %s failed: %s", found.email, e.msg);
+                redis.del(resetKey(token));   // a link nobody received must not stay live
+                // Fall through to the generic success: a lost mail must
+                // not become an oracle either.
+            }
+            logInfo("reset: reset email sent for %s from %s", found.username, ip);
+        } else {
+            if (found.username.length == 0)
+                logInfo("reset: request for unknown address from %s", ip);
+            else
+                logWarn("reset: request for %s skipped, no mail provider configured", found.username);
+        }
+        if (wantsJson(req)) {
+            res.statusCode = 202;
+            res.writeJsonBody(Json(["status": Json("reset_sent")]));
+            return;
+        }
+        renderVerify(res, 200, "reset_sent", email, "", "");
+    }
+
+    private void resetGet(HTTPServerRequest req, HTTPServerResponse res) {
+        const token = req.query.get("token", "").strip();
+        auto store = new PasswordResetStore(redis);
+        if (token.length == 0 || !store.exists(token)) {
+            renderVerify(res, 410, "error", "", "",
+                "This reset link has expired or was already used. "
+                ~ "Please request a new one.");
+            return;
+        }
+        renderVerify(res, 200, "reset_form", "", token, "");
+    }
+
+    // Consumes the token single-use before validating the password (a
+    // raced double-submit sees the 410 page). Only the site passwordHash
+    // changes — same scope as the admin apiResetPassword; the NickServ
+    // credential is untouched. No session is started; the user signs in
+    // via /login afterwards.
+    private void resetPost(HTTPServerRequest req, HTTPServerResponse res) {
+        const token = req.form.get("token", "").strip();
+        auto store = new PasswordResetStore(redis);
+        auto pending = token.length ? store.take(token) : Nullable!PasswordReset.init;
+        if (pending.isNull) {
+            renderVerify(res, 410, "error", "", "",
+                "This reset link has expired or was already used. "
+                ~ "Please request a new one.");
+            return;
+        }
+        const password = req.form.get("password", "").strip();
+        if (password.length < 8) {
+            resetFail(req, res, 400, "Password must be at least 8 characters.", token);
+            return;
+        }
+        auto repo = new UserRepository();
+        User user;
+        try user = repo.findByEmailCI(pending.get.email);
+        catch (Exception e) {
+            logWarn("reset: email lookup failed: %s", e.msg);
+            renderVerify(res, 410, "error", "", "",
+                "This reset link has expired or was already used. "
+                ~ "Please request a new one.");
+            return;
+        }
+        if (user.username.length == 0) {
+            renderVerify(res, 410, "error", "", "",
+                "This reset link has expired or was already used. "
+                ~ "Please request a new one.");
+            return;
+        }
+        user.passwordHash = hashPassword(password);
+        try repo.update(user);
+        catch (Exception e) {
+            logError("reset: updating password for %s failed: %s", user.username, e.msg);
+            renderVerify(res, 503, "error", "", "",
+                "Password reset failed for a moment. Please request a new link and try again.");
+            return;
+        }
+        logInfo("password reset for %s", user.username);
+        if (wantsJson(req)) {
+            res.statusCode = 200;
+            res.writeJsonBody(Json(["status": Json("reset_done")]));
+            return;
+        }
+        renderVerify(res, 200, "reset_done", "", "", "");
     }
 
     /// GET /unsubscribe?token= — peeks (never consumes) the campaign token

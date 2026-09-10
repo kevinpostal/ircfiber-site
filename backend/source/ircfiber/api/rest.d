@@ -107,6 +107,7 @@ final class RESTAPI {
         router.get("/api/me/bouncer/clients", &getMyBouncerClients);
         router.post("/api/me/bouncer/clients/:sid/disconnect", &disconnectMyBouncerClient);
         router.get("/api/me", &getMe);
+        router.post("/api/me/password", &changeMyPassword);
         router.delete_("/api/me", &deleteMe);
         router.get("/api/me/irc-account", &getIrcAccount);
         router.post("/api/me/irc-account/retry", &retryIrcAccount);
@@ -1776,6 +1777,56 @@ final class RESTAPI {
             "deleted": Json(true),
             "username": Json(user.username)
         ]));
+    }
+    /**
+     * POST /api/me/password — the owner changes their own password
+     * ("Change password" in Settings → Account).
+     *
+     * The Account panel was calling this route since it shipped; the route
+     * did not exist, so every attempt answered 404. Verifies the current
+     * password, then stores a fresh `ircfiber.auth` hash via the existing
+     * `userRepo` — same 8-char minimum the register/reset/invite-accept
+     * paths enforce, same `{error: string}` body shape as `deleteMe`.
+     */
+    private void changeMyPassword(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.auth : hashPassword, verifyPassword;
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        string oldPassword, newPassword;
+        try {
+            auto bodyJson = req.json;
+            oldPassword = bodyJson["oldPassword"].opt!string("");
+            newPassword = bodyJson["newPassword"].opt!string("");
+        } catch (Exception) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("Invalid request.")]));
+            return;
+        }
+        if (!oldPassword.length || !newPassword.length) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("Please fill in all fields.")]));
+            return;
+        }
+        if (newPassword.length < 8) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("Password must be at least 8 characters.")]));
+            return;
+        }
+        if (!verifyPassword(oldPassword, user.passwordHash)) {
+            res.statusCode = 401;
+            res.writeJsonBody(Json(["error": Json("Current password is incorrect.")]));
+            return;
+        }
+        user.passwordHash = hashPassword(newPassword);
+        try userRepo.update(user);
+        catch (Exception e) {
+            logWarn("changeMyPassword: saving new hash for %s failed: %s", user.username, e.msg);
+            res.statusCode = 500;
+            res.writeJsonBody(Json(["error": Json("Could not save the new password.")]));
+            return;
+        }
+        res.writeJsonBody(Json(["changed": Json(true)]));
     }
 
     /// GET /api/me/irc-account — the NickServ account this website account

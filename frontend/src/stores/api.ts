@@ -636,7 +636,7 @@ export async function changePassword(oldPassword: string, newPassword: string): 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ oldPassword, newPassword })
   });
-  if (!r.ok) throw new Error('Change password failed');
+  if (!r.ok) throw new Error(await serverError(r, 'Change password failed'));
 }
 
 export async function deleteAccount(): Promise<void> {

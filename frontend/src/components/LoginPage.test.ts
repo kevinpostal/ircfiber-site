@@ -74,6 +74,62 @@ describe('LoginPage', () => {
     expect(onAuthenticated).not.toHaveBeenCalled();
     expect(window.location.search).toBe('');
   });
+  it('shows a Forgot password link in signin mode that opens the reset form', async () => {
+    const onAuthenticated = vi.fn();
+    render(LoginPage, { props: { onAuthenticated } });
+    await userEvent.click(page.getByRole('button', { name: /Forgot password/ }));
+    await vi.waitFor(() => expect(page.getByRole('heading', { name: 'Reset your password' })).toBeTruthy());
+    expect(page.getByRole('button', { name: 'Send reset link' })).toBeTruthy();
+    expect(onAuthenticated).not.toHaveBeenCalled();
+  });
+  it('posts /forgot and shows the check-email state on 202 reset_sent', async () => {
+    const onAuthenticated = vi.fn();
+    let postedUrl = '';
+    let postedBody = '';
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/forgot')) {
+        postedUrl = url;
+        postedBody = String(init?.body ?? '');
+        return new Response(JSON.stringify({ status: 'reset_sent' }), {
+          status: 202,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    render(LoginPage, { props: { onAuthenticated } });
+    await userEvent.click(page.getByRole('button', { name: /Forgot password/ }));
+    await userEvent.fill(page.getByLabelText('Email'), 'alice@x.test');
+    await userEvent.click(page.getByRole('button', { name: 'Send reset link' }));
+    await vi.waitFor(() => expect(document.body.textContent).toContain('If an account exists for'));
+    expect(postedUrl).toContain('/forgot');
+    expect(postedBody).toContain('alice%40x.test');
+    expect(document.body.textContent).toContain('alice@x.test');
+    expect(onAuthenticated).not.toHaveBeenCalled();
+    expect(window.location.search).toBe('');
+  });
+  it('renders forgot errors inline without leaving the form', async () => {
+    const onAuthenticated = vi.fn();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/forgot')) {
+        return new Response(JSON.stringify({ error: 'We already sent a reset link to that address.' }), {
+          status: 429,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    render(LoginPage, { props: { onAuthenticated } });
+    await userEvent.click(page.getByRole('button', { name: /Forgot password/ }));
+    await userEvent.fill(page.getByLabelText('Email'), 'alice@x.test');
+    await userEvent.click(page.getByRole('button', { name: 'Send reset link' }));
+    await vi.waitFor(() => expect(document.body.textContent).toContain('We already sent a reset link'));
+    // Still on the form — the user can correct and retry.
+    expect(page.getByRole('button', { name: 'Send reset link' })).toBeTruthy();
+    expect(onAuthenticated).not.toHaveBeenCalled();
+  });
   it('renders one Continue-with anchor per configured provider with exact hrefs', async () => {
     const onAuthenticated = vi.fn();
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {

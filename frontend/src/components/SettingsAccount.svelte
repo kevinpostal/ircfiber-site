@@ -63,8 +63,8 @@
       passwordError = 'New passwords do not match';
       return;
     }
-    if (newPassword.length < 6) {
-      passwordError = 'Password must be at least 6 characters';
+    if (newPassword.length < 8) {
+      passwordError = 'Password must be at least 8 characters';
       return;
     }
     passwordBusy = true;

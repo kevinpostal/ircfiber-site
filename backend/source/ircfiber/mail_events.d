@@ -4,7 +4,8 @@
  * Nothing else records a send: `ircfiber.mail` only logs a line, so a
  * provider rejection (bad DMARC, unverified sender domain) is invisible to
  * an operator once the request is gone. Every send site (signup
- * verification, admin test send, admin resend) writes one MailEvent here.
+ * verification, password reset, admin test send, admin resend) writes one
+ * MailEvent here.
  *
  * Storage is a capped Redis list (`irc:mail:events`, newest first, 500
  * entries, 30-day TTL): no Mongo collection is introduced. The keys live
@@ -65,11 +66,12 @@ private long jsonLong(Json j, string key) @safe {
 
 /// One send attempt. `error` is the provider's own message on failure (the
 /// API token never reaches it — ircfiber.mail keeps it out of exceptions).
-/// `kind` is "signup_verification" | "admin_test" | "campaign" (one row per
-/// mailed recipient) | "campaign_summary" (one #staff-only line per send).
+/// `kind` is "signup_verification" | "password_reset" | "admin_test" |
+/// "campaign" (one row per mailed recipient) | "campaign_summary" (one
+/// #staff-only line per send).
 struct MailEvent {
     long atMs;          /// unix ms
-    string kind;        /// "signup_verification" | "admin_test" | "campaign"
+    string kind;        /// "signup_verification" | "password_reset" | "admin_test" | "campaign"
     string toEmail;
     string username;    /// "" for admin_test
     string provider;    /// MailSettings.provider at send time
