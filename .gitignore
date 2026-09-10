@@ -5,6 +5,12 @@
 backend/irc-fiber
 *.a
 public/dist/.vite/
+# Stray root-level dependency/cache dirs — e.g. vitest writes
+# node_modules/.vite/vitest/results.json at the repo root when a run
+# resolves here. Never committed; the real install lives under
+# frontend/node_modules (ignored by frontend/.gitignore). Without this
+# the ship clean-tree guard trips on test artifacts.
+node_modules/
 frontend/.vitest-attachments/
 # vitest browser-mode auto-generated failure/run screenshots (App.test.ts
 # etc.) — the comment above already documented this as ignored; the
