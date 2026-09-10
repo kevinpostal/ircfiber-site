@@ -314,20 +314,49 @@
       flex-shrink: 0;
     }
     .topbar-signin:hover { color: var(--fiber-snow); background: var(--fiber-line-2); text-decoration: none; }
-    /* Social OAuth shortcuts (rendered by the bottom fetch when a provider
-       is configured; :empty keeps them out of the layout otherwise). */
-    .topbar-oauth { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    /* Social OAuth (rendered by the bottom fetch when a provider
+       is configured; :empty keeps them out of the layout otherwise).
+       Single icon button opens a provider picker popup. */
+    .topbar-oauth { display: inline-flex; align-items: center; flex-shrink: 0; position: relative; }
     .topbar-oauth:empty { display: none; }
-    .topbar-oauth a {
+    .oauth-toggle {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 30px; height: 30px;
+      color: var(--fiber-fog);
+      background: transparent;
+      border: 1px solid var(--fiber-line);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: color var(--t-fast), border-color var(--t-fast);
+    }
+    .oauth-toggle:hover { color: var(--fiber-snow); border-color: var(--fiber-blue-dim); }
+    .oauth-toggle svg { width: 15px; height: 15px; }
+    .oauth-menu {
+      display: none;
+      position: absolute; top: calc(100% + 8px); right: 0; z-index: 60;
+      min-width: 200px;
+      padding: 6px;
+      background: rgba(13, 18, 26, 0.97);
+      border: 1px solid var(--fiber-line);
+      border-radius: 10px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    }
+    .oauth-menu.open { display: block; }
+    .oauth-menu a {
+      display: flex; align-items: center; gap: 8px;
       color: var(--fiber-fog);
       font: 600 12px/1 var(--font-sans);
       white-space: nowrap;
-      padding: 7px 10px;
-      border: 1px solid var(--fiber-line);
+      padding: 9px 10px;
       border-radius: 6px;
-      transition: color var(--t-fast), border-color var(--t-fast);
+      text-decoration: none;
     }
-    .topbar-oauth a:hover { color: var(--fiber-snow); border-color: var(--fiber-blue-dim); text-decoration: none; }
+    .oauth-menu a:hover { color: var(--fiber-snow); background: var(--fiber-line-2); }
+    .oauth-menu .oauth-menu-head {
+      padding: 6px 10px 8px;
+      font: 600 11px/1.4 var(--font-sans);
+      color: var(--fiber-mist);
+    }
     .cta-oauth { display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; margin-top: var(--s-3); }
     .cta-oauth:empty { display: none; }
 
@@ -1236,7 +1265,7 @@
         <input type="password" name="password" placeholder="Password" required autocomplete="current-password" />
         <button type="submit">Sign in</button>
       </form>
-      <span class="topbar-oauth" id="topbar-oauth"></span>
+      <div class="topbar-oauth" id="topbar-oauth"></div>
 
       <a class="topbar-signin" href="/login" aria-label="Sign in to IRC Fiber">Sign in</a>
 
@@ -1858,10 +1887,12 @@
         rotateComposerHint();
         renderOAuthProviders();
       }
-      // Social OAuth shortcuts (progressive enhancement): fetch the
-      // configured providers and render compact topbar links plus
-      // Continue-with buttons in the signup CTA. Renders nothing when no
-      // provider is configured — the page is unchanged.
+      // Social OAuth (progressive enhancement): fetch the configured
+      // providers and render a single topbar icon button that opens a
+      // provider picker popup, plus Continue-with buttons in the signup
+      // CTA. Renders nothing when no provider is configured — the page is
+      // unchanged.
+      var OAUTH_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="5" r="2.6"/><path d="M2.8 13.4c.7-2.6 2.8-4 5.2-4s4.5 1.4 5.2 4"/></svg>';
       function renderOAuthProviders() {
         if (!window.fetch) return;
         var top = document.getElementById('topbar-oauth');
@@ -1872,25 +1903,75 @@
           return res.json();
         }).then(function (data) {
           if (!data || !Array.isArray(data.providers) || !data.providers.length) return;
-          data.providers.forEach(function (p) {
-            if (!p || typeof p.name !== 'string' || typeof p.label !== 'string') return;
-            if (top) {
-              var t = document.createElement('a');
-              t.href = '/auth/' + encodeURIComponent(p.name);
-              t.setAttribute('data-provider', p.name);
-              t.setAttribute('aria-label', 'Sign in with ' + p.label);
-              t.textContent = p.label;
-              top.appendChild(t);
+          var valid = data.providers.filter(function (p) {
+            return p && typeof p.name === 'string' && typeof p.label === 'string';
+          });
+          if (!valid.length) return;
+          if (top) {
+            if (valid.length === 1) {
+              var single = document.createElement('a');
+              single.className = 'oauth-toggle';
+              single.href = '/auth/' + encodeURIComponent(valid[0].name);
+              single.setAttribute('data-provider', valid[0].name);
+              single.setAttribute('aria-label', 'Sign in with ' + valid[0].label);
+              single.innerHTML = OAUTH_ICON_SVG;
+              top.appendChild(single);
+            } else {
+              var btn = document.createElement('button');
+              btn.type = 'button';
+              btn.className = 'oauth-toggle';
+              btn.setAttribute('aria-haspopup', 'menu');
+              btn.setAttribute('aria-expanded', 'false');
+              btn.setAttribute('aria-controls', 'topbar-oauth-menu');
+              btn.setAttribute('aria-label', 'Sign in with a social account');
+              btn.innerHTML = OAUTH_ICON_SVG;
+              var menu = document.createElement('div');
+              menu.className = 'oauth-menu';
+              menu.id = 'topbar-oauth-menu';
+              menu.setAttribute('role', 'menu');
+              var head = document.createElement('div');
+              head.className = 'oauth-menu-head';
+              head.textContent = 'Continue with';
+              menu.appendChild(head);
+              valid.forEach(function (p) {
+                var item = document.createElement('a');
+                item.href = '/auth/' + encodeURIComponent(p.name);
+                item.setAttribute('data-provider', p.name);
+                item.setAttribute('role', 'menuitem');
+                item.textContent = p.label;
+                menu.appendChild(item);
+              });
+              btn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                var open = menu.classList.toggle('open');
+                btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+              });
+              document.addEventListener('click', function () {
+                menu.classList.remove('open');
+                btn.setAttribute('aria-expanded', 'false');
+              });
+              document.addEventListener('keydown', function (ev) {
+                if (ev.key === 'Escape') {
+                  menu.classList.remove('open');
+                  btn.setAttribute('aria-expanded', 'false');
+                  btn.focus();
+                }
+              });
+              menu.addEventListener('click', function (ev) { ev.stopPropagation(); });
+              top.appendChild(btn);
+              top.appendChild(menu);
             }
-            if (cta) {
+          }
+          if (cta) {
+            valid.forEach(function (p) {
               var c = document.createElement('a');
               c.className = 'btn btn-ghost lg';
               c.href = '/auth/' + encodeURIComponent(p.name);
               c.setAttribute('data-provider', p.name);
               c.textContent = 'Continue with ' + p.label;
               cta.appendChild(c);
-            }
-          });
+            });
+          }
         }).catch(function () {});
       }
 
