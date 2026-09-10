@@ -389,7 +389,21 @@ function flushQueue(): void {
 }
 
 export function sendRaw(networkId: string, line: string): void {
-  doSend(JSON.stringify({ cmd: 'raw', network: networkId, text: line }));
+  const payload = JSON.stringify({ cmd: 'raw', network: networkId, text: line });
+  // User-initiated JOIN jumps the queue: when the socket is open it goes
+  // out immediately (doSend already sends direct), and when closed it is
+  // unshifted to the FRONT so it flushes before any queued PRIVMSG on open.
+  // The engine likewise writes JOIN via writeRaw, bypassing the fake-lag
+  // pacer (only PRIVMSG/NOTICE go through enqueuePaced) — no engine change.
+  if (line.length >= 5 && line.slice(0, 5).toUpperCase() === 'JOIN ') {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(payload);
+    } else if (messageQueue.length < 500) {
+      messageQueue.unshift(payload);
+    }
+    return;
+  }
+  doSend(payload);
 }
 
 export function sendMessage(networkId: string, target: string, text: string, label?: string): void {

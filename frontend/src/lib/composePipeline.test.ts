@@ -1,9 +1,14 @@
-import { describe, it, expect } from 'vitest';
-import { DEFAULT_COMPOSE_STYLE, type ComposeStyle } from './composeStyle';
-import { renderComposeLines } from './composePipeline';
+import { describe, it, expect, vi } from 'vitest';
+import { DEFAULT_COMPOSE_STYLE, clampArtWrapWidth, type ComposeStyle } from './composeStyle';
+import { groupWidths, renderComposeLines } from './composePipeline';
 import { applyCase, applyUnicodeStyle, colorizeLine } from './textEffects';
 import { utf8Length } from './messageSplitter';
 
+// TheDraw pack is a fetched binary asset: stub the renderer so wrap-grouping
+// tests measure deterministic widths (`[word]` per word, joined with spaces).
+vi.mock('./tdf', () => ({
+  renderTdf: vi.fn(async (text: string) => [`[${text}]`]),
+}));
 const style = (patch: Partial<ComposeStyle>): ComposeStyle => ({ ...DEFAULT_COMPOSE_STYLE, ...patch });
 
 describe('renderComposeLines', () => {
@@ -45,6 +50,72 @@ describe('renderComposeLines', () => {
     expect(r.overBudget).toEqual([]);
   });
 
+  it('renders a 10-row figlet banner unfolded at width 400', async () => {
+    const { renderFiglet } = await import('./figlet');
+    const expected = (await renderFiglet('IRC FIBER', 'Bloody', { width: 400 })).split('\n');
+    expect(expected.length).toBe(10);
+    const r = await renderComposeLines('IRC FIBER', style({ font: { kind: 'figlet', font: 'Bloody' } }), 4000);
+    expect(r.overBudget).toEqual([]);
+    // push() drops blank lines; the banner itself has no blank edges.
+    expect(r.lines.map((l) => l.replace(/\s+$/, ''))).toEqual(expected.filter((l) => l.trim() !== ''));
+  });
+
+  it('does not fold a wide banner at 80 columns', async () => {
+    const { renderFiglet } = await import('./figlet');
+    const expected = (await renderFiglet('IRC FIBER', 'Flower Power', { width: 400 })).split('\n');
+    // Wide enough that the old width-80 fold would have reflowed it.
+    expect(Math.max(...expected.map((l) => l.length))).toBeGreaterThan(80);
+    const r = await renderComposeLines('IRC FIBER', style({ font: { kind: 'figlet', font: 'Flower Power' } }), 4000);
+    expect(r.overBudget).toEqual([]);
+    expect(r.lines.map((l) => l.replace(/\s+$/, ''))).toEqual(expected.filter((l) => l.trim() !== ''));
+  });
+
+  it('flags over-budget art rows so styled sends route to pastebin, never split', async () => {
+    const r = await renderComposeLines('IRC FIBER', style({ font: { kind: 'figlet', font: 'Bloody' } }), 50);
+    expect(r.lines.length).toBeGreaterThan(0);
+    // A tiny budget exceeds every wide art row: the send path must open
+    // the pastebin dialog on this signal instead of emitting PRIVMSGs.
+    expect(r.overBudget.length).toBeGreaterThan(0);
+    expect(r.lines.join('\n').trim()).not.toBe('');
+  });
+
+  it('folds a figlet banner between words at the wrap width', async () => {
+    const { renderFiglet } = await import('./figlet');
+    const expected = (await renderFiglet('IRC FIBER', 'Bloody', { width: 40 })).split('\n');
+    const r = await renderComposeLines(
+      'IRC FIBER',
+      style({ font: { kind: 'figlet', font: 'Bloody' }, artWrap: { mode: 'word', width: 40 } }),
+      4000,
+    );
+    expect(r.overBudget).toEqual([]);
+    expect(r.lines.map((l) => l.replace(/\s+$/, ''))).toEqual(expected.filter((l) => l.trim() !== ''));
+  });
+
+  it('clamps the wrap width into 20–400', async () => {
+    expect(clampArtWrapWidth(NaN)).toBe(80);
+    expect(clampArtWrapWidth(1)).toBe(20);
+    expect(clampArtWrapWidth(80)).toBe(80);
+    expect(clampArtWrapWidth(9999)).toBe(400);
+  });
+
+  it('packs words greedily without ever cutting one', async () => {
+    // [aa bb] [cc]: aa+gap+bb fits 12, adding cc does not.
+    expect(groupWidths([4, 4, 4], 4, 12)).toEqual([[0, 1], [2]]);
+    // A lone word wider than the limit keeps its own group.
+    expect(groupWidths([4, 99, 4], 4, 12)).toEqual([[0], [1], [2]]);
+    expect(groupWidths([], 4, 80)).toEqual([]);
+  });
+
+  it('wraps TheDraw banners word by word, off sends one banner', async () => {
+    const tdfStyle = (wrap: ComposeStyle['artWrap']) =>
+      style({ font: { kind: 'tdf', font: 'Stub' }, artWrap: wrap });
+    // Stub renders `[word]`; `[aaa]` is 5 cols: aaa+4+bbb = 14 fits 20,
+    // adding ccc (14+4+5 = 23) does not — so two groups.
+    const wrapped = await renderComposeLines('aaa bbb ccc', tdfStyle({ mode: 'word', width: 20 }), 4000);
+    expect(wrapped.lines).toEqual(['[aaa bbb]', '[ccc]']);
+    const whole = await renderComposeLines('aaa bbb ccc', tdfStyle({ mode: 'off', width: 80 }), 4000);
+    expect(whole.lines).toEqual(['[aaa bbb ccc]']);
+  });
   it('drops blank lines and passes plain text through when nothing is set', async () => {
     const r = await renderComposeLines('a\n\nb', DEFAULT_COMPOSE_STYLE, 400);
     expect(r.lines).toEqual(['a', 'b']);

@@ -1,6 +1,6 @@
 // Turns the plain compose text into styled IRC lines at send time. Lazy:
 // fonts and effects load only when a style is active.
-import type { ComposeStyle } from './composeStyle';
+import { clampArtWrapWidth, type ComposeStyle } from './composeStyle';
 import { stripIrcFormatting } from './ircFormatting';
 import { splitIntoMessages, utf8Length } from './messageSplitter';
 import { applyCase, applyUnicodeStyle, applyZalgo, colorizeLine, wrapAttrs } from './textEffects';
@@ -33,10 +33,18 @@ export async function renderComposeLines(plain: string, style: ComposeStyle, bud
   };
 
   if (font.kind === 'figlet' || font.kind === 'tdf') {
+    // Word-wrap limit from the Font tab; off renders every row whole.
+    const wrapOn = style.artWrap?.mode === 'word';
+    const wrapWidth = clampArtWrapWidth(style.artWrap?.width ?? 80);
     let artLines: string[];
     if (font.kind === 'figlet') {
       const { renderFiglet } = await import('./figlet');
-      artLines = (await renderFiglet(text, font.font, { width: 80 })).split('\n');
+      // Unwrapped chat art stays unfolded at 400; display-side no-wrap
+      // (blockArt + overflow-x:auto) handles narrow viewports. A set wrap
+      // limit folds between words via whitespaceBreak — never mid-glyph.
+      artLines = (await renderFiglet(text, font.font, { width: wrapOn ? wrapWidth : 400 })).split('\n');
+    } else if (wrapOn) {
+      artLines = await renderTdfWrapped(text, font.font, wrapWidth);
     } else {
       const { renderTdf } = await import('./tdf');
       artLines = await renderTdf(text, font.font);
@@ -74,4 +82,56 @@ export async function renderComposeLines(plain: string, style: ComposeStyle, bud
     }
   }
   return { lines: out, overBudget };
+}
+
+/**
+ * Greedy word partition: `widths[i]` is word i in columns, `gap` the columns
+ * between joined words. Returns index groups that fit `maxWidth`; a lone
+ * word wider than the limit keeps its own group — never cut mid-word.
+ */
+export function groupWidths(widths: number[], gap: number, maxWidth: number): number[][] {
+  const groups: number[][] = [];
+  let cur: number[] = [];
+  let curW = 0;
+  widths.forEach((w, i) => {
+    if (cur.length > 0 && curW + gap + w > maxWidth) {
+      groups.push(cur);
+      cur = [];
+      curW = 0;
+    }
+    cur.push(i);
+    curW += (cur.length === 1 ? w : gap + w);
+  });
+  if (cur.length > 0) groups.push(cur);
+  return groups;
+}
+
+/**
+ * TheDraw grids have no fold column, so wrap between words: measure each
+ * word's rendered width, pack groups that fit, render one banner per group.
+ */
+async function renderTdfWrapped(text: string, name: string, maxWidth: number): Promise<string[]> {
+  const { renderTdf } = await import('./tdf');
+  const renderWidth = async (s: string): Promise<number> => {
+    const lines = await renderTdf(s, name);
+    return lines.reduce((m, l) => Math.max(m, [...stripIrcFormatting(l)].length), 0);
+  };
+  const out: string[] = [];
+  for (const para of text.split(/\r\n|\r|\n/)) {
+    if (para.trim() === '') continue;
+    const words = para.split(/\s+/).filter((w) => w !== '');
+    if (words.length <= 1) {
+      out.push(...(await renderTdf(para, name)));
+      continue;
+    }
+    const widths: number[] = [];
+    for (const w of words) widths.push(await renderWidth(w));
+    const groups = groupWidths(widths, 4, maxWidth);
+    if (groups.length <= 1) {
+      out.push(...(await renderTdf(para, name)));
+      continue;
+    }
+    for (const g of groups) out.push(...(await renderTdf(g.map((i) => words[i]).join(' '), name)));
+  }
+  return out;
 }

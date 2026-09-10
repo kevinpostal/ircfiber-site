@@ -5,6 +5,7 @@
    */
   import { onMount, onDestroy } from 'svelte';
   import PageHeader from '../components/PageHeader.svelte';
+  import ServerGroup from '../components/ServerGroup.svelte';
   import Card from '../components/Card.svelte';
   import KpiCard from '../components/KpiCard.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
@@ -140,6 +141,93 @@
     const fillPct = cap > 0 ? Math.min((h.totalConns * 100) / cap, 100) : 0;
     return { ...h, cap, fillPct, isUnlimited: false as const };
   }));
+  // Ghost rows (empty networkId) stay in their engine's group: grouping
+  // keys off serverId, never networkId.
+  const assignmentsByServer = $derived.by(() => {
+    const m = new Map<string, AssignmentEntry[]>();
+    for (const a of data?.assignments ?? []) {
+      const key = a.serverId || 'unassigned';
+      const list = m.get(key);
+      if (list) list.push(a);
+      else m.set(key, [a]);
+    }
+    return m;
+  });
+  // Deterministic order so groups don't jump on each 5 s poll.
+  const orderedEngines = $derived([...(data?.engines ?? [])].sort((x, y) =>
+    Number(y.healthy) - Number(x.healthy) || x.serverId.localeCompare(y.serverId),
+  ));
+  // Entries whose serverId matches no engine (or is empty) render as a
+  // final Unassigned group instead of being dropped — never silently hide
+  // networks.
+  const orphanAssignments = $derived((data?.assignments ?? []).filter((a) => {
+    const sid = a.serverId || 'unassigned';
+    if (sid === 'unassigned') return true;
+    return !(data?.engines ?? []).some((e) => e.serverId === sid);
+  }));
+  function groupRows(sid: string): AssignmentEntry[] {
+    return assignmentsByServer.get(sid) ?? [];
+  }
+  function connText(e: Engine): string {
+    return e.maxConnections > 0
+      ? `${e.assignedNetworks.length}/${e.maxConnections} conns`
+      : `${e.assignedNetworks.length}/∞ conns`;
+  }
+
+  // Collapse state: local, persisted, poll-safe. Never reset on fetchData.
+  const EXPANDED_KEY = 'admin:servers:expanded';
+  function loadExpanded(): Record<string, boolean> {
+    try {
+      const raw = localStorage.getItem(EXPANDED_KEY);
+      if (!raw) return {};
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, boolean>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+  let expanded = $state<Record<string, boolean>>(loadExpanded());
+  function persistExpanded() {
+    try {
+      localStorage.setItem(EXPANDED_KEY, JSON.stringify(expanded));
+    } catch {
+      // Shared-kiosk / private-mode admin: folds stay session-only.
+    }
+  }
+  // First healthy (else first) engine open by default; Unassigned closed.
+  const defaultOpenId = $derived(
+    (data?.engines ?? []).find((e) => e.healthy)?.serverId
+      ?? data?.engines?.[0]?.serverId
+      ?? null,
+  );
+  function isOpen(sid: string): boolean {
+    const stored = expanded[sid];
+    if (typeof stored === 'boolean') return stored;
+    if (sid === 'unassigned') return false;
+    return sid === defaultOpenId;
+  }
+  function toggle(sid: string) {
+    expanded[sid] = !isOpen(sid);
+    persistExpanded();
+  }
+  function expandAll() {
+    for (const e of data?.engines ?? []) expanded[e.serverId] = true;
+    if (orphanAssignments.length > 0) expanded['unassigned'] = true;
+    persistExpanded();
+  }
+  function collapseAll() {
+    for (const e of data?.engines ?? []) expanded[e.serverId] = false;
+    expanded['unassigned'] = false;
+    persistExpanded();
+  }
+  const totalGroups = $derived((data?.engines.length ?? 0) + (orphanAssignments.length > 0 ? 1 : 0));
+  const openCount = $derived(
+    ((data?.engines ?? []).filter((e) => isOpen(e.serverId)).length)
+      + (orphanAssignments.length > 0 && isOpen('unassigned') ? 1 : 0),
+  );
   async function reassignAll(sid: string, count: number) {
     if (!confirm(`Reassign all ${count} networks from ${sid}?`)) return;
     try {
@@ -260,40 +348,205 @@
 
 <!-- KPIs -->
 <div class="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
-  <KpiCard label="Total Engines" value={data?.engines.length ?? '—'} loading={loading && !data} icon="🖥️" />
+  <KpiCard label="Total Engines" value={data?.engines.length ?? '—'} loading={loading && !data} />
   <KpiCard
     label="Healthy Engines"
     value={`${healthyCount}/${data?.engines.length ?? 0}`}
     tone={healthyCount === (data?.engines.length ?? 0) && (data?.engines.length ?? 0) > 0 ? 'success' : healthyCount > 0 ? 'warn' : 'danger'}
     loading={loading && !data}
-    icon="❤️"
   />
-  <KpiCard label="Max Conns / Host" value={data?.maxConnsPerHost ?? '—'} loading={loading && !data} icon="🔗" />
-  <KpiCard label="Total Networks" value={totalNetworks} loading={loading && !data} icon="🌐" />
+  <KpiCard label="Max Conns / Host" value={data?.maxConnsPerHost ?? '—'} loading={loading && !data} />
+  <KpiCard label="Total Networks" value={totalNetworks} loading={loading && !data} />
 </div>
 
-<!-- Engine Status -->
-<Card title="Engine Status" subtitle={`${data?.engines.length ?? 0} engines registered`}>
-  {#if data?.engines?.length}
-    <div class="space-y-4">
-      {#each data.engines as engine (engine.serverId)}
-        {@const engCap = engine.maxConnections > 0 ? engine.maxConnections : 0}
-        {@const pct = engCap > 0 ? Math.min((engine.assignedNetworks.length * 100) / engCap, 100) : 0}
-        <div class="rounded-lg border border-border bg-surface/40">
-          <div class="flex items-center gap-3 px-5 py-3">
-            <span class="h-3 w-3 rounded-full {engine.healthy ? 'bg-success' : 'bg-danger'}"></span>
-            <span class="font-semibold text-heading">{engine.serverId}</span>
-            <StatusBadge
-              label={engine.healthy ? 'Healthy' : 'Unhealthy'}
-              tone={engine.healthy ? 'success' : 'danger'}
-              size="sm"
-            />
-            {#if engine.hotswapActive}
-              <StatusBadge label="HOT SWAP" tone="warn" size="sm" />
-            {/if}
-            <span class="ml-auto text-xs text-muted">{engine.bindAddress}:{engine.port}</span>
-          </div>
-          <div class="flex flex-wrap items-center gap-4 px-5 pb-3 text-xs text-muted">
+<!-- Server groups: one collapsible group per engine (header = health +
+     name + counts; body = engine detail + that engine's networks) -->
+{#snippet assignmentTable(rows: AssignmentEntry[])}
+  {#if rows.length}
+    <table class="w-full text-sm">
+      <thead class="text-xs uppercase tracking-wider text-muted">
+        <tr class="border-b border-border">
+          <th class="py-2 text-left font-semibold">Network</th>
+          <th class="py-2 text-left font-semibold">IRC Nick</th>
+          <th class="py-2 text-left font-semibold">Owner</th>
+          <th class="py-2 text-left font-semibold">Server</th>
+          <th class="py-2 text-left font-semibold">Pinned Egress</th>
+          <th class="py-2 text-left font-semibold">Active Egress</th>
+          <th class="py-2 text-right font-semibold">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#each rows as a, i (a.networkId || 'ghost-' + i)}
+          {@const label = a.networkName || a.networkHost || '(unnamed)'}
+          <tr class="border-b border-border/40 hover:bg-surface/40">
+            <td class="py-2">
+              <div class="font-medium text-heading">{label}</div>
+              {#if a.networkHost && a.networkHost !== label}
+                <div class="font-mono text-[11px] text-muted">{a.networkHost}</div>
+              {/if}
+              <div class="font-mono text-[10px] text-muted opacity-70">{a.networkId}</div>
+            </td>
+            <td class="py-2">
+              {#if a.nick}
+                <span class="font-mono text-xs text-text">{a.nick}</span>
+              {:else}
+                <span class="text-[11px] text-muted">offline</span>
+              {/if}
+            </td>
+            <td class="py-2">
+              {#if a.username}
+                <a href="#/users/{a.userId}" class="text-primary hover:underline">{a.username}</a>
+              {:else}
+                <span class="text-muted text-xs">orphan</span>
+              {/if}
+            </td>
+            <td class="py-2">
+              <StatusBadge label={a.serverId} tone="info" size="sm" />
+            </td>
+            <td class="py-2">
+              <select
+                class="rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text"
+                value={a.egressNodeId || ''}
+                onchange={(e) => setEgress(a.networkId, label, (e.target as HTMLSelectElement).value)}
+              >
+                <option value="">Random</option>
+                {#each mullvadPool.filter((n) => !!n.locationId) as n (n.id)}
+                  <option value={n.locationId}>
+                    {n.city ? `${n.city}, ${n.country}` : n.locationId}
+                  </option>
+                {/each}
+              </select>
+            </td>
+            <td class="py-2">
+              {#if a.activeEgressLabel}
+                <div class="flex flex-col gap-0.5" title="{a.activeEgressHost}{a.activeEgressIp ? ' / ' + a.activeEgressIp : ''}">
+                  <span class="inline-flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[11px] font-semibold text-success border border-success/20">
+                    <span class="h-2 w-2 rounded-full bg-success"></span>
+                    {a.activeEgressLabel.toUpperCase()}
+                  </span>
+                  <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressHost}</span>
+                  {#if a.activeEgressIp}
+                    {@const egressLink = fibereyeIpHref(a.activeEgressIp)}
+                    {#if egressLink}
+                      <a href={egressLink} class="font-mono text-[10px] leading-tight text-primary hover:underline">{a.activeEgressIp}</a>
+                    {:else}
+                      <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressIp}</span>
+                    {/if}
+                  {/if}
+                </div>
+              {:else}
+                <div class="flex flex-col gap-0.5">
+                  <span class="inline-flex items-center gap-1">
+                    <span class="inline-flex items-center gap-1 rounded bg-border px-1.5 py-0.5 text-[11px] font-medium text-muted border border-border" title="Direct — no Mullvad SOCKS, host IP">
+                      <span class="h-2 w-2 rounded-full bg-muted"></span>
+                      direct
+                    </span>
+                    {#if a.peerIp}
+                      <span
+                        class="rounded px-1.5 py-0.5 text-[10px] font-semibold border {ipFamily(a.peerIp) === 'IPv6' ? 'bg-success/10 text-success border-success/20' : 'bg-warn/10 text-warn border-warn/20'}"
+                        title={ipFamily(a.peerIp) === 'IPv6' ? 'Connected over IPv6 (AAAA record won the Happy Eyeballs race)' : 'Connected over IPv4 — server has no AAAA record or IPv6 lost the race'}
+                      >{ipFamily(a.peerIp)}</span>
+                    {/if}
+                  </span>
+                  {#if a.peerIp}
+                    {@const peerLink = fibereyeIpHref(a.peerIp)}
+                    {#if peerLink}
+                      <a href={peerLink} class="font-mono text-[10px] leading-tight text-primary hover:underline" title="Remote IRC server address">→ {a.peerIp}</a>
+                    {:else}
+                      <span class="font-mono text-[10px] leading-tight text-muted" title="Remote IRC server address">→ {a.peerIp}</span>
+                    {/if}
+                  {/if}
+                  {#if a.localIp}
+                    {@const localLink = fibereyeIpHref(a.localIp)}
+                    {#if localLink}
+                      <a href={localLink} class="font-mono text-[10px] leading-tight text-primary hover:underline" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</a>
+                    {:else}
+                      <span class="font-mono text-[10px] leading-tight text-muted" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</span>
+                    {/if}
+                  {/if}
+                </div>
+              {/if}
+            </td>
+            <td class="py-2 text-right whitespace-nowrap">
+              {#if a.networkHost}
+                <button
+                  type="button"
+                  onclick={() => disconnectAssignment(a.networkId, a.networkHost, label)}
+                  class="rounded border border-warn/30 px-2 py-1 text-[11px] font-medium text-warn hover:bg-warn/10"
+                >
+                  Disconnect
+                </button>
+              {/if}
+              <button
+                type="button"
+                onclick={() => reassignAssignment(a.networkId, label, a.serverId)}
+                class="ml-1 rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40"
+              >
+                Reassign
+              </button>
+              <button
+                type="button"
+                onclick={() => removeAssignment(a.networkId, label)}
+                class="ml-1 rounded border border-danger/30 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
+              >
+                Remove
+              </button>
+              <button
+                type="button"
+                onclick={() => deleteAssignment(a.networkId, label)}
+                class="ml-1 rounded border border-danger/60 bg-danger/10 px-2 py-1 text-[11px] font-semibold text-danger hover:bg-danger/20"
+                title={a.networkId ? 'Permanently delete network config + engine client + Redis state' : 'Scrub ghost row from engine assignedNetworks'}
+              >
+                Delete
+              </button>
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {:else}
+    <p class="text-xs text-muted">No networks on this engine.</p>
+  {/if}
+{/snippet}
+
+<div class="mb-3 flex items-center gap-3 text-xs">
+  <button
+    type="button"
+    data-testid="servers-expand-all"
+    onclick={expandAll}
+    class="font-medium text-primary hover:underline"
+  >
+    Expand all
+  </button>
+  <button
+    type="button"
+    data-testid="servers-collapse-all"
+    onclick={collapseAll}
+    class="font-medium text-primary hover:underline"
+  >
+    Collapse all
+  </button>
+  <span class="ml-auto text-muted">{openCount} of {totalGroups} open</span>
+</div>
+
+{#if orderedEngines.length || orphanAssignments.length}
+  <div class="space-y-4">
+    {#each orderedEngines as engine (engine.serverId)}
+      {@const engCap = engine.maxConnections > 0 ? engine.maxConnections : 0}
+      {@const pct = engCap > 0 ? Math.min((engine.assignedNetworks.length * 100) / engCap, 100) : 0}
+      {@const rows = groupRows(engine.serverId)}
+      <ServerGroup
+        serverId={engine.serverId}
+        healthy={engine.healthy}
+        hotswapActive={engine.hotswapActive}
+        networkCount={rows.length}
+        connText={connText(engine)}
+        open={isOpen(engine.serverId)}
+        onToggle={() => toggle(engine.serverId)}
+      >
+        {#snippet meta()}
+          <div class="flex flex-wrap items-center gap-4 text-xs text-muted">
+            <span class="font-mono">{engine.bindAddress}:{engine.port}</span>
             <span class="whitespace-nowrap">
               Engine load:
               <span class="ml-1 inline-flex items-center gap-1">
@@ -349,43 +602,60 @@
               </button>
             {/if}
           </div>
-          <!-- Per-engine config inline -->
-          <form
-            id={`engine-config-${engine.serverId}`}
-            class="flex flex-wrap items-end gap-3 border-t border-border px-5 py-3 text-xs"
-            onsubmit={(e) => { e.preventDefault(); saveConfig(engine.serverId); }}
-          >
-            <div>
-              <label for="priority" class="block text-muted">Priority</label>
-              <input id="priority" type="number" name="priority" value={engine.priority}
-                class="mt-0.5 w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-text" />
-            </div>
-            <div>
-              <label for="maxConnections" class="block text-muted">Engine Cap</label>
-              <input id="maxConnections" type="number" name="maxConnections" value={engine.maxConnections} min="0"
-                class="mt-0.5 w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-text" />
-              <div class="text-[10px] text-muted">0 = unlimited</div>
-            </div>
-            <div>
-              <label for="fallbackOnly" class="block text-muted">Fallback</label>
-              <select id="fallbackOnly" name="fallbackOnly"
-                class="mt-0.5 rounded border border-border bg-surface px-2 py-1 text-xs text-text">
-                <option value="false" selected={!engine.fallbackOnly}>No</option>
-                <option value="true" selected={engine.fallbackOnly}>Yes</option>
-              </select>
-            </div>
-            <button type="submit"
-              class="rounded bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90">
-              Save
-            </button>
-          </form>
+        {/snippet}
+        <form
+          id={`engine-config-${engine.serverId}`}
+          class="mt-3 flex flex-wrap items-end gap-3 border-t border-border pt-3 text-xs"
+          onsubmit={(e) => { e.preventDefault(); saveConfig(engine.serverId); }}
+        >
+          <div>
+            <label for="priority" class="block text-muted">Priority</label>
+            <input id="priority" type="number" name="priority" value={engine.priority}
+              class="mt-0.5 w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-text" />
+          </div>
+          <div>
+            <label for="maxConnections" class="block text-muted">Engine Cap</label>
+            <input id="maxConnections" type="number" name="maxConnections" value={engine.maxConnections} min="0"
+              class="mt-0.5 w-16 rounded border border-border bg-surface px-2 py-1 text-xs text-text" />
+            <div class="text-[10px] text-muted">0 = unlimited</div>
+          </div>
+          <div>
+            <label for="fallbackOnly" class="block text-muted">Fallback</label>
+            <select id="fallbackOnly" name="fallbackOnly"
+              class="mt-0.5 rounded border border-border bg-surface px-2 py-1 text-xs text-text">
+              <option value="false" selected={!engine.fallbackOnly}>No</option>
+              <option value="true" selected={engine.fallbackOnly}>Yes</option>
+            </select>
+          </div>
+          <button type="submit"
+            class="rounded bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg hover:bg-primary/90">
+            Save
+          </button>
+        </form>
+        <div class="mt-3 border-t border-border pt-3">
+          {@render assignmentTable(rows)}
         </div>
-      {/each}
-    </div>
-  {:else}
-    <EmptyState icon="🖥️" title="No engines registered" description="Start an IRC engine to see it appear here." />
-  {/if}
-</Card>
+      </ServerGroup>
+    {/each}
+    {#if orphanAssignments.length}
+      <ServerGroup
+        serverId="unassigned"
+        title="Unassigned / orphaned"
+        healthy={false}
+        statusLabel="Orphaned"
+        statusTone="warn"
+        networkCount={orphanAssignments.length}
+        connText="orphaned"
+        open={isOpen('unassigned')}
+        onToggle={() => toggle('unassigned')}
+      >
+        {@render assignmentTable(orphanAssignments)}
+      </ServerGroup>
+    {/if}
+  </div>
+{:else}
+  <EmptyState icon="🖥️" title="No engines registered" description="Start an IRC engine to see it appear here." />
+{/if}
 
 <!-- Host Connection Routing -->
 <Card title="Host Connection Routing" subtitle="Per-host capacity across engines">
@@ -437,152 +707,3 @@
     <EmptyState icon="🔗" title="No hosts" description="No IRC host routing data yet." />
   {/if}
 </Card>
-
-<!-- Network Assignments -->
-  <Card title="Network Assignments" subtitle="Live routing table — one row per network bound to an engine">
-    {#if data?.assignments?.length}
-      <table class="w-full text-sm">
-        <thead class="text-xs uppercase tracking-wider text-muted">
-          <tr class="border-b border-border">
-            <th class="py-2 text-left font-semibold">Network</th>
-            <th class="py-2 text-left font-semibold">IRC Nick</th>
-            <th class="py-2 text-left font-semibold">Owner</th>
-            <th class="py-2 text-left font-semibold">Server</th>
-            <th class="py-2 text-left font-semibold">Pinned Egress</th>
-            <th class="py-2 text-left font-semibold">Active Egress</th>
-            <th class="py-2 text-right font-semibold">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each data.assignments as a (a.networkId)}
-            {@const label = a.networkName || a.networkHost || '(unnamed)'}
-            <tr class="border-b border-border/40 hover:bg-surface/40">
-              <td class="py-2">
-                <div class="font-medium text-heading">{label}</div>
-                {#if a.networkHost && a.networkHost !== label}
-                  <div class="font-mono text-[11px] text-muted">{a.networkHost}</div>
-                {/if}
-                <div class="font-mono text-[10px] text-muted opacity-70">{a.networkId}</div>
-              </td>
-              <td class="py-2">
-                {#if a.nick}
-                  <span class="font-mono text-xs text-text">{a.nick}</span>
-                {:else}
-                  <span class="text-[11px] text-muted">offline</span>
-                {/if}
-              </td>
-              <td class="py-2">
-                {#if a.username}
-                  <a href="#/users/{a.userId}" class="text-primary hover:underline">{a.username}</a>
-                {:else}
-                  <span class="text-muted text-xs">orphan</span>
-                {/if}
-              </td>
-              <td class="py-2">
-                <StatusBadge label={a.serverId} tone="info" size="sm" />
-              </td>
-              <td class="py-2">
-                <select
-                  class="rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text"
-                  value={a.egressNodeId || ''}
-                  onchange={(e) => setEgress(a.networkId, label, (e.target as HTMLSelectElement).value)}
-                >
-                  <option value="">Random</option>
-                  {#each mullvadPool.filter((n) => !!n.locationId) as n (n.id)}
-                    <option value={n.locationId}>
-                      {n.city ? `${n.city}, ${n.country}` : n.locationId}
-                    </option>
-                  {/each}
-                </select>
-              </td>
-              <td class="py-2">
-                {#if a.activeEgressLabel}
-                  <div class="flex flex-col gap-0.5" title="{a.activeEgressHost}{a.activeEgressIp ? ' / ' + a.activeEgressIp : ''}">
-                    <span class="inline-flex items-center gap-1 rounded bg-success/10 px-1.5 py-0.5 text-[11px] font-semibold text-success border border-success/20">
-                      <span class="h-2 w-2 rounded-full bg-success"></span>
-                      {a.activeEgressLabel.toUpperCase()}
-                    </span>
-                    <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressHost}</span>
-                    {#if a.activeEgressIp}
-                      {@const egressLink = fibereyeIpHref(a.activeEgressIp)}
-                      {#if egressLink}
-                        <a href={egressLink} class="font-mono text-[10px] leading-tight text-primary hover:underline">{a.activeEgressIp}</a>
-                      {:else}
-                        <span class="font-mono text-[10px] leading-tight text-muted">{a.activeEgressIp}</span>
-                      {/if}
-                    {/if}
-                  </div>
-                {:else}
-                  <div class="flex flex-col gap-0.5">
-                    <span class="inline-flex items-center gap-1">
-                      <span class="inline-flex items-center gap-1 rounded bg-border px-1.5 py-0.5 text-[11px] font-medium text-muted border border-border" title="Direct — no Mullvad SOCKS, host IP">
-                        <span class="h-2 w-2 rounded-full bg-muted"></span>
-                        direct
-                      </span>
-                      {#if a.peerIp}
-                        <span
-                          class="rounded px-1.5 py-0.5 text-[10px] font-semibold border {ipFamily(a.peerIp) === 'IPv6' ? 'bg-success/10 text-success border-success/20' : 'bg-warn/10 text-warn border-warn/20'}"
-                          title={ipFamily(a.peerIp) === 'IPv6' ? 'Connected over IPv6 (AAAA record won the Happy Eyeballs race)' : 'Connected over IPv4 — server has no AAAA record or IPv6 lost the race'}
-                        >{ipFamily(a.peerIp)}</span>
-                      {/if}
-                    </span>
-                    {#if a.peerIp}
-                      {@const peerLink = fibereyeIpHref(a.peerIp)}
-                      {#if peerLink}
-                        <a href={peerLink} class="font-mono text-[10px] leading-tight text-primary hover:underline" title="Remote IRC server address">→ {a.peerIp}</a>
-                      {:else}
-                        <span class="font-mono text-[10px] leading-tight text-muted" title="Remote IRC server address">→ {a.peerIp}</span>
-                      {/if}
-                    {/if}
-                    {#if a.localIp}
-                      {@const localLink = fibereyeIpHref(a.localIp)}
-                      {#if localLink}
-                        <a href={localLink} class="font-mono text-[10px] leading-tight text-primary hover:underline" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</a>
-                      {:else}
-                        <span class="font-mono text-[10px] leading-tight text-muted" title="Local source address (per-user IPv6 bind, or the shared host/NAT66 address)">← {a.localIp}</span>
-                      {/if}
-                    {/if}
-                  </div>
-                {/if}
-              </td>
-              <td class="py-2 text-right whitespace-nowrap">
-                {#if a.networkHost}
-                  <button
-                    type="button"
-                    onclick={() => disconnectAssignment(a.networkId, a.networkHost, label)}
-                    class="rounded border border-warn/30 px-2 py-1 text-[11px] font-medium text-warn hover:bg-warn/10"
-                  >
-                    Disconnect
-                  </button>
-                {/if}
-                <button
-                  type="button"
-                  onclick={() => reassignAssignment(a.networkId, label, a.serverId)}
-                  class="ml-1 rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text hover:border-primary/40"
-                >
-                  Reassign
-                </button>
-                <button
-                  type="button"
-                  onclick={() => removeAssignment(a.networkId, label)}
-                  class="ml-1 rounded border border-danger/30 px-2 py-1 text-[11px] font-medium text-danger hover:bg-danger/10"
-                >
-                  Remove
-                </button>
-                <button
-                  type="button"
-                  onclick={() => deleteAssignment(a.networkId, label)}
-                  class="ml-1 rounded border border-danger/60 bg-danger/10 px-2 py-1 text-[11px] font-semibold text-danger hover:bg-danger/20"
-                  title={a.networkId ? 'Permanently delete network config + engine client + Redis state' : 'Scrub ghost row from engine assignedNetworks'}
-                >
-                  Delete
-                </button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    {:else}
-      <EmptyState icon="🌐" title="No networks assigned" description="No networks are currently bound to any engine." />
-    {/if}
-  </Card>

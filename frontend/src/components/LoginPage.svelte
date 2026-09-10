@@ -48,6 +48,19 @@
   // card is password-only, exactly as today.
   interface OAuthProviderEntry { name: string; label: string; }
   let oauthProviders: OAuthProviderEntry[] = $state([]);
+  // GitHub and Google get brand chips; every other provider sits behind one
+  // picker popup — the same shape the landing topbar and the /login card use,
+  // so the overlay never grows one full-width button per provider.
+  const DIRECT_ORDER: Record<string, number> = { github: 0, google: 1 };
+  let moreOpen = $state(false);
+  const directProviders = $derived(
+    oauthProviders
+      .filter((p) => p.name === 'github' || p.name === 'google')
+      .sort((a, b) => DIRECT_ORDER[a.name] - DIRECT_ORDER[b.name]),
+  );
+  const restProviders = $derived(
+    oauthProviders.filter((p) => p.name !== 'github' && p.name !== 'google'),
+  );
 
   async function loadOAuthProviders(): Promise<void> {
     try {
@@ -186,6 +199,21 @@
   }
 </script>
 
+<svelte:window
+  onclick={() => { moreOpen = false; }}
+  onkeydown={(e) => { if (e.key === 'Escape' && moreOpen) moreOpen = false; }}
+/>
+
+{#snippet providerIcon(name: string)}
+  {#if name === 'github'}
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+  {:else if name === 'google'}
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75z"/></svg>
+  {:else}
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="5" r="2.6"/><path d="M2.8 13.4c.7-2.6 2.8-4 5.2-4s4.5 1.4 5.2 4"/></svg>
+  {/if}
+{/snippet}
+
 <div class="noauth" role="dialog" aria-modal="true" aria-label={mode === 'signin' ? 'Sign in to IRC Fiber' : mode === 'register' ? 'Create your IRC Fiber account' : 'Reset your IRC Fiber password'}>
   <div class="noauth-shade" aria-hidden="true"></div>
 
@@ -225,11 +253,34 @@
       {:else}
       {#if oauthProviders.length > 0}
         <div class="noauth-oauth">
-          {#each oauthProviders as p}
-            <a class="noauth-button noauth-oauth__button" href="/auth/{p.name}" rel="external" data-provider={p.name}>
-              Continue with {p.label}
-            </a>
-          {/each}
+          <div class="noauth-oauth__label">Continue with</div>
+          <div class="noauth-oauth__row">
+            {#each directProviders as p}
+              <a class="noauth-oauth__icon" href="/auth/{p.name}" rel="external" data-provider={p.name}
+                 aria-label="Continue with {p.label}" title="Continue with {p.label}">{@render providerIcon(p.name)}</a>
+            {/each}
+            {#if restProviders.length === 1}
+              <a class="noauth-oauth__icon" href="/auth/{restProviders[0].name}" rel="external"
+                 data-provider={restProviders[0].name}
+                 aria-label="Continue with {restProviders[0].label}"
+                 title="Continue with {restProviders[0].label}">{@render providerIcon('')}</a>
+            {:else if restProviders.length > 1}
+              <button type="button" class="noauth-oauth__icon" aria-haspopup="menu"
+                      aria-expanded={moreOpen} aria-controls="noauth-oauth-more"
+                      aria-label="More sign-in options" title="More sign-in options"
+                      onclick={(e) => { e.stopPropagation(); moreOpen = !moreOpen; }}>{@render providerIcon('')}</button>
+              <!-- The click stopper keeps a menu click from reaching the
+                   window dismisser; keyboard use needs no equivalent (Enter
+                   activates the item anchors, Escape closes via window). -->
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <div class="noauth-oauth__menu" class:open={moreOpen} id="noauth-oauth-more" role="menu" tabindex="-1"
+                   onclick={(e) => e.stopPropagation()}>
+                {#each restProviders as p}
+                  <a href="/auth/{p.name}" rel="external" role="menuitem" data-provider={p.name}>{p.label}</a>
+                {/each}
+              </div>
+            {/if}
+          </div>
           <div class="noauth-oauth__divider" aria-hidden="true"><span>or</span></div>
         </div>
       {/if}
@@ -532,27 +583,59 @@
     box-shadow: none;
   }
 
-  /* Social OAuth buttons: secondary variant of .noauth-button (same
-     radius/weight, surface background, border) stacked above the form. */
+  /* Social OAuth: a compact icon row above the form — GitHub/Google brand
+     chips plus one picker popup holding every other provider. */
   .noauth-oauth {
     display: flex;
     flex-direction: column;
     gap: 8px;
     margin-bottom: 4px;
   }
-  .noauth-oauth__button {
+  .noauth-oauth__label { text-align: center; font-size: 12px; color: #8b96a4; }
+  .noauth-oauth__row { position: relative; display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .noauth-oauth__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 60px;
+    height: 42px;
+    padding: 0;
     background: #0e1b26;
-    border-color: #2a3b4d;
     color: #e6edf3;
+    border: 1px solid #2a3b4d;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .noauth-oauth__icon:hover { background: #162635; border-color: #67e8f9; box-shadow: 0 0 16px rgba(103, 232, 249, 0.25); }
+  .noauth-oauth__icon:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(103, 232, 249, 0.30); }
+  .noauth-oauth__icon svg { display: block; width: 20px; height: 20px; }
+  .noauth-oauth__menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    min-width: 190px;
+    padding: 6px;
+    background: #0b1620;
+    border: 1px solid #2a3b4d;
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  }
+  .noauth-oauth__menu.open { display: block; }
+  .noauth-oauth__menu a {
+    display: block;
+    padding: 9px 10px;
+    border-radius: 6px;
+    color: #e6edf3;
+    font-size: 13px;
     font-weight: 600;
     text-decoration: none;
-    margin-top: 0;
+    white-space: nowrap;
   }
-  .noauth-oauth__button:hover {
-    background: #162635;
-    border-color: #67e8f9;
-    box-shadow: 0 0 16px rgba(103, 232, 249, 0.25);
-  }
+  .noauth-oauth__menu a:hover { background: #162635; color: #fff; }
   .noauth-oauth__divider {
     display: flex;
     align-items: center;

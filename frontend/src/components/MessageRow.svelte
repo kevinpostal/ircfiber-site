@@ -211,9 +211,22 @@
       const artGlyphs = (text.match(/[#.]/g) || []).length;
       if (artGlyphs >= 8) return true;
     }
-    // ASCII cat / owl art like d4rkm4g3's D00M TooL — many | / \ . - _ " ' ( ) [ ] and multiple lines with checkboxes
+    // Plain box-drawing / FIGlet box art (e.g. TDF 10-row "IRC FIBER"
+    // banners): no color codes and no U+2580-259F blocks, so the rules
+    // above miss it. Content-based: >=3 lines carrying box/shade glyphs
+    // with wide average line length.
     const lines = text.split('\n');
+    if (lines.length >= 3) {
+      const boxRe = /[┌┐└┘─│═║╔╗╚╝▓░▒█▄▀]/;
+      const boxLines = lines.filter((l) => boxRe.test(l));
+      if (boxLines.length >= 3) {
+        const stripped = boxLines.map((l) => l.replace(/[\x03\x04]/g, ''));
+        const avg = stripped.reduce((n, l) => n + l.length, 0) / stripped.length;
+        if (avg >= 20) return true;
+      }
+    }
     if (lines.length < 3) return false;
+    // ASCII cat / owl art like d4rkm4g3's D00M TooL — many | / \ . - _ " ' ( ) [ ] and multiple lines with checkboxes
     const hasBoxes = (text.match(/\[ \]/g) || []).length >= 2;
     const symbols = (text.match(/[|\/\\\-_\.\"]/g) || []).length;
     // At least 12 symbol chars and 2 checkboxes, or the tool name

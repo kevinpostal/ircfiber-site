@@ -254,3 +254,43 @@ describe('/rejoin delegates identically to /cycle (W3-T06)', () => {
 		expect(vi.mocked(reconnectNetwork)).not.toHaveBeenCalled();
 	});
 });
+
+describe('/rejoin channel key threading', () => {
+	beforeEach(() => {
+		ircState.networks.length = 0;
+		activeJoinList.clear();
+		pendingJoins.clear();
+		vi.mocked(sendRaw).mockClear();
+		vi.mocked(reconnectNetwork).mockClear();
+	});
+
+	it('/rejoin #chan key sends JOIN with the key exactly once', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+
+		dispatch('/rejoin #chan hunter2', 'n1', net);
+
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'JOIN #chan hunter2');
+		expect(vi.mocked(sendRaw)).not.toHaveBeenCalledWith(
+			'n1',
+			expect.stringContaining('PART'),
+		);
+	});
+
+	it('/rejoin hunter2 in-channel uses the active target with args[0] as key', () => {
+		const net = createNetwork({ networkId: 'n1', name: 'net', connected: true, currentNick: 'me' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+
+		// dispatch() passes target='' — invoke the handler directly with the
+		// active channel as target, mirroring InputArea.svelte:427-430.
+		const handler = getSlashHandler('rejoin');
+		if (!handler) throw new Error('No slash handler registered for /rejoin');
+		handler(['hunter2'], 'n1', '#chan', net as never);
+
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'JOIN #chan hunter2');
+	});
+});

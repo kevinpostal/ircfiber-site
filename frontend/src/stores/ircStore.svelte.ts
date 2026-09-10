@@ -645,6 +645,12 @@ export function clearActiveJoin(networkId: string, bufferName: string): void {
 
 export const pendingJoins: Set<string> = $state(new Set());
 
+// Re-issue throttle for explicit rejoins: keyed like pendingJoins, stamped
+// in markJoinPending, deleted in clearJoinPending. Lets a hammered /rejoin
+// re-send JOIN after 1500 ms while same-tick double-fire (sidebar + slash)
+// stays deduped. Module-private — no equivalent exists.
+const lastJoinAttemptAt: Map<string, number> = new Map();
+
 export function pendingJoinKey(networkId: string, bufferName: string): string {
   return `${networkId}:${normalizeChannelName(bufferName)}`;
 }
@@ -653,12 +659,20 @@ export function isJoinPending(networkId: string, bufferName: string): boolean {
   return pendingJoins.has(pendingJoinKey(networkId, bufferName));
 }
 
+export function lastJoinAttemptMs(networkId: string, bufferName: string): number | undefined {
+  return lastJoinAttemptAt.get(pendingJoinKey(networkId, bufferName));
+}
+
 export function markJoinPending(networkId: string, bufferName: string): void {
-  pendingJoins.add(pendingJoinKey(networkId, bufferName));
+  const key = pendingJoinKey(networkId, bufferName);
+  pendingJoins.add(key);
+  lastJoinAttemptAt.set(key, Date.now());
 }
 
 export function clearJoinPending(networkId: string, bufferName: string): void {
-  pendingJoins.delete(pendingJoinKey(networkId, bufferName));
+  const key = pendingJoinKey(networkId, bufferName);
+  pendingJoins.delete(key);
+  lastJoinAttemptAt.delete(key);
 }
 
 // ── W1-T01: initiateRejoin helper ──
@@ -703,21 +717,32 @@ export interface InitiateRejoinOptions {
    *  reconnect; context-menu / slash / URL-nav should let the existing
    *  connection-recovery paths handle that. */
   allowReconnect?: boolean;
+  /** Channel key (+k) to send on the wire: `JOIN <chan> <key>`.
+   *  Optional — absent by default; only the /rejoin slash passes one. */
+  key?: string;
 }
 
 /**
  * Issue a user-initiated JOIN for `bufferName` on `networkId`.
  *
+ * Marks the buffer joined OPTIMISTICALLY (isJoined=true in the same tick,
+ * alongside joinInFlight=true) so the channel renders joined + writable
+ * instantly; the JOIN-self echo / 443 confirms, failure numerics clear it.
+ * joinInFlight drives only the Joining chip — never gate the input on it.
+ *
  * Sets the full state-machine quartet (joinInFlight=true, joinError=null,
  * pendingIsJoined=true, pendingConfirmations=2) on the buffer, marks the
- * join as pending (dedup via isJoinPending), records it in activeJoinList
- * (buffersToDelete guard), pre-populates self-nick into buf.users, and
- * sends JOIN <bufferName>. Optional `opts.allowReconnect` kicks the
- * engine reconnect when the network is disconnected — only the
- * BufferHeader Rejoin button wants this; context-menu / slash / URL-nav
- * let the existing connection-recovery paths handle that.
+ * join as pending (re-issue throttled via lastJoinAttemptAt), records it
+ * in activeJoinList (buffersToDelete guard), pre-populates self-nick into
+ * buf.users, and sends JOIN <bufferName> [+ key]. Optional
+ * `opts.allowReconnect` kicks the engine reconnect when the network is
+ * disconnected — only the BufferHeader Rejoin button wants this;
+ * context-menu / slash / URL-nav let the existing connection-recovery
+ * paths handle that.
  *
- * No-op when a JOIN is already in flight for this buffer (idempotent).
+ * Throttled, not idempotent: a pending JOIN re-sends when the last attempt
+ * is older than 1500 ms (hammering /rejoin works); same-tick double-fire
+ * (sidebar + slash) stays deduped.
  */
 export function initiateRejoin(
   networkId: string,
@@ -729,17 +754,20 @@ export function initiateRejoin(
   if (!net) return;
   let buf = net.buffers.find(b => b.name === normalized);
 
-  // Idempotency: if a JOIN is already in flight for this buffer, the
-  // existing pendingJoins entry blocks double-issuance. Mirrors
-  // maybeAutoJoinChannel's guard at App.svelte:557.
-  if (isJoinPending(networkId, normalized)) return;
+  // Re-issue throttle: a pending JOIN blocks re-send only within 1500 ms
+  // of the last attempt (same-tick double-fire stays deduped); an explicit
+  // rejoin after that re-sends. maybeAutoJoinChannel keeps its own guard.
+  if (isJoinPending(networkId, normalized)) {
+    const last = lastJoinAttemptMs(networkId, normalized);
+    if (last === undefined || Date.now() - last < 1500) return;
+  }
 
-  // If the buffer doesn't exist locally, create it so the sidebar
-  // shows the channel immediately and the join-in-flight chip appears.
-  // The JOIN echo from the engine will promote it to isJoined=true.
+  // If the buffer doesn't exist locally, create it already joined: the
+  // channel renders joined + writable in the same tick; the JOIN-self
+  // echo / 443 confirms, failure numerics (471/473/474/475/...) clear it.
   if (!buf) {
     buf = {
-      name: normalized, type: 'channel', isJoined: false,
+      name: normalized, type: 'channel', isJoined: true,
       unseen: false, unseenCount: 0, unseenHighlights: [], isPinned: false, isArchived: false,
       topic: '', topicSetBy: '', topicSetAt: 0, users: [],
       lastSeenMsgTime: null, firstUnseenMsgIndex: null,
@@ -750,9 +778,10 @@ export function initiateRejoin(
     sortBuffers(net);
   }
 
-  // Set the FULL state-machine quartet. This is the single source
-  // of truth — every caller sets all four flags.
+  // Set the FULL state-machine quartet plus optimistic isJoined. This is
+  // the single source of truth — every caller sets all five flags.
   buf.joinError = null;          // clear stale failure text
+  buf.isJoined = true;           // optimistic: writable in the same tick
   buf.joinInFlight = true;       // drives BufferHeader chip + sidebar modifier
   buf.pendingIsJoined = true;    // belt-and-suspenders for WS-round-trip clobber
   buf.pendingConfirmations = 2;  // require TWO confirming syncs to clear
@@ -761,7 +790,7 @@ export function initiateRejoin(
   prePopulateOwnNick(buf, net.currentNick);
   markJoinPending(networkId, normalized);
   recordJoin(networkId, normalized);
-  sendRaw(networkId, 'JOIN ' + normalized);
+  sendRaw(networkId, 'JOIN ' + normalized + (opts.key ? ' ' + opts.key : ''));
 
   if (opts.allowReconnect && !net.connected) {
     beginConnectAttempt(networkId);
@@ -794,6 +823,7 @@ export function initiateRejoin(
  */
 export function resetPendingState(): void {
   pendingJoins.clear();
+  lastJoinAttemptAt.clear();
   for (const net of ircState.networks) {
     for (const buf of net.buffers) {
       buf.joinInFlight = false;
@@ -3737,10 +3767,12 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
         lastSpoke: 0, lastHighlighted: 0, account: ''
       });
     }
-    // Mark pending so the next sync doesn't overwrite with a stale
-    // snapshot taken before the JOIN propagated to the engine.
-    buf.pendingIsJoined = true;
-    buf.pendingConfirmations = 2;
+    // JOIN echo is authoritative AND final: clear the pending guard so the
+    // Joining chip resolves in the same tick instead of waiting out a
+    // ~20s two-sync tail. Buffers that never saw an echo (phantom/URL-nav)
+    // keep the two-confirm path in updateNetworkFromSync.
+    buf.pendingIsJoined = undefined;
+    buf.pendingConfirmations = undefined;
     buf.joinInFlight = false;
     buf.joinError = null;
     // W7-T01: clear the pendingJoins dedup so future URL navigations to
@@ -3804,14 +3836,14 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     };
     if (buf) {
       // 443 (ERR_USERONCHANNEL) means the user IS already in the channel —
-      // treat it as a successful join, not an error. Set the pending guard
-      // so the next sync doesn't clobber isJoined back to false.
+      // treat it as a successful join, not an error. A redundant JOIN while
+      // still joined resolves in the same tick with no error chip.
       if (cmd === '443') {
         buf.isJoined = true;
         buf.joinError = null;
         buf.joinInFlight = false;
-        buf.pendingIsJoined = true;
-        buf.pendingConfirmations = 2;
+        buf.pendingIsJoined = undefined;
+        buf.pendingConfirmations = undefined;
       } else {
         buf.joinError = codeMap[cmd] ?? 'unknown';
         buf.joinInFlight = false;

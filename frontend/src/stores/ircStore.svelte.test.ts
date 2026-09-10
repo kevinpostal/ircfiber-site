@@ -2952,8 +2952,96 @@ describe('W7-T01: URL nav auto-join plumbing', () => {
 			// JOIN queued via sendRaw.
 			expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'JOIN #test');
 		});
-	});
 
+		// ── T12: optimistic isJoined in the same tick ──────────────────────
+		it('T12: marks isJoined=true optimistically alongside joinInFlight', () => {
+			setupBuf({ isJoined: false });
+			initiateRejoin('n1', '#test');
+			flushSync();
+			const buf = findBuf('n1', '#test')!;
+			expect(buf.isJoined).toBe(true);
+			expect(buf.joinInFlight).toBe(true);
+		});
+
+		// ── T13: channel key rides on the single JOIN ──────────────────────
+		it('T13: sends JOIN with channel key when opts.key is set', () => {
+			setupBuf({ isJoined: false });
+			initiateRejoin('n1', '#test', { key: 'hunter2' });
+			flushSync();
+			expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+			expect(vi.mocked(sendRaw)).toHaveBeenCalledWith('n1', 'JOIN #test hunter2');
+		});
+
+		// ── T14: 1500ms re-issue throttle ──────────────────────────────────
+		it('T14: re-issue within 1500ms is deduped, after 1500ms re-sends', () => {
+			setupBuf({ isJoined: false });
+			const nowSpy = vi.spyOn(Date, 'now');
+			try {
+				nowSpy.mockReturnValue(1_000_000);
+				initiateRejoin('n1', '#test');
+				flushSync();
+				expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+				// Same-tick hammer: deduped.
+				nowSpy.mockReturnValue(1_000_100);
+				initiateRejoin('n1', '#test');
+				flushSync();
+				expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(1);
+				// Past the throttle: re-sends.
+				nowSpy.mockReturnValue(1_002_000);
+				initiateRejoin('n1', '#test');
+				flushSync();
+				expect(vi.mocked(sendRaw)).toHaveBeenCalledTimes(2);
+				expect(vi.mocked(sendRaw)).toHaveBeenLastCalledWith('n1', 'JOIN #test');
+			} finally {
+				nowSpy.mockRestore();
+			}
+		});
+
+		// ── T15: JOIN-self echo confirms with no two-sync tail ─────────────
+		it('T15: JOIN-self echo clears joinInFlight AND both pending fields with isJoined true', () => {
+			setupBuf({ isJoined: false });
+			initiateRejoin('n1', '#test');
+			flushSync();
+			updateChannelUsers('n1', '#test', 'JOIN', 'me');
+			flushSync();
+			const buf = findBuf('n1', '#test')!;
+			expect(buf.isJoined).toBe(true);
+			expect(buf.joinInFlight).toBe(false);
+			expect(buf.joinError).toBe(null);
+			expect(buf.pendingIsJoined).toBeUndefined();
+			expect(buf.pendingConfirmations).toBeUndefined();
+		});
+
+		// ── T16: 443 resolves to joined with no error ──────────────────────
+		it('T16: 443 ERR_USERONCHANNEL resolves to joined with no error chip', () => {
+			setupBuf({ isJoined: false });
+			initiateRejoin('n1', '#test');
+			flushSync();
+			updateChannelUsers('n1', '#test', '443', 'irc.server', ['me', '#test', 'is already on channel']);
+			flushSync();
+			const buf = findBuf('n1', '#test')!;
+			expect(buf.isJoined).toBe(true);
+			expect(buf.joinInFlight).toBe(false);
+			expect(buf.joinError).toBe(null);
+			expect(buf.pendingIsJoined).toBeUndefined();
+			expect(buf.pendingConfirmations).toBeUndefined();
+		});
+
+		// ── T17: failure numerics still fail ───────────────────────────────
+		it.each(['471', '473', '474', '475'])('T17: %s sets joinError and isJoined=false', (code) => {
+			setupBuf({ isJoined: false });
+			initiateRejoin('n1', '#test');
+			flushSync();
+			updateChannelUsers('n1', '#test', code, 'irc.server', ['me', '#test', 'cannot join']);
+			flushSync();
+			const buf = findBuf('n1', '#test')!;
+			expect(buf.isJoined).toBe(false);
+			expect(buf.joinInFlight).toBe(false);
+			expect(buf.joinError).not.toBe(null);
+			expect(buf.pendingIsJoined).toBeUndefined();
+			expect(buf.pendingConfirmations).toBeUndefined();
+		});
+	});
 	describe('self-nick in userlist', () => {
 		it('adds own nick on JOIN for self (existing buffer)', () => {
 			const net = createNetwork({ networkId: 'n1', currentNick: 'me' });

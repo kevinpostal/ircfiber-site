@@ -264,15 +264,16 @@ registerSlash(['me'], (args, networkId, target, _net) => {
 });
 
 registerSlash(['cycle', 'hop', 'rejoin'], (args, networkId, target) => {
-  const chan = args[0] ? normalizeChannelName(args[0]) : target;
-  // Key extraction is preserved (key variable intentionally unused for now)
-  // so future enhancement can pass the key into a future key-aware helper.
-  const key = args[0] ? (args[1] || '') : '';
+  // args[0] is an explicit channel only when channel-shaped (#...);
+  // otherwise in-channel `/rejoin hunter2` treats args[0] as the key.
+  const explicitChan = !!args[0] && normalizeChannelName(args[0]).startsWith('#');
+  const chan = explicitChan ? normalizeChannelName(args[0]) : target;
+  const key = explicitChan ? (args[1] || undefined) : (args[0] || undefined);
   if (!chan || !chan.startsWith('#')) throw new Error('Not in a channel');
-  // W1-T01: drop the PART-before-JOIN (was sendRaw(PART) + sendRaw(JOIN));
-  // PART clobbered isJoined mid-flow and broke the optimistic Joining chip.
-  // Match IRCCloud semantics — /cycle is "just rejoin".
-  initiateRejoin(networkId, chan, { allowReconnect: false });
+  // W1-T01: no PART-before-JOIN (PART clobbered isJoined mid-flow and broke
+  // the optimistic Joining chip). Match IRCCloud semantics — /cycle is
+  // "just rejoin". The key (if any) rides on the single JOIN.
+  initiateRejoin(networkId, chan, { allowReconnect: false, key });
 });
 
 registerSlash(['clear'], async (_args, networkId, target) => {

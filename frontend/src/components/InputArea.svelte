@@ -810,7 +810,20 @@
       // Styled sends bypass the pastebin prompt: multi-line output is the point.
       const { renderComposeLines } = await import('../lib/composePipeline');
       const budget = ircPayloadBudget(activeNetwork?.isupport, '', target);
-      const { lines } = await renderComposeLines(text, globalPrefs.composeStyle, budget);
+      const { lines, overBudget } = await renderComposeLines(text, globalPrefs.composeStyle, budget);
+      if (overBudget.length > 0) {
+        // An art row is atomic: never hard-split it mid-glyph across
+        // PRIVMSGs. Route the full rendered art to the pastebin
+        // confirmation so it goes out as a paste link instead.
+        pastebinOpen = true;
+        pastebinText = lines.join('\n');
+        pastebinNetworkId = networkId;
+        pastebinTarget = target;
+        pastebinFilename = '';
+        pastebinLanguage = 'text';
+        // Don't clear the input yet — preserved if the user cancels.
+        return;
+      }
       for (const line of lines) sendPlainLine(networkId, target, line);
       requestForceScrollToBottom();
     } else {

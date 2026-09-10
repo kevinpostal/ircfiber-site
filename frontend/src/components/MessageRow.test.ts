@@ -145,6 +145,27 @@ describe('MessageRow', () => {
 		expect(document.querySelector('.messageRow.blockArt')).toBeInTheDocument();
 	});
 
+	it('applies blockArt class to plain multi-line box-drawing art without color codes', async () => {
+		const art = [
+			'┌───────┐  ┌───────┐  ┌───────┐',
+			'│  IRC  │  │ FIBER │  │  NET  │',
+			'│       │  │       │  │       │',
+			'│  BOX  │  │  ART  │  │  ROW  │',
+			'└───────┘  └───────┘  └───────┘',
+		].join('\n');
+		const msg = createMessage({ nick: 'carol', text: art });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.messageRow.blockArt')).toBeInTheDocument();
+	});
+
+	it('does not flag a single normal chat line as blockArt', async () => {
+		const msg = createMessage({ nick: 'dave', text: 'hello everyone, how is it going?' });
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.messageRow.blockArt')).not.toBeInTheDocument();
+	});
+
 	it('calls onNickClick when nick is clicked', async () => {
 		const onNickClick = vi.fn();
 		const msg = createMessage({ nick: 'alice', text: 'hello' });

@@ -363,7 +363,11 @@ describe('App', () => {
     });
 
     it('hides member list when channel is parted', async () => {
-      const net = createNetwork({ networkId: 'net1' });
+      // Disconnected network: maybeAutoJoinChannel skips (no engine to
+      // JOIN through), so the parted channel genuinely hides members. On
+      // a connected network App auto-rejoins the active channel and the
+      // optimistic join shows members instantly by design.
+      const net = createNetwork({ networkId: 'net1', connected: false });
       net.buffers.push(createBuffer({ name: '#general', isJoined: false }));
       ircState.networks.push(net);
       ircState.activeBuffer.networkId = 'net1';
@@ -458,10 +462,17 @@ describe('App', () => {
 
       render(App);
 
+      // App auto-joins the active channel (optimistic join may flash
+      // members); then the 470 rejection lands and the sidebar hides.
+      updateChannelUsers('net1', '#superbowl', '470', 'irc.server', ['me', '#superbowl', 'Forwarding to #blackhole']);
+      flushSync();
+
       // Member sidebar must NOT show — active buffer is #superbowl
       // with isJoined: false (join was rejected)
-      expect(document.querySelector('#member-sidebar')).not.toBeInTheDocument();
-      expect(document.querySelector('#wrap')?.classList.contains('has-members')).toBe(false);
+      await vi.waitFor(() => {
+        expect(document.querySelector('#member-sidebar')).not.toBeInTheDocument();
+        expect(document.querySelector('#wrap')?.classList.contains('has-members')).toBe(false);
+      }, { timeout: 2000, interval: 50 });
     });
   });
 

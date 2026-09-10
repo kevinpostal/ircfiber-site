@@ -149,7 +149,52 @@ describe('LoginPage', () => {
     const google = document.querySelector('a[data-provider="google"]');
     expect(github?.getAttribute('href')).toBe('/auth/github');
     expect(google?.getAttribute('href')).toBe('/auth/google');
-    expect(github?.textContent).toContain('Continue with GitHub');
+    // The chips are icon-only, so the accessible name carries the label.
+    expect(github?.getAttribute('aria-label')).toBe('Continue with GitHub');
+    expect(google?.getAttribute('aria-label')).toBe('Continue with Google');
+    // Nothing falls outside github/google, so no picker toggle is rendered.
+    expect(document.querySelector('button[aria-haspopup="menu"]')).toBeNull();
+    expect(onAuthenticated).not.toHaveBeenCalled();
+  });
+  it('puts non-brand providers behind one picker popup', async () => {
+    const onAuthenticated = vi.fn();
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/auth/providers')) {
+        // Exactly what production serves: alphabetical by name.
+        return new Response(
+          JSON.stringify({
+            providers: [
+              { name: 'codeberg', label: 'Codeberg' },
+              { name: 'github', label: 'GitHub' },
+              { name: 'gitlab', label: 'GitLab' },
+              { name: 'google', label: 'Google' },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('', { status: 200 });
+    }) as typeof fetch;
+    render(LoginPage, { props: { onAuthenticated } });
+    await vi.waitFor(() => expect(document.querySelector('button[aria-haspopup="menu"]')).toBeTruthy());
+    // The row itself only ever holds the brand chips: github + google.
+    expect(document.querySelectorAll('.noauth-oauth__row > a[data-provider]').length).toBe(2);
+    const toggle = document.querySelector('button[aria-haspopup="menu"]') as HTMLButtonElement;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    const menu = document.querySelector('#noauth-oauth-more') as HTMLElement;
+    await expect.element(menu).not.toBeVisible();
+
+    await userEvent.click(toggle);
+    await vi.waitFor(() => expect(toggle.getAttribute('aria-expanded')).toBe('true'));
+    await expect.element(menu).toBeVisible();
+    const items = [...menu.querySelectorAll('a[role="menuitem"]')];
+    expect(items.map((a) => a.getAttribute('data-provider'))).toEqual(['codeberg', 'gitlab']);
+    expect(items.map((a) => a.getAttribute('href'))).toEqual(['/auth/codeberg', '/auth/gitlab']);
+
+    await userEvent.keyboard('{Escape}');
+    await vi.waitFor(() => expect(toggle.getAttribute('aria-expanded')).toBe('false'));
+    await expect.element(menu).not.toBeVisible();
     expect(onAuthenticated).not.toHaveBeenCalled();
   });
   it('shows no provider buttons when none are configured', async () => {

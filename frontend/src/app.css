@@ -199,11 +199,15 @@ body.ascii-compact .row.messageRow {
   overflow-wrap: anywhere;
 }
 .row.messageRow.blockArt .content {
-  /* Art lines preserve columns; avoid break-all inside art which would
-     slice mid-glyph and cause extra reflow. Art already has <wbr> at
-     color boundaries for wrap. */
+  /* Art never wraps: preserve columns on exactly one visual line per row;
+     horizontal overflow scrolls inside the row. Must match
+     _messageGrouping.scss .blockArt .content exactly. */
+  white-space: pre;
+  display: block;
+  font-family: var(--font-mono, ui-monospace, monospace);
   word-break: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  overflow-x: auto;
 }
 
 /* Status rows: wrap at word boundaries so capability names, URLs, and

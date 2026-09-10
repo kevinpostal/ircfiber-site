@@ -328,3 +328,126 @@ describe('Servers.svelte — holder info (connection holder)', () => {
     await expect.element(page.getByText('Holder: —')).toBeInTheDocument();
   });
 });
+
+describe('Servers.svelte — per-engine collapsible groups', () => {
+  const hetiEngine = {
+    serverId: 'heti',
+    bindAddress: '0.0.0.0',
+    port: 8092,
+    priority: 5,
+    maxConnections: 10,
+    fallbackOnly: false,
+    assignedNetworks: ['c9d1a2b3-0000-4000-8000-aaaaaaaaaaaa'],
+    healthy: false,
+    lastHeartbeat: 1784671020000,
+    ageSeconds: 30,
+  };
+  const hetiAssignment = {
+    networkId: 'c9d1a2b3-0000-4000-8000-aaaaaaaaaaaa',
+    serverId: 'heti',
+    networkName: 'Heti Net',
+    networkHost: 'irc.example.org',
+    userId: '11111111-2222-4333-8444-555555555555',
+    username: 'hetiuser',
+    nick: 'HetiNick',
+  };
+  const twoEngineFixture = () =>
+    baseFixture({
+      engines: [...baseFixture().engines, hetiEngine],
+      assignments: [...baseFixture().assignments, hetiAssignment],
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    mockedGet.mockResolvedValue(twoEngineFixture());
+    mockedPost.mockResolvedValue({});
+  });
+
+  it('renders one toggle per engine with network counts in the header', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await expect.element(page.getByTestId('server-group-toggle-ovh')).toBeInTheDocument();
+    await expect.element(page.getByTestId('server-group-toggle-heti')).toBeInTheDocument();
+    // ovh holds 2 networks with no engine cap; heti holds 1 of a 10-cap.
+    await expect.element(page.getByText('2 networks · 2/∞ conns')).toBeInTheDocument();
+    await expect.element(page.getByText('1 networks · 1/10 conns')).toBeInTheDocument();
+  });
+
+  it('opens the first healthy group by default and keeps the rest collapsed', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await expect.element(page.getByTestId('server-group-body-ovh')).toBeInTheDocument();
+    expect(page.getByTestId('server-group-body-heti').elements().length).toBe(0);
+  });
+
+  it('clicking a toggle hides/shows its body and flips aria-expanded', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    const toggle = page.getByTestId('server-group-toggle-heti').first();
+    await expect.element(toggle).toBeInTheDocument();
+    expect(document.querySelector('[data-testid="server-group-toggle-heti"]')?.getAttribute('aria-expanded')).toBe('false');
+
+    await toggle.click();
+    await expect.element(page.getByTestId('server-group-body-heti')).toBeInTheDocument();
+    expect(document.querySelector('[data-testid="server-group-toggle-heti"]')?.getAttribute('aria-expanded')).toBe('true');
+
+    await toggle.click();
+    expect(page.getByTestId('server-group-body-heti').elements().length).toBe(0);
+    expect(document.querySelector('[data-testid="server-group-toggle-heti"]')?.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('keeps a collapsed engine\u2019s assignments out of the DOM (grouping proof)', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    // heti starts collapsed: its nick is nowhere in the document, while
+    // the open ovh group's rows render.
+    await expect.element(page.getByTestId('server-group-body-ovh')).toBeInTheDocument();
+    expect(page.getByText('HetiNick').elements().length).toBe(0);
+    await expect.element(page.getByText('faggy_6094')).toBeInTheDocument();
+
+    // Expanding heti mounts its rows.
+    await page.getByTestId('server-group-toggle-heti').first().click();
+    await expect.element(page.getByText('HetiNick')).toBeInTheDocument();
+  });
+
+  it('Expand all / Collapse all flip every group and persist the fold state', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await expect.element(page.getByTestId('server-group-body-ovh')).toBeInTheDocument();
+    await page.getByTestId('servers-expand-all').click();
+    await expect.element(page.getByTestId('server-group-body-heti')).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('admin:servers:expanded') ?? '{}').heti).toBe(true);
+
+    await page.getByTestId('servers-collapse-all').click();
+    expect(page.getByTestId('server-group-body-ovh').elements().length).toBe(0);
+    expect(page.getByTestId('server-group-body-heti').elements().length).toBe(0);
+    await expect.element(page.getByText('0 of 2 open')).toBeInTheDocument();
+  });
+
+  it('renders orphan assignments in an Unassigned group instead of dropping them', async () => {
+    mockedGet.mockResolvedValue(
+      baseFixture({
+        assignments: [
+          ...baseFixture().assignments,
+          {
+            networkId: 'dddddddd-0000-4000-8000-aaaaaaaaaaaa',
+            serverId: 'gone-engine',
+            networkName: 'Orphan Net',
+            networkHost: 'irc.example.org',
+            userId: '',
+            username: '',
+            nick: '',
+          },
+        ],
+      })
+    );
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await expect.element(page.getByTestId('server-group-toggle-unassigned')).toBeInTheDocument();
+    // Unassigned defaults closed — expanding reveals the orphan row.
+    expect(page.getByText('Orphan Net').elements().length).toBe(0);
+    await page.getByTestId('server-group-toggle-unassigned').first().click();
+    await expect.element(page.getByText('Orphan Net')).toBeInTheDocument();
+  });
+});

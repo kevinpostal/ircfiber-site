@@ -816,4 +816,43 @@ describe('InputArea', () => {
 			expect(mockSendRaw).toHaveBeenLastCalledWith('net1', tagmsg('done'));
 		});
 	});
+
+	describe('styled art sends (pastebin fallback)', () => {
+		function setupArtSend(linelen?: string) {
+			const net = createNetwork({
+				networkId: 'net1',
+				currentNick: 'tester',
+				isupport: linelen ? { LINELEN: linelen } : {},
+			});
+			net.buffers.push(createBuffer({ name: '#general' }));
+			ircState.networks.push(net);
+			ircState.activeBuffer.networkId = 'net1';
+			ircState.activeBuffer.bufferName = '#general';
+			globalPrefs.composeStyle = {
+				...DEFAULT_COMPOSE_STYLE,
+				font: { kind: 'figlet', font: 'Bloody' },
+			};
+			flushSync();
+			render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+			return page.getByRole('textbox', { name: /message input/i });
+		}
+
+		it('routes over-budget art to the pastebin dialog and sends zero PRIVMSGs', async () => {
+			const textarea = setupArtSend('120');
+			await userEvent.type(textarea, 'IRC FIBER');
+			await userEvent.keyboard('{Enter}');
+
+			await expect.element(page.getByText('Text snippet')).toBeInTheDocument();
+			expect(mockSendMessage).not.toHaveBeenCalled();
+		});
+
+		it('sends fitting art as one PRIVMSG per row with no dialog', async () => {
+			const textarea = setupArtSend();
+			await userEvent.type(textarea, 'HI');
+			await userEvent.keyboard('{Enter}');
+
+			expect(mockSendMessage).toHaveBeenCalled();
+			expect(page.getByText('Text snippet').query()).toBeNull();
+		});
+	});
 });

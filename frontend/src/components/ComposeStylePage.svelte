@@ -15,8 +15,10 @@
   import { navigateBackFromComposeStyle } from '../lib/routing';
   import { globalPrefs } from '../stores/preferences.svelte';
   import {
+    clampArtWrapWidth,
     DEFAULT_COMPOSE_STYLE,
     isComposeStyleActive,
+    type ArtWrapMode,
     type ColorMode,
     type ComposeStyle,
     type FontMode,
@@ -83,6 +85,8 @@
     if (f.kind === 'figlet') bits.push(`FIGlet ${f.font}`);
     else if (f.kind === 'tdf') bits.push(`TheDraw ${f.font}`);
     else if (f.kind === 'unicode') bits.push(`Unicode ${f.style}`);
+    if ((f.kind === 'figlet' || f.kind === 'tdf') && draft.artWrap?.mode === 'word')
+      bits.push(`Wrap ${clampArtWrapWidth(draft.artWrap.width)}`);
     return bits.length ? bits.join(' · ') : 'No styling — messages send exactly as typed';
   });
 
@@ -415,6 +419,24 @@
                   </li>
                 {/each}
               </ul>
+            </div>
+          </div>
+          <div class="cs-group">
+            <div class="cs-label">Width</div>
+            <div>
+              {@render seg([
+                { value: 'off', label: 'Off', title: 'Send every art row whole — wide rows scroll' },
+                { value: 'word', label: 'Wrap words', title: 'Fold long banners between words at the column limit' },
+              ], draft.artWrap?.mode ?? 'off', (v) => { draft.artWrap = { mode: v as ArtWrapMode, width: draft.artWrap?.width ?? 80 }; })}
+              {#if (draft.artWrap?.mode ?? 'off') === 'word'}
+                <div class="csp-bar">
+                  <input type="number" class="cs-input" aria-label="Wrap at column" min="20" max="400" step="1"
+                         value={draft.artWrap?.width ?? 80}
+                         oninput={(e) => { draft.artWrap = { mode: 'word', width: clampArtWrapWidth(Number(e.currentTarget.value)) }; }} />
+                  <span class="cs-list-meta">columns (20–400)</span>
+                </div>
+                <div class="cs-note">Long banners fold between words — no glyph is ever cut mid-character. Off sends rows whole.</div>
+              {/if}
             </div>
           </div>
         {/if}

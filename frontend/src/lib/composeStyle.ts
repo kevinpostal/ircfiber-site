@@ -30,6 +30,21 @@ export type ColorMode =
 
 export type CaseMode = 'none' | 'upper' | 'lower' | 'mocking';
 
+/** Word-wrap limit for FIGlet/TheDraw banners. `off` sends every art row
+  whole (wide rows scroll); `word` folds between words at `width` columns
+  so no glyph is ever cut mid-character. Clamped to 20–400 at render time. */
+export type ArtWrapMode = 'off' | 'word';
+export interface ArtWrap {
+  mode: ArtWrapMode;
+  width: number;
+}
+
+/** Clamp a user wrap width into the sane render range (20–400 columns). */
+export function clampArtWrapWidth(width: number): number {
+  if (!Number.isFinite(width)) return 80;
+  return Math.min(400, Math.max(20, Math.floor(width)));
+}
+
 export interface ComposeStyle {
   bold: boolean;
   italic: boolean;
@@ -41,6 +56,7 @@ export interface ComposeStyle {
   zalgo: 0 | 1 | 2 | 3;
   color: ColorMode;
   font: FontMode;
+  artWrap: ArtWrap;
 }
 
 export const DEFAULT_COMPOSE_STYLE: ComposeStyle = {
@@ -54,6 +70,7 @@ export const DEFAULT_COMPOSE_STYLE: ComposeStyle = {
   zalgo: 0,
   color: { kind: 'none' },
   font: { kind: 'none' },
+  artWrap: { mode: 'off', width: 80 },
 };
 
 export function isComposeStyleActive(s: ComposeStyle): boolean {
