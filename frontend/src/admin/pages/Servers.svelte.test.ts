@@ -451,3 +451,107 @@ describe('Servers.svelte — per-engine collapsible groups', () => {
     await expect.element(page.getByText('Orphan Net')).toBeInTheDocument();
   });
 });
+
+describe('Servers.svelte — group by IRC network + pagination', () => {
+  const hetiEngine = {
+    serverId: 'heti',
+    bindAddress: '0.0.0.0',
+    port: 8092,
+    priority: 5,
+    maxConnections: 10,
+    fallbackOnly: false,
+    assignedNetworks: ['c9d1a2b3-0000-4000-8000-aaaaaaaaaaaa'],
+    healthy: false,
+    lastHeartbeat: 1784671020000,
+    ageSeconds: 30,
+  };
+  const hetiAssignment = {
+    networkId: 'c9d1a2b3-0000-4000-8000-aaaaaaaaaaaa',
+    serverId: 'heti',
+    networkName: 'Heti Net',
+    networkHost: 'irc.example.org',
+    userId: '11111111-2222-4333-8444-555555555555',
+    username: 'hetiuser',
+    nick: 'HetiNick',
+  };
+  const twoEngineFixture = () =>
+    baseFixture({
+      engines: [...baseFixture().engines, hetiEngine],
+      assignments: [...baseFixture().assignments, hetiAssignment],
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    mockedGet.mockResolvedValue(twoEngineFixture());
+    mockedPost.mockResolvedValue({});
+  });
+
+  it('switching to Network view groups connections by IRC host', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await page.getByTestId('servers-groupby-network').click();
+
+    // Engine toggles are gone; host groups take their place.
+    expect(page.getByTestId('server-group-toggle-ovh').elements().length).toBe(0);
+    await expect.element(page.getByTestId('server-group-toggle-net:irc.ircfiber.com')).toBeInTheDocument();
+    await expect.element(page.getByTestId('server-group-toggle-net:irc.example.org')).toBeInTheDocument();
+    // First host group (irc.example.org sorts first) opens by default.
+    await expect.element(page.getByText('HetiNick')).toBeInTheDocument();
+    await page.getByTestId('servers-expand-all').click();
+    await expect.element(page.getByText('faggy_6094')).toBeInTheDocument();
+    expect(localStorage.getItem('admin:servers:groupBy')).toBe('network');
+  });
+
+  it('network view shows the owning engine per row across engines', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    await page.getByTestId('servers-groupby-network').click();
+    await page.getByTestId('servers-expand-all').click();
+
+    // heti row carries its engine badge; ovh rows carry theirs.
+    await expect.element(page.getByText('HetiNick')).toBeInTheDocument();
+    await expect.element(page.getByText('faggy_6094')).toBeInTheDocument();
+    await expect.element(page.getByText('1 networks · on heti')).toBeInTheDocument();
+    await expect.element(page.getByText('2 networks · on ovh')).toBeInTheDocument();
+  });
+
+  it('paginates an engine group past 25 connections', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
+      networkId: `bbbbbbbb-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      serverId: 'ovh',
+      networkName: `Bulk ${i}`,
+      networkHost: 'irc.ircfiber.com',
+      userId: '',
+      username: '',
+      nick: `bulk-nick-${String(i).padStart(2, '0')}`,
+    }));
+    mockedGet.mockResolvedValue(
+      baseFixture({
+        engines: [{ ...baseFixture().engines[0], assignedNetworks: many.map((m) => m.networkId) }],
+        assignments: many,
+      })
+    );
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+
+    await expect.element(page.getByText('Page 1 of 2 · 30 connections')).toBeInTheDocument();
+    await expect.element(page.getByText('bulk-nick-00')).toBeInTheDocument();
+    expect(page.getByText('bulk-nick-29').elements().length).toBe(0);
+
+    await page.getByTestId('servers-page-next-ovh').click();
+    await expect.element(page.getByText('Page 2 of 2 · 30 connections')).toBeInTheDocument();
+    await expect.element(page.getByText('bulk-nick-29')).toBeInTheDocument();
+    expect(page.getByText('bulk-nick-00').elements().length).toBe(0);
+
+    await page.getByTestId('servers-page-prev-ovh').click();
+    await expect.element(page.getByText('bulk-nick-00')).toBeInTheDocument();
+  });
+
+  it('does not render a pager for small groups', async () => {
+    render(Servers);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/servers'));
+    expect(page.getByTestId('servers-page-next-ovh').elements().length).toBe(0);
+    expect(page.getByTestId('servers-page-label-ovh').elements().length).toBe(0);
+  });
+});

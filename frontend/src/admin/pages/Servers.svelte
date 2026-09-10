@@ -173,6 +173,62 @@
       ? `${e.assignedNetworks.length}/${e.maxConnections} conns`
       : `${e.assignedNetworks.length}/∞ conns`;
   }
+  // Alternate grouping: by IRC network (networkHost) instead of engine.
+  // Persisted; defaults to engine view.
+  const GROUP_BY_KEY = 'admin:servers:groupBy';
+  function loadGroupBy(): 'engine' | 'network' {
+    try {
+      return localStorage.getItem(GROUP_BY_KEY) === 'network' ? 'network' : 'engine';
+    } catch {
+      return 'engine';
+    }
+  }
+  let groupBy = $state<'engine' | 'network'>(loadGroupBy());
+  function setGroupBy(mode: 'engine' | 'network') {
+    groupBy = mode;
+    try {
+      localStorage.setItem(GROUP_BY_KEY, mode);
+    } catch {
+      // Shared-kiosk / private-mode admin: view stays session-only.
+    }
+  }
+  function engineById(sid: string): Engine | undefined {
+    return (data?.engines ?? []).find((e) => e.serverId === sid);
+  }
+  const assignmentsByHost = $derived.by(() => {
+    const m = new Map<string, AssignmentEntry[]>();
+    for (const a of data?.assignments ?? []) {
+      const key = a.networkHost || '(unknown)';
+      const list = m.get(key);
+      if (list) list.push(a);
+      else m.set(key, [a]);
+    }
+    return m;
+  });
+  // Deterministic order so groups don't jump on each 5 s poll.
+  const orderedNetHosts = $derived([...assignmentsByHost.keys()].sort((a, b) => a.localeCompare(b)));
+  function netGroupKey(host: string): string {
+    return `net:${host}`;
+  }
+  function netEngines(rows: AssignmentEntry[]): string[] {
+    return [...new Set(rows.map((a) => a.serverId || 'unassigned'))].sort((a, b) => a.localeCompare(b));
+  }
+  function netHealthy(rows: AssignmentEntry[]): boolean {
+    return rows.every((a) => engineById(a.serverId)?.healthy ?? true);
+  }
+
+  // Per-group pagination: page index per group key, session-only.
+  const PAGE_SIZE = 25;
+  let pages = $state<Record<string, number>>({});
+  function pageOf(key: string, total: number): number {
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    const p = pages[key] ?? 0;
+    return Math.min(Math.max(p, 0), totalPages - 1);
+  }
+  function gotoPage(key: string, total: number, p: number) {
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    pages[key] = Math.min(Math.max(p, 0), totalPages - 1);
+  }
 
   // Collapse state: local, persisted, poll-safe. Never reset on fetchData.
   const EXPANDED_KEY = 'admin:servers:expanded';
@@ -197,37 +253,45 @@
       // Shared-kiosk / private-mode admin: folds stay session-only.
     }
   }
-  // First healthy (else first) engine open by default; Unassigned closed.
+  // First healthy (else first) engine open by default in engine view.
   const defaultOpenId = $derived(
     (data?.engines ?? []).find((e) => e.healthy)?.serverId
       ?? data?.engines?.[0]?.serverId
       ?? null,
   );
-  function isOpen(sid: string): boolean {
-    const stored = expanded[sid];
+  // All group keys in the current view (expand/collapse-all scope).
+  const groupKeys = $derived(
+    groupBy === 'engine'
+      ? [...(data?.engines ?? []).map((e) => e.serverId), ...(orphanAssignments.length > 0 ? ['unassigned'] : [])]
+      : orderedNetHosts.map(netGroupKey),
+  );
+  // First healthy engine (else first engine / first network) open by
+  // default; Unassigned closed.
+  const defaultOpenKey = $derived<string | null>(
+    groupBy === 'engine'
+      ? (defaultOpenId)
+      : (orderedNetHosts.length > 0 ? netGroupKey(orderedNetHosts[0]) : null),
+  );
+  function isOpen(key: string): boolean {
+    const stored = expanded[key];
     if (typeof stored === 'boolean') return stored;
-    if (sid === 'unassigned') return false;
-    return sid === defaultOpenId;
+    if (key === 'unassigned') return false;
+    return key === defaultOpenKey;
   }
-  function toggle(sid: string) {
-    expanded[sid] = !isOpen(sid);
+  function toggle(key: string) {
+    expanded[key] = !isOpen(key);
     persistExpanded();
   }
   function expandAll() {
-    for (const e of data?.engines ?? []) expanded[e.serverId] = true;
-    if (orphanAssignments.length > 0) expanded['unassigned'] = true;
+    for (const k of groupKeys) expanded[k] = true;
     persistExpanded();
   }
   function collapseAll() {
-    for (const e of data?.engines ?? []) expanded[e.serverId] = false;
-    expanded['unassigned'] = false;
+    for (const k of groupKeys) expanded[k] = false;
     persistExpanded();
   }
-  const totalGroups = $derived((data?.engines.length ?? 0) + (orphanAssignments.length > 0 ? 1 : 0));
-  const openCount = $derived(
-    ((data?.engines ?? []).filter((e) => isOpen(e.serverId)).length)
-      + (orphanAssignments.length > 0 && isOpen('unassigned') ? 1 : 0),
-  );
+  const totalGroups = $derived(groupKeys.length);
+  const openCount = $derived(groupKeys.filter((k) => isOpen(k)).length);
   async function reassignAll(sid: string, count: number) {
     if (!confirm(`Reassign all ${count} networks from ${sid}?`)) return;
     try {
@@ -361,8 +425,12 @@
 
 <!-- Server groups: one collapsible group per engine (header = health +
      name + counts; body = engine detail + that engine's networks) -->
-{#snippet assignmentTable(rows: AssignmentEntry[])}
+{#snippet assignmentTable(rows: AssignmentEntry[], pageKey: string)}
   {#if rows.length}
+    {@const page = pageOf(pageKey, rows.length)}
+    {@const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))}
+    {@const start = page * PAGE_SIZE}
+    {@const pageRows = rows.slice(start, start + PAGE_SIZE)}
     <table class="w-full text-sm">
       <thead class="text-xs uppercase tracking-wider text-muted">
         <tr class="border-b border-border">
@@ -376,7 +444,7 @@
         </tr>
       </thead>
       <tbody>
-        {#each rows as a, i (a.networkId || 'ghost-' + i)}
+        {#each pageRows as a, i (a.networkId || 'ghost-' + (start + i))}
           {@const label = a.networkName || a.networkHost || '(unnamed)'}
           <tr class="border-b border-border/40 hover:bg-surface/40">
             <td class="py-2">
@@ -504,12 +572,55 @@
         {/each}
       </tbody>
     </table>
+    {#if totalPages > 1}
+      <div class="mt-2 flex items-center gap-3 text-xs text-muted">
+        <button
+          type="button"
+          data-testid="servers-page-prev-{pageKey}"
+          onclick={() => gotoPage(pageKey, rows.length, page - 1)}
+          disabled={page === 0}
+          class="font-medium text-primary hover:underline disabled:text-muted disabled:no-underline"
+        >
+          ← Prev
+        </button>
+        <span data-testid="servers-page-label-{pageKey}">Page {page + 1} of {totalPages} · {rows.length} connections</span>
+        <button
+          type="button"
+          data-testid="servers-page-next-{pageKey}"
+          onclick={() => gotoPage(pageKey, rows.length, page + 1)}
+          disabled={page >= totalPages - 1}
+          class="font-medium text-primary hover:underline disabled:text-muted disabled:no-underline"
+        >
+          Next →
+        </button>
+      </div>
+    {/if}
   {:else}
-    <p class="text-xs text-muted">No networks on this engine.</p>
+    <p class="text-xs text-muted">No connections in this group.</p>
   {/if}
 {/snippet}
 
 <div class="mb-3 flex items-center gap-3 text-xs">
+  <span class="text-muted">Group by:</span>
+  <button
+    type="button"
+    data-testid="servers-groupby-engine"
+    aria-pressed={groupBy === 'engine'}
+    onclick={() => setGroupBy('engine')}
+    class="font-medium {groupBy === 'engine' ? 'text-heading underline' : 'text-primary hover:underline'}"
+  >
+    Engine
+  </button>
+  <button
+    type="button"
+    data-testid="servers-groupby-network"
+    aria-pressed={groupBy === 'network'}
+    onclick={() => setGroupBy('network')}
+    class="font-medium {groupBy === 'network' ? 'text-heading underline' : 'text-primary hover:underline'}"
+  >
+    Network
+  </button>
+  <span class="text-border">|</span>
   <button
     type="button"
     data-testid="servers-expand-all"
@@ -529,6 +640,7 @@
   <span class="ml-auto text-muted">{openCount} of {totalGroups} open</span>
 </div>
 
+{#if groupBy === 'engine'}
 {#if orderedEngines.length || orphanAssignments.length}
   <div class="space-y-4">
     {#each orderedEngines as engine (engine.serverId)}
@@ -633,7 +745,7 @@
           </button>
         </form>
         <div class="mt-3 border-t border-border pt-3">
-          {@render assignmentTable(rows)}
+          {@render assignmentTable(rows, engine.serverId)}
         </div>
       </ServerGroup>
     {/each}
@@ -649,12 +761,38 @@
         open={isOpen('unassigned')}
         onToggle={() => toggle('unassigned')}
       >
-        {@render assignmentTable(orphanAssignments)}
+        {@render assignmentTable(orphanAssignments, 'unassigned')}
       </ServerGroup>
     {/if}
   </div>
 {:else}
   <EmptyState icon="🖥️" title="No engines registered" description="Start an IRC engine to see it appear here." />
+{/if}
+{:else}
+  {#if orderedNetHosts.length}
+    <div class="space-y-4">
+      {#each orderedNetHosts as host (host)}
+        {@const nrows = assignmentsByHost.get(host) ?? []}
+        {@const engs = netEngines(nrows)}
+        {@const nkey = netGroupKey(host)}
+        <ServerGroup
+          serverId={nkey}
+          title={host}
+          healthy={netHealthy(nrows)}
+          statusLabel={engs.length === 1 ? engs[0] : `${engs.length} engines`}
+          statusTone="info"
+          networkCount={nrows.length}
+          connText={engs.length === 1 ? `on ${engs[0]}` : `across ${engs.length} engines`}
+          open={isOpen(nkey)}
+          onToggle={() => toggle(nkey)}
+        >
+          {@render assignmentTable(nrows, nkey)}
+        </ServerGroup>
+      {/each}
+    </div>
+  {:else}
+    <p class="text-xs text-muted">No connections assigned.</p>
+  {/if}
 {/if}
 
 <!-- Host Connection Routing -->
