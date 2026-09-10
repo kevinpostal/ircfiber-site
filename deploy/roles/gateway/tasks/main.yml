@@ -244,6 +244,7 @@
       IRCFIBER_FIBEREYE_CHANNELS: "#staff,#ircfiber"
       IRCFIBER_FIBEREYE_IGNORE_CLASSES: "{{ fibereye_ignore_classes }}"
       IRCFIBER_FIBEREYE_EXEMPT_IPS: "{{ fibereye_exempt_ips | default('') }}"
+      IRCFIBER_FIBEREYE_EXEMPT_NICKS: "{{ fibereye_exempt_nicks | default('') }}"
       IRCFIBER_FIBEREYE_WINDOW: "{{ fibereye_window | string }}"
       IRCFIBER_FIBEREYE_CONNECT_THRESHOLD: "{{ fibereye_connect_threshold | string }}"
       IRCFIBER_FIBEREYE_NICK_THRESHOLD: "{{ fibereye_nick_threshold | string }}"

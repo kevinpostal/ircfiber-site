@@ -116,6 +116,10 @@ struct FiberEyeConfig {
     string[] ignoreClasses = ["ircfiber-engine", "ircfiber-engine-v6", "localhost", "localhost-v6"];
     /// IP groups that are persisted but never counted or banned.
     string[] exemptIps;
+    /// Nicks that are persisted but never counted or banned (exact nicks
+    /// or `*`/`?` globs, matched case-insensitively). Only the nick's own
+    /// connects are skipped — strangers sharing its exit are still counted.
+    string[] exemptNicks;
     Thresholds thresholds;
     string publicBase = "https://ircfiber.com";
     string redisUrl = "redis://127.0.0.1:6379";
@@ -141,6 +145,7 @@ void startFiberEye() {
     cfg.operPassword = envSecret("IRCFIBER_FIBEREYE_OPER_PASSWORD", "");
     cfg.ignoreClasses = botEnvList("IRCFIBER_FIBEREYE_IGNORE_CLASSES", cfg.ignoreClasses);
     cfg.exemptIps = botEnvList("IRCFIBER_FIBEREYE_EXEMPT_IPS", null);
+    cfg.exemptNicks = botEnvList("IRCFIBER_FIBEREYE_EXEMPT_NICKS", null);
     cfg.thresholds.windowSeconds = botEnvLong("IRCFIBER_FIBEREYE_WINDOW", 60);
     cfg.thresholds.connects = botEnvLong("IRCFIBER_FIBEREYE_CONNECT_THRESHOLD", 10);
     cfg.thresholds.nicks = botEnvLong("IRCFIBER_FIBEREYE_NICK_THRESHOLD", 6);
@@ -156,11 +161,12 @@ void startFiberEye() {
     auto bot = new FiberEyeBot(cfg);
     runTask(&bot.run);
     logInfo("FiberEye starting: %s:%s (%s) nick=%s channel=%s oper=%s window=%ss "
-        ~ "connects=%s nicks=%s churn=%s ban=%ss ignore=%s exempt=%s",
+        ~ "connects=%s nicks=%s churn=%s ban=%ss ignore=%s exempt=%s exemptNicks=%s",
         cfg.host, cfg.port, cfg.tls ? "TLS" : "plaintext", cfg.nick, cfg.channel,
         cfg.operName.length ? cfg.operName : "none",
         cfg.thresholds.windowSeconds, cfg.thresholds.connects, cfg.thresholds.nicks,
-        cfg.thresholds.churn, cfg.thresholds.banSeconds, cfg.ignoreClasses, cfg.exemptIps);
+        cfg.thresholds.churn, cfg.thresholds.banSeconds, cfg.ignoreClasses, cfg.exemptIps,
+        cfg.exemptNicks);
 }
 
 private IrcBotConfig coreConfig(const FiberEyeConfig c) {
@@ -258,6 +264,7 @@ final class FiberEyeBot : IrcBot {
         deployedRules.thresholds = cfg.thresholds;
         deployedRules.ignoreClasses = cfg.ignoreClasses.dup;
         deployedRules.exemptIps = cfg.exemptIps.dup;
+        deployedRules.exemptNicks = cfg.exemptNicks.dup;
         liveRules = deployedRules;
     }
 
@@ -538,7 +545,10 @@ final class FiberEyeBot : IrcBot {
 
         // A trusted-subnet container address must never be banned: that
         // would take the whole platform offline. Persist it, count nothing.
-        if (isPrivateIp(c.ip) || exempt(c.ip, group)) return;
+        // An exempt nick is persisted (and still announced) for the same
+        // reason — only its own connects skip the flood counters, so the
+        // strangers sharing its exit are still counted.
+        if (isPrivateIp(c.ip) || exempt(c.ip, group) || exemptNick(c.nick)) return;
 
         Observation o;
         o.windowSeconds = liveRules.thresholds.windowSeconds;
@@ -594,7 +604,7 @@ final class FiberEyeBot : IrcBot {
         openedAt.remove(id);
         if (duration > 0 && duration < liveRules.thresholds.shortMs) {
             const group = ipGroup(q.ip);
-            if (!isPrivateIp(q.ip) && !exempt(q.ip, group)) {
+            if (!isPrivateIp(q.ip) && !exempt(q.ip, group) && !exemptNick(q.nick)) {
                 countChurn(group, ts);
                 if (store !is null) store.bumpShortSession(group);
             }
@@ -614,6 +624,20 @@ final class FiberEyeBot : IrcBot {
         foreach (e; liveRules.exemptIps) {
             if (e == group || e == ip) return true;
             if (zlineMatches(e, ip)) return true;
+        }
+        return false;
+    }
+
+    /// True when `nick` is on the never-count, never-ban list. Entries are
+    /// exact nicks or `*`/`?` globs (`p34c3*` covers bouncer alts), matched
+    /// case-insensitively — `nickExemptMatch` is the same predicate the
+    /// admin API validates against, so what the UI accepts is what the bot
+    /// enforces. Exemption by services account is deliberately not offered:
+    /// the account is only known after a best-effort WHOIS seconds later,
+    /// while the flood verdict is reached at connect time.
+    private bool exemptNick(string nick) {
+        foreach (e; liveRules.exemptNicks) {
+            if (nickExemptMatch(e, nick)) return true;
         }
         return false;
     }

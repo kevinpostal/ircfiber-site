@@ -210,3 +210,52 @@ bool validExemptEntry(string entry) @safe pure {
     if (!parseIpv4(net, v4)) return false;
     return bits >= 16 && bits <= 32;
 }
+
+/// True when `entry` is storable in the admin-managed nick exemption list:
+/// an exact IRC nick or a glob (`*`/`?`) with at least two literal
+/// characters — `p34c3*` covers bouncer alts like `p34c3_` and `p34c3_e5eb`.
+///
+/// A bare `*` (or any entry without literal content) is refused: an exempt
+/// nick is never counted, so a catch-all would silently disable FiberEye
+/// for the whole network — the same reason `validExemptEntry` refuses
+/// globs for addresses. Matching is case-insensitive (IRC nicks are), so
+/// validation does not fold case, only de-duplication does.
+bool validExemptNick(string entry) @safe pure {
+    const e = entry.strip();
+    if (!e.length || e.length > 32) return false;
+    if (e != entry) return false;                    // stray surrounding space
+    size_t literal;
+    foreach (i, dchar c; e) {
+        if (c <= ' ' || c == 0x7F) return false;     // whitespace + control
+        if (c == ',' || c == '!' || c == '@' || c == '.' || c == ':' || c == '#' || c == '&') return false;
+        if (c == '*' || c == '?') continue;
+        // IRC nick charset (cf. `isValidIrcNick`): letters and
+        // "[]\\`_^{|}" anywhere, digits and '-' past the first character.
+        // An exemption is matched, never registered, so a digit or '-'
+        // first is merely dead, not dangerous — but refuse it anyway so a
+        // typo does not file as an exemption that can never fire.
+        const letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        const special = c == '[' || c == ']' || c == '\\' || c == '`'
+                     || c == '_' || c == '^' || c == '{' || c == '|' || c == '}';
+        if (letter || special) { literal++; continue; }
+        if (i > 0 && ((c >= '0' && c <= '9') || c == '-')) { literal++; continue; }
+        return false;
+    }
+    return literal >= 2;
+}
+
+/// True when nick exemption `entry` covers `nick`. Case-insensitive;
+/// globs go through the same matcher Z-line masks use.
+bool nickExemptMatch(string entry, string nick) @safe pure {
+    const e = entry.strip();
+    const n = nick.strip();
+    if (!e.length || !n.length) return false;
+    // Belt to the validator's braces: an entry with no literal content
+    // must never match, however it got stored.
+    bool literal;
+    foreach (dchar c; e) if (c != '*' && c != '?') { literal = true; break; }
+    if (!literal) return false;
+    if (e.indexOf('*') < 0 && e.indexOf('?') < 0)
+        return e.toLower() == n.toLower();
+    return globMatch(n.toLower(), e.toLower());
+}

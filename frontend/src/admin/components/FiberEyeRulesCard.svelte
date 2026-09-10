@@ -27,7 +27,7 @@
     nicks: number; nicksEnabled: boolean;
     churn: number; churnEnabled: boolean;
     shortMs: number; banSeconds: number;
-    ignoreClasses: string[]; exemptIps: string[];
+    ignoreClasses: string[]; exemptIps: string[]; exemptNicks: string[];
     updatedAtMs: number; updatedBy: string;
   }
   interface Bounds {
@@ -75,6 +75,7 @@
   let banSeconds = $state(3_600);
   let ignoreClasses = $state<string[]>([]);
   let exemptIps = $state<string[]>([]);
+  let exemptNicks = $state<string[]>([]);
 
   const bounds = $derived(data?.bounds ?? FALLBACK_BOUNDS);
   const source = $derived(data?.source ?? 'unknown');
@@ -112,6 +113,7 @@
     banSeconds = r.banSeconds;
     ignoreClasses = [...r.ignoreClasses];
     exemptIps = [...r.exemptIps];
+    exemptNicks = [...(r.exemptNicks ?? [])];
     dirty = false;
   }
 
@@ -152,6 +154,7 @@
       banSeconds: Number(banSeconds),
       ignoreClasses: [...ignoreClasses],
       exemptIps: [...exemptIps],
+      exemptNicks: [...exemptNicks],
       updatedAtMs: 0, updatedBy: '',
     };
   }
@@ -214,6 +217,17 @@
     if (!Number.isInteger(bits)) return 'The prefix must be a whole number.';
     if (v6 && (bits < 32 || bits > 128)) return 'A v6 exemption may not be wider than /32.';
     if (!v6 && (bits < 16 || bits > 32)) return 'A v4 exemption may not be wider than /16.';
+    return null;
+  }
+  // Mirrors validExemptNick() on the server (instant feedback; the server
+  // stays authoritative).
+  function validNickExempt(v: string): string | null {
+    if (!v.length || v.length > 32) return 'A nick is 1–32 characters.';
+    if (/[\s,!@.#&:]/.test(v)) return 'No spaces, commas or !@.#&: — a nick exemption is a nick, optionally with * or ?.';
+    const literal = v.replace(/[*?]/g, '');
+    if (literal.length < 2) return 'Needs at least two non-wildcard characters — a bare * would exempt everyone.';
+    if (!/^[A-Za-z[\]\\`_^{|}*?]/.test(v)) return 'Must start with a letter, a nick symbol ([]{}`_^{|}) or a wildcard.';
+    if (!/^[A-Za-z0-9[\]\\`_^{|}\-*?]+$/.test(v)) return 'Not an IRC nick — letters, digits, []{}`_^{|}- plus * or ?.';
     return null;
   }
   function validClass(v: string): string | null {
@@ -359,6 +373,15 @@
         validate={validExempt}
         onchange={touch}
         inputId="fibereye-exempt-ip"
+      />
+      <StringListEditor
+        label="Exempt nicks"
+        bind:entries={exemptNicks}
+        placeholder="p34c3*"
+        helpText="Never counted, never banned — only their own connects are skipped, so strangers on the same exit are still caught. An exact nick or a * / ? glob, case-insensitive. FiberEye only: the ircd's own connectban still applies."
+        validate={validNickExempt}
+        onchange={touch}
+        inputId="fibereye-exempt-nick"
       />
     </div>
   </div>

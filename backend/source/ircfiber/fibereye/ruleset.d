@@ -17,7 +17,7 @@ import std.string : strip, toLower;
 
 import vibe.data.json : Json;
 
-import ircfiber.fibereye.format : validExemptEntry;
+import ircfiber.fibereye.format : validExemptEntry, validExemptNick;
 import ircfiber.fibereye.rules : Thresholds, validateThresholds;
 
 /// Longest list the admin API will store, per list.
@@ -35,6 +35,11 @@ struct RuleSet {
     string[] ignoreClasses;
     /// Addresses and CIDRs that are never counted or banned.
     string[] exemptIps;
+    /// Nicks whose connects are never counted or banned. Exact nicks or
+    /// `*`/`?` globs (`p34c3*`), matched case-insensitively. An exempt
+    /// nick still behind a flooding exit does not shield the strangers
+    /// around it — only its own connects are skipped.
+    string[] exemptNicks;
     /// When this override was stored (unix ms); 0 for the env baseline.
     long updatedAtMs;
     /// Admin username that stored it; "" for the env baseline.
@@ -47,6 +52,8 @@ struct RuleSet {
         foreach (c; ignoreClasses) classes ~= Json(c);
         auto ips = appender!(Json[]);
         foreach (i; exemptIps) ips ~= Json(i);
+        auto nicks = appender!(Json[]);
+        foreach (n; exemptNicks) nicks ~= Json(n);
         return Json([
             "windowSeconds":   Json(thresholds.windowSeconds),
             "connects":        Json(thresholds.connects),
@@ -59,6 +66,7 @@ struct RuleSet {
             "banSeconds":      Json(thresholds.banSeconds),
             "ignoreClasses":   Json(classes.data),
             "exemptIps":       Json(ips.data),
+            "exemptNicks":     Json(nicks.data),
             "updatedAtMs":     Json(updatedAtMs),
             "updatedBy":       Json(updatedBy),
         ]);
@@ -74,6 +82,7 @@ struct RuleSet {
         r.thresholds = fallback.thresholds;
         r.ignoreClasses = fallback.ignoreClasses.dup;
         r.exemptIps = fallback.exemptIps.dup;
+        r.exemptNicks = fallback.exemptNicks.dup;
         r.updatedAtMs = fallback.updatedAtMs;
         r.updatedBy = fallback.updatedBy;
         if (j.type != Json.Type.object) return r;
@@ -85,9 +94,9 @@ struct RuleSet {
         r.thresholds.banSeconds = optLong(j, "banSeconds", fallback.thresholds.banSeconds);
         r.thresholds.connectsEnabled = optBool(j, "connectsEnabled", fallback.thresholds.connectsEnabled);
         r.thresholds.nicksEnabled = optBool(j, "nicksEnabled", fallback.thresholds.nicksEnabled);
-        r.thresholds.churnEnabled = optBool(j, "churnEnabled", fallback.thresholds.churnEnabled);
         r.ignoreClasses = optList(j, "ignoreClasses", fallback.ignoreClasses, true);
         r.exemptIps = optList(j, "exemptIps", fallback.exemptIps, false);
+        r.exemptNicks = optList(j, "exemptNicks", fallback.exemptNicks, true);
         r.updatedAtMs = optLong(j, "updatedAtMs", fallback.updatedAtMs);
         r.updatedBy = optString(j, "updatedBy", fallback.updatedBy);
         return r;
@@ -139,11 +148,16 @@ string[] validateRuleSet(const RuleSet r) @safe {
         errs ~= "ignoreClasses has more than 64 entries";
     if (r.exemptIps.length > RULE_LIST_MAX)
         errs ~= "exemptIps has more than 64 entries";
+    if (r.exemptNicks.length > RULE_LIST_MAX)
+        errs ~= "exemptNicks has more than 64 entries";
     foreach (c; r.ignoreClasses)
         if (!validClassEntry(c)) errs ~= "invalid connect class: " ~ c;
     foreach (i; r.exemptIps)
         if (!validExemptEntry(i))
             errs ~= "invalid exemption (use an address or a CIDR no wider than /16 or /32): " ~ i;
+    foreach (n; r.exemptNicks)
+        if (!validExemptNick(n))
+            errs ~= "invalid nick exemption (use a nick or a glob like p34c3*): " ~ n;
     return errs;
 }
 
@@ -193,6 +207,7 @@ string summarizeRuleChange(const RuleSet before, const RuleSet after) @safe {
     }
     list("ignoreClasses", before.ignoreClasses, after.ignoreClasses);
     list("exemptIps", before.exemptIps, after.exemptIps);
+    list("exemptNicks", before.exemptNicks, after.exemptNicks);
 
     string outp;
     foreach (i, p; parts) outp ~= (i ? "; " : "") ~ p;

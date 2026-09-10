@@ -214,6 +214,51 @@
          useconnflood="no"
          modes="+x">
 
+# Trusted individuals on shared exits whose reconnects must never trip
+# m_connectban. A shared VPN/proxy exit multiplexes many strangers behind
+# one IP, and connectban counts raw TCP connects per IP with a counter
+# that only clears on the hourly GC — such an exit crosses the threshold
+# within the hour and loop-bans every few minutes forever (2026-09:
+# 185.206.149.176). Excusing the address stops the loop.
+#
+# This excuses ONLY the ircd's blunt 5-minute bans (and the server-wide
+# connflood throttle): clone caps, throttling and DNSBL still apply, and
+# FiberEye still counts the address under its own rules — a real flood
+# from it still earns a longer, appealable, admin-visible FiberEye Z-line.
+# Prefer a FiberEye nick exemption (fibereye_exempt_nicks) when the trusted
+# party is one user on a busy exit; reach for this when the 5-minute
+# loop-bans themselves are the problem, since FiberEye exemptions cannot
+# stop the ircd's own module.
+#
+# MUST stay above "main": connect classes match in file order and main's
+# allow="*" would otherwise claim these addresses first. Empty by default;
+# entries come from ircd_connectban_exempt_ips (space- or comma-separated).
+{% if ircd_connectban_exempt_ips | default('') %}
+<connect name="connectban-exempt"
+         allow="{{ ircd_connectban_exempt_ips | replace(',', ' ') }}"
+         maxchans="{{ ircd_max_channels_per_account }}"
+         timeout="60"
+         pingfreq="2m"
+         hardsendq="1M"
+         softsendq="512K"
+         recvq="8K"
+         threshold="10"
+         commandrate="1000"
+         fakelag="yes"
+         localmax="{{ ircd_ip_limits_connections }}"
+         globalmax="{{ ircd_ip_limits_connections }}"
+         limit="{{ ircd_public_class_limit }}"
+         resolvehostnames="yes"
+         useident="no"
+         usednsbl="{{ 'yes' if ircd_enable_dnsbl else 'no' }}"
+         useconnectban="no"
+         useconnflood="no"
+{% if ircd_require_sasl %}
+         requireaccount="yes"
+{% endif %}
+         modes="+x">
+{% endif %}
+
 # Everyone else (direct public connections to {{ ircd_port_plain }}/{{ ircd_port_tls }}).
 <connect name="main"
          allow="*"

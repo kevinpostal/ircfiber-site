@@ -15,7 +15,7 @@ import std.conv : to;
 import std.string : indexOf;
 
 import ircfiber.fibereye.format : parseQuitNotice, ipGroup, expandIpv6, zlineMatches,
-    validExemptEntry;
+    validExemptEntry, validExemptNick, nickExemptMatch;
 import ircfiber.fibereye.rules : Observation, Thresholds, evaluate, banDurationFor,
     isAutoPlacedZline, banReason, validateThresholds;
 import ircfiber.fibereye.ruleset : RuleSet, validateRuleSet, summarizeRuleChange;
@@ -193,6 +193,68 @@ private void testExemptEntries() {
     check(!validExemptEntry("not an ip"), "unparsable input is refused");
 }
 
+/// A nick exemption skips counting for one user without shielding the
+/// strangers behind the same exit — the p34c3 bouncer alts behind the
+/// shared exit 185.206.149.176 are the motivating case.
+private void testExemptNicks() {
+    check(validExemptNick("p34c3"), "an exact nick is storable");
+    check(validExemptNick("p34c3*"), "a trailing glob covers bouncer alts");
+    check(validExemptNick("*p34c3?"), "a leading glob is storable");
+    check(!validExemptNick("*"), "a bare catch-all is refused");
+    check(!validExemptNick("?"), "a bare wildcard is refused");
+    check(!validExemptNick("*?"), "wildcards alone carry no literal content");
+    check(!validExemptNick("a"), "a single literal is refused");
+    check(!validExemptNick("3foo"), "a digit-first nick can never match a real nick");
+    check(!validExemptNick("a!b"), "a bang is refused");
+    check(!validExemptNick("a@b"), "an at-sign is refused");
+    check(!validExemptNick("a b"), "a space is refused");
+    check(!validExemptNick("p34c3 "), "a trailing space is refused");
+    check(!validExemptNick("p34c3,p34c3_"), "a comma-joined pair is refused");
+    check(!validExemptNick(""), "empty is refused");
+    check(!validExemptNick("123456789012345678901234567890123"), "33 chars exceed maxnick");
+
+    check(nickExemptMatch("p34c3", "p34c3"), "an exact entry matches");
+    check(nickExemptMatch("p34c3", "P34C3"), "matching is case-insensitive");
+    check(nickExemptMatch("p34c3*", "p34c3_"), "the glob covers the bouncer alt");
+    check(nickExemptMatch("p34c3*", "P34C3_E5EB"), "the glob covers the second alt regardless of case");
+    check(!nickExemptMatch("p34c3*", "stranger"), "the glob does not cover strangers");
+    check(!nickExemptMatch("p34c3", "p34c3_"), "an exact entry does not cover the alt");
+    check(!nickExemptMatch("*", "p34c3"), "a catch-all entry never matches, however stored");
+    check(!nickExemptMatch("p34c3", ""), "empty nick never matches");
+}
+
+private void testExemptNicksRuleSet() {
+    RuleSet baseline;
+    baseline.exemptNicks = ["p34c3*"];
+
+    const roundTrip = RuleSet.fromJson(baseline.toJson(), RuleSet.init);
+    check(roundTrip.exemptNicks == ["p34c3*"], "nick exemptions survive a JSON round trip");
+
+    // A stored override written before the field existed degrades to the
+    // deployed baseline instead of invalidating the whole set.
+    const merged = RuleSet.fromJson(Json.emptyObject, baseline);
+    check(merged.exemptNicks == ["p34c3*"], "a missing nick list inherits the baseline");
+
+    // De-duplication folds case; the stored spelling wins.
+    const deduped = RuleSet.fromJson(
+        parseJsonString(`{"exemptNicks":["p34c3*","P34C3*","stranger"]}`), RuleSet.init);
+    check(deduped.exemptNicks == ["p34c3*", "stranger"], "nick exemptions de-duplicate case-insensitively");
+
+    const cleared = RuleSet.fromJson(parseJsonString(`{"exemptNicks":[]}`), baseline);
+    check(cleared.exemptNicks.length == 0, "an explicit empty array clears the nick list");
+
+    RuleSet bad;
+    bad.exemptNicks = ["*"];
+    check(validateRuleSet(bad).canFind(
+            "invalid nick exemption (use a nick or a glob like p34c3*): *"),
+        "a catch-all nick exemption is refused with the message the UI shows");
+
+    auto after = RuleSet.init;
+    after.exemptNicks = ["p34c3*"];
+    check(summarizeRuleChange(RuleSet.init, after).indexOf("exemptNicks +1") >= 0,
+        "a nick addition is counted in the change summary");
+}
+
 private void testRuleSetJson() {
     RuleSet baseline;
     baseline.thresholds.connects = 11;
@@ -316,8 +378,9 @@ void main() {
     testRules();
     testAutoPlacedPredicate();
     testRuleToggles();
-    testValidateThresholds();
     testExemptEntries();
+    testExemptNicks();
+    testExemptNicksRuleSet();
     testRuleSetJson();
     testValidateRuleSet();
     testSummarizeRuleChange();

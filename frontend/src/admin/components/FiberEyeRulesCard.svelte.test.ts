@@ -53,7 +53,7 @@ const ruleSet = (over: Record<string, unknown> = {}) => ({
   shortMs: 20_000, banSeconds: 3_600,
   ignoreClasses: ['ircfiber-engine'],
   exemptIps: ['76.32.236.21'],
-  updatedAtMs: 0, updatedBy: '',
+  exemptNicks: [],
   ...over,
 });
 
@@ -174,5 +174,27 @@ describe('FiberEyeRulesCard.svelte', () => {
     await expect.element(
       page.getByText('No globs, spaces or commas — an exempt address can never be banned.'),
     ).toBeInTheDocument();
+  });
+
+  it('saves a nick exemption and refuses a catch-all client-side', async () => {
+    render(FiberEyeRulesCard);
+    await expect.element(page.getByText('Deployed defaults', { exact: true })).toBeInTheDocument();
+
+    await page.getByLabelText('Add to Exempt nicks').fill('*');
+    await page.getByRole('button', { name: 'Add', exact: true }).nth(2).click();
+    await expect.element(
+      page.getByText('Needs at least two non-wildcard characters — a bare * would exempt everyone.'),
+    ).toBeInTheDocument();
+    expect(mockedPost).not.toHaveBeenCalled();
+
+    await page.getByLabelText('Add to Exempt nicks').fill('p34c3*');
+    await page.getByRole('button', { name: 'Add', exact: true }).nth(2).click();
+    await page.getByRole('button', { name: 'Save rules', exact: true }).click();
+
+    await vi.waitFor(() => expect(mockedPost).toHaveBeenCalled());
+    const [, body] = mockedPost.mock.calls[0] as [string, Record<string, unknown>];
+    expect(body.exemptNicks).toEqual(['p34c3*']);
+    // The untouched lists round-trip unchanged.
+    expect(body.exemptIps).toEqual(['76.32.236.21']);
   });
 });
