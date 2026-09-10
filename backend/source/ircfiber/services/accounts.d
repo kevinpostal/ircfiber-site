@@ -19,7 +19,10 @@
  *   - `irc:services:skip:<userId>`  EX 86400 — a permanent refusal (services
  *     disabled, every candidate taken, bad password/email) is not retried
  *     for 24h. Transport failures set no skip key: they retry next login.
- *   - `cfg.sasl == plain && saslUsername && saslPassword` — already done.
+ *   - `cfg.sasl == plain && saslUsername && saslPassword` — already done,
+ *     unless the held account is a derived fallback while the bare username
+ *     is now safely registrable (fallback upgrade: heals `user_hex` to
+ *     `user`, drops the abandoned fallback when an oper account exists).
  *
  * Every attempt's outcome is counted into `irc:services:outcomes`
  * (`SERVICES_OUTCOMES_KEY`), because a failing provisioner is otherwise
@@ -37,6 +40,7 @@ import std.algorithm : canFind;
 import std.ascii : isAlphaNum;
 import std.conv : to;
 import std.datetime : Clock;
+import std.string : strip;
 import std.uni : toLower;
 import std.uuid : UUID;
 import core.time : msecs;
@@ -52,7 +56,7 @@ import ircfiber.models.network : NetworkConfig, SASLMechanism;
 import ircfiber.models.user : User;
 import ircfiber.redis.protocol : ControlMessage, NetworkStateSnapshot, RedisKeys;
 import ircfiber.services.anope : AnopeSettings, anopeCheckAuthentication, anopeCommand,
-    anopeUser, anopeUserOnline, isSafeServicesArg, loadAnopeSettings;
+    anopeOperCommand, anopeUser, anopeUserOnline, isSafeServicesArg, loadAnopeSettings;
 import ircfiber.storage.redis : RedisStorage;
 
 /// Max nick length accepted by InspIRCd 4 in our config (`<limits maxnick>`).
@@ -120,8 +124,29 @@ string[] servicesAccountCandidates(User user, string preferred = "") @safe {
     }
     add(user.username);
     add(buildDefaultNick(user));
+
     foreach (n; 2 .. 10) add(user.username ~ "_" ~ n.to!string);
     return out_;
+}
+/**
+ * Bare nick a fallback-held network should heal to, or "" for no upgrade.
+ *
+ * Signup parks the user on a derived fallback (`<username>_<4hex>`,
+ * `<username>_2`…) when the bare username is registered or held by a live
+ * session at that moment, and that fallback is sticky: nothing re-runs the
+ * candidate list once a credential exists. This returns the head candidate
+ * exactly when the held account is one of our own derived fallbacks and
+ * differs from the head — the "AShapiro holds AShapiro_2a08 while AShapiro
+ * is free" shape. An account we did not derive (admin-linked, foreign) is
+ * never touched; whether the head is safe to take is the hijack guard's
+ * call at the call site, not this predicate's.
+ */
+string fallbackUpgradeTarget(User user, string current) @safe {
+    auto c = servicesAccountCandidates(user);
+    if (c.length < 2) return "";
+    if (current == c[0]) return "";
+    if (!c[1 .. $].canFind(current)) return "";
+    return c[0];
 }
 
 /// How NickServ answered a REGISTER.
@@ -382,8 +407,10 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
         return ProvisionOutcome.skipped;
     }
     if (cfg.disabled) return ProvisionOutcome.skipped;
-    if (cfg.sasl == SASLMechanism.plain && cfg.saslUsername.length && cfg.saslPassword.length)
-        return ProvisionOutcome.alreadyProvisioned;
+    // A live credential normally ends the attempt here — unless it is a
+    // derived fallback the bare username has since freed (upgrade below).
+    const bool hasCredential = cfg.sasl == SASLMechanism.plain
+        && cfg.saslUsername.length && cfg.saslPassword.length;
 
     // An admin-chosen nick never parks automatic provisioning: the refusal
     // says something about that nick, not about the user, and a 24h marker
@@ -446,7 +473,10 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
     }
 
     auto candidates = servicesAccountCandidates(user, preferredAccount);
-    if (!candidates.length) {
+    // A network that already holds a working credential keeps it when no
+    // candidate can be derived (legacy illegal username): the upgrade below
+    // yields "" and the attempt ends as alreadyProvisioned.
+    if (!candidates.length && !hasCredential) {
         // Accounts created before the registerPost nick gate can hold a
         // username no derived nick can be legal for (`bob.smith`, `1234`).
         markSkip("username is not a valid IRC nickname");
@@ -506,6 +536,98 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
         logWarn("services: dropping unsafe email argument for %s", user.username);
 
     string account;
+
+    /// REGISTER one candidate and verify the credential through the same
+    /// path SASL PLAIN takes. Shared by the fresh path and the fallback
+    /// upgrade below so the two never drift apart. Sets `account` on a
+    /// verified success; the caller maps everything else onto its outcome.
+    /// The pending record is written BEFORE creating the account: if the
+    /// process dies (or Mongo rejects the write) between REGISTER and save,
+    /// the next run adopts this record instead of orphaning the nick with a
+    /// password nobody knows — see adoptPendingCredential.
+    struct RegAttempt { bool transportOk; NickServVerdict verdict; bool verified; string refusal; }
+    RegAttempt attemptCandidate(string candidate, string pw) {
+        rememberPending(candidate, pw);
+        auto reply = anopeCommand(s, "NickServ", candidate,
+                                  emailArg.length ? "REGISTER " ~ pw ~ " " ~ emailArg
+                                                  : "REGISTER " ~ pw);
+        if (!reply.transportOk) {
+            logWarn("services: Anope unreachable while registering %s: %s",
+                    candidate, reply.transportError);
+            return RegAttempt(false, NickServVerdict.unknown, false, "");
+        }
+        auto verdict = classifyNickServReply(reply.text);
+        if (verdict == NickServVerdict.emailRejected) {
+            // Some configurations reject the address; REGISTER works without one.
+            reply = anopeCommand(s, "NickServ", candidate, "REGISTER " ~ pw);
+            if (!reply.transportOk) {
+                logWarn("services: Anope unreachable while registering %s: %s",
+                        candidate, reply.transportError);
+                return RegAttempt(false, NickServVerdict.unknown, false, "");
+            }
+            verdict = classifyNickServReply(reply.text);
+        }
+        if (verdict != NickServVerdict.registered)
+            return RegAttempt(true, verdict, false, reply.text);
+        // Never hand the user a credential we have not proven works:
+        // verify it through the same path SASL PLAIN will take.
+        bool determined;
+        if (!anopeCheckAuthentication(s, candidate, pw, determined)) {
+            logWarn("services: %s registered but the generated credential does not " ~
+                    "authenticate (verified=%s) — leaving it unpersisted for the next run",
+                    candidate, determined);
+            return RegAttempt(true, NickServVerdict.registered, false, reply.text);
+        }
+        account = candidate;
+        return RegAttempt(true, NickServVerdict.registered, true, reply.text);
+    }
+
+    // Fallback upgrade: the network holds a derived fallback while the bare
+    // username has since freed (the human was online with it at signup, or
+    // the probe failed then). Registering the bare nick now heals that
+    // permanently. Every failure keeps the working credential — this path
+    // never marks a skip key and never fails the login.
+    if (hasCredential) {
+        if (preferredAccount.length)
+            return ProvisionOutcome.alreadyProvisioned;
+        const target = fallbackUpgradeTarget(user, cfg.saslUsername.strip());
+        if (target.length) {
+            bool defer;
+            if (safeToRegister(target, defer)) {
+                string upPassword;
+                try upPassword = generateServicesPassword();
+                catch (Exception e) {
+                    logWarn("services: password generation for the %s upgrade failed: %s",
+                            user.username, e.msg);
+                    return ProvisionOutcome.alreadyProvisioned;
+                }
+                const oldAccount = cfg.saslUsername.strip();
+                const a = attemptCandidate(target, upPassword);
+                if (a.transportOk && a.verdict == NickServVerdict.registered && a.verified) {
+                    const o = persistProvisionedAccount(user, cfg, target, upPassword,
+                                                        networkRepo, redis, serverRegistry);
+                    if (s.hasOper) {
+                        const drop = anopeOperCommand(s, "DROP " ~ oldAccount);
+                        if (!drop.text.toLower().canFind("has been dropped"))
+                            logWarn("services: upgraded %s to %s but DROP %s said: %s",
+                                    user.username, target, oldAccount, drop.text);
+                    } else {
+                        logInfo("services: upgraded %s to %s; no oper account, so fallback " ~
+                                "%s stays registered for the admin NickServ page to drop",
+                                user.username, target, oldAccount);
+                    }
+                    return o;
+                }
+                logInfo("services: keeping fallback %s for %s (bare nick %s not registrable this run)",
+                        oldAccount, user.username, target);
+            } else if (defer) {
+                logInfo("services: deferring fallback upgrade for %s — %s is online " ~
+                        "but not attributable to our engine", user.username, target);
+            }
+        }
+        return ProvisionOutcome.alreadyProvisioned;
+    }
+
     foreach (candidate; candidates) {
         bool defer;
         if (!safeToRegister(candidate, defer)) {
@@ -517,46 +639,15 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
             continue;  // stranger holds it; try the next candidate
         }
 
-        // Record the credential BEFORE creating the account. If the process
-        // dies (or Mongo rejects the write) between REGISTER and save, the
-        // next run adopts this record instead of orphaning the nick with a
-        // password nobody knows — see adoptPendingCredential.
-        rememberPending(candidate, password);
-
-        auto reply = anopeCommand(s, "NickServ", candidate,
-                                  emailArg.length ? "REGISTER " ~ password ~ " " ~ emailArg
-                                                  : "REGISTER " ~ password);
-        if (!reply.transportOk) {
+        const a = attemptCandidate(candidate, password);
+        if (!a.transportOk) {
             // Retry on the next login rather than burning a candidate.
-            logWarn("services: Anope unreachable while registering %s: %s",
-                    candidate, reply.transportError);
             return ProvisionOutcome.failed;
         }
-
-        auto verdict = classifyNickServReply(reply.text);
-        if (verdict == NickServVerdict.emailRejected) {
-            // Some configurations reject the address; REGISTER works without one.
-            reply = anopeCommand(s, "NickServ", candidate, "REGISTER " ~ password);
-            if (!reply.transportOk) {
-                logWarn("services: Anope unreachable while registering %s: %s",
-                        candidate, reply.transportError);
-                return ProvisionOutcome.failed;
-            }
-            verdict = classifyNickServReply(reply.text);
-        }
-
-        final switch (verdict) {
+        final switch (a.verdict) {
             case NickServVerdict.registered:
-                // Never hand the user a credential we have not proven works:
-                // verify it through the same path SASL PLAIN will take.
-                bool determined;
-                if (!anopeCheckAuthentication(s, candidate, password, determined)) {
-                    logWarn("services: %s registered but the generated credential does not " ~
-                            "authenticate (verified=%s) — leaving it unpersisted for the next run",
-                            candidate, determined);
+                if (!a.verified)
                     return ProvisionOutcome.failed;
-                }
-                account = candidate;
                 break;
             case NickServVerdict.alreadyTaken:
             case NickServVerdict.nickRejected:
@@ -565,8 +656,8 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
             case NickServVerdict.passwordRejected:
             case NickServVerdict.disabled:
             case NickServVerdict.unknown:
-                logWarn("services: NickServ refused %s: %s", candidate, reply.text);
-                markSkip(reply.text.length ? reply.text : "NickServ refused the registration");
+                logWarn("services: NickServ refused %s: %s", candidate, a.refusal);
+                markSkip(a.refusal.length ? a.refusal : "NickServ refused the registration");
                 return ProvisionOutcome.failed;
         }
         if (account.length) break;
@@ -776,4 +867,25 @@ unittest {
     assert(a != b, "two draws from /dev/urandom must differ");
     foreach (char c; a) assert(isAlphaNum(c), "no XML- or IRC-special characters");
     assert(generateServicesPassword(8).length == 8);
+}
+
+@("fallbackUpgradeTarget heals our own fallbacks only")
+unittest {
+    import std.uuid : UUID;
+    User u;
+    u.id = UUID("2a080d63-f1eb-4243-99c0-ece0da37cf08");
+    u.username = "AShapiro";
+    assert(fallbackUpgradeTarget(u, "AShapiro") == "",
+           "holding the bare nick needs no upgrade");
+    assert(fallbackUpgradeTarget(u, "AShapiro_2a08") == "AShapiro",
+           "deterministic fallback heals to the username");
+    assert(fallbackUpgradeTarget(u, "AShapiro_3") == "AShapiro",
+           "numbered fallback heals to the username");
+    assert(fallbackUpgradeTarget(u, "stranger") == "",
+           "an account we did not derive is never touched");
+    User bad;
+    bad.id = u.id;
+    bad.username = "1234";
+    assert(fallbackUpgradeTarget(bad, "whatever") == "",
+           "no candidates means no upgrade");
 }
