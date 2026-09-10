@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync } from 'svelte';
 import InputArea from './InputArea.svelte';
 import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
-import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText, setTyping, clearTyping } from '../stores/ircStore.svelte';
+import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText, setTyping, clearTyping, resetTypingState } from '../stores/ircStore.svelte';
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 import { bufferNameFromChannelPart } from '../lib/routing';
@@ -43,6 +43,7 @@ function resetState(): void {
 	ircState.activeBuffer.bufferName = null;
 	ircState.messages = {};
 	ircState.processedMessages = {};
+	resetTypingState();
 	bufferInputText.clear();
 	// Clear lastSentMessages from previous tests
 	for (const k of Object.keys(lastSentMessages)) delete lastSentMessages[k];

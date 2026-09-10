@@ -1,7 +1,7 @@
 import type { IRCMessage, Network, WhoisData, BanEntry, BanListData, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { WHOIS_FAMILY } from './serverLogGroups';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
-         updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
+         updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping, clearTypingForNick, resetTypingStreak,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
          checkHighlight, isMessageUnseen, applySetname, applyAccountChange, markRedacted,
          markMemberBot,
@@ -512,9 +512,24 @@ export function processIrcEvent(
     return {};
   }
 
+  // ── Clear typing when the user leaves, is kicked, or renames ──
+  // TAGMSG `done` + PRIVMSG + the 6.5s ticker cover the common cases, but
+  // PART/QUIT/KICK/NICK otherwise leave a stale entry behind (QUIT/NICK
+  // carry no channel, so this lives here — not in updateChannelUsers,
+  // which early-returns on _server buffers).
+  if ((cmd === 'PART' || cmd === 'QUIT') && msg.nick) {
+    clearTypingForNick(networkId, msg.nick);
+  } else if (cmd === 'KICK' && msg.params && msg.params[1]) {
+    clearTyping(networkId, channel, msg.params[1]);
+  } else if (cmd === 'NICK' && msg.nick) {
+    clearTypingForNick(networkId, msg.nick);
+  }
   // ── Clear typing when the user actually sends a message ──
+  // A sent message also resets the spam streak: liveness proven, the nick
+  // earns its indicators back.
   if (cmd === 'PRIVMSG' && msg.nick) {
     clearTyping(networkId, channel, msg.nick);
+    resetTypingStreak(networkId, channel, msg.nick);
   }
   // Clear temp_unavailable state when a new chat message arrives
   // (IRCCloud: server busy state clears on any server response).

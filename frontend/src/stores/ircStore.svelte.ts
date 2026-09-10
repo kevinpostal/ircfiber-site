@@ -218,8 +218,14 @@ export const ircState = $state({
   // boolean) ensures the same value incrementing again still triggers
   // a re-run if needed (e.g. multiple sends in the same micro-task).
   forceScrollToBottomNonce: 0,
-  // Per-buffer typing state: bufferKey -> (nick -> timestamp of last TAGMSG)
-  typing: {} as Record<string, Record<string, number>>,
+  // Per (buffer, nick) typing-spam streaks: `${networkId}:${channel}:${nick}`
+  // -> { episodes, actives }. An episode starts on each fresh `active`
+  // (first sighting, post-`done`, or post-expiry); heartbeats inside a live
+  // 6.5s window bump `actives`. Past the caps the nick's indicator is muted
+  // until they actually send a message (resetTypingStreak). Survives
+  // PART/QUIT on purpose so leaving can't dodge the mute; NICK naturally
+  // starts a fresh streak under the new name.
+  typingStreaks: {} as Record<string, { episodes: number; actives: number }>,
   // Invalidation counter for typing displays. clearTyping tombstones via
   // a deep SET (the tracked path) and this counter is bumped on every
   // set/clear as belt-and-suspenders — consumers (InputArea) read it so
@@ -1754,15 +1760,58 @@ function applyAddMessageUnseen(networkId: string, bufferName: string, msgs: IRCM
   }
   if (added > 0) setUnseen(networkId, bufferName, buf.unseenCount + added, highlights);
 }
-// Each TAGMSG from a nick resets a 6.5s heartbeat. The UI reads the
-// timestamp and hides the indicator when the window expires. Entries
-// are lazily cleaned up on read.
+// A nick gets 5 typing episodes per buffer before they need to send a
+// message; a single episode that heartbeats past ~60s of continuous
+// `active` (broken clients re-send every 3s forever on an abandoned draft)
+// mutes the same way. Either mute lifts the moment they PRIVMSG.
+export const TYPING_MAX_EPISODES = 5;
+export const TYPING_MAX_STREAK_ACTIVES = 20;
 
-export function setTyping(networkId: string, channel: string, nick: string): void {
-  const key = `${networkId}:${normalizeChannelName(channel)}`;
+export function setTyping(networkId: string, channel: string, nick: string): boolean {
+  const norm = normalizeChannelName(channel);
+  const key = `${networkId}:${norm}`;
+  const skey = `${key}:${nick}`;
   if (!ircState.typing[key]) ircState.typing[key] = {};
+  const prev = ircState.typing[key][nick];
+  const live = typeof prev === 'number' && prev !== 0 && Date.now() - prev < 6500;
+  const streak = ircState.typingStreaks[skey] ?? { episodes: 0, actives: 0 };
+  if (!live) {
+    // New episode: first sighting, post-`done`, or post-expiry.
+    streak.episodes += 1;
+    streak.actives = 1;
+    if (streak.episodes > TYPING_MAX_EPISODES) {
+      ircState.typingStreaks[skey] = streak;
+      return false;
+    }
+  } else {
+    streak.actives += 1;
+    if (streak.actives > TYPING_MAX_STREAK_ACTIVES) {
+      ircState.typingStreaks[skey] = streak;
+      return false;
+    }
+  }
+  ircState.typingStreaks[skey] = streak;
   ircState.typing[key][nick] = Date.now();
   ircState.typingVersion++;
+  return true;
+}
+
+/** True when the nick's indicator is currently muted in this buffer. */
+export function isTypingMuted(networkId: string, channel: string, nick: string): boolean {
+  const streak = ircState.typingStreaks[`${networkId}:${normalizeChannelName(channel)}:${nick}`];
+  if (!streak) return false;
+  return streak.episodes > TYPING_MAX_EPISODES || streak.actives > TYPING_MAX_STREAK_ACTIVES;
+}
+
+/** A sent message proves liveness: the nick earns its indicators back. */
+export function resetTypingStreak(networkId: string, channel: string, nick: string): void {
+  delete ircState.typingStreaks[`${networkId}:${normalizeChannelName(channel)}:${nick}`];
+}
+
+/** Test/reset helper: clears display state AND spam streaks together. */
+export function resetTypingState(): void {
+  ircState.typing = {};
+  ircState.typingStreaks = {};
 }
 
 /**
@@ -1790,6 +1839,25 @@ export function clearTyping(networkId: string, channel: string, nick: string): v
     typing[nick] = 0;
     ircState.typingVersion++;
   }
+}
+/**
+ * Tombstone `nick` out of EVERY buffer's typing map on this network.
+ * QUIT and NICK carry no channel (or fan out per-channel); without this
+ * the indicator lingers on the full 6.5s expiry — or forever on a
+ * pre-ticker bundle. Same tombstone shape as clearTyping (ts=0, filtered
+ * by getTypersForBuffer), single typingVersion bump when anything changed.
+ */
+export function clearTypingForNick(networkId: string, nick: string): void {
+  const prefix = `${networkId}:`;
+  let changed = false;
+  for (const [key, typing] of Object.entries(ircState.typing)) {
+    if (!key.startsWith(prefix)) continue;
+    if (typing && nick in typing && typing[nick] !== 0) {
+      typing[nick] = 0;
+      changed = true;
+    }
+  }
+  if (changed) ircState.typingVersion++;
 }
 
 export function getTypersForBuffer(networkId: string, channel: string): string[] {
