@@ -274,6 +274,98 @@ string xlineAttribution(const string[] nicks, string account) @safe pure {
     string out_ = " · trigger: " ~ joinClauses(uniq, ", ");
     if (who.length) out_ ~= (uniq.length ? " " : "") ~ "[" ~ who ~ "]";
     return out_;
+
+}
+/// mIRC formatting for #staff ban lines. Applied AFTER sanitizing, so
+/// attacker-controlled fields can never inject their own codes: every code
+/// below is emitted by this module around already-sanitized text.
+enum IRC_BOLD = "\x02";
+enum IRC_COLOR = "\x03";
+/// mIRC colour numbers: red for failures and ban keywords, blue for the
+/// connect label and services accounts, green for success labels.
+enum IRC_RED = "04";
+enum IRC_BLUE = "12";
+enum IRC_GREEN = "03";
+
+private string ircBold(string s) @safe pure {
+    return s.length ? IRC_BOLD ~ s ~ IRC_BOLD : s;
+}
+
+private string ircColor(string s, string code) @safe pure {
+    return s.length ? IRC_COLOR ~ code ~ s ~ IRC_COLOR : s;
+}
+
+/// Styles a sanitized ban notice for #staff: the `ZLINE`/`Z-line` keyword
+/// in red bold, the banned mask in bold, trigger nicks in bold and the
+/// services account in blue. Anything that is not a ban notice (no `ZLINE`
+/// or `Z-line` marker) is returned unchanged, so generic notices keep
+/// their plain rendering. The `unknown` fallback (no nick seen at all)
+/// stays plain — bold would imply a culprit where there is none.
+string styleBanNotice(string text) @safe pure {
+    if (text.indexOf("ZLINE") < 0 && text.indexOf("Z-line") < 0) return text;
+    string out_ = text;
+    // Own placement first: `ZLINE <mask> for …`. The foreign shape below
+    // has no `ZLINE ` prefix, so the two never collide.
+    {
+        const p = out_.indexOf("ZLINE ");
+        if (p >= 0) {
+            const mStart = p + "ZLINE ".length;
+            const f = out_[mStart .. $].indexOf(" for ");
+            if (f > 0) {
+                const mEnd = mStart + f;
+                out_ = out_[0 .. mStart] ~ ircBold(out_[mStart .. mEnd]) ~ out_[mEnd .. $];
+            }
+        }
+    }
+    // ircd automatic: `… timed Z-line on <mask>, expires …`. Guarded on
+    // the `Z-line` marker so an unrelated ` on ` is never touched.
+    {
+        const p = out_.indexOf(" on ");
+        if (p >= 0 && out_.indexOf("Z-line") >= 0) {
+            const mStart = p + " on ".length;
+            const c = out_[mStart .. $].indexOf(",");
+            if (c > 0) {
+                const mEnd = mStart + c;
+                out_ = out_[0 .. mStart] ~ ircBold(out_[mStart .. mEnd]) ~ out_[mEnd .. $];
+            }
+        }
+    }
+    // Keyword: FiberEye's own `ZLINE` wins when both spellings are present
+    // (they never are — one branch fires per notice shape).
+    {
+        const p = out_.indexOf("ZLINE");
+        if (p >= 0)
+            out_ = out_[0 .. p] ~ ircColor(ircBold("ZLINE"), IRC_RED) ~ out_[p + "ZLINE".length .. $];
+        else {
+            const q = out_.indexOf("Z-line");
+            if (q >= 0)
+                out_ = out_[0 .. q] ~ ircColor(ircBold("Z-line"), IRC_RED) ~ out_[q + "Z-line".length .. $];
+        }
+    }
+    // Trigger clause built by `xlineAttribution`: nicks in bold, the
+    // trailing `[account]` in blue. `unknown` (nothing seen) stays plain.
+    {
+        enum MARK = "· trigger: ";
+        const p = out_.indexOf(MARK);
+        if (p >= 0) {
+            const vStart = p + MARK.length;
+            const rest = out_[vStart .. $];
+            if (rest.length && !rest.startsWith("unknown")) {
+                if (rest.startsWith("[")) {
+                    if (rest.endsWith("]") && rest.length > 2)
+                        out_ = out_[0 .. vStart] ~ "[" ~ ircColor(rest[1 .. $ - 1], IRC_BLUE) ~ "]";
+                } else {
+                    const lb = rest.indexOf(" [");
+                    if (lb > 0 && rest.endsWith("]"))
+                        out_ = out_[0 .. vStart] ~ ircBold(rest[0 .. lb])
+                            ~ " [" ~ ircColor(rest[lb + 2 .. $ - 1], IRC_BLUE) ~ "]";
+                    else
+                        out_ = out_[0 .. vStart] ~ ircBold(rest);
+                }
+            }
+        }
+    }
+    return out_;
 }
 
 /// One or two IRC lines per event; empty for unknown event types.
@@ -286,11 +378,13 @@ string xlineAttribution(const string[] nicks, string account) @safe pure {
 /// - notice:      `Notice from zodiac: maintenance in 10 min`
 /// - backup:      `Backup mongo ok: mongo-20260907-031700.archive.gz · 112.4 MB · 45231ms`
 ///                `Backup mongo FAILED at verify: <error>`
+/// Labels and key entities carry mIRC bold/colour, applied post-sanitize;
+/// plain-text clients read the same words without decoration.
 string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighting) @safe pure {
     const ip = sanitizeLine(ev.ip);
     switch (ev.type) {
         case "signup": {
-            string line = "Signup: " ~ ircName(ev.username);
+            string line = ircColor(ircBold("Signup:"), IRC_GREEN) ~ " " ~ ircBold(ircName(ev.username));
             const email = sanitizeLine(ev.email);
             if (email.length) line ~= " <" ~ email ~ ">";
             if (ip.length) line ~= " · " ~ ip;
@@ -299,7 +393,8 @@ string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighti
         }
         case "mail": {
             const failed = sanitizeLine(ev.status) == "failed";
-            string line = failed ? "Email FAILED: " : "Email sent: ";
+            string line = (failed ? ircColor(ircBold("Email FAILED:"), IRC_RED)
+                                  : ircColor(ircBold("Email sent:"), IRC_GREEN)) ~ " ";
             const kind = sanitizeLine(ev.kind);
             line ~= kind.length ? kind : "email";
             const to_ = sanitizeLine(ev.email);
@@ -324,7 +419,7 @@ string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighti
             const host = sanitizeLine(ev.host);
             if (ident.length) mask ~= "!" ~ ident;
             if (host.length) mask ~= "@" ~ host;
-            string line = "IRC connect: " ~ mask;
+            string line = ircColor(ircBold("IRC connect:"), IRC_BLUE) ~ " " ~ ircBold(mask);
             if (ip.length) line ~= " (" ~ ip ~ ")";
             const cls = sanitizeLine(ev.connClass);
             if (cls.length) line ~= " · class " ~ cls;
@@ -342,13 +437,15 @@ string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighti
         case "notice": {
             const text = sanitizeLine(ev.text);
             if (!text.length) return [];
-            return [finish("Notice from " ~ ircName(ev.actor) ~ ": " ~ text)];
+            // Ban lines (own placements and the ircd's automatics) keep
+            // keyword/mask/trigger styling; anything else renders with a bold actor.
+            return [finish("Notice from " ~ ircBold(ircName(ev.actor)) ~ ": " ~ styleBanNotice(text))];
         }
         case "backup": {
             const kind = sanitizeLine(ev.kind);
             const label = kind.length ? kind : "backup";
             if (sanitizeLine(ev.status) == "ok") {
-                string line = "Backup " ~ label ~ " ok:";
+                string line = "Backup " ~ label ~ " " ~ ircColor(ircBold("ok:"), IRC_GREEN);
                 const file = sanitizeLine(ev.file);
                 if (file.length) line ~= " " ~ file ~ " ·";
                 line ~= " " ~ backupSize(ev.fileBytes);
@@ -358,7 +455,7 @@ string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighti
             const stage = sanitizeLine(ev.stage);
             const msg = truncateText(sanitizeLine(ev.error.length ? ev.error : ev.text),
                 LOGS_ERROR_MAX_CHARS);
-            return [finish("Backup " ~ label ~ " FAILED at "
+            return [finish("Backup " ~ label ~ " " ~ ircColor(ircBold("FAILED"), IRC_RED) ~ " at "
                 ~ (stage.length ? stage : "unknown") ~ ": " ~ msg)];
         }
         default:

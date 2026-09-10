@@ -14,6 +14,10 @@ import ircfiber.logs.backup_announce : backupAnnounceKey, backupDedupId, buildBa
 
 private int failures;
 
+/// mIRC shorthand for styled-output expectations.
+private enum TB = "\x02";
+private enum TC = "\x03";
+
 private void check(bool cond, string what, string file = __FILE__, size_t line = __LINE__) {
     if (cond) return;
     failures++;
@@ -156,22 +160,26 @@ private void testFormatSignup() {
     auto ev = signupEvent();
     auto first = formatLogEvent(ev, sampleIntel(), true);
     check(first.length == 1, "signup is one line");
-    check(first[0] == "Signup: alice <alice@example.com> · 203.0.113.7 · Austin, Texas, US"
+    check(first[0] == TC ~ "03" ~ TB ~ "Signup:" ~ TB ~ TC ~ " " ~ TB ~ "alice" ~ TB
+        ~ " <alice@example.com> · 203.0.113.7 · Austin, Texas, US"
         ~ " · AS15169 Google LLC · America/Chicago",
         "signup first sighting, got " ~ first[0]);
 
     auto again = formatLogEvent(ev, sampleIntel(), false);
-    check(again[0] == "Signup: alice <alice@example.com> · 203.0.113.7 · known IP (Austin, US)",
+    check(again[0] == TC ~ "03" ~ TB ~ "Signup:" ~ TB ~ TC ~ " " ~ TB ~ "alice" ~ TB
+        ~ " <alice@example.com> · 203.0.113.7 · known IP (Austin, US)",
         "signup seen before, got " ~ again[0]);
 
     auto priv = ev;
     priv.ip = "10.0.0.5";
     check(formatLogEvent(priv, IpIntel.init, false)[0]
-        == "Signup: alice <alice@example.com> · 10.0.0.5 · private IP",
+        == TC ~ "03" ~ TB ~ "Signup:" ~ TB ~ TC ~ " " ~ TB ~ "alice" ~ TB
+        ~ " <alice@example.com> · 10.0.0.5 · private IP",
         "signup from a private IP");
 
     auto nogeo = formatLogEvent(ev, IpIntel.init, false);
-    check(nogeo[0] == "Signup: alice <alice@example.com> · 203.0.113.7 · geo unavailable",
+    check(nogeo[0] == TC ~ "03" ~ TB ~ "Signup:" ~ TB ~ TC ~ " " ~ TB ~ "alice" ~ TB
+        ~ " <alice@example.com> · 203.0.113.7 · geo unavailable",
         "signup with no geo, got " ~ nogeo[0]);
 }
 
@@ -186,19 +194,22 @@ private void testFormatMail() {
     ev.durationMs = 412;
     auto sent = formatLogEvent(ev, IpIntel.init, false);
     check(sent.length == 1 && sent[0]
-        == "Email sent: signup_verification → alice@example.com (alice) · resend · 412ms",
+        == TC ~ "03" ~ TB ~ "Email sent:" ~ TB ~ TC
+        ~ " signup_verification → alice@example.com (alice) · resend · 412ms",
         "mail sent, got " ~ sent[0]);
 
     ev.username = "";
     check(formatLogEvent(ev, IpIntel.init, false)[0]
-        == "Email sent: signup_verification → alice@example.com · resend · 412ms",
+        == TC ~ "03" ~ TB ~ "Email sent:" ~ TB ~ TC
+        ~ " signup_verification → alice@example.com · resend · 412ms",
         "username clause omitted when empty");
 
     ev.username = "alice";
     ev.status = "failed";
     ev.error = "resend rejected the message: HTTP 422 domain not verified";
     auto failed = formatLogEvent(ev, IpIntel.init, false);
-    check(failed[0] == "Email FAILED: signup_verification → alice@example.com (alice) · resend"
+    check(failed[0] == TC ~ "04" ~ TB ~ "Email FAILED:" ~ TB ~ TC
+        ~ " signup_verification → alice@example.com (alice) · resend"
         ~ " · resend rejected the message: HTTP 422 domain not verified",
         "mail failed, got " ~ failed[0]);
 
@@ -226,7 +237,8 @@ private void testFormatConnect() {
     auto ev = connectEvent();
     auto first = formatLogEvent(ev, sampleIntel(), true);
     check(first.length == 2, "first sighting emits the intel follow-up line");
-    check(first[0] == "IRC connect: alice!~alice@host.example (203.0.113.7) · class main"
+    check(first[0] == TC ~ "12" ~ TB ~ "IRC connect:" ~ TB ~ TC ~ " "
+        ~ TB ~ "alice!~alice@host.example" ~ TB ~ " (203.0.113.7) · class main"
         ~ " · port 6697 · [Alice]",
         "connect headline, got " ~ first[0]);
     check(first[1] == "↳ 203.0.113.7 · Austin, Texas, US · AS15169 Google LLC · America/Chicago",
@@ -272,7 +284,8 @@ private void testFormatNoticeAndUnknown() {
     ev.type = "notice";
     ev.actor = "zodiac";
     ev.text = "maintenance in 10 min";
-    check(formatLogEvent(ev, IpIntel.init, false)[0] == "Notice from zodiac: maintenance in 10 min",
+    check(formatLogEvent(ev, IpIntel.init, false)[0]
+        == "Notice from " ~ TB ~ "zodiac" ~ TB ~ ": maintenance in 10 min",
         "notice line");
     ev.text = "";
     check(formatLogEvent(ev, IpIntel.init, false).length == 0, "empty notice emits nothing");
@@ -295,6 +308,40 @@ private void testXlineAttribution() {
         == " · trigger: n1, n2, n3, n4, n5", "nick list capped at five");
     check(xlineAttribution(["ev\x02il"], "") == " · trigger: ev il",
         "control bytes sanitized");
+
+}
+private void testStyleBanNotice() {
+    enum B = "\x02";
+    enum C = "\x03";
+    check(styleBanNotice("maintenance in 10 min") == "maintenance in 10 min",
+        "non-ban notice untouched");
+    check(styleBanNotice("ZLINE 1.2.3.4 for 3600s (connect_flood, strike 1)")
+        == C ~ "04" ~ B ~ "ZLINE" ~ B ~ C ~ " " ~ B ~ "1.2.3.4" ~ B ~ " for 3600s (connect_flood, strike 1)",
+        "own placement: red keyword, bold mask");
+    const foreign = "XLINE: m_connectban@irc.ircfiber.com added a timed Z-line on 185.206.149.176,"
+        ~ " expires in 5 minutes: FiberEye: connection flood detected. Appeal: https://ircfiber.com/unban"
+        ~ " · trigger: bob, alice [alice]";
+    const styled = styleBanNotice(foreign);
+    check(styled.indexOf(C ~ "04" ~ B ~ "Z-line" ~ B ~ C) >= 0, "automatic: red Z-line keyword");
+    check(styled.indexOf(B ~ "185.206.149.176" ~ B) >= 0, "automatic: bold mask");
+    check(styled.indexOf("· trigger: " ~ B ~ "bob, alice" ~ B ~ " [" ~ C ~ "12alice" ~ C ~ "]") >= 0,
+        "trigger nicks bold, account blue, got " ~ styled);
+    check(styleBanNotice("ZLINE 1.2.3.4 for 5s (x, strike 1) · trigger: unknown · 9 connects seen")
+        .indexOf("· trigger: unknown · 9 connects seen") >= 0,
+        "unknown fallback stays plain");
+    check(styleBanNotice("ZLINE 1.2.3.4 for 5s (x, strike 1) · trigger: [alice]")
+        .indexOf("· trigger: [" ~ C ~ "12alice" ~ C ~ "]") >= 0,
+        "account-only trigger blue");
+    LogEvent ev;
+    ev.type = "notice";
+    ev.actor = "FiberEye";
+    ev.text = "ZLINE 1.2.3.4 for 60s (connect_flood, strike 1)";
+    check(formatLogEvent(ev, IpIntel.init, false)[0].indexOf(C ~ "04") >= 0,
+        "notice render path styles ban lines");
+    ev.text = "maintenance in 10 min";
+    check(formatLogEvent(ev, IpIntel.init, false)[0]
+        == "Notice from " ~ TB ~ "FiberEye" ~ TB ~ ": maintenance in 10 min",
+        "notice render path bolds the actor, leaves the text plain");
 }
 
 private void testEventJson() {
@@ -336,24 +383,26 @@ private LogEvent backupOkEvent() {
 private void testFormatBackupOk() {
     auto line = formatLogEvent(backupOkEvent(), IpIntel.init, false);
     check(line.length == 1, "backup ok is one line");
-    check(line[0] == "Backup mongo ok: mongo-20260907-031700.archive.gz · 112.4 MB · 45231ms",
+    check(line[0] == "Backup mongo " ~ TC ~ "03" ~ TB ~ "ok:" ~ TB ~ TC
+        ~ " mongo-20260907-031700.archive.gz · 112.4 MB · 45231ms",
         "backup ok line, got " ~ line[0]);
 
     auto noFile = backupOkEvent();
     noFile.file = "";
     check(formatLogEvent(noFile, IpIntel.init, false)[0]
-        == "Backup mongo ok: 112.4 MB · 45231ms",
+        == "Backup mongo " ~ TC ~ "03" ~ TB ~ "ok:" ~ TB ~ TC ~ " 112.4 MB · 45231ms",
         "empty file omits the file clause");
 
     auto noDur = backupOkEvent();
     noDur.durationMs = 0;
     check(formatLogEvent(noDur, IpIntel.init, false)[0]
-        == "Backup mongo ok: mongo-20260907-031700.archive.gz · 112.4 MB",
+        == "Backup mongo " ~ TC ~ "03" ~ TB ~ "ok:" ~ TB ~ TC
+        ~ " mongo-20260907-031700.archive.gz · 112.4 MB",
         "non-positive duration omits the duration clause");
 
     auto noKind = backupOkEvent();
     noKind.kind = "";
-    check(formatLogEvent(noKind, IpIntel.init, false)[0].startsWith("Backup backup ok:"),
+    check(formatLogEvent(noKind, IpIntel.init, false)[0].startsWith("Backup backup "),
         "empty kind falls back to backup");
 }
 
@@ -365,15 +414,16 @@ private void testFormatBackupFailed() {
     ev.stage = "verify";
     ev.error = "FAILED: messages missing";
     auto line = formatLogEvent(ev, IpIntel.init, false);
-    check(line.length == 1 && line[0] == "Backup mongo FAILED at verify: FAILED: messages missing",
+    check(line.length == 1 && line[0] == "Backup mongo " ~ TC ~ "04" ~ TB ~ "FAILED" ~ TB ~ TC
+        ~ " at verify: FAILED: messages missing",
         "backup failed line, got " ~ (line.length ? line[0] : "<none>"));
 
     ev.stage = "";
-    check(formatLogEvent(ev, IpIntel.init, false)[0].startsWith("Backup mongo FAILED at unknown:"),
+    check(formatLogEvent(ev, IpIntel.init, false)[0].startsWith("Backup mongo " ~ TC),
         "empty stage falls back to unknown");
 
     ev.status = "";
-    check(formatLogEvent(ev, IpIntel.init, false)[0].startsWith("Backup mongo FAILED"),
+    check(formatLogEvent(ev, IpIntel.init, false)[0].startsWith("Backup mongo " ~ TC),
         "non-ok status takes the FAILED shape");
 
     ev.status = "failed";
@@ -430,6 +480,7 @@ void main() {
     testBackupSize();
     testFormatBackupOk();
     testFormatBackupFailed();
+    testStyleBanNotice();
     testBackupEventJson();
     testBackupAnnouncePure();
     testXlineAttribution();

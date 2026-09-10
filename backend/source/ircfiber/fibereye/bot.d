@@ -442,31 +442,57 @@ final class FiberEyeBot : IrcBot {
     }
 
     /// Newest-first nicks behind `mask`: still-connected sessions first
-    /// (the in-memory map survives a Mongo outage), then the newest stored
-    /// rows with the rollup's services account. Both store reads are indexed
-    /// (`_id`, `ipGroup`+`ts`) and capped, and every store method already
-    /// fails soft internally — a flood must not stall the read loop.
+    /// (newest connect first, via the session map's insertion time), then
+    /// the newest stored rows with the newest services account. Both store
+    /// reads are indexed (`_id`, `ipGroup`+`ts`) and capped, and every store
+    /// method already fails soft internally — a flood must not stall the
+    /// read loop. When no nick is known at all but the IP rollup exists,
+    /// falls back to its last nick (or a bare connect count) so the
+    /// announcement never goes out as a bare IP.
     private string attributeXline(string mask) {
+        import std.algorithm.sorting : sort;
+        struct Cand { string nick; long ts; }
         string[] nicks;
         string account;
+        long fallbackConnects;
+        string fallbackNick;
         try {
-            foreach (key, _; openSessions) {
+            Cand[] open;
+            foreach (key, id; openSessions) {
                 const sep = key.indexOf('\0');
                 if (sep < 0) continue;
                 const ipPart = key[sep + 1 .. $];
                 if (ipPart != mask && ipGroup(ipPart) != mask) continue;
-                nicks ~= key[0 .. sep];
+                open ~= Cand(key[0 .. sep], openedAt.get(id, 0));
+            }
+            open.sort!((a, b) => a.ts > b.ts);
+            foreach (c; open) {
+                nicks ~= c.nick;
                 if (nicks.length >= 5) break;
             }
             if (store !is null) {
-                foreach (s; store.sessionsForGroup(mask, 6))
+                foreach (s; store.sessionsForGroup(mask, 6)) {
+                    if (nicks.length + 1 > 11) break;
                     nicks ~= s.nick;
+                    if (!account.length && s.account.strip().length)
+                        account = s.account;
+                }
                 auto rec = store.findIp(mask);
-                if (!rec.isNull && rec.get.lastAccount.length)
-                    account = rec.get.lastAccount;
+                if (!rec.isNull) {
+                    if (!account.length && rec.get.lastAccount.strip().length)
+                        account = rec.get.lastAccount;
+                    fallbackConnects = rec.get.connects;
+                    fallbackNick = rec.get.lastNick;
+                }
             }
         } catch (Exception) {}
-        return xlineAttribution(nicks, account);
+        auto attr = xlineAttribution(nicks, account);
+        if (attr.length) return attr;
+        if (fallbackNick.strip().length)
+            return xlineAttribution([fallbackNick], account);
+        if (fallbackConnects > 0)
+            return " · trigger: unknown · " ~ fallbackConnects.to!string ~ " connects seen";
+        return "";
     }
 
     private void onConnect(ConnectNotice c) {
