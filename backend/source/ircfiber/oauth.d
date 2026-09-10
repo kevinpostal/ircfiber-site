@@ -76,7 +76,7 @@ immutable OAuthProvider[] oauthProviders = [
         "https://gitlab.com/oauth/token",
         "https://gitlab.com/oauth/userinfo",
         "",
-        "read_user"),
+        "read_user openid email"),
 ];
 
 /// Table lookup; null when the provider name is unknown.

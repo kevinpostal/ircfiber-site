@@ -96,7 +96,7 @@ private void testCodebergAndGitlabTable() {
     check(cb !is null && cb.emailsUrl == "https://codeberg.org/api/v1/user/emails", "codeberg emails URL");
     check(cb.scope_.length == 0, "codeberg scope unset");
     const gl = oauthProvider("gitlab");
-    check(gl !is null && gl.scope_ == "read_user", "gitlab scope");
+    check(gl !is null && gl.scope_ == "read_user openid email", "gitlab scope");
     check(gl.userUrl == "https://gitlab.com/oauth/userinfo", "gitlab userinfo URL");
 }
 
