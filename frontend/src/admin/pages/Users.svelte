@@ -31,8 +31,8 @@
   let error = $state<string | null>(null);
   let q = $state('');
   let roleFilter = $state<'all' | 'admin' | 'user'>('all');
-  let sortKey = $state<SortKey>('username');
-  let sortDir = $state<SortDir>('asc');
+  let sortKey = $state<SortKey>('createdAt');
+  let sortDir = $state<SortDir>('desc');
 
   let page = $state(1);
   const pageSize = 25;

@@ -678,6 +678,9 @@ let showEditNetwork: boolean = $state(false);
       if (uploadState.panelOpen) { uploadState.panelOpen = false; closedSomething = true; }
       if (uploadState.pastebinPanelOpen) { uploadState.pastebinPanelOpen = false; closedSomething = true; }
       if (userPopup) { userPopup = null; closedSomething = true; }
+      // Mobile drawers sit above the chat but below every modal: Esc
+      // dismisses an open drawer instead of falling through to mark-read.
+      if (sidebarDrawerOpen || mobileMembersOpen) { closeDrawers(); closedSomething = true; }
       // IRCCloud docKeyDown: with nothing open, Esc marks the current
       // buffer read; Shift+Esc marks every buffer read.
       if (!closedSomething) {
