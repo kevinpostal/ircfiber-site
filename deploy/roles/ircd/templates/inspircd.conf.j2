@@ -116,10 +116,16 @@
 # that instant, so the constraint is satisfied exactly when it is checked
 # (a password= gate would not be: PASS arrives after WEBIRC). Engine bursts
 # (autojoin, NAMES/WHO sweeps, backlog replay) still need engine-sized
-# queues and no fakelag; per-IP limits and connectban now apply to the
-# user's real address, which is the point. useconnflood stays off: it is a
-# server-wide throttle checked against the post-swap class, and an engine
-# restart reconnects every web user inside a few seconds.
+# queues and no fakelag. useconnectban stays off: every web connection is
+# gateway-authenticated (the engine only dials for a real websocket user),
+# and m_connectban counts raw TCP connects per real IP with a counter that
+# only clears on the hourly GC — any shared egress (VPN/proxy/NAT, or one
+# human with a few tabs reconnecting) crosses threshold="8" within the hour
+# and loop-bans every ~12 minutes. Per-IP protection here is the class
+# clone caps plus FiberEye's connect_flood/nick_churn rules. useconnflood
+# stays off for the same reason: it is a server-wide throttle checked
+# against the post-swap class, and an engine restart reconnects every web
+# user inside a few seconds.
 #
 # Enforced by the gateway module: without it the webirc= attribute is
 # ignored and this allow="*" class ahead of "main" would catch every
@@ -142,7 +148,7 @@
          resolvehostnames="no"
          useident="no"
          usednsbl="no"
-         useconnectban="yes"
+         useconnectban="no"
          useconnflood="no"
          usests="no"
 {% if ircd_require_sasl %}
