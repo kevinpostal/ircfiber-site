@@ -79,7 +79,7 @@ export const DEFAULT_PREFS: GlobalPrefs = {
   showUserIcons: true,
   modeIndicator: 'dots',
   enlargeEmoji: true,
-  sidebarLeft: false,
+  sidebarLeft: true,
   coloriseMentions: true,
   formatColors: true,
   notificationSound: true,
