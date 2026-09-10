@@ -47,6 +47,8 @@ export interface GlobalPrefs {
   autoDismissNotifs: boolean;
   muteAll: boolean;
   typingIndicator: boolean;
+  /** Display side: show "X is typing" from other people. */
+  showOthersTyping: boolean;
   removeTrackers: boolean;
   customCSS: string;
   timestampFormat: '12h' | '24h' | 'relative';
@@ -87,6 +89,7 @@ export const DEFAULT_PREFS: GlobalPrefs = {
   autoDismissNotifs: true,
   muteAll: false,
   typingIndicator: true,
+  showOthersTyping: true,
   removeTrackers: false,
   customCSS: '',
   timestampFormat: 'relative',

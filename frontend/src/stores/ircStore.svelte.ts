@@ -4,7 +4,7 @@ import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, natur
 import { setChanPrefixChars } from '../lib/autolinker';
 import { isMessageIgnored } from '../lib/ignorePolicy';
 import { closeNotification } from '../lib/notifications';
-import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
+import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, globalPrefs, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw, sendJson } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
@@ -1867,14 +1867,40 @@ export function clearTypingForNick(networkId: string, nick: string): void {
   if (changed) ircState.typingVersion++;
 }
 
+/**
+ * Nicks currently typing in a buffer, minus everyone the reader should
+ * not be told about:
+ *  - the whole list when `showOthersTyping` is off (display-side switch;
+ *    `typingIndicator` is the separate send-side one),
+ *  - the reader's own nick (their other tab echoing back),
+ *  - ignored nicks — /ignore hides someone's messages, so leaking "X is
+ *    typing" from them was a hole in the same feature,
+ *  - other clients logged into the reader's own services account (a
+ *    bouncer alt is the reader, not a third party).
+ */
 export function getTypersForBuffer(networkId: string, channel: string): string[] {
+  if (globalPrefs.showOthersTyping === false) return [];
   const key = `${networkId}:${normalizeChannelName(channel)}`;
   const typing = ircState.typing[key];
   if (!typing) return [];
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  const norm = normalizeChannelName(channel);
+  const buf = net?.buffers.find(b => normalizeChannelName(b.name) === norm);
+  const myNick = (net?.currentNick || net?.nick || '').toLowerCase();
+  const accountOf = (nick: string): string => {
+    const u = buf?.users?.find(m => stripPrefix(m.nick).toLowerCase() === nick);
+    return (u?.account || '').toLowerCase();
+  };
+  const myAccount = myNick ? accountOf(myNick) : '';
   const now = Date.now();
   const result: string[] = [];
   for (const [nick, ts] of Object.entries(typing)) {
-    if (now - ts < 6500) result.push(nick);
+    if (now - ts >= 6500) continue;
+    const lower = nick.toLowerCase();
+    if (lower === myNick) continue;
+    if (isIgnored(nick)) continue;
+    if (myAccount && accountOf(lower) === myAccount) continue;
+    result.push(nick);
   }
   return result;
 }

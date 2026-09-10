@@ -106,6 +106,18 @@
         </label>
       </div>
     </div>
+    <div class="settings-row">
+      <div class="settings-label">
+        <span class="settings-label-text">Show others' typing</span>
+        <span class="settings-label-desc">Display "X is typing" from other people (ignored nicks and your own other clients never show)</span>
+      </div>
+      <div class="settings-control">
+        <label class="toggle-switch">
+          <input type="checkbox" bind:checked={globalPrefs.showOthersTyping} />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
   </div>
 </SettingsSection>
 

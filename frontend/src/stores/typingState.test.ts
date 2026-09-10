@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { setTyping, clearTyping, clearTypingForNick, resetTypingStreak, resetTypingState, isTypingMuted, getTypersForBuffer, ircState } from './ircStore.svelte';
+import { globalPrefs, ignoreList } from './preferences.svelte';
 import { processIrcEvent } from '../lib/messageHandler';
 
 describe('typing state management', () => {
@@ -265,5 +266,43 @@ describe('typing-spam mute (5 episodes, then send to earn back)', () => {
     evt('PART', 'Alice');
     expect(isTypingMuted('net1', '#chan', 'Alice')).toBe(true);
     expect(setTyping('net1', '#chan', 'Alice')).toBe(false);
+  });
+});
+
+describe('typing visibility filters', () => {
+  beforeEach(() => {
+    resetTypingState();
+    ircState.networks.length = 0;
+    ignoreList.length = 0;
+    globalPrefs.showOthersTyping = true;
+  });
+
+  const withNetwork = (myNick: string, users: Array<{ nick: string; account: string }>) => {
+    ircState.networks.push({
+      networkId: 'net1', name: 'n', currentNick: myNick, nick: myNick,
+      buffers: [{ name: '#chan', type: 'channel', users: users.map(u => ({ ...u, isBot: false })) }],
+    } as never);
+  };
+
+  it('hides typing from an ignored nick', () => {
+    withNetwork('Me', [{ nick: 'Me', account: '' }, { nick: 'Spammer', account: '' }]);
+    setTyping('net1', '#chan', 'Spammer');
+    expect(getTypersForBuffer('net1', '#chan')).toEqual(['Spammer']);
+    ignoreList.push('Spammer');
+    expect(getTypersForBuffer('net1', '#chan')).toEqual([]);
+  });
+
+  it("hides typing from another client on the reader's own account", () => {
+    withNetwork('Me', [{ nick: 'Me', account: 'acct' }, { nick: 'Me_phone', account: 'acct' }, { nick: 'Other', account: 'other' }]);
+    setTyping('net1', '#chan', 'Me_phone');
+    setTyping('net1', '#chan', 'Other');
+    expect(getTypersForBuffer('net1', '#chan')).toEqual(['Other']);
+  });
+
+  it('shows nothing at all when the display preference is off', () => {
+    withNetwork('Me', [{ nick: 'Me', account: '' }, { nick: 'Other', account: '' }]);
+    setTyping('net1', '#chan', 'Other');
+    globalPrefs.showOthersTyping = false;
+    expect(getTypersForBuffer('net1', '#chan')).toEqual([]);
   });
 });
