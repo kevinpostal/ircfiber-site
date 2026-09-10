@@ -225,7 +225,26 @@
     }
     .brand .brand-fiber { color: var(--fiber-blue); }
 
-    .topbar-nav { display: flex; align-items: center; gap: var(--s-4); margin-left: auto; flex-shrink: 0; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 5px 12px;
+      background: var(--fiber-paper);
+      border: 1px solid var(--fiber-line);
+      border-radius: 999px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--fiber-fog);
+      white-space: nowrap;
+    }
+    .status-pill .led {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--fiber-signal);
+      box-shadow: 0 0 8px var(--fiber-signal);
+      animation: led-pulse 2.4s ease-in-out infinite;
+    }
+    .status-pill .meta { color: var(--fiber-mist); }
+    @keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
     .topbar-nav a {
       color: var(--fiber-fog);
       font-size: 13.5px;
@@ -341,6 +360,7 @@
     .cta-oauth:empty { display: none; }
 
     @media (max-width: 1280px) {
+      .status-pill { display: none; }
       .topbar-form input { width: 110px; }
     }
     /* Sign-in form is hidden at <1080px — but a text-link "Sign in"
@@ -1226,6 +1246,10 @@
         <span>IRC<span class="brand-fiber">Fiber</span></span>
       </a>
 
+      <span class="status-pill" title="Cloud bouncer edge status — us-east, eu-west, ap-south">
+        <span class="led" aria-hidden="true"></span>
+        <span>all systems operational</span>
+      </span>
 
       <nav class="topbar-nav" aria-label="Primary">
         <a href="#preview">Preview</a>
