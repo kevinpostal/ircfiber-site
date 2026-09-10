@@ -347,7 +347,11 @@ OAuthTokenResult exchangeOAuthCode(const OAuthProvider p, const OAuthSettings s,
     }
     if (status != 200) {
         r.error = "Sign-in with " ~ p.label ~ " failed. Please try again.";
-        logWarn("oauth: %s token request answered HTTP %d", p.name, status);
+        // Response bodies here are provider error JSON (our secret travels
+        // in the request, never in the reply), so a snippet is safe to log
+        // and turns the next silent 502 into a named provider error.
+        auto snippet = responseBody.length > 200 ? responseBody[0 .. 200] : responseBody;
+        logWarn("oauth: %s token request answered HTTP %d: %s", p.name, status, snippet);
         return r;
     }
     try {
@@ -357,8 +361,12 @@ OAuthTokenResult exchangeOAuthCode(const OAuthProvider p, const OAuthSettings s,
     } catch (Exception e) {
         logWarn("oauth: parsing %s token response failed: %s", p.name, e.msg);
     }
-    if (r.accessToken.length == 0)
+    if (r.accessToken.length == 0) {
         r.error = "Sign-in with " ~ p.label ~ " failed. Please try again.";
+        auto snippet = responseBody.length > 200 ? responseBody[0 .. 200] : responseBody;
+        logWarn("oauth: %s token reply carried no access_token (HTTP %d): %s",
+            p.name, status, snippet);
+    }
     return r;
 }
 
