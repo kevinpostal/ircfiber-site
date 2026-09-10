@@ -225,26 +225,6 @@
     }
     .brand .brand-fiber { color: var(--fiber-blue); }
 
-    .status-pill {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 5px 12px;
-      background: var(--fiber-paper);
-      border: 1px solid var(--fiber-line);
-      border-radius: 999px;
-      font-family: var(--font-mono);
-      font-size: 11px;
-      color: var(--fiber-fog);
-      white-space: nowrap;
-    }
-    .status-pill .led {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--fiber-signal);
-      box-shadow: 0 0 8px var(--fiber-signal);
-      animation: led-pulse 2.4s ease-in-out infinite;
-    }
-    .status-pill .meta { color: var(--fiber-mist); }
-    @keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
-
     .topbar-nav { display: flex; align-items: center; gap: var(--s-4); margin-left: auto; flex-shrink: 0; }
     .topbar-nav a {
       color: var(--fiber-fog);
@@ -316,8 +296,8 @@
     .topbar-signin:hover { color: var(--fiber-snow); background: var(--fiber-line-2); text-decoration: none; }
     /* Social OAuth (rendered by the bottom fetch when a provider
        is configured; :empty keeps them out of the layout otherwise).
-       Single icon button opens a provider picker popup. */
-    .topbar-oauth { display: inline-flex; align-items: center; flex-shrink: 0; position: relative; }
+       GitHub/Google get direct brand buttons, the rest share a picker. */
+    .topbar-oauth { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; position: relative; }
     .topbar-oauth:empty { display: none; }
     .oauth-toggle {
       display: inline-flex; align-items: center; justify-content: center;
@@ -361,7 +341,6 @@
     .cta-oauth:empty { display: none; }
 
     @media (max-width: 1280px) {
-      .status-pill { display: none; }
       .topbar-form input { width: 110px; }
     }
     /* Sign-in form is hidden at <1080px — but a text-link "Sign in"
@@ -1247,10 +1226,6 @@
         <span>IRC<span class="brand-fiber">Fiber</span></span>
       </a>
 
-      <span class="status-pill" title="Cloud bouncer edge status — us-east, eu-west, ap-south">
-        <span class="led" aria-hidden="true"></span>
-        <span>all systems operational</span>
-      </span>
 
       <nav class="topbar-nav" aria-label="Primary">
         <a href="#preview">Preview</a>
@@ -1888,11 +1863,25 @@
         renderOAuthProviders();
       }
       // Social OAuth (progressive enhancement): fetch the configured
-      // providers and render a single topbar icon button that opens a
-      // provider picker popup, plus Continue-with buttons in the signup
-      // CTA. Renders nothing when no provider is configured — the page is
-      // unchanged.
+      // providers and render them in the topbar — GitHub and Google get
+      // direct brand icon buttons, everything else shares one picker
+      // popup — plus Continue-with buttons in the signup CTA. Renders
+      // nothing when no provider is configured — the page is unchanged.
       var OAUTH_ICON_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="5" r="2.6"/><path d="M2.8 13.4c.7-2.6 2.8-4 5.2-4s4.5 1.4 5.2 4"/></svg>';
+      var OAUTH_BRAND_SVG = {
+        github: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>',
+        google: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47c-.29 1.48-1.14 2.73-2.4 3.58v3h3.86c2.26-2.09 3.56-5.17 3.56-8.82z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.29v3.09C3.26 21.3 7.31 24 12 24z"/><path fill="#FBBC05" d="M5.27 14.29c-.25-.72-.38-1.49-.38-2.29s.14-1.57.38-2.29V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.98-3.09z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.98 3.09C6.22 6.86 8.87 4.75 12 4.75z"/></svg>'
+      };
+      function oauthIcon(name) { return OAUTH_BRAND_SVG[name] || OAUTH_ICON_SVG; }
+      function oauthLink(name, label, icon) {
+        var a = document.createElement('a');
+        a.className = 'oauth-toggle';
+        a.href = '/auth/' + encodeURIComponent(name);
+        a.setAttribute('data-provider', name);
+        a.setAttribute('aria-label', 'Sign in with ' + label);
+        a.innerHTML = icon;
+        return a;
+      }
       function renderOAuthProviders() {
         if (!window.fetch) return;
         var top = document.getElementById('topbar-oauth');
@@ -1908,22 +1897,21 @@
           });
           if (!valid.length) return;
           if (top) {
-            if (valid.length === 1) {
-              var single = document.createElement('a');
-              single.className = 'oauth-toggle';
-              single.href = '/auth/' + encodeURIComponent(valid[0].name);
-              single.setAttribute('data-provider', valid[0].name);
-              single.setAttribute('aria-label', 'Sign in with ' + valid[0].label);
-              single.innerHTML = OAUTH_ICON_SVG;
-              top.appendChild(single);
-            } else {
+            var direct = valid.filter(function (p) { return p.name === 'github' || p.name === 'google'; });
+            var order = { github: 0, google: 1 };
+            direct.sort(function (a, b) { return order[a.name] - order[b.name]; });
+            var rest = valid.filter(function (p) { return p.name !== 'github' && p.name !== 'google'; });
+            direct.forEach(function (p) { top.appendChild(oauthLink(p.name, p.label, oauthIcon(p.name))); });
+            if (rest.length === 1) {
+              top.appendChild(oauthLink(rest[0].name, rest[0].label, OAUTH_ICON_SVG));
+            } else if (rest.length > 1) {
               var btn = document.createElement('button');
               btn.type = 'button';
               btn.className = 'oauth-toggle';
               btn.setAttribute('aria-haspopup', 'menu');
               btn.setAttribute('aria-expanded', 'false');
               btn.setAttribute('aria-controls', 'topbar-oauth-menu');
-              btn.setAttribute('aria-label', 'Sign in with a social account');
+              btn.setAttribute('aria-label', 'More sign-in options');
               btn.innerHTML = OAUTH_ICON_SVG;
               var menu = document.createElement('div');
               menu.className = 'oauth-menu';
@@ -1933,7 +1921,7 @@
               head.className = 'oauth-menu-head';
               head.textContent = 'Continue with';
               menu.appendChild(head);
-              valid.forEach(function (p) {
+              rest.forEach(function (p) {
                 var item = document.createElement('a');
                 item.href = '/auth/' + encodeURIComponent(p.name);
                 item.setAttribute('data-provider', p.name);
