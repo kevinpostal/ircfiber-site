@@ -95,6 +95,7 @@
                   <span class="member-mode-prefix" aria-hidden="true">{CATEGORY_SYMBOLS[member.category] ?? CATEGORY_SYMBOLS[category] ?? ''}</span>
                 {/if}
                 <span class="member-nick">{nick}</span>
+                {#if member.isBot}<span class="member-bot" title="Bot">BOT</span>{/if}
               </button>
             </li>
           {/each}
@@ -108,6 +109,16 @@
   .member-nick {
     vertical-align: middle;
     color: #ccc;
+  }
+  .member-bot {
+    display: inline-block;
+    background: rgba(255,255,255,0.1);
+    color: var(--text-tertiary);
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 3px;
+    border-radius: 3px;
+    vertical-align: middle;
   }
   .author-realname {
     color: #737373;

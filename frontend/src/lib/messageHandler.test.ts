@@ -318,6 +318,38 @@ describe('WHOIS accumulation feeds the overlay', () => {
     ]);
     expect((last as { whoisData?: WhoisData }).whoisData?.special).toEqual(['is keepin it 100']);
   });
+  it('marks the member bot on 335 and keeps the overlay line', () => {
+    // +B user mode: RPL_WHOISBOT must badge the member row (memberlist BOT
+    // pill) while the sentence still reaches the WHOIS overlay.
+    const net = createNetwork({ networkId: 'n1', name: 'libera', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: '_server' }));
+    const chan = createBuffer({ name: '#chan', users: [createMember({ nick: 'GURU' })] });
+    net.buffers.push(chan);
+    ircState.networks.push(net);
+    const accum = {
+      whoisAcc: {
+        nick: '', user: '', host: '', realname: '', server: '', serverInfo: '',
+        channels: [] as string[], idle: 0, signon: 0, account: '', secure: false, away: '',
+      },
+      whoisAccs: new Map(),
+      banAcc: [],
+      banTargetChannel: '',
+    };
+    const lines = [
+      { c: '311', p: ['me', 'GURU', '~guru', 'host', '*'], x: 'GURU', network: 'libera', nid: 'n1' },
+      { c: '335', p: ['me', 'GURU'], x: 'is a bot', network: 'libera', nid: 'n1' },
+      { c: '318', p: ['me', 'GURU'], x: 'End of /WHOIS list.', network: 'libera', nid: 'n1' },
+    ];
+    let last: unknown;
+    for (const l of lines) {
+      last = processIrcEvent(l, { value: 0 }, accum as never, { switchToBuffer: () => {} }, () => {});
+    }
+    const w = (last as { whoisData?: WhoisData }).whoisData as WhoisData;
+    expect(w.bot).toBe(true);
+    expect(w.special).toEqual(['is a bot']);
+    expect(chan.users.find((u) => u.nick === 'GURU')?.isBot).toBe(true);
+  });
+
 });
 
 // ACCOUNT notify ("nick logged in as account") used to fan out into every

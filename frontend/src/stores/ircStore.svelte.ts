@@ -846,6 +846,28 @@ export function applySetname(networkId: string, nick: string, realname: string):
 }
 
 /**
+ * Flag a nick as a bot across every member row on the network.
+ * Fed by +B evidence (WHO 352 flags, WHOIS 335) — see the host-suffix
+ * heuristic in the JOIN handler for the passive counterpart. Set-only:
+ * +B is effectively never removed, and clearing here would race the
+ * heuristic with stale data.
+ */
+export function markMemberBot(networkId: string, nick: string): void {
+  const net = ircState.networks.find(n => n.networkId === networkId);
+  if (!net) return;
+  const bare = stripPrefix(nick);
+  if (!bare) return;
+  for (const b of net.buffers) {
+    if (!b.users) continue;
+    for (const u of b.users) {
+      if (stripPrefix(u.nick).toLowerCase() === bare.toLowerCase()) {
+        u.isBot = true;
+      }
+    }
+  }
+}
+
+/**
  * Apply a live ACCOUNT login/logout change: refresh every member row for
  * the nick across all buffers. `*` means logged out — clear the badge
  * rather than displaying a literal star.
@@ -3583,6 +3605,18 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
           lastSpoke: 0, lastHighlighted: 0, account: ''
         });
       }
+    }
+  } else if (cmd === '352' && params && params.length >= 7) {
+    // RPL_WHOREPLY: [me, channel, user, host, server, nick, flags].
+    // The flags field carries the +B bot mode ('B') — the only passive
+    // signal a +B user exists, since user MODE changes echo only to the
+    // user themselves, never to the channel. Set-only, mirroring the
+    // host-suffix heuristic: +B is effectively never removed.
+    const flags = params[6] || '';
+    if (flags.includes('B')) {
+      const target = stripPrefix(params[5] || '');
+      const m = buf.users.find(u => stripPrefix(u.nick).toLowerCase() === target.toLowerCase());
+      if (m) m.isBot = true;
     }
   } else if (cmd === 'JOIN' && joinNick === net.currentNick) {
     buf.isJoined = true;

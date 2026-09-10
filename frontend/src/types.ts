@@ -564,6 +564,7 @@ export interface WhoisData {
   secure: boolean;
   away: string;
   operator?: boolean;
+  bot?: boolean;
   waway?: string;
   /**
    * Free-form WHOIS lines a network invents for itself — RPL_WHOISSPECIAL

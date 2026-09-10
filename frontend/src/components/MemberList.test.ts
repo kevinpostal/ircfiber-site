@@ -30,6 +30,23 @@ describe('MemberList', () => {
     await expect.element(page.getByText('member1')).toBeInTheDocument();
   });
 
+  it('badges bot members with a BOT pill', async () => {
+    const net = createNetwork({ networkId: 'net1' });
+    const buf = createBuffer({
+      name: '#chan',
+      users: [
+        createMember({ nick: 'GURU', isBot: true }),
+        createMember({ nick: 'member1' }),
+      ],
+    });
+    net.buffers.push(buf);
+    ircState.networks.push(net);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#chan';
+    render(MemberList);
+    await expect.element(page.getByTitle('Bot')).toBeInTheDocument();
+  });
+
   it('renders IRCCloud category labels', async () => {
     const net = createNetwork({ networkId: 'net1' });
     const buf = createBuffer({

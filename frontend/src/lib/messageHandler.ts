@@ -4,6 +4,7 @@ import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, apply
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
          checkHighlight, isMessageUnseen, applySetname, applyAccountChange, markRedacted,
+         markMemberBot,
          findBufferByName, isSelfMessage, renameQueryBuffer, isSessionFocused } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getLastSeen, getBottomSeen } from '../stores/preferences.svelte';
 import { normalizeChannelName, stripPrefix, isSkippedCommand, messageHostmask } from './utils';
@@ -260,6 +261,10 @@ export function processIrcEvent(
       whoisParams = [whoisParams[1], ...whoisParams.slice(2)];
     }
     accumulateWhois(accum, cmd, whoisParams, msg.text || '');
+    // RPL_WHOISBOT (+B user mode) doubles as member-list evidence: WHO
+    // flags only reach us when the engine polls, but an explicit WHOIS
+    // lands here, so flag the member row right away.
+    if (cmd === '335' && targetNick) markMemberBot(networkId, targetNick);
     // ensure map entry reflects any new fields added by accumulateWhois
     accum.whoisAccs.set(key, acc);
   } else if (cmd === '318') {
@@ -708,9 +713,19 @@ function accumulateWhois(accum: AccumState, cmd: string, params: string[], text:
     case '330':
       accum.whoisAcc.account = params[1];
       break;
-    case '671':
-      // RPL_WHOISSECURE: nick :is using a secure connection
-      accum.whoisAcc.secure = true;
+    case '335':
+      // RPL_WHOISBOT: nick :is a bot — +B user mode. Flag it for the
+      // overlay (mirrors 313's operator flag) and keep the text line so
+      // the overlay still reads the sentence.
+      accum.whoisAcc.bot = true;
+      {
+        const line = (text || '').trim();
+        if (line) {
+          const special = accum.whoisAcc.special ?? [];
+          if (!special.includes(line)) special.push(line);
+          accum.whoisAcc.special = special;
+        }
+      }
       break;
     // Everything else in the WHOIS family — RPL_WHOISSPECIAL (320),
     // WHOISREGNICK (307), WHOISHOST (378), WHOISMODES (379), WHOISBOT

@@ -1082,6 +1082,24 @@ describe('updateChannelUsers', () => {
 		expect(foundBuf?.users[2].category).toBe('MEMBER');
 	});
 
+	it('flags +B members from WHO 352 flags', () => {
+		// The flags field carries the +B bot mode ('B') — the only passive
+		// +B signal, since user MODE echoes only to the user themselves.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+
+		updateChannelUsers('net1', '#chan', '353', '', ['#chan', 'alice +bob']);
+		updateChannelUsers('net1', '#chan', '352', '', ['me', '#chan', '~b', 'host', 'srv', 'bob', 'HB']);
+		updateChannelUsers('net1', '#chan', '352', '', ['me', '#chan', '~a', 'host', 'srv', 'alice', 'H']);
+		flushSync();
+
+		const foundBuf = ircState.networks.find((n) => n.networkId === 'net1')!
+			.buffers.find((b) => b.name === '#chan')!;
+		expect(foundBuf.users.find((u) => stripPrefix(u.nick) === 'bob')?.isBot).toBe(true);
+		expect(foundBuf.users.find((u) => stripPrefix(u.nick) === 'alice')?.isBot).toBeFalsy();
+	});
+
 	it('fills realname from the network cache on 353', () => {
 		// NAMES itself doesn't carry realnames; the 353 handler must look
 		// them up in the engine's network-wide cache (which is populated by
