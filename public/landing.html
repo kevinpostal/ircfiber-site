@@ -226,7 +226,7 @@
     }
     .brand .brand-fiber { color: var(--fiber-blue); }
 
-    .status-pill {
+    a.status-pill {
       display: inline-flex; align-items: center; gap: 8px;
       padding: 5px 12px;
       background: var(--fiber-paper);
@@ -236,14 +236,17 @@
       font-size: 11px;
       color: var(--fiber-fog);
       white-space: nowrap;
+      text-decoration: none;
+      transition: border-color 0.15s ease, color 0.15s ease;
     }
-    .status-pill .led {
+    a.status-pill:hover { border-color: var(--fiber-blue); color: var(--fiber-snow); }
+    a.status-pill .led {
       width: 6px; height: 6px; border-radius: 50%;
       background: var(--fiber-signal);
       box-shadow: 0 0 8px var(--fiber-signal);
       animation: led-pulse 2.4s ease-in-out infinite;
     }
-    .status-pill .meta { color: var(--fiber-mist); }
+    a.status-pill .meta { color: var(--fiber-mist); }
     @keyframes led-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
 
     .topbar-nav { display: flex; align-items: center; gap: var(--s-4); margin-left: auto; flex-shrink: 0; }
@@ -1252,10 +1255,10 @@
         <span>IRC<span class="brand-fiber">Fiber</span></span>
       </a>
 
-      <span class="status-pill" title="Cloud bouncer edge status — us-east, eu-west, ap-south">
+      <a class="status-pill" href="https://status.ircfiber.com/" target="_blank" rel="noreferrer" title="Live service status — status.ircfiber.com">
         <span class="led" aria-hidden="true"></span>
         <span>all systems operational</span>
-      </span>
+      </a>
 
       <nav class="topbar-nav" aria-label="Primary">
         <a href="#preview">Preview</a>
@@ -1758,6 +1761,7 @@
           <h4>Resources</h4>
           <ul>
             <li><a href="#docs">Docs</a></li>
+            <li><a href="https://status.ircfiber.com/" target="_blank" rel="noreferrer">Status</a></li>
             <li><a href="#privacy">Privacy &amp; terms</a></li>
           </ul>
         </div>
