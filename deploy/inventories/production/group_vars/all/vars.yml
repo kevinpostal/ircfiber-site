@@ -164,6 +164,22 @@ fibereye_ignore_classes: "ircfiber-engine,ircfiber-engine-v6,localhost,localhost
 # hole: an exempt group is never counted, so it can never be banned however
 # hard it floods.
 fibereye_exempt_ips: "2603:8001:98f0:1530::/64,76.32.236.21"
+# Nicks whose connects are recorded but never counted and never banned.
+# Exact nicks or `*`/`?` globs, matched case-insensitively — `p34c3*`
+# covers the bouncer alts (`p34c3_`, `p34c3_e5eb`) behind the shared exit
+# below. Only the nick's own connects are skipped, so the strangers
+# sharing that exit are still counted and still bannable.
+fibereye_exempt_nicks: "p34c3*"
+# Public addresses excused from the ircd's own <connectban> (and
+# <connflood>) via a dedicated connect class in inspircd.conf.j2 — the
+# 5-minute Z-lines in #staff come from there, not from the FiberEye bot,
+# so a FiberEye exemption alone cannot stop them. 185.206.149.176 is a
+# shared exit whose strangers reconnect ~8x/hour and loop-ban it forever;
+# excusing it stops the loop. The exit stays under FiberEye's own rules
+# (above), which place longer, appealable, admin-visible bans — a real
+# flood from it still earns a Z-line there.
+# Space- or comma-separated; rendered into the class's allow list.
+ircd_connectban_exempt_ips: "185.206.149.176"
 # Detection window and the three rules evaluated inside it, per IP group (the
 # exact address for IPv4, the /64 for IPv6). Opening values chosen against the
 # 2026-09 flood sample; the admin card shows what is actually in force, so
@@ -261,10 +277,10 @@ ircfiber_public_url: "https://ircfiber.com"
 # → Credentials → OAuth client (Web); Codeberg: Settings → Applications
 # (confidential client); GitLab: User Settings → Applications (scopes
 # read_user, openid, email).
-ircfiber_oauth_github_client_id: ""
-ircfiber_oauth_google_client_id: ""
-ircfiber_oauth_codeberg_client_id: ""
-ircfiber_oauth_gitlab_client_id: ""
+ircfiber_oauth_github_client_id: "Ov23li7FovcvgvyDtD3J"
+ircfiber_oauth_google_client_id: "650470972727-h06s7ueb29t0e6grm8441u1d4ahc0d06.apps.googleusercontent.com"
+ircfiber_oauth_codeberg_client_id: "3f808a0c-be5c-442c-b7af-d7ae94b17954"
+ircfiber_oauth_gitlab_client_id: "76c37fd353bd92e5bbc2de870f247b7728c18484fb8cb9dd6db47b492a17b82d"
 
 # --- IRCd (InspIRCd 4 + Anope 2 services) --------------------------------------
 # Pinned upstream images (multi-arch). Anope 2.0.x links to InspIRCd 4 via
