@@ -91,7 +91,9 @@ Host: `vps-efb4b52d` pulls `ghcr.io/kevinpostal/irc-fiber-gateway` and `…/ircf
 npm --prefix frontend test          # Vitest lib + client (Playwright)
 npm --prefix frontend run test:watch
 dub --root=common test && dub --root=backend test
-./scripts/check-common-drift.sh --fetch  # common in sync?
+./scripts/sync-common.sh                  # propagate site/common edits to the mirrors first
+./scripts/check-common-drift.sh --fetch   # common in sync?
+./scripts/check-common-version.sh         # version + dep strings consistent?
 ```
 
 ## Links

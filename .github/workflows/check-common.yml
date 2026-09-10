@@ -1,0 +1,51 @@
+name: Check common
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'common/**'
+      - 'backend/dub.sdl'
+      - 'scripts/check-common-*.sh'
+      - 'scripts/sync-common.sh'
+  pull_request:
+    paths:
+      - 'common/**'
+      - 'backend/dub.sdl'
+      - 'scripts/check-common-*.sh'
+      - 'scripts/sync-common.sh'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Peers (../common, ../engine/common) only exist in the superproject
+      # checkout; here the guard checks this repo's version + dep spec.
+      - name: Common version + dep spec in sync
+        run: ./scripts/check-common-version.sh
+
+      # site/common is the source of truth; engine/common must match it
+      # byte-for-byte. PEER_REPO_URL is only needed while the peer is private.
+      - name: No drift vs engine/common
+        env:
+          PEER_TOKEN: ${{ secrets.SUPERPROJECT_PAT }}
+        run: |
+          if [ -n "$PEER_TOKEN" ]; then
+            export PEER_REPO_URL="https://x-access-token:$PEER_TOKEN@github.com/kevinpostal/ircfiber-engine.git"
+          fi
+          ./scripts/check-common-drift.sh --fetch
+
+      - uses: dlang-community/setup-dlang@v2
+        with:
+          compiler: ldc-latest
+
+      # Runs the library's unit suite (green; the one Redis integration test
+      # self-skips without a local Redis). `dub describe` on backend then
+      # proves the `~>x.y.z` spec still accepts common/dub.sdl's version
+      # through the `path="../common"` dependency.
+      - name: Test common and resolve it from backend
+        run: |
+          dub test --root=common --compiler=ldc2
+          dub describe --root=backend --config=library > /dev/null
