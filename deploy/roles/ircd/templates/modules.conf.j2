@@ -205,8 +205,14 @@
 # The ircd's own first line of defence, retuned to actually fire: at the
 # stock threshold="32" a client can reconnect 31 times per bootwait window
 # and never trip, which is exactly how the observed connect flood sailed
-# through. 8 connects in the window is well above anything a human client
-# does and the ban is short (5m), so a flapping link self-heals.
+# through. 16 connects in the window is still far below that flood and far
+# above anything one human client does — but a shared VPN/proxy/Mullvad
+# exit multiplexes many strangers behind one IP, and at threshold="8" such
+# an exit crossed within the hour and loop-banned every ~12 minutes
+# forever (2026-09-09: exit 185.206.149.176, our own engine sessions dying
+# as collateral). 16 halves those false trips while keeping an order of
+# magnitude of margin under the real flood. The ban stays short (5m), so a
+# flapping link still self-heals.
 # ipv6cidr="64" matches FiberEye's own grouping: the flood rotates
 # addresses inside one /64, so banning a single /128 bans nothing.
 #
@@ -231,7 +237,7 @@
             ipv4cidr="32"
             ipv6cidr="64"
             splitwait="128"
-            threshold="8">
+            threshold="16">
 <module name="messageflood">
 <messageflood notice="1.0" privmsg="1.0" tagmsg="0.2">
 <module name="joinflood">
