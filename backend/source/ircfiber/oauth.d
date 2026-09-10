@@ -228,15 +228,16 @@ string oauthRedirectUri(string provider) {
 }
 
 /// The 302 target for `GET /auth/:provider`. Google additionally gets
-/// `prompt=select_account` so multi-account users can switch; Google and
-/// GitLab require an explicit `response_type=code` (GitHub/Forgejo do not).
+/// `prompt=select_account` so multi-account users can switch; Google, GitLab
+/// and Codeberg require an explicit `response_type=code` (GitHub defaults to
+/// code when it is absent; Forgejo rejects the request without it).
 string oauthAuthorizeUrl(const OAuthProvider p, string clientId, string state, string redirectUri) {
     string q = "client_id=" ~ encodeComponent(clientId)
         ~ "&redirect_uri=" ~ encodeComponent(redirectUri)
         ~ "&state=" ~ encodeComponent(state);
     if (p.scope_.length > 0)
         q ~= "&scope=" ~ encodeComponent(p.scope_);
-    if (p.name == "google" || p.name == "gitlab")
+    if (p.name == "google" || p.name == "gitlab" || p.name == "codeberg")
         q ~= "&response_type=code";
     if (p.name == "google")
         q ~= "&prompt=select_account";
