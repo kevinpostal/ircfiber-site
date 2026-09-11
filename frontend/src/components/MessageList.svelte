@@ -487,6 +487,42 @@
   function isFullyRendered(): boolean {
     return untrack(() => renderStart) === 0 && !hasMoreHistory;
   }
+  // Buffers proven to have no older server-side history. Set when a
+  // network fetch returns nothing; survives buffer switches so a return
+  // visit doesn't flash the Load More row before the first tick.
+  const exhaustedKeys = new Set<string>();
+  function isScrollable(): boolean {
+    return !!container && container.scrollHeight > container.clientHeight + 1;
+  }
+  // IRCCloud parity: the backlog always fills the viewport before the
+  // Load More row appears. The row is only truthful when the viewport
+  // actually scrolls — otherwise it sits above a stub list that never
+  // needed paging.
+  function updateLoadMoreVisibility(): void {
+    // Pre-layout (zero-height container): keep the optimistic value from
+    // the buffer switch instead of hiding on a meaningless measure.
+    if (container && container.clientHeight === 0) return;
+    showLoadMoreRow = !isFullyRendered() && (!container || isScrollable());
+  }
+  // Page the network while the viewport isn't full and older server-side
+  // history may exist. Self-terminating: every pass either grows the
+  // content or flips hasMoreHistory false.
+  function fillViewport(): void {
+    // A channel switch (or initial history arrival) queues its pin to
+    // the bottom on a tick; until that settle runs, scrollTop is stale
+    // (usually 0) and layout may predate the new rows.
+    if (lastScrollTop === -1 || lastScrollHeight === -1) return;
+    if (isServerBuffer) return;
+    if (!container || fetching || isFullyRendered()) return;
+    if (isScrollable()) return;
+    // Network only — never auto-reveal the memory window. A hidden
+    // window almost always fills the viewport once laid out, and a
+    // transient pre-layout measure (unconstrained container reads
+    // scrollHeight == clientHeight) would otherwise collapse windowing
+    // and burn fetches. A scroll to the top still reveals memory.
+    if (untrack(() => renderStart) > 0) return;
+    loadBacklog();
+  }
 
   function checkInfiniscroll(): void {
     if (isServerBuffer) return;
@@ -521,6 +557,7 @@
       }
       if (key !== bufferKey) { fetching = false; showFetchRow = false; return; }
       hasMoreHistory = ok;
+      if (!ok) exhaustedKeys.add(key);
       showFetchRow = false;
       await tick();
       fetched(atTop, atBottom);
@@ -552,7 +589,7 @@
   //   keeps the reading position otherwise); at bottom → pin; at top →
   //   jump to divider-31 then animate to max(divider-152, 48) and settle.
   function fetched(atTop: boolean, atBottom: boolean): void {
-    showLoadMoreRow = !isFullyRendered();
+    updateLoadMoreVisibility();
     if (!container) { fetchDone(false); return; }
     const divider = container.querySelector('.backlogDivider') as HTMLElement | null;
     if (!atTop) { fetchDone(atBottom); return; }
@@ -575,6 +612,7 @@
   function fetchDone(pin: boolean): void {
     fetching = false;
     onChange(pin);
+    fillViewport();
   }
 
   function fetchFailed(): void {
@@ -981,22 +1019,39 @@
         lastBufferKey = key;
         renderStart = Math.max(0, msgs.length - BATCH_SIZE);
         renderEndKey = '';
-        hasMoreHistory = true;
+        hasMoreHistory = !exhaustedKeys.has(key);
         fetching = false;
         showFetchRow = false;
         showFetchFailedRow = false;
-        showLoadMoreRow = msgs.length > 0;
+        // Optimistic: a hidden window (renderStart > 0) always pages.
+        // Otherwise the tick below measures the real viewport.
+        showLoadMoreRow = msgs.length > BATCH_SIZE;
         clockTs = null;
+        // Reset scroll observers: a leftover scrollTop 0 from reading the
+        // previous buffer at the top would make a backfill prepend landing
+        // before the tick below look like "user at top" and park the new
+        // buffer at the top via fetched fetchDone(false).
+        lastScrollTop = -1;
+        lastScrollHeight = -1;
         lastBottomKey = msgs.length ? itemKeyOf(msgs[msgs.length - 1]) : '';
         lastFirstProcessedKey = msgs.length ? itemKeyOf(msgs[0]) : '';
         lastProcessedLength = msgs.length;
         setScrolledToBottom(true);
         tick().then(() => {
-          if (!container || bufferKey !== key) return;
-          scrollToBottom({ silent: true });
-          lastScrollTop = container.scrollTop;
-          lastScrollHeight = container.scrollHeight;
-          doScroll(false);
+          if (bufferKey !== key) return;
+          // Measure after layout: the tick fires before first paint, so
+          // scrollHeight can still be 0/stale and a sync measure would
+          // hide Load More then fill-eat the window on a phantom "full"
+          // viewport. rAF runs after layout, before paint — no flash.
+          requestAnimationFrame(() => {
+            if (!container || bufferKey !== key) return;
+            scrollToBottom({ silent: true });
+            lastScrollTop = container.scrollTop;
+            lastScrollHeight = container.scrollHeight;
+            updateLoadMoreVisibility();
+            doScroll(false);
+            fillViewport();
+          });
         });
         return;
       }
@@ -1007,16 +1062,21 @@
           // and land at the bottom (IRCCloud initial backlog render).
           renderStart = Math.max(0, msgs.length - BATCH_SIZE);
           renderEndKey = '';
-          hasMoreHistory = true;
-          showLoadMoreRow = true;
+          hasMoreHistory = !exhaustedKeys.has(key);
+          showLoadMoreRow = msgs.length > BATCH_SIZE;
           lastBottomKey = itemKeyOf(msgs[msgs.length - 1]);
           setScrolledToBottom(true);
           tick().then(() => {
-            if (!container || bufferKey !== key) return;
-            scrollToBottom({ silent: true });
-            lastScrollTop = container.scrollTop;
-            lastScrollHeight = container.scrollHeight;
-            doScroll(false);
+            if (bufferKey !== key) return;
+            requestAnimationFrame(() => {
+              if (!container || bufferKey !== key) return;
+              scrollToBottom({ silent: true });
+              lastScrollTop = container.scrollTop;
+              lastScrollHeight = container.scrollHeight;
+              updateLoadMoreVisibility();
+              doScroll(false);
+              fillViewport();
+            });
           });
         } else {
           // Older history prepended: keep the window on the same rows.

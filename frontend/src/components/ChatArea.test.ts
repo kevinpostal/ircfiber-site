@@ -101,8 +101,12 @@ describe('ChatArea', () => {
 
   it('renders the loadMore button at the top of the log', async () => {
     const network = setupActiveBuffer();
-    const msg = createMessage({ t: Date.now() });
-    ircState.messages[`${network.networkId}:#chan`] = [msg];
+    const now = Date.now();
+    // More than one window (BATCH_SIZE 200) so older rows are hidden
+    // behind renderStart — the button is truthful and must show.
+    ircState.messages[`${network.networkId}:#chan`] = Array.from({ length: 250 }, (_, i) =>
+      createMessage({ t: now - (250 - i) * 1000, text: `msg ${i}` }),
+    );
     render(ChatArea);
     // IRCCloud renders the "Load more backlog…" button at the top of
     // the log; infiniscroll fires when the user scrolls to the very
@@ -110,10 +114,23 @@ describe('ChatArea', () => {
     await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
   });
 
-  it('keeps the loadMore button when loadHistory would fail', async () => {
+  it('hides the loadMore button when history fits the viewport', async () => {
     const network = setupActiveBuffer();
     const msg = createMessage({ t: Date.now() });
     ircState.messages[`${network.networkId}:#chan`] = [msg];
+    render(ChatArea);
+    // IRCCloud parity: the backlog fills the viewport before Load More
+    // appears — a single message never pages.
+    await expect.element(page.getByRole('log', { name: 'Chat messages' })).toBeInTheDocument();
+    await expect.element(page.getByText('Load more backlog…')).not.toBeInTheDocument();
+  });
+
+  it('keeps the loadMore button when loadHistory would fail', async () => {
+    const network = setupActiveBuffer();
+    const now = Date.now();
+    ircState.messages[`${network.networkId}:#chan`] = Array.from({ length: 250 }, (_, i) =>
+      createMessage({ t: now - (250 - i) * 1000, text: `msg ${i}` }),
+    );
     vi.mocked(loadHistory).mockRejectedValue(new Error('Network error'));
     render(ChatArea);
     // No fetch happens on mount, so the failure never triggers; the
