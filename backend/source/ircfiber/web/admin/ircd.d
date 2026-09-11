@@ -102,6 +102,11 @@ public struct IrcLine {
     string command;
     string[] params;
     bool valid;
+    /// `time` message-tag (IRCv3 `server-time`) as unix millis, or -1 when
+    /// the server sent no tag (untagged relay, pre-CAP peer). The ircd
+    /// replays chathistory with the ORIGINAL stamps, so anything older
+    /// than our own JOIN is a replay, never a live message.
+    long serverTimeMs = -1;
 }
 
 /// Parse one raw IRC line. Tolerates an optional leading @tag section
@@ -113,6 +118,7 @@ public IrcLine parseIrcLine(string raw) {
     if (s[0] == '@') {
         auto sp = s.indexOf(' ');
         if (sp < 0) return l;
+        l.serverTimeMs = parseServerTimeTag(s[1 .. sp]);
         s = s[sp + 1 .. $].strip();
     }
     if (s.length == 0) return l;
@@ -136,6 +142,122 @@ public IrcLine parseIrcLine(string raw) {
     l.params = parts[1 .. $];
     l.valid = true;
     return l;
+}
+
+/// Tolerance for the history-replay check: a line stamped more than this
+/// far before our own JOIN is a chathistory replay, never live traffic.
+/// Minutes-old replays vs same-second live lines — 2 s absorbs any clock
+/// skew between the ircd and bot containers on the same host.
+enum HISTORY_SKEW_MS = 2_000;
+
+/// True when a channel line with `serverTimeMs` predates our `joinedAtMs
+/// and is therefore chathistory replay. Untagged lines (no negotiated
+/// `server-time` cap) and channels we never stamped are never replays.
+bool isHistoryReplayLine(long serverTimeMs, long joinedAtMs) @safe pure nothrow {
+    if (serverTimeMs < 0 || joinedAtMs <= 0) return false;
+    return joinedAtMs - serverTimeMs > HISTORY_SKEW_MS;
+}
+
+/// Unix millis from an IRCv3 `time` tag section (`tag[;tag...]`, tag values
+/// may carry `\:` `\s` `\\` escapes). -1 when no usable `time=` is present.
+long parseServerTimeTag(string tags) @safe pure nothrow {
+    foreach (tok; splitTags(tags)) {
+        if (tok.length > 5 && tok[0 .. 5] == "time=") {
+            const ms = parseIrcTimestamp(unescapeTagValue(tok[5 .. $]));
+            if (ms >= 0) return ms;
+        }
+    }
+    return -1;
+}
+
+private string[] splitTags(string tags) @safe pure nothrow {
+    string[] parts;
+    size_t start = 0;
+    // A `;` preceded by `\` is an escaped literal, not a separator.
+    for (size_t i = 0; i < tags.length; i++) {
+        if (tags[i] != ';') continue;
+        size_t bs = 0;
+        for (size_t j = i; j > start && tags[j - 1] == '\\'; j--) bs++;
+        if (bs % 2 == 1) continue;
+        parts ~= tags[start .. i];
+        start = i + 1;
+    }
+    parts ~= tags[start .. $];
+    return parts;
+}
+
+private string unescapeTagValue(string v) @safe pure nothrow {
+    // Single pass so `\n` survives alongside `\:`/`\s`/`\\`.
+    char[] buf;
+    buf.length = v.length;
+    size_t n = 0;
+    for (size_t i = 0; i < v.length; i++) {
+        if (v[i] == '\\' && i + 1 < v.length) {
+            i++;
+            switch (v[i]) {
+                case ':': buf[n++] = ';'; break;
+                case 's': buf[n++] = ' '; break;
+                case '\\': buf[n++] = '\\'; break;
+                case 'r': buf[n++] = '\r'; break;
+                case 'n': buf[n++] = '\n'; break;
+                default: buf[n++] = v[i]; break;
+            }
+        } else {
+            buf[n++] = v[i];
+        }
+    }
+    return buf[0 .. n].idup;
+}
+
+/// Unix millis from `YYYY-MM-DDTHH:MM:SS[.sss]Z`. -1 on anything else —
+/// no timezone offsets, no leap-second smuggling, just what the ircd emits.
+long parseIrcTimestamp(string iso) @safe pure nothrow {
+    // Shortest accepted: `1970-01-01T00:00:00Z` (20 chars).
+    if (iso.length < 20) return -1;
+    if (iso[4] != '-' || iso[7] != '-' || iso[10] != 'T'
+            || iso[13] != ':' || iso[16] != ':' || iso[$ - 1] != 'Z')
+        return -1;
+    long num(size_t a, size_t b) {
+        long v = 0;
+        foreach (i; a .. b) {
+            if (iso[i] < '0' || iso[i] > '9') return -1;
+            v = v * 10 + (iso[i] - '0');
+        }
+        return v;
+    }
+    const y = num(0, 4), mo = num(5, 7), d = num(8, 10);
+    const h = num(11, 13), mi = num(14, 16), se = num(17, 19);
+    if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > 31
+            || h > 23 || mi > 59 || se > 60)
+        return -1;
+    long ms = 0;
+    size_t i = 19;
+    if (i < iso.length - 1 && iso[i] == '.') {
+        i++;
+        long scale = 100;
+        int digits = 0;
+        while (i < iso.length - 1 && iso[i] >= '0' && iso[i] <= '9' && digits < 6) {
+            if (digits < 3) ms += (iso[i] - '0') * scale;
+            scale /= 10;
+            digits++;
+            i++;
+        }
+        if (digits == 0) return -1;
+        while (i < iso.length - 1 && iso[i] >= '0' && iso[i] <= '9') i++;
+    }
+    if (i != iso.length - 1) return -1;
+    return daysToUnix(y, mo, d) * 86_400_000L + h * 3_600_000L + mi * 60_000L + se * 1_000L + ms;
+}
+
+/// Days from 1970-01-01 to y-mo-d (Howard Hinnant's days_from_civil).
+/// day-of-month validity is the caller's light range check above.
+private long daysToUnix(long y, long mo, long d) @safe pure nothrow {
+    y -= mo <= 2;
+    const era = (y >= 0 ? y : y - 399) / 400;
+    const yoe = y - era * 400;
+    const doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146_097 + doe - 719_468;
 }
 
 /// One X-line (ban) row from STATS g/k/Z numeric 210:

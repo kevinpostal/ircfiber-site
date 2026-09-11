@@ -10,8 +10,9 @@ module ircd_test;
 import std.stdio : writeln, writefln;
 import std.string : indexOf;
 
-import ircfiber.web.admin.ircd : parseIrcLine, parseStatsXLine, parseListLine,
-    parseNamesLine, stripStatusPrefix, redactAttr, redactConfText,
+import ircfiber.web.admin.ircd : HISTORY_SKEW_MS, isHistoryReplayLine, parseIrcLine, parseIrcTimestamp,
+    parseNamesLine, parseServerTimeTag, parseStatsXLine, parseListLine,
+    stripStatusPrefix, redactAttr, redactConfText,
     restoreSecrets, validBanMask, XLine, ChanInfo, NamesInfo;
 
 private int failures;
@@ -35,6 +36,48 @@ private void testParseIrcLine() {
     check(!parseIrcLine("   ").valid, "blank invalid");
     auto m = parseIrcLine(":srv MODE operA :+o");
     check(m.valid && m.params == ["operA", "+o"], "MODE params");
+}
+
+private void testParseServerTime() {
+    // Anchors that need no hand-computed civil dates.
+    check(parseIrcTimestamp("1970-01-01T00:00:00Z") == 0, "epoch is zero");
+    check(parseIrcTimestamp("1970-01-01T00:00:01Z") == 1_000, "one second is 1000 ms");
+    // Millis arithmetic is exact: the same instant half a second apart.
+    const a = parseIrcTimestamp("2026-09-09T15:33:00.000Z");
+    check(a > 0, "2026 stamp positive");
+    check(parseIrcTimestamp("2026-09-09T15:33:00.500Z") == a + 500, "fractional millis exact");
+    check(parseIrcTimestamp("2026-09-09T15:33:01Z") == a + 1_000, "fraction digits optional");
+    check(parseIrcTimestamp("2026-09-09T15:33:00.000100Z") == a, "sub-millis truncated");
+    check(parseIrcTimestamp("2026-02-29T12:00:00Z") > parseIrcTimestamp("2026-02-28T12:00:00Z"),
+        "leap-day ordering");
+    // Malformed input is -1, never an exception.
+    check(parseIrcTimestamp("") == -1, "empty rejected");
+    check(parseIrcTimestamp("2026-09-09 15:33:00Z") == -1, "space instead of T rejected");
+    check(parseIrcTimestamp("2026-09-09T15:33:00+00:00") == -1, "offset rejected, Z only");
+    check(parseIrcTimestamp("2026-13-01T00:00:00Z") == -1, "month 13 rejected");
+    check(parseIrcTimestamp("2026-09-09T25:00:00Z") == -1, "hour 25 rejected");
+    check(parseIrcTimestamp("2026-09-09T15:33:00.") == -1, "bare dot rejected");
+    check(parseIrcTimestamp("2026-09-09T15:33:00Z ") == -1, "trailing space rejected");
+    // Tag section: first usable `time=` wins, escapes decoded.
+    check(parseServerTimeTag("time=2026-09-09T15:33:00.000Z") == a, "bare time tag");
+    check(parseServerTimeTag("msgid=abc;time=2026-09-09T15:33:00.500Z") == a + 500,
+        "time after other tags");
+    check(parseServerTimeTag("foo=1;bar=2") == -1, "no time tag is -1");
+    check(parseServerTimeTag("time=junk") == -1, "bad time value is -1");
+    // The parser carries the stamp onto the line; untagged lines stay -1.
+    auto h = parseIrcLine("@time=2026-09-09T15:33:00.000Z :nick!u@h PRIVMSG #support :!issues");
+    check(h.valid && h.serverTimeMs == a, "line carries server time");
+    check(parseIrcLine(":srv NOTICE n :hi").serverTimeMs == -1, "untagged is -1");
+    // Replay rule: older than JOIN minus skew is replay, live is not,
+    // unknown channel and untagged lines never are.
+    const joinAt = a + 1_000_000;
+    check(isHistoryReplayLine(a, joinAt), "day-old line is replay");
+    check(!isHistoryReplayLine(joinAt, joinAt), "line at join is live");
+    check(!isHistoryReplayLine(joinAt + 5_000, joinAt), "line after join is live");
+    check(!isHistoryReplayLine(joinAt - HISTORY_SKEW_MS, joinAt), "skew edge is live");
+    check(isHistoryReplayLine(joinAt - HISTORY_SKEW_MS - 1, joinAt), "past skew is replay");
+    check(!isHistoryReplayLine(-1, joinAt), "untagged never replay");
+    check(!isHistoryReplayLine(a, 0), "unknown channel never replay");
 }
 
 private void testParseStatsXLine() {
@@ -100,7 +143,6 @@ private void testRestoreSecrets() {
     auto submitted = "      sendpass=\"***REDACTED***\"";
     auto r = restoreSecrets(live, submitted);
     check(r.error.length == 0 && r.restored == live, "restore single secret");
-
     // (b) untouched lines pass through
     live = "      sendpass=\"secret123\"\n      other=\"value\"";
     submitted = "      sendpass=\"***REDACTED***\"\n      other=\"value\"";
@@ -143,6 +185,7 @@ private void testValidBanMask() {
 
 void main() {
     testParseIrcLine();
+    testParseServerTime();
     testParseStatsXLine();
     testParseListLine();
     testParseNamesLine();

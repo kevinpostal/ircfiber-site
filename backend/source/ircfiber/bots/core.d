@@ -37,7 +37,7 @@ import ircfiber.bots.nick : IDENTIFY_RESEND_MIN_MS, NICK_RECLAIM_EVERY_MS, NickS
     classifyNickServNotice, modeGrantsRegistered, nickNeedsReclaim;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.support.format : clipBytes;
-import ircfiber.web.admin.ircd : IrcLine, parseIrcLine;
+import ircfiber.web.admin.ircd : IrcLine, isHistoryReplayLine, parseIrcLine;
 
 /// Unix time in milliseconds; 0 when the clock is unavailable.
 package(ircfiber) long nowMs() nothrow {
@@ -153,6 +153,11 @@ abstract class IrcBot {
     private TaskMutex sendMutex;
     /// Lower-cased channel → currently in it.
     private bool[string] joinedChannels;
+    /// Lower-cased channel → wall ms of our own JOIN echo. Anything the
+    /// ircd stamps older (minus skew) is chathistory replay, never live.
+    private long[string] joinedAtMs;
+    /// Logged once per session: replay suppression is otherwise invisible.
+    private bool historySkipLogged;
 
     // ── status published to Redis for the admin pages ──
     private string hostName;
@@ -253,11 +258,13 @@ abstract class IrcBot {
         alive = true;
         nick = cfg.nick;
         nickAttempts = 0;
+        joinedChannels = null;
+        joinedAtMs = null;
+        historySkipLogged = false;
         tls = null;
         haveConn = false;
         socketClosed = false;
         lastSendMs = 0;
-        joinedChannels = null;
         sessions++;
         scope (exit) teardown();
 
@@ -276,6 +283,14 @@ abstract class IrcBot {
         }
         lastRecvMs = nowMs();
 
+        // `server-time` first: with it the ircd stamps every relayed line,
+        // and replays chathistory with the ORIGINAL stamps, so our own JOIN
+        // time separates live traffic from replay. Request ONLY server-time:
+        // a bundle naming anything the server lacks is NAKed wholesale
+        // (verified: `msgid` is loaded but unadvertised). Unanswered here —
+        // without the ACK no tags arrive and every line parses untagged.
+        sendLine("CAP REQ :server-time");
+        sendLine("CAP END");
         sendLine("NICK " ~ nick);
         sendLine("USER " ~ cfg.username ~ " 0 * :" ~ cfg.realname);
         onSessionStart();
@@ -331,6 +346,7 @@ abstract class IrcBot {
         readyDone = false;
         connectedSinceMs = 0;
         joinedChannels = null;
+        joinedAtMs = null;
         closeSocket();
         haveConn = false;
         try onSessionEnd();
@@ -398,6 +414,18 @@ abstract class IrcBot {
     private void handleLine(string raw) {
         auto l = parseIrcLine(raw);
         if (!l.valid) return;
+        // Chathistory replay looks exactly like live traffic except for its
+        // stamps: drop it here, before any bot's command handling, so a
+        // rejoin never re-answers old `!` lines (or re-fires oper-gated
+        // WHOIS storms). Untagged lines and unknown channels pass through.
+        if (l.command == "PRIVMSG" && l.params.length >= 2
+                && isHistoryReplayLine(l.serverTimeMs, joinedAtMs.get(l.params[0].toLower(), 0))) {
+            if (!historySkipLogged) {
+                historySkipLogged = true;
+                logInfo("%s: ignoring chathistory replay for %s", cfg.logPrefix, l.params[0]);
+            }
+            return;
+        }
         if (onLine(l)) return;
         switch (l.command) {
             case "PING":
@@ -442,6 +470,9 @@ abstract class IrcBot {
             case "JOIN":
                 if (l.params.length && isMe(l.prefix) && isMyChannel(l.params[0])) {
                     joinedChannels[l.params[0].toLower()] = true;
+                    // Stamp BEFORE onJoined: the history burst lands right
+                    // behind our echo, so the echo is the replay/live cut.
+                    joinedAtMs[l.params[0].toLower()] = nowMs();
                     logInfo("%s: joined %s as %s", cfg.logPrefix, l.params[0], nick);
                     onJoined(l.params[0]);
                 }
@@ -457,6 +488,7 @@ abstract class IrcBot {
             case "KICK":
                 if (l.params.length >= 2 && isMyChannel(l.params[0]) && icmp(l.params[1], nick) == 0) {
                     joinedChannels.remove(l.params[0].toLower());
+                    joinedAtMs.remove(l.params[0].toLower());
                     logWarn("%s: kicked from %s by %s — rejoining in 5s", cfg.logPrefix,
                         l.params[0], nickOf(l.prefix));
                     runTask(&rejoinLater, l.params[0]);
