@@ -64,7 +64,7 @@
   let notice = $state('');
 
   const hb = $derived(data?.bot ?? null);
-  const nick = $derived(hb?.nick || data?.expectedNick || 'FiberEye');
+  const nick = $derived(hb?.nick || data?.expectedNick || 'FIBEREYE');
   const channel = $derived(hb?.channel || data?.expectedChannel || '#staff');
   const botState = $derived.by(() => {
     if (!data) return { label: 'Loading', tone: 'muted' as const };

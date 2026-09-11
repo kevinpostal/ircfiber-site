@@ -284,7 +284,7 @@ package void apiSupportBotStatus(HTTPServerRequest req, HTTPServerResponse res, 
     // before its first heartbeat.
     auto nick = environment.get("IRCFIBER_SUPPORT_BOT_NICK", "").strip();
     auto channel = environment.get("IRCFIBER_SUPPORT_BOT_CHANNEL", "").strip();
-    data["expectedNick"] = Json(nick.length ? nick : "FiberSupport");
+    data["expectedNick"] = Json(nick.length ? nick : "FIBERSUPPORT");
     data["expectedChannel"] = Json(channel.length ? channel : "#support");
     data["runsInThisProcess"] = Json(isEnvEnabled("IRCFIBER_SUPPORT_BOT_ENABLED"));
     jsonOk(res, data);

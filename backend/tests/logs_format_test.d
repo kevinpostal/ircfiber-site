@@ -373,7 +373,7 @@ private void testStyleBanNotice() {
         == C ~ "04" ~ B ~ "ZLINE" ~ B ~ C ~ " " ~ B ~ "1.2.3.4" ~ B ~ " for 3600s (connect_flood, strike 1)",
         "own placement: red keyword, bold mask");
     const foreign = "XLINE: m_connectban@irc.ircfiber.com added a timed Z-line on 185.206.149.176,"
-        ~ " expires in 5 minutes: FiberEye: connection flood detected. Appeal: https://ircfiber.com/unban"
+        ~ " expires in 5 minutes: FIBEREYE: connection flood detected. Appeal: https://ircfiber.com/unban"
         ~ " · trigger: bob, alice [alice]";
     const styled = styleBanNotice(foreign);
     check(styled.indexOf(C ~ "04" ~ B ~ "Z-line" ~ B ~ C) >= 0, "automatic: red Z-line keyword");

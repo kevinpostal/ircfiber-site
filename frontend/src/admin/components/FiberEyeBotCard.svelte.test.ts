@@ -40,7 +40,7 @@ const mockedGet = vi.mocked(api.get);
 const mockedPost = vi.mocked(api.post);
 
 const heartbeat = (over: Record<string, unknown> = {}) => ({
-  nick: 'FiberEye', configuredNick: 'FiberEye', host: 'ircd', port: 6667, tls: false,
+  nick: 'FIBEREYE', configuredNick: 'FIBEREYE', host: 'ircd', port: 6667, tls: false,
   channel: '#staff', joined: true,
   connected: true, registered: true, opered: true,
   startedAt: Date.now() - 3_600_000, connectedSince: Date.now() - 600_000, sessions: 1,
@@ -72,7 +72,7 @@ const heartbeat = (over: Record<string, unknown> = {}) => ({
 
 const status = (over: Record<string, unknown> = {}) => ({
   bot: heartbeat(over), alive: true, heartbeatAgeMs: 2000, runsInThisProcess: false,
-  expectedNick: 'FiberEye', expectedChannel: '#staff', outboxDepth: 0, controlDepth: 0, armed: false,
+  expectedNick: 'FIBEREYE', expectedChannel: '#staff', outboxDepth: 0, controlDepth: 0, armed: false,
 });
 
 describe('FiberEyeBotCard.svelte', () => {

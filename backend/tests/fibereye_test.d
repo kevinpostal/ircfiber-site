@@ -336,23 +336,26 @@ private void testAutoPlacedPredicate() {
     check(isAutoPlacedZline(banReason("connect_flood", "https://ircfiber.com/unban/tok")),
         "FiberEye's own reason is recognised");
     // The retuned <connectban banmessage> carries the same marker.
-    check(isAutoPlacedZline("FiberEye: connection flood detected. Appeal: https://ircfiber.com/unban"),
+    check(isAutoPlacedZline("FIBEREYE: connection flood detected. Appeal: https://ircfiber.com/unban"),
         "connectban banmessage is recognised");
+    // Pre-cutover bans carry the mixed-case marker and must stay releasable.
+    check(isAutoPlacedZline("FiberEye: connection flood detected. Appeal: https://ircfiber.com/unban"),
+        "legacy mixed-case marker still recognised");
     // The default reason of the admin ban endpoint must NOT be liftable by
     // the public page — this is the check that protects the network.
     check(!isAutoPlacedZline("Banned by administrator"), "an oper's ban is not auto-placed");
     check(!isAutoPlacedZline(""), "empty reason is not auto-placed");
 
     check(banReason("connect_flood", "https://x/unban/t")
-        == "FiberEye: connection flood from your address. Appeal: https://x/unban/t",
+        == "FIBEREYE: connection flood from your address. Appeal: https://x/unban/t",
         "connect_flood reason wording");
     check(banReason("nick_churn", "https://x/u")
-        == "FiberEye: too many nicknames from your address. Appeal: https://x/u",
+        == "FIBEREYE: too many nicknames from your address. Appeal: https://x/u",
         "nick_churn reason wording");
     check(banReason("session_churn", "https://x/u")
-        == "FiberEye: repeated connect/disconnect from your address. Appeal: https://x/u",
+        == "FIBEREYE: repeated connect/disconnect from your address. Appeal: https://x/u",
         "session_churn reason wording");
-    check(banReason("manual", "") == "FiberEye: banned by staff.", "manual reason without a URL");
+    check(banReason("manual", "") == "FIBEREYE: banned by staff.", "manual reason without a URL");
 }
 
 private void testAppealRoundTrip() {

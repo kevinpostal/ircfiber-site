@@ -116,7 +116,7 @@ const infoFixture = () => ({
   lines: ['Information for channel #staff:', '     Founder: Zodiac'],
   access: [
     { number: 1, level: 'SOP', mask: 'sq' },
-    { number: 2, level: 'HOP', mask: 'FiberEye' },
+    { number: 2, level: 'HOP', mask: 'FIBEREYE' },
   ],
   accessError: '',
   platform: { userId: 'u-1', username: 'zodiac', networkId: 'n-1' },
@@ -156,7 +156,7 @@ const rosterInfoFixture = () => ({
   ...infoFixture(),
   access: [
     { number: 1, level: 'SOP', mask: 'Zodiac_A' },
-    { number: 2, level: 'HOP', mask: 'FiberEye' },
+    { number: 2, level: 'HOP', mask: 'FIBEREYE' },
   ],
 });
 function mockRoster(over: {
@@ -245,7 +245,7 @@ describe('ChanServPanel.svelte — ChanServ channel management', () => {
     await expect.element(page.getByText('+ntOPH 200:1w')).toBeInTheDocument();
     await vi.waitFor(() => expect(accessRows().length).toBe(2));
     expect(accessRows()[0].textContent).toContain('SOP');
-    expect(accessRows()[1].textContent).toContain('FiberEye');
+    expect(accessRows()[1].textContent).toContain('FIBEREYE');
   });
 
   it('Suspend posts the reason and expiry, then re-runs the lookup', async () => {

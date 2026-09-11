@@ -221,7 +221,7 @@ string[] formatIssueDetail(const SupportIssueRecord r, long nowMs, string public
 
 /// Bot help line.
 string[] formatHelp(string publicUrl) @safe pure {
-    return ["FiberSupport: !issues [open|all] — recent issues · !issue <n> — details · !adduser <nick> — create a site account from a NickServ account, or send a signup link when there is none · !nsinfo <nick> — show NickServ account info (opers only) · report problems at "
+    return ["FIBERSUPPORT: !issues [open|all] — recent issues · !issue <n> — details · !adduser <nick> — create a site account from a NickServ account, or send a signup link when there is none · !nsinfo <nick> — show NickServ account info (opers only) · report problems at "
         ~ feedbackUrl(publicUrl)];
 }
 

@@ -14,14 +14,14 @@ private void check(bool cond, string what, string file = __FILE__, size_t line =
 
 private void testNeedsReclaim() {
     // The whole point: a Guest nick on a live session must trigger reclaim.
-    check(nickNeedsReclaim(true, "Guest25885", "FiberSupport"), "guest vs want");
-    check(nickNeedsReclaim(true, "Guest21457", "FiberEye"), "guest vs eye");
-    check(nickNeedsReclaim(true, "FiberSupport_", "FiberSupport"), "433 fallback still reclaims");
+    check(nickNeedsReclaim(true, "Guest25885", "FIBERSUPPORT"), "guest vs want");
+    check(nickNeedsReclaim(true, "Guest21457", "FIBEREYE"), "guest vs eye");
+    check(nickNeedsReclaim(true, "FIBERSUPPORT_", "FIBERSUPPORT"), "433 fallback still reclaims");
     // No-ops: already home, not registered, or nothing to compare.
-    check(!nickNeedsReclaim(true, "FiberSupport", "FiberSupport"), "home nick is quiet");
-    check(!nickNeedsReclaim(true, "fibersupport", "FiberSupport"), "case-insensitive match");
-    check(!nickNeedsReclaim(false, "Guest25885", "FiberSupport"), "pre-registration is quiet");
-    check(!nickNeedsReclaim(true, "", "FiberSupport"), "empty nick is quiet");
+    check(!nickNeedsReclaim(true, "FIBERSUPPORT", "FIBERSUPPORT"), "home nick is quiet");
+    check(!nickNeedsReclaim(true, "fibersupport", "FIBERSUPPORT"), "case-insensitive match");
+    check(!nickNeedsReclaim(false, "Guest25885", "FIBERSUPPORT"), "pre-registration is quiet");
+    check(!nickNeedsReclaim(true, "", "FIBERSUPPORT"), "empty nick is quiet");
     check(!nickNeedsReclaim(true, "Guest1", ""), "empty want is quiet");
 }
 
@@ -42,7 +42,7 @@ private void testClassify() {
     check(classifyNickServNotice("NickServ!services@services.ircfiber.com",
         "You are already identified.") == NickServNote.identifyOk, "already identified");
     check(classifyNickServNotice("NickServ!services@services.ircfiber.com",
-        "Invalid password for FiberSupport.") == NickServNote.identifyBad, "bad password");
+        "Invalid password for FIBERSUPPORT.") == NickServNote.identifyBad, "bad password");
     // Sender gate: the same wordings from anyone else must not IDENTIFY.
     check(classifyNickServNotice("ChanServ!services@services.ircfiber.com",
         "Password accepted - you are now recognized.") == NickServNote.none, "chanserv never");
@@ -60,12 +60,12 @@ private void testClassify() {
 
 private void testModeGrants() {
     check(modeGrantsRegistered("Guest25885", ["Guest25885", "+r"]), "+r grants");
-    check(modeGrantsRegistered("FiberSupport", ["FiberSupport", "+rw"]), "+rw grants");
-    check(!modeGrantsRegistered("FiberSupport", ["FiberSupport", "+B"]), "own +B ignored");
-    check(!modeGrantsRegistered("FiberEye", ["FiberEye", "+s"]), "snomask ignored");
-    check(!modeGrantsRegistered("FiberEye", ["FiberEye", "-r"]), "removal ignored");
-    check(!modeGrantsRegistered("FiberEye", ["SomeoneElse", "+r"]), "other target ignored");
-    check(modeGrantsRegistered("fibereye", ["FiberEye", "+r"]), "target case-insensitive");
+    check(modeGrantsRegistered("FIBERSUPPORT", ["FIBERSUPPORT", "+rw"]), "+rw grants");
+    check(!modeGrantsRegistered("FIBERSUPPORT", ["FIBERSUPPORT", "+B"]), "own +B ignored");
+    check(!modeGrantsRegistered("FIBEREYE", ["FIBEREYE", "+s"]), "snomask ignored");
+    check(!modeGrantsRegistered("FIBEREYE", ["FIBEREYE", "-r"]), "removal ignored");
+    check(!modeGrantsRegistered("FIBEREYE", ["SomeoneElse", "+r"]), "other target ignored");
+    check(modeGrantsRegistered("fibereye", ["FIBEREYE", "+r"]), "target case-insensitive");
     check(!modeGrantsRegistered("x", ["x"]), "short params ignored");
 }
 

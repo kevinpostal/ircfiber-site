@@ -44,7 +44,7 @@
  *   IRCFIBER_FIBEREYE_HOST                 ircd host (default IRCFIBER_IRCD_HOST, then irc.ircfiber.com)
  *   IRCFIBER_FIBEREYE_PORT                 ircd port (default IRCFIBER_IRCD_PORT, then 6667)
  *   IRCFIBER_FIBEREYE_TLS                  "1" → TLS client connection
- *   IRCFIBER_FIBEREYE_NICK                 default FiberEye
+ *   IRCFIBER_FIBEREYE_NICK                 default FIBEREYE
  *   IRCFIBER_FIBEREYE_CHANNEL              announcements channel (default #staff)
  *   IRCFIBER_FIBEREYE_NICKSERV_PASSWORD    optional (also _FILE); IDENTIFY after 001
  *   IRCFIBER_FIBEREYE_OPER                 oper account; unset → no OPER, so no
@@ -103,7 +103,7 @@ struct FiberEyeConfig {
     string host;
     ushort port = 6667;
     bool tls;
-    string nick = "FiberEye";
+    string nick = "FIBEREYE";
     string channel = "#staff";
     /// Comma-separated list of channels to join (supports multiple).
     string channels = "#staff,#ircfiber";
@@ -443,7 +443,7 @@ final class FiberEyeBot : IrcBot {
         LogEvent banEv;
         banEv.type = "notice";
         banEv.ts = nowMs();
-        banEv.actor = "FiberEye";
+        banEv.actor = "FIBEREYE";
         banEv.text = shown;
         pushLogEvent(pushRedis, banEv);
     }
@@ -805,7 +805,7 @@ final class FiberEyeBot : IrcBot {
         LogEvent banEv;
         banEv.type = "notice";
         banEv.ts = now;
-        banEv.actor = "FiberEye";
+        banEv.actor = "FIBEREYE";
         banEv.text = "ZLINE " ~ b.mask ~ " for " ~ seconds_.to!string ~ "s ("
             ~ rule ~ ", strike " ~ strikes.to!string ~ ")";
         pushLogEvent(pushRedis, banEv);

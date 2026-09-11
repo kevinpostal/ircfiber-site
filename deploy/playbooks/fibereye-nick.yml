@@ -1,12 +1,12 @@
 ---
-# One-shot: register the FiberEye bot nick with NickServ so nobody else can
+# One-shot: register the FIBEREYE bot nick with NickServ so nobody else can
 # take it. The oper class deliberately carries no <badnick> reservation
-# (FiberEye sends NICK before it can OPER, so a reservation would lock our
+# (FIBEREYE sends NICK before it can OPER, so a reservation would lock our
 # own bot out), which makes this registration the only thing protecting the
 # nick. Idempotent: a second run just gets "already registered".
 #
 #   ansible-playbook playbooks/fibereye-nick.yml
-- name: Register the FiberEye nick with NickServ
+- name: Register the FIBEREYE nick with NickServ
   hosts: ircfiber_gw
   become: true
   tags: [fibereye]
@@ -30,9 +30,9 @@
       ansible.builtin.shell:
         cmd: >-
           docker run --rm --network {{ _ircd_net.stdout.split()[0] }} busybox sh -c
-          "(printf 'NICK {{ fibereye_nick | default('FiberEye') }}_reg\r\nUSER reg 0 * :registration\r\n';
+          "(printf 'NICK {{ fibereye_nick | default('FIBEREYE') }}_reg\r\nUSER reg 0 * :registration\r\n';
             sleep 6;
-            printf 'NICK {{ fibereye_nick | default('FiberEye') }}\r\n';
+            printf 'NICK {{ fibereye_nick | default('FIBEREYE') }}\r\n';
             sleep 3;
             printf 'PRIVMSG NickServ :REGISTER {{ vault_fibereye_nickserv_password }} eye@ircfiber.com\r\n';
             sleep 5;

@@ -104,12 +104,13 @@ long banDurationFor(long strikes, long baseSeconds) @safe pure {
 /// reasons and the ircd's `<connectban banmessage>` start with it, so one
 /// predicate covers both and a human oper's Z-line can never be lifted by
 /// the public unban page.
-enum FIBEREYE_BAN_MARKER = "FiberEye:";
+enum FIBEREYE_BAN_MARKER = "FIBEREYE:";
 
 /// True when `reason` marks an automatically placed ban — the only kind
 /// the self-service `/unban` page may remove.
 bool isAutoPlacedZline(string reason) @safe pure {
-    return reason.strip().startsWith(FIBEREYE_BAN_MARKER);
+    const s = reason.strip();
+    return s.startsWith(FIBEREYE_BAN_MARKER) || s.startsWith("FiberEye:");
 }
 
 /// The reason text sent to the ircd, which is also what the banned client

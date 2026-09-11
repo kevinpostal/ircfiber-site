@@ -64,7 +64,7 @@
       host="*@{{ ircd_trusted_subnet }} *@{{ ircd_trusted_subnet_v6 }}"
       type="Dashboard">
 
-# FiberEye: the connection-watch bot and the #staff announcer (it replaced
+# FIBEREYE: the connection-watch bot and the #staff announcer (it replaced
 # the FiberLogs log bot, whose Snotices/LogBot oper is gone). Two
 # capabilities beyond an ordinary client, and nothing else: connect/remote
 # connect/quit/X-line server notices (umode +s with snomasks c/C/q/x) and
@@ -79,24 +79,24 @@
 # privs="servers/auspex" is REQUIRED, not incidental: `commands="STATS"`
 # alone lets the oper issue the command but the restricted STATS letters
 # stay gated on that priv, so `STATS Z` answers
-# `STATS: Stats 'Z' denied for FiberEye` — verified against InspIRCd
-# 4.11.0. Without it FiberEye can place a Z-line but never see one, so no
+# `STATS: Stats 'Z' denied for FIBEREYE` — verified against InspIRCd
+# 4.11.0. Without it FIBEREYE can place a Z-line but never see one, so no
 # placement is ever confirmed and the reconciliation sweep marks every
 # standing ban as already gone. It is the same read-only visibility the
 # Dashboard class above needs for exactly the same reason.
 #
 # Host-locked to the Docker network like the dashboard oper (both
 # families: a v6 source does not match the v4 subnet).
-# Deliberately no <badnick nick="FIBEREYE">: unlike FiberServ (a BotServ
-# pseudo-client), FiberEye is a real client that sends NICK before it can
+# Deliberately no <badnick nick="FIBEREYE">: unlike FIBERSERV (a BotServ
+# pseudo-client), FIBEREYE is a real client that sends NICK before it can
 # OPER, so a reservation would lock our own bot out. The nick is protected
-# by NickServ registration instead, exactly like FiberSupport.
+# by NickServ registration instead, exactly like FIBERSUPPORT.
 <class name="EyeWatch"
        commands="ZLINE STATS"
        privs="servers/auspex"
        usermodes="s"
        snomasks="cCqx">
-<type name="FiberEye"
+<type name="FIBEREYE"
       classes="EyeWatch"
       vhost="eye&netsuffix;"
       modes="+s +cCqx">
@@ -104,7 +104,7 @@
       hash="hmac-sha256"
       password="{{ ircd_fibereye_oper_hash }}"
       host="*@{{ ircd_trusted_subnet }} *@{{ ircd_trusted_subnet_v6 }}"
-      type="FiberEye">
+      type="FIBEREYE">
 
 # /OPER {{ ircd_oper_name }} <vault_ircd_oper_password>
 # Password is stored as InspIRCd hmac-sha256 (base64(salt)$base64(hmac)),

@@ -9,9 +9,9 @@
  *
  * The safety rules, in order of importance:
  *   1. Only *machine-placed* Z-lines are liftable — `isAutoPlacedZline`
- *      matches the `FiberEye:` reason marker that both FiberEye and the
- *      ircd's own `<connectban banmessage>` carry. A human oper's ban can
- *      never be removed from here.
+ *      matches the `FIBEREYE:` reason marker that both FiberEye and the
+ *      ircd's own `<connectban banmessage>` carry (pre-cutover `FiberEye:`
+ *      reasons are still honoured). A human oper's ban can
  *   2. A catch-all mask (`*`, `0.0.0.0/0`, `::/0`) never counts as "the
  *      visitor's own ban" — `zlineMatches` rejects those outright.
  *   3. No release without a verified challenge. A missing Turnstile secret

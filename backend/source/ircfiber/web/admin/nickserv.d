@@ -540,7 +540,7 @@ package void apiNsCreate(HTTPServerRequest req, HTTPServerResponse res,
  *     privileged commands as. It is an oper by construction, and adding it
  *     unconditionally means an unreachable Anope cannot make it look
  *     droppable;
- *   * the bots' nicks — `FiberSupport` and `FiberLogs` are *not* Anope
+ *   * the bots' nicks — `FIBERSUPPORT` and `FiberLogs` are *not* Anope
  *     opers (verified: their `NickServ INFO` has no "is a Services
  *     Operator" line), they are infrastructure this codebase owns and
  *     identifies as, so nothing in Mongo will ever claim them.

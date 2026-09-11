@@ -17,7 +17,7 @@
  *   IRCFIBER_SUPPORT_BOT_HOST               ircd host (default IRCFIBER_IRCD_HOST, then irc.ircfiber.com)
  *   IRCFIBER_SUPPORT_BOT_PORT               ircd port (default IRCFIBER_IRCD_PORT, then 6667)
  *   IRCFIBER_SUPPORT_BOT_TLS                "1" → TLS client connection (default plaintext)
- *   IRCFIBER_SUPPORT_BOT_NICK               default FiberSupport
+ *   IRCFIBER_SUPPORT_BOT_NICK               default FIBERSUPPORT
  *   IRCFIBER_SUPPORT_BOT_CHANNEL            default #support
  *   IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD  optional; IDENTIFY after 001 when set.
  *                                           Prod sets only the _FILE form
@@ -54,7 +54,7 @@ struct SupportBotConfig {
     string host;
     ushort port = 6667;
     bool tls;
-    string nick = "FiberSupport";
+    string nick = "FIBERSUPPORT";
     string channel = "#support";
     string nickservPassword;
     string publicUrl = "https://ircfiber.com";

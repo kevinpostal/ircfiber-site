@@ -67,10 +67,10 @@ vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"
 # the human admin oper password.
 vault_ircd_dashboard_password: "REPLACE-WITH-STRONG-PASSWORD"
 # NickServ password of the #support bot nick (support_bot_nick, default
-# FiberSupport). Register the nick once from the prod host before the first
+# FIBERSUPPORT). Register the nick once from the prod host before the first
 # deploy (see the support-bot rollout notes); the bot sends
-# `PRIVMSG NickServ :IDENTIFY FiberSupport <password>` after 001. Leave empty
-# to skip IDENTIFY (the bot then falls back to FiberSupport_ on a 433).
+# `PRIVMSG NickServ :IDENTIFY FIBERSUPPORT <password>` after 001. Leave empty
+# to skip IDENTIFY (the bot then falls back to FIBERSUPPORT_ on a 433).
 vault_support_bot_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD"
 # ipinfo.io API token: the geo owner of the IP intelligence record
 # (ircfiber.ipintel) FiberEye announces in #staff and the admin pages show.
@@ -98,11 +98,11 @@ vault_ipintel_accounts:
 vault_proxycheck_key: ""
 vault_iphub_key: ""
 vault_ipapi_is_key: ""
-# NickServ password of the FiberEye nick (fibereye_nick, default FiberEye).
+# NickServ password of the FIBEREYE nick (fibereye_nick, default FIBEREYE).
 # Register the nick once with `ansible-playbook playbooks/fibereye-nick.yml`
 # before the first deploy; the bot sends
-# `PRIVMSG NickServ :IDENTIFY FiberEye <password>` after 001. Leave empty to
-# skip IDENTIFY (the bot then falls back to FiberEye_ on a 433).
+# `PRIVMSG NickServ :IDENTIFY FIBEREYE <password>` after 001. Leave empty to
+# skip IDENTIFY (the bot then falls back to FIBEREYE_ on a 433).
 # MUST be 32 characters or fewer: NickServ answers a longer one with
 # "Your password is too long. It must not exceed 32 characters." and the
 # registration silently does not happen.

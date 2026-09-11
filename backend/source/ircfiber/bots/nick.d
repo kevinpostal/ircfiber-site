@@ -2,7 +2,7 @@
  * Pure nick-reclaim helpers for the gateway IRC bots (`IrcBot` in core.d).
  *
  * Anope guards both bot nicks with NickServ `killprotect` (20 s killquick):
- * any session holding `FiberSupport`/`FiberEye` without identifying is
+ * any session holding `FIBERSUPPORT`/`FIBEREYE` without identifying is
  * SVSNICKed to `GuestNNNN` (`guestnickprefix = "Guest"` in
  * `site/deploy/roles/ircd/templates/nickserv.conf.j2`). That strikes
  * whenever the ircd restarts and the bot's 001-time IDENTIFY lands while

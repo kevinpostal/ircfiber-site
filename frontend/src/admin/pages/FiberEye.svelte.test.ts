@@ -43,7 +43,7 @@ const mockedGet = vi.mocked(api.get);
 const mockedPost = vi.mocked(api.post);
 
 const heartbeat = {
-  nick: 'FiberEye', configuredNick: 'FiberEye', host: 'ircd', port: 6667, tls: false,
+  nick: 'FIBEREYE', configuredNick: 'FIBEREYE', host: 'ircd', port: 6667, tls: false,
   connected: true, registered: true, opered: true,
   startedAt: Date.now() - 3_600_000, connectedSince: Date.now() - 600_000, sessions: 1,
   lastRecvAt: Date.now() - 1000, lastSendAt: Date.now() - 2000,
@@ -72,7 +72,7 @@ const heartbeat = {
 const candidate = {
   id: 'ban-1', mask: '2603:8001:98f0:1530::/64', ipGroup: '2603:8001:98f0:1530::/64',
   type: 'zline', rule: 'connect_flood',
-  reason: 'FiberEye: connection flood from your address. Appeal: https://ircfiber.com/unban/abc',
+  reason: 'FIBEREYE: connection flood from your address. Appeal: https://ircfiber.com/unban/abc',
   durationSeconds: 3600, placedAtMs: Date.now() - 120_000, expiresAtMs: Date.now() + 3_480_000,
   strikes: 1, observeOnly: true, placed: false, placeError: '',
   releasedAtMs: 0, releasedBy: '',
@@ -86,7 +86,7 @@ const overview = (over: Record<string, unknown> = {}) => ({
   alive: true,
   heartbeatAgeMs: 2000,
   runsInThisProcess: false,
-  expectedNick: 'FiberEye',
+  expectedNick: 'FIBEREYE',
   counters: {
     connects24h: 128, quits24h: 121, uniqueIps24h: 37, sessionsOpen: 3,
     bansActive: 0, bansObserved24h: 2, releases24h: 0,

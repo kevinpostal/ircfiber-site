@@ -250,7 +250,7 @@ package void apiFiberEyeOverview(HTTPServerRequest req, HTTPServerResponse res, 
     // What this deployment expects, so the page can name the bot before
     // its first heartbeat.
     auto nick = environment.get("IRCFIBER_FIBEREYE_NICK", "").strip();
-    data["expectedNick"] = Json(nick.length ? nick : "FiberEye");
+    data["expectedNick"] = Json(nick.length ? nick : "FIBEREYE");
     auto channel = environment.get("IRCFIBER_FIBEREYE_CHANNEL", "").strip();
     data["expectedChannel"] = Json(channel.length ? channel : "#staff");
     // The `#staff` announcement queue and the admin control list.

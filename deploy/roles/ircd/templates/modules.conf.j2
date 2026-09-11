@@ -223,7 +223,7 @@
 # 21600-second Z-line, i.e. the 6-hour default. A five-minute intent
 # would have shipped as a six-hour ban on eight connects.
 #
-# The banmessage MUST keep starting with the literal `FiberEye:` — the
+# The banmessage MUST keep starting with the literal `FIBEREYE:` — the
 # backend predicate isAutoPlacedZline() keys on that prefix, and it is
 # what lets the public /unban page lift a machine-placed Z-line while
 # never touching one a human oper set by hand.
@@ -231,7 +231,7 @@
 # ircfiber-engine-v6 (:104), localhost (:145) and localhost-v6 (:166)
 # connect classes all set useconnectban="no", which is what keeps the
 # ircd's healthcheck from Z-lining the ircd's own source address.
-<connectban banmessage="FiberEye: connection flood detected. Appeal: {{ ircd_appeal_url }}"
+<connectban banmessage="FIBEREYE: connection flood detected. Appeal: {{ ircd_appeal_url }}"
             banduration="5m"
             bootwait="128"
             ipv4cidr="32"

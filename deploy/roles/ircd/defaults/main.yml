@@ -271,11 +271,11 @@ ircd_permanent_channels:
     description: "IRC Fiber"
     topic: "Welcome to IRC Fiber — https://ircfiber.com"
     bot: true
-    # FiberEye sits in #staff and #ircfiber as halfop: visible staff presence
+    # FIBEREYE sits in #staff and #ircfiber as halfop: visible staff presence
     # without op powers it never uses. Scoped per channel.
     access:
       hop:
-        - "FiberEye"
+        - "FIBEREYE"
   - channel: "#welcome"
     modes: "nt"
     history: "50:1w"
@@ -285,7 +285,7 @@ ircd_permanent_channels:
     modes: "nt"
     history: "50:1w"
     description: "IRC Fiber support requests"
-    topic: "IRC Fiber support — report problems at https://ircfiber.com/?/feedback · FiberSupport announces new reports here"
+    topic: "IRC Fiber support — report problems at https://ircfiber.com/?/feedback · FIBERSUPPORT announces new reports here"
     bot: true
     # The support bot needs ops where it works: SECUREOPS is on, so `+o`
     # only sticks for an account on the access list — and it has to be
@@ -294,21 +294,21 @@ ircd_permanent_channels:
     # never manages the access list.
     access:
       aop:
-        - "FiberSupport"
+        - "FIBERSUPPORT"
   - channel: "#staff"
     modes: "ntO"
     history: "200:1w"
     description: "IRC Fiber staff log feed"
     topic: "IRC Fiber operations log — FiberLogs reports signups, outbound email and IRCd connects · oper-only (+O)"
     bot: true
-    # FiberEye reads as staff in the member list: HOP (+h) can kick, set
+    # FIBEREYE reads as staff in the member list: HOP (+h) can kick, set
     # the topic and manage voice — enough for an enforcement bot to be
     # visibly on duty — but cannot op/deop or touch the access list.
     # Scoped to this channel like the support bot's AOP: it has no
     # business holding status elsewhere.
     access:
       hop:
-        - "FiberEye"
+        - "FIBEREYE"
 
 # ChanServ registration of the staff channels above (roles/ircd/files/
 # ircd_channel_setup.py, run over TLS on the loopback TLS port). Set false
@@ -401,13 +401,13 @@ ircd_channel_autovoice:
 # bot and can talk to it, but cannot drive it.
 #
 # ident/host match the other services (nickserv.conf.j2 uses
-# services@services.host), so FiberServ reads as services in a WHOIS
+# services@services.host), so FIBERSERV reads as services in a WHOIS
 # rather than as a user-run bot. Anope Q-lines the nick when it creates
 # the bot; inspircd.conf.j2 also reserves it with <badnick> so the
 # reservation survives services being down. Set to {} to create no bot
 # (the `bot: true` flags then do nothing).
 ircd_services_bot:
-  nick: "FiberServ"
+  nick: "FIBERSERV"
   ident: "services"
   host: "services.host"
   realname: "IRC Fiber Channel Services"

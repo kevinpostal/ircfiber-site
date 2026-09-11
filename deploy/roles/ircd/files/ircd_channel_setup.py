@@ -19,7 +19,7 @@ config-defined <permchannels> tags, so the saved copy always wins. The
 mode lock changes the live channel, which the db then persists.
 
 A channel marked {"bot": true} additionally gets the network's own
-BotServ bot (IRCD_SERVICES_BOT, "FiberServ" in the role defaults) sitting
+BotServ bot (IRCD_SERVICES_BOT, "FIBERSERV" in the role defaults) sitting
 in it with fantasy commands on — the same ChanServ machinery reached as
 `op nick in the channel instead of /msg ChanServ OP #chan nick. BotServ's
 `defaults = "greet fantasy"` only applies to channels at registration

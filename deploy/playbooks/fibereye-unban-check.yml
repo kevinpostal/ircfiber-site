@@ -28,7 +28,7 @@
           PW=$(cat /etc/ircfiber/gateway/secrets/ircd_oper_password)
           OP=$(grep -oE '^IRCFIBER_IRCD_OPER=.*' /etc/ircfiber/gateway/env | cut -d= -f2)
           {% if state == 'place' %}
-          CMD="ZLINE {{ probe_ip }} 300 :FiberEye: unban render check"
+          CMD="ZLINE {{ probe_ip }} 300 :FIBEREYE: unban render check"
           {% else %}
           CMD="ZLINE {{ probe_ip }}"
           {% endif %}

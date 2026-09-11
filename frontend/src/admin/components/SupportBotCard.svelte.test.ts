@@ -38,7 +38,7 @@ const mockedGet = vi.mocked(api.get);
 const mockedPost = vi.mocked(api.post);
 
 const heartbeat = (over: Record<string, unknown> = {}) => ({
-  nick: 'FiberSupport', configuredNick: 'FiberSupport', channel: '#support', host: 'ircd', port: 6667, tls: false,
+  nick: 'FIBERSUPPORT', configuredNick: 'FIBERSUPPORT', channel: '#support', host: 'ircd', port: 6667, tls: false,
   publicUrl: 'https://ircfiber.com', connected: true, registered: true, joined: true,
   startedAt: Date.now() - 3_600_000, connectedSince: Date.now() - 600_000, sessions: 1,
   lastRecvAt: Date.now() - 1000, lastSendAt: Date.now() - 2000,
@@ -50,12 +50,12 @@ const heartbeat = (over: Record<string, unknown> = {}) => ({
 
 const online = () => ({
   status: heartbeat(), alive: true, heartbeatAgeMs: 2000, outboxDepth: 0, controlDepth: 0,
-  expectedNick: 'FiberSupport', expectedChannel: '#support', runsInThisProcess: false,
+  expectedNick: 'FIBERSUPPORT', expectedChannel: '#support', runsInThisProcess: false,
 });
 
 const offline = () => ({
   status: null, alive: false, heartbeatAgeMs: -1, outboxDepth: 4, controlDepth: 0,
-  expectedNick: 'FiberSupport', expectedChannel: '#support', runsInThisProcess: false,
+  expectedNick: 'FIBERSUPPORT', expectedChannel: '#support', runsInThisProcess: false,
 });
 
 describe('SupportBotCard.svelte', () => {
