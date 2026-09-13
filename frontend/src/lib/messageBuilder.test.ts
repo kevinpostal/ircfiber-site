@@ -215,7 +215,37 @@ describe('groupJoinPartEvents', () => {
     const result = groupJoinPartEvents(messages);
     expect(result).toHaveLength(1);
     const group = result[0] as { sentences: string };
-    expect(group.sentences).toContain('Channel mode');
+    expect(group.sentences).toContain('opped');
+    expect(group.sentences).toContain('mode_OP');
+  });
+
+  it('merges several MODE events for one nick into a single mode sentence', () => {
+    const messages: IRCMessage[] = [
+      { command: 'JOIN', nick: 'alice', prefix: 'alice!user@host' },
+      { command: 'MODE', nick: 'op', params: ['#c', '+v', 'alice'] },
+      { command: 'MODE', nick: 'op', params: ['#c', '+o', 'alice'] },
+    ];
+    const result = groupJoinPartEvents(messages);
+    expect(result).toHaveLength(1);
+    const group = result[0] as { sentences: string };
+    // One sentence, both phrases, highest added rank drives the symbol.
+    expect(group.sentences.match(/data-name="alice"/g)).toHaveLength(1);
+    expect(group.sentences).toContain('opped, voiced');
+    expect(group.sentences).toContain('mode_OP');
+    expect(group.sentences).not.toContain('mode_VOICED');
+  });
+
+  it('drops a +o/-o pair for the same nick inside one group', () => {
+    const messages: IRCMessage[] = [
+      { command: 'MODE', nick: 'op', params: ['#c', '+o', 'alice'] },
+      { command: 'MODE', nick: 'op', params: ['#c', '-o', 'alice'] },
+      { command: 'JOIN', nick: 'bob', prefix: 'bob!user@host' },
+    ];
+    const result = groupJoinPartEvents(messages);
+    expect(result).toHaveLength(1);
+    const group = result[0] as { sentences: string };
+    expect(group.sentences).not.toContain('alice');
+    expect(group.sentences).toContain('joined');
   });
 });
 

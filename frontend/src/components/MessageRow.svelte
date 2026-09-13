@@ -5,6 +5,7 @@
   import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, wrapNicksWithHighlight } from '../lib/autolinker';
+  import { modeSentences } from '../lib/modeSentence';
   import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
   import { sendMessage } from '../stores/wsConnection.svelte.ts';
   import { globalPrefs, getBufferPrefs, highlightWords } from '../stores/preferences.svelte';
@@ -389,20 +390,7 @@
     } else if (cmd === 'TOPIC') {
       inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' changed the topic to: ' + renderText(msg.text || '');
     } else if (cmd === 'MODE') {
-      const banInfos = expandBanModes(msg.params || []);
-      if (banInfos.length === 1) {
-        const modeInfo = banInfos[0];
-        inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> `
-          + `${escapeHtml(modeInfo.action)} <b>${escapeHtml(modeInfo.target)}</b> `
-          + `(<span class="mono rawMode">${escapeHtml(modeInfo.diff)}${escapeHtml(modeInfo.mode)}</span>)`;
-      } else if (banInfos.length > 1) {
-        const parts = banInfos.map(b => `${escapeHtml(b.action)} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`);
-        inner += `<span class="buffer bufferLink user link" onclick="void(0)">${escapeHtml(nick)}</span> ${parts.join(', ')}`;
-      } else if (msg.params && !msg.params[0]?.startsWith('#') && !msg.params[0]?.startsWith('&')) {
-        inner += '<span class="prefix">&#x2699;</span> user mode: ' + escapeHtml(msg.params.slice(1).join(' ') || msg.text || '');
-      } else {
-        inner += '<span class="prefix">&#x2699;</span> ' + escapeHtml(nick) + ' sets mode: ' + escapeHtml(msg.params?.slice(1).join(' ') || msg.text || '');
-      }
+      inner += modeSentences(msg.params || [], nick, msg.text || '').join('<span class="bullet">\u2022</span>');
     } else if (cmd === 'KICK') {
       const kicked = msg.params?.[1] || '';
       inner += '<span class="prefix">&#x2190;</span>'
@@ -432,37 +420,6 @@
     return `<span translate="no" class="content">${inner}</span>`;
   }
 
-  interface BanModeInfo {
-    action: string;
-    target: string;
-    diff: string;
-    mode: string;
-  }
-
-  function expandBanModes(params: string[]): BanModeInfo[] {
-    if (!params || params.length < 2) return [];
-    const modeStr = params[1] || '';
-    const targets = params.slice(2);
-    let adding = true;
-    let targetIdx = 0;
-    const out: BanModeInfo[] = [];
-    for (const ch of modeStr) {
-      if (ch === '+') { adding = true; continue; }
-      if (ch === '-') { adding = false; continue; }
-      if (ch !== 'b') continue;
-      if (targetIdx < targets.length) {
-        const diff = adding ? '+' : '-';
-        const action = adding ? 'banned' : 'un-banned';
-        out.push({ action, target: targets[targetIdx++], diff, mode: 'b' });
-      }
-    }
-    return out;
-  }
-
-  function parseBanMode(params: string[]): BanModeInfo | null {
-    const expanded = expandBanModes(params);
-    return expanded.length === 1 ? expanded[0] : null;
-  }
   function toggleExpand(): void {
     const willExpand = !expanded;
     // If the user was pinned at the bottom before expanding, keep the
@@ -511,15 +468,6 @@
     }
   }
 
-  function formatModeText(evt: IRCMessage): string {
-    const params = evt.params || [];
-    const modeStr = params[1] || evt.text || '';
-    if (params.length > 2) {
-      return `${modeStr} ${params.slice(2).join(' ')}`;
-    }
-    return modeStr;
-  }
-
   function renderEvent(evt: IRCMessage): { timeStr: string; fullTitle: string; html: string; typeClass: string } {
     const eTs = evt.timestamp || (evt.t ? new Date(evt.t).toISOString() : null);
     const eTimeStr = eTs ? formatTime12Hour(new Date(eTs)) : '--:--:--';
@@ -554,16 +502,7 @@
         html = `<span class="prefix">&#x2691;</span> <span class="bufferLink user link">${escapeHtml(eNick)}</span> is back`;
       }
     } else if (eCmd === 'MODE') {
-      const bans = expandBanModes(evt.params || []);
-      if (bans.length === 1) {
-        const b = bans[0];
-        html = `<span class="buffer bufferLink user link">${escapeHtml(eNick)}</span> ${b.action} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`;
-      } else if (bans.length > 1) {
-        const parts = bans.map(b => `${b.action} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`);
-        html = `<span class="buffer bufferLink user link">${escapeHtml(eNick)}</span> ${parts.join(', ')}`;
-      } else {
-        html = `<span class="prefix">&#x2699;</span> Channel mode is <b>${escapeHtml(formatModeText(evt))}</b>`;
-      }
+      html = modeSentences(evt.params || [], eNick, evt.text || '').join('<span class="bullet">\u2022</span>');
     }
 
     return { timeStr: eTimeStr, fullTitle: eFullTitle, html, typeClass: eTypeClass };

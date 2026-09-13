@@ -213,10 +213,35 @@ module
 command { service = "OperServ"; name = "DEFCON"; command = "operserv/defcon"; permission = "operserv/defcon"; }
 include { type = "file"; name = "operserv.conf" }
 
-/* Logging: services.log under /anope/logs plus globops for admin actions. */
+/* Logging: services.log under /anope/logs plus globops for admin actions.
+ * The file target also feeds #staff so opers see the whole services log in
+ * the channel without needing +s snomasks, and can answer with `/msg
+ * OperServ DEFCON <1-4>` from the same window (Anope splits `target` on
+ * whitespace: file names, `globops` and channel names may be mixed in one
+ * block). This block REPLACES the former dedicated `target = "#staff"`
+ * block, which duplicated every admin line in the channel once this one
+ * gained the channel. #staff is oper-only (+O, mode-locked), so per the
+ * Anope "secure your log channels" rule no additional securing is needed.
+ * Note the channel now also carries users=connect/disconnect, which is
+ * chatty: every platform user arrives through a couple of engine
+ * container IPs.
+ * bot = Global matters only as a fallback: Anope's LOG_ADMIN (admin=)
+ * and LOG_USER (users=) categories always carry a predefined sender —
+ * the command's owning service — which overrides `bot =` entirely
+ * (src/logger.cpp Log::ProcessMessage: `bi = l->bi; if (!bi) bi =
+ * this->bot;`). Channel delivery is a raw PRIVMSG from that sender, and
+ * InspIRCd's +n (noextmsg) on #staff silently drops it unless the sender
+ * is actually a channel member — so BOTH Global (bot fallback) and
+ * OperServ (predefined sender for the admin/user categories) need
+ * `channels = "#staff"` in their own service {} blocks. See
+ * global.conf.j2 and operserv.conf.j2 for why that means replacing their
+ * stock includes outright rather than adding override blocks (Anope does
+ * not first-block-wins dedupe `service` the way it dedupes `module` by
+ * name — confirmed live, 2026-09-11: a duplicate `service { nick =
+ * "Global" }` override crashes Anope with SIGSEGV on startup). */
 log
 {
-	target = "services.log"
+	target = "services.log #staff"
 	bot = "Global"
 	logage = 7
 	admin = "*"
@@ -232,40 +257,6 @@ log
 log
 {
 	target = "globops"
-	admin = "global/* operserv/chankill operserv/mode operserv/kick operserv/akill operserv/s*line operserv/noop operserv/jupe operserv/oline operserv/set operserv/svsnick operserv/svsjoin operserv/svspart nickserv/getpass */drop"
-	servers = "squit"
-	users = "oper"
-	other = "expire/* bados akill/*"
-}
-
-/* Staff channel feed: mirror the globops security set into #staff so opers
- * watching the channel see spam-relevant services events without needing +s
- * snomasks, and can answer with `/msg OperServ DEFCON <1-4>` from the same
- * window. #staff is already oper-only (+O, mode-locked), so per the Anope
- * "secure your log channels" rule no additional securing is needed.
- * Deliberately NOT the services.log set: users=connect/disconnect would
- * flood the channel because every platform user arrives through a couple
- * of engine container IPs (the same shape behind the 2026-09-02 session
- * kill incident and the removal of `reducedsessions` from os_defcon).
- * bot = Global matters only as a fallback: Anope's LOG_ADMIN (admin=)
- * and LOG_USER (users=) categories always carry a predefined sender —
- * the command's owning service (OperServ, for both `oper` and every
- * `operserv/*` admin command here) — which overrides `bot =` entirely
- * (src/logger.cpp Log::ProcessMessage: `bi = l->bi; if (!bi) bi =
- * this->bot;`). Channel delivery is a raw PRIVMSG from that sender, and
- * InspIRCd's +n (noextmsg) on #staff silently drops it unless the
- * sender is actually a channel member — so BOTH Global (bot fallback)
- * and OperServ (predefined sender for every category this block uses)
- * need `channels = "#staff"` in their own service {} blocks. See
- * global.conf.j2 and operserv.conf.j2 for why that means replacing
- * their stock includes outright rather than adding override blocks
- * (Anope does not first-block-wins dedupe `service` the way it dedupes
- * `module` by name — confirmed live, 2026-09-11: a duplicate `service {
- * nick = "Global" }` override crashes Anope with SIGSEGV on startup). */
-log
-{
-	target = "#staff"
-	bot = "Global"
 	admin = "global/* operserv/chankill operserv/mode operserv/kick operserv/akill operserv/s*line operserv/noop operserv/jupe operserv/oline operserv/set operserv/svsnick operserv/svsjoin operserv/svspart nickserv/getpass */drop"
 	servers = "squit"
 	users = "oper"

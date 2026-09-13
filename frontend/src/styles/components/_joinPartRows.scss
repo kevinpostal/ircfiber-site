@@ -212,6 +212,21 @@
   margin: 0 6px;
 }
 
+/* IRCCloud `span.mode` — the parenthetical "(promoted to admin, opped)"
+   after a moded nick. Dimmer than the row text, same size, both in a
+   grouped head sentence and in a standalone/child mode row. */
+.row.messageRow .mode {
+  color: var(--prefix-fg);
+}
+
+/* A MODE line can carry several sentences (`+ob nick mask`); the same
+   bullet separator the grouped head uses joins them, so it needs the
+   grouped head's spacing outside `.sentence` too. */
+.row.messageRow .content .bullet {
+  color: var(--prefix-fg);
+  margin: 0 6px;
+}
+
 .collapseGroup.joinPartGroup {
   padding-left: 0;
 }

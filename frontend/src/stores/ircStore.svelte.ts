@@ -2,6 +2,7 @@ import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, O
 import { MODE_HIERARCHY } from '../types';
 import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
 import { setChanPrefixChars } from '../lib/autolinker';
+import { setChanModeTypes } from '../lib/modeSentence';
 import { isMessageIgnored } from '../lib/ignorePolicy';
 import { closeNotification } from '../lib/notifications';
 import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, globalPrefs, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
@@ -3466,6 +3467,28 @@ function refreshChanPrefixChars(): void {
   setChanPrefixChars(chars);
 }
 /**
+ * Feed every network's ISUPPORT `CHANMODES` classes into the mode-sentence
+ * formatter so a mode's argument is consumed by the mode that owns it
+ * (`+ob nick mask` must not hand the ban mask to the op sentence).
+ * Process-global like `refreshChanPrefixChars`, so the union across
+ * networks is used; a letter already claimed by an earlier class is not
+ * re-added.
+ */
+function refreshChanModeTypes(): void {
+  let a = '', b = '', c = '';
+  const claim = (letter: string): boolean =>
+    !a.includes(letter) && !b.includes(letter) && !c.includes(letter);
+  for (const net of ircState.networks) {
+    const cm = net.isupport?.['CHANMODES'];
+    if (!cm) continue;
+    const parts = cm.split(',');
+    for (const letter of parts[0] || '') if (claim(letter)) a += letter;
+    for (const letter of parts[1] || '') if (claim(letter)) b += letter;
+    for (const letter of parts[2] || '') if (claim(letter)) c += letter;
+  }
+  setChanModeTypes(a, b, c);
+}
+/**
  * Apply a freshly-received ISUPPORT map to the network. Sent by the
  * engine as a dedicated synthetic event when the 005 reply stream
  * finishes — see `IRCRawEvent.makeIsupport` in
@@ -3494,6 +3517,7 @@ export function applyIsupportUpdate(
   if (same) return;
   net.isupport = { ...raw };
   refreshChanPrefixChars();
+  refreshChanModeTypes();
   markNetworkSeen(networkId);
 }
 /**

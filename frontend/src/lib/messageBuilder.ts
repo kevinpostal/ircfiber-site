@@ -1,5 +1,9 @@
 import type { IRCMessage, JoinPartGroupMessage, DiscoGroupMessage } from '../types';
 import { isJoinPartLike, isDisconnectLike, escapeHtml, stripPrefix } from './utils';
+import {
+  flagModeSentence, listModeSentence, mergeUserModeChange, modeSentences,
+  parseModeLine, userModeSentence, type UserModeChange,
+} from './modeSentence';
 
 /**
  * Group consecutive MOTD lines (372, 375) into a single MOTD_GROUP message.
@@ -110,35 +114,6 @@ interface NickState {
   newNick?: string;
 }
 
-function formatModeText(evt: IRCMessage): string {
-  const params = evt.params || [];
-  const modeStr = params[1] || evt.text || '';
-  if (params.length > 2) {
-    return `${modeStr} ${params.slice(2).join(' ')}`;
-  }
-  return modeStr;
-}
-
-function expandBanModes(params: string[]): { action: string; target: string; diff: string; mode: string }[] {
-  if (!params || params.length < 2) return [];
-  const modeStr = params[1] || '';
-  const targets = params.slice(2);
-  let adding = true;
-  let targetIdx = 0;
-  const out: { action: string; target: string; diff: string; mode: string }[] = [];
-  for (const ch of modeStr) {
-    if (ch === '+') { adding = true; continue; }
-    if (ch === '-') { adding = false; continue; }
-    if (ch !== 'b') continue;
-    if (targetIdx < targets.length) {
-      const diff = adding ? '+' : '-';
-      const action = adding ? 'banned' : 'un-banned';
-      out.push({ action, target: targets[targetIdx++], diff, mode: 'b' });
-    }
-  }
-  return out;
-}
-
 function buildJoinPartGroup(events: IRCMessage[]): JoinPartGroupMessage {
   const nickStates = new Map<string, NickState>();
   const modeEvents: IRCMessage[] = [];
@@ -238,16 +213,33 @@ function buildJoinPartGroup(events: IRCMessage[]): JoinPartGroupMessage {
   if (poppedIn.length) sentences.push(`<span class="prefix">&#x2194;</span> ${poppedIn.join(', ')} popped in`);
   if (nippedOut.length) sentences.push(`<span class="prefix">&#x2194;</span> ${nippedOut.join(', ')} nipped out`);
   if (nickchanged.length) sentences.push(nickchanged.join(', '));
+  // MODE events in one burst merge per affected user, so `+v alice`
+  // followed by `+o alice` reads as a single sentence (and a `+o`/`-o`
+  // pair for the same nick cancels out entirely).
+  const userModes = new Map<string, UserModeChange>();
+  const modeSetters = new Map<string, string>();
+  const listSentences: string[] = [];
+  const flagSentences: string[] = [];
   for (const me of modeEvents) {
-    const bans = expandBanModes(me.params || []);
-    if (bans.length) {
-      for (const b of bans) {
-        sentences.push(`<span class="buffer bufferLink user link">${escapeHtml(me.nick || '')}</span> ${b.action} <b>${escapeHtml(b.target)}</b> (<span class="mono rawMode">${escapeHtml(b.diff)}${escapeHtml(b.mode)}</span>)`);
-      }
-    } else {
-      sentences.push(`<span class="prefix">&#x2699;</span> Channel mode: <b>${escapeHtml(formatModeText(me))}</b>`);
+    const setter = stripPrefix(me.nick || '');
+    const parsed = parseModeLine(me.params || []);
+    if (!parsed.isChannel) {
+      // User-mode echo or param-less MODE: render verbatim, never merged.
+      flagSentences.push(...modeSentences(me.params || [], setter, me.text || ''));
+      continue;
     }
+    for (const u of parsed.users) {
+      mergeUserModeChange(userModes, u);
+      modeSetters.set(u.nick.toLowerCase(), setter);
+    }
+    for (const l of parsed.lists) listSentences.push(listModeSentence(l, setter));
+    if (parsed.flags) flagSentences.push(flagModeSentence(parsed.flags, setter));
   }
+  for (const [key, c] of userModes) {
+    if (!c.added.length && !c.removed.length) continue;
+    sentences.push(userModeSentence(c, modeSetters.get(key) || ''));
+  }
+  sentences.push(...listSentences, ...flagSentences);
   if (awayEvents.length) {
     const awayNicksSet = new Set<string>();
     const backNicksSet = new Set<string>();

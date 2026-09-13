@@ -98,11 +98,16 @@ describe('MessageRow', () => {
 		await expect.element(page.getByText('New topic here')).toBeInTheDocument();
 	});
 
-	it('renders MODE change', async () => {
+	it('renders MODE change as an IRCCloud mode sentence', async () => {
 		const msg = createMessage({ command: 'MODE', nick: 'alice', params: ['#chan', '+o', 'bob'] });
 		render(MessageRow, { props: { msg } });
 
-		await expect.element(page.getByText(/sets mode/i)).toBeInTheDocument();
+		const symbol = document.querySelector('.mode_prefix.mode_symbol.mode_OP');
+		expect(symbol).toBeInTheDocument();
+		expect(symbol?.textContent).toBe('@');
+		const moded = document.querySelector('.moded.mode_OP');
+		expect(moded?.textContent).toBe('bob');
+		expect(document.querySelector('.mode')?.textContent).toBe('opped');
 	});
 
 	it('renders MOTD_GROUP', async () => {
