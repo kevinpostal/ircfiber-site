@@ -27,35 +27,12 @@ caddy_extra_serve_hosts:
   # www.ircfiber.com — CF A record for "www" is managed by the cloudflare role.
   # The apex "ircfiber.com" is already served via ircfiber_domain.
   - "www.ircfiber.com"
-  # irc. and bnc. are raw-TCP services that cannot be proxied by Cloudflare;
-  # both have DNS-only A records (irc: playbooks/ircd.yml, bnc: see below) and
-  # reuse the certificate Caddy obtains for them out of the Caddy data volume.
-  # They are served ONLY so Caddy issues and renews those certificates.
-  - "irc.ircfiber.com"
-  - "bnc.ircfiber.com"
-
-# Hosts that must get a real Let's Encrypt certificate rather than the
-# internal CA used for Cloudflare-tunnel origins. ircd reads
-# irc.ircfiber.com's cert (ircd_tls_mode below) and ircfiber-bnc reads
-# bnc.ircfiber.com's; both terminate TLS themselves, so an internal-CA cert
-# would make every IRC client show an untrusted-certificate error.
-caddy_acme_hosts:
-  - "irc.ircfiber.com"
-  - "bnc.ircfiber.com"
 
 # --- TLS for the public domain ---------------------------------------------
 # Enable Let's Encrypt so ircfiber.com / www.ircfiber.com get real browser-
 # trusted certs once Cloudflare's DNS resolves them to this host's public
 # IP. The Caddyfile uses the per-host value here.
 ircfiber_use_lets_encrypt: true
-
-# --- TLS for the IRC daemon -------------------------------------------------
-# Serve the Caddy-issued LE certificate for irc.ircfiber.com on 6697 instead
-# of the self-signed pair the image entrypoint generates. roles/ircd copies
-# the cert/key out of the Caddy data volume into the conf dir on every
-# deploy and installs a daily renewal cron; ssl_gnutls picks up new bytes
-# from a SIGUSR1 (m_sslrehashsignal), so renewals never drop a client.
-ircd_tls_mode: "letsencrypt"
 
 # --- Cloudflare DNS (managed by the `cloudflare` role) ----------------------
 # Public IP this host's records should resolve to. Discovered via

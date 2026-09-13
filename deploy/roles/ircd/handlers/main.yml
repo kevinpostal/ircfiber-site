@@ -32,6 +32,10 @@
 # the node as a hostPath, so the pod already sees the new bytes and only
 # needs the signal. Handlers flush after the rollout task, so the pod is
 # Ready by the time this runs.
+#
+# `kill -HUP 1`, not `pkill -x inspircd`: inspircd is the pod's PID 1 and
+# busybox pkill never matches it, so the pkill form exited 1 and failed
+# every leaf deploy that changed config (2026-09-13).
 - name: Rehash k8s ircd
   ansible.builtin.command:
     argv:
@@ -43,10 +47,9 @@
       - exec
       - deployment/ircfiber-ircd-k8s
       - --
-      - pkill
+      - kill
       - -HUP
-      - -x
-      - inspircd
+      - "1"
   delegate_to: localhost
   become: false
   changed_when: true
