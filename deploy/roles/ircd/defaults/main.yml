@@ -272,10 +272,13 @@ ircd_permanent_channels:
     topic: "Welcome to IRC Fiber — https://ircfiber.com"
     bot: true
     # FIBEREYE sits in #staff and #ircfiber as halfop: visible staff presence
-    # without op powers it never uses. Scoped per channel.
+    # without op powers it never uses. FIBERSUPPORT joins #ircfiber too (it
+    # takes issue commands there) and gets the same Staff tier; its ops stay
+    # scoped to #support. Scoped per channel.
     access:
       hop:
         - "FIBEREYE"
+        - "FIBERSUPPORT"
   - channel: "#welcome"
     modes: "nt"
     history: "50:1w"

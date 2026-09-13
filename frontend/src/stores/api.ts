@@ -823,7 +823,7 @@ export function pastebinRawUrl(id: string): string {
 }
 
 // ── Help & Feedback (support issues) ─────────────────────────────────────
-export type SupportIssueKind = 'bug' | 'feature' | 'question' | 'other';
+export type SupportIssueKind = 'bug' | 'feature' | 'question' | 'other' | 'task';
 export type SupportIssueStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
 export interface SupportComment {
   id: string; authorName: string; fromAdmin: boolean; internal: boolean; body: string; createdAt: number;

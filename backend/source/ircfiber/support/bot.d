@@ -6,8 +6,10 @@
  *
  * It keeps one plaintext (or TLS) client connection to the ircd, joins the
  * support channel, announces every entry of the Redis outbox
- * (`RedisKeys.supportOutbox()`, fed by `ircfiber.support.events`) and
- * answers `!help`, `!issues [open|all]` and `!issue <n>`.
+ * (`RedisKeys.supportOutbox()`, fed by `ircfiber.support.events`), answers
+ * `!help`, `!issues [open|all]` and `!issue <n>` and — for IRC operators —
+ * files and triages issues (`!new`, `!bug`, `!done`, `!close`, `!reopen`,
+ * `!prio`, `!note`) plus the services commands (`!adduser`, `!nsinfo`).
  *
  * The IRC client skeleton (reconnects, JOIN, sideband) is
  * `ircfiber.bots.core.IrcBot`; this module is only the support logic.
@@ -23,6 +25,8 @@
  *                                           Prod sets only the _FILE form
  *                                           (ircfiber.env.envSecret).
  *   IRCFIBER_SUPPORT_BOT_PUBLIC_URL         default https://ircfiber.com (admin/feedback links)
+ *   IRCFIBER_SUPPORT_BOT_ADDUSER_ALLOW      comma nicks allowed to run the oper commands
+ *                                           without a WHOIS-313 oper mark (fallback)
  *   IRCFIBER_REDIS_URL                      outbox consumer connection
  */
 module ircfiber.support.bot;
@@ -32,6 +36,7 @@ import std.process : environment;
 import std.string : strip;
 import std.typecons : Nullable, Tuple;
 import std.uni : icmp;
+import std.uuid : randomUUID;
 import core.time : seconds, msecs;
 
 import vibe.core.core : runTask, sleep;
@@ -41,11 +46,11 @@ import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.bots.core;
 import ircfiber.bots.nick : SUPPORT_BOT_DEFAULT_NICK;
-import ircfiber.db.support_issues : SupportIssueRepository, SupportIssueRecord;
+import ircfiber.db.support_issues : SupportIssueRepository, SupportIssueRecord, SupportComment;
 import ircfiber.env : envSecret;
 import ircfiber.redis.protocol : RedisKeys;
 import ircfiber.storage.redis : RedisStorage;
-import ircfiber.support.events : SupportEvent;
+import ircfiber.support.events : SupportEvent, pushSupportEvent;
 import ircfiber.support.format;
 import ircfiber.tracing : isEnvEnabled;
 import ircfiber.web.admin.ircd : IrcLine;
@@ -60,10 +65,10 @@ struct SupportBotConfig {
     string nickservPassword;
     string publicUrl = "https://ircfiber.com";
     string redisUrl = "redis://127.0.0.1:6379";
-    /// Fallback oper allowlist for `!adduser`/`!nsinfo` when the ircd does
-    /// not answer 313 for oper callers. Comma nicks, ASCII case-insensitive.
-    /// Empty = WHOIS-313 gate only.
-    string[] adduserAllow;
+    /// Fallback oper-command allowlist for the oper-gated commands when the
+    /// ircd does not answer 313 for oper callers. Comma nicks, ASCII
+    /// case-insensitive. Empty = WHOIS-313 gate only.
+    string[] operAllow;
 }
 
 /// Starts the bot task when `IRCFIBER_SUPPORT_BOT_ENABLED` is set; no-op otherwise.
@@ -83,7 +88,8 @@ void startSupportBot() {
     cfg.nickservPassword = envSecret("IRCFIBER_SUPPORT_BOT_NICKSERV_PASSWORD", "");
     cfg.publicUrl = botEnvStr("SUPPORT_BOT", "PUBLIC_URL", "", cfg.publicUrl);
     cfg.redisUrl = environment.get("IRCFIBER_REDIS_URL", cfg.redisUrl);
-    cfg.adduserAllow = botEnvList("IRCFIBER_SUPPORT_BOT_ADDUSER_ALLOW", []);
+    // Env key keeps its historic `_ADDUSER_ALLOW` name (set by deploy).
+    cfg.operAllow = botEnvList("IRCFIBER_SUPPORT_BOT_ADDUSER_ALLOW", []);
 
     auto bot = new SupportBot(cfg);
     runTask(&bot.run);
@@ -135,6 +141,11 @@ final class SupportBot : IrcBot {
     private enum CMD_COOLDOWN_MS = 2000;
     private enum OPER_WHOIS_TIMEOUT_MS = 10_000;
     private enum OPER_PENDING_MAX = 64;
+    /// Answered for anyone.
+    private static immutable string[] PUBLIC_CMDS = ["help", "issues", "issue"];
+    /// Answered only past the WHOIS-313 oper gate (`!help admin` too).
+    private static immutable string[] OPER_CMDS = ["adduser", "nsinfo", "new", "bug",
+        "done", "close", "reopen", "prio", "note"];
 
     private SupportBotConfig sb;
     private Task outboxTask;
@@ -218,9 +229,13 @@ final class SupportBot : IrcBot {
         if (!toChannel && !toMe) return;
         const sender = nickOf(l.prefix);
 
+        import std.algorithm : canFind;
         auto cmd = parseBotCommand(text);
-        if (cmd.name != "help" && cmd.name != "issues" && cmd.name != "issue"
-                && cmd.name != "adduser" && cmd.name != "nsinfo") return;
+        const isPublic = PUBLIC_CMDS.canFind(cmd.name);
+        const isOper = OPER_CMDS.canFind(cmd.name);
+        if (!isPublic && !isOper) return;
+        // `!help admin` is staff-only; bare `!help` stays public.
+        const adminHelp = cmd.name == "help" && cmd.ok && cmd.arg == "admin";
 
         const now = nowMs();
         if (auto p = sender in lastCmdMs) if (now - *p < CMD_COOLDOWN_MS) return;
@@ -230,18 +245,19 @@ final class SupportBot : IrcBot {
         const replyTo = toChannel ? target : sender;
         // Oper-only commands go through the WHOIS-313 gate (or the env
         // allowlist fallback) and continue asynchronously.
-        if (cmd.name == "adduser" || cmd.name == "nsinfo") {
+        if (isOper || adminHelp) {
+            const nickArg = cmd.name == "adduser" || cmd.name == "nsinfo";
             if (!cmd.ok) {
-                say(replyTo, [SUPPORT_USAGE]);
+                say(replyTo, [nickArg ? SUPPORT_SERVICES_USAGE : SUPPORT_TRACK_USAGE]);
                 return;
             }
-            requestOperCommand(sender, cmd.arg, replyTo, cmd.name, text, now);
+            requestOperCommand(sender, cmd.arg, replyTo, cmd.name, text, now, nickArg);
             return;
         }
         string[] reply;
         switch (cmd.name) {
             case "help":
-                reply = formatHelp(sb.publicUrl);
+                reply = cmd.ok ? formatHelp(sb.publicUrl) : [SUPPORT_USAGE];
                 break;
             case "issues":
                 reply = cmd.ok ? issuesSummary(cmd.arg) : [SUPPORT_USAGE];
@@ -261,21 +277,24 @@ final class SupportBot : IrcBot {
 
     private bool operAllowlisted(string sender) const {
         const s = asciiLower(sender);
-        foreach (a; sb.adduserAllow) if (asciiLower(a) == s) return true;
+        foreach (a; sb.operAllow) if (asciiLower(a) == s) return true;
         return false;
     }
 
-    private void requestOperCommand(string sender, string nick, string replyTo,
-            string cmdName, string text, long now) {
+    /// `nickArg` = the argument is an IRC nickname passed to services and
+    /// must survive the injection guard; the tracking commands sanitize
+    /// their own free text (`parseNewIssue`/`parseIssueRef`).
+    private void requestOperCommand(string sender, string arg, string replyTo,
+            string cmdName, string text, long now, bool nickArg) {
         import ircfiber.services.anope : isSafeServicesArg;
         // Injection guard before any Anope call or WHOIS echo.
-        if (!isSafeServicesArg(sender) || !isSafeServicesArg(nick)) {
-            say(replyTo, [SUPPORT_USAGE]);
+        if (!isSafeServicesArg(sender) || (nickArg && !isSafeServicesArg(arg))) {
+            say(replyTo, [nickArg ? SUPPORT_SERVICES_USAGE : SUPPORT_TRACK_USAGE]);
             return;
         }
         // Env allowlist bypass (for ircds that omit 313).
         if (operAllowlisted(sender)) {
-            string s0 = sender, n0 = nick, r0 = replyTo, c0 = cmdName, t0 = text;
+            string s0 = sender, n0 = arg, r0 = replyTo, c0 = cmdName, t0 = text;
             long now0 = now;
             runTask(() nothrow { try this.operCommandTask(s0, n0, r0, c0, t0, now0, true); catch (Exception) {} });
             return;
@@ -293,12 +312,12 @@ final class SupportBot : IrcBot {
             say(replyTo, ["Services unavailable — try again later."]);
             return;
         }
-        string s1 = sender, n1 = nick, r1 = replyTo, c1 = cmdName, t1 = text;
+        string s1 = sender, n1 = arg, r1 = replyTo, c1 = cmdName, t1 = text;
         long now1 = now;
         runTask(() nothrow { try this.operCommandTask(s1, n1, r1, c1, t1, now1, false); catch (Exception) {} });
     }
 
-    private void operCommandTask(string sender, string nick, string replyTo,
+    private void operCommandTask(string sender, string arg, string replyTo,
             string cmdName, string text, long now, bool preAuthed) {
         try {
             if (!preAuthed) {
@@ -320,8 +339,16 @@ final class SupportBot : IrcBot {
                 }
                 cast(void) done;
             }
-            if (cmdName == "adduser") adduserFlow(sender, nick, replyTo, text, now);
-            else if (cmdName == "nsinfo") nsinfoFlow(sender, nick, replyTo, text, now);
+            if (cmdName == "adduser") adduserFlow(sender, arg, replyTo, text, now);
+            else if (cmdName == "nsinfo") nsinfoFlow(sender, arg, replyTo, text, now);
+            else if (cmdName == "help") {
+                say(replyTo, formatAdminHelp());
+                commandsAnswered++;
+                lastCommandText = text;
+                lastCommandBy = sender;
+                lastCommandAt = now;
+            }
+            else issueFlow(cmdName, arg, sender, replyTo, text, now);
         } catch (Exception e) {
             try logWarn("support bot: !%s failed: %s", cmdName, e.msg);
             catch (Exception) {}
@@ -587,6 +614,234 @@ final class SupportBot : IrcBot {
             logWarn("support bot: !adduser invite redis failed: %s", e.msg);
             try say(replyTo, ["Services unavailable — try again later."]);
             catch (Exception) {}
+        }
+        if (redis !is null) try redis.close(); catch (Exception) {}
+    }
+
+    // ── issue tracking (oper-gated) ──────────────────────────────────
+
+    private enum DB_UNAVAILABLE = "Support database unavailable — try again later";
+
+    /// `!new` / `!bug` / `!done` / `!close` / `!reopen` / `!prio` / `!note`,
+    /// already past the oper gate. Mirrors the admin pane's semantics
+    /// (`ircfiber.web.admin.support`).
+    private void issueFlow(string cmdName, string arg, string sender, string replyTo,
+            string text, long now) {
+        bool handled;
+        switch (cmdName) {
+            case "new":
+            case "bug":
+                handled = fileIssue(cmdName, arg, sender, replyTo, now);
+                break;
+            case "done":
+                handled = setIssueStatus(arg, "resolved", sender, replyTo, now);
+                break;
+            case "close":
+                handled = setIssueStatus(arg, "closed", sender, replyTo, now);
+                break;
+            case "reopen":
+                handled = setIssueStatus(arg, "open", sender, replyTo, now);
+                break;
+            case "prio":
+                handled = setIssuePriority(arg, replyTo, now);
+                break;
+            case "note":
+                handled = addIssueNote(arg, sender, replyTo, now);
+                break;
+            default:
+                return;
+        }
+        if (!handled) return;
+        commandsAnswered++;
+        lastCommandText = text;
+        lastCommandBy = sender;
+        lastCommandAt = now;
+    }
+
+    /// Writes the same `support_issues` document the web form writes; the
+    /// kind comes from the command word (`!bug` → bug, `!new` → task).
+    private bool fileIssue(string cmdName, string arg, string sender, string replyTo, long now) {
+        import ircfiber.db.user : UserRepository;
+
+        auto a = parseNewIssue(arg);
+        if (!a.ok) {
+            say(replyTo, [SUPPORT_TRACK_USAGE]);
+            return false;
+        }
+        SupportIssueRecord rec;
+        rec.id = randomUUID().toString();
+        rec.kind = cmdName == "bug" ? "bug" : "task";
+        rec.title = a.title;
+        rec.body_ = a.body_.length ? a.body_ : "Filed from IRC by " ~ sender ~ ".";
+        rec.status = "open";
+        rec.priority = "normal";
+        rec.reporterUsername = sender;
+        rec.createdAt = now;
+        rec.updatedAt = now;
+        try {
+            // A site account of the same name owns the issue, so it also
+            // shows up in that account's /?/feedback list.
+            auto existing = (new UserRepository()).findByUsernameCI(sender);
+            if (existing.username.length) rec.userId = existing.id.toString();
+        } catch (Exception e) {
+            logWarn("support bot: !%s user lookup failed: %s", cmdName, e.msg);
+        }
+        try {
+            auto r = repository();
+            rec.number = r.nextNumber();
+            r.insert(rec);
+        } catch (Exception e) {
+            logWarn("support bot: !%s failed: %s", cmdName, e.msg);
+            say(replyTo, [DB_UNAVAILABLE]);
+            return false;
+        }
+        logInfo("Support issue #%d (%s) filed from IRC by %s", rec.number, rec.kind, sender);
+        SupportEvent ev;
+        ev.type = "issue_created";
+        ev.issueId = rec.id;
+        ev.number = rec.number;
+        ev.kind = rec.kind;
+        ev.title = rec.title;
+        ev.status = rec.status;
+        ev.priority = rec.priority;
+        ev.reporter = sender;
+        ev.ts = now;
+        pushIrcEvent(ev);
+        // In a channel the announcement is the acknowledgement; a DM has
+        // no announcement to see, so it gets the detail line.
+        if (replyTo == sender) say(replyTo, formatIssueDetail(rec, now, sb.publicUrl));
+        return true;
+    }
+
+    private bool setIssueStatus(string arg, string status, string sender, string replyTo, long now) {
+        auto q = parseIssueRef(arg, false);
+        if (!q.ok) {
+            say(replyTo, [SUPPORT_TRACK_USAGE]);
+            return false;
+        }
+        const num = "#" ~ q.number.to!string;
+        SupportIssueRecord rec;
+        try rec = repository().getByNumber(q.number);
+        catch (Exception e) {
+            logWarn("support bot: !%s failed: %s", status, e.msg);
+            say(replyTo, [DB_UNAVAILABLE]);
+            return false;
+        }
+        if (rec.id.length == 0) {
+            say(replyTo, ["No issue " ~ num]);
+            return false;
+        }
+        if (rec.status == status) {
+            say(replyTo, [num ~ " is already " ~ statusLabel(status)]);
+            return true;
+        }
+        // Same resolvedAt rule as the admin pane.
+        const bool finished = status == "resolved" || status == "closed";
+        long resolvedAt = rec.resolvedAt;
+        if (finished && resolvedAt == 0) resolvedAt = now;
+        else if (!finished) resolvedAt = 0;
+        try {
+            if (!repository().updateTriage(rec.id, status, rec.priority, rec.assigneeId,
+                    rec.assigneeUsername, now, resolvedAt)) {
+                say(replyTo, ["No issue " ~ num]);
+                return false;
+            }
+        } catch (Exception e) {
+            logWarn("support bot: status change on %s failed: %s", num, e.msg);
+            say(replyTo, [DB_UNAVAILABLE]);
+            return false;
+        }
+        logInfo("Support issue #%d → %s from IRC by %s", rec.number, status, sender);
+        SupportEvent ev;
+        ev.type = "status_changed";
+        ev.issueId = rec.id;
+        ev.number = rec.number;
+        ev.kind = rec.kind;
+        ev.title = rec.title;
+        ev.status = status;
+        ev.priority = rec.priority;
+        ev.actor = sender;
+        ev.reporter = rec.reporterUsername;
+        ev.actorIsAdmin = true;
+        ev.ts = now;
+        // The announcement is the acknowledgement.
+        pushIrcEvent(ev);
+        return true;
+    }
+
+    private bool setIssuePriority(string arg, string replyTo, long now) {
+        auto q = parseIssueRef(arg, true);
+        const priority = q.ok ? normalizePriority(q.rest) : "";
+        if (!q.ok || priority.length == 0) {
+            say(replyTo, [SUPPORT_TRACK_USAGE]);
+            return false;
+        }
+        const num = "#" ~ q.number.to!string;
+        try {
+            auto rec = repository().getByNumber(q.number);
+            if (rec.id.length == 0) {
+                say(replyTo, ["No issue " ~ num]);
+                return false;
+            }
+            if (!repository().updateTriage(rec.id, rec.status, priority, rec.assigneeId,
+                    rec.assigneeUsername, now, rec.resolvedAt)) {
+                say(replyTo, ["No issue " ~ num]);
+                return false;
+            }
+        } catch (Exception e) {
+            logWarn("support bot: !prio on %s failed: %s", num, e.msg);
+            say(replyTo, [DB_UNAVAILABLE]);
+            return false;
+        }
+        // No event type exists for a priority change, so no announcement.
+        say(replyTo, [num ~ " priority → " ~ priority]);
+        return true;
+    }
+
+    private bool addIssueNote(string arg, string sender, string replyTo, long now) {
+        auto q = parseIssueRef(arg, true);
+        if (!q.ok) {
+            say(replyTo, [SUPPORT_TRACK_USAGE]);
+            return false;
+        }
+        const num = "#" ~ q.number.to!string;
+        try {
+            auto rec = repository().getByNumber(q.number);
+            if (rec.id.length == 0) {
+                say(replyTo, ["No issue " ~ num]);
+                return false;
+            }
+            SupportComment c;
+            c.id = randomUUID().toString();
+            // No site session behind an IRC oper, so no authorId.
+            c.authorName = sender;
+            c.fromAdmin = true;
+            c.internal = true;
+            c.body_ = clipBytes(q.rest, 5000);
+            c.createdAt = now;
+            if (!repository().appendComment(rec.id, c, now, "", rec.resolvedAt)) {
+                say(replyTo, ["No issue " ~ num]);
+                return false;
+            }
+        } catch (Exception e) {
+            logWarn("support bot: !note on %s failed: %s", num, e.msg);
+            say(replyTo, [DB_UNAVAILABLE]);
+            return false;
+        }
+        // Internal notes are never announced, matching the admin pane.
+        say(replyTo, ["Noted on " ~ num ~ " (internal)."]);
+        return true;
+    }
+
+    /// Queues an announcement on the outbox the bot's own consumer drains.
+    private void pushIrcEvent(SupportEvent ev) {
+        RedisStorage redis;
+        try {
+            redis = new RedisStorage();
+            redis.connectFromUrl(sb.redisUrl);
+            pushSupportEvent(redis, ev);
+        } catch (Exception e) {
+            logWarn("support bot: announcing %s #%d failed: %s", ev.type, ev.number, e.msg);
         }
         if (redis !is null) try redis.close(); catch (Exception) {}
     }

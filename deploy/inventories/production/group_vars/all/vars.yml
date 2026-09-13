@@ -121,7 +121,9 @@ bnc_trace: false
 support_bot_enabled: true
 support_bot_container_name: "ircfiber-support-bot"
 support_bot_nick: "FIBERSUPPORT"
-support_bot_channel: "#support"
+# First entry is the announcement channel; the bot also answers commands
+# in every other joined channel (#ircfiber is the staff-visible main one).
+support_bot_channel: "#support,#ircfiber"
 support_bot_public_url: "https://{{ ircfiber_domain }}"
 # --- FiberEye connection watch + #staff announcer (dedicated container) -----
 # Only the process with IRCFIBER_FIBEREYE_ENABLED=1 opens an opered IRC

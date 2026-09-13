@@ -4,7 +4,7 @@
  * `ircfiber.support.json.supportIssueToJson` with `includeInternal=true`.
  */
 export type SupportStatus = 'open' | 'in_progress' | 'resolved' | 'closed';
-export type SupportKind = 'bug' | 'feature' | 'question' | 'other';
+export type SupportKind = 'bug' | 'feature' | 'question' | 'other' | 'task';
 export type SupportPriority = 'low' | 'normal' | 'high' | 'urgent';
 
 export interface SupportRow {
@@ -60,7 +60,7 @@ export const STATUS_TONES: Record<SupportStatus, 'primary' | 'warn' | 'success' 
   open: 'primary', in_progress: 'warn', resolved: 'success', closed: 'muted',
 };
 export const KIND_LABELS: Record<SupportKind, string> = {
-  bug: 'Bug', feature: 'Feature', question: 'Question', other: 'Other',
+  bug: 'Bug', feature: 'Feature', question: 'Question', other: 'Other', task: 'Task',
 };
 export const CONTEXT_LABELS: Record<keyof SupportContext, string> = {
   appVersion: 'App version', userAgent: 'Browser', url: 'URL',

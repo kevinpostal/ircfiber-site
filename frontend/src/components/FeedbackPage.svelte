@@ -10,7 +10,9 @@
   } from '../stores/api';
   import SettingsSection from './SettingsSection.svelte';
 
-  const KIND_LABELS: Record<SupportIssueKind, string> = {
+  // Partial: `task` issues are filed from IRC only, so the reporter's
+  // <select> never offers them — but one still has to render in the list.
+  const KIND_LABELS: Partial<Record<SupportIssueKind, string>> = {
     bug: 'Bug', feature: 'Feature request', question: 'Question', other: 'Other',
   };
   const STATUS_LABELS: Record<SupportIssueStatus, string> = {

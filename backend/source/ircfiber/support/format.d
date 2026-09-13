@@ -14,7 +14,7 @@ import std.conv : to;
 import std.string : strip, indexOf, toLower, split;
 import std.utf : stride;
 
-import ircfiber.db.support_issues : SupportIssueRecord, supportStatuses;
+import ircfiber.db.support_issues : SupportIssueRecord, supportStatuses, supportPriorities;
 import ircfiber.support.events : SupportEvent;
 import ircfiber.support.json : sanitizeLine;
 
@@ -141,8 +141,9 @@ struct BotCommand {
     bool ok;
 }
 
-/// Parses `!help`, `!issues [open|all]`, `!issue <n>`, `!adduser <nick>`,
-/// `!nsinfo <nick>`. Anything else is
+/// Parses `!help [admin]`, `!issues [open|all]`, `!issue <n>`, `!adduser <nick>`,
+/// `!nsinfo <nick>`, `!new`/`!bug <title> [| details]`, `!done`/`!close`/`!reopen <n>`,
+/// `!prio <n> <priority>` and `!note <n> <text>`. Anything else is
 /// returned with `ok=false`; unknown `!words` keep their `name` so the
 /// caller can stay silent for them.
 BotCommand parseBotCommand(string text) @safe pure {
@@ -155,7 +156,8 @@ BotCommand parseBotCommand(string text) @safe pure {
     else { c.name = s[0 .. sp].toLower(); c.arg = s[sp + 1 .. $].strip(); }
     switch (c.name) {
         case "help":
-            c.ok = true;
+            c.arg = c.arg.toLower();
+            c.ok = c.arg == "" || c.arg == "admin";
             break;
         case "issues":
             c.arg = c.arg.toLower();
@@ -170,6 +172,24 @@ BotCommand parseBotCommand(string text) @safe pure {
             // deliberately loose here; the handler enforces the strict
             // `isValidIrcNick` gate signup uses. Arg case preserved.
             c.ok = isSingleNickToken(c.arg);
+            break;
+        case "new":
+        case "bug":
+            // Kind comes from the command word, arg case preserved.
+            c.ok = parseNewIssue(c.arg).ok;
+            break;
+        case "done":
+        case "close":
+        case "reopen":
+            c.ok = parseIssueRef(c.arg, false).ok;
+            break;
+        case "prio": {
+            auto pr = parseIssueRef(c.arg, true);
+            c.ok = pr.ok && normalizePriority(pr.rest).length > 0;
+            break;
+        }
+        case "note":
+            c.ok = parseIssueRef(c.arg, true).ok;
             break;
         default:
             break;
@@ -219,11 +239,82 @@ string[] formatIssueDetail(const SupportIssueRecord r, long nowMs, string public
         ~ " · " ~ adminIssueUrl(publicUrl, r.id))];
 }
 
-/// Bot help line.
+/// Public `!help` reply (one line).
 string[] formatHelp(string publicUrl) @safe pure {
-    return ["FIBERSUPPORT: !issues [open|all] — recent issues · !issue <n> — details · !adduser <nick> — create a site account from a NickServ account, or send a signup link when there is none · !nsinfo <nick> — show NickServ account info (opers only) · report problems at "
-        ~ feedbackUrl(publicUrl)];
+    return [finish("FIBERSUPPORT: !issues [open|all] — recent issues · !issue <n> — details · "
+        ~ "!help admin — staff commands (opers) · report problems at " ~ feedbackUrl(publicUrl))];
 }
 
-/// Reply for a malformed `!issue` / `!issues`.
-enum SUPPORT_USAGE = "Usage: !issues [open|all] · !issue <n> · !adduser <nick> · !nsinfo <nick> (last two: opers only)";
+/// `!help admin` reply (two lines), oper-only.
+string[] formatAdminHelp() @safe pure {
+    return [finish(SUPPORT_TRACK_USAGE), finish(SUPPORT_SERVICES_USAGE)];
+}
+
+/// Reply for a malformed public command (`!issue` / `!issues` / `!help`).
+enum SUPPORT_USAGE = "Usage: !issues [open|all] · !issue <n> · !help";
+/// Reply for a malformed issue-tracking command (opers).
+enum SUPPORT_TRACK_USAGE = "Track: !new <title> [| details] · !bug <title> [| details] · !done <n> · !close <n> · !reopen <n> · !prio <n> <low|normal|high|urgent> · !note <n> <text>";
+/// Reply for a malformed services command (opers).
+enum SUPPORT_SERVICES_USAGE = "Services: !adduser <nick> · !nsinfo <nick>";
+
+/// Parsed argument of `!new` / `!bug`.
+struct NewIssueArg {
+    /// Sanitized title, 3–120 bytes when `ok`.
+    string title;
+    /// Details after the `|` separator; "" when the command carried none.
+    string body_;
+    /// True when the title is within bounds.
+    bool ok;
+}
+
+/// `<title> [| details]`. The kind comes from the command word, never from
+/// the argument, so a title may start with any word.
+NewIssueArg parseNewIssue(string arg) @safe pure {
+    NewIssueArg a;
+    const bar = arg.indexOf('|');
+    const head = bar < 0 ? arg : arg[0 .. bar];
+    if (bar >= 0) a.body_ = clipBytes(arg[bar + 1 .. $].strip(), 5000);
+    a.title = sanitizeLine(head).strip();
+    a.ok = a.title.length >= 3 && a.title.length <= 120;
+    return a;
+}
+
+/// Parsed `<n> [rest]` / `#<n> [rest]` argument.
+struct IssueRefArg {
+    /// Issue number; 0 when unparsable.
+    long number;
+    /// Remainder after the number, stripped.
+    string rest;
+    /// True for a well-formed reference (and a non-empty `rest` when required).
+    bool ok;
+}
+
+/// `restRequired` demands a non-empty remainder (`!prio`, `!note`); false
+/// allows a bare number (`!done`, `!close`, `!reopen`).
+IssueRefArg parseIssueRef(string arg, bool restRequired) @safe pure {
+    IssueRefArg r;
+    auto s = arg.strip();
+    if (s.length && s[0] == '#') s = s[1 .. $];
+    const sp = s.indexOf(' ');
+    const num = sp < 0 ? s : s[0 .. sp];
+    r.rest = sp < 0 ? "" : s[sp + 1 .. $].strip();
+    if (num.length == 0 || num.length > 9 || num == "0" || !isDigits(num)) return r;
+    r.number = num.to!long;
+    r.ok = !restRequired || r.rest.length > 0;
+    return r;
+}
+
+/// Priority word → wire value, "" when not in `supportPriorities`
+/// (case-insensitive). Also accepts the shorthands "l", "n", "h", "u".
+string normalizePriority(string s) @safe pure {
+    const p = s.strip().toLower();
+    switch (p) {
+        case "l": return "low";
+        case "n": return "normal";
+        case "h": return "high";
+        case "u": return "urgent";
+        default: break;
+    }
+    foreach (v; supportPriorities) if (v == p) return v;
+    return "";
+}

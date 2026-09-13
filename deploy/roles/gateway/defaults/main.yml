@@ -75,8 +75,10 @@ support_bot_memory_limit: "256m"
 support_bot_memory_reservation: "64m"
 support_bot_cpus: 0.5
 support_bot_oom_score_adj: 500
-# Comma-separated fallback opers for `!adduser`/`!nsinfo` when the ircd omits
-# 313. Empty (default) = WHOIS-313 gate only.
+# Comma-separated fallback opers for the oper-gated bot commands (`!new`,
+# `!bug`, `!done`, `!close`, `!reopen`, `!prio`, `!note`, `!help admin`,
+# `!adduser`, `!nsinfo`) when the ircd omits 313. Empty (default) =
+# WHOIS-313 gate only.
 support_bot_adduser_allow: ""
 
 # Same shape as the support bot: one IRC connection plus ipinfo.io lookups,

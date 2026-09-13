@@ -50,11 +50,78 @@ private void testParseBotCommand() {
     check(parseBotCommand("!adduser " ~ replicate("a", 32)).ok, "!adduser 32-char nick ok");
     check(!parseBotCommand("!adduser " ~ replicate("a", 33)).ok, "!adduser 33-char nick rejected");
     check(!parseBotCommand("!nsinfo " ~ replicate("a", 33)).ok, "!nsinfo 33-char nick rejected");
+    auto nw = parseBotCommand("!new Fix flood pacing");
+    check(nw.ok && nw.name == "new" && nw.arg == "Fix flood pacing", "!new keeps arg case");
+    auto bg = parseBotCommand("!BUG Upload dialog freezes | on drop");
+    check(bg.ok && bg.name == "bug" && bg.arg == "Upload dialog freezes | on drop", "!BUG lower-cases name only");
+    check(!parseBotCommand("!new ab").ok, "!new with a 2-char title rejected");
+    check(!parseBotCommand("!new").ok, "bare !new rejected");
+    auto ha = parseBotCommand("!help admin");
+    check(ha.ok && ha.name == "help" && ha.arg == "admin", "!help admin");
+    check(!parseBotCommand("!help wat").ok, "!help wat rejected");
+    check(parseBotCommand("!prio 14 high").ok, "!prio 14 high");
+    check(!parseBotCommand("!prio 14 nope").ok, "!prio with an unknown priority rejected");
+    check(!parseBotCommand("!prio 14").ok, "!prio without a priority rejected");
+    check(parseBotCommand("!done 14").ok, "!done 14");
+    auto dn = parseBotCommand("!done");
+    check(!dn.ok && dn.name == "done", "bare !done rejected but named");
+    check(parseBotCommand("!close #14").ok && parseBotCommand("!reopen 14").ok, "!close/!reopen");
+    check(parseBotCommand("!note 14 check ergo config").ok, "!note 14 <text>");
+    check(!parseBotCommand("!note 14").ok, "!note without text rejected");
     auto e = parseBotCommand("hello");
     check(!e.ok && e.name == "", "plain text is not a command");
     auto f = parseBotCommand("!frobnicate now");
     check(!f.ok && f.name == "frobnicate", "unknown !word keeps its name (caller stays silent)");
     check(!parseBotCommand("!").ok, "lone ! rejected");
+}
+
+private void testParseNewIssue() {
+    auto a = parseNewIssue("Upload freezes | drops on composer");
+    check(a.ok && a.title == "Upload freezes" && a.body_ == "drops on composer", "title | details split");
+    auto b = parseNewIssue("Rework throttle");
+    check(b.ok && b.title == "Rework throttle" && b.body_ == "", "no details part");
+    auto c = parseNewIssue("bug Upload freezes");
+    check(c.ok && c.title == "bug Upload freezes", "argument is never parsed as a kind: " ~ c.title);
+    check(!parseNewIssue("ab").ok, "2-char title rejected");
+    check(!parseNewIssue("   ").ok, "blank title rejected");
+    import std.array : replicate;
+    check(parseNewIssue(replicate("a", 120)).ok, "120-char title ok");
+    check(!parseNewIssue(replicate("a", 121)).ok, "121-char title rejected");
+    auto inj = parseNewIssue("Evil\r\nPRIVMSG #ops :pwned | body\r\nsecond");
+    check(inj.ok && !inj.title.canFind("\r") && !inj.title.canFind("\n"), "title sanitized: " ~ inj.title);
+    check(parseNewIssue("t | " ~ replicate("b", 6000)).body_.length == 5000, "details clipped to 5000 bytes");
+}
+
+private void testParseIssueRef() {
+    auto a = parseIssueRef("#14 high", true);
+    check(a.ok && a.number == 14 && a.rest == "high", "#14 high");
+    check(!parseIssueRef("14", true).ok, "rest required but missing");
+    auto b = parseIssueRef("14", false);
+    check(b.ok && b.number == 14 && b.rest == "", "bare number when rest optional");
+    check(!parseIssueRef("0", false).ok, "issue 0 rejected");
+    check(!parseIssueRef("abc", false).ok, "non-numeric rejected");
+    check(!parseIssueRef("", false).ok, "empty rejected");
+    check(!parseIssueRef("1234567890", false).ok, "10-digit number rejected");
+    auto c = parseIssueRef(" 7   some note text ", true);
+    check(c.ok && c.number == 7 && c.rest == "some note text", "padding stripped: \"" ~ c.rest ~ "\"");
+
+    check(normalizePriority("HIGH") == "high", "HIGH → high");
+    check(normalizePriority("u") == "urgent", "u → urgent");
+    check(normalizePriority(" low ") == "low", "padding stripped");
+    check(normalizePriority("x") == "", "unknown priority → empty");
+    check(normalizePriority("") == "", "empty priority → empty");
+}
+
+private void testHelpLines() {
+    auto h = formatHelp("https://ircfiber.com");
+    check(h.length == 1 && h[0].canFind("!help admin"), "public help points at !help admin");
+    auto a = formatAdminHelp();
+    check(a.length == 2, "admin help is two lines: " ~ a.length.to!string);
+    if (a.length == 2) {
+        check(a[0].canFind("!new") && a[0].canFind("!prio") && a[0].canFind("!note"), "track line: " ~ a[0]);
+        check(a[1].canFind("!adduser") && a[1].canFind("!nsinfo"), "services line: " ~ a[1]);
+        check(a[0].length <= SUPPORT_LINE_MAX_BYTES, "track line fits one IRC line");
+    }
 }
 
 private SupportEvent sampleEvent(string type) {
@@ -232,6 +299,9 @@ private void testEventJsonRoundTrip() {
 
 void main() {
     testParseBotCommand();
+    testParseNewIssue();
+    testParseIssueRef();
+    testHelpLines();
     testFormatSupportEvent();
     testTruncateText();
     testRelativeAge();
