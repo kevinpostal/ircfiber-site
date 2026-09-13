@@ -12,6 +12,12 @@
  */
 module ircfiber.bots.nick;
 
+/// Default nicks of the two gateway bots. The bot config structs and the
+/// staff oracle (`ircfiber.services.staff`) share them so a rename cannot
+/// leave the oracle protecting the wrong name.
+enum SUPPORT_BOT_DEFAULT_NICK = "FIBERSUPPORT";
+enum FIBEREYE_DEFAULT_NICK = "FIBEREYE";
+
 /// Minimum gap between `NICK <want>` reclaim attempts (driven by checkIdle).
 enum NICK_RECLAIM_EVERY_MS = 30_000;
 /// Minimum gap between IDENTIFY sends outside the 001 welcome, so a wrong

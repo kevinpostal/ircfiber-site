@@ -819,16 +819,37 @@ package void apiFiberConfigSet(HTTPServerRequest req, HTTPServerResponse res,
 // NickServ→site auto-sync toggle — GET + POST /api/admin/config/nickserv-sync
 // ────────────────────────────────────────────────────────────
 
-/// GET /api/admin/config/nickserv-sync — returns {enabled}
+/// GET /api/admin/config/nickserv-sync — {enabled, key, intervalSecs, maxPerRun, status|null}
 package void apiNickservSyncConfig(HTTPServerRequest req, HTTPServerResponse res,
                             RedisStorage redis) {
-    import ircfiber.services.nickserv_sync : isNickservSyncEnabled, NICKSERV_SYNC_CONFIG_KEY;
+    import ircfiber.services.nickserv_sync : isNickservSyncEnabled, NICKSERV_SYNC_CONFIG_KEY,
+        NICKSERV_SYNC_INTERVAL_SECS, NICKSERV_SYNC_MAX_NEW_PER_RUN, NickservSyncStatus,
+        readNickservSyncStatus;
     bool enabled = true;
     try enabled = isNickservSyncEnabled(redis);
     catch (Exception) {}
     Json data = Json.emptyObject;
     data["enabled"] = Json(enabled);
     data["key"] = Json(NICKSERV_SYNC_CONFIG_KEY);
+    data["intervalSecs"] = Json(cast(long) NICKSERV_SYNC_INTERVAL_SECS);
+    data["maxPerRun"] = Json(cast(long) NICKSERV_SYNC_MAX_NEW_PER_RUN);
+    NickservSyncStatus st;
+    if (readNickservSyncStatus(redis, st)) {
+        Json s = Json.emptyObject;
+        s["lastRunAt"] = Json(st.lastRunAt);
+        s["host"] = Json(st.host);
+        s["result"] = Json(st.result);
+        s["error"] = Json(st.error);
+        s["accounts"] = Json(st.accounts);
+        s["created"] = Json(st.created);
+        s["skipped"] = Json(st.skipped);
+        s["failed"] = Json(st.failed);
+        s["capped"] = Json(st.capped);
+        s["inventoryMtime"] = Json(st.inventoryMtime);
+        data["status"] = s;
+    } else {
+        data["status"] = Json(null);
+    }
     jsonOk(res, data);
 }
 

@@ -31,6 +31,13 @@
   import ConfirmDialog from './ConfirmDialog.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { toastSuccess, toastError, toastInfo } from '../stores/ui';
+  import {
+    nickservSync,
+    nickservSyncError,
+    nickservSyncSaving,
+    fetchNickservSyncConfig,
+    setNickservSyncEnabled,
+  } from '../stores/nickservSync';
 
   interface NsAccount {
     nick: string; account: string; email: string;
@@ -256,7 +263,27 @@
   onMount(() => {
     void loadAccounts();
     void loadUnprovisioned();
+    void fetchNickservSyncConfig();
   });
+
+  async function toggleSync() {
+    if (!$nickservSync) return;
+    const enabled = !$nickservSync.enabled;
+    try {
+      await setNickservSyncEnabled(enabled);
+      toastSuccess(enabled ? 'Auto-sync enabled' : 'Auto-sync disabled');
+    } catch (e) {
+      toastError(errMsg(e));
+    }
+  }
+  /// A live loop records a run every interval; two missed intervals with the
+  /// switch on means the loop is dead or stuck, which an idle-looking card
+  /// must not hide.
+  const syncStale = $derived(
+    !!$nickservSync?.enabled &&
+      !!$nickservSync.status &&
+      Date.now() / 1000 - $nickservSync.status.lastRunAt > 2 * $nickservSync.intervalSecs,
+  );
 
   async function loadAccounts() {
     listLoading = true;
@@ -674,6 +701,67 @@
     </div>
   </Card>
 {/if}
+
+<!--
+  The other direction: NickServ accounts with no site user. Always rendered
+  because the switch and the last run are the only evidence the loop exists —
+  a dead or always-failing loop is otherwise indistinguishable from an idle one.
+-->
+<Card class="mb-4">
+  <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
+    <div>
+      <h3 class="text-sm font-semibold text-heading">Auto-sync (NickServ → site)</h3>
+      <p class="mt-0.5 text-xs text-muted">
+        Every {$nickservSync ? $nickservSync.intervalSecs / 60 : 10} minutes the gateway reads the
+        Anope inventory and creates a parked site account (random password, no Fiber network) for
+        each NickServ account that no site user, network credential, staff list or email already
+        claims — at most {$nickservSync ? $nickservSync.maxPerRun : 25} per run. The owner activates
+        it by signing in with their NickServ password.
+      </p>
+    </div>
+    <button
+      type="button"
+      data-testid="ns-sync-toggle"
+      class={btn}
+      disabled={!$nickservSync || $nickservSyncSaving}
+      onclick={() => void toggleSync()}
+    >
+      {$nickservSyncSaving ? 'Saving…' : $nickservSync?.enabled ? 'Disable' : 'Enable'}
+    </button>
+  </div>
+
+  <div class="text-xs text-muted" data-testid="ns-sync-status">
+    {#if $nickservSyncError}
+      <span class="text-danger">{$nickservSyncError}</span>
+    {:else if !$nickservSync}
+      Loading…
+    {:else}
+      {#if !$nickservSync.enabled}
+        <p class="text-amber-500">Disabled — IRC-first accounts are not being created.</p>
+      {/if}
+      {#if $nickservSync.status}
+        {@const st = $nickservSync.status}
+        <p>
+          Last run {fmtTime(st.lastRunAt)} on {st.host || 'unknown host'}:
+          {#if st.result === 'error'}
+            <span class="text-danger">failed — {st.error}</span>
+          {:else}
+            {st.created} created, {st.skipped} skipped, {st.failed} failed of {st.accounts} accounts
+          {/if}
+          · inventory as of {fmtTime(st.inventoryMtime)}
+          {#if st.capped}
+            <span class="text-amber-500">· cap hit, continues next run</span>
+          {/if}
+          {#if syncStale}
+            <span class="text-amber-500">· stale: no run in over {(2 * $nickservSync.intervalSecs) / 60} min</span>
+          {/if}
+        </p>
+      {:else}
+        <p>No run recorded yet on this deployment.</p>
+      {/if}
+    {/if}
+  </div>
+</Card>
 
 <!--
   Users with no NickServ account, above the inventory because the inventory

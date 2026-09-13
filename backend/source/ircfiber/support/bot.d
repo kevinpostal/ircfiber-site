@@ -40,6 +40,7 @@ import vibe.core.task : Task;
 import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.bots.core;
+import ircfiber.bots.nick : SUPPORT_BOT_DEFAULT_NICK;
 import ircfiber.db.support_issues : SupportIssueRepository, SupportIssueRecord;
 import ircfiber.env : envSecret;
 import ircfiber.redis.protocol : RedisKeys;
@@ -54,7 +55,7 @@ struct SupportBotConfig {
     string host;
     ushort port = 6667;
     bool tls;
-    string nick = "FIBERSUPPORT";
+    string nick = SUPPORT_BOT_DEFAULT_NICK;
     string channel = "#support";
     string nickservPassword;
     string publicUrl = "https://ircfiber.com";

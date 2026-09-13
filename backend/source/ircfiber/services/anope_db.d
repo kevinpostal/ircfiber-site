@@ -110,7 +110,7 @@ struct AnopeAccount {
     long lastSeenAt;          /// NickAlias "last_seen", unix seconds, 0 when absent
     string lastUsermask;      /// NickAlias "last_usermask"
     string lastRealName;      /// NickAlias "last_realname"
-    bool suspended;           /// an NSSuspendInfo names this nick
+    bool suspended;           /// the owning NickCore carries an NSSuspendInfo (Anope suspends accounts, so every grouped alias is suspended)
     string suspendedBy;       /// NSSuspendInfo "by"
     string suspendReason;     /// NSSuspendInfo "reason"
     long suspendedAt;         /// NSSuspendInfo "time"
@@ -294,9 +294,11 @@ private string field(const AnopeDbRecord r, string key) @safe pure {
 
 /**
  * Assemble the inventory: every `NickAlias` joined to its `NickCore` by
- * `nc == display` for the email, plus the suspension flags of any matching
- * `NSSuspendInfo`. Both joins are ASCII case-insensitive because IRC nicks
- * are. Sorted by nick, case-insensitively.
+ * `nc == display` for the email, plus the suspension of its core:
+ * `NSSuspendInfo.nick` is the core display at suspension time and is resolved
+ * alias → core the way Anope's own unserializer does, so every alias of a
+ * suspended account is flagged. Both joins are ASCII case-insensitive because
+ * IRC nicks are. Sorted by nick, case-insensitively.
  *
  * An alias whose core is missing (a database Anope is mid-write on, or a
  * hand-edited file) is kept with an empty email rather than dropped: the admin
@@ -308,20 +310,37 @@ AnopeAccount[] anopeAccountsFromDb(string contents) @safe pure {
     auto records = parseAnopeDb(contents);
 
     string[string] coreEmail;                 // lower(display) → email
-    AnopeDbRecord[string] suspensions;        // lower(nick)    → NSSuspendInfo
+    string[string] aliasCore;                 // lower(nick)    → lower(nc)
+    AnopeDbRecord[] suspendRecords;
     foreach (ref rec; records) {
         switch (rec.type) {
             case "NickCore":
                 const display = field(rec, "display");
                 if (display.length) coreEmail[asciiLowerStr(display)] = field(rec, "email");
                 break;
-            case "NSSuspendInfo":
+            case "NickAlias":
                 const nick = field(rec, "nick");
-                if (nick.length) suspensions[asciiLowerStr(nick)] = rec;
+                const nc = field(rec, "nc");
+                if (nick.length && nc.length) aliasCore[asciiLowerStr(nick)] = asciiLowerStr(nc);
+                break;
+            case "NSSuspendInfo":
+                suspendRecords ~= rec;
                 break;
             default:
                 break;
         }
+    }
+
+    // `NSSuspendInfo::Unserialize` does `NickAlias::Find(snick)` → `na->nc`
+    // and hangs the extension on the core; mirror that so a suspension keyed
+    // by the display alias reaches every grouped alias. A record naming an
+    // alias the file lacks keeps its own name as the key (today's behaviour).
+    AnopeDbRecord[string] suspensions;        // lower(core display) → NSSuspendInfo
+    foreach (ref rec; suspendRecords) {
+        const named = asciiLowerStr(field(rec, "nick"));
+        if (!named.length) continue;
+        const core = (named in aliasCore) ? aliasCore[named] : named;
+        suspensions[core] = rec;
     }
 
     AnopeAccount[] rows;
@@ -341,7 +360,7 @@ AnopeAccount[] anopeAccountsFromDb(string contents) @safe pure {
         if (auto email = asciiLowerStr(a.account.length ? a.account : nick) in coreEmail)
             a.email = *email;
 
-        if (auto sus = asciiLowerStr(nick) in suspensions) {
+        if (auto sus = asciiLowerStr(a.account.length ? a.account : nick) in suspensions) {
             a.suspended = true;
             a.suspendedBy = field(*sus, "by");
             a.suspendReason = field(*sus, "reason");

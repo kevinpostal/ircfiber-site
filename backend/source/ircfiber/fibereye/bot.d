@@ -82,6 +82,7 @@ import vibe.core.task : Task;
 import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.bots.core;
+import ircfiber.bots.nick : FIBEREYE_DEFAULT_NICK;
 import ircfiber.env : envSecret;
 import ircfiber.fibereye.events;
 import ircfiber.fibereye.format;
@@ -103,7 +104,7 @@ struct FiberEyeConfig {
     string host;
     ushort port = 6667;
     bool tls;
-    string nick = "FIBEREYE";
+    string nick = FIBEREYE_DEFAULT_NICK;
     string channel = "#staff";
     /// Comma-separated list of channels to join (supports multiple).
     string channels = "#staff,#ircfiber";

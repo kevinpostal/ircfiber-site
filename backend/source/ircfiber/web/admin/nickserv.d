@@ -50,13 +50,12 @@ import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick,
     ProvisionOutcome, servicesAccountCandidates, servicesPendingKey, servicesSkipKey,
     SERVICES_OUTCOMES_KEY;
 import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
-    anopeCheckAuthentication, anopeNickRegistration, anopeOperAccounts, anopeOperCommand,
+    anopeCheckAuthentication, anopeNickRegistration, anopeOperCommand,
     anopeOperQuery, isSafeServicesArg, loadAnopeSettings, nickServSetPasswordCommand,
     NickRegistration, parseNickInfo;
 import ircfiber.services.anope_db : AnopeAccount, AnopeInventory, asciiLowerStr,
     classifyAccountOwnership, readAnopeInventory;
-import ircfiber.support.bot : SupportBotConfig;
-import ircfiber.fibereye.bot : FiberEyeConfig;
+import ircfiber.services.staff : staffAccountsLower;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
 import ircfiber.web.admin.services_common : accessDeniedMessage, anopeReplyOk,
@@ -527,52 +526,6 @@ package void apiNsCreate(HTTPServerRequest req, HTTPServerResponse res,
 // `services.anope_db`: they are pure inventory logic, and only there does a
 // dub configuration (`services-test`) actually compile and run their
 // unittests — in this module the blocks would never execute.
-
-/**
- * The accounts that must never read as unowned, ASCII-lowercased.
- *
- * Three sources, because no single one covers the staff population:
- *   * `OperServ OPER LIST` over RPC — the authoritative opers, but it reports
- *     the *nick* each `oper {}` block names, so prod's `admin` block has to
- *     be resolved through the inventory to its display `Zodiac` (both rows
- *     are then staff);
- *   * `IRCFIBER_ANOPE_OPER_ACCOUNT` — the account this gateway itself runs
- *     privileged commands as. It is an oper by construction, and adding it
- *     unconditionally means an unreachable Anope cannot make it look
- *     droppable;
- *   * the bots' nicks — `FIBERSUPPORT` and `FiberLogs` are *not* Anope
- *     opers (verified: their `NickServ INFO` has no "is a Services
- *     Operator" line), they are infrastructure this codebase owns and
- *     identifies as, so nothing in Mongo will ever claim them.
- */
-private bool[string] staffAccountsLower(const ref AnopeInventory inv) {
-    import std.process : environment;
-
-    auto s = loadAnopeSettings();
-    auto staff = anopeOperAccounts(s);
-    if (s.operAccount.length) staff[asciiLowerStr(s.operAccount)] = true;
-    auto botNick = environment.get("IRCFIBER_SUPPORT_BOT_NICK", "").strip();
-    if (!botNick.length) botNick = SupportBotConfig.init.nick;
-    if (botNick.length) staff[asciiLowerStr(botNick)] = true;
-    auto eyeNick = environment.get("IRCFIBER_FIBEREYE_NICK", "").strip();
-    if (!eyeNick.length) eyeNick = FiberEyeConfig.init.nick;
-    if (eyeNick.length) staff[asciiLowerStr(eyeNick)] = true;
-
-    // Alias → display. A grouped account is one identity wearing several
-    // nicks, so flagging only the nick the oper block happens to name would
-    // leave its other rows (prod: `Zodiac`, from the `admin` block) looking
-    // ownerless.
-    foreach (ref a; inv.accounts) {
-        if (!a.account.length) continue;
-        const nick = asciiLowerStr(a.nick);
-        const display = asciiLowerStr(a.account);
-        if (nick in staff || display in staff) {
-            staff[nick] = true;
-            staff[display] = true;
-        }
-    }
-    return staff;
-}
 
 /// lower(email) → username for every website user, from one Mongo query. The
 /// `email` ownership class exists entirely because of this index: accounts

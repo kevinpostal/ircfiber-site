@@ -357,6 +357,19 @@ private void testAnopeAccounts() {
     check(ci.length == 2 && ci[0].nick == "Bob" && ci[1].nick == "charlie",
           "sorted case-insensitively, so Bob precedes charlie");
     check(ci[0].suspended, "NSSuspendInfo matches the nick case-insensitively");
+
+    // Anope suspends the NickCore (`ns_suspend.cpp`: `si->what = nc->display`,
+    // extension on `nc`), so a grouped alias is just as suspended as the display.
+    auto grouped = anopeAccountsFromDb(
+        "OBJECT NickAlias\nDATA nick dave\nDATA nc dave\nEND\n"
+        ~ "OBJECT NickAlias\nDATA nick dave_away\nDATA nc dave\nEND\n"
+        ~ "OBJECT NickAlias\nDATA nick erin\nDATA nc erin\nEND\n"
+        ~ "OBJECT NSSuspendInfo\nDATA nick dave\nDATA by admin\nDATA reason x\nEND\n");
+    check(grouped.length == 3, "three aliases");
+    check(grouped[0].nick == "dave" && grouped[0].suspended, "the display alias is suspended");
+    check(grouped[1].nick == "dave_away" && grouped[1].suspended && grouped[1].suspendedBy == "admin",
+          "a grouped alias of a suspended account is suspended too");
+    check(grouped[2].nick == "erin" && !grouped[2].suspended, "another account is untouched");
 }
 
 /// Captured verbatim from prod services over XML-RPC (2026-09-09):

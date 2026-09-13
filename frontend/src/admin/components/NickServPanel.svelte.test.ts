@@ -57,6 +57,28 @@ const ACCOUNTS = '/api/admin/ircd/nickserv/accounts';
 const ACCOUNT = '/api/admin/ircd/nickserv/account';
 const UNPROVISIONED = '/api/admin/ircd/nickserv/unprovisioned';
 const CREATE = '/api/admin/ircd/nickserv/create';
+const SYNC = '/api/admin/config/nickserv-sync';
+
+/// The gateway's last auto-sync cycle: a minute ago, on a fresh inventory.
+const syncFixture = (over: Record<string, unknown> = {}) => ({
+  enabled: true,
+  key: 'irc:config:nickservSync',
+  intervalSecs: 600,
+  maxPerRun: 25,
+  status: {
+    lastRunAt: Math.floor(Date.now() / 1000) - 60,
+    host: 'gw-blue',
+    result: 'ok',
+    error: '',
+    accounts: 41,
+    created: 1,
+    skipped: 40,
+    failed: 0,
+    capped: false,
+    inventoryMtime: Math.floor(Date.now() / 1000) - 120,
+  },
+  ...over,
+});
 
 const nsAccount = (over: Record<string, unknown> = {}) => ({
   nick: 'alice',
@@ -173,6 +195,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
       if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
       if (path === ACCOUNT) return Promise.resolve(infoFixture());
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     mockedPost.mockResolvedValue({});
@@ -212,6 +235,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
           accounts: [nsAccount({ nick: 'nsplat', account: 'nsplat', username: 'platuser' })],
         });
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -285,6 +309,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
       if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
       if (path === ACCOUNT) return Promise.reject(new ApiError(refusal, 403));
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -308,6 +333,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
           }),
         });
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -357,6 +383,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
           provisioning: provisioningFixture({ pendingOrphans: -1, unprovisioned: -1 }),
         });
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     render(NickServPanel);
@@ -392,6 +419,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
       if (path === USERS)
         return Promise.resolve({ users: [{ id: 'u-9', username: 'bob', email: 'bob@example.com' }] });
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
   }
@@ -562,6 +590,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
       if (path === USERS)
         return Promise.resolve({ users: [{ id: 'u-9', username: 'bob', email: 'bob@example.com' }] });
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     mockedPost.mockResolvedValue({ nick: 'newguy', username: 'bob' });
@@ -633,6 +662,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
       if (path === ACCOUNTS) return Promise.resolve({ ...ownershipFixture(), ...over });
       if (path === ACCOUNT) return Promise.resolve(infoFixture());
       if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
   }
@@ -739,5 +769,60 @@ describe('NickServPanel.svelte — NickServ account management', () => {
     const victim = bodyRows().find((r) => r.textContent?.includes('nsvictim'))!;
     expect(victim.children[2].textContent?.trim()).toBe('—');
     expect(bodyRows()[0].textContent).not.toContain('No platform user');
+  });
+
+  const syncStatus = () =>
+    document.querySelector('[data-testid="ns-sync-status"]')?.textContent?.replace(/\s+/g, ' ') ?? '';
+
+  it('shows the auto-sync run summary and toggles the kill-switch', async () => {
+    render(NickServPanel);
+    await vi.waitFor(() =>
+      expect(syncStatus()).toContain('1 created, 40 skipped, 0 failed of 41 accounts'),
+    );
+    expect(syncStatus()).toContain('gw-blue');
+    expect(document.querySelector('[data-testid="ns-sync-toggle"]')?.textContent?.trim()).toBe('Disable');
+
+    await page.getByTestId('ns-sync-toggle').click();
+    await vi.waitFor(() => expect(api.post).toHaveBeenCalledWith(SYNC, { enabled: false }));
+    // The switch state comes from the gateway, so it is re-read after the write.
+    await vi.waitFor(() =>
+      expect(mockedGet.mock.calls.filter((c) => c[0] === SYNC).length).toBeGreaterThan(1),
+    );
+  });
+
+  /// A loop that dies or fails every cycle must read as such, not as idle:
+  /// the whole point of recording the run.
+  it('reports a failed and stale auto-sync run', async () => {
+    mockedGet.mockImplementation((path: string) => {
+      if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC)
+        return Promise.resolve(
+          syncFixture({
+            status: {
+              ...syncFixture().status,
+              result: 'error',
+              error: 'user preload failed: mongo down',
+              lastRunAt: Math.floor(Date.now() / 1000) - 1801,
+            },
+          }),
+        );
+      return Promise.reject(new Error('unexpected GET ' + path));
+    });
+    render(NickServPanel);
+    await vi.waitFor(() => expect(syncStatus()).toContain('failed — user preload failed: mongo down'));
+    expect(syncStatus()).toContain('stale');
+  });
+
+  it('shows the disabled state', async () => {
+    mockedGet.mockImplementation((path: string) => {
+      if (path === ACCOUNTS) return Promise.resolve(accountsFixture());
+      if (path === UNPROVISIONED) return Promise.resolve(unprovisionedFixture());
+      if (path === SYNC) return Promise.resolve(syncFixture({ enabled: false }));
+      return Promise.reject(new Error('unexpected GET ' + path));
+    });
+    render(NickServPanel);
+    await vi.waitFor(() => expect(syncStatus()).toContain('Disabled —'));
+    expect(document.querySelector('[data-testid="ns-sync-toggle"]')?.textContent?.trim()).toBe('Enable');
   });
 });
