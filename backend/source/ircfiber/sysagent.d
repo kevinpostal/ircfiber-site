@@ -94,7 +94,10 @@ int runSysAgent() {
     settings.port = agentPort();
     // The docker network address only. There is no path from the internet:
     // Caddy does not know this container and no port is published.
-    settings.bindAddresses = ["0.0.0.0"];
+    // Both families: the ircfiber docker network assigns IPv6 ULAs, so the
+    // gateway resolves ircfiber-sysagent to fd00:…::10 and an IPv4-only
+    // listener refuses the connection ("system agent unreachable").
+    settings.bindAddresses = ["0.0.0.0", "::"];
     settings.serverString = "irc-fiber-sysagent";
     listenHTTP(settings, router);
     logInfo("sysagent: listening on :%s — docker socket + host /proc holder, "
