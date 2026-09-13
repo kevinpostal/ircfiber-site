@@ -473,7 +473,7 @@ ircd_tls_sync_cron_hour: "3"
 ircd_tls_sync_cron_minute: "17"
 
   # Admin Config tab drift guard (tasks/guarded_conf.yml): inspircd.conf /
-  # modules.conf are editable from #/ircd, and a re-render skips installing
-  # over admin edits with a visible warning. true installs the rendered file
-  # regardless (admin edits lost).
+  # modules.conf / custom.conf are editable from #/ircd, and a re-render
+  # skips installing over admin edits with a visible warning. true installs
+  # the rendered file regardless (admin edits lost).
 ircd_config_force: false

@@ -37,7 +37,12 @@
     type: 'gline' | 'kline' | 'zline'; mask: string;
     setAt: number; durationSecs: number; setter: string; reason: string;
   }
-  type Tab = 'overview' | 'channels' | 'bans' | 'nickserv' | 'chanserv' | 'invites' | 'config' | 'logs';
+  interface LinkServer { name: string; parent: string; hops: number; desc: string; }
+  interface ConfiguredLink {
+    name: string; ipaddr: string; port: string; file: string;
+    autoconnect: boolean; linked: boolean;
+  }
+  type Tab = 'overview' | 'channels' | 'links' | 'bans' | 'nickserv' | 'chanserv' | 'invites' | 'config' | 'logs';
   let tab = $state<Tab>('overview');
 
   let status = $state<StatusResponse | null>(null);
@@ -51,12 +56,22 @@
   let expanded = $state<Record<string, MemberEntry[]>>({});
   let expanding = $state<Record<string, boolean>>({});
 
+  let links = $state<{ servers: LinkServer[]; configured: ConfiguredLink[] } | null>(null);
+  let linksError = $state<string | null>(null);
+  let linksLoading = $state(false);
+  let connecting = $state<Record<string, boolean>>({});
+
   let bans = $state<{ glines: BanEntry[]; klines: BanEntry[]; zlines: BanEntry[] } | null>(null);
   let bansError = $state<string | null>(null);
   let bansLoading = $state(false);
   let newBan = $state({ type: 'gline', mask: '', duration: '1d', reason: '' });
 
-  interface LogEntry { ts: number; service: string; severity: string; body: string; }
+  interface LogEntry { ts: number; service: string; severity: string; body: string; origin: string; }
+
+  // A peer server relays its own notices to us verbatim: 893 of 906 `LINK:`
+  // lines in a 6h prod window were `REMOTELINK: From <peer>:` noise, which
+  // buried our own. The split is client-side (SigNoz has no NOT CONTAINS).
+  const RELAYED_NOTICE = /\bREMOTELINK: From ([^\s:]+):\s*/;
 
   // service.name is the Docker container name (fluent-bit promotes
   // container_name). ircd, services and the three bots share this tab.
@@ -68,8 +83,9 @@
   let logsError = $state<string | null>(null);
   let logsLoading = $state(false);
   let logFilter = $state('');
+  let hideRelayed = $state(true);
 
-  const confFiles = ['inspircd.conf', 'modules.conf', 'opers.conf', 'motd'] as const;
+  const confFiles = ['inspircd.conf', 'modules.conf', 'custom.conf', 'opers.conf', 'motd'] as const;
   let confFile = $state<(typeof confFiles)[number]>('inspircd.conf');
   let confContent = $state<string | null>(null);
   let confError = $state<string | null>(null);
@@ -79,6 +95,9 @@
   let confEditing = $state(false);
   let confDraft = $state('');
   let confSaving = $state(false);
+  // sha256 of the file as loaded; POSTed back so a save on a stale buffer
+  // is rejected instead of splicing secrets into the wrong tag.
+  let confRevision = $state('');
 
   let stop: (() => void) | null = null;
   onMount(() => {
@@ -201,11 +220,19 @@
     if (typeof o.timestamp_nano === 'number') ms = o.timestamp_nano / 1e6;
     else if (typeof o.timestamp === 'number') ms = o.timestamp > 1e14 ? o.timestamp / 1e6 : o.timestamp;
     else ms = Date.now();
+    let body = typeof o.body === 'string' ? o.body : '';
+    let origin = '';
+    const m = RELAYED_NOTICE.exec(body);
+    if (m) {
+      origin = m[1];
+      body = body.slice(0, m.index) + body.slice(m.index + m[0].length);
+    }
     return {
       ts: ms,
       service: typeof o.service_name === 'string' ? o.service_name : '',
       severity: typeof o.severity_text === 'string' ? o.severity_text : 'INFO',
-      body: typeof o.body === 'string' ? o.body : '',
+      body,
+      origin,
     };
   }
 
@@ -242,7 +269,7 @@
       });
       const data = (res?.data ?? {}) as Record<string, { list?: unknown[] }>;
       const list = data['A']?.list;
-      logRows = (Array.isArray(list) ? list : []).slice(-200).map(parseLogRow);
+      logRows = (Array.isArray(list) ? list : []).slice(-500).map(parseLogRow);
     } catch (e) {
       logsError = errMsg(e);
     } finally {
@@ -265,12 +292,15 @@
     confLoading = true; confError = null; confContent = null;
     confEditing = false;
     try {
-      const r = await api.get<{ content: string; editable?: boolean; drifted?: boolean }>('/api/admin/ircd/config', { file: confFile });
+      const r = await api.get<{ content: string; editable?: boolean; drifted?: boolean; revision?: string }>(
+        '/api/admin/ircd/config', { file: confFile });
       confContent = r.content;
       confEditable = r.editable === true;
       confDrifted = r.drifted === true;
+      confRevision = r.revision ?? '';
     } catch (e) {
       confError = errMsg(e);
+      confRevision = '';
     } finally { confLoading = false; }
   }
 
@@ -278,14 +308,45 @@
     if (!confirm(`Save ${confFile} and rehash ircd? Connected users stay online.`)) return;
     confSaving = true;
     try {
-      const r = await api.post<{ file: string; rehashed: string; notices: string[] }>('/api/admin/ircd/config', { file: confFile, content: confDraft });
+      const r = await api.post<{ file: string; rehashed: string; notices: string[] }>(
+        '/api/admin/ircd/config', { file: confFile, content: confDraft, revision: confRevision });
       toastSuccess(`Saved ${r.file}, rehashed ${r.rehashed}`);
       if (Array.isArray(r.notices) && r.notices.length > 0) toastInfo(r.notices.join('\n'));
       confEditing = false;
       await fetchConfig();
     } catch (e) {
-      toastError(errMsg(e));
+      // 409 = the file moved under the editor. Keep the draft: reloading
+      // here would throw away whatever the operator just typed.
+      if (e instanceof ApiError && e.status === 409) toastError(e.message);
+      else toastError(errMsg(e));
     } finally { confSaving = false; }
+  }
+
+  async function fetchLinks() {
+    linksLoading = true; linksError = null;
+    try {
+      links = await api.get<{ servers: LinkServer[]; configured: ConfiguredLink[] }>('/api/admin/ircd/links');
+    } catch (e) {
+      linksError = errMsg(e);
+    } finally { linksLoading = false; }
+  }
+
+  async function connectLink(name: string) {
+    if (!confirm(`Connect to ${name}?`)) return;
+    connecting = { ...connecting, [name]: true };
+    try {
+      const r = await api.post<{ notice: string; linked: boolean }>('/api/admin/ircd/links/connect', { name });
+      // A dial failure is asynchronous (snotice, never a command reply), so
+      // "not linked yet" is reported with the server's own notice.
+      if (r.linked) toastSuccess(`Linked ${name}`);
+      else toastInfo(r.notice || `${name} did not link — check the Logs tab.`);
+      await fetchLinks();
+    } catch (e) {
+      toastError(errMsg(e));
+    } finally {
+      const { [name]: _drop, ...rest } = connecting;
+      connecting = rest;
+    }
   }
 
   function fmtDuration(secs: number): string {
@@ -305,10 +366,22 @@
     { label: 'Z-lines', entries: bans?.zlines ?? [] },
   ]);
   const totalBans = $derived((bans?.glines.length ?? 0) + (bans?.klines.length ?? 0) + (bans?.zlines.length ?? 0));
+  const relayedCount = $derived(logRows.filter((r) => r.origin).length);
+  const visibleLogRows = $derived(hideRelayed ? logRows.filter((r) => !r.origin) : logRows);
+
+  // First visit of a lazy tab fetches once: without this the Config tab sat
+  // on "Loading…" until Reload, and Logs waited for the 15s poll tick.
+  function selectTab(t: Tab) {
+    tab = t;
+    if (t === 'config' && confContent === null && !confLoading) void fetchConfig();
+    if (t === 'logs' && logRows.length === 0 && !logsLoading) void fetchLogs(true);
+    if (t === 'links' && links === null && !linksLoading) void fetchLinks();
+  }
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
     { id: 'channels', label: 'Channels' },
+    { id: 'links', label: 'Links' },
     { id: 'bans', label: 'Bans' },
     { id: 'nickserv', label: 'NickServ' },
     { id: 'chanserv', label: 'ChanServ' },
@@ -325,7 +398,7 @@
   {#snippet actions()}
     <button
       type="button"
-      onclick={() => { void fetchStatus(true); void fetchChannels(); void fetchBans(); }}
+      onclick={() => { void fetchStatus(true); void fetchChannels(); void fetchBans(); void fetchLinks(); }}
       class="rounded-md border border-border bg-surface-2 px-3 py-1.5 text-sm hover:border-primary/40"
     >
       Refresh
@@ -354,11 +427,7 @@
     {#each tabs as t}
       <button
         type="button"
-        onclick={() => {
-          tab = t.id;
-          if (t.id === 'config' && confContent === null && !confLoading) void fetchConfig();
-          if (t.id === 'logs' && logRows.length === 0 && !logsLoading) void fetchLogs();
-        }}
+        onclick={() => selectTab(t.id)}
         class="px-4 py-2 text-sm font-medium transition {tab === t.id
           ? 'border-b-2 border-primary text-heading'
           : 'text-muted hover:text-text'}"
@@ -472,6 +541,116 @@
         </div>
       {/if}
     </Card>
+  {:else if tab === 'links'}
+    <Card>
+      <div class="mb-3 flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-heading">Linked servers ({links?.servers.length ?? 0})</h3>
+        <button
+          type="button"
+          onclick={() => void fetchLinks()}
+          class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40"
+        >
+          {linksLoading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+      {#if linksError}
+        <p class="text-sm text-danger">{linksError}</p>
+      {:else if !links}
+        <p class="text-sm text-muted">Loading…</p>
+      {:else if links.servers.length === 0}
+        <EmptyState title="No servers" description="LINKS returned nothing — this server is not linked to any peer." />
+      {:else}
+        <div class="overflow-x-auto" data-testid="ircd-links-live">
+          <table class="w-full text-left text-sm">
+            <thead>
+              <tr class="border-b border-border text-xs uppercase tracking-wider text-muted">
+                <th class="py-2 pr-4">Server</th>
+                <th class="py-2 pr-4">Uplink</th>
+                <th class="py-2 pr-4">Hops</th>
+                <th class="py-2">Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each links.servers as s}
+                <tr class="border-b border-border/50 last:border-0">
+                  <td class="py-2 pr-4 font-mono font-semibold">{s.name}</td>
+                  <td class="py-2 pr-4 font-mono text-muted">
+                    {#if status?.server && s.name === status.server}
+                      <span class="rounded bg-border/40 px-2 py-0.5 text-xs">this server</span>
+                    {:else}
+                      {s.parent || '—'}
+                    {/if}
+                  </td>
+                  <td class="py-2 pr-4 font-mono">{s.hops >= 0 ? s.hops : '—'}</td>
+                  <td class="max-w-md truncate py-2 text-muted">{s.desc || '—'}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </Card>
+    <div class="mt-4">
+      <Card>
+        <h3 class="mb-3 text-sm font-semibold text-heading">Configured links ({links?.configured.length ?? 0})</h3>
+        {#if linksError}
+          <p class="text-sm text-danger">{linksError}</p>
+        {:else if !links}
+          <p class="text-sm text-muted">Loading…</p>
+        {:else if links.configured.length === 0}
+          <EmptyState
+            title="No configured links"
+            description="No <link> tag in inspircd.conf, modules.conf or custom.conf. Add one in the Config tab."
+          />
+        {:else}
+          <div class="overflow-x-auto" data-testid="ircd-links-configured">
+            <table class="w-full text-left text-sm">
+              <thead>
+                <tr class="border-b border-border text-xs uppercase tracking-wider text-muted">
+                  <th class="py-2 pr-4">Server</th>
+                  <th class="py-2 pr-4">Address</th>
+                  <th class="py-2 pr-4">Defined in</th>
+                  <th class="py-2 pr-4">Autoconnect</th>
+                  <th class="py-2 pr-4">State</th>
+                  <th class="py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each links.configured as c}
+                  <tr class="border-b border-border/50 last:border-0">
+                    <td class="py-2 pr-4 font-mono font-semibold">{c.name}</td>
+                    <td class="py-2 pr-4 font-mono text-muted">{c.ipaddr ? `${c.ipaddr}:${c.port}` : '—'}</td>
+                    <td class="py-2 pr-4 font-mono text-muted">{c.file}</td>
+                    <td class="py-2 pr-4 text-muted">{c.autoconnect ? 'yes' : 'no'}</td>
+                    <td class="py-2 pr-4 {c.linked ? 'text-success' : 'text-muted'}">
+                      {c.linked ? 'Linked' : 'Not linked'}
+                    </td>
+                    <td class="py-2 text-right">
+                      <button
+                        type="button"
+                        data-testid="ircd-link-connect"
+                        onclick={() => void connectLink(c.name)}
+                        disabled={c.linked || connecting[c.name]}
+                        class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40 disabled:opacity-50"
+                      >
+                        {connecting[c.name] ? '…' : 'Connect'}
+                      </button>
+                      <button
+                        type="button"
+                        onclick={() => { logFilter = c.name; selectTab('logs'); void fetchLogs(true); }}
+                        class="ml-1 rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40"
+                      >
+                        Logs
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </Card>
+    </div>
   {:else if tab === 'bans'}
     <Card>
       <h3 class="mb-3 text-sm font-semibold text-heading">Add ban</h3>
@@ -634,12 +813,18 @@
             Discard
           </button>
         {/if}
-        {#if confFile === 'opers.conf'}
-          <span class="text-xs text-muted">Read-only · secrets shown as <code>***REDACTED***</code> · edits stay in Ansible</span>
+        {#if confEditable}
+          <span class="text-xs text-muted">Secrets shown as <code>***REDACTED#n***</code> · kept automatically unless replaced with the real value</span>
         {:else}
-          <span class="text-xs text-muted">Secrets shown as <code>***REDACTED***</code> · kept automatically unless replaced with the real value</span>
+          <span class="text-xs text-muted">Read-only · secrets shown as <code>***REDACTED#n***</code> · edits stay in Ansible</span>
         {/if}
       </div>
+      {#if confFile === 'custom.conf'}
+        <p class="mb-2 text-xs text-muted">
+          Server links live here. A rehash applies <code>&lt;link&gt;</code>/<code>&lt;autoconnect&gt;</code>
+          changes with no client disconnects; a new <code>&lt;bind&gt;</code> needs a container restart.
+        </p>
+      {/if}
       {#if confEditable && confContent !== null && !confError}
         <p class="mb-2 text-xs text-muted">
           {#if confDrifted}
@@ -689,21 +874,41 @@
         >
           {logsLoading ? 'Loading…' : 'Refresh'}
         </button>
-        <span class="text-xs text-muted">Last hour · ircfiber-ircd + ircfiber-services · via SigNoz</span>
+        <label class="flex items-center gap-1.5 text-xs text-muted">
+          <input
+            type="checkbox"
+            bind:checked={hideRelayed}
+            aria-label="Hide relayed peer notices"
+            class="rounded border-border"
+          />
+          Hide peer notices
+        </label>
+        {#if hideRelayed && relayedCount > 0}
+          <span class="text-xs text-muted">{relayedCount} relayed hidden</span>
+        {/if}
+        <span class="text-xs text-muted">Last hour · ircd + services + bots · via SigNoz</span>
       </div>
       {#if logsError}
         <p class="text-sm text-danger">{logsError}</p>
       {:else if logsLoading && logRows.length === 0}
         <p class="text-sm text-muted">Loading…</p>
-      {:else if logRows.length === 0}
-        <EmptyState title="No ircd logs" description="Nothing from ircfiber-ircd or ircfiber-services in the last hour. If SigNoz is unreachable this shows the proxy error instead." />
+      {:else if visibleLogRows.length === 0}
+        <EmptyState
+          title="No ircd logs"
+          description={relayedCount > 0
+            ? 'Only relayed peer notices in the last hour — untick "Hide peer notices" to see them.'
+            : 'Nothing from ircfiber-ircd or ircfiber-services in the last hour. If SigNoz is unreachable this shows the proxy error instead.'}
+        />
       {:else}
         <div class="max-h-[60vh] space-y-0.5 overflow-auto font-mono text-xs leading-relaxed">
-          {#each logRows as r}
+          {#each visibleLogRows as r}
             <div class="flex gap-2 border-b border-border/30 py-0.5 last:border-0">
               <span class="shrink-0 text-muted" title={new Date(r.ts).toLocaleString()}>{fmtTime(r.ts)}</span>
               <span class="shrink-0 text-primary">{r.service.replace('ircfiber-', '')}</span>
               <span class="shrink-0 {sevClass(r.severity)}">{r.severity}</span>
+              {#if r.origin}
+                <span class="shrink-0 text-amber-500" title="Relayed from {r.origin}">via {r.origin}</span>
+              {/if}
               <span class="min-w-0 flex-1 whitespace-pre-wrap break-words text-text">{r.body}</span>
             </div>
           {/each}

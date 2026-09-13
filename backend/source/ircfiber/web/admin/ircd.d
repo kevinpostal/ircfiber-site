@@ -283,52 +283,13 @@ public bool parseStatsXLine(IrcLine l, out XLine x) {
     return true;
 }
 
-/// Attribute map of the first `<tag …>` in an InspIRCd config text.
-///
-/// Handles the multi-line form the templates render (one attribute per
-/// line) and quoted values containing `>`; comment lines are dropped
-/// first, because the rendered config discusses tags in prose
-/// ("# … leaves the per-IP judgement to <connectban> below") and a
-/// comment must never be read as the tag itself. Empty when absent.
-public string[string] parseConfTag(string confText, string tag) @safe pure {
-    import std.string : splitLines;
-
-    string[string] attrs;
-    if (!tag.length) return attrs;
-
-    string text;
-    foreach (line; confText.splitLines()) {
-        if (line.strip().startsWith("#")) continue;
-        text ~= line ~ "\n";
-    }
-
+/// Attribute map of one `<tag …>` body (everything between the tag name
+/// and its unquoted `>`).
+private string[string] parseConfAttrs(string inner) @safe pure {
     static bool isSpace(char c) @safe pure {
         return c == ' ' || c == '\t' || c == '\n' || c == '\r';
     }
-
-    // `<connectban` must not match `<connectbanfoo`.
-    const open = "<" ~ tag;
-    ptrdiff_t start = -1;
-    for (ptrdiff_t p = text.indexOf(open); p >= 0;) {
-        const size_t after = cast(size_t)(p + open.length);
-        if (after < text.length && (isSpace(text[after]) || text[after] == '>')) {
-            start = cast(ptrdiff_t) after;
-            break;
-        }
-        const next = text[after .. $].indexOf(open);
-        if (next < 0) break;
-        p = cast(ptrdiff_t)(after + next);
-    }
-    if (start < 0) return attrs;
-
-    size_t end = text.length;
-    bool quoted;
-    for (size_t j = cast(size_t) start; j < text.length; j++) {
-        if (text[j] == '"') quoted = !quoted;
-        else if (text[j] == '>' && !quoted) { end = j; break; }
-    }
-
-    const inner = text[cast(size_t) start .. end];
+    string[string] attrs;
     size_t k;
     while (k < inner.length) {
         while (k < inner.length && isSpace(inner[k])) k++;
@@ -346,6 +307,58 @@ public string[string] parseConfTag(string confText, string tag) @safe pure {
         if (name.length) attrs[name] = value;
     }
     return attrs;
+}
+
+/// Attribute maps of EVERY `<tag …>` in an InspIRCd config text, in file
+/// order. Handles the multi-line form the templates render (one attribute
+/// per line) and quoted values containing `>`; comment lines are dropped
+/// first, because the rendered config discusses tags in prose
+/// ("# … leaves the per-IP judgement to <connectban> below") and a
+/// comment must never be read as the tag itself. Empty when absent.
+public string[string][] parseConfTags(string confText, string tag) @safe pure {
+    import std.string : splitLines;
+
+    string[string][] tags;
+    if (!tag.length) return tags;
+
+    string text;
+    foreach (line; confText.splitLines()) {
+        if (line.strip().startsWith("#")) continue;
+        text ~= line ~ "\n";
+    }
+
+    static bool isSpace(char c) @safe pure {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+    }
+
+    // `<connectban` must not match `<connectbanfoo`.
+    const open = "<" ~ tag;
+    size_t pos;
+    while (pos < text.length) {
+        const rel = text[pos .. $].indexOf(open);
+        if (rel < 0) break;
+        const size_t after = pos + cast(size_t) rel + open.length;
+        if (!(after < text.length && (isSpace(text[after]) || text[after] == '>'))) {
+            pos = after;
+            continue;
+        }
+        size_t end = text.length;
+        bool quoted;
+        for (size_t j = after; j < text.length; j++) {
+            if (text[j] == '"') quoted = !quoted;
+            else if (text[j] == '>' && !quoted) { end = j; break; }
+        }
+        tags ~= parseConfAttrs(text[after .. end]);
+        pos = end < text.length ? end + 1 : text.length;
+    }
+    return tags;
+}
+
+/// Attribute map of the first `<tag …>` in an InspIRCd config text.
+/// Empty when absent. See `parseConfTags` for the scanning rules.
+public string[string] parseConfTag(string confText, string tag) @safe pure {
+    auto all = parseConfTags(confText, tag);
+    return all.length ? all[0] : null;
 }
 
 /// One LIST row, numeric 322:
@@ -406,28 +419,28 @@ public bool numericOf(IrcLine l, string num) {
 /// Config attribute names whose quoted value is a secret.
 private immutable string[] _secretAttrs = ["key", "sendpass", "recvpass", "password"];
 
-/// Mask the quoted value of one `attr="..."` / `attr='...'` occurrence.
-/// Returns the line unchanged when the attribute is absent.
-public string redactAttr(string line, string attr) {
-    foreach (q; ['"', '\'']) {
-        auto needle = attr ~ "=" ~ [q];
-        auto at = line.indexOf(needle);
-        if (at < 0) continue;
-        auto vs = at + needle.length;
-        auto end = line.indexOf(q, vs);
-        if (end < 0) continue;
-        return line[0 .. vs] ~ "***REDACTED***" ~ line[end .. $];
-    }
-    return line;
-}
+/// Placeholder for the Nth secret in a config file, 1-based. The index is
+/// what makes a round-trip safe when two lines redact alike — custom.conf
+/// renders `recvpass=` twice with identical indentation (netcrave link and
+/// k3s leaf link), and an unindexed marker cannot tell them apart.
+public string redactedMarker(size_t n) { return "***REDACTED#" ~ n.to!string ~ "***"; }
 
-/// Redact every secret attribute on every line of a config file dump.
+/// Redact every secret attribute on every line of a config file dump,
+/// numbering the markers file-wide in reading order.
 public string redactConfText(string text) {
     string[] out_;
     out_.reserve(text.length / 64 + 1);
+    size_t n;
     foreach (line; text.split("\n")) {
-        foreach (attr; _secretAttrs) line = redactAttr(line, attr);
-        out_ ~= line;
+        auto hits = secretHits(line);
+        if (hits.length == 0) { out_ ~= line; continue; }
+        string rebuilt;
+        size_t cursor;
+        foreach (h; hits) {
+            rebuilt ~= line[cursor .. h.valueStart] ~ redactedMarker(++n);
+            cursor = h.valueEnd;
+        }
+        out_ ~= rebuilt ~ line[cursor .. $];
     }
     import std.array : join;
     return out_.join("\n");
@@ -437,16 +450,16 @@ public string redactConfText(string text) {
 // Secret-preserving save (covered by unit tests — no I/O here)
 // ---------------------------------------------------------------------------
 
-/// One quoted secret occurrence and its byte offset on the line.
+/// One quoted secret occurrence and the span of its value on the line.
 private struct SecretHit {
-    size_t pos;
+    size_t valueStart;  // first char of the quoted value
+    size_t valueEnd;    // index of the closing quote
     string value;
 }
 
 /// Every quoted secret value on `line` (`key`/`sendpass`/`recvpass`/
-/// `password`, single or double quotes) in left-to-right order, so a line
-/// carrying several secrets refills its redacted markers positionally.
-private string[] extractSecretValues(string line) {
+/// `password`, single or double quotes) in left-to-right order.
+private SecretHit[] secretHits(string line) {
     SecretHit[] hits;
     foreach (attr; _secretAttrs) {
         foreach (q; ['"', '\'']) {
@@ -460,17 +473,14 @@ private string[] extractSecretValues(string line) {
                 auto erel = line[vs .. $].indexOf(q);
                 if (erel < 0) break;
                 auto end = vs + cast(size_t) erel;
-                hits ~= SecretHit(at, line[vs .. end]);
+                hits ~= SecretHit(vs, end, line[vs .. end]);
                 from = end + 1;
             }
         }
     }
     import std.algorithm : sort;
-    hits.sort!((a, b) => a.pos < b.pos);
-    string[] out_;
-    out_.reserve(hits.length);
-    foreach (h; hits) out_ ~= h.value;
-    return out_;
+    hits.sort!((a, b) => a.valueStart < b.valueStart);
+    return hits;
 }
 
 /// Result of `restoreSecrets`: `error` is "" on success.
@@ -479,56 +489,66 @@ public struct RestoreSecretsResult {
     string error;
 }
 
-private enum _redactedMarker = "***REDACTED***";
-
-private string fillRedactedMarkers(string line, string[] secrets) {
-    auto res = line;
-    foreach (s; secrets) {
-        auto at = res.indexOf(_redactedMarker);
-        assert(at >= 0);
-        res = res[0 .. cast(size_t) at] ~ s ~ res[cast(size_t) at + _redactedMarker.length .. $];
-    }
-    return res;
-}
-
 /// Re-inject live secrets into submitted (redacted) config text. The editor
-/// buffer is the redacted dump, so every submitted line still carrying the
-/// marker is matched against the live file by its redacted form
-/// (`redactConfText`): exactly one live line may match, and its secret
-/// count must equal the marker count, otherwise the submission is rejected
-/// naming the 1-based line number — never a guess. Lines without the
-/// marker pass through untouched (so a value pasted from the Ansible vault
-/// is kept verbatim).
+/// buffer is the redacted dump, so every marker carries the 1-based index
+/// of the live secret it stands for (`***REDACTED#3***`) and is refilled
+/// from the live file by that index — position on the line, and even the
+/// order of the lines, may change without mixing two secrets up. An index
+/// outside the live file, or an unindexed `***REDACTED***` left over from
+/// an older editor buffer, is rejected naming the 1-based submitted line —
+/// never a guess. Lines without a marker pass through untouched (so a
+/// value pasted from the Ansible vault is kept verbatim).
 public RestoreSecretsResult restoreSecrets(string liveText, string submittedText) {
     import std.array : join;
-    // Redacted line -> one secret list per live line redacting to it. Two
-    // live lines redacting alike (even with equal values) leave two
-    // candidates and therefore reject: ambiguity must not guess.
-    string[][][string] liveMap;
-    foreach (line; liveText.split("\n")) {
-        auto secrets = extractSecretValues(line);
-        if (secrets.length == 0) continue;
-        liveMap[redactConfText(line)] ~= secrets;
-    }
+    string[] live;
+    foreach (line; liveText.split("\n"))
+        foreach (h; secretHits(line)) live ~= h.value;
+
+    enum markerHead = "***REDACTED";
+    enum markerTail = "***";
     string[] out_;
     out_.reserve(submittedText.length / 64 + 1);
     foreach (idx, line; submittedText.split("\n")) {
-        if (line.indexOf(_redactedMarker) < 0) { out_ ~= line; continue; }
-        auto cands = liveMap.get(redactConfText(line), null);
-        size_t markers = 0;
-        if (cands !is null && cands.length == 1) {
-            size_t from = 0;
-            while (from < line.length) {
-                auto rel = line[from .. $].indexOf(_redactedMarker);
-                if (rel < 0) break;
-                markers++;
-                from += cast(size_t) rel + _redactedMarker.length;
+        string rebuilt;
+        size_t cursor;
+        while (cursor < line.length) {
+            auto rel = line[cursor .. $].indexOf(markerHead);
+            if (rel < 0) break;
+            const size_t at = cursor + cast(size_t) rel;
+            size_t p = at + markerHead.length;
+            if (p + markerTail.length <= line.length && line[p .. p + markerTail.length] == markerTail)
+                return RestoreSecretsResult("", "line " ~ (idx + 1).to!string ~
+                    ": ***REDACTED*** has no index \u2014 reload the Config tab and re-apply " ~
+                    "the edit, or paste the real value from the Ansible vault");
+            if (p >= line.length || line[p] != '#') {
+                rebuilt ~= line[cursor .. p];
+                cursor = p;
+                continue;
             }
+            p++;
+            const size_t digits = p;
+            size_t n;
+            bool overflow;
+            while (p < line.length && line[p] >= '0' && line[p] <= '9') {
+                if (n > (size_t.max - 9) / 10) overflow = true;
+                else n = n * 10 + cast(size_t)(line[p] - '0');
+                p++;
+            }
+            if (p == digits || p + markerTail.length > line.length ||
+                line[p .. p + markerTail.length] != markerTail) {
+                rebuilt ~= line[cursor .. p];
+                cursor = p;
+                continue;
+            }
+            const size_t markerEnd = p + markerTail.length;
+            if (overflow || n == 0 || n > live.length)
+                return RestoreSecretsResult("", "line " ~ (idx + 1).to!string ~ ": " ~
+                    line[at .. markerEnd] ~ " does not match the live file \u2014 reload the " ~
+                    "Config tab and re-apply the edit");
+            rebuilt ~= line[cursor .. at] ~ live[n - 1];
+            cursor = markerEnd;
         }
-        if (cands is null || cands.length != 1 || markers != cands[0].length)
-            return RestoreSecretsResult("", "line " ~ (idx + 1).to!string ~
-                ": redacted secret has no unique live match \u2014 copy the real value from the Ansible vault");
-        out_ ~= fillRedactedMarkers(line, cands[0]);
+        out_ ~= rebuilt ~ line[cursor .. $];
     }
     return RestoreSecretsResult(out_.join("\n"), "");
 }
@@ -998,6 +1018,172 @@ package void apiIrcdChannel(HTTPServerRequest req, HTTPServerResponse res) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Server links
+// ---------------------------------------------------------------------------
+
+/// One `<link>` tag as declared on disk. Passwords are deliberately absent:
+/// this struct feeds an HTTP response.
+private struct ConfLink {
+    string name;
+    string ipaddr;
+    string port;
+    string file;
+    bool autoconnect;
+}
+
+/// Every `<link>` declared in the gateway-visible conf dir, in file order
+/// (`inspircd.conf`, `modules.conf`, `custom.conf`), first declaration of a
+/// name winning. `<autoconnect server="a b">` is a failover list, so the
+/// flag is resolved against every whitespace-separated entry of every
+/// autoconnect tag in any of the files. No IRC I/O.
+private ConfLink[] configuredLinks(string confDir) {
+    import std.file : exists, isFile, readText;
+    import std.path : buildPath;
+    ConfLink[] links;
+    bool[string] seen;
+    string[] autoServers;
+    foreach (file; ["inspircd.conf", "modules.conf", "custom.conf"]) {
+        auto path = buildPath(confDir, file);
+        if (!exists(path) || !isFile(path)) continue;
+        string text;
+        try text = readText(path);
+        catch (Exception) continue;
+        foreach (tag; parseConfTags(text, "autoconnect"))
+            foreach (s; tag.get("server", "").split()) autoServers ~= s.toLower();
+        foreach (tag; parseConfTags(text, "link")) {
+            auto name = tag.get("name", "").strip();
+            if (name.length == 0 || (name.toLower() in seen) !is null) continue;
+            seen[name.toLower()] = true;
+            links ~= ConfLink(name, tag.get("ipaddr", ""), tag.get("port", ""), file, false);
+        }
+    }
+    foreach (ref l; links)
+        if (autoServers.canFind(l.name.toLower())) l.autoconnect = true;
+    return links;
+}
+
+/// Server names present on the network right now, lowercased, from LINKS:
+/// `:srv 364 <nick> <server> <parent> :<hops> <desc>`, terminated by 365.
+private bool[string] liveLinkNames(IrcdClient client) {
+    bool[string] live;
+    foreach (line; client.transact("LINKS", ["365", "421"], 8000)) {
+        auto l = parseIrcLine(line);
+        if (!l.valid || l.command != "364" || l.params.length < 4) continue;
+        live[l.params[1].toLower()] = true;
+    }
+    return live;
+}
+
+/// GET /api/admin/ircd/links — live LINKS rows plus the `<link>` tags on
+/// disk, so "configured but not linked" is visible without reading logs.
+package void apiIrcdLinks(HTTPServerRequest req, HTTPServerResponse res) {
+    auto settings = loadIrcdSettings();
+    withIrcd(req, res, (client) {
+        auto servers = Json.emptyArray;
+        bool[string] live;
+        foreach (line; client.transact("LINKS", ["365", "421"], 8000)) {
+            auto l = parseIrcLine(line);
+            // A 364 row with fewer than 4 params is skipped, never fatal.
+            if (!l.valid || l.command != "364" || l.params.length < 4) continue;
+            auto trailing = l.params[3];
+            long hops = -1;
+            string desc = "";
+            auto sp = trailing.indexOf(' ');
+            if (sp > 0) {
+                try hops = trailing[0 .. cast(size_t) sp].to!long;
+                catch (Exception) { hops = -1; }
+                desc = trailing[cast(size_t) sp + 1 .. $];
+            } else {
+                try hops = trailing.to!long;
+                catch (Exception) { hops = -1; desc = trailing; }
+            }
+            auto o = Json.emptyObject;
+            o["name"] = Json(l.params[1]);
+            o["parent"] = Json(l.params[2]);
+            o["hops"] = Json(hops);
+            o["desc"] = Json(desc);
+            servers ~= o;
+            live[l.params[1].toLower()] = true;
+        }
+        auto configured = Json.emptyArray;
+        foreach (c; configuredLinks(settings.confDir)) {
+            auto o = Json.emptyObject;
+            o["name"] = Json(c.name);
+            o["ipaddr"] = Json(c.ipaddr);
+            o["port"] = Json(c.port);
+            o["file"] = Json(c.file);
+            o["autoconnect"] = Json(c.autoconnect);
+            o["linked"] = Json((c.name.toLower() in live) !is null);
+            configured ~= o;
+        }
+        auto data = Json.emptyObject;
+        data["servers"] = servers;
+        data["configured"] = configured;
+        jsonOk(res, data);
+    });
+}
+
+/// POST /api/admin/ircd/links/connect {name} — dial one configured link.
+///
+/// The name goes into a raw IRC command, so it must both look like a server
+/// name and already be declared on disk. InspIRCd answers CONNECT
+/// synchronously with a single NOTICE ("Connecting to server: …", "already
+/// exists", "No server matching …", "is ME"); an actual dial failure is
+/// asynchronous, so the link is polled for a few seconds and `linked: false`
+/// plus the notice is the honest answer.
+package void apiIrcdLinkConnect(HTTPServerRequest req, HTTPServerResponse res) {
+    import vibe.core.core : sleep;
+    auto body = readJsonBody(req);
+    if (body.type != Json.Type.object) {
+        jsonError(res, 400, "Request body must be JSON {name}.");
+        return;
+    }
+    string name = body["name"].type == Json.Type.string ? body["name"].get!string.strip() : "";
+    bool wellFormed = name.length > 0 && name.length <= 64;
+    if (wellFormed)
+        foreach (c; name) {
+            const ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+            if (!ok) { wellFormed = false; break; }
+        }
+    auto settings = loadIrcdSettings();
+    bool known = false;
+    if (wellFormed)
+        foreach (c; configuredLinks(settings.confDir))
+            if (c.name == name) { known = true; break; }
+    if (!known) {
+        jsonError(res, 400, "name must be a configured link.");
+        return;
+    }
+    withIrcd(req, res, (client) {
+        string notice = "";
+        bool denied = false;
+        foreach (line; client.transact("CONNECT " ~ name, ["NOTICE", "481"], 8000)) {
+            auto l = parseIrcLine(line);
+            if (!l.valid) continue;
+            if (l.command == "481") { denied = true; break; }
+            if (l.command == "NOTICE" && notice.length == 0 && l.params.length > 0)
+                notice = l.params[$ - 1];
+        }
+        if (denied) {
+            jsonError(res, 403, "The dashboard oper may not CONNECT. Deploy roles/ircd " ~
+                "(opers.conf grants CONNECT to the Dashboard class) and rehash.");
+            return;
+        }
+        bool linked = false;
+        foreach (attempt; 0 .. 4) {
+            sleep(dur!"msecs"(2000));
+            if ((name.toLower() in liveLinkNames(client)) !is null) { linked = true; break; }
+        }
+        logInfo("Admin CONNECT %s (linked=%s)", name, linked);
+        auto data = Json.emptyObject;
+        data["notice"] = Json(notice);
+        data["linked"] = Json(linked);
+        jsonOk(res, data);
+    });
+}
+
 private string xlineLetter(string type) {
     switch (type) {
         case "gline": return "g";
@@ -1291,11 +1477,25 @@ public void removeXlineNow(string type, string mask) {
     assert(0);
 }
 
-/// Config files viewable (read-only) from the dashboard.
-private immutable string[] _viewableConf = ["inspircd.conf", "modules.conf", "opers.conf", "motd"];
+/// Config files viewable (read-only) from the dashboard. `custom.conf`
+/// holds the server `<link>` / `<autoconnect>` / `<bind>` tags.
+private immutable string[] _viewableConf =
+    ["inspircd.conf", "modules.conf", "custom.conf", "opers.conf", "motd"];
 
-/// Files editable through the save endpoint (opers.conf stays in Ansible).
-private immutable string[] _editableConf = ["inspircd.conf", "modules.conf", "motd"];
+/// Files editable through the save endpoint. `opers.conf` stays in Ansible
+/// (an oper block edited live is an authentication change, not a tuning one).
+private immutable string[] _editableConf = ["inspircd.conf", "modules.conf", "custom.conf", "motd"];
+
+/// Lowercase hex sha256 of a config file's bytes. Lowercase because that is
+/// what Ansible's `stat.checksum` writes into .ansible.<file>.sha256
+/// (guarded_conf.yml) — D's toHexString is uppercase, which made every file
+/// look drifted. Doubles as the editor's optimistic-concurrency revision.
+private string confRevision(string text) {
+    import std.digest : toHexString;
+    import std.digest.sha : sha256Of;
+    auto hex = toHexString(sha256Of(cast(const(char)[]) text));
+    return hex[].idup.toLower();
+}
 
 /// GET /api/admin/ircd/config?file=inspircd.conf — redacted config text.
 /// Reads the host-exposed conf dir (mounted read-only into the gateway).
@@ -1303,7 +1503,8 @@ package void apiIrcdConfig(HTTPServerRequest req, HTTPServerResponse res) {
     auto settings = loadIrcdSettings();
     auto name = req.query.get("file", "inspircd.conf").strip();
     if (!_viewableConf.canFind(name)) {
-        jsonError(res, 400, "file must be one of: inspircd.conf, modules.conf, opers.conf, motd.");
+        import std.array : join;
+        jsonError(res, 400, "file must be one of: " ~ _viewableConf.join(", ") ~ ".");
         return;
     }
     if (name.indexOf('/') >= 0 || name.indexOf('.') == 0) {
@@ -1328,20 +1529,16 @@ package void apiIrcdConfig(HTTPServerRequest req, HTTPServerResponse res) {
     }
     if (text.length > 200_000) { jsonError(res, 400, "Config file too large to display."); return; }
     bool editable = _editableConf.canFind(name);
-    // drifted: sha256 of live file != content of sidecar .ansible.<file>.sha256
+    // drifted: sha256 of live file != content of sidecar .ansible.<file>.sha256.
+    // Computed for every viewable file — the guarded render writes a sidecar
+    // for opers.conf and custom.conf too; a missing sidecar is "not drifted".
     bool drifted = false;
-    if (editable) {
-        import std.digest : toHexString;
-        import std.digest.sha : sha256Of;
-        auto sidecar = buildPath(settings.confDir, ".ansible." ~ name ~ ".sha256");
-        if (exists(sidecar) && isFile(sidecar)) {
-            try {
-                auto sidecarHash = readText(sidecar).strip();
-                auto liveHash = toHexString(sha256Of(cast(const(char)[]) text));
-                drifted = (sidecarHash != liveHash);
-            } catch (Exception) {
-                // missing/unreadable sidecar -> not drifted
-            }
+    auto sidecar = buildPath(settings.confDir, ".ansible." ~ name ~ ".sha256");
+    if (exists(sidecar) && isFile(sidecar)) {
+        try {
+            drifted = readText(sidecar).strip().toLower() != confRevision(text);
+        } catch (Exception) {
+            // missing/unreadable sidecar -> not drifted
         }
     }
     auto data = Json.emptyObject;
@@ -1350,6 +1547,7 @@ package void apiIrcdConfig(HTTPServerRequest req, HTTPServerResponse res) {
     data["content"] = Json(redactConfText(text));
     data["editable"] = Json(editable);
     data["drifted"] = Json(drifted);
+    data["revision"] = Json(confRevision(text));
     jsonOk(res, data);
 }
 
@@ -1404,8 +1602,11 @@ package void apiIrcdConfigSave(HTTPServerRequest req, HTTPServerResponse res) {
     }
     string name = body["file"].type == Json.Type.string ? body["file"].get!string.strip() : "";
     string content = body["content"].type == Json.Type.string ? body["content"].get!string : "";
+    string revision = body["revision"].type == Json.Type.string ? body["revision"].get!string.strip() : "";
     if (!_editableConf.canFind(name)) {
-        jsonError(res, 400, "opers.conf stays in Ansible");
+        import std.array : join;
+        jsonError(res, 400, "file must be one of: " ~ _editableConf.join(", ") ~
+            " (opers.conf stays in Ansible).");
         return;
     }
     if (content.length == 0 || content.length > 200_000) {
@@ -1413,6 +1614,13 @@ package void apiIrcdConfigSave(HTTPServerRequest req, HTTPServerResponse res) {
         return;
     }
     auto settings = loadIrcdSettings();
+    // Nothing below may touch disk when the ircd cannot be rehashed: a saved
+    // but un-rehashed config is neither live nor rolled back.
+    if (!settings.configured()) {
+        jsonError(res, 503, "IRCd oper credentials are not configured; " ~
+            "refusing to write config that cannot be rehashed.");
+        return;
+    }
     import std.file : exists, isFile, readText;
     import std.path : buildPath;
     // Resolve path exactly as GET does
@@ -1427,6 +1635,13 @@ package void apiIrcdConfigSave(HTTPServerRequest req, HTTPServerResponse res) {
     try liveText = readText(path);
     catch (Exception e) {
         jsonError(res, 500, "Could not read live config file.");
+        return;
+    }
+    // Optimistic concurrency: with indexed markers a stale editor buffer
+    // would splice the wrong secret into the wrong tag.
+    if (revision.length == 0 || revision != confRevision(liveText)) {
+        jsonError(res, 409, "This file changed on disk since you loaded it " ~
+            "(Ansible install or another admin). Reload the Config tab and re-apply your edit.");
         return;
     }
     // Restore secrets

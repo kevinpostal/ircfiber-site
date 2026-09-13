@@ -12,7 +12,7 @@ import std.string : indexOf;
 
 import ircfiber.web.admin.ircd : HISTORY_SKEW_MS, isHistoryReplayLine, parseIrcLine, parseIrcTimestamp,
     parseNamesLine, parseServerTimeTag, parseStatsXLine, parseListLine,
-    stripStatusPrefix, redactAttr, redactConfText,
+    stripStatusPrefix, parseConfTag, parseConfTags, redactConfText, redactedMarker,
     restoreSecrets, validBanMask, XLine, ChanInfo, NamesInfo;
 
 private int failures;
@@ -122,56 +122,99 @@ private void testParseNamesLine() {
 }
 
 private void testRedact() {
-    check(redactAttr(`<cloak method="hmac-sha256" key="SECRETKEY" prefix="a">`, "key") ==
-        `<cloak method="hmac-sha256" key="***REDACTED***" prefix="a">`, "cloak key masked");
-    check(redactAttr(`      sendpass="hunter2"`, "sendpass") ==
-        `      sendpass="***REDACTED***"`, "sendpass masked");
-    check(redactAttr(`      password="abc$def"`, "password") ==
-        `      password="***REDACTED***"`, "oper password masked");
-    check(redactAttr(`<server name="irc.example.com">`, "key") ==
+    check(redactConfText(`<cloak method="hmac-sha256" key="SECRETKEY" prefix="a">`) ==
+        `<cloak method="hmac-sha256" key="***REDACTED#1***" prefix="a">`, "cloak key masked");
+    check(redactConfText(`      password="abc$def"`) ==
+        `      password="***REDACTED#1***"`, "oper password masked");
+    check(redactConfText(`<server name="irc.example.com">`) ==
         `<server name="irc.example.com">`, "non-secret untouched");
+    // Multi-secret line numbers left to right, not per attribute name.
+    check(redactConfText(`<link name="s" sendpass="A" recvpass="B">`) ==
+        `<link name="s" sendpass="***REDACTED#1***" recvpass="***REDACTED#2***">`,
+        "multi-secret line numbered left to right");
+    // custom.conf shape: two identically indented recvpass lines must get
+    // distinct markers — an unindexed marker made this pair unsavable.
+    auto twin = redactConfText("      recvpass=\"A\"\n      recvpass=\"B\"");
+    check(twin == "      recvpass=\"***REDACTED#1***\"\n      recvpass=\"***REDACTED#2***\"",
+        "identical lines get distinct indices");
+    check(twin.indexOf("\"A\"") < 0 && twin.indexOf("\"B\"") < 0, "no live secret survives");
     auto doc = "<link name=\"s\"\n      sendpass=\"A\"\n      recvpass=\"B\">\n<server name=\"x\">";
     auto red = redactConfText(doc);
     check(red.indexOf("\"A\"") < 0 && red.indexOf("\"B\"") < 0, "both link secrets gone");
-    check(red.indexOf("***REDACTED***") >= 0 && red.indexOf("<server name=\"x\">") >= 0,
-        "structure preserved");
+    check(red.indexOf(redactedMarker(1)) >= 0 && red.indexOf(redactedMarker(2)) >= 0 &&
+        red.indexOf("<server name=\"x\">") >= 0, "structure preserved");
 }
 
 private void testRestoreSecrets() {
     // (a) redacted sendpass line restores live password byte-for-byte
     auto live = "      sendpass=\"secret123\"";
-    auto submitted = "      sendpass=\"***REDACTED***\"";
+    auto submitted = "      sendpass=\"***REDACTED#1***\"";
     auto r = restoreSecrets(live, submitted);
     check(r.error.length == 0 && r.restored == live, "restore single secret");
+
     // (b) untouched lines pass through
     live = "      sendpass=\"secret123\"\n      other=\"value\"";
-    submitted = "      sendpass=\"***REDACTED***\"\n      other=\"value\"";
+    submitted = "      sendpass=\"***REDACTED#1***\"\n      other=\"value\"";
     r = restoreSecrets(live, submitted);
     check(r.error.length == 0 && r.restored == live, "untouched lines pass");
 
-    // (c) submitted placeholder with no live match -> error naming line
-    live = "      other=\"value\"";
-    submitted = "      sendpass=\"***REDACTED***\"";
-    r = restoreSecrets(live, submitted);
-    check(r.error.length > 0 && r.error.indexOf("line 1") >= 0, "no match -> error");
+    // (c) the custom.conf regression: two identically indented secret
+    // lines round-trip to their own values (this is what used to 400).
+    live = "      recvpass=\"A\"\n      recvpass=\"B\"";
+    r = restoreSecrets(live, redactConfText(live));
+    check(r.error.length == 0 && r.restored == live, "twin secret lines round-trip");
 
-    // (d) two identical live secret lines (ambiguous) -> error, never a guess
-    live = "      sendpass=\"secret1\"\n      sendpass=\"secret2\"";
-    submitted = "      sendpass=\"***REDACTED***\"";
+    // (d) reordering the editor buffer keeps each secret with its marker
+    submitted = "      recvpass=\"***REDACTED#2***\"\n      recvpass=\"***REDACTED#1***\"";
     r = restoreSecrets(live, submitted);
-    check(r.error.length > 0 && r.error.indexOf("line 1") >= 0, "ambiguous -> error");
+    check(r.error.length == 0 && r.restored == "      recvpass=\"B\"\n      recvpass=\"A\"",
+        "markers follow their index, not their position");
 
     // (e) multi-secret line positional refill
     live = `<link name="s" sendpass="A" recvpass="B">`;
-    submitted = `<link name="s" sendpass="***REDACTED***" recvpass="***REDACTED***">`;
-    r = restoreSecrets(live, submitted);
+    r = restoreSecrets(live, redactConfText(live));
     check(r.error.length == 0 && r.restored == live, "multi-secret positional");
 
-    // (f) line without marker keeps submitted value (Ansible vault paste)
+    // (f) index out of range -> error naming the 1-based line
+    live = "      other=\"value\"";
+    submitted = "x\n      sendpass=\"***REDACTED#1***\"";
+    r = restoreSecrets(live, submitted);
+    check(r.error.length > 0 && r.error.indexOf("line 2") >= 0, "out of range -> error");
+
+    // (g) unindexed leftover marker -> error naming the 1-based line
     live = "      sendpass=\"secret123\"";
+    submitted = "      sendpass=\"***REDACTED***\"";
+    r = restoreSecrets(live, submitted);
+    check(r.error.length > 0 && r.error.indexOf("line 1") >= 0 &&
+        r.error.indexOf("no index") >= 0, "bare marker -> error");
+
+    // (h) line without marker keeps submitted value (Ansible vault paste)
     submitted = "      sendpass=\"vault-copied-value\"";
     r = restoreSecrets(live, submitted);
     check(r.error.length == 0 && r.restored == submitted, "vault paste kept");
+}
+
+private void testParseConfTags() {
+    // custom.conf shape: two <link> blocks plus an <autoconnect>.
+    auto conf = "# a comment about <link> tags\n" ~
+        "<link name=\"irc.netcrave.chat\"\n      ipaddr=\"1.2.3.4\"\n      port=\"4445\"\n" ~
+        "      sendpass=\"A\"\n      recvpass=\"B\">\n" ~
+        "<link name=\"k8s.ircfiber.com\"\n      ipaddr=\"5.6.7.8\"\n      port=\"4445\"\n" ~
+        "      sendpass=\"C\"\n      recvpass=\"D\">\n" ~
+        "<autoconnect period=\"120\" server=\"irc.netcrave.chat\">\n";
+    auto links = parseConfTags(conf, "link");
+    check(links.length == 2, "both link tags found");
+    check(links.length == 2 && links[0]["name"] == "irc.netcrave.chat" &&
+        links[1]["name"] == "k8s.ircfiber.com", "link names in file order");
+    check(links.length == 2 && links[1]["ipaddr"] == "5.6.7.8" && links[1]["port"] == "4445",
+        "second link attrs are its own");
+    check(parseConfTag(conf, "link")["name"] == "irc.netcrave.chat", "singular returns first");
+    check(parseConfTags(conf, "autoconnect").length == 1 &&
+        parseConfTags(conf, "autoconnect")[0]["server"] == "irc.netcrave.chat", "autoconnect parsed");
+    check(parseConfTags(conf, "server").length == 0, "absent tag is empty");
+    // Prefix guard: <connectban> must not be found by <connect>.
+    check(parseConfTags("<connectban threshold=\"10\">", "connect").length == 0,
+        "prefix guard holds");
 }
 
 private void testValidBanMask() {
@@ -191,6 +234,7 @@ void main() {
     testParseNamesLine();
     testRedact();
     testRestoreSecrets();
+    testParseConfTags();
     testValidBanMask();
     if (failures) {
         writefln("ircd tests: %d FAILED", failures);

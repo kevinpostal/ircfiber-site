@@ -136,7 +136,6 @@
     # Rendered once; after that the gateway's MOTD rotation owns the file.
     force: "{{ item.force | default(true) }}"
   loop:
-    - { src: custom.conf.j2, dest: custom.conf }
     - { src: opers.conf.j2, dest: opers.conf }
     - { src: rules.j2, dest: rules.txt }
     # 0644, like the file the gateway's MOTD rotation writes in its place;
@@ -153,15 +152,16 @@
   tags: [ircdconf]
   notify: Rehash ircd
 
-  # inspircd.conf / modules.conf are editable from the admin Config tab, so
-  # they render through guarded_conf.yml: never installed over admin edits
-  # unless ircd_config_force=true (see defaults/main.yml). motd.d/motd keeps
-  # force:false above and needs nothing.
+  # inspircd.conf / modules.conf / custom.conf are editable from the admin
+  # Config tab, so they render through guarded_conf.yml: never installed over
+  # admin edits unless ircd_config_force=true (see defaults/main.yml).
+  # motd.d/motd keeps force:false above and needs nothing.
 - name: Render guarded InspIRCd config
   ansible.builtin.include_tasks: guarded_conf.yml
   loop:
     - { src: inspircd.conf.j2, dest: inspircd.conf }
     - { src: modules.conf.j2, dest: modules.conf }
+    - { src: custom.conf.j2, dest: custom.conf }
   loop_control:
     loop_var: conf
     label: "{{ conf.dest }}"

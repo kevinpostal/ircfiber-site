@@ -47,10 +47,13 @@
 # Dashboard: exactly what the admin web UI needs and nothing else —
 # REHASH plus G/K/Z-LINE management and the STATS letters that list
 # them. No Shutdown (DIE/RESTART), no SA* overrides, no host changes.
+# CONNECT can only dial servers already declared in the config, which is
+# what the admin Links tab uses; no SQUIT, deliberately (a mis-click must
+# not split the network).
 # Usable only from the Docker network (host mask); the gateway connects
 # to ircd:6697 over TLS on the trusted subnet.
 <class name="Dashboard"
-       commands="REHASH STATS GLINE KLINE ZLINE"
+       commands="REHASH STATS GLINE KLINE ZLINE CONNECT"
        privs="servers/auspex">
 <type name="Dashboard"
       classes="Dashboard"

@@ -39,7 +39,8 @@ import ircfiber.web.admin.replication : apiReplicationStatus;
 import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
     apiBncSeenClear, apiBncSeenForget;
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
-    apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig, apiIrcdConfigSave;
+    apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig, apiIrcdConfigSave,
+    apiIrcdLinks, apiIrcdLinkConnect;
 import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
     apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink,
     apiNsUnprovisioned, apiNsCreate;
@@ -268,6 +269,8 @@ final class AdminController {
         router.post("/api/admin/ircd/bans", &adminWrap!apiIrcdBanAddRoute);
         router.post("/api/admin/ircd/bans/delete", &adminWrap!apiIrcdBanDeleteRoute);
         router.post("/api/admin/ircd/rehash", &adminWrap!apiIrcdRehashRoute);
+        router.get("/api/admin/ircd/links", &adminWrap!apiIrcdLinksRoute);
+        router.post("/api/admin/ircd/links/connect", &adminWrap!apiIrcdLinkConnectRoute);
         router.get("/api/admin/ircd/config", &adminWrap!apiIrcdConfigRoute);
         router.post("/api/admin/ircd/config", &adminWrap!apiIrcdConfigSaveRoute);
 
@@ -350,6 +353,8 @@ private:
     void apiIrcdRehashRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdRehash(req, res); }
     void apiIrcdConfigRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfig(req, res); }
     void apiIrcdConfigSaveRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfigSave(req, res); }
+    void apiIrcdLinksRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdLinks(req, res); }
+    void apiIrcdLinkConnectRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdLinkConnect(req, res); }
     void apiMotdListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdList(req, res, redis); }
     void apiMotdCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdCreate(req, res, redis); }
     void apiMotdUpdateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdUpdate(req, res, redis); }

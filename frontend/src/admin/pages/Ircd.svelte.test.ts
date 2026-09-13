@@ -7,6 +7,10 @@
  *  3. Cancelling the confirm skips the POST.
  *  4. Channels tab lists channels from GET /api/admin/ircd/channels.
  *  5. Logs tab queries the SigNoz proxy filtered to the ircd services.
+ *  6. Logs tab hides relayed peer notices behind a counted toggle.
+ *  7. Config tab loads on first visit (no Reload click) and can open custom.conf.
+ *  8. Saving a config round-trips the revision from the GET.
+ *  9. Links tab lists configured links and CONNECTs one.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -21,6 +25,7 @@ const mockedGet = api.get as unknown as ReturnType<typeof vi.fn>;
 const mockedPost = api.post as unknown as ReturnType<typeof vi.fn>;
 const mockedToastOk = ui.toastSuccess as unknown as ReturnType<typeof vi.fn>;
 const mockedToastErr = ui.toastError as unknown as ReturnType<typeof vi.fn>;
+const mockedToastInfo = ui.toastInfo as unknown as ReturnType<typeof vi.fn>;
 
 vi.mock('/src/admin/lib/api-client', () => ({
   api: {
@@ -75,6 +80,37 @@ const logsFixture = () => ({
   },
 });
 
+// One of our own lines plus two notices a peer relayed to us. 893 of 906
+// LINK: lines in a 6h prod window were the relayed kind.
+const relayedLogsFixture = () => ({
+  status: 'success',
+  data: {
+    A: {
+      queryName: 'A',
+      list: [
+        {
+          timestamp_nano: 1756947655000000000,
+          service_name: 'ircfiber-ircd',
+          severity_text: 'INFO',
+          body: 'LINK: Connection to irc.netcrave.chat started',
+        },
+        {
+          timestamp_nano: 1756947656000000000,
+          service_name: 'ircfiber-ircd',
+          severity_text: 'INFO',
+          body: 'LINK: REMOTELINK: From irc.netcrave.chat: Looking up peer.example.org',
+        },
+        {
+          timestamp_nano: 1756947657000000000,
+          service_name: 'ircfiber-ircd',
+          severity_text: 'INFO',
+          body: 'LINK: REMOTELINK: From irc.netcrave.chat: Connection to peer.example.org failed',
+        },
+      ],
+    },
+  },
+});
+
 vi.mock('/src/admin/stores/polling', () => ({
   startPolling: vi.fn((fetcher: () => unknown) => {
     void fetcher();
@@ -104,6 +140,19 @@ const channelsFixture = () => ({
 
 const bansFixture = () => ({ glines: [], klines: [], zlines: [] });
 
+const linksFixture = () => ({
+  servers: [
+    { name: 'irc.ircfiber.com', parent: '*', hops: 0, desc: 'IRC Fiber' },
+    { name: 'services.ircfiber.com', parent: 'irc.ircfiber.com', hops: 1, desc: 'Anope' },
+  ],
+  configured: [
+    {
+      name: 'irc.netcrave.chat', ipaddr: '203.0.113.9', port: '4445',
+      file: 'custom.conf', autoconnect: true, linked: false,
+    },
+  ],
+});
+
 describe('Ircd.svelte — IRCD management page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -111,6 +160,7 @@ describe('Ircd.svelte — IRCD management page', () => {
       if (path === '/api/admin/ircd/status') return Promise.resolve(statusFixture());
       if (path === '/api/admin/ircd/channels') return Promise.resolve(channelsFixture());
       if (path === '/api/admin/ircd/bans') return Promise.resolve(bansFixture());
+      if (path === '/api/admin/ircd/links') return Promise.resolve(linksFixture());
       return Promise.reject(new Error('unexpected GET ' + path));
     });
     mockedPost.mockResolvedValue({ rehashed: 'inspircd.conf' });
@@ -178,6 +228,47 @@ describe('Ircd.svelte — IRCD management page', () => {
     await expect.element(page.getByText(/Connection to irc\.netcrave\.chat started/)).toBeInTheDocument();
   });
 
+  it('Logs tab hides relayed peer notices until the toggle is unticked', async () => {
+    mockedQueryRange.mockResolvedValue(relayedLogsFixture());
+    render(Ircd);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/status'));
+    await page.getByRole('button', { name: 'Logs' }).first().click();
+    await vi.waitFor(() => expect(mockedQueryRange).toHaveBeenCalled());
+    await expect.element(page.getByText(/Connection to irc\.netcrave\.chat started/)).toBeInTheDocument();
+    await expect.element(page.getByText('2 relayed hidden')).toBeInTheDocument();
+    await expect.element(page.getByText(/Looking up peer\.example\.org/)).not.toBeInTheDocument();
+    await page.getByRole('checkbox', { name: 'Hide relayed peer notices' }).click();
+    await expect.element(page.getByText(/Looking up peer\.example\.org/)).toBeInTheDocument();
+    await expect.element(page.getByText(/Connection to peer\.example\.org failed/)).toBeInTheDocument();
+  });
+
+  it('Links tab lists configured links and CONNECTs one', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    mockedPost.mockImplementation((path: string) => {
+      if (path === '/api/admin/ircd/links/connect') {
+        return Promise.resolve({
+          notice: '*** CONNECT: Connecting to server: irc.netcrave.chat (203.0.113.9:4445)',
+          linked: false,
+        });
+      }
+      return Promise.resolve({ rehashed: 'inspircd.conf' });
+    });
+    render(Ircd);
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/status'));
+    await page.getByRole('button', { name: 'Links' }).first().click();
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/links'));
+    await expect.element(page.getByText('irc.netcrave.chat')).toBeInTheDocument();
+    await expect.element(page.getByText('Not linked')).toBeInTheDocument();
+    await expect.element(page.getByText('custom.conf')).toBeInTheDocument();
+    await page.getByTestId('ircd-link-connect').first().click();
+    await vi.waitFor(() => {
+      expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/links/connect', { name: 'irc.netcrave.chat' });
+    });
+    // The dial is asynchronous: an unlinked answer surfaces the notice.
+    expect(mockedToastInfo).toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
   describe('Config tab edit mode', () => {
     const selectConfFile = (name: string) => {
       const sel = document.querySelector('select[aria-label="Config file"]') as HTMLSelectElement | null;
@@ -201,10 +292,55 @@ describe('Ircd.svelte — IRCD management page', () => {
           content: `# ${file}\n`,
           editable: file !== 'opers.conf',
           drifted: false,
+          revision: `rev-${file}`,
         });
       }
       return Promise.reject(new Error('unexpected GET ' + path));
     };
+
+    it('opening the Config tab loads and renders without pressing Reload', async () => {
+      mockedGet.mockImplementation(configGet);
+      render(Ircd);
+      await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/status'));
+      await page.getByRole('button', { name: 'Config' }).first().click();
+      await vi.waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/config', { file: 'inspircd.conf' });
+      });
+      // The file content, not the "Loading…" the tab used to sit on.
+      await expect.element(page.getByText('# inspircd.conf')).toBeInTheDocument();
+    });
+
+    it('custom.conf is selectable and its save round-trips the revision', async () => {
+      mockedGet.mockImplementation(configGet);
+      mockedPost.mockImplementation((path: string) => {
+        if (path === '/api/admin/ircd/config') {
+          return Promise.resolve({ file: 'custom.conf', rehashed: 'inspircd.conf', notices: [] });
+        }
+        return Promise.resolve({ rehashed: 'inspircd.conf' });
+      });
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+      render(Ircd);
+      await vi.waitFor(() => expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/status'));
+      await page.getByRole('button', { name: 'Config' }).first().click();
+      await vi.waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/config', { file: 'inspircd.conf' });
+      });
+      selectConfFile('custom.conf');
+      await vi.waitFor(() => {
+        expect(api.get).toHaveBeenCalledWith('/api/admin/ircd/config', { file: 'custom.conf' });
+      });
+      await page.getByRole('button', { name: 'Edit' }).first().click();
+      fillEditor('# custom.conf\n<link name="peer" recvpass="***REDACTED#1***">');
+      await page.getByRole('button', { name: 'Save & rehash' }).first().click();
+      await vi.waitFor(() => {
+        expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/config', {
+          file: 'custom.conf',
+          content: '# custom.conf\n<link name="peer" recvpass="***REDACTED#1***">',
+          revision: 'rev-custom.conf',
+        });
+      });
+      confirmSpy.mockRestore();
+    });
 
     it('opers.conf shows no Edit button and keeps the Ansible note', async () => {
       mockedGet.mockImplementation(configGet);
@@ -248,6 +384,7 @@ describe('Ircd.svelte — IRCD management page', () => {
         expect(api.post).toHaveBeenCalledWith('/api/admin/ircd/config', {
           file: 'modules.conf',
           content: '# edited by admin test',
+          revision: 'rev-modules.conf',
         });
       });
       expect(mockedToastOk).toHaveBeenCalledWith('Saved modules.conf, rehashed modules.conf');
