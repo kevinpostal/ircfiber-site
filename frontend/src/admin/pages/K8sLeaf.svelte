@@ -89,24 +89,27 @@
   /** A failed check blocks Start unless the operator overrides it. */
   const startBlocked = $derived(checks !== null && !preflightOk && !force);
 
+  /** The modal closes whatever the outcome: a 504 leaves the Deployment at
+   *  1 replica, and the operator has to see that state (and the log tail)
+   *  to decide between waiting and pressing Stop. */
   async function doStart() {
     acting = true;
     logTail = null;
     try {
       const r = await startLeaf(force);
-      ask = null;
       if (r.linked) toastSuccess(`${$leaf?.name ?? 'Leaf'} linked in ${Math.round(r.elapsedMs / 1000)}s`);
       else {
         toastError(`Pod is ready but the link did not come up: ${r.notice || 'no notice'}`);
         logTail = r.podLogTail ?? null;
       }
-      await fetchLeaf(true);
-      lastFetchedAt = Date.now();
-      await preflight();
     } catch (e) {
       toastError(errMsg(e));
     } finally {
+      ask = null;
       acting = false;
+      await fetchLeaf(true);
+      lastFetchedAt = Date.now();
+      await preflight();
     }
   }
 
@@ -116,14 +119,15 @@
     try {
       const s = await stopLeaf(stopReason);
       leaf.set(s);
-      lastFetchedAt = Date.now();
-      ask = null;
       toastSuccess(`${s.name} unlinked and scaled to 0`);
-      await preflight();
     } catch (e) {
       toastError(errMsg(e));
+      await fetchLeaf(true);
     } finally {
+      ask = null;
       acting = false;
+      lastFetchedAt = Date.now();
+      await preflight();
     }
   }
 </script>

@@ -663,7 +663,9 @@ package void apiLeafStart(HTTPServerRequest req, HTTPServerResponse res) {
                 l.deployment, p.phase, p.message, tail.length ? tail[$ - 1] : "(empty)");
             jsonError(res, 504, "Leaf pod did not become ready in 120s (phase "
                 ~ (p.phase.length ? p.phase : "unknown") ~ ": "
-                ~ (p.message.length ? p.message : "no pod message") ~ ").");
+                ~ (p.message.length ? p.message : "no pod message")
+                ~ "). The Deployment is still scaled to 1, so the ReplicaSet keeps "
+                ~ "recreating the pod — press Stop to scale it back to 0.");
             return;
         }
     } catch (K8sError e) {
