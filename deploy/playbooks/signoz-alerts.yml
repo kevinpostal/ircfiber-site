@@ -138,16 +138,27 @@
     # well past the registry's own verdict, still short enough to matter.
     signoz_alert_engine_heartbeat_window: "3m"
 
-    # ── Rules gated on telemetry that does not exist yet ────────────────────
-    # Both stay off until the matching receiver exists, because a rule that can
-    # never gather data is worse than no rule: it looks like coverage. Exact
-    # receiver snippets are in roles/logging/README-alerts.md.
-    #   docker_stats -> container.restarts (rule 21)
+    # ── Rules gated on telemetry that must exist first ──────────────────────
+    # A rule that can never gather data is worse than no rule: it looks like
+    # coverage. Receiver snippets are in roles/logging/README-alerts.md.
+    #   docker_stats -> container.restarts (rule 21). ON since 2026-09-13:
+    #     roles/signoz_bridge enables the receiver's container.restarts /
+    #     container.uptime metrics and forwards the docker_stats pipeline to
+    #     SigNoz, verified present in signoz_metrics.
     #   httpcheck    -> httpcheck.status  (rule 31; probes ircfiber.com from
     #                   ubuntu-docker, i.e. off the prod host on purpose, so it
-    #                   survives the host wedging)
-    signoz_alert_enable_docker_stats: false
+    #                   survives the host wedging). Still absent.
+    signoz_alert_enable_docker_stats: true
     signoz_alert_enable_endpoint_probe: false
+    # ircfiber.registration.timeout_networks (rule 40) comes from the engine's
+    # own OTLP exporter, which is off on prod (no IRCFIBER_OTEL_ENABLED in
+    # roles/engine env, endpoint empty). The rule alerts on absence, so with
+    # no exporter it fires permanently and says nothing about the engine.
+    # Engine liveness is meanwhile covered by the per-minute watchdog
+    # (scripts/ircfiber-monitor.sh restarts on a stale heartbeat) and by the
+    # admin dashboard's Healthy Engines counter. Flip this on in the same
+    # change that points the engine at ircfiber-otel-collector:4317.
+    signoz_alert_enable_engine_otel: false
 
     # Per-rule overrides keyed by the `alert` name inside each JSON file.
     # Anything omitted keeps the value committed in the file.
@@ -176,6 +187,7 @@
         disabled: "{{ not (signoz_alert_enable_endpoint_probe | bool) }}"
       "IRCFiber engine heartbeat stale":
         evalWindow: "{{ signoz_alert_engine_heartbeat_window }}"
+        disabled: "{{ not (signoz_alert_enable_engine_otel | bool) }}"
 
   tasks:
     # ── Load the committed rule definitions ────────────────────────────────

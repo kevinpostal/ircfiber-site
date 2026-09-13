@@ -49,6 +49,11 @@ receivers:
         metrics:
           system.memory.utilization:
             enabled: true
+          # MemAvailable. Off by default in the receiver, and the metric the
+          # host-memory alert rule thresholds on — without it that rule fired
+          # permanently on absence instead of on memory pressure.
+          system.linux.memory.available:
+            enabled: true
       disk:
       filesystem:
         metrics:
