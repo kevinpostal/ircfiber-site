@@ -206,7 +206,6 @@
     header @notsignoz {
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
         Referrer-Policy "no-referrer"
         # CSP allows:
         #  - 'self' for app assets
@@ -217,7 +216,6 @@
         #  - jsdelivr and cloudflare CDNs (used by the Svelte app)
         #  - wss:// for the gateway WebSocket connection
         #  - data: URIs for inline images and font fallbacks
-        #  - frame-ancestors 'none' so other sites cannot embed /admin
         #  - frame-src for YouTube inline previews (IRCCloud parity) and for
         #    the Cloudflare Turnstile widget on /unban
         # script-src allows static.cloudflareinsights.com: Cloudflare injects its
@@ -229,7 +227,24 @@
         # BOTH allowances the widget never initialises, the page shows no
         # challenge, and a banned user can never appeal -- verified against
         # prod, where the widget div rendered but the challenge did not.
-        Content-Security-Policy "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://challenges.cloudflare.com; connect-src 'self' wss: https:; frame-src 'self' https://challenges.cloudflare.com https://www.youtube.com https://youtube.com https://youtu.be https://www.youtube-nocookie.com https://m.youtube.com https://music.youtube.com; frame-ancestors 'none'"
+        #
+        # NO frame-ancestors and NO X-Frame-Options here: which partner
+        # origins may iframe the site is runtime state, editable from the
+        # admin Embedding page, so the gateway emits its own
+        # `Content-Security-Policy: frame-ancestors ...` (and X-Frame-Options
+        # DENY when the allowlist is empty) per response. `+` appends instead
+        # of replacing, so the gateway's header survives and the browser
+        # intersects both policies -- replacing it would silently make the
+        # site frameable by anyone.
+        +Content-Security-Policy "default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.googleapis.com; font-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://fonts.gstatic.com data:; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://challenges.cloudflare.com; connect-src 'self' wss: https:; frame-src 'self' https://challenges.cloudflare.com https://www.youtube.com https://youtube.com https://youtu.be https://www.youtube-nocookie.com https://m.youtube.com https://music.youtube.com"
+    }
+
+    # Paths Caddy answers itself or proxies elsewhere never reach the gateway,
+    # so nothing sets frame-ancestors for them. Deny framing statically.
+    @notgateway path /health /api/health /grafana /grafana/*
+    header @notgateway {
+        X-Frame-Options "DENY"
+        +Content-Security-Policy "frame-ancestors 'none'"
     }
 
     log {

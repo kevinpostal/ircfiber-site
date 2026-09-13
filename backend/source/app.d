@@ -159,8 +159,23 @@ void main() {
     // (Cloudflare terminates TLS). Without this, vibe.d sets
     // Secure=false on the cookie, which modern browsers may
     // reject or handle inconsistently over HTTPS connections.
+    // noSameSiteStrict: vibe's own Set-Cookie for a brand-new session would
+    // otherwise be SameSite=Strict. persistSessionCookie rewrites SameSite on
+    // every login (Lax, or None while embedding is enabled), so Strict here
+    // only creates a window where the two disagree.
     import vibe.http.server : SessionOption;
-    settings.sessionOptions = SessionOption.httpOnly | SessionOption.secure;
+    settings.sessionOptions = SessionOption.httpOnly | SessionOption.secure
+        | SessionOption.noSameSiteStrict;
+
+    // Iframe-embedding allowlist (admin Embedding page) — cached per process
+    // and consulted on every request for the framing and CSRF headers.
+    import ircfiber.embed : initEmbedConfig, cachedEmbedOrigins;
+    initEmbedConfig(redis);
+    {
+        auto embedOrigins = cachedEmbedOrigins();
+        logInfo("embed: %s allowed origin(s)%s", embedOrigins.length,
+            embedOrigins.length ? " — " ~ embedOrigins.join(", ") : " (framing blocked)");
+    }
 
     auto router = new URLRouter;
 
@@ -283,6 +298,16 @@ void main() {
         req.context["resourceId"] = resourceId();
         // Enterprise: sliding window — refresh browser cookie before handler writes headers
         try { import ircfiber.web.common : refreshSessionCookie; refreshSessionCookie(req, res); } catch (Exception) {}
+        // Embedding policy: frame-ancestors (+ X-Frame-Options in the deny
+        // case) for every response, from the admin-managed allowlist.
+        try { import ircfiber.web.common : applyFrameHeaders; applyFrameHeaders(req, res); } catch (Exception) {}
+        // CSRF: reject cookie-authenticated mutations from a foreign origin.
+        // Required because an active allowlist downgrades the session cookie
+        // to SameSite=None, which no longer blocks cross-site sends.
+        try {
+            import ircfiber.web.common : rejectForeignOrigin;
+            if (rejectForeignOrigin(req, res)) return;
+        } catch (Exception) {}
         if (!isTracingEnabled()) {
             router.handleRequest(req, res);
             return;

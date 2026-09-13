@@ -115,6 +115,31 @@ final class WebSocketGateway {
             return;
         }
 
+        // Cross-site WebSocket gate. The handshake is a GET, so the CSRF
+        // gate in app.d does not cover it, and a SameSite=None session
+        // cookie is sent on a socket opened by any site. Only this site and
+        // the admin-allowlisted embed origins may open one.
+        {
+            import ircfiber.web.common : claimedOrigin, isPermittedOrigin;
+            import ircfiber.embed : embeddingEnabled;
+            auto claimed = claimedOrigin(socket.request);
+            string wsHost;
+            try wsHost = socket.request.host;
+            catch (Exception) {}
+            // Header-less clients are only refused once embedding is live;
+            // see rejectForeignOrigin for the same reasoning.
+            bool mustCheck = claimed.length > 0;
+            if (!mustCheck) {
+                try mustCheck = embeddingEnabled();
+                catch (Exception) {}
+            }
+            if (mustCheck && !isPermittedOrigin(claimed, wsHost, true)) {
+                logWarn("ws: rejected handshake from origin '%s' (host '%s')", claimed, wsHost);
+                socket.close(1008, "Origin not allowed");
+                return;
+            }
+        }
+
         UserSession session;
 
         // Try JWT-based session restore (cold path from Redis).

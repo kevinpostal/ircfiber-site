@@ -57,6 +57,7 @@
         { label: 'Support', path: '/support', icon: '🎫' },
         { label: 'Emails', path: '/emails', icon: '✉️' },
         { label: 'Social login', path: '/oauth', icon: '🔐' },
+        { label: 'Embedding', path: '/embedding', icon: '🖼️' },
       ],
     },
   ];

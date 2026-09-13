@@ -65,6 +65,7 @@ import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
     apiMotdDelete, apiMotdRotate, apiMotdBatch, apiMotdPin, apiMotdUnpin;
 import ircfiber.web.admin.oauth : apiOAuthStatus, apiOAuthSave, apiOAuthClear;
+import ircfiber.web.admin.embed : apiEmbedOrigins, apiEmbedOriginsSet;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
 /// Diet templates are kept as a no-JS fallback until each page is ported
@@ -131,6 +132,8 @@ final class AdminController {
         router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
         router.get("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigRoute);
         router.post("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigSetRoute);
+        router.get("/api/admin/config/embed-origins", &adminWrap!apiEmbedOriginsRoute);
+        router.post("/api/admin/config/embed-origins", &adminWrap!apiEmbedOriginsSetRoute);
         router.get("/api/admin/oauth/status", &adminWrap!apiOAuthStatusRoute);
         router.post("/api/admin/oauth/:provider", &adminWrap!apiOAuthSaveRoute);
         router.delete_("/api/admin/oauth/:provider", &adminWrap!apiOAuthClearRoute);
@@ -447,6 +450,12 @@ private:
     }
     void apiNickservSyncConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiNickservSyncConfigSet(req, res, redis);
+    }
+    void apiEmbedOriginsRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiEmbedOrigins(req, res, redis);
+    }
+    void apiEmbedOriginsSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiEmbedOriginsSet(req, res, redis);
     }
     void apiOAuthStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthStatus(req, res, redis); }
     void apiOAuthSaveRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthSave(req, res, redis); }

@@ -158,6 +158,19 @@ configuration "logs-format-test" {
     versions "VibeUseFibers"
 }
 
+// Origin grammar for the iframe-embedding allowlist. Pure string work, no
+// Redis/vibe needed:
+//   dub --root=backend build --config=embed-test && ./backend/embed-test
+configuration "embed-test" {
+    targetType "executable"
+    targetName "embed-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/embed_origin.d"
+    mainSourceFile "tests/embed_test.d"
+    versions "VibeUseFibers"
+}
+
 // Pure-code unit test for FiberEye: the quit-notice parser, the IPv6 /64
 // grouping, the Z-line mask matcher, the rule engine and the strike
 // escalation (no Redis/Mongo/IRCd needed):

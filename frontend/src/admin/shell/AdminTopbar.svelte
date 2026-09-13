@@ -27,6 +27,7 @@
     '/redis': 'Redis Monitor',
     '/backups': 'Backups',
     '/emails': 'Emails',
+    '/embedding': 'Embedding',
   };
   const pageTitle = $derived.by(() => {
     const cur = current();
