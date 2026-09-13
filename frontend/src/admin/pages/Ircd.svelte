@@ -829,8 +829,12 @@
       {/if}
       {#if confFile === 'rules.txt'}
         <p class="mb-2 text-xs text-muted">
-          Network rules shown by <code>/RULES</code> (and <code>/HELP RULES</code>). Plain text, one
-          rule per line; a rehash publishes it to every connected user with no disconnects.
+          Rules shown by <code>/RULES</code> (and <code>/HELP RULES</code>). Plain text, one rule per
+          line; a rehash publishes it with no disconnects — but only on <strong>this server</strong>.
+          <code>/RULES</code> is served from each server's own disk and is never replicated over the
+          server link, so a save here leaves users on every other linked server reading the old
+          text. For a permanent, network-wide change edit
+          <code>roles/ircd/templates/rules.j2</code> and run <code>make deploy-ircd-network</code>.
         </p>
       {/if}
       {#if confEditable && confContent !== null && !confError}
