@@ -10,7 +10,11 @@ mongo_ulimits:
   nofile:
     soft: 64000
     hard: 64000
-mongo_resources_limits:
-  memory: 512M
-mongo_resources_reservations:
-  memory: 128M
+# Memory. The box is 8 GB shared with the engine, gateway, redis and ircd,
+# so mongod must not size itself off total RAM: WiredTiger's default cache
+# is 50% of (RAM - 1 GB) ≈ 3.4 GB here, which is what drove the host into
+# swapless OOM/thrash on 2026-09-13 (load 57, sshd unresponsive, gateway
+# OOM-killed twice). Cache is capped below and the container gets a hard
+# ceiling ~2x the cache so a runaway is killed instead of taking the host.
+mongo_wiredtiger_cache_gb: "0.5"
+mongo_memory_limit: "1500m"

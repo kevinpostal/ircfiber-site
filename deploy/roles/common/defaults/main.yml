@@ -21,3 +21,9 @@ common_apt_packages_optional:
   - netcat-openbsd
 
 common_timezone: "UTC"
+
+# Swap — emergency relief valve, see the swap block in tasks/main.yml.
+common_swap_enabled: true
+common_swap_file: /swapfile
+common_swap_size: 4G
+common_swappiness: 10

@@ -64,6 +64,10 @@
     state: started
     restart_policy: unless-stopped
     network_mode: host
+    # Hard ceiling; WiredTiger's cache cap in mongod.conf is the real knob.
+    # Without this the container was unlimited and mongod peaked at 2.9 GB
+    # RSS on a 7.7 GB swapless host (2026-09-13 outage).
+    memory: "{{ mongo_memory_limit }}"
     # We DO NOT publish ports — host network mode already exposes them
     # But we DO tell docker the container binds only to tailscale IP via the entrypoint
     command:

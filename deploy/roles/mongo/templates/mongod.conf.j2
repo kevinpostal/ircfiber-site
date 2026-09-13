@@ -5,6 +5,11 @@
 
 storage:
   dbPath: /data/db
+  wiredTiger:
+    engineConfig:
+      # Explicit, because the default (50% of RAM - 1 GB) sizes mongod for a
+      # box it does not own: every other IRC Fiber service lives here too.
+      cacheSizeGB: {{ mongo_wiredtiger_cache_gb }}
 
 systemLog:
   destination: file

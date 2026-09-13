@@ -4,8 +4,14 @@
 # Images, container names, ports and volumes live in
 # inventories/production/group_vars/all/vars.yml.
 
-# Container restart
-ircd_restart_policy: "unless-stopped"
+# Container restart. `always`, not `unless-stopped`: InspIRCd exits 1 when it
+# unloads its modules on SIGTERM, so a host reboot leaves the container in
+# "Exited (1)" and `unless-stopped` does not bring it back when dockerd
+# starts — the network stayed down after the 2026-09-13 reboot until it was
+# started by hand. `always` restarts it on daemon start regardless of the
+# recorded exit; an explicit `docker stop` still holds until the next
+# daemon start.
+ircd_restart_policy: "always"
 
 # ---------------------------------------------------------------------------
 # Resource limits
