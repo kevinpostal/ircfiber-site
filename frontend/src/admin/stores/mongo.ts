@@ -28,6 +28,10 @@ export interface MongoStatus {
     opcounters?: Record<string, number>;
   };
   error?: string;
+  /** Why `serverStatus` is missing — prod's app user has no clusterMonitor
+   *  role, so the gateway reports the refusal instead of dropping the field
+   *  silently (the UI showed bare em dashes for version/connections). */
+  serverStatusError?: string;
 }
 
 export interface MongoCollection {

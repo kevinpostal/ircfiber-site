@@ -16,19 +16,15 @@
   import StatusBadge from '../components/StatusBadge.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Sparkline from '../components/Sparkline.svelte';
-  import { relative, percent, bytes, shortNumber } from '../lib/format';
+  import { duration, percent, bytes, shortNumber } from '../lib/format';
 
   let stop: (() => void) | null = null;
-
-  // Track last-fetched-at timestamps for the refresh indicator
-  let lastFetchedAt = $state<number | null>(null);
-  const setLastFetched = () => { lastFetchedAt = Date.now(); };
 
   onMount(() => {
     fetchFiberConfig();
     stop = startPolling(async () => {
       await Promise.all([
-        fetchDashboard().then(setLastFetched),
+        fetchDashboard(),
         fetchRedisSummary(),
         fetchMongoStatus(),
         fetchFiberConfig(),
@@ -168,6 +164,11 @@
           {$mongoStatus.serverStatus?.connections?.current ?? '—'} / {$mongoStatus.serverStatus?.connections?.available ?? '—'} avail
         </dd></div>
       </dl>
+      {#if !$mongoStatus.serverStatus}
+        <div class="mt-2 text-xs text-muted">
+          Version and connection counts need <code>serverStatus</code>, which this Mongo user may not run{#if $mongoStatus.serverStatusError}: <span class="text-warn">{$mongoStatus.serverStatusError}</span>{/if}. The figures above come from <code>dbStats</code>.
+        </div>
+      {/if}
     {/if}
   </Card>
 
@@ -186,7 +187,7 @@
     {:else}
       <dl class="space-y-2 text-sm">
         <div class="flex justify-between"><dt class="text-muted">Version</dt><dd>{$redisSummary.version ?? '—'}</dd></div>
-        <div class="flex justify-between"><dt class="text-muted">Uptime</dt><dd>{$redisSummary.uptimeSeconds != null ? relative($redisSummary.uptimeSeconds * 1000, Date.now() - 1000) : '—'}</dd></div>
+        <div class="flex justify-between"><dt class="text-muted">Uptime</dt><dd>{$redisSummary.uptimeSeconds != null ? duration($redisSummary.uptimeSeconds * 1000) : '—'}</dd></div>
         <div class="flex justify-between"><dt class="text-muted">Used memory</dt><dd>{$redisSummary.usedMemoryHuman ?? '—'}</dd></div>
         <div class="flex justify-between"><dt class="text-muted">Connected clients</dt><dd>{$redisSummary.connectedClients ?? '—'}</dd></div>
         <div class="flex justify-between"><dt class="text-muted">Ops / sec</dt><dd>{$redisSummary.opsPerSec ?? '—'}</dd></div>

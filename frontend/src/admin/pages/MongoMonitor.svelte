@@ -127,6 +127,12 @@
   />
 </div>
 
+{#if $mongoStatus?.connected && !$mongoStatus.serverStatus}
+  <div class="mb-6 text-xs text-muted">
+    Server version, connections, opcounters and memory need the <code>serverStatus</code> command{#if $mongoStatus.serverStatusError}, which this Mongo user cannot run: <span class="text-warn">{$mongoStatus.serverStatusError}</span>{/if}. Database stats below come from <code>dbStats</code> and are unaffected.
+  </div>
+{/if}
+
 <!-- Stats row -->
 <div class="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
   <Card title="Database Stats">
