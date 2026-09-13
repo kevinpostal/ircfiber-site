@@ -53,10 +53,12 @@
       - "no-new-privileges:true"
     memory: "{{ signoz_bridge_mem }}"
     cpus: "{{ signoz_bridge_cpus }}"
-    # Distroless image — binary is /signoz-otel-collector, no shell/wget.
-    # No validate subcommand exists. restart: unless-stopped handles crashes.
+    # Distroless image — no shell/wget, and the collector has no validate
+    # subcommand. `test: ["NONE"]` is how community.docker >=4 disables the
+    # image's healthcheck (the old `disable: true` key was removed and made
+    # this role undeployable).
     healthcheck:
-      disable: true
+      test: ["NONE"]
     labels:
       com.ircfiber.component: "otel-bridge"
       com.ircfiber.version: "{{ ircfiber_version | default('0.3.0') }}"

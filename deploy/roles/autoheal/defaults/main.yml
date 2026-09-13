@@ -1,0 +1,24 @@
+---
+# Autoheal — restarts any container whose Docker healthcheck goes unhealthy.
+#
+# Docker restarts containers that *exit*; it does nothing about a container
+# that stays up while its healthcheck fails (a wedged event loop, a TLS
+# handshake stuck forever, a process that stopped answering). Before this,
+# only three containers were covered, by the per-minute
+# /opt/ircfiber/bin/ircfiber-monitor.sh cron (engine, gateway, holder) —
+# ircd, services, redis, mongo, caddy, bnc, fibereye and the support bot had
+# no automatic recovery at all.
+autoheal_container_name: ircfiber-autoheal
+autoheal_image: "willfarrell/autoheal:1.2.0"
+# ALL: watch every container that defines a healthcheck. The alternative
+# (label opt-in) silently protects nothing when a new container forgets the
+# label, which is exactly the failure mode this guards against.
+autoheal_container_label: all
+autoheal_interval_seconds: 15
+# Grace period after a container start before an unhealthy state counts.
+autoheal_start_period_seconds: 60
+# Seconds given to a graceful stop before the restart is forced.
+autoheal_restart_timeout: 30
+autoheal_memory_limit: "64m"
+autoheal_oom_score_adj: -400
+autoheal_cpus: 0.25

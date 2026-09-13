@@ -27,3 +27,51 @@ common_swap_enabled: true
 common_swap_file: /swapfile
 common_swap_size: 4G
 common_swappiness: 10
+
+# earlyoom — see the earlyoom block in tasks/main.yml.
+#   -r 0   no periodic report spam (kills are still logged to the journal)
+#   -m 5   act when available memory drops under 5%
+#   -s 10  ...and free swap under 10%
+#   --avoid  never pick these: losing sshd/tailscaled means no way in,
+#            losing inspircd or the socket holder disconnects every user
+#   --prefer pick these first: all are restartable without dropping an IRC
+#            session (grafana, mongod, the gateway, the engine)
+common_earlyoom_enabled: true
+common_earlyoom_args: >-
+  -r 0 -m 5 -s 10
+  --avoid ^(sshd|tailscaled|dockerd|containerd|systemd|inspircd|irc-fiber-holde)$
+  --prefer ^(grafana|mongod|irc-fiber|irc-fiber-engin)$
+
+# cgroup guarantees — see the cgroup block in tasks/main.yml.
+# MemoryMin is reserved outright (never reclaimed), so keep the sum small
+# relative to RAM: 512 MiB of 7.7 GiB here.
+common_cgroup_protection_enabled: true
+common_cgroup_protected_units:
+  # The way in. Ubuntu ships this as ssh.service with an sshd.service alias.
+  - unit: ssh.service
+    memory_min: 64M
+    memory_low: 192M
+    cpu_weight: 2000
+    io_weight: 1000
+  # SSH reaches this host over the tailnet, so tailscaled is part of the
+  # remote-access path, not an optional extra.
+  - unit: tailscaled.service
+    memory_min: 128M
+    memory_low: 256M
+    cpu_weight: 1500
+    io_weight: 800
+  # Without a responsive dockerd there is no way to restart anything.
+  - unit: docker.service
+    memory_min: 192M
+    memory_low: 384M
+    cpu_weight: 1000
+    io_weight: 600
+  - unit: containerd.service
+    memory_min: 128M
+    memory_low: 256M
+    cpu_weight: 1000
+    io_weight: 600
+
+# Service watchdog — see the watchdog block in tasks/main.yml.
+common_monitor_enabled: true
+common_monitor_user: deploy

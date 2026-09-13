@@ -236,7 +236,7 @@ processors:
 
 exporters:
   otlp/signoz:
-    endpoint: signoz-ingester:4317
+    endpoint: {{ signoz_bridge_export_endpoint }}
     tls:
       insecure: true
     sending_queue:
@@ -249,11 +249,6 @@ exporters:
       max_interval: 30s
       max_elapsed_time: 300s
 
-  debug:
-    verbosity: detailed
-    sampling_initial: 5
-    sampling_thereafter: 200
-
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
@@ -264,6 +259,14 @@ extensions:
 
 service:
   extensions: [health_check, pprof, zpages]
+
+  # Self-telemetry on the container IP (default is loopback-only, which is
+  # unreachable from the host): otelcol_exporter_sent_* vs _send_failed_* is
+  # the only local way to prove telemetry actually reaches SigNoz rather
+  # than piling up in the sending queue.
+  telemetry:
+    metrics:
+      address: 0.0.0.0:{{ signoz_bridge_telemetry_port }}
 
   pipelines:
     traces:
@@ -276,12 +279,15 @@ service:
       processors: [memory_limiter, resourcedetection, transform/newrelic, batch]
       exporters: [otlp/signoz]
 
-    # Docker stats metrics produce a high volume of metric names that the
-    # signoz-ingester rejects with 400. Collect but don't forward to SigNoz.
+    # Per-container CPU/memory/IO. These go to SigNoz like everything else:
+    # the `debug` exporter this used to carry wrote ~17k lines/min of
+    # detailed metric dumps into docker logs and told nobody anything. They
+    # are also the only series that shows a single container walking toward
+    # its ceiling (gateway, 2026-09-12) before it is OOM-killed.
     metrics/docker:
       receivers: [docker_stats]
-      processors: [memory_limiter, batch]
-      exporters: [debug]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlp/signoz]
 
     logs:
       receivers: [otlp, filelog/caddy]

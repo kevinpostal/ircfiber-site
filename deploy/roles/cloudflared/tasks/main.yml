@@ -38,6 +38,9 @@
     image: "{{ cloudflared_image }}"
     state: started
     restart_policy: "{{ cloudflared_restart_policy }}"
+    memory: "{{ cloudflared_memory_limit }}"
+    oom_score_adj: "{{ cloudflared_oom_score_adj }}"
+    cpus: "{{ cloudflared_cpus | float }}"
     command: >-
       tunnel
       {% if cloudflared_no_autoupdate %}--no-autoupdate{% endif %}

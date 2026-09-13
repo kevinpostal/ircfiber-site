@@ -77,6 +77,10 @@
     image: "{{ ircfiber_holder_image_full }}"
     state: started
     restart_policy: unless-stopped
+    memory: "{{ holder_memory_limit }}"
+    memory_reservation: "{{ holder_memory_reservation }}"
+    oom_score_adj: "{{ holder_oom_score_adj }}"
+    cpus: "{{ holder_cpus | float }}"
     networks:
       - name: "{{ docker_ircfiber_network }}"
       - name: ircfiber_logging
@@ -106,6 +110,10 @@
     image: "{{ ircfiber_holder_image_full }}"
     state: started
     restart_policy: unless-stopped
+    memory: "{{ holder_memory_limit }}"
+    memory_reservation: "{{ holder_memory_reservation }}"
+    oom_score_adj: "{{ holder_oom_score_adj }}"
+    cpus: "{{ holder_cpus | float }}"
     network_mode: host
     # In host mode the container shares the host's network namespace, so the
     # per-user IPv6 source addresses (ip -6 route add local <prefix>/64 dev lo,

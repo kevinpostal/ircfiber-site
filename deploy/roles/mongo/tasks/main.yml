@@ -68,6 +68,7 @@
     # Without this the container was unlimited and mongod peaked at 2.9 GB
     # RSS on a 7.7 GB swapless host (2026-09-13 outage).
     memory: "{{ mongo_memory_limit }}"
+    cpus: "{{ mongo_cpus | float }}"
     # We DO NOT publish ports — host network mode already exposes them
     # But we DO tell docker the container binds only to tailscale IP via the entrypoint
     command:

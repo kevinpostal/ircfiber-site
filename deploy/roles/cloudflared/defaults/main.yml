@@ -19,3 +19,10 @@ cloudflared_container_name: "ircfiber-cloudflared"
 cloudflared_tunnel_token: "{{ vault_cloudflared_tunnel_token | default('') }}"
 cloudflared_no_autoupdate: true
 cloudflared_restart_policy: "unless-stopped"
+
+# --- Memory governance -------------------------------------------------------
+# The tunnel is the public ingress; it is tiny (~47 MB) and must outlive any
+# memory event, otherwise the site is unreachable even while it is healthy.
+cloudflared_memory_limit: "256m"
+cloudflared_oom_score_adj: -500
+cloudflared_cpus: 1.0

@@ -68,3 +68,11 @@ caddy_signoz_api_key_path: /etc/ircfiber/signoz-mcp/.api_key
 gateway_replica_count: 1
 gateway_bluegreen_enabled: true
 gateway_replica_sticky: true
+
+# --- Memory governance -------------------------------------------------------
+# Caddy is the only path to the site (Cloudflare Tunnel → caddy → gateway):
+# when it stalls, every request 502s. Small, steady footprint (~70 MB), so a
+# tight ceiling plus a protected OOM score.
+caddy_memory_limit: "384m"
+caddy_oom_score_adj: -500
+caddy_cpus: 1.5

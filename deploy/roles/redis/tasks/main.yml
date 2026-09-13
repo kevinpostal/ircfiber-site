@@ -27,6 +27,9 @@
     image: "{{ redis_image }}"
     state: started
     restart_policy: unless-stopped
+    memory: "{{ redis_memory_limit }}"
+    oom_score_adj: "{{ redis_oom_score_adj }}"
+    cpus: "{{ redis_cpus | float }}"
     network_mode: host
     command:
       - "redis-server"

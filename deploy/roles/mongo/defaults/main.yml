@@ -18,3 +18,5 @@ mongo_ulimits:
 # ceiling ~2x the cache so a runaway is killed instead of taking the host.
 mongo_wiredtiger_cache_gb: "0.5"
 mongo_memory_limit: "1500m"
+# Ceiling only; mongod is never the priority on this box.
+mongo_cpus: 1.5

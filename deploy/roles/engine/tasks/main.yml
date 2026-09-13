@@ -134,6 +134,8 @@
     image: "{{ mullvad_sidecar_image }}"
     state: started
     restart_policy: unless-stopped
+    memory: "{{ mullvad_sidecar_memory_limit }}"
+    cpus: "{{ mullvad_sidecar_cpus | float }}"
     # Userspace: no NET_ADMIN needed; SOCKS5 on :1055 for engine to dial via
     env:
       TS_AUTHKEY: "{{ vault_tailscale_authkey }}"
@@ -171,6 +173,10 @@
     image: "{{ ircfiber_engine_image_full }}"
     state: started
     restart_policy: unless-stopped
+    memory: "{{ engine_memory_limit }}"
+    memory_reservation: "{{ engine_memory_reservation }}"
+    oom_score_adj: "{{ engine_oom_score_adj }}"
+    cpus: "{{ engine_cpus | float }}"
     command: ["/usr/local/bin/ircfiber-engine-entrypoint.sh"]
     networks:
       - name: "{{ docker_ircfiber_network }}"

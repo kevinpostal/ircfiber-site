@@ -1,0 +1,11 @@
+---
+- name: Restart earlyoom
+  ansible.builtin.service:
+    name: earlyoom
+    state: restarted
+
+# daemon-reload re-applies resource control to already-running units, so the
+# guarantees take effect without restarting sshd/dockerd.
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true

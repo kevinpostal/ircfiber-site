@@ -28,3 +28,21 @@ mullvad_sidecars: []
 #   - { name: "us", exit_node: "us-nyc-wg-001.mullvad.ts.net" }
 mullvad_sidecar_image: "tailscale/tailscale:stable"
 mullvad_sidecar_socks_port: 1055
+
+# --- Memory governance -------------------------------------------------------
+# Every container on this host gets a ceiling: on 2026-09-13 the unlimited
+# ones (mongo, engine, holder, redis) summed past 7.7 GB of swapless RAM and
+# the host thrashed until it was unreachable. The engine is the safe one to
+# cap hard — its IRC sockets live in the holder, so an OOM kill is a hot
+# restart that re-attaches every session, not a user-visible reconnect.
+# Peak observed: 1.8 GB RSS after 3 days with ~50 networks.
+engine_memory_limit: "2g"
+engine_memory_reservation: "512m"
+# Prefer killing the engine over the holder and ircd (both far more damaging),
+# but keep it ahead of gateway/bnc/support-bot in the ircd role's ordering.
+engine_oom_score_adj: -200
+mullvad_sidecar_memory_limit: "192m"
+# CPU ceilings, 4 cores total. Ceilings, not reservations: they stop one
+# runaway from monopolising the box while leaving idle capacity shareable.
+engine_cpus: 2.0
+mullvad_sidecar_cpus: 0.5

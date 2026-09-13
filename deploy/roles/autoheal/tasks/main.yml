@@ -1,0 +1,31 @@
+---
+- name: Run autoheal
+  community.docker.docker_container:
+    name: "{{ autoheal_container_name }}"
+    image: "{{ autoheal_image }}"
+    state: started
+    restart_policy: always
+    # No network at all: it only talks to the Docker socket.
+    network_mode: none
+    env:
+      AUTOHEAL_CONTAINER_LABEL: "{{ autoheal_container_label }}"
+      AUTOHEAL_INTERVAL: "{{ autoheal_interval_seconds | string }}"
+      AUTOHEAL_START_PERIOD: "{{ autoheal_start_period_seconds | string }}"
+      AUTOHEAL_DEFAULT_STOP_TIMEOUT: "{{ autoheal_restart_timeout | string }}"
+      DOCKER_SOCK: /var/run/docker.sock
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    memory: "{{ autoheal_memory_limit }}"
+    oom_score_adj: "{{ autoheal_oom_score_adj }}"
+    cpus: "{{ autoheal_cpus | float }}"
+    labels:
+      com.ircfiber.component: "autoheal"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+
+- name: Verify autoheal is watching
+  ansible.builtin.command: "docker logs --tail 20 {{ autoheal_container_name }}"
+  register: autoheal_logs
+  changed_when: false
+  retries: 6
+  delay: 5
+  until: "'Monitoring containers' in autoheal_logs.stdout or 'autoheal' in autoheal_logs.stdout"

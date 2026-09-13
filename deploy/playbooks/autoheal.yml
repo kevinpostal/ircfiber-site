@@ -1,0 +1,11 @@
+---
+# Container self-healing: restart anything whose healthcheck goes unhealthy.
+# Also runs as part of site.yml (base setup play).
+- name: Deploy autoheal
+  hosts: ircfiber
+  become: true
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  roles:
+    - role: autoheal

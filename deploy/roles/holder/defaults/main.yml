@@ -17,3 +17,15 @@ holder_quit_msg: "IRC Fiber maintenance"
 # Optional knobs rendered into holder-env.j2 only when defined:
 #   holder_log_level, holder_detach_buffer_bytes (4194304),
 #   holder_detach_max_secs (600), holder_closed_retain_secs (3600).
+
+# --- Memory governance -------------------------------------------------------
+# The holder owns every IRC socket on this engine: killing it reconnects all
+# ~50 networks, so it is the most protected container on the box (kernel OOM
+# score floor, generous ceiling). Peak observed 0.95 GB RSS after 3.5 days.
+# Changing these recreates the holder on the next holder deploy — the same
+# full-reconnect cost holder-deploy.yml already carries, never paid by an
+# engine or gateway deploy.
+holder_memory_limit: "1500m"
+holder_memory_reservation: "256m"
+holder_oom_score_adj: -800
+holder_cpus: 2.0

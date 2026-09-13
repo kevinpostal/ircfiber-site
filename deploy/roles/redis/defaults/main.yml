@@ -9,3 +9,13 @@ redis_ulimits:
   nofile:
     soft: 65536
     hard: 65536
+
+# --- Memory governance -------------------------------------------------------
+# redis.conf already caps the dataset (redis_maxmemory, volatile-lru); this is
+# the container ceiling that stops fragmentation/COW on a BGSAVE from turning
+# a 256 MB dataset into a host-wide memory event. Observed RSS 216-240 MB.
+# Losing redis drops engine↔gateway routing, so it sits below the stateless
+# services in kill order but above holder/ircd.
+redis_memory_limit: "768m"
+redis_oom_score_adj: -300
+redis_cpus: 1.5

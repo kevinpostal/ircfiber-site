@@ -98,6 +98,85 @@
     reload: true
   when: common_swap_enabled | bool
 
+# --- earlyoom ---------------------------------------------------------------
+# Userspace OOM killer. The kernel's own killer only fires once the machine is
+# already thrashing: on 2026-09-13 the host spent ~20 minutes at load 57 with
+# sshd unable to answer, so nobody could log in to fix it. earlyoom acts on
+# *available* memory instead, kills one process while the box is still
+# responsive, and is told which processes to spare (ssh/tailscale/docker in,
+# the ircd and the socket holder — losing either disconnects every user).
+- name: Install earlyoom
+  ansible.builtin.apt:
+    name: earlyoom
+    state: present
+  when: common_earlyoom_enabled | bool
+
+- name: Configure earlyoom
+  ansible.builtin.copy:
+    dest: /etc/default/earlyoom
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Ansible-managed (roles/common) — local edits are overwritten.
+      EARLYOOM_ARGS="{{ common_earlyoom_args }}"
+  when: common_earlyoom_enabled | bool
+  notify: Restart earlyoom
+
+- name: Enable and start earlyoom
+  ansible.builtin.service:
+    name: earlyoom
+    state: started
+    enabled: true
+  when: common_earlyoom_enabled | bool
+
+# --- cgroup guarantees for the units that keep the host reachable -----------
+# Docker containers and the system daemons are siblings under system.slice,
+# so a container that eats the page cache also starves sshd: on 2026-09-13
+# sshd accepted TCP but could not get enough memory/CPU to answer a banner
+# for minutes, which is what turned a memory problem into "cannot log in to
+# fix it". MemoryMin is a hard, unreclaimable floor per cgroup; MemoryLow is
+# a soft one; CPUWeight/IOWeight decide who wins under contention. Together
+# they mean the remote-access path is the last thing to be squeezed.
+- name: Collect systemd unit facts
+  ansible.builtin.service_facts:
+  when: common_cgroup_protection_enabled | bool
+
+- name: Ensure drop-in directories for protected units
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item.unit }}.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ common_cgroup_protected_units }}"
+  loop_control:
+    label: "{{ item.unit }}"
+  when:
+    - common_cgroup_protection_enabled | bool
+    - item.unit in (ansible_facts.services | default({}))
+
+- name: Guarantee memory/CPU/IO for protected units
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.unit }}.d/50-ircfiber-resources.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      # Ansible-managed (roles/common) — local edits are overwritten.
+      [Service]
+      MemoryMin={{ item.memory_min }}
+      MemoryLow={{ item.memory_low }}
+      CPUWeight={{ item.cpu_weight }}
+      IOWeight={{ item.io_weight }}
+  loop: "{{ common_cgroup_protected_units }}"
+  loop_control:
+    label: "{{ item.unit }}"
+  when:
+    - common_cgroup_protection_enabled | bool
+    - item.unit in (ansible_facts.services | default({}))
+  notify: Reload systemd
+
 - name: Ensure /etc/ircfiber exists
   ansible.builtin.file:
     path: /etc/ircfiber
@@ -113,3 +192,45 @@
     owner: root
     group: root
     mode: "0750"
+
+# --- service watchdog -------------------------------------------------------
+# scripts/ircfiber-monitor.sh: per-minute checks with cooldowns and strike
+# counters (engine heartbeat, irc:assignments, gateway /api/version, holder
+# health, gateway FD count) that restart the offender. It had been copied to
+# the host by hand, so a rebuilt or replacement host would have come up with
+# no watchdog and nobody would have noticed until the next incident. The
+# repo copy is the source of truth — never edit the one on the host.
+- name: Ensure /opt/ircfiber/bin exists
+  ansible.builtin.file:
+    path: /opt/ircfiber/bin
+    state: directory
+    owner: "{{ common_monitor_user }}"
+    group: "{{ common_monitor_user }}"
+    mode: "0755"
+  when: common_monitor_enabled | bool
+
+- name: Install the service watchdog
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../scripts/ircfiber-monitor.sh"
+    dest: /opt/ircfiber/bin/ircfiber-monitor.sh
+    owner: "{{ common_monitor_user }}"
+    group: "{{ common_monitor_user }}"
+    mode: "0755"
+  when: common_monitor_enabled | bool
+
+- name: Ensure the watchdog log directory is writable by its user
+  ansible.builtin.file:
+    path: /var/log/ircfiber
+    state: directory
+    owner: "{{ common_monitor_user }}"
+    group: "{{ common_monitor_user }}"
+    mode: "0775"
+  when: common_monitor_enabled | bool
+
+- name: Schedule the service watchdog every minute
+  ansible.builtin.cron:
+    name: "ircfiber service watchdog"
+    user: "{{ common_monitor_user }}"
+    job: "/opt/ircfiber/bin/ircfiber-monitor.sh >/dev/null 2>&1"
+    state: present
+  when: common_monitor_enabled | bool
