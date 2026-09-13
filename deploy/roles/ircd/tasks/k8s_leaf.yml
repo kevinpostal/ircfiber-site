@@ -79,6 +79,28 @@
   register: ircd_k8s_apply
   changed_when: "'created' in ircd_k8s_apply.stdout or 'configured' in ircd_k8s_apply.stdout"
 
+# The replica count is owned by the gateway's admin K8s-leaf page, not by
+# this play (the manifest carries no `replicas:`). So read what the operator
+# wants before deciding to wait: `rollout status` on a Deployment scaled to 0
+# blocks for the full timeout and then fails the play, which is how a
+# deliberately-stopped leaf used to break `make deploy-ircd-k8s`.
+- name: Read the leaf's desired replica count
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - --context
+      - "{{ ircd_k8s_context }}"
+      - --namespace
+      - "{{ ircd_k8s_namespace }}"
+      - get
+      - deployment/ircfiber-ircd-k8s
+      - -o
+      - jsonpath={.spec.replicas}
+  delegate_to: localhost
+  become: false
+  register: ircd_k8s_desired
+  changed_when: false
+
 - name: Wait for the leaf rollout
   ansible.builtin.command:
     argv:
@@ -94,3 +116,12 @@
   delegate_to: localhost
   become: false
   changed_when: false
+  when: (ircd_k8s_desired.stdout | default('0') | int) > 0
+
+- name: Report that the leaf is intentionally scaled to zero
+  ansible.builtin.debug:
+    msg: >-
+      Leaf conf rendered and manifests applied; the Deployment is scaled to 0,
+      so nothing was started. Turn it on in the admin dashboard
+      (Operations → K8s leaf), which also runs the preflight checks.
+  when: (ircd_k8s_desired.stdout | default('0') | int) == 0
