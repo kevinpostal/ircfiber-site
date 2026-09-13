@@ -35,6 +35,10 @@
     - { src: custom.conf.j2, dest: custom.conf }
     - { src: modules.conf.j2, dest: modules.conf }
     - { src: opers.conf.j2, dest: opers.conf }
+    # /RULES is served by m_showfile from this path (modules.conf). Without
+    # it the leaf logged "Unable to read /inspircd/conf/rules.txt" on every
+    # rehash and /RULES returned nothing there.
+    - { src: rules.j2, dest: rules.txt }
     - { src: motd.j2, dest: motd.d/motd, mode: "0644" }
   loop_control:
     label: "{{ item.dest }}"

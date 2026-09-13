@@ -137,7 +137,6 @@
     force: "{{ item.force | default(true) }}"
   loop:
     - { src: opers.conf.j2, dest: opers.conf }
-    - { src: rules.j2, dest: rules.txt }
     # 0644, like the file the gateway's MOTD rotation writes in its place;
     # never re-rendered over a rotated MOTD.
     - { src: motd.j2, dest: motd.d/motd, mode: "0644", force: false }
@@ -152,9 +151,10 @@
   tags: [ircdconf]
   notify: Rehash ircd
 
-  # inspircd.conf / modules.conf / custom.conf are editable from the admin
-  # Config tab, so they render through guarded_conf.yml: never installed over
-  # admin edits unless ircd_config_force=true (see defaults/main.yml).
+  # inspircd.conf / modules.conf / custom.conf / rules.txt are editable from
+  # the admin Config tab, so they render through guarded_conf.yml: never
+  # installed over admin edits unless ircd_config_force=true (see
+  # defaults/main.yml).
   # motd.d/motd keeps force:false above and needs nothing.
 - name: Render guarded InspIRCd config
   ansible.builtin.include_tasks: guarded_conf.yml
@@ -162,6 +162,9 @@
     - { src: inspircd.conf.j2, dest: inspircd.conf }
     - { src: modules.conf.j2, dest: modules.conf }
     - { src: custom.conf.j2, dest: custom.conf }
+    # /RULES text (m_showfile). Staff edit this far more often than any
+    # other file, and from the admin UI rather than a deploy.
+    - { src: rules.j2, dest: rules.txt }
   loop_control:
     loop_var: conf
     label: "{{ conf.dest }}"

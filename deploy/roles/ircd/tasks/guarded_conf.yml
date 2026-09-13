@@ -1,11 +1,11 @@
 ---
 # Guarded render of one InspIRCd config file (looped from main.yml with
-# `conf = { src, dest }`). inspircd.conf / modules.conf / custom.conf are
-# editable from the admin Config tab (POST /api/admin/ircd/config), so a
-# re-render must never silently clobber admin edits: render to staging,
-# compare the live file against the .ansible.<file>.sha256 sidecar, and
-# skip the install with a visible warning when they differ — unless
-# ircd_config_force=true.
+# `conf = { src, dest }`). inspircd.conf / modules.conf / custom.conf /
+# rules.txt are editable from the admin Config tab (POST
+# /api/admin/ircd/config), so a re-render must never silently clobber admin
+# edits: render to staging, compare the live file against the
+# .ansible.<file>.sha256 sidecar, and skip the install with a visible
+# warning when they differ — unless ircd_config_force=true.
 #
 # Sidecar contract (shared with the gateway's drifted flag in
 # web/admin/ircd.d): the sidecar holds the hex sha256 of the last content

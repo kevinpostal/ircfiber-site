@@ -1480,11 +1480,14 @@ public void removeXlineNow(string type, string mask) {
 /// Config files viewable (read-only) from the dashboard. `custom.conf`
 /// holds the server `<link>` / `<autoconnect>` / `<bind>` tags.
 private immutable string[] _viewableConf =
-    ["inspircd.conf", "modules.conf", "custom.conf", "opers.conf", "motd"];
+    ["inspircd.conf", "modules.conf", "custom.conf", "rules.txt", "opers.conf", "motd"];
 
 /// Files editable through the save endpoint. `opers.conf` stays in Ansible
 /// (an oper block edited live is an authentication change, not a tuning one).
-private immutable string[] _editableConf = ["inspircd.conf", "modules.conf", "custom.conf", "motd"];
+/// `rules.txt` is the /RULES text (m_showfile) — staff-facing prose, edited
+/// far more often than any tag file.
+private immutable string[] _editableConf =
+    ["inspircd.conf", "modules.conf", "custom.conf", "rules.txt", "motd"];
 
 /// Lowercase hex sha256 of a config file's bytes. Lowercase because that is
 /// what Ansible's `stat.checksum` writes into .ansible.<file>.sha256

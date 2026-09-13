@@ -60,18 +60,19 @@
     state: started
     restart: true
 
-  # The gateway reads inspircd.conf / modules.conf / custom.conf through
-  # per-file rw bind mounts (roles/gateway/tasks/container.yml). An Ansible
-  # install replaces the host file by rename, orphaning the container-side
-  # inode, so the gateway must be RECREATED to see the new bytes (a
-  # `docker restart` keeps the stale mount). The ircd reads the conf dir
-  # directly and needs only the rehash above. This play owns no gateway
+  # The gateway reads inspircd.conf / modules.conf / custom.conf / rules.txt
+  # through per-file rw bind mounts (roles/gateway/tasks/container.yml). An
+  # Ansible install replaces the host file by rename, orphaning the
+  # container-side inode, so the gateway must be RECREATED to see the new
+  # bytes (a `docker restart` keeps the stale mount). The ircd reads the conf
+  # dir directly and needs only the rehash above. This play owns no gateway
   # containers, so the handler warns instead of recreating: run
   # playbooks/gateway-deploy.yml.
 - name: Recreate gateway for ircd conf
   ansible.builtin.debug:
     msg: >-
-      inspircd.conf / modules.conf / custom.conf was (re)installed: recreate the gateway
+      inspircd.conf / modules.conf / custom.conf / rules.txt was (re)installed:
+      recreate the gateway
       (ansible-playbook playbooks/gateway-deploy.yml) so its per-file ircd
       conf bind mounts pick up the new inode. Until then the gateway serves
       the pre-install bytes.

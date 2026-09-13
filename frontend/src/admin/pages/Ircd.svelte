@@ -85,7 +85,9 @@
   let logFilter = $state('');
   let hideRelayed = $state(true);
 
-  const confFiles = ['inspircd.conf', 'modules.conf', 'custom.conf', 'opers.conf', 'motd'] as const;
+  const confFiles = [
+    'inspircd.conf', 'modules.conf', 'custom.conf', 'rules.txt', 'opers.conf', 'motd',
+  ] as const;
   let confFile = $state<(typeof confFiles)[number]>('inspircd.conf');
   let confContent = $state<string | null>(null);
   let confError = $state<string | null>(null);
@@ -823,6 +825,12 @@
         <p class="mb-2 text-xs text-muted">
           Server links live here. A rehash applies <code>&lt;link&gt;</code>/<code>&lt;autoconnect&gt;</code>
           changes with no client disconnects; a new <code>&lt;bind&gt;</code> needs a container restart.
+        </p>
+      {/if}
+      {#if confFile === 'rules.txt'}
+        <p class="mb-2 text-xs text-muted">
+          Network rules shown by <code>/RULES</code> (and <code>/HELP RULES</code>). Plain text, one
+          rule per line; a rehash publishes it to every connected user with no disconnects.
         </p>
       {/if}
       {#if confEditable && confContent !== null && !confError}
