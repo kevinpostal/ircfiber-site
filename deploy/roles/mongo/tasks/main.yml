@@ -105,3 +105,59 @@
     labels:
       com.ircfiber.component: "mongo"
       com.ircfiber.version: "{{ ircfiber_version }}"
+
+# The app user is created by mongo-init.js, which only runs on a fresh
+# /data/db — an existing deployment never picks up a role added there. This
+# grant is the upgrade path, and it is idempotent (granting a held role is a
+# no-op). Without clusterMonitor the app user cannot run `serverStatus`
+# (a cluster-scoped command), so the admin Mongo tab and the replication
+# monitor answer "not authorized on ircfiber to execute command
+# { serverStatus: 1 }" and fall back to dbStats — no version, uptime or
+# connection counts. clusterMonitor is read-only.
+- name: Wait for mongo to accept connections
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ mongo_container_name }}"
+      - mongosh
+      - --quiet
+      - --host
+      - "{{ mongo_bind_ip }}"
+      - -u
+      - "{{ vault_mongo_root_username }}"
+      - -p
+      - "{{ vault_mongo_root_password }}"
+      - --authenticationDatabase
+      - admin
+      - --eval
+      - "db.adminCommand({ping: 1}).ok"
+  register: mongo_ping
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: mongo_ping.rc == 0
+  no_log: true
+
+- name: Grant clusterMonitor to the app user (serverStatus for the admin UI)
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - "{{ mongo_container_name }}"
+      - mongosh
+      - --quiet
+      - --host
+      - "{{ mongo_bind_ip }}"
+      - -u
+      - "{{ vault_mongo_root_username }}"
+      - -p
+      - "{{ vault_mongo_root_password }}"
+      - --authenticationDatabase
+      - admin
+      - --eval
+      - >-
+        db.getSiblingDB("{{ mongo_initdb_database }}").grantRolesToUser(
+        "{{ vault_mongo_app_username }}", [{role: "clusterMonitor", db: "admin"}])
+  changed_when: false
+  no_log: true

@@ -17,6 +17,11 @@ db.createUser({
   pwd: appPass,
   roles: [
     { role: 'readWrite', db: targetDb },
-    { role: 'dbAdmin',   db: targetDb }
+    { role: 'dbAdmin',   db: targetDb },
+    // serverStatus is a cluster-scoped command: without clusterMonitor the
+    // admin dashboard's Mongo tab and the replication monitor lose the
+    // server version, uptime and connection counts and fall back to
+    // dbStats. Read-only — it grants no write or user-management rights.
+    { role: 'clusterMonitor', db: 'admin' }
   ]
 });
