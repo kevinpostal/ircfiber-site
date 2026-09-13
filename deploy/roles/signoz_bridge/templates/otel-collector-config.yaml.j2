@@ -64,6 +64,15 @@ receivers:
     timeout: 10s
     initial_delay: 5s
     api_version: "1.45"   # collector v0.119 defaults to 1.25; host Docker (v29+) requires >=1.40
+    # Off by default in the receiver. container.restarts is the only signal
+    # that shows a container being restarted in a loop — by dockerd after a
+    # crash, by an OOM kill, or by autoheal after a failed healthcheck — and
+    # it drives the "container restart count increasing" alert rule.
+    metrics:
+      container.restarts:
+        enabled: true
+      container.uptime:
+        enabled: true
 
   filelog/caddy:
     # Tail the Caddy JSON access log. We only parse the body (json_parser
@@ -151,6 +160,17 @@ processors:
           enabled: true
         os.type:
           enabled: true
+
+  # resourcedetection runs INSIDE this container, so it reports the container
+  # id (e.g. f5a08ddfa0b2) as host.name — and the k3s collector's resource/ovh
+  # processor uses `insert`, so it never corrects an already-set value. Every
+  # host-scoped alert rule filters on host.name = ovh-prod, so the metrics
+  # landed under an identity nothing matched. Upsert it here, at the source.
+  resource/host_identity:
+    attributes:
+      - key: host.name
+        value: {{ signoz_bridge_host_name }}
+        action: upsert
 
   transform/newrelic:
     # New Relic-style entity model applied to ALL signals.
@@ -271,12 +291,12 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resourcedetection, transform/newrelic, batch]
+      processors: [memory_limiter, resourcedetection, resource/host_identity, transform/newrelic, batch]
       exporters: [otlp/signoz]
 
     metrics:
       receivers: [otlp, hostmetrics]
-      processors: [memory_limiter, resourcedetection, transform/newrelic, batch]
+      processors: [memory_limiter, resourcedetection, resource/host_identity, transform/newrelic, batch]
       exporters: [otlp/signoz]
 
     # Per-container CPU/memory/IO. These go to SigNoz like everything else:
@@ -286,10 +306,10 @@ service:
     # its ceiling (gateway, 2026-09-12) before it is OOM-killed.
     metrics/docker:
       receivers: [docker_stats]
-      processors: [memory_limiter, resourcedetection, batch]
+      processors: [memory_limiter, resourcedetection, resource/host_identity, batch]
       exporters: [otlp/signoz]
 
     logs:
       receivers: [otlp, filelog/caddy]
-      processors: [memory_limiter, resourcedetection, transform/newrelic, redaction, batch]
+      processors: [memory_limiter, resourcedetection, resource/host_identity, transform/newrelic, redaction, batch]
       exporters: [otlp/signoz]

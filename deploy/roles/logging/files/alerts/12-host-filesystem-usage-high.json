@@ -29,70 +29,35 @@
       "queryType": "builder",
       "panelType": "graph",
       "unit": "percentunit",
-      "builderQueries": {
-        "A": {
-          "queryName": "A",
-          "dataSource": "metrics",
-          "aggregateOperator": "max",
-          "aggregateAttribute": {
-            "key": "system.filesystem.utilization",
-            "dataType": "float64",
-            "type": "Gauge",
-            "isColumn": true
-          },
-          "timeAggregation": "max",
-          "spaceAggregation": "max",
-          "functions": [],
-          "filter": {
-            "expression": "host.name = 'ovh-prod' AND type != 'tmpfs'"
-          },
-          "filters": {
-            "op": "AND",
-            "items": [
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
               {
-                "key": {
-                  "key": "host.name",
-                  "dataType": "string",
-                  "type": "resource",
-                  "isColumn": false
-                },
-                "op": "=",
-                "value": "ovh-prod"
-              },
-              {
-                "key": {
-                  "key": "type",
-                  "dataType": "string",
-                  "type": "tag",
-                  "isColumn": false
-                },
-                "op": "!=",
-                "value": "tmpfs"
+                "metricName": "system.filesystem.utilization",
+                "timeAggregation": "max",
+                "spaceAggregation": "max"
               }
-            ]
-          },
-          "groupBy": [
-            {
-              "key": "mountpoint",
-              "dataType": "string",
-              "type": "tag",
-              "isColumn": false
-            }
-          ],
-          "expression": "A",
-          "disabled": false,
-          "having": {
-            "expression": ""
-          },
-          "limit": null,
-          "stepInterval": 60,
-          "orderBy": [],
-          "reduceTo": "last",
-          "legend": "filesystem utilization"
+            ],
+            "filter": {
+              "expression": "host.name = 'ovh-prod' AND type != 'tmpfs'"
+            },
+            "groupBy": [
+              {
+                "name": "mountpoint",
+                "fieldContext": "attribute"
+              }
+            ],
+            "stepInterval": "60s",
+            "legend": "filesystem utilization"
+          }
         }
-      },
-      "promQueries": {},
-      "chQueries": {}
+      ]
     }
-  }
+  },
+  "version": "v5"
 }

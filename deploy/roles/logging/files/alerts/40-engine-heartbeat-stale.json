@@ -14,7 +14,7 @@
   },
   "annotations": {
     "summary": "Engine ovh stopped emitting its heartbeat gauge",
-    "description": "The engine's heartbeat loop records the ircfiber.registration.timeout_networks gauge on every cycle (~10s, engine/source/ircfiber/engine/bootstrap.d), tagged serverId. Fewer than one data point in 3 minutes means that loop is not running, which is exactly the condition the admin dashboard reports as Healthy Engines 0/1 — ServerRegistry marks a server unhealthy once lastHeartbeat is older than 60s, and network assignments then stop being serviced. Counting the gauge rather than reading Redis works because the metric already ships today (IRCFIBER_OTEL_ENABLED=1 in host_vars/ircfiber-prod-1.yml). Check: docker exec ircfiber-redis redis-cli hget irc:server:ovh lastHeartbeat; docker logs --tail 100 ircfiber-engine-ovh; the admin dashboard Engines card."
+    "description": "The engine's heartbeat loop records the ircfiber.registration.timeout_networks gauge on every cycle (~10s, engine/source/ircfiber/engine/bootstrap.d), tagged serverId. Fewer than one data point in 3 minutes means that loop is not running, which is exactly the condition the admin dashboard reports as Healthy Engines 0/1 \u2014 ServerRegistry marks a server unhealthy once lastHeartbeat is older than 60s, and network assignments then stop being serviced. Counting the gauge rather than reading Redis works because the metric already ships today (IRCFIBER_OTEL_ENABLED=1 in host_vars/ircfiber-prod-1.yml). Check: docker exec ircfiber-redis redis-cli hget irc:server:ovh lastHeartbeat; docker logs --tail 100 ircfiber-engine-ovh; the admin dashboard Engines card."
   },
   "preferredChannels": [],
   "condition": {
@@ -29,53 +29,29 @@
       "queryType": "builder",
       "panelType": "graph",
       "unit": "short",
-      "builderQueries": {
-        "A": {
-          "queryName": "A",
-          "dataSource": "metrics",
-          "aggregateOperator": "count",
-          "aggregateAttribute": {
-            "key": "ircfiber.registration.timeout_networks",
-            "dataType": "float64",
-            "type": "Gauge",
-            "isColumn": true
-          },
-          "timeAggregation": "count",
-          "spaceAggregation": "count",
-          "functions": [],
-          "filter": {
-            "expression": "serverId = 'ovh'"
-          },
-          "filters": {
-            "op": "AND",
-            "items": [
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
               {
-                "key": {
-                  "key": "serverId",
-                  "dataType": "string",
-                  "type": "tag",
-                  "isColumn": false
-                },
-                "op": "=",
-                "value": "ovh"
+                "metricName": "ircfiber.registration.timeout_networks",
+                "timeAggregation": "count",
+                "spaceAggregation": "count"
               }
-            ]
-          },
-          "groupBy": [],
-          "expression": "A",
-          "disabled": false,
-          "having": {
-            "expression": ""
-          },
-          "limit": null,
-          "stepInterval": 60,
-          "orderBy": [],
-          "reduceTo": "last",
-          "legend": "engine ovh heartbeat"
+            ],
+            "filter": {
+              "expression": "serverId = 'ovh'"
+            },
+            "stepInterval": "60s",
+            "legend": "engine ovh heartbeat"
+          }
         }
-      },
-      "promQueries": {},
-      "chQueries": {}
+      ]
     }
-  }
+  },
+  "version": "v5"
 }

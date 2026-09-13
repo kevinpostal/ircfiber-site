@@ -29,60 +29,35 @@
       "queryType": "builder",
       "panelType": "graph",
       "unit": "short",
-      "builderQueries": {
-        "A": {
-          "queryName": "A",
-          "dataSource": "metrics",
-          "aggregateOperator": "increase",
-          "aggregateAttribute": {
-            "key": "container.restarts",
-            "dataType": "float64",
-            "type": "Sum",
-            "isColumn": true
-          },
-          "timeAggregation": "increase",
-          "spaceAggregation": "max",
-          "functions": [],
-          "filter": {
-            "expression": "host.name = 'ovh-prod'"
-          },
-          "filters": {
-            "op": "AND",
-            "items": [
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
               {
-                "key": {
-                  "key": "host.name",
-                  "dataType": "string",
-                  "type": "resource",
-                  "isColumn": false
-                },
-                "op": "=",
-                "value": "ovh-prod"
+                "metricName": "container.restarts",
+                "timeAggregation": "increase",
+                "spaceAggregation": "max"
               }
-            ]
-          },
-          "groupBy": [
-            {
-              "key": "container.name",
-              "dataType": "string",
-              "type": "resource",
-              "isColumn": false
-            }
-          ],
-          "expression": "A",
-          "disabled": false,
-          "having": {
-            "expression": ""
-          },
-          "limit": null,
-          "stepInterval": 60,
-          "orderBy": [],
-          "reduceTo": "last",
-          "legend": "container restarts"
+            ],
+            "filter": {
+              "expression": "host.name = 'ovh-prod'"
+            },
+            "groupBy": [
+              {
+                "name": "container.name",
+                "fieldContext": "resource"
+              }
+            ],
+            "stepInterval": "60s",
+            "legend": "container restarts"
+          }
         }
-      },
-      "promQueries": {},
-      "chQueries": {}
+      ]
     }
-  }
+  },
+  "version": "v5"
 }

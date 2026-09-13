@@ -28,10 +28,12 @@ import ircfiber.db.img2irc_saves : Img2IrcSaveRecord, Img2IrcSaveRepository;
 import ircfiber.db.support_issues : SupportIssueRepository, SupportIssueRecord, SupportComment, SupportIssueContext;
 import ircfiber.support.events : SupportEvent, pushSupportEvent;
 import ircfiber.support.json : supportIssueToJson, isValidKind, sanitizeLine;
+import ircfiber.logs.events : LogEvent, pushLogEvent;
+import ircfiber.env : envSecret;
 import ircfiber.upload.local : LocalUploadResult, LocalUploadException, saveUpload, saveIrcArtOriginal, saveIrcArtThumbnail, uploadDir;
 import std.file : remove, readText, exists;
 import std.path : buildPath;
-import std.string : strip, indexOf, lastIndexOf;
+import std.string : strip, indexOf, lastIndexOf, toLower;
 import ircfiber.auth : requireAuth;
 import ircfiber.api.image_proxy : handleImageProxy;
 import ircfiber.build_info : buildInfo;
@@ -132,6 +134,11 @@ final class RESTAPI {
         router.get("/api/version", &versionCheck);
         router.get("/api/git", &versionCheck);
         router.get("/version", &versionCheck);
+        // SigNoz Alertmanager webhook → #staff (via the logs outbox).
+        // Session-unauthenticated by design: SigNoz is not a website user,
+        // so this route must never call requireAuth. The only gate is the
+        // IRCFIBER_ALERT_WEBHOOK_TOKEN bearer secret (see signozAlertHook).
+        router.post("/api/hooks/signoz", &signozAlertHook);
         // 2026-07-07 redesign: OOB (out-of-band) event fetch for hole
         // filling. The client calls this when it detects a gap in the
         // eid stream from the WS (e.g. WS silently dropped a frame).
@@ -3329,6 +3336,9 @@ final class RESTAPI {
     private enum SUPPORT_MAX_PER_HOUR = 10;
     private enum SUPPORT_MAX_ATTACHMENTS = 3;
     private enum SUPPORT_CONTEXT_FIELD_MAX = 512;
+    /// Max SigNoz alerts queued to #staff per webhook call: a storm must
+    /// not flood the channel. The rest are dropped with a log line.
+    private enum SIGNOZ_HOOK_MAX_ALERTS = 10;
 
     private static void supportError(HTTPServerResponse res, int code, string msg) {
         res.statusCode = code;
@@ -3678,6 +3688,124 @@ final class RESTAPI {
     /// Vibe.d automatically strips the body for HEAD requests on GET routes.
     private void ping(HTTPServerRequest, HTTPServerResponse res) {
         res.writeJsonBody(Json(["ping": Json("pong")]));
+    }
+
+    /// POST /api/hooks/signoz — SigNoz (Alertmanager-shape) webhook.
+    ///
+    /// Deliberately session-unauthenticated: SigNoz is not a website user,
+    /// so this handler must never call requireAuth. The only gate is the
+    /// shared bearer secret `IRCFIBER_ALERT_WEBHOOK_TOKEN` (file-backed in
+    /// prod via `IRCFIBER_ALERT_WEBHOOK_TOKEN_FILE`, resolved with
+    /// `ircfiber.env.envSecret` like every other secret). Each alert is
+    /// queued as a `notice` LogEvent, which FiberEye announces in #staff.
+    /// Never throws on a malformed body: unparseable JSON answers 400, a
+    /// missing `alerts` array answers 200 with `queued: 0`.
+    private void signozAlertHook(HTTPServerRequest req, HTTPServerResponse res) {
+        const token = envSecret("IRCFIBER_ALERT_WEBHOOK_TOKEN", "");
+        if (token.length == 0) {
+            logWarn("signoz webhook: IRCFIBER_ALERT_WEBHOOK_TOKEN is not set; dropping delivery (503)");
+            res.statusCode = 503;
+            res.writeJsonBody(Json(["error": Json("alert webhook is not configured")]));
+            return;
+        }
+        string presented = "";
+        const auth = req.headers.get("Authorization", "");
+        enum bearerPrefix = "Bearer ";
+        if (auth.length > bearerPrefix.length && auth[0 .. bearerPrefix.length] == bearerPrefix)
+            presented = auth[bearerPrefix.length .. $];
+        if (presented.length != token.length || presented != token) {
+            res.statusCode = 401;
+            res.writeJsonBody(Json(["error": Json("unauthorized")]));
+            return;
+        }
+        Json body_;
+        try {
+            body_ = req.json;
+        } catch (Exception) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("invalid body")]));
+            return;
+        }
+        if (body_.type != Json.Type.object) {
+            res.writeJsonBody(Json(["ok": Json(true), "queued": Json(0)]));
+            return;
+        }
+        const topStatus = signozStr(body_, "status");
+        Json alerts = Json.undefined;
+        try {
+            alerts = body_["alerts"];
+        } catch (Exception) {
+            alerts = Json.undefined;
+        }
+        if (alerts.type != Json.Type.array) {
+            res.writeJsonBody(Json(["ok": Json(true), "queued": Json(0)]));
+            return;
+        }
+        const now = Clock.currTime.toUnixTime!long * 1000;
+        long queued = 0;
+        long dropped = 0;
+        foreach (a; alerts) {
+            if (a.type != Json.Type.object) continue;
+            if (queued >= SIGNOZ_HOOK_MAX_ALERTS) { dropped++; continue; }
+            LogEvent ev;
+            ev.type = "notice";
+            ev.ts = now;
+            ev.actor = "signoz";
+            ev.text = signozAlertLine(a, topStatus);
+            pushLogEvent(redis, ev);
+            queued++;
+        }
+        if (dropped > 0)
+            logWarn("signoz webhook: dropped %d alerts over the %d-event cap", dropped, SIGNOZ_HOOK_MAX_ALERTS);
+        res.writeJsonBody(Json(["ok": Json(true), "queued": Json(queued)]));
+    }
+
+    /// Never-throwing single-level string lookup for the SigNoz payload:
+    /// "" unless `j` is an object holding a string at `key`.
+    private static string signozStr(Json j, string key) {
+        try {
+            if (j.type != Json.Type.object) return "";
+            auto v = j[key];
+            return v.type == Json.Type.string ? v.get!string : "";
+        } catch (Exception) {
+            return "";
+        }
+    }
+
+    /// Never-throwing single-level object lookup for the SigNoz payload:
+    /// `Json.undefined` unless `j` is an object holding an object at `key`.
+    private static Json signozSection(Json j, string key) {
+        try {
+            if (j.type != Json.Type.object) return Json.undefined;
+            auto v = j[key];
+            return v.type == Json.Type.object ? v : Json.undefined;
+        } catch (Exception) {
+            return Json.undefined;
+        }
+    }
+
+    /// One IRC-safe line for a single SigNoz alert:
+    /// `[FIRING critical] <alertname> — <summary>` (`RESOLVED` on resolve),
+    /// falling back to the first 200 chars of `description`, then to the
+    /// alertname alone. Newlines are flattened (sanitizeLine) and the whole
+    /// line is capped at 400 chars.
+    private static string signozAlertLine(Json a, string topStatus) {
+        const labels = signozSection(a, "labels");
+        const annotations = signozSection(a, "annotations");
+        auto status = signozStr(a, "status");
+        if (status.length == 0) status = topStatus;
+        const resolved = status.toLower() == "resolved";
+        auto name = signozStr(labels, "alertname");
+        if (name.length == 0) name = "unknown";
+        auto severity = signozStr(labels, "severity");
+        if (severity.length == 0) severity = "unknown";
+        const summary = sanitizeLine(signozStr(annotations, "summary"));
+        const desc = sanitizeLine(signozStr(annotations, "description"));
+        string line = "[" ~ (resolved ? "RESOLVED" : "FIRING") ~ " " ~ severity ~ "] " ~ name;
+        string detail = summary;
+        if (detail.length == 0 && desc.length > 0) detail = clip(desc, 200);
+        if (detail.length > 0) line ~= " — " ~ detail;
+        return clip(line, 400);
     }
 
     private void versionCheck(HTTPServerRequest req, HTTPServerResponse res) {

@@ -14,7 +14,7 @@
   },
   "annotations": {
     "summary": "No container logs at all from ovh-prod",
-    "description": "Total log volume from the prod host dropped to zero for the window. This is the coarse but unmissable outage signal: when the host wedged on 2026-09-06 dockerd stopped answering, every container stopped producing output and fluent-bit stopped shipping — and nothing said so. It also catches fluent-bit itself dying, the Tailscale path to the collector breaking, and a container stuck unhealthy with a dead main loop. Check: ssh the host, docker ps, docker logs ircfiber-fluent-bit --tail 50, tailscale status, and curl -fsS https://ircfiber.com/health from outside."
+    "description": "Total log volume from the prod host dropped to zero for the window. This is the coarse but unmissable outage signal: when the host wedged on 2026-09-06 dockerd stopped answering, every container stopped producing output and fluent-bit stopped shipping \u2014 and nothing said so. It also catches fluent-bit itself dying, the Tailscale path to the collector breaking, and a container stuck unhealthy with a dead main loop. Check: ssh the host, docker ps, docker logs ircfiber-fluent-bit --tail 50, tailscale status, and curl -fsS https://ircfiber.com/health from outside."
   },
   "preferredChannels": [],
   "condition": {
@@ -29,60 +29,33 @@
       "queryType": "builder",
       "panelType": "graph",
       "unit": "short",
-      "builderQueries": {
-        "A": {
-          "queryName": "A",
-          "dataSource": "logs",
-          "aggregateOperator": "count",
-          "aggregateAttribute": {
-            "key": "",
-            "dataType": "",
-            "type": "",
-            "isColumn": false
-          },
-          "timeAggregation": "count",
-          "spaceAggregation": "sum",
-          "functions": [],
-          "filter": {
-            "expression": "host.name = 'ovh-prod'"
-          },
-          "filters": {
-            "op": "AND",
-            "items": [
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "logs",
+            "disabled": false,
+            "aggregations": [
               {
-                "key": {
-                  "key": "host.name",
-                  "dataType": "string",
-                  "type": "resource",
-                  "isColumn": false
-                },
-                "op": "=",
-                "value": "ovh-prod"
+                "expression": "count()"
               }
-            ]
-          },
-          "groupBy": [
-            {
-              "key": "service.name",
-              "dataType": "string",
-              "type": "resource",
-              "isColumn": false
-            }
-          ],
-          "expression": "A",
-          "disabled": false,
-          "having": {
-            "expression": ""
-          },
-          "limit": null,
-          "stepInterval": 60,
-          "orderBy": [],
-          "reduceTo": "last",
-          "legend": "prod log volume"
+            ],
+            "filter": {
+              "expression": "host.name = 'ovh-prod'"
+            },
+            "groupBy": [
+              {
+                "name": "service.name",
+                "fieldContext": "resource"
+              }
+            ],
+            "stepInterval": "60s",
+            "legend": "prod log volume"
+          }
         }
-      },
-      "promQueries": {},
-      "chQueries": {}
+      ]
     }
-  }
+  },
+  "version": "v5"
 }

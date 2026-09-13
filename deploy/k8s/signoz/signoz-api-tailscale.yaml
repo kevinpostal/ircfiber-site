@@ -1,0 +1,33 @@
+---
+# SigNoz query API / UI on the tailnet.
+#
+# The SigNoz service itself is ClusterIP-only, so the alert-rule importer
+# (roles/signoz_alerts) and the admin SPA's /signoz route had no reachable
+# address: prod's Caddy still proxies to `signoz:8080`, a name that stopped
+# resolving when SigNoz moved from the OVH host to k3s. Result — zero alert
+# rules were ever imported, which is why the 2026-09-13 memory exhaustion
+# paged nobody.
+#
+# Same pattern as signoz-otel-collector-tailscale: a LoadBalancer handled by
+# the Tailscale operator, published as signoz.tail544547.ts.net.
+#
+#   kubectl apply -f k8s/signoz/signoz-api-tailscale.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: signoz-tailscale
+  namespace: signoz
+  annotations:
+    tailscale.com/hostname: signoz
+spec:
+  type: LoadBalancer
+  loadBalancerClass: tailscale
+  selector:
+    app.kubernetes.io/component: signoz
+    app.kubernetes.io/instance: signoz
+    app.kubernetes.io/name: signoz
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

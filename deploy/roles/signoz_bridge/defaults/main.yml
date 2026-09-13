@@ -18,11 +18,19 @@ signoz_bridge_health_port: 13133
 # Collector self-telemetry (Prometheus scrape endpoint on the container IP).
 signoz_bridge_telemetry_port: 8888
 
-# Export target. SigNoz no longer runs on this host — it lives on the k3s
-# box and is reached over the tailnet, the same path fluent-bit already uses
-# for container logs (roles/logging: k3s_signoz_otlp_host). Until this was
-# pointed at the tailnet, prod shipped NO host metrics at all, which is why
-# the 2026-09-13 memory exhaustion was invisible until the site 502'd: the
-# host_memory_high / host_cpu_high / host_disk_high alert rules in
-# roles/signoz_alerts only ever saw the k3s host.
-signoz_bridge_export_endpoint: "otel-collector.tail544547.ts.net:4317"
+# Export target. SigNoz no longer runs on this host — it lives on the k3s box
+# and is reached over the tailnet. Until this was pointed there, prod shipped
+# NO host metrics at all, which is why the 2026-09-13 memory exhaustion was
+# invisible until the site 502'd: every host-scoped rule in
+# roles/logging/files/alerts only ever saw the k3s node.
+#
+# Port 4320 is the collector's dedicated `otlp/ovh` gRPC receiver. It skips
+# k8sattributes/resourcedetection and stamps host.name=ovh-prod — the
+# identity those rules filter on, and the same pipeline fluent-bit already
+# uses for container logs (4319, http). The generic 4317 receiver would land
+# these metrics under k8s identities that no rule matches.
+signoz_bridge_export_endpoint: "otel-collector.tail544547.ts.net:4320"
+
+# The identity this host publishes on every signal. Must match the host.name
+# the alert rules in roles/logging/files/alerts filter on.
+signoz_bridge_host_name: "ovh-prod"

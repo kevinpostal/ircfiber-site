@@ -55,7 +55,11 @@
 
     signoz_alerts_dir: "{{ playbook_dir }}/../roles/logging/files/alerts"
     signoz_alerts_group_vars: "{{ playbook_dir }}/../inventories/production/group_vars/all/vars.yml"
-    signoz_alerts_vault_file: "{{ playbook_dir }}/../inventories/production/group_vars/all/vault.yml"
+    # vault_signoz_api_key lives in group_vars/vault.yml (the file every
+    # playbook loads via vars_files), NOT group_vars/all/vault.yml — pointing
+    # here at the latter made the credential assert fail and is one reason no
+    # rule was ever imported.
+    signoz_alerts_vault_file: "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
     # Where the offline dry run writes the assembled payloads.
     signoz_alerts_render_dir: "/tmp/ircfiber-signoz-alerts"
     signoz_alerts_render_only: false
@@ -68,17 +72,19 @@
     # every rule file, including the mirrored filter expression string.
     signoz_alert_host_name: "ovh-prod"
 
-    # ── Notification channel — OPEN QUESTION, unset on purpose ─────────────
-    # The operator has not chosen Slack / email / webhook / IRC. An empty list
-    # means SigNoz evaluates and displays every rule (Alerts -> Triggered) but
-    # notifies nowhere. That is deliberate: a visible rule with no channel
-    # still beats no rule, and it lets these thresholds be validated against
-    # real traffic before anyone is paged.
-    # To wire one up: create the channel in SigNoz (Settings -> Alert
-    # Channels), then put its NAME (not id) here — in
-    # inventories/production/group_vars/all/vars.yml for the durable answer, or
-    # with -e for a one-off.
-    signoz_alert_channels: []
+    # ── Notification channel ───────────────────────────────────────────────
+    # Decided 2026-09-13: alerts go to IRC #staff. SigNoz POSTs the
+    # Alertmanager webhook to the gateway's /api/hooks/signoz (bearer
+    # vault_alert_webhook_token), which queues a `notice` on the logs outbox
+    # that FiberEye already drains into #staff.
+    #
+    # This build of SigNoz refuses to store a rule with no channel, so the
+    # list is no longer optional. Known limitation of routing through the
+    # monitored stack: an alert about the prod host being down cannot be
+    # delivered by that same host — the external backstop for that case is
+    # Uptime Kuma on ubuntu-docker (playbooks/uptime-kuma.yml), which probes
+    # ircfiber.com from outside.
+    signoz_alert_channels: ["ircfiber-irc-staff"]
 
     # ── Thresholds and durations ────────────────────────────────────────────
     # Host memory. Incident signature: 117 MB available of 7.565 GiB. Measured
@@ -280,9 +286,11 @@
       ansible.builtin.include_vars:
         file: "{{ signoz_alerts_vault_file }}"
       no_log: true
-      when:
-        - vault_signoz_api_key | default('') | length == 0
-        - vault_signoz_admin_password | default('') | length == 0
+      # Only the API key short-circuits this. Gating on the admin password
+      # too meant a password picked up from group_vars skipped the load, left
+      # the key empty, and sent the run down the JWT path — whose
+      # /api/v2/sessions/email_password endpoint 404s on this build.
+      when: vault_signoz_api_key | default('') | length == 0
 
     - name: Fail early when no SigNoz credential is available
       ansible.builtin.assert:

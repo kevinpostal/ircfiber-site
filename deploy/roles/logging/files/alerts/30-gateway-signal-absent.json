@@ -14,7 +14,7 @@
   },
   "annotations": {
     "summary": "No log records from ircfiber-gateway",
-    "description": "The gateway container produced no log line for the window, so /health is at best unverified: either the process is wedged, the container is gone, or its logs are not reaching SigNoz. The gateway has no fixed log cadence, hence the deliberately long 15-minute window and warning severity — this is a backstop, not a probe. The precise /health check is rule 31, which needs the httpcheck receiver. If this flaps on a genuinely quiet gateway, raise signoz_alert_gateway_silence rather than deleting the rule. Check: docker inspect ircfiber-gateway | grep -A3 '\"Health\"'; curl -fsS http://127.0.0.1:8090/health on the host."
+    "description": "The gateway container produced no log line for the window, so /health is at best unverified: either the process is wedged, the container is gone, or its logs are not reaching SigNoz. The gateway has no fixed log cadence, hence the deliberately long 15-minute window and warning severity \u2014 this is a backstop, not a probe. The precise /health check is rule 31, which needs the httpcheck receiver. If this flaps on a genuinely quiet gateway, raise signoz_alert_gateway_silence rather than deleting the rule. Check: docker inspect ircfiber-gateway | grep -A3 '\"Health\"'; curl -fsS http://127.0.0.1:8090/health on the host."
   },
   "preferredChannels": [],
   "condition": {
@@ -29,53 +29,27 @@
       "queryType": "builder",
       "panelType": "graph",
       "unit": "short",
-      "builderQueries": {
-        "A": {
-          "queryName": "A",
-          "dataSource": "logs",
-          "aggregateOperator": "count",
-          "aggregateAttribute": {
-            "key": "",
-            "dataType": "",
-            "type": "",
-            "isColumn": false
-          },
-          "timeAggregation": "count",
-          "spaceAggregation": "sum",
-          "functions": [],
-          "filter": {
-            "expression": "service.name = 'ircfiber-gateway'"
-          },
-          "filters": {
-            "op": "AND",
-            "items": [
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "logs",
+            "disabled": false,
+            "aggregations": [
               {
-                "key": {
-                  "key": "service.name",
-                  "dataType": "string",
-                  "type": "resource",
-                  "isColumn": false
-                },
-                "op": "=",
-                "value": "ircfiber-gateway"
+                "expression": "count()"
               }
-            ]
-          },
-          "groupBy": [],
-          "expression": "A",
-          "disabled": false,
-          "having": {
-            "expression": ""
-          },
-          "limit": null,
-          "stepInterval": 60,
-          "orderBy": [],
-          "reduceTo": "last",
-          "legend": "ircfiber-gateway"
+            ],
+            "filter": {
+              "expression": "service.name = 'ircfiber-gateway'"
+            },
+            "stepInterval": "60s",
+            "legend": "ircfiber-gateway"
+          }
         }
-      },
-      "promQueries": {},
-      "chQueries": {}
+      ]
     }
-  }
+  },
+  "version": "v5"
 }
