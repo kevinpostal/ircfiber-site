@@ -82,6 +82,9 @@ final class WebSocketGateway {
         RedisStorage redis;
         ServerRegistry serverRegistry;  // NEW: for server-aware routing
         string streamId;                 // IRCCloud-style stream id, set at boot
+        /// Rows per buffer in the connect-time unread tail — the sidebar's
+        /// `99+` cap, so the badge is exact up to the cap.
+        enum UNREAD_TAIL_LIMIT = 100;
         long idleIntervalMs = 60_000;    // tell client when to expect idle
     }
 
@@ -264,7 +267,7 @@ final class WebSocketGateway {
             auto bootPrefs = (new PreferencesRepository(redis)).load(session.user.id);
             sendStatUser(session, socket, bootPrefs);
             sendNetworkList(session, socket, bootConfigs);
-            performStateDump(session, socket, bootConfigs, bootPrefs);
+            performStateDump(session, socket, bootConfigs, bootPrefs, true);
             // IRCCloud-style: replay events missed while disconnected.
             // Events are stored in a per-user Redis stream by the engine.
             // Always run, even on first load (sinceEid == 0), so the
@@ -462,7 +465,7 @@ final class WebSocketGateway {
     }
 
     private void performStateDump(UserSession session, WebSocket socket,
-        NetworkConfig[] configs, UserPreferences prefs) {
+        NetworkConfig[] configs, UserPreferences prefs, bool includeUnread) {
         // Server-side phase timestamps for boot profiling — included in
         // the sync message as "phases" so the frontend can correlate
         // server processing time with client-side timing marks.
@@ -784,15 +787,22 @@ final class WebSocketGateway {
                 }
                 chan["isPinned"] = Json(prefs.pinnedChannels.canFind(networkIdStr ~ ":" ~ pinName));
 
-                // Include the last 200 _server messages from Redis scrollback
-                // _server messages (connection logs, MOTD, welcome) are
-                // loaded by the frontend via a REST call after the sync
-                // arrives (App.svelte:loadBufferHistory).  Skipping them
-                // here keeps the sync payload small and fast — Redis LRANGE
-                // per network was the single largest contributor to
-                // performStateDump latency (~5-50ms per network).
-                // Non-server buffers still include their recent messages
-                // so the channel sidebar shows previews immediately.
+                // IRCCloud OOB backlog, connect-time only: the scrollback rows newer
+                // than the persisted lastSeen, so the frontend recomputes this buffer's
+                // unread badge from server truth instead of localStorage. Omitted (not
+                // `[]`) when lastSeen is unknown or the read fails — the frontend then
+                // keeps whatever it has. Periodic syncs never carry it (cost).
+                if (includeUnread && buf["type"].get!string != "server") {
+                    if (auto seenT = (networkIdStr ~ ":" ~ normalizeChannelName(name)) in lastSeen) {
+                        try {
+                            auto tail = Json.emptyArray;
+                            foreach (m; bufferManager.getUnreadTail(snap.serverId, networkIdStr, name, *seenT, UNREAD_TAIL_LIMIT)) tail ~= m;
+                            chan["messages"] = tail;
+                        } catch (Exception e) {
+                            logWarn("unread tail %s/%s: %s", networkIdStr, name, e.msg);
+                        }
+                    }
+                }
 
                 netObj["buffers"] ~= chan;
 
@@ -1183,7 +1193,7 @@ final class WebSocketGateway {
                         // Periodic sync: configs and prefs aren't cached, re-fetch.
                         auto configs = (new NetworkRepository()).findByUserId(session.user.id);
                         auto prefs = (new PreferencesRepository(redis)).load(session.user.id);
-                        performStateDump(session, session.socket, configs, prefs);
+                        performStateDump(session, session.socket, configs, prefs, false);
                     } catch (Exception e) {
                         logWarn("Failed to send sync dump: %s", e.msg);
                     }

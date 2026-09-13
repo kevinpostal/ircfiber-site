@@ -195,6 +195,25 @@ describe('localStorage persistence', () => {
 		clearAllFocusSeen();
 		expect(getFocusSeen('net1', '#chan')).toBeNull();
 	});
+
+	// Svelte 5 `Object.keys(map)` only subscribes to the key set, so a
+	// count change on an existing key never re-ran the persist effect and
+	// the badge survived a reload at its first value (or not at all).
+	it('persists a value change on an existing key', () => {
+		window.localStorage.removeItem('ircfiber:unseen');
+
+		unseenMap['net1:#p'] = 1;
+		flushSync();
+		flushPersist();
+		unseenMap['net1:#p'] = 2;
+		flushSync();
+		flushPersist();
+
+		expect(JSON.parse(window.localStorage.getItem('ircfiber:unseen') as string)['net1:#p']).toBe(2);
+
+		delete unseenMap['net1:#p'];
+		window.localStorage.removeItem('ircfiber:unseen');
+	});
 });
 
 describe('hideChannel / unhideChannel / isChannelHidden', () => {

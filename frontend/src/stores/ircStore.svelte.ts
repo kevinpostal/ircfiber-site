@@ -824,6 +824,9 @@ export function initiateRejoin(
 export function resetPendingState(): void {
   pendingJoins.clear();
   lastJoinAttemptAt.clear();
+  // Sync unread tails are connection-scoped: the connect-time sync that
+  // follows this open delivers fresh ones for every buffer it knows.
+  unreadTails.clear();
   for (const net of ircState.networks) {
     for (const buf of net.buffers) {
       buf.joinInFlight = false;
@@ -1405,6 +1408,32 @@ function bufferKey(networkId: string, bufferName: string): string {
   return `${networkId}:${normalizeChannelName(bufferName)}`;
 }
 
+// Sync-delivered unread tail per buffer key: scrollback rows newer than the
+// gateway's lastSeen (IRCCloud OOB backlog). Consulted by unread recounts
+// until the buffer's real history lands via setMessages; never rendered.
+const unreadTails = new Map<string, IRCMessage[]>();
+
+/** Messages a recount may inspect: loaded history, the sync tail, or both
+ *  merged (tail rows already present live are dropped by eid/msgid, result
+ *  ascending by `t`). `undefined` = nothing is known about this buffer. */
+function unreadSource(key: string): IRCMessage[] | undefined {
+  const live = ircState.messages[key];
+  const tail = unreadTails.get(key);
+  if (!tail) return live;
+  if (!live || live.length === 0) return tail;
+  const eids = new Set<number>();
+  const msgids = new Set<string>();
+  for (const m of live) { if (m.eid != null) eids.add(m.eid); if (m.msgid) msgids.add(m.msgid); }
+  const merged = tail.filter(m => !((m.eid != null && eids.has(m.eid)) || (m.msgid && msgids.has(m.msgid))));
+  merged.push(...live);
+  merged.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+  return merged;
+}
+
+function setUnreadTail(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
+  unreadTails.set(bufferKey(networkId, bufferName), msgs);
+}
+
 /**
  * Find a buffer object by name, folding case per the network casemapping.
  * Buffer OBJECTS keep display case (`NickServ`) while every keyed map is
@@ -1457,6 +1486,7 @@ function migrateBufferKeys(
   moveBufferKey(focusSeenMap, oldK, newK);
   moveBufferKey(unseenMap, oldK, newK);
   moveBufferKey(unseenHighlightsMap, oldK, newK);
+  const tail = unreadTails.get(oldK); if (tail && !unreadTails.has(newK)) unreadTails.set(newK, tail); unreadTails.delete(oldK);
   moveBufferKey(archivedMap, oldK, newK);
   moveBufferKey(pinnedMap, oldK, newK);
   moveBufferKey(hiddenChannelsMap, oldK, newK);
@@ -1607,7 +1637,7 @@ function writeUnseenHighlights(networkId: string, bufferName: string, buf: Buffe
 /** Unseen important messages strictly after `t` (0 when none loaded). */
 export function countImportantMessagesAfter(networkId: string, bufferName: string, t: number): number {
   const found = findBuffer(networkId, bufferName);
-  const list = ircState.messages[bufferKey(networkId, bufferName)] ?? [];
+  const list = unreadSource(bufferKey(networkId, bufferName)) ?? [];
   if (!found || list.length === 0) return 0;
   let n = 0;
   for (let i = list.length - 1; i >= 0; i--) {
@@ -1716,7 +1746,11 @@ export function setLastSeenMessage(networkId: string, bufferName: string, t: num
   if (before !== null && t < before) return;
   clearUnseenHighlightsUntil(networkId, bufferName, t);
   updateBottomSeen(networkId, bufferName, t);
-  setUnseen(networkId, bufferName, countImportantMessagesAfter(networkId, bufferName, t));
+  // IRCCloud setLastSeen: a marker for a message we do not hold only moves
+  // last_seen — unseen is recomputed when history (or the sync tail) lands.
+  if (unreadSource(bufferKey(networkId, bufferName)) !== undefined) {
+    setUnseen(networkId, bufferName, countImportantMessagesAfter(networkId, bufferName, t));
+  }
   setLastSeen(networkId, bufferName, t);
   const found = findBuffer(networkId, bufferName);
   if (found) found.buf.lastSeen = t;
@@ -2015,6 +2049,7 @@ export function setMessages(networkId: string, bufferName: string, msgs: IRCMess
   // (where msgs were empty) is cleared without waiting for the next
   // periodic sync ~10s later — the exact "flash on then off after a
   // few seconds" reported on /irc/IRC%20Fiber/channel/testing.
+  unreadTails.delete(key);
   reconcileUnreadForBuffer(networkId, bufferName);
 }
 
@@ -2222,6 +2257,10 @@ export function markBufferOpenRead(networkId: string, bufferName: string): void 
   // nothing seen yet pins 0 so the divider sits above the first message.
   if (!(key in ircState.openSeen)) ircState.openSeen[key] = before ?? 0;
   setLastSeenMessage(networkId, bufferName, t);
+  // A user read, not a marker adoption: with nothing loaded the marker is
+  // "now", so nothing can be unread — zero the badge even though
+  // setLastSeenMessage had no source to recount from.
+  setUnseen(networkId, bufferName, 0);
   flushSeenEids();
 }
 
@@ -2261,14 +2300,15 @@ export function countImportantMessagesBetween(networkId: string, bufferName: str
 function reconcileBuffer(net: Network, buf: Buffer): void {
   if (buf.name === '_server') return;
   const key = bufferKey(net.networkId, buf.name);
-  const msgs = ircState.messages[key];
+  const msgs = unreadSource(key);
   if (msgs === undefined) {
-    // History not loaded yet (fresh boot, or a background buffer whose
-    // history is only fetched on open) — there is nothing to validate the
-    // persisted badge against, so keep it. Wiping here cleared every unread
-    // counter on refresh; the next reconcile after history lands recomputes
-    // the truth. Note `[]` (loaded and truly empty) still falls through and
-    // zeroes a stale badge below.
+    // Nothing is known: no history loaded (fresh boot, or a background
+    // buffer whose history is only fetched on open) and no sync tail from
+    // the gateway — there is nothing to validate the persisted badge
+    // against, so keep it. Wiping here cleared every unread counter on
+    // refresh; the next reconcile after history or a tail lands recomputes
+    // the truth. Note `[]` (loaded/synced and truly empty) still falls
+    // through and zeroes a stale badge below.
     return;
   }
   if (msgs.length === 0) {
@@ -2396,6 +2436,9 @@ export interface SyncBuffer extends Buffer {
   realnames?: Record<string, string>;
   accounts?: Record<string, string>;
   idents?: Record<string, string>;
+  /** Wire-format rows (`t/c/n/x/m/eid/se`) newer than the gateway `lastSeen`;
+   *  present only on the connect-time sync. */
+  messages?: Record<string, unknown>[];
 }
 
 /** Restore persisted unseen state onto a freshly synced buffer object and
@@ -2485,6 +2528,7 @@ function pruneMissingNetworks(incoming: SyncNetwork[]): void {
     for (const key of Object.keys(ircState.messages)) {
       if (key.startsWith(`${id}:`)) delete ircState.messages[key];
     }
+    for (const key of unreadTails.keys()) if (key.startsWith(`${id}:`)) unreadTails.delete(key);
     try {
       for (const key of Object.keys(sessionStorage)) {
         if (key.startsWith(CACHE_PREFIX + id + ':')) sessionStorage.removeItem(key);
@@ -3071,41 +3115,15 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
         if (buf.syncMissedCount < 1) continue;
         existing.buffers = existing.buffers.filter(b => b !== buf);
       }
-      // IRCCloud-style: sync now includes message history in the buffer
-      // objects (sourced from Redis scrollback on the server).  Pull it
-      // out and feed setMessages so the chat area renders without waiting
-      // for a separate REST API round-trip.
-      // NOTE: we iterate net.buffers (the incoming sync data), NOT
-      // existing.buffers.  The individual property assignments above
-      // copy topic/users/status etc. but do NOT copy 'messages' since
-      // the Buffer interface doesn't declare that transient field.
-      // The incoming objects from the JSON deserialization still carry it.
-      //
-      // The sync payload uses the engine's wire-format keys (`x` for text,
-      // `c` for command, etc.) because it's a verbatim slice of the Redis
-      // scrollback JSON. Feed each entry through normalizeMessage so the
-      // frontend sees IRCMessage-shaped objects — without this, server-log
-      // phase events render with empty bodies in ServerLog (the field
-      // name `text` is never set; only `x` survives the JSON trip).
+      // Connect-time sync: per-buffer scrollback rows newer than the gateway's
+      // lastSeen (IRCCloud OOB backlog). They feed the unread recount below
+      // (reconcileUnreadState) and are never rendered; history still comes from
+      // REST on open. Absent field = gateway had no lastSeen → keep cached badge.
       for (const buf of net.buffers) {
-        const rawMsgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
-        if (rawMsgs && rawMsgs.length > 0) {
-          const key = `${existing.networkId}:${buf.name}`;
-          if (!ircState.messages[key] || ircState.messages[key].length === 0) {
-            const msgs = rawMsgs.map((m) => normalizeMessage(m as unknown as Record<string, unknown>));
-            setMessages(existing.networkId, buf.name, msgs);
-            // Force-scroll the active buffer when its initial messages arrive
-            // from the sync — the buffer-switch force-scroll (in setActiveBuffer)
-            // often fires before messages are loaded, landing at scrollTop=0.
-            // Without this re-trigger the user lands partway through history
-            // instead of at the very bottom.
-            const active = ircState.activeBuffer;
-            if (active.networkId === existing.networkId && active.bufferName === buf.name) {
-              requestForceScrollToBottom();
-            }
-          }
-          delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
-        }
+        const raw = (buf as SyncBuffer).messages;
+        if (raw === undefined) continue;
+        setUnreadTail(existing.networkId, buf.name, Array.isArray(raw) ? raw.map(m => normalizeMessage(m)) : []);
+        delete (buf as SyncBuffer).messages;
       }
       // Drop any locally-tracked buffers the user has since hidden so the
       // buffer list stays in sync with hiddenChannelsMap across refreshes.
@@ -3315,31 +3333,15 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
       }
       net.connectionState = connectionStateFromEngineStatus(net.status, net.connected);
 
-      // IRCCloud-style: pull message history out of the buffer objects
-      // and into ircState.messages (avoids duplicating + eliminates the
-      // REST API round-trip for boot).
-      //
-      // Sync `messages[]` arrives in the engine's wire-format keys (`x`
-      // for text, `c` for command, etc.) — a verbatim slice of the Redis
-      // scrollback JSON. normalizeMessage() translates it into the
-      // IRCMessage shape used everywhere else in the frontend so phase
-      // events surface their `text` body (without this, ServerLog would
-      // render phase rows with `msg.text === undefined` and an empty
-      // content cell).
+      // Connect-time sync: per-buffer scrollback rows newer than the gateway's
+      // lastSeen (IRCCloud OOB backlog). They feed the unread recount below
+      // (reconcileUnreadState) and are never rendered; history still comes from
+      // REST on open. Absent field = gateway had no lastSeen → keep cached badge.
       for (const buf of net.buffers) {
-        const rawMsgs = (buf as Buffer & { messages?: IRCMessage[] }).messages;
-        if (rawMsgs && rawMsgs.length > 0) {
-          const key = `${net.networkId}:${buf.name}`;
-          if (!ircState.messages[key] || ircState.messages[key].length === 0) {
-            const msgs = rawMsgs.map((m) => normalizeMessage(m as unknown as Record<string, unknown>));
-            setMessages(net.networkId, buf.name, msgs);
-            const active = ircState.activeBuffer;
-            if (active.networkId === net.networkId && active.bufferName === buf.name) {
-              requestForceScrollToBottom();
-            }
-          }
-          delete (buf as Buffer & { messages?: IRCMessage[] }).messages;
-        }
+        const raw = (buf as SyncBuffer).messages;
+        if (raw === undefined) continue;
+        setUnreadTail(net.networkId, buf.name, Array.isArray(raw) ? raw.map(m => normalizeMessage(m)) : []);
+        delete (buf as SyncBuffer).messages;
       }
 
       applyTelemetryFromSync(net, rawNet);

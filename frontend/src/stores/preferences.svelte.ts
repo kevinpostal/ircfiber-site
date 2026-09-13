@@ -380,11 +380,13 @@ function schedulePersist(keyPrefix: string, map: unknown): void {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-/** Schedules a persist after reading the map's keys so Svelte 5 tracks mutations. */
+/** Schedules a persist after reading the map's keys and values so Svelte 5
+ *  tracks mutations. */
 function schedulePersistMap<T>(keyPrefix: string, map: Record<string, T>): void {
-  // Reading keys subscribes the effect to additions/removals on the $state proxy.
-  // Without this read, passing the proxy reference alone won't re-trigger the effect.
-  Object.keys(map);
+  // Read every key AND value: Object.keys alone subscribes only to the key
+  // set, so `unseenMap[k] = n` on an existing key never re-ran the effect and
+  // the count was never persisted (same for collapsed/pinned toggles).
+  for (const k of Object.keys(map)) void map[k];
   schedulePersist(keyPrefix, map);
 }
 

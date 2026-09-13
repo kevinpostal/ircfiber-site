@@ -51,6 +51,7 @@ import {
 	renameQueryBuffer,
 	findBufferByName,
 	beginConnectAttempt,
+	reconcileUnreadState,
 } from './ircStore.svelte';
 import { reconnectNetwork } from '/src/stores/api';
 import { sendRaw, sendJson } from '/src/stores/wsConnection.svelte.ts';
@@ -140,6 +141,7 @@ beforeEach(() => {
 	ircState.messages = {};
 	ircState.optimisticMessages.clear();
 	clearPendingNickChanges();
+	resetPendingState();
 
 	// Reset preference-derived singletons that ircStore writes into
 	Object.keys(unseenMap).forEach((k) => delete (unseenMap as Record<string, unknown>)[k]);
@@ -663,6 +665,106 @@ describe('updateNetworkFromSync', () => {
 
 		expect(liveBuf('net1', '#dev')?.unseen).toBe(false);
 		expect('net1:#dev' in unseenMap).toBe(false);
+	});
+
+	/**
+	 * Server-authoritative unread on boot (IRCCloud OOB backlog): the
+	 * connect-time sync carries, per buffer, the scrollback rows newer than
+	 * the gateway's lastSeen, and the badge is recomputed from those instead
+	 * of trusting localStorage. `normalizeMessage` is identity-mocked in
+	 * this file, so tail rows are given IRCMessage-shaped.
+	 */
+	function syncTailBuffer(name: string, lastSeen: number, messages?: unknown[]): SyncBuffer {
+		const buf = syncWireBuffer(name);
+		buf.lastSeen = lastSeen;
+		if (messages !== undefined) buf.messages = messages as Record<string, unknown>[];
+		return buf;
+	}
+
+	it('boot sync recomputes the badge from the server unread tail', () => {
+		unseenMap['net1:#dev'] = 9;
+		setLastSeen('net1', '#dev', 1000);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncTailBuffer('#dev', 1000, [
+			createMessage({ t: 500, nick: 'alice', text: 'old' }),
+			createMessage({ t: 2000, nick: 'bob', text: 'new one', msgid: 'a', eid: 1 }),
+			createMessage({ t: 3000, nick: 'carol', text: 'tester look', msgid: 'b', eid: 2 }),
+		])];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(2);
+		expect(liveBuf('net1', '#dev')?.unseen).toBe(true);
+		expect(liveBuf('net1', '#dev')?.unseenHighlights).toEqual([3000]);
+		expect(unseenMap['net1:#dev']).toBe(2);
+	});
+
+	it('boot sync with an empty tail clears a stale cached badge', () => {
+		unseenMap['net1:#dev'] = 3;
+		unseenHighlightsMap['net1:#dev'] = [2000];
+		setLastSeen('net1', '#dev', 1000);
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncTailBuffer('#dev', 1000, [])];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		expect(liveBuf('net1', '#dev')?.unseen).toBe(false);
+		expect('net1:#dev' in unseenMap).toBe(false);
+		expect(liveBuf('net1', '#dev')?.unseenHighlights).toEqual([]);
+	});
+
+	it('server lastSeen ahead of a device with no history keeps the cached badge', () => {
+		unseenMap['net1:#dev'] = 3;
+
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncTailBuffer('#dev', 1000)];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(3);
+		expect(getLastSeen('net1', '#dev')).toBe(1000);
+	});
+
+	it('a live message counts on top of the sync tail across reconciles', () => {
+		setLastSeen('net1', '#dev', 1000);
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncTailBuffer('#dev', 1000, [
+			createMessage({ t: 2000, nick: 'bob', text: 'new one', msgid: 'a', eid: 1 }),
+			createMessage({ t: 3000, nick: 'carol', text: 'new two', msgid: 'b', eid: 2 }),
+		])];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(2);
+
+		appendMessage('net1', '#dev', createMessage({ t: 4000, nick: 'dave', text: 'live', msgid: 'c', eid: 3 }));
+		flushSync();
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(3);
+
+		reconcileUnreadState();
+		flushSync();
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(3);
+
+		appendMessage('net1', '#dev', createMessage({ t: 4000, nick: 'dave', text: 'live', msgid: 'c', eid: 3 }));
+		flushSync();
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(3);
+	});
+
+	it('opening the buffer supersedes the tail', () => {
+		setLastSeen('net1', '#dev', 1000);
+		const incoming = createNetwork({ networkId: 'net1' });
+		incoming.buffers = [syncTailBuffer('#dev', 1000, [
+			createMessage({ t: 2000, nick: 'bob', text: 'new one', msgid: 'a', eid: 1 }),
+			createMessage({ t: 3000, nick: 'carol', text: 'new two', msgid: 'b', eid: 2 }),
+		])];
+		updateNetworkFromSync([incoming]);
+		flushSync();
+		expect(liveBuf('net1', '#dev')?.unseenCount).toBe(2);
+
+		setMessages('net1', '#dev', [createMessage({ t: 500, nick: 'alice', text: 'old' })]);
+		flushSync();
+		expect(liveBuf('net1', '#dev')?.unseen).toBe(false);
 	});
 
 	/**
