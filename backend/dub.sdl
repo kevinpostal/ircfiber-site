@@ -99,8 +99,21 @@ configuration "backups-test" {
     targetName "backups-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/web/admin/backups.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d" "source/ircfiber/env.d"
+    sourceFiles "source/ircfiber/web/admin/backups.d" "source/ircfiber/web/admin/k8s.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d" "source/ircfiber/env.d"
     mainSourceFile "tests/backups_test.d"
+    versions "VibeUseFibers"
+}
+
+// Pure-code unit test for the admin K8s-leaf parsers and state machine
+// (no k8s and no ircd needed):
+//   dub --root=backend build --config=leaf-test && ./backend/leaf-test
+configuration "leaf-test" {
+    targetType "executable"
+    targetName "leaf-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/web/admin/leaf.d" "source/ircfiber/web/admin/k8s.d" "source/ircfiber/web/admin/ircd.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d" "source/ircfiber/env.d"
+    mainSourceFile "tests/leaf_test.d"
     versions "VibeUseFibers"
 }
 

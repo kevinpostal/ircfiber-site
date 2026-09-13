@@ -22,7 +22,12 @@ metadata:
     app: ircfiber-ircd-k8s
     component: ircd-leaf
 spec:
-  replicas: 1
+  # No `replicas:` here on purpose. The replica count is owned by the
+  # gateway's admin page (Operations → K8s leaf) — 1 = leaf on, 0 = off — so
+  # `kubectl apply` / `make deploy-ircd-k8s` must never silently restart a
+  # leaf an operator turned off. (The first apply after this field was
+  # removed can still reset it once, while it drops out of
+  # last-applied-configuration; re-check the page after that deploy.)
   # Recreate, never RollingUpdate: the link listener uses a hostPort and a
   # second pod would sit Pending on the port conflict forever.
   strategy:

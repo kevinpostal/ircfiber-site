@@ -835,7 +835,10 @@ private IrcdClient acquireSession(IrcdSettings settings, out bool reused) {
 /// drops it and retries once on a fresh connection (the peer may have
 /// closed it between keepalive ticks); any failure on a fresh session
 /// drops it so the next request starts clean. Maps IrcdError to JSON.
-private void withIrcd(HTTPServerRequest req, HTTPServerResponse res, void delegate(IrcdClient) work) {
+/// `package` so sibling admin modules (the K8s-leaf page) reuse the one
+/// session instead of opening another oper connection per request — every
+/// connect/OPER/QUIT cycle is broadcast to every oper on every linked server.
+package void withIrcd(HTTPServerRequest req, HTTPServerResponse res, void delegate(IrcdClient) work) {
     auto settings = loadIrcdSettings();
     foreach (attempt; 0 .. 2) {
         IrcdClient client;
@@ -865,6 +868,29 @@ private void withIrcd(HTTPServerRequest req, HTTPServerResponse res, void delega
         }
         return;
     }
+}
+
+/// Same as `withIrcd` but outside an HTTP request (timers, supervisors):
+/// same one-retry-on-stale-session policy, exceptions propagate to the
+/// caller instead of becoming a JSON error. Must run on the main thread
+/// that owns the shared session.
+package void withIrcdSession(void delegate(IrcdClient) work) {
+    auto settings = loadIrcdSettings();
+    if (!settings.configured())
+        throw new IrcdError("IRCd oper credentials are not configured.", 503);
+    foreach (attempt; 0 .. 2) {
+        bool reused;
+        auto client = acquireSession(settings, reused);
+        try {
+            work(client);
+            return;
+        } catch (Exception e) {
+            dropSession();
+            if (reused && attempt == 0) continue;
+            throw e;
+        }
+    }
+    assert(0);
 }
 
 /// GET /api/admin/ircd/status — server, version, LUSERS counts, uptime, MOTD.
@@ -1023,8 +1049,9 @@ package void apiIrcdChannel(HTTPServerRequest req, HTTPServerResponse res) {
 // ---------------------------------------------------------------------------
 
 /// One `<link>` tag as declared on disk. Passwords are deliberately absent:
-/// this struct feeds an HTTP response.
-private struct ConfLink {
+/// this struct feeds an HTTP response. `package` so the K8s-leaf page can
+/// report the leaf's declared address without re-parsing the conf.
+package struct ConfLink {
     string name;
     string ipaddr;
     string port;
@@ -1037,7 +1064,7 @@ private struct ConfLink {
 /// name winning. `<autoconnect server="a b">` is a failover list, so the
 /// flag is resolved against every whitespace-separated entry of every
 /// autoconnect tag in any of the files. No IRC I/O.
-private ConfLink[] configuredLinks(string confDir) {
+package ConfLink[] configuredLinks(string confDir) {
     import std.file : exists, isFile, readText;
     import std.path : buildPath;
     ConfLink[] links;
@@ -1065,7 +1092,7 @@ private ConfLink[] configuredLinks(string confDir) {
 
 /// Server names present on the network right now, lowercased, from LINKS:
 /// `:srv 364 <nick> <server> <parent> :<hops> <desc>`, terminated by 365.
-private bool[string] liveLinkNames(IrcdClient client) {
+package bool[string] liveLinkNames(IrcdClient client) {
     bool[string] live;
     foreach (line; client.transact("LINKS", ["365", "421"], 8000)) {
         auto l = parseIrcLine(line);
@@ -1124,32 +1151,83 @@ package void apiIrcdLinks(HTTPServerRequest req, HTTPServerResponse res) {
     });
 }
 
+/// Outcome of one CONNECT. `denied` means the oper class lacks the command
+/// (numeric 481), which is a deploy problem, not a link problem.
+package struct ConnectResult {
+    string notice;
+    bool linked;
+    bool denied;
+}
+
+/// Dial one declared link and wait for it to show up in LINKS.
+///
+/// InspIRCd answers CONNECT synchronously with a single NOTICE
+/// ("Connecting to server: …", "already exists", "No server matching …",
+/// "is ME"); an actual dial failure is asynchronous, so the link is polled
+/// (`pollAttempts` × 2s) and `linked: false` plus the notice is the honest
+/// answer. Caller validates the name — it goes into a raw IRC command.
+package ConnectResult connectLink(IrcdClient client, string name, int pollAttempts = 4) {
+    import vibe.core.core : sleep;
+    ConnectResult r;
+    foreach (line; client.transact("CONNECT " ~ name, ["NOTICE", "481"], 8000)) {
+        auto l = parseIrcLine(line);
+        if (!l.valid) continue;
+        if (l.command == "481") { r.denied = true; return r; }
+        if (l.command == "NOTICE" && r.notice.length == 0 && l.params.length > 0)
+            r.notice = l.params[$ - 1];
+    }
+    foreach (attempt; 0 .. pollAttempts) {
+        sleep(dur!"msecs"(2000));
+        if ((name.toLower() in liveLinkNames(client)) !is null) { r.linked = true; break; }
+    }
+    return r;
+}
+
+/// Unlink one declared server. Returns the first NOTICE InspIRCd sends back
+/// (402 "No such server" included as a stop token so an already-unlinked
+/// leaf answers immediately instead of burning the budget); throws
+/// IrcdError on 481 so the caller can explain the missing oper privilege.
+package string squitLink(IrcdClient client, string name, string reason) {
+    string notice = "";
+    foreach (line; client.transact("SQUIT " ~ name ~ " :" ~ reason,
+            ["NOTICE", "481", "402"], 8000)) {
+        auto l = parseIrcLine(line);
+        if (!l.valid) continue;
+        if (l.command == "481")
+            throw new IrcdError("The dashboard oper may not SQUIT.", 403);
+        if (notice.length == 0 && l.params.length > 0 &&
+                (l.command == "NOTICE" || l.command == "402"))
+            notice = l.params[$ - 1];
+    }
+    return notice;
+}
+
+/// True when `name` is a well-formed server name — it goes into a raw IRC
+/// command, so anything outside the host-name alphabet is refused.
+package bool wellFormedServerName(string name) {
+    if (name.length == 0 || name.length > 64) return false;
+    foreach (c; name) {
+        const ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+
 /// POST /api/admin/ircd/links/connect {name} — dial one configured link.
 ///
-/// The name goes into a raw IRC command, so it must both look like a server
-/// name and already be declared on disk. InspIRCd answers CONNECT
-/// synchronously with a single NOTICE ("Connecting to server: …", "already
-/// exists", "No server matching …", "is ME"); an actual dial failure is
-/// asynchronous, so the link is polled for a few seconds and `linked: false`
-/// plus the notice is the honest answer.
+/// The name must both look like a server name and already be declared on
+/// disk; the dial itself is `connectLink`, shared with the K8s-leaf page.
 package void apiIrcdLinkConnect(HTTPServerRequest req, HTTPServerResponse res) {
-    import vibe.core.core : sleep;
     auto body = readJsonBody(req);
     if (body.type != Json.Type.object) {
         jsonError(res, 400, "Request body must be JSON {name}.");
         return;
     }
     string name = body["name"].type == Json.Type.string ? body["name"].get!string.strip() : "";
-    bool wellFormed = name.length > 0 && name.length <= 64;
-    if (wellFormed)
-        foreach (c; name) {
-            const ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
-            if (!ok) { wellFormed = false; break; }
-        }
     auto settings = loadIrcdSettings();
     bool known = false;
-    if (wellFormed)
+    if (wellFormedServerName(name))
         foreach (c; configuredLinks(settings.confDir))
             if (c.name == name) { known = true; break; }
     if (!known) {
@@ -1157,29 +1235,16 @@ package void apiIrcdLinkConnect(HTTPServerRequest req, HTTPServerResponse res) {
         return;
     }
     withIrcd(req, res, (client) {
-        string notice = "";
-        bool denied = false;
-        foreach (line; client.transact("CONNECT " ~ name, ["NOTICE", "481"], 8000)) {
-            auto l = parseIrcLine(line);
-            if (!l.valid) continue;
-            if (l.command == "481") { denied = true; break; }
-            if (l.command == "NOTICE" && notice.length == 0 && l.params.length > 0)
-                notice = l.params[$ - 1];
-        }
-        if (denied) {
+        auto r = connectLink(client, name);
+        if (r.denied) {
             jsonError(res, 403, "The dashboard oper may not CONNECT. Deploy roles/ircd " ~
                 "(opers.conf grants CONNECT to the Dashboard class) and rehash.");
             return;
         }
-        bool linked = false;
-        foreach (attempt; 0 .. 4) {
-            sleep(dur!"msecs"(2000));
-            if ((name.toLower() in liveLinkNames(client)) !is null) { linked = true; break; }
-        }
-        logInfo("Admin CONNECT %s (linked=%s)", name, linked);
+        logInfo("Admin CONNECT %s (linked=%s)", name, r.linked);
         auto data = Json.emptyObject;
-        data["notice"] = Json(notice);
-        data["linked"] = Json(linked);
+        data["notice"] = Json(r.notice);
+        data["linked"] = Json(r.linked);
         jsonOk(res, data);
     });
 }

@@ -11,7 +11,8 @@ import std.stdio : writeln, writefln;
 import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.web.admin.backups : backupKind, nextDailyRunMs,
-    parseK8sTimeMs, freshnessState, normalizeRun;
+    freshnessState, normalizeRun;
+import ircfiber.web.admin.k8s : parseK8sTimeMs;
 
 private int failures;
 

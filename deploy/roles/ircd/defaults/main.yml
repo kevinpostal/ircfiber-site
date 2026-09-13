@@ -137,7 +137,9 @@ ircd_k8s_leaf_ipaddr: "100.94.116.56"
 # three links stay unambiguous in logs, allowmasks and netpol rules.
 ircd_k8s_link_port: 7001
 
-# The hub renders <link>/<autoconnect> for the leaf only when this is true.
+# The hub declares the leaf <link> only when this is true. It is not an
+# ON/OFF switch: there is no <autoconnect>, so nothing dials the leaf until
+# the admin K8s-leaf page (or a CONNECT from an oper) does.
 ircd_k8s_link_enabled: false
 
 # Rendered config and InspIRCd state live on the k3s node and are hostPath

@@ -16,6 +16,7 @@
   import ServerHost from './pages/ServerHost.svelte';
   import System from './pages/System.svelte';
   import Ircd from './pages/Ircd.svelte';
+  import K8sLeaf from './pages/K8sLeaf.svelte';
   import Motd from './pages/Motd.svelte';
   import Sessions from './pages/Sessions.svelte';
   import Bouncer from './pages/Bouncer.svelte';
@@ -61,6 +62,7 @@
     if (match('/servers', path)) return { kind: 'servers' } as const;
     if (match('/system', path)) return { kind: 'system' } as const;
     if (match('/ircd', path)) return { kind: 'ircd' } as const;
+    if (match('/k8s-leaf', path)) return { kind: 'k8s-leaf' } as const;
     if (match('/motd', path)) return { kind: 'motd' } as const;
     if (match('/mullvad', path)) return { kind: 'mullvad' } as const;
     if (match('/backups', path)) return { kind: 'backups' } as const;
@@ -108,6 +110,8 @@
         <System />
       {:else if page?.kind === 'ircd'}
         <Ircd />
+      {:else if page?.kind === 'k8s-leaf'}
+        <K8sLeaf />
       {:else if page?.kind === 'motd'}
         <Motd />
       {:else if page?.kind === 'mullvad'}

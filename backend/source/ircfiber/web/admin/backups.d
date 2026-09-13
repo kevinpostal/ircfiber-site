@@ -1,13 +1,11 @@
 module ircfiber.web.admin.backups;
 
+/// Admin Backups page: live CronJob/Job/Pod state plus the durable run
+/// history the backup jobs publish themselves.
 ///
-///
-///
-/// The k3s API on ubuntu-docker is dialled by IP literal (the gateway
-/// container has no MagicDNS) against a k3s-CA-signed serving cert, so TLS
-/// peer validation is off by default — same rationale and same default as
-/// IRCFIBER_SIGNOZ_INSECURE. The tailnet hop is WireGuard-encrypted.
-/// Secrets (the ServiceAccount token) never appear in logs or error strings.
+/// The k3s HTTP client (settings, token, TLS, error type) lives in
+/// ircfiber.web.admin.k8s and is shared with the K8s-leaf page; the env
+/// variables are documented there.
 ///
 /// Two facts shape this module: the k8s API cannot list files on the node and
 /// keeps only 3 job histories, so archive inventory and durable run history
@@ -16,19 +14,6 @@ module ircfiber.web.admin.backups;
 /// the gateway calls the k8s API only for live state and control
 /// (CronJob/Job/Pod reads, manual Job creation, suspend patch, pod-log tail).
 /// The page never restores and never deletes an archive.
-///
-///
-/// Env:
-///   IRCFIBER_K8S_API_URL    base URL of the k3s API.
-///                           Default: https://100.94.116.56:6443
-///   IRCFIBER_K8S_NAMESPACE  namespace holding the backup CronJobs.
-///                           Default: ircfiber-prod
-///   IRCFIBER_K8S_TOKEN      bearer token of the ircfiber-backup-admin
-///                           ServiceAccount (file-backed in prod via
-///                           IRCFIBER_K8S_TOKEN_FILE — never inline).
-///   IRCFIBER_K8S_INSECURE   "0" disables TLS peer-validation skip.
-///                           Default skipped (see above).
-///
 
 import std.algorithm : canFind, map, sort, startsWith;
 import std.array : array, split;
@@ -39,162 +24,26 @@ import std.string : strip, toLower;
 import core.time : seconds;
 
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
-import vibe.http.client : requestHTTP, HTTPMethod, HTTPClientSettings,
-    HTTPClientRequest, HTTPClientResponse;
-import vibe.stream.tls : TLSContext, TLSPeerValidationMode;
-import vibe.stream.operations : readAll;
 import vibe.core.log : logWarn, logInfo;
 import vibe.data.json : Json, parseJsonString;
 import vibe.data.bson : Bson;
 import vibe.db.redis.redis : RedisReply;
 
 import ircfiber.db.mongo : AppMongoConnection;
-import ircfiber.env : envSecret;
 import ircfiber.redis.protocol : RedisKeys;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody;
+import ircfiber.web.admin.k8s : K8sSettings, loadK8sSettings, K8sError,
+    k8sRaw, k8sJson, parseK8sTimeMs;
 
 // ---------------------------------------------------------------------------
-// Settings + error
+// CronJob allowlist
 // ---------------------------------------------------------------------------
 
 /// Only these CronJobs may be inspected or driven through the admin API.
 /// Without the allowlist the routes would be a generic remote job-creation
 /// API pointed at the cluster.
 immutable string[] BACKUP_CRONJOBS = ["ircfiber-mongo-backup", "ircfiber-redis-backup"];
-
-/// k3s connection settings. All from env so no secret is committed.
-struct BackupsSettings {
-    string apiUrl = "https://100.94.116.56:6443";
-    string ns = "ircfiber-prod";
-    string token;
-    bool insecure = true;
-
-    bool configured() const {
-        return apiUrl.length > 0 && token.length > 0;
-    }
-}
-
-BackupsSettings loadBackupsSettings() {
-    import std.process : environment;
-    BackupsSettings st;
-    try {
-        auto u = environment.get("IRCFIBER_K8S_API_URL", "");
-        if (u.length) st.apiUrl = u;
-        auto n = environment.get("IRCFIBER_K8S_NAMESPACE", "");
-        if (n.length) st.ns = n;
-        // ServiceAccount token: file-backed in prod
-        // (IRCFIBER_K8S_TOKEN_FILE), never inline in the container env.
-        st.token = envSecret("IRCFIBER_K8S_TOKEN", "");
-        st.insecure = environment.get("IRCFIBER_K8S_INSECURE", "1") != "0";
-    } catch (Exception) {}
-    return st;
-}
-
-/// Always safe to surface to admins (never contains the token).
-class BackupsError : Exception {
-    int httpStatus;
-    this(string msg, int status = 502) { super(msg); httpStatus = status; }
-}
-
-// ---------------------------------------------------------------------------
-// k8s HTTP client
-// ---------------------------------------------------------------------------
-
-private HTTPClientSettings k8sHttpSettings(BackupsSettings st) {
-    auto settings = new HTTPClientSettings;
-    settings.connectTimeout = 10.seconds;
-    settings.readTimeout = 20.seconds;
-    if (st.insecure) {
-        // IP-literal URL against a k3s-CA-signed cert. The
-        // peerValidationMode setter is neither @safe nor nothrow, so the
-        // @safe nothrow delegate needs a @trusted shutter plus an explicit
-        // cast (delegate-to-delegate casts are legal; the shutter body only
-        // flips one validated field).
-        void delegate(TLSContext) @trusted nothrow setup =
-            (TLSContext ctx) @trusted nothrow {
-                try ctx.peerValidationMode = TLSPeerValidationMode.none;
-                catch (Exception) {}
-            };
-        settings.tlsContextSetup = cast(typeof(settings.tlsContextSetup)) setup;
-    }
-    return settings;
-}
-
-/// Raw k8s API call. Returns the response body as a string (pod logs are
-/// text/plain, everything else JSON). Throws BackupsError — never leaks the
-/// token into the message.
-private string k8sRaw(BackupsSettings st, string method, string path,
-        string body_ = "", string contentType = "application/json") {
-    auto settings = k8sHttpSettings(st);
-    string target = st.apiUrl.strip();
-    while (target.length && target[$ - 1] == '/') target = target[0 .. $ - 1];
-    target ~= path;
-
-    HTTPMethod vm;
-    switch (method) {
-        case "POST": vm = HTTPMethod.POST; break;
-        case "PATCH": vm = HTTPMethod.PATCH; break;
-        case "PUT": vm = HTTPMethod.PUT; break;
-        case "DELETE": vm = HTTPMethod.DELETE; break;
-        default: vm = HTTPMethod.GET; break;
-    }
-
-    int status = 0;
-    ubyte[] payload;
-    try {
-        requestHTTP(target,
-            (scope HTTPClientRequest r) {
-                r.method = vm;
-                r.headers["Authorization"] = "Bearer " ~ st.token;
-                r.headers["Accept"] = "application/json";
-                if (method == "POST" || method == "PATCH" || method == "PUT") {
-                    r.headers["Content-Type"] = contentType;
-                    r.bodyWriter.write(cast(const(ubyte)[]) body_);
-                }
-            },
-            (scope HTTPClientResponse remoteRes) {
-                status = remoteRes.statusCode;
-                try payload = remoteRes.bodyReader.readAll();
-                catch (Exception e) {
-                    logWarn("admin-backups: reading k3s %s %s failed: %s", method, path, e.msg);
-                }
-            },
-            settings);
-    } catch (Exception e) {
-        logWarn("admin-backups: k3s %s %s failed: %s", method, path, e.msg);
-        throw new BackupsError("k3s API unreachable at " ~ st.apiUrl
-            ~ " (" ~ e.msg ~ "). Check the gateway tailnet route and IRCFIBER_K8S_* env.");
-    }
-    if (status == 0)
-        throw new BackupsError("k3s API unreachable at " ~ st.apiUrl ~ " (no response).");
-    if (status == 401 || status == 403) {
-        logWarn("admin-backups: k3s rejected the gateway token (%d) for %s %s", status, method, path);
-        throw new BackupsError("k3s rejected the gateway token — re-run "
-            ~ "`make -f Makefile.k8s k8s-prod-backups-token` and update `vault_k3s_backup_token`");
-    }
-    string out_ = cast(string) payload;
-    if (status < 200 || status >= 300) {
-        string detail = out_;
-        try {
-            auto v = parseJsonString(out_);
-            if (v["message"].type == Json.Type.string)
-                detail = v["message"].get!string;
-        } catch (Exception) {}
-        throw new BackupsError("k3s API " ~ status.to!string ~ ": " ~ detail, status);
-    }
-    return out_;
-}
-
-/// JSON k8s API call. Unparseable 2xx bodies become a BackupsError rather
-/// than a 500 — the page's job is diagnosis.
-private Json k8s(BackupsSettings st, string method, string path,
-        string body_ = "", string contentType = "application/json") {
-    auto raw = k8sRaw(st, method, path, body_, contentType);
-    try return parseJsonString(raw.length ? raw : "null");
-    catch (Exception e)
-        throw new BackupsError("k3s API returned unparseable JSON for " ~ method ~ " " ~ path);
-}
 
 // ---------------------------------------------------------------------------
 // Pure helpers (no I/O — covered by unit tests)
@@ -227,18 +76,6 @@ long nextDailyRunMs(string schedule, long nowMs) {
         if (cand.toUnixTime() * 1000 <= nowMs)
             cand += 86400.seconds;
         return cand.toUnixTime() * 1000;
-    } catch (Exception) {
-        return -1;
-    }
-}
-
-/// RFC3339 (k8s `lastScheduleTime` / `startTime` / `creationTimestamp`) to
-/// unix-ms, or -1 when absent/unparseable.
-long parseK8sTimeMs(string rfc3339) {
-    try {
-        auto s = rfc3339.strip();
-        if (s.length == 0) return -1;
-        return SysTime.fromISOExtString(s).toUnixTime() * 1000;
     } catch (Exception) {
         return -1;
     }
@@ -431,7 +268,7 @@ private string sanitizeAnnotation(string raw) {
 /// jobs is [] and control carries the error, so a dead control plane never
 /// hides the history that explains it.
 void apiBackupsOverview(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
-    auto st = loadBackupsSettings();
+    auto st = loadK8sSettings();
     long nowMs = Clock.currTime.toUnixTime() * 1000L;
 
     Json jobs = Json.emptyArray;
@@ -442,9 +279,9 @@ void apiBackupsOverview(HTTPServerRequest req, HTTPServerResponse res, RedisStor
 
     if (st.configured()) {
         try {
-            auto cronList = k8s(st, "GET",
+            auto cronList = k8sJson(st, "GET",
                 "/apis/batch/v1/namespaces/" ~ st.ns ~ "/cronjobs");
-            auto jobList = k8s(st, "GET",
+            auto jobList = k8sJson(st, "GET",
                 "/apis/batch/v1/namespaces/" ~ st.ns ~ "/jobs");
 
             Json[] jobItems;
@@ -513,7 +350,7 @@ void apiBackupsOverview(HTTPServerRequest req, HTTPServerResponse res, RedisStor
                 e["active"] = active;
                 jobs ~= e;
             }
-        } catch (BackupsError e) {
+        } catch (K8sError e) {
             jobs = Json.emptyArray;
             controlAvailable = false;
             controlError = e.msg;
@@ -626,14 +463,14 @@ void apiBackupsRun(HTTPServerRequest req, HTTPServerResponse res) {
         jsonError(res, 400, "Unknown backup job");
         return;
     }
-    auto st = loadBackupsSettings();
+    auto st = loadK8sSettings();
     if (!st.configured()) {
         jsonError(res, 503,
             "k3s API not configured (IRCFIBER_K8S_API_URL / IRCFIBER_K8S_TOKEN_FILE)");
         return;
     }
     try {
-        auto jobList = k8s(st, "GET",
+        auto jobList = k8sJson(st, "GET",
             "/apis/batch/v1/namespaces/" ~ st.ns ~ "/jobs");
         string prefix = name ~ "-";
         try foreach (ref j; jobList["items"]) {
@@ -650,12 +487,12 @@ void apiBackupsRun(HTTPServerRequest req, HTTPServerResponse res) {
             if (jobList["items"].type != Json.Type.undefined) throw e;
         }
 
-        auto cj = k8s(st, "GET",
+        auto cj = k8sJson(st, "GET",
             "/apis/batch/v1/namespaces/" ~ st.ns ~ "/cronjobs/" ~ name);
         Json tmplSpec;
         try tmplSpec = cj["spec"]["jobTemplate"]["spec"];
         catch (Exception)
-            throw new BackupsError("CronJob " ~ name ~ " has no jobTemplate.spec");
+            throw new K8sError("CronJob " ~ name ~ " has no jobTemplate.spec");
 
         // Manual jobs carry no owner reference, so
         // successfulJobsHistoryLimit never reaps them — the TTL does.
@@ -689,7 +526,7 @@ void apiBackupsRun(HTTPServerRequest req, HTTPServerResponse res) {
         body_["metadata"] = meta;
         body_["spec"] = tmplSpec;
 
-        auto created = k8s(st, "POST",
+        auto created = k8sJson(st, "POST",
             "/apis/batch/v1/namespaces/" ~ st.ns ~ "/jobs", body_.toString());
         string createdName = jobName;
         try createdName = created["metadata"]["name"].get!string;
@@ -699,7 +536,7 @@ void apiBackupsRun(HTTPServerRequest req, HTTPServerResponse res) {
         auto data = Json.emptyObject;
         data["job"] = Json(createdName);
         jsonOk(res, data);
-    } catch (BackupsError e) {
+    } catch (K8sError e) {
         jsonError(res, e.httpStatus, e.msg);
     } catch (Exception e) {
         logWarn("admin-backups: run %s failed: %s", name, e.msg);
@@ -719,7 +556,7 @@ void apiBackupsSuspend(HTTPServerRequest req, HTTPServerResponse res) {
         jsonError(res, 400, "Unknown backup job");
         return;
     }
-    auto st = loadBackupsSettings();
+    auto st = loadK8sSettings();
     if (!st.configured()) {
         jsonError(res, 503,
             "k3s API not configured (IRCFIBER_K8S_API_URL / IRCFIBER_K8S_TOKEN_FILE)");
@@ -742,7 +579,7 @@ void apiBackupsSuspend(HTTPServerRequest req, HTTPServerResponse res) {
         auto spec = Json.emptyObject;
         spec["suspend"] = Json(suspend);
         patch["spec"] = spec;
-        auto updated = k8s(st, "PATCH",
+        auto updated = k8sJson(st, "PATCH",
             "/apis/batch/v1/namespaces/" ~ st.ns ~ "/cronjobs/" ~ name,
             patch.toString(), "application/merge-patch+json");
         bool nowSuspended = suspend;
@@ -755,7 +592,7 @@ void apiBackupsSuspend(HTTPServerRequest req, HTTPServerResponse res) {
         data["name"] = Json(name);
         data["suspended"] = Json(nowSuspended);
         jsonOk(res, data);
-    } catch (BackupsError e) {
+    } catch (K8sError e) {
         jsonError(res, e.httpStatus, e.msg);
     } catch (Exception e) {
         logWarn("admin-backups: suspend %s failed: %s", name, e.msg);
@@ -774,14 +611,14 @@ void apiBackupsLogs(HTTPServerRequest req, HTTPServerResponse res) {
         jsonError(res, 400, "Unknown backup job");
         return;
     }
-    auto st = loadBackupsSettings();
+    auto st = loadK8sSettings();
     if (!st.configured()) {
         jsonError(res, 503,
             "k3s API not configured (IRCFIBER_K8S_API_URL / IRCFIBER_K8S_TOKEN_FILE)");
         return;
     }
     try {
-        auto jobList = k8s(st, "GET",
+        auto jobList = k8sJson(st, "GET",
             "/apis/batch/v1/namespaces/" ~ st.ns ~ "/jobs");
         string prefix = name ~ "-";
         string bestJob = "";
@@ -805,12 +642,12 @@ void apiBackupsLogs(HTTPServerRequest req, HTTPServerResponse res) {
         import std.uri : encodeComponent;
         Json pods = Json.undefined;
         try {
-            pods = k8s(st, "GET", "/api/v1/namespaces/" ~ st.ns ~ "/pods"
+            pods = k8sJson(st, "GET", "/api/v1/namespaces/" ~ st.ns ~ "/pods"
                 ~ "?labelSelector=batch.kubernetes.io%2Fjob-name%3D" ~ encodeComponent(bestJob));
-        } catch (BackupsError e) {
+        } catch (K8sError e) {
             throw e;
         } catch (Exception e) {
-            throw new BackupsError(e.msg);
+            throw new K8sError(e.msg);
         }
         bool empty = true;
         try empty = pods["items"].type != Json.Type.array || pods["items"].length == 0;
@@ -818,7 +655,7 @@ void apiBackupsLogs(HTTPServerRequest req, HTTPServerResponse res) {
         if (empty) {
             // Legacy selector retry before giving up.
             try {
-                pods = k8s(st, "GET", "/api/v1/namespaces/" ~ st.ns ~ "/pods"
+                pods = k8sJson(st, "GET", "/api/v1/namespaces/" ~ st.ns ~ "/pods"
                     ~ "?labelSelector=job-name%3D" ~ encodeComponent(bestJob));
                 empty = pods["items"].type != Json.Type.array || pods["items"].length == 0;
             } catch (Exception) {}
@@ -837,9 +674,9 @@ void apiBackupsLogs(HTTPServerRequest req, HTTPServerResponse res) {
         try {
             logText = k8sRaw(st, "GET", "/api/v1/namespaces/" ~ st.ns
                 ~ "/pods/" ~ encodeComponent(podName) ~ "/log?tailLines=200");
-        } catch (BackupsError e) {
+        } catch (K8sError e) {
             if (e.httpStatus == 404)
-                throw new BackupsError("Pod " ~ podName ~ " for job " ~ bestJob
+                throw new K8sError("Pod " ~ podName ~ " for job " ~ bestJob
                     ~ " is gone — it was already reaped by the history limit", 404);
             throw e;
         }
@@ -848,7 +685,7 @@ void apiBackupsLogs(HTTPServerRequest req, HTTPServerResponse res) {
         data["pod"] = Json(podName);
         data["log"] = Json(logText);
         jsonOk(res, data);
-    } catch (BackupsError e) {
+    } catch (K8sError e) {
         jsonError(res, e.httpStatus, e.msg);
     } catch (Exception e) {
         logWarn("admin-backups: logs %s failed: %s", name, e.msg);

@@ -32,6 +32,7 @@
       items: [
         { label: 'System', path: '/system', icon: '🩺' },
         { label: 'Servers', path: '/servers', icon: '🖥️' },
+        { label: 'K8s leaf', path: '/k8s-leaf', icon: '🌱' },
         { label: 'IRCD', path: '/ircd', icon: '📡' },
         { label: 'MOTD', path: '/motd', icon: '📜' },
         { label: 'Mullvad', path: '/mullvad', icon: '🛡️' },

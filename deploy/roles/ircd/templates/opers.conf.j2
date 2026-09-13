@@ -47,13 +47,15 @@
 # Dashboard: exactly what the admin web UI needs and nothing else —
 # REHASH plus G/K/Z-LINE management and the STATS letters that list
 # them. No Shutdown (DIE/RESTART), no SA* overrides, no host changes.
-# CONNECT can only dial servers already declared in the config, which is
-# what the admin Links tab uses; no SQUIT, deliberately (a mis-click must
-# not split the network).
+# CONNECT and SQUIT can only reach servers already declared in the config,
+# which is what the admin Links tab and the K8s-leaf page use: Start dials
+# the leaf with CONNECT, Stop unlinks it with SQUIT *before* scaling the pod
+# to zero — killing the pod without a SQUIT first makes every peer print a
+# lost-connection snotice instead of a clean netsplit for one declared leaf.
 # Usable only from the Docker network (host mask); the gateway connects
 # to ircd:6697 over TLS on the trusted subnet.
 <class name="Dashboard"
-       commands="REHASH STATS GLINE KLINE ZLINE CONNECT"
+       commands="REHASH STATS GLINE KLINE ZLINE CONNECT SQUIT"
        privs="servers/auspex">
 <type name="Dashboard"
       classes="Dashboard"

@@ -30,6 +30,11 @@
 
 #-#-#-#-#-#-#-#-#-#-#  k3s LEAF LINK ({{ ircd_k8s_leaf_name }})  -#-#-#-#-#-#-#
 #
+# ircd_k8s_link_enabled means "declare the link so the admin can dial it" —
+# NOT "the leaf is on". Whether the leaf actually runs and is linked is owned
+# by the gateway's admin page (Operations → K8s leaf), whose source of truth
+# is the k3s Deployment's replica count.
+#
 # This hub is the connecting side, so no new <bind> is added here and the
 # link comes up on a plain SIGHUP rehash — no container recreate, no client
 # disconnects. The leaf listens on the k3s node's tailnet address only, so
@@ -45,8 +50,13 @@
       sslprofile="main"
       timeout="8s">
 
-<autoconnect period="16s"
-             server="{{ ircd_k8s_leaf_name }}">
+# There is deliberately NO <autoconnect> for the leaf: the admin K8s-leaf page
+# is the only dialer (a CONNECT from the `dashboard` oper on Start, plus a
+# once-a-minute reconcile in the gateway). InspIRCd's own autoconnect retried
+# every 16s, so an unreachable leaf — e.g. the pod evicted in a DiskPressure
+# loop — became a network-wide `REMOTELINK … Connection closed` snotice storm
+# on every peer (netcrave, ircd.chat). The <autoconnect> above is netcrave's
+# and is unaffected.
 {% endif %}
 {% else %}
 #-#-#-#-#-#-#-#-#-#-#-#-#  HUB LINK ({{ ircd_hub_name }})  -#-#-#-#-#-#-#-#-#-#

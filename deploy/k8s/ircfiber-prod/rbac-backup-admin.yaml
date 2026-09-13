@@ -1,14 +1,19 @@
 # Least-privilege access for the gateway's admin Backups page
-# (`GET /api/admin/backups`, Run now, Suspend/Resume, pod-log tail).
+# (`GET /api/admin/backups`, Run now, Suspend/Resume, pod-log tail) and the
+# admin K8s-leaf page (scale `deployment/ircfiber-ircd-k8s` 0↔1, read the
+# node's Ready/pressure conditions for the preflight checks).
 #
-# There is deliberately NO `delete` verb anywhere in this Role: the page can
-# list CronJobs/jobs/pods, read pod logs, create a manual Job from the
-# CronJob template and flip `spec.suspend` — it can never remove a job or an
-# archive. Archive deletion stays with the jobs' own 14-day `find -mtime +14`
-# prune; restores stay with `site/deploy/playbooks/restore.yml`.
+# There is deliberately NO `delete` verb anywhere: the pages can list
+# CronJobs/jobs/pods, read pod logs, create a manual Job from the CronJob
+# template, flip `spec.suspend` and patch the leaf Deployment's replica count
+# — they can never remove a job, an archive or a Deployment. Archive deletion
+# stays with the jobs' own 14-day `find -mtime +14` prune; restores stay with
+# `site/deploy/playbooks/restore.yml`.
 #
 # The Role is namespaced to `ircfiber-prod`, so this token cannot touch the
-# `ircfiber` dev namespace, any other namespace, or any node/cluster object.
+# `ircfiber` dev namespace or any other namespace. The one cluster-scoped
+# grant is the node *reader* ClusterRole at the bottom of this file: node
+# conditions are cluster-scoped objects, so a Role cannot express them.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -39,6 +44,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -73,3 +84,35 @@ metadata:
   annotations:
     kubernetes.io/service-account.name: ircfiber-backup-admin
 type: kubernetes.io/service-account-token
+---
+# Cluster-scoped, read-only: the admin K8s-leaf preflight refuses to start the
+# leaf when the node is NotReady or under Disk/Memory/PID pressure (the
+# DiskPressure eviction loop is what made the hub's old <autoconnect> storm
+# every peer with REMOTELINK snotices).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ircfiber-gateway-node-reader
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: gateway
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ircfiber-gateway-node-reader
+  labels:
+    app.kubernetes.io/part-of: ircfiber
+    component: gateway
+subjects:
+  - kind: ServiceAccount
+    name: ircfiber-backup-admin
+    namespace: ircfiber-prod
+roleRef:
+  kind: ClusterRole
+  name: ircfiber-gateway-node-reader
+  apiGroup: rbac.authorization.k8s.io

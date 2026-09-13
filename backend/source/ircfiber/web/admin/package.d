@@ -43,6 +43,8 @@ import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
     apiIrcdBans, apiIrcdBanAdd, apiIrcdBanDelete, apiIrcdRehash, apiIrcdConfig, apiIrcdConfigSave,
     apiIrcdLinks, apiIrcdLinkConnect;
+import ircfiber.web.admin.leaf : apiLeafStatus, apiLeafPreflight, apiLeafStart,
+    apiLeafStop;
 import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
     apiNsUnsuspend, apiNsDrop, apiNsResetPassword, apiNsLogout, apiNsLink, apiNsUnlink,
     apiNsUnprovisioned, apiNsCreate;
@@ -282,6 +284,10 @@ final class AdminController {
         router.post("/api/admin/ircd/rehash", &adminWrap!apiIrcdRehashRoute);
         router.get("/api/admin/ircd/links", &adminWrap!apiIrcdLinksRoute);
         router.post("/api/admin/ircd/links/connect", &adminWrap!apiIrcdLinkConnectRoute);
+        router.get("/api/admin/ircd/leaf", &adminWrap!apiLeafStatusRoute);
+        router.get("/api/admin/ircd/leaf/preflight", &adminWrap!apiLeafPreflightRoute);
+        router.post("/api/admin/ircd/leaf/start", &adminWrap!apiLeafStartRoute);
+        router.post("/api/admin/ircd/leaf/stop", &adminWrap!apiLeafStopRoute);
         router.get("/api/admin/ircd/config", &adminWrap!apiIrcdConfigRoute);
         router.post("/api/admin/ircd/config", &adminWrap!apiIrcdConfigSaveRoute);
 
@@ -369,6 +375,10 @@ private:
     void apiIrcdConfigSaveRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdConfigSave(req, res); }
     void apiIrcdLinksRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdLinks(req, res); }
     void apiIrcdLinkConnectRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdLinkConnect(req, res); }
+    void apiLeafStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLeafStatus(req, res); }
+    void apiLeafPreflightRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLeafPreflight(req, res); }
+    void apiLeafStartRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLeafStart(req, res); }
+    void apiLeafStopRoute(HTTPServerRequest req, HTTPServerResponse res) { apiLeafStop(req, res); }
     void apiMotdListRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdList(req, res, redis); }
     void apiMotdCreateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdCreate(req, res, redis); }
     void apiMotdUpdateRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMotdUpdate(req, res, redis); }

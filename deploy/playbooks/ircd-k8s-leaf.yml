@@ -5,8 +5,9 @@
 #
 # The leaf renders the OVH hub's own templates in leaf mode, so the module,
 # mode, codepage and cloak sets CAPAB compares cannot drift apart. The hub
-# side (<link> + <autoconnect>) is enabled by ircd_k8s_link_enabled and
-# applied with `playbooks/ircd.yml -t ircdconf`.
+# side (the <link> declaration, no <autoconnect>) is enabled by
+# ircd_k8s_link_enabled and applied with `playbooks/ircd.yml -t ircdconf`;
+# dialing it is the admin K8s-leaf page's job, not ansible's.
 - name: InspIRCd k3s leaf
   hosts: ircfiber_k3s
   become: true

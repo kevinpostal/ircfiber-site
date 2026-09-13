@@ -387,6 +387,14 @@ void main() {
         startMotdProfiles();
     }
 
+    // Replaces the hub's removed <autoconnect> for the k3s leaf: one CONNECT
+    // a minute, and only while the leaf's Deployment has a ready pod. No-ops
+    // in the sidecars (no ircd conf mount) and without k3s credentials.
+    {
+        import ircfiber.web.admin.leaf : startLeafSupervisor;
+        startLeafSupervisor();
+    }
+
     cast(void) new ServerRegistry(redis);
     // Run engine health monitor on g_bgPool with its own Redis connection
     // so it never contends with HTTP handlers.

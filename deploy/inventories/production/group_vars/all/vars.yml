@@ -321,15 +321,16 @@ ircd_server_name: "irc.ircfiber.com"
 # Link the k3s spanningtree leaf (playbooks/ircd-k8s-leaf.yml). The hub is
 # the connecting side, so this needs only a rehash, never a restart.
 #
-# This is the ON/OFF switch for the whole leaf. `make ircd-leaf-off` flips it
-# to false, scales the k8s Deployment to 0 and rehashes the hub;
-# `make ircd-leaf-on` does the reverse. Off while the leaf is not running:
-# the hub's <autoconnect> retries every 16s and each failure is a REMOTELINK
-# snotice that every linked network (netcrave, ircd.chat) sees.
+# True means "the hub DECLARES the <link> so an admin can dial it" — it is no
+# longer an ON/OFF switch. There is no <autoconnect> for the leaf any more
+# (custom.conf.j2): whether the leaf runs and is linked is owned by the
+# gateway's admin page (Operations → K8s leaf), which scales the k3s
+# Deployment and issues CONNECT/SQUIT. Ansible must not decide that — an
+# operator turning the leaf off must not be overridden by the next deploy.
 #
-# 2026-09-13: off — the k3s node (odysseus, 1.7T shared disk at 97%) is in
-# DiskPressure, so kubelet evicts the leaf pod as fast as it is created.
-ircd_k8s_link_enabled: false
+# Set this to false only to retire the leaf link entirely (the tag then
+# disappears and CONNECT k8s.ircfiber.com is refused by InspIRCd).
+ircd_k8s_link_enabled: true
 # Leaf server name, here for the same reason as ircd_server_name above:
 # roles/engine's env.j2 names it in IRCFIBER_FLOOD_TRUSTED_HOSTS and runs in
 # a play where roles/ircd defaults are not in scope.
