@@ -50,6 +50,9 @@
     lastLoginIp: string;
     loginIps: string[];
     createdAt: number;
+    lastLoginAt: number;
+    provisionedFrom: string;
+    oauthIdentities: { provider: string; linkedAt: number; lastUsedAt: number; useCount: number }[];
     uploadCount: number;
     networks: NetworkData[];
     uploads: UploadData[];
@@ -435,6 +438,28 @@
       </div>
     </dl>
   </Card>
+
+  <!-- Social login -->
+  {#if user.oauthIdentities?.length}
+    <Card
+      class="mt-6"
+      title="Social login"
+      subtitle={user.provisionedFrom?.startsWith('oauth:') ? 'Account created through social login' : 'Linked to an existing account'}
+    >
+      <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {#each user.oauthIdentities as o (o.provider)}
+          <div>
+            <dt class="text-xs font-semibold uppercase tracking-wider text-muted">{o.provider}</dt>
+            <dd class="text-sm text-text">
+              {o.useCount} login{o.useCount === 1 ? '' : 's'} ·
+              last {o.lastUsedAt > 0 ? relative(o.lastUsedAt * 1000) : '—'} ·
+              linked {o.linkedAt > 0 ? new Date(o.linkedAt * 1000).toLocaleString() : '—'}
+            </dd>
+          </div>
+        {/each}
+      </dl>
+    </Card>
+  {/if}
 
   <!-- Reset Password -->
   <Card class="mt-6" title="Reset Password" subtitle="Set a new password for this user">

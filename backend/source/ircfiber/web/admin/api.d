@@ -967,6 +967,18 @@ package void apiUserDetail(HTTPServerRequest req, HTTPServerResponse res,
     data["lastLoginIp"] = Json(user.lastLoginIp);
     data["loginIps"] = jsonArray(user.loginIps);
     data["createdAt"] = Json(user.createdAt.toUnixTime());
+    data["lastLoginAt"] = Json(user.lastLoginAt.toUnixTime() > 0 ? user.lastLoginAt.toUnixTime() : 0);
+    data["provisionedFrom"] = Json(user.provisionedFrom);
+    Json[] oauthArr;
+    foreach (o; user.oauthIdentities) {
+        Json oj = Json.emptyObject;
+        oj["provider"] = Json(o.provider);
+        oj["linkedAt"] = Json(o.linkedAt.toUnixTime() > 0 ? o.linkedAt.toUnixTime() : 0);
+        oj["lastUsedAt"] = Json(o.lastUsedAt.toUnixTime() > 0 ? o.lastUsedAt.toUnixTime() : 0);
+        oj["useCount"] = Json(o.useCount);
+        oauthArr ~= oj;
+    }
+    data["oauthIdentities"] = Json(oauthArr);
     data["uploadCount"] = Json(uploadCount);
 
     Json[] netArr;

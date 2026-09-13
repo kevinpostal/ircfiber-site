@@ -15,6 +15,9 @@ module ircfiber.web.admin.oauth;
 /// POST with an empty/missing `clientSecret` keeps the stored one, so the
 /// ID can be edited without retyping the secret. DELETE drops the whole
 /// override and the provider falls back to env (usually: off).
+import std.algorithm.searching : startsWith;
+import std.algorithm.sorting : sort;
+import std.datetime : Clock, SysTime;
 import std.process : environment;
 import std.string : strip, toUpper;
 
@@ -26,6 +29,8 @@ import ircfiber.oauth : OAuthConfigOverride, OAuthConfigStore, loadOAuthSettings
     oauthProvider, oauthProviders, oauthRedirectUri, oauthStatusRow;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
+import ircfiber.db.user : UserRepository;
+import ircfiber.models.user : User;
 
 /// Max credential length: provider IDs/secrets are short tokens; this only
 /// rejects junk, not any real value.
@@ -66,6 +71,92 @@ package void apiOAuthStatus(HTTPServerRequest, HTTPServerResponse res, RedisStor
     }
     Json out_ = Json.emptyObject;
     out_["providers"] = Json(rows);
+    jsonOk(res, out_);
+}
+
+/// Activity window for the signups panel: an identity counts as active
+/// when `lastUsedAt` falls inside it.
+private enum long OAUTH_ACTIVE_WINDOW_DAYS = 30;
+/// Hard cap on the signups table (admin-only list; social accounts are a
+/// small slice of `users`). `truncated` tells the UI when it bit.
+private enum int OAUTH_SIGNUP_LIST_MAX = 500;
+
+/// Unix seconds for a possibly-unset stamp: `SysTime.init` is year 1, whose
+/// unix time is negative — report 0 so the UI renders "—".
+private long unixOrZero(SysTime t) {
+    const ts = t.toUnixTime();
+    return ts > 0 ? ts : 0;
+}
+
+/// Newest social use across a user's identities, 0 when never used.
+private long lastSocialUse(const User u) {
+    long best = 0;
+    foreach (o; u.oauthIdentities) {
+        const ts = unixOrZero(o.lastUsedAt);
+        if (ts > best) best = ts;
+    }
+    return best;
+}
+
+/// GET /api/admin/oauth/signups — social-login adoption: exact
+/// per-provider linked/created/active counts plus one row per user holding
+/// an identity, most recent social use first.
+package void apiOAuthSignups(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
+    auto repo = new UserRepository();
+    auto settings = loadOAuthSettings(redis);
+    const cutoff = Clock.currTime.toUnixTime() - OAUTH_ACTIVE_WINDOW_DAYS * 86_400;
+
+    Json[] provRows;
+    foreach (p; oauthProviders) {
+        Json r = Json.emptyObject;
+        r["name"] = Json(p.name);
+        r["label"] = Json(p.label);
+        r["configured"] = Json((p.name in settings) !is null);
+        r["linked"] = Json(repo.countOAuthLinked(p.name));
+        r["signups"] = Json(repo.countOAuthSignups(p.name));
+        r["activeInWindow"] = Json(repo.countOAuthActiveSince(cutoff, p.name));
+        provRows ~= r;
+    }
+
+    auto users = repo.listWithOAuth(OAUTH_SIGNUP_LIST_MAX);
+    // Newest social use first; never-used (pre-tracking) identities last.
+    users.sort!((a, b) => lastSocialUse(a) > lastSocialUse(b));
+
+    Json[] userRows;
+    foreach (u; users) {
+        Json row = Json.emptyObject;
+        row["id"] = Json(u.id.toString());
+        row["username"] = Json(u.username);
+        row["email"] = Json(u.email);
+        row["signupIp"] = Json(u.signupIp);
+        row["provisionedFrom"] = Json(u.provisionedFrom);
+        row["viaSocial"] = Json(u.provisionedFrom.startsWith("oauth:"));
+        row["createdAt"] = Json(unixOrZero(u.createdAt));
+        row["lastLoginAt"] = Json(unixOrZero(u.lastLoginAt));
+        Json[] ids;
+        foreach (o; u.oauthIdentities)
+            ids ~= Json([
+                "provider": Json(o.provider),
+                "linkedAt": Json(unixOrZero(o.linkedAt)),
+                "lastUsedAt": Json(unixOrZero(o.lastUsedAt)),
+                "useCount": Json(o.useCount)
+            ]);
+        row["identities"] = Json(ids);
+        userRows ~= row;
+    }
+
+    Json totals = Json.emptyObject;
+    totals["users"] = Json(cast(long) repo.count());
+    totals["linked"] = Json(repo.countOAuthLinked(""));
+    totals["signups"] = Json(repo.countOAuthSignups(""));
+    totals["activeInWindow"] = Json(repo.countOAuthActiveSince(cutoff, ""));
+
+    Json out_ = Json.emptyObject;
+    out_["providers"] = Json(provRows);
+    out_["users"] = Json(userRows);
+    out_["totals"] = totals;
+    out_["windowDays"] = Json(OAUTH_ACTIVE_WINDOW_DAYS);
+    out_["truncated"] = Json(users.length >= OAUTH_SIGNUP_LIST_MAX);
     jsonOk(res, out_);
 }
 

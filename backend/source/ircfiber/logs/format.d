@@ -418,6 +418,7 @@ string styleBanNotice(string text) @safe pure {
 /// One or two IRC lines per event; empty for unknown event types.
 ///
 /// - signup:      `Signup: alice <alice@example.com> · 203.0.113.7 · Austin, Texas, US · AS15169 Google LLC · …`
+/// - oauth_login: `Social login: alice · github · returning · 203.0.113.7 · Austin, Texas, US`
 /// - mail:        `Email sent: signup_verification → alice@example.com (alice) · resend · 412ms`
 ///                `Email FAILED: … · resend · <error>`
 /// - irc_connect: `IRC connect: alice!~alice@h.example (203.0.113.7) · class main · port 6697 · [Alice]`
@@ -434,6 +435,18 @@ string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighti
             string line = ircColor(ircBold("Signup:"), IRC_GREEN) ~ " " ~ ircBold(ircName(ev.username));
             const email = sanitizeLine(ev.email);
             if (email.length) line ~= " <" ~ email ~ ">";
+            if (ip.length) line ~= " · " ~ ip;
+            line ~= geoClause(ip, intel, firstSighting, true);
+            return [finish(line)];
+        }
+        case "oauth_login": {
+            const who = sanitizeLine(ev.username);
+            if (!who.length) return [];
+            string line = ircColor(ircBold("Social login:"), IRC_BLUE) ~ " " ~ ircBold(ircName(ev.username));
+            const prov = sanitizeLine(ev.provider);
+            if (prov.length) line ~= " · " ~ prov;
+            const kind = sanitizeLine(ev.kind);
+            if (kind.length) line ~= " · " ~ kind;
             if (ip.length) line ~= " · " ~ ip;
             line ~= geoClause(ip, intel, firstSighting, true);
             return [finish(line)];

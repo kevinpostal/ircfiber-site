@@ -66,7 +66,7 @@ import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignCancel, apiCa
 import ircfiber.web.admin.logs : apiLogsQueryRange;
 import ircfiber.web.admin.motd : apiMotdList, apiMotdCreate, apiMotdUpdate,
     apiMotdDelete, apiMotdRotate, apiMotdBatch, apiMotdPin, apiMotdUnpin;
-import ircfiber.web.admin.oauth : apiOAuthStatus, apiOAuthSave, apiOAuthClear;
+import ircfiber.web.admin.oauth : apiOAuthStatus, apiOAuthSignups, apiOAuthSave, apiOAuthClear;
 import ircfiber.web.admin.embed : apiEmbedOrigins, apiEmbedOriginsSet;
 /// Admin controller — orchestrates the admin submodules.
 /// All routes are gated by `adminWrap` (requireAuth + requireAdmin + touch).
@@ -137,6 +137,7 @@ final class AdminController {
         router.get("/api/admin/config/embed-origins", &adminWrap!apiEmbedOriginsRoute);
         router.post("/api/admin/config/embed-origins", &adminWrap!apiEmbedOriginsSetRoute);
         router.get("/api/admin/oauth/status", &adminWrap!apiOAuthStatusRoute);
+        router.get("/api/admin/oauth/signups", &adminWrap!apiOAuthSignupsRoute);
         router.post("/api/admin/oauth/:provider", &adminWrap!apiOAuthSaveRoute);
         router.delete_("/api/admin/oauth/:provider", &adminWrap!apiOAuthClearRoute);
         router.get("/api/admin/mullvad/status", &adminWrap!apiMullvadStatusRoute);
@@ -468,6 +469,7 @@ private:
         apiEmbedOriginsSet(req, res, redis);
     }
     void apiOAuthStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthStatus(req, res, redis); }
+    void apiOAuthSignupsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthSignups(req, res, redis); }
     void apiOAuthSaveRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthSave(req, res, redis); }
     void apiOAuthClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiOAuthClear(req, res, redis); }
     void apiMullvadStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiMullvadStatus(req, res, redis, serverRegistry); }

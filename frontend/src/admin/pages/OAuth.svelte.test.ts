@@ -56,8 +56,26 @@ const fixture = () => ({
   ],
 });
 
-async function mount(data = fixture()) {
-  mockedGet.mockResolvedValue(data);
+const signupsFixture = () => ({
+  providers: [
+    { name: 'github', label: 'GitHub', configured: true, linked: 3, signups: 2, activeInWindow: 1 },
+    { name: 'google', label: 'Google', configured: false, linked: 0, signups: 0, activeInWindow: 0 },
+  ],
+  users: [{
+    id: 'u1', username: 'alice', email: 'alice@example.com', signupIp: '203.0.113.7',
+    provisionedFrom: 'oauth:github', viaSocial: true,
+    createdAt: 1_757_000_000, lastLoginAt: 1_757_100_000,
+    identities: [{ provider: 'github', linkedAt: 1_757_000_000, lastUsedAt: 1_757_100_000, useCount: 4 }],
+  }],
+  totals: { users: 10, linked: 3, signups: 2, activeInWindow: 1 },
+  windowDays: 30,
+  truncated: false,
+});
+
+async function mount(data = fixture(), signups: unknown = signupsFixture()) {
+  // Path-keyed: the page issues two independent GETs.
+  mockedGet.mockImplementation((path: string) =>
+    Promise.resolve(path === '/api/admin/oauth/signups' ? signups : data));
   render(OAuth);
   await expect.element(page.getByText('https://ircfiber.com/auth/github/callback')).toBeInTheDocument();
 }
@@ -138,5 +156,30 @@ describe('OAuth admin page', () => {
     if (!confirmBtn) throw new Error('no confirm button');
     await click(confirmBtn as HTMLButtonElement);
     await vi.waitFor(() => expect(mockedDelete).toHaveBeenCalledWith('/api/admin/oauth/github'));
+  });
+
+  it('reports social-signup adoption per provider and per user', async () => {
+    await mount();
+    await vi.waitFor(() => {
+      if (!document.querySelector('[data-signup-provider="github"]')) throw new Error('no github row');
+    });
+    const gh = document.querySelector('[data-signup-provider="github"]')!.textContent ?? '';
+    expect(gh).toContain('3');
+    expect(gh).toContain('2');
+    const alice = document.querySelector('[data-signup-user="alice"]');
+    expect(alice).not.toBeNull();
+    expect(alice!.textContent).toContain('4');
+    expect(alice!.textContent).toContain('Social signup');
+    expect(document.body.textContent).toContain('Social accounts');
+  });
+
+  it('shows the empty state when nobody has linked a provider', async () => {
+    const empty = signupsFixture();
+    empty.users = [];
+    empty.totals = { users: 10, linked: 0, signups: 0, activeInWindow: 0 };
+    await mount(fixture(), empty);
+    await vi.waitFor(() => {
+      if (!document.body.textContent?.includes('No social logins yet')) throw new Error('no empty state');
+    });
   });
 });

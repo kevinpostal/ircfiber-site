@@ -115,6 +115,80 @@ private void testOAuthIdentityJsonRoundTrip() {
     check(bare.oauthIdentities.length == 0, "missing key reads as []");
 }
 
+private void testRecordOAuthLogin() {
+    import std.datetime : SysTime, unixTimeToStdTime;
+    const t0 = SysTime(unixTimeToStdTime(1_757_000_000));
+    const t1 = SysTime(unixTimeToStdTime(1_757_100_000));
+    User u;
+    u.recordOAuthLogin("github", "42", t0);
+    check(u.oauthIdentities.length == 1, "first social login appends the identity");
+    check(u.oauthIdentities[0].useCount == 1, "first login counts once");
+    check(u.oauthIdentities[0].linkedAt == t0 && u.oauthIdentities[0].lastUsedAt == t0,
+        "first login stamps both times");
+
+    u.recordOAuthLogin("github", "42", t1);
+    check(u.oauthIdentities.length == 1, "second login reuses the identity");
+    check(u.oauthIdentities[0].linkedAt == t0, "linkedAt is not moved by later use");
+    check(u.oauthIdentities[0].lastUsedAt == t1, "lastUsedAt follows the newest login");
+    check(u.oauthIdentities[0].useCount == 2, "second login increments the counter");
+
+    u.recordOAuthLogin("github", "99", t1);
+    check(u.oauthIdentities.length == 2, "a different subject is a separate identity");
+
+    // Row written before usage tracking: stamps unset, counter zero.
+    User legacy;
+    legacy.oauthIdentities = [OAuthIdentity("github", "42")];
+    legacy.recordOAuthLogin("github", "42", t1);
+    check(legacy.oauthIdentities.length == 1, "legacy identity is not duplicated");
+    check(legacy.oauthIdentities[0].linkedAt == t1, "legacy linkedAt is back-filled");
+    check(legacy.oauthIdentities[0].useCount == 1, "legacy counter starts at this login");
+}
+
+private void testOAuthStampJsonRoundTrip() {
+    import std.datetime : SysTime, unixTimeToStdTime;
+    import std.uuid : randomUUID;
+    import vibe.data.json : Json;
+    const t0 = SysTime(unixTimeToStdTime(1_757_000_000));
+    const t1 = SysTime(unixTimeToStdTime(1_757_100_000));
+    User u;
+    u.id = randomUUID();
+    u.username = "bob";
+    u.recordOAuthLogin("github", "42", t0);
+    u.recordOAuthLogin("github", "42", t1);
+    auto rt = User.fromJson(u.toJson());
+    check(rt.oauthIdentities.length == 1, "stamped identity survives JSON");
+    check(rt.oauthIdentities[0].linkedAt == t0 && rt.oauthIdentities[0].lastUsedAt == t1,
+        "stamps survive JSON");
+    check(rt.oauthIdentities[0].useCount == 2, "useCount survives JSON");
+
+    // Legacy JSON: provider/subject only, no stamps, no throw.
+    auto legacy = User.fromJson(Json([
+        "id": Json(u.id.toString()), "username": Json("x"),
+        "email": Json("e"), "passwordHash": Json(""),
+        "oauthIdentities": Json([Json(["provider": Json("gitlab"), "subject": Json("7")])])
+    ]));
+    check(legacy.oauthIdentities.length == 1, "legacy identity JSON still reads");
+    check(legacy.oauthIdentities[0].useCount == 0, "legacy useCount reads as 0");
+    check(legacy.oauthIdentities[0].lastUsedAt == SysTime.init, "legacy stamps stay unset");
+}
+
+private void testOAuthAdoptionFilterShapes() {
+    import ircfiber.db.user : oauthLinkedFilter, oauthSignupFilter, oauthActiveSinceFilter;
+    const anyLinked = oauthLinkedFilter("").toString();
+    check(anyLinked.canFind("oauthIdentities.0") && anyLinked.canFind("$exists"),
+        "any-provider linked filter, got " ~ anyLinked);
+    const ghLinked = oauthLinkedFilter("github").toString();
+    check(ghLinked.canFind("$elemMatch") && ghLinked.canFind("github"),
+        "per-provider linked filter, got " ~ ghLinked);
+    const anySignup = oauthSignupFilter("").toString();
+    check(anySignup.canFind("^oauth:"), "any-provider signup filter, got " ~ anySignup);
+    check(oauthSignupFilter("gitlab").toString().canFind("oauth:gitlab"),
+        "per-provider signup filter is a literal match");
+    const active = oauthActiveSinceFilter(1_757_000_000, "github").toString();
+    check(active.canFind("lastUsedAt") && active.canFind("$gte") && active.canFind("github"),
+        "active-since filter, got " ~ active);
+}
+
 int main() {
     testSettingsGate();
     testRedirectUri();
@@ -123,6 +197,9 @@ int main() {
     testLoadSettingsEmptyByDefault();
     testCodebergAndGitlabTable();
     testOAuthIdentityJsonRoundTrip();
+    testRecordOAuthLogin();
+    testOAuthStampJsonRoundTrip();
+    testOAuthAdoptionFilterShapes();
     if (failures == 0) writeln("oauth_test: all checks passed");
     else writefln("oauth_test: %d FAILURES", failures);
     return failures == 0 ? 0 : 1;

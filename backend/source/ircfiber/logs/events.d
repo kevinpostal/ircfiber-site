@@ -30,7 +30,7 @@ string logsOutboxKey() @safe pure nothrow { return "irc:logs:outbox"; }
 /// One announcement. `#staff` is oper-only (`+O`), so unlike the #support
 /// bot these lines deliberately carry full IPs and e-mail addresses.
 struct LogEvent {
-    /// "signup" | "mail" | "irc_connect" | "notice" | "backup"
+    /// "signup" | "oauth_login" | "mail" | "irc_connect" | "notice" | "backup"
     string type;
     /// Event timestamp (unix ms).
     long ts;
@@ -40,9 +40,11 @@ struct LogEvent {
     string email;
     /// Source IP (signup, mail, irc_connect) — geo-enriched by the bot.
     string ip;
-    /// Mail kind: "signup_verification" | "password_reset" | "admin_test" | …
+    /// Mail kind: "signup_verification" | "password_reset" | "admin_test" | …;
+    /// oauth_login kind: "new" | "returning" | "link".
     string kind;
-    /// Mail provider: "resend" | "sender" | "log".
+    /// Mail provider: "resend" | "sender" | "log"; oauth_login: the social
+    /// login provider name ("github", "google", …).
     string provider;
     /// Mail status: "sent" | "failed".
     string status;

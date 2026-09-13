@@ -14,6 +14,8 @@
   import Card from '../components/Card.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
   import EmptyState from '../components/EmptyState.svelte';
+  import KpiCard from '../components/KpiCard.svelte';
+  import { relative, percent } from '../lib/format';
   import { toastSuccess, toastError } from '../stores/ui';
   import { api } from '../lib/api-client';
 
@@ -27,6 +29,37 @@
     envId: string;
     envHasSecret: boolean;
     redirectUri: string;
+  }
+
+  /** One provider link on a user account, with its usage stamps. */
+  interface SignupIdentity { provider: string; linkedAt: number; lastUsedAt: number; useCount: number }
+  /** Per-provider adoption: `linked` counts accounts holding the identity,
+   *  `signups` only accounts created through it. */
+  interface SignupProvider {
+    name: string;
+    label: string;
+    configured: boolean;
+    linked: number;
+    signups: number;
+    activeInWindow: number;
+  }
+  interface SignupUser {
+    id: string;
+    username: string;
+    email: string;
+    signupIp: string;
+    provisionedFrom: string;
+    viaSocial: boolean;
+    createdAt: number;
+    lastLoginAt: number;
+    identities: SignupIdentity[];
+  }
+  interface SignupsData {
+    providers: SignupProvider[];
+    users: SignupUser[];
+    totals: { users: number; linked: number; signups: number; activeInWindow: number };
+    windowDays: number;
+    truncated: boolean;
   }
 
   const setupGuide: Record<string, { where: string; url: string; note: string }> = {
@@ -60,6 +93,18 @@
   let saving = $state<Record<string, boolean>>({});
   let clearing = $state<Record<string, boolean>>({});
   let confirmClear = $state<string | null>(null);
+  let signups = $state<SignupsData | null>(null);
+  let signupsError = $state('');
+
+  /** Total completed social logins across a user's identities. */
+  function totalLogins(u: SignupUser): number {
+    return u.identities.reduce((n, i) => n + i.useCount, 0);
+  }
+
+  /** Newest social use across a user's identities, unix seconds (0 = never). */
+  function lastUsed(u: SignupUser): number {
+    return u.identities.reduce((t, i) => (i.lastUsedAt > t ? i.lastUsedAt : t), 0);
+  }
 
   function sourceBadge(r: OAuthRow): { label: string; tone: 'success' | 'muted' | 'info' | 'warn' } {
     if (!r.configured) return { label: 'Off', tone: 'muted' };
@@ -85,6 +130,15 @@
       error = e instanceof Error ? e.message : 'Could not load provider status.';
     } finally {
       loading = false;
+    }
+    // Independent of the credential fetch: a failure in either card must
+    // not blank the other.
+    signupsError = '';
+    try {
+      signups = await api.get<SignupsData>('/api/admin/oauth/signups');
+    } catch (e) {
+      signups = null;
+      signupsError = e instanceof Error ? e.message : 'Could not load signup stats.';
     }
   }
 
@@ -168,6 +222,108 @@
       Secrets are write-only — this page never displays one.
     </p>
   </Card>
+
+  {#if signupsError}
+    <Card class="mt-6" title="Social signups">
+      <p class="text-sm text-danger">{signupsError}</p>
+    </Card>
+  {:else if signups}
+    <div class="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <KpiCard label="Social accounts" value={signups.totals.signups} hint="created via social login" />
+      <KpiCard label="Linked identities" value={signups.totals.linked} hint="accounts with ≥1 provider" />
+      <KpiCard label={`Active (last ${signups.windowDays}d)`} value={signups.totals.activeInWindow} hint="signed in with a provider" />
+      <KpiCard label="Share of all users" value={percent(signups.totals.linked, signups.totals.users)} hint={`${signups.totals.users} accounts total`} />
+    </div>
+
+    <Card
+      class="mt-6"
+      title="Adoption by provider"
+      subtitle={`Linked accounts, accounts created through the provider, and accounts that used it in the last ${signups.windowDays} days. A user linking two providers counts in both rows.`}
+    >
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-sm">
+          <thead>
+            <tr class="border-b border-border text-xs uppercase tracking-wider text-muted">
+              <th class="pb-2 pr-4">Provider</th>
+              <th class="pb-2 pr-4">Status</th>
+              <th class="pb-2 pr-4">Linked</th>
+              <th class="pb-2 pr-4">Signups</th>
+              <th class="pb-2">Active</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each signups.providers as p}
+              <tr class="border-b border-border last:border-0" data-signup-provider={p.name}>
+                <td class="py-2.5 pr-4 font-semibold text-heading">{p.label}</td>
+                <td class="py-2.5 pr-4">
+                  {#if p.configured}
+                    <StatusBadge label="Live" tone="success" size="sm" />
+                  {:else}
+                    <StatusBadge label="Off" tone="muted" size="sm" />
+                  {/if}
+                </td>
+                <td class="py-2.5 pr-4 text-heading">{p.linked}</td>
+                <td class="py-2.5 pr-4 text-heading">{p.signups}</td>
+                <td class="py-2.5 text-heading">{p.activeInWindow}</td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+
+    <Card class="mt-6" title="Social users" subtitle="Every account holding a provider identity, most recent social login first.">
+      {#if signups.users.length === 0}
+        <EmptyState
+          icon="🔐"
+          title="No social logins yet"
+          description="Accounts appear here the first time someone signs in with a provider."
+        />
+      {:else}
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead>
+              <tr class="border-b border-border text-xs uppercase tracking-wider text-muted">
+                <th class="pb-2 pr-4">Username</th>
+                <th class="pb-2 pr-4">Email</th>
+                <th class="pb-2 pr-4">Providers</th>
+                <th class="pb-2 pr-4">Logins</th>
+                <th class="pb-2 pr-4">Last used</th>
+                <th class="pb-2 pr-4">Signed up</th>
+                <th class="pb-2">Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each signups.users as u}
+                <tr class="border-b border-border last:border-0" data-signup-user={u.username}>
+                  <td class="py-2.5 pr-4 font-semibold">
+                    <a class="text-primary hover:underline" href={'#/users/' + u.id}>{u.username}</a>
+                  </td>
+                  <td class="py-2.5 pr-4 text-xs text-muted">{u.email || '—'}</td>
+                  <td class="py-2.5 pr-4">
+                    <span class="flex flex-wrap gap-1">
+                      {#each u.identities as id (id.provider)}
+                        <StatusBadge label={id.provider} tone={u.viaSocial ? 'primary' : 'muted'} size="sm" />
+                      {/each}
+                    </span>
+                  </td>
+                  <td class="py-2.5 pr-4 text-heading">{totalLogins(u)}</td>
+                  <td class="py-2.5 pr-4 text-xs text-muted">{relative(lastUsed(u) * 1000)}</td>
+                  <td class="py-2.5 pr-4 text-xs text-muted">{relative(u.createdAt * 1000)}</td>
+                  <td class="py-2.5 text-xs text-muted">{u.viaSocial ? 'Social signup' : 'Linked later'}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        {#if signups.truncated}
+          <p class="mt-3 text-xs text-muted">
+            Only the first 500 social accounts are listed — the counts above are exact.
+          </p>
+        {/if}
+      {/if}
+    </Card>
+  {/if}
 
   <div class="mt-6 grid gap-6 lg:grid-cols-2">
     {#each rows as r}

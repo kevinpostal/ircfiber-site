@@ -422,19 +422,13 @@ final class WebController {
         }
         try {
             auto repo = new UserRepository();
+            auto now = Clock.currTime;
             // Logged in already: clicking a provider button links it.
             auto current = authenticateRequest(req, repo);
             if (current.username.length > 0) {
-                bool present = false;
-                foreach (o; current.oauthIdentities)
-                    if (o.provider == provider && o.subject == prof.profile.subject) {
-                        present = true;
-                        break;
-                    }
-                if (!present) {
-                    current.oauthIdentities ~= OAuthIdentity(provider, prof.profile.subject);
-                    repo.update(current);
-                }
+                current.recordOAuthLogin(provider, prof.profile.subject, now);
+                repo.update(current);
+                announceOAuthLogin(provider, "link", current, req);
                 res.redirect("/");
                 return;
             }
@@ -442,17 +436,19 @@ final class WebController {
             // verbatim — same session, same provisioning, not the welcome
             // redirect.
             auto user = repo.findByOAuth(provider, prof.profile.subject);
+            bool adopted = false;
             if (user.username.length == 0) {
                 // Verified provider email matching an existing row adopts
                 // social login instead of growing a second account.
                 auto byEmail = repo.findByEmailCI(prof.profile.email);
                 if (byEmail.username.length > 0) {
                     user = byEmail;
-                    user.oauthIdentities ~= OAuthIdentity(provider, prof.profile.subject);
-                    repo.update(user);
+                    adopted = true;
                 }
             }
             if (user.username.length > 0) {
+                user.recordOAuthLogin(provider, prof.profile.subject, now);
+                announceOAuthLogin(provider, adopted ? "link" : "returning", user, req);
                 startLoginSession(req, res, repo, user);
                 return;
             }
@@ -484,8 +480,8 @@ final class WebController {
             u.passwordHash = "";
             u.signupIp = getClientIp(req);
             u.provisionedFrom = "oauth:" ~ provider;
-            u.oauthIdentities = [OAuthIdentity(provider, prof.profile.subject)];
-            u.createdAt = Clock.currTime;
+            u.createdAt = now;
+            u.recordOAuthLogin(provider, prof.profile.subject, now);
             if (!createAccountAndLogin(req, res, u)) {
                 // Residual race (two callbacks, or a simultaneous signup):
                 // the winner's row is authoritative. A duplicate-key hit on
@@ -493,6 +489,8 @@ final class WebController {
                 // in instead of 500ing.
                 auto winner = repo.findByOAuth(provider, prof.profile.subject);
                 if (winner.username.length > 0) {
+                    winner.recordOAuthLogin(provider, prof.profile.subject, now);
+                    announceOAuthLogin(provider, "returning", winner, req);
                     startLoginSession(req, res, repo, winner);
                     return;
                 }
@@ -501,6 +499,7 @@ final class WebController {
                 res.render!("login.dt", authError)();
                 return;
             }
+            announceOAuthLogin(provider, "new", u, req);
         } catch (Exception e) {
             logError("oauth: %s callback failed: %s", provider, e.msg);
             authError = "An unexpected error occurred. Please try again.";
@@ -510,6 +509,24 @@ final class WebController {
                 res.writeBody("An unexpected error occurred.", "text/plain; charset=utf-8");
             }
         }
+    }
+
+    /// Queues the `#staff` announcement for one social login. `kind` is
+    /// "new" (account just created), "returning" (existing identity) or
+    /// "link" (identity attached to an existing account). Best-effort:
+    /// `pushLogEvent` swallows Redis failures.
+    private void announceOAuthLogin(string provider, string kind, const User u,
+            HTTPServerRequest req) {
+        import ircfiber.logs.events : LogEvent, pushLogEvent;
+        LogEvent le;
+        le.type = "oauth_login";
+        le.ts = Clock.currTime.toUnixTime!long * 1000;
+        le.provider = provider;
+        le.kind = kind;
+        le.username = u.username;
+        le.email = u.email;
+        le.ip = getClientIp(req);
+        pushLogEvent(redis, le);
     }
 
     /// NickServ-password fallback for `loginPost`: only when the local hash

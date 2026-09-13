@@ -223,6 +223,23 @@ private void testFormatSignup() {
         "signup with no geo, got " ~ nogeo[0]);
 }
 
+private void testFormatOAuthLogin() {
+    LogEvent ev;
+    ev.type = "oauth_login";
+    ev.username = "alice";
+    ev.provider = "github";
+    ev.kind = "returning";
+    ev.ip = "203.0.113.7";
+    auto lines = formatLogEvent(ev, IpIntel.init, false);
+    check(lines.length == 1, "social login is one line");
+    check(lines[0] == TC ~ "12" ~ TB ~ "Social login:" ~ TB ~ TC ~ " "
+        ~ TB ~ "alice" ~ TB ~ " · github · returning · 203.0.113.7 · geo unavailable",
+        "social login line, got " ~ lines[0]);
+    ev.username = "";
+    check(formatLogEvent(ev, IpIntel.init, false).length == 0,
+        "nameless social login is dropped, not announced");
+}
+
 private void testFormatMail() {
     LogEvent ev;
     ev.type = "mail";
@@ -527,6 +544,7 @@ void main() {
     testIsPrivateIp();
     testGeoClauses();
     testFormatSignup();
+    testFormatOAuthLogin();
     testFormatMail();
     testFormatConnect();
     testFormatNoticeAndUnknown();
