@@ -30,6 +30,7 @@
     {
       label: 'Operations',
       items: [
+        { label: 'System', path: '/system', icon: '🩺' },
         { label: 'Servers', path: '/servers', icon: '🖥️' },
         { label: 'IRCD', path: '/ircd', icon: '📡' },
         { label: 'MOTD', path: '/motd', icon: '📜' },

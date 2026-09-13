@@ -257,3 +257,16 @@ configuration "oauth-test" {
     versions "VibeUseFibers"
     buildOptions "unittests"
 }
+
+// Pure-code unit test for the host metrics + Docker parsers behind the admin
+// System page (no /proc, /sys, docker socket or network needed):
+//   dub --root=backend build --config=system-test && ./backend/system-test
+configuration "system-test" {
+    targetType "executable"
+    targetName "system-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/sysmetrics.d"
+    mainSourceFile "tests/system_test.d"
+    versions "VibeUseFibers"
+}

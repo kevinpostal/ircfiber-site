@@ -75,6 +75,19 @@
       # serves admin routes, so the mount would widen their access for
       # nothing.
       - "{{ ircd_services_data_volume | default('ircfiber_services_data') }}:/var/lib/ircfiber/anope:ro"
+      # Host telemetry + Docker control for the admin System page
+      # (web/admin/system.d reads /host/proc, /host/sys and /host/root and
+      # talks to the Docker Engine API over the socket with curl). Admin
+      # replicas only — bnc / support-bot / fibereye pass their own list.
+      # This is a root-equivalent grant: an RCE in the gateway becomes host
+      # root. Accepted deliberately; the alternative sidecar was rejected.
+      # The socket is intentionally NOT :ro — read-only on a socket inode
+      # does not restrict API writes, so marking it so would misrepresent
+      # the grant.
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "/:/host/root:ro"
   community.docker.docker_container:
     name: "{{ gateway_spec_name }}"
     image: "{{ ircfiber_gateway_image_full }}"

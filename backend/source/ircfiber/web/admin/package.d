@@ -36,6 +36,8 @@ import ircfiber.web.admin.mongo : apiMongoStatus, apiMongoCollections,
 import ircfiber.web.admin.redis : apiRedisInfo, apiRedisSummary, apiRedisKeys,
     apiRedisKeyDetail, apiRedisSlowlog, apiRedisPubsub, apiRedisClients;
 import ircfiber.web.admin.replication : apiReplicationStatus;
+import ircfiber.web.admin.system : apiSystemOverview, apiSystemContainerAction,
+    apiSystemContainerLogs;
 import ircfiber.web.admin.bnc : apiBncOverview, apiBncKick, apiBncRevoke,
     apiBncSeenClear, apiBncSeenForget;
 import ircfiber.web.admin.ircd : apiIrcdStatus, apiIrcdChannels, apiIrcdChannel,
@@ -232,6 +234,11 @@ final class AdminController {
         // Replication monitor (Mongo rs0 + Redis global keys / shake)
         router.get("/api/admin/replication", &adminWrap!apiReplicationStatusRoute);
 
+        // Host system + Docker containers (see web.admin.system)
+        router.get("/api/admin/system", &adminWrap!apiSystemOverviewRoute);
+        router.get("/api/admin/system/containers/:name/logs", &adminWrap!apiSystemContainerLogsRoute);
+        router.post("/api/admin/system/containers/:name/:action", &adminWrap!apiSystemContainerActionRoute);
+
         // Backups (k8s CronJob state + published run history; see web.admin.backups)
         router.get("/api/admin/backups", &adminWrap!apiBackupsOverviewRoute);
         router.get("/api/admin/backups/:name/logs", &adminWrap!apiBackupsLogsRoute);
@@ -347,6 +354,9 @@ private:
     void apiBncRevokeRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncRevoke(req, res, redis); }
     void apiBncSeenClearRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncSeenClear(req, res, redis); }
     void apiBncSeenForgetRoute(HTTPServerRequest req, HTTPServerResponse res) { apiBncSeenForget(req, res, redis); }
+    void apiSystemOverviewRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSystemOverview(req, res); }
+    void apiSystemContainerLogsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSystemContainerLogs(req, res); }
+    void apiSystemContainerActionRoute(HTTPServerRequest req, HTTPServerResponse res) { apiSystemContainerAction(req, res); }
     void apiIrcdStatusRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdStatus(req, res); }
     void apiIrcdChannelsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdChannels(req, res); }
     void apiIrcdChannelRoute(HTTPServerRequest req, HTTPServerResponse res) { apiIrcdChannel(req, res); }

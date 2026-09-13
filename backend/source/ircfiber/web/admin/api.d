@@ -1382,6 +1382,9 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 import ircfiber.egress : mullvadRawPool, parseMullvadPool, PoolEntry,
     DIRECT_EGRESS_ID, EgressSlot, EgressView, egressView, matchingSlot,
     normalizeEgressId, isKnownEgressId;
+// Single Docker client for the whole backend (Engine API over the socket,
+// collected on the System page's background thread — see sysmetrics.d).
+import ircfiber.sysmetrics : containerAction, dockerContainerState;
 
 private struct _ContainerInfo { string container; string state; string status; string tailscaleExit; }
 
@@ -1442,42 +1445,18 @@ private _ContainerInfo _collectContainerState(string label) {
         } catch (Exception) {}
         return ci;
     }
-    // Quick check: if docker not available, skip immediately
-    import std.process : executeShell;
-    auto which = executeShell("which docker 2>&1");
-    if (which.status != 0) {
-        ci.state = "unknown";
-        ci.status = "docker CLI not available";
-        return ci;
-    }
-    // Docker available — try to get container state with timeout
-    try {
-        auto res = executeShell("timeout 2 docker ps -a --filter name=" ~ ci.container ~ " --format '{{.State}}|{{.Status}}' 2>&1");
-        if (res.status == 0) {
-            auto txt = res.output.strip();
-            if (txt.length == 0) { ci.state = "missing"; }
-            else {
-                import std.string : split, indexOf;
-                auto first = txt.split("\n")[0].strip();
-                auto bar = first.indexOf("|");
-                if (bar >= 0) {
-                    ci.state = first[0 .. bar].strip();
-                    ci.status = first[bar+1 .. $].strip();
-                    if (ci.state == "running") ci.state = "running";
-                    else if (ci.state == "exited") ci.state = "exited";
-                    else if (ci.state.length == 0) ci.state = "unknown";
-                } else {
-                    ci.state = first.length > 0 ? first : "unknown";
-                }
-            }
-        } else {
-            ci.state = "unknown";
-            if (res.output.length > 0) ci.status = res.output.strip();
-        }
-    } catch (Exception e) {
-        ci.state = "unknown";
-        ci.status = e.msg;
-    }
+    // Non-k8s: the container state comes from the single Docker client in
+    // ircfiber.sysmetrics (Engine API over /var/run/docker.sock, collected
+    // on its background thread). The runtime image has no `docker` CLI, so
+    // the old `which docker` + `docker ps` shell-out always reported
+    // "docker CLI not available" in prod.
+    // `dockerContainerState` fills state/status either way: "missing" when
+    // the daemon has no such container, "unknown"/"docker unavailable" when
+    // the socket itself is unreachable.
+    string state, status;
+    dockerContainerState(ci.container, state, status);
+    ci.state = state;
+    ci.status = status;
     return ci;
 }
 
@@ -2283,38 +2262,27 @@ package void apiMullvadRestart(HTTPServerRequest req, HTTPServerResponse res,
     bool found = false;
     foreach (e; entries) if (e.label.toLower() == label) { found = true; break; }
     if (!found) { jsonError(res, 404, "unknown mullvad label: " ~ label); return; }
-    try {
-        import std.process : executeShell;
-        auto cname = "tailscale-mullvad-" ~ label;
-        auto r = executeShell("docker restart " ~ cname ~ " 2>&1");
-        if (r.status != 0) {
-            // check docker availability
-            if (r.output.indexOf("Cannot connect") >= 0 || r.output.indexOf("docker: not found") >= 0 || r.output.indexOf("No such") >= 0) {
-                // docker unavailable → 503 with guidance
-                if (r.output.indexOf("No such container") >= 0) {
-                    jsonError(res, 404, "container not found: " ~ cname);
-                    return;
-                }
-                jsonError(res, 503, "docker unavailable — restart via ansible/host shell: " ~ r.output.strip());
-                return;
-            }
-            jsonError(res, 500, r.output.strip());
-            return;
+    // One Docker client only: ircfiber.sysmetrics talks to the Engine API
+    // over /var/run/docker.sock. The old `docker restart` shell-out could
+    // never work — the runtime image ships no docker CLI.
+    auto cname = "tailscale-mullvad-" ~ label;
+    auto r = containerAction(cname, "restart");
+    if (!r.ok) {
+        if (r.httpStatus == 404) {
+            jsonError(res, 404, "container not found: " ~ cname);
+        } else if (r.httpStatus == 503) {
+            jsonError(res, 503, "docker unavailable — restart via ansible/host shell: " ~ r.message);
+        } else {
+            jsonError(res, 500, r.message);
         }
-        logInfo("Admin restarted mullvad sidecar %s: %s", cname, r.output.strip());
-        Json data = Json.emptyObject;
-        data["label"] = Json(label);
-        data["restarted"] = Json(true);
-        data["output"] = Json(r.output.strip());
-        jsonOk(res, data);
-    } catch (Exception e) {
-        // docker socket absent
-        if (e.msg.indexOf("No such file") >= 0 || e.msg.indexOf("docker") >= 0) {
-            jsonError(res, 503, "docker unavailable — restart via ansible/host shell: " ~ e.msg);
-            return;
-        }
-        jsonError(res, 500, e.msg);
+        return;
     }
+    logInfo("Admin restarted mullvad sidecar %s: %s", cname, r.message);
+    Json data = Json.emptyObject;
+    data["label"] = Json(label);
+    data["restarted"] = Json(true);
+    data["output"] = Json(r.message);
+    jsonOk(res, data);
 }
 
 /// POST /api/admin/mullvad/:label/irc-test — prove IRC works through this exit.
