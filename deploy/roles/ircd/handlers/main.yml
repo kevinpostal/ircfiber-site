@@ -2,14 +2,29 @@
 # Config changes are applied with a rehash (SIGHUP) so connected
 # clients — including every engine-multiplexed platform user — stay up.
 # InspIRCd 4 also loads newly added <module> tags on rehash (verified
-# 2026-09-04: "REHASH: The m_foo.so module was loaded"); only removing a
-# module or changing sslprofile/bind needs `make deploy-restart COMP=ircd`.
+# 2026-09-04: "REHASH: The m_foo.so module was loaded"), and ssl_gnutls
+# re-reads every <sslprofile> — certificate files included — on rehash
+# (ReadConfig -> ReadProfiles, v4.11.0 m_ssl_gnutls.cpp:1201). Only
+# removing a module or changing a <bind> needs
+# `make deploy-restart COMP=ircd`.
 - name: Rehash ircd
   ansible.builtin.command:
     argv:
       - docker
       - kill
       - --signal=HUP
+      - "{{ ircd_container_name }}"
+  changed_when: true
+
+# TLS-only reload: SIGUSR1 (m_sslrehashsignal) re-reads the certificate
+# files without touching the rest of the config. Used when the Let's
+# Encrypt cert is renewed, where the bytes change but no config does.
+- name: Reload ircd TLS
+  ansible.builtin.command:
+    argv:
+      - docker
+      - kill
+      - --signal=USR1
       - "{{ ircd_container_name }}"
   changed_when: true
 

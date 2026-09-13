@@ -243,7 +243,7 @@
       - /usr/local/sbin/ircfiber-ircd-tls-sync
   register: ircd_tls_sync
   changed_when: "'CHANGED' in ircd_tls_sync.stdout"
-  notify: Rehash ircd
+  notify: Reload ircd TLS
   when: ircd_tls_mode == "letsencrypt"
 
 - name: Daily LE cert renewal check
@@ -251,7 +251,7 @@
     name: "ircfiber ircd TLS sync"
     hour: "{{ ircd_tls_sync_cron_hour }}"
     minute: "{{ ircd_tls_sync_cron_minute }}"
-    job: "/usr/local/sbin/ircfiber-ircd-tls-sync | grep -q CHANGED && docker kill --signal=HUP {{ ircd_container_name }} || true"
+    job: "/usr/local/sbin/ircfiber-ircd-tls-sync | grep -q CHANGED && docker kill --signal=USR1 {{ ircd_container_name }} || true"
   when: ircd_tls_mode == "letsencrypt"
 
 - name: Run ircfiber-ircd (InspIRCd)

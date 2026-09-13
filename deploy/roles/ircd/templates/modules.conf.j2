@@ -39,7 +39,42 @@
 #-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  TLS  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
 
 <module name="ssl_gnutls">
+# SIGUSR1 reloads the TLS certificates alone (OnModuleRehash "tls" ->
+# GnuTLS::ReadProfiles), without the full config rehash a SIGHUP does.
+# That is what the LE renewal cron sends after installing new bytes:
+# renewal changes only the files, never the config. The .so is built by
+# our image (configure enables it on UNIX); a plain rehash loads it.
+<module name="sslrehashsignal">
+# "main" — server links (custom.conf) and anything that does not name a
+# profile. Deliberately left on the image's self-signed pair: a peer link
+# authenticates by sendpass/recvpass, not by certificate chain, and tying
+# it to a 90-day LE cert would add a renewal failure mode to a link that
+# does not need one.
 <sslprofile name="main"
+            provider="gnutls"
+            cafile=""
+            certfile="cert.pem"
+            crlfile=""
+            dhfile="dhparams.pem"
+            hash="sha256"
+            keyfile="key.pem"
+            mindhbits="2048"
+            outrecsize="2048"
+            priority="NORMAL:-VERS-TLS1.0:-VERS-TLS1.1"
+            requestclientcert="yes"
+            strictpriority="no">
+
+# "clients" — the public TLS client port ({{ ircd_port_tls }}) only, so the
+# certificate every IRC client validates is separate from the server-link
+# one above and can be rotated on its own.
+{% if ircd_tls_mode == "letsencrypt" %}
+# Let's Encrypt cert for {{ ircd_server_name }}, issued by Caddy and copied
+# into the conf dir by roles/ircd (renewal: daily cron + SIGUSR1).
+{% else %}
+# Self-signed mode: same files as "main" until ircd_tls_mode is switched to
+# "letsencrypt". The profile still exists so the <bind> never has to change.
+{% endif %}
+<sslprofile name="clients"
             provider="gnutls"
             cafile=""
 {% if ircd_tls_mode == "letsencrypt" %}
