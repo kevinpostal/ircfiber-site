@@ -474,8 +474,10 @@
                       <button
                         type="button"
                         class="rounded-md border border-border bg-surface-2 px-2 py-1 text-xs font-medium text-text hover:bg-border disabled:opacity-50"
-                        disabled={!c.controllable}
-                        title={c.controlReason}
+                        disabled={!c.controllable || c.stopProtected}
+                        title={c.stopProtected
+                          ? 'A stop has no undo from here — nothing restarts it and the control path may run through it. Use Restart.'
+                          : c.controlReason}
                         aria-label={`Stop ${c.name}`}
                         onclick={() => confirmAction(c, 'stop')}
                       >Stop</button>

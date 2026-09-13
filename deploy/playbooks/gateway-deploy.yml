@@ -235,6 +235,20 @@
       changed_when: false
       failed_when: running_image_id.stdout != gateway_image_id.stdout
 
+    # Roll the sysagent sidecar onto the same image. It runs the same build
+    # as the gateway (IRCFIBER_SYSAGENT=1), so a ship that only swapped the
+    # replicas would leave it on the previous release. Same shared-spec
+    # mechanism as the green/blue includes above: include_role (not
+    # include_tasks) so the role's defaults resolve at role precedence, and
+    # the ircfiber_gateway_image_full play var already tagged as :deploy is
+    # what the sidecar starts from — no second image variable to drift.
+    # After the swap (not before) so a failed deploy never touches the
+    # sidecar serving the still-live blue replica.
+    - name: Roll sysagent sidecar onto the deployed image
+      ansible.builtin.include_role:
+        name: gateway
+        tasks_from: sysagent.yml
+
     - name: Show result
       ansible.builtin.debug:
         msg: "Blue/green swap done — {{ gateway_container_name }} runs {{ gateway_image_ref }} ({{ gateway_image_id.stdout[:19] }}). Engine: {{ engine_status.stdout }} | Health: {{ health_check.stdout | default('ok') }}"

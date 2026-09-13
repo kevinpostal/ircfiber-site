@@ -111,7 +111,8 @@ const snapshotFixture = (over: Record<string, unknown> = {}) => ({
       createdAtMs: now - 7_200_000, ports: ['0.0.0.0:8090→8090/tcp'],
       cpuPercent: 3.4, memBytes: 268_435_456, memLimitBytes: 1_073_741_824,
       memPercent: 25.0, pids: 42,
-      self: true, controllable: false, controlReason: 'this gateway container',
+      self: true, controllable: false, stopProtected: false,
+      controlReason: 'this gateway container',
     },
     {
       id: '044f1a1fb346', name: 'ircfiber-redis', image: 'redis:7-alpine',
@@ -119,7 +120,7 @@ const snapshotFixture = (over: Record<string, unknown> = {}) => ({
       createdAtMs: now - 259_200_000, ports: ['6379/tcp'],
       cpuPercent: 0.9, memBytes: 103_325_696, memLimitBytes: -1,
       memPercent: 1.3, pids: 6,
-      self: false, controllable: true, controlReason: '',
+      self: false, controllable: true, stopProtected: true, controlReason: '',
     },
     {
       id: 'aa11bb22cc33', name: 'tailscale-mullvad-ch', image: 'tailscale/tailscale:stable',
@@ -127,7 +128,7 @@ const snapshotFixture = (over: Record<string, unknown> = {}) => ({
       createdAtMs: now - 500_000_000, ports: [],
       cpuPercent: null, memBytes: null, memLimitBytes: -1,
       memPercent: null, pids: null,
-      self: false, controllable: true, controlReason: '',
+      self: false, controllable: true, stopProtected: false, controlReason: '',
     },
   ],
   history: [
@@ -193,15 +194,20 @@ describe('System.svelte — host metrics + container control', () => {
     expect(document.querySelector('[data-testid="containers-table"]')).toBeNull();
   });
 
-  it('disables Stop/Restart on the gateway itself but not on ircfiber-redis', async () => {
+  it('disables every state action on the gateway itself, and Stop on a stop-protected row', async () => {
     render(System);
     await vi.waitFor(() => {
       expect(document.querySelectorAll('[data-testid="container-row"]').length).toBe(3);
     });
+    // The gateway can never act on itself (the backend refuses with 409 too).
     await expect.element(page.getByRole('button', { name: 'Stop ircfiber-gateway' })).toBeDisabled();
     await expect.element(page.getByRole('button', { name: 'Restart ircfiber-gateway' })).toBeDisabled();
-    await expect.element(page.getByRole('button', { name: 'Stop ircfiber-redis' })).toBeEnabled();
+    // ircfiber-redis is stop-protected: a stop has no undo from the product,
+    // so only Restart is offered. The backend enforces the same rule.
+    await expect.element(page.getByRole('button', { name: 'Stop ircfiber-redis' })).toBeDisabled();
     await expect.element(page.getByRole('button', { name: 'Restart ircfiber-redis' })).toBeEnabled();
+    // A disposable sidecar keeps its full control set.
+    await expect.element(page.getByRole('button', { name: 'Start tailscale-mullvad-ch' })).toBeEnabled();
     expect(api.post).not.toHaveBeenCalled();
   });
 

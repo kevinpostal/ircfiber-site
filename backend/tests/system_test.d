@@ -10,11 +10,13 @@ module system_test;
 
 import std.stdio : writefln, writeln;
 import std.math : abs;
+import std.string : indexOf;
 
 import ircfiber.sysmetrics : containerIdFromCgroupDir, demuxDockerLogStream,
-    parseCgroupCpuUsageUsec, parseCgroupValue, parseContainerList, parseCpuCount,
-    parseDiskStats, parseDockerInfo, parseHealth, parseLoadAvg, parseMemInfo,
-    parseMounts, parseNetDev, parseProcStat, parseUptimeSeconds;
+    isStopProtected, logSafe, parseCgroupCpuUsageUsec, parseCgroupValue,
+    parseContainerList, parseCpuCount, parseDiskStats, parseDockerInfo,
+    parseHealth, parseLoadAvg, parseMemInfo, parseMounts, parseNetDev,
+    parseProcStat, parseUptimeSeconds, resolveControl, LOG_MAX_BYTES;
 
 private int failures;
 
@@ -245,6 +247,56 @@ private void testLogDemux() {
     check(s.length > 0 && s[$ - 1] == 'x', "invalid UTF-8 sanitized, payload kept");
 }
 
+/// The security gate every container-addressed operation goes through.
+/// Runs with no Docker socket and no host mounts, which is exactly the
+/// state that must fail closed.
+private void testControlGate() {
+    // Shape: anything that could change the Docker URL is refused before a
+    // snapshot is even consulted.
+    foreach (bad; ["", "../../info", "a/b", "x?y", "x&y", "-rf", "a b",
+                   "name%0Aforged", "x#y", "a:b"]) {
+        auto r = resolveControl(bad, "restart");
+        check(!r.ok && r.httpStatus == 400, "rejects malformed name: '" ~ bad ~ "'");
+    }
+    check(resolveControl("ircfiber-redis", "frobnicate").httpStatus == 400,
+        "rejects an unknown verb");
+    // A well-formed name with no inventory behind it must fail closed, and
+    // say which kind of failure it is (503 not-collected, never a 404 that
+    // sends an operator hunting a removed container).
+    auto cold = resolveControl("ircfiber-redis", "restart");
+    check(!cold.ok, "no inventory → refused");
+    check(cold.httpStatus == 503, "cold inventory reports 503, not 404");
+
+    // The stop-protected set: a stop has no undo from inside the product.
+    foreach (n; ["ircfiber-caddy", "ircfiber-cloudflared", "ircfiber-autoheal",
+                 "ircfiber-mongo", "ircfiber-redis", "ircfiber-ircd",
+                 "ircfiber-services", "ircfiber-holder-ovh", "ircfiber-engine-ovh"])
+        check(isStopProtected(n), n ~ " is stop-protected");
+    foreach (n; ["ircfiber-grafana", "tailscale-mullvad-ch", "ircfiber-fibereye"])
+        check(!isStopProtected(n), n ~ " is freely stoppable");
+
+    check(LOG_MAX_BYTES == 2 * 1024 * 1024, "log tail is byte-capped, not only line-capped");
+}
+
+/// Audit-log integrity: a percent-decoded route param reaches logWarn, so a
+/// newline in it would forge a second record in the gateway log and SigNoz.
+private void testLogSafe() {
+    check(logSafe("x\n2026-09-13 INF Admin restart container ircfiber-ircd")
+        .indexOf('\n') < 0, "newline stripped from a logged name");
+    check(logSafe("a\rb\tc") == "a?b?c", "CR and TAB replaced");
+    check(logSafe("ircfiber-redis") == "ircfiber-redis", "clean name unchanged");
+    check(logSafe("") == "<empty>", "empty name is explicit");
+    auto long_ = logSafe(repeat('x', 400));
+    check(long_.length < 200, "over-long value truncated");
+}
+
+private string repeat(char c, size_t n) {
+    char[] s;
+    s.length = n;
+    s[] = c;
+    return cast(string) s;
+}
+
 int main() {
     testProcStat();
     testMemInfo();
@@ -257,6 +309,8 @@ int main() {
     testHealth();
     testDockerInfo();
     testLogDemux();
+    testControlGate();
+    testLogSafe();
     if (failures == 0) writeln("system_test: all checks passed");
     else writefln("system_test: %d failure(s)", failures);
     return failures ? 1 : 0;

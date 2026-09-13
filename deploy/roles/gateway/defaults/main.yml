@@ -89,3 +89,26 @@ fibereye_memory_limit: "256m"
 fibereye_memory_reservation: "64m"
 fibereye_cpus: 0.5
 fibereye_oom_score_adj: 500
+
+# ---------------------------------------------------------------------------
+# Sysagent sidecar (tasks/sysagent.yml): host telemetry + Docker control for
+# the admin System page, same image as the gateway with IRCFIBER_SYSAGENT=1.
+# It holds the docker socket and the host mounts so the internet-facing
+# replicas hold neither; the gateway reaches it as a bearer-authenticated
+# client over the internal docker network (no published ports, ever).
+# ---------------------------------------------------------------------------
+
+# Container name the gateway dials as http://ircfiber-sysagent:8099.
+sysagent_container_name: ircfiber-sysagent
+# Internal-only port; never published to the host.
+sysagent_port: "8099"
+# Polls the Docker socket and reads /proc on a loop: the same quarter core as
+# autoheal, with a cap far above steady state.
+sysagent_memory_limit: "192m"
+# Soft floor under host pressure, kept tiny like every other reservation.
+sysagent_memory_reservation: "64m"
+# Quarter of a core, matching the autoheal watcher.
+sysagent_cpus: 0.25
+# Stateless and restarted by unless-stopped: the most disposable thing on the
+# host, so the kernel picks it first.
+sysagent_oom_score_adj: 500

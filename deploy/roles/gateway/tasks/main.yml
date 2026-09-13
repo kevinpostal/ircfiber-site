@@ -133,6 +133,21 @@
   vars:
     gateway_spec_component: "gateway"
 
+  # Host telemetry + Docker control for the admin System page: the sysagent
+  # sidecar holds the docker socket and the host mounts so the
+  # internet-facing replicas hold neither (see tasks/sysagent.yml). After the
+  # replicas because the gateway is the sidecar's client, not the reverse.
+  # `apply:` is what makes `-t sysagent` work: a tag on a dynamic include
+  # only decides whether the include itself runs, and the tasks inside
+  # sysagent.yml carry no tags of their own — so a tagged run would print the
+  # include and then silently create nothing.
+- name: Run ircfiber-sysagent
+  tags: [gateway, sysagent]
+  ansible.builtin.include_tasks:
+    file: sysagent.yml
+    apply:
+      tags: [sysagent]
+
 # Bouncer listener: same image, dedicated container so the public TCP
 # port is independent of the HTTP gateway replicas (not part of blue/green).
 # TLS uses the LE cert Caddy obtained for bnc_public_host; the Caddy data

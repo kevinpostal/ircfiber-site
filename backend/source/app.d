@@ -47,6 +47,18 @@ __gshared WebSocketGateway g_wsGateway;
 void main() {
     logInfo("Starting IRC Fiber Gateway...");
 
+    // Telemetry sidecar mode (ircfiber-sysagent). Checked before any storage
+    // is touched: that container is deployed with no database credential at
+    // all — it holds the Docker socket and the host /proc instead, and the
+    // internet-facing gateway holds neither. See ircfiber.sysagent.
+    {
+        import ircfiber.sysagent : sysAgentMode, runSysAgent;
+        if (sysAgentMode()) {
+            import core.stdc.stdlib : exit;
+            exit(runSysAgent());
+        }
+    }
+
     // Initialize dedicated thread pools for task isolation.
     initThreadPools();
     logInfo("Thread pools initialized (http=%d, irc=%d, bg=%d, stg=%d)",

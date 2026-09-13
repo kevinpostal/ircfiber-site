@@ -1,0 +1,113 @@
+---
+# The single definition of the ircfiber-sysagent sidecar: host telemetry and
+# Docker control for the admin System page, running the SAME image as the
+# gateway replicas with IRCFIBER_SYSAGENT=1. This file is INCLUDED with
+# vars — never copy-pasted — by:
+#
+#   * tasks/main.yml                            (normal role run, after the
+#                                              gateway replicas)
+#   * playbooks/gateway-deploy.yml           (after the blue/green swap, so
+#                                              every ship rolls the sidecar
+#                                              onto the new image too)
+#
+# It exists as a security boundary. The mounts below — the Docker socket, the
+# host's /proc and /sys, the host root — are a root-equivalent grant: whoever
+# holds them can become host root. The internet-facing gateway must never hold
+# them (see the comment at the end of _gateway_spec_volumes_admin in
+# tasks/container.yml), so they live only here, in a container with no
+# published ports that answers only on the internal docker network, and the
+# gateway reaches it as a bearer-authenticated client
+# (http://ircfiber-sysagent:8099, token from env.j2's
+# IRCFIBER_SYSAGENT_TOKEN_FILE). The sidecar receives NO gateway env — no
+# Mongo/Redis/OAuth/mail secrets — only the four keys below; the single-file
+# token bind is its only credential, never the whole secrets dir.
+#
+# The playbook is invoked directly (ansible-playbook
+# playbooks/gateway-deploy.yml), so it never runs this role and does not
+# get its defaults through the role machinery; it loads
+# roles/gateway/defaults/main.yml through vars_files instead. Every variable
+# read below must therefore either live in those defaults or carry an explicit
+# `| default()` fallback — otherwise the standalone run breaks.
+# The bearer the gateway presents to the sidecar. Minted on the host, not in
+# the vault: it is a capability between two containers on one box, and the
+# `creates:` guard keeps it stable across every later run. It lives HERE and
+# not in tasks/secrets.yml so both call sites — the role and the blue/green
+# playbook, which never renders secrets — can start the sidecar standalone.
+# `umask 077` so the value is never briefly world-readable between the
+# redirect and the chmod. To rotate: delete the file, re-run, then restart
+# BOTH containers together (a gateway holding the old token is locked out).
+- name: Mint the sysagent bearer token (once; never rotated by a deploy)
+  vars:
+    _sysagent_token: "{{ gateway_secrets_dir | default('/etc/ircfiber/gateway/secrets') }}/sysagent_token"
+  ansible.builtin.shell: >-
+    umask 077 && openssl rand -hex 32 > {{ _sysagent_token | quote }}
+    && chmod 0400 {{ _sysagent_token | quote }}
+    && chown root:root {{ _sysagent_token | quote }}
+  args:
+    creates: "{{ gateway_secrets_dir | default('/etc/ircfiber/gateway/secrets') }}/sysagent_token"
+  no_log: true
+
+- name: "Run {{ sysagent_container_name | default('ircfiber-sysagent') }}"
+  community.docker.docker_container:
+    name: "{{ sysagent_container_name | default('ircfiber-sysagent') }}"
+    image: "{{ ircfiber_gateway_image_full }}"
+    state: started
+    restart_policy: unless-stopped
+    command: ["/app/irc-fiber"]
+    networks:
+      - name: "{{ docker_ircfiber_network | default('ircfiber_net') }}"
+    networks_cli_compatible: true
+    # Exactly these four keys and nothing else: this container must never see
+    # the gateway env dict (Mongo/Redis/OAuth/mail secrets). The gateway is
+    # the authenticated client; this sidecar only verifies the bearer.
+    env:
+      IRCFIBER_SYSAGENT: "1"
+      IRCFIBER_SYSAGENT_PORT: "{{ sysagent_port | default('8099') }}"
+      IRCFIBER_SYSAGENT_TOKEN_FILE: "{{ gateway_secrets_dir | default('/etc/ircfiber/gateway/secrets') }}/sysagent_token"
+      IRCFIBER_OTEL_ENABLED: "0"
+    # Exactly these five mounts and nothing more. The socket is deliberately
+    # NOT :ro — read-only on a socket inode does not restrict API writes, so
+    # marking it so would misrepresent the grant. The token is a single-file
+    # bind, never the whole secrets dir: the point of the sidecar is that it
+    # holds no other credential.
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "/proc:/host/proc:ro"
+      - "/sys:/host/sys:ro"
+      - "/:/host/root:ro"
+      - "{{ gateway_secrets_dir | default('/etc/ircfiber/gateway/secrets') }}/sysagent_token:{{ gateway_secrets_dir | default('/etc/ircfiber/gateway/secrets') }}/sysagent_token:ro"
+    # Resource limits, sized like the other watchers: the sidecar polls the
+    # Docker socket and reads /proc on a loop, so it gets the same quarter
+    # core as autoheal and a cap far above its steady state.
+    memory: "{{ sysagent_memory_limit | default('192m') }}"
+    memory_reservation: "{{ sysagent_memory_reservation | default('64m') }}"
+    cpus: "{{ sysagent_cpus | default(0.25) | float }}"
+    # Disposable by design: stateless, restarted by unless-stopped, and only
+    # ever one of it — losing it costs one poll interval of admin metrics.
+    oom_score_adj: "{{ sysagent_oom_score_adj | default(500) | int }}"
+    # /healthz is unauthenticated and returns no data, so the probe needs no
+    # credential. autoheal watches every container on this host by label, so
+    # a wedged agent is restarted without an operator.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:{{ sysagent_port | default('8099') }}/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opts:
+      - "no-new-privileges:true"
+    labels:
+      com.ircfiber.component: "sysagent"
+      com.ircfiber.version: "{{ ircfiber_version | default('unknown') }}"
+
+# The /healthz route is unauthenticated and returns no data — safe to probe
+# from the host without the bearer token.
+- name: Verify sysagent answers /healthz
+  ansible.builtin.command: >-
+    docker exec {{ sysagent_container_name | default('ircfiber-sysagent') }}
+    curl -fsS http://127.0.0.1:{{ sysagent_port | default('8099') }}/healthz
+  register: sysagent_health
+  until: sysagent_health.rc == 0
+  retries: 30
+  delay: 1
+  changed_when: false

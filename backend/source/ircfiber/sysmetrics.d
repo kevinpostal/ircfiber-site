@@ -476,6 +476,10 @@ struct ContainerSample {
     /// This gateway container — can never be stopped or restarted from here.
     bool self;
     bool controllable;
+    /// `stop` is refused server-side (see STOP_PROTECTED) while `restart`
+    /// and `start` are allowed. Published so the page disables the same
+    /// button the backend refuses.
+    bool stopProtected;
     /// Human reason the state buttons are disabled; "" when controllable.
     string controlReason;
 }
@@ -565,6 +569,13 @@ bool dockerContainerState(string name, out string state, out string status) {
         status = c.status;
         return true;
     }
+    if (snap.collectedAtMs == 0) {
+        // First call after a restart: the collector has not published yet.
+        // "missing" here would send an operator hunting a removed container.
+        state = "unknown";
+        status = "inventory not collected yet";
+        return false;
+    }
     if (snap.dockerError.length > 0) {
         state = "unknown";
         status = "docker unavailable";
@@ -575,51 +586,120 @@ bool dockerContainerState(string name, out string state, out string status) {
     return false;
 }
 
-/// start | stop | restart one container. Called from the request fiber, so
-/// it blocks it for up to 20 s — the same order as the existing 15 s IRC
-/// `LIST` transaction. Self and non-allowlisted containers are refused
-/// before the socket is touched.
-ActionResult containerAction(string name, string action) {
-    ActionResult r;
-    if (action != "start" && action != "stop" && action != "restart") {
-        r.httpStatus = 400;
-        r.message = "unknown action: " ~ action;
-        return r;
+/// Containers whose `stop` has no undo from inside the product. Docker never
+/// restarts a container that was stopped through the API, and with
+/// `ircfiber-caddy` or `ircfiber-cloudflared` down the Start button that
+/// would fix it is no longer reachable — recovery needs host SSH. Stopping
+/// `ircfiber-autoheal` silently disables automated recovery for every
+/// container on the box. `restart` and `start` stay available for all of
+/// them; only `stop` is refused. Enforced here, server-side: the page's
+/// confirmation dialog is a courtesy, not a control.
+static immutable string[] STOP_PROTECTED = [
+    "ircfiber-caddy", "ircfiber-cloudflared", "ircfiber-autoheal",
+    "ircfiber-mongo", "ircfiber-redis", "ircfiber-ircd", "ircfiber-services",
+    "ircfiber-holder-ovh", "ircfiber-engine-ovh",
+];
+
+/// True when `stop` is refused for this container. Exposed so the snapshot
+/// can publish the same reason the enforcement uses.
+bool isStopProtected(string name) {
+    foreach (p; STOP_PROTECTED) if (p == name) return true;
+    return false;
+}
+
+/// Strips control characters from a request-supplied value before it reaches
+/// a log line, and caps its length. vibe's router percent-decodes route
+/// params, so `%0A` arrives as a real newline: without this a caller could
+/// forge a second, fabricated audit record in the gateway log and in SigNoz.
+string logSafe(string raw) {
+    import std.array : appender;
+    if (raw.length == 0) return "<empty>";
+    auto app = appender!string();
+    size_t emitted;
+    foreach (char ch; raw) {
+        if (emitted >= 128) { app.put("…"); break; }
+        app.put(ch < 0x20 || ch == 0x7f ? '?' : ch);
+        emitted++;
     }
+    return app.data;
+}
+
+/// Hard cap on a log tail. `tail` bounds lines, not bytes, and a single line
+/// has no length limit — the ircd and the bouncer log connection-time
+/// material supplied by unauthenticated IRC users. Without this the response
+/// path allocates several multiples of the raw size in one burst.
+enum LOG_MAX_BYTES = 2 * 1024 * 1024;
+
+/// Shared authorization for every container-addressed operation — the three
+/// action verbs AND the log tail. Every caller goes through this: an
+/// operation that skips it is a hole, which is exactly how the log route was
+/// ungated in the first cut.
+///
+/// `verb` is `start`, `stop`, `restart` or `logs`. `ok` means proceed;
+/// otherwise `httpStatus`/`message` are ready to serve.
+ActionResult resolveControl(string name, string verb) {
+    ActionResult r;
     if (!validContainerName(name)) {
         r.httpStatus = 400;
-        r.message = "invalid container name: " ~ name;
+        r.message = "invalid container name";
+        return r;
+    }
+    const bool isLogs = verb == "logs";
+    if (!isLogs && verb != "start" && verb != "stop" && verb != "restart") {
+        r.httpStatus = 400;
+        r.message = "unknown action: " ~ verb;
         return r;
     }
     auto snap = sysSnapshot();
-    bool found;
     foreach (c; snap.containers) {
         if (c.name != name) continue;
-        found = true;
-        if (c.self) {
+        // Reading our own log is useful and harmless; changing our own state
+        // is never allowed.
+        if (c.self && !isLogs) {
             r.httpStatus = 409;
-            r.message = "refusing to " ~ action ~ " this gateway container";
+            r.message = "refusing to " ~ verb ~ " this gateway container";
             return r;
         }
-        if (!c.controllable) {
+        if (!c.controllable && !(isLogs && c.self)) {
             r.httpStatus = 403;
-            r.message = "refusing to " ~ action ~ " " ~ name ~ ": " ~ c.controlReason;
+            r.message = "refusing to " ~ verb ~ " " ~ name ~ ": " ~ c.controlReason;
             return r;
         }
-        break;
-    }
-    if (!found) {
-        if (snap.dockerError.length > 0) {
-            r.httpStatus = 503;
-            r.message = "docker socket unavailable: " ~ snap.dockerError;
-        } else {
-            r.httpStatus = 404;
-            r.message = "no such container: " ~ name;
+        if (verb == "stop" && isStopProtected(name)) {
+            r.httpStatus = 409;
+            r.message = "refusing to stop " ~ name
+                ~ ": a stop has no undo from here (nothing restarts it and the"
+                ~ " control path may run through it) — use restart";
+            return r;
         }
+        r.ok = true;
+        r.httpStatus = 200;
         return r;
     }
+    // Not in the inventory. Distinguish "not collected yet" from "gone":
+    // the first call after a restart always sees an empty snapshot.
+    if (snap.collectedAtMs == 0) {
+        r.httpStatus = 503;
+        r.message = "container inventory not collected yet — retry in a few seconds";
+    } else if (snap.dockerError.length > 0) {
+        r.httpStatus = 503;
+        r.message = "docker socket unavailable: " ~ snap.dockerError;
+    } else {
+        r.httpStatus = 404;
+        r.message = "no such container: " ~ name;
+    }
+    return r;
+}
 
-    import std.process : execute;
+/// start | stop | restart one container. Runs on a request fiber, so it uses
+/// vibe's fiber-aware `execute`: Phobos' would park the whole event-loop
+/// thread for the full `--max-time` and stall every other user.
+ActionResult containerAction(string name, string action) {
+    auto gate = resolveControl(name, action);
+    if (!gate.ok) return gate;
+
+    ActionResult r;
+    import vibe.core.process : execute, Config;
     string code;
     try {
         // `?t=10` is the stop grace period (ignored by /start).
@@ -627,7 +707,7 @@ ActionResult containerAction(string name, string action) {
             "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}",
             "--max-time", "20", "-X", "POST", "--unix-socket", DOCKER_SOCK,
             "http://d/" ~ DOCKER_API ~ "/containers/" ~ name ~ "/" ~ action ~ "?t=10",
-        ]);
+        ], null, Config.none, 64);
         if (proc.status != 0) {
             r.httpStatus = 503;
             r.message = "docker socket unavailable: curl exit "
@@ -664,19 +744,49 @@ ActionResult containerAction(string name, string action) {
     }
 }
 
-/// Demuxed, sanitized tail of one container's logs.
-string containerLogs(string name, int tail) {
-    import std.process : execute;
-    if (!validContainerName(name)) throw new Exception("invalid container name: " ~ name);
+/// Outcome of a log tail. A status, not an exception, so a bad name reads as
+/// 400 and a dead socket as 503 instead of both arriving as one 503.
+struct LogsResult {
+    bool ok;
+    int httpStatus;
+    string message;
+    string text;
+}
+
+/// Demuxed, sanitized, byte-capped tail of one container's logs. Subject to
+/// the same allowlist as the state actions.
+LogsResult containerLogs(string name, int tail) {
+    LogsResult out_;
+    auto gate = resolveControl(name, "logs");
+    if (!gate.ok) {
+        out_.httpStatus = gate.httpStatus;
+        out_.message = gate.message;
+        return out_;
+    }
     if (tail < 1) tail = 1;
-    auto proc = execute([
-        "curl", "-s", "--max-time", "10", "--unix-socket", DOCKER_SOCK,
-        "http://d/" ~ DOCKER_API ~ "/containers/" ~ name
-            ~ "/logs?stdout=1&stderr=1&timestamps=1&tail=" ~ tail.to!string,
-    ]);
-    if (proc.status != 0)
-        throw new Exception("docker socket unavailable: curl exit " ~ proc.status.to!string);
-    return demuxDockerLogStream(cast(const(ubyte)[]) proc.output);
+    import vibe.core.process : execute, Config;
+    try {
+        auto proc = execute([
+            "curl", "-s", "--max-time", "10", "--unix-socket", DOCKER_SOCK,
+            "http://d/" ~ DOCKER_API ~ "/containers/" ~ name
+                ~ "/logs?stdout=1&stderr=1&timestamps=1&tail=" ~ tail.to!string,
+        ], null, Config.none, LOG_MAX_BYTES);
+        if (proc.status != 0) {
+            out_.httpStatus = 503;
+            out_.message = "docker socket unavailable: curl exit " ~ proc.status.to!string;
+            return out_;
+        }
+        out_.text = demuxDockerLogStream(cast(const(ubyte)[]) proc.output);
+        if (proc.output.length >= LOG_MAX_BYTES)
+            out_.text ~= "\n… [truncated at " ~ (LOG_MAX_BYTES / 1024).to!string ~ " KiB]";
+        out_.ok = true;
+        out_.httpStatus = 200;
+        return out_;
+    } catch (Exception e) {
+        out_.httpStatus = 503;
+        out_.message = "docker socket unavailable: " ~ e.msg;
+        return out_;
+    }
 }
 
 // Collector-thread state. Thread-local by default in D, and only the
@@ -900,6 +1010,7 @@ private void collectOnce() {
                 cs.controlReason = "name outside the ircfiber-/tailscale-mullvad- allowlist";
             } else {
                 cs.controllable = true;
+                cs.stopProtected = isStopProtected(row.name);
             }
 
             if (row.state == "running") {

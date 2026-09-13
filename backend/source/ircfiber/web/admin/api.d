@@ -1382,9 +1382,10 @@ package void apiSessionsClearOne(HTTPServerRequest req, HTTPServerResponse res, 
 import ircfiber.egress : mullvadRawPool, parseMullvadPool, PoolEntry,
     DIRECT_EGRESS_ID, EgressSlot, EgressView, egressView, matchingSlot,
     normalizeEgressId, isKnownEgressId;
-// Single Docker client for the whole backend (Engine API over the socket,
-// collected on the System page's background thread — see sysmetrics.d).
-import ircfiber.sysmetrics : containerAction, dockerContainerState;
+// Single Docker client for the whole backend — and it is not in this
+// process. The gateway holds no socket; `web.admin.system` forwards to the
+// ircfiber-sysagent sidecar, which re-checks the allowlist itself.
+import ircfiber.web.admin.system : agentContainerAction, agentContainerState;
 
 private struct _ContainerInfo { string container; string state; string status; string tailscaleExit; }
 
@@ -1454,7 +1455,7 @@ private _ContainerInfo _collectContainerState(string label) {
     // the daemon has no such container, "unknown"/"docker unavailable" when
     // the socket itself is unreachable.
     string state, status;
-    dockerContainerState(ci.container, state, status);
+    agentContainerState(ci.container, state, status);
     ci.state = state;
     ci.status = status;
     return ci;
@@ -2266,7 +2267,7 @@ package void apiMullvadRestart(HTTPServerRequest req, HTTPServerResponse res,
     // over /var/run/docker.sock. The old `docker restart` shell-out could
     // never work — the runtime image ships no docker CLI.
     auto cname = "tailscale-mullvad-" ~ label;
-    auto r = containerAction(cname, "restart");
+    auto r = agentContainerAction(cname, "restart");
     if (!r.ok) {
         if (r.httpStatus == 404) {
             jsonError(res, 404, "container not found: " ~ cname);

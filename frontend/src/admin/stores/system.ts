@@ -99,6 +99,13 @@ export interface SystemContainer {
   /** This gateway container: state actions are refused server-side too. */
   self: boolean;
   controllable: boolean;
+  /**
+   * `stop` is refused by the backend (ingress, datastores, ircd, watchdog):
+   * nothing restarts a container stopped through the Docker API, and the
+   * Start button that would fix it may run through the container being
+   * stopped. `restart` and `start` stay available.
+   */
+  stopProtected: boolean;
   controlReason: string;
 }
 
