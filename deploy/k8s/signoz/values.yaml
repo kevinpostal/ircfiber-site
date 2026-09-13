@@ -41,6 +41,75 @@ clickhouse:
     limits:
       cpu: 2000m
       memory: 8Gi
+  # ClickHouse's OWN system logs, not telemetry. Measured 2026-09-13, six
+  # days after install: trace_log 1.68G, zookeeper_log 1.62G, query_log
+  # 651M, processors_profile_log 633M, asynchronous_metric_log 338M,
+  # part_log 333M, metric_log 152M — 5.4G of the 7.1G PV, against 174M of
+  # actual signoz_logs. The chart's config.d/system_log.xml only TTLs
+  # text_log, latency_log, error_log and query_metric_log, so the big ones
+  # grew unbounded and helped push the node into DiskPressure.
+  #
+  # This key replaces that one file in clickhouse.files (the other entries —
+  # crash.xml, formatting.xml, load.xml … — are untouched). trace_log,
+  # zookeeper_log, processors_profile_log and asynchronous_metric_log are
+  # removed outright: they only answer "why is ClickHouse itself slow",
+  # which is not a question this deployment needs at 250M/day.
+  #
+  # The tables that stay are re-declared in full rather than given a bare
+  # <ttl>: the clickhouse-operator ships config.d/01-clickhouse-NN-*.xml
+  # with an <engine> for each of them (MergeTree … TTL event_date + interval
+  # 30 day), and ClickHouse refuses to start with
+  # "If 'engine' is specified for system table, TTL parameters should be
+  # specified directly inside 'engine'" (exit 36, observed 2026-09-13) when
+  # both are present. text_log/latency_log/error_log/query_metric_log have
+  # no operator file, so those keep the chart's plain <ttl> form.
+  #
+  # ClickHouse applies a changed system-log definition on start-up by
+  # renaming the old table aside, so a helm upgrade is enough.
+  files:
+    config.d/system_log.xml: |
+      <clickhouse>
+        <trace_log remove="1"/>
+        <zookeeper_log remove="1"/>
+        <processors_profile_log remove="1"/>
+        <asynchronous_metric_log remove="1"/>
+        <query_log replace="1">
+          <database>system</database>
+          <table>query_log</table>
+          <engine>Engine = MergeTree PARTITION BY event_date ORDER BY event_time TTL event_date + interval 3 day</engine>
+          <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        </query_log>
+        <part_log replace="1">
+          <database>system</database>
+          <table>part_log</table>
+          <engine>Engine = MergeTree PARTITION BY event_date ORDER BY event_time TTL event_date + interval 3 day</engine>
+          <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        </part_log>
+        <metric_log replace="1">
+          <database>system</database>
+          <table>metric_log</table>
+          <engine>Engine = MergeTree PARTITION BY event_date ORDER BY event_time TTL event_date + interval 3 day</engine>
+          <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        </metric_log>
+        <query_views_log replace="1">
+          <database>system</database>
+          <table>query_views_log</table>
+          <engine>Engine = MergeTree PARTITION BY event_date ORDER BY event_time TTL event_date + interval 3 day</engine>
+          <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        </query_views_log>
+        <text_log>
+          <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+        </text_log>
+        <latency_log>
+          <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+        </latency_log>
+        <error_log>
+          <ttl>event_date + INTERVAL 7 DAY DELETE</ttl>
+        </error_log>
+        <query_metric_log>
+          <ttl>event_date + INTERVAL 3 DAY DELETE</ttl>
+        </query_metric_log>
+      </clickhouse>
 # ---- SigNoz queryService + frontend (merged Deployment "signoz") ----
 signoz:
   replicaCount: 1

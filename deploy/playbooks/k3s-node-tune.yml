@@ -20,6 +20,12 @@
 # in place, the eviction manager was still reclaiming ephemeral-storage at
 # 4.76% free. The supported override is another drop-in that sorts after it.
 #
+# The threshold alone was not enough (2026-09-13): k3s' defaults also set
+# `evictionMinimumReclaim: {nodefs.available: 10%, imagefs.available: 10%}`,
+# the amount kubelet must free BEYOND the threshold before it stops, so a 2%
+# threshold still made it chase 12% of 1.87T (~224G) and evict every
+# evictable pod on the node. The drop-in overrides that too.
+#
 # k3s on this node is not under systemd — /usr/local/bin/start.sh launches it
 # with `nohup k3s server > /var/log/k3s.log 2>&1 &` — so the restart handler
 # reproduces exactly that, then waits for the API to answer.
@@ -29,32 +35,53 @@
   gather_facts: false
   vars:
     k3s_kubelet_conf_d: /var/lib/rancher/k3s/agent/etc/kubelet.conf.d
+    k3s_config: /etc/rancher/k3s/config.yaml
   tasks:
-    - name: Install the kubelet eviction drop-in
+    # Single source of truth for kubelet tuning. Ansible owns this whole file:
+    # every key k3s needs on this node is here.
+    - name: Write the k3s server config
       ansible.builtin.copy:
-        dest: "{{ k3s_kubelet_conf_d }}/10-ircfiber-eviction.conf"
+        dest: "{{ k3s_config }}"
         owner: root
         group: root
-        mode: "0600"
+        mode: "0644"
         content: |
           # Managed by playbooks/k3s-node-tune.yml — see that file for why.
+          write-kubeconfig-mode: 0644
+          snapshotter: fuse-overlayfs
+          secrets-encryption: true
+          # Eviction tuning. The node's root filesystem is odysseus' 1.87T
+          # disk, which we do not control and which sits at ~97%.
           #
-          # Sorts after 00-k3s-defaults.conf, so these values replace k3s'
-          # 5%/5%. 2% of this 1.87T filesystem is still a ~37G reserve, which
-          # is more than the entire cluster's own footprint, while 5% (93G)
-          # was unreachable on a disk shared with the odysseus host.
-          # nodefs.inodesFree is carried explicitly: setting evictionHard
-          # replaces the whole map, and an inode-exhaustion guard is worth
-          # keeping.
-          apiVersion: kubelet.config.k8s.io/v1beta1
-          kind: KubeletConfiguration
-          evictionHard:
-            nodefs.available: 2%
-            imagefs.available: 2%
-            nodefs.inodesFree: 3%
+          # - eviction-hard 2%: ~37G reserve, more than the entire cluster's
+          #   own footprint, where k3s' default 5% (93G) is unreachable.
+          # - eviction-minimum-reclaim: how much MORE kubelet must free after
+          #   a threshold trips before it stops evicting. k3s defaults it to
+          #   10% of nodefs AND imagefs, so the eviction manager chased
+          #   2% + 10% = ~224G and evicted every evictable pod on the node in
+          #   a loop at 66G / 3.8% free (2026-09-13). 1Gi means "get back
+          #   over the line, then stop".
+          # - nodefs.inodesFree is carried explicitly: eviction-hard replaces
+          #   the whole map and an inode guard is worth keeping.
+          #
+          # These are kubelet FLAGS, not a kubelet.conf.d drop-in: the
+          # deprecated flags win over config-dir values, which is why the
+          # earlier 10-ircfiber-eviction.conf drop-in never took effect
+          # (configz kept reporting the flag's 3% and k3s' 10% reclaim).
+          kubelet-arg:
+            - "eviction-hard=nodefs.available<2%,imagefs.available<2%,nodefs.inodesFree<3%"
+            - "eviction-minimum-reclaim=nodefs.available=1Gi,imagefs.available=1Gi"
       notify: Restart k3s
 
-    # The drop-in only takes effect on a kubelet start, so allow an explicit
+    # Superseded by the flags above; leaving it in place would be a second,
+    # silently ineffective home for the same setting.
+    - name: Remove the superseded kubelet eviction drop-in
+      ansible.builtin.file:
+        path: "{{ k3s_kubelet_conf_d }}/10-ircfiber-eviction.conf"
+        state: absent
+      notify: Restart k3s
+
+    # The config only takes effect on a kubelet start, so allow an explicit
     # bounce when the file is already correct but the running kubelet is not:
     #   ansible-playbook playbooks/k3s-node-tune.yml -e k3s_force_restart=true
     - name: Request a k3s restart
@@ -64,6 +91,34 @@
       notify: Restart k3s
       when: k3s_force_restart | default(false) | bool
 
+    - name: Flush handlers so the verification below sees the new kubelet
+      ansible.builtin.meta: flush_handlers
+
+    - name: Read the running kubelet's effective eviction config
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          k3s kubectl get --raw "/api/v1/nodes/$(hostname)/proxy/configz" \
+            | python3 -c 'import json,sys; k=json.load(sys.stdin)["kubeletconfig"]; print(json.dumps({"hard": k.get("evictionHard"), "minReclaim": k.get("evictionMinimumReclaim")}))'
+        executable: /bin/bash
+      register: k3s_configz
+      changed_when: false
+      retries: 10
+      delay: 6
+      until: k3s_configz.rc == 0
+
+    # A drop-in that loses to a flag fails silently, so assert on what the
+    # kubelet actually runs with rather than on the file we wrote.
+    - name: Assert kubelet runs with the tuned eviction values
+      ansible.builtin.assert:
+        that:
+          - (k3s_configz.stdout | from_json).hard['nodefs.available'] == '2%'
+          - (k3s_configz.stdout | from_json).hard['imagefs.available'] == '2%'
+          - (k3s_configz.stdout | from_json).minReclaim['nodefs.available'] == '1Gi'
+          - (k3s_configz.stdout | from_json).minReclaim['imagefs.available'] == '1Gi'
+        success_msg: "kubelet eviction: {{ k3s_configz.stdout }}"
+        fail_msg: "kubelet is NOT using the tuned values: {{ k3s_configz.stdout }}"
+
   handlers:
     # kubelet reads its config once at start-up; k3s embeds kubelet, so the
     # whole server has to come back. Everything on this node is a Deployment,
@@ -72,15 +127,25 @@
       ansible.builtin.shell:
         cmd: |
           set -u
-          # The process' comm is "k3s-server", NOT "k3s": `pkill -x k3s`
-          # matches nothing and silently leaves the old kubelet running with
-          # the old config (observed 2026-09-07). Match the full argv instead.
-          pkill -f '^/usr/local/bin/k3s server$' || true
+          # The process' comm is "k3s-server", NOT "k3s", so `pkill -x k3s`
+          # matches nothing (observed 2026-09-07). Its argv is also just
+          # "k3s server" — start.sh execs it off PATH — so the absolute-path
+          # pattern '^/usr/local/bin/k3s server$' matched nothing either and
+          # this handler reported "changed" while leaving the old kubelet
+          # running with the old config (observed 2026-09-13). Match the
+          # argv as it actually appears, with the path optional.
+          pat='^(/usr/local/bin/)?k3s server$'
+          before=$(pgrep -f "$pat" | head -1)
+          if [ -z "$before" ]; then
+            echo "no running k3s server matched $pat"
+            exit 1
+          fi
+          pkill -f "$pat" || true
           for i in $(seq 1 60); do
-            pgrep -f '^/usr/local/bin/k3s server$' >/dev/null || break
+            pgrep -f "$pat" >/dev/null || break
             sleep 1
           done
-          if pgrep -f '^/usr/local/bin/k3s server$' >/dev/null; then
+          if pgrep -f "$pat" >/dev/null; then
             echo "k3s still running after SIGTERM; refusing to start a second one"
             exit 1
           fi
@@ -88,7 +153,12 @@
           nohup k3s server >> /var/log/k3s.log 2>&1 &
           for i in $(seq 1 120); do
             if k3s kubectl get --raw /readyz >/dev/null 2>&1; then
-              echo "k3s ready after ${i}s"
+              after=$(pgrep -f "$pat" | head -1)
+              if [ "$after" = "$before" ]; then
+                echo "k3s pid unchanged ($after): the old process survived"
+                exit 1
+              fi
+              echo "k3s ready after ${i}s (pid $before -> $after)"
               exit 0
             fi
             sleep 1

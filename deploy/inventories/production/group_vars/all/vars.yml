@@ -320,7 +320,16 @@ ircd_server_name: "irc.ircfiber.com"
 
 # Link the k3s spanningtree leaf (playbooks/ircd-k8s-leaf.yml). The hub is
 # the connecting side, so this needs only a rehash, never a restart.
-ircd_k8s_link_enabled: true
+#
+# This is the ON/OFF switch for the whole leaf. `make ircd-leaf-off` flips it
+# to false, scales the k8s Deployment to 0 and rehashes the hub;
+# `make ircd-leaf-on` does the reverse. Off while the leaf is not running:
+# the hub's <autoconnect> retries every 16s and each failure is a REMOTELINK
+# snotice that every linked network (netcrave, ircd.chat) sees.
+#
+# 2026-09-13: off — the k3s node (odysseus, 1.7T shared disk at 97%) is in
+# DiskPressure, so kubelet evicts the leaf pod as fast as it is created.
+ircd_k8s_link_enabled: false
 # Leaf server name, here for the same reason as ircd_server_name above:
 # roles/engine's env.j2 names it in IRCFIBER_FLOOD_TRUSTED_HOSTS and runs in
 # a play where roles/ircd defaults are not in scope.
