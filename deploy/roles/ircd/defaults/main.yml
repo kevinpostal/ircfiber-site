@@ -309,6 +309,27 @@ ircd_permanent_channels:
     access:
       hop:
         - "FIBEREYE"
+    #
+    # Known noise (accepted, not a bug, 2026-09-11): #staff also carries
+    # LINK/REMOTEOPER/REMOTECONNECT/REMOTEXLINE/GLOBOPS lines sourced
+    # from `irc.netcrave.chat` itself (bare server prefix, no nick — a
+    # server, not a client). That's irc.netcrave.chat's own InspIRCd
+    # `chanlog` module (see their config, not ours — `chanlog` appears
+    # nowhere in this repo) mirroring THEIR snomask stream into #staff.
+    # Since #staff is a global `#` channel, it's the same channel object
+    # network-wide once linked — there's no partial-sharing option in
+    # IRC protocol, and irc.netcrave.chat isn't even <uline>'d here (only
+    # the Anope services server is), so this isn't a trust setting we
+    # can flip. It also explains an unrelated third party they link to
+    # (uk.insecurity.cloud) showing up as repeated failed-autoconnect
+    # spam. Real fixes are both out of scope of a config tweak: ask
+    # netcrave's admin to retarget/remove their chanlog, or convert
+    # #staff to a local `&staff` channel (never crosses server links,
+    # but a disruptive migration — re-register with ChanServ, rebuild
+    # the access list, update ircd_channel_setup.py, every member
+    # rejoins). Decision: leave it. The #staff log{} block below
+    # (services.conf.j2) delivers its own lines cleanly regardless —
+    # verified live, unaffected by this.
 
 # ChanServ registration of the staff channels above (roles/ircd/files/
 # ircd_channel_setup.py, run over TLS on the loopback TLS port). Set false

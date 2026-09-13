@@ -177,6 +177,8 @@
   loop:
     - { src: services.conf.j2, dest: services.conf }
     - { src: nickserv.conf.j2, dest: nickserv.conf }
+    - { src: global.conf.j2, dest: global.conf }
+    - { src: operserv.conf.j2, dest: operserv.conf }
     - { src: motd.j2, dest: services.motd }
   loop_control:
     label: "{{ item.dest }}"
@@ -445,6 +447,8 @@
       - "{{ ircd_services_data_volume }}:/anope/data"
       - "{{ ircd_services_conf_dir }}/services.conf:/anope/conf/services.conf:ro"
       - "{{ ircd_services_conf_dir }}/nickserv.conf:/anope/conf/nickserv.conf:ro"
+      - "{{ ircd_services_conf_dir }}/global.conf:/anope/conf/global.conf:ro"
+      - "{{ ircd_services_conf_dir }}/operserv.conf:/anope/conf/operserv.conf:ro"
       - "{{ ircd_services_conf_dir }}/services.motd:/anope/conf/services.motd:ro"
     # Resource limits — see the "Resource limits" block in defaults/main.yml.
     # Services rank just behind the ircd in OOM protection: users stay

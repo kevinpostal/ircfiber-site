@@ -152,7 +152,7 @@ module
 	fantasycharacter = "`"
 }
 include { type = "file"; name = "botserv.example.conf" }
-include { type = "file"; name = "global.example.conf" }
+include { type = "file"; name = "global.conf" }
 include { type = "file"; name = "hostserv.example.conf" }
 include { type = "file"; name = "memoserv.example.conf" }
 include { type = "file"; name = "nickserv.conf" }
@@ -211,7 +211,7 @@ module
 	akillreason = "{{ ircd_network_name }} is not accepting new connections right now, please try again later."
 }
 command { service = "OperServ"; name = "DEFCON"; command = "operserv/defcon"; permission = "operserv/defcon"; }
-include { type = "file"; name = "operserv.example.conf" }
+include { type = "file"; name = "operserv.conf" }
 
 /* Logging: services.log under /anope/logs plus globops for admin actions. */
 log
@@ -232,6 +232,40 @@ log
 log
 {
 	target = "globops"
+	admin = "global/* operserv/chankill operserv/mode operserv/kick operserv/akill operserv/s*line operserv/noop operserv/jupe operserv/oline operserv/set operserv/svsnick operserv/svsjoin operserv/svspart nickserv/getpass */drop"
+	servers = "squit"
+	users = "oper"
+	other = "expire/* bados akill/*"
+}
+
+/* Staff channel feed: mirror the globops security set into #staff so opers
+ * watching the channel see spam-relevant services events without needing +s
+ * snomasks, and can answer with `/msg OperServ DEFCON <1-4>` from the same
+ * window. #staff is already oper-only (+O, mode-locked), so per the Anope
+ * "secure your log channels" rule no additional securing is needed.
+ * Deliberately NOT the services.log set: users=connect/disconnect would
+ * flood the channel because every platform user arrives through a couple
+ * of engine container IPs (the same shape behind the 2026-09-02 session
+ * kill incident and the removal of `reducedsessions` from os_defcon).
+ * bot = Global matters only as a fallback: Anope's LOG_ADMIN (admin=)
+ * and LOG_USER (users=) categories always carry a predefined sender —
+ * the command's owning service (OperServ, for both `oper` and every
+ * `operserv/*` admin command here) — which overrides `bot =` entirely
+ * (src/logger.cpp Log::ProcessMessage: `bi = l->bi; if (!bi) bi =
+ * this->bot;`). Channel delivery is a raw PRIVMSG from that sender, and
+ * InspIRCd's +n (noextmsg) on #staff silently drops it unless the
+ * sender is actually a channel member — so BOTH Global (bot fallback)
+ * and OperServ (predefined sender for every category this block uses)
+ * need `channels = "#staff"` in their own service {} blocks. See
+ * global.conf.j2 and operserv.conf.j2 for why that means replacing
+ * their stock includes outright rather than adding override blocks
+ * (Anope does not first-block-wins dedupe `service` the way it dedupes
+ * `module` by name — confirmed live, 2026-09-11: a duplicate `service {
+ * nick = "Global" }` override crashes Anope with SIGSEGV on startup). */
+log
+{
+	target = "#staff"
+	bot = "Global"
 	admin = "global/* operserv/chankill operserv/mode operserv/kick operserv/akill operserv/s*line operserv/noop operserv/jupe operserv/oline operserv/set operserv/svsnick operserv/svsjoin operserv/svspart nickserv/getpass */drop"
 	servers = "squit"
 	users = "oper"

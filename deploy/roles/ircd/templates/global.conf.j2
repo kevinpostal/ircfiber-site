@@ -1,0 +1,39 @@
+/*
+ * {{ ansible_managed }}
+ * Global — derived from Anope 2.0 data/global.example.conf with one IRC
+ * Fiber delta: channels = "#staff", so the Global client actually joins
+ * the channel instead of idling as a bare ULine pseudo-client.
+ *
+ * Needed for the #staff log{} block (services.conf.j2) to deliver at all:
+ * verified live (2026-09-11) that without a real join, Anope's channel
+ * log delivery silently reaches nobody. This replaces the stock include
+ * rather than overriding it with a second `service {}` block, because
+ * Anope does not first-block-wins dedupe `service` blocks the way it
+ * dedupes `module` blocks by name — a duplicate `service { nick =
+ * "Global" }` crashes Anope outright (SIGSEGV on startup).
+ *
+ * Mounted at /anope/conf/global.conf.
+ */
+
+service
+{
+	nick = "Global"
+	user = "services"
+	host = "services.host"
+	gecos = "Global Noticer"
+	channels = "#staff"
+}
+
+/* Core Global module. */
+module
+{
+	name = "global"
+	client = "Global"
+}
+
+/* Give it a help command. */
+command { service = "Global"; name = "HELP"; command = "generic/help"; }
+
+/* gl_global: provides global/global, for sending a message to every online user. */
+module { name = "gl_global" }
+command { service = "Global"; name = "GLOBAL"; command = "global/global"; permission = "global/global"; }
