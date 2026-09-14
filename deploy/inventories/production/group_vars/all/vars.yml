@@ -312,6 +312,46 @@ ircd_services_data_volume: "ircfiber_services_data"
 ircd_services_rpc_enabled: true
 ircd_services_rpc_port: 8080
 
+# --- Discord bridge (Anope 2.1 + bridgeserv sidecar) ---------------------------
+# A second, bridge-only Anope which links as its own server. It exists
+# separately because bridgeserv is 2.1 only, while the services instance above
+# is pinned to 2.0.20 for db_flatfile + m_xmlrpc_main, both of which 2.1
+# removed and both of which the gateway depends on. It carries no account
+# database of the network: the only accounts it knows are the two which
+# authorise BridgeServ.
+ircd_bridge_enabled: true
+# Our own build of Anope 2.1 + bridgeserv
+# (roles/ircd/files/Containerfile.anope). Built and promoted to :prod by
+# `make ship-bridge`, which deploys by digest via playbooks/bridge-deploy.yml.
+ircd_bridge_image_registry: >-
+  {{ (docker_registry_url + '/' if (docker_registry_url | length > 0) else '')
+     + docker_registry_namespace + '/irc-fiber-anope' }}
+ircd_bridge_image: "{{ ircd_bridge_image_registry }}:{{ docker_image_tag }}"
+ircd_bridge_container_name: "ircfiber-bridge"
+ircd_bridge_data_volume: "ircfiber_bridge_data"
+ircd_bridge_services_name: "bridge.ircfiber.com"
+ircd_bridge_net_alias: "bridge"
+# Virtual links and pseudo client hosts are "<guild-id>.{{ ircd_bridge_domain }}".
+ircd_bridge_domain: "discord.bridge"
+# The account a human operator identifies to BridgeAuth as to run BridgeServ
+# commands over IRC. Must be registered once on the sidecar (it has its own,
+# otherwise empty, account database).
+ircd_bridge_admin_account: "{{ ircd_oper_name }}"
+# Server ID of the sidecar. It MUST be set explicitly and MUST differ from
+# every other SID on the network: Anope defaults serverinfo:id to "00A", which
+# the 2.0.20 services instance already uses, and InspIRCd refuses a second
+# server with a SID it has already seen. Anope allocates the SIDs of the
+# per-guild virtual links by incrementing from this one (2BS, 2BT, ...), so
+# leave room after it. The ircd itself is {{ ircd_server_id }}.
+ircd_bridge_server_id: "2BR"
+# JSON-RPC endpoint the admin SPA drives BridgeServ through. Same
+# container-only exposure as the 2.0 XML-RPC listener: no published port.
+# Unlike 2.0's m_xmlrpc, 2.1's jsonrpc supports Bearer token auth, so the
+# listener is additionally gated on vault_ircd_bridge_rpc_token.
+ircd_bridge_rpc_enabled: true
+ircd_bridge_rpc_port: 8080
+ircd_bridge_rpc_account: "bridge-rpc"
+
 # Our own ircd's server name. Also here, not only in roles/ircd defaults,
 # because roles/engine's env.j2 needs it: the engine role runs in its own
 # play (hosts: ircfiber_engines) where the ircd role's defaults are not in

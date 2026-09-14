@@ -1,0 +1,82 @@
+---
+# Discord bridge sidecar: a bridge-only Anope 2.1 (roles/ircd/files/
+# Containerfile.anope) which links as its own server, {{ ircd_bridge_services_name }},
+# and relays IRC <-> Discord through the bridgeserv module.
+#
+# This file is the ONLY place the bridge container is managed. It is included
+# at the end of tasks/main.yml so `make deploy-ircd` keeps it in sync, and is
+# also included on its own by playbooks/bridge-deploy.yml (tasks_from:), which
+# is what `make ship-bridge` runs to deploy a new image by digest without
+# touching ircfiber-ircd or ircfiber-services.
+
+- name: Create bridge config dir
+  ansible.builtin.file:
+    path: "{{ ircd_bridge_conf_dir }}"
+    state: directory
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0750"
+  when: ircd_bridge_enabled | default(false)
+
+# no_log: the rendered config carries both the Discord bot token and the
+# server link password.
+- name: Render bridge Anope config
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ ircd_bridge_conf_dir }}/{{ item.dest }}"
+    owner: "{{ ircd_container_uid }}"
+    group: "{{ ircd_container_uid }}"
+    mode: "0640"
+  loop:
+    - { src: bridge-anope.conf.j2, dest: anope.conf }
+    - { src: bridge-motd.j2, dest: bridge.motd }
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: true
+  notify: Restart bridge
+  when: ircd_bridge_enabled | default(false)
+
+- name: Create bridge data volume
+  community.docker.docker_volume:
+    name: "{{ ircd_bridge_data_volume }}"
+  when: ircd_bridge_enabled | default(false)
+
+- name: Run ircfiber-bridge (Anope 2.1 + bridgeserv)
+  community.docker.docker_container:
+    name: "{{ ircd_bridge_container_name }}"
+    image: "{{ ircd_bridge_image }}"
+    state: started
+    restart_policy: "{{ ircd_restart_policy }}"
+    networks:
+      - name: "{{ docker_ircfiber_network }}"
+        aliases:
+          - "{{ ircd_bridge_net_alias }}"
+          - "{{ ircd_bridge_services_name }}"
+    networks_cli_compatible: true
+    volumes:
+      - "{{ ircd_bridge_data_volume }}:/anope/data"
+      - "{{ ircd_bridge_conf_dir }}/anope.conf:/anope/conf/anope.conf:ro"
+      - "{{ ircd_bridge_conf_dir }}/bridge.motd:/anope/conf/bridge.motd:ro"
+    # Resource limits — see the "Resource limits" block in defaults/main.yml.
+    # Deliberately less OOM-protected than services: losing the bridge costs
+    # the Discord relay, losing services costs NickServ network-wide.
+    memory: "{{ ircd_bridge_memory_limit }}"
+    memory_reservation: "{{ ircd_bridge_memory_reservation }}"
+    cpus: "{{ ircd_bridge_cpus | float }}"
+    oom_score_adj: "{{ ircd_bridge_oom_score_adj | int }}"
+    healthcheck:
+      # Process check only, for the same reason as ircfiber-services: the
+      # uplink to ircd:{{ ircd_link_port }} is an *outbound* connection whose
+      # absence is normal during an ircd restart, and there is no inbound
+      # client listener to probe. (The JSON-RPC listener is not probed
+      # either: it answers only with a valid Bearer token.)
+      test: ["CMD-SHELL", "pgrep anope >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    labels:
+      com.ircfiber.component: "bridge"
+      com.ircfiber.version: "{{ ircfiber_version }}"
+      com.ircfiber.server_name: "{{ ircd_bridge_services_name }}"
+  when: ircd_bridge_enabled | default(false)

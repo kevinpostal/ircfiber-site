@@ -57,6 +57,21 @@ vault_ircd_netcrave_link_password: "REPLACE-WITH-NETCRAVE-LINK-SECRET"
 # Server-link password for the k3s spanningtree leaf (k8s.ircfiber.com).
 # Shared sendpass/recvpass on both sides of the OVH<->k3s link.
 vault_ircd_k8s_link_password: "REPLACE-WITH-K8S-LINK-SECRET"
+
+# --- Discord bridge (Anope 2.1 + bridgeserv sidecar) ----------------------------
+# Discord bot token of the bridge application. Rendered into the sidecar's
+# anope.conf and handed to the gateway as a secret file so the admin panel's
+# guild/channel pickers work while the sidecar is down.
+vault_bridgeserv_discord_token: "REPLACE-WITH-DISCORD-BOT-TOKEN"
+# Shared secret for the InspIRCd <-> bridge sidecar server link (>= 16 chars).
+# Must differ from vault_ircd_services_link_password: the two links
+# authenticate separately.
+vault_ircd_bridge_link_password: "REPLACE-WITH-RANDOM-32-CHARS"
+# Bearer token for the sidecar's JSON-RPC listener (>= 32 chars), which the
+# gateway drives BridgeServ through. Scoped to the anope.command method; the
+# listener is only reachable inside the docker network.
+vault_ircd_bridge_rpc_token: "REPLACE-WITH-RANDOM-48-CHARS"
+
 # Host-cloak HMAC key (>= 30 chars). Changing it invalidates existing
 # cloak-based channel bans.
 vault_ircd_cloak_key: "REPLACE-WITH-RANDOM-48-CHARS"

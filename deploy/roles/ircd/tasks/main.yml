@@ -577,3 +577,11 @@
     var: ircd_chanserv_setup.stdout_lines
   when: ircd_chanserv_setup_enabled | bool
   tags: [chanserv]
+
+# The Discord bridge sidecar. Last, so it links to an ircd which already
+# carries its <link>/<uline>. Every task in the file is guarded on
+# ircd_bridge_enabled, and playbooks/bridge-deploy.yml includes the same file
+# on its own to deploy a new image without touching the ircd or services.
+- name: Manage the Discord bridge sidecar
+  ansible.builtin.include_tasks: bridge.yml
+  tags: [bridge]

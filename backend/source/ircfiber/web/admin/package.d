@@ -51,6 +51,8 @@ import ircfiber.web.admin.nickserv : apiNsAccounts, apiNsAccount, apiNsSuspend,
 import ircfiber.web.admin.chanserv : apiCsChannels, apiCsChannel, apiCsSuspend,
     apiCsUnsuspend, apiCsDrop, apiCsRegister, apiCsFounder, apiCsAccessAdd,
     apiCsAccessDelete;
+import ircfiber.web.admin.bridge : apiBridgeList, apiBridgeGuilds,
+    apiBridgeChannels, apiBridgeAdd, apiBridgeSet, apiBridgeDel;
 import ircfiber.web.admin.invites : apiInvitesList, apiInviteRevoke, apiProvisionedList;
 import ircfiber.web.admin.support : apiSupportIssuesList, apiSupportIssueDetail,
     apiSupportIssueUpdate, apiSupportIssueComment, apiSupportIssueDelete,
@@ -314,6 +316,16 @@ final class AdminController {
         router.post("/api/admin/ircd/chanserv/founder", &adminWrap!apiCsFounder);
         router.post("/api/admin/ircd/chanserv/access", &adminWrap!apiCsAccessAdd);
         router.post("/api/admin/ircd/chanserv/access/delete", &adminWrap!apiCsAccessDelete);
+
+        // BridgeServ (Anope 2.1 sidecar) Discord bridges, on the same IRCD
+        // page. Driven over JSON-RPC against bridge.ircfiber.com, not the
+        // 2.0 XML-RPC listener the two surfaces above use.
+        router.get("/api/admin/ircd/bridge/bridges", &adminWrap!apiBridgeList);
+        router.get("/api/admin/ircd/bridge/guilds", &adminWrap!apiBridgeGuilds);
+        router.get("/api/admin/ircd/bridge/channels", &adminWrap!apiBridgeChannels);
+        router.post("/api/admin/ircd/bridge/add", &adminWrap!apiBridgeAdd);
+        router.post("/api/admin/ircd/bridge/set", &adminWrap!apiBridgeSet);
+        router.post("/api/admin/ircd/bridge/del", &adminWrap!apiBridgeDel);
         // !adduser invites + provisioned accounts, on the same IRCD page
         router.get("/api/admin/ircd/invites", &adminWrap!apiInvitesListRoute);
         router.post("/api/admin/ircd/invites/revoke", &adminWrap!apiInviteRevokeRoute);

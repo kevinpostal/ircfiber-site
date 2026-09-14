@@ -59,6 +59,15 @@ ircd_services_memory_reservation: "64m"
 ircd_services_cpus: 1.0
 ircd_services_oom_score_adj: -300
 
+# The bridge sidecar holds only its stored bridges and the pseudo clients
+# which are currently online, so its footprint is close to the services one.
+# Deliberately less OOM-protected than services: losing the bridge costs the
+# Discord relay, losing services costs NickServ for the whole network.
+ircd_bridge_memory_limit: "256m"
+ircd_bridge_memory_reservation: "64m"
+ircd_bridge_cpus: 1.0
+ircd_bridge_oom_score_adj: -100
+
 # ---------------------------------------------------------------------------
 # Health probes (see the healthcheck comments in tasks/main.yml)
 #
@@ -81,6 +90,10 @@ ircd_healthcheck_socket_every: 20
 # /anope/conf/ (the image ships the *.example.conf includes there).
 ircd_conf_dir: "/etc/ircfiber/ircd"
 ircd_services_conf_dir: "/etc/ircfiber/services"
+# The bridge sidecar's rendered anope.conf, bind-mounted read-only over
+# /anope/conf/anope.conf. It contains the Discord bot token and the link
+# password, so the dir is 0750 and the file 0640, owned by uid 10000.
+ircd_bridge_conf_dir: "/etc/ircfiber/bridge"
 ircd_container_uid: 10000
 
 # Docker network aliases. The engine dials irc.ircfiber.com; on the host

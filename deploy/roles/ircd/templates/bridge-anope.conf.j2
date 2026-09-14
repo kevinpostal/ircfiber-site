@@ -1,0 +1,260 @@
+/*
+ * {{ ansible_managed }}
+ * Anope 2.1 bridge sidecar — {{ ircd_bridge_services_name }} for {{ ircd_network_name }}
+ *
+ * Mounted read-only at /anope/conf/anope.conf (2.1's default config name).
+ *
+ * This is deliberately self-contained: it includes none of the shipped
+ * *.example.conf files. Anope takes the FIRST module block by name, so an
+ * include cannot be overridden afterwards, and 2.1's examples would pull in
+ * ChanServ, MemoServ and HostServ — pseudo-clients this instance must never
+ * introduce, because the 2.0.20 services container already owns them on this
+ * network.
+ *
+ * What this instance is: a bridge-only Anope which links as its own server
+ * and relays IRC <-> Discord. It holds no account database of the network;
+ * the only accounts it knows are the two which authorise BridgeServ.
+ */
+
+define
+{
+	name = "services.host"
+	value = "{{ ircd_bridge_services_name }}"
+}
+
+/* Uplink: the InspIRCd container via its Docker network alias. Its own
+ * <link> block and password, separate from the services link. */
+uplink
+{
+	host = "{{ ircd_ircfiber_net_alias }}"
+	protocol = "ipv4"
+	ssl = no
+	port = {{ ircd_link_port }}
+	password = "{{ vault_ircd_bridge_link_password }}"
+}
+
+serverinfo
+{
+	name = "{{ ircd_bridge_services_name }}"
+	description = "IRC Fiber bridge services"
+	/* Explicit, and distinct from every other SID on the network: Anope
+	 * defaults this to "00A", which the 2.0.20 services instance uses.
+	 * The per-guild virtual links are allocated by incrementing from it. */
+	id = "{{ ircd_bridge_server_id }}"
+	pid = "/tmp/bridge.pid"
+	motd = "conf/bridge.motd"
+}
+
+/* Protocol: 2.1 speaks InspIRCd 4 natively (the 2.0 "inspircd3" module is
+ * gone). Server-side mlock/topiclock belong to the services instance, which
+ * owns ChanServ; this one must not claim them. */
+module { name = "inspircd" }
+
+networkinfo
+{
+	networkname = "{{ ircd_network_name }}"
+	nicklen = {{ ircd_nicklen }}
+	userlen = {{ ircd_identlen }}
+	hostlen = 64
+	chanlen = {{ ircd_channellen }}
+	modelistsize = 100
+}
+
+options
+{
+	casemap = "ascii"
+	readtimeout = 5s
+	timeoutcheck = 3s
+	updatetimeout = 2m
+	expiretimeout = 30m
+	retrywait = 60s
+	badpasslimit = 5
+	badpasstimeout = 1h
+	hideprivilegedcommands = yes
+	hideregisteredcommands = yes
+}
+
+/* No bot = "Global" here: the global module is not loaded, and the
+ * reference would warn on every write. */
+log
+{
+	target = "services.log"
+	logage = 7
+	other = "*"
+	servers = "*"
+	rawio = no
+	debug = no
+}
+
+/* Database: 2.1's JSON store, in /anope/data (the container volume). The
+ * 2.0.20 instance keeps its own db_flatfile anope.db in a different volume;
+ * the two never share state. */
+module
+{
+	name = "db_json"
+	database = "anope.json"
+	module_database = "{name}.module.json"
+	daily_backups = 7
+	monthly_backups = 3
+	backup_directory = "backups"
+}
+
+module { name = "enc_bcrypt" }
+
+/*
+ * Authentication surface.
+ *
+ * It exists only because User::IsServicesOper() short-circuits on a user
+ * with no account, so a permission-checked BridgeServ needs an account
+ * service in the same Anope instance. The client is named BridgeAuth, not
+ * NickServ: the 2.0.20 instance already owns that nick on this network.
+ *
+ * It is configured inert so it never competes with the real NickServ —
+ * `defaults` omits protect, modeonid is no, and nothing which enforces or
+ * drops nicks (ns_recover, ns_drop, ns_group, ns_set*, SASL) is loaded.
+ */
+service
+{
+	nick = "BridgeAuth"
+	user = "services"
+	host = "${services.host}"
+	real = "Bridge Authentication"
+}
+
+module
+{
+	name = "nickserv"
+	client = "BridgeAuth"
+	forceemail = no
+	regdelay = 0
+	defaults = "ns_private hide_email hide_mask"
+	modeonid = no
+	nonicknameownership = no
+	minpasslen = 10
+	maxpasslen = 50
+	/* The two authorising accounts must never expire. */
+	expire = 0
+}
+
+command { service = "BridgeAuth"; name = "HELP"; command = "generic/help" }
+
+module { name = "ns_register" }
+command { service = "BridgeAuth"; name = "REGISTER"; command = "nickserv/register" }
+
+module { name = "ns_identify" }
+command { service = "BridgeAuth"; name = "IDENTIFY"; command = "nickserv/identify" }
+
+module { name = "ns_logout" }
+command { service = "BridgeAuth"; name = "LOGOUT"; command = "nickserv/logout" }
+
+/*
+ * Authorisation. The opertype carries only the bridge commands and no
+ * privs at all, so an account tied to it can do nothing else here.
+ */
+opertype
+{
+	name = "Bridge Admin"
+	commands = "bridgeserv/*"
+	privs = ""
+}
+
+/* A human operator must BOTH be +o on IRC (through the ircd's own oper
+ * blocks) and be identified to BridgeAuth; one without the other does not
+ * reach the bridge commands. */
+oper
+{
+	name = "{{ ircd_bridge_admin_account }}"
+	type = "Bridge Admin"
+	require_oper = yes
+}
+{% if ircd_bridge_rpc_enabled %}
+
+/* The account the gateway runs BridgeServ commands as over JSON-RPC. An RPC
+ * caller is not an IRC user, so require_oper must be no here: privileges
+ * resolve straight from the opertype. Access is gated by the Bearer token on
+ * the listener below, which is only reachable inside the docker network.
+ * The account itself must be registered with BridgeAuth once — anope.command
+ * resolves it with NickAlias::Find and errors with "No such account"
+ * otherwise. Nobody ever logs into it. */
+oper
+{
+	name = "{{ ircd_bridge_rpc_account }}"
+	type = "Bridge Admin"
+	require_oper = no
+}
+{% endif %}
+
+service
+{
+	nick = "BridgeServ"
+	user = "services"
+	host = "${services.host}"
+	real = "Bridge Service"
+}
+
+module
+{
+	name = "bridgeserv"
+	client = "BridgeServ"
+	token = "{{ vault_bridgeserv_discord_token }}"
+	protocol = "discord"
+	domain = "{{ ircd_bridge_domain }}"
+	bridgename = "IRC Bridge"
+	webhooksuffix = " (IRC)"
+	useridle = 1h
+	maxlines = 8
+	floodlines = 6
+	floodsecs = 4s
+}
+
+/* `permission` stays on every command, mutating ones included: without it
+ * DEL and SET would be reachable by the whole network. */
+command { service = "BridgeServ"; name = "HELP";     command = "generic/help" }
+command { service = "BridgeServ"; name = "ADD";      command = "bridgeserv/add";      permission = "bridgeserv/add" }
+command { service = "BridgeServ"; name = "SET";      command = "bridgeserv/set";      permission = "bridgeserv/set" }
+command { service = "BridgeServ"; name = "DEL";      command = "bridgeserv/del";      permission = "bridgeserv/del" }
+command { service = "BridgeServ"; name = "LIST";     command = "bridgeserv/list";     permission = "bridgeserv/list" }
+command { service = "BridgeServ"; name = "GUILDS";   command = "bridgeserv/guilds";   permission = "bridgeserv/guilds" }
+command { service = "BridgeServ"; name = "CHANNELS"; command = "bridgeserv/channels"; permission = "bridgeserv/channels" }
+{% if ircd_bridge_rpc_enabled %}
+
+/*
+ * The JSON-RPC listener the admin SPA drives BridgeServ through.
+ *
+ * ip = "::" and not "0.0.0.0": Anope picks the socket family from whether
+ * the address contains a colon and never sets IPV6_V6ONLY, so a v4 bind
+ * refuses every AAAA-preferring client on a dual-stack docker network.
+ *
+ * The token's method glob is the whole authorisation surface. rpc_data and
+ * rpc_message are NOT loaded, so nothing here can enumerate accounts or
+ * message the network. xmlrpc must not be loaded beside jsonrpc.
+ */
+module
+{
+	name = "httpd"
+
+	httpd
+	{
+		name = "httpd/main"
+		ip = "::"
+		port = {{ ircd_bridge_rpc_port }}
+		timeout = 30
+	}
+}
+
+module
+{
+	name = "jsonrpc"
+	server = "httpd/main"
+
+	token
+	{
+		token = "{{ vault_ircd_bridge_rpc_token }}"
+		methods = "anope.command"
+	}
+}
+
+/* pretenduser = no keeps the command running as the bare account rather
+ * than hijacking the session of an online IRC user. */
+module { name = "rpc_user"; pretenduser = no }
+{% endif %}

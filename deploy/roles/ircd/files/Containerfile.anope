@@ -1,0 +1,58 @@
+# IRC Fiber bridge image: Anope 2.1 with the bridgeserv module (Discord <->
+# IRC relay), run as a bridge-only sidecar next to the anope/anope:2.0.20
+# services container.
+#
+# It is deliberately not the services image. bridgeserv is 2.1 only, and 2.1
+# removed db_flatfile and m_xmlrpc_main, both of which the gateway depends on
+# against the 2.0.20 instance. This image carries no account database of the
+# network: the only accounts it knows are the two which authorise BridgeServ.
+#
+# Both stages pin the same alpine so the daemon is not compiled against one
+# musl/libstdc++ and run against another. The source (including the vendored
+# DPP under vendor/brainboxdotcc) is cloned in the builder stage at
+# ANOPE_COMMIT, exactly as Containerfile.ircd clones InspIRCd.
+#
+# Build context is the site repo root (what the root Makefile's SHIP_SH
+# passes):
+#   docker build -f deploy/roles/ircd/files/Containerfile.anope --target runtime-anope .
+#
+# Image contract, which deploy/roles/ircd/tasks/bridge.yml relies on:
+#   /anope/bin/anope              the daemon, run with --nofork
+#   /anope/modules/bridgeserv.so  the bridge module
+#   /anope/conf/anope.conf        bind-mounted read-only by the role
+#   /anope/data                   the volume (db_json database + backups)
+#   uid/gid 10000
+
+ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
+ARG ANOPE_BRANCH=bridgeserv-live
+ARG ANOPE_COMMIT=5881ed30881a71d90d34baf6e430667b299c41a2
+
+FROM alpine:3.24 AS builder-anope
+ARG ANOPE_REPO
+ARG ANOPE_BRANCH
+ARG ANOPE_COMMIT
+# zlib-dev is required even though upstream's own CI omits it: DPP's
+# vendor/CMakeLists.txt calls find_package(ZLIB REQUIRED).
+RUN apk add --no-cache g++ cmake samurai make git pkgconfig gettext openssl-dev zlib-dev
+RUN git clone --branch ${ANOPE_BRANCH} ${ANOPE_REPO} /anope-src \
+ && git -C /anope-src checkout --detach ${ANOPE_COMMIT}
+WORKDIR /anope-src
+# The `test -f` lines are the build gate. CMake skips a module whose
+# dependencies it cannot detect rather than failing the build, so without
+# them an OpenSSL or DPP detection failure would silently ship an Anope with
+# no bridge and only surface as a missing BridgeServ in prod.
+RUN cmake -B build -D CMAKE_BUILD_TYPE=Release -D INSTDIR=/anope -G Ninja \
+ && ninja -C build install \
+ && test -f /anope/modules/bridgeserv.so \
+ && test -f /anope/bin/anope
+
+FROM alpine:3.24 AS runtime-anope
+RUN apk add --no-cache libgcc libstdc++ openssl zlib \
+ && addgroup -g 10000 -S anope && adduser -u 10000 -h /anope/ -D -S -G anope anope
+COPY --from=builder-anope --chown=10000:10000 /anope/ /anope/
+# The rendered config is bind-mounted over conf/anope.conf; the shipped
+# examples stay in the image so an operator can read them in place.
+RUN mkdir -p /anope/data && chown 10000:10000 /anope/data
+USER 10000
+WORKDIR /anope
+ENTRYPOINT ["/anope/bin/anope", "--nofork"]

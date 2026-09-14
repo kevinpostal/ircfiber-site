@@ -14,6 +14,7 @@
   import FiberEyeBotCard from '../components/FiberEyeBotCard.svelte';
   import NickServPanel from '../components/NickServPanel.svelte';
   import ChanServPanel from '../components/ChanServPanel.svelte';
+  import BridgeServPanel from '../components/BridgeServPanel.svelte';
   import InvitesPanel from '../components/InvitesPanel.svelte';
   import { api, ApiError } from '../lib/api-client';
   import { queryRange } from '../../lib/signoz';
@@ -42,7 +43,7 @@
     name: string; ipaddr: string; port: string; file: string;
     autoconnect: boolean; linked: boolean;
   }
-  type Tab = 'overview' | 'channels' | 'links' | 'bans' | 'nickserv' | 'chanserv' | 'invites' | 'config' | 'logs';
+  type Tab = 'overview' | 'channels' | 'links' | 'bans' | 'nickserv' | 'chanserv' | 'bridge' | 'invites' | 'config' | 'logs';
   let tab = $state<Tab>('overview');
 
   let status = $state<StatusResponse | null>(null);
@@ -385,8 +386,8 @@
     { id: 'channels', label: 'Channels' },
     { id: 'links', label: 'Links' },
     { id: 'bans', label: 'Bans' },
-    { id: 'nickserv', label: 'NickServ' },
     { id: 'chanserv', label: 'ChanServ' },
+    { id: 'bridge', label: 'BridgeServ' },
     { id: 'invites', label: 'Invites' },
     { id: 'config', label: 'Config' },
     { id: 'logs', label: 'Logs' },
@@ -766,6 +767,8 @@
     <NickServPanel />
   {:else if tab === 'chanserv'}
     <ChanServPanel />
+  {:else if tab === 'bridge'}
+    <BridgeServPanel />
   {:else if tab === 'invites'}
     <InvitesPanel />
   {:else if tab === 'config'}
