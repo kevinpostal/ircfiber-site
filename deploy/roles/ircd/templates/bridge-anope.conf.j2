@@ -216,6 +216,12 @@ module
 	maxlines = 8
 	floodlines = 6
 	floodsecs = 4s
+	/* This container is supervised (restart_policy: {{ ircd_restart_policy }}),
+	 * so letting services exit is the only way the Discord link recovers
+	 * from a connect which never comes up — DPP cannot be restarted in
+	 * place. Seen live: a rate limited /gateway/bot query at startup left
+	 * the relay dead with the daemon still running. */
+	restartonfailure = yes
 }
 
 /* `permission` stays on every command, mutating ones included: without it
