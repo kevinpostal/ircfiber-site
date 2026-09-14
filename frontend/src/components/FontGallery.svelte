@@ -191,7 +191,12 @@
             {#if e.note}<span class="csp-card-note">{e.note}</span>{/if}
             <span class="csp-card-rows">{e.rows || '?'} rows</span>
           </div>
-          <div class="csp-card-art">
+          <!-- The art arrives asynchronously, but its height is known from
+               the catalog, so it is reserved up front. Without this every
+               card grows from one line to `rows` lines as its sample
+               resolves — including cards above the viewport — and the
+               list shoves itself around under the cursor while scrolling. -->
+          <div class="csp-card-art" style="min-height: {(e.rows || 1) * 11}px">
             {#if art[artKey(e, sample)] !== undefined}
               {@html art[artKey(e, sample)]}
             {:else}
