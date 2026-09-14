@@ -1,11 +1,11 @@
-/* Seen dividers — IRCCloud parity
+/* Seen dividers — IRCCloud parity, with one deliberate divergence
    Base: div.log div.seenDivider{padding-top:10px;padding-bottom:12px}
    hr border #ccc light → #4d4d4d on midnight, #224d77 on dusk
-   text #aaa on #fff → #8c8c8c on #000 (midnight) / #4d8ccb on #11263b (dusk)
    Verified via curl https://www.irccloud.com/build/common-002a6024.css
-   (bottomSeen/focusSeen/lastSeen). Muted grey, 12px, normal weight,
-   Title Case, no uppercase. The bright #1E72FF blue was the "blue bar"
-   complaint — IRCCloud is desaturated. */
+   (bottomSeen/lastSeen). The hairline stays IRCCloud's desaturated grey —
+   the bright #1E72FF version was the "blue bar" complaint. The LABEL is
+   brighter than IRCCloud's #aaa/#8c8c8c, because at 12px grey-on-black the
+   text vanished and the divider read as an unexplained rule. */
 .row.seenDivider {
   padding-top: 10px;
   padding-bottom: 12px;
@@ -31,7 +31,6 @@
 /* Theme overrides — match IRCCloud */
 body.theme-dusk .row.seenDivider hr,
 body.theme-dusk div.log div.bottomSeen hr,
-body.theme-dusk div.log div.focusSeen hr,
 body.theme-dusk div.log div.lastSeen hr {
   border-top-color: #224d77;
 }
@@ -49,7 +48,7 @@ body.theme-dusk div.log div.lastSeen hr {
 .divider-text {
   display: inline-block;
   background: var(--chat-bg, #000);
-  color: #8c8c8c;
+  color: #d2d8e0;
   font-size: 12px;
   font-weight: 400;
   padding: 0 10px;
@@ -59,8 +58,7 @@ body.theme-dusk div.log div.lastSeen hr {
 
 body.theme-dusk .divider-text,
 body.theme-dusk div.log div.bottomSeen span,
-body.theme-dusk div.log div.focusSeen span,
 body.theme-dusk div.log div.lastSeen .divider-text {
   background-color: #11263b;
-  color: #4d8ccb;
+  color: #8fc0f5;
 }

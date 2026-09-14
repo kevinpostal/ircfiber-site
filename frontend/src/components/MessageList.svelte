@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack, flushSync, tick, onMount, onDestroy } from 'svelte';
   import { ircState, isMessageUnseen, getActiveBufferObj, getActiveNetwork, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused, getVisitSeen, clearVisitSeen, isMessageUnseenForVisit, getVisitSeenMessage } from '../stores/ircStore.svelte';
-  import { getClearedAt, getBufferPrefs, getFocusSeen, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen, ignoreList } from '../stores/preferences.svelte';
+  import { getClearedAt, getBufferPrefs, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen, ignoreList } from '../stores/preferences.svelte';
   import { isMessageIgnored } from '../lib/ignorePolicy';
   import { preprocessMessages } from '../lib/messageBuilder';
   import MessageRow from './MessageRow.svelte';
@@ -226,11 +226,12 @@
   }
 
   // ── IRCCloud parity: seen dividers ──
-  // Priority: bottomSeen (scrolled up) > focusSeen (tabbed out) > lastSeen (new messages)
-  // Matches BufferView.showSeenMarker() which tries showBottomSeen() || showFocusSeen() || showLastSeen().
-  // Only one divider per buffer is visible at a time; lastSeenEid avoids duplicates
-  // for the same eid on re-render (BufferView.lastSeenEid check).
-  function getSeenDividerType(msg: IRCMessage, prev: IRCMessage | null): 'focus' | 'bottom' | 'last' | null {
+  // Priority: bottomSeen (scrolled up) > lastSeen (new messages).
+  // Matches BufferView.showSeenMarker(), minus IRCCloud's focusSeen variant:
+  // a tab-out divider fired on every window switch, even for a single line,
+  // so it is deliberately not rendered here. focusSeen itself is still kept
+  // (preferences.svelte) because `readBuffer` caps the read marker with it.
+  function getSeenDividerType(msg: IRCMessage, prev: IRCMessage | null): 'bottom' | 'last' | null {
     if (!prev) return null;
     const nid = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
@@ -242,11 +243,6 @@
       if (lastSeenEidMap[key] === (msg.eid ?? msg.msgid)) return null;
       return 'bottom';
     }
-    const focusTs = getFocusSeen(nid, buf);
-    if (focusTs !== null && (prev.t || 0) <= focusTs && (msg.t || 0) > focusTs) {
-      if (lastSeenEidMap[key] === (msg.eid ?? msg.msgid)) return null;
-      return 'focus';
-    }
     const lastTs = getVisitSeen(nid, buf);
     if (lastTs !== null && (prev.t || 0) <= lastTs && (msg.t || 0) > lastTs) {
       // Hide lastSeen when at the end (no next visible) — matches BufferView.renderLastSeenDivider's hidden
@@ -256,12 +252,6 @@
       if (lastSeenEidMap[key] === (msg.eid ?? msg.msgid)) return null;
       lastSeenEidMap[key] = msg.eid ?? msg.msgid ?? (msg.t ?? 0);
       return 'last';
-    }
-    if (ircState.lastSeenMsgTime && ircState.focusLost) {
-      if ((prev.t || 0) <= ircState.lastSeenMsgTime && (msg.t || 0) > ircState.lastSeenMsgTime) {
-        if (lastSeenEidMap[key] === (msg.eid ?? msg.msgid)) return null;
-        return 'focus';
-      }
     }
     return null;
   }
@@ -730,21 +720,18 @@
   // the scroll-clock / buffering tests (probeRow timing).
   // IRCCloud seen-divider placement: compute once per rendered window, not per-row.
   // Only one divider per buffer is visible at a time, with priority
-  // bottomSeen (scrolled up) > focusSeen (tabbed out) > lastSeen (new messages)
-  // Matches BufferView.showSeenMarker() and lastSeenEid deduplication.
+  // bottomSeen (scrolled up) > lastSeen (new messages). No focusSeen variant.
   const seenDividerByKey = $derived.by(() => {
-    const m = new Map<string, 'focus' | 'bottom' | 'last'>();
+    const m = new Map<string, 'bottom' | 'last'>();
     const nid = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
     if (!nid || !buf) return m;
     const key = `${nid}:${buf}`;
     const bufferMessages = ircState.messages[key] ?? [];
     const bottomTs = getBottomSeen(nid, buf);
-    const focusTs = getFocusSeen(nid, buf);
     // Visit pin: opening the buffer already advanced the real read marker,
     // so the "new messages" line has to come from where this visit started.
     const lastTs = getVisitSeen(nid, buf);
-    const globalTs = ircState.lastSeenMsgTime && ircState.focusLost ? ircState.lastSeenMsgTime : null;
     // Helper to find first msg after seenTs in the current window
     const findKey = (seenTs: number | null): string | null => {
       if (seenTs === null) return null;
@@ -792,11 +779,6 @@
       m.set(bottomKey, 'bottom');
       return m;
     }
-    const focusKey = findKey(focusTs);
-    if (focusKey) {
-      m.set(focusKey, 'focus');
-      return m;
-    }
     const lastKey = findKey(lastTs);
     if (lastKey) {
       const lastMsg = messagesWithDates.find(item => item._key === lastKey)?.msg;
@@ -827,10 +809,6 @@
         }
       }
       return m;
-    }
-    const globalKey = findKey(globalTs);
-    if (globalKey) {
-      m.set(globalKey, 'focus');
     }
     return m;
   });

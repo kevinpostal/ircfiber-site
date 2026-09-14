@@ -2,25 +2,22 @@
   import type { IRCMessage } from '../types';
 
   interface Props {
-    type?: 'focus' | 'bottom' | 'last';
+    type?: 'bottom' | 'last';
     networkId?: string;
     bufferName?: string;
     msg?: IRCMessage | null;
     prevMsg?: IRCMessage | null;
     sameAuthor?: boolean;
   }
-  let { type = 'focus', networkId, bufferName, msg, sameAuthor = false }: Props = $props();
+  let { type = 'last', networkId, bufferName, msg, sameAuthor = false }: Props = $props();
 
   // IRCCloud parity: labels from common-5650bddb.js
-  //   focus  → "New messages since you tabbed out"  (renderFocusSeenDivider)
   //   bottom → "New messages since you scrolled up" (renderBottomSeenDivider)
   //   last   → "New messages"                       (renderLastSeenDivider)
+  // IRCCloud's focusSeen ("since you tabbed out") variant is deliberately
+  // not rendered by MessageList, so there is no label for it.
   const label = $derived(
-    type === 'focus'
-      ? 'New messages since you tabbed out'
-      : type === 'bottom'
-      ? 'New messages since you scrolled up'
-      : 'New messages'
+    type === 'bottom' ? 'New messages since you scrolled up' : 'New messages'
   );
   const eid = $derived(msg?.eid ?? msg?.msgid ?? '');
   const t = $derived(msg?.t ?? 0);
@@ -28,7 +25,6 @@
 
 <div
   class="row seenDivider"
-  class:focusSeen={type === 'focus'}
   class:bottomSeen={type === 'bottom'}
   class:lastSeen={type === 'last'}
   class:sameAuthor={sameAuthor}
