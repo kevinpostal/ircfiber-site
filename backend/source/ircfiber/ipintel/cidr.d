@@ -156,3 +156,25 @@ bool cidrContains(string cidr, string ip) @safe pure {
     const uint bitmask = bits == 0 ? 0u : bits == 32 ? 0xFFFF_FFFFu : ~((1u << (32 - bits)) - 1);
     return (va & bitmask) == (vb & bitmask);
 }
+
+/// True when `spec` is an address or range `cidrContains` can match:
+/// `10.0.0.0/8`, `203.0.113.9`, `2001:db8::/32`, `::1`. Empty input, a
+/// malformed address or an out-of-range prefix length are false.
+bool isCidrSpec(string spec) @safe pure {
+    auto m = spec.strip();
+    if (!m.length) return false;
+    int bits = -1;
+    const slash = m.lastIndexOf('/');
+    if (slash > 0) {
+        try bits = m[slash + 1 .. $].strip().to!int;
+        catch (Exception) return false;
+        if (bits < 0) return false;
+        m = m[0 .. slash].strip();
+    }
+    if (m.indexOf(':') >= 0) {
+        ushort[8] a;
+        return bits <= 128 && expandIpv6(m, a);
+    }
+    ubyte[4] na;
+    return bits <= 32 && parseIpv4(m, na);
+}

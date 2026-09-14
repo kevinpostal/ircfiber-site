@@ -23,6 +23,7 @@ export function createNetwork(overrides: Partial<Network> = {}): Network {
     tls: 'required',
     nick: 'tester',
     realName: 'tester',
+    ident: '',
     currentNick: 'tester',
     sasl: 'none',
     saslUsername: '',

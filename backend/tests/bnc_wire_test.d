@@ -314,6 +314,15 @@ private void testZncCommands() {
     check(!isZncStatusTarget(""), "empty is not a module target");
 }
 
+private void testPeerIp() {
+    check(peerIp("1.2.3.4:52506") == "1.2.3.4", "v4 peer loses the port");
+    check(peerIp("[2001:db8::1]:52506") == "2001:db8::1", "bracketed v6 peer");
+    check(peerIp("1.2.3.4") == "1.2.3.4", "bare v4 unchanged");
+    check(peerIp("::1") == "::1", "bracket-less v6 keeps every hextet");
+    check(peerIp("?") == "", "unknown peer is empty");
+    check(peerIp("") == "", "empty peer is empty");
+}
+
 void main() {
     testParseBncPass();
     testParseClientLine();
@@ -325,6 +334,7 @@ void main() {
     testMissedRows();
     testFormatChannelList();
     testZncCommands();
+    testPeerIp();
     if (failures) {
         writefln("bnc wire tests: %d FAILED", failures);
         import core.stdc.stdlib : exit;

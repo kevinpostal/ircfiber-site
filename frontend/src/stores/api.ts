@@ -459,7 +459,39 @@ export interface BouncerNetwork {
   slug: string;
   host: string;
   port: number;
+  /** Configured nick (live-changeable). */
+  nick: string;
+  /** IRC username sent as the first `USER` parameter; '' = use the nick. */
+  ident: string;
+  realName: string;
+  /** Platform-managed network: identity is pinned to the services account. */
+  managed: boolean;
+  /** Channels detached for the bouncer (no live traffic, backlog kept). */
+  detached: string[];
   connected: boolean;
+}
+
+/** One known replay device: a bouncer `@clientid` (or an anonymous
+ *  connection keyed by nick) that has a replay cursor on some network. */
+export interface BouncerDevice {
+  /** Cursor key as stored (`laptop`, or `anon:<nick>`). */
+  id: string;
+  /** Display name: the clientid, or the nick for an anonymous device. */
+  clientId: string;
+  anonymous: boolean;
+  online: boolean;
+  networks: { networkId: string; networkName: string; cursor: number }[];
+}
+
+/** One bouncer event from the account's trail (last 20, 90-day retention). */
+export interface BouncerActivity {
+  t: number;
+  event: 'attach' | 'detach' | 'reject';
+  reason: string;
+  ip: string;
+  clientId: string;
+  networkName: string;
+  tls: boolean;
 }
 
 /** GET/POST/DELETE /me/bouncer — Settings → Bouncer. */
@@ -472,11 +504,29 @@ export interface BouncerInfo {
   username: string;
   /** The bouncer password, or null when none has been generated. */
   password: string | null;
+  /** When the current password was generated (unix ms, 0 = unknown). */
+  passwordCreatedAt: number;
+  /** Newest attach with this password (unix ms, 0 = never used). */
+  passwordLastUsedAt: number;
+  passwordLastIp: string;
+  passwordLastClient: string;
   networks: BouncerNetwork[];
   /** Lines per buffer replayed on attach for clients without CHATHISTORY (0 = none). */
   playbackLines: number;
   /** Server-side cap for `playbackLines`. */
   playbackMax: number;
+  /** Reject a bouncer client that attaches without TLS. */
+  requireTls: boolean;
+  /** IPs/CIDRs allowed to attach; empty = any address. */
+  allowedCidrs: string[];
+  /** Max simultaneously attached clients (0 = unlimited). */
+  maxClients: number;
+  /** Server-side cap for `maxClients`. */
+  maxClientsCeiling: number;
+  /** Sent as AWAY upstream while nothing is attached ('' = off). */
+  awayMessage: string;
+  devices: BouncerDevice[];
+  activity: BouncerActivity[];
 }
 
 export async function fetchBouncer(): Promise<BouncerInfo> {
@@ -491,15 +541,43 @@ export async function generateBouncerPassword(): Promise<BouncerInfo> {
   return r.json();
 }
 
-/** POST /me/bnc-playback-lines — persists the bouncer playback size; returns the clamped value. */
-export async function updateBncPlaybackLines(value: number): Promise<number> {
-  const r = await fetch(`${API_BASE}/me/bnc-playback-lines`, {
+/** The five Access settings; every key optional (partial update). */
+export interface BouncerSettings {
+  playbackLines?: number;
+  requireTls?: boolean;
+  allowedCidrs?: string[];
+  maxClients?: number;
+  awayMessage?: string;
+}
+
+/** What POST /me/bouncer/settings stores (server clamps win). */
+export interface BouncerSettingsResult {
+  prefVersion: number;
+  playbackLines: number;
+  playbackMax: number;
+  requireTls: boolean;
+  allowedCidrs: string[];
+  maxClients: number;
+  maxClientsCeiling: number;
+  awayMessage: string;
+}
+
+/** POST /me/bouncer/settings — partial save; returns the stored values. */
+export async function updateBouncerSettings(patch: BouncerSettings): Promise<BouncerSettingsResult> {
+  const r = await fetch(`${API_BASE}/me/bouncer/settings`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ value }),
+    body: JSON.stringify(patch),
   });
-  if (!r.ok) throw new Error('Could not save playback setting');
-  return (await r.json() as { value: number }).value;
+  if (!r.ok) throw new Error(await serverError(r, 'Could not save bouncer settings'));
+  return r.json();
+}
+
+/** DELETE /me/bouncer/devices/:clientId — forgets one device's replay
+ *  cursor on every network, so its next attach replays the history buffer. */
+export async function resetBouncerDevice(clientId: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/me/bouncer/devices/${encodeURIComponent(clientId)}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await serverError(r, 'Could not reset that device'));
 }
 
 export async function revokeBouncerPassword(): Promise<void> {
@@ -552,7 +630,7 @@ export async function joinChannel(networkId: string, channel: string, key?: stri
 
 export async function addNetwork(data: {
   name: string; host: string; port: number; tls: string;
-  nick: string; realName: string; autoJoinChannels: string; nspass?: string;
+  nick: string; realName: string; ident?: string; autoJoinChannels: string; nspass?: string;
   commands?: string; sasl?: string; saslUsername?: string; saslPassword?: string;
   autoJoinDelaySeconds?: number; egressNodeId?: string; operUsername?: string; operPassword?: string;
 }): Promise<Record<string, unknown>> {

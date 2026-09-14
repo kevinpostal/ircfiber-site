@@ -95,13 +95,14 @@ vi.mock('/src/stores/api', () => ({
   // path. The tests in this file don't drive the WebSocket sync payload,
   // so a pass-through stub is fine.
   normalizeMessage: vi.fn((m: unknown) => m),
-  fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: null, networks: [], playbackLines: 200, playbackMax: 1000 })),
-  generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: 'token', networks: [], playbackLines: 200, playbackMax: 1000 })),
+  fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: null, passwordCreatedAt: 0, passwordLastUsedAt: 0, passwordLastIp: '', passwordLastClient: '', networks: [], playbackLines: 200, playbackMax: 1000, requireTls: false, allowedCidrs: [], maxClients: 0, maxClientsCeiling: 32, awayMessage: '', devices: [], activity: [] })),
+  generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: 'token', passwordCreatedAt: 0, passwordLastUsedAt: 0, passwordLastIp: '', passwordLastClient: '', networks: [], playbackLines: 200, playbackMax: 1000, requireTls: false, allowedCidrs: [], maxClients: 0, maxClientsCeiling: 32, awayMessage: '', devices: [], activity: [] })),
   revokeBouncerPassword: vi.fn(async () => undefined),
   fetchBouncerClients: vi.fn(async () => ({ clients: [], now: Date.now() })),
   disconnectBouncerClient: vi.fn(async () => undefined),
   // Remaining api surface (dialogs/panels imported by App) — inert stubs.
-  updateBncPlaybackLines: vi.fn(async () => undefined),
+  updateBouncerSettings: vi.fn(async () => ({ prefVersion: 1, playbackLines: 200, playbackMax: 1000, requireTls: false, allowedCidrs: [], maxClients: 0, maxClientsCeiling: 32, awayMessage: '' })),
+  resetBouncerDevice: vi.fn(async () => undefined),
   updateNotificationPrefs: vi.fn(async () => undefined),
   submitSupportIssue: vi.fn(async () => ({ id: 's1', number: 1 })),
   fetchMySupportIssues: vi.fn(async () => ({ issues: [], total: 0 })),

@@ -4,7 +4,7 @@
  */
 module ircfiber.bnc.wire;
 
-import std.string : indexOf, toUpper, toLower, split, strip, startsWith;
+import std.string : indexOf, lastIndexOf, toUpper, toLower, split, strip, startsWith;
 import std.conv : to;
 import std.array : appender, Appender;
 import std.algorithm : canFind, max;
@@ -625,4 +625,30 @@ string[] bufferOrder(Json[] events) @safe {
         order ~= key;
     }
     return order;
+}
+
+/// IP part of a `vibe.core.net` peer address: `1.2.3.4:52506` → `1.2.3.4`,
+/// `[2001:db8::1]:52506` → `2001:db8::1`, a bare address unchanged. "" when
+/// the input is empty or `?` (what the listener stores when `peerAddress`
+/// threw). Feeds the CIDR allowlist and the audit trail, so a wrong answer
+/// would either lock a user out or mis-attribute an attach.
+string peerIp(string peer) @safe pure {
+    auto s = peer.strip();
+    if (!s.length || s == "?") return "";
+    if (s[0] == '[') {
+        const close = s.indexOf(']');
+        if (close > 1) return s[1 .. close];
+        return s[1 .. $];
+    }
+    const colon = s.lastIndexOf(':');
+    if (colon > 0) {
+        const head = s[0 .. colon];
+        const tail = s[colon + 1 .. $];
+        bool digits = tail.length > 0;
+        foreach (c; tail) if (c < '0' || c > '9') { digits = false; break; }
+        // A second colon in the head means a bracket-less IPv6 literal, which
+        // has no port to cut (`::1`, `2001:db8::1`).
+        if (digits && head.indexOf(':') < 0) return head;
+    }
+    return s;
 }

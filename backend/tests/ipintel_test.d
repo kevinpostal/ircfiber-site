@@ -11,7 +11,7 @@ import std.stdio : writeln, writefln;
 import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.ipintel.assemble : SourceResult, assemble, asnFromOrg, isoToMs, needsTiebreak;
-import ircfiber.ipintel.cidr : cidrContains;
+import ircfiber.ipintel.cidr : cidrContains, isCidrSpec;
 import ircfiber.ipintel.record : IpIntel;
 
 private int failures;
@@ -188,6 +188,17 @@ private void testCidr() {
     check(!cidrContains("10.0.0.0/8", "2001:db8::1"), "mixed families never match");
     check(!cidrContains("10.0.0.0/33", "10.1.1.1"), "over-long mask is malformed");
     check(!cidrContains("junk", "10.1.1.1"), "garbage is malformed");
+    // `isCidrSpec` gates what the bouncer allowlist accepts, so it must
+    // agree with `cidrContains` on what is matchable at all.
+    check(isCidrSpec("10.0.0.0/8"), "spec: v4 range");
+    check(isCidrSpec("203.0.113.9"), "spec: bare v4");
+    check(isCidrSpec("2001:db8::/32"), "spec: v6 range");
+    check(isCidrSpec("::1"), "spec: bare v6");
+    check(!isCidrSpec(""), "spec: empty is not a range");
+    check(!isCidrSpec("not-an-ip"), "spec: garbage rejected");
+    check(!isCidrSpec("10.0.0.0/33"), "spec: v4 mask over 32 rejected");
+    check(!isCidrSpec("2001:db8::/129"), "spec: v6 mask over 128 rejected");
+    check(!isCidrSpec("10.0.0.0/-1"), "spec: negative mask rejected");
 }
 
 private void testFlagsLabel() {

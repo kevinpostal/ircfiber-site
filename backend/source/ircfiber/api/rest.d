@@ -13,7 +13,7 @@ import vibe.core.log;
 import vibe.core.core : runTask;
 import ircfiber.api.session : SessionManager;
 import ircfiber.models.user : User;
-import ircfiber.models.network : NetworkConfig, TLSMode, SASLMechanism, dedupChannels;
+import ircfiber.models.network : NetworkConfig, TLSMode, SASLMechanism, dedupChannels, sanitizeIdent;
 import ircfiber.default_network : DEFAULT_FIBER_HOST, DEFAULT_FIBER_PORT, DEFAULT_FIBER_CHANNELS,
     ensureDefaultFiberNetwork;
 import ircfiber.models.irc_event : IRCRawEvent;
@@ -110,6 +110,8 @@ final class RESTAPI {
         router.delete_("/api/me/bouncer", &revokeBouncer);
         router.get("/api/me/bouncer/clients", &getMyBouncerClients);
         router.post("/api/me/bouncer/clients/:sid/disconnect", &disconnectMyBouncerClient);
+        router.post("/api/me/bouncer/settings", &updateBouncerSettings);
+        router.delete_("/api/me/bouncer/devices/:clientId", &resetMyBouncerDevice);
         router.get("/api/me", &getMe);
         router.post("/api/me/password", &changeMyPassword);
         router.delete_("/api/me", &deleteMe);
@@ -128,7 +130,6 @@ final class RESTAPI {
         router.post("/api/me/ignores", &updateIgnores);
         router.post("/api/me/pin-order", &updatePinnedOrder);
         router.post("/api/me/show-member-prefixes", &updateShowMemberPrefixes);
-        router.post("/api/me/bnc-playback-lines", &updateBncPlaybackLines);
         router.post("/api/me/notification-prefs", &updateNotificationPrefs);
         router.get("/api/ping", &ping);
         router.get("/health", &healthCheck);
@@ -230,12 +231,20 @@ final class RESTAPI {
             cfg.realName = cfg.nick;
         }
 
-        // Fiber lock: host/port/tls/nick/realName are managed — ignore client-supplied values
+        // Ident (IRC username, first `USER` parameter). Empty = use the nick,
+        // which is what every pre-ident network registers with.
+        if (bodyJson["ident"].type != Json.Type.undefined)
+            cfg.ident = sanitizeIdent(bodyJson["ident"].get!string);
+
+        // Fiber lock: host/port/tls/nick/realName/ident are managed — ignore
+        // client-supplied values. A free-form ident on the hosted ircd would
+        // let a user register as somebody else's username.
         if (cfg.host == DEFAULT_FIBER_HOST) {
             cfg.port = DEFAULT_FIBER_PORT;
             cfg.tls = TLSMode.required;
             cfg.nick = user.username;
             cfg.realName = user.username;
+            cfg.ident = "";
         }
 
         cfg.autoJoinChannels = dedupChannels(deserializeJson!(string[])(bodyJson["autoJoinChannels"]));
@@ -343,6 +352,8 @@ final class RESTAPI {
             cfg.realName = bodyJson["realName"].get!string;
             if (cfg.realName.length == 0) cfg.realName = cfg.nick;
         }
+        if (bodyJson["ident"].type != Json.Type.undefined)
+            cfg.ident = sanitizeIdent(bodyJson["ident"].get!string);
 
         if (bodyJson["autoJoinChannels"].type != Json.Type.undefined)
             cfg.autoJoinChannels = dedupChannels(deserializeJson!(string[])(bodyJson["autoJoinChannels"]));
@@ -408,6 +419,7 @@ final class RESTAPI {
             cfg.port = DEFAULT_FIBER_PORT;
             cfg.tls = TLSMode.required;
             cfg.host = DEFAULT_FIBER_HOST;
+            cfg.ident = "";
         }
         auto serverId = updateOwnedNetwork(cfg, user.id, egressChanged, networkRepo, redis, serverRegistry);
         if (serverId.length == 0) {
@@ -458,34 +470,176 @@ final class RESTAPI {
 
     // ── Bouncer (Settings → Bouncer) ─────────────────────────────────
 
-    /// Public bouncer endpoint description plus the account's password,
-    /// the networks it reaches and the caller's playback setting.
+    /// Channels the caller has detached on `networkId`, read from the
+    /// per-buffer prefs the bouncer writes (`bncDetached`). One map, so a
+    /// detach survives the connection that made it and shows up in the
+    /// web app's buffer list at the same time.
+    private static string[] detachedChannelsFor(ref UserPreferences prefs, string networkId) {
+        import std.algorithm : sort;
+        string[] outArr;
+        const prefix = networkId ~ ":";
+        foreach (k, v; prefs.bufferPrefs) {
+            if (k.length <= prefix.length || k[0 .. prefix.length] != prefix) continue;
+            if (v.type != Json.Type.object) continue;
+            auto d = "bncDetached" in v;
+            if (d is null || d.type != Json.Type.bool_ || !d.get!bool) continue;
+            outArr ~= k[prefix.length .. $];
+        }
+        sort(outArr);
+        return outArr;
+    }
+
+    /// Client ids of the caller's currently attached bouncer clients.
+    /// Anonymous clients (no `@clientid`) are keyed the way the bouncer
+    /// keys their replay cursor: `anon:<lowercased nick>`.
+    private string[] attachedClientIds(string uid) {
+        import std.string : toLower, strip;
+        string[] ids;
+        if (redis is null) return ids;
+        try {
+            foreach (sid; redis.getDb().smembers(RedisKeys.bncClients())) {
+                Json j;
+                try j = redis.getJson(RedisKeys.bncClient(sid));
+                catch (Exception) continue;
+                if (j.type != Json.Type.object) continue;
+                if (j["userId"].type != Json.Type.string || j["userId"].get!string != uid) continue;
+                if (j["clientId"].type == Json.Type.string && j["clientId"].get!string.length) {
+                    ids ~= j["clientId"].get!string;
+                    continue;
+                }
+                if (j["nick"].type == Json.Type.string) {
+                    const n = j["nick"].get!string.strip().toLower();
+                    if (n.length && n != "*") ids ~= "anon:" ~ n;
+                }
+            }
+        } catch (Exception e) {
+            logWarn("bouncerJson: presence read failed for %s: %s", uid, e.msg);
+        }
+        return ids;
+    }
+
+    /// Known replay devices: one row per cursor key across the caller's
+    /// networks (`irc:bnc:seen:<network>`), which is what decides whether
+    /// a reconnecting client gets "what you missed" or the playback
+    /// buffer. `anon:<nick>` keys are reported as anonymous devices.
+    private Json bouncerDevices(NetworkConfig[] configs, string[] names, string uid) {
+        import std.algorithm : canFind, sort, startsWith;
+        struct Dev { bool anonymous; Json networks; }
+        Dev[string] devs;
+        string[] order;
+        const online = attachedClientIds(uid);
+        foreach (i, ref cfg; configs) {
+            if (redis is null) break;
+            string[string] seen;
+            try seen = redis.hgetAll(RedisKeys.bncSeen(cfg.id.toString()));
+            catch (Exception) continue;
+            foreach (field, cursor; seen) {
+                if (!field.length) continue;
+                long cur = 0;
+                try cur = cursor.to!long; catch (Exception) {}
+                auto entry = Json.emptyObject;
+                entry["networkId"] = Json(cfg.id.toString());
+                entry["networkName"] = Json(names[i]);
+                entry["cursor"] = Json(cur);
+                if (field !in devs) {
+                    devs[field] = Dev(field.startsWith("anon:"), Json.emptyArray);
+                    order ~= field;
+                }
+                devs[field].networks ~= entry;
+            }
+        }
+        sort(order);
+        auto arr = Json.emptyArray;
+        foreach (field; order) {
+            auto o = Json.emptyObject;
+            o["id"] = Json(field);
+            o["clientId"] = Json(devs[field].anonymous ? field["anon:".length .. $] : field);
+            o["anonymous"] = Json(devs[field].anonymous);
+            o["online"] = Json(online.canFind(field));
+            o["networks"] = devs[field].networks;
+            arr ~= o;
+        }
+        return arr;
+    }
+
+    /// The caller's last bouncer events, newest first (see `auditBnc` in
+    /// `bnc/client.d`). Malformed rows are skipped rather than failing the
+    /// whole response — the trail is diagnostic, not authoritative.
+    private Json bouncerActivity(string uid) {
+        auto arr = Json.emptyArray;
+        if (redis is null) return arr;
+        try {
+            foreach (raw; redis.getDb().lrange!string(RedisKeys.bncAudit(uid), 0, 19)) {
+                Json j;
+                try j = parseJsonString(raw);
+                catch (Exception) continue;
+                if (j.type != Json.Type.object) continue;
+                arr ~= j;
+            }
+        } catch (Exception e) {
+            logWarn("bouncerJson: audit read failed for %s: %s", uid, e.msg);
+        }
+        return arr;
+    }
+
+    /// Public bouncer endpoint description plus the account's password and
+    /// its metadata, the networks it reaches (with their editable IRC
+    /// identity and detached channels), the access policy, the known replay
+    /// devices and the recent event trail — everything Settings → Bouncer
+    /// renders, in one request.
     private Json bouncerJson(User user) {
         import std.process : environment;
-        import ircfiber.db.preferences : BNC_PLAYBACK_MAX;
-        int playback = 0;
-        try playback = prefsRepo.load(user.id).bncPlaybackLines; catch (Exception) {}
+        import ircfiber.db.preferences : BNC_PLAYBACK_MAX, BNC_MAX_CLIENTS_CEILING;
+        UserPreferences prefs;
+        bool prefsOk = false;
+        try { prefs = prefsRepo.load(user.id); prefsOk = true; } catch (Exception) {}
+        const playback = prefsOk ? prefs.bncPlaybackLines : 0;
         const host = environment.get("IRCFIBER_BNC_PUBLIC_HOST", "");
         int port = 7000;
         try port = environment.get("IRCFIBER_BNC_PUBLIC_PORT", "7000").to!int;
         catch (Exception) {}
         const tlsFlag = environment.get("IRCFIBER_BNC_PUBLIC_TLS", "1") == "1";
         const token = userRepo.getBncToken(user.id);
+        const uid = user.id.toString();
+        long passwordCreatedAt = 0;
+        try passwordCreatedAt = token.length ? userRepo.getBncTokenCreatedAt(user.id) : 0;
+        catch (Exception) {}
         auto nets = Json.emptyArray;
         auto configs = networkRepo.findByUserId(user.id);
         string[] names;
         foreach (ref cfg; configs) names ~= cfg.name;
         const slugs = networkSlugs(names);
         foreach (i, ref cfg; configs) {
+            auto detached = Json.emptyArray;
+            foreach (ch; detachedChannelsFor(prefs, cfg.id.toString())) detached ~= Json(ch);
             nets ~= Json([
                 "id": Json(cfg.id.toString()),
                 "name": Json(cfg.name),
                 "slug": Json(slugs[i]),
                 "host": Json(cfg.host),
                 "port": Json(cfg.port),
+                "nick": Json(cfg.nick),
+                "ident": Json(cfg.ident),
+                "realName": Json(cfg.realName),
+                "managed": Json(cfg.host == DEFAULT_FIBER_HOST),
+                "detached": detached,
                 "connected": Json(loadSnapshot(cfg.id.toString()).connected)
             ]);
         }
+        auto activity = bouncerActivity(uid);
+        // Password "last used" comes from the newest attach in the trail —
+        // the attach already writes one row, so nothing extra is stored.
+        long lastUsedAt = 0;
+        string lastIp, lastClient;
+        foreach (row; activity) {
+            if (row["event"].type != Json.Type.string || row["event"].get!string != "attach") continue;
+            if (row["t"].type == Json.Type.int_) lastUsedAt = row["t"].get!long;
+            if (row["ip"].type == Json.Type.string) lastIp = row["ip"].get!string;
+            if (row["clientId"].type == Json.Type.string) lastClient = row["clientId"].get!string;
+            break;
+        }
+        auto cidrs = Json.emptyArray;
+        foreach (c; prefs.bncAllowedCidrs) cidrs ~= Json(c);
         return Json([
             "enabled": Json(host.length > 0),
             "host": Json(host),
@@ -493,32 +647,155 @@ final class RESTAPI {
             "tls": Json(tlsFlag),
             "username": Json(user.username),
             "password": token.length ? Json(token) : Json(null),
+            "passwordCreatedAt": Json(passwordCreatedAt),
+            "passwordLastUsedAt": Json(lastUsedAt),
+            "passwordLastIp": Json(lastIp),
+            "passwordLastClient": Json(lastClient),
             "networks": nets,
             "playbackLines": Json(playback),
-            "playbackMax": Json(BNC_PLAYBACK_MAX)
+            "playbackMax": Json(BNC_PLAYBACK_MAX),
+            "requireTls": Json(prefs.bncRequireTls),
+            "allowedCidrs": cidrs,
+            "maxClients": Json(prefs.bncMaxClients),
+            "maxClientsCeiling": Json(BNC_MAX_CLIENTS_CEILING),
+            "awayMessage": Json(prefs.bncAwayMessage),
+            "devices": bouncerDevices(configs, names, uid),
+            "activity": activity
         ]);
     }
 
-    /// POST /api/me/bnc-playback-lines {value:int} — lines per buffer the
-    /// bouncer replays on attach for clients without CHATHISTORY (0 = none).
-    private void updateBncPlaybackLines(HTTPServerRequest req, HTTPServerResponse res) {
-        import ircfiber.db.preferences : clampBncPlaybackLines;
+    /// POST /api/me/bouncer/settings — partial object, any of
+    /// {playbackLines:int, requireTls:bool, allowedCidrs:[string],
+    ///  maxClients:int, awayMessage:string}. Every present key is validated
+    /// BEFORE the per-user prefs lock is taken, then the stored settings are
+    /// returned so the caller needs no refetch. Unknown keys are ignored.
+    ///
+    /// No `pref_update` fan-out: these five are read by `GET /api/me/bouncer`
+    /// and by the bnc process straight from the prefs blob, so nothing
+    /// caches them client-side.
+    private void updateBouncerSettings(HTTPServerRequest req, HTTPServerResponse res) {
+        import ircfiber.db.preferences : clampBncPlaybackLines, clampBncMaxClients,
+            truncateBncAway, BNC_PLAYBACK_MAX, BNC_MAX_CLIENTS_CEILING;
+        import ircfiber.ipintel.cidr : isCidrSpec;
         requireAuth(req, res);
         if (res.headerWritten) return;
         auto user = req.context["user"].get!User;
         auto bodyJson = req.json;
-        auto v = "value" in bodyJson;
-        if (v is null || v.type != Json.Type.int_) {
+        if (bodyJson.type != Json.Type.object) {
             res.statusCode = 400;
-            res.writeJsonBody(Json(["error": Json("value must be an integer")]));
+            res.writeJsonBody(Json(["error": Json("body must be object")]));
             return;
         }
-        const value = clampBncPlaybackLines(cast(int) v.get!long);
-        auto prefs = prefsRepo.load(user.id);
-        prefs.bncPlaybackLines = value;
-        auto newVersion = prefsRepo.save(user.id, prefs);
-        broadcastPrefUpdate(user.id.toString(), "bncPlaybackLines", Json(value), newVersion);
-        res.writeJsonBody(Json(["value": Json(value)]));
+        void bad(string msg) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json(msg)]));
+        }
+        // Validate first: a bad body must never hold the per-user lock, and
+        // a rejected allowlist must leave the stored one untouched.
+        if (auto v = "playbackLines" in bodyJson) {
+            if (v.type != Json.Type.int_) { bad("playbackLines must be an integer"); return; }
+        }
+        if (auto v = "requireTls" in bodyJson) {
+            if (v.type != Json.Type.bool_) { bad("requireTls must be boolean"); return; }
+        }
+        if (auto v = "maxClients" in bodyJson) {
+            if (v.type != Json.Type.int_) { bad("maxClients must be an integer"); return; }
+        }
+        if (auto v = "awayMessage" in bodyJson) {
+            if (v.type != Json.Type.string) { bad("awayMessage must be a string"); return; }
+        }
+        string[] cidrs;
+        bool haveCidrs = false;
+        if (auto v = "allowedCidrs" in bodyJson) {
+            if (v.type != Json.Type.array) { bad("allowedCidrs must be an array of strings"); return; }
+            haveCidrs = true;
+            foreach (entry; *v) {
+                if (entry.type != Json.Type.string) {
+                    bad("allowedCidrs must be an array of strings");
+                    return;
+                }
+                const spec = entry.get!string.strip();
+                if (!spec.length) continue;
+                if (!isCidrSpec(spec)) {
+                    bad("allowedCidrs contains an invalid address or range: " ~ spec);
+                    return;
+                }
+                cidrs ~= spec;
+                if (cidrs.length > 20) { bad("allowedCidrs accepts at most 20 entries"); return; }
+            }
+        }
+
+        bool any = false;
+        UserPreferences after;
+        auto newVersion = prefsRepo.mutate(user.id, (ref UserPreferences prefs) {
+            if (auto v = "playbackLines" in bodyJson) {
+                prefs.bncPlaybackLines = clampBncPlaybackLines(cast(int) v.get!long);
+                any = true;
+            }
+            if (auto v = "requireTls" in bodyJson) { prefs.bncRequireTls = v.get!bool; any = true; }
+            if (auto v = "maxClients" in bodyJson) {
+                prefs.bncMaxClients = clampBncMaxClients(cast(int) v.get!long);
+                any = true;
+            }
+            if (auto v = "awayMessage" in bodyJson) {
+                prefs.bncAwayMessage = truncateBncAway(v.get!string);
+                any = true;
+            }
+            if (haveCidrs) { prefs.bncAllowedCidrs = cidrs; any = true; }
+            after = prefs;
+            return any;
+        });
+        if (!any) { bad("no bouncer setting provided"); return; }
+        auto stored = Json.emptyArray;
+        foreach (c; after.bncAllowedCidrs) stored ~= Json(c);
+        auto out_ = Json.emptyObject;
+        out_["prefVersion"] = Json(newVersion);
+        out_["playbackLines"] = Json(after.bncPlaybackLines);
+        out_["playbackMax"] = Json(BNC_PLAYBACK_MAX);
+        out_["requireTls"] = Json(after.bncRequireTls);
+        out_["allowedCidrs"] = stored;
+        out_["maxClients"] = Json(after.bncMaxClients);
+        out_["maxClientsCeiling"] = Json(BNC_MAX_CLIENTS_CEILING);
+        out_["awayMessage"] = Json(after.bncAwayMessage);
+        res.writeJsonBody(out_);
+    }
+
+    /// DELETE /api/me/bouncer/devices/:clientId — forgets one device's
+    /// replay cursor on every network of the caller, so its next attach
+    /// replays the playback buffer instead of "what you missed". The
+    /// user-scoped twin of the admin `.../seen/:clientId/forget` action.
+    private void resetMyBouncerDevice(HTTPServerRequest req, HTTPServerResponse res) {
+        requireAuth(req, res);
+        if (res.headerWritten) return;
+        auto user = req.context["user"].get!User;
+        const clientId = req.params.get("clientId", "");
+        if (!clientId.length) {
+            res.statusCode = 400;
+            res.writeJsonBody(Json(["error": Json("clientId required")]));
+            return;
+        }
+        if (redis is null) {
+            res.statusCode = 503;
+            res.writeJsonBody(Json(["error": Json("The bouncer store is unavailable")]));
+            return;
+        }
+        long removed = 0;
+        auto db = redis.getDb();
+        foreach (ref cfg; networkRepo.findByUserId(user.id)) {
+            try removed += db.hdel(RedisKeys.bncSeen(cfg.id.toString()), clientId);
+            catch (Exception e) {
+                logWarn("resetMyBouncerDevice: hdel failed for %s/%s: %s",
+                    cfg.id, clientId, e.msg);
+            }
+        }
+        if (removed == 0) {
+            res.statusCode = 404;
+            res.writeJsonBody(Json(["error": Json("Unknown device")]));
+            return;
+        }
+        logInfo("user %s reset bnc device %s (%s cursor(s))", user.username, clientId, removed);
+        res.statusCode = 204;
+        res.writeVoidBody();
     }
 
     /// Drops every attached bouncer client of the user and their replay

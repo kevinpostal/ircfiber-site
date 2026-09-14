@@ -33,11 +33,14 @@ export function create_mock_api(overrides = {}) {
     addNetwork: vi.fn(async () => undefined),
     updateNetwork: vi.fn(async () => undefined),
     deleteNetwork: vi.fn(async () => undefined),
-    fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: null, networks: [], playbackLines: 200, playbackMax: 1000 })),
-    generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: 'token', networks: [], playbackLines: 200, playbackMax: 1000 })),
+    fetchBouncer: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: null, passwordCreatedAt: 0, passwordLastUsedAt: 0, passwordLastIp: '', passwordLastClient: '', networks: [], playbackLines: 200, playbackMax: 1000, requireTls: false, allowedCidrs: [], maxClients: 0, maxClientsCeiling: 32, awayMessage: '', devices: [], activity: [] })),
+    generateBouncerPassword: vi.fn(async () => ({ enabled: true, host: 'bnc.test', port: 7000, tls: true, username: 'tester', password: 'token', passwordCreatedAt: 0, passwordLastUsedAt: 0, passwordLastIp: '', passwordLastClient: '', networks: [], playbackLines: 200, playbackMax: 1000, requireTls: false, allowedCidrs: [], maxClients: 0, maxClientsCeiling: 32, awayMessage: '', devices: [], activity: [] })),
     revokeBouncerPassword: vi.fn(async () => undefined),
     fetchBouncerClients: vi.fn(async () => ({ clients: [], now: Date.now() })),
     disconnectBouncerClient: vi.fn(async () => undefined),
+    updateBouncerSettings: vi.fn(async () => ({ prefVersion: 1, playbackLines: 200, playbackMax: 1000, requireTls: false, allowedCidrs: [], maxClients: 0, maxClientsCeiling: 32, awayMessage: '' })),
+    resetBouncerDevice: vi.fn(async () => undefined),
+    updateBufferPrefs: vi.fn(async () => undefined),
     // ircStore imports this for the WebSocket-sync message normalization
     // path. Default to a pass-through so consumers that don't drive the
     // sync path don't need to think about it; tests that exercise the

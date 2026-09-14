@@ -43,13 +43,14 @@ import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.user : UserRepository;
 import ircfiber.db.messages : MessageRepository;
-import ircfiber.db.preferences : PreferencesRepository, clampBncPlaybackLines;
+import ircfiber.db.preferences : PreferencesRepository, clampBncPlaybackLines, UserPreferences;
 import ircfiber.storage.buffer : BufferManager;
 import ircfiber.models.irc_event : IRCRawEvent;
 import ircfiber.models.network : NetworkConfig, TLSMode;
 import ircfiber.network_lifecycle : normalizeHost, provisionNetwork, updateOwnedNetwork, deleteOwnedNetwork;
 import ircfiber.redis.protocol : RedisKeys, IRCCommand, NetworkStateSnapshot, ControlMessage;
 import ircfiber.api.websocket : loadNetworkStateSnapshot, routeEngineCommand;
+import ircfiber.ipintel.cidr : cidrContains;
 import ircfiber.bnc.wire;
 import ircfiber.bnc.format : FormatCtx, RecentOwn, formatEvent, formatChannelListEvent;
 import ircfiber.bnc.control : BNC_EVENT_REVOKED, BNC_EVENT_KICK, BNC_EVENT_NETWORKS;
@@ -481,11 +482,185 @@ final class BncClient {
         return d;
     }
 
+    // ── Access policy, audit, persistent detach, auto-away ───────────
+
+    /// Live presence records of this account, optionally narrowed to one
+    /// network and excluding one session id. Reads `irc:bnc:clients` +
+    /// `irc:bnc:client:<sid>` — the same records the admin page reads.
+    private size_t countOwnClients(string net, string excludeSid) {
+        size_t n = 0;
+        if (!userId.length) return 0;
+        try {
+            foreach (sid; ctx.redis.getDb().smembers(RedisKeys.bncClients())) {
+                if (excludeSid.length && sid == excludeSid) continue;
+                Json j;
+                try j = ctx.redis.getJson(RedisKeys.bncClient(sid));
+                catch (Exception) continue;
+                if (j.type != Json.Type.object) continue;
+                if (j["userId"].type != Json.Type.string || j["userId"].get!string != userId) continue;
+                if (net.length
+                    && (j["networkId"].type != Json.Type.string || j["networkId"].get!string != net))
+                    continue;
+                n++;
+            }
+        } catch (Exception e) {
+            logWarn("bnc: sid=%s client count failed: %s", sessionId, e.msg);
+        }
+        return n;
+    }
+
+    /// Appends one bouncer event to `RedisKeys.bncAudit(uid)`: LPUSH,
+    /// LTRIM 0 49, EXPIRE 90 d. `event` is `attach`, `detach` or `reject`.
+    /// Diagnostic, not a compliance ledger — a failed write is a debug line.
+    private void auditBncFor(string uid, string event, string reason) nothrow {
+        if (!uid.length) return;
+        try {
+            auto j = Json.emptyObject;
+            j["t"] = Json(nowMs());
+            j["event"] = Json(event);
+            j["reason"] = Json(reason);
+            j["ip"] = Json(peerIp(peer));
+            j["clientId"] = Json(clientId);
+            j["networkName"] = Json(networkName);
+            j["tls"] = Json(tls !is null);
+            auto db = ctx.redis.getDb();
+            const key = RedisKeys.bncAudit(uid);
+            db.lpush(key, j.toString());
+            db.ltrim(key, 0, 49);
+            db.expire(key, 90L * 24 * 3600);
+        } catch (Exception e) {
+            try logDebug("bnc: audit write failed for %s: %s", uid, e.msg);
+            catch (Exception) {}
+        }
+    }
+
+    /// `auditBncFor` for the authenticated account of this connection.
+    private void auditBnc(string event, string reason) nothrow {
+        auditBncFor(userId, event, reason);
+    }
+
+    /// Sends the rejection reason, closes, and records it. One helper so
+    /// every policy denial looks identical on the wire and in the trail.
+    private bool rejectPolicy(string text, string tag) {
+        send("ERROR :Closing link: " ~ text);
+        markClosing(tag);
+        auditBnc("reject", tag);
+        logInfo("bnc: sid=%s policy reject=%s user=%s peer=%s", sessionId, tag, userId, peer);
+        return false;
+    }
+
+    /// Per-account bouncer access policy (Settings → Bouncer → Access):
+    /// TLS requirement, IP allowlist, simultaneous-client cap. Runs after
+    /// authentication (the policy is the user's) and before binding, so a
+    /// rejected client never reaches a network.
+    private bool enforceAccessPolicy() {
+        UserPreferences prefs;
+        try prefs = ctx.prefsRepo.load(parseUUID(userId.idup));
+        catch (Exception e) {
+            // Fail open: a prefs-store hiccup must not lock a user out of
+            // their own bouncer.
+            logWarn("bnc: sid=%s access policy skipped (prefs load failed): %s", sessionId, e.msg);
+            return true;
+        }
+        if (prefs.bncRequireTls && tls is null)
+            return rejectPolicy("TLS required for bouncer access", "require-tls");
+        if (prefs.bncAllowedCidrs.length) {
+            const ip = peerIp(peer);
+            bool allowed = false;
+            foreach (c; prefs.bncAllowedCidrs) if (cidrContains(c, ip)) { allowed = true; break; }
+            if (!allowed) return rejectPolicy("Address not allowed", "cidr-denied");
+        }
+        if (prefs.bncMaxClients > 0
+            && cast(int) countOwnClients("", "") >= prefs.bncMaxClients)
+            return rejectPolicy("Too many attached clients ("
+                ~ prefs.bncMaxClients.to!string ~ ")", "max-clients");
+        return true;
+    }
+
+    /// Seeds `detachedChans` from the user's persisted per-buffer flags for
+    /// the bound network (`bufferPrefs["<net>:<chan>"].bncDetached`), so a
+    /// detach survives the connection that made it (ZNC parity).
+    private void loadDetachedFromPrefs() {
+        detachedChans = null;
+        if (!userId.length || !networkId.length) return;
+        try {
+            auto prefs = ctx.prefsRepo.load(parseUUID(userId.idup));
+            const prefix = networkId ~ ":";
+            foreach (k, v; prefs.bufferPrefs) {
+                if (k.length <= prefix.length || k[0 .. prefix.length] != prefix) continue;
+                if (v.type != Json.Type.object) continue;
+                auto d = "bncDetached" in v;
+                if (d is null || d.type != Json.Type.bool_ || !d.get!bool) continue;
+                detachedChans[k[prefix.length .. $].toLower()] = true;
+            }
+        } catch (Exception e) {
+            logWarn("bnc: sid=%s detached-pref load failed: %s", sessionId, e.msg);
+        }
+    }
+
+    /// Applies one channel's detached state to this connection and persists
+    /// it, fanning the change out to the web app and every other client
+    /// (`pref_update` key `bufferPrefs`, the same map `POST
+    /// /api/me/buffer-prefs` writes — including its drop-empty-object rule).
+    private void setDetachedPref(string chan, bool detached) {
+        const key = chan.toLower();
+        if (detached) detachedChans[key] = true;
+        else detachedChans.remove(key);
+        if (!userId.length || !networkId.length) return;
+        const prefKey = networkId ~ ":" ~ key;
+        try {
+            auto map = Json.emptyObject;
+            auto newVersion = ctx.prefsRepo.mutate(parseUUID(userId.idup), (ref UserPreferences p) {
+                auto existing = prefKey in p.bufferPrefs;
+                Json entry = (existing !is null && existing.type == Json.Type.object)
+                    ? *existing : Json.emptyObject;
+                if (detached) entry["bncDetached"] = Json(true);
+                else if (entry["bncDetached"].type != Json.Type.undefined) entry.remove("bncDetached");
+                bool empty = true;
+                foreach (string _k, _v; entry) { empty = false; break; }
+                if (empty) p.bufferPrefs.remove(prefKey);
+                else p.bufferPrefs[prefKey] = entry;
+                foreach (k, v; p.bufferPrefs) map[k] = v;
+                return true;
+            });
+            ctx.prefsRepo.publishPrefUpdate(userId, "bufferPrefs", map, newVersion);
+        } catch (Exception e) {
+            logWarn("bnc: sid=%s detach persist failed for %s: %s", sessionId, prefKey, e.msg);
+        }
+    }
+
+    /// ZNC "away when detached": sends `AWAY :<message>` on `net` when this
+    /// account has no bouncer client left there, and clears it (`AWAY` with
+    /// no argument) as soon as one attaches. No-op without a configured
+    /// away message or a healthy engine for that network.
+    private void applyAway(string net, bool attached) nothrow {
+        try {
+            if (!net.length || !userId.length) return;
+            string msg;
+            try msg = ctx.prefsRepo.load(parseUUID(userId.idup)).bncAwayMessage;
+            catch (Exception) return;
+            if (!msg.length) return;
+            auto serverId = ctx.registry.getServerForNetwork(net);
+            if (!serverId.length) return;
+            routeEngineCommand(ctx.redis, net, serverId,
+                IRCCommand("raw", "", attached ? "AWAY" : "AWAY :" ~ msg));
+        } catch (Exception e) {
+            try logWarn("bnc: sid=%s away update failed for %s: %s", sessionId, net, e.msg);
+            catch (Exception) {}
+        }
+    }
+
     private void teardown() {
         closing = true;
         stopSubscriber();
         if (!revoked) flushCursor(true);
         clearPresence();
+        // Only a connection that actually attached gets a detach row; a
+        // policy rejection already wrote its own `reject` row.
+        if (registered) auditBnc("detach", closeReason.length ? closeReason : "unknown");
+        // Last client of this account on the network → mark away upstream.
+        if (registered && networkId.length && countOwnClients(networkId, sessionId) == 0)
+            applyAway(networkId, false);
         if (registered && networkId.length) {
             const secs = (nowMs() - attachedAtMs) / 1000;
             emitStatusEvent("Bouncer client disconnected " ~ clientDescription()
@@ -672,7 +847,13 @@ final class BncClient {
         if (u.id == UUID.init) return false;
         auto stored = ctx.userRepo.getBncToken(u.id);
         if (!stored.length || stored.length != token.length
-            || !secureEqual(cast(const(ubyte)[]) stored, cast(const(ubyte)[]) token)) return false;
+            || !secureEqual(cast(const(ubyte)[]) stored, cast(const(ubyte)[]) token)) {
+            // The username resolved, so this rejection is that account's
+            // business. An unresolvable username never reaches here, so a
+            // stranger cannot fill somebody else's trail.
+            auditBncFor(u.id.toString(), "reject", "bad-password");
+            return false;
+        }
         userId = u.id.toString();
         authUsername = u.username;
         clientId = id.clientId;
@@ -699,6 +880,7 @@ final class BncClient {
                 return;
             }
         }
+        if (!enforceAccessPolicy()) return;
         if (!resolveBinding()) return;
         attach();
     }
@@ -799,6 +981,7 @@ final class BncClient {
         auto snap = loadNetworkStateSnapshot(ctx.redis, ctx.registry, networkId);
         currentNick = snap.currentNick.length ? snap.currentNick : clientNick;
         if (auto pfx = "PREFIX" in snap.isupport) prefixChars = prefixCharsFromIsupport(*pfx);
+        loadDetachedFromPrefs();
 
         string chanModes = "ov";
         if (auto cm = "CHANMODES" in snap.isupport) {
@@ -858,6 +1041,8 @@ final class BncClient {
                 ~ (capList.length ? ", caps: " ~ capList.join(" ") : ", no caps"));
         }
         keepaliveTask = runTask(&keepaliveLoop);
+        auditBnc("attach", clientId.length ? "clientid" : "anonymous");
+        applyAway(networkId, true);
         logInfo("bnc: attached sid=%s user=%s network=%s client=%s nick=%s peer=%s caps=%s",
             sessionId, userId, networkId, clientId.length ? clientId : "-", currentNick, peer, caps.keys.join(","));
     }
@@ -908,6 +1093,7 @@ final class BncClient {
         pendingLive = null;
         attachedAtMs = nowMs();
         writePresence();
+        auditBnc("attach", clientId.length ? "clientid" : "anonymous");
         keepaliveTask = runTask(&keepaliveLoop);
         logInfo("bnc: attached sid=%s user=%s network=- client=%s nick=%s peer=%s caps=%s",
             sessionId, userId, clientId.length ? clientId : "-", currentNick, peer, caps.keys.join(","));
@@ -1097,6 +1283,9 @@ final class BncClient {
             if (buf["isJoined"].type != Json.Type.bool_ || !buf["isJoined"].get!bool) continue;
             const chan = buf["name"].type == Json.Type.string ? buf["name"].get!string : "";
             if (!chan.length) continue;
+            // A persistently detached channel is not part of this client's
+            // view (ZNC parity): no JOIN, no NAMES, no history below.
+            if (chan.toLower() in detachedChans) continue;
 
             if (has("extended-join")) send(formatLine(null, selfMask, "JOIN", [chan, "*", currentNick]));
             else send(formatLine(null, selfMask, "JOIN", [chan]));
@@ -1287,6 +1476,7 @@ final class BncClient {
             if (ev["ch"].type == Json.Type.string) key = ev["ch"].get!string;
             if (!key.length && ev["n"].type == Json.Type.string) key = ev["n"].get!string;
             if (!key.length) continue;
+            if (key.toLower() in detachedChans) continue;
             const dk = key.toLower() ~ "\0" ~ dedupeKey(ev);
             if (dk in seen) continue;
             seen[dk] = true;
@@ -1673,6 +1863,8 @@ final class BncClient {
         // Persist the old network's replay cursor before `networkId` moves —
         // `flushCursor` keys off it.
         flushCursor(true);
+        if (oldNetworkId.length && countOwnClients(oldNetworkId, sessionId) == 0)
+            applyAway(oldNetworkId, false);
         if (oldNetworkId.length) {
             emitStatusEvent("Bouncer client jumped to " ~ cfg.name ~ " " ~ clientDescription());
             auto old = loadNetworkStateSnapshot(ctx.redis, ctx.registry, oldNetworkId);
@@ -1692,6 +1884,8 @@ final class BncClient {
 
         networkId = cfg.id.toString();
         networkName = cfg.name;
+        loadDetachedFromPrefs();
+        applyAway(networkId, true);
         auto snap = loadNetworkStateSnapshot(ctx.redis, ctx.registry, networkId);
         const oldNick = currentNick;
         currentNick = snap.currentNick.length ? snap.currentNick : clientNick;
@@ -1884,10 +2078,7 @@ final class BncClient {
                     reply(detaching ? "No channels to detach" : "No channels to attach");
                     return;
                 }
-                foreach (chan; chans) {
-                    if (detaching) detachedChans[chan.toLower()] = true;
-                    else detachedChans.remove(chan.toLower());
-                }
+                foreach (chan; chans) setDetachedPref(chan, detaching);
                 reply(detaching
                     ? "Detached " ~ chans.join(", ") ~ " (backlog kept; Attach or /JOIN resumes)"
                     : "Attached " ~ chans.join(", "));
@@ -2092,7 +2283,7 @@ final class BncClient {
             if (reason.strip().toLower() == "detach") {
                 foreach (chan; pl.params[0].split(",")) {
                     if (!chan.length) continue;
-                    detachedChans[chan.toLower()] = true;
+                    setDetachedPref(chan, true);
                 }
                 status("Detached " ~ pl.params[0] ~ " (backlog kept, use /JOIN to re-attach)");
                 return;
@@ -2100,7 +2291,7 @@ final class BncClient {
             foreach (chan; pl.params[0].split(",")) {
                 if (!chan.length) continue;
                 // Re-attach if it was detached before
-                detachedChans.remove(chan.toLower());
+                setDetachedPref(chan, false);
                 auto cmd = IRCCommand("part", chan, "");
                 cmd.timestampMs = now;
                 routeEngineCommand(ctx.redis, networkId, serverId, cmd);
@@ -2112,10 +2303,10 @@ final class BncClient {
             if (pl.params.length) {
                 foreach (chan; pl.params[0].split(",")) {
                     if (!chan.length) continue;
-                    auto key = chan.toLower();
+                    auto key = chan;
                     // Strip leading : if present (JOIN :#ch)
                     if (key.length && key[0] == ':') key = key[1 .. $];
-                    detachedChans.remove(key);
+                    setDetachedPref(key, false);
                 }
             }
             // Fall through to raw forwarding below

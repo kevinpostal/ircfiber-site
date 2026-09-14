@@ -123,6 +123,8 @@ export interface Network {
   tls: string;
   nick: string;
   realName: string;
+  /** IRC username sent as the first `USER` parameter; '' = use the nick. */
+  ident: string;
   currentNick: string;
   /** SASL authentication mechanism: 'none' | 'plain' | 'external' | 'scramSha256' */
   sasl: string;

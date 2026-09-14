@@ -94,6 +94,7 @@
   let tls = $state<'enabled' | 'disabled' | 'required'>('enabled');
   let nick = $state('');
   let realName = $state('');
+  let ident = $state('');
   let autoJoinChannels = $state('');
   let autoJoinDelaySeconds = $state(0);
   let nspass = $state('');
@@ -206,6 +207,7 @@
       tls = initTls;
       nick = existing.nick;
       realName = existing.realName;
+      ident = existing.ident ?? '';
       autoJoinChannels = (existing.autoJoinChannels ?? []).join(', ');
       autoJoinDelaySeconds = existing.autoJoinDelaySeconds ?? 0;
       nspass = '';
@@ -224,6 +226,7 @@
       tls = 'required';
       nick = '';
       realName = '';
+      ident = '';
       autoJoinChannels = '';
       autoJoinDelaySeconds = 0;
       nspass = '';
@@ -310,7 +313,7 @@
     try {
       if (mode === 'add') {
         const result = await onAddNetwork({
-          name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
+          name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName, ident,
           autoJoinChannels, autoJoinDelaySeconds, nspass, serverPass, commands, egressNodeId, operUsername, operPassword,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : undefined,
@@ -341,7 +344,7 @@
         if (operPassword) { writeOnly.operUsername = operUsername; writeOnly.operPassword = operPassword; }
 
         await onUpdateNetwork(networkId, {
-          name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName,
+          name, host: effectiveHost, port: effectivePort, tls: effectiveTls, nick, realName, ident,
           sasl: saslMechanism,
           saslUsername: saslMechanism !== 'none' ? saslUsername : '',
           saslPassword: saslMechanism !== 'none' && saslPassword ? saslPassword : undefined,
@@ -400,6 +403,8 @@
           if (realName && realName !== priorRealName) {
             existing.realName = realName;
           }
+          // Ident is registration-time only, same as realName above.
+          if (ident !== (existing.ident ?? '')) existing.ident = ident;
         }
         onClose();
       }
@@ -507,7 +512,7 @@
         <tbody>
           <tr>
             <th class="nickname"><label for="add-network-nick">Nickname</label></th>
-            <th class="realname"><label for="add-network-realname">Full name <small class="explanation">(optional)</small></label></th>
+            <th class="realname"><label for="add-network-ident">Ident <small class="explanation">(optional — defaults to your nick)</small></label></th>
           </tr>
           <tr>
             <td class="nickname">
@@ -515,6 +520,15 @@
                      bind:value={nick} placeholder="Nick" required disabled={isFiber} />
             </td>
             <td class="realname">
+              <input id="add-network-ident" class="input" type="text"
+                     bind:value={ident} placeholder="defaults to nick" maxlength="10" disabled={isFiber} />
+            </td>
+          </tr>
+          <tr>
+            <th class="realname" colspan="2"><label for="add-network-realname">Full name <small class="explanation">(optional)</small></label></th>
+          </tr>
+          <tr>
+            <td class="realname" colspan="2">
               <input id="add-network-realname" class="input" type="text"
                      bind:value={realName} placeholder="optional" disabled={isFiber} />
             </td>
