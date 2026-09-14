@@ -36,7 +36,7 @@
   import { ircArtPanelOpen } from './stores/ircArtStore.svelte';
   import { notify } from './lib/notifications';
   import { startOnlineChecker } from './lib/onlineChecker';
-  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, pinnedOrder, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs, ignoreList, applyServerIgnores } from './stores/preferences.svelte';
+  import { membersCollapsedMap, collapsedMap, archivedMap, hiddenChannelsMap, pinnedMap, pinnedOrder, inactiveCollapsedMap, networkOrder, suppressAnimations, globalPrefs, setFocusSeen, getFocusSeen, clearAllFocusSeen, clearBottomSeen, bufferPrefsMap, conversationsCollapsedMap, setShowMemberPrefixes, applyServerNotificationPrefs, ignoreList, applyServerIgnores, clearLocalPreferences, isPersistSuppressed } from './stores/preferences.svelte';
   import { loadCachedMessages } from './stores/ircStore.svelte';
   import { updateRoute, bufferNameFromChannelPart, getSettingsTabFromUrl, isSettingsUrl, navigateBackFromSettings, isShortcutsUrl, navigateBackFromShortcuts, isFeedbackUrl, navigateBackFromFeedback, isComposeStyleUrl, navigateBackFromComposeStyle, isAddNetworkUrl, isAddNetworkWelcome, navigateAddNetwork, navigateBackFromAddNetwork, isFileViewerUrl, getFileViewerIdFromUrl, navigateBackFromFileViewer, isPastebinUrl, getPastebinIdFromUrl, navigateBackFromPastebin } from './lib/routing';
   import { processIrcEvent, type AccumState } from './lib/messageHandler';
@@ -433,7 +433,7 @@ let showEditNetwork: boolean = $state(false);
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', () => {
       try {
-        if (typeof localStorage !== 'undefined')
+        if (typeof localStorage !== 'undefined' && !isPersistSuppressed())
           localStorage.setItem('ircfiber:dirtySeen', JSON.stringify(dirtySeenEids));
       } catch {}
     });
@@ -1038,6 +1038,21 @@ let showEditNetwork: boolean = $state(false);
   // Equivalent to IRCCloud's Session.messageHandlers.stat_user
   function handleStatUser(obj: Record<string, unknown>): void {
     performance.mark('stat_user');
+    const incomingUser = (obj.username as string) || '';
+    if (incomingUser) {
+      const previous = localStorage.getItem('ircfiber:lastUser');
+      if (previous && previous !== incomingUser) {
+        // A different account on this browser (expired session, shared
+        // machine) — user A's pins must not leak into user B. The sweep
+        // also removes `ircfiber:lastUser`, so it is rewritten after,
+        // which is what stops the reload from looping.
+        clearLocalPreferences();
+        localStorage.setItem('ircfiber:lastUser', incomingUser);
+        window.location.reload();
+        return;
+      }
+      localStorage.setItem('ircfiber:lastUser', incomingUser);
+    }
     ircState.me = {
       username: (obj.username as string) || '',
       email: (obj.email as string) || '',
@@ -1169,12 +1184,14 @@ let showEditNetwork: boolean = $state(false);
     const user = obj;
     if (user.pinnedChannels) {
       const list = user.pinnedChannels as string[];
+      // The server list is authoritative. Anything absent from it is not
+      // pinned — including a stale `false` tombstone written by an older
+      // build, which used to make this device permanently ignore a pin
+      // made on another device.
       for (const key of Object.keys(pinnedMap)) {
-        if (pinnedMap[key] === true && !list.includes(key)) delete pinnedMap[key];
+        if (!list.includes(key)) delete pinnedMap[key];
       }
-      for (const key of list) {
-        if (pinnedMap[key] !== false) pinnedMap[key] = true;
-      }
+      for (const key of list) pinnedMap[key] = true;
       // The array order IS the user's Pinned order (see the pin-order
       // endpoint), so a drag on another device arrives here as a plain
       // `pinned` broadcast and the sidebar re-sorts live.
@@ -1306,19 +1323,13 @@ let showEditNetwork: boolean = $state(false);
     const key = data.key as string;
     if (key === 'pinned') {
       const channels = (data.value as string[]) ?? [];
-      // Sync server-side pins into local pinnedMap. Stale true values
-      // that are no longer on the server are removed so unpinning
-      // propagates to all connected tabs/devices in real time.
+      // The server list is authoritative — see mergePreferences. A key
+      // missing from it is deleted outright, so an unpin on this device
+      // cannot block a later pin arriving from another one.
       for (const k of Object.keys(pinnedMap)) {
-        if (pinnedMap[k] === true && !channels.includes(k)) {
-          delete pinnedMap[k];
-        }
+        if (!channels.includes(k)) delete pinnedMap[k];
       }
-      for (const k of channels) {
-        if (pinnedMap[k] !== false) {
-          pinnedMap[k] = true;
-        }
-      }
+      for (const k of channels) pinnedMap[k] = true;
       // The list order is the Pinned section's order, so a drag on another
       // device (or another tab) re-sorts this one within one WS frame.
       pinnedOrder.length = 0;

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ircState, type SettingsTab } from '../stores/ircStore.svelte';
-  import { highlightWords } from '../stores/preferences.svelte';
+  import { highlightWords, clearLocalPreferences } from '../stores/preferences.svelte';
   import { onMount } from 'svelte';
   import { changePassword, deleteAccount, uploadAvatar, removeAvatar, fetchIrcAccount, retryIrcAccount, type IrcAccountInfo } from '../stores/api';
   import SettingsSection from './SettingsSection.svelte';
@@ -87,6 +87,7 @@
     deleteError = '';
     try {
       await deleteAccount();
+      clearLocalPreferences();
       localStorage.removeItem('token');
       window.location.href = '/login';
     } catch (e: unknown) {

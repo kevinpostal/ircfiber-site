@@ -5,7 +5,7 @@ import { setChanPrefixChars } from '../lib/autolinker';
 import { setChanModeTypes } from '../lib/modeSentence';
 import { isMessageIgnored } from '../lib/ignorePolicy';
 import { closeNotification } from '../lib/notifications';
-import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, globalPrefs, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap } from './preferences.svelte';
+import { unseenMap, unseenHighlightsMap, archivedMap, pinnedMap, hiddenChannelsMap, highlightWords, isIgnored, globalPrefs, getLastSeen, setLastSeen, getBottomSeen, setBottomSeen, getFocusSeen, clearFocusSeen, hideChannel, unhideChannel, networkOrder, conversationsCollapsedMap, getBufferPrefs, bufferPrefsMap, lastSeenMap, bottomSeenMap, focusSeenMap, clearedAtMap, isPersistSuppressed } from './preferences.svelte';
 import { archiveChannel as apiArchiveChannel, unarchiveChannel as apiUnarchiveChannel, normalizeMessage, reconnectNetwork } from './api';
 import { sendRaw, sendJson } from './wsConnection.svelte';
 import { appendToProcessed, buildProcessedBuffer, prependReprocess, replaceInProcessedBuffer, type ProcessedBuffer } from '../lib/messageBuilder';
@@ -1692,6 +1692,9 @@ const DIRTY_SEEN_KEY = 'ircfiber:dirtySeen';
 function persistDirtySeen(): void {
   try {
     if (typeof localStorage === 'undefined') return;
+    // A sign-out sweep has run: writing here would resurrect the previous
+    // account's read markers for the next user.
+    if (isPersistSuppressed()) return;
     localStorage.setItem(DIRTY_SEEN_KEY, JSON.stringify(dirtySeenEids));
   } catch {}
 }

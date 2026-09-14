@@ -1523,7 +1523,9 @@ final class RESTAPI {
         if (res.headerWritten) return;
 
         auto user = req.context["user"].get!User;
-        auto prefs = prefsRepo.load(user.id);
+        // bypassCache: /api/me is a fresh-client bootstrap, so it must
+        // reflect another device's writes immediately.
+        auto prefs = prefsRepo.load(user.id, true);
         auto mc = Json.emptyObject;
         foreach (k, v; prefs.membersCollapsed)
             mc[k] = Json(v);
@@ -1945,18 +1947,27 @@ final class RESTAPI {
         const channel = bodyJson["channel"].get!string;
         const pinId = network ~ ":" ~ channel;
 
-        auto prefs = prefsRepo.load(user.id);
-        long newVersion = 0;
-        if (!prefs.pinnedChannels.canFind(pinId)) {
-            prefs.pinnedChannels ~= pinId;
-            newVersion = prefsRepo.save(user.id, prefs);
-        } else {
-            // No mutation this request — surface the current prefVersion
-            // so other tabs see a consistent counter in the broadcast.
-            newVersion = prefs.prefVersion;
-        }
+        // Serialized read-modify-write: two devices pinning at the same
+        // time must not lose each other's edit. `mutate` returns only the
+        // new prefVersion, so the list and the pre-existing version are
+        // captured inside the delegate.
+        string[] pinned;
+        long currentVersion;
+        auto newVersion = prefsRepo.mutate(user.id, (ref UserPreferences p) {
+            currentVersion = p.prefVersion;
+            if (p.pinnedChannels.canFind(pinId)) {
+                pinned = p.pinnedChannels;
+                return false;
+            }
+            p.pinnedChannels ~= pinId;
+            pinned = p.pinnedChannels;
+            return true;
+        });
+        // No mutation this request — surface the current prefVersion
+        // so other tabs see a consistent counter in the broadcast.
+        if (newVersion == 0) newVersion = currentVersion;
         // Broadcast pref update to all connected WebSocket clients for this user
-        broadcastPrefUpdate(user.id.toString(), "pinned", serializeToJson(prefs.pinnedChannels), newVersion);
+        broadcastPrefUpdate(user.id.toString(), "pinned", serializeToJson(pinned), newVersion);
         res.statusCode = 204;
         res.writeVoidBody();
     }
@@ -1970,12 +1981,17 @@ final class RESTAPI {
         const channel = req.params["channel"];
         const pinId = network ~ ":" ~ channel;
 
-        auto prefs = prefsRepo.load(user.id);
-        prefs.pinnedChannels = prefs.pinnedChannels.filter!(p => p != pinId).array;
-        auto newVersion = prefsRepo.save(user.id, prefs);
+        // Unconditional save, as before: the broadcast must fire even when
+        // the channel was not pinned here, so every device converges.
+        string[] pinned;
+        auto newVersion = prefsRepo.mutate(user.id, (ref UserPreferences p) {
+            p.pinnedChannels = p.pinnedChannels.filter!(x => x != pinId).array;
+            pinned = p.pinnedChannels;
+            return true;
+        });
 
         // Broadcast pref update to all connected WebSocket clients for this user
-        broadcastPrefUpdate(user.id.toString(), "pinned", serializeToJson(prefs.pinnedChannels), newVersion);
+        broadcastPrefUpdate(user.id.toString(), "pinned", serializeToJson(pinned), newVersion);
         res.statusCode = 204;
         res.writeVoidBody();
     }
@@ -2385,28 +2401,29 @@ final class RESTAPI {
         auto user = req.context["user"].get!User;
         const bodyJson = req.json;
 
-        auto prefs = prefsRepo.load(user.id);
-
-        string[] requested;
-        if (auto o = "order" in bodyJson) {
-            if (o.type == Json.Type.array) {
-                foreach (entry; *o) {
-                    if (entry.type != Json.Type.string) continue;
-                    const id = entry.get!string;
-                    if (id.length == 0 || requested.canFind(id)) continue;
-                    if (!prefs.pinnedChannels.canFind(id)) continue;
-                    requested ~= id;
+        string[] ordered;
+        auto newVersion = prefsRepo.mutate(user.id, (ref UserPreferences p) {
+            string[] requested;
+            if (auto o = "order" in bodyJson) {
+                if (o.type == Json.Type.array) {
+                    foreach (entry; *o) {
+                        if (entry.type != Json.Type.string) continue;
+                        const id = entry.get!string;
+                        if (id.length == 0 || requested.canFind(id)) continue;
+                        if (!p.pinnedChannels.canFind(id)) continue;
+                        requested ~= id;
+                    }
                 }
             }
-        }
-        foreach (id; prefs.pinnedChannels) {
-            if (!requested.canFind(id)) requested ~= id;
-        }
+            foreach (id; p.pinnedChannels) {
+                if (!requested.canFind(id)) requested ~= id;
+            }
+            p.pinnedChannels = requested;
+            ordered = requested;
+            return true;
+        });
 
-        prefs.pinnedChannels = requested;
-        auto newVersion = prefsRepo.save(user.id, prefs);
-
-        broadcastPrefUpdate(user.id.toString(), "pinned", serializeToJson(prefs.pinnedChannels), newVersion);
+        broadcastPrefUpdate(user.id.toString(), "pinned", serializeToJson(ordered), newVersion);
 
         res.statusCode = 204;
         res.writeVoidBody();

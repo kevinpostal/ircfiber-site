@@ -248,7 +248,9 @@ describe('ChannelContextMenu', () => {
     await userEvent.click(unpinButton);
     const pinButtonAgain = page.getByRole('button', { name: 'Pin', exact: true }).element() as HTMLButtonElement;
     expect(pinButtonAgain.getAttribute('aria-pressed')).toBe('false');
-    expect(pinnedMap['net1:#chan']).toBe(false);
+    // Unpin deletes the key; a `false` tombstone would block a pin
+    // arriving later from another device.
+    expect(pinnedMap['net1:#chan']).toBeUndefined();
     expect(buf.isPinned).toBe(false);
     expect(unpinChannelMock).toHaveBeenCalledWith('net1', '#chan');
   });
@@ -274,7 +276,7 @@ describe('ChannelContextMenu', () => {
     await userEvent.click(unpinButton);
     const pinButton = page.getByRole('button', { name: 'Pin', exact: true }).element() as HTMLButtonElement;
     expect(pinButton.getAttribute('aria-pressed')).toBe('false');
-    expect(pinnedMap['net1:#chan']).toBe(false);
+    expect(pinnedMap['net1:#chan']).toBeUndefined();
     expect(buf.isPinned).toBe(false);
     expect(unpinChannelMock).toHaveBeenCalledWith('net1', '#chan');
   });

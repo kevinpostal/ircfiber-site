@@ -14,6 +14,7 @@ import vibe.core.log : logInfo, logWarn;
 import ircfiber.auth : hashPassword;
 import ircfiber.web.common : getClientIp;
 import ircfiber.db.user : UserRepository;
+import ircfiber.db.preferences : PreferencesRepository;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.uploads : UploadRepository;
 import ircfiber.models.user : User;
@@ -228,9 +229,11 @@ package void adminUserDelete(HTTPServerRequest req, HTTPServerResponse res,
         logWarn("Session cleanup error for deleted user %s: %s", user.username, e.msg);
     }
 
-    // 3. Delete user preferences from Redis
+    // 3. Delete user preferences — Redis key, in-process cache and the
+    // durable Mongo document. A Redis-only DEL would be resurrected by
+    // the Mongo fallback in `PreferencesRepository.load()`.
     try {
-        db.del("prefs:" ~ id.toString());
+        (new PreferencesRepository(redis)).deleteForUser(id);
         logInfo("Cleared preferences for deleted user %s", user.username);
     } catch (Exception e) {
         logWarn("Preferences cleanup error for deleted user %s: %s", user.username, e.msg);

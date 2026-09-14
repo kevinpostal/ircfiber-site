@@ -33,6 +33,7 @@ import ircfiber.storage.session : RedisSessionStore;
 import ircfiber.db.network : NetworkRepository;
 import ircfiber.db.uploads : UploadRepository;
 import ircfiber.db.user : UserRepository;
+import ircfiber.db.preferences : PreferencesRepository;
 import ircfiber.default_network : DEFAULT_FIBER_HOST;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.models.network : NetworkConfig;
@@ -80,8 +81,10 @@ void purgeUserAccount(User user, RedisStorage redis, ServerRegistry serverRegist
     // per-network purge above; an empty network id drops them all.
     publishBncRevoked(redis, userId, "");
 
-    try db.del("prefs:" ~ userId);
-    catch (Exception e) logWarn("purge %s: deleting prefs failed: %s", user.username, e.msg);
+    // Every copy — Redis key, in-process cache and the durable Mongo
+    // document. A Redis-only DEL would be resurrected by the Mongo
+    // fallback in `PreferencesRepository.load()`.
+    (new PreferencesRepository(redis)).deleteForUser(id);
     purgeUploads(userId, user.username);
     destroySessions(redis, userId);
     purgeWsSessions(redis, userId);

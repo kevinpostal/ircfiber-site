@@ -613,22 +613,6 @@ describe('Sidebar', () => {
       const regularList = document.querySelector('.network-buffers');
       expect(regularList?.textContent).toContain('general');
     });
-
-    it('pinnedMap value false is respected over server merge', () => {
-      // Simulate: user unpinned, then server sends pinnedChannels on fetchMe
-      pinnedMap['net1:#general'] = false;
-
-      // Simulate the merge logic from App.svelte
-      const serverPinned = ['net1:#general'];
-      for (const key of serverPinned) {
-        if (pinnedMap[key] !== false) {
-          pinnedMap[key] = true;
-        }
-      }
-
-      // Should stay unpinned because local state said false
-      expect(pinnedMap['net1:#general']).toBe(false);
-    });
   });
 
   describe('drag-to-reorder', () => {

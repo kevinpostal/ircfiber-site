@@ -784,6 +784,55 @@ describe('App', () => {
       expect(pinnedMap['net1:#should-not-apply']).toBeUndefined();
     });
 
+    it('a pin from another device applies even after this device unpinned it', async () => {
+      // The server's pinned list is authoritative. A `false` tombstone —
+      // what an older build wrote on unpin, and what survives in this
+      // browser's localStorage after the upgrade — must not make this
+      // device ignore a pin made on another device.
+      pinnedMap['net1:#general'] = false;
+
+      render(App);
+
+      const wsMock = connectWebSocket as unknown as {
+        mock: { calls: Array<Array<(d: unknown) => void>> };
+      };
+      await vi.waitFor(() => {
+        expect(wsMock.mock.calls.length).toBeGreaterThan(0);
+      });
+      const onMessage = wsMock.mock.calls[0]?.[0];
+      expect(onMessage).toBeDefined();
+
+      onMessage!({
+        type: 'stat_user',
+        username: 'tester',
+        email: 'tester@test.local',
+        prefVersion: 10,
+        pinnedChannels: ['net1:#general'],
+      });
+      flushSync();
+      expect(pinnedMap['net1:#general']).toBe(true);
+
+      // This device unpins: the server echoes an empty list.
+      onMessage!({
+        type: 'pref_update',
+        key: 'pinned',
+        value: [],
+        prefVersion: 11,
+      });
+      flushSync();
+      expect(pinnedMap['net1:#general']).toBeUndefined();
+
+      // Another device pins it again.
+      onMessage!({
+        type: 'pref_update',
+        key: 'pinned',
+        value: ['net1:#general'],
+        prefVersion: 12,
+      });
+      flushSync();
+      expect(pinnedMap['net1:#general']).toBe(true);
+    });
+
     afterEach(() => {
       for (const k of Object.keys(membersCollapsedMap)) delete membersCollapsedMap[k];
       for (const k of Object.keys(collapsedMap)) delete collapsedMap[k];

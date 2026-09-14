@@ -209,7 +209,23 @@ function getStorageItem<T>(key: string, defaultValue: T): T {
     return defaultValue;
   }
 }
+/**
+ * Latched by `clearLocalPreferences`. Without it the sweep loses a race it
+ * can never win: the debounced persist timer, and the `beforeunload`
+ * dirtySeen write, both fire AFTER the sweep and before the sign-out
+ * navigation completes, re-creating the previous account's keys for
+ * whoever logs in next. The page is navigating away or reloading in both
+ * callers, so suppressing every further write costs nothing.
+ */
+let persistSuppressed = false;
+
+/** Whether local persistence has been latched off by a sign-out/user switch. */
+export function isPersistSuppressed(): boolean {
+  return persistSuppressed;
+}
+
 export function setStorageItem(key: string, value: unknown): void {
+  if (persistSuppressed) return;
   try {
     localStorage.setItem(key, JSON.stringify(value));
     // Sibling timestamp so getStorageItem can apply TTL. Writes happen
@@ -218,6 +234,29 @@ export function setStorageItem(key: string, value: unknown): void {
   } catch (e) {
     // Storage might be full or unavailable
     console.warn('Failed to persist', key, e);
+  }
+}
+
+/**
+ * Removes every `ircfiber:*` localStorage entry (pref maps and their
+ * `:_savedAt` siblings). A prefix sweep rather than an explicit key list:
+ * the key literals are already duplicated across the declarations, the
+ * persist effects and the `storage` handler, and a fourth copy would
+ * drift. The auth token is stored under `token` (no prefix) and is
+ * removed separately by the caller.
+ */
+export function clearLocalPreferences(): void {
+  persistSuppressed = true;
+  cancelPendingPersist();
+  try {
+    const doomed: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('ircfiber:')) doomed.push(k);
+    }
+    for (const k of doomed) localStorage.removeItem(k);
+  } catch (e) {
+    console.warn('Failed to clear local preferences:', e);
   }
 }
 
@@ -368,7 +407,17 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null;
 const PERSIST_DEBOUNCE_MS = 500; // flush at most twice a second
 const persistedMaps = new Map<string, unknown>();
 
+/** Drops the queued maps and the pending debounce without writing them. */
+function cancelPendingPersist(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  persistedMaps.clear();
+}
+
 function schedulePersist(keyPrefix: string, map: unknown): void {
+  if (persistSuppressed) return;
   persistedMaps.set(keyPrefix, map);
   if (persistTimer) return;
   persistTimer = setTimeout(() => {

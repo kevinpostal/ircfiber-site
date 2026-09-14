@@ -276,11 +276,13 @@
         buf.isPinned = true;
         pinChannel(networkId, buf.name).catch((err) => {
           console.error('Pin failed:', err);
-          pinnedMap[pinnedKey] = false;
+          delete pinnedMap[pinnedKey];
           buf.isPinned = false;
         });
       } else {
-        pinnedMap[pinnedKey] = false;
+        // Delete, never `false`: a tombstone would make this device
+        // permanently ignore a later pin from another device.
+        delete pinnedMap[pinnedKey];
         buf.isPinned = false;
         unpinChannel(networkId, buf.name).catch((err) => {
           console.error('Unpin failed:', err);

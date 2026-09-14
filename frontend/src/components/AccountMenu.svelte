@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ircState, type SettingsTab } from '../stores/ircStore.svelte';
   import { navigateSettings, navigateShortcuts, navigateFeedback } from '../lib/routing';
+  import { clearLocalPreferences } from '../stores/preferences.svelte';
 
   let open = $state(false);
   /// The popup and its trigger — a click in either is "inside".
@@ -42,6 +43,9 @@
     // the login page. A hard reload ensures the session cookie is
     // gone and the server renders a fresh login page.
     try { await fetch('/logout', { method: 'GET' }); } catch {}
+    // Local pref maps are per-browser, not per-account: leaving them
+    // behind would show this user's pins to whoever logs in next.
+    clearLocalPreferences();
     localStorage.removeItem('token');
     window.location.href = '/login';
   }

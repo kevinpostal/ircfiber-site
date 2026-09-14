@@ -289,7 +289,10 @@ final class WebSocketGateway {
             // Single MongoDB find + single Redis prefs load reused across
             // all three functions (was loading prefs TWICE before).
             auto bootConfigs = (new NetworkRepository()).findByUserId(session.user.id);
-            auto bootPrefs = (new PreferencesRepository(redis)).load(session.user.id);
+            // bypassCache: this is the fresh-device login path — it must
+            // not be served a sibling replica's 30-second-old cache entry
+            // and miss a pin made on another device.
+            auto bootPrefs = (new PreferencesRepository(redis)).load(session.user.id, true);
             sendStatUser(session, socket, bootPrefs);
             sendNetworkList(session, socket, bootConfigs);
             performStateDump(session, socket, bootConfigs, bootPrefs, true);
