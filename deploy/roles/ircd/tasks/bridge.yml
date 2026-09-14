@@ -70,7 +70,12 @@
       # absence is normal during an ircd restart, and there is no inbound
       # client listener to probe. (The JSON-RPC listener is not probed
       # either: it answers only with a valid Bearer token.)
-      test: ["CMD-SHELL", "pgrep anope >/dev/null"]
+      # /proc/1/comm, not pgrep: the image is debian:trixie-slim, which
+      # ships no procps, so `pgrep anope` exited 127 on every probe. The
+      # container went unhealthy and the host's unhealthy-container watcher
+      # then recycled it every ~90s with a perfectly healthy daemon inside.
+      # The entrypoint is exec form, so anope is PID 1.
+      test: ["CMD-SHELL", "grep -q anope /proc/1/comm"]
       interval: 30s
       timeout: 5s
       retries: 3
