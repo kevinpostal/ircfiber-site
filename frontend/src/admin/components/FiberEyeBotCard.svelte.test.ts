@@ -9,6 +9,9 @@
  *     is no longer enforced.
  *  4. The #staff announcer role: the joined state is shown, Rejoin and
  *     Announce hit the FiberEye routes (FiberLogs is retired).
+ *  5. The startup adoption sweep is reported, so "N open" after a restart
+ *     can be told apart from sessions the bot watched connect; a bot that
+ *     has not swept yet says so instead of printing zeroes.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -136,5 +139,22 @@ describe('FiberEyeBotCard.svelte', () => {
     mockedGet.mockResolvedValue(status({ joined: false }));
     render(FiberEyeBotCard);
     await expect.element(page.getByText('Not in #staff', { exact: true })).toBeInTheDocument();
+  });
+
+  it('reports what the startup adoption sweep did', async () => {
+    mockedGet.mockResolvedValue(status({
+      sessionsOpen: 32, sessionsAdopted: 32, sessionsAbandoned: 43,
+      liveWithoutRow: 26, sessionsAmbiguous: 6, lastSweepAt: Date.now() - 45_000,
+    }));
+    render(FiberEyeBotCard);
+    await expect.element(page.getByText(/32 adopted · 43 closed/)).toBeInTheDocument();
+    await expect.element(page.getByText(/6 ambiguous/)).toBeInTheDocument();
+  });
+
+  it('does not invent a sweep result before the first sweep', async () => {
+    mockedGet.mockResolvedValue(status({ lastSweepAt: 0 }));
+    render(FiberEyeBotCard);
+    await expect.element(page.getByText('Adoption sweep', { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText(/adopted ·/)).not.toBeInTheDocument();
   });
 });
