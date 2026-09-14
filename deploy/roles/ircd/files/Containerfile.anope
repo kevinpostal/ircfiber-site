@@ -29,7 +29,7 @@
 # https://github.com/paigeadelethompson/anope/pull/3
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
 ARG ANOPE_BRANCH=bridgeserv-live
-ARG ANOPE_COMMIT=f674edaa7a5f832a37024cdabae684cb94e5cd0e
+ARG ANOPE_COMMIT=150a313ef5870b2ce17d5563be107471cba8df6b
 
 FROM alpine:3.24 AS builder-anope
 ARG ANOPE_REPO
