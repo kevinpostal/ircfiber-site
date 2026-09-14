@@ -426,6 +426,8 @@ string styleBanNotice(string text) @safe pure {
 /// - notice:      `Notice from zodiac: maintenance in 10 min`
 /// - backup:      `Backup mongo ok: mongo-20260907-031700.archive.gz · 112.4 MB · 45231ms`
 ///                `Backup mongo FAILED at verify: <error>`
+/// - bnc:         `Bouncer attached: alice · laptop · Libera · 203.0.113.7 · TLS · known IP (Austin, US)`
+///                `Bouncer refused: alice · cidr-denied · 203.0.113.7 · plaintext`
 /// Labels and key entities carry mIRC bold/colour, applied post-sanitize;
 /// plain-text clients read the same words without decoration.
 string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighting) @safe pure {
@@ -493,6 +495,38 @@ string[] formatLogEvent(const LogEvent ev, const IpIntel intel, bool firstSighti
                 if (d.length) lines ~= finish("↳ " ~ ip ~ " · " ~ d);
             }
             return lines;
+        }
+        case "bnc": {
+            // The bouncer's own attach/detach/reject trail, mirrored here so
+            // #staff sees a client reaching an account the same way it sees a
+            // client reaching the ircd. `kind` is the event, `status` the
+            // reason, `ident` the device clientid, `host` the network name.
+            const who = sanitizeLine(ev.username);
+            if (!who.length) return [];
+            const event = sanitizeLine(ev.kind);
+            string label;
+            string colour = IRC_BLUE;
+            switch (event) {
+                case "attach": label = "Bouncer attached:"; colour = IRC_GREEN; break;
+                case "detach": label = "Bouncer detached:"; break;
+                case "reject": label = "Bouncer refused:"; colour = IRC_RED; break;
+                default: return [];
+            }
+            string line = ircColor(ircBold(label), colour) ~ " " ~ ircBold(who);
+            const reason = sanitizeLine(ev.status);
+            // A rejection's reason is the headline; for attach/detach the
+            // device and network matter more, so the reason trails them.
+            if (event == "reject" && reason.length) line ~= " · " ~ reason;
+            const device = sanitizeLine(ev.ident);
+            if (device.length) line ~= " · " ~ device;
+            const net = sanitizeLine(ev.host);
+            if (net.length) line ~= " · " ~ net;
+            if (ip.length) line ~= " · " ~ ip;
+            const transport = sanitizeLine(ev.provider);
+            if (transport.length) line ~= " · " ~ transport;
+            if (event != "reject" && reason.length) line ~= " · " ~ reason;
+            line ~= geoClause(ip, intel, firstSighting, false);
+            return [finish(line)];
         }
         case "notice": {
             const text = sanitizeLine(ev.text);

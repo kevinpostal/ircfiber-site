@@ -290,6 +290,50 @@ private LogEvent connectEvent() {
     return ev;
 }
 
+private LogEvent bncEvent(string event, string reason) {
+    LogEvent ev;
+    ev.type = "bnc";
+    ev.username = "alice";
+    ev.kind = event;
+    ev.status = reason;
+    ev.ip = "203.0.113.7";
+    ev.ident = "laptop";
+    ev.host = "Libera";
+    ev.nick = "alice";
+    ev.provider = "TLS";
+    return ev;
+}
+
+private void testFormatBnc() {
+    auto att = formatLogEvent(bncEvent("attach", "clientid"), sampleIntel(), false);
+    check(att.length == 1, "bnc attach is one line");
+    check(att[0].canFind("Bouncer attached:") && att[0].canFind("alice")
+        && att[0].canFind("laptop") && att[0].canFind("Libera")
+        && att[0].canFind("203.0.113.7") && att[0].canFind("TLS"),
+        "attach line names account, device, network, ip and transport: " ~ att[0]);
+
+    // A rejection leads with WHY it was refused — that is the triage signal.
+    auto rej = formatLogEvent(bncEvent("reject", "cidr-denied"), sampleIntel(), false);
+    check(rej[0].canFind("Bouncer refused:"), "reject label");
+    check(rej[0].indexOf("cidr-denied") < rej[0].indexOf("laptop"),
+        "reject reason precedes the device: " ~ rej[0]);
+
+    auto det = formatLogEvent(bncEvent("detach", "quit"), sampleIntel(), false);
+    check(det[0].canFind("Bouncer detached:") && det[0].canFind("quit"), "detach label + reason");
+
+    // An unauthenticated connection must never reach #staff, and an unknown
+    // event must not be announced as a blank line.
+    auto anon = bncEvent("attach", "clientid");
+    anon.username = "";
+    check(formatLogEvent(anon, sampleIntel(), false).length == 0, "no account → no announcement");
+    check(formatLogEvent(bncEvent("bogus", ""), sampleIntel(), false).length == 0,
+        "unknown bnc event is dropped");
+
+    // CR/LF in a reason must never break out into a second IRC command.
+    auto inj = formatLogEvent(bncEvent("reject", "bad\r\nQUIT :x"), sampleIntel(), false);
+    check(!inj[0].canFind("\n") && !inj[0].canFind("\r"), "reason is sanitized: " ~ inj[0]);
+}
+
 private void testFormatConnect() {
     auto ev = connectEvent();
     auto first = formatLogEvent(ev, sampleIntel(), true);
@@ -547,6 +591,7 @@ void main() {
     testFormatOAuthLogin();
     testFormatMail();
     testFormatConnect();
+    testFormatBnc();
     testFormatNoticeAndUnknown();
     testEventJson();
     testBackupSize();

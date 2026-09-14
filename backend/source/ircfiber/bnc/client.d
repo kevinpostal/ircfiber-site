@@ -54,6 +54,7 @@ import ircfiber.ipintel.cidr : cidrContains;
 import ircfiber.bnc.wire;
 import ircfiber.bnc.format : FormatCtx, RecentOwn, formatEvent, formatChannelListEvent;
 import ircfiber.bnc.control : BNC_EVENT_REVOKED, BNC_EVENT_KICK, BNC_EVENT_NETWORKS;
+import ircfiber.logs.events : LogEvent, pushLogEvent;
 
 /// Shared services handed to every client by the listener.
 struct BncContext {
@@ -510,16 +511,21 @@ final class BncClient {
     }
 
     /// Appends one bouncer event to `RedisKeys.bncAudit(uid)`: LPUSH,
-    /// LTRIM 0 49, EXPIRE 90 d. `event` is `attach`, `detach` or `reject`.
-    /// Diagnostic, not a compliance ledger — a failed write is a debug line.
-    private void auditBncFor(string uid, string event, string reason) nothrow {
+    /// LTRIM 0 49, EXPIRE 90 d, and mirrors it onto the `#staff` outbox so
+    /// FiberEye announces a client reaching an account the same way it
+    /// announces one reaching the ircd. `event` is `attach`, `detach` or
+    /// `reject`. Diagnostic, not a compliance ledger — a failed write is a
+    /// debug line, and neither store can break the connection.
+    private void auditBncFor(string uid, string uname, string event, string reason) nothrow {
         if (!uid.length) return;
+        string ip;
+        try ip = peerIp(peer); catch (Exception) {}
         try {
             auto j = Json.emptyObject;
             j["t"] = Json(nowMs());
             j["event"] = Json(event);
             j["reason"] = Json(reason);
-            j["ip"] = Json(peerIp(peer));
+            j["ip"] = Json(ip);
             j["clientId"] = Json(clientId);
             j["networkName"] = Json(networkName);
             j["tls"] = Json(tls !is null);
@@ -532,11 +538,28 @@ final class BncClient {
             try logDebug("bnc: audit write failed for %s: %s", uid, e.msg);
             catch (Exception) {}
         }
+        try {
+            LogEvent le;
+            le.type = "bnc";
+            le.ts = nowMs();
+            le.username = uname;
+            le.kind = event;
+            le.status = reason;
+            le.ip = ip;
+            le.ident = clientId;
+            le.host = networkName;
+            le.nick = displayNick();
+            le.provider = tls !is null ? "TLS" : "plaintext";
+            pushLogEvent(ctx.redis, le);
+        } catch (Exception e) {
+            try logDebug("bnc: #staff announce failed for %s: %s", uid, e.msg);
+            catch (Exception) {}
+        }
     }
 
     /// `auditBncFor` for the authenticated account of this connection.
     private void auditBnc(string event, string reason) nothrow {
-        auditBncFor(userId, event, reason);
+        auditBncFor(userId, authUsername, event, reason);
     }
 
     /// Sends the rejection reason, closes, and records it. One helper so
@@ -851,7 +874,7 @@ final class BncClient {
             // The username resolved, so this rejection is that account's
             // business. An unresolvable username never reaches here, so a
             // stranger cannot fill somebody else's trail.
-            auditBncFor(u.id.toString(), "reject", "bad-password");
+            auditBncFor(u.id.toString(), u.username, "reject", "bad-password");
             return false;
         }
         userId = u.id.toString();
