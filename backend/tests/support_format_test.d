@@ -140,6 +140,15 @@ private SupportEvent sampleEvent(string type) {
     return ev;
 }
 
+private void testNeedsLocalAck() {
+    // Prod runs "#support,#ircfiber": the announcement lands in #support, so
+    // an oper typing !new in #ircfiber (or in a DM) must be answered there.
+    check(!needsLocalAck("#support", "#support"), "primary channel: announcement is the ack");
+    check(!needsLocalAck("#SUPPORT", "#support"), "channel names are case-insensitive");
+    check(needsLocalAck("#ircfiber", "#support"), "secondary channel gets its own ack");
+    check(needsLocalAck("Zodiac", "#support"), "a DM gets its own ack");
+}
+
 private void testFormatSupportEvent() {
     const url = "https://ircfiber.com/admin#/support/6f1c2a3b-0000-4000-8000-000000000012";
 
@@ -303,6 +312,7 @@ void main() {
     testParseIssueRef();
     testHelpLines();
     testFormatSupportEvent();
+    testNeedsLocalAck();
     testTruncateText();
     testRelativeAge();
     testUrls();

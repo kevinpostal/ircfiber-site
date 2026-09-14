@@ -11,7 +11,7 @@ module ircfiber.support.format;
 import std.algorithm : min;
 import std.array : replace;
 import std.conv : to;
-import std.string : strip, indexOf, toLower, split;
+import std.string : strip, indexOf, toLower, split, icmp;
 import std.utf : stride;
 
 import ircfiber.db.support_issues : SupportIssueRecord, supportStatuses, supportPriorities;
@@ -84,6 +84,17 @@ string feedbackUrl(string publicUrl) @safe pure {
 /// Status wire value → display (`in_progress` → `in progress`).
 string statusLabel(string status) @safe pure {
     return status.replace("_", " ");
+}
+
+/// Whether an issue-command result must be echoed straight back to where the
+/// command was typed. The Redis outbox announcement only ever reaches the
+/// bot's primary channel (the first entry of `IRCFIBER_SUPPORT_BOT_CHANNEL`),
+/// so `!new`/`!bug`/`!done`/`!close`/`!reopen` issued in any other joined
+/// channel — or in a DM — need their own reply, otherwise the command looks
+/// ignored while the answer shows up in a channel the sender may not be in.
+/// In the primary channel itself the announcement IS the acknowledgement.
+bool needsLocalAck(string replyTo, string primaryChannel) @safe pure {
+    return icmp(replyTo, primaryChannel) != 0;
 }
 
 private string ircTitle(string title) @safe pure {

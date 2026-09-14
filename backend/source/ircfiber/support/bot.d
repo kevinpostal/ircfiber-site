@@ -707,9 +707,7 @@ final class SupportBot : IrcBot {
         ev.reporter = sender;
         ev.ts = now;
         pushIrcEvent(ev);
-        // In a channel the announcement is the acknowledgement; a DM has
-        // no announcement to see, so it gets the detail line.
-        if (replyTo == sender) say(replyTo, formatIssueDetail(rec, now, sb.publicUrl));
+        ackLocally(replyTo, formatIssueDetail(rec, now, sb.publicUrl));
         return true;
     }
 
@@ -764,9 +762,17 @@ final class SupportBot : IrcBot {
         ev.reporter = rec.reporterUsername;
         ev.actorIsAdmin = true;
         ev.ts = now;
-        // The announcement is the acknowledgement.
         pushIrcEvent(ev);
+        ackLocally(replyTo, formatSupportEvent(ev, sb.publicUrl));
         return true;
+    }
+
+    /// Echo the result where the command was typed (see `needsLocalAck`):
+    /// silent in the primary channel, where the announcement already is the
+    /// acknowledgement, and two lines would be noise.
+    private void ackLocally(string replyTo, string[] lines) {
+        if (!needsLocalAck(replyTo, primaryChannel(sb))) return;
+        say(replyTo, lines);
     }
 
     private bool setIssuePriority(string arg, string replyTo, long now) {
