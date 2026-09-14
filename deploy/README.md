@@ -456,7 +456,7 @@ Banned users get an appeal URL in the ban reason and lift the ban themselves at 
 Rollout (each step idempotent):
 
 ```bash
-ansible-playbook playbooks/ircd.yml -t ircdconf             # EyeWatch oper (snomasks cCqxnN) + seenicks module, fiberlogs oper removed, #staff permchannel, retuned connectban (SIGHUP rehash, nobody dropped)
+ansible-playbook playbooks/ircd.yml -t ircdconf             # EyeWatch oper (snomasks cCqxnN; seenicks was already loaded), fiberlogs oper removed, #staff permchannel, retuned connectban (SIGHUP rehash, nobody dropped)
 ansible-playbook playbooks/ircd.yml -t chanserv             # register + mode-lock #staff
 ansible-playbook playbooks/fibereye-nick.yml                # register the bot nick once (Anope: usemail=no)
 make ship                                                   # the image that carries the bot code and the /unban page
