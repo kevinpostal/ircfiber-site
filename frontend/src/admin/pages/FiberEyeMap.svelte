@@ -345,14 +345,15 @@
   <div class="eyemap-viewport relative h-[480px] w-full overflow-hidden" data-testid="eyemap-canvas">
     <Chart
       geo={{ projection: geoMercator, fitGeojson: WORLD_FIT }}
-      transform={{ mode: 'canvas', initialScrollMode: 'scale' }}
+      transform={{ mode: 'canvas', initialScrollMode: 'none' }}
       let:transform
       let:width
       let:height
     >
-      <!-- Scroll-to-zoom, drag-to-pan and double-click come from
-           TransformContext. These buttons are the discoverable and
-           keyboard-reachable affordance for the same thing. -->
+      <!-- `initialScrollMode: 'none'` on purpose: a map that zooms on
+           wheel steals the page scroll out from under anyone scrolling
+           past it. Zoom is buttons and double-click only; drag still
+           pans. -->
       <div class="absolute top-2 right-2 z-10 flex flex-col gap-1">
         <button
           type="button"
@@ -410,7 +411,7 @@
         {/each}
       </Svg>
       <p class="absolute bottom-1 left-1 text-[10px] text-muted">
-        Scroll to zoom · drag to pan · double-click in (shift out){transform.scale !== 1
+        Drag to pan · double-click to zoom in (shift out){transform.scale !== 1
           ? ` · ${transform.scale.toFixed(1)}×`
           : ''}
       </p>
