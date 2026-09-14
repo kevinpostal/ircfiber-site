@@ -24,24 +24,45 @@
 #   uid/gid 10000
 
 # The fork's branch, not paigeadelethompson/master, until the pull request
-# which carries the live-run fixes (pseudo clients on their own link, the
-# CMake parse fix, the Discord reconnect watchdog) is merged upstream:
+# which carries the live-run fixes (pseudo clients on their own bridge
+# link, the CMake parse fix) is merged upstream:
 # https://github.com/paigeadelethompson/anope/pull/3
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
 ARG ANOPE_BRANCH=bridgeserv-live
 ARG ANOPE_COMMIT=beb2b9415fdded52bce14843ba66a1e75ee409e4
 
-FROM alpine:3.24 AS builder-anope
+# Debian, not alpine, and NOT interchangeable: on musl the vendored DPP
+# segfaults the moment Discord sends a guild with members. Its timestamp
+# parser builds a named std::locale, which Alpine's libstdc++ cannot do —
+# backtrace from a RelWithDebInfo build of this image on the live network:
+#
+#   __strchrnul (s=0x1) at src/string/strchrnul.c:19
+#   std::locale::_Impl::_Impl(char const*, unsigned long)
+#   crossplatform_strptime (s="2025-06-13T21:24:04")
+#   dpp::set_ts_not_null (keyname="joined_at")
+#   dpp::guild_member::fill_from_json
+#   dpp::events::guild_create::handle
+#
+# The process died with SIGSEGV about a second after every
+# "connected to Discord", so the container crash-looped and flapped the
+# services link on the network. Every other part of the image contract is
+# unchanged: /anope/bin/anope, /anope/modules/bridgeserv.so,
+# /anope/conf/anope.conf, /anope/data, uid/gid 10000.
+
+FROM debian:trixie-slim AS builder-anope
 ARG ANOPE_REPO
 ARG ANOPE_BRANCH
 ARG ANOPE_COMMIT
-# zlib-dev is required even though upstream's own CI omits it: DPP's
-# vendor/CMakeLists.txt calls find_package(ZLIB REQUIRED).
-# gettext-dev, not just gettext: without libintl's headers CMake builds an
-# Anope which logs "Unable to initialize languages, gettext and/or libintl
-# were not installed at build time" on every start (observed on the first
-# live deploy) and serves every reply unlocalised.
-RUN apk add --no-cache g++ cmake samurai make git pkgconfig gettext gettext-dev openssl-dev zlib-dev
+# zlib1g-dev is required even though upstream's own CI omits it: DPP's
+# vendor/CMakeLists.txt calls find_package(ZLIB REQUIRED). gettext supplies
+# the libintl headers, without which Anope logs "Unable to initialize
+# languages, gettext and/or libintl were not installed at build time" on
+# every start and serves every reply unlocalised.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake ninja-build git pkg-config gettext \
+      libssl-dev zlib1g-dev ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 RUN git clone --branch ${ANOPE_BRANCH} ${ANOPE_REPO} /anope-src \
  && git -C /anope-src checkout --detach ${ANOPE_COMMIT}
 WORKDIR /anope-src
@@ -54,11 +75,15 @@ RUN cmake -B build -D CMAKE_BUILD_TYPE=Release -D INSTDIR=/anope -G Ninja \
  && test -f /anope/modules/bridgeserv.so \
  && test -f /anope/bin/anope
 
-FROM alpine:3.24 AS runtime-anope
-# libintl is the runtime half of the gettext build dependency above; musl
-# has no built-in libintl, so the daemon fails to load without it.
-RUN apk add --no-cache libgcc libstdc++ openssl zlib libintl \
- && addgroup -g 10000 -S anope && adduser -u 10000 -h /anope/ -D -S -G anope anope
+FROM debian:trixie-slim AS runtime-anope
+# ca-certificates is required: DPP verifies discord.com's chain, and without
+# a trust store the gateway connection fails before it is even attempted.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libssl3 zlib1g libstdc++6 ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g 10000 anope \
+ && useradd -u 10000 -g 10000 -d /anope -M -s /usr/sbin/nologin anope
 COPY --from=builder-anope --chown=10000:10000 /anope/ /anope/
 # The rendered config is bind-mounted over conf/anope.conf; the shipped
 # examples stay in the image so an operator can read them in place.
