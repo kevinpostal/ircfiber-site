@@ -122,8 +122,11 @@
 <style>
   .member-nick {
     vertical-align: middle;
-    /* Inherits the `c0`–`c26` nick colour set on the row. */
-    color: inherit;
+    /* Flat grey, NOT the `c0`–`c26` nick palette still carried by the row:
+       the row's band colour already encodes identity here, so per-nick hues
+       only made the list noisy. The palette class stays on the <li> because
+       the mode-prefix glyph and the away state read from it. */
+    color: #ccc;
   }
   .member-bot {
     display: inline-block;
@@ -167,8 +170,8 @@
   :global(.member-item[data-category="HALFOP"] .member-mode-prefix) { color: #b55900; }
   :global(.member-item[data-category="VOICED"] .member-mode-prefix) { color: #25b100; }
   :global(.member-item.away) { opacity: .5; }
-  /* Self is emphasised by weight only — the nick keeps its own colour,
-     exactly as IRCCloud renders the logged-in user's row. */
+  /* Self is emphasised by weight only — every nick in this list is the same
+     grey, so bolding is the whole distinction. */
   :global(.member-item.isSelf .member-nick) { font-weight: 600; }
   :global(.member-item.match) { background: rgba(88,166,255,.08); border-left: 3px solid #58a6ff; }
 </style>
