@@ -124,6 +124,11 @@ private Json sessionJson(const SessionRecord r) {
     o["id"] = Json(r.id);
     o["ts"] = Json(r.ts);
     o["nick"] = Json(r.nick);
+    // The nick in force: equal to `nick` until the client renamed, and
+    // back-filled from `nick` for rows written before renames were
+    // tracked, so the UI never has to guess.
+    o["currentNick"] = Json(r.currentNick.length ? r.currentNick : r.nick);
+    o["nickChanges"] = Json(r.nickChanges);
     o["ident"] = Json(r.ident);
     o["host"] = Json(r.host);
     o["ip"] = Json(r.ip);
@@ -162,6 +167,8 @@ private Json ipJson(const IpRecord r) {
     o["connects"] = Json(r.connects);
     o["shortSessions"] = Json(r.shortSessions);
     o["lastNick"] = Json(r.lastNick);
+    o["nickChanges"] = Json(r.nickChanges);
+    o["lastNickAtMs"] = Json(r.lastNickAtMs);
     o["lastAccount"] = Json(r.lastAccount);
     o["lastRealname"] = Json(r.lastRealname);
     o["lastClass"] = Json(r.lastClass);
@@ -318,7 +325,11 @@ package void apiFiberEyeSessions(HTTPServerRequest req, HTTPServerResponse res, 
         ])]);
     }
     const nick = queryString(req, "nick", "");
-    if (nick.length) clauses ~= caseInsensitiveLike("nick", nick);
+    // Both nicks: a session that renamed is findable by either.
+    if (nick.length) clauses ~= Bson(["$or": Bson([
+        caseInsensitiveLike("nick", nick),
+        caseInsensitiveLike("currentNick", nick),
+    ])]);
     const account = queryString(req, "account", "");
     if (account.length) clauses ~= caseInsensitiveLike("account", account);
     const openOnly = queryString(req, "openOnly", "").toLower();
@@ -326,7 +337,7 @@ package void apiFiberEyeSessions(HTTPServerRequest req, HTTPServerResponse res, 
     const q = queryString(req, "q", "");
     if (q.length) {
         Bson[] any;
-        foreach (field; ["nick", "ident", "ip", "realname", "account"])
+        foreach (field; ["nick", "currentNick", "ident", "ip", "realname", "account"])
             any ~= caseInsensitiveLike(field, q);
         clauses ~= Bson(["$or": Bson(any)]);
     }
@@ -506,6 +517,7 @@ package void apiFiberEyeIp(HTTPServerRequest req, HTTPServerResponse res, RedisS
     foreach (i, r; recent) {
         if (i < 100) sessions ~= sessionJson(r);
         if (r.nick.length) nicks[r.nick] = true;
+        if (r.currentNick.length) nicks[r.currentNick] = true;
         if (r.account.length) accounts[r.account] = true;
     }
     data["sessions"] = sessions;

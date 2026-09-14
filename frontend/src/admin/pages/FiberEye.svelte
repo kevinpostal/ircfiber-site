@@ -37,7 +37,8 @@
     state: string;
   }
   interface SessionRow {
-    id: string; ts: number; nick: string; ident: string; host: string; ip: string;
+    id: string; ts: number; nick: string; currentNick: string; nickChanges: number;
+    ident: string; host: string; ip: string;
     ipGroup: string; ipVersion: number; realname: string; connClass: string;
     port: number; tls: boolean; account: string;
     quitTs: number; quitReason: string; durationMs: number;
@@ -49,7 +50,8 @@
   interface IpRow {
     ipGroup: string; ip: string; ipVersion: number;
     firstSeen: number; lastSeen: number; connects: number; shortSessions: number;
-    lastNick: string; lastAccount: string; lastRealname: string; lastClass: string;
+    lastNick: string; nickChanges: number; lastNickAtMs: number;
+    lastAccount: string; lastRealname: string; lastClass: string;
     geoCity: string; geoRegion: string; geoCountry: string; geoOrg: string;
     geoTimezone: string; geoPending: boolean;
     intelAsn: string; intelFlags: string; intelOperator: string; intelPrefix: string;
@@ -466,7 +468,14 @@
                 {#each sessions.rows as s (s.id)}
                   <tr class="border-b border-border/50 last:border-0">
                     <td class="py-2 pr-4 font-mono text-muted">{relative(s.ts)}</td>
-                    <td class="py-2 pr-4 font-mono">{s.nick}</td>
+                    <td class="py-2 pr-4 font-mono">
+                      {#if s.currentNick && s.currentNick !== s.nick}
+                        <span class="text-muted" title="nick at connect">{s.nick}</span>
+                        <span class="text-muted">→</span> {s.currentNick}
+                      {:else}
+                        {s.nick}
+                      {/if}
+                    </td>
                     <td class="py-2 pr-4 font-mono text-muted">{s.account || '—'}</td>
                     <td class="py-2 pr-4">
                       <a href={ipHref(s.ipGroup)} class="font-mono hover:text-primary">{s.ip}</a>

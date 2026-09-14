@@ -125,7 +125,7 @@ vault_fibereye_nickserv_password: "REPLACE-WITH-STRONG-PASSWORD-MAX-32-CHARS"
 # FiberEye oper password: the connection watch OPERs as the "fibereye" oper
 # (ircd_fibereye_oper_name), whose EyeWatch class grants ZLINE + STATS plus
 # privs="servers/auspex" (required for STATS Z) and umode +s with snomasks
-# c/q/x, host-locked to the Docker network. The ircd role renders it as an
+# c/C/q/x/n/N, host-locked to the Docker network. The ircd role renders it as an
 # InspIRCd hmac-sha256 hash and the gateway receives it as
 # IRCFIBER_FIBEREYE_OPER_PASSWORD. No length limit (it is hashed). Use a
 # distinct random value — never reuse the dashboard, log-bot or human admin

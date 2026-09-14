@@ -184,16 +184,17 @@ configuration "embed-test" {
     versions "VibeUseFibers"
 }
 
-// Pure-code unit test for FiberEye: the quit-notice parser, the IPv6 /64
-// grouping, the Z-line mask matcher, the rule engine and the strike
-// escalation (no Redis/Mongo/IRCd needed):
+// Pure-code unit test for FiberEye: the quit-notice and nick-change
+// parsers, the open-session map, the IPv6 /64 grouping, the Z-line mask
+// matcher, the rule engine and the strike escalation (no Redis/Mongo/IRCd
+// needed):
 //   dub --root=backend build --config=fibereye-test && ./backend/fibereye-test
 configuration "fibereye-test" {
     targetType "executable"
     targetName "fibereye-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/fibereye/format.d" "source/ircfiber/fibereye/rules.d" "source/ircfiber/fibereye/events.d" "source/ircfiber/fibereye/ruleset.d" "source/ircfiber/fibereye/map.d" "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/json.d" "source/ircfiber/ipintel/record.d" "source/ircfiber/ipintel/assemble.d" "source/ircfiber/ipintel/cidr.d"
+    sourceFiles "source/ircfiber/fibereye/format.d" "source/ircfiber/fibereye/sessions.d" "source/ircfiber/fibereye/rules.d" "source/ircfiber/fibereye/events.d" "source/ircfiber/fibereye/ruleset.d" "source/ircfiber/fibereye/map.d" "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/json.d" "source/ircfiber/ipintel/record.d" "source/ircfiber/ipintel/assemble.d" "source/ircfiber/ipintel/cidr.d"
     mainSourceFile "tests/fibereye_test.d"
     versions "VibeUseFibers"
 }

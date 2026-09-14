@@ -72,7 +72,10 @@
 # FIBEREYE: the connection-watch bot and the #staff announcer (it replaced
 # the FiberLogs log bot, whose Snotices/LogBot oper is gone). Two
 # capabilities beyond an ordinary client, and nothing else: connect/remote
-# connect/quit/X-line server notices (umode +s with snomasks c/C/q/x) and
+# connect/quit/nick-change/X-line server notices (umode +s with snomasks
+# c/C/q/x and n/N — `n`/`N` need <module name="seenicks"> in
+# modules.conf.j2, and without them FiberEye shows every client under the
+# nick it registered with and never closes a renamed client's session) and
 # the ability to place and list a Z-line. That is the whole job, so the
 # class carries ZLINE and STATS only — deliberately no KILL, no GLINE, no
 # KLINE and no REHASH, because a bot that bans automatically must not be
@@ -100,11 +103,11 @@
        commands="ZLINE STATS"
        privs="servers/auspex"
        usermodes="s"
-       snomasks="cCqx">
+       snomasks="cCqxnN">
 <type name="FIBEREYE"
       classes="EyeWatch"
       vhost="eye&netsuffix;"
-      modes="+s +cCqx">
+      modes="+s +cCqxnN">
 <oper name="{{ ircd_fibereye_oper_name }}"
       hash="hmac-sha256"
       password="{{ ircd_fibereye_oper_hash }}"

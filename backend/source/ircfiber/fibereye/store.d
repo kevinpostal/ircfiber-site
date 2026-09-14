@@ -110,8 +110,14 @@ struct SessionRecord {
     string id;
     /// Connect time (unix ms).
     long ts;
-    /// Nick at connect time.
+    /// Nick at connect time — what the ircd's connect notice carried.
     string nick;
+    /// Nick the session is using now: the connect nick until a `NICK`
+    /// notice moves it. Rows written before nick changes were tracked
+    /// have no such field, so readers fall back to `nick`.
+    string currentNick;
+    /// Nick changes observed on this session.
+    long nickChanges;
     /// Ident as sent by the client.
     string ident;
     /// Cloaked host the network shows.
@@ -161,6 +167,11 @@ struct SessionRecord {
             "account": Bson(account),
             "quitTs": Bson(quitTs), "quitReason": Bson(quitReason),
             "durationMs": Bson(durationMs),
+            // `currentNick` is always written, and equals `nick` until the
+            // client renames, so the admin read path filters and displays
+            // one field without a per-row fallback.
+            "currentNick": Bson(currentNick.length ? currentNick : nick),
+            "nickChanges": Bson(nickChanges),
             "geoCity": Bson(geoCity), "geoRegion": Bson(geoRegion),
             "geoCountry": Bson(geoCountry), "geoOrg": Bson(geoOrg),
             "geoTimezone": Bson(geoTimezone),
@@ -184,6 +195,8 @@ struct SessionRecord {
         r.connClass = bstr(b, "connClass");
         r.port = blong(b, "port");
         r.tls = bbool(b, "tls");
+        r.currentNick = bstr(b, "currentNick");
+        r.nickChanges = blong(b, "nickChanges");
         r.ipGroup = bstr(b, "ipGroup");
         r.ipVersion = cast(int) blong(b, "ipVersion");
         r.account = bstr(b, "account");
@@ -223,8 +236,13 @@ struct IpRecord {
     long firstSeen, lastSeen;
     /// Lifetime connect count and count of sessions shorter than `shortMs`.
     long connects, shortSessions;
-    /// Most recent nick / account / GECOS / connect class.
+    /// Nick / account / GECOS / connect class in force now. `lastNick`
+    /// follows a `NICK` snotice as well as a connect, so it is the nick
+    /// the client is actually using — not the one it registered with.
     string lastNick, lastAccount, lastRealname, lastClass;
+    /// Nick changes ever observed on the group, and when the last one
+    /// landed (0 = `lastNick` came from a connect, not from a rename).
+    long nickChanges, lastNickAtMs;
     /// Geo, from the IP-intelligence record (`geoOrg` = `AS<n> <name>`).
     string geoCity, geoRegion, geoCountry, geoOrg, geoTimezone;
     /// From the same record: ASN, confirmed flags label, VPN operator,
@@ -255,6 +273,8 @@ struct IpRecord {
         r.lastAccount = bstr(b, "lastAccount");
         r.lastRealname = bstr(b, "lastRealname");
         r.lastClass = bstr(b, "lastClass");
+        r.nickChanges = blong(b, "nickChanges");
+        r.lastNickAtMs = blong(b, "lastNickAtMs");
         r.geoCity = bstr(b, "geoCity");
         r.geoRegion = bstr(b, "geoRegion");
         r.geoCountry = bstr(b, "geoCountry");
@@ -517,6 +537,43 @@ final class FiberEyeStore {
         }
     }
 
+    /// Records an observed nick change on one open session row.
+    ///
+    /// `nick` is deliberately left alone: it is the nick the ircd's
+    /// connect notice carried, the key the flood counters used, and the
+    /// only evidence of what the client registered as. `currentNick` is
+    /// what every admin view shows.
+    void renameSession(string id, string newNick) @trusted {
+        if (!id.length || !newNick.length) return;
+        try {
+            sessions.updateOne(Bson(["_id": Bson(id)]), Bson([
+                "$set": Bson(["currentNick": Bson(newNick)]),
+                "$inc": Bson(["nickChanges": Bson(1L)]),
+            ]));
+        } catch (Exception e) {
+            logWarn("FiberEye: renameSession failed: %s", e.msg);
+        }
+    }
+
+    /// Records an observed nick change against the IP-group rollup, so
+    /// every admin view of the address shows the nick in use now instead
+    /// of the one the client registered with.
+    ///
+    /// Matches nothing when the group was never seen — a rename by a
+    /// client whose connect predates this bot — which is the correct
+    /// no-op: there is no rollup to keep current.
+    void setIpNick(string ipGroup, string nick, long atMs) @trusted {
+        if (!ipGroup.length || !nick.length) return;
+        try {
+            ips.updateOne(Bson(["_id": Bson(ipGroup)]), Bson([
+                "$set": Bson(["lastNick": Bson(nick), "lastNickAtMs": Bson(atMs)]),
+                "$inc": Bson(["nickChanges": Bson(1L)]),
+            ]));
+        } catch (Exception e) {
+            logWarn("FiberEye: setIpNick failed: %s", e.msg);
+        }
+    }
+
     private static Bson intelSet(const IpIntel r) @trusted {
         string org = r.network.asn;
         if (r.network.asName.length) org = org.length ? org ~ " " ~ r.network.asName : r.network.asName;
@@ -571,6 +628,10 @@ final class FiberEyeStore {
                 "ip": Bson(r.ip), "ipVersion": Bson(r.ipVersion),
                 "lastNick": Bson(r.nick), "lastRealname": Bson(r.realname),
                 "lastClass": Bson(r.connClass),
+                // A connect supersedes any earlier rename: `lastNick` now
+                // comes from the notice, so the "renamed <when>" marker
+                // must not keep pointing at a rename of a past session.
+                "lastNickAtMs": Bson(0L),
             ]),
         ]);
         try {
@@ -592,6 +653,7 @@ final class FiberEyeStore {
                 "intelAsn": Bson(""), "intelFlags": Bson(""), "intelOperator": Bson(""),
                 "intelPrefix": Bson(""), "intelRisk": Bson(-1), "intelAt": Bson(0L),
                 "geoPending": Bson(true),
+                "nickChanges": Bson(0L), "lastNickAtMs": Bson(0L),
                 "strikes": Bson(0L), "bannedUntil": Bson(0L), "lastBanId": Bson(""),
             ]));
         } catch (Exception e) {

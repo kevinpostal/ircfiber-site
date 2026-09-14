@@ -4,9 +4,11 @@
  * The connect-notice parser, the connect-class filter and the private-IP
  * test are reused from `ircfiber.logs.format` rather than re-implemented —
  * both bots read the same InspIRCd snotices. What is new here is the quit
- * notice (snomask `q`, which the #staff bot never subscribed to), the IPv6
- * `/64` grouping FiberEye counts and bans on, and the predicate that
- * decides whether a live Z-line covers a given visitor's address.
+ * notice (snomask `q`, which the #staff bot never subscribed to), the
+ * nick-change notice (snomask `n`/`N`, which is how a session's nick
+ * stops being frozen at the one it registered with), the IPv6 `/64`
+ * grouping FiberEye counts and bans on, and the predicate that decides
+ * whether a live Z-line covers a given visitor's address.
  *
  * No IO — covered by `tests/fibereye_test.d`.
  */
@@ -88,6 +90,86 @@ QuitNotice parseQuitNotice(string text) @safe pure {
     q.reason = sanitizeLine(q.reason);
     q.ok = q.nick.length > 0;
     return q;
+}
+
+/// A parsed `*** NICK: User old!ident@host (ip) changed their nickname to
+/// new` server notice (snomask `n`; `*** REMOTENICK:` on snomask `N` when
+/// the client sits on a linked server).
+struct NickNotice {
+    /// True when the notice was a nick-change notice and yielded both nicks.
+    bool ok;
+    /// Nick before and after the change.
+    string oldNick, newNick;
+    /// Mask parts. InspIRCd's `seenicks` prints the **real** user@host
+    /// (`GetRealUserHost()`) here, not the cloak the connect notice shows.
+    string ident, host;
+    /// Real (uncloaked) IP as the ircd sees it.
+    string ip;
+    /// True when the notice came from a linked server (`REMOTENICK`).
+    bool remote;
+}
+
+/// Parses an InspIRCd 4 nick-change server notice as delivered to an
+/// opered client with snomask `n` (or `N`):
+///
+///   `*** NICK: User i!~incog@h.example (94.8.165.152) changed their nickname to incog`
+///
+/// The `NICK:`/`REMOTENICK:` label is mandatory, so no other snotice can
+/// be mistaken for a rename. The IP is peeled off before the mask is
+/// split — in the same order as `parseQuitNotice`, so an IPv6 address
+/// survives — and the new nick is the first word after the fixed
+/// `changed their nickname to` marker. Anything else returns `ok = false`.
+///
+/// The notice only exists when the ircd loads the `seenicks` module and
+/// the oper class allows the snomask; both are wired in
+/// `deploy/roles/ircd/templates/{modules,opers}.conf.j2`.
+NickNotice parseNickNotice(string text) @safe pure {
+    NickNotice n;
+    auto t = text.strip();
+    if (t.startsWith("*** ")) t = t[4 .. $].strip();
+    if (t.startsWith("NICK: ")) t = t["NICK: ".length .. $].strip();
+    else if (t.startsWith("REMOTENICK: ")) {
+        n.remote = true;
+        t = t["REMOTENICK: ".length .. $].strip();
+    } else return n;
+
+    enum PREFIX = "User ";
+    if (!t.startsWith(PREFIX)) return n;
+    auto head = t[PREFIX.length .. $].strip();
+
+    enum MARKER = " changed their nickname to ";
+    const mk = head.indexOf(MARKER);
+    if (mk <= 0) return n;
+    auto tail = head[mk + MARKER.length .. $].strip();
+    head = head[0 .. mk].strip();
+    // A nick carries no whitespace, so anything trailing it (a future
+    // suffix, a stacked "(last message repeated N times)") is dropped
+    // rather than stored as part of the new nick.
+    const sp = tail.indexOf(' ');
+    if (sp >= 0) tail = tail[0 .. sp];
+    n.newNick = tail;
+
+    const lp = head.indexOf(" (");
+    if (lp >= 0 && head.endsWith(")")) {
+        n.ip = head[lp + 2 .. $ - 1];
+        head = head[0 .. lp].strip();
+    }
+
+    const mask = head.strip();
+    const bang = mask.indexOf('!');
+    const at = mask.lastIndexOf('@');
+    if (!(bang > 0 && bang < at)) return n;
+    n.oldNick = mask[0 .. bang];
+    n.ident = mask[bang + 1 .. at];
+    n.host = mask[at + 1 .. $];
+
+    n.oldNick = sanitizeLine(n.oldNick);
+    n.newNick = sanitizeLine(n.newNick);
+    n.ident = sanitizeLine(n.ident);
+    n.host = sanitizeLine(n.host);
+    n.ip = sanitizeLine(n.ip);
+    n.ok = n.oldNick.length > 0 && n.newNick.length > 0;
+    return n;
 }
 
 /// The unit FiberEye counts and bans: the exact address for IPv4, the

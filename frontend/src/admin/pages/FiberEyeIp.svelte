@@ -27,7 +27,8 @@
     state: string;
   }
   interface SessionRow {
-    id: string; ts: number; nick: string; ident: string; host: string; ip: string;
+    id: string; ts: number; nick: string; currentNick: string; nickChanges: number;
+    ident: string; host: string; ip: string;
     ipGroup: string; ipVersion: number; realname: string; connClass: string;
     port: number; tls: boolean; account: string;
     quitTs: number; quitReason: string; durationMs: number;
@@ -39,7 +40,8 @@
   interface IpRollup {
     ipGroup: string; ip: string; ipVersion: number;
     firstSeen: number; lastSeen: number; connects: number; shortSessions: number;
-    lastNick: string; lastAccount: string; lastRealname: string; lastClass: string;
+    lastNick: string; nickChanges: number; lastNickAtMs: number;
+    lastAccount: string; lastRealname: string; lastClass: string;
     geoCity: string; geoRegion: string; geoCountry: string; geoOrg: string;
     geoTimezone: string; geoPending: boolean;
     intelAsn: string; intelFlags: string; intelOperator: string; intelPrefix: string;
@@ -273,7 +275,18 @@
         <div class="flex justify-between gap-4"><dt class="text-muted">Last address</dt><dd class="font-mono">{rollup.ip} (v{rollup.ipVersion})</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">First seen</dt><dd class="font-mono text-xs">{relative(rollup.firstSeen)}</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">Last seen</dt><dd class="font-mono text-xs">{relative(rollup.lastSeen)}</dd></div>
-        <div class="flex justify-between gap-4"><dt class="text-muted">Last nick</dt><dd class="font-mono">{rollup.lastNick || '—'}</dd></div>
+        <div class="flex justify-between gap-4">
+          <dt class="text-muted">Current nick</dt>
+          <dd class="font-mono">
+            {rollup.lastNick || '—'}
+            {#if rollup.lastNickAtMs > 0}
+              <span class="text-xs font-sans text-muted" title="the client renamed itself; the nick the session connected with is in the Sessions table">
+                (renamed {relative(rollup.lastNickAtMs)})
+              </span>
+            {/if}
+          </dd>
+        </div>
+        <div class="flex justify-between gap-4"><dt class="text-muted">Nick changes</dt><dd class="font-mono">{rollup.nickChanges}</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">Last account</dt><dd class="font-mono">{rollup.lastAccount || '—'}</dd></div>
         <div class="flex justify-between gap-4"><dt class="shrink-0 text-muted">Last real name</dt><dd class="min-w-0 truncate text-right text-xs" title={rollup.lastRealname}>{rollup.lastRealname || '—'}</dd></div>
         <div class="flex justify-between gap-4"><dt class="text-muted">Last class</dt><dd class="font-mono">{rollup.lastClass || '—'}</dd></div>
@@ -553,7 +566,14 @@
               {#each data.sessions as s (s.id)}
                 <tr class="border-b border-border/50 last:border-0">
                   <td class="py-2 pr-4 font-mono text-muted">{relative(s.ts)}</td>
-                  <td class="py-2 pr-4 font-mono">{s.nick}</td>
+                  <td class="py-2 pr-4 font-mono">
+                    {#if s.currentNick && s.currentNick !== s.nick}
+                      <span class="text-muted" title="nick at connect">{s.nick}</span>
+                      <span class="text-muted">→</span> {s.currentNick}
+                    {:else}
+                      {s.nick}
+                    {/if}
+                  </td>
                   <td class="py-2 pr-4 font-mono text-muted">{s.ident || '—'}</td>
                   <td class="py-2 pr-4 font-mono text-muted">{s.account || '—'}</td>
                   <td class="py-2 pr-4 font-mono text-xs">{s.ip}</td>

@@ -346,6 +346,18 @@
 <module name="saquit">
 <module name="satopic">
 <module name="xline_db">
+# Nick-change server notices, on snomask `n` (local) and `N` (remote).
+# FiberEye subscribes to both: without them a session's nick is frozen at
+# the one it registered with (the admin #/fibereye views would show `i`
+# forever for a client that connected as `i` and then `/nick incog`), and
+# — worse — the QUIT notice carries the nick in force at quit time, so a
+# renamed session never matches FiberEye's open-session map and its row is
+# never closed: no session duration, no short-session churn count.
+# Provides no modes and is VF_VENDOR, not VF_COMMON/VF_OPTCOMMON, so it
+# does not enter the spanningtree CAPAB compare and cannot affect the
+# irc.netcrave.chat link. See the EyeWatch oper class in opers.conf.j2,
+# which must allow the snomasks for the bot to receive them.
+<module name="seenicks">
 
 #-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#  MOTD  -#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#-#
 #

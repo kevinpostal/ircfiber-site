@@ -128,7 +128,8 @@ support_bot_public_url: "https://{{ ircfiber_domain }}"
 # --- FiberEye connection watch + #staff announcer (dedicated container) -----
 # Only the process with IRCFIBER_FIBEREYE_ENABLED=1 opens an opered IRC
 # connection to the ircd as FIBEREYE. It OPERs as {{ fibereye_oper_name }}
-# with snomasks cCqx (connects, remote connects, quits, X-lines), persists
+# with snomasks cCqxnN (connects, remote connects, quits, X-lines, local
+# and remote nick changes), persists
 # every session in Mongo behind the admin #/fibereye page, assembles the IP
 # intelligence record for every public connect, places timed Z-lines on
 # connect floods, and sits in {{ fibereye_channel }} announcing the Redis

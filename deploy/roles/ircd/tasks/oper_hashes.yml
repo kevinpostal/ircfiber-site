@@ -55,8 +55,9 @@
   tags: [ircdconf]
 
 # FiberEye connection-watch + #staff announcer oper (EyeWatch class: ZLINE +
-# STATS only, plus umode +s with snomasks c/C/q/x so it sees every connect
-# and quit). Rotated independently of the human and dashboard opers.
+# STATS only, plus umode +s with snomasks c/C/q/x/n/N so it sees every
+# connect, quit and nick change). Rotated independently of the human and
+# dashboard opers.
 - name: Compute InspIRCd hmac-sha256 FiberEye oper password hash
   ansible.builtin.command:
     argv:

@@ -14,8 +14,9 @@ import std.algorithm : canFind;
 import std.conv : to;
 import std.string : indexOf;
 
-import ircfiber.fibereye.format : parseQuitNotice, ipGroup, expandIpv6, zlineMatches,
-    validExemptEntry, validExemptNick, nickExemptMatch;
+import ircfiber.fibereye.format : parseQuitNotice, parseNickNotice, ipGroup, expandIpv6,
+    zlineMatches, validExemptEntry, validExemptNick, nickExemptMatch;
+import ircfiber.fibereye.sessions : OpenSession, OpenSessions;
 import ircfiber.fibereye.rules : Observation, Thresholds, evaluate, banDurationFor,
     isAutoPlacedZline, banReason, validateThresholds;
 import ircfiber.fibereye.ruleset : RuleSet, validateRuleSet, summarizeRuleChange;
@@ -486,8 +487,107 @@ private void testRollupCountries() {
     check(rows[1].banned == 1, "country row counts currently-banned groups");
 }
 
+/// The nick-change notice (snomask `n`) is what keeps a session's nick
+/// from being frozen at the one it registered with. The sample below is
+/// the shape InspIRCd 4's `seenicks` module emits.
+private void testParseNickNotice() {
+    auto n = parseNickNotice("*** NICK: User i!~incog@user.ircfiber.com "
+        ~ "(94.8.165.152) changed their nickname to incog");
+    check(n.ok, "nick-change notice parses");
+    check(n.oldNick == "i", "nick before the change");
+    check(n.newNick == "incog", "nick after the change");
+    check(n.ident == "~incog", "nick-change ident");
+    check(n.host == "user.ircfiber.com", "nick-change host");
+    check(n.ip == "94.8.165.152", "nick-change real IP");
+    check(!n.remote, "a NICK notice is local");
+
+    auto v6 = parseNickNotice("*** REMOTENICK: User slxpbdgg__!~s@cloak.hidden "
+        ~ "(2603:8001:98f0:1530:691d:b048:970e:1304) changed their nickname to slxpbdgg");
+    check(v6.ok && v6.remote, "a linked server's nick change parses as remote");
+    check(v6.ip == "2603:8001:98f0:1530:691d:b048:970e:1304",
+        "ipv6 address is not split by the mask parser");
+    check(v6.oldNick == "slxpbdgg__" && v6.newNick == "slxpbdgg", "both nicks survive");
+
+    // Only the labelled snotice counts — every other line the ircd sends
+    // must be inert here, and a nick notice must not look like a connect
+    // or a quit to their parsers.
+    check(!parseNickNotice("User a!~a@h (1.2.3.4) changed their nickname to b").ok,
+        "an unlabelled line is not a nick notice");
+    check(!parseNickNotice("*** Client connecting on port 6697 (class main): "
+        ~ "a!~a@h.example (203.0.113.7) [A]").ok, "connect notice rejected by nick parser");
+    check(!parseNickNotice("*** QUIT: Client exiting: a!~a@h (1.2.3.4) [Quit: x]").ok,
+        "quit notice rejected by nick parser");
+    check(!parseQuitNotice("*** NICK: User a!~a@h (1.2.3.4) changed their nickname to b").ok,
+        "nick notice rejected by quit parser");
+    check(!parseConnectNotice("*** NICK: User a!~a@h (1.2.3.4) changed their nickname to b").ok,
+        "nick notice rejected by connect parser");
+    check(!parseNickNotice("*** NICK: User nomask (1.2.3.4) changed their nickname to b").ok,
+        "nick notice without a nick!user@host mask rejected");
+    check(!parseNickNotice("*** NICK: User a!~a@h (1.2.3.4) changed their nickname to ").ok,
+        "nick notice without a new nick rejected");
+    // Snotice stacking is on by default (<options nosnoticestack>), so the
+    // `n` snomask also carries this line — it is not a rename.
+    check(!parseNickNotice("*** NICK: (last message repeated 3 times)").ok,
+        "a stacked-repeat snotice is not a rename");
+    check(parseNickNotice("*** NICK: User a!~a@h (1.2.3.4) changed their nickname to b c")
+        .newNick == "b", "only the nick is taken from the tail");
+}
+
+/// The open-session map. The rename cases are the regression: a QUIT
+/// notice carries the nick the client is using at quit time, so before
+/// nick changes were tracked every renamed session stayed open forever —
+/// losing its `durationMs` and its short-session churn count.
+private void testOpenSessions() {
+    OpenSessions open;
+    OpenSession s;
+    open.remember("i", "94.8.165.152", "sess-1", 1_000, 10);
+    check(open.length == 1, "a connect is remembered");
+    check(!open.close("incog", "94.8.165.152", s), "the post-rename nick is unknown until it renames");
+
+    check(open.rename("i", "incog", "94.8.165.152", s), "rename finds the open session");
+    check(s.id == "sess-1" && s.openedAt == 1_000, "rename keeps the id and the connect instant");
+    check(!open.close("i", "94.8.165.152", s), "the pre-rename nick stops resolving");
+    check(open.close("incog", "94.8.165.152", s), "a renamed session is still closable at quit");
+    check(s.id == "sess-1" && s.openedAt == 1_000, "the duration is computable after a rename");
+    check(open.length == 0, "closing removes the session");
+    check(!open.close("incog", "94.8.165.152", s), "a session closes exactly once");
+    check(!open.rename("incog", "x", "94.8.165.152", s), "an unknown nick renames nothing");
+
+    open.remember("Alice", "203.0.113.7", "sess-2", 2_000, 10);
+    open.remember("bob", "2603:8001:98f0:1530:691d:b048:970e:1304", "sess-3", 3_000, 10);
+    check(open.findByNick("ALICE", s) && s.id == "sess-2", "WHOIS nick match is case-insensitive");
+    check(!open.findByNick("nobody", s), "an unknown nick has no open session");
+    auto v6 = open.forMask("2603:8001:98f0:1530::/64", 5);
+    check(v6.length == 1 && v6[0].nick == "bob", "an ipv6 session is attributable by its /64");
+    check(open.forMask("203.0.113.7", 5).length == 1, "an ipv4 session is attributable by its address");
+
+    open.remember("carol", "203.0.113.7", "sess-4", 4_000, 10);
+    auto ordered = open.forMask("203.0.113.7", 5);
+    check(ordered.length == 2 && ordered[0].nick == "carol", "attribution is newest connect first");
+    check(open.forMask("203.0.113.7", 1).length == 1, "attribution respects its cap");
+
+    // A flood must not grow the map without bound; the oldest goes first.
+    OpenSessions small;
+    foreach (i; 0 .. 5)
+        small.remember("n" ~ i.to!string, "198.51.100.1", "id" ~ i.to!string, i, 2);
+    check(small.length == 2, "the map is capped");
+    check(!small.close("n0", "198.51.100.1", s), "the oldest session was evicted");
+    check(small.close("n4", "198.51.100.1", s), "the newest session survived");
+
+    // Same nick and address reconnecting rebinds the key to the new row;
+    // evicting the row it replaced must not unbind the live one.
+    OpenSessions reuse;
+    reuse.remember("dave", "198.51.100.2", "old", 1, 2);
+    reuse.remember("dave", "198.51.100.2", "new", 2, 2);
+    reuse.remember("erin", "198.51.100.3", "erin-1", 3, 2);
+    check(reuse.close("dave", "198.51.100.2", s) && s.id == "new",
+        "a reconnect's row survives eviction of the id it replaced");
+}
+
 void main() {
     testParseQuitNotice();
+    testParseNickNotice();
+    testOpenSessions();
     testIpGroup();
     testZlineMatches();
     testRules();

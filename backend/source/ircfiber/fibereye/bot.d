@@ -6,8 +6,8 @@
  * dedicated `ircfiber-fibereye` container).
  *
  * What it does:
- *   - subscribe to snomasks `+s +cCqx` and persist every connect and quit
- *     to Mongo (`ircfiber.fibereye.store`);
+ *   - subscribe to snomasks `+s +cCqxnN` and persist every connect, nick
+ *     change and quit to Mongo (`ircfiber.fibereye.store`);
  *   - for every public connect, count the sighting and assemble the IP
  *     intelligence record (`ircfiber.ipintel`), attach it to the FiberEye
  *     rollups, then queue the `irc_connect` announcement;
@@ -86,6 +86,7 @@ import ircfiber.bots.nick : FIBEREYE_DEFAULT_NICK;
 import ircfiber.env : envSecret;
 import ircfiber.fibereye.events;
 import ircfiber.fibereye.format;
+import ircfiber.fibereye.sessions : OpenSession, OpenSessions;
 import ircfiber.fibereye.rules;
 import ircfiber.fibereye.store;
 import ircfiber.fibereye.ruleset;
@@ -181,8 +182,11 @@ private IrcBotConfig coreConfig(const FiberEyeConfig c) {
     b.nickservPassword = c.nickservPassword;
     b.operName = c.operName;
     b.operPassword = c.operPassword;
-    // `c` connects, `C` remote connects (announced), `q` local quits, `x` X-line notices.
-    b.snomasks = "cCqx";
+    // `c` connects, `C` remote connects (announced), `q` local quits,
+    // `x` X-line notices, `n`/`N` nick changes (local/remote — the ircd
+    // needs the `seenicks` module loaded for these, see
+    // deploy/roles/ircd/templates/modules.conf.j2).
+    b.snomasks = "cCqxnN";
     string[] chs;
     if (c.channels.length) chs = c.channels.split(",");
     else if (c.channel.length) chs = [c.channel];
@@ -215,13 +219,11 @@ final class FiberEyeBot : IrcBot {
     private Task outboxTask;
     private bool torLoopStarted;
 
-    /// nick\0ip → open session id, so a quit can close its own row.
-    private string[string] openSessions;
-    /// Insertion order of `openSessions`, for bounded eviction.
-    private string[] openOrder;
-    /// Connect time per open session id, so a quit computes its duration
-    /// without a Mongo read on the IRC read loop.
-    private long[string] openedAt;
+    /// Sessions seen to connect and not yet seen to quit. Keyed by nick
+    /// and address, and moved on a nick change — the QUIT notice carries
+    /// the nick in force at quit time, so without that move a renamed
+    /// session would never be closed.
+    private OpenSessions open;
     /// Last WHOIS send, for the account-enrichment throttle.
     private long lastWhoisMs;
 
@@ -238,6 +240,7 @@ final class FiberEyeBot : IrcBot {
     private long connectsSeen;
     private long connectsIgnored;
     private long quitsSeen;
+    private long nickChangesSeen;
     private long bansPlaced;
     private long bansObserved;
     private long accountLookups;
@@ -378,39 +381,23 @@ final class FiberEyeBot : IrcBot {
         }
     }
 
-    // ── connect / quit observation ───────────────────────────────────
-
-    private static string openKey(string nick_, string ip) {
-        return nick_.toLower() ~ "\0" ~ ip;
-    }
-
-    private void rememberOpen(string key, string id, long ts) {
-        if (!(key in openSessions)) {
-            openOrder ~= key;
-            if (openOrder.length > MAX_OPEN_SESSIONS) {
-                const evict = openOrder[0];
-                openOrder = openOrder[1 .. $];
-                if (auto old = evict in openSessions) {
-                    openedAt.remove(*old);
-                    openSessions.remove(evict);
-                }
-            }
-        }
-        openSessions[key] = id;
-        openedAt[id] = ts;
-    }
+    // ── connect / nick / quit observation ────────────────────────────
 
     /// A server notice: a connect notice (snomask `c`), a local quit
-    /// notice (`q`), or an X-line notice (`x`). Our own placements are
-    /// announced by `enforceBan` itself; anything else the ircd reports
-    /// (connectban automatics, oper/human bans) is announced here so
-    /// #staff sees every ban. Removals and expiries stay quiet — the
-    /// sweep already logs those and they would double the noise.
+    /// notice (`q`), a nick change (`n`/`N`), or an X-line notice (`x`).
+    /// Our own placements are announced by `enforceBan` itself; anything
+    /// else the ircd reports (connectban automatics, oper/human bans) is
+    /// announced here so #staff sees every ban. Removals and expiries
+    /// stay quiet — the sweep already logs those and they would double
+    /// the noise.
     protected override void onServerNotice(string text) {
         auto c = parseConnectNotice(text);
         if (c.ok) { onConnect(c); return; }
         auto q = parseQuitNotice(text);
         if (q.ok) { onQuit(q); return; }
+        auto nk = parseNickNotice(text);
+        if (nk.ok) { onNickChange(nk); return; }
+
         const t = text.strip();
         if (t.indexOf("Z-line") >= 0 || t.indexOf("Z:line") >= 0 || t.indexOf("ZLINE") >= 0)
             logInfo("FiberEye: xline notice: %s", t);
@@ -450,38 +437,26 @@ final class FiberEyeBot : IrcBot {
     }
 
     /// Newest-first nicks behind `mask`: still-connected sessions first
-    /// (newest connect first, via the session map's insertion time), then
-    /// the newest stored rows with the newest services account. Both store
-    /// reads are indexed (`_id`, `ipGroup`+`ts`) and capped, and every store
-    /// method already fails soft internally — a flood must not stall the
-    /// read loop. When no nick is known at all but the IP rollup exists,
-    /// falls back to its last nick (or a bare connect count) so the
+    /// (newest connect first, from the session map), then the newest
+    /// stored rows with the newest services account. Both store reads are
+    /// indexed (`_id`, `ipGroup`+`ts`) and capped, and every store method
+    /// already fails soft internally — a flood must not stall the read
+    /// loop. When no nick is known at all but the IP rollup exists, falls
+    /// back to its last nick (or a bare connect count) so the
     /// announcement never goes out as a bare IP.
     private string attributeXline(string mask) {
-        import std.algorithm.sorting : sort;
-        struct Cand { string nick; long ts; }
         string[] nicks;
         string account;
         long fallbackConnects;
         string fallbackNick;
         try {
-            Cand[] open;
-            foreach (key, id; openSessions) {
-                const sep = key.indexOf('\0');
-                if (sep < 0) continue;
-                const ipPart = key[sep + 1 .. $];
-                if (ipPart != mask && ipGroup(ipPart) != mask) continue;
-                open ~= Cand(key[0 .. sep], openedAt.get(id, 0));
-            }
-            open.sort!((a, b) => a.ts > b.ts);
-            foreach (c; open) {
-                nicks ~= c.nick;
-                if (nicks.length >= 5) break;
-            }
+            foreach (s; open.forMask(mask, 5)) nicks ~= s.nick;
             if (store !is null) {
                 foreach (s; store.sessionsForGroup(mask, 6)) {
                     if (nicks.length + 1 > 11) break;
-                    nicks ~= s.nick;
+                    // The nick the session ended up using, not the one it
+                    // registered with.
+                    nicks ~= s.currentNick.length ? s.currentNick : s.nick;
                     if (!account.length && s.account.strip().length)
                         account = s.account;
                 }
@@ -533,7 +508,7 @@ final class FiberEyeBot : IrcBot {
             r.id = id;
             store.upsertIp(r);
         }
-        if (id.length) rememberOpen(openKey(c.nick, c.ip), id, r.ts);
+        if (id.length) open.remember(c.nick, c.ip, id, r.ts, MAX_OPEN_SESSIONS);
 
         // Sighting + record + `#staff` announcement, off the read loop. The
         // announcement is queued only after the record is assembled, so the
@@ -587,22 +562,16 @@ final class FiberEyeBot : IrcBot {
 
     private void onQuit(QuitNotice q) {
         quitsSeen++;
-        const key = openKey(q.nick, q.ip);
-        auto found = key in openSessions;
-        if (found is null) return;
-        const id = *found;
-        openSessions.remove(key);
+        OpenSession s;
+        // The notice carries the nick in force at quit time, which is why
+        // `onNickChange` has to move the map entry: before it did, every
+        // renamed session missed here and stayed open forever.
+        if (!open.close(q.nick, q.ip, s)) return;
         const ts = nowMs();
-        long duration;
-        if (store !is null) {
-            // The connect timestamp is the row's own `ts`; reading it back
-            // is one findOne, so instead the duration is derived from the
-            // session map's insertion time when available.
-            auto opened = openedAt.get(id, 0L);
-            duration = opened > 0 ? ts - opened : 0;
-            store.closeSession(id, ts, q.reason, duration);
-        }
-        openedAt.remove(id);
+        // The connect timestamp is the row's own `ts`; reading it back is
+        // one findOne, so the duration comes from the map instead.
+        const duration = s.openedAt > 0 ? ts - s.openedAt : 0;
+        if (store !is null) store.closeSession(s.id, ts, q.reason, duration);
         if (duration > 0 && duration < liveRules.thresholds.shortMs) {
             const group = ipGroup(q.ip);
             if (!isPrivateIp(q.ip) && !exempt(q.ip, group) && !exemptNick(q.nick)) {
@@ -610,6 +579,32 @@ final class FiberEyeBot : IrcBot {
                 if (store !is null) store.bumpShortSession(group);
             }
         }
+    }
+
+    /// A nick change (snomask `n`, or `N` from a linked server).
+    ///
+    /// Two things are broken without it, both observed on 94.8.165.152:
+    /// the rollup's `lastNick` — and so every admin view of that address
+    /// — keeps showing the nick the client registered with forever, and
+    /// the QUIT notice no longer matches the open-session key, so the row
+    /// is never closed: no `durationMs`, no short-session churn count,
+    /// and the open-sessions gauge only ever climbs.
+    ///
+    /// Deliberately NOT fed into the window counters. `nick_churn` counts
+    /// distinct nicks *per connect*, and nick flapping is already policed
+    /// by the ircd's own `nickflood` module; counting renames there would
+    /// let one client that renames six times in a minute Z-line its own
+    /// address — and, behind a shared VPN exit, everyone else's with it.
+    private void onNickChange(NickNotice n) {
+        nickChangesSeen++;
+        OpenSession s;
+        const moved = open.rename(n.oldNick, n.newNick, n.ip, s);
+        if (store is null) return;
+        if (moved) store.renameSession(s.id, n.newNick);
+        // Independent of the map: a client whose connect predates this bot
+        // (or was evicted) still has a rollup worth keeping current, and
+        // `setIpNick` no-ops when the group was never seen.
+        store.setIpNick(ipGroup(n.ip), n.newNick, nowMs());
     }
 
     /// True when this connect is on the never-count, never-ban list.
@@ -646,19 +641,13 @@ final class FiberEyeBot : IrcBot {
     private void onWhoisAccount(string who, string account) {
         if (!account.length) return;
         accountLookups++;
-        // The map key needs the IP, which a 330 does not carry, so the
-        // newest open session for this nick is the one that gets it.
-        foreach (key, id; openSessions) {
-            const sep = key.indexOf('\0');
-            if (sep < 0) continue;
-            if (icmp(key[0 .. sep], who) != 0) continue;
-            if (store !is null) {
-                store.setSessionAccount(id, account);
-                const ipPart = key[sep + 1 .. $];
-                store.setIpAccount(ipGroup(ipPart), account);
-            }
-            return;
-        }
+        // A 330 carries no IP, so the newest open session using this nick
+        // is the one that gets the account.
+        OpenSession s;
+        if (!open.findByNick(who, s)) return;
+        if (store is null) return;
+        store.setSessionAccount(s.id, account);
+        store.setIpAccount(ipGroup(s.ip), account);
     }
 
     // ── window counters ──────────────────────────────────────────────
@@ -966,7 +955,8 @@ final class FiberEyeBot : IrcBot {
         j["connectsSeen"] = Json(connectsSeen);
         j["connectsIgnored"] = Json(connectsIgnored);
         j["quitsSeen"] = Json(quitsSeen);
-        j["sessionsOpen"] = Json(cast(long) openSessions.length);
+        j["nickChangesSeen"] = Json(nickChangesSeen);
+        j["sessionsOpen"] = Json(cast(long) open.length);
         j["bansPlaced"] = Json(bansPlaced);
         j["bansObserved"] = Json(bansObserved);
         j["activeZlines"] = Json(cast(long) activeZlines.length);

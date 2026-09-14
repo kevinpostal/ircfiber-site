@@ -7,6 +7,8 @@
  *     provenanced field names its source in the provenance table.
  *  2. A field without provenance renders an em dash, never a default.
  *  3. Deep lookup posts the exact address and replaces the record.
+ *  4. A session that changed nick shows the nick it is using now, and the
+ *     rollup says the current nick came from a rename.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -80,6 +82,7 @@ const detail = (over: Record<string, unknown> = {}) => ({
     ipGroup: '185.65.134.66', ip: '185.65.134.66', ipVersion: 4,
     firstSeen: NOW - 86_400_000 * 3, lastSeen: NOW - 60_000, connects: 12, shortSessions: 1,
     lastNick: 'alice', lastAccount: '', lastRealname: 'Alice', lastClass: 'main',
+    nickChanges: 0, lastNickAtMs: 0,
     geoCity: 'Amsterdam', geoRegion: 'North Holland', geoCountry: 'NL', geoOrg: 'AS39351 31173 Services AB',
     geoTimezone: 'Europe/Amsterdam', geoPending: false,
     intelAsn: 'AS39351', intelFlags: 'vpn(Mullvad)+hosting', intelOperator: 'Mullvad', intelPrefix: '185.65.134.0/24',
@@ -93,6 +96,19 @@ const detail = (over: Record<string, unknown> = {}) => ({
   zline: null,
   intel: intel(),
   intelSources: ['proxycheck', 'ripestat_prefix', 'ripestat_rpki', 'ripestat_abuse', 'rdap', 'sfs', 'dronebl', 'efnetrbl', 'ipinfo'],
+  ...over,
+});
+
+const session = (over: Record<string, unknown> = {}) => ({
+  id: 'sess-1', ts: NOW - 300_000, nick: 'alice', currentNick: 'alice', nickChanges: 0,
+  ident: '~alice', host: 'cloak.ircfiber.com', ip: '185.65.134.66',
+  ipGroup: '185.65.134.66', ipVersion: 4, realname: 'Alice', connClass: 'main',
+  port: 6697, tls: true, account: '',
+  quitTs: 0, quitReason: '', durationMs: 0,
+  geoCity: 'Amsterdam', geoRegion: 'North Holland', geoCountry: 'NL',
+  geoOrg: 'AS39351 31173 Services AB', geoTimezone: 'Europe/Amsterdam', geoPending: false,
+  intelAsn: 'AS39351', intelFlags: 'vpn(Mullvad)', intelOperator: 'Mullvad',
+  intelPrefix: '185.65.134.0/24', intelRisk: 73, intelAt: NOW - 60_000,
   ...over,
 });
 
@@ -142,5 +158,20 @@ describe('FiberEyeIp.svelte', () => {
     await vi.waitFor(() => expect(mockedPost).toHaveBeenCalledWith('/api/admin/fibereye/ip/deep', { ip: '185.65.134.66' }));
     await expect.element(page.getByText('22, 9030', { exact: true })).toBeInTheDocument();
     await expect.element(page.getByText(/Shodan InternetDB is non-commercial/)).toBeInTheDocument();
+  });
+
+  it('shows the nick a session renamed to, not only the one it connected with', async () => {
+    const base = detail();
+    mockedGet.mockResolvedValue(detail({
+      rollup: { ...base.rollup, lastNick: 'incog', nickChanges: 1, lastNickAtMs: NOW - 120_000 },
+      sessions: [session({ nick: 'i', currentNick: 'incog', nickChanges: 1 })],
+      distinctNicks: ['i', 'incog'],
+    }));
+    render(FiberEyeIp, { ip: '185.65.134.66' });
+    // The session row carries both: what it registered as, and what it is
+    // using now. Before nick changes were tracked only "i" existed.
+    await expect.element(page.getByText(/i\s*→\s*incog/)).toBeInTheDocument();
+    // And the rollup says the current nick came from a rename, not a connect.
+    await expect.element(page.getByText(/renamed/)).toBeInTheDocument();
   });
 });
