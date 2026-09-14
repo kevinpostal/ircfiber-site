@@ -89,3 +89,24 @@ describe('AccountMenu dismissal', () => {
     spy.mockRestore();
   });
 });
+
+describe('AccountMenu items', () => {
+  it('opens Settings on the requested tab', async () => {
+    for (const [label, tab] of [['Sessions', 'sessions'], ['Bouncer', 'bouncer'], ['Settings', 'design']] as const) {
+      ircState.showSettings = false;
+      ircState.settingsTab = 'account';
+      const gear = open();
+      await tick();
+      const item = [...document.querySelectorAll('#accountMenu button')]
+        .find((b) => b.textContent?.trim() === label) as HTMLElement | undefined;
+      expect(item, `${label} entry exists`).toBeTruthy();
+      item!.click();
+      await tick();
+      expect(ircState.showSettings).toBe(true);
+      expect(ircState.settingsTab).toBe(tab);
+      // Picking an item dismisses the popup.
+      expect(document.querySelector('#accountMenu')).toBeNull();
+      gear.remove();
+    }
+  });
+});

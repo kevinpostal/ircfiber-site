@@ -80,6 +80,8 @@
     <div class="accountMenu__items">
       <ul class="accountMenu__items-list">
         <li><button onclick={() => openSettings('design')}>Settings</button></li>
+        <li><button onclick={() => openSettings('sessions')}>Sessions</button></li>
+        <li><button onclick={() => openSettings('bouncer')}>Bouncer</button></li>
         <li><button onclick={openShortcuts}>Shortcuts</button></li>
         <li><button onclick={openFeedback}>Help &amp; Feedback</button></li>
       </ul>
