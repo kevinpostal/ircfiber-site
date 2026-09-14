@@ -21,6 +21,7 @@
   import { Chart, Svg, GeoPath, GeoPoint } from 'layerchart';
   import { geoMercator, type GeoPermissibleObjects } from 'd3-geo';
 
+
   import PageHeader from '../components/PageHeader.svelte';
   import Card from '../components/Card.svelte';
   import KpiCard from '../components/KpiCard.svelte';
@@ -169,6 +170,41 @@
   const clusters = $derived(data?.clusters ?? []);
   const maxConnects = $derived(clusters.reduce((m, c) => Math.max(m, c.connects), 1));
 
+  /**
+   * Pan/zoom is layerchart's TransformContext in `mode: 'canvas'`: it
+   * scales the whole SVG layer, so markers stay geographically pinned
+   * without re-projecting. The zoom ceiling is what 1:110m outline detail
+   * can honestly support — past that the coastlines are visibly faceted.
+   */
+  const ZOOM_MAX = 12;
+
+  /** The slice of layerchart's TransformContext the controls use. */
+  type ZoomT = {
+    scale: number;
+    setScale(v: number): void;
+    translate: { x: number; y: number };
+    setTranslate(p: { x: number; y: number }): void;
+    reset(): void;
+  };
+
+  /**
+   * Zooms about the middle of the viewport. `setScale` alone scales about
+   * the SVG origin, which walks the map off the top-left corner; the
+   * translate has to move with it to keep the centre point fixed. The
+   * wheel and double-click paths already anchor on the pointer inside
+   * TransformContext, so only the buttons need this.
+   */
+  function zoomBy(t: ZoomT, factor: number, w: number, h: number): void {
+    const next = Math.min(Math.max(t.scale * factor, 1), ZOOM_MAX);
+    const k = next / t.scale;
+    if (k === 1) return;
+    t.setTranslate({
+      x: w / 2 - k * (w / 2 - t.translate.x),
+      y: h / 2 - k * (h / 2 - t.translate.y),
+    });
+    t.setScale(next);
+  }
+
   /** Area-proportional, so a 400-connect cell does not swamp a 4-connect one. */
   function radius(c: MapCluster): number {
     return 3 + 9 * Math.sqrt(c.connects / maxConnects);
@@ -306,21 +342,60 @@
     ? `${data.summary.returned} IP groups in ${clusters.length} cells · ${new Date(data.start).toLocaleString()} → ${new Date(data.end).toLocaleString()}`
     : 'Loading…'}
 >
-  <div class="h-[480px] w-full" data-testid="eyemap-canvas">
-    <Chart geo={{ projection: geoMercator, fitGeojson: WORLD_FIT }}>
+  <div class="eyemap-viewport relative h-[480px] w-full overflow-hidden" data-testid="eyemap-canvas">
+    <Chart
+      geo={{ projection: geoMercator, fitGeojson: WORLD_FIT }}
+      transform={{ mode: 'canvas', initialScrollMode: 'scale' }}
+      let:transform
+      let:width
+      let:height
+    >
+      <!-- Scroll-to-zoom, drag-to-pan and double-click come from
+           TransformContext. These buttons are the discoverable and
+           keyboard-reachable affordance for the same thing. -->
+      <div class="absolute top-2 right-2 z-10 flex flex-col gap-1">
+        <button
+          type="button"
+          onclick={() => zoomBy(transform, 1.5, width, height)}
+          class="h-7 w-7 rounded border border-border bg-surface-2/90 text-sm text-text hover:border-primary/40"
+          aria-label="Zoom in"
+          data-testid="eyemap-zoom-in"
+        >+</button>
+        <button
+          type="button"
+          onclick={() => zoomBy(transform, 1 / 1.5, width, height)}
+          class="h-7 w-7 rounded border border-border bg-surface-2/90 text-sm text-text hover:border-primary/40"
+          aria-label="Zoom out"
+          data-testid="eyemap-zoom-out"
+        >&minus;</button>
+        <button
+          type="button"
+          onclick={() => transform.reset()}
+          class="h-7 w-7 rounded border border-border bg-surface-2/90 text-[10px] text-muted hover:border-primary/40"
+          aria-label="Reset zoom"
+          data-testid="eyemap-zoom-reset"
+        >1:1</button>
+      </div>
       <Svg>
         {#if world}
-          <GeoPath geojson={world} class="fill-border/60 stroke-muted/40" />
+          <GeoPath
+            geojson={world}
+            class="fill-border/60 stroke-muted/40"
+            strokeWidth={1 / transform.scale}
+          />
         {/if}
         {#each clusters as c, i (c.lat + ':' + c.lon)}
           <GeoPoint lat={c.lat} long={c.lon}>
             <!-- GeoPoint's slot renders inside a <g> already translated to
-                 the projected point, so the circle sits at the origin. -->
+                 the projected point, so the circle sits at the origin.
+                 Radius and stroke are screen units, so they are divided by
+                 the zoom: a dot stays a dot and a hairline stays a
+                 hairline at 8x. -->
             <circle
               cx="0"
               cy="0"
-              r={radius(c)}
-              stroke-width="1"
+              r={radius(c) / transform.scale}
+              stroke-width={1 / transform.scale}
               class="cursor-pointer {toneClass(c)}"
               role="button"
               tabindex="0"
@@ -334,6 +409,11 @@
           </GeoPoint>
         {/each}
       </Svg>
+      <p class="absolute bottom-1 left-1 text-[10px] text-muted">
+        Scroll to zoom · drag to pan · double-click in (shift out){transform.scale !== 1
+          ? ` · ${transform.scale.toFixed(1)}×`
+          : ''}
+      </p>
     </Chart>
   </div>
 
@@ -446,3 +526,13 @@
     {/if}
   </Card>
 </div>
+
+<style>
+  /* layerchart's Svg layer is `overflow-visible`, so a zoomed map paints
+     outside the card — markers ended up over the header. The wrapper's
+     overflow-hidden only clips HTML children; the SVG itself needs its own
+     rule, and it is a child component's element, hence :global. */
+  .eyemap-viewport :global(svg) {
+    overflow: hidden;
+  }
+</style>
