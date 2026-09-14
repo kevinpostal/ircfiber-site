@@ -468,6 +468,12 @@ export interface IRCMessage {
   highlight?: boolean;
   /** Author's services account from the IRCv3 account-tag (`data.a`). */
   account?: string;
+  /** Author's channel status prefix (`~ & @ % +`, or `*`/`!` for an IRC
+   *  operator) AT SEND TIME — IRCCloud's `from_mode`, stamped by the
+   *  engine and stored with the message (wire `data.fm`). Preferred over
+   *  the live roster: a roster lookup loses the glyph once the author
+   *  quits or is de-opped, and on history loaded before NAMES lands. */
+  fromMode?: string;
   /** Label of the original message this event edits in place
    *  (remote draft/edit-message; engine tags it `edit_of`, wire `data.eo`). */
   editOf?: string;

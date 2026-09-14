@@ -278,6 +278,42 @@ private void testFormatChannelList() {
     check(formatChannelListEvent(parseJsonString(`{"c":"CHANNEL_LIST"}`), c).length == 0, "missing cl → nothing");
 }
 
+private void testZncCommands() {
+    auto ln = parseZncCommand("ListNetworks");
+    check(ln.name == "listnetworks" && ln.args.length == 0 && ln.rest == "", "bare ListNetworks");
+
+    auto an = parseZncCommand("  AddNetwork   libera  irc.libera.chat  +6697 ");
+    check(an.name == "addnetwork", "addnetwork name: " ~ an.name);
+    check(an.args.length == 3, "addnetwork arg count: " ~ an.args.length.to!string);
+    if (an.args.length == 3)
+        check(an.args == ["libera", "irc.libera.chat", "+6697"], "addnetwork args: " ~ an.args.to!string);
+    check(an.rest.startsWith("libera"), "addnetwork rest: " ~ an.rest);
+
+    auto tabbed = parseZncCommand("Detach\t#one,#two");
+    check(tabbed.name == "detach" && tabbed.args == ["#one,#two"], "tab separator");
+    check(parseZncCommand("/help").name == "help", "leading slash dropped");
+    check(parseZncCommand("   ").name == "", "blank line");
+
+    auto d = parseZncServerSpec("irc.libera.chat", "");
+    check(d.ok && d.tls && d.port == 6697 && d.host == "irc.libera.chat", "default TLS 6697");
+    auto t = parseZncServerSpec("irc.libera.chat", "+7000");
+    check(t.ok && t.tls && t.port == 7000, "+port is TLS");
+    auto p = parseZncServerSpec("irc.libera.chat", "6667");
+    check(p.ok && !p.tls && p.port == 6667, "bare port is plaintext");
+    check(!parseZncServerSpec("irc.libera.chat", "70000").ok, "port out of range");
+    check(!parseZncServerSpec("irc.libera.chat", "abc").ok, "non-numeric port");
+    check(!parseZncServerSpec("irc.libera.chat", "0").ok, "port 0 rejected");
+    check(!parseZncServerSpec("irc.libera.chat", "+").ok, "lone + rejected");
+    check(!parseZncServerSpec("", "").ok, "empty host rejected");
+    check(!parseZncServerSpec("   ", "").ok, "blank host rejected");
+
+    check(isZncStatusTarget("*status"), "*status is a module target");
+    check(isZncStatusTarget("*controlpanel"), "*controlpanel is a module target");
+    check(isZncStatusTarget("*"), "bare * is a module target");
+    check(!isZncStatusTarget("#chan"), "#chan is not a module target");
+    check(!isZncStatusTarget(""), "empty is not a module target");
+}
+
 void main() {
     testParseBncPass();
     testParseClientLine();
@@ -288,6 +324,7 @@ void main() {
     testGrouping();
     testMissedRows();
     testFormatChannelList();
+    testZncCommands();
     if (failures) {
         writefln("bnc wire tests: %d FAILED", failures);
         import core.stdc.stdlib : exit;

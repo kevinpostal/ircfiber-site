@@ -59,6 +59,15 @@ export function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
     label: (raw.label as string) || (raw.l as string) || undefined,
     type,
     phase,
+    // Author's channel status at send time (IRCCloud `from_mode`). Without
+    // it here, a reload rendered every history row bare — the whole reason
+    // the engine stamps it onto the message.
+    fromMode: (raw.fromMode as string) || (raw.fm as string) || tags?.from_mode || undefined,
+    // `account` and `editOf` were dropped on this path while the live
+    // normalizer mapped both, so a reload also lost the account identity
+    // and turned a remote edit back into a duplicate row.
+    account: (raw.account as string) || (raw.a as string) || tags?.account || undefined,
+    editOf: (raw.editOf as string) || (raw.eo as string) || tags?.edit_of || undefined,
     selfEcho: !!(raw.se as string | undefined) || !!(raw.selfEcho as boolean | undefined),
   };
 }

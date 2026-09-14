@@ -881,6 +881,12 @@
       ircState.optimisticMessages.delete(label);
     } else {
       list.push(optimistic);
+      // Assign back: `?? []` above creates a FRESH array when the buffer has
+      // no messages yet, so without this the first line sent into an empty
+      // buffer only ever reached `processedMessages` and was missing from
+      // `ircState.messages` — the list every echo-replacement, dedup and
+      // history merge reads. The `/msg` path above always did this.
+      ircState.messages[key] = list;
       if (ircState.processedMessages[key]) {
         ircState.processedMessages[key] = appendToProcessed(ircState.processedMessages[key], [optimistic]);
       } else {

@@ -126,6 +126,10 @@ export function unpackEvent(
     label: ((data.label as string) || (data.l as string) || (data.le as string) || '') as string,
     account: (((data.a as string) || tags?.account || '') as string) || undefined,
     editOf: (((data.eo as string) || tags?.edit_of || '') as string) || undefined,
+    // IRCCloud `from_mode` — the author's channel status when they spoke.
+    // Rendered in preference to the live roster (MessageRow), so the glyph
+    // survives the author quitting or losing the mode.
+    fromMode: (((data.fm as string) || tags?.from_mode || '') as string) || undefined,
     t: data.t as number,
     eid: (data.eid as number) || undefined,
     selfEcho: !!(data.se as string | undefined),

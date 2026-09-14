@@ -48,7 +48,7 @@ import ircfiber.storage.buffer : BufferManager;
 import ircfiber.models.irc_event : IRCRawEvent;
 import ircfiber.models.network : NetworkConfig, TLSMode;
 import ircfiber.network_lifecycle : normalizeHost, provisionNetwork, updateOwnedNetwork, deleteOwnedNetwork;
-import ircfiber.redis.protocol : RedisKeys, IRCCommand, NetworkStateSnapshot;
+import ircfiber.redis.protocol : RedisKeys, IRCCommand, NetworkStateSnapshot, ControlMessage;
 import ircfiber.api.websocket : loadNetworkStateSnapshot, routeEngineCommand;
 import ircfiber.bnc.wire;
 import ircfiber.bnc.format : FormatCtx, RecentOwn, formatEvent, formatChannelListEvent;
@@ -723,6 +723,21 @@ final class BncClient {
         return slugs.length ? slugs.join(", ") : "none";
     }
 
+    /// Resolves a user-typed network selector (uuid, slug from
+    /// `networkSlugs`, or upstream host) against this user's networks.
+    /// `id == UUID.init` when nothing matches.
+    private NetworkConfig findNetworkBySelector(string sel) {
+        NetworkConfig chosen;
+        if (!sel.length) return chosen;
+        auto nets = userNetworks();
+        const wantSlug = networkSlug(sel);
+        const slugs = slugsOf(nets);
+        foreach (ref cfg; nets) if (cfg.id.toString() == sel) return cfg;
+        if (wantSlug.length) foreach (i, ref cfg; nets) if (slugs[i] == wantSlug) return cfg;
+        foreach (ref cfg; nets) if (icmp(cfg.host, sel) == 0) return cfg;
+        return chosen;
+    }
+
     /// Picks the network for this connection: `BOUNCER BIND`, then the
     /// identity suffix, then the ZNC convenience of a lone network for
     /// clients without `bouncer-networks`. Returns false after sending the
@@ -739,13 +754,7 @@ final class BncClient {
                 return false;
             }
         } else if (networkSel.length) {
-            const wantSlug = networkSlug(networkSel);
-            const slugs = slugsOf(nets);
-            foreach (ref cfg; nets) if (cfg.id.toString() == networkSel) { chosen = cfg; break; }
-            if (chosen.id == UUID.init && wantSlug.length)
-                foreach (i, ref cfg; nets) if (slugs[i] == wantSlug) { chosen = cfg; break; }
-            if (chosen.id == UUID.init)
-                foreach (ref cfg; nets) if (icmp(cfg.host, networkSel) == 0) { chosen = cfg; break; }
+            chosen = findNetworkBySelector(networkSel);
             if (chosen.id == UUID.init) {
                 send("ERROR :Closing link: Unknown network \"" ~ networkSel ~ "\" — yours: " ~ slugList(nets));
                 markClosing("bad-network");
@@ -799,22 +808,7 @@ final class BncClient {
         }
 
         sendWelcome(chanModes);
-        {
-            string[] toks;
-            foreach (k, v; snap.isupport) {
-                // The bouncer answers CHATHISTORY itself; hide the upstream's tokens.
-                if (k == "CHATHISTORY" || k == "draft/CHATHISTORY" || k == "MSGREFTYPES") continue;
-                toks ~= v.length ? k ~ "=" ~ v : k;
-            }
-            toks ~= "CHATHISTORY=" ~ CHATHISTORY_MAX.to!string;
-            toks ~= "MSGREFTYPES=timestamp,msgid";
-            // Clients without bouncer-networks ignore the unknown token.
-            toks ~= "BOUNCER_NETID=" ~ networkId;
-            foreach (i; 0 .. (toks.length + 12) / 13) {
-                auto slice = toks[i * 13 .. min(toks.length, (i + 1) * 13)];
-                send(formatLine(null, src, "005", [clientNick] ~ slice ~ ["are supported by this server"]));
-            }
-        }
+        sendIsupport(snap, clientNick);
         // Network-attached: don't fake the upstream; let /MOTD fetch the
         // real server MOTD via the engine (handleClientLine routes "MOTD"
         // as raw -> engine -> ircd -> 372/376 live).
@@ -875,6 +869,26 @@ final class BncClient {
         send(formatLine(null, src, "004", [clientNick, src, "irc-fiber-bnc", "iw", chanModes]));
     }
 
+    /// The 005 burst for the currently bound network: upstream ISUPPORT
+    /// minus the tokens the bouncer answers itself, plus
+    /// CHATHISTORY/MSGREFTYPES and BOUNCER_NETID. 13 tokens per line.
+    private void sendIsupport(ref NetworkStateSnapshot snap, string nick) {
+        string[] toks;
+        foreach (k, v; snap.isupport) {
+            // The bouncer answers CHATHISTORY itself; hide the upstream's tokens.
+            if (k == "CHATHISTORY" || k == "draft/CHATHISTORY" || k == "MSGREFTYPES") continue;
+            toks ~= v.length ? k ~ "=" ~ v : k;
+        }
+        toks ~= "CHATHISTORY=" ~ CHATHISTORY_MAX.to!string;
+        toks ~= "MSGREFTYPES=timestamp,msgid";
+        // Clients without bouncer-networks ignore the unknown token.
+        toks ~= "BOUNCER_NETID=" ~ networkId;
+        foreach (i; 0 .. (toks.length + 12) / 13) {
+            auto slice = toks[i * 13 .. min(toks.length, (i + 1) * 13)];
+            send(formatLine(null, src, "005", [nick] ~ slice ~ ["are supported by this server"]));
+        }
+    }
+
     /// Bouncer-level registration (soju "no network" connection): the
     /// bouncer MOTD from IRCFIBER_BNC_MOTD_PATH (re-read per connection so
     /// editing the file needs no restart), no 005, no channels — only the
@@ -888,7 +902,8 @@ final class BncClient {
         send(formatLine(null, src, "376", [clientNick, "End of /MOTD command"]));
         if (has("soju.im/bouncer-networks-notify")) sendNetworkList();
         status("Not bound to a network — use BOUNCER BIND, or connect with username "
-            ~ authUsername ~ "/<network>. Your networks: " ~ slugList(userNetworks()));
+            ~ authUsername ~ "/<network>. Your networks: " ~ slugList(userNetworks())
+            ~ ". Or /znc jumpnetwork <network>.");
         liveReady = true;
         pendingLive = null;
         attachedAtMs = nowMs();
@@ -1604,9 +1619,10 @@ final class BncClient {
                 "VERSION — bouncer version",
                 "NETWORK LIST — your networks and the username that binds each one",
                 "PART #chan detach — detach (keep backlog, stop live)",
+                "ZNC users: /znc help (or /msg *status help) for ListNetworks/JumpNetwork/AddNetwork",
             ]) reply(line);
         } else if (sub == "version") {
-            reply("IRC Fiber bouncer 0.4.0 (bouncer-networks)");
+            reply(BNC_VERSION ~ " (bouncer-networks)");
         } else if (sub == "network" || sub == "networks") {
             auto nets = userNetworks();
             if (!nets.length) reply("No networks yet — BOUNCER ADDNETWORK host=<server> or add one on the website");
@@ -1618,9 +1634,296 @@ final class BncClient {
                 reply(slug ~ " — " ~ cfg.name ~ " " ~ cfg.host ~ ":" ~ cfg.port.to!string
                     ~ " [" ~ state ~ "]  (username " ~ authUsername ~ "/" ~ slug ~ ")");
             }
-            reply("BOUNCER ADDNETWORK/DELNETWORK or the website Settings → Bouncer page manage networks");
+            reply("BOUNCER ADDNETWORK/DELNETWORK, /znc addnetwork, or the website Settings → Bouncer page manage networks");
         } else {
             reply("Unknown command " ~ sub ~ " (try HELP)");
+        }
+    }
+
+    // ── ZNC-compatible `*status` surface ─────────────────────────────
+
+    /// One `*status`-style NOTICE from `nick` (the module the client
+    /// queried), so the reply lands in the query window the client used.
+    private void zncReply(string nick, string line) {
+        send(formatLine(null, nick ~ "!znc@" ~ src, "NOTICE", [displayNick(), line]));
+    }
+
+    /// Joined channel names from an engine state snapshot.
+    private static string[] joinedChannels(ref NetworkStateSnapshot snap) {
+        string[] chans;
+        if (snap.buffers.type != Json.Type.array) return chans;
+        foreach (buf; snap.buffers) {
+            if (buf.type != Json.Type.object) continue;
+            if (buf["type"].type != Json.Type.string || buf["type"].get!string != "channel") continue;
+            if (buf["isJoined"].type != Json.Type.bool_ || !buf["isJoined"].get!bool) continue;
+            if (buf["name"].type != Json.Type.string) continue;
+            const name = buf["name"].get!string;
+            if (name.length) chans ~= name;
+        }
+        return chans;
+    }
+
+    /// ZNC `JumpNetwork`: repoints this connection at another of the user's
+    /// networks without a reconnect — PARTs the old network's channels, then
+    /// replays the new network's 005 / channels / history burst.
+    private void jumpToNetwork(NetworkConfig cfg, string replyNick) {
+        if (cfg.id.toString() == networkId) { zncReply(replyNick, "Already on " ~ networkName); return; }
+        const oldNetworkId = networkId;
+        const oldName = networkName;
+        // Persist the old network's replay cursor before `networkId` moves —
+        // `flushCursor` keys off it.
+        flushCursor(true);
+        if (oldNetworkId.length) {
+            emitStatusEvent("Bouncer client jumped to " ~ cfg.name ~ " " ~ clientDescription());
+            auto old = loadNetworkStateSnapshot(ctx.redis, ctx.registry, oldNetworkId);
+            foreach (chan; joinedChannels(old)) {
+                if (chan.toLower() in detachedChans) continue;
+                send(formatLine(null, currentNick ~ "!" ~ currentNick ~ "@" ~ src, "PART",
+                    [chan, "Jumping to " ~ cfg.name]));
+            }
+        }
+        // Per-network client state belongs to the network we just left.
+        detachedChans = null;
+        cursor = 0;
+        flushedCursor = 0;
+        lastFlushMs = 0;
+        hadPriorBncSeen = false;
+        recentOwn = RecentOwn.init;
+
+        networkId = cfg.id.toString();
+        networkName = cfg.name;
+        auto snap = loadNetworkStateSnapshot(ctx.redis, ctx.registry, networkId);
+        const oldNick = currentNick;
+        currentNick = snap.currentNick.length ? snap.currentNick : clientNick;
+        if (auto pfx = "PREFIX" in snap.isupport) prefixChars = prefixCharsFromIsupport(*pfx);
+        sendIsupport(snap, currentNick);
+        if (oldNick != currentNick)
+            send(formatLine(null, oldNick ~ "!" ~ oldNick ~ "@" ~ src, "NICK", [currentNick]));
+        if (snap.isAway) numeric("306", ["You have been marked as being away"]);
+        if (!snap.connected)
+            status("Not connected to " ~ networkName ~ (snap.status.length ? " (" ~ snap.status ~ ")" : ""));
+        else
+            dumpChannels(snap);
+        // `liveReady` is already true: `deliverLive`'s cursor check plus the
+        // `nid != networkId` filter in `onRedisMessage` gate the new stream,
+        // and the per-user subscription already carries every network.
+        auto serverId = ctx.registry.getServerForNetwork(networkId);
+        sendHistory(serverId, snap);
+        flushCursor(true);
+        writePresence();
+        emitStatusEvent("Bouncer client jumped from " ~ (oldName.length ? oldName : "no network")
+            ~ " " ~ clientDescription());
+        zncReply(replyNick, "Now on " ~ networkName);
+        if (has("soju.im/bouncer-networks-notify")) sendNetworkList();
+        logInfo("bnc: jump sid=%s user=%s from=%s to=%s nick=%s", sessionId, userId,
+            oldNetworkId.length ? oldNetworkId : "-", networkId, currentNick);
+    }
+
+    /// ZNC `Jump` with no argument: reconnect the bound network, mirroring
+    /// the REST reconnect sequence (clear an admin-disabled flag, reassign
+    /// an unhealthy engine, push `reconnectNetwork`).
+    private void zncReconnect(string replyNick) {
+        if (!networkId.length) {
+            zncReply(replyNick, "Not bound to a network — JumpNetwork <network> first");
+            return;
+        }
+        auto cfg = ctx.networkRepo.findById(UUID(networkId));
+        if (cfg.disabled) {
+            ctx.networkRepo.setDisabled(cfg.id, false);
+            cfg.disabled = false;
+        }
+        auto serverId = ctx.registry.getServerForNetwork(networkId);
+        if (!serverId.length || !ctx.registry.isServerHealthy(serverId))
+            serverId = ctx.registry.reassignNetwork(networkId);
+        if (!serverId.length) {
+            zncReply(replyNick, "No healthy connection servers — try again shortly");
+            return;
+        }
+        auto msg = ControlMessage("reconnectNetwork", networkId, userId, cfg.toJson());
+        msg.timestampMs = nowMs();
+        ctx.redis.lpush(RedisKeys.control(serverId), msg.toJson().toString());
+        zncReply(replyNick, "Reconnecting " ~ networkName ~ "…");
+    }
+
+    /// ZNC `*status` command surface (`/znc <cmd>` and `/msg *status <cmd>`).
+    /// Works bound or unbound; nothing here reaches the engine.
+    /// `replyNick` is the module target the client queried.
+    private void handleZncCommand(string text, string replyNick) {
+        auto c = parseZncCommand(text);
+        void reply(string line) { zncReply(replyNick, line); }
+        switch (c.name) {
+            case "", "help":
+                foreach (line; [
+                    "IRC Fiber bouncer — ZNC-compatible commands (also /msg *status <command>):",
+                    "Help                                  this help",
+                    "Version                               bouncer version",
+                    "ListNetworks                          your networks; * marks this connection's",
+                    "JumpNetwork <network>                 switch this connection to another network",
+                    "AddNetwork <name> <host> [[+]port]    add a network (+port = TLS, default TLS 6697)",
+                    "DelNetwork <network>                  delete a network",
+                    "Jump                                  reconnect the current network",
+                    "ListChans                             channels on the current network",
+                    "Detach <#chan|*>                      stop live traffic here (backlog kept)",
+                    "Attach <#chan|*>                      resume live traffic here",
+                    "ListClients                           your attached bouncer clients",
+                    "<network> is a name-slug, host or network id. Everything else is sent to IRC.",
+                ]) reply(line);
+                return;
+            case "version":
+                reply(BNC_VERSION ~ " (ZNC-compatible *status surface)");
+                return;
+            case "listnetworks": {
+                auto nets = userNetworks();
+                if (!nets.length) {
+                    reply("No networks yet — AddNetwork <name> <host>, or add one on the website");
+                    return;
+                }
+                auto slugs = slugsOf(nets);
+                foreach (i, ref cfg; nets) {
+                    string state;
+                    foreach (p; networkAttrs(cfg)) if (p[0] == "state") state = p[1];
+                    reply((cfg.id.toString() == networkId ? "* " : "  ") ~ slugs[i] ~ " — " ~ cfg.name
+                        ~ " " ~ cfg.host ~ ":" ~ cfg.port.to!string
+                        ~ (cfg.tls == TLSMode.disabled ? " (plaintext)" : " (tls)")
+                        ~ " [" ~ state ~ "] nick=" ~ cfg.nick);
+                }
+                reply("Connect directly as username " ~ authUsername ~ "/<network>");
+                return;
+            }
+            case "jumpnetwork", "jump": {
+                if (!c.args.length) {
+                    if (c.name == "jump") { zncReconnect(replyNick); return; }
+                    reply("Usage: JumpNetwork <network> — yours: " ~ slugList(userNetworks()));
+                    return;
+                }
+                auto cfg = findNetworkBySelector(c.args[0]);
+                if (cfg.id == UUID.init) {
+                    reply("No network matches \"" ~ c.args[0] ~ "\" — yours: " ~ slugList(userNetworks()));
+                    return;
+                }
+                jumpToNetwork(cfg, replyNick);
+                return;
+            }
+            case "addnetwork": {
+                if (c.args.length < 2) {
+                    reply("Usage: AddNetwork <name> <host> [[+]port] — a host is required"
+                        ~ " (ZNC's AddServer is not supported; edit servers on the website)");
+                    return;
+                }
+                auto spec = parseZncServerSpec(normalizeHost(c.args[1]), c.args.length > 2 ? c.args[2] : "");
+                if (!spec.ok) { reply("Bad host or port — AddNetwork <name> <host> [[+]port]"); return; }
+                if (findNetworkBySelector(c.args[0]).id != UUID.init) {
+                    reply("You already have a network called " ~ c.args[0]);
+                    return;
+                }
+                NetworkConfig cfg;
+                cfg.id = randomUUID();
+                cfg.autoJoinChannels = [];
+                cfg.name = c.args[0];
+                cfg.host = spec.host;
+                cfg.port = spec.port;
+                cfg.tls = spec.tls ? TLSMode.required : TLSMode.disabled;
+                cfg.nick = authUsername;
+                cfg.realName = cfg.nick;
+                auto serverId = provisionNetwork(cfg, parseUUID(userId.idup), ctx.networkRepo, ctx.redis, ctx.registry);
+                if (!serverId.length) {
+                    reply("Added " ~ cfg.name ~ " but no healthy connection server took it"
+                        ~ " — it will connect when one is available");
+                    return;
+                }
+                reply("Added " ~ cfg.name ~ " (" ~ cfg.host ~ ":" ~ cfg.port.to!string ~ ") — JumpNetwork "
+                    ~ networkSlug(cfg.name) ~ " to use it here");
+                return;
+            }
+            case "delnetwork": {
+                if (!c.args.length) { reply("Usage: DelNetwork <network>"); return; }
+                auto cfg = findNetworkBySelector(c.args[0]);
+                if (cfg.id == UUID.init) {
+                    reply("No network matches \"" ~ c.args[0] ~ "\" — yours: " ~ slugList(userNetworks()));
+                    return;
+                }
+                if (cfg.systemManaged) {
+                    reply("This network is provisioned by IRC Fiber and cannot be deleted");
+                    return;
+                }
+                deleteOwnedNetwork(cfg.id, parseUUID(userId.idup), ctx.networkRepo, ctx.redis, ctx.registry);
+                reply("Deleted " ~ cfg.name);
+                return;
+            }
+            case "listchans": {
+                if (!networkId.length) { reply("Not bound to a network"); return; }
+                auto snap = loadNetworkStateSnapshot(ctx.redis, ctx.registry, networkId);
+                auto chans = joinedChannels(snap);
+                if (!chans.length) { reply("No channels joined on " ~ networkName); return; }
+                foreach (chan; chans) {
+                    size_t users;
+                    if (snap.users.type == Json.Type.object) {
+                        auto u = snap.users[chan];
+                        if (u.type == Json.Type.array) users = u.get!(Json[]).length;
+                    }
+                    reply(chan ~ " — " ~ users.to!string ~ " users"
+                        ~ (chan.toLower() in detachedChans ? "  (detached here)" : ""));
+                }
+                return;
+            }
+            case "detach", "attach": {
+                const detaching = c.name == "detach";
+                if (!c.args.length) {
+                    reply("Usage: " ~ (detaching ? "Detach" : "Attach") ~ " <#chan|*>");
+                    return;
+                }
+                string[] chans;
+                if (c.args[0] == "*") {
+                    if (!networkId.length) { reply("Not bound to a network"); return; }
+                    auto snap = loadNetworkStateSnapshot(ctx.redis, ctx.registry, networkId);
+                    chans = joinedChannels(snap);
+                } else {
+                    foreach (chan; c.args[0].split(",")) if (chan.length) chans ~= chan;
+                }
+                if (!chans.length) {
+                    reply(detaching ? "No channels to detach" : "No channels to attach");
+                    return;
+                }
+                foreach (chan; chans) {
+                    if (detaching) detachedChans[chan.toLower()] = true;
+                    else detachedChans.remove(chan.toLower());
+                }
+                reply(detaching
+                    ? "Detached " ~ chans.join(", ") ~ " (backlog kept; Attach or /JOIN resumes)"
+                    : "Attached " ~ chans.join(", "));
+                return;
+            }
+            case "listclients": {
+                static string str(Json x, string k) {
+                    return x[k].type == Json.Type.string ? x[k].get!string : "";
+                }
+                try {
+                    string[] rows;
+                    foreach (sid; ctx.redis.getDb().smembers(RedisKeys.bncClients())) {
+                        Json j;
+                        try j = ctx.redis.getJson(RedisKeys.bncClient(sid));
+                        catch (Exception) continue;
+                        if (j.type != Json.Type.object) continue;
+                        if (j["userId"].type != Json.Type.string || j["userId"].get!string != userId) continue;
+                        const net = str(j, "networkName");
+                        const cid = str(j, "clientId");
+                        rows ~= (sid == sessionId ? "* " : "  ") ~ sid ~ " " ~ str(j, "nick")
+                            ~ " @ " ~ (net.length ? net : "-") ~ " from " ~ str(j, "peer")
+                            ~ (cid.length ? " client=" ~ cid : "")
+                            ~ (j["tls"].type == Json.Type.bool_ && j["tls"].get!bool ? " tls" : " plaintext");
+                    }
+                    if (!rows.length) reply("No bouncer clients attached");
+                    else foreach (row; rows) reply(row);
+                } catch (Exception e) {
+                    logWarn("bnc: listclients failed for %s: %s", userId, e.msg);
+                    reply("Client list unavailable");
+                }
+                return;
+            }
+            default:
+                reply("Unknown command [" ~ c.name ~ "]. Try 'Help'."
+                    ~ " Commands for the IRC network itself go through IRC as usual.");
+                return;
         }
     }
 
@@ -1721,6 +2024,10 @@ final class BncClient {
             case "BOUNCER":
                 handleBouncer(pl.params);
                 return;
+            case "ZNC":
+                // Every ZNC-era client sends `/znc <cmd>` as this raw line.
+                handleZncCommand(pl.params.join(" "), "*status");
+                return;
             case "CHATHISTORY":
                 // Served from our own store; works even while the engine is down.
                 handleChatHistory(pl.params);
@@ -1736,6 +2043,17 @@ final class BncClient {
             handleBouncerServ(pl.params[1]);
             return;
         }
+        // ZNC module targets (`*status`, `*controlpanel`, bare `*`) are
+        // answered locally too — after BouncerServ so it keeps its own
+        // surface, before the unbound gate so a client with no network can
+        // still list and jump.
+        if (pl.command == "PRIVMSG" && pl.params.length >= 2 && isZncStatusTarget(pl.params[0])) {
+            handleZncCommand(pl.params[1], pl.params[0]);
+            return;
+        }
+        // A NOTICE to a module target is swallowed (answering a bot's NOTICE
+        // with a NOTICE loops) and never forwarded upstream.
+        if (pl.command == "NOTICE" && pl.params.length >= 2 && isZncStatusTarget(pl.params[0])) return;
         if (networkId.length == 0) {
             numeric("421", [pl.command, "Not bound to a network — BOUNCER BIND <netid> or username " ~ authUsername ~ "/<network>"]);
             return;
@@ -1753,10 +2071,9 @@ final class BncClient {
             const text = pl.params[1];
             foreach (target; pl.params[0].split(",")) {
                 if (!target.length) continue;
-                if (target.startsWith("*")) {
-                    status("No bouncer commands are available");
-                    continue;
-                }
+                // A module target inside a comma list (`#chan,*status`)
+                // still belongs to the bouncer, never to the ircd.
+                if (isZncStatusTarget(target)) { handleZncCommand(text, target); continue; }
                 auto cmd = IRCCommand("msg", target, text);
                 cmd.timestampMs = now;
                 cmd.label = "bnc-" ~ sessionId ~ "-" ~ (++seq).to!string;

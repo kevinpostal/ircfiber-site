@@ -311,4 +311,35 @@ describe('MessageRow', () => {
 		expect(document.querySelector('.longMessageContent')).toBeInTheDocument();
 		expect(document.querySelector('.messageTruncated')).not.toBeInTheDocument();
 	});
+
+	// The author's status is a property of the message (engine `from_mode`),
+	// not of the current roster: deriving it live lost the glyph the moment
+	// the author quit or was de-opped, and on any history rendered before
+	// NAMES landed.
+	it('renders the stored fromMode when the author is no longer in the roster', async () => {
+		const msg = createMessage({ nick: 'sq', text: 'still an admin', fromMode: '&' });
+		render(MessageRow, { props: { msg, memberByNick: new Map() } });
+
+		const symbol = document.querySelector('.authorWrap .mode_prefix.mode_symbol');
+		expect(symbol?.textContent).toBe('&');
+		expect(symbol?.classList.contains('mode_ADMIN')).toBe(true);
+	});
+
+	it('prefers the stored fromMode over the live roster status', async () => {
+		// Author has since been promoted to op; the old message must still
+		// read as voiced.
+		const msg = createMessage({ nick: 'alice', text: 'was voiced then', fromMode: '+' });
+		const member = createMember({ nick: '@alice', prefix: '@' });
+		render(MessageRow, { props: { msg, memberByNick: new Map([['alice', member]]) } });
+
+		expect(document.querySelector('.authorWrap .mode_prefix.mode_symbol')?.textContent).toBe('+');
+	});
+
+	it('falls back to the roster for messages stored before fromMode existed', async () => {
+		const msg = createMessage({ nick: 'alice', text: 'legacy row' });
+		const member = createMember({ nick: '@alice', prefix: '@' });
+		render(MessageRow, { props: { msg, memberByNick: new Map([['alice', member]]) } });
+
+		expect(document.querySelector('.authorWrap .mode_prefix.mode_symbol')?.textContent).toBe('@');
+	});
 });

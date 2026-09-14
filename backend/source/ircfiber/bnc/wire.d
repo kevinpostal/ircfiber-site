@@ -190,6 +190,87 @@ string formatBouncerAttrs(const(string[2])[] pairs) @safe pure {
     return app.data;
 }
 
+/// Bouncer version string, shared by the `*status Version` reply and
+/// BouncerServ's `VERSION`.
+enum string BNC_VERSION = "IRC Fiber bouncer 0.4.0";
+
+/// One `*status` / `ZNC` command line.
+struct ZncCommand {
+    /// Lower-cased first token ("" for an empty line).
+    string name;
+    /// Remaining whitespace-separated tokens, case preserved.
+    string[] args;
+    /// Everything after the first token, stripped (free-text arguments).
+    string rest;
+}
+
+/// Splits a ZNC command line. Runs of spaces/tabs collapse; a leading
+/// `/` is dropped so `/znc /help` and `*status /help` both work.
+ZncCommand parseZncCommand(string text) @safe pure {
+    ZncCommand r;
+    const line = text.strip();
+    if (!line.length) return r;
+    size_t i = 0;
+    while (i < line.length && line[i] != ' ' && line[i] != '\t') i++;
+    auto first = line[0 .. i];
+    if (first.length && first[0] == '/') first = first[1 .. $];
+    r.name = first.toLower();
+    r.rest = line[i .. $].strip();
+    size_t j = i;
+    while (j < line.length) {
+        while (j < line.length && (line[j] == ' ' || line[j] == '\t')) j++;
+        const s = j;
+        while (j < line.length && line[j] != ' ' && line[j] != '\t') j++;
+        if (j > s) r.args ~= line[s .. j];
+    }
+    return r;
+}
+
+/// `host` + optional `[+]port` token: `+` means TLS (ZNC `AddServer`
+/// convention), a bare port means plaintext, and no port at all means
+/// TLS on 6697. `ok` is false for a non-numeric / out-of-range port or
+/// an empty host.
+struct ZncServerSpec {
+    string host;
+    ushort port;
+    bool tls;
+    bool ok;
+}
+
+/// Parses the `<host> [[+]port]` tail of ZNC's `AddNetwork`.
+ZncServerSpec parseZncServerSpec(string host, string portToken) @safe pure {
+    ZncServerSpec r;
+    r.host = host.strip();
+    if (!r.host.length) return r;
+    auto tok = portToken.strip();
+    if (!tok.length) {
+        r.port = 6697;
+        r.tls = true;
+        r.ok = true;
+        return r;
+    }
+    if (tok[0] == '+') { r.tls = true; tok = tok[1 .. $]; }
+    if (!tok.length) return r;
+    // Hand-rolled digit scan: keeps this function `pure` and rejects
+    // "6667x" / "+" / overflow without an exception round-trip.
+    uint port = 0;
+    foreach (char c; tok) {
+        if (c < '0' || c > '9') return r;
+        port = port * 10 + (c - '0');
+        if (port > 65_535) return r;
+    }
+    if (port == 0) return r;
+    r.port = cast(ushort) port;
+    r.ok = true;
+    return r;
+}
+
+/// True for a ZNC module target — any target starting with `*`
+/// (`*status`, `*controlpanel`, bare `*`).
+bool isZncStatusTarget(string target) @safe pure nothrow @nogc {
+    return target.length > 0 && target[0] == '*';
+}
+
 /// Command + params of a line the client sent (tags/prefix discarded).
 struct ParsedLine {
     /// Upper-cased command (or numeric).

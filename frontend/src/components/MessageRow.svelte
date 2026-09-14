@@ -125,7 +125,14 @@
   }
 
 
+  /// The author's channel status glyph. `msg.fromMode` is what the author
+  /// held WHEN THEY SPOKE (IRCCloud `from_mode`, stamped by the engine and
+  /// stored with the message); the roster is only a fallback for messages
+  /// predating that field, because a roster lookup returns nothing once the
+  /// author quits or is de-opped and returns nothing at all for history
+  /// rendered before NAMES lands.
   function getModeForNick(n: string): string {
+    if (msg.fromMode) return msg.fromMode;
     const cleaned = stripPrefix(n);
     const member = memberByNick.get(cleaned);
     if (member) return member.prefix;

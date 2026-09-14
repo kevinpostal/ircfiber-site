@@ -74,7 +74,29 @@ describe('MessageList', () => {
 		await expect.element(page.getByText('new')).toBeInTheDocument();
 	});
 
-	it('renders the IRCCloud loadMore button at the top of the log', async () => {
+	// The row appears when the buffer holds more than one render batch
+	// (BATCH_SIZE = 200), i.e. when older messages exist above the window.
+	// It used to be asserted for a single-message buffer, which stopped
+	// being true when paging went optimistic (`msgs.length > BATCH_SIZE`)
+	// and left this test failing on main.
+	it('renders the IRCCloud loadMore button when older history is windowed off', async () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+		const base = Date.now() - 250_000;
+		ircState.messages['net1:#chan'] = Array.from({ length: 250 }, (_, i) =>
+			createMessage({ text: `msg ${i}`, t: base + i * 1000, msgid: `m-${i}` }));
+		flushSync();
+
+		render(MessageList);
+
+		await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
+		expect(document.querySelector('.row.loadMore')).not.toBeNull();
+	});
+
+	it('renders no loadMore button for a fully rendered buffer', async () => {
 		const net = createNetwork({ networkId: 'net1' });
 		net.buffers.push(createBuffer({ name: '#chan' }));
 		ircState.networks.push(net);
@@ -85,11 +107,8 @@ describe('MessageList', () => {
 
 		render(MessageList);
 
-		// IRCCloud renders a "Load more backlog…" button whenever the
-		// buffer is not fully rendered.
-		await expect.element(page.getByText('Load more backlog…')).toBeInTheDocument();
-		const row = document.querySelector('.row.loadMore');
-		expect(row).not.toBeNull();
+		await expect.element(page.getByText('hello')).toBeInTheDocument();
+		expect(document.querySelector('.row.loadMore')).toBeNull();
 	});
 
 	it('filters cleared messages', async () => {
@@ -481,16 +500,19 @@ describe('MessageList', () => {
 			expect([0, 1].includes(document.querySelectorAll('.backlogDivider').length)).toBe(true);
 		}, 10000);
 
-		it('shows the "Load more backlog…" row when the log does not overflow (IRCCloud renderLoadMore)', async () => {
+		// A log that cannot overflow the viewport pages ITSELF: infiniscroll
+		// can never fire there (isScrolledToBottom() stays true), so the
+		// backfill runs once and must stop the moment the fetch reports no
+		// more history — a non-terminating version of this is an infinite
+		// request loop against the API. The manual "Load more backlog…" row
+		// belongs to the windowed case (see the BATCH_SIZE test above).
+		it('auto-pages a non-overflowing log exactly once and stops when history is exhausted', async () => {
 			const net = createNetwork({ networkId: 'net1' });
 			net.buffers.push(createBuffer({ name: '#chan' }));
 			ircState.networks.push(net);
 			ircState.activeBuffer.networkId = 'net1';
 			ircState.activeBuffer.bufferName = '#chan';
 
-			// A few messages only — the log can't overflow the viewport, so
-			// infiniscroll can never fire (isScrolledToBottom() is true). IRCCloud
-			// never auto-fills: it renders the loadMore row and the user clicks.
 			const now = Date.now();
 			ircState.messages['net1:#chan'] = [
 				createMessage({ text: 'one', t: now - 2000, msgid: 'fill-1' }),
@@ -498,17 +520,16 @@ describe('MessageList', () => {
 			];
 			flushSync();
 
+			// false = "no older history" — the self-terminating signal.
 			const onLoadMore = vi.fn().mockResolvedValue(false);
 			render(MessageList, { props: { onLoadMore } });
 			flushSync();
-			await new Promise((r) => setTimeout(r, 300));
-			expect(onLoadMore).not.toHaveBeenCalled();
-			const btn = document.querySelector('.row.loadMore .loadMore__button') as HTMLButtonElement | null;
-			expect(btn).not.toBeNull();
-			btn!.click();
-			await vi.waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1), { timeout: 1500 });
-			// Fetch returned false → fully rendered → the row goes away.
+
+			await vi.waitFor(() => expect(onLoadMore).toHaveBeenCalledTimes(1), { timeout: 2000 });
+			// `false` marked the buffer exhausted, so there is nothing left to
+			// page and no manual row either — that absence is the loop guard.
 			await vi.waitFor(() => expect(document.querySelector('.row.loadMore')).toBeNull(), { timeout: 1500 });
+			expect(onLoadMore).toHaveBeenCalledTimes(1);
 		});
 
 		it('never strands the user at scrollTop 0 across consecutive reveals', async () => {
