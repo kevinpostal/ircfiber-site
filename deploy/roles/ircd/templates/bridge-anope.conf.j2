@@ -106,6 +106,12 @@ module
 
 module { name = "enc_bcrypt" }
 
+/* Provides the "generic/help" command both services below register as
+ * HELP. Without it every HELP is an unknown command ("Unknown command
+ * HELP. Did you mean DEL?"), which is how it presented on the live
+ * network — the registration alone loads nothing. */
+module { name = "help" }
+
 /*
  * Authentication surface.
  *
