@@ -49,6 +49,14 @@
   html, body { overflow-x: hidden; max-width: 100vw; }
   #app { overflow-x: clip; max-width: 100vw; }
 
+  /* sidebar-left mode (the default, preferences.svelte.ts `sidebarLeft: true`)
+     pins .main-area to grid column 2. The rule above collapses the grid to a
+     single explicit column, so column 2 becomes an *implicit* track: the chat
+     renders to the right of an empty 1fr column and is then clipped by
+     `overflow-x: clip`. #sidebar is a fixed drawer here and owns no track, so
+     the main area takes the only column. */
+  #app.sidebar-left #wrap .main-area { grid-column: 1; }
+
   /* Buffer/network sidebar -> fixed right-side drawer
      iPhone XR fix: translateX(100%) + visibility keeps the 300px panel
      from expanding document scrollWidth to 720px (horizontal pan). */

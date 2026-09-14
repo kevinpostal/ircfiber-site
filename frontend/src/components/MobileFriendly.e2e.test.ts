@@ -403,3 +403,65 @@ describe('mobile settings + add-network', () => {
     await setViewport(DESKTOP_VIEWPORT.width, DESKTOP_VIEWPORT.height);
   }, 15000);
 });
+
+describe('mobile layout in sidebar-left mode (the default)', () => {
+  const originalFetch = globalThis.fetch;
+  let appEl: HTMLDivElement;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    globalThis.fetch = vi.fn(async (input: unknown) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url.includes('/api/me')) {
+        return new Response(JSON.stringify({ username: 'tester', email: 'tester@test.local' }), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    history.replaceState({}, '', '/');
+    // Production mounts into `#app` (index.html) and App.svelte toggles
+    // `sidebar-left` on it from globalPrefs, which defaults to true. The
+    // other suites render into testing-library's own container, so that
+    // ancestor is missing and every `#app.sidebar-left …` rule silently
+    // never applies — which is how a broken phone layout shipped.
+    appEl = document.createElement('div');
+    appEl.id = 'app';
+    document.body.appendChild(appEl);
+    const net = createNetworkWithChannels(['#alpha'], {
+      networkId: 'net1',
+      currentNick: 'tester',
+      host: 'irc.test.local',
+    });
+    ircState.networks.push(net);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#alpha';
+    flushSync();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    appEl.remove();
+    history.replaceState({}, '', '/');
+  });
+
+  it('gives the chat the full viewport width at phone size', async () => {
+    await setViewport(390, 844);
+    render(App, { target: appEl });
+    await expect.element(page.getByRole('button', { name: 'Toggle sidebar' })).toBeInTheDocument();
+    await vi.waitFor(() => expect(appEl.classList.contains('sidebar-left')).toBe(true));
+
+    // The sidebar is a fixed drawer on phones, so the main area must own
+    // the whole width. Before the fix it sat in an implicit grid column 2
+    // behind an empty 1fr track and was clipped off the right edge.
+    await vi.waitFor(() => {
+      const rect = (document.querySelector('.main-area') as HTMLElement).getBoundingClientRect();
+      expect(Math.round(rect.left), 'main area left edge').toBeLessThanOrEqual(1);
+      expect(
+        Math.round(rect.width),
+        `main area width (viewport ${window.innerWidth})`,
+      ).toBeGreaterThanOrEqual(window.innerWidth - 1);
+    }, { timeout: 2000, interval: 25 });
+    assertNoHorizontalOverflow();
+
+    await setViewport(DESKTOP_VIEWPORT.width, DESKTOP_VIEWPORT.height);
+  }, 15000);
+});
