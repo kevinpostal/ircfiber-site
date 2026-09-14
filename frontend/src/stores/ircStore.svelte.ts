@@ -1,6 +1,6 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
-import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier, splitUserHost } from '../lib/utils';
+import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, prefixRun, naturalCompare, normaliseIdentifier, splitUserHost } from '../lib/utils';
 import { setChanPrefixChars } from '../lib/autolinker';
 import { setChanModeTypes } from '../lib/modeSentence';
 import { isMessageIgnored } from '../lib/ignorePolicy';
@@ -274,6 +274,22 @@ export function clearPendingNickChanges(): void { pendingNickChanges.clear(); }
 const pendingMemberRemovals: Map<string, { setAt: number }> = new Map();
 const PENDING_REMOVAL_TTL_MS = 20_000;
 export function clearPendingMemberRemovals(): void { pendingMemberRemovals.clear(); }
+// ── Pending prefix changes (live channel MODE vs. stale sync snapshots) ──
+// The engine writes its channelUsers snapshot to Redis every 10s
+// (engine/engine/source/ircfiber/engine/state.d:38) and the SPA re-syncs every
+// 10s (App.svelte:456), so a sync can carry a roster captured BEFORE a MODE we
+// already applied live — which used to revert `-q` back to `~nick` in the
+// member list until a hard refresh. Live MODE wins until the snapshot agrees.
+// Keyed by `${networkId}:${normalizedBuffer}:${bareNick.toLowerCase()}`.
+const pendingModeChanges: Map<string, { nick: string; prefix: string; category: ModeCategory; setAt: number }> = new Map();
+// 2 × (snapshot write interval + client sync interval); matches the reasoning
+// behind PENDING_SELF_NICK_TTL_MS.
+const PENDING_MODE_TTL_MS = 30_000;
+/** Exported for test cleanup only. */
+export function clearPendingModeChanges(): void { pendingModeChanges.clear(); }
+function modeGuardKey(networkId: string, bufferName: string, bareNick: string): string {
+  return `${networkId}:${normalizeChannelName(bufferName)}:${bareNick.toLowerCase()}`;
+}
 // Auto-clear stale pending entries after 60s in case a sync never confirms.
 const PENDING_NICK_TTL_MS = 60_000;
 // How long a /nick attempt stays pending before we give up on the echo
@@ -2909,6 +2925,29 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
               pendingNickChanges.delete(k);
             }
           }
+          // Stale-snapshot guard for prefix modes — see pendingModeChanges.
+          patchedUsers = patchedUsers.map((m) => {
+            const bare = stripPrefix(m.nick);
+            const gk = modeGuardKey(existing.networkId, incomingBuf.name, bare);
+            const pendMode = pendingModeChanges.get(gk);
+            if (!pendMode) return m;
+            if (pendMode.setAt + PENDING_MODE_TTL_MS < now) {
+              pendingModeChanges.delete(gk);
+              return m;
+            }
+            const incomingRun = prefixRun(m.nick);
+            const wantRun = prefixRun(pendMode.nick);
+            // Compare as sets: the engine (nickPrefixChars "*!~&@%+") and the
+            // MODE handler (MODE_RANK) emit the same order today, but the
+            // snapshot can also carry a raw server-ordered multi-prefix run.
+            if ([...incomingRun].sort().join('') === [...wantRun].sort().join('')) {
+              pendingModeChanges.delete(gk);  // snapshot caught up
+              return m;
+            }
+            // Snapshot is older than our live MODE — keep the live prefix run
+            // and the incoming `nick`'s tail (bare nick plus any `!user@host`).
+            return { ...m, nick: wantRun + m.nick.slice(incomingRun.length), prefix: pendMode.prefix, category: pendMode.category };
+          });
           // Filter out stale nicks that were removed live but are still in the sync snapshot
           const now2 = Date.now();
           patchedUsers = patchedUsers.filter(m => {
@@ -3742,6 +3781,9 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     for (const n of nicks) {
       if (!n) continue;
       const stripped = stripPrefix(n);
+      // A 353 on the live stream is newer truth than a guard we recorded
+      // from an earlier MODE — drop it so it can't override this roster.
+      pendingModeChanges.delete(modeGuardKey(networkId, buf.name, stripped));
       const mode = getUserModePrefix(n);
       // userhost-in-names: nick!user@host — keep both halves.
       const { ident: identEJ, host: hostEJ } = n.includes('!')
@@ -3902,6 +3944,9 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     const stripped = stripPrefix(nick);
     pendingMemberRemovals.delete(`${networkId}:${normalized}:${stripped}`);
     pendingMemberRemovals.delete(`${networkId}:*:${stripped}`);
+    // A rejoin resets prefixes server-side — a stale guard must not force
+    // the pre-part prefix back on.
+    pendingModeChanges.delete(modeGuardKey(networkId, normalized, stripped));
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
       // Capture the userhost from the prefix so we can populate
       // `ident`/`host` and the IRCCloud-style `isBot` flag from the host
@@ -4166,6 +4211,8 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
             member.category = pm.category;
             member.nick = ordered.map(m => MODE_TO_PREFIX[m]).join('') + bare;
           }
+          // Live MODE beats a snapshot taken before it — see pendingModeChanges.
+          pendingModeChanges.set(modeGuardKey(networkId, buf.name, bare), { nick: member.nick, prefix: member.prefix, category: member.category, setAt: Date.now() });
         } else if (adds.size > 0) {
           // MODE arrived before the user was in the list (or user joined
           // via services). Add them only when something remains after
@@ -4177,8 +4224,9 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
           const ordered = MODE_RANK.filter(m => remaining.has(m));
           const top = ordered[0];
           const pm = PREFIX_MODES[top];
+          const pushedNick = ordered.map(m => MODE_TO_PREFIX[m]).join('') + canon;
           buf.users.push({
-            nick: ordered.map(m => MODE_TO_PREFIX[m]).join('') + canon,
+            nick: pushedNick,
             prefix: pm.prefix,
             category: pm.category,
             ident: '',
@@ -4190,6 +4238,8 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
             lastHighlighted: 0,
             account: '', isBot: false
           });
+          // Live MODE beats a snapshot taken before it — see pendingModeChanges.
+          pendingModeChanges.set(modeGuardKey(networkId, buf.name, canon), { nick: pushedNick, prefix: pm.prefix, category: pm.category, setAt: Date.now() });
         }
         // Absent member + pure removal: no-op (never tracked them).
       }

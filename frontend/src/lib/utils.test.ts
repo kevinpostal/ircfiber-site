@@ -5,6 +5,7 @@ import {
   formatTime12Hour,
   formatDate,
   stripPrefix,
+  prefixRun,
   splitUserHost,
   getUserModePrefix,
   getAvatarColor,
@@ -146,6 +147,14 @@ describe('stripPrefix', () => {
 
   it('returns nick unchanged when no prefix', () => {
     expect(stripPrefix('alice')).toBe('alice');
+  });
+});
+
+describe('prefixRun', () => {
+  it('returns the leading prefix run and nothing else', () => {
+    expect(prefixRun('*~@Zodiac')).toBe('*~@');
+    expect(prefixRun('@alice!user@host')).toBe('@');
+    expect(prefixRun('bob')).toBe('');
   });
 });
 

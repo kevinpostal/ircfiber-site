@@ -41,7 +41,7 @@ import {
 	initiateRejoin,
 	resetPendingState,
 	flushSeenEids,
-	clearPendingNickChanges, clearPendingMemberRemovals,
+	clearPendingNickChanges, clearPendingMemberRemovals, clearPendingModeChanges,
 	applyRetryStatus,
 	applyFail,
 	applySetname,
@@ -141,6 +141,7 @@ beforeEach(() => {
 	ircState.messages = {};
 	ircState.optimisticMessages.clear();
 	clearPendingNickChanges();
+	clearPendingModeChanges();
 	resetPendingState();
 
 	// Reset preference-derived singletons that ircStore writes into
@@ -4152,5 +4153,70 @@ describe('channel list (/list)', () => {
 		vi.advanceTimersByTime(60_000);
 		flushSync();
 		expect(live('net1').channelList!.error).toBeNull();
+	});
+});
+
+describe('live MODE vs stale sync snapshot', () => {
+	// The engine snapshots channelUsers to Redis every 10s and the SPA
+	// re-syncs every 10s, so a sync can carry a roster captured BEFORE a
+	// MODE we already applied live. Without the pendingModeChanges guard,
+	// `/mode #ircfiber -q Zodiac` flipped back to `~Zodiac` seconds later.
+	function member(bare: string): Member | undefined {
+		return liveBuf('net1', '#ircfiber')?.users?.find((u) => stripPrefix(u.nick) === bare);
+	}
+	function seed(users: Member[]): void {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const buf = createBuffer({ name: '#ircfiber', isJoined: true });
+		buf.users = users;
+		net.buffers.push(buf);
+		ircState.networks.push(net);
+	}
+	function sync(users: Member[]): void {
+		const incoming = createNetwork({ networkId: 'net1', currentNick: 'Zodiac' });
+		const incomingBuf = createBuffer({ name: '#ircfiber', isJoined: true });
+		incomingBuf.users = users;
+		incoming.buffers.push(incomingBuf);
+		updateNetworkFromSync([incoming as unknown as SyncNetwork]);
+		flushSync();
+	}
+
+	it('a snapshot taken before -q does not restore the owner prefix', () => {
+		seed([createMember({ nick: '~Zodiac', prefix: '~', category: 'OWNER' })]);
+		updateChannelUsers('net1', '#ircfiber', 'MODE', 'Zodiac', ['#ircfiber', '-q', 'Zodiac']);
+		flushSync();
+		expect(member('Zodiac')?.prefix).toBe('');
+
+		sync([createMember({ nick: '~Zodiac', prefix: '~', category: 'OWNER' })]);
+
+		expect(member('Zodiac')?.nick).toBe('Zodiac');
+		expect(member('Zodiac')?.prefix).toBe('');
+		expect(member('Zodiac')?.category).toBe('MEMBER');
+	});
+
+	it('releases the guard once the snapshot agrees, so a later server-side mode lands', () => {
+		seed([createMember({ nick: '~Zodiac', prefix: '~', category: 'OWNER' })]);
+		updateChannelUsers('net1', '#ircfiber', 'MODE', 'Zodiac', ['#ircfiber', '-q', 'Zodiac']);
+		flushSync();
+
+		sync([createMember({ nick: 'Zodiac' })]);
+		expect(member('Zodiac')?.prefix).toBe('');
+
+		// Someone ops him server-side: the snapshot is now the newest truth.
+		sync([createMember({ nick: '@Zodiac', prefix: '@', category: 'OP' })]);
+		expect(member('Zodiac')?.nick).toBe('@Zodiac');
+		expect(member('Zodiac')?.prefix).toBe('@');
+		expect(member('Zodiac')?.category).toBe('OP');
+	});
+
+	it('a snapshot taken before +q does not drop the owner prefix', () => {
+		seed([createMember({ nick: 'bob' })]);
+		updateChannelUsers('net1', '#ircfiber', 'MODE', 'Zodiac', ['#ircfiber', '+q', 'bob']);
+		flushSync();
+
+		sync([createMember({ nick: 'bob' })]);
+
+		expect(member('bob')?.nick).toBe('~bob');
+		expect(member('bob')?.prefix).toBe('~');
+		expect(member('bob')?.category).toBe('OWNER');
 	});
 });

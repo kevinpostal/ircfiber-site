@@ -2,7 +2,8 @@ import { describe, expect, it, beforeEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { flushSync } from 'svelte';
 import MemberList from './MemberList.svelte';
-import { ircState } from '../stores/ircStore.svelte';
+import { ircState, updateNetworkFromSync, clearPendingModeChanges } from '../stores/ircStore.svelte';
+import type { SyncNetwork } from '../stores/ircStore.svelte';
 import { processIrcEvent } from '../lib/messageHandler';
 import { createNetwork, createBuffer, createMember } from '../test/factories';
 
@@ -55,6 +56,7 @@ describe('MemberList realtime mode updates', () => {
     ircState.activeBuffer.networkId = null;
     ircState.activeBuffer.bufferName = null;
     ircState.messages = {};
+    clearPendingModeChanges();
   });
 
   it('+v moves bob to Voiced', () => {
@@ -169,5 +171,29 @@ describe('MemberList realtime mode updates', () => {
 
     expect(sectionHas('ops', 'bob')).toBe(true);
     expect(hasSection('owner')).toBe(false);
+  });
+
+  it('a sync snapshot taken before -q does not flip the member back to Owner', () => {
+    // Production bug: the engine snapshots channelUsers to Redis every 10s
+    // and the SPA re-syncs every 10s, so the sync that lands seconds after a
+    // live MODE can still carry the pre-MODE roster. Before the
+    // pendingModeChanges guard, that snapshot put `~Zodiac` back in Owner
+    // until a hard page refresh.
+    seedBob(createMember({ nick: '~Zodiac', prefix: '~', category: 'OWNER' }));
+    render(MemberList);
+    expect(sectionHas('owner', 'Zodiac')).toBe(true);
+
+    fireMode(['#chan', '-q', 'Zodiac']);
+    expect(sectionHas('members', 'Zodiac')).toBe(true);
+
+    const stale = createNetwork({ networkId: 'net1', currentNick: 'me' });
+    const staleBuf = createBuffer({ name: '#chan', isJoined: true });
+    staleBuf.users = [createMember({ nick: '~Zodiac', prefix: '~', category: 'OWNER' })];
+    stale.buffers.push(staleBuf);
+    updateNetworkFromSync([stale as unknown as SyncNetwork]);
+    flushSync();
+
+    expect(sectionHas('owner', 'Zodiac')).toBe(false);
+    expect(sectionHas('members', 'Zodiac')).toBe(true);
   });
 });

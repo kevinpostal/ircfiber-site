@@ -401,6 +401,12 @@ export function stripPrefix(nick: string): string {
   return n;
 }
 
+/** The leading run of channel-prefix chars on a nick (`*~@Zodiac` → `*~@`). */
+export function prefixRun(nick: string): string {
+  // Same char class as stripPrefix above — keep the two in sync.
+  return /^[*!~&@%+]+/.exec(nick)?.[0] ?? '';
+}
+
 /**
  * Split the userhost half of an IRC mask into its `ident` and `host`
  * parts. Accepts any of the forms a member entry can arrive as:
