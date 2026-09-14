@@ -62,7 +62,12 @@ networkinfo
 
 options
 {
-	casemap = "ascii"
+	/* MUST match the ircd's <options casemapping>, which this network
+	 * leaves at InspIRCd's rfc1459 default (same reason as the services
+	 * instance, services.conf.j2:65). ascii here + rfc1459 there is a
+	 * CAPAB "casemapping differs" refusal and the sidecar flaps forever —
+	 * observed on the first live deploy. */
+	casemap = "rfc1459"
 	readtimeout = 5s
 	timeoutcheck = 3s
 	updatetimeout = 2m

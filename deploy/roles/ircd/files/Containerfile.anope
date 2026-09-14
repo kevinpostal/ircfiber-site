@@ -33,7 +33,11 @@ ARG ANOPE_BRANCH
 ARG ANOPE_COMMIT
 # zlib-dev is required even though upstream's own CI omits it: DPP's
 # vendor/CMakeLists.txt calls find_package(ZLIB REQUIRED).
-RUN apk add --no-cache g++ cmake samurai make git pkgconfig gettext openssl-dev zlib-dev
+# gettext-dev, not just gettext: without libintl's headers CMake builds an
+# Anope which logs "Unable to initialize languages, gettext and/or libintl
+# were not installed at build time" on every start (observed on the first
+# live deploy) and serves every reply unlocalised.
+RUN apk add --no-cache g++ cmake samurai make git pkgconfig gettext gettext-dev openssl-dev zlib-dev
 RUN git clone --branch ${ANOPE_BRANCH} ${ANOPE_REPO} /anope-src \
  && git -C /anope-src checkout --detach ${ANOPE_COMMIT}
 WORKDIR /anope-src
@@ -47,7 +51,9 @@ RUN cmake -B build -D CMAKE_BUILD_TYPE=Release -D INSTDIR=/anope -G Ninja \
  && test -f /anope/bin/anope
 
 FROM alpine:3.24 AS runtime-anope
-RUN apk add --no-cache libgcc libstdc++ openssl zlib \
+# libintl is the runtime half of the gettext build dependency above; musl
+# has no built-in libintl, so the daemon fails to load without it.
+RUN apk add --no-cache libgcc libstdc++ openssl zlib libintl \
  && addgroup -g 10000 -S anope && adduser -u 10000 -h /anope/ -D -S -G anope anope
 COPY --from=builder-anope --chown=10000:10000 /anope/ /anope/
 # The rendered config is bind-mounted over conf/anope.conf; the shipped
