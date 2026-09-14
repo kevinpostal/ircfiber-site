@@ -334,6 +334,14 @@ ircd_bridge_services_name: "bridge.ircfiber.com"
 ircd_bridge_net_alias: "bridge"
 # Virtual links and pseudo client hosts are "<guild-id>.{{ ircd_bridge_domain }}".
 ircd_bridge_domain: "discord.bridge"
+# How long a bridged Discord user's IRC pseudo client may stay idle before
+# BridgeServ quits it. 0 disables the reaper: a pseudo client introduced on
+# its owner's first message stays joined until the bridge container
+# restarts, which is what we want — at 1h, a Discord user who went quiet
+# showed up on IRC as an hourly "Idle" QUIT followed by a JOIN on their
+# next message. Non-zero values below 60 are clamped up to 60 by the
+# module, which logs the clamp.
+ircd_bridge_user_idle: 0
 # The account a human operator identifies to BridgeAuth as to run BridgeServ
 # commands over IRC. Must be registered once on the sidecar (it has its own,
 # otherwise empty, account database).

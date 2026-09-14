@@ -212,7 +212,7 @@ module
 	domain = "{{ ircd_bridge_domain }}"
 	bridgename = "IRC Bridge"
 	webhooksuffix = " (IRC)"
-	useridle = 1h
+	useridle = {{ ircd_bridge_user_idle }}
 	maxlines = 8
 	floodlines = 6
 	floodsecs = 4s
