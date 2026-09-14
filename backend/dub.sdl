@@ -193,7 +193,7 @@ configuration "fibereye-test" {
     targetName "fibereye-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/fibereye/format.d" "source/ircfiber/fibereye/rules.d" "source/ircfiber/fibereye/events.d" "source/ircfiber/fibereye/ruleset.d" "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/json.d" "source/ircfiber/ipintel/record.d" "source/ircfiber/ipintel/assemble.d" "source/ircfiber/ipintel/cidr.d"
+    sourceFiles "source/ircfiber/fibereye/format.d" "source/ircfiber/fibereye/rules.d" "source/ircfiber/fibereye/events.d" "source/ircfiber/fibereye/ruleset.d" "source/ircfiber/fibereye/map.d" "source/ircfiber/logs/format.d" "source/ircfiber/logs/events.d" "source/ircfiber/support/format.d" "source/ircfiber/support/json.d" "source/ircfiber/ipintel/record.d" "source/ircfiber/ipintel/assemble.d" "source/ircfiber/ipintel/cidr.d"
     mainSourceFile "tests/fibereye_test.d"
     versions "VibeUseFibers"
 }

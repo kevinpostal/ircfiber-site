@@ -21,6 +21,8 @@ import ircfiber.fibereye.rules : Observation, Thresholds, evaluate, banDurationF
 import ircfiber.fibereye.ruleset : RuleSet, validateRuleSet, summarizeRuleChange;
 import ircfiber.fibereye.events : Appeal, fiberEyeAppealKey, fiberEyeConnKey, fiberEyeRulesKey;
 import ircfiber.logs.format : parseConnectNotice;
+import ircfiber.fibereye.map : MapPoint, MapWindow, resolveMapWindow, clusterMapPoints,
+    rollupCountries, MAP_RANGE_DEFAULT;
 
 import vibe.data.json : Json, parseJsonString;
 
@@ -374,6 +376,116 @@ private void testAppealRoundTrip() {
     check(fiberEyeConnKey("76.32.236.21") == "fibereye:conn:76.32.236.21", "conn key shape");
 }
 
+// ─── map: window resolution, coordinate clustering, country rollup ─────
+
+private MapPoint mapPoint(string group, double lat, double lon, long connects,
+    string city = "", string org = "", string country = "DE", long lastTs = 0) {
+    MapPoint p;
+    p.ipGroup = group;
+    p.ip = group;
+    p.ipVersion = 4;
+    p.lat = lat;
+    p.lon = lon;
+    p.connects = connects;
+    p.city = city;
+    p.org = org;
+    p.country = country;
+    p.lastTs = lastTs;
+    return p;
+}
+
+private void testResolveMapWindow() {
+    enum long now = 1_000_000_000_000L;
+
+    const day = resolveMapWindow("24h", 0, 0, now);
+    check(day.startMs == 999_913_600_000L, "24h window starts 86_400_000 ms before now");
+    check(day.endMs == now, "24h window ends at the server clock");
+    check(day.label == "24h", "24h label echoes the token");
+
+    check(resolveMapWindow("1h", 0, 0, now).startMs == now - 3_600_000L, "1h window span");
+    check(resolveMapWindow("7d", 0, 0, now).startMs == now - 604_800_000L, "7d window span");
+    check(resolveMapWindow("30d", 0, 0, now).startMs == now - 2_592_000_000L, "30d window span");
+
+    const all = resolveMapWindow("all", 0, 0, now);
+    check(all.startMs == 0 && all.endMs == now && all.label == "all",
+        "all window is unbounded below");
+
+    const custom = resolveMapWindow("custom", 5, 9, now);
+    check(custom.startMs == 5 && custom.endMs == 9 && custom.label == "custom",
+        "custom bounds pass through verbatim");
+
+    // An incoherent custom range and an unknown token must both degrade to
+    // the default window *and say so*, so the UI never shows a range it did
+    // not get.
+    const inverted = resolveMapWindow("custom", 9, 5, now);
+    check(inverted.startMs == now - 86_400_000L && inverted.label == MAP_RANGE_DEFAULT,
+        "custom with end <= start falls back to 24h");
+    const bogus = resolveMapWindow("bogus", 0, 0, now);
+    check(bogus.startMs == now - 86_400_000L && bogus.label == MAP_RANGE_DEFAULT,
+        "unrecognised range falls back to 24h");
+    check(resolveMapWindow("", 0, 0, now).label == MAP_RANGE_DEFAULT,
+        "empty range falls back to 24h");
+}
+
+private void testClusterMapPoints() {
+    enum long now = 1_700_000_000_000L;
+    MapPoint[] pts = [
+        mapPoint("a", 50.11, 8.68, 10, "Frankfurt am Main", "AS24940 Hetzner", "DE", 100),
+        mapPoint("b", 50.14, 8.71, 4, "Offenbach", "AS3320 DTAG", "DE", 200),
+        mapPoint("c", -33.9, 151.2, 7, "Sydney", "AS4764 Aussie", "AU", 50),
+    ];
+
+    long located;
+    auto clusters = clusterMapPoints(pts, 5, now, located);
+    check(clusters.length == 2, "adjacent suburbs collapse into one cell");
+    check(located == 3, "every located point is counted");
+    check(clusters[0].groups == 2 && clusters[0].connects == 14,
+        "busiest cell carries both groups and the summed connects");
+    check(clusters[0].lat == 50.1 && clusters[0].lon == 8.7, "cell centre is the rounded coordinate");
+    check(clusters[0].city == "Frankfurt am Main" && clusters[0].topOrg == "AS24940 Hetzner",
+        "cell labels come from its busiest point");
+    check(clusters[0].lastTs == 200, "cell lastTs is the newest of its points");
+    check(clusters[1].city == "Sydney", "clusters are ordered by connects descending");
+    check(clusters[0].samples.length == 2 && clusters[0].samples[0].ipGroup == "a",
+        "samples are busiest first");
+
+    // A point the intel record has no coordinates for must not silently
+    // join a cell, and must not inflate `located`.
+    pts ~= mapPoint("d", double.nan, double.nan, 99, "Nowhere", "AS0 ?", "DE", 300);
+    clusters = clusterMapPoints(pts, 5, now, located);
+    check(located == 3, "unlocated point is not counted as located");
+    check(clusters.length == 2 && clusters[0].groups == 2 && clusters[0].connects == 14,
+        "unlocated point joins no cell");
+
+    auto hostile = mapPoint("e", 50.12, 8.69, 1, "Frankfurt am Main", "AS24940 Hetzner", "DE", 400);
+    hostile.bannedUntil = now + 1000;
+    hostile.flags = "vpn(Mullvad)";
+    pts ~= hostile;
+    clusters = clusterMapPoints(pts, 1, now, located);
+    check(clusters[0].groups == 3 && clusters[0].banned == 1 && clusters[0].flagged == 1,
+        "cell counts currently-banned and flagged points");
+    check(clusters[0].samples.length == 1, "samples are capped by maxSamples");
+}
+
+private void testRollupCountries() {
+    enum long now = 1_700_000_000_000L;
+    auto unlocated = mapPoint("b", double.nan, double.nan, 5, "", "", "DE");
+    unlocated.bannedUntil = now + 1000;
+    MapPoint[] pts = [
+        mapPoint("a", 50.1, 8.7, 10, "Frankfurt am Main", "AS24940", "DE"),
+        unlocated,
+        mapPoint("c", 1.0, 2.0, 20, "", "", ""),
+    ];
+
+    auto rows = rollupCountries(pts, now);
+    check(rows.length == 2, "one row per distinct country");
+    check(rows[0].country == "??" && rows[0].connects == 20,
+        "rows are ordered by connects descending; missing country is bucketed");
+    check(rows[1].country == "DE" && rows[1].groups == 2 && rows[1].connects == 15,
+        "a point without coordinates still counts toward its country");
+    check(rows[1].banned == 1, "country row counts currently-banned groups");
+}
+
 void main() {
     testParseQuitNotice();
     testIpGroup();
@@ -388,6 +500,9 @@ void main() {
     testValidateRuleSet();
     testSummarizeRuleChange();
     testAppealRoundTrip();
+    testResolveMapWindow();
+    testClusterMapPoints();
+    testRollupCountries();
     if (failures) {
         writefln("%d check(s) failed", failures);
         import core.stdc.stdlib : exit;

@@ -27,6 +27,7 @@ import vibe.db.mongo.mongo;
 
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.ipintel.record : IpIntel;
+import ircfiber.fibereye.map : MapPoint;
 import ircfiber.fibereye.ruleset : RuleSet;
 
 /// Retention for `fibereye_sessions`, enforced by a TTL index on `tsAt`.
@@ -81,6 +82,25 @@ private bool bbool(Bson b, string key) @trusted {
         return v.get.get!bool;
     } catch (Exception) {
         return false;
+    }
+}
+
+/// Coordinates arrive as BSON doubles from `ipintel_records`, and are
+/// *absent* when the source returned none. NaN is the "unlocated" signal
+/// the map layer expects, so a missing or non-numeric field reads as NaN
+/// rather than as 0 — (0, 0) is a real place in the Gulf of Guinea.
+private double bdouble(Bson b, string key) @trusted {
+    try {
+        auto v = b.tryIndex(key);
+        if (v.isNull) return double.nan;
+        switch (v.get.type) {
+            case Bson.Type.double_: return v.get.get!double;
+            case Bson.Type.long_:   return cast(double) v.get.get!long;
+            case Bson.Type.int_:    return cast(double) v.get.get!int;
+            default:                return double.nan;
+        }
+    } catch (Exception) {
+        return double.nan;
     }
 }
 
@@ -390,6 +410,16 @@ struct RuleAudit {
         a.after = bstr(b, "after");
         return a;
     }
+}
+
+/// Window totals returned alongside the map points.
+/// `groups - returned` is what the UI turns into "showing the busiest
+/// 2000 of 9314 IP groups" instead of silently lying about a truncated
+/// map.
+struct MapSummary {
+    long sessions;   /// Connects matched by the window.
+    long groups;     /// Distinct IP groups in the window.
+    long returned;   /// Rows this call actually produced (<= limit).
 }
 
 /// Persistence for FiberEye; collections `fibereye_sessions`,
@@ -901,6 +931,151 @@ final class FiberEyeStore {
             logWarn("FiberEye: countIpsSeenSince failed: %s", e.msg);
             return 0;
         }
+    }
+
+    /// The busiest `limit` IP groups of a time window, each carrying its
+    /// current rollup attributes and its intel coordinates.
+    ///
+    /// Three collections, joined at read time rather than denormalised:
+    ///   - `fibereye_sessions` supplies the **windowed** connect count (the
+    ///     rollup's `connects` is lifetime and cannot answer "last 24 h");
+    ///   - `fibereye_ips` supplies the current attributes (`$last` over an
+    ///     unsorted `$group` is arbitrary, and `fibereye_ips` already keeps
+    ///     exactly the newest values);
+    ///   - `ipintel_records` supplies latitude/longitude, which no FiberEye
+    ///     document stores at all.
+    /// Both lookups are `_id` equality joins, so their cost is bounded by
+    /// `limit`, and the map works on every retained day from the first
+    /// deploy — no schema change, no backfill.
+    ///
+    /// Degrades to an empty result with a zeroed `summary` on any Mongo
+    /// failure, like every other read here.
+    MapPoint[] mapPoints(long startMs, long endMs, int limit, out MapSummary summary) @trusted {
+        summary = MapSummary.init;
+        if (limit < 1) limit = 1;
+
+        // An "all" window groups every retained session document, which can
+        // exceed the 100 MB in-memory $group limit; and the admin fetch
+        // gives up after 15 s, so bound the server side too rather than
+        // leave a cursor grinding for a browser that already walked away.
+        AggregateOptions opts;
+        opts.allowDiskUse = true;
+        opts.maxTimeMS = 20_000;
+
+        // Both pipelines enter through the {ts:-1} index.
+        const window = Bson(["$match": Bson(["ts": Bson([
+            "$gte": Bson(startMs), "$lte": Bson(endMs)])])]);
+        const groupByIp = Bson(["$group": Bson([
+            "_id": Bson("$ipGroup"),
+            "connects": Bson(["$sum": Bson(1)]),
+            "lastTs": Bson(["$max": Bson("$ts")])])]);
+
+        try {
+            Bson[] pipeline = [
+                window,
+                groupByIp,
+                Bson(["$group": Bson([
+                    "_id": Bson(null),
+                    "groups": Bson(["$sum": Bson(1)]),
+                    "sessions": Bson(["$sum": Bson("$connects")])])]),
+            ];
+            // An empty window yields no document, so `summary` stays zeroed.
+            foreach (doc; sessions.aggregate!Bson(pipeline, opts)) {
+                summary.groups = blong(doc, "groups");
+                summary.sessions = blong(doc, "sessions");
+            }
+        } catch (Exception e) {
+            logWarn("FiberEye: mapPoints summary failed: %s", e.msg);
+        }
+
+        static Bson ifNull(string path, Bson fallback) {
+            return Bson(["$ifNull": Bson([Bson(path), fallback])]);
+        }
+        static Bson firstOf(string path) {
+            return Bson(["$arrayElemAt": Bson([Bson(path), Bson(0)])]);
+        }
+
+        MapPoint[] rows;
+        try {
+            // Field order decides sort priority, and a Bson built from an
+            // associative array has none — hence the explicit object.
+            Bson sortSpec = Bson.emptyObject;
+            sortSpec["connects"] = Bson(-1);
+            sortSpec["_id"] = Bson(1);
+
+            Bson[] pipeline = [
+                window,
+                groupByIp,
+                Bson(["$sort": sortSpec]),
+                Bson(["$limit": Bson(limit)]),
+                Bson(["$lookup": Bson([
+                    "from": Bson("fibereye_ips"), "localField": Bson("_id"),
+                    "foreignField": Bson("_id"), "as": Bson("ipRec")])]),
+                Bson(["$set": Bson(["ipRec": firstOf("$ipRec")])]),
+                Bson(["$lookup": Bson([
+                    "from": Bson("ipintel_records"), "localField": Bson("ipRec.ip"),
+                    "foreignField": Bson("_id"), "as": Bson("intelRec")])]),
+                Bson(["$set": Bson(["intelRec": firstOf("$intelRec")])]),
+                // $project on a missing path omits the field, and `bdouble`
+                // turns an absent lat/lon into NaN — which is exactly the
+                // "unlocated" signal. Touch-only intel rows (record: null)
+                // and records whose source returned no coordinates
+                // (IpIntel.toJson omits NaN) both arrive that way.
+                Bson(["$project": Bson([
+                    "_id": Bson(0),
+                    "ipGroup": Bson("$_id"),
+                    "connects": Bson(1),
+                    "lastTs": Bson(1),
+                    "ip": ifNull("$ipRec.ip", Bson("")),
+                    "ipVersion": ifNull("$ipRec.ipVersion", Bson(0)),
+                    "city": ifNull("$ipRec.geoCity", Bson("")),
+                    "region": ifNull("$ipRec.geoRegion", Bson("")),
+                    "country": ifNull("$ipRec.geoCountry", Bson("")),
+                    "org": ifNull("$ipRec.geoOrg", Bson("")),
+                    "asn": ifNull("$ipRec.intelAsn", Bson("")),
+                    "flags": ifNull("$ipRec.intelFlags", Bson("")),
+                    "risk": ifNull("$ipRec.intelRisk", Bson(-1)),
+                    "nick": ifNull("$ipRec.lastNick", Bson("")),
+                    "account": ifNull("$ipRec.lastAccount", Bson("")),
+                    "connClass": ifNull("$ipRec.lastClass", Bson("")),
+                    "bannedUntil": ifNull("$ipRec.bannedUntil", Bson(0)),
+                    "strikes": ifNull("$ipRec.strikes", Bson(0)),
+                    "geoPending": ifNull("$ipRec.geoPending", Bson(true)),
+                    "lat": Bson("$intelRec.record.geo.latitude"),
+                    "lon": Bson("$intelRec.record.geo.longitude")])]),
+            ];
+
+            foreach (doc; sessions.aggregate!Bson(pipeline, opts)) {
+                MapPoint p;
+                p.ipGroup = bstr(doc, "ipGroup");
+                p.ip = bstr(doc, "ip");
+                p.ipVersion = cast(int) blong(doc, "ipVersion");
+                p.lat = bdouble(doc, "lat");
+                p.lon = bdouble(doc, "lon");
+                p.city = bstr(doc, "city");
+                p.region = bstr(doc, "region");
+                p.country = bstr(doc, "country");
+                p.org = bstr(doc, "org");
+                p.asn = bstr(doc, "asn");
+                p.flags = bstr(doc, "flags");
+                p.nick = bstr(doc, "nick");
+                p.account = bstr(doc, "account");
+                p.connClass = bstr(doc, "connClass");
+                p.risk = cast(int) blong(doc, "risk");
+                p.connects = blong(doc, "connects");
+                p.lastTs = blong(doc, "lastTs");
+                p.bannedUntil = blong(doc, "bannedUntil");
+                p.strikes = blong(doc, "strikes");
+                p.geoPending = bbool(doc, "geoPending");
+                rows ~= p;
+            }
+        } catch (Exception e) {
+            logWarn("FiberEye: mapPoints rows failed: %s", e.msg);
+            rows = null;
+        }
+
+        summary.returned = rows.length;
+        return rows;
     }
 
     /// Count of ban documents matching `filter`.

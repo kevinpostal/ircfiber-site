@@ -260,6 +260,12 @@
   subtitle="Every ircd connect and quit, per-IP flood detection and the Z-lines it places"
 >
   {#snippet actions()}
+    <a
+      href={href('/fibereye/map')}
+      class="rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs hover:border-primary/40"
+    >
+      Map
+    </a>
     <button
       type="button"
       onclick={() => void fetchOverview(true)}

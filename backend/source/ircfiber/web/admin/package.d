@@ -62,7 +62,7 @@ import ircfiber.web.admin.fibereye : apiFiberEyeOverview, apiFiberEyeSessions,
     apiFiberEyeIps, apiFiberEyeIp, apiFiberEyeIpBatch, apiFiberEyeBans, apiFiberEyeArm,
     apiFiberEyeBanRelease, apiFiberEyeReconnect, apiFiberEyeRulesGet,
     apiFiberEyeRulesSet, apiFiberEyeRulesReset, apiFiberEyeIrcdRules,
-    apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce;
+    apiFiberEyeIpDeep, apiFiberEyeRejoin, apiFiberEyeAnnounce, apiFiberEyeMap;
 import ircfiber.web.admin.emails : apiCampaignAudience, apiCampaignCancel, apiCampaignDetail,
     apiCampaignPause, apiCampaignResume, apiCampaignSend, apiCampaignTest, apiCampaignsCreate,
     apiCampaignsList, apiEmailSend, apiEmailsOverview, apiEmailsTest, apiEmailsPendingResend,
@@ -187,6 +187,7 @@ final class AdminController {
         router.get("/api/admin/fibereye", &adminWrap!apiFiberEyeOverviewRoute);
         router.get("/api/admin/fibereye/sessions", &adminWrap!apiFiberEyeSessionsRoute);
         router.get("/api/admin/fibereye/ips", &adminWrap!apiFiberEyeIpsRoute);
+        router.get("/api/admin/fibereye/map", &adminWrap!apiFiberEyeMapRoute);
         router.get("/api/admin/fibereye/ip", &adminWrap!apiFiberEyeIpRoute);
         router.get("/api/admin/fibereye/ip/batch", &adminWrap!apiFiberEyeIpBatchRoute);
         router.post("/api/admin/fibereye/ip/deep", &adminWrap!apiFiberEyeIpDeepRoute);
@@ -541,6 +542,7 @@ private:
     void apiFiberEyeOverviewRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeOverview(req, res, redis); }
     void apiFiberEyeSessionsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeSessions(req, res, redis); }
     void apiFiberEyeIpsRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIps(req, res, redis); }
+    void apiFiberEyeMapRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeMap(req, res, redis); }
     void apiFiberEyeIpRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIp(req, res, redis); }
     void apiFiberEyeIpBatchRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeIpBatch(req, res, redis); }
     void apiFiberEyeBansRoute(HTTPServerRequest req, HTTPServerResponse res) { apiFiberEyeBans(req, res, redis); }

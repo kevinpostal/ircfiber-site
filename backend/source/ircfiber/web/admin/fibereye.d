@@ -33,6 +33,7 @@ import ircfiber.bots.core : nowMs;
 import ircfiber.fibereye.events : fiberEyeArmedKey, fiberEyeBotKey, fiberEyeControlKey,
     fiberEyeRulesKey;
 import ircfiber.fibereye.format : ipGroup, zlineMatches;
+import ircfiber.fibereye.map;
 import ircfiber.fibereye.rules : isAutoPlacedZline, RULE_WINDOW_MIN, RULE_WINDOW_MAX,
     RULE_COUNT_MIN, RULE_COUNT_MAX, RULE_SHORT_MS_MIN, RULE_SHORT_MS_MAX,
     RULE_BAN_SECONDS_MIN, RULE_BAN_SECONDS_MAX;
@@ -68,6 +69,16 @@ private int queryInt(HTTPServerRequest req, string key, int fallback) {
     try {
         const raw = queryString(req, key, "");
         if (raw.length) return raw.to!int;
+    } catch (Exception) {
+    }
+    return fallback;
+}
+
+/// `queryInt` truncates at 2^31; every timestamp in this API is unix ms.
+private long queryLong(HTTPServerRequest req, string key, long fallback) {
+    try {
+        const raw = queryString(req, key, "");
+        if (raw.length) return raw.to!long;
     } catch (Exception) {
     }
     return fallback;
@@ -362,6 +373,116 @@ package void apiFiberEyeIps(HTTPServerRequest req, HTTPServerResponse res, Redis
     data["total"] = Json(total);
     data["page"] = Json(page);
     data["limit"] = Json(limit);
+    jsonOk(res, data);
+}
+
+/// IP groups listed per cluster when one is selected on the map. The
+/// cluster already carries the aggregate counts; this is just the "who is
+/// here" peek that links into `/fibereye/ip/:ip`.
+private enum MAP_CLUSTER_SAMPLES = 5;
+/// Default and hard cap on IP groups a map response carries. Deliberately
+/// not `paging()`'s 200: that is a table-page contract, and a world map
+/// showing 200 of several thousand groups would be actively misleading.
+private enum MAP_LIMIT_DEFAULT = 2000;
+private enum MAP_LIMIT_MAX = 5000;
+
+/// GET /api/admin/fibereye/map?range=1h|24h|7d|30d|all|custom&start=&end=&limit=
+///
+/// Relative ranges are resolved against the server clock, so a skewed
+/// browser cannot shift the window; `custom` uses the supplied unix-ms
+/// bounds. `limit` caps IP groups, not sessions. An empty window is a
+/// legitimate 200 with empty arrays and zeroed counters.
+package void apiFiberEyeMap(HTTPServerRequest req, HTTPServerResponse res, RedisStorage redis) {
+    const range = queryString(req, "range", MAP_RANGE_DEFAULT);
+    const start = queryLong(req, "start", 0);
+    const end = queryLong(req, "end", 0);
+    int limit = queryInt(req, "limit", MAP_LIMIT_DEFAULT);
+    if (limit < 1) limit = 1;
+    if (limit > MAP_LIMIT_MAX) limit = MAP_LIMIT_MAX;
+
+    const w = resolveMapWindow(range, start, end, nowMs());
+
+    MapSummary summary;
+    auto store = new FiberEyeStore();
+    auto points = store.mapPoints(w.startMs, w.endMs, limit, summary);
+    const now = nowMs();
+    long located;
+    auto clusters = clusterMapPoints(points, MAP_CLUSTER_SAMPLES, now, located);
+    auto countries = rollupCountries(points, now);
+
+    auto clusterArr = Json.emptyArray;
+    foreach (c; clusters) {
+        // Samples deliberately carry no lat/lon: the cluster holds the cell
+        // coordinate, and omitting them removes every path by which a NaN
+        // could reach Json — `Json(double.nan)` serialises to the literal
+        // `nan`, which is not valid JSON.
+        auto samples = Json.emptyArray;
+        foreach (s; c.samples) {
+            auto sj = Json.emptyObject;
+            sj["ipGroup"] = Json(s.ipGroup);
+            sj["ip"] = Json(s.ip);
+            sj["ipVersion"] = Json(s.ipVersion);
+            sj["connects"] = Json(s.connects);
+            sj["lastTs"] = Json(s.lastTs);
+            sj["nick"] = Json(s.nick);
+            sj["account"] = Json(s.account);
+            sj["connClass"] = Json(s.connClass);
+            sj["city"] = Json(s.city);
+            sj["region"] = Json(s.region);
+            sj["country"] = Json(s.country);
+            sj["org"] = Json(s.org);
+            sj["asn"] = Json(s.asn);
+            sj["flags"] = Json(s.flags);
+            sj["risk"] = Json(s.risk);
+            sj["bannedUntil"] = Json(s.bannedUntil);
+            sj["strikes"] = Json(s.strikes);
+            sj["geoPending"] = Json(s.geoPending);
+            samples ~= sj;
+        }
+        auto cj = Json.emptyObject;
+        cj["lat"] = Json(c.lat);
+        cj["lon"] = Json(c.lon);
+        cj["city"] = Json(c.city);
+        cj["region"] = Json(c.region);
+        cj["country"] = Json(c.country);
+        cj["topOrg"] = Json(c.topOrg);
+        cj["groups"] = Json(c.groups);
+        cj["connects"] = Json(c.connects);
+        cj["lastTs"] = Json(c.lastTs);
+        cj["banned"] = Json(c.banned);
+        cj["flagged"] = Json(c.flagged);
+        cj["samples"] = samples;
+        clusterArr ~= cj;
+    }
+
+    auto countryArr = Json.emptyArray;
+    foreach (r; countries) {
+        auto rj = Json.emptyObject;
+        rj["country"] = Json(r.country);
+        rj["groups"] = Json(r.groups);
+        rj["connects"] = Json(r.connects);
+        rj["banned"] = Json(r.banned);
+        countryArr ~= rj;
+    }
+
+    // The arithmetic lives here so the UI never does it: `unlocated` is the
+    // rows with no intel coordinates, `truncated` the groups the limit cut.
+    auto sj = Json.emptyObject;
+    sj["sessions"] = Json(summary.sessions);
+    sj["groups"] = Json(summary.groups);
+    sj["returned"] = Json(summary.returned);
+    sj["located"] = Json(located);
+    sj["unlocated"] = Json(summary.returned - located);
+    sj["truncated"] = Json(summary.groups > summary.returned
+        ? summary.groups - summary.returned : 0L);
+
+    auto data = Json.emptyObject;
+    data["range"] = Json(w.label);
+    data["start"] = Json(w.startMs);
+    data["end"] = Json(w.endMs);
+    data["summary"] = sj;
+    data["clusters"] = clusterArr;
+    data["countries"] = countryArr;
     jsonOk(res, data);
 }
 
