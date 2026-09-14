@@ -82,6 +82,7 @@ export function createMember(overrides: Partial<Member> = {}): Member {
     prefix: '',
     category: 'MEMBER',
     ident: '',
+    host: '',
     realname: '',
     isAway: false,
     awayMessage: '',

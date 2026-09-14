@@ -41,6 +41,10 @@
     _gateway_spec_volumes_base:
       - "{{ gateway_uploads_volume }}:/app/uploads"
       - "{{ gateway_logs_volume }}:/var/log/irc-fiber"
+      # GIF conversion spool shared with ircfiber-gifworker: this process
+      # only writes job files and reads results, it never decodes media
+      # itself (tasks/gifworker.yml).
+      - "{{ gateway_gifwork_volume | default('ircfiber_gifwork') }}:/work"
       # Secret material rendered by tasks/secrets.yml (0700 dir, 0400 files,
       # root-owned) and read through the *_FILE env indirection, so no
       # credential is visible in `docker inspect` or the container env.

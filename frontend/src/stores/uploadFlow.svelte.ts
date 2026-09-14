@@ -1,6 +1,6 @@
 import { uploadFile, validateFile, flattenFileList, joinMessageLink, type UploadHandle, type UploadResponse } from '../lib/upload';
 import { isTextFile, detectSyntaxFromFilename, MAX_TEXT_FILE_BYTES } from '../lib/textFiles';
-import { uploadState, trackUpload, setProgress, setConverting, finishUpload, failUpload, removeUpload, type ActiveUpload } from './uploadStore.svelte';
+import { uploadState, trackUpload, setProgress, setConverting, finishUpload, failUpload, removeUpload, openUploadProgress, type ActiveUpload } from './uploadStore.svelte';
 import { openFromFile } from './pastebinStore.svelte';
 import { sendMessage } from './wsConnection.svelte.ts';
 import { ircState } from './ircStore.svelte';
@@ -121,6 +121,7 @@ export function confirmDialog(data: { filename?: string; message: string; conver
   const dialog = uploadState.dialog;
   if (!dialog) return;
   uploadState.dialog = null;
+  openUploadProgress(dialog.uploads.map(u => u.id), !!data.convertToGif);
   const opts = pendingDialogOpts;
   pendingDialogOpts = null;
 
@@ -138,10 +139,11 @@ export function confirmDialog(data: { filename?: string; message: string; conver
       try {
         const gif = await convertUploadToGif(
           (results[0] as PromiseFulfilledResult<UploadResponse>).value.id,
-          (job) => { setConverting(uid, job.durationMs > 0 ? job.percent : 0); },
+          (job) => setConverting(uid, { phase: job.phase ?? 'encode', percent: job.percent, etaMs: job.etaMs, frame: job.frame, fps: job.fps, durationMs: job.durationMs }),
         );
         urls[0] = gif.url;
       } catch (e) {
+        failUpload(uid, (e as Error).message);
         deps.notifyError(`${(e as Error).message} — posting original file link`);
       }
     }
@@ -149,7 +151,7 @@ export function confirmDialog(data: { filename?: string; message: string; conver
     // Clean up handles
     for (const u of dialog.uploads) {
       handles.delete(u.id);
-      setTimeout(() => removeUpload(u.id), 1500);
+      if (!u.error) setTimeout(() => removeUpload(u.id), 1500);
     }
 
     if (urls.length === 0) {

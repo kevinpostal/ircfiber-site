@@ -174,17 +174,13 @@
     if (member?.account?.toUpperCase() === 'BOT') return true;
     if (member?.ident && /(^|\.)bot(\.|$)/i.test(member.ident)) return true;
     // Host suffix `.bot` (e.g. scroll@super.nets.bot) is the strongest
-    // public IRC signal short of `+B` user mode. We look in both the
-    // message prefix (`nick!user@host`) and any cached `member.ident`
-    // since either may carry the userhost depending on how the member
-    // entry was populated (NAMES vs WHO vs PRIVMSG).
+    // public IRC signal short of `+B` user mode. The message prefix wins
+    // when present; `member.host` is the cached copy filled in by
+    // NAMES/WHO/JOIN.
     const hostFromPrefix = prefix && prefix.includes('@')
       ? prefix.slice(prefix.lastIndexOf('@') + 1)
       : '';
-    const hostFromIdent = member?.ident && member.ident.includes('@')
-      ? member.ident.slice(member.ident.lastIndexOf('@') + 1)
-      : '';
-    const host = hostFromPrefix || hostFromIdent;
+    const host = hostFromPrefix || member?.host || '';
     if (host && /(^|\.)bot(\.|$)/i.test(host)) return true;
     return false;
   }

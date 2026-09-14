@@ -381,6 +381,21 @@ ssh <host> 'K=$(sudo cat /etc/ircfiber/gateway/secrets/resend_api_key); \
 
 Do **not** loop that probe while waiting for DNS. A retry every two minutes got the sender.net account suspended for "suspicious activity" (HTTP 403, then 401 on every send) even though each request was a legitimate API call; a provider's resolver can cache the old negative answer for the zone's negative TTL (1800 s on `ircfiber.com`), so wait that out and re-check the provider's own domain state instead of re-sending.
 
+### GIF sandbox (`ircfiber-gifworker`)
+
+Video/WebP → GIF conversion runs in a dedicated container, never in the gateway. ffmpeg and ffprobe are a large C attack surface driven entirely by bytes any logged-in user can upload, so `tasks/gifworker.yml` starts the **same gateway image** as `sh /app/gif-worker.sh` with `network_mode: none`, a read-only rootfs, `cap_drop: ALL`, `no-new-privileges`, uid 65534, `pids_limit: 64`, `gifworker_memory_limit` (768m) / `gifworker_cpus` (1.5), and the uploads volume mounted **read-only**. A decoder RCE in there has no socket, no credentials and no write access to anyone's uploads.
+
+The two halves talk over the `ircfiber_gifwork` volume mounted at `/work` in both: the gateway writes `<id>.job` (source basename, output name, duration cap), the worker probes the file, rejects any container format outside its allowlist, runs the two ffmpeg passes with `-protocol_whitelist file` and writes `<id>.gif` plus a terminal `<id>.exit`. The gateway polls the progress files ffmpeg itself writes and republishes them as the `gif:job:<id>` snapshot the browser polls. Protocol and recipe: `docker/gifworker/gif-worker.sh`; gateway half: `backend/source/ircfiber/api/gifspool.d` (tested by `dub --root=backend build --config=gif-spool-test`).
+
+Deploys with any gateway run (`-t gateway` or `-t gifworker`); `gifworker_enabled: false` removes the container. The gateway env carries `IRCFIBER_GIF_SIDECAR=1` — **without it the gateway falls back to decoding untrusted media in its own container**, which is exactly the exposure this removes. Admission control lives in the gateway: one conversion per user, two per gateway, `429` beyond that.
+
+```bash
+# posture check after a deploy
+ssh <host> 'sudo docker inspect ircfiber-gifworker \
+  --format "{{.HostConfig.NetworkMode}} ro={{.HostConfig.ReadonlyRootfs}} user={{.Config.User}} caps={{.HostConfig.CapDrop}}"'
+# → none ro=true user=65534:65534 caps=[ALL]
+```
+
 ### Bouncer (`bnc.<domain>:7000`, Settings → Bouncer)
 
 The gateway image also contains the soju-style bouncer listener; it only listens in a process that has `IRCFIBER_BNC_PORT` set, which the `gateway` role gives to the dedicated `ircfiber-bnc` container (`bnc_enabled`, `bnc_public_host`, `bnc_public_port` in `group_vars/all/vars.yml`). TLS terminates in that container using the Let's Encrypt cert Caddy obtains for `bnc_public_host`, read from the Caddy data volume on every connection, so renewals need no restart. One credential per account: the IRC Fiber username plus a bouncer password generated in **Settings → Bouncer** (stored as `users.bncToken`). Clients that speak `soju.im/bouncer-networks` (Goguma, senpai, gamja, Halloy) log in with SASL PLAIN or `PASS <password>` and see every network via `BOUNCER LISTNETWORKS` / `BIND`; legacy clients pick one network per connection with the ZNC-style identity `<username>/<network-slug>[@<clientid>]` as the `USER` name or as `PASS <identity>:<password>`. Per-network bouncer passwords no longer exist — `NetworkRepository` strips any stale `networks.bncToken` at startup, so after the first deploy of this version every bouncer user must generate a new password (announce in `#ircfiber`).

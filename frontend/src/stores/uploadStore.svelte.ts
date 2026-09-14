@@ -2,6 +2,15 @@ import type { UploadResponse } from '../lib/upload';
 
 export type UploadStatus = 'uploading' | 'finalizing' | 'converting' | 'done' | 'error' | 'cancelled';
 
+export interface GifProgress {
+  phase: 'palette' | 'encode';
+  percent: number;
+  etaMs: number;
+  frame: number;
+  fps: number;
+  durationMs: number;
+}
+
 export interface ActiveUpload {
   id: number;
   filename: string;
@@ -13,6 +22,7 @@ export interface ActiveUpload {
   abort?: () => void;
   file?: File | Blob;
   previewUrl?: string;
+  gif?: GifProgress;
 }
 
 export interface DialogState {
@@ -22,6 +32,11 @@ export interface DialogState {
   truncated?: boolean;
 }
 
+export interface ProgressDialogState {
+  ids: number[];
+  convertToGif: boolean;
+}
+
 let nextId = 1;
 
 export const uploadState = $state({
@@ -29,8 +44,8 @@ export const uploadState = $state({
   dialog: null as DialogState | null,
   panelOpen: false,
   pastebinPanelOpen: false,
+  progressDialog: null as ProgressDialogState | null,
 });
-
 export function trackUpload(filename: string, size: number, file?: File | Blob): ActiveUpload {
   const u: ActiveUpload = {
     id: nextId++, filename, size, progress: 0, status: 'uploading', file,
@@ -53,11 +68,27 @@ export function setProgress(id: number, pct: number): void {
 
 /** Server-side GIF conversion progress for an already-uploaded file.
  *  Drives the same ring/progress UI as the upload itself. */
-export function setConverting(id: number, pct: number): void {
+export function setConverting(id: number, gif: GifProgress): void {
   const u = find(id);
   if (!u) return;
   u.status = 'converting';
-  u.progress = Math.max(0, Math.min(100, pct));
+  u.gif = gif;
+  u.progress = (gif.durationMs > 0 && gif.phase === 'encode')
+    ? Math.max(0, Math.min(100, gif.percent))
+    : 0;
+}
+
+export function openUploadProgress(ids: number[], convertToGif: boolean): void {
+  uploadState.progressDialog = { ids: [...ids], convertToGif };
+}
+
+export function dismissUploadProgress(): void {
+  const dlg = uploadState.progressDialog;
+  uploadState.progressDialog = null;
+  if (dlg) {
+    const ids = new Set(dlg.ids);
+    uploadState.active = uploadState.active.filter(u => !ids.has(u.id));
+  }
 }
 
 export function finishUpload(id: number, result: UploadResponse): void {

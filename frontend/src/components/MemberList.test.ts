@@ -4,12 +4,16 @@ import { page, userEvent } from 'vitest/browser';
 import MemberList from './MemberList.svelte';
 import { ircState } from '../stores/ircStore.svelte';
 import { createNetwork, createBuffer, createMember } from '../test/factories';
+import { nickColorIndex } from '../lib/utils';
+import { setShowMemberPrefixes } from '../stores/preferences.svelte';
 
 describe('MemberList', () => {
   beforeEach(() => {
     ircState.networks.length = 0;
     ircState.activeBuffer.networkId = null;
     ircState.activeBuffer.bufferName = null;
+    // Fresh-account default; the one test that needs glyphs opts in.
+    setShowMemberPrefixes(false);
   });
 
   it('renders members grouped by mode category', async () => {
@@ -70,7 +74,7 @@ describe('MemberList', () => {
     await expect.element(page.getByRole('heading', { name: /^Owner/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Admins/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Ops/ })).toBeInTheDocument();
-    await expect.element(page.getByRole('heading', { name: /^Staff/ })).toBeInTheDocument();
+    await expect.element(page.getByRole('heading', { name: /^Half ops/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Voiced/ })).toBeInTheDocument();
     await expect.element(page.getByRole('heading', { name: /^Members/ })).toBeInTheDocument();
   });
@@ -105,6 +109,9 @@ describe('MemberList', () => {
   });
 
   it('renders the mode symbol and count in each category header', async () => {
+    // Prefix glyphs are off for a fresh account, so the test drives the
+    // pref rather than relying on the default.
+    setShowMemberPrefixes(true);
     const net = createNetwork({ networkId: 'net1' });
     const buf = createBuffer({
       name: '#chan',
@@ -123,9 +130,75 @@ describe('MemberList', () => {
       document.querySelector(`.memberList li.category.${cls} h2`)!;
     expect(header('ops').querySelector('.mode_symbol')!.textContent).toBe('@');
     expect(header('ops').querySelector('.memberCount')!.textContent).toBe('2');
-    // Members carries a count only, exactly as IRCCloud renders it.
+    // Members has no mode char, so its bullet is the always-visible
+    // `memberDot` stand-in; ranked bands keep the dots-mode-only pill.
     expect(header('members').querySelector('.mode_symbol')).toBeNull();
+    expect(header('members').querySelector('.mode_pill')!.textContent).toBe('\u2022');
+    expect(header('members').querySelector('.mode_pill')!.classList.contains('memberDot')).toBe(true);
+    expect(header('ops').querySelector('.mode_pill')!.classList.contains('memberDot')).toBe(false);
     expect(header('members').querySelector('.memberCount')!.textContent).toBe('1');
+  });
+
+  it('hides every mode glyph by default (fresh account)', async () => {
+    const net = createNetwork({ networkId: 'net1' });
+    const buf = createBuffer({
+      name: '#chan',
+      users: [createMember({ nick: '@op1', prefix: '@', category: 'OP' })],
+    });
+    net.buffers.push(buf);
+    ircState.networks.push(net);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#chan';
+    render(MemberList);
+    expect(document.querySelector('.memberList .mode_symbol')).toBeNull();
+    expect(document.querySelector('.memberList .mode_pill')).toBeNull();
+    expect(document.querySelector('.member-mode-prefix')).toBeNull();
+    // The count still renders — it is not part of the prefix pref.
+    expect(document.querySelector('.memberList .memberCount')!.textContent).toBe('1');
+  });
+
+  it('exposes the usermask the way IRCCloud does', async () => {
+    const net = createNetwork({ networkId: 'net1' });
+    const buf = createBuffer({
+      name: '#chan',
+      users: [
+        createMember({ nick: '&sq', prefix: '&', category: 'ADMIN', ident: '~sq', host: 'qefugmwi.hidden' }),
+        createMember({ nick: 'bare', prefix: '', category: 'MEMBER' }),
+      ],
+    });
+    net.buffers.push(buf);
+    ircState.networks.push(net);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#chan';
+    render(MemberList);
+    const row = document.querySelector('.member-item[data-category="ADMIN"]') as HTMLElement;
+    expect(row.dataset.usermask).toBe('~sq@qefugmwi.hidden');
+    // `data-ident_prefix` keeps IRCCloud's underscore, so it is not a
+    // camelCased `dataset` key.
+    expect(row.getAttribute('data-ident_prefix')).toBe('~');
+    expect(row.dataset.user).toBe('sq');
+    expect(row.dataset.userhost).toBe('qefugmwi.hidden');
+    expect(row.querySelector('button')!.title).toBe('sq (~sq@qefugmwi.hidden)');
+    // A member we have no mask for falls back to the bare nick.
+    const bare = document.querySelector('.member-item[data-category="MEMBER"]') as HTMLElement;
+    expect(bare.dataset.usermask).toBe('');
+    expect(bare.querySelector('button')!.title).toBe('bare');
+  });
+
+  it('paints each row with its IRCCloud nick colour', async () => {
+    const net = createNetwork({ networkId: 'net1' });
+    const buf = createBuffer({
+      name: '#chan',
+      users: [createMember({ nick: '@roarie', prefix: '@', category: 'OP' })],
+    });
+    net.buffers.push(buf);
+    ircState.networks.push(net);
+    ircState.activeBuffer.networkId = 'net1';
+    ircState.activeBuffer.bufferName = '#chan';
+    render(MemberList);
+    const row = document.querySelector('.member-item') as HTMLElement;
+    // Same hash the avatars and message authors use, on the stripped nick.
+    expect(row.classList.contains(`c${nickColorIndex('roarie')}`)).toBe(true);
   });
 
   it('calls onNickClick when member nick clicked', async () => {

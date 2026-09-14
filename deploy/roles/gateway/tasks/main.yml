@@ -67,7 +67,7 @@
     mode: "0640"
   notify: Restart gateway replicas
 
-- name: Ensure uploads & logs volumes exist
+- name: Ensure uploads, logs & GIF-spool volumes exist
   tags: [always]
   community.docker.docker_volume:
     name: "{{ item }}"
@@ -75,6 +75,8 @@
   loop:
     - "{{ gateway_uploads_volume }}"
     - "{{ gateway_logs_volume }}"
+    # Shared spool between the gateway replicas and the GIF sandbox.
+    - "{{ gateway_gifwork_volume }}"
 
 - name: Resolve the ircfiber network name
   tags: [always]
@@ -147,6 +149,18 @@
     file: sysagent.yml
     apply:
       tags: [sysagent]
+
+# The media sandbox: the only container that decodes user-supplied video.
+# After the replicas because the gateway is its client (it writes the job
+# files), and tagged with [gateway] as well so every gateway deploy converges
+# it — a sandbox running an older recipe than the gateway that spools for it
+# would silently fail every conversion.
+- name: Run ircfiber-gifworker
+  tags: [gateway, gifworker]
+  ansible.builtin.include_tasks:
+    file: gifworker.yml
+    apply:
+      tags: [gifworker]
 
 # Bouncer listener: same image, dedicated container so the public TCP
 # port is independent of the HTTP gateway replicas (not part of blue/green).

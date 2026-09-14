@@ -15,7 +15,7 @@ export const MODE_PREFIX_MAP: Record<string, { prefix: string; cls: string; cate
   '~': { prefix: '~', cls: 'mode_OWNER',  category: 'OWNER',  mode: 'q', title: 'Channel owner' },
   '&': { prefix: '&', cls: 'mode_ADMIN',  category: 'ADMIN',  mode: 'a', title: 'Channel admin' },
   '@': { prefix: '@', cls: 'mode_OP',     category: 'OP',     mode: 'o', title: 'Channel operator' },
-  '%': { prefix: '%', cls: 'mode_HALFOP', category: 'HALFOP', mode: 'h', title: 'Staff' },
+  '%': { prefix: '%', cls: 'mode_HALFOP', category: 'HALFOP', mode: 'h', title: 'Half op' },
   '+': { prefix: '+', cls: 'mode_VOICED', category: 'VOICED', mode: 'v', title: 'Voiced' },
 };
 
@@ -429,7 +429,14 @@ export interface Member {
   nick: string;
   prefix: string;       // raw prefix char: *, !, ~, &, @, %, +, or ''
   category: ModeCategory;
-  ident: string;        // user@host
+  /** User part only, `~` included when the server sends one (`~sq`).
+   *  The host lives in `host` — IRCCloud splits the same way
+   *  (`data-user` / `data-userhost`). */
+  ident: string;
+  /** Host part of the usermask (`qefugmwi.gf4fsaiv.3tcdqqeh.hidden`),
+   *  empty until a source that carries it (userhost-in-names, WHO 352,
+   *  a JOIN/PRIVMSG prefix) has been seen. */
+  host: string;
   realname: string;
   isAway: boolean;
   awayMessage: string;

@@ -187,7 +187,7 @@ describe('renameQueryBuffer (IRCCloud rename model)', () => {
 		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
 		const buf = createBuffer({ name: 'bob', type: 'query', isJoined: true });
 		buf.users = [{
-			nick: '@bob', prefix: '@', category: 'OP', ident: 'bob@host', realname: 'bob',
+			nick: '@bob', prefix: '@', category: 'OP', ident: 'bob', host: 'host', realname: 'bob',
 			isAway: false, awayMessage: '', lastSpoke: 0, lastHighlighted: 0,
 			account: '', isBot: false,
 		}];

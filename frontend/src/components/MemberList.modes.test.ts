@@ -68,7 +68,7 @@ describe('MemberList realtime mode updates', () => {
     expect(hasSection('members')).toBe(false);
   });
 
-  it('+h moves bob to Staff', () => {
+  it('+h moves bob to Half ops', () => {
     seedBob();
     render(MemberList);
 

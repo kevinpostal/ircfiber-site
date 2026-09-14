@@ -283,3 +283,17 @@ configuration "system-test" {
     mainSourceFile "tests/system_test.d"
     versions "VibeUseFibers"
 }
+
+// Pure-code unit test for the GIF sandbox spool protocol — the job spec, the
+// ffmpeg -progress parser and the exit/error mapping the gateway reads back
+// out of the shared volume (no ffmpeg, container or Redis needed):
+//   dub --root=backend build --config=gif-spool-test && ./backend/gif-spool-test
+configuration "gif-spool-test" {
+    targetType "executable"
+    targetName "gif-spool-test"
+    sourcePaths "tests"
+    importPaths "source" "tests"
+    sourceFiles "source/ircfiber/api/gifspool.d"
+    mainSourceFile "tests/gif_spool_test.d"
+    versions "VibeUseFibers"
+}

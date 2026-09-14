@@ -28,10 +28,15 @@ services:
       IRCFIBER_BNC_PUBLIC_HOST: "127.0.0.1"
       IRCFIBER_BNC_PUBLIC_PORT: "7000"
       IRCFIBER_BNC_PUBLIC_TLS: "0"
+      # GIF conversion runs in the ircfiber-gifworker sandbox; the gateway
+      # only writes job files into the shared spool and reads results back.
+      IRCFIBER_GIF_WORK_DIR: /work
+      IRCFIBER_GIF_SIDECAR: "1"
     volumes:
       - ./config/prod.conf:/config/prod.conf:ro
       - ircfiber_uploads:/app/uploads
       - irc_fiber_logs:/var/log/irc-fiber
+      - ircfiber_gifwork:/work
     ports:
       - "${GATEWAY_HOST_PORT:-8090}:8090"
       - "${BNC_HOST_PORT:-7000}:7000"
@@ -53,6 +58,55 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # ---------------------------------------------------------------------------
+  # ircfiber-gifworker — the media sandbox
+  # ---------------------------------------------------------------------------
+  # Every byte of user-supplied video/WebP is decoded here and nowhere else.
+  # ffmpeg/ffprobe are a large C attack surface driven entirely by uploaded
+  # bytes, so this container gets no network namespace, a read-only rootfs, no
+  # capabilities, uid 65534, a pid cap and its own memory ceiling, and it sees
+  # the uploads volume READ-ONLY. Its only channel to the gateway is the
+  # /work file spool (docker/gifworker/gif-worker.sh).
+  #
+  # Same image as the gateway, different command and a stripped-down
+  # container — the pattern ircfiber-bnc / -support-bot / -fibereye already
+  # follow, so there is no second image to build, push or promote.
+  ircfiber-gifworker:
+    build:
+      context: .
+      dockerfile: Containerfile
+      target: runtime-gateway
+    container_name: ircfiber-gifworker
+    command: ["/bin/sh", "/app/gif-worker.sh"]
+    environment:
+      GIF_WORK_DIR: /work
+      GIF_SRC_DIR: /uploads
+    depends_on:
+      - ircfiber-gateway
+    restart: unless-stopped
+    # `none`, not the app bridge: a decoder RCE gets no socket to phone home
+    # with and cannot reach Redis, Mongo or the IRC network.
+    network_mode: none
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # `pids` lives under deploy.resources with the cpu/memory caps: compose
+    # rejects a project that sets both the top-level `pids_limit` and this.
+    volumes:
+      - ircfiber_uploads:/uploads:ro
+      - ircfiber_gifwork:/work
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 768M
+          pids: 64
 
   redis:
     image: redis:7-alpine
@@ -149,4 +203,6 @@ volumes:
   irc_fiber_logs:
     driver: local
   ircfiber_uploads:
+    driver: local
+  ircfiber_gifwork:
     driver: local

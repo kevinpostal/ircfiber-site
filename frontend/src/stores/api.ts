@@ -714,6 +714,7 @@ export async function editUpload(id: string, data: { content: string; filename: 
  *  only the terminal `done` snapshot carries 100. */
 export interface GifJob {
   state: 'running' | 'done' | 'error';
+  phase?: 'palette' | 'encode';
   percent: number; frame: number; fps: number; speed: number;
   durationMs: number; outTimeMs: number; elapsedMs: number; etaMs: number;
   filename?: string; uploadId?: string; startedAt?: number;

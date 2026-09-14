@@ -36,6 +36,8 @@ import std.path : buildPath;
 import std.string : strip, indexOf, lastIndexOf, toLower;
 import ircfiber.auth : requireAuth;
 import ircfiber.api.image_proxy : handleImageProxy;
+import ircfiber.api.gifspool : gifSpoolSafeName, gifSpoolSpec, gifSpoolValue,
+    parseGifProgress, parseGifExit, gifExitMessage, GifExitRecord;
 import ircfiber.build_info : buildInfo;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.irc.registry : ServerRegistry;
@@ -2913,35 +2915,77 @@ final class RESTAPI {
         catch (Exception e) logWarn("gif job publish failed: %s", e.msg);
     }
 
-    /// Duration of the source in ms via ffprobe, clamped to GIF_MAX_SECONDS.
-    /// Returns 0 when ffprobe is unavailable or the value is unparseable —
-    /// the client then renders an indeterminate progress bar instead of a
-    /// wrong percentage.
-    private long probeDurationMs(string srcPath) {
-        import vibe.core.process : execute;
-        import std.string : strip;
-        try {
-            auto r = execute(["ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", srcPath]);
-            if (r.status != 0) return 0;
-            auto secs = r.output.strip.to!double;
-            if (secs <= 0) return 0;
-            if (secs > GIF_MAX_SECONDS) secs = GIF_MAX_SECONDS;
-            return cast(long)(secs * 1000);
-        } catch (Exception) {
-            return 0;
+    /// Wall-clock ceiling for one spooled conversion, measured from the
+    /// moment the job file lands. Covers sidecar queueing plus both ffmpeg
+    /// passes; each pass has its own tighter deadline inside the sandbox.
+    private enum int GIF_SPOOL_TIMEOUT_SECONDS = 300;
+
+    /// Conversions the whole gateway will run at once, and the set of users
+    /// currently holding a slot (one each). See the admission check in
+    /// `convertUploadToGif`.
+    private enum int GIF_MAX_CONCURRENT = 2;
+    private int gifRunning;
+    private bool[string] gifRunningUsers;
+
+    /// Filesystem spool the GIF sandbox drains. Shared volume in prod
+    /// (`/work` in the gateway and in `runtime-gifworker`), a temp directory
+    /// in native dev.
+    private static string gifWorkDir() {
+        import std.process : environment;
+        import std.file : tempDir, mkdirRecurse, isDir;
+        auto env = environment.get("IRCFIBER_GIF_WORK_DIR", "");
+        string dir;
+        if (env.length > 0) dir = env;
+        else {
+            bool haveWork = false;
+            try haveWork = exists("/work") && isDir("/work"); catch (Exception) {}
+            dir = haveWork ? "/work" : buildPath(tempDir, "ircfiber-gifwork");
         }
+        try mkdirRecurse(dir);
+        catch (Exception e) logWarn("gif: cannot create spool %s: %s", dir, e.msg);
+        // Two writers with different uids share this directory: the gateway
+        // (root in its container) drops `.job` files, the sandbox (65534)
+        // claims them and writes results back. Whichever container first
+        // materialises a fresh named volume decides its ownership, so the
+        // gateway widens it instead of depending on that order.
+        version (Posix) {
+            import std.file : setAttributes;
+            import std.conv : octal;
+            try setAttributes(dir, octal!777);
+            catch (Exception e) logWarn("gif: cannot widen spool %s: %s", dir, e.msg);
+        }
+        return dir;
     }
 
-    /// Convert an uploaded video (or WebP) to an animated GIF via ffmpeg.
+    /// True when a `runtime-gifworker` sidecar is draining the spool. Without
+    /// one (native dev) the gateway runs the very same script itself with
+    /// `--once`, so there is only ever one ffmpeg recipe in the tree.
+    private static bool gifSidecarEnabled() {
+        import std.process : environment;
+        return environment.get("IRCFIBER_GIF_SIDECAR", "") == "1";
+    }
+
+    /// Worker script for the no-sidecar fallback.
+    private static string gifWorkerScript() {
+        import std.process : environment;
+        auto env = environment.get("IRCFIBER_GIF_WORKER", "");
+        if (env.length > 0) return env;
+        try if (exists("/app/gif-worker.sh")) return "/app/gif-worker.sh";
+        catch (Exception) {}
+        return "docker/gifworker/gif-worker.sh";
+    }
+
+    // The spool protocol itself (job spec, progress parser, exit mapping)
+    // lives in ircfiber.api.gifspool — pure text handling with its own test
+    // target, `dub --root=backend build --config=gif-spool-test`.
+
+    /// Convert an uploaded video (or WebP) to an animated GIF.
     ///
-    /// Returns `202 {jobId}` immediately and does the work in a background
-    /// task, publishing live ffmpeg progress under `gif:job:<jobId>`; the
-    /// client polls `GET /api/uploads/gif-jobs/:jobId`. Conversion of a 30 s
-    /// clip takes tens of seconds, so the previous blocking request left the
-    /// UI on a static "converting…" label with no way to tell progress from
-    /// a hang.
+    /// Returns `202 {jobId}` immediately and spools the work to the GIF
+    /// sandbox, publishing live progress under `gif:job:<jobId>`; the client
+    /// polls `GET /api/uploads/gif-jobs/:jobId`. Conversion of a 30 s clip
+    /// takes tens of seconds, so a blocking request left the UI on a static
+    /// "converting…" label with no way to tell progress from a hang.
     private void convertUploadToGif(HTTPServerRequest req, HTTPServerResponse res) {
         requireAuth(req, res);
         if (res.headerWritten) return;
@@ -2986,12 +3030,32 @@ final class RESTAPI {
         const userId = user.id.toString();
         const startedAt = Clock.currTime.toUnixTime!long * 1000;
 
+        // Admission control. A conversion is the most expensive thing an
+        // authenticated user can make the server start, so one per user and
+        // GIF_MAX_CONCURRENT per gateway: without this, N tabs POSTing /gif
+        // is free CPU and memory exhaustion even with the sandbox's caps.
+        if (userId in gifRunningUsers) {
+            res.statusCode = 429;
+            res.writeJsonBody(Json(["error":
+                Json("A conversion is already running — wait for it to finish")]));
+            return;
+        }
+        if (gifRunning >= GIF_MAX_CONCURRENT) {
+            res.statusCode = 429;
+            res.writeJsonBody(Json(["error":
+                Json("The server is busy converting other videos — try again in a moment")]));
+            return;
+        }
+        gifRunning++;
+        gifRunningUsers[userId] = true;
+
         // The very first poll can land before ffmpeg has emitted anything, so
         // this placeholder MUST carry the full field set the poll contract
         // promises — a missing `frame` renders as "frame undefined" in the
         // client's indeterminate label.
         putGifJob(jobId, Json([
             "state":      Json("running"),
+            "phase":      Json("palette"),
             "userId":     Json(userId),
             "uploadId":   Json(rec.id),
             "filename":   Json(rec.filename),
@@ -3012,8 +3076,12 @@ final class RESTAPI {
         // runTask requires a nothrow delegate, so every failure has to be
         // funnelled into the job record instead of propagating.
         runTask(() nothrow {
+            void releaseSlot() nothrow {
+                try { gifRunning--; gifRunningUsers.remove(userId); } catch (Exception) {}
+            }
+            scope (exit) releaseSlot();
             try {
-                runGifConversion(jobId, userId, recCopy, srcPath, baseUrl, startedAt);
+                runGifConversion(jobId, userId, recCopy, srcName, baseUrl, startedAt);
             } catch (Exception e) {
                 try {
                     logWarn("gif conversion task failed: %s", e.msg);
@@ -3064,24 +3132,36 @@ final class RESTAPI {
         res.writeJsonBody(job);
     }
 
-    /// The actual ffmpeg run. Publishes progress as it goes and the finished
-    /// upload record (same shape the endpoint used to return synchronously)
-    /// under `result` when done.
+    /// Drives one conversion through the sandbox spool and publishes
+    /// progress. The gateway NEVER runs ffmpeg itself: untrusted media is
+    /// decoded only inside `runtime-gifworker` (no network namespace,
+    /// read-only rootfs, all caps dropped, uid 65534, uploads mounted
+    /// read-only). See docker/gifworker/gif-worker.sh for the protocol and
+    /// the ffmpeg recipe.
+    ///
+    /// Two phases are reported: `palette` (pass 1, no measurable output
+    /// timeline — palettegen produces its single frame at EOF, so `percent`
+    /// stays 0 and the client renders it indeterminate) and `encode`
+    /// (pass 2, real 0-99 progress against the capped duration).
     private void runGifConversion(string jobId, string userId, UploadRecord rec,
-                                  string srcPath, string baseUrl, long startedAt) {
-        import vibe.core.process : pipeProcess, Redirect;
-        import vibe.stream.operations : readLine;
-        import core.time : seconds;
-        import std.file : tempDir;
+                                  string srcName, string baseUrl, long startedAt) {
+        import vibe.core.core : sleep;
+        import core.time : msecs, seconds;
+        import std.file : read, write, rename;
         import std.path : stripExtension;
         import std.array : replace;
-        import std.string : indexOf, strip;
-        import std.algorithm : endsWith;
 
-        const durationMs = probeDurationMs(srcPath);
+        const work = gifWorkDir();
+        const id = jobId.replace("-", "");
+        const outName = id ~ ".gif";
 
-        void publish(string state, int percent, long frame, double fps, double speed,
-                     long outTimeMs, string error, Json result) {
+        long durationMs = 0;
+        long frame, outTimeMs;
+        double fps = 0, speed = 0;
+        int percent = 0;
+        string phase = "palette";
+
+        void publish(string state, string error = "", Json result = Json.undefined) {
             const now = Clock.currTime.toUnixTime!long * 1000;
             const elapsed = now - startedAt;
             // ETA from observed throughput, not from `speed` (which is
@@ -3091,6 +3171,7 @@ final class RESTAPI {
                 etaMs = cast(long)(elapsed * (100.0 - percent) / percent);
             auto job = Json.emptyObject;
             job["state"]      = Json(state);
+            job["phase"]      = Json(phase);
             job["userId"]     = Json(userId);
             job["uploadId"]   = Json(rec.id);
             job["filename"]   = Json(rec.filename);
@@ -3108,120 +3189,115 @@ final class RESTAPI {
             putGifJob(jobId, job);
         }
 
-        auto tmpPath = buildPath(tempDir, randomUUID().toString().replace("-", "") ~ ".gif");
-        // Cap at 30s, 12fps, max width 480, palette-optimized. ffmpeg's own
-        // filtergraph parser handles the argument; argv exec, no shell.
-        // `-progress pipe:1 -nostats` turns stdout into a machine-readable
-        // key=value progress stream (frame/fps/out_time_us/speed/progress).
-        // `-stats_period 0.2` overrides ffmpeg's 0.5 s default so a short
-        // conversion still emits several blocks and the bar actually moves.
-        auto args = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-nostats", "-progress", "pipe:1", "-stats_period", "0.2",
-            "-i", srcPath,
-            "-t", GIF_MAX_SECONDS.to!string,
-            "-vf", "fps=12,scale=w='min(480,iw)':h=-2:flags=lanczos," ~
-                   "split[s0][s1];[s0]palettegen=stats_mode=diff[p];" ~
-                   "[s1][p]paletteuse=dither=bayer:bayer_scale=5",
-            "-loop", "0", tmpPath];
-
-        typeof(pipeProcess(args, Redirect.stdout)) pipes;
-        try {
-            pipes = pipeProcess(args, Redirect.stdout);
-        } catch (Exception e) {
-            logWarn("ffmpeg spawn failed: %s", e.msg);
-            publish("error", 0, 0, 0, 0, 0,
-                "GIF conversion unavailable (ffmpeg not installed)", Json.undefined);
+        if (!gifSpoolSafeName(srcName)) {
+            logWarn("gif: refusing unsafe source name %s", srcName);
+            publish("error", "This file cannot be converted");
             return;
         }
 
-        long frame, outTimeMs;
-        double fps = 0, speed = 0;
-        int percent = 0;
-        long lastPublishMs = 0;
+        string spoolPath(string suffix) { return buildPath(work, id ~ suffix); }
+        string slurp(string suffix) {
+            try {
+                auto p = spoolPath(suffix);
+                if (!exists(p)) return null;
+                return cast(string) read(p);
+            } catch (Exception) {
+                return null;
+            }
+        }
+        // `scope (exit)` cannot contain a `catch`, so the swallowing lives in
+        // a helper the scope guard calls.
+        void dropSpool() {
+            foreach (suffix; [".job", ".job.tmp", ".claim", ".meta", ".p1", ".p2",
+                              ".err", ".exit", ".pal.png", ".gif"]) {
+                try { auto p = spoolPath(suffix); if (exists(p)) remove(p); }
+                catch (Exception) {}
+            }
+        }
+        scope (exit) dropSpool();
+
+        // Atomic hand-off: write beside the spool name, then rename, so the
+        // worker's claim can never see a half-written spec.
         try {
-            while (!pipes.stdout.empty) {
-                // vibe's readLine defaults to a CRLF separator and THROWS if
-                // the stream ends without one. ffmpeg's `-progress` stream is
-                // LF-separated, so without the explicit separator the whole
-                // stream comes back as one unparseable blob at EOF and every
-                // progress field stays zero.
-                auto line = cast(string) pipes.stdout.readLine(4096, "\n");
-                const eq = line.indexOf('=');
-                if (eq <= 0) continue;
-                const key = line[0 .. eq].strip;
-                const val = line[eq + 1 .. $].strip;
-                switch (key) {
-                    case "frame":
-                        try frame = val.to!long; catch (Exception) {}
-                        break;
-                    case "fps":
-                        try fps = val.to!double; catch (Exception) {}
-                        break;
-                    case "speed":
-                        // e.g. "1.42x", or "N/A" before the first frame.
-                        try speed = val.endsWith("x") ? val[0 .. $ - 1].to!double : val.to!double;
-                        catch (Exception) {}
-                        break;
-                    case "out_time_us":
-                    case "out_time_ms":   // ffmpeg reports microseconds here too
-                        try outTimeMs = val.to!long / 1000; catch (Exception) {}
-                        break;
-                    case "progress":
-                        // Every ffmpeg progress block is terminated by a
-                        // `progress=continue|end` line. Publishing only here
-                        // means a snapshot never mixes this block's frame
-                        // count with the previous block's timestamp.
-                        if (val == "end") outTimeMs = durationMs > 0 ? durationMs : outTimeMs;
-                        if (durationMs > 0) {
-                            auto p = cast(int)(outTimeMs * 100 / durationMs);
-                            percent = p < 0 ? 0 : (p > 99 ? 99 : p);
-                        }
-                        const nowMs = Clock.currTime.toUnixTime!long * 1000;
-                        if (val != "end" && nowMs - lastPublishMs >= 150) {
-                            lastPublishMs = nowMs;
-                            publish("running", percent, frame, fps, speed, outTimeMs, "", Json.undefined);
-                        }
-                        break;
-                    default:
-                        break;
+            write(spoolPath(".job.tmp"), gifSpoolSpec(srcName, outName, GIF_MAX_SECONDS));
+            rename(spoolPath(".job.tmp"), spoolPath(".job"));
+        } catch (Exception e) {
+            logWarn("gif: cannot spool job %s: %s", id, e.msg);
+            publish("error", "Conversion service unavailable");
+            return;
+        }
+
+        // No sidecar (native dev): run the very same script once ourselves.
+        if (!gifSidecarEnabled()) {
+            try {
+                import vibe.core.process : spawnProcess;
+                spawnProcess(["/bin/sh", gifWorkerScript(), "--once", id],
+                    ["GIF_WORK_DIR": work, "GIF_SRC_DIR": uploadDir()]);
+            } catch (Exception e) {
+                logWarn("gif: worker spawn failed: %s", e.msg);
+                publish("error", "Conversion service unavailable");
+                return;
+            }
+        }
+
+        publish("running");
+
+        const deadline = Clock.currTime + GIF_SPOOL_TIMEOUT_SECONDS.seconds;
+        GifExitRecord fin;
+        while (true) {
+            if (durationMs == 0) {
+                auto meta = slurp(".meta");
+                if (meta.length > 0) {
+                    auto d = gifSpoolValue(meta, "duration_ms");
+                    if (d.length > 0) try durationMs = d.to!long; catch (Exception) {}
                 }
             }
-        } catch (Exception e) {
-            // A read failure is not fatal on its own — the exit status below
-            // decides. Progress simply stops updating.
-            logWarn("ffmpeg progress read ended: %s", e.msg);
+
+            // Pass 2's stream supersedes pass 1's the moment it exists.
+            auto encode = slurp(".p2");
+            auto snap = parseGifProgress(encode.length > 0 ? encode : slurp(".p1"));
+            phase = encode.length > 0 ? "encode" : "palette";
+            if (snap.any) {
+                frame = snap.frame;
+                fps = snap.fps;
+                speed = snap.speed;
+                outTimeMs = snap.outTimeMs;
+                if (durationMs > 0) {
+                    auto p = cast(int)(outTimeMs * 100 / durationMs);
+                    percent = p < 0 ? 0 : (p > 99 ? 99 : p);
+                }
+            }
+
+            fin = parseGifExit(slurp(".exit"));
+            if (fin.present) break;
+            if (Clock.currTime > deadline) {
+                publish("error", "GIF conversion timed out");
+                return;
+            }
+            publish("running");
+            sleep(200.msecs);
         }
 
-        auto code = pipes.process.wait(120.seconds);
-        if (code.isNull) {
-            pipes.process.forceKill();
-            pipes.process.wait();
-            try { if (exists(tmpPath)) remove(tmpPath); } catch (Exception) {}
-            publish("error", percent, frame, fps, speed, outTimeMs,
-                "GIF conversion timed out", Json.undefined);
-            return;
-        }
-        if (code.get != 0) {
-            try { if (exists(tmpPath)) remove(tmpPath); } catch (Exception) {}
-            publish("error", percent, frame, fps, speed, outTimeMs,
-                "ffmpeg failed (exit " ~ code.get.to!string ~ ")", Json.undefined);
+        if (fin.status != 0) {
+            logWarn("gif: job %s failed (status %d) %s", id, fin.status, fin.error);
+            publish("error", fin.error.length > 0 ? fin.error : gifExitMessage(fin.status));
             return;
         }
 
         const(ubyte)[] data;
-        {
-            import std.file : read;
-            data = cast(const(ubyte)[]) read(tmpPath);
+        try {
+            data = cast(const(ubyte)[]) read(spoolPath(".gif"));
+        } catch (Exception e) {
+            logWarn("gif: result unreadable for %s: %s", id, e.msg);
+            publish("error", "Conversion produced no output");
+            return;
         }
-        try { remove(tmpPath); } catch (Exception) {}
         if (data.length == 0) {
-            publish("error", percent, frame, fps, speed, outTimeMs,
-                "ffmpeg produced empty output", Json.undefined);
+            publish("error", "Conversion produced empty output");
             return;
         }
         if (data.length > MAX_UPLOAD_BYTES) {
-            publish("error", percent, frame, fps, speed, outTimeMs,
-                "Converted GIF exceeds 50 MB", Json.undefined);
+            publish("error", "Converted GIF exceeds 50 MB");
             return;
         }
 
@@ -3231,7 +3307,7 @@ final class RESTAPI {
             uploaded = saveUpload(gifName, "image/gif", data, baseUrl);
         } catch (LocalUploadException e) {
             logWarn("gif upload save failed: %s", e.msg);
-            publish("error", percent, frame, fps, speed, outTimeMs, e.msg, Json.undefined);
+            publish("error", e.msg);
             return;
         }
 
@@ -3250,7 +3326,8 @@ final class RESTAPI {
         try { uploadRepo.insert(rec2); }
         catch (Exception e) { logError("Failed to record gif upload: %s", e.msg); }
 
-        publish("done", 100, frame, fps, speed, outTimeMs, "", Json([
+        percent = 100;
+        publish("done", "", Json([
             "id": Json(rec2.id), "url": Json(rec2.directUrl), "pageUrl": Json(rec2.pageUrl),
             "name": Json(rec2.filename), "mimeType": Json(rec2.mimeType), "size": Json(rec2.size),
             "createdAt": Json(rec2.createdAt), "buffer": Json(rec2.buffer), "networkId": Json(rec2.networkId),

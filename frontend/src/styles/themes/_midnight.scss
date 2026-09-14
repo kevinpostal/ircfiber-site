@@ -86,8 +86,13 @@
 .upload-dialog .progress-bar-bg { flex: 0 0 80px; height: 6px; background: rgba(255,255,255,.1); border-radius: 3px; overflow: hidden; }
 .upload-dialog .progress-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .2s; }
 
-/* ---- upload confirmation dialog ---- */
-#fileUploadContainer.uploadDialog {
+/* ---- upload confirmation + upload progress dialogs ---- */
+/* One box for both: the confirm dialog (#fileUploadContainer) and the
+   upload/GIF progress dialog (#uploadProgressContainer) that replaces it on
+   submit. The rule is id-scoped, so a new dialog carrying only
+   .uploadDialog renders as unstyled text in the page's top-left corner. */
+#fileUploadContainer.uploadDialog,
+#uploadProgressContainer.uploadDialog {
   position: absolute;
   top: 50px;
   left: 50%;

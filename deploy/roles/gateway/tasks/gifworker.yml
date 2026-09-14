@@ -1,0 +1,68 @@
+---
+# ircfiber-gifworker — the media sandbox.
+#
+# Every byte of user-supplied video/WebP is decoded HERE and nowhere else.
+# ffmpeg and ffprobe are a large C attack surface driven entirely by
+# attacker-controlled bytes (any logged-in user can upload a file), and they
+# used to run inside the gateway container — next to its Redis and Mongo
+# credentials, its read-write uploads volume and its network namespace. This
+# container removes all three.
+#
+# Deliberately NOT defined through tasks/container.yml, which is the spec for
+# a container that *serves*: that spec carries the whole gateway env (every
+# connection URL and the secrets mount), joins two docker networks and gets an
+# HTTP health probe. The sandbox must have none of that. The one thing it
+# shares with the gateway is the image — the same pattern ircfiber-bnc,
+# -support-bot, -fibereye and -sysagent already use, so there is no second
+# image to build, push or promote.
+#
+# The gateway drops `<id>.job` into the shared spool volume and reads
+# `<id>.gif` / `<id>.exit` back out; see docker/gifworker/gif-worker.sh for
+# the protocol and source/ircfiber/api/gifspool.d for the gateway half.
+- name: "Run {{ gifworker_container_name }}"
+  community.docker.docker_container:
+    name: "{{ gifworker_container_name }}"
+    image: "{{ ircfiber_gateway_image_full }}"
+    state: started
+    restart_policy: unless-stopped
+    command: ["/bin/sh", "/app/gif-worker.sh"]
+    # No networks at all. A decoder RCE in here has no socket to phone home
+    # with and cannot reach redis, mongo, the ircd or the metadata service.
+    network_mode: none
+    # Unprivileged, and it cannot regain privilege via a setuid binary.
+    user: "65534:65534"
+    security_opts:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    # The rootfs is immutable; the only writable paths are the spool volume
+    # and a small tmpfs.
+    read_only: true
+    tmpfs:
+      - "/tmp:size=64m,mode=1777"
+    env:
+      GIF_WORK_DIR: /work
+      GIF_SRC_DIR: /uploads
+    volumes:
+      # Uploads READ-ONLY: the sandbox reads the source file and can neither
+      # tamper with other users' uploads nor plant a new one. The converted
+      # GIF is written to the spool and saved into uploads by the gateway.
+      - "{{ gateway_uploads_volume }}:/uploads:ro"
+      - "{{ gateway_gifwork_volume }}:/work"
+    memory: "{{ gifworker_memory_limit }}"
+    memory_reservation: "{{ gifworker_memory_reservation }}"
+    cpus: "{{ gifworker_cpus | float }}"
+    pids_limit: 64
+    oom_score_adj: "{{ gifworker_oom_score_adj | int }}"
+    labels:
+      com.ircfiber.component: "gifworker"
+      com.ircfiber.version: "{{ ircfiber_version | default('unknown') }}"
+  when: gifworker_enabled | default(true) | bool
+
+# Turning the sidecar off must not leave a stale container draining the spool
+# with an old recipe.
+- name: Remove {{ gifworker_container_name }} when disabled
+  community.docker.docker_container:
+    name: "{{ gifworker_container_name }}"
+    state: absent
+  when: not (gifworker_enabled | default(true) | bool)

@@ -211,12 +211,16 @@ services:
       # every `docker compose up -d` wipes /app/uploads and all shared
       # image/text-file URLs 404.
       - uploads_data:/app/uploads
+      - gifwork_data:/work
     environment:
       IRCFIBER_OTEL_ENABLED: "${IRCFIBER_OTEL_ENABLED:-0}"
       IRCFIBER_OTEL_ENDPOINT: "${IRCFIBER_OTEL_ENDPOINT:-http://otel-collector:4318}"
       IRCFIBER_REDIS_URL: redis://redis:6379/0
       IRCFIBER_MONGO_URL: mongodb://mongo:27017/ircfiber
       IRCFIBER_LOG_LEVEL: debug
+      # GIF conversion happens in ircfiber-gifworker, never in this process.
+      IRCFIBER_GIF_WORK_DIR: /work
+      IRCFIBER_GIF_SIDECAR: "1"
       # Same pool the engine reads: the gateway derives slot labels from it for
       # the SOCKS identity probe and for the pre-slot-registry fallback.
       IRCFIBER_MULLVAD_POOL: socks5://a@mullvad-slot-a:1080,socks5://b@mullvad-slot-b:1080
@@ -238,6 +242,46 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # -----------------------------------------------------------------------
+  # ircfiber-gifworker — the media sandbox
+  # -----------------------------------------------------------------------
+  # Every byte of user-supplied video/WebP is decoded here and nowhere else:
+  # ffmpeg/ffprobe are a large C attack surface driven entirely by uploaded
+  # bytes. Same image as the gateway, different command, and a container with
+  # no network namespace, a read-only rootfs, no capabilities, uid 65534 and
+  # the uploads volume mounted READ-ONLY. Its only channel back to the
+  # gateway is the /work file spool (docker/gifworker/gif-worker.sh).
+  ircfiber-gifworker:
+    build:
+      context: ../..
+      dockerfile: Containerfile
+      target: runtime-gateway
+    image: irc-fiber-gateway:local
+    container_name: ircfiber-gifworker
+    restart: unless-stopped
+    command: ["/bin/sh", "/app/gif-worker.sh"]
+    network_mode: none
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      GIF_WORK_DIR: /work
+      GIF_SRC_DIR: /uploads
+    volumes:
+      - uploads_data:/uploads:ro
+      - gifwork_data:/work
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 768M
+          pids: 64
 
   # -----------------------------------------------------------------------
   # ircfiber-holder — owns every IRC TCP/SOCKS5/TLS socket and relays
@@ -407,6 +451,8 @@ volumes:
   zookeeper_datalog:
     driver: local
   uploads_data:
+    driver: local
+  gifwork_data:
     driver: local
   slot_a_ctl:
     driver: local

@@ -1753,6 +1753,12 @@ let showEditNetwork: boolean = $state(false);
   {/await}
 {/if}
 
+{#if uploadState.progressDialog}
+  {#await import('./components/UploadProgressDialog.svelte') then { default: UploadProgressDialog }}
+    <UploadProgressDialog />
+  {/await}
+{/if}
+
 {#if channelMenu}
   {@const capturedNetworkId = channelMenu.networkId}
   {@const capturedBufferName = channelMenu.bufferName}

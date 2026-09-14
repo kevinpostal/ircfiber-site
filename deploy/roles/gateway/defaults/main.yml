@@ -112,3 +112,29 @@ sysagent_cpus: 0.25
 # Stateless and restarted by unless-stopped: the most disposable thing on the
 # host, so the kernel picks it first.
 sysagent_oom_score_adj: 500
+
+# ---------------------------------------------------------------------------
+# GIF sandbox (tasks/gifworker.yml): the ONLY place untrusted user media is
+# decoded. Same image as the gateway, started as `sh /app/gif-worker.sh`,
+# with no network namespace, a read-only rootfs, no capabilities, uid 65534
+# and the uploads volume mounted read-only. Its only channel to the gateway
+# is the shared spool volume below.
+# ---------------------------------------------------------------------------
+gifworker_container_name: ircfiber-gifworker
+gifworker_enabled: true
+# Job spool shared with the gateway replicas: <id>.job in, <id>.gif and
+# <id>.exit out. Tiny and transient — everything in it is deleted by the
+# gateway when a job settles, and swept after 30 minutes by the worker.
+gateway_gifwork_volume: "ircfiber_gifwork"
+# Measured peak for the two-pass 30 s / 480 px conversion: 58 MiB RSS. 768 MiB
+# is deliberately far above that — the single-pass palette graph this replaced
+# peaked at 350 MiB and a 4-minute clip OOM-killed it, so the cap is sized to
+# absorb a pathological input rather than to fit the happy path.
+gifworker_memory_limit: "768m"
+gifworker_memory_reservation: "64m"
+# One and a half cores: a conversion is CPU-bound for a few seconds and must
+# not be able to starve the ircd or mongo.
+gifworker_cpus: 1.5
+# Nothing depends on it staying alive: a killed conversion is one failed
+# upload, retried by the user.
+gifworker_oom_score_adj: 500

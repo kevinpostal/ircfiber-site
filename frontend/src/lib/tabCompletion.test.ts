@@ -8,6 +8,7 @@ describe('TabCompletionEngine', () => {
     prefix: '',
     category: 'MEMBER',
     ident: '',
+    host: '',
     realname: '',
     isAway: false,
     awayMessage: '',

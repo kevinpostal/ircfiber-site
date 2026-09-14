@@ -5,6 +5,7 @@ import {
   formatTime12Hour,
   formatDate,
   stripPrefix,
+  splitUserHost,
   getUserModePrefix,
   getAvatarColor,
   generateLabel,
@@ -210,6 +211,28 @@ describe('getUserModePrefix', () => {
     const result = getUserModePrefix('alice');
     expect(result.category).toBe('MEMBER');
     expect(result.prefix).toBe('');
+  });
+});
+
+describe('splitUserHost', () => {
+  it('splits a full nick!user@host mask', () => {
+    expect(splitUserHost('sq!~sq@qefugmwi.hidden')).toEqual({ ident: '~sq', host: 'qefugmwi.hidden' });
+  });
+
+  it('splits a bare user@host (the engine idents cache form)', () => {
+    expect(splitUserHost('services@services.host')).toEqual({ ident: 'services', host: 'services.host' });
+  });
+
+  it('keeps a hostless value as the ident', () => {
+    expect(splitUserHost('bob_ident')).toEqual({ ident: 'bob_ident', host: '' });
+  });
+
+  it('splits on the last @ so an @ in the user part cannot steal the host', () => {
+    expect(splitUserHost('nick!a@b@real.host')).toEqual({ ident: 'a@b', host: 'real.host' });
+  });
+
+  it('returns empty parts for an empty mask', () => {
+    expect(splitUserHost('')).toEqual({ ident: '', host: '' });
   });
 });
 

@@ -1,6 +1,6 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
-import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier } from '../lib/utils';
+import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, naturalCompare, normaliseIdentifier, splitUserHost } from '../lib/utils';
 import { setChanPrefixChars } from '../lib/autolinker';
 import { setChanModeTypes } from '../lib/modeSentence';
 import { isMessageIgnored } from '../lib/ignorePolicy';
@@ -707,7 +707,7 @@ function prePopulateOwnNick(buf: Buffer, currentNick: string): void {
   if (buf.users.some(u => stripPrefix(u.nick) === stripped)) return;
   buf.users.push({
     nick: currentNick, prefix: '', category: 'MEMBER',
-    ident: '', realname: '', isAway: false, awayMessage: '',
+    ident: '', host: '', realname: '', isAway: false, awayMessage: '',
     lastSpoke: 0, lastHighlighted: 0, account: '', isBot: false
   });
 }
@@ -2363,14 +2363,15 @@ function normalizeUser(user: string | Member): Member {
     // refresh and made users appear without their @/+/% prefix in
     // the member list. The `prefix` field is still set so
     // sorting/grouping by ModeCategory keeps working.
-    const bang = user.indexOf('!');
-    const identEJ = bang > 0 ? user.slice(bang + 1).split('@')[0] : '';
+    const { ident: identEJ, host: hostEJ } = user.includes('!')
+      ? splitUserHost(user)
+      : { ident: '', host: '' };
     const mode = getUserModePrefix(user);
     return {
       nick: user,
       prefix: mode.prefix,
       category: mode.category,
-      ident: identEJ, realname: '', isAway: false, awayMessage: '',
+      ident: identEJ, host: hostEJ, realname: '', isAway: false, awayMessage: '',
       lastSpoke: 0, lastHighlighted: 0, account: ''
     };
   }
@@ -2498,9 +2499,15 @@ function enrichMembersFromSync(
       const acct = findCI(caches.accounts, m.nick) ?? findCI(caches.accounts, bare);
       if (acct) m.account = acct;
     }
-    if (caches.idents && !m.ident) {
+    if (caches.idents && (!m.ident || !m.host)) {
       const id = findCI(caches.idents, m.nick) ?? findCI(caches.idents, bare);
-      if (id) m.ident = id;
+      if (id) {
+        // The cache stores whatever the engine saw, which may be a bare
+        // user or a full `user@host`.
+        const parts = splitUserHost(id);
+        if (parts.ident && !m.ident) m.ident = parts.ident;
+        if (parts.host && !m.host) m.host = parts.host;
+      }
     }
     if (caches.realnames && !m.realname) {
       const rn = (caches.bufRealnames ? (findCI(caches.bufRealnames, m.nick) ?? findCI(caches.bufRealnames, bare)) : undefined)
@@ -2942,7 +2949,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
             if (!existingBuf.users.some(u => stripPrefix(u.nick) === selfBare)) {
               existingBuf.users.push({
                 nick: existing.currentNick, prefix: '', category: 'MEMBER',
-                ident: '', realname: '', isAway: false, awayMessage: '',
+                ident: '', host: '', realname: '', isAway: false, awayMessage: '',
                 lastSpoke: 0, lastHighlighted: 0, account: '',
               });
             }
@@ -3329,7 +3336,7 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
           if (!buf.users.some(u => stripPrefix(u.nick) === selfBare)) {
             buf.users.push({
               nick: net.currentNick, prefix: '', category: 'MEMBER',
-              ident: '', realname: '', isAway: false, awayMessage: '',
+              ident: '', host: '', realname: '', isAway: false, awayMessage: '',
               lastSpoke: 0, lastHighlighted: 0, account: '',
             });
           }
@@ -3736,9 +3743,10 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
       if (!n) continue;
       const stripped = stripPrefix(n);
       const mode = getUserModePrefix(n);
-      // userhost-in-names: nick!user@host — extract ident
-      const bang = n.indexOf('!');
-      const identEJ = bang > 0 ? n.slice(bang + 1).split('@')[0] : '';
+      // userhost-in-names: nick!user@host — keep both halves.
+      const { ident: identEJ, host: hostEJ } = n.includes('!')
+        ? splitUserHost(n)
+        : { ident: '', host: '' };
       // Find an existing entry by stripped nick. If found, PROMOTE it to
       // the prefixed form (in place) so the operator status survives
       // even when the JOIN handler raced ahead with a bare-nick entry.
@@ -3757,26 +3765,33 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
         if (!existing.prefix) existing.prefix = mode.prefix;
         if (existing.category === 'MEMBER' || !existing.category) existing.category = mode.category;
         if (identEJ && !existing.ident) existing.ident = identEJ;
+        if (hostEJ && !existing.host) existing.host = hostEJ;
         if (sensibleRealname && !existing.realname) existing.realname = sensibleRealname;
       } else {
         buf.users.push({
           nick: n, prefix: mode.prefix, category: mode.category,
-          ident: identEJ, realname: sensibleRealname, isAway: false, awayMessage: '',
+          ident: identEJ, host: hostEJ, realname: sensibleRealname, isAway: false, awayMessage: '',
           lastSpoke: 0, lastHighlighted: 0, account: ''
         });
       }
     }
   } else if (cmd === '352' && params && params.length >= 7) {
     // RPL_WHOREPLY: [me, channel, user, host, server, nick, flags].
+    // This is the one source that always carries the full usermask, so
+    // it backfills `ident`/`host` for members NAMES delivered bare.
     // The flags field carries the +B bot mode ('B') — the only passive
     // signal a +B user exists, since user MODE changes echo only to the
     // user themselves, never to the channel. Set-only, mirroring the
     // host-suffix heuristic: +B is effectively never removed.
     const flags = params[6] || '';
-    if (flags.includes('B')) {
-      const target = stripPrefix(params[5] || '');
-      const m = buf.users.find(u => stripPrefix(u.nick).toLowerCase() === target.toLowerCase());
-      if (m) m.isBot = true;
+    const target = stripPrefix(params[5] || '');
+    const m = target
+      ? buf.users.find(u => stripPrefix(u.nick).toLowerCase() === target.toLowerCase())
+      : undefined;
+    if (m) {
+      if (!m.ident && params[2]) m.ident = params[2];
+      if (!m.host && params[3]) m.host = params[3];
+      if (flags.includes('B')) m.isBot = true;
     }
   } else if (cmd === 'JOIN' && joinNick === net.currentNick) {
     buf.isJoined = true;
@@ -3792,7 +3807,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     if (!buf.users.some(u => stripPrefix(u.nick) === net.currentNick)) {
       buf.users.push({
         nick: net.currentNick, prefix: '', category: 'MEMBER',
-        ident: '', realname: '', isAway: false, awayMessage: '',
+        ident: '', host: '', realname: '', isAway: false, awayMessage: '',
         lastSpoke: 0, lastHighlighted: 0, account: ''
       });
     }
@@ -3888,15 +3903,14 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
     pendingMemberRemovals.delete(`${networkId}:${normalized}:${stripped}`);
     pendingMemberRemovals.delete(`${networkId}:*:${stripped}`);
     if (!buf.users.some(u => stripPrefix(u.nick) === stripped)) {
-      // Capture the userhost from the prefix so we can populate `ident`
-      // and the IRCCloud-style `isBot` flag from the host suffix without
-      // waiting for a separate WHO/WHOIS. Members added later via NAMES
-      // get filled in by the same heuristic (see PRIVMSG handler / the
-      // `isBotNick` helper in MessageRow.svelte).
-      const ident = prefix && prefix.includes('!')
-        ? prefix.slice(prefix.indexOf('!') + 1)
-        : '';
-      const host = ident.includes('@') ? ident.slice(ident.lastIndexOf('@') + 1) : '';
+      // Capture the userhost from the prefix so we can populate
+      // `ident`/`host` and the IRCCloud-style `isBot` flag from the host
+      // suffix without waiting for a separate WHO/WHOIS. Members added
+      // later via NAMES get filled in by the same heuristic (see PRIVMSG
+      // handler / the `isBotNick` helper in MessageRow.svelte).
+      const { ident, host } = prefix && prefix.includes('!')
+        ? splitUserHost(prefix)
+        : { ident: '', host: '' };
       const isBot = !!host && /(^|\.)bot(\.|$)/i.test(host);
       // extended-join: params = [channel, account, realname]
       const acct = params && params.length >= 3 ? params[1] : '';
@@ -3912,7 +3926,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
           : cachedRealname && cachedRealname !== nick ? cachedRealname : '';
       buf.users.push({
         nick, prefix: '', category: 'MEMBER',
-        ident, realname, isAway: false, awayMessage: '',
+        ident, host, realname, isAway: false, awayMessage: '',
         lastSpoke: 0, lastHighlighted: 0, account: acct, isBot
       });
     }
@@ -4168,6 +4182,7 @@ export function updateChannelUsers(networkId: string, bufferName: string, cmd: s
             prefix: pm.prefix,
             category: pm.category,
             ident: '',
+            host: '',
             realname: '',
             isAway: false,
             awayMessage: '',

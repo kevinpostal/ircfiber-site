@@ -343,14 +343,16 @@ export function setPastebinDisablePrompt(value: boolean): void {
 // ── Member list prefix visibility ──
 //
 // Controls whether mode-prefix glyphs (@, +, %, etc.) are shown in the
-// member list sidebar. Default true (show). Synced cross-tab via
-// localStorage `storage` event and cross-device via `pref_update`
-// (`showMemberPrefixes` key) + `stat_user` boot seed. The setter writes
-// to localStorage immediately so a fast refresh (<500ms debounce) keeps
-// the choice; the Settings UI also POSTs to
+// member list sidebar. Default FALSE (hidden) — matches the server-side
+// default for a fresh account (db/preferences.d). An existing user's
+// stored value arrives via the `stat_user` boot seed and overrides this.
+// Synced cross-tab via localStorage `storage` event and cross-device via
+// `pref_update` (`showMemberPrefixes` key). The setter writes to
+// localStorage immediately so a fast refresh (<500ms debounce) keeps the
+// choice; the Settings UI also POSTs to
 // `/api/me/show-member-prefixes` which then fans out via WS.
 let _showMemberPrefixes = $state<boolean>(
-  getStorageItem('ircfiber:showMemberPrefixes', true)
+  getStorageItem('ircfiber:showMemberPrefixes', false)
 );
 
 export function getShowMemberPrefixes(): boolean {
@@ -663,13 +665,13 @@ if (typeof window !== 'undefined') {
       }
       case 'ircfiber:showMemberPrefixes': {
         if (e.newValue === null) {
-          _showMemberPrefixes = true;
+          _showMemberPrefixes = false;
         } else {
           try {
             const v = JSON.parse(e.newValue);
-            _showMemberPrefixes = v === true || v === false ? v : true;
+            _showMemberPrefixes = v === true || v === false ? v : false;
           } catch {
-            _showMemberPrefixes = true;
+            _showMemberPrefixes = false;
           }
         }
         break;

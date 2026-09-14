@@ -32,11 +32,17 @@
   const modeClass = $derived(member?.prefix ? MODE_PREFIX_MAP[member.prefix]?.cls ?? '' : '');
   const modeTitle = $derived.by(() => {
     if (!member?.category || member.category === 'MEMBER') return '';
-    const titles: Record<ModeCategory, string> = { OPER: 'IRC Operator', OWNER: 'Owner', ADMIN: 'Admin', OP: 'Op', HALFOP: 'Staff', VOICED: 'Voiced', MEMBER: '' };
+    const titles: Record<ModeCategory, string> = { OPER: 'IRC Operator', OWNER: 'Owner', ADMIN: 'Admin', OP: 'Op', HALFOP: 'Half op', VOICED: 'Voiced', MEMBER: '' };
     return titles[member.category] ?? '';
   });
 
-  const ident = $derived(member?.ident ?? '');
+  /** `user@host` when both halves are known, else whichever we have.
+   *  Members store the two parts separately (see `Member.ident`/`host`). */
+  const ident = $derived.by(() => {
+    const u = member?.ident ?? '';
+    const h = member?.host ?? '';
+    return h ? (u ? `${u}@${h}` : `@${h}`) : u;
+  });
   const realname = $derived(member?.realname ?? '');
   const account = $derived(member?.account ?? '');
   const isAway = $derived(member?.isAway ?? false);
@@ -142,25 +148,10 @@
       // known via the member list realname cache. The live WHOIS reply
       // (via App.svelte) will then refresh the overlay with fresh data.
       const m = member;
-      const ident = m?.ident || '';
-      const at = ident.indexOf('@');
-      const u = at >= 0 ? ident.slice(0, at).split('!').pop() || ident.slice(0, at) : '';
-      // ident may be "user@host" or "nick!user@host" - handle both
-      let user = '';
-      let host = '';
-      if (ident.includes('@')) {
-        const parts = ident.split('@');
-        host = parts.pop() || '';
-        const userPart = parts.join('@');
-        // userPart may be "nick!user" or just "user"
-        if (userPart.includes('!')) user = userPart.split('!').pop() || '';
-        else user = userPart;
-        if (!user && m?.ident) user = m.ident.split('@')[0].split('!').pop() || '';
-      }
       const whoisData: WhoisData = {
         nick: displayNick,
-        user: user || m?.ident?.split('@')[0]?.split('!').pop() || '',
-        host: host || m?.ident?.split('@')[1] || '',
+        user: m?.ident || '',
+        host: m?.host || '',
         realname: m?.realname || '',
         server: '',
         serverInfo: '',

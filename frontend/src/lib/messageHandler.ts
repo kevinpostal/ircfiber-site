@@ -7,7 +7,7 @@ import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, apply
          markMemberBot,
          findBufferByName, isSelfMessage, renameQueryBuffer, isSessionFocused } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getLastSeen, getBottomSeen } from '../stores/preferences.svelte';
-import { normalizeChannelName, stripPrefix, isSkippedCommand, messageHostmask } from './utils';
+import { normalizeChannelName, stripPrefix, isSkippedCommand, messageHostmask, splitUserHost } from './utils';
 import { isMessageIgnored } from './ignorePolicy';
 import { notify } from './notifications';
 import { shouldNotifyForMessage, getNotificationTitle, getNotificationBody, getNotificationIcon } from './notificationPolicy';
@@ -470,19 +470,15 @@ export function processIrcEvent(
         // Backfill the services account from the IRCv3 account-tag so
         // the member list shows identity without a WHOIS round trip.
         if (msg.account && msg.account !== '*' && !u.account) u.account = msg.account;
-        // Backfill ident + isBot from the message prefix the first time
-        // we see a member speak, so members originally added via NAMES
-        // (which doesn't carry the userhost) still get a BOT badge and
-        // the realname popover once a single message has arrived.
+        // Backfill ident/host + isBot from the message prefix the first
+        // time we see a member speak, so members originally added via
+        // NAMES (which doesn't carry the userhost) still get a BOT badge
+        // and the realname popover once a single message has arrived.
         if (msg.prefix && msg.prefix.includes('!')) {
-          const ident = msg.prefix.slice(msg.prefix.indexOf('!') + 1);
-          if (!u.ident) u.ident = ident;
-          if (!u.isBot) {
-            const host = ident.includes('@')
-              ? ident.slice(ident.lastIndexOf('@') + 1)
-              : '';
-            if (host && /(^|\.)bot(\.|$)/i.test(host)) u.isBot = true;
-          }
+          const { ident, host } = splitUserHost(msg.prefix);
+          if (ident && !u.ident) u.ident = ident;
+          if (host && !u.host) u.host = host;
+          if (!u.isBot && host && /(^|\.)bot(\.|$)/i.test(host)) u.isBot = true;
         }
       }
     }

@@ -402,6 +402,22 @@ export function stripPrefix(nick: string): string {
 }
 
 /**
+ * Split the userhost half of an IRC mask into its `ident` and `host`
+ * parts. Accepts any of the forms a member entry can arrive as:
+ * `nick!user@host` (userhost-in-names, message prefixes), a bare
+ * `user@host` (the engine's `idents` sync cache), or just `user`.
+ * The `~` on an unidentified ident is part of the user and is kept.
+ */
+export function splitUserHost(mask: string): { ident: string; host: string } {
+  if (!mask) return { ident: '', host: '' };
+  const bang = mask.indexOf('!');
+  const tail = bang >= 0 ? mask.slice(bang + 1) : mask;
+  const at = tail.lastIndexOf('@');
+  if (at < 0) return { ident: tail, host: '' };
+  return { ident: tail.slice(0, at), host: tail.slice(at + 1) };
+}
+
+/**
  * Canonical nick for color/identity comparison — byte-for-byte parity
  * with IRCCloud's `normaliseIdentifier`. Lowercases, strips an
  * away-suffix (`alice|away` → `alice`), strips the host part of a

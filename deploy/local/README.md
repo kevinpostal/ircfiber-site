@@ -68,6 +68,18 @@ Frontend, Alertmanager) for observability. All containers run on the
 | `ircfiber-gateway` | irc-fiber:local (built) | HTTP/WS frontend + admin API | 8090 |
 | `ircfiber-engine` | irc-fiber:local (built) | IRC protocol engine | — |
 | `ircfiber-ircd` | ircd-local:latest (built) | ngIRCd test server | 6667 |
+| `ircfiber-gifworker` | irc-fiber:local (built) | video/WebP → GIF sandbox (no network, read-only, uid 65534) | — |
+
+`ircfiber-gifworker` runs the **same image** as the gateway with
+`sh /app/gif-worker.sh`. It is the only process that decodes user-supplied
+media: ffmpeg/ffprobe are driven entirely by uploaded bytes, so the container
+gets `network_mode: none`, a read-only rootfs, `cap_drop: ALL`,
+`no-new-privileges`, uid 65534, a 768 MB / 1.5 CPU / 64 pid cap, and the
+uploads volume **read-only**. The gateway hands it work by dropping
+`<id>.job` into the shared `gifwork_data` volume and reads `<id>.gif` /
+`<id>.exit` back (protocol: `docker/gifworker/gif-worker.sh`, gateway half:
+`backend/source/ircfiber/api/gifspool.d`).
+
 ## Observability toggle
 
 SigNoz + ClickHouse + fluent-bit consume ~3.5 GB (ClickHouse 2 GB + signoz

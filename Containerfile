@@ -8,6 +8,7 @@
 #   builder-backend  : gateway binary (`irc-fiber`) — from builder-common
 #   frontend-builder : vite build (node:20-bookworm) — frontend + public/dist
 #   runtime-gateway  : slim Ubuntu + gateway binary + public/dist
+#                      (also runs the GIF sandbox: same image, `sh /app/gif-worker.sh`)
 #
 # builder-backend and frontend-builder are independent: BuildKit runs them
 # concurrently and a change on one side never invalidates the other. The SPA
@@ -139,6 +140,12 @@ RUN strip ./irc-fiber ./irc-fiber-gateway
 # ============================================================================
 FROM ubuntu:22.04 AS runtime-gateway
 
+# ffmpeg/ffprobe live here, but the gateway process NEVER runs them: untrusted
+# media is decoded by the ircfiber-gifworker container, which is this same
+# image started as `sh /app/gif-worker.sh` with no network namespace, a
+# read-only rootfs, no capabilities, uid 65534 and the uploads volume mounted
+# read-only. Same image, different container — the pattern ircfiber-bnc,
+# -support-bot, -fibereye and -sysagent already use.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -163,8 +170,16 @@ COPY --from=frontend-builder /build/public ./public/
 # ship only for debugging.
 COPY backend/views/ ./views/
 COPY config/ ./config/
-# Data dirs.
-RUN mkdir -p /app/data /app/uploads && \
+# The GIF worker recipe: the ircfiber-gifworker container runs this image
+# with `sh /app/gif-worker.sh`, and a gateway with no sidecar (native dev,
+# `IRCFIBER_GIF_SIDECAR` unset) spawns the same script with `--once`, so
+# there is exactly one ffmpeg recipe in the tree.
+COPY --chmod=0555 docker/gifworker/gif-worker.sh /app/gif-worker.sh
+# Data dirs. /work is the GIF spool: the gateway (root) drops job files there
+# and the sandbox (uid 65534) claims them, so a fresh named volume must start
+# out writable by both — Docker seeds volume ownership from this directory.
+# No sticky bit: the sandbox has to rename the gateway's `.job` files.
+RUN mkdir -p /app/data /app/uploads /work && chmod 0777 /work && \
     if [ ! -f /app/irc-fiber ]; then echo "gateway binary missing" && exit 1; fi
 
 EXPOSE 8090

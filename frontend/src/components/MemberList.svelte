@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getActiveBufferObj, getSortedMembers, getActiveNetwork } from '../stores/ircStore.svelte';
-  import { stripPrefix } from '../lib/utils';
+  import { stripPrefix, nickColorIndex } from '../lib/utils';
   import type { ModeCategory, Member } from '../types';
   import { getShowMemberPrefixes } from '../stores/preferences.svelte';
 
@@ -19,19 +19,13 @@
   // Section headings and symbols, from IRCCloud's member list
   // (`li.category > h2`): Oper, Owner, Admins, Ops, Half ops, Voiced,
   // Members. `*` is this network's operprefix char (see MODE_PREFIX_MAP);
-  // Members carries no symbol there, only a count.
-  //
-  // One deliberate divergence: halfop reads as "Staff" here. On IRC Fiber
-  // `+h` is what the staff group holds (ircd_channel_access.hop in the
-  // ircd role), so the section says who they are rather than which mode
-  // letter they were given. The prefix char stays `%` and the band keeps
-  // the `halfops` class, so nothing else has to know.
+  // Members carries no symbol there, only the `•` pill and a count.
   const CATEGORY_LABELS: Record<ModeCategory, string> = {
     OPER: 'Oper',
     OWNER: 'Owner',
     ADMIN: 'Admins',
     OP: 'Ops',
-    HALFOP: 'Staff',
+    HALFOP: 'Half ops',
     VOICED: 'Voiced',
     MEMBER: 'Members',
   };
@@ -71,9 +65,16 @@
         <h2>
           {CATEGORY_LABELS[category]}
           <span class="memberExtras">
-            {#if showPrefixes && CATEGORY_SYMBOLS[category]}
-              <span class="mode_prefix mode_symbol mode_{category}">{CATEGORY_SYMBOLS[category]}</span>
-              <span class="mode_prefix mode_pill mode_{category}">&bull;</span>
+            {#if showPrefixes}
+              {#if CATEGORY_SYMBOLS[category]}
+                <span class="mode_prefix mode_symbol mode_{category}">{CATEGORY_SYMBOLS[category]}</span>
+              {/if}
+              <!-- `.memberDot` (only on Members, which has no mode char)
+                   keeps the bullet visible in the default symbol
+                   indicator mode; see `_accountMenu.scss`. The plain
+                   pill is the dots-mode counterpart of the symbol. -->
+              <span class="mode_prefix mode_pill mode_{category}"
+                    class:memberDot={!CATEGORY_SYMBOLS[category]}>&bull;</span>
             {/if}
             <span class="memberCount">{members.length}</span>
           </span>
@@ -84,11 +85,23 @@
             {@const isSelf = nick === myNick}
             {@const isMatch = hoveredNick !== null && hoveredNick === nick}
             {@const sym = CATEGORY_SYMBOLS[member.category] ?? CATEGORY_SYMBOLS[category] ?? ''}
-            <li class="user member-item" class:away={member.isAway} class:isSelf={isSelf} class:match={isMatch} data-category={category} data-mode={member.prefix}>
+            <!-- IRCCloud splits the usermask across `data-ident_prefix`
+                 (the `~` of an unidentified ident), `data-user`,
+                 `data-userhost` and the joined `data-usermask`; the nick
+                 colour class (`c0`–`c26`) is the same hash it uses for
+                 avatars and message authors. -->
+            {@const identPrefix = member.ident.startsWith('~') ? '~' : ''}
+            {@const user = identPrefix ? member.ident.slice(1) : member.ident}
+            {@const usermask = member.host ? `${member.ident}@${member.host}` : member.ident}
+            <li class="user member-item c{nickColorIndex(nick)}"
+                class:away={member.isAway} class:isSelf={isSelf} class:match={isMatch}
+                data-category={category} data-mode={member.prefix}
+                data-usermask={usermask} data-ident_prefix={identPrefix}
+                data-user={user} data-userhost={member.host}>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <button type="button" class="bufferLink {cssCat}"
                       class:away={member.isAway}
-                      title={member.ident ? `${nick} (${member.ident})` : nick}
+                      title={usermask ? `${nick} (${usermask})` : nick}
                       onclick={(e) => onNickClick?.(nick, e, member)}
                       onmouseenter={() => onNickHover?.(nick)}
                       onmouseleave={() => onNickHover?.(null)}>
@@ -109,7 +122,8 @@
 <style>
   .member-nick {
     vertical-align: middle;
-    color: #ccc;
+    /* Inherits the `c0`–`c26` nick colour set on the row. */
+    color: inherit;
   }
   .member-bot {
     display: inline-block;
@@ -153,6 +167,8 @@
   :global(.member-item[data-category="HALFOP"] .member-mode-prefix) { color: #b55900; }
   :global(.member-item[data-category="VOICED"] .member-mode-prefix) { color: #25b100; }
   :global(.member-item.away) { opacity: .5; }
-  :global(.member-item.isSelf .member-nick) { font-weight: 600; color: #fff; }
+  /* Self is emphasised by weight only — the nick keeps its own colour,
+     exactly as IRCCloud renders the logged-in user's row. */
+  :global(.member-item.isSelf .member-nick) { font-weight: 600; }
   :global(.member-item.match) { background: rgba(88,166,255,.08); border-left: 3px solid #58a6ff; }
 </style>
