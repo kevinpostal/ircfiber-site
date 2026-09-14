@@ -415,17 +415,19 @@ body.mode-hidesymbol .mode_prefix.mode_pill   { display: inline; }
 body.mode-hidden .mode_prefix.mode_symbol,
 body.mode-hidden .mode_prefix.mode_pill { display: none !important; }
 
-/* Mode-prefix colors, taken verbatim from IRCCloud's stylesheet
-   (`span.mode_prefix.mode_*`) so every marker matches the colors users
-   already recognise, and so the member list, message rows and the user
-   popup all read from one palette. */
-.mode_prefix.mode_OPER   { color: #e02305; }
-.mode_prefix.mode_OWNER  { color: #e7aa00; }
-.mode_prefix.mode_ADMIN  { color: #6500a5; }
-.mode_prefix.mode_OP     { color: #ba1719; }
-.mode_prefix.mode_HALFOP { color: #b55900; }
-.mode_prefix.mode_VOICED { color: #25b100; }
-.mode_prefix.mode_MEMBER { color: #777; }
+/* Mode-prefix colors. The hues are IRCCloud's (`span.mode_prefix.mode_*`)
+   so every marker stays recognisable, but lifted for a dark background:
+   IRCCloud's palette is tuned for its WHITE theme, and on #0a0e14 the
+   admin `&` (#6500a5) and op `@` (#ba1719) were dark enough to read as
+   "no prefix at all". Same hue, enough luminance to be legible. One
+   palette for the member list, the message rows and the user popup. */
+.mode_prefix.mode_OPER   { color: #ff5f52; }
+.mode_prefix.mode_OWNER  { color: #f2bd2b; }
+.mode_prefix.mode_ADMIN  { color: #b083f0; }
+.mode_prefix.mode_OP     { color: #f2585b; }
+.mode_prefix.mode_HALFOP { color: #e08a2e; }
+.mode_prefix.mode_VOICED { color: #3fd12a; }
+.mode_prefix.mode_MEMBER { color: #8b949e; }
 
 /* When the author span carries a `.moded` modifier (e.g. `moded
    mode_HALFOP`) IRCCloud bumps the nick to font-weight 600 — same

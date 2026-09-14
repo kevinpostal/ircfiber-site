@@ -158,17 +158,17 @@
     flex-shrink: 0;
     text-align: center;
     font: 600 12px/1 var(--font-mono, ui-monospace, monospace);
-    color: #777;
+    color: #8b949e;
   }
   /* IRCCloud's `span.mode_prefix.mode_*` values. Set on this span rather
      than inherited because the row's button fixes its own `color` for the
      nick and its hover state. */
-  :global(.member-item[data-category="OPER"] .member-mode-prefix) { color: #e02305; }
-  :global(.member-item[data-category="OWNER"] .member-mode-prefix) { color: #e7aa00; }
-  :global(.member-item[data-category="ADMIN"] .member-mode-prefix) { color: #6500a5; }
-  :global(.member-item[data-category="OP"] .member-mode-prefix) { color: #ba1719; }
-  :global(.member-item[data-category="HALFOP"] .member-mode-prefix) { color: #b55900; }
-  :global(.member-item[data-category="VOICED"] .member-mode-prefix) { color: #25b100; }
+  :global(.member-item[data-category="OPER"] .member-mode-prefix) { color: #ff5f52; }
+  :global(.member-item[data-category="OWNER"] .member-mode-prefix) { color: #f2bd2b; }
+  :global(.member-item[data-category="ADMIN"] .member-mode-prefix) { color: #b083f0; }
+  :global(.member-item[data-category="OP"] .member-mode-prefix) { color: #f2585b; }
+  :global(.member-item[data-category="HALFOP"] .member-mode-prefix) { color: #e08a2e; }
+  :global(.member-item[data-category="VOICED"] .member-mode-prefix) { color: #3fd12a; }
   :global(.member-item.away) { opacity: .5; }
   /* Self is emphasised by weight only — every nick in this list is the same
      grey, so bolding is the whole distinction. */
