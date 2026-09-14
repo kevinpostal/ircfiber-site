@@ -41,7 +41,6 @@
         { label: 'Bouncer', path: '/bouncer', icon: '🔌' },
         { label: 'Logs', path: '/logs', icon: '📜' },
         { label: 'FiberEye', path: '/fibereye', icon: '👁️' },
-        { label: 'FiberEye Map', path: '/fibereye/map', icon: '🗺️' },
       ],
     },
     {
