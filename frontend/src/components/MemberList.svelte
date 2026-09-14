@@ -83,6 +83,7 @@
             {@const nick = stripPrefix(member.nick)}
             {@const isSelf = nick === myNick}
             {@const isMatch = hoveredNick !== null && hoveredNick === nick}
+            {@const sym = CATEGORY_SYMBOLS[member.category] ?? CATEGORY_SYMBOLS[category] ?? ''}
             <li class="user member-item" class:away={member.isAway} class:isSelf={isSelf} class:match={isMatch} data-category={category} data-mode={member.prefix}>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <button type="button" class="bufferLink {cssCat}"
@@ -91,8 +92,8 @@
                       onclick={(e) => onNickClick?.(nick, e, member)}
                       onmouseenter={() => onNickHover?.(nick)}
                       onmouseleave={() => onNickHover?.(null)}>
-                {#if showPrefixes}
-                  <span class="member-mode-prefix" aria-hidden="true">{CATEGORY_SYMBOLS[member.category] ?? CATEGORY_SYMBOLS[category] ?? ''}</span>
+                {#if showPrefixes && sym}
+                  <span class="member-mode-prefix" aria-hidden="true">{sym}</span>
                 {/if}
                 <span class="member-nick">{nick}</span>
                 {#if member.isBot}<span class="member-bot" title="Bot">BOT</span>{/if}
