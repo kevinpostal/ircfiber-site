@@ -10,16 +10,15 @@
    * groups whose record has none are reported as `Unlocated` rather than
    * dropped, and they still count in the country table.
    *
-   * Basemap defaults to the vendored Natural Earth outline (no third-party
-   * request at all); the Tiles toggle swaps in OpenStreetMap raster tiles,
-   * inverted to sit in the dark admin theme. CARTO's basemaps were the
-   * first choice and are rejected on purpose: `basemaps.cartocdn.com`
-   * now stamps "API KEY REQUIRED" across every unkeyed tile. Both
-   * basemaps use geoMercator — raster tiles are Web Mercator, so changing
-   * the projection with the toggle would unregister the markers.
+   * The basemap is a vendored Natural Earth outline: no third-party
+   * request, no API key, no usage policy to honour. Raster tiles were
+   * tried and dropped — CARTO stamps "API KEY REQUIRED" across every
+   * unkeyed tile, and OpenStreetMap's volunteer servers refuse
+   * third-party apps under their tile usage policy. Projection is
+   * geoMercator.
    */
   import { onMount, onDestroy } from 'svelte';
-  import { Chart, Svg, GeoPath, GeoPoint, GeoTile } from 'layerchart';
+  import { Chart, Svg, GeoPath, GeoPoint } from 'layerchart';
   import { geoMercator, type GeoPermissibleObjects } from 'd3-geo';
 
   import PageHeader from '../components/PageHeader.svelte';
@@ -65,16 +64,13 @@
   const PRESET_LABELS: Record<Preset, string> = {
     '1h': '1h', '24h': '24h', '7d': '7d', '30d': '30d', all: 'All',
   };
-  type Basemap = 'outline' | 'tiles';
 
   const RANGE_KEY = 'ircfiber:admin:eyemap:range';
-  const BASEMAP_KEY = 'ircfiber:admin:eyemap:basemap';
 
   /**
-   * Framing for both basemaps. Fitting a constant instead of the loaded
-   * outline keeps the view identical in tiles mode and while the outline
-   * chunk is still downloading — toggling the basemap never reframes the
-   * map. Mercator is unusable past ~±85°; ±62° is the populated band.
+   * Framing. Fitting a constant rather than the loaded outline keeps the
+   * view stable while the outline chunk is still downloading. Mercator is
+   * unusable past ~±85°; ±62° is the populated band.
    */
   const WORLD_FIT = {
     type: 'Polygon' as const,
@@ -82,7 +78,6 @@
   };
 
   let range = $state<Preset | 'custom'>(readRange());
-  let basemap = $state<Basemap>(readBasemap());
   /** The `datetime-local` inputs; committed to customStart/End on Apply. */
   let customRangeOpen = $state(false);
   let customFrom = $state('');
@@ -105,11 +100,6 @@
       if (v && (PRESETS as readonly string[]).includes(v)) return v as Preset;
     } catch { /* private mode / storage disabled */ }
     return '24h';
-  }
-  function readBasemap(): Basemap {
-    try {
-      return localStorage.getItem(BASEMAP_KEY) === 'tiles' ? 'tiles' : 'outline';
-    } catch { return 'outline'; }
   }
   function persist(key: string, value: string): void {
     try { localStorage.setItem(key, value); } catch { /* ignore */ }
@@ -174,11 +164,6 @@
     // not on a frozen one from last week.
     selected = null;
     void load();
-  }
-
-  function setBasemap(b: Basemap): void {
-    basemap = b;
-    persist(BASEMAP_KEY, b);
   }
 
   const clusters = $derived(data?.clusters ?? []);
@@ -269,24 +254,6 @@
     data-testid="eyemap-preset-custom"
     aria-label="Custom time range"
   >&hellip;</button>
-
-  <span class="ml-auto text-xs text-muted">Basemap:</span>
-  <button
-    type="button"
-    onclick={() => setBasemap('outline')}
-    class="rounded border border-border bg-surface-2 px-2 py-1 text-xs hover:bg-border/40"
-    class:text-text={basemap === 'outline'}
-    class:text-muted={basemap !== 'outline'}
-    data-testid="eyemap-basemap-outline"
-  >Outline</button>
-  <button
-    type="button"
-    onclick={() => setBasemap('tiles')}
-    class="rounded border border-border bg-surface-2 px-2 py-1 text-xs hover:bg-border/40"
-    class:text-text={basemap === 'tiles'}
-    class:text-muted={basemap !== 'tiles'}
-    data-testid="eyemap-basemap-tiles"
-  >Tiles</button>
 </div>
 
 {#if customRangeOpen}
@@ -342,14 +309,7 @@
   <div class="h-[480px] w-full" data-testid="eyemap-canvas">
     <Chart geo={{ projection: geoMercator, fitGeojson: WORLD_FIT }}>
       <Svg>
-        {#if basemap === 'tiles'}
-          <!-- Wrapped so the dark-mode filter can reach layerchart's
-               <image> elements, which carry no class of ours. -->
-          <g class="eyemap-tiles">
-            <GeoTile url={(x: number, y: number, z: number) =>
-              `https://tile.openstreetmap.org/${z}/${x}/${y}.png`} />
-          </g>
-        {:else if world}
+        {#if world}
           <GeoPath geojson={world} class="fill-border/60 stroke-muted/40" />
         {/if}
         {#each clusters as c, i (c.lat + ':' + c.lon)}
@@ -381,9 +341,6 @@
     <p class="mt-2 text-xs text-warn" data-testid="eyemap-truncated">
       Showing the busiest {data.summary.returned} of {data.summary.groups} IP groups.
     </p>
-  {/if}
-  {#if basemap === 'tiles'}
-    <p class="mt-2 text-xs text-muted">© OpenStreetMap contributors</p>
   {/if}
   {#if data && clusters.length === 0}
     <p class="mt-2 text-xs text-muted">
@@ -489,14 +446,3 @@
     {/if}
   </Card>
 </div>
-
-<style>
-  /* OpenStreetMap ships one light raster style. Inverting and rotating the
-     hue back is the standard dark treatment: land/water keep their
-     relative contrast and the labels stay legible against the admin's
-     dark surfaces. The filter has to be :global because the <image>
-     elements are created inside layerchart's GeoTile. */
-  .eyemap-tiles :global(image) {
-    filter: invert(1) hue-rotate(180deg) brightness(0.85) contrast(0.95) saturate(0.7);
-  }
-</style>
