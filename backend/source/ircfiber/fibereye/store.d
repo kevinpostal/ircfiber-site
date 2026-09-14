@@ -15,6 +15,7 @@
  */
 module ircfiber.fibereye.store;
 
+import std.algorithm.comparison : min;
 import std.conv : to;
 import std.datetime : Clock, days;
 import std.process : environment;
@@ -28,6 +29,7 @@ import vibe.db.mongo.mongo;
 import ircfiber.db.mongo : AppMongoConnection;
 import ircfiber.ipintel.record : IpIntel;
 import ircfiber.fibereye.map : MapPoint;
+import ircfiber.fibereye.sessions : OpenRow;
 import ircfiber.fibereye.ruleset : RuleSet;
 
 /// Retention for `fibereye_sessions`, enforced by a TTL index on `tsAt`.
@@ -144,6 +146,11 @@ struct SessionRecord {
     string quitReason;
     /// Session length, 0 while open.
     long durationMs;
+    /// True when the quit was never observed: the reconciliation sweep
+    /// found the client gone after a restart and closed the row at sweep
+    /// time. `durationMs` stays 0 because the real length is unknown, so
+    /// readers must show "unknown", not "0s".
+    bool quitInferred;
     /// Geo, from the IP-intelligence record (`geoOrg` = `AS<n> <name>`).
     string geoCity, geoRegion, geoCountry, geoOrg, geoTimezone;
     /// From the same record: ASN, confirmed flags label, VPN operator,
@@ -166,7 +173,7 @@ struct SessionRecord {
             "ipGroup": Bson(ipGroup), "ipVersion": Bson(ipVersion),
             "account": Bson(account),
             "quitTs": Bson(quitTs), "quitReason": Bson(quitReason),
-            "durationMs": Bson(durationMs),
+            "durationMs": Bson(durationMs), "quitInferred": Bson(quitInferred),
             // `currentNick` is always written, and equals `nick` until the
             // client renames, so the admin read path filters and displays
             // one field without a per-row fallback.
@@ -203,6 +210,7 @@ struct SessionRecord {
         r.quitTs = blong(b, "quitTs");
         r.quitReason = bstr(b, "quitReason");
         r.durationMs = blong(b, "durationMs");
+        r.quitInferred = bbool(b, "quitInferred");
         r.geoCity = bstr(b, "geoCity");
         r.geoRegion = bstr(b, "geoRegion");
         r.geoCountry = bstr(b, "geoCountry");
@@ -881,6 +889,77 @@ final class FiberEyeStore {
             logWarn("FiberEye: sessionsForGroup failed: %s", e.msg);
         }
         return rows;
+    }
+
+    /// Every session row with no quit recorded yet, newest first.
+    ///
+    /// One read per IRC session, for the reconciliation sweep: the
+    /// in-memory open-session map starts empty after a restart while
+    /// these rows describe everyone who was connected when the bot went
+    /// away, so without this pass each of them would stay open forever.
+    /// Only the pairing fields are projected — the sweep never needs geo
+    /// or intel, and a deployment with thousands of stale rows should not
+    /// drag the whole documents across.
+    OpenRow[] openSessionRows(int limit) @trusted {
+        OpenRow[] rows;
+        if (limit <= 0) return rows;
+        try {
+            FindOptions opts;
+            opts.sort = Bson(["ts": Bson(-1)]);
+            opts.limit = limit;
+            opts.projection = Bson([
+                "nick": Bson(1), "currentNick": Bson(1),
+                "ip": Bson(1), "ipGroup": Bson(1), "ts": Bson(1),
+            ]);
+            foreach (doc; sessions.find(Bson(["quitTs": Bson(0L)]), opts)) {
+                OpenRow r;
+                r.id = bstr(doc, "_id");
+                r.nick = bstr(doc, "nick");
+                r.currentNick = bstr(doc, "currentNick");
+                r.ip = bstr(doc, "ip");
+                r.ipGroup = bstr(doc, "ipGroup");
+                r.ts = blong(doc, "ts");
+                if (r.id.length) rows ~= r;
+            }
+        } catch (Exception e) {
+            logWarn("FiberEye: openSessionRows failed: %s", e.msg);
+        }
+        return rows;
+    }
+
+    /// Closes rows whose client the reconciliation sweep proved gone, and
+    /// returns how many it actually closed.
+    ///
+    /// `durationMs` stays 0 and `quitInferred` is set: the quit happened
+    /// at an instant nobody observed, and inventing a length would put a
+    /// fabricated number in the admin table. The `quitTs: 0` guard in the
+    /// selector leaves a row that closed normally while the sweep ran
+    /// exactly as the QUIT wrote it.
+    long markSessionsAbandoned(const string[] ids, long atMs) @trusted {
+        if (!ids.length) return 0;
+        // One round trip per 500 ids: the first sweep of a deployment that
+        // has been restarting for months can carry thousands.
+        enum CHUNK = 500;
+        long closed;
+        for (size_t i = 0; i < ids.length; i += CHUNK) {
+            Bson[] batch;
+            foreach (id; ids[i .. min(i + CHUNK, ids.length)])
+                if (id.length) batch ~= Bson(id);
+            if (!batch.length) continue;
+            try {
+                auto r = sessions.updateMany(
+                    Bson(["_id": Bson(["$in": Bson(batch)]), "quitTs": Bson(0L)]),
+                    Bson(["$set": Bson([
+                        "quitTs": Bson(atMs),
+                        "durationMs": Bson(0L),
+                        "quitInferred": Bson(true),
+                    ])]));
+                closed += r.modifiedCount;
+            } catch (Exception e) {
+                logWarn("FiberEye: markSessionsAbandoned failed: %s", e.msg);
+            }
+        }
+        return closed;
     }
 
     /// Page of IP rollups matching `filter`, sorted by `sortField` desc.

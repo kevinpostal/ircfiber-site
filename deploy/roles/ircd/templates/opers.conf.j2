@@ -93,6 +93,18 @@
 # standing ban as already gone. It is the same read-only visibility the
 # Dashboard class above needs for exactly the same reason.
 #
+# privs="users/auspex" is required by the startup adoption sweep, and only
+# by it. On (re)start FiberEye's open-session map is empty while Mongo
+# still holds a row for everyone connected, so it runs one
+# `WHO * %tina,fe` and pairs the live network against those rows. Without
+# this priv InspIRCd 4 answers the `%i` (IP) field with the literal
+# 255.255.255.255 for every client and hides every `+i` user from a fuzzy
+# WHO (modules/core/who.cpp: `source_can_see_target`, `can_see_normally`),
+# which leaves the sweep pairing on nicks alone and blind to most of the
+# network. It grants no data FiberEye does not already store: every real
+# IP, ident and host is in `fibereye_sessions` from the connect notice.
+# Still read-only — no KILL, no mode changes, no override.
+#
 # Host-locked to the Docker network like the dashboard oper (both
 # families: a v6 source does not match the v4 subnet).
 # Deliberately no <badnick nick="FIBEREYE">: unlike FIBERSERV (a BotServ
@@ -101,7 +113,7 @@
 # by NickServ registration instead, exactly like FIBERSUPPORT.
 <class name="EyeWatch"
        commands="ZLINE STATS"
-       privs="servers/auspex"
+       privs="servers/auspex users/auspex"
        usermodes="s"
        snomasks="cCqxnN">
 <type name="FIBEREYE"

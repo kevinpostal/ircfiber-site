@@ -142,6 +142,9 @@ private Json sessionJson(const SessionRecord r) {
     o["quitTs"] = Json(r.quitTs);
     o["quitReason"] = Json(r.quitReason);
     o["durationMs"] = Json(r.durationMs);
+    // The quit was never observed (closed by the adoption sweep), so
+    // `durationMs` is 0 because it is unknown — not because it was short.
+    o["quitInferred"] = Json(r.quitInferred);
     o["geoCity"] = Json(r.geoCity);
     o["geoRegion"] = Json(r.geoRegion);
     o["geoCountry"] = Json(r.geoCountry);

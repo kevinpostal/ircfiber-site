@@ -14,9 +14,11 @@ import std.algorithm : canFind;
 import std.conv : to;
 import std.string : indexOf;
 
-import ircfiber.fibereye.format : parseQuitNotice, parseNickNotice, ipGroup, expandIpv6,
+import ircfiber.fibereye.format : parseQuitNotice, parseNickNotice, parseWhoxReply,
+    WhoEntry, WHOX_QUERYTYPE, WHOX_FLAGS, WHOX_IP_HIDDEN, ipGroup, expandIpv6,
     zlineMatches, validExemptEntry, validExemptNick, nickExemptMatch;
-import ircfiber.fibereye.sessions : OpenSession, OpenSessions;
+import ircfiber.fibereye.sessions : OpenSession, OpenSessions, OpenRow, ReconcilePlan,
+    planReconcile;
 import ircfiber.fibereye.rules : Observation, Thresholds, evaluate, banDurationFor,
     isAutoPlacedZline, banReason, validateThresholds;
 import ircfiber.fibereye.ruleset : RuleSet, validateRuleSet, summarizeRuleChange;
@@ -584,10 +586,136 @@ private void testOpenSessions() {
         "a reconnect's row survives eviction of the id it replaced");
 }
 
+/// The WHOX reply of the startup adoption sweep. Fields arrive in the
+/// ircd's canonical order (t, i, n, a), never the requested order, so the
+/// parser reads fixed positions after our own nick.
+private void testParseWhoxReply() {
+    check(WHOX_FLAGS == "%tina,fe", "the sweep asks for query type, IP, nick and account");
+
+    auto w = parseWhoxReply(["FIBEREYE", WHOX_QUERYTYPE, "94.8.165.152", "incog", "incog"]);
+    check(w.ok, "a 354 for our query type parses");
+    check(w.nick == "incog" && w.ip == "94.8.165.152", "nick and address");
+    check(w.account == "incog" && !w.ipHidden, "account and a visible address");
+
+    // InspIRCd writes the literal 0 for a client with no services account.
+    auto anon = parseWhoxReply(["FIBEREYE", WHOX_QUERYTYPE, "203.0.113.7", "guest", "0"]);
+    check(anon.ok && anon.account == "", "the wire's `0` account reads as none");
+
+    // Without users/auspex every address is this placeholder, which must
+    // never be treated as a real one: it would fold the whole network
+    // into a single fictional IP.
+    auto hidden = parseWhoxReply(["FIBEREYE", WHOX_QUERYTYPE, WHOX_IP_HIDDEN, "guest", "0"]);
+    check(hidden.ok && hidden.ipHidden, "the hidden-address placeholder is flagged");
+
+    check(!parseWhoxReply(["FIBEREYE", "xx", "1.2.3.4", "guest", "0"]).ok,
+        "somebody else's WHOX query type is ignored");
+    check(!parseWhoxReply(["FIBEREYE", WHOX_QUERYTYPE, "1.2.3.4"]).ok,
+        "a short 354 is ignored");
+    check(!parseWhoxReply(["FIBEREYE", WHOX_QUERYTYPE, "1.2.3.4", "", "0"]).ok,
+        "a 354 without a nick is ignored");
+}
+
+private OpenRow row(string id, string nick, string currentNick, string ip, long ts) {
+    return OpenRow(id, nick, currentNick, ip, ipGroup(ip), ts);
+}
+
+private WhoEntry liveClient(string nick, string ip, string account = "") {
+    return WhoEntry(true, nick, ip, account, ip == WHOX_IP_HIDDEN);
+}
+
+/// The startup adoption sweep's pairing rules. This is what stops a
+/// restart from leaving every connected client's row open forever — and
+/// what stops it from closing a row whose client is still there.
+private void testPlanReconcile() {
+    // A plain restart: both clients are still connected under the nicks
+    // their rows carry, so both rows are adopted and nothing is closed.
+    auto rows = [
+        row("s1", "alice", "alice", "203.0.113.7", 1_000),
+        row("s2", "bob", "bob", "198.51.100.4", 2_000),
+    ];
+    auto plan = planReconcile([liveClient("alice", "203.0.113.7"),
+        liveClient("bob", "198.51.100.4")], rows, true);
+    check(plan.adopt.length == 2, "a restart adopts every still-connected session");
+    check(plan.rename.length == 0 && plan.abandon.length == 0,
+        "nothing is renamed or closed when the network is unchanged");
+    check(plan.adopt[0].ts == 1_000 || plan.adopt[1].ts == 1_000,
+        "the adopted row keeps its connect instant, so the duration stays real");
+    check(plan.unknown.length == 0 && plan.ambiguous == 0, "nothing is left over");
+
+    // One client quit while the bot was away: its row is provably gone.
+    plan = planReconcile([liveClient("alice", "203.0.113.7")], rows, true);
+    check(plan.adopt.length == 1 && plan.adopt[0].id == "s1", "the live client is adopted");
+    check(plan.abandon == ["s2"], "the departed client's row is closed");
+
+    // Renamed while away: no nick matches, but the group holds exactly one
+    // unpaired client and one unpaired row, so they are the same session.
+    plan = planReconcile([liveClient("incognito", "203.0.113.7")],
+        [row("s1", "i", "i", "203.0.113.7", 1_000)], true);
+    check(plan.adopt.length == 1 && plan.adopt[0].currentNick == "incognito",
+        "a client that renamed while the bot was away is still adopted");
+    check(plan.rename.length == 1 && plan.rename[0].nick == "incognito",
+        "and its stored nick is corrected");
+    check(plan.abandon.length == 0, "a renamed client's row is never closed");
+
+    // Two unpaired clients behind one exit and two unpaired rows: which is
+    // which is unknowable, so nothing is adopted and nothing is closed.
+    plan = planReconcile([liveClient("x1", "185.65.134.66"), liveClient("x2", "185.65.134.66")],
+        [row("s1", "a", "a", "185.65.134.66", 1_000),
+         row("s2", "b", "b", "185.65.134.66", 2_000)], true);
+    check(plan.adopt.length == 0 && plan.abandon.length == 0,
+        "an ambiguous group is never guessed at");
+    check(plan.ambiguous == 2 && plan.unknown.length == 2, "and is reported as ambiguous");
+
+    // A stale row carrying a nick a different client now holds elsewhere:
+    // the address disagrees, so it is not adopted — it is closed.
+    plan = planReconcile([liveClient("alice", "198.51.100.9")],
+        [row("s1", "alice", "alice", "203.0.113.7", 1_000)], true);
+    check(plan.adopt.length == 0, "a nick match with the wrong address is not a match");
+    check(plan.abandon == ["s1"], "the stale row is closed");
+    check(plan.unknown.length == 1 && plan.unknown[0].nick == "alice",
+        "the live client with no row is reported, never invented");
+
+    // Same nick connected twice: the newest row wins, the older is closed.
+    plan = planReconcile([liveClient("alice", "203.0.113.7")],
+        [row("old", "alice", "alice", "203.0.113.7", 1_000),
+         row("new", "alice", "alice", "203.0.113.7", 5_000)], true);
+    check(plan.adopt.length == 1 && plan.adopt[0].id == "new", "the newest row is adopted");
+    check(plan.abandon == ["old"], "the older row of the same nick is closed");
+
+    // Nick-only mode (the ircd hid the addresses): pairing still works by
+    // nick, and a row is only closed when its nick is nowhere online.
+    plan = planReconcile([liveClient("alice", WHOX_IP_HIDDEN)],
+        [row("s1", "alice", "alice", "203.0.113.7", 1_000),
+         row("s2", "bob", "bob", "198.51.100.4", 2_000)], false);
+    check(plan.adopt.length == 1 && plan.adopt[0].id == "s1",
+        "nick-only pairing still adopts");
+    check(plan.abandon == ["s2"], "and still closes a nick that is nowhere online");
+
+    // The renamed session is what nick-only mode cannot see: `i` is not
+    // online any more, so its row is closed rather than adopted. Asserted
+    // so the cost of running without users/auspex is explicit.
+    plan = planReconcile([liveClient("incognito", WHOX_IP_HIDDEN)],
+        [row("s1", "i", "i", "203.0.113.7", 1_000)], false);
+    check(plan.adopt.length == 0 && plan.abandon == ["s1"],
+        "without addresses a rename during the outage is indistinguishable from a quit");
+
+    // An empty network with no open rows is a no-op, not a mass close.
+    plan = planReconcile([], [], true);
+    check(plan.adopt.length == 0 && plan.abandon.length == 0 && plan.ambiguous == 0,
+        "an empty sweep does nothing");
+
+    // A sweep that saw nobody while rows are open still closes them (the
+    // network really is empty), but only with addresses available.
+    plan = planReconcile([], [row("s1", "alice", "alice", "203.0.113.7", 1_000)], true);
+    check(plan.abandon == ["s1"], "an empty live list closes the rows it contradicts");
+}
+
 void main() {
     testParseQuitNotice();
     testParseNickNotice();
     testOpenSessions();
+    testParseWhoxReply();
+    testPlanReconcile();
     testIpGroup();
     testZlineMatches();
     testRules();

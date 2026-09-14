@@ -33,6 +33,10 @@
     armed: boolean;
     connectsSeen: number; connectsIgnored: number; quitsSeen: number; sessionsOpen: number;
     nickChangesSeen?: number;
+    /// Startup adoption sweep (WHOX): absent on a heartbeat written
+    /// before the sweep existed, or before the first sweep of a session.
+    sessionsAdopted?: number; sessionsAbandoned?: number;
+    liveWithoutRow?: number; sessionsAmbiguous?: number; lastSweepAt?: number;
     bansPlaced: number; bansObserved: number; activeZlines: number;
     accountLookups: number;
     announced: number; lastAnnouncement: string; lastAnnouncementAt: number;
@@ -151,6 +155,18 @@
     <dl class="space-y-1 text-sm">
       <div class="flex justify-between gap-4"><dt class="text-muted">Connects seen</dt><dd class="font-mono">{hb ? hb.connectsSeen : '—'}{#if hb}<span class="ml-1 text-xs text-muted">· {hb.connectsIgnored} ignored</span>{/if}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-muted">Quits seen</dt><dd class="font-mono">{hb ? hb.quitsSeen : '—'}{#if hb}<span class="ml-1 text-xs text-muted">· {hb.sessionsOpen} open · {hb.nickChangesSeen ?? 0} renames</span>{/if}</dd></div>
+      <div class="flex justify-between gap-4">
+        <dt class="shrink-0 text-muted" title="one WHOX sweep per IRC session pairs the live network against the session rows that were still open, so a restart no longer leaves them open forever">Adoption sweep</dt>
+        <dd class="min-w-0 text-right font-mono text-xs">
+          {#if hb && hb.lastSweepAt}
+            {hb.sessionsAdopted ?? 0} adopted · {hb.sessionsAbandoned ?? 0} closed
+            <span class="text-muted">· {since(hb.lastSweepAt)}</span>
+            {#if (hb.sessionsAmbiguous ?? 0) > 0}<span class="ml-1 text-warn">· {hb.sessionsAmbiguous} ambiguous</span>{/if}
+          {:else}
+            <span class="text-muted">—</span>
+          {/if}
+        </dd>
+      </div>
       <div class="flex justify-between gap-4"><dt class="text-muted">Bans placed</dt><dd class="font-mono">{hb ? hb.bansPlaced : '—'}{#if hb}<span class="ml-1 text-xs text-muted">· {hb.bansObserved} observed</span>{/if}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-muted">Z-lines on the ircd</dt><dd class="font-mono">{hb ? hb.activeZlines : '—'}</dd></div>
       <div class="flex justify-between gap-4"><dt class="text-muted">Enrichment</dt><dd class="font-mono text-xs">{hb ? `${hb.accountLookups} accounts · ${hb.intelLookups ?? 0} intel` : '—'}{#if hb && (hb.intelFailures ?? 0) > 0}<span class="ml-1 text-warn">· {hb.intelFailures} degraded</span>{/if}</dd></div>

@@ -172,6 +172,59 @@ NickNotice parseNickNotice(string text) @safe pure {
     return n;
 }
 
+/// WHOX query type FiberEye stamps on its sweep, echoed back in every
+/// `354` so a reply to somebody else's WHO can never be mistaken for one
+/// of ours. InspIRCd drops a query type longer than three characters.
+enum WHOX_QUERYTYPE = "fe";
+
+/// The WHOX request FiberEye sends: no matching flags, fields
+/// `t` (query type), `i` (IP), `n` (nick), `a` (services account).
+///
+/// InspIRCd emits the fields in its own canonical order
+/// (`whox_field_order = "tcuihsnfdlaor"`, modules/core/who.cpp), NOT in
+/// the order they were asked for, so `354` always arrives as
+/// `<me> <querytype> <ip> <nick> <account>`.
+enum WHOX_FLAGS = "%tina," ~ WHOX_QUERYTYPE;
+
+/// What InspIRCd substitutes for the IP of a user the requester may not
+/// see (`source_can_see_target` is false without `users/auspex`). It is a
+/// placeholder, never a real address — treating it as one would group
+/// every client on the network under a single fictional IP.
+enum WHOX_IP_HIDDEN = "255.255.255.255";
+
+/// One live client from a WHOX (`354`) reply.
+struct WhoEntry {
+    /// True when the line was one of our `354`s and yielded a nick.
+    bool ok;
+    /// Nick in force right now.
+    string nick;
+    /// Real IP, or `WHOX_IP_HIDDEN` when the ircd refused it.
+    string ip;
+    /// Services account, empty when the client is not logged in (the wire
+    /// value for that is the literal `0`).
+    string account;
+    /// True when `ip` is the placeholder rather than an address.
+    bool ipHidden;
+}
+
+/// Parses one `354` (RPL_WHOSPCRPL) reply to `WHOX_FLAGS`.
+///
+/// `params` is the numeric's parameter list, so `params[0]` is our own
+/// nick and the fields follow. A line whose query type is not ours — any
+/// other WHOX in flight — returns `ok = false`.
+WhoEntry parseWhoxReply(const string[] params) @safe pure {
+    WhoEntry w;
+    if (params.length < 5) return w;
+    if (params[1].strip() != WHOX_QUERYTYPE) return w;
+    w.ip = sanitizeLine(params[2].strip());
+    w.nick = sanitizeLine(params[3].strip());
+    const acct = sanitizeLine(params[4].strip());
+    w.account = acct == "0" ? "" : acct;
+    w.ipHidden = w.ip == WHOX_IP_HIDDEN || !w.ip.length;
+    w.ok = w.nick.length > 0;
+    return w;
+}
+
 /// The unit FiberEye counts and bans: the exact address for IPv4, the
 /// `/64` for IPv6 — the observed flood rotates addresses inside one /64.
 ///

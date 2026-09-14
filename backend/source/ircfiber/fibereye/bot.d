@@ -8,6 +8,10 @@
  * What it does:
  *   - subscribe to snomasks `+s +cCqxnN` and persist every connect, nick
  *     change and quit to Mongo (`ircfiber.fibereye.store`);
+ *   - on every (re)connect, run one WHOX adoption sweep (`WHO * %tina,fe`)
+ *     and reconcile the live network against the session rows that are
+ *     still open: adopt, correct a nick that changed while it was away,
+ *     close what is provably gone. It never creates a row;
  *   - for every public connect, count the sighting and assemble the IP
  *     intelligence record (`ircfiber.ipintel`), attach it to the FiberEye
  *     rollups, then queue the `irc_connect` announcement;
@@ -86,7 +90,7 @@ import ircfiber.bots.nick : FIBEREYE_DEFAULT_NICK;
 import ircfiber.env : envSecret;
 import ircfiber.fibereye.events;
 import ircfiber.fibereye.format;
-import ircfiber.fibereye.sessions : OpenSession, OpenSessions;
+import ircfiber.fibereye.sessions : OpenRow, OpenSession, OpenSessions, planReconcile;
 import ircfiber.fibereye.rules;
 import ircfiber.fibereye.store;
 import ircfiber.fibereye.ruleset;
@@ -207,6 +211,19 @@ final class FiberEyeBot : IrcBot {
     /// oldest insertion is evicted, which only costs a `durationMs` on a
     /// session that has been open longer than 20 000 others.
     private enum MAX_OPEN_SESSIONS = 20_000;
+    /// Seconds to wait after `onReady` before the adoption sweep: the
+    /// JOINs and the NickServ IDENTIFY go out first, and `WHO *` costs the
+    /// bot server-side fakelag penalty proportional to the reply size.
+    private enum WHO_SWEEP_DELAY = 5;
+    /// Seconds to wait for `315` before giving the sweep up. A partial
+    /// reply must never be reconciled — the missing clients would look
+    /// like quits and close live sessions — so a timeout discards it.
+    private enum WHO_SWEEP_TIMEOUT = 45;
+    /// Cap on both sides of the reconciliation. The reply cap only guards
+    /// memory on an absurdly large network; the row cap bounds the Mongo
+    /// read of a deployment that has accumulated stale open rows.
+    private enum WHO_SWEEP_MAX_REPLIES = 20_000;
+    private enum WHO_SWEEP_MAX_ROWS = 20_000;
 
     private FiberEyeConfig fe;
     /// Redis connection owned by the reader fiber (each loop owns its own).
@@ -226,6 +243,22 @@ final class FiberEyeBot : IrcBot {
     private OpenSessions open;
     /// Last WHOIS send, for the account-enrichment throttle.
     private long lastWhoisMs;
+
+    // ── startup adoption sweep (WHOX) ────────────────────────────────
+    /// True between sending `WHO` and its `315`, i.e. while `354` replies
+    /// are ours to collect.
+    private bool whoSweepRunning;
+    /// True once this IRC session has reconciled; a reconnect clears it,
+    /// because a new session starts with an empty open-session map.
+    private bool whoSweepDone;
+    /// Replies collected for the sweep in flight.
+    private WhoEntry[] whoSweepLive;
+    /// True when a reply carried the `255.255.255.255` placeholder, i.e.
+    /// the oper account lacks `users/auspex` and addresses are unusable.
+    private bool whoSweepIpHidden;
+    /// Sweep outcome, published for the admin page.
+    private long adoptedSessions, abandonedSessions, unknownLiveSessions,
+        ambiguousSessions, lastSweepAt;
 
     /// Masks the ircd currently lists in `STATS Z`, refreshed by the sweep.
     private bool[string] activeZlines;
@@ -348,7 +381,13 @@ final class FiberEyeBot : IrcBot {
                     if (parseStatsXLine(l, x) && x.type == "Z") pendingStats[x.mask] = x;
                 }
                 return true;
-            case "219":   // RPL_ENDOFSTATS — the sweep is complete
+            case "354":   // RPL_WHOSPCRPL — one client of our WHOX sweep
+                onWhoxReply(l.params);
+                return true;
+            case "315":   // RPL_ENDOFWHO — the sweep is complete
+                onWhoSweepComplete();
+                return true;
+            case "219":   // RPL_ENDOFSTATS — the STATS sweep is complete
                 onStatsComplete();
                 return true;
             default:
@@ -356,11 +395,15 @@ final class FiberEyeBot : IrcBot {
         }
     }
 
-    /// `+s +cCqx` for the notices; the STATS sweep needs oper. The Tor
-    /// exit list refresh is per process, not per session.
+    /// `+s +cCqxnN` for the notices; the STATS sweep and the adoption
+    /// sweep both need oper. The Tor exit list refresh is per process,
+    /// not per session.
     protected override void onReady() {
         if (isOpered()) {
             if (!statsLoopStarted) { statsLoopStarted = true; runTask(&statsLoop); }
+            // Per session, not per process: a reconnect starts with an
+            // empty open-session map and has to adopt again.
+            if (!whoSweepDone && store !is null) runTask(&whoSweepTask);
         } else {
             logWarn("FiberEye: not opered — no connect notices and no bans");
         }
@@ -373,12 +416,18 @@ final class FiberEyeBot : IrcBot {
         if (outboxTask == Task.init || !outboxTask.running) outboxTask = runTask(&outboxLoop);
     }
 
-    /// The outbox consumer ends with the session; the next session starts a fresh one.
+    /// The outbox consumer ends with the session; the next session starts
+    /// a fresh one, and so does the adoption sweep: the open-session map
+    /// it filled is gone with the session that filled it.
     protected override void onSessionEnd() {
         if (outboxTask != Task.init) {
             try outboxTask.join(); catch (Exception) {}
             outboxTask = Task.init;
         }
+        whoSweepRunning = false;
+        whoSweepDone = false;
+        whoSweepLive = null;
+        whoSweepIpHidden = false;
     }
 
     // ── connect / nick / quit observation ────────────────────────────
@@ -648,6 +697,106 @@ final class FiberEyeBot : IrcBot {
         if (store is null) return;
         store.setSessionAccount(s.id, account);
         store.setIpAccount(ipGroup(s.ip), account);
+    }
+
+    // ── startup adoption sweep ───────────────────────────────────────
+
+    /// Asks the ircd who is connected right now, so the sessions that
+    /// were open when this process (re)started are adopted instead of
+    /// hanging open forever.
+    ///
+    /// Only the connect notice creates a session row; this sweep never
+    /// does. A client whose connect predates the bot is reported as
+    /// `unknown` and left alone, because synthesising a row would inflate
+    /// the rollup's lifetime `connects` and the flood counters with
+    /// connects that never happened.
+    private void whoSweepTask() nothrow {
+        try {
+            sleep(WHO_SWEEP_DELAY.seconds);
+            if (!isAlive() || !isOpered() || whoSweepDone || whoSweepRunning) return;
+            whoSweepLive = null;
+            whoSweepIpHidden = false;
+            whoSweepRunning = true;
+            logInfo("FiberEye: adoption sweep — WHO * %s", WHOX_FLAGS);
+            sendLine("WHO * " ~ WHOX_FLAGS);
+            sleep(WHO_SWEEP_TIMEOUT.seconds);
+            // `315` clears the flag. Still set means the reply never
+            // finished: reconciling a partial list would read the missing
+            // clients as quits and close live sessions, so drop it.
+            if (whoSweepRunning) {
+                whoSweepRunning = false;
+                whoSweepLive = null;
+                logWarn("FiberEye: adoption sweep timed out after %ss — no reconciliation this session",
+                    WHO_SWEEP_TIMEOUT);
+            }
+        } catch (Exception e) {
+            whoSweepRunning = false;
+            whoSweepLive = null;
+            try logWarn("FiberEye: adoption sweep failed: %s", e.msg); catch (Exception) {}
+        }
+    }
+
+    /// One `354`. Replies to anybody else's WHOX carry a different query
+    /// type and are ignored by the parser.
+    private void onWhoxReply(const string[] params) {
+        if (!whoSweepRunning) return;
+        auto w = parseWhoxReply(params);
+        if (!w.ok) return;
+        if (w.ipHidden) whoSweepIpHidden = true;
+        if (whoSweepLive.length >= WHO_SWEEP_MAX_REPLIES) return;
+        whoSweepLive ~= w;
+    }
+
+    /// `315`: the live list is complete, so reconcile it off the read loop.
+    private void onWhoSweepComplete() {
+        if (!whoSweepRunning) return;
+        whoSweepRunning = false;
+        whoSweepDone = true;
+        auto live = whoSweepLive;
+        whoSweepLive = null;
+        runTask(&reconcileTask, live, whoSweepIpHidden);
+    }
+
+    /// `runTask` entry point for the reconciliation — named and nothrow so
+    /// a Mongo failure cannot escape into the scheduler.
+    private void reconcileTask(WhoEntry[] live, bool ipHidden) nothrow {
+        try reconcile(live, ipHidden);
+        catch (Exception e) {
+            try logWarn("FiberEye: reconciliation failed: %s", e.msg); catch (Exception) {}
+        }
+    }
+
+    private void reconcile(WhoEntry[] live, bool ipHidden) {
+        if (store is null) return;
+        const now = nowMs();
+        auto rows = store.openSessionRows(WHO_SWEEP_MAX_ROWS);
+        // Without `users/auspex` the ircd answers `%i` with the literal
+        // 255.255.255.255 for every client, so addresses cannot be used
+        // at all — pairing falls back to the nick and cannot recover a
+        // client that renamed while the bot was away.
+        if (ipHidden)
+            logWarn("FiberEye: the ircd hid client addresses from WHOX (the oper account needs "
+                ~ "privs=\"users/auspex\") — reconciling by nick only");
+        auto plan = planReconcile(live, rows, !ipHidden);
+
+        foreach (r; plan.adopt)
+            open.remember(r.currentNick, r.ip, r.id, r.ts, MAX_OPEN_SESSIONS);
+        foreach (r; plan.rename) {
+            store.renameSession(r.id, r.nick);
+            store.setIpNick(r.ipGroup, r.nick, now);
+        }
+        const closed = store.markSessionsAbandoned(plan.abandon, now);
+
+        adoptedSessions = cast(long) plan.adopt.length;
+        abandonedSessions = closed;
+        unknownLiveSessions = cast(long) plan.unknown.length;
+        ambiguousSessions = plan.ambiguous;
+        lastSweepAt = now;
+        logInfo("FiberEye: adoption sweep reconciled %s live client(s) against %s open row(s): "
+            ~ "%s adopted (%s renamed while away), %s closed as gone, %s live without a row, "
+            ~ "%s left open as ambiguous",
+            live.length, rows.length, plan.adopt.length, plan.rename.length, closed,
+            plan.unknown.length, plan.ambiguous);
     }
 
     // ── window counters ──────────────────────────────────────────────
@@ -957,6 +1106,14 @@ final class FiberEyeBot : IrcBot {
         j["quitsSeen"] = Json(quitsSeen);
         j["nickChangesSeen"] = Json(nickChangesSeen);
         j["sessionsOpen"] = Json(cast(long) open.length);
+        // Startup adoption sweep: what the last reconciliation did, so the
+        // admin page can tell "3 open" that survived a restart from "3
+        // open" the bot actually watched connect.
+        j["sessionsAdopted"] = Json(adoptedSessions);
+        j["sessionsAbandoned"] = Json(abandonedSessions);
+        j["liveWithoutRow"] = Json(unknownLiveSessions);
+        j["sessionsAmbiguous"] = Json(ambiguousSessions);
+        j["lastSweepAt"] = Json(lastSweepAt);
         j["bansPlaced"] = Json(bansPlaced);
         j["bansObserved"] = Json(bansObserved);
         j["activeZlines"] = Json(cast(long) activeZlines.length);

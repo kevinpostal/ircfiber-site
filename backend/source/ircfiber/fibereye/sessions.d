@@ -14,13 +14,24 @@
  * address disambiguates the same nick reconnecting from elsewhere.
  * Sessions are evicted oldest-first at a caller-supplied cap so a flood
  * can never grow the maps without bound.
+ *
+ * The map is per IRC session: a reconnect or a restart starts it empty
+ * while Mongo still holds the rows of everyone who is connected right
+ * now. `planReconcile` is the other half — it pairs a WHOX sweep of the
+ * live network against those rows, so sessions survive a restart instead
+ * of hanging open forever. It is pure, so the pairing rules (and the
+ * cases where it refuses to guess) are asserted in the test binary.
  */
 module ircfiber.fibereye.sessions;
 
+import std.algorithm.comparison : min;
 import std.algorithm.sorting : sort;
+import std.array : array;
+import std.range : iota;
 import std.string : toLower;
+import std.uni : icmp;
 
-import ircfiber.fibereye.format : ipGroup;
+import ircfiber.fibereye.format : ipGroup, WhoEntry;
 
 /// One session the bot saw connect and has not seen quit.
 struct OpenSession {
@@ -152,4 +163,145 @@ struct OpenSessions {
             byId.remove(id);
         }
     }
+}
+
+/// One `fibereye_sessions` row with no quit recorded yet.
+struct OpenRow {
+    /// `fibereye_sessions._id`.
+    string id;
+    /// Nick at connect time.
+    string nick;
+    /// Nick in force when the row was last touched; empty on rows written
+    /// before nick changes were tracked.
+    string currentNick;
+    /// Real IP and its ban/flood group.
+    string ip, ipGroup;
+    /// Connect instant (unix ms).
+    long ts;
+
+    /// The nick this session was last known to be using.
+    string knownNick() const @safe pure nothrow {
+        return currentNick.length ? currentNick : nick;
+    }
+}
+
+/// A rename the sweep found: the client renamed while the bot was away.
+struct ReconcileRename {
+    string id, ipGroup, nick;
+}
+
+/// What a reconciliation would do. Pure data, so the pairing rules are
+/// asserted without Mongo or an ircd, and the bot only has to apply it.
+struct ReconcilePlan {
+    /// Rows whose client is still connected, with the live nick filled in:
+    /// these go back into the open-session map so the eventual QUIT closes
+    /// them with a real duration instead of leaving them open for good.
+    OpenRow[] adopt;
+    /// Adopted rows whose live nick differs from the stored one.
+    ReconcileRename[] rename;
+    /// Ids whose client is provably gone.
+    string[] abandon;
+    /// Live clients with no open row — their connect was never recorded
+    /// (it predates the deployment, or the row aged out). Deliberately
+    /// reported and not turned into rows: a synthesised connect would
+    /// inflate the rollup's `connects` and the flood counters.
+    WhoEntry[] unknown;
+    /// Rows left open because pairing was not provable.
+    long ambiguous;
+}
+
+/// Pairs a WHOX sweep of the live network against the session rows that
+/// are still open, and says what to adopt, rename, close and report.
+///
+/// `haveIps` is the caller's answer to "did the ircd actually give us
+/// addresses" — without `users/auspex` every `354` carries
+/// `WHOX_IP_HIDDEN` instead, and matching on that would fold the whole
+/// network into one fictional address. With addresses the pairing is
+/// exact; without them it falls back to the nick alone, which is still
+/// sound (a nick is unique network-wide at any instant) but cannot see a
+/// client that renamed while the bot was away.
+///
+/// Nothing here guesses: a row is only closed when no live client can
+/// possibly be it, and an ambiguous group (several unpaired clients
+/// behind one VPN exit) is counted rather than resolved.
+ReconcilePlan planReconcile(const WhoEntry[] live, const OpenRow[] rows, bool haveIps) @safe {
+    ReconcilePlan p;
+    if (!rows.length && !live.length) return p;
+
+    // Newest row first: a nick that connected twice adopts its newest
+    // row, and identical input always yields an identical plan.
+    auto order = iota(rows.length).array;
+    order.sort!((a, b) => rows[a].ts != rows[b].ts
+        ? rows[a].ts > rows[b].ts
+        : rows[a].id < rows[b].id);
+
+    auto rowTaken = new bool[rows.length];
+    auto liveTaken = new bool[live.length];
+    auto liveGroup = new string[live.length];
+    foreach (i, ref e; live)
+        liveGroup[i] = (haveIps && !e.ipHidden) ? ipGroup(e.ip) : "";
+
+    // Pass 1 — the nick is the join key: it is unique network-wide at any
+    // instant, so a live nick equal to an open row's nick is that row's
+    // client. The address, when we have it, must agree — a stale row can
+    // carry a nick a different client now holds.
+    foreach (i, ref e; live) {
+        foreach (ri; order) {
+            if (rowTaken[ri]) continue;
+            const r = rows[ri];
+            if (liveGroup[i].length && r.ipGroup != liveGroup[i]) continue;
+            if (icmp(r.knownNick(), e.nick) != 0 && icmp(r.nick, e.nick) != 0) continue;
+            rowTaken[ri] = true;
+            liveTaken[i] = true;
+            p.adopt ~= OpenRow(r.id, r.nick, e.nick, r.ip, r.ipGroup, r.ts);
+            if (icmp(r.knownNick(), e.nick) != 0)
+                p.rename ~= ReconcileRename(r.id, r.ipGroup, e.nick);
+            break;
+        }
+    }
+
+    // Pass 2 — renamed while the bot was away, so no nick matches. When a
+    // group has exactly one unpaired client and exactly one unpaired row
+    // they are the same session; anything less certain is left alone.
+    if (haveIps) {
+        foreach (i, ref e; live) {
+            if (liveTaken[i] || !liveGroup[i].length) continue;
+            size_t liveHere, rowsHere, only;
+            foreach (j; 0 .. live.length)
+                if (!liveTaken[j] && liveGroup[j] == liveGroup[i]) liveHere++;
+            foreach (ri; order)
+                if (!rowTaken[ri] && rows[ri].ipGroup == liveGroup[i]) { rowsHere++; only = ri; }
+            if (liveHere != 1 || rowsHere != 1) continue;
+            const r = rows[only];
+            rowTaken[only] = true;
+            liveTaken[i] = true;
+            p.adopt ~= OpenRow(r.id, r.nick, e.nick, r.ip, r.ipGroup, r.ts);
+            p.rename ~= ReconcileRename(r.id, r.ipGroup, e.nick);
+        }
+    }
+
+    // Pass 3 — a row is gone only when nothing unpaired could be it.
+    foreach (ri; order) {
+        if (rowTaken[ri]) continue;
+        const r = rows[ri];
+        bool gone = true;
+        if (haveIps) {
+            foreach (j; 0 .. live.length)
+                if (!liveTaken[j] && liveGroup[j] == r.ipGroup) { gone = false; break; }
+        } else {
+            // No addresses: the weaker "is this nick online at all". A
+            // client that renamed while we were away is indistinguishable
+            // from one that quit, and its row is unrecoverable either way.
+            foreach (ref e; live)
+                if (icmp(e.nick, r.knownNick()) == 0 || icmp(e.nick, r.nick) == 0) { gone = false; break; }
+        }
+        if (gone) p.abandon ~= r.id;
+        else p.ambiguous++;
+    }
+
+    foreach (i, ref e; live) {
+        if (liveTaken[i]) continue;
+        p.unknown ~= WhoEntry(e.ok, e.nick, e.ip, e.account, e.ipHidden);
+    }
+    return p;
 }

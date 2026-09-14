@@ -41,7 +41,7 @@
     ident: string; host: string; ip: string;
     ipGroup: string; ipVersion: number; realname: string; connClass: string;
     port: number; tls: boolean; account: string;
-    quitTs: number; quitReason: string; durationMs: number;
+    quitTs: number; quitReason: string; durationMs: number; quitInferred: boolean;
     geoCity: string; geoRegion: string; geoCountry: string; geoOrg: string;
     geoTimezone: string; geoPending: boolean;
     intelAsn: string; intelFlags: string; intelOperator: string; intelPrefix: string;
@@ -487,6 +487,11 @@
                     <td class="py-2 pr-4 font-mono">
                       {#if s.quitTs === 0}
                         <span class="text-success">open</span>
+                      {:else if s.quitInferred}
+                        <span
+                          class="text-muted"
+                          title="the client was gone when FiberEye reconnected, so the quit instant is unknown — this row was closed by the adoption sweep"
+                        >unknown</span>
                       {:else}
                         {duration(s.durationMs)}
                       {/if}
