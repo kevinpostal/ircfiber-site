@@ -23,9 +23,13 @@
 #   /anope/data                   the volume (db_json database + backups)
 #   uid/gid 10000
 
+# The fork's branch, not paigeadelethompson/master, until the pull request
+# which carries the live-run fixes (pseudo clients on their own link, the
+# CMake parse fix, the Discord reconnect watchdog) is merged upstream:
+# https://github.com/paigeadelethompson/anope/pull/3
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
 ARG ANOPE_BRANCH=bridgeserv-live
-ARG ANOPE_COMMIT=5881ed30881a71d90d34baf6e430667b299c41a2
+ARG ANOPE_COMMIT=f674edaa7a5f832a37024cdabae684cb94e5cd0e
 
 FROM alpine:3.24 AS builder-anope
 ARG ANOPE_REPO
