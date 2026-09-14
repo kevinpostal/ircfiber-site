@@ -29,7 +29,7 @@
 # https://github.com/paigeadelethompson/anope/pull/3
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
 ARG ANOPE_BRANCH=bridgeserv-live
-ARG ANOPE_COMMIT=c435a1a43c52afce745be48416684a22766f513f
+ARG ANOPE_COMMIT=0f964f4417a41ca70b47627f710e4a88faa88300
 
 # Debian, not alpine, and NOT interchangeable: on musl the vendored DPP
 # segfaults the moment Discord sends a guild with members. Its timestamp
