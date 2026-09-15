@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage, clearReplyTarget, clearReactTarget, applyReaction, type ReactTarget } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage, clearReplyTarget, clearReactTarget, clearEditRequest, applyReaction, type ReactTarget } from '../stores/ircStore.svelte';
   import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
-  import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix, normalizeChannelName, escapeTagValue } from '../lib/utils';
+  import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix, normalizeChannelName, escapeTagValue, isTouchDevice } from '../lib/utils';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
   import { pastebinStore, closeFromFile } from '../stores/pastebinStore.svelte';
@@ -414,11 +414,7 @@
       // explicit tap on the input to bring up the keyboard). Detect real
       // touch/coarse devices, not just narrow viewports (tests run narrow
       // on desktop and must still auto-focus).
-      const isMobile = typeof window !== 'undefined' && (
-        window.matchMedia('(pointer: coarse)').matches ||
-        (window.matchMedia('(max-width: 800px)').matches && (('ontouchstart' in window) || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)))
-      );
-      if (!isMobile) tick().then(() => textarea?.focus());
+      if (!isTouchDevice()) tick().then(() => textarea?.focus());
     }
     // Reset highlight cycling state on buffer switch
     if (lastBufferKey && lastBufferKey !== newKey) {
@@ -893,12 +889,12 @@
   }
 
   /** Sends one PRIVMSG line and inserts its optimistic row. A pending
-   *  reply target for this buffer rides along as `+draft/reply` on the
+   *  reply target for this buffer rides along as `+reply` on the
    *  first line and is cleared once sent. */
   function sendPlainLine(networkId: string, target: string, text: string): void {
     const label = generateLabel();
     const reply = activeReply;
-    const tags = reply ? { '+draft/reply': reply.msgid } : undefined;
+    const tags = reply ? { '+reply': reply.msgid } : undefined;
     if (tags) {
       onSendMessage(networkId, target, text, label, tags);
       clearReplyTarget();
@@ -1102,6 +1098,18 @@
     textarea?.focus();
   }
 
+  // A row's Edit action (More menu / sheet): same entry as Ctrl/Cmd+Up.
+  $effect(() => {
+    const r = ircState.editRequest;
+    if (!r) return;
+    if (r.networkId !== ircState.activeBuffer.networkId) return;
+    if (normalizeChannelName(r.bufferName) !== normalizeChannelName(ircState.activeBuffer.bufferName || '')) return;
+    inputValue = '[edit] ' + r.body;
+    editTarget = { eid: r.eid, msgid: r.msgid, label: r.label };
+    clearEditRequest();
+    tick().then(() => textarea?.focus());
+  });
+
   // A row's React action opens the picker; the next pick becomes a
   // `+draft/react` TAGMSG on that row (raw path, like typing) applied
   // optimistically — the server echo re-applies it idempotently.
@@ -1112,7 +1120,7 @@
     if (!emojiOpen && ircState.reactTarget) clearReactTarget();
   });
   function sendReaction(target: ReactTarget, emoji: string): void {
-    onSendRaw(target.networkId, `@+draft/reply=${escapeTagValue(target.msgid)};+draft/react=${escapeTagValue(emoji)} TAGMSG ${target.bufferName}`);
+    onSendRaw(target.networkId, `@+reply=${escapeTagValue(target.msgid)};+draft/react=${escapeTagValue(emoji)} TAGMSG ${target.bufferName}`);
     if (myNick) applyReaction(target.networkId, target.bufferName, target.msgid, emoji, myNick, true);
     clearReactTarget();
   }

@@ -423,6 +423,15 @@ export function escapeTagValue(raw: string): string {
   });
 }
 
+/** Real touch device: coarse pointer, or a phone-width viewport with touch
+ *  events. Width alone is not enough — tests run narrow on desktop. */
+export function isTouchDevice(): boolean {
+  return typeof window !== 'undefined' && (
+    window.matchMedia('(pointer: coarse)').matches ||
+    (window.matchMedia('(max-width: 800px)').matches && (('ontouchstart' in window) || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)))
+  );
+}
+
 /**
  * Split the userhost half of an IRC mask into its `ident` and `host`
  * parts. Accepts any of the forms a member entry can arrive as:

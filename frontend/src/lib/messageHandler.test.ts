@@ -151,7 +151,7 @@ describe('unpackEvent — account-tag and remote-edit fields', () => {
   });
 });
 
-describe('replies and reactions (draft/reply, draft/react)', () => {
+describe('replies and reactions (+reply, draft/react)', () => {
   beforeEach(() => {
     ircState.networks.length = 0;
     ircState.activeBuffer.networkId = null;
@@ -160,9 +160,12 @@ describe('replies and reactions (draft/reply, draft/react)', () => {
     ircState.processedMessages = {};
   });
 
-  it('unpacks the compact rp key and the long-form tag into replyTo', () => {
+  it('unpacks the compact rp key and the long-form tags into replyTo', () => {
     expect(unpackEvent({ command: 'PRIVMSG', nick: 'a', rp: 'dc-123' }, { value: 0 }).replyTo)
       .toBe('dc-123');
+    expect(unpackEvent({ command: 'PRIVMSG', nick: 'a', tags: { '+reply': 'dc-9' } }, { value: 0 }).replyTo)
+      .toBe('dc-9');
+    // Pre-ratification clients still send the draft name.
     expect(unpackEvent({ command: 'PRIVMSG', nick: 'a', tags: { '+draft/reply': 'dc-9' } }, { value: 0 }).replyTo)
       .toBe('dc-9');
     expect(unpackEvent({ command: 'PRIVMSG', nick: 'a' }, { value: 0 }).replyTo).toBeUndefined();

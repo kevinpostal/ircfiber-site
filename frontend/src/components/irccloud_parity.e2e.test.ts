@@ -58,8 +58,15 @@ describe('irccloud parity extensive', () => {
     c.dispatchEvent(new Event('scroll'));
     await delay(300); await nextFrame();
     await delay(300);
-    // half-way parity leaves ~150px buffer; with tall rows 3499 is valid anchor — just verify not snapped to bottom
-    expect(c.scrollTop < 6000, `anchored near top, got ${c.scrollTop}`).toBe(true);
+    // IRCCloud fetched(): the old/new divider settles just below the
+    // viewport top (scrollTop = max(dividerPos - 152, 48)), whatever the
+    // row height — the previous `scrollTop < 6000` bound was a proxy
+    // calibrated to unstyled 22px rows. Not snapped to bottom either.
+    const divider = c.querySelector('.backlogDivider') as HTMLElement | null;
+    expect(divider, 'backlog divider rendered at the reveal boundary').not.toBeNull();
+    const offset = divider!.getBoundingClientRect().top - c.getBoundingClientRect().top;
+    expect(offset, `divider anchored near the viewport top, got ${offset}`).toBeGreaterThanOrEqual(0);
+    expect(offset, `divider anchored near the viewport top, got ${offset}`).toBeLessThanOrEqual(200);
     expect(c.scrollHeight - c.scrollTop - c.clientHeight > 50).toBe(true);
   }, 15000);
 

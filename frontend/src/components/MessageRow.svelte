@@ -2,12 +2,12 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import type { IRCMessage, Member } from '../types';
-  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, escapeTagValue } from '../lib/utils';
+  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, isTouchDevice } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, wrapNicksWithHighlight } from '../lib/autolinker';
   import { modeSentences } from '../lib/modeSentence';
-  import { getActiveBufferObj, getActiveNetwork, findMessage, setReplyTarget, setReactTarget, applyReaction } from '../stores/ircStore.svelte';
-  import { sendMessage, sendRaw } from '../stores/wsConnection.svelte.ts';
+  import { getActiveBufferObj, getActiveNetwork, findMessage, setReplyTarget, setReactTarget, toggleReaction, openMessageActions, QUICK_REACTIONS } from '../stores/ircStore.svelte';
+  import { sendMessage } from '../stores/wsConnection.svelte.ts';
   import { globalPrefs, getBufferPrefs, highlightWords } from '../stores/preferences.svelte';
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
@@ -250,7 +250,7 @@
     }
   }
 
-  // ── Replies and reactions (IRCv3 +draft/reply, +draft/react) ──
+  // ── Replies and reactions (IRCv3 +reply, +draft/react) ──
   // A chat row with a msgid can be replied to and reacted to. The reply
   // target lives in the store (the input bar reads it); a reaction is a
   // TAGMSG on the raw path, exactly as typing is, applied optimistically
@@ -285,13 +285,74 @@
     setReactTarget(networkId, activeBufferName, msg.msgid);
   }
 
-  /** Toggle the current user's reaction on this row (chip click). */
-  function toggleOwnReaction(emoji: string, own: boolean): void {
+  // ── Row actions: quick-reaction strip, More menu, right-click, long-press ──
+  let rowEl = $state<HTMLElement | null>(null);
+  let stripOpen = $state(false);
+  const ownReactions = $derived(new Set(reactionChips.filter(c => c.own).map(c => c.emoji)));
+
+  /** One-click reaction toggle (chip, quick strip). */
+  function quickReact(emoji: string): void {
     const networkId = activeNetwork?.networkId;
-    if (!canInteract || !networkId || !activeBufferName || !msg.msgid || !myNick) return;
-    const tag = own ? '+draft/unreact' : '+draft/react';
-    sendRaw(networkId, `@+draft/reply=${escapeTagValue(msg.msgid)};${tag}=${escapeTagValue(emoji)} TAGMSG ${activeBufferName}`);
-    applyReaction(networkId, activeBufferName, msg.msgid, emoji, myNick, !own);
+    if (!canInteract || !networkId || !activeBufferName) return;
+    toggleReaction(networkId, activeBufferName, msg, emoji);
+    stripOpen = false;
+  }
+
+  function openActions(x: number, y: number, sheet: boolean): void {
+    const networkId = activeNetwork?.networkId;
+    if (!canInteract || !networkId || !activeBufferName) return;
+    stripOpen = false;
+    openMessageActions({ networkId, bufferName: activeBufferName, msg, x, y, sheet, rowEl });
+  }
+
+  function openMenuFromButton(e: MouseEvent): void {
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    // positionMenu flips it right-anchored at the viewport edge.
+    openActions(r.left, r.bottom + 4, false);
+  }
+
+  /** Right-click: our menu, unless the browser's would be more useful
+   *  (a link, an existing widget) or the user is copying a selection. */
+  function handleContextMenu(e: MouseEvent): void {
+    const t = e.target as HTMLElement | null;
+    if (t?.closest('a, .replyQuote, .reaction')) return;
+    if ((window.getSelection()?.toString() ?? '').length > 0) return;
+    e.preventDefault();
+    cancelPress();
+    openActions(e.clientX, e.clientY, isTouchDevice());
+  }
+
+  // Touch has no hover: a 500ms press (without a 10px drift, which is a
+  // scroll) opens the same content as a bottom sheet. iOS synthesizes a
+  // click on release even after a long press; preventDefault on that
+  // touchend swallows it so it cannot land on the sheet's scrim and
+  // close the sheet it just opened.
+  const LONG_PRESS_MS = 500;
+  let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  let pressStart = { x: 0, y: 0 };
+  let pressFired = false;
+  function cancelPress(): void {
+    if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+  }
+  function handleTouchStart(e: TouchEvent): void {
+    if (e.touches.length !== 1) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest('a, button, .reaction, .replyQuote')) return;
+    const { clientX, clientY } = e.touches[0];
+    pressStart = { x: clientX, y: clientY };
+    pressFired = false;
+    cancelPress();
+    pressTimer = setTimeout(() => { pressTimer = null; pressFired = true; openActions(clientX, clientY, true); }, LONG_PRESS_MS);
+  }
+  function handleTouchMove(e: TouchEvent): void {
+    if (!pressTimer) return;
+    const { clientX, clientY } = e.touches[0];
+    if (Math.abs(clientX - pressStart.x) > 10 || Math.abs(clientY - pressStart.y) > 10) cancelPress();
+  }
+  function handleTouchEnd(e: TouchEvent): void {
+    if (pressFired) { pressFired = false; if (e.cancelable) e.preventDefault(); }
+    cancelPress();
   }
 
   /** Scroll the replied-to row into view and flash it. */
@@ -577,6 +638,10 @@
   }
 </script>
 
+{#snippet iconReply()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>{/snippet}
+{#snippet iconReact()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11v1a10 10 0 1 1-9-10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/><path d="M16 5h6"/><path d="M19 2v6"/></svg>{/snippet}
+{#snippet iconMore()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/><circle cx="5" cy="12" r="1.2"/></svg>{/snippet}
+
 {#if isGrouped && msg.events && msg.events.length > 0}
   {@const events = (msg.events as { msg: IRCMessage }[]).map(e => e.msg)}
   {@const head = events[0]}
@@ -642,7 +707,14 @@
     data-msgid={msg.msgid || undefined}
     data-phase={isServerLog ? phase : undefined}
     tabindex={canInteract ? -1 : undefined}
+    bind:this={rowEl}
     onkeydown={canInteract ? handleRowKey : undefined}
+    oncontextmenu={canInteract ? handleContextMenu : undefined}
+    onmouseleave={canInteract ? () => { stripOpen = false; } : undefined}
+    ontouchstart={canInteract ? handleTouchStart : undefined}
+    ontouchmove={canInteract ? handleTouchMove : undefined}
+    ontouchend={canInteract ? handleTouchEnd : undefined}
+    ontouchcancel={canInteract ? cancelPress : undefined}
   >
     {#if !isSystem && !isJoinPart && !isAction && nick}
       {@const colorIndex = nickColorIndex(nick)}
@@ -738,7 +810,7 @@
           <button type="button" class="reaction" class:own={chip.own}
                   title={chip.nicks.join(', ')}
                   aria-pressed={chip.own}
-                  onclick={(e) => { e.stopPropagation(); toggleOwnReaction(chip.emoji, chip.own); }}>
+                  onclick={(e) => { e.stopPropagation(); quickReact(chip.emoji); }}>
             <span class="reactionEmoji">{chip.emoji}</span> <span class="reactionCount">{chip.nicks.length}</span>
           </button>
         {/each}
@@ -746,8 +818,22 @@
     {/if}
     {#if canInteract}
       <span class="rowActions" aria-label="Message actions">
-        <button type="button" class="rowAction reply" title="Reply (r)" aria-label="Reply" onclick={(e) => { e.stopPropagation(); handleReply(); }}>&#8617; Reply</button>
-        <button type="button" class="rowAction react" title="React" aria-label="React" onclick={(e) => { e.stopPropagation(); handleReact(); }}>&#9786; React</button>
+        <button type="button" class="rowAction reply" title="Reply (r)" aria-label="Reply"
+                onclick={(e) => { e.stopPropagation(); handleReply(); }}>{@render iconReply()}</button>
+        <span class="reactWrap" class:open={stripOpen}>
+          <button type="button" class="rowAction react" title="React" aria-label="React" aria-expanded={stripOpen}
+                  onclick={(e) => { e.stopPropagation(); stripOpen = !stripOpen; }}>{@render iconReact()}</button>
+          <span class="reactStrip"><span class="reactStripInner">
+            {#each QUICK_REACTIONS as emoji (emoji)}
+              <button type="button" class="quickReaction" class:own={ownReactions.has(emoji)} aria-label="React {emoji}" aria-pressed={ownReactions.has(emoji)}
+                      onclick={(e) => { e.stopPropagation(); quickReact(emoji); }}>{emoji}</button>
+            {/each}
+            <button type="button" class="quickReaction more" title="More reactions" aria-label="More reactions"
+                    onclick={(e) => { e.stopPropagation(); stripOpen = false; handleReact(); }}>{@render iconReact()}</button>
+          </span></span>
+        </span>
+        <button type="button" class="rowAction more" title="More" aria-label="More actions" aria-haspopup="menu"
+                onclick={openMenuFromButton}>{@render iconMore()}</button>
       </span>
     {/if}
     <span class="date" onmouseenter={() => tsHover = true} onmouseleave={() => tsHover = false}><span class="timestamp" title={fullTitle} role={pendingState === 'failed' ? 'button' : undefined} tabindex={pendingState === 'failed' ? 0 : undefined} onclick={pendingState === 'failed' ? handleFailedRetry : undefined} onkeydown={pendingState === 'failed' ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleFailedRetry(); } } : undefined}>{timeStr}</span></span>

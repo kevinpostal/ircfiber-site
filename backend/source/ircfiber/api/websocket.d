@@ -587,8 +587,6 @@ final class WebSocketGateway {
                 }
                 // Full ISUPPORT inventory the server advertised in
                 // its 005 reply stream. The frontend renders this into
-                // Full ISUPPORT inventory the server advertised in
-                // its 005 reply stream. The frontend renders this into
                 // the categorised "Server features" panel using its
                 // 80-entry knowledge base (see src/lib/isupportCatalog.ts)
                 // so we don't ship the catalog lookup server-side — the
@@ -597,6 +595,13 @@ final class WebSocketGateway {
                 foreach (string k, ref v; snap.isupport)
                     isupportObj[k] = Json(v);
                 netObj["isupport"] = isupportObj;
+                // Negotiated IRCv3 caps (engine getAckedCaps): the frontend gates the
+                // per-message Edit/Delete actions on draft/edit-message and
+                // draft/message-redaction. Always shipped, so a reconnect that lost
+                // a cap clears it client-side.
+                auto capsArr = Json.emptyArray;
+                foreach (c; snap.caps) capsArr ~= Json(c);
+                netObj["caps"] = capsArr;
 
                 // Live connection telemetry (owner: engine state.d →
                 // NetworkStateSnapshot). Egress keys are always shipped
@@ -1333,7 +1338,7 @@ final class WebSocketGateway {
                     if (json["label"].type != Json.Type.undefined) {
                         c.label = json["label"].get!string;
                     }
-                    // Client-only tags (`+draft/reply`) ride along; only
+                    // Client-only tags (`+reply`) ride along; only
                     // `+`-prefixed names, so a client cannot forge server
                     // tags such as msgid or account.
                     if (json["tags"].type == Json.Type.object) {

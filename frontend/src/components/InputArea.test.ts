@@ -43,6 +43,7 @@ function resetState(): void {
 	ircState.activeBuffer.bufferName = null;
 	ircState.messages = {};
 	ircState.processedMessages = {};
+	ircState.editRequest = null;
 	resetTypingState();
 	bufferInputText.clear();
 	// Clear lastSentMessages from previous tests
@@ -501,6 +502,31 @@ describe('InputArea', () => {
 		expect(el.value).toBe('[edit] hello world');
 	});
 
+	it('adopts a row Edit request into the edit state, clears it, and sends with the row label', async () => {
+		globalPrefs.featureFlags.editMessage.enabled = true;
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw, onSendEditMessage: mockSendEditMessage } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		const el = textarea.element() as HTMLTextAreaElement;
+
+		ircState.editRequest = { networkId: 'net1', bufferName: '#general', label: 'l1', body: 'old text' };
+		flushSync();
+
+		expect(el.value).toBe('[edit] old text');
+		expect(ircState.editRequest).toBeNull();
+
+		await vi.waitFor(() => expect(document.activeElement).toBe(el));
+		await userEvent.keyboard(' more{Enter}');
+		expect(mockSendEditMessage).toHaveBeenCalledWith('net1', '#general', 'old text more', 'l1');
+		expect(el.value).toBe('');
+	});
+
 	it('Ctrl+Cmd+Up with non-empty input does nothing', async () => {
 		globalPrefs.featureFlags.editMessage.enabled = true;
 		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
@@ -921,7 +947,7 @@ describe('InputArea — reply compose bar', () => {
 		ircState.activeBuffer.bufferName = '#general';
 	}
 
-	it('sends +draft/reply with the line and clears the bar', async () => {
+	it('sends +reply with the line and clears the bar', async () => {
 		activeChannel();
 		ircState.replyTarget = {
 			networkId: 'net1', bufferName: '#general', msgid: 'dc-1',
@@ -937,7 +963,7 @@ describe('InputArea — reply compose bar', () => {
 		await userEvent.keyboard('{Enter}');
 
 		expect(mockSendMessage).toHaveBeenCalledWith(
-			'net1', '#general', 'agreed', expect.any(String), { '+draft/reply': 'dc-1' },
+			'net1', '#general', 'agreed', expect.any(String), { '+reply': 'dc-1' },
 		);
 		expect(ircState.replyTarget).toBeNull();
 

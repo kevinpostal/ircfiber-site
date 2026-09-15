@@ -1,7 +1,7 @@
-/* Replies and reactions (IRCv3 +draft/reply, +draft/react) on message rows.
+/* Replies and reactions (IRCv3 +reply, +draft/react) on message rows.
    The quote sits above the body, the reaction chips below it, and the
-   Reply / React actions float at the top-right of a hovered (or focused)
-   chat row, next to the timestamp. */
+   Reply · React · More actions sit in the right gutter, left of the
+   timestamp, revealed on hover/focus of a chat row. */
 
 .row.messageRow .replyQuote {
   display: flex;
@@ -77,35 +77,138 @@
   font-family: var(--font-mono);
 }
 
+/* Row actions — Reply · React · More — sit in the right gutter left of the
+   timestamp ("11:49:40 PM" = 79px + 10px padding → right: 92px), centred on
+   the 12px time (bottom: 3px). visibility keeps them out of the tab order
+   until the row is hovered/focused or its menu is open. Reveal is by
+   hover, keyboard focus (:focus-visible on the row or a button inside) or
+   an open menu — deliberately not :focus-within, which would pin the
+   icons on any row a mouse click happened to focus. */
 .row.messageRow .rowActions {
   position: absolute;
-  top: 2px;
-  right: 72px;
-  display: none;
-  gap: 2px;
+  right: 92px;
+  bottom: 1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   z-index: 2;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 80ms ease-out, visibility 0s linear 80ms;
 }
 .row.messageRow:hover .rowActions,
-.row.messageRow:focus-within .rowActions,
-.row.messageRow:focus .rowActions {
-  display: inline-flex;
+.row.messageRow:focus-visible .rowActions,
+.row.messageRow:has(.rowActions :focus-visible) .rowActions,
+.row.messageRow.actionsOpen .rowActions {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
 }
 .row.messageRow .rowAction {
-  padding: 0 6px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-  background: var(--bg-secondary, rgba(0, 0, 0, 0.6));
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 11px;
-  line-height: 18px;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  display: inline-grid;
+  place-items: center;
   cursor: pointer;
   user-select: none;
 }
-.row.messageRow .rowAction:hover {
+.row.messageRow .rowAction svg { width: 15px; height: 15px; }
+.row.messageRow .rowAction:hover,
+.row.messageRow .rowAction:focus-visible,
+.row.messageRow .rowAction[aria-expanded="true"] {
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.07);
 }
+/* Quick-reaction strip: left of the icons, inside the hovered row. Shown
+   150ms after the pointer settles on React (hover intent), kept 200ms
+   after it leaves so the pointer can cross into it; the strip's
+   padding-right is the transparent bridge that keeps :hover contiguous. */
+.row.messageRow .reactWrap { position: relative; display: inline-flex; }
+.row.messageRow .reactStrip {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  padding-right: 6px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 80ms ease-out 200ms, visibility 0s linear 280ms;
+}
+.row.messageRow .reactWrap:hover .reactStrip,
+.row.messageRow .reactWrap:has(:focus-visible) .reactStrip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 150ms, 150ms;
+}
+.row.messageRow .reactWrap.open .reactStrip {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s, 0s;
+}
+.row.messageRow .reactStripInner,
+.messageActionMenu .reactRow {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #2c2f35;
+  border-radius: 8px;
+  background: #1a1d21;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.messageActionMenu .reactRow { border: 0; box-shadow: none; border-radius: 0; padding: 4px 6px 2px; }
+.quickReaction {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.quickReaction svg { width: 16px; height: 16px; }
+.quickReaction:hover { background: #21252b; }
+.quickReaction.own { background: rgba(30, 114, 255, 0.14); box-shadow: inset 0 0 0 1px var(--accent); }
+.contextMenu__item.danger { color: #ff7b72; }
+
+/* Touch: no hover affordance — a long-press opens the sheet. Selection on
+   the message body is suppressed so the OS text callout doesn't race the
+   sheet; the sheet's Copy text replaces it. */
+@media (hover: none) and (pointer: coarse) {
+  .row.messageRow .rowActions { display: none; }
+  .row.messageRow .message { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .row.messageRow .rowActions,
+  .row.messageRow .reactStrip { transition: none; }
+}
+
+/* Bottom sheet (touch). Items reuse the global .contextMenu__item rule. */
+.messageActionSheet { position: fixed; inset: 0; z-index: 400; }
+.messageActionSheet__scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); }
+.messageActionSheet__panel {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  background: #1a1d21;
+  border-top: 1px solid #2c2f35;
+  border-radius: 14px 14px 0 0;
+  padding: 8px 8px calc(12px + env(safe-area-inset-bottom));
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.7);
+}
+.messageActionSheet__grab { width: 36px; height: 4px; border-radius: 2px; background: #2c2f35; margin: 0 auto 8px; }
+.messageActionSheet .reactRow { display: flex; justify-content: space-between; padding: 2px 6px 8px; }
+.messageActionSheet .quickReaction { width: 40px; height: 40px; border-radius: 10px; font-size: 22px; background: #11161d; }
+.messageActionSheet .actions { list-style: none; margin: 0; padding: 0; }
+.messageActionSheet .contextMenu__item { display: flex; align-items: center; padding: 12px 10px; font-size: 14px; border-top: 1px solid #2c2f35; white-space: normal; }
+.messageActionSheet hr { display: none; }
 .row.messageRow:focus {
   outline: none;
 }

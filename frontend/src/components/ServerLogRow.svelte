@@ -341,9 +341,9 @@
   .groupedLines.collapsed div.groupedLines__line { display: none; }
 
   /* ── isupport: one row, 2-line clamp, expandable ────────────────── */
-  /* Widen the right gutter past the global 118px so the `…more` toggle
+  /* Widen the right gutter past the global one so the `…more` toggle
      sits between the clamped text and the timestamp. */
-  .isup.row.messageRow.status { padding-right: 160px; }
+  .isup.row.messageRow.status { padding-right: calc(var(--row-gutter-right) + 42px); }
   /* The clamp itself lives in styles/components/_serverLogTokens.scss:
      scoped `.isup .content` ties on specificity with the global
      `.row.messageRow .content`, and component styles are injected before

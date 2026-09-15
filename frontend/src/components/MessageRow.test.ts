@@ -6,6 +6,15 @@ import MessageRow from './MessageRow.svelte';
 import { createMessage, createNetwork, createBuffer, createMember } from '../test/factories';
 import { ircState } from '../stores/ircStore.svelte';
 
+vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
+  sendRaw: vi.fn(),
+  sendJson: vi.fn(),
+  sendMessage: vi.fn(),
+  setMaxEid: vi.fn(),
+}));
+
+import { sendRaw } from '/src/stores/wsConnection.svelte.ts';
+
 function resetState(): void {
 	ircState.networks.length = 0;
 	ircState.activeBuffer.networkId = null;
@@ -14,11 +23,13 @@ function resetState(): void {
 	ircState.processedMessages = {};
 	ircState.replyTarget = null;
 	ircState.reactTarget = null;
+	ircState.messageActions = null;
 	document.body.innerHTML = '';
 }
 
 beforeEach(() => {
 	resetState();
+	vi.clearAllMocks();
 });
 
 describe('MessageRow', () => {
@@ -434,5 +445,105 @@ describe('MessageRow — replies and reactions', () => {
 			networkId: 'net1', bufferName: '#chan', msgid: 'dc-1',
 			nick: 'alice', excerpt: 'the original',
 		});
+	});
+
+	it('opens the quick strip from React and sends one-click reactions through the store', async () => {
+		activeChannel();
+		const msg = createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' });
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+		render(MessageRow, { props: { msg } });
+
+		(document.querySelector('.rowAction.react') as HTMLButtonElement).click();
+		flushSync();
+		expect(document.querySelector('.reactWrap.open')).toBeInTheDocument();
+
+		(document.querySelector('.quickReaction[aria-label="React 👍"]') as HTMLButtonElement).click();
+		flushSync();
+		expect(sendRaw).toHaveBeenCalledWith('net1', '@+reply=dc-1;+draft/react=👍 TAGMSG #chan');
+		// Applied optimistically to the row in the store; the strip closes.
+		expect(ircState.messages['net1:#chan'][0].reactions).toEqual({ '👍': ['me'] });
+		expect(document.querySelector('.reactWrap.open')).toBeNull();
+	});
+
+	it('unreacts from the quick strip when the reaction is already ours', async () => {
+		activeChannel();
+		const msg = createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1', reactions: { '👍': ['bob', 'me'] } });
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+		render(MessageRow, { props: { msg } });
+
+		const thumb = document.querySelector('.quickReaction[aria-label="React 👍"]') as HTMLButtonElement;
+		expect(thumb.classList.contains('own')).toBe(true);
+		thumb.click();
+		flushSync();
+		expect(sendRaw).toHaveBeenCalledWith('net1', '@+reply=dc-1;+draft/unreact=👍 TAGMSG #chan');
+		expect(ircState.messages['net1:#chan'][0].reactions).toEqual({ '👍': ['bob'] });
+	});
+
+	it('publishes the row as the actions target from More, anchored at the button', async () => {
+		activeChannel();
+		const msg = createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' });
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+		render(MessageRow, { props: { msg } });
+
+		(document.querySelector('.rowAction.more') as HTMLButtonElement).click();
+		flushSync();
+		expect(ircState.messageActions).toMatchObject({ networkId: 'net1', bufferName: '#chan', sheet: false });
+		expect(ircState.messageActions?.msg.msgid).toBe('dc-1');
+		expect(ircState.messageActions?.rowEl).toBe(document.querySelector('.row.messageRow'));
+	});
+
+	it('right-click opens the actions menu, except on a link', async () => {
+		activeChannel();
+		const msg = createMessage({ nick: 'alice', text: 'see https://example.com/x', msgid: 'dc-1' });
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+		render(MessageRow, { props: { msg } });
+		const row = document.querySelector('.row.messageRow') as HTMLElement;
+
+		const onLink = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+		row.querySelector('a')!.dispatchEvent(onLink);
+		flushSync();
+		expect(onLink.defaultPrevented).toBe(false);
+		expect(ircState.messageActions).toBeNull();
+
+		const onRow = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 30, clientY: 40 });
+		row.dispatchEvent(onRow);
+		flushSync();
+		expect(onRow.defaultPrevented).toBe(true);
+		expect(ircState.messageActions).toMatchObject({ x: 30, y: 40, sheet: false });
+		expect(ircState.messageActions?.msg.msgid).toBe('dc-1');
+	});
+
+	it('long-press opens the sheet; a 20px drift (scroll) cancels it', async () => {
+		vi.useFakeTimers();
+		try {
+			activeChannel();
+			const msg = createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' });
+			ircState.messages['net1:#chan'] = [msg];
+			flushSync();
+			render(MessageRow, { props: { msg } });
+			const row = document.querySelector('.row.messageRow') as HTMLElement;
+			const touch = (x: number, y: number) => new Touch({ identifier: 1, target: row, clientX: x, clientY: y });
+			const touchEvent = (type: string, x: number, y: number) =>
+				new TouchEvent(type, { bubbles: true, cancelable: true, touches: [touch(x, y)] });
+
+			row.dispatchEvent(touchEvent('touchstart', 10, 10));
+			row.dispatchEvent(touchEvent('touchmove', 30, 10));
+			vi.advanceTimersByTime(600);
+			flushSync();
+			expect(ircState.messageActions).toBeNull();
+
+			row.dispatchEvent(touchEvent('touchstart', 10, 10));
+			vi.advanceTimersByTime(499);
+			expect(ircState.messageActions).toBeNull();
+			vi.advanceTimersByTime(1);
+			flushSync();
+			expect(ircState.messageActions).toMatchObject({ networkId: 'net1', bufferName: '#chan', sheet: true, x: 10, y: 10 });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

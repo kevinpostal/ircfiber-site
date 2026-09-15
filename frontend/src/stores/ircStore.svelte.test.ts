@@ -3877,6 +3877,17 @@ describe('updateNetworkFromSync — connection telemetry mapping', () => {
 		expect(net.connectedAtMs).toBeNull();
 		expect(net.tlsInfo).toBeNull();
 	});
+
+	it('adopts the negotiated cap set from every sync, clearing caps a reconnect lost', () => {
+		ircState.networks.push(createNetwork({ networkId: 'net1' }));
+		updateNetworkFromSync([telemetrySync({ caps: ['message-tags', 'draft/message-redaction'] })]);
+		flushSync();
+		expect(live('net1').capabilities.has('draft/message-redaction')).toBe(true);
+		expect(live('net1').capabilities.has('draft/edit-message')).toBe(false);
+		updateNetworkFromSync([telemetrySync({ caps: [] })]);
+		flushSync();
+		expect(live('net1').capabilities.size).toBe(0);
+	});
 });
 
 describe('applyFail (W2-T02 — engine CONNECTION_FAIL adapter)', () => {

@@ -60,7 +60,7 @@
 }
 .bufferinputcell .typingcell.is-typing .typing-pill { opacity: 1; }
 
-/* "Replying to" bar (IRCv3 +draft/reply): same flex-row slot as the
+/* "Replying to" bar (IRCv3 +reply): same flex-row slot as the
    typing indicator, laid out above the input so it pushes messages up
    rather than covering them. */
 .bufferinputcell .replyBar {

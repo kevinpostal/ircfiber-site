@@ -1,6 +1,6 @@
 import type { Network, Buffer, IRCMessage, ActiveBuffer, Member, ModeCategory, OverlayState, ContextMenuState, ConnectionState, RetryStatus, FailInfo, ChannelListChunk } from '../types';
 import { MODE_HIERARCHY } from '../types';
-import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, prefixRun, naturalCompare, normaliseIdentifier, splitUserHost } from '../lib/utils';
+import { normalizeChannelName, equalNicks, getUserModePrefix, stripPrefix, prefixRun, naturalCompare, normaliseIdentifier, splitUserHost, escapeTagValue } from '../lib/utils';
 import { setChanPrefixChars } from '../lib/autolinker';
 import { setChanModeTypes } from '../lib/modeSentence';
 import { isMessageIgnored } from '../lib/ignorePolicy';
@@ -147,7 +147,7 @@ export function clearConnectRequested(networkId: string): void {
   connectRequestedAt.delete(networkId);
 }
 
-/** What the next message answers (IRCv3 `+draft/reply`). */
+/** What the next message answers (IRCv3 `+reply`). */
 export interface ReplyTarget {
   networkId: string;
   bufferName: string;
@@ -186,6 +186,66 @@ export function setReactTarget(networkId: string, bufferName: string, msgid: str
 
 export function clearReactTarget(): void {
   ircState.reactTarget = null;
+}
+
+/** Emoji offered as one-click reactions (row strip, More menu, touch sheet). */
+export const QUICK_REACTIONS = ['👍', '✅', '😂', '❤️', '👀'] as const;
+
+/** Row a message-actions menu or sheet is open for. One MessageActionMenu is
+ *  mounted in App; rows only publish this. */
+export interface MessageActionsTarget {
+  networkId: string;
+  bufferName: string;
+  msg: IRCMessage;
+  /** Viewport anchor of the desktop menu (ignored when `sheet`). */
+  x: number;
+  y: number;
+  /** Touch: render as a bottom sheet instead of a positioned menu. */
+  sheet: boolean;
+  /** The row element; the menu marks it `.actionsOpen` so the hover
+   *  actions stay visible while the pointer is inside the menu. */
+  rowEl: HTMLElement | null;
+}
+
+/** One-shot request from a row's Edit action; InputArea adopts it into its
+ *  edit state (same as Ctrl/Cmd+Up) and clears it. */
+export interface EditRequest {
+  networkId: string;
+  bufferName: string;
+  eid?: number;
+  msgid?: string;
+  label: string;
+  body: string;
+}
+
+/** Opens the menu/sheet for a row; a second call for the same msgid is a no-op
+ *  (Android fires contextmenu AND our long-press timer). */
+export function openMessageActions(t: MessageActionsTarget): void {
+  if (ircState.messageActions?.msg.msgid === t.msg.msgid) return;
+  ircState.messageActions = t;
+}
+
+export function closeMessageActions(): void {
+  ircState.messageActions = null;
+}
+
+export function requestEdit(r: EditRequest): void {
+  ircState.editRequest = r;
+}
+
+export function clearEditRequest(): void {
+  ircState.editRequest = null;
+}
+
+/** Toggles the current nick's reaction on a row: `+draft/react` when absent,
+ *  `+draft/unreact` when present, both as a TAGMSG on the raw path (like
+ *  typing), applied optimistically; the server echo re-applies idempotently. */
+export function toggleReaction(networkId: string, bufferName: string, msg: IRCMessage, emoji: string): void {
+  const me = ircState.networks.find(n => n.networkId === networkId)?.currentNick ?? '';
+  if (!msg.msgid || !me || !emoji) return;
+  const own = (msg.reactions?.[emoji] ?? []).some(n => n.toLowerCase() === me.toLowerCase());
+  sendRaw(networkId, `@+reply=${escapeTagValue(msg.msgid)};${own ? '+draft/unreact' : '+draft/react'}=${escapeTagValue(emoji)} TAGMSG ${bufferName}`);
+  applyReaction(networkId, bufferName, msg.msgid, emoji, me, !own);
 }
 
 export const ircState = $state({
@@ -288,7 +348,7 @@ export const ircState = $state({
   // expireAt = serverTs + countdownMs (unix ms). The UI computes remaining
   // = max(0, expireAt - Date.now()).
   tempUnavailable: {} as Record<string, { expireAt: number }>,
-  // Compose-side reply target (IRCv3 `+draft/reply`): set from a row's
+  // Compose-side reply target (IRCv3 `+reply`): set from a row's
   // Reply action, shown as the "Replying to" bar above the input, cleared
   // on send or Esc. Null when the next message is not a reply.
   replyTarget: null as ReplyTarget | null,
@@ -296,6 +356,12 @@ export const ircState = $state({
   // sent as a `+draft/react` TAGMSG on it rather than inserted into the
   // input. Cleared when the picker closes.
   reactTarget: null as ReactTarget | null,
+  // Row whose More menu (desktop) or long-press sheet (touch) is open;
+  // one MessageActionMenu in App renders it. Null when closed.
+  messageActions: null as MessageActionsTarget | null,
+  // One-shot Edit request from a row's actions menu; InputArea adopts it
+  // into its edit state and clears it.
+  editRequest: null as EditRequest | null,
 });
 
 // E2E hooks for load-more verification
@@ -2520,6 +2586,8 @@ export interface SyncNetwork extends Network {
   /** Seconds since last inbound byte / last PONG (gateway performStateDump ← NetworkStateSnapshot). */
   dataAgeSecs?: number;
   pongAgeSecs?: number;
+  /** Negotiated IRCv3 capabilities (websocket.d ← NetworkStateSnapshot.caps). */
+  caps?: string[];
 }
 
 /** Copy the sync's telemetry sentinels onto `target` as nullable fields. */
@@ -2543,6 +2611,7 @@ function applyTelemetryFromSync(target: Network, raw: SyncNetwork): void {
         certNotAfterMs: typeof tls.certNotAfterMs === 'number' ? tls.certNotAfterMs : 0,
       }
     : null;
+  if (Array.isArray(raw.caps)) target.capabilities = new Set(raw.caps);
 }
 
 /** Sync payload buffer. `lastSeen` (inherited) carries the gateway-persisted

@@ -7,6 +7,7 @@
   import NetworkForm from './components/NetworkForm.svelte';
   import JoinModal from './components/JoinModal.svelte';
   import ContextMenu from './components/ContextMenu.svelte';
+  import MessageActionMenu from './components/MessageActionMenu.svelte';
   import ChannelContextMenu from './components/ChannelContextMenu.svelte';
   import ServerLogContextMenu from './components/ServerLogContextMenu.svelte';
   import Overlay from './components/Overlay.svelte';
@@ -29,7 +30,7 @@
   } from './stores/ircStore.svelte';
   import { connectWebSocket, requestSync, requestSwitchBuffer, disconnectWebSocket, wsState } from './stores/wsConnection.svelte.ts';
   import { loadHistory, updateMembersCollapsed } from './stores/api';
-  import { normalizeChannelName, isSkippedCommand, stripPrefix, banListKey } from './lib/utils';
+  import { normalizeChannelName, isSkippedCommand, stripPrefix, banListKey, isTouchDevice } from './lib/utils';
   import DropTarget from './components/DropTarget.svelte';
   import { startUploads, confirmDialog, cancelDialog } from './stores/uploadFlow.svelte';
   import { uploadState } from './stores/uploadStore.svelte';
@@ -699,11 +700,7 @@ let showEditNetwork: boolean = $state(false);
     // (IRCCloud mobile also requires an explicit tap). Detect coarse/touch
     // not just narrow width (tests run narrow on desktop).
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
-      const isMobileForTyping = typeof window !== 'undefined' && (
-        window.matchMedia('(pointer: coarse)').matches ||
-        (window.matchMedia('(max-width: 800px)').matches && (('ontouchstart' in window) || (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0)))
-      );
-      if (isMobileForTyping) return;
+      if (isTouchDevice()) return;
       const target = e.target as HTMLElement | null;
       const isTypingTarget = target && (
         target.tagName === 'INPUT' ||
@@ -1722,6 +1719,12 @@ let showEditNetwork: boolean = $state(false);
 
 {#if ircState.contextMenu.visible}
   <ContextMenu />
+{/if}
+
+{#if ircState.messageActions}
+  {#key ircState.messageActions.msg.msgid}
+    <MessageActionMenu target={ircState.messageActions} />
+  {/key}
 {/if}
 
 {#if userPopup}

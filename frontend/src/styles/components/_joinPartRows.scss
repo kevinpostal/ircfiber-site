@@ -47,7 +47,7 @@
 .row.messageRow.status.monospace .content {
   color: var(--row-mono-fg);
   line-height: inherit;
-  padding-right: 118px;
+  padding-right: var(--row-gutter-right);
 }
 
 /* MOTD / INFO blocks, IRCCloud values: `#mainwrapper div.log
@@ -153,7 +153,7 @@
 .row.groupedJoinPart {
   cursor: pointer;
   white-space: normal;
-  padding-right: 118px;
+  padding-right: var(--row-gutter-right);
 }
 
 .row.groupedJoinPart .collapseWidget {
