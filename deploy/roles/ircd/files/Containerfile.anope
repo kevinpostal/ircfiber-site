@@ -28,8 +28,8 @@
 # named branch, so the branch must be the one the commit is on. Everything on
 # it is submitted upstream as pull requests from kevinpostal/anope.
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
-ARG ANOPE_BRANCH=bridgeserv-ircv3
-ARG ANOPE_COMMIT=8a80d5009af56fc330a9e196abdd48143fc662ac
+ARG ANOPE_BRANCH=bridgeserv-reply-tag
+ARG ANOPE_COMMIT=aa537eb94f5a04a0365c81b9d091051382510db0
 
 # Debian, not alpine, and NOT interchangeable: on musl the vendored DPP
 # segfaults the moment Discord sends a guild with members. Its timestamp
