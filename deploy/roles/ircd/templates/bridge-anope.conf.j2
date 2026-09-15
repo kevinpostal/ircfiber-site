@@ -227,6 +227,12 @@ module
 	floodsecs = 4s
 	relaytyping = yes
 	relayreactions = yes
+	/* An IRC "@nick" naming one of this bridge's Discord pseudo clients is
+	 * relayed as a real Discord mention, so mentioning somebody from IRC
+	 * pings them exactly as it would from Discord. Only the ids actually
+	 * resolved end up in allowed_mentions; @everyone and roles never ping.
+	 * See files/anope-bridge-irc-mentions.patch. */
+	relaymentions = yes
 	relayevents = "nick,topic,kick"
 }
 
