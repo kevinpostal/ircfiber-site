@@ -36,12 +36,12 @@
  */
 module ircfiber.services.accounts;
 
-import std.algorithm : canFind;
+import std.algorithm : canFind, sort;
 import std.ascii : isAlphaNum;
 import std.conv : to;
 import std.datetime : Clock;
 import std.string : strip;
-import std.uni : toLower;
+import std.uni : sicmp, toLower;
 import std.uuid : UUID;
 import core.time : msecs;
 
@@ -50,6 +50,7 @@ import vibe.core.log;
 import vibe.data.json : Json, parseJsonString;
 
 import ircfiber.db.network : NetworkRepository;
+import ircfiber.db.user : UserRepository;
 import ircfiber.default_network : DEFAULT_FIBER_HOST, buildDefaultNick;
 import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.models.network : NetworkConfig, SASLMechanism;
@@ -321,6 +322,59 @@ private void recordProvisionOutcome(RedisStorage redis, ProvisionOutcome outcome
     }
 }
 
+
+/// One website user whose IRC identity is backed by no NickServ account.
+struct UnprovisionedUser {
+    User user;
+    NetworkConfig cfg;   /// their Fiber network; `id == UUID.init` when they have none
+    bool hasNetwork;
+}
+
+/**
+ * Every website user whose `irc.ircfiber.com` network carries no SASL
+ * credential, plus the users who have no Fiber network at all — those are
+ * equally unsynced, and provisioning creates the network for them.
+ *
+ * Enumerated from the users collection, not from networks, so the count the
+ * admin page reports, the rows its create action offers to fix, and the
+ * candidates `services_backfill` works through are one population. A
+ * networks-derived list would silently omit exactly the users nothing has
+ * ever provisioned. It lives here rather than in the admin module so those
+ * three can never drift apart.
+ */
+UnprovisionedUser[] unprovisionedUsers() {
+    auto users = new UserRepository();
+    // findAll ignores its offset argument, so one oversized page holds
+    // everybody; the admin user table is in the tens.
+    auto all = users.findAll(users.count() + 50, 0);
+
+    NetworkConfig[string] fiber;
+    foreach (row; new NetworkRepository().findAll()) {
+        if (row.config.host != DEFAULT_FIBER_HOST) continue;
+        const uid = row.userId.toString();
+        // Hand-made Mongo docs can leave a user with two Fiber networks: the
+        // one holding a credential wins, so a provisioned user is never listed.
+        if (auto have = uid in fiber)
+            if (have.saslUsername.strip().length) continue;
+        fiber[uid] = row.config;
+    }
+
+    UnprovisionedUser[] rows;
+    foreach (u; all) {
+        if (u.id == UUID.init) continue;
+        auto cfg = u.id.toString() in fiber;
+        if (cfg && cfg.saslUsername.strip().length) continue;
+        UnprovisionedUser r;
+        r.user = u;
+        if (cfg) {
+            r.cfg = *cfg;
+            r.hasNetwork = true;
+        }
+        rows ~= r;
+    }
+    sort!((a, b) => sicmp(a.user.username, b.user.username) < 0)(rows);
+    return rows;
+}
 
 /**
  * Register the user's nick with NickServ and persist the generated password

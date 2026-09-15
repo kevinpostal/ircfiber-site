@@ -214,6 +214,10 @@ void main() {
     // irc:config:nickservSync kill-switch; single-flight via Redis lock.
     import ircfiber.services.nickserv_sync : startNickservSyncLoop;
     startNickservSyncLoop();
+    // Site→NickServ backfill: every site user ends up with a NickServ
+    // account + SASL credential. irc:config:servicesBackfill kill-switch.
+    import ircfiber.services.services_backfill : startServicesBackfillLoop;
+    startServicesBackfillLoop();
     // FiberEye connection watch — same image, only runs where
     // IRCFIBER_FIBEREYE_ENABLED=1 (prod: the ircfiber-fibereye container).
     import ircfiber.fibereye.bot : startFiberEye;

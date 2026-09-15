@@ -876,6 +876,67 @@ package void apiNickservSyncConfigSet(HTTPServerRequest req, HTTPServerResponse 
     jsonOk(res, data);
 }
 
+// ────────────────────────────────────────────────────────────
+// Site→NickServ backfill toggle — GET + POST /api/admin/config/services-backfill
+// ────────────────────────────────────────────────────────────
+
+/// GET /api/admin/config/services-backfill — {enabled, key, intervalSecs, maxPerRun, status|null}
+package void apiServicesBackfillConfig(HTTPServerRequest req, HTTPServerResponse res,
+                            RedisStorage redis) {
+    import ircfiber.services.services_backfill : isServicesBackfillEnabled,
+        readServicesBackfillStatus, SERVICES_BACKFILL_CONFIG_KEY,
+        SERVICES_BACKFILL_INTERVAL_SECS, SERVICES_BACKFILL_MAX_PER_RUN,
+        ServicesBackfillStatus;
+    bool enabled = true;
+    try enabled = isServicesBackfillEnabled(redis);
+    catch (Exception) {}
+    Json data = Json.emptyObject;
+    data["enabled"] = Json(enabled);
+    data["key"] = Json(SERVICES_BACKFILL_CONFIG_KEY);
+    data["intervalSecs"] = Json(cast(long) SERVICES_BACKFILL_INTERVAL_SECS);
+    data["maxPerRun"] = Json(cast(long) SERVICES_BACKFILL_MAX_PER_RUN);
+    ServicesBackfillStatus st;
+    if (readServicesBackfillStatus(redis, st)) {
+        Json s = Json.emptyObject;
+        s["lastRunAt"] = Json(st.lastRunAt);
+        s["host"] = Json(st.host);
+        s["result"] = Json(st.result);
+        s["error"] = Json(st.error);
+        s["candidates"] = Json(st.candidates);
+        s["provisioned"] = Json(st.provisioned);
+        s["skipped"] = Json(st.skipped);
+        s["failed"] = Json(st.failed);
+        s["capped"] = Json(st.capped);
+        data["status"] = s;
+    } else {
+        data["status"] = Json(null);
+    }
+    jsonOk(res, data);
+}
+
+/// POST /api/admin/config/services-backfill — {enabled: bool}
+package void apiServicesBackfillConfigSet(HTTPServerRequest req, HTTPServerResponse res,
+                               RedisStorage redis) {
+    import ircfiber.services.services_backfill : setServicesBackfillEnabled;
+    auto body = readJsonBody(req);
+    bool enabled;
+    try {
+        enabled = body["enabled"].get!bool;
+    } catch (Exception e) {
+        jsonError(res, 400, "enabled boolean required");
+        return;
+    }
+    try {
+        setServicesBackfillEnabled(redis, enabled);
+    } catch (Exception e) {
+        jsonError(res, 500, e.msg);
+        return;
+    }
+    Json data = Json.emptyObject;
+    data["enabled"] = Json(enabled);
+    jsonOk(res, data);
+}
+
 
 // ────────────────────────────────────────────────────────────
 // Users API

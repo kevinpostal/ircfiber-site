@@ -17,6 +17,7 @@ import ircfiber.web.admin.api : apiMe, apiDashboard,
     apiRemoveAssignment, apiEngineConfig, apiHostDisconnect, apiHostReconnect,
     apiHostDeleteNetwork, apiAssignmentDelete, apiRouting,
     apiFiberConfig, apiFiberConfigSet, apiNickservSyncConfig, apiNickservSyncConfigSet,
+    apiServicesBackfillConfig, apiServicesBackfillConfigSet,
     apiMullvadStatus, apiMullvadRestart, apiMullvadTest, apiMullvadIrcTest, apiMullvadTestAll, apiMullvadSlotExit,
     apiMullvadServerEgressSet, apiMullvadServerEgressClear, apiNetworkEgressSet,
     apiUsersList, apiUsersBulkDelete, apiUserCreate, apiUserDetail, apiUserUpdate, apiUserDelete, apiRolesList,
@@ -138,6 +139,8 @@ final class AdminController {
         router.post("/api/admin/config/fiber", &adminWrap!apiFiberConfigSetRoute);
         router.get("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigRoute);
         router.post("/api/admin/config/nickserv-sync", &adminWrap!apiNickservSyncConfigSetRoute);
+        router.get("/api/admin/config/services-backfill", &adminWrap!apiServicesBackfillConfigRoute);
+        router.post("/api/admin/config/services-backfill", &adminWrap!apiServicesBackfillConfigSetRoute);
         router.get("/api/admin/config/embed-origins", &adminWrap!apiEmbedOriginsRoute);
         router.post("/api/admin/config/embed-origins", &adminWrap!apiEmbedOriginsSetRoute);
         router.get("/api/admin/oauth/status", &adminWrap!apiOAuthStatusRoute);
@@ -484,6 +487,12 @@ private:
     }
     void apiNickservSyncConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiNickservSyncConfigSet(req, res, redis);
+    }
+    void apiServicesBackfillConfigRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiServicesBackfillConfig(req, res, redis);
+    }
+    void apiServicesBackfillConfigSetRoute(HTTPServerRequest req, HTTPServerResponse res) {
+        apiServicesBackfillConfigSet(req, res, redis);
     }
     void apiEmbedOriginsRoute(HTTPServerRequest req, HTTPServerResponse res) {
         apiEmbedOrigins(req, res, redis);

@@ -48,7 +48,7 @@ import ircfiber.redis.protocol : ControlMessage, RedisKeys;
 import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick,
     persistProvisionedAccount, provisionServicesAccount, provisionServicesAccountAsync,
     ProvisionOutcome, servicesAccountCandidates, servicesPendingKey, servicesSkipKey,
-    SERVICES_OUTCOMES_KEY;
+    SERVICES_OUTCOMES_KEY, unprovisionedUsers, UnprovisionedUser;
 import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
     anopeCheckAuthentication, anopeNickRegistration, anopeOperCommand,
     anopeOperQuery, isSafeServicesArg, loadAnopeSettings, nickServSetPasswordCommand,
@@ -141,57 +141,6 @@ private string skipReasonFor(RedisStorage redis, string userId) {
         logWarn("nickserv: reading the skip marker for %s failed: %s", userId, e.msg);
         return "";
     }
-}
-
-/// One website user whose IRC identity is backed by no NickServ account.
-private struct UnprovisionedUser {
-    User user;
-    NetworkConfig cfg;   /// their Fiber network; `id == UUID.init` when they have none
-    bool hasNetwork;
-}
-
-/**
- * Every website user whose `irc.ircfiber.com` network carries no SASL
- * credential, plus the users who have no Fiber network at all — those are
- * equally unsynced, and `create` provisions the network for them.
- *
- * Enumerated from the users collection, not from networks, so the count this
- * page reports and the rows it offers to fix are the same population. A
- * networks-derived list would silently omit exactly the users nothing has
- * ever provisioned.
- */
-private UnprovisionedUser[] unprovisionedUsers() {
-    auto users = new UserRepository();
-    // findAll ignores its offset argument, so one oversized page holds
-    // everybody; the admin user table is in the tens.
-    auto all = users.findAll(users.count() + 50, 0);
-
-    NetworkConfig[string] fiber;
-    foreach (row; new NetworkRepository().findAll()) {
-        if (row.config.host != DEFAULT_FIBER_HOST) continue;
-        const uid = row.userId.toString();
-        // Hand-made Mongo docs can leave a user with two Fiber networks: the
-        // one holding a credential wins, so a provisioned user is never listed.
-        if (auto have = uid in fiber)
-            if (have.saslUsername.strip().length) continue;
-        fiber[uid] = row.config;
-    }
-
-    UnprovisionedUser[] rows;
-    foreach (u; all) {
-        if (u.id == UUID.init) continue;
-        auto cfg = u.id.toString() in fiber;
-        if (cfg && cfg.saslUsername.strip().length) continue;
-        UnprovisionedUser r;
-        r.user = u;
-        if (cfg) {
-            r.cfg = *cfg;
-            r.hasNetwork = true;
-        }
-        rows ~= r;
-    }
-    sort!((a, b) => sicmp(a.user.username, b.user.username) < 0)(rows);
-    return rows;
 }
 
 /// The three per-user counters, all derived in one pass.
