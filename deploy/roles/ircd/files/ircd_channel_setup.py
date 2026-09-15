@@ -205,6 +205,12 @@ SERVICE_NICKS = ("ChanServ", "NickServ", "OperServ", "MemoServ",
 VOICE_SWEEP_MAX = 200
 
 
+# WHOX querytype echoed back in the 354 replies, so a 354 from this query
+# is never confused with one somebody else's WHO provoked. Any 1-3 digit
+# value works; 152 is what most clients use for an account lookup.
+WHOX_TAG = "152"
+
+
 def clean(text: str) -> str:
     return FORMATTING.sub("", text)
 
@@ -633,9 +639,41 @@ def nickserv_status(session: IrcSession, nicks: list[str]) -> dict[str, int]:
     return out
 
 
+def channel_accounts(session: IrcSession, channel: str) -> dict[str, str]:
+    """{nick: ircd account} for the channel, from one WHOX query.
+
+    This is the exact predicate `+w v:account:*` is matched against —
+    m_autoop calls `Channel::CheckBan(user, "account:*")`, which reads
+    the accountname InspIRCd is holding for the session. Asking for it
+    directly is what keeps the sweep from ever being narrower than the
+    autoop rule it converges.
+
+    `WHO #chan %tna,152` answers `354 <me> 152 <nick> :<account>` per
+    member and a closing 315; `0` is WHOX's "no account". An ircd without
+    WHOX answers 352s instead, so nothing is parsed and the sweep falls
+    back to NickServ alone rather than failing.
+    """
+    mark = len(session.lines)
+    session.send(f"WHO {channel} %tna,{WHOX_TAG}")
+    done = session.wait_for(
+        re.compile(rf"\s315\s+\S+\s+{re.escape(channel)}\s", re.I), 10.0)
+    if not done:
+        raise IrcError(f"WHO {channel} never reached end-of-list (315)")
+    out: dict[str, str] = {}
+    for line in session.lines[mark:]:
+        tokens = clean(line).split()
+        if (len(tokens) < 6 or tokens[1] != "354"
+                or tokens[3] != WHOX_TAG):
+            continue
+        account = tokens[5].lstrip(":")
+        if account and account != "0":
+            out[tokens[4]] = account
+    return out
+
+
 def sync_voice(session: IrcSession, channel: str, entries: list,
                bot_nick: str, own_nick: str) -> bool:
-    """Voice identified members who hold no status mode. True when changed.
+    """Voice members the autoop rule would have voiced. True when changed.
 
     m_autoop only fires in OnPostJoin, so `+w v:account:*` voices a user
     as they join and never again: anyone already in the channel when the
@@ -644,10 +682,18 @@ def sync_voice(session: IrcSession, channel: str, entries: list,
     forever. This is the converging half, the same role the mode-lock
     repair above plays for +H.
 
-    NickServ is asked rather than the ircd's own account state on
-    purpose: NickServ stays authoritative even when something has
-    cleared the account InspIRCd learned from a SASL login, which is
-    exactly the state this sweep has to repair.
+    A member qualifies on either of two readings of "registered", because
+    neither alone covers the population:
+
+    * the ircd holds an account for the session (`channel_accounts`) —
+      literally what autoop matches, and the only reading that sees a
+      user whose current nick is not an alias of their account;
+    * NickServ STATUS says 3 (`nickserv_status`) — Anope's own view,
+      which survives something clearing the accountname InspIRCd learned
+      from a SASL login, the state this sweep exists to repair. Measured
+      on prod 2026-09-15: after the bridge deauth every pre-fix session
+      answered WHOX `0` while Anope still had the account, so dropping
+      this reading would have voiced nobody.
 
     Additive and status-blind: a member carrying any prefix already has
     voice-or-better, so ops are never demoted and a hand-granted mode is
@@ -672,9 +718,13 @@ def sync_voice(session: IrcSession, channel: str, entries: list,
     if not bare:
         return False
 
-    status = nickserv_status(session, bare[:VOICE_SWEEP_MAX])
-    targets = [n for n in bare[:VOICE_SWEEP_MAX]
-               if status.get(n.lower()) == 3]
+    bare = bare[:VOICE_SWEEP_MAX]
+    accounts = channel_accounts(session, channel)
+    # Only the members the ircd has no account for need asking about:
+    # one NickServ command each, so this also keeps the run short.
+    status = nickserv_status(session, [n for n in bare if n not in accounts])
+    targets = [n for n in bare
+               if n in accounts or status.get(n.lower()) == 3]
     if not targets:
         return False
 
