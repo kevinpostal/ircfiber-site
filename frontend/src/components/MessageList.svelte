@@ -938,7 +938,17 @@
       lastHeight = el.clientHeight;
       onChange(shouldPinBottom());
     };
-    const onContentGrowth = () => onChange(untrack(() => cachedAtBottom));
+    // Late growth of already-rendered content while pinned: re-pin to the
+    // very bottom. The trigger is the content height changing, whatever
+    // caused it — scrollToBottom only writes scrollTop, so this cannot
+    // feed itself, and a burst of mutations collapses into one re-pin.
+    let lastContentHeight = el.scrollHeight;
+    const onContentGrowth = () => {
+      const height = el.scrollHeight;
+      if (height === lastContentHeight) return;
+      lastContentHeight = height;
+      onChange(untrack(() => cachedAtBottom));
+    };
     const ro = new ResizeObserver(onContainerResize);
     ro.observe(el);
     const embedRo = new ResizeObserver(onContentGrowth);
@@ -947,11 +957,19 @@
         try { embedRo.observe(n as Element); } catch {}
       });
     };
-    // Late layout growth inside an already-rendered row (image decode,
-    // embed expansion, inline style changes) while pinned: re-pin once.
-    const mo = new MutationObserver((records) => {
+    // Anything that makes a rendered row taller after it landed: an image
+    // or embed decoding, a member's realname arriving on the next sync
+    // (the author gains a second line), a reaction chip appearing.
+    //
+    // This used to fire only for `attributes` records, which caught an
+    // inline style edit and nothing else — every ADDED node is a
+    // `childList` record, so the realname case grew the last row by a
+    // line and left the viewport that far off the bottom with no append
+    // to trigger another snap. The height check above is what makes
+    // reacting to every record cheap enough to be correct.
+    const mo = new MutationObserver(() => {
       observeEmbeds();
-      if (records.some(r => r.type === 'attributes')) onContentGrowth();
+      onContentGrowth();
     });
     mo.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
     observeEmbeds();

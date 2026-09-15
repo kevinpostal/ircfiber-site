@@ -1356,8 +1356,8 @@ describe('MessageList', () => {
 			// it on the next WS sync). The message row snaps into view, then
 			// the sync enriches the member → the row re-renders taller
 			// (author-realname span) → the viewport drifts off the very
-			// bottom with no new append to trigger another snap. The pinned
-			// settle chain must catch it and re-snap.
+			// bottom with no new append to trigger another snap. The
+			// content-growth observer must catch it and re-snap.
 			const container = await setupScrollableChannel(40);
 			if (!container) return;
 
@@ -1385,7 +1385,7 @@ describe('MessageList', () => {
 			const bob = foundBuf.users.find((u) => stripPrefix(u.nick) === 'bob')!;
 			bob.realname = 'Bob Builder';
 			flushSync();
-			// The row grew; the settle chain (4 × 200ms) must re-snap.
+			// The row grew by a line; the content-growth observer re-pins.
 			await new Promise((r) => setTimeout(r, 250));
 
 			const drift = container.scrollHeight - container.clientHeight - container.scrollTop;
