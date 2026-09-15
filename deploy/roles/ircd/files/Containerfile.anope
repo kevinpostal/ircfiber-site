@@ -63,8 +63,20 @@ RUN apt-get update \
       build-essential cmake ninja-build git pkg-config gettext \
       libssl-dev zlib1g-dev ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# anope-bridge-no-deauth.patch gates the upstream "deauth a user whose
+# account this database does not know" paths behind nickserv:deauthunknown,
+# which templates/bridge-anope.conf.j2 sets to no. Without it this
+# bridge-only instance clears the accountname InspIRCd learned from the real
+# services' SASL login for every user on the network.
+#
+# It is applied as the last command of the clone layer so it is a build gate:
+# `git apply` fails the build if the patch stops matching after an
+# ANOPE_COMMIT bump. Never relax it with --3way or `|| true` — a silently
+# unpatched bridge deauths the whole network.
+COPY deploy/roles/ircd/files/anope-bridge-no-deauth.patch /tmp/anope-bridge-no-deauth.patch
 RUN git clone --branch ${ANOPE_BRANCH} ${ANOPE_REPO} /anope-src \
- && git -C /anope-src checkout --detach ${ANOPE_COMMIT}
+ && git -C /anope-src checkout --detach ${ANOPE_COMMIT} \
+ && git -C /anope-src apply --verbose /tmp/anope-bridge-no-deauth.patch
 WORKDIR /anope-src
 # The `test -f` lines are the build gate. CMake skips a module whose
 # dependencies it cannot detect rather than failing the build, so without

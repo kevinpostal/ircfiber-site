@@ -145,6 +145,14 @@ module
 	maxpasslen = 50
 	/* The two authorising accounts must never expire. */
 	expire = 0
+	/* This instance is NOT the network's account authority: its database
+	 * holds only the two accounts that authorise BridgeServ. Upstream
+	 * deauths any user whose account it cannot find — on 2026-09-14 that
+	 * wiped every SASL login on irc.ircfiber.com (METADATA accountname
+	 * cleared + SVSMODE -r), which silently disabled the `+w v:account:*`
+	 * autovoice in #ircfiber/#support and every other account-gated ircd
+	 * feature. See files/anope-bridge-no-deauth.patch. */
+	deauthunknown = no
 }
 
 command { service = "BridgeAuth"; name = "HELP"; command = "generic/help" }
