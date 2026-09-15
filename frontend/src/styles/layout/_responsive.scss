@@ -358,10 +358,11 @@
     border-color: #1e72ff;
     box-shadow: 0 0 0 3px rgba(30,114,255,0.12), 0 1px 3px rgba(0,0,0,0.35);
   }
-  /* Typing indicator: same reserved row on mobile, narrower pill. */
-  .bufferinputcell .typingcell { font-size: 11px; }
+  /* Compose status line: same reserved row on phones, narrower chip. The
+     clock now lives in that row instead of beside the input pill, where it
+     used to cost ~80px of a 48px thumb-target row — so it no longer needs
+     to be hidden here. */
   .bufferinputcell .typing-pill { max-width: min(85%, 280px); }
-  .bufferinputcell .timestampcell { display: none; }
   .bufferinputcell .timecell { display: none; }
   /* Emoji popover — full-width sheet on phones instead of tiny corner */
   .emoji-popover {

@@ -338,11 +338,12 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
   overflow: hidden;
 }
 
-/* Typing indicator now lives as a flex row inside .bufferinputcell (order -1,
-   flex 0 0 100%) so it occupies layout space above the input and shrinks
-   the messages viewport via flex — no overlay, no occlusion. The old
-   `scroll-padding-bottom: 12px` hack for the absolute pill is no longer
-   needed and is removed so the viewport uses its natural bottom snap. */
+/* The compose status line lives as a flex row inside .bufferinputcell
+   (order -1, flex 0 0 100%, fixed 25px) so it occupies layout space above
+   the input instead of overlaying the viewport — no occlusion, and its
+   height never changes, so the messages viewport is never re-pinned by it.
+   The old `scroll-padding-bottom: 12px` hack for the absolute pill is gone
+   and must not come back. */
 .channel-name {
   font-size: 1.125rem;
   font-weight: 600;

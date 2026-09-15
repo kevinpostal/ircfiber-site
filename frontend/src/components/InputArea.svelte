@@ -212,7 +212,7 @@
   });
 
   // The strip above the compose box is always mounted at a constant height
-  // (_chatInput.scss .typingcell/.typing-pill), so a typer appearing or
+  // (_chatInput.scss .composeStatusRow, pinned at 25px), so a typer appearing or
   // expiring can no longer change .bufferinputcell height — which used to
   // shrink the .messages viewport and trip MessageList's ResizeObserver
   // re-pin on every active/done TAGMSG (the up/down "flicker").
@@ -236,6 +236,41 @@
       typingDisplay = '';
     }, TYPING_LINGER_MS);
   });
+
+  // The reserved band above the composer is a status line, not a
+  // typing-only strip: its right end always carries the clock (moved out
+  // of the composer row) and the network's last measured lag, so the row
+  // never reads as dead space while nobody is typing. Its height is
+  // pinned in _chatInput.scss (.composeStatusRow, 25px) — that pin, not
+  // the label being empty, is what keeps a typer appearing or expiring
+  // from resizing .bufferinputcell and re-pinning the message viewport.
+  //
+  // Left slot precedence: an in-flight upload outranks the ambient typing
+  // indicator because it reports the user's own operation. 'success' and
+  // 'error' are deliberately excluded — a finished upload lingers ~1.5s
+  // (uploadFlow.svelte.ts:154,246 removeUpload) and a failed one stays in
+  // uploadState.active until dismissed, so either would starve typing.
+  // Both states are already reported by the paperclip ring and UploadMenu.
+  const uploadLabel = $derived.by(() => {
+    const state = ringState();
+    if (state !== 'active' && state !== 'converting' && state !== 'finalizing') return '';
+    const n = uploadState.active.length;
+    const files = n === 1 ? 'file' : 'files';
+    if (state === 'finalizing') return `Finishing ${n} ${files}…`;
+    const verb = state === 'converting' ? 'Converting' : 'Uploading';
+    // setConverting leaves progress at 0 during the palette phase, so a
+    // percent-less form is the honest one there.
+    const pct = aggregateProgress();
+    return pct > 0 ? `${verb} ${n} ${files} — ${pct}%` : `${verb} ${n} ${files}…`;
+  });
+  const statusLabel = $derived(uploadLabel || typingDisplay);
+  /// Same wording as the server-buffer header pill (BufferHeader.svelte:298)
+  /// so the two never disagree. lagMs is null until a PING round-trip is
+  /// measured (ircStore.svelte.ts:2600 maps the <0 wire sentinel to null);
+  /// unknown lag renders nothing and the clock carries the row alone.
+  const lagText = $derived(
+    activeNetwork?.connected && activeNetwork.lagMs != null ? `lag ${activeNetwork.lagMs} ms` : ''
+  );
 
   // ── Send typing notifications ──
   // IRCv3 typing spec: `active` on first keystroke, re-sent every ~3s
@@ -1231,10 +1266,25 @@
 </script>
 
 <div class="bufferinputcell">
-  <div class="typingcell" class:is-typing={!!typingDisplay} role="status" aria-live="polite" aria-atomic="true">
-    <div class="typing-pill">
-      <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
-      <span class="typing-label">{typingDisplay}</span>
+  <div class="composeStatusRow">
+    <div class="composeStatusSlot"
+         class:is-shown={!!statusLabel}
+         class:is-typing={!uploadLabel && !!typingDisplay}
+         class:is-upload={!!uploadLabel}
+         role="status"
+         aria-live={uploadLabel ? 'off' : 'polite'}
+         aria-atomic="true">
+      <div class="typing-pill">
+        <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="typing-label">{statusLabel}</span>
+      </div>
+    </div>
+    <div class="composeStatusMeta">
+      {#if lagText}
+        <span class="composeStatusLag" title="Last measured PING round-trip">{lagText}</span>
+        <span class="composeStatusSep" aria-hidden="true">·</span>
+      {/if}
+      <span class="composeStatusClock" id="timeContainer" title={timeTitle}>{timeStr}</span>
     </div>
   </div>
   {#if activeReply}
@@ -1340,7 +1390,6 @@
       />
     {/await}
   {/if}
-  <div class="timestampcell" id="timeContainer" title={timeTitle}>{timeStr}</div>
   {#if emojiOpen}
     <div id="emoji-popover" class="emoji-popover" role="dialog" aria-label="Emoji picker">
       <emoji-picker class="dark"></emoji-picker>

@@ -9,6 +9,7 @@ import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 import { bufferNameFromChannelPart } from '../lib/routing';
 import { DEFAULT_COMPOSE_STYLE } from '../lib/composeStyle';
+import { uploadState } from '../stores/uploadStore.svelte';
 
 vi.mock('/src/stores/api', () => ({
   // uploadFlow imports these; a factory mock must name every export the
@@ -47,6 +48,7 @@ function resetState(): void {
 	ircState.replyTarget = null;
 	ircState.reactTarget = null;
 	resetTypingState();
+	uploadState.active = [];
 	bufferInputText.clear();
 	// Clear lastSentMessages from previous tests
 	for (const k of Object.keys(lastSentMessages)) delete lastSentMessages[k];
@@ -62,9 +64,15 @@ beforeEach(() => {
 });
 
 describe('InputArea', () => {
-	let mockSendMessage: ReturnType<typeof vi.fn>;
-	let mockSendRaw: ReturnType<typeof vi.fn>;
-	let mockSendEditMessage: ReturnType<typeof vi.fn>;
+	// Not `ReturnType<typeof vi.fn>`: that instantiates vi.fn's generic at
+	// its constraint, Procedure | Constructable, and the Constructable half
+	// is not assignable to the component's callback props — it made every
+	// render() call below a svelte-check error. Bare `Mock` defaults to
+	// Procedure, vitest's own name for a plain callable, which is
+	// assignable and still types the toHaveBeenCalledWith assertions.
+	let mockSendMessage: Mock;
+	let mockSendRaw: Mock;
+	let mockSendEditMessage: Mock;
 
 	beforeEach(() => {
 		mockSendMessage = vi.fn();
@@ -697,7 +705,7 @@ describe('InputArea', () => {
 		flushSync();
 
 		expect(page.getByText('Alice is typing').query()).not.toBeNull();
-		expect(document.querySelector('.bufferinputcell .typingcell.is-typing')).not.toBeNull();
+		expect(document.querySelector('.bufferinputcell .composeStatusSlot.is-typing')).not.toBeNull();
 
 		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 		try {
@@ -711,11 +719,47 @@ describe('InputArea', () => {
 
 			expect(page.getByText('Alice is typing').query()).toBeNull();
 			// Strip stays in the DOM; only the state class drops.
-			expect(document.querySelector('.bufferinputcell .typingcell')).not.toBeNull();
-			expect(document.querySelector('.bufferinputcell .typingcell.is-typing')).toBeNull();
+			expect(document.querySelector('.bufferinputcell .composeStatusSlot')).not.toBeNull();
+			expect(document.querySelector('.composeStatusSlot.is-typing')).toBeNull();
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('shows in-flight upload progress instead of the typing chip, and always shows lag + clock', async () => {
+		// One transient slot: an upload the user started outranks the ambient
+		// typing indicator. A finished upload is NOT a status — it lingers in
+		// uploadState.active for ~1.5s — so the chip must fall back to typing
+		// the moment the transfer completes.
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester', connected: true, lagMs: 41 });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		setTyping('net1', '#general', 'Alice');
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		flushSync();
+
+		expect(page.getByText('Alice is typing').query()).not.toBeNull();
+		// The row is never empty: lag + clock anchor it in every state.
+		expect(document.querySelector('.composeStatusMeta')?.textContent).toContain('lag 41 ms');
+		expect(document.querySelector('.composeStatusClock')?.textContent ?? '').toMatch(/\d{1,2}:\d{2}:\d{2}/);
+
+		uploadState.active.push({ id: 1, filename: 'a.png', size: 1000, progress: 40, status: 'uploading' });
+		flushSync();
+
+		expect(page.getByText('Uploading 1 file — 40%').query()).not.toBeNull();
+		expect(page.getByText('Alice is typing').query()).toBeNull();
+		expect(document.querySelector('.composeStatusSlot.is-upload')).not.toBeNull();
+
+		uploadState.active[0].status = 'done';
+		uploadState.active[0].progress = 100;
+		flushSync();
+
+		expect(page.getByText('Alice is typing').query()).not.toBeNull();
+		expect(document.querySelector('.composeStatusSlot.is-upload')).toBeNull();
 	});
 
 	it('drops a lingering typing label immediately on buffer switch', async () => {
@@ -740,7 +784,7 @@ describe('InputArea', () => {
 		flushSync();
 
 		expect(page.getByText('Alice is typing').query()).toBeNull();
-		expect(document.querySelector('.bufferinputcell .typingcell.is-typing')).toBeNull();
+		expect(document.querySelector('.composeStatusSlot.is-typing')).toBeNull();
 	});
 
 	it('hides the typing indicator on its own after the 6.5s expiry window (no new TAGMSGs)', async () => {

@@ -1,11 +1,20 @@
-// Pixel-level proof that the typing strip never reflows the compose area.
+// Pixel-level proof that the compose status row never reflows the compose
+// area.
 //
 // The strip used to be `{#if typingText}` inside .bufferinputcell, so every
 // `+typing=active` / `+typing=done` / 6.5s-expiry cycle changed that cell's
 // height, shrank the .messages viewport and tripped MessageList's
-// ResizeObserver re-pin — the message list visibly jumped up and down. It is
-// now a permanently reserved constant-height row (_chatInput.scss
-// .typingcell/.typing-pill); only opacity and label text change.
+// ResizeObserver re-pin — the message list visibly jumped up and down.
+//
+// An earlier fix instead floated the pill over the viewport with
+// `position: absolute`, which clipped the last message. Neither design may
+// come back.
+//
+// It is now a status line whose height is pinned at 25px in CSS
+// (_chatInput.scss .composeStatusRow) and which is never empty: the left
+// chip carries the transient label (typing, or an in-flight upload) while
+// the right end always carries the network's last measured lag and the
+// clock. Only opacity and text change across states.
 //
 // This lives in its own file because it needs the real stylesheet injected
 // globally (same convention as MessageRow.statusStyles.test.ts), which
@@ -19,6 +28,7 @@ import { createNetwork, createBuffer } from '../test/factories';
 import { ircState, bufferInputText, lastSentMessages, setTyping, clearTyping, resetTypingState } from '../stores/ircStore.svelte';
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
+import { uploadState } from '../stores/uploadStore.svelte';
 // The reserved-band geometry under test lives here.
 import '../styles/components/_chatInput.scss';
 
@@ -50,6 +60,7 @@ function resetState(): void {
 	ircState.messages = {};
 	ircState.processedMessages = {};
 	resetTypingState();
+	uploadState.active = [];
 	bufferInputText.clear();
 	for (const k of Object.keys(lastSentMessages)) delete lastSentMessages[k];
 	Object.assign(globalPrefs, DEFAULT_PREFS);
@@ -61,13 +72,13 @@ beforeEach(() => {
 	vi.clearAllMocks();
 });
 
-describe('InputArea typing strip geometry', () => {
+describe('InputArea compose status row geometry', () => {
 	// Nothing here asserts on sends; these only keep the component off the
 	// real wsConnection helpers.
 	const noSend: (...args: any[]) => any = () => undefined;
 
-	it('reserves the typing strip so .bufferinputcell height is identical idle vs typing', async () => {
-		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+	it('keeps the status row at a constant 25px across idle, typing and uploading', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester', connected: true, lagMs: 41 });
 		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
@@ -76,24 +87,29 @@ describe('InputArea typing strip geometry', () => {
 		flushSync();
 
 		const cell = document.querySelector('.bufferinputcell') as HTMLElement;
-		const strip = document.querySelector('.bufferinputcell .typingcell') as HTMLElement;
+		const row = document.querySelector('.bufferinputcell .composeStatusRow') as HTMLElement;
+		expect(row).not.toBeNull();
 		const idleHeight = cell.getBoundingClientRect().height;
-		expect(strip).not.toBeNull();
-		// The band must already occupy its full height while idle — otherwise
-		// the stylesheet did not load and the equality below is vacuous.
-		expect(strip.getBoundingClientRect().height).toBeGreaterThan(15);
+		// Exact height doubles as the "stylesheet actually loaded" guard.
+		expect(Math.round(row.getBoundingClientRect().height)).toBe(25);
 		expect(idleHeight).toBeGreaterThan(0);
+		// Idle row is not dead space: the clock renders with no typer.
+		expect((row.querySelector('.composeStatusClock')?.textContent ?? '').length).toBeGreaterThan(0);
 
 		setTyping('net1', '#general', 'Alice');
 		flushSync();
-
 		expect(page.getByText('Alice is typing').query()).not.toBeNull();
 		expect(cell.getBoundingClientRect().height).toBe(idleHeight);
 
-		// …and back down again: the whole active/done cycle is height-neutral.
+		// A long upload label must not grow the row either.
+		uploadState.active.push({ id: 1, filename: 'a-very-long-filename.png', size: 1000, progress: 40, status: 'uploading' });
+		flushSync();
+		expect(page.getByText('Uploading 1 file — 40%').query()).not.toBeNull();
+		expect(cell.getBoundingClientRect().height).toBe(idleHeight);
+
+		uploadState.active.length = 0;
 		clearTyping('net1', '#general', 'Alice');
 		flushSync();
-
 		expect(cell.getBoundingClientRect().height).toBe(idleHeight);
 	});
 });
