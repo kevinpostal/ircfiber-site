@@ -49,6 +49,9 @@ Environment:
                        applied to every channel
   IRCD_CHANNEL_AUTOVOICE  JSON ["v:account:*", ...] autoop (+w) entries to
                        keep on the channel
+  IRCD_VOICE_SWEEP     1 = also give +v to every identified member who
+                       holds no status mode, repairing channels the
+                       join-time autoop could not (default 1, 0 disables)
   IRCD_SERVICES_BOT    JSON {"nick","ident","host","realname"} for the
                        BotServ bot assigned to channels marked
                        {"bot": true}; {} or unset creates no bot
@@ -182,6 +185,24 @@ FORMATTING = re.compile(r"[\x02\x0f\x11\x16\x1d\x1e\x1f]|\x03(\d{1,2}(,\d{1,2})?
 # grants it and the level string `ACCESS LIST` prints back: QOP +q
 # (owner), SOP +a (admin), AOP +o, HOP +h, VOP +v.
 XOP_TIERS = ("QOP", "SOP", "AOP", "HOP", "VOP")
+
+
+# InspIRCd's status prefixes as NAMES reports them, highest first:
+# ~ founder (+q), & admin (+a), @ op (+o), % halfop (+h), + voice (+v).
+STATUS_PREFIXES = "~&@%+"
+
+
+# Pseudo-clients the voice sweep must never try to voice: they are not
+# NickServ accounts and SAMODE against them would just fail.
+SERVICE_NICKS = ("ChanServ", "NickServ", "OperServ", "MemoServ",
+                 "HostServ", "BotServ", "Global", "BridgeServ",
+                 "BridgeAuth")
+
+
+# Ceiling on one channel's sweep. Each target costs a STATUS command and
+# a SAMODE; the cap keeps a big channel inside IRCD_TIMEOUT, and since
+# the sweep converges it just finishes on the next run.
+VOICE_SWEEP_MAX = 200
 
 
 def clean(text: str) -> str:
@@ -535,6 +556,145 @@ def sync_autovoice(session: IrcSession, channel: str,
     return changed
 
 
+def channel_members(session: IrcSession, channel: str) -> dict[str, str]:
+    """{nick: status prefix run} for everyone in the channel, from NAMES.
+
+    InspIRCd answers `NAMES #chan` with one or more `353 <me> = #chan
+    :@nick +other third` and a closing 366. Parsed positionally like the
+    other numerics here — the channel is the token before the list, and
+    every token after it is a nick with its prefixes still attached.
+    The prefix *run* is returned rather than a bool because the only
+    question the caller asks is whether a member has no status at all.
+
+    A NAMES that never ends is an error rather than a short list: a
+    truncated member list would silently under-voice the channel and
+    then pass the sweep's own verification.
+    """
+    mark = len(session.lines)
+    session.send(f"NAMES {channel}")
+    done = session.wait_for(
+        re.compile(rf"\s366\s+\S+\s+{re.escape(channel)}\s", re.I), 10.0)
+    if not done:
+        raise IrcError(f"NAMES {channel} never reached end-of-list (366)")
+    out: dict[str, str] = {}
+    for line in session.lines[mark:]:
+        tokens = clean(line).split()
+        if (len(tokens) < 6 or tokens[1] != "353"
+                or tokens[4].lower() != channel.lower()):
+            continue
+        for token in tokens[5:]:
+            entry = token.lstrip(":")
+            prefix = ""
+            while entry and entry[0] in STATUS_PREFIXES:
+                prefix, entry = prefix + entry[0], entry[1:]
+            if entry:
+                out[entry] = prefix
+    return out
+
+
+def nickserv_status(session: IrcSession, nicks: list[str]) -> dict[str, int]:
+    """{lower-cased nick: NickServ STATUS code} for every nick given.
+
+    One command per nick, all sent before anything is read. Anope's
+    nickserv/status declares max_params=16 but only ever looks at
+    params[0] — it runs a spacesepstream over the *first* token — so
+    `STATUS a b c` answers about `a` alone and batching would silently
+    report the rest as unidentified. Pipelining is what keeps a
+    200-member sweep inside IRCD_TIMEOUT instead of paying one collect
+    window per nick; the replies are self-identifying
+    (`STATUS <nick> <code> <account>`) so they need no matching up.
+
+    Code 3 is "identified", including via SASL, which is how every web
+    client logs in. 0/1/2 are offline, unregistered, or recognised by
+    access list only.
+    """
+    if not nicks:
+        return {}
+    mark = len(session.lines)
+    for index, nick in enumerate(nicks):
+        session.send(f"PRIVMSG NickServ :STATUS {nick}")
+        if index % 8 == 7:
+            time.sleep(0.2)
+    # Replies arrive in the order the commands were sent, so the last
+    # nick's line is the barrier; the short drain after it catches a
+    # straggler that shared the final read.
+    session.wait_for(
+        re.compile(rf"\sNOTICE\s.*STATUS\s+{re.escape(nicks[-1])}\s", re.I),
+        20.0)
+    session.collect(0.5)
+    out: dict[str, int] = {}
+    for line in session.lines[mark:]:
+        if not line.lower().startswith(":nickserv!") or " NOTICE " not in line:
+            continue
+        tokens = clean(line.split(" :", 1)[1]).split() if " :" in line else []
+        if (len(tokens) >= 3 and tokens[0].upper() == "STATUS"
+                and tokens[2].isdigit()):
+            out[tokens[1].lower()] = int(tokens[2])
+    return out
+
+
+def sync_voice(session: IrcSession, channel: str, entries: list,
+               bot_nick: str, own_nick: str) -> bool:
+    """Voice identified members who hold no status mode. True when changed.
+
+    m_autoop only fires in OnPostJoin, so `+w v:account:*` voices a user
+    as they join and never again: anyone already in the channel when the
+    entry was added, anyone who identified after joining, and anyone who
+    joined while the ircd was holding no account for them stays bare
+    forever. This is the converging half, the same role the mode-lock
+    repair above plays for +H.
+
+    NickServ is asked rather than the ircd's own account state on
+    purpose: NickServ stays authoritative even when something has
+    cleared the account InspIRCd learned from a SASL login, which is
+    exactly the state this sweep has to repair.
+
+    Additive and status-blind: a member carrying any prefix already has
+    voice-or-better, so ops are never demoted and a hand-granted mode is
+    never fought. Only runs on a channel whose desired autoop list asks
+    for account voice, so it follows that policy instead of inventing a
+    second one.
+    """
+    if not any(entry.split(":", 1)[0] == "v" for entry in entries or []):
+        return False
+
+    skip = {n.lower() for n in SERVICE_NICKS}
+    if bot_nick:
+        skip.add(bot_nick.lower())
+    # Our own session PARTs at the end of every run and rejoins bare on
+    # the next one, so voicing it would report `changed` forever.
+    if own_nick:
+        skip.add(own_nick.lower())
+
+    members = channel_members(session, channel)
+    bare = [nick for nick, prefix in members.items()
+            if not prefix and nick.lower() not in skip]
+    if not bare:
+        return False
+
+    status = nickserv_status(session, bare[:VOICE_SWEEP_MAX])
+    targets = [n for n in bare[:VOICE_SWEEP_MAX]
+               if status.get(n.lower()) == 3]
+    if not targets:
+        return False
+
+    for index, nick in enumerate(targets):
+        session.send(f"SAMODE {channel} +v {nick}")
+        log(f"{channel}: +v {nick}")
+        if index % 8 == 7:
+            time.sleep(0.2)
+    session.collect(1.5)
+
+    # Verified by re-listing, because SAMODE answers nothing on success —
+    # same contract as sync_autovoice. A target that has since left the
+    # channel is no longer this channel's problem.
+    after = channel_members(session, channel)
+    for nick in targets:
+        if nick in after and not after[nick]:
+            raise IrcError(f"SAMODE {channel} +v {nick} did not stick")
+    return True
+
+
 def ensure_services_bot(session: IrcSession, bot: dict) -> bool:
     """Create the network's BotServ bot, or converge its mask. True when
     changed.
@@ -631,7 +791,7 @@ def sync_services_bot(session: IrcSession, channel: str, spec: dict,
 
 def setup_channel(session: IrcSession, spec: dict, account: str,
                   display: str, access: dict, autovoice: list,
-                  bot: dict) -> bool:
+                  bot: dict, voice_sweep: bool) -> bool:
     """Bring one channel to the desired state. Returns True when changed."""
     channel = spec["channel"]
     changed = False
@@ -771,6 +931,13 @@ def setup_channel(session: IrcSession, spec: dict, account: str,
     if sync_autovoice(session, channel, autovoice):
         changed = True
 
+    # And the repair for everyone the join-time autoop could not reach.
+    # Runs while still in the channel so NAMES and the SAMODEs share the
+    # session that already holds oper.
+    if voice_sweep and sync_voice(session, channel, autovoice,
+                                  bot.get("nick") or "", session.nick):
+        changed = True
+
     # The services bot last, because ASSIGN is what makes it join: by the
     # time it arrives the channel is fully configured.
     if sync_services_bot(session, channel, spec, bot):
@@ -797,6 +964,7 @@ def main() -> int:
     display = os.environ.get("IRCD_ACCOUNT_DISPLAY") or account
     access = json.loads(os.environ.get("IRCD_CHANNEL_ACCESS") or "{}")
     autovoice = json.loads(os.environ.get("IRCD_CHANNEL_AUTOVOICE") or "[]")
+    voice_sweep = os.environ.get("IRCD_VOICE_SWEEP", "1") == "1"
     services_bot = json.loads(os.environ.get("IRCD_SERVICES_BOT") or "{}")
     deadline = time.monotonic() + float(os.environ.get("IRCD_TIMEOUT", "180"))
 
@@ -842,7 +1010,7 @@ def main() -> int:
         for spec in channels:
             if setup_channel(session, spec, account, display,
                              channel_access(access, spec),
-                             autovoice, services_bot):
+                             autovoice, services_bot, voice_sweep):
                 changed = True
             else:
                 log(f"{spec['channel']}: already configured")

@@ -564,6 +564,7 @@
     IRCD_ACCOUNT_DISPLAY: "{{ ircd_services_root_display }}"
     IRCD_CHANNEL_ACCESS: "{{ ircd_channel_access | to_json }}"
     IRCD_CHANNEL_AUTOVOICE: "{{ ircd_channel_autovoice | to_json }}"
+    IRCD_VOICE_SWEEP: "{{ '1' if ircd_channel_voice_sweep else '0' }}"
     IRCD_SERVICES_BOT: "{{ ircd_services_bot | to_json }}"
   register: ircd_chanserv_setup
   # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".

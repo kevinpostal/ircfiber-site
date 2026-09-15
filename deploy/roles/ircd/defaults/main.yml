@@ -429,6 +429,20 @@ ircd_services_root_display: "Zodiac"
 ircd_channel_autovoice:
   - "v:account:*"
 
+# Repair pass for the same policy. The autovoice entry above is an autoop
+# list mode, and m_autoop only fires in OnPostJoin: it voices a user as
+# they join and never again. Anyone already in the channel when the entry
+# was added, anyone who identified after joining, and anyone who joined
+# while the ircd held no account for them stays bare forever — which is
+# exactly what #ircfiber looked like after the bridge sidecar started
+# clearing accounts (see files/anope-bridge-no-deauth.patch). With this on,
+# ircd_channel_setup.py additionally SAMODEs +v onto every member that
+# NickServ STATUS reports as identified and that carries no status prefix
+# at all, so ops are never demoted. Only runs on channels whose
+# ircd_channel_autovoice asks for account voice. Set false to leave the
+# live member list alone and rely on join-time autoop only.
+ircd_channel_voice_sweep: true
+
 # The network's own in-channel services bot, created and assigned by
 # ircd_channel_setup.py to every channel above marked `bot: true`.
 #
