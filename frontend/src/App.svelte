@@ -45,6 +45,7 @@
   import AddNetworkPage from './components/AddNetworkPage.svelte';
   import ChannelSwitcher from './components/ChannelSwitcher.svelte';
   import LoadingSkeleton from './components/LoadingSkeleton.svelte';
+  import ChunkLoadError from './components/ChunkLoadError.svelte';
   import LoginPage from './components/LoginPage.svelte';
 import Dialog from './components/Dialog.svelte';
 
@@ -1750,12 +1751,16 @@ let showEditNetwork: boolean = $state(false);
     <UploadDialog
       onConfirm={(data) => confirmDialog(data)}
       onCancel={() => cancelDialog()} />
+  {:catch err}
+    <ChunkLoadError error={err} />
   {/await}
 {/if}
 
 {#if uploadState.progressDialog}
   {#await import('./components/UploadProgressDialog.svelte') then { default: UploadProgressDialog }}
     <UploadProgressDialog />
+  {:catch err}
+    <ChunkLoadError error={err} />
   {/await}
 {/if}
 
@@ -1797,22 +1802,32 @@ let showEditNetwork: boolean = $state(false);
     {#if pasteViewerId !== null}
       {#await import('./components/PasteViewerPage.svelte') then { default: PasteViewerPage }}
         <PasteViewerPage id={pasteViewerId} onClose={() => { syncViewers(); navigateBackFromPastebin(); }} />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {:else if fileViewerId !== null}
       {#await import('./components/FileViewerPage.svelte') then { default: FileViewerPage }}
         <FileViewerPage id={fileViewerId} onClose={() => { syncFileViewer(); navigateBackFromFileViewer(); }} />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {:else if ircState.showSettings}
       {#await import('./components/SettingsPage.svelte') then { default: SettingsPage }}
         <SettingsPage />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {:else if ircState.showShortcuts}
       {#await import('./components/ShortcutsPage.svelte') then { default: ShortcutsPage }}
         <ShortcutsPage />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {:else if ircState.showFeedback}
       {#await import('./components/FeedbackPage.svelte') then { default: FeedbackPage }}
         <FeedbackPage />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {:else if ircState.showAddNetwork}
       <AddNetworkPage welcome={ircState.addNetworkWelcome}
@@ -1848,16 +1863,22 @@ let showEditNetwork: boolean = $state(false);
     {#if uploadState.panelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showComposeStyle && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
       {#await import('./components/UploadsPanel.svelte') then { default: UploadsPanel }}
         <UploadsPanel onClose={() => uploadState.panelOpen = false} />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {/if}
     {#if uploadState.pastebinPanelOpen && !ircState.showSettings && !isShortcutsUrl() && !isFeedbackUrl() && !ircState.showComposeStyle && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null && ircState.networks.length > 0}
       {#await import('./components/SnippetsPanel.svelte') then { default: SnippetsPanel }}
         <SnippetsPanel onClose={() => uploadState.pastebinPanelOpen = false} />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {/if}
     {#if ircArtPanelOpen.value && !ircState.showSettings && !ircState.showComposeStyle && !ircState.showAddNetwork && fileViewerId === null && pasteViewerId === null}
       {#await import('./components/IrcArtPanel.svelte') then { default: IrcArtPanel }}
         <IrcArtPanel onClose={() => ircArtPanelOpen.value = false} />
+      {:catch err}
+        <ChunkLoadError error={err} />
       {/await}
     {/if}
   </div>
