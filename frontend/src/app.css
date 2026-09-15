@@ -582,6 +582,24 @@ html:has(dialog[open]) { overflow: hidden; }
 form:has(:invalid) { border-color: crimson; }
 .row.messageRow:has(.mention) { background: color-mix(in oklch, var(--fiber-amber, #f59e0b) 12%, transparent); }
 ::highlight(mention) { background: gold; color: inherit; }
+/* Discord-style @mention chip: the whole "@nick" is one clickable pill,
+   tinted with the nick's own colour class (c0–c26 set `color`, so
+   currentColor is that colour). `.mention` above stays the "mentions me"
+   row wash; this is the affordance for mentioning anybody. */
+.row.messageRow .content .atMention,
+.row.messageRow .sentence .atMention {
+  border-radius: 4px;
+  padding: 0 2px;
+  background: color-mix(in oklch, currentColor 16%, transparent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.row.messageRow .content .atMention:hover,
+.row.messageRow .sentence .atMention:hover {
+  background: color-mix(in oklch, currentColor 28%, transparent);
+  text-decoration: underline;
+}
+.row.messageRow .content .bufferLink[data-name] { cursor: pointer; }
 ::view-transition-group(root) { animation-duration: .2s; }
 @media (prefers-reduced-motion: reduce) { ::view-transition-group(root) { animation-duration: 0s; } }
 [inert] { pointer-events: none; }

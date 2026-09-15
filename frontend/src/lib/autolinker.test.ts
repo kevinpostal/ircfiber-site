@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitTextOnLinks, setChanPrefixChars, detectEmbed } from './autolinker';
+import { splitTextOnLinks, setChanPrefixChars, detectEmbed, wrapNicksWithHighlight, buildNickMentionPattern } from './autolinker';
 
 describe('splitTextOnLinks', () => {
   it('detects URLs in plain text', () => {
@@ -149,5 +149,49 @@ describe('detectEmbed', () => {
 
   it('returns none for invalid URLs', () => {
     expect(detectEmbed('not-a-url')).toBe('none');
+  });
+});
+
+describe('buildNickMentionPattern / wrapNicksWithHighlight', () => {
+  const pattern = () => buildNickMentionPattern(['zodiac'])!;
+
+  it('returns null when there are no nicks', () => {
+    expect(buildNickMentionPattern([])).toBeNull();
+    expect(buildNickMentionPattern([''])).toBeNull();
+  });
+
+  it('renders "@nick" as one clickable chip', () => {
+    const html = wrapNicksWithHighlight('hi @zodiac', pattern(), new Set());
+    expect(html).toMatch(/class="buffer bufferLink atMention c\d+ user link" role="button" tabindex="0" data-name="zodiac"/);
+    // The chip's text is the whole "@zodiac", not just the nick.
+    expect(html).toContain('>@zodiac</span>');
+  });
+
+  it('gives a bare nick data-name but no chip and no tab stop', () => {
+    const html = wrapNicksWithHighlight('hi Zodiac', pattern(), new Set());
+    expect(html).toContain('data-name="Zodiac"');
+    expect(html).not.toContain('atMention');
+    expect(html).not.toContain('tabindex');
+  });
+
+  it('does not read a host as a mention', () => {
+    const html = wrapNicksWithHighlight('mail me at bob@zodiac.com', pattern(), new Set());
+    expect(html).toBe('mail me at bob@zodiac.com');
+  });
+
+  it('leaves an unknown nick untouched', () => {
+    const html = wrapNicksWithHighlight('@nobody here', pattern(), new Set());
+    expect(html).toBe('@nobody here');
+  });
+
+  it('still washes the row when the mention is of me', () => {
+    const html = wrapNicksWithHighlight('hi @zodiac', pattern(), new Set(['zodiac']));
+    expect(html).toContain('atMention');
+    expect(html).toMatch(/\bmention\b/);
+  });
+
+  it('prefers the longest nick', () => {
+    const html = wrapNicksWithHighlight('@zodiacbot hi', buildNickMentionPattern(['zodiac', 'zodiacbot'])!, new Set());
+    expect(html).toContain('data-name="zodiacbot"');
   });
 });

@@ -3,7 +3,7 @@
   import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
-  import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
+  import { TabCompletionEngine, recentHighlightersCache, replacementFor, mentionCandidates, mentionFragmentAt } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
   import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix, normalizeChannelName, escapeTagValue, isTouchDevice } from '../lib/utils';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
@@ -71,20 +71,16 @@
     originalInput: string;
     wordStart: number;
     wordEnd: number;
+    /** `@` mention autocomplete: opened by typing, refiltered on every
+     *  keystroke, applied only on Enter/Tab or a click. The input is never
+     *  rewritten while the list is merely being browsed, unlike Tab
+     *  cycling. */
+    mention?: boolean;
   };
   let tabPopup = $state<TabPopup | null>(null);
-  function buildReplacement(candidate: import('../types').TabCompletionCandidate, wordStart: number): string {
-    let r = candidate.value;
-    if (candidate.type === 'nick' && wordStart === 0) r += ': ';
-    else if (candidate.type === 'nick') r += ' ';
-    else if (candidate.type === 'command') r += ' ';
-    else if (candidate.type === 'channel') r += ' ';
-    else if (candidate.type === 'emoji') r += ': ';
-    return r;
-  }
   function applyTabPopupCandidate(popup: TabPopup, idx: number): { text: string; cursor: number; replacement: string } {
     const cand = popup.candidates[idx];
-    const replacement = buildReplacement(cand, popup.wordStart);
+    const replacement = replacementFor(cand, popup.wordStart);
     const before = popup.originalInput.slice(0, popup.wordStart);
     const after = popup.originalInput.slice(popup.wordEnd);
     const text = before + replacement + after;
@@ -464,6 +460,7 @@
 
   function selectTabCandidate(idx: number): void {
     if (!tabPopup) return;
+    if (tabPopup.mention) { acceptMentionCandidate(idx); return; }
     const updated: TabPopup = { ...tabPopup, selectedIndex: idx };
     tabEngine.setCandidates(tabPopup.candidates);
     (tabEngine as any).currentIndex = idx - 1;
@@ -483,8 +480,46 @@
     textarea?.focus();
   }
 
+  /** Filter or close the `@` picker after every keystroke. */
+  function refreshMentionPopup(): void {
+    if (isTabbing || isEmptyTabbing) return;
+    const cursorPos = textarea?.selectionStart ?? inputValue.length;
+    const frag = mentionFragmentAt(inputValue, cursorPos);
+    const members = getActiveBufferObj()?.users || [];
+    const candidates = frag ? mentionCandidates(frag.word, members, myNick) : [];
+    if (!frag || candidates.length === 0) {
+      if (tabPopup?.mention) tabPopup = null;
+      return;
+    }
+    tabPopup = {
+      original: frag.word,
+      candidates,
+      selectedIndex: 0,
+      originalInput: inputValue,
+      wordStart: frag.start,
+      wordEnd: frag.end,
+      mention: true,
+    };
+  }
+
+  function acceptMentionCandidate(idx: number): void {
+    if (!tabPopup?.mention) return;
+    const { text, cursor } = applyTabPopupCandidate(tabPopup, idx);
+    tabPopup = null;
+    inputValue = text;
+    requestAnimationFrame(() => {
+      if (textarea) textarea.selectionStart = textarea.selectionEnd = cursor;
+    });
+    textarea?.focus();
+  }
+
   function handleKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
+      if (tabPopup?.mention) {
+        e.preventDefault();
+        tabPopup = null;
+        return;
+      }
       if (activeReply && !tabPopup && !isEmptyTabbing && !isTabbing) {
         e.preventDefault();
         cancelReply();
@@ -504,6 +539,21 @@
         e.preventDefault();
         tabEngine.reset();
         isTabbing = false;
+        return;
+      }
+    }
+    // The `@` picker owns Up/Down/Enter/Tab while it is open.
+    if (tabPopup?.mention) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = tabPopup.candidates.length;
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        tabPopup = { ...tabPopup, selectedIndex: (tabPopup.selectedIndex + step + n) % n };
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        acceptMentionCandidate(tabPopup.selectedIndex);
         return;
       }
     }
@@ -1039,6 +1089,7 @@
   function handleInput(): void {
     autoResize();
     noteKeystroke();
+    refreshMentionPopup();
   }
 
   function handleNickClick(): void {
@@ -1298,7 +1349,7 @@
   {#if tabPopup}
     <div class="inputInfoWrapper">
       <div class="inputInfo" style="display: block;">
-        <span class="hint">Press tab or esc to dismiss</span>
+        <span class="hint">{tabPopup.mention ? 'Up/down to select, enter to insert, esc to dismiss' : 'Press tab or esc to dismiss'}</span>
         <span class="original item">{tabPopup.original}</span>
         {#each tabPopup.candidates as c, i (c.value + i)}
           <span class="item" class:highlight={i === tabPopup.selectedIndex} role="button" tabindex="0" onmousedown={(e) => e.preventDefault()} onclick={() => selectTabCandidate(i)} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectTabCandidate(i); } }}>{c.display ?? c.value}</span>
@@ -1333,6 +1384,7 @@
             onkeydown={handleKeyDown}
             oninput={handleInput}
             onpaste={handlePaste}
+            onblur={() => { if (tabPopup?.mention) tabPopup = null; }}
           ></textarea>
         </form>
       </div>

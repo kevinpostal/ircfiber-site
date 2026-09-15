@@ -201,152 +201,28 @@ export function detectEmbed(url: string): EmbedType {
 }
 
 /**
- * Wrap nicknames found in message text with mention spans, with IRCCloud-style
- * nick color classes (c0..c26). Runs after autolinkHtml so it operates on the
- * same split-by-tag-bounds principle — existing <a> and <span> tags are
- * preserved.
+ * Build the pattern `wrapNicksWithHighlight` expects: an optional
+ * Discord-style `@` (group 1) followed by one of `nicks` (group 2), both at
+ * IRC word boundaries. Longest nick first, so "zodiacbot" wins over
+ * "zodiac".
  *
- * @param text  HTML text (output of autolinkHtml, already containing links etc.)
- * @param nicks  Set of lowercase nicks that exist in the current buffer
+ * `@` is excluded from the leading boundary as well, so `user@host` can
+ * never read as a mention of `host`; a real email is already an <a> by the
+ * time this runs and is skipped anyway.
+ *
+ * @param nicks  Nicks of the current buffer, plus own nick and highlight
+ *               words. Case is irrelevant — the pattern is case-insensitive.
  */
-let _cachedNickSerial = '';
-let _cachedNickPattern: RegExp | null = null;
-
-function buildNickPattern(sorted: string[]): RegExp {
-  return new RegExp(
-    `(?<=^|[^a-zA-Z0-9_\\\\[\\]\\\\{}])(${sorted.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?=$|[^a-zA-Z0-9_\\\\[\\]\\\\{}])`,
-    'gi'
-  );
-}
-
-export function mentionNicks(text: string, nicks: Set<string>): string {
-  if (!text || !nicks || nicks.size === 0) return text;
-  const sorted = [...nicks].sort((a, b) => b.length - a.length);
-  const serial = sorted.join('\x00');
-  if (serial !== _cachedNickSerial || !_cachedNickPattern) {
-    _cachedNickSerial = serial;
-    _cachedNickPattern = buildNickPattern(sorted);
-  }
-  return _mentionNicksImpl(text, _cachedNickPattern);
-}
-
-export function mentionNicksWithPattern(text: string, pattern: RegExp): string {
-  if (!text) return text;
-  return _mentionNicksImpl(text, pattern);
-}
-
-function _mentionNicksImpl(text: string, nickPattern: RegExp): string {
-  const TAG_RE = /<[^>]+>/g;
-  let result = '';
-  let lastIdx = 0;
-  let insideAnchor = 0;
-  let m: RegExpExecArray | null;
-  while ((m = TAG_RE.exec(text)) !== null) {
-    if (m.index > lastIdx) {
-      const segment = text.slice(lastIdx, m.index);
-      if (insideAnchor === 0) {
-        result += mentionTextSegment(segment, nickPattern);
-      } else {
-        result += segment;
-      }
-    }
-    const tag = m[0].toLowerCase();
-    if (tag.startsWith('</a')) {
-      insideAnchor--;
-    } else if (tag.startsWith('<a ') || tag === '<a>') {
-      insideAnchor++;
-    }
-    result += m[0];
-    lastIdx = m.index + m[0].length;
-  }
-  if (lastIdx < text.length) {
-    const segment = text.slice(lastIdx);
-    if (insideAnchor === 0) {
-      result += mentionTextSegment(segment, nickPattern);
-    } else {
-      result += segment;
-    }
-  }
-  return result;
-}
-
-function mentionTextSegment(segment: string, pattern: RegExp): string {
-  pattern.lastIndex = 0;
-  let result = '';
-  let lastIdx = 0;
-  let m: RegExpExecArray | null;
-  while ((m = pattern.exec(segment)) !== null) {
-    if (m.index > lastIdx) {
-      result += segment.slice(lastIdx, m.index);
-    }
-    const nick = m[1];
-    const colorIndex = hashStr(nick) % 27;
-    result += `<span class="buffer bufferLink mention c${colorIndex} user link">${nick}</span>`;
-    lastIdx = m.index + m[0].length;
-  }
-  if (lastIdx < segment.length) {
-    result += segment.slice(lastIdx);
-  }
-  return result || segment;
-}
-function colorTextSegment(segment: string, pattern: RegExp): string {
-  pattern.lastIndex = 0;
-  let result = '';
-  let lastIdx = 0;
-  let m: RegExpExecArray | null;
-  while ((m = pattern.exec(segment)) !== null) {
-    if (m.index > lastIdx) {
-      result += segment.slice(lastIdx, m.index);
-    }
-    const nick = m[1];
-    const colorIndex = hashStr(nick) % 27;
-    result += `<span class="buffer bufferLink c${colorIndex} user link">${nick}</span>`;
-    lastIdx = m.index + m[0].length;
-  }
-  if (lastIdx < segment.length) {
-    result += segment.slice(lastIdx);
-  }
-  return result || segment;
-}
-
-export function colorNicksWithPattern(text: string, pattern: RegExp): string {
-  if (!text) return text;
-  return _colorNicksImpl(text, pattern);
-}
-
-function _colorNicksImpl(text: string, nickPattern: RegExp): string {
-  const TAG_RE = /<[^>]+>/g;
-  let result = '';
-  let lastIdx = 0;
-  let insideAnchor = 0;
-  let m: RegExpExecArray | null;
-  while ((m = TAG_RE.exec(text)) !== null) {
-    if (m.index > lastIdx) {
-      const segment = text.slice(lastIdx, m.index);
-      if (insideAnchor === 0) {
-        result += colorTextSegment(segment, nickPattern);
-      } else {
-        result += segment;
-      }
-    }
-    const tag = m[0].toLowerCase();
-    if (tag.startsWith('</a')) {
-      insideAnchor--;
-    } else if (tag.startsWith('<a ') || tag === '<a>') {
-      insideAnchor++;
-    }
-    result += m[0];
-    lastIdx = m.index + m[0].length;
-  }
-  if (lastIdx < text.length) {
-    const segment = text.slice(lastIdx);
-    if (insideAnchor === 0) {
-      result += colorTextSegment(segment, nickPattern);
-    } else {
-      result += segment;
-    }
-  }
-  return result;
+export function buildNickMentionPattern(nicks: Iterable<string>): RegExp | null {
+  const candidates = new Set<string>();
+  for (const n of nicks) if (n) candidates.add(n.toLowerCase());
+  if (candidates.size === 0) return null;
+  const sorted = [...candidates].sort((a, b) => b.length - a.length);
+  const escaped = sorted.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  // Unchanged from the literal it replaces, except for the trailing `@`.
+  const LEAD = '[^a-zA-Z0-9_\\[\\]{}\\\\@]';
+  const TRAIL = '[^a-zA-Z0-9_\\[\\]{}\\\\]';
+  return new RegExp(`(?<=^|${LEAD})(@?)(${escaped.join('|')})(?=$|${TRAIL})`, 'gi');
 }
 
 export function wrapNicksWithHighlight(text: string, allPattern: RegExp, highlightSet: Set<string>): string {
@@ -395,22 +271,26 @@ function wrapTextSegment(segment: string, pattern: RegExp, highlightSet: Set<str
   let lastIdx = 0;
   let m: RegExpExecArray | null;
   while ((m = pattern.exec(segment)) !== null) {
-    if (m.index > lastIdx) {
-      result += segment.slice(lastIdx, m.index);
-    }
-    const nick = m[1];
-    const lower = nick.toLowerCase();
+    if (m.index > lastIdx) result += segment.slice(lastIdx, m.index);
+    const at = m[1];
+    const nick = m[2];
     const colorIndex = hashStr(nick) % 27;
-    if (highlightSet.has(lower)) {
-      result += `<span class="buffer bufferLink mention c${colorIndex} user link">${nick}</span>`;
-    } else {
-      result += `<span class="buffer bufferLink c${colorIndex} user link">${nick}</span>`;
-    }
+    const classes = ['buffer', 'bufferLink'];
+    // `atMention` is the chip; `mention` stays reserved for "mentions me"
+    // and is what washes the row amber.
+    if (at) classes.push('atMention');
+    if (highlightSet.has(nick.toLowerCase())) classes.push('mention');
+    classes.push(`c${colorIndex}`, 'user', 'link');
+    // Only the chip gets a tab stop: a busy channel would otherwise add a
+    // tab stop for every coloured nick in every row.
+    const attrs = at ? ' role="button" tabindex="0"' : '';
+    // `nick` is a substring of already-escaped HTML, so it is safe both as
+    // text and inside a double-quoted attribute; escaping it again would
+    // double-encode what dataset.name hands back.
+    result += `<span class="${classes.join(' ')}"${attrs} data-name="${nick}">${at}${nick}</span>`;
     lastIdx = m.index + m[0].length;
   }
-  if (lastIdx < segment.length) {
-    result += segment.slice(lastIdx);
-  }
+  if (lastIdx < segment.length) result += segment.slice(lastIdx);
   return result || segment;
 }
 

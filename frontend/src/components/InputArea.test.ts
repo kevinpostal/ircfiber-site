@@ -201,6 +201,69 @@ describe('InputArea', () => {
 		expect(value).toMatch(/alice|alex/);
 	});
 
+	function setupMentionPicker() {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({
+			name: '#general',
+			users: [createMember({ nick: 'zodiac' }), createMember({ nick: 'zorro' })],
+		}));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		return page.getByRole('textbox', { name: /message input/i });
+	}
+
+	it('opens the @ picker while typing, without rewriting the input', async () => {
+		const textarea = setupMentionPicker();
+		await userEvent.type(textarea, '@zo');
+
+		const popup = document.querySelector('.inputInfo');
+		expect(popup?.textContent).toContain('@zodiac');
+		expect(popup?.textContent).toContain('@zorro');
+		expect((textarea.element() as HTMLTextAreaElement).value).toBe('@zo');
+	});
+
+	it('inserts the selected mention on Enter instead of sending', async () => {
+		const textarea = setupMentionPicker();
+		await userEvent.type(textarea, '@zo');
+		await userEvent.keyboard('{ArrowDown}');
+		await userEvent.keyboard('{Enter}');
+
+		expect((textarea.element() as HTMLTextAreaElement).value).toBe('@zorro ');
+		expect(document.querySelector('.inputInfo')).toBeNull();
+		expect(mockSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('inserts the first mention on Tab instead of cycling', async () => {
+		const textarea = setupMentionPicker();
+		await userEvent.type(textarea, '@zo');
+		await userEvent.keyboard('{Tab}');
+
+		expect((textarea.element() as HTMLTextAreaElement).value).toBe('@zodiac ');
+	});
+
+	it('dismisses the @ picker on Escape without reverting the input', async () => {
+		const textarea = setupMentionPicker();
+		await userEvent.type(textarea, '@zo');
+		await userEvent.keyboard('{Escape}');
+
+		expect(document.querySelector('.inputInfo')).toBeNull();
+		expect((textarea.element() as HTMLTextAreaElement).value).toBe('@zo');
+		expect(mockSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('closes the @ picker once the fragment stops matching', async () => {
+		const textarea = setupMentionPicker();
+		await userEvent.type(textarea, '@zo');
+		expect(document.querySelector('.inputInfo')).not.toBeNull();
+		await userEvent.type(textarea, 'nkey');
+
+		expect(document.querySelector('.inputInfo')).toBeNull();
+		expect((textarea.element() as HTMLTextAreaElement).value).toBe('@zonkey');
+	});
+
 	it('Tabs through recent highlighters on empty input in channel', async () => {
 		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
 		net.buffers.push(createBuffer({ name: '#general', users: [createMember({ nick: 'alice' }), createMember({ nick: 'bob' })] }));

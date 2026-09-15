@@ -357,6 +357,41 @@ describe('MessageRow', () => {
 
 		expect(document.querySelector('.authorWrap .mode_prefix.mode_symbol')?.textContent).toBe('@');
 	});
+
+	it('renders an @nick mention as one clickable chip', async () => {
+		const onNickClick = vi.fn();
+		const msg = createMessage({ nick: 'alice', text: '@zodiac chipping in' });
+		const member = createMember({ nick: 'zodiac' });
+		render(MessageRow, { props: { msg, onNickClick, memberByNick: new Map([['zodiac', member]]) } });
+
+		const chip = document.querySelector('.content .atMention');
+		expect(chip?.textContent).toBe('@zodiac');
+		await userEvent.click(page.getByRole('button', { name: '@zodiac' }));
+		expect(onNickClick).toHaveBeenCalledTimes(1);
+		expect(onNickClick.mock.calls[0][0]).toBe('zodiac');
+		expect(onNickClick.mock.calls[0][2]).toBe(member);
+	});
+
+	it('opens the popup for a bare in-body nick, with the rosters spelling', async () => {
+		const onNickClick = vi.fn();
+		const msg = createMessage({ nick: 'alice', text: 'Zodiac said so' });
+		const member = createMember({ nick: 'zodiac' });
+		render(MessageRow, { props: { msg, onNickClick, memberByNick: new Map([['zodiac', member]]) } });
+
+		const span = document.querySelector<HTMLElement>('.content .bufferLink[data-name="Zodiac"]');
+		expect(span).not.toBeNull();
+		expect(span?.classList.contains('atMention')).toBe(false);
+		await userEvent.click(page.getByText('Zodiac'));
+		expect(onNickClick.mock.calls[0][0]).toBe('zodiac');
+	});
+
+	it('does not wash the row when somebody else is mentioned', async () => {
+		const msg = createMessage({ nick: 'alice', text: '@zodiac not about me' });
+		render(MessageRow, { props: { msg, memberByNick: new Map([['zodiac', createMember({ nick: 'zodiac' })]]) } });
+
+		expect(document.querySelector('.content .atMention')).not.toBeNull();
+		expect(document.querySelector('.content .mention')).toBeNull();
+	});
 });
 
 describe('MessageRow — replies and reactions', () => {

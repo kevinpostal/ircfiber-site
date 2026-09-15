@@ -4,7 +4,7 @@
   import type { IRCMessage, Member } from '../types';
   import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, isTouchDevice } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
-  import { autolinkHtml, wrapNicksWithHighlight } from '../lib/autolinker';
+  import { autolinkHtml, wrapNicksWithHighlight, buildNickMentionPattern } from '../lib/autolinker';
   import { modeSentences } from '../lib/modeSentence';
   import { getActiveBufferObj, getActiveNetwork, findMessage, setReplyTarget, setReactTarget, toggleReaction, openMessageActions, QUICK_REACTIONS } from '../stores/ircStore.svelte';
   import { sendMessage } from '../stores/wsConnection.svelte.ts';
@@ -87,27 +87,14 @@
   const isBot = $derived(isBotNick(nick, findMemberForNick(nick), msg.prefix));
   const isBlockArt = $derived(memoBlockArt(containsBlockArt, msg.text || ''));
 
-  const allNicksPattern = $derived.by(() => {
-    const candidates = new Set<string>();
-    for (const n of memberByNick.keys()) candidates.add(n.toLowerCase());
-    if (myNick) candidates.add(myNick.toLowerCase());
-    for (const w of highlightWords) if (w) candidates.add(w.toLowerCase());
-    if (candidates.size === 0) return null;
-    const sorted = [...candidates].sort((a, b) => b.length - a.length);
-    const escaped = sorted.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    return new RegExp(
-      `(?<=^|[^a-zA-Z0-9_\\\\[\\]\\\\{}])(${escaped.join('|')})(?=$|[^a-zA-Z0-9_\\\\[\\]\\\\{}])`,
-      'gi'
-    );
-  });
+  const allNicksPattern = $derived.by(() => buildNickMentionPattern(
+    [...memberByNick.keys(), myNick, ...highlightWords]));
   const highlightSet = $derived.by(() => {
     const s = new Set<string>();
     if (myNick) s.add(myNick.toLowerCase());
     for (const w of highlightWords) if (w) s.add(w.toLowerCase());
     return s;
   });
-  // Back-compat alias for tests that import nickPattern (none, but keep)
-  const nickPattern = $derived(allNicksPattern);
   let expanded = $state(false);
   let tsHover = $state(false);
   const pendingState = $derived((msg as any).pendingState as string | undefined);
@@ -250,6 +237,31 @@
     }
   }
 
+  /** The roster's own spelling of a nick. IRC nicks are case-insensitive,
+   *  so "@zodiac" must open Zodiac's popup with Zodiac's member row. */
+  function canonicalNick(n: string): string {
+    const cleaned = stripPrefix(n);
+    if (memberByNick.has(cleaned)) return cleaned;
+    const low = cleaned.toLowerCase();
+    for (const k of memberByNick.keys()) if (k.toLowerCase() === low) return k;
+    return cleaned;
+  }
+
+  /** Delegated: a click on a nick inside the message body opens the same
+   *  user popup the author column does. The body is {@html}, so there is
+   *  nowhere to hang a per-span handler. Returns true when it handled the
+   *  click, so a row with its own onclick can fall through. */
+  function handleBodyNickClick(e: MouseEvent): boolean {
+    const el = (e.target as HTMLElement | null)?.closest<HTMLElement>('.bufferLink[data-name]');
+    if (!el || !onNickClick) return false;
+    const target = canonicalNick(el.dataset.name || '');
+    if (!target) return false;
+    e.preventDefault();
+    e.stopPropagation();
+    onNickClick(target, e, findMemberForNick(target));
+    return true;
+  }
+
   // ── Replies and reactions (IRCv3 +reply, +draft/react) ──
   // A chat row with a msgid can be replied to and reacted to. The reply
   // target lives in the store (the input bar reads it); a reaction is a
@@ -369,6 +381,12 @@
   }
 
   function handleRowKey(e: KeyboardEvent): void {
+    if ((e.key === 'Enter' || e.key === ' ')
+        && (e.target as HTMLElement | null)?.closest('.atMention')) {
+      e.preventDefault();
+      handleBodyNickClick(e as unknown as MouseEvent);
+      return;
+    }
     if (e.target !== e.currentTarget) return;
     if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
@@ -654,7 +672,7 @@
     data-time={head.t || msg.t}
     data-name={head.nick || undefined}
     data-msgid={head.msgid || undefined}
-    onclick={toggleExpand}
+    onclick={(e) => { if (!handleBodyNickClick(e)) toggleExpand(); }}
     onkeydown={onKeyDown}
   >
     <span class="g">&nbsp;</span>
@@ -700,6 +718,7 @@
 {:else}
   {@const usermaskAttr = getUsermask(msg.prefix || '')}
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     class="row messageRow {isJoinPart ? 'joinPart' : ''} {isPlainStatus ? 'status' : ''} {isMonoStatus ? 'status monospace' : ''} {isNoticeRow ? 'notice' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {tsHover ? 'timestampHighlight' : ''} {pendingState ?? ''}"
     data-time={msg.t}
@@ -710,6 +729,7 @@
     tabindex={canInteract ? -1 : undefined}
     bind:this={rowEl}
     onkeydown={canInteract ? handleRowKey : undefined}
+    onclick={handleBodyNickClick}
     oncontextmenu={canInteract ? handleContextMenu : undefined}
     onmouseleave={canInteract ? () => { stripOpen = false; } : undefined}
     ontouchstart={canInteract ? handleTouchStart : undefined}

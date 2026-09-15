@@ -1,23 +1,23 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { TabCompletionEngine, recentHighlightersCache } from './tabCompletion';
+import { TabCompletionEngine, recentHighlightersCache, replacementFor, mentionCandidates, mentionFragmentAt } from './tabCompletion';
 import type { Member, TabCompletionCandidate } from '../types';
 
-describe('TabCompletionEngine', () => {
-  const make_member = (nick: string, lastSpoke = 0, lastHighlighted = 0): Member => ({
-    nick,
-    prefix: '',
-    category: 'MEMBER',
-    ident: '',
-    host: '',
-    realname: '',
-    isAway: false,
-    awayMessage: '',
-    lastSpoke,
-    lastHighlighted,
-    account: '',
-    isBot: false,
-  });
+const make_member = (nick: string, lastSpoke = 0, lastHighlighted = 0): Member => ({
+  nick,
+  prefix: '',
+  category: 'MEMBER',
+  ident: '',
+  host: '',
+  realname: '',
+  isAway: false,
+  awayMessage: '',
+  lastSpoke,
+  lastHighlighted,
+  account: '',
+  isBot: false,
+});
 
+describe('TabCompletionEngine', () => {
   const make_engine = () => new TabCompletionEngine();
 
   describe('getCandidates', () => {
@@ -105,37 +105,6 @@ describe('TabCompletionEngine', () => {
     });
   });
 
-  describe('apply', () => {
-    it('adds ": " for nick at start of line', () => {
-      const engine = make_engine();
-      const members: Member[] = [make_member('alice')];
-      engine.getCandidates('ali', 3, members, [], 'me');
-      const candidate: TabCompletionCandidate = { value: 'alice', type: 'nick' };
-      const result = engine.apply('ali', candidate);
-      expect(result.text).toBe('alice: ');
-      expect(result.cursor).toBe(7);
-    });
-
-    it('adds " " for nick mid-line', () => {
-      const engine = make_engine();
-      const members: Member[] = [make_member('alice')];
-      engine.getCandidates('hello ali', 9, members, [], 'me');
-      const candidate: TabCompletionCandidate = { value: 'alice', type: 'nick' };
-      const result = engine.apply('hello ali', candidate);
-      expect(result.text).toBe('hello alice ');
-      expect(result.cursor).toBe(12);
-    });
-
-    it('adds " " for command completion', () => {
-      const engine = make_engine();
-      engine.getCandidates('/jo', 3, [], [], 'me');
-      const candidate: TabCompletionCandidate = { value: '/join', type: 'command' };
-      const result = engine.apply('/jo', candidate);
-      expect(result.text).toBe('/join ');
-      expect(result.cursor).toBe(6);
-    });
-  });
-
   describe('cycle', () => {
     it('cycles forward through candidates', () => {
       const engine = make_engine();
@@ -188,6 +157,62 @@ describe('TabCompletionEngine', () => {
       engine.reset();
       expect(engine.cycle(1)).toBeNull();
     });
+  });
+});
+
+describe('replacementFor', () => {
+  it('adds ": " for a nick at the start of the line', () => {
+    expect(replacementFor({ value: 'alice', type: 'nick' }, 0)).toBe('alice: ');
+  });
+
+  it('adds " " for a nick mid-line', () => {
+    expect(replacementFor({ value: 'alice', type: 'nick' }, 6)).toBe('alice ');
+  });
+
+  it('adds " " for a command', () => {
+    expect(replacementFor({ value: '/join', type: 'command' }, 0)).toBe('/join ');
+  });
+
+  it('adds " " for a mention even at the start of the line', () => {
+    expect(replacementFor({ value: '@alice', type: 'mention' }, 0)).toBe('@alice ');
+  });
+});
+
+describe('mention completion', () => {
+  const members: Member[] = [make_member('zodiac'), make_member('alice')];
+
+  it('keeps the @ on both the value and the picker label', () => {
+    expect(mentionCandidates('@zo', members, 'me')).toEqual([
+      expect.objectContaining({ value: '@zodiac', display: '@zodiac', type: 'mention' }),
+    ]);
+  });
+
+  it('offers every member for a bare @', () => {
+    expect(mentionCandidates('@', members, 'me').map(c => c.value)).toEqual(['@alice', '@zodiac']);
+  });
+
+  it('ignores a fragment that does not start with @', () => {
+    expect(mentionCandidates('zo', members, 'me')).toEqual([]);
+  });
+
+  it('never offers your own nick', () => {
+    expect(mentionCandidates('@zo', members, 'zodiac')).toEqual([]);
+  });
+
+  it('finds the @ fragment the cursor sits in', () => {
+    expect(mentionFragmentAt('say @zo', 7)).toEqual({ word: '@zo', start: 4, end: 7 });
+  });
+
+  it('returns null for a word with no @', () => {
+    expect(mentionFragmentAt('say hi', 6)).toBeNull();
+  });
+
+  it('returns null for an @ that is not the first character of the run', () => {
+    expect(mentionFragmentAt('mail bob@host', 13)).toBeNull();
+  });
+
+  it('covers the whole run when the cursor is mid-fragment', () => {
+    expect(mentionFragmentAt('@zodiac hi', 3)).toEqual({ word: '@zodiac', start: 0, end: 7 });
   });
 });
 

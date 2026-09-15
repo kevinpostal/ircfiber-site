@@ -47,29 +47,13 @@ export class TabCompletionEngine {
         .map(b => ({ value: b, type: 'channel' as const, display: b }));
     }
 
-    // Nick completion (default)
-    return this.getNickCandidates(word, members, myNick);
-  }
+    // Mention completion: @ prefix, Discord-style.
+    if (word.startsWith('@')) {
+      return mentionCandidates(word, members, myNick);
+    }
 
-  private getNickCandidates(word: string, members: Member[], myNick: string): TabCompletionCandidate[] {
-    const lower = word.toLowerCase();
-    return members
-      .filter(m => {
-        const nick = stripPrefix(m.nick).toLowerCase();
-        return nick.startsWith(lower) && nick !== myNick.toLowerCase();
-      })
-      .sort((a, b) => {
-        if (a.lastSpoke !== b.lastSpoke) return (b.lastSpoke || 0) - (a.lastSpoke || 0);
-        if (a.lastHighlighted !== b.lastHighlighted) return (b.lastHighlighted || 0) - (a.lastHighlighted || 0);
-        return naturalCompare(stripPrefix(a.nick), stripPrefix(b.nick));
-      })
-      .map(m => ({
-        value: stripPrefix(m.nick),
-        type: 'nick' as const,
-        display: stripPrefix(m.nick),
-        isAway: m.isAway,
-        lastSpoke: m.lastSpoke,
-      }));
+    // Nick completion (default)
+    return nickCandidates(word, members, myNick);
   }
 
   private getCommandCandidates(partial: string): TabCompletionCandidate[] {
@@ -100,31 +84,6 @@ export class TabCompletionEngine {
     return { word: input.slice(start, end), start, end };
   }
 
-  /**
-   * Apply a completion candidate to the input.
-   * Returns the new input string and cursor position.
-   */
-  apply(input: string, candidate: TabCompletionCandidate): { text: string; cursor: number } {
-    let replacement = candidate.value;
-
-    if (candidate.type === 'nick' && this.wordStart === 0) {
-      replacement += ': ';
-    } else if (candidate.type === 'nick') {
-      replacement += ' ';
-    } else if (candidate.type === 'command') {
-      replacement += ' ';
-    } else if (candidate.type === 'emoji') {
-      replacement += ': ';
-    }
-
-    const before = input.slice(0, this.wordStart);
-    const after = input.slice(this.wordEnd);
-    const text = before + replacement + after;
-    const cursor = before.length + replacement.length;
-    // Update wordEnd so subsequent cycles replace the inserted word, not the original slice.
-    this.wordEnd = this.wordStart + replacement.length;
-    return { text, cursor };
-  }
   /** Cycle to next candidate (Tab) or previous (Shift+Tab) */
   cycle(direction: 1 | -1): TabCompletionCandidate | null {
     if (this.candidates.length === 0) return null;
@@ -144,6 +103,61 @@ export class TabCompletionEngine {
     this.currentIndex = -1;
     this.originalWord = '';
   }
+}
+
+/** The nicks of `members` which complete `word`, most recently active
+ *  first. Own nick excluded — completing yourself is never what was
+ *  meant. */
+export function nickCandidates(word: string, members: Member[], myNick: string): TabCompletionCandidate[] {
+  const lower = word.toLowerCase();
+  return members
+    .filter(m => {
+      const nick = stripPrefix(m.nick).toLowerCase();
+      return nick.startsWith(lower) && nick !== myNick.toLowerCase();
+    })
+    .sort((a, b) => {
+      if (a.lastSpoke !== b.lastSpoke) return (b.lastSpoke || 0) - (a.lastSpoke || 0);
+      if (a.lastHighlighted !== b.lastHighlighted) return (b.lastHighlighted || 0) - (a.lastHighlighted || 0);
+      return naturalCompare(stripPrefix(a.nick), stripPrefix(b.nick));
+    })
+    .map(m => ({
+      value: stripPrefix(m.nick),
+      type: 'nick' as const,
+      display: stripPrefix(m.nick),
+      isAway: m.isAway,
+      lastSpoke: m.lastSpoke,
+    }));
+}
+
+/** Discord-style `@` mention candidates for a fragment that starts with
+ *  `@`. `value` keeps the `@`, so the line that is sent reads "@nick" —
+ *  which is what other IRC clients show and what the Discord bridge keys
+ *  on when it turns the mention into a real ping. `display` keeps it too,
+ *  so the picker's rows read exactly as what they insert. */
+export function mentionCandidates(fragment: string, members: Member[], myNick: string): TabCompletionCandidate[] {
+  if (!fragment.startsWith('@')) return [];
+  return nickCandidates(fragment.slice(1), members, myNick)
+    .map(c => ({ ...c, type: 'mention' as const, value: '@' + c.value, display: '@' + c.value }));
+}
+
+/** The `@` fragment the cursor sits in, or null. Discord-style: a run with
+ *  no whitespace whose first character is `@`. */
+export function mentionFragmentAt(input: string, cursorPos: number): { word: string; start: number; end: number } | null {
+  let start = cursorPos;
+  while (start > 0 && !/\s/.test(input[start - 1])) start--;
+  if (input[start] !== '@') return null;
+  let end = cursorPos;
+  while (end < input.length && !/\s/.test(input[end])) end++;
+  return { word: input.slice(start, end), start, end };
+}
+
+/** What a chosen candidate inserts, including its trailing separator.
+ *  Single definition: `InputArea` renders through this too. */
+export function replacementFor(candidate: TabCompletionCandidate, wordStart: number): string {
+  if (candidate.type === 'nick') return candidate.value + (wordStart === 0 ? ': ' : ' ');
+  if (candidate.type === 'emoji') return candidate.value + ': ';
+  // mention / command / channel
+  return candidate.value + ' ';
 }
 
 export interface TabCompletionCycle {

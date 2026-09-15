@@ -562,7 +562,7 @@ export type GroupedEvent = JoinPartEvent | DiscoGroupEvent;
 // ── Tab completion types ──
 export interface TabCompletionCandidate {
   value: string;
-  type: 'nick' | 'channel' | 'emoji' | 'command';
+  type: 'nick' | 'channel' | 'emoji' | 'command' | 'mention';
   display?: string;
   isAway?: boolean;
   lastSpoke?: number;
