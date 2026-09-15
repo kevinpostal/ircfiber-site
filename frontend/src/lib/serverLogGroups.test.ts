@@ -101,6 +101,14 @@ describe('classifyServerLog', () => {
     expect(classifyServerLog(m({ command: 'TAGMSG', nick: 'me', text: '' }))).toBe('skip');
   });
 
+  // The channel-less NICK the engine publishes for every user's rename
+  // lands in `_server` whoever renamed; only the engine-stamped self one
+  // may be worded in the first person.
+  it('classifies a `_server` NICK as self only when self-echoed', () => {
+    expect(classifyServerLog(m({ command: 'NICK', nick: 'me', text: 'me2', selfEcho: true }))).toBe('self');
+    expect(classifyServerLog(m({ command: 'NICK', nick: 'zodiac', text: 'incog' }))).toBe('skip');
+  });
+
   it('falls back to notice for unknown commands', () => {
     expect(classifyServerLog(m({ command: 'SOMETHING' }))).toBe('notice');
   });

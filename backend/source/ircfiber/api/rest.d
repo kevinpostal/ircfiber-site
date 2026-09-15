@@ -973,7 +973,20 @@ final class RESTAPI {
         // Disable manual disconnect for the platform-provisioned Fiber server.
         // The Fiber server must stay connected; admin toggle controls it.
         {
-            auto cfgCheck = networkRepo.findById(id);
+            auto info = networkRepo.findByIdWithUser(id);
+            auto cfgCheck = info.config;
+            if (cfgCheck.name.length == 0) {
+                res.statusCode = 404;
+                res.writeJsonBody(Json(["error": Json("Network not found")]));
+                return;
+            }
+            // setDisabled below would otherwise let a stranger take down
+            // someone else's connection.
+            if (info.userId != user.id) {
+                res.statusCode = 403;
+                res.writeJsonBody(Json(["error": Json("not your network")]));
+                return;
+            }
             if (cfgCheck.id != UUID.init && cfgCheck.host == "irc.ircfiber.com" && cfgCheck.systemManaged) {
                 res.statusCode = 403;
                 res.writeJsonBody(Json([
@@ -1230,11 +1243,21 @@ final class RESTAPI {
 
         auto id = parseUUID(req.params["id"]);
         auto user = req.context["user"].get!User;
-        auto cfg = networkRepo.findById(id);
+        auto info = networkRepo.findByIdWithUser(id);
+        auto cfg = info.config;
 
         if (cfg.name.length == 0) {
             res.statusCode = 404;
             res.writeJsonBody(Json(["error": Json("Network not found")]));
+            return;
+        }
+        // The ControlMessage below hands the engine this caller's user id as
+        // the network's owner (consumer.d → addAndStartNetwork → networkOwners),
+        // which would re-home another account's live event stream onto the
+        // caller. The id must belong to the caller.
+        if (info.userId != user.id) {
+            res.statusCode = 403;
+            res.writeJsonBody(Json(["error": Json("not your network")]));
             return;
         }
 
@@ -1378,6 +1401,7 @@ final class RESTAPI {
         if (res.headerWritten) return;
 
         auto networkId = parseUUID(req.params["network"]);
+        auto user = req.context["user"].get!User;
         auto channel = req.params["channel"];
         auto count = req.query.get("count", "50").to!long;
         long before = 0;
@@ -1429,10 +1453,19 @@ final class RESTAPI {
         }
         if (auto fr = "fetch_ref" in req.query) fetchRef = *fr;
 
-        const cfg = networkRepo.findById(networkId);
+        auto info = networkRepo.findByIdWithUser(networkId);
+        const cfg = info.config;
         if (cfg.name.length == 0) {
             res.statusCode = 404;
             res.writeJsonBody(Json(["error": Json("Network not found")]));
+            return;
+        }
+        // This endpoint serves the network's scrollback (including the
+        // `_server` log) and can fire CHATHISTORY into the owner's engine
+        // queue, so the client-supplied id must belong to the caller.
+        if (info.userId != user.id) {
+            res.statusCode = 403;
+            res.writeJsonBody(Json(["error": Json("not your network")]));
             return;
         }
 
@@ -1663,6 +1696,21 @@ final class RESTAPI {
         auto bodyJson = req.json;
         auto chan = bodyJson["channel"].get!string;
         const user = req.context["user"].get!User;
+        {
+            // The command is routed by client-supplied network id, so the
+            // network must belong to the caller.
+            auto info = networkRepo.findByIdWithUser(nid);
+            if (info.config.name.length == 0) {
+                res.statusCode = 404;
+                res.writeJsonBody(Json(["error": Json("Network not found")]));
+                return;
+            }
+            if (info.userId != user.id) {
+                res.statusCode = 403;
+                res.writeJsonBody(Json(["error": Json("not your network")]));
+                return;
+            }
+        }
         auto c = IRCCommand("join", chan, "");
         c.timestampMs = Clock.currTime.toUnixTime!long * 1000;
         
@@ -1783,6 +1831,22 @@ final class RESTAPI {
         if (res.headerWritten) return;
 
         auto nid = parseUUID(req.params["network"]);
+        const user = req.context["user"].get!User;
+        {
+            // The command is routed by client-supplied network id, so the
+            // network must belong to the caller.
+            auto info = networkRepo.findByIdWithUser(nid);
+            if (info.config.name.length == 0) {
+                res.statusCode = 404;
+                res.writeJsonBody(Json(["error": Json("Network not found")]));
+                return;
+            }
+            if (info.userId != user.id) {
+                res.statusCode = 403;
+                res.writeJsonBody(Json(["error": Json("not your network")]));
+                return;
+            }
+        }
         auto bodyJson = req.json;
         auto c = IRCCommand("part", bodyJson["channel"].get!string, "");
         c.timestampMs = Clock.currTime.toUnixTime!long * 1000;

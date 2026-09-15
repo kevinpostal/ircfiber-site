@@ -306,7 +306,7 @@ describe('ServerLog', () => {
     const msgs = [
       ...connectSequence(DAY),
       createMessage({ command: 'MODE', nick: 'me', text: '+Ziw', t: DAY + 1300, eid: 10 }),
-      createMessage({ command: 'NICK', nick: 'me', text: 'me2', t: DAY + 1400, eid: 11 }),
+      createMessage({ command: 'NICK', nick: 'me', text: 'me2', t: DAY + 1400, eid: 11, selfEcho: true }),
     ];
     render(ServerLog, { props: { messages: msgs, network } });
 
@@ -318,6 +318,20 @@ describe('ServerLog', () => {
     expect(nickRow.classList.contains('type_nickchange')).toBe(true);
     expect(nickRow.textContent).toContain('You are now known as me2');
     expect(document.querySelector('.row.notice')).toBeNull();
+  });
+
+  it('never words another user\'s nick change in the first person', async () => {
+    const network = setupServerBuffer();
+    const msgs = [
+      ...connectSequence(DAY),
+      // The engine publishes the base (channel-less) NICK for EVERY user's
+      // rename, so a stranger's rename lands in `_server` without `se`.
+      createMessage({ command: 'NICK', nick: 'zodiac', text: 'incog', t: DAY + 1400, eid: 11 }),
+    ];
+    render(ServerLog, { props: { messages: msgs, network } });
+
+    expect(document.querySelector('.row.status[data-cmd="NICK"]')).toBeNull();
+    expect(document.querySelector('.serverLog')!.textContent).not.toContain('You are now known as');
   });
 
   it('drops the ERR numeric that merely echoes the disconnect reason', async () => {

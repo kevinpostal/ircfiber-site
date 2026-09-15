@@ -189,6 +189,19 @@ final class WebSocketGateway {
                             // Restore from Redis so the client resumes
                             // from its last `lastDeliveredEid` cursor.
                             auto restored = sessionManager.restoreFromRedis(sessionId);
+                            // `verifySessionJWT` checks HMAC + expiry only, so a
+                            // session blob is adopted on its id alone. The live
+                            // subscription below keys on the AUTHENTICATED user
+                            // (startIrcEventListenerOnPool(user.id…)) while the
+                            // backlog replay keys on the RESTORED session's user
+                            // (RedisKeys.userStream(session.user.id…)) — the two
+                            // must be the same account or one user's stream
+                            // backlog is replayed to another.
+                            if (restored !is null && restored.user.id != user.id) {
+                                logWarn("ws: refusing to restore session %s (user %s) for user %s",
+                                    sessionId, restored.user.id.toString(), user.id.toString());
+                                restored = null;
+                            }
                             if (restored !is null) {
                                 // Re-attach the live WebSocket to the restored session
                                 restored.socket = socket;
@@ -1268,6 +1281,27 @@ final class WebSocketGateway {
                 return;
             }
             auto networkId = json["network"].get!string;
+
+            // Every command below is routed by client-supplied networkId
+            // (routeCommand → RedisKeys.cmd(serverId, networkId)), so the
+            // id must belong to this session's user. findByUserId is
+            // Redis-cached per user (irc:user-networks:<userId>, 60 s), so
+            // this is a cached lookup, not a Mongo round trip per keystroke.
+            {
+                bool owned = false;
+                try {
+                    foreach (c; (new NetworkRepository()).findByUserId(session.user.id)) {
+                        if (c.id.toString() == networkId) { owned = true; break; }
+                    }
+                } catch (Exception e) {
+                    logWarn("ws: owner check failed for network %s: %s", networkId, e.msg);
+                }
+                if (!owned) {
+                    logWarn("ws: user %s sent '%s' for unowned network %s",
+                        session.user.username, cmd, networkId);
+                    return;
+                }
+            }
 
             // NEW: Get assigned server for routing
             auto serverId = serverRegistry.getServerForNetwork(networkId);

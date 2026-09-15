@@ -74,7 +74,15 @@ export function classifyServerLog(msg: IRCMessage): ServerLogKind {
   }
   if (cmd === 'NOTICE') return 'notice';
   // Self events echoed into the server buffer (user mode, nick change).
-  if (cmd === 'MODE' || cmd === 'NICK') return 'self';
+  if (cmd === 'MODE') return 'self';
+  // A channel-less NICK is published for EVERY user's rename (engine
+  // connection.d fans the same event out per channel with `ch` set, and
+  // publishes the original with none), so it lands in `_server` whoever
+  // renamed. Only our own — stamped `self_echo` by the engine — may be
+  // worded in the first person; anyone else's belongs to the channel
+  // buffers that already got their own copy. Same reasoning as the
+  // channel-less QUIT dropped above.
+  if (cmd === 'NICK') return msg.selfEcho ? 'self' : 'skip';
   // Numeric IRC replies
   if (cmd === '005') return 'cap';
   if (cmd === '372' || cmd === '375' || cmd === '376') return 'motd';
