@@ -83,7 +83,10 @@
    until the row is hovered/focused or its menu is open. Reveal is by
    hover, keyboard focus (:focus-visible on the row or a button inside) or
    an open menu — deliberately not :focus-within, which would pin the
-   icons on any row a mouse click happened to focus. */
+   icons on any row a mouse click happened to focus. The pill is taller
+   than a grouped row and deliberately overhangs it, which app.css's
+   `.row.messageRow { contain: layout paint }` used to clip — the exception
+   that lets it paint outside the row lives next to that rule. */
 .row.messageRow .rowActions {
   position: absolute;
   right: 92px;

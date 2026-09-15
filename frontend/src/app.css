@@ -148,6 +148,26 @@ body.ascii-compact .row.messageRow {
   content-visibility: auto;
   contain-intrinsic-size: 1px 300px;
 }
+/* Exception to both rules above, for the row-actions toolbar
+   (styles/components/_replies.scss): the pill is 26px tall (20px buttons +
+   2px padding + 1px borders) against a 16px grouped row, so it overhangs
+   the row by 11px, and paint containment clipped it — the pill and the top
+   half of its emoji were sliced off at the row's top edge. Paint
+   containment only buys something for rows the browser can skip painting,
+   and the row under the pointer (or holding focus, or with its menu open)
+   is on screen by definition, so it is dropped for exactly that row.
+   Layout containment stays, and with it the stacking context and the
+   off-screen layout isolation the art rows need. `content-visibility` goes
+   with it because `auto` implies paint containment; the hovered row is
+   rendered either way, so `visible` changes nothing else about it. Must
+   stay after the .bot/.blockArt rule above: same (0,3,0) specificity. */
+.row.messageRow:hover,
+.row.messageRow:focus-visible,
+.row.messageRow:has(.rowActions :focus-visible),
+.row.messageRow.actionsOpen {
+  contain: layout;
+  content-visibility: visible;
+}
 /* The .type_buffer_msg / .bot / .blockArt shorthand above (specificity
    0,3,0) comes after the generic .row.messageRow.firstAuthor { padding-top:
    6px } rule in the legacy public/style.css, so its `padding` shorthand
