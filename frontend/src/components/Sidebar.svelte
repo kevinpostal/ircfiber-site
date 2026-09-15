@@ -504,8 +504,8 @@
 <SidebarIndicators {sidebarEl} {onSwitchBuffer} />
 <div class="addNetworkButtonContainer">
   <button class="addNetworkButton" class:addNetworkButton--selected={ircState.networks.length === 0} id="add-network-btn" type="button" onclick={onAddNetwork}>
-    <i class="fa fa-plus-circle"></i>
-    Add a network
+    <i class="fa fa-plus-circle" aria-hidden="true"></i>
+    <span class="addNetworkLabel">Add a network</span>
   </button>
 </div>
 <AccountMenu />

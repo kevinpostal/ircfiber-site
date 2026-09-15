@@ -8,7 +8,10 @@
   margin-top: 1px;
   height: 39px;
   min-height: 39px;
-  width: 200px;
+  /* Full width, not a fixed 200px: that matched the desktop sidebar track
+     exactly but left the row stopping short inside the mobile drawer
+     (min(85vw, 300px)), which made the footer look ragged. */
+  width: 100%;
   color: #fff;
   font-size: 15px;
   font-weight: 400;

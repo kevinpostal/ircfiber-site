@@ -61,7 +61,9 @@
   color: #d1d5db;
   background: rgba(255,255,255,0.06);
 }
-.network-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background: transparent; padding: 0 0 0 5px; }
+/* padding-bottom keeps the last row off the footer hairline instead of
+   butting against it; scroll-padding does the same for keyboard scrolling. */
+.network-list { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background: transparent; padding: 0 0 4px 5px; scroll-padding-bottom: 4px; }
 .network { position: relative; margin-bottom: 10px; list-style: none; }
 .network:last-child { margin-bottom: 0; }
 ul.buffers { list-style: none; padding: 0; margin: 0; }
@@ -517,31 +519,13 @@ ul.buffers { list-style: none; padding: 0; margin: 0; }
 .contextMenu.bufferContextMenu .contextMenu__item i.fa { color: #fff; }
 .contextMenu .info { margin: 0.5rem 1rem 0.25rem 1rem; font-size: 0.75rem; color: #8b949e; font-family: var(--font-mono); }
 
-/* ── Footer rail toggle (Design A) ────────────────────────────────────── */
-.addNetworkButtonContainer {
-  display: flex;
-  gap: 6px;
-  padding: 8px 6px;
-  border-top: 1px solid #1a1a1a;
-  align-items: center;
-}
-.addNetworkButton {
-  flex: 1;
-  min-width: 0;
-  background: #1a1a1a;
-  border: 1px solid #222;
-  color: #d6d6d6;
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-.addNetworkButton:hover { background: #222; }
+/* ── Footer rail toggle ───────────────────────────────────────────────────
+   The .addNetworkButtonContainer / .addNetworkButton rules that used to sit
+   here are gone: _addNetworkButton.scss (imported later, so it won every
+   conflicting property anyway) is the single definition. What survived the
+   cascade from this block was only the leftovers it happened not to set —
+   flex:1, border-radius, a border-top in a different shade — i.e. the
+   footer's look was an accident of import order, not a design. */
 .sidebarCollapseButton {
   width: 32px;
   height: 32px;

@@ -1,35 +1,54 @@
-/* Add Network Button — IRCCloud style */
+/* Sidebar footer — "Add a network" sits directly above the Account Settings
+   row, and the two together are the sidebar's chrome. It used to be styled
+   like a list row instead: #000 background and the same `inset 5px 0 #333`
+   left stripe the network list uses, so with several servers the scrolling
+   list appeared to bleed straight into the footer (and a half-scrolled
+   network header got sliced right above it). The hairline plus the raised
+   background below are what mark the boundary; the account row already had
+   its own (#262626), so matching metrics here makes the two read as one
+   block. `.addNetworkLabel` is what the collapsed rail hides (_sidebar.scss)
+   to leave just the icon. */
 .addNetworkButtonContainer {
-  padding: 3px 0 4px 17px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
   width: 100%;
   box-sizing: border-box;
-  background: #000;
-  display: flex;
-  justify-content: flex-start;
-  box-shadow: inset 5px 0 #333;
+  padding: 0;
+  background: #1a1a1a;
+  border-top: 1px solid #333;
 }
 
 .addNetworkButton {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  padding: 2px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
   background: transparent;
   border: none;
+  border-radius: 0;
   color: #d9d9d9;
   font-size: 14px;
   font-weight: 400;
+  line-height: 18px;
+  text-align: left;
   white-space: nowrap;
   overflow: hidden;
   cursor: pointer;
   font-family: inherit;
-  padding: 1px 10px 4px 10px;
 }
 
-.addNetworkButton:hover {
-  color: #fff;
+/* Same 16px icon gutter as .accountMenu__caret, so the two footer rows'
+   labels line up. */
+.addNetworkButton .fa {
+  width: 16px;
+  text-align: center;
+  color: #555;
+  flex-shrink: 0;
 }
 
-
+.addNetworkButton:hover { background: #222; color: #fff; }
+.addNetworkButton:hover .fa { color: #ccc; }
