@@ -89,12 +89,19 @@ describe('Scroll pin 1-0 with overflow', () => {
     if (cFinal) {
       console.log(`[scroll-pin2] final atBottom=${cFinal.scrollHeight - cFinal.clientHeight - cFinal.scrollTop} scrollTop=${cFinal.scrollTop} scrollHeight=${cFinal.scrollHeight} clientHeight=${cFinal.clientHeight}`);
       expect(cFinal.scrollHeight - cFinal.clientHeight - cFinal.scrollTop).toBeLessThanOrEqual(100);
-      const zeroEl = page.getByText('0').first().element() as HTMLElement | null;
+      // The row of the message just typed, NOT `getByText('0').first()`:
+      // that matched `init-0` — the first row of the seeded history, a
+      // thousand pixels above the viewport — so the assertion was about a
+      // row nobody was scrolling to. `allRows` is in DOM order, so its
+      // last entry is the newest message.
+      const zeroEl = allRows[allRows.length - 1] as HTMLElement | undefined;
       if (zeroEl) {
         const rect = zeroEl.getBoundingClientRect();
         const cRect = cFinal.getBoundingClientRect();
-        expect(rect.bottom).toBeLessThanOrEqual(cRect.bottom + 500);
-        expect(rect.top).toBeGreaterThanOrEqual(cRect.top - 600);
+        // Pinned means the newest row is inside the viewport; the slack is
+        // the same 100px the pin check above allows.
+        expect(rect.bottom).toBeLessThanOrEqual(cRect.bottom + 100);
+        expect(rect.top).toBeGreaterThanOrEqual(cRect.top);
       }
     }
   }, 20000);
