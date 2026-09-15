@@ -147,6 +147,47 @@ export function clearConnectRequested(networkId: string): void {
   connectRequestedAt.delete(networkId);
 }
 
+/** What the next message answers (IRCv3 `+draft/reply`). */
+export interface ReplyTarget {
+  networkId: string;
+  bufferName: string;
+  msgid: string;
+  nick: string;
+  excerpt: string;
+}
+
+/** The row a reaction is being picked for. */
+export interface ReactTarget {
+  networkId: string;
+  bufferName: string;
+  msgid: string;
+}
+
+/** Set the reply target from a row; a row without a msgid cannot be replied to. */
+export function setReplyTarget(networkId: string, bufferName: string, msg: IRCMessage): void {
+  if (!msg.msgid) return;
+  ircState.replyTarget = {
+    networkId,
+    bufferName,
+    msgid: msg.msgid,
+    nick: stripPrefix(msg.nick ?? ''),
+    excerpt: (msg.text ?? '').slice(0, 120),
+  };
+}
+
+export function clearReplyTarget(): void {
+  ircState.replyTarget = null;
+}
+
+export function setReactTarget(networkId: string, bufferName: string, msgid: string): void {
+  if (!msgid) return;
+  ircState.reactTarget = { networkId, bufferName, msgid };
+}
+
+export function clearReactTarget(): void {
+  ircState.reactTarget = null;
+}
+
 export const ircState = $state({
   networks: [] as Network[],
   activeBuffer: { networkId: null, bufferName: null } as ActiveBuffer,
@@ -247,6 +288,14 @@ export const ircState = $state({
   // expireAt = serverTs + countdownMs (unix ms). The UI computes remaining
   // = max(0, expireAt - Date.now()).
   tempUnavailable: {} as Record<string, { expireAt: number }>,
+  // Compose-side reply target (IRCv3 `+draft/reply`): set from a row's
+  // Reply action, shown as the "Replying to" bar above the input, cleared
+  // on send or Esc. Null when the next message is not a reply.
+  replyTarget: null as ReplyTarget | null,
+  // The row whose React action opened the emoji picker; the next pick is
+  // sent as a `+draft/react` TAGMSG on it rather than inserted into the
+  // input. Cleared when the picker closes.
+  reactTarget: null as ReactTarget | null,
 });
 
 // E2E hooks for load-more verification
@@ -975,6 +1024,51 @@ export function markRedacted(networkId: string, bufferName: string, msgid: strin
   ircState.messages[key] = [...list];
   const replaced = ircState.processedMessages[key]
     ? replaceInProcessedBuffer(ircState.processedMessages[key], original, tombstone)
+    : null;
+  ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
+  return true;
+}
+
+/** The message with a msgid in a buffer, or undefined when it is not loaded. */
+export function findMessage(networkId: string, bufferName: string, msgid: string): IRCMessage | undefined {
+  if (!msgid) return undefined;
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  return (ircState.messages[key] ?? []).find((m: IRCMessage) => m.msgid === msgid);
+}
+
+/**
+ * Apply a reaction (IRCv3 `+draft/react` / `+draft/unreact`) to the row
+ * whose msgid it names. `add` inserts the nick once under the emoji;
+ * removal deletes it and drops the emoji when nobody is left. Unknown
+ * msgid → no-op. Idempotent, so the echo-message of our own reaction
+ * re-applies harmlessly.
+ */
+export function applyReaction(networkId: string, bufferName: string, msgid: string, emoji: string, nick: string, add: boolean): boolean {
+  if (!msgid || !emoji || !nick) return false;
+  const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  const list = ircState.messages[key] ?? [];
+  const idx = list.findIndex((m: IRCMessage) => m.msgid === msgid);
+  if (idx < 0) return false;
+  const original = list[idx];
+  const reactions: Record<string, string[]> = { ...(original.reactions ?? {}) };
+  const nicks = reactions[emoji] ?? [];
+  if (add) {
+    if (nicks.includes(nick)) return true;
+    reactions[emoji] = [...nicks, nick];
+  } else {
+    if (!nicks.includes(nick)) return true;
+    const rest = nicks.filter(n => n !== nick);
+    if (rest.length) reactions[emoji] = rest;
+    else delete reactions[emoji];
+  }
+  const updated: IRCMessage = {
+    ...original,
+    reactions: Object.keys(reactions).length ? reactions : undefined,
+  };
+  list[idx] = updated;
+  ircState.messages[key] = [...list];
+  const replaced = ircState.processedMessages[key]
+    ? replaceInProcessedBuffer(ircState.processedMessages[key], original, updated)
     : null;
   ircState.processedMessages[key] = replaced ?? buildProcessedBuffer([...list]);
   return true;

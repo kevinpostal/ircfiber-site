@@ -11,6 +11,10 @@ function resetState(): void {
 	ircState.activeBuffer.networkId = null;
 	ircState.activeBuffer.bufferName = null;
 	ircState.messages = {};
+	ircState.processedMessages = {};
+	ircState.replyTarget = null;
+	ircState.reactTarget = null;
+	document.body.innerHTML = '';
 }
 
 beforeEach(() => {
@@ -341,5 +345,94 @@ describe('MessageRow', () => {
 		render(MessageRow, { props: { msg, memberByNick: new Map([['alice', member]]) } });
 
 		expect(document.querySelector('.authorWrap .mode_prefix.mode_symbol')?.textContent).toBe('@');
+	});
+});
+
+describe('MessageRow — replies and reactions', () => {
+	function activeChannel(): void {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		net.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+	}
+
+	it('quotes the replied-to message when it is in the buffer', async () => {
+		activeChannel();
+		const parent = createMessage({ nick: 'alice', text: 'the original', msgid: 'dc-1' });
+		const reply = createMessage({ nick: 'bob', text: 'agreed', msgid: 'dc-2', replyTo: 'dc-1' });
+		ircState.messages['net1:#chan'] = [parent, reply];
+		flushSync();
+
+		render(MessageRow, { props: { msg: reply } });
+
+		const quote = document.querySelector('.replyQuote');
+		expect(quote).toBeInTheDocument();
+		expect(quote?.querySelector('.replyNick')?.textContent).toBe('alice:');
+		expect(quote?.querySelector('.replyExcerpt')?.textContent).toBe('the original');
+	});
+
+	it('falls back to a generic quote when the parent is not loaded', async () => {
+		activeChannel();
+		const reply = createMessage({ nick: 'bob', text: 'agreed', msgid: 'dc-2', replyTo: 'dc-gone' });
+		ircState.messages['net1:#chan'] = [reply];
+		flushSync();
+
+		render(MessageRow, { props: { msg: reply } });
+
+		expect(document.querySelector('.replyQuote .replyMissing')?.textContent)
+			.toBe('replying to an earlier message');
+		expect(document.querySelector('.replyQuote .replyNick')).toBeNull();
+	});
+
+	it('renders a chip per emoji with its count, nicks and own-state', async () => {
+		activeChannel();
+		const msg = createMessage({
+			nick: 'alice', text: 'hello', msgid: 'dc-1',
+			reactions: { '👍': ['bob', 'me'], '🎉': ['carol'] },
+		});
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+
+		render(MessageRow, { props: { msg } });
+
+		const chips = Array.from(document.querySelectorAll('.reaction'));
+		expect(chips.map(c => c.querySelector('.reactionEmoji')?.textContent)).toEqual(['👍', '🎉']);
+		expect(chips.map(c => c.querySelector('.reactionCount')?.textContent)).toEqual(['2', '1']);
+		expect(chips[0].getAttribute('title')).toBe('bob, me');
+		// Our own reaction is marked so a second click removes it.
+		expect(chips[0].classList.contains('own')).toBe(true);
+		expect(chips[1].classList.contains('own')).toBe(false);
+	});
+
+	it('offers Reply and React on a chat row but not on a system row', async () => {
+		activeChannel();
+		const chat = createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' });
+		ircState.messages['net1:#chan'] = [chat];
+		flushSync();
+		render(MessageRow, { props: { msg: chat } });
+		expect(document.querySelector('.rowAction.reply')).toBeInTheDocument();
+		expect(document.querySelector('.rowAction.react')).toBeInTheDocument();
+
+		document.body.innerHTML = '';
+		const join = createMessage({ command: 'JOIN', nick: 'alice', msgid: 'dc-3' });
+		render(MessageRow, { props: { msg: join } });
+		expect(document.querySelector('.rowAction.reply')).toBeNull();
+	});
+
+	it('sets the store reply target from the Reply action', async () => {
+		activeChannel();
+		const msg = createMessage({ nick: 'alice', text: 'the original', msgid: 'dc-1' });
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+
+		render(MessageRow, { props: { msg } });
+		(document.querySelector('.rowAction.reply') as HTMLButtonElement).click();
+		flushSync();
+
+		expect(ircState.replyTarget).toEqual({
+			networkId: 'net1', bufferName: '#chan', msgid: 'dc-1',
+			nick: 'alice', excerpt: 'the original',
+		});
 	});
 });

@@ -1,7 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, type Mock } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from 'vitest/browser';
-import { flushSync } from 'svelte';
+import { flushSync, untrack } from 'svelte';
 import InputArea from './InputArea.svelte';
 import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
 import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText, setTyping, clearTyping, resetTypingState } from '../stores/ircStore.svelte';
@@ -854,5 +854,100 @@ describe('InputArea', () => {
 			expect(mockSendMessage).toHaveBeenCalled();
 			expect(page.getByText('Text snippet').query()).toBeNull();
 		});
+	});
+});
+
+describe('InputArea — reply compose bar', () => {
+	let mockSendMessage: Mock;
+	let mockSendRaw: Mock;
+
+	beforeEach(() => {
+		mockSendMessage = vi.fn();
+		mockSendRaw = vi.fn();
+		ircState.replyTarget = null;
+		ircState.reactTarget = null;
+	});
+
+	function activeChannel(): void {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+	}
+
+	it('sends +draft/reply with the line and clears the bar', async () => {
+		activeChannel();
+		ircState.replyTarget = {
+			networkId: 'net1', bufferName: '#general', msgid: 'dc-1',
+			nick: 'alice', excerpt: 'the original',
+		};
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		await expect.element(page.getByText(/Replying to/)).toBeInTheDocument();
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		await userEvent.type(textarea, 'agreed');
+		await userEvent.keyboard('{Enter}');
+
+		expect(mockSendMessage).toHaveBeenCalledWith(
+			'net1', '#general', 'agreed', expect.any(String), { '+draft/reply': 'dc-1' },
+		);
+		expect(ircState.replyTarget).toBeNull();
+
+		// The optimistic row carries the reply so the quote shows at once.
+		const list = untrack(() => ircState.messages['net1:#general'] ?? []);
+		expect(list.at(-1)?.replyTo).toBe('dc-1');
+	});
+
+	it('sends no tags when nothing is being replied to', async () => {
+		activeChannel();
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		expect(page.getByText(/Replying to/).query()).toBeNull();
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		await userEvent.type(textarea, 'plain');
+		await userEvent.keyboard('{Enter}');
+
+		expect(mockSendMessage).toHaveBeenCalledWith('net1', '#general', 'plain', expect.any(String));
+	});
+
+	it('ignores a reply target set in another buffer', async () => {
+		activeChannel();
+		ircState.replyTarget = {
+			networkId: 'net1', bufferName: '#elsewhere', msgid: 'dc-9',
+			nick: 'alice', excerpt: 'other room',
+		};
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		expect(page.getByText(/Replying to/).query()).toBeNull();
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		await userEvent.type(textarea, 'hi');
+		await userEvent.keyboard('{Enter}');
+
+		expect(mockSendMessage).toHaveBeenCalledWith('net1', '#general', 'hi', expect.any(String));
+	});
+
+	it('clears the reply target on Escape', async () => {
+		activeChannel();
+		ircState.replyTarget = {
+			networkId: 'net1', bufferName: '#general', msgid: 'dc-1',
+			nick: 'alice', excerpt: 'the original',
+		};
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		await userEvent.click(textarea);
+		await userEvent.keyboard('{Escape}');
+		flushSync();
+
+		expect(ircState.replyTarget).toBeNull();
+		expect(page.getByText(/Replying to/).query()).toBeNull();
 	});
 });

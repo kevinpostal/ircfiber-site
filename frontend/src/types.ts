@@ -483,6 +483,12 @@ export interface IRCMessage {
   redacted?: boolean;
   /** Redaction reason from `REDACT <target> <msgid> [<reason>]`. */
   redactReason?: string;
+  /** msgid of the message this one answers (IRCv3 `+draft/reply`, wire `data.rp`). */
+  replyTo?: string;
+  /** Reactions on this row, emoji -> nicks in arrival order (IRCv3
+   *  `+draft/react` / `+draft/unreact` TAGMSGs). Live-only: the engine
+   *  excludes TAGMSG rows from scrollback replay. */
+  reactions?: Record<string, string[]>;
   /** Optimistic message state — mirrors IRCCloud .pending / .pendingOut / .failed */
   pendingState?: 'pending' | 'pendingOut' | 'failed';
   // For grouped messages

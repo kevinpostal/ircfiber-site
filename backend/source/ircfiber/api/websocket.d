@@ -1299,6 +1299,15 @@ final class WebSocketGateway {
                     if (json["label"].type != Json.Type.undefined) {
                         c.label = json["label"].get!string;
                     }
+                    // Client-only tags (`+draft/reply`) ride along; only
+                    // `+`-prefixed names, so a client cannot forge server
+                    // tags such as msgid or account.
+                    if (json["tags"].type == Json.Type.object) {
+                        foreach (string k, Json v; json["tags"]) {
+                            if (k.length > 1 && k[0] == '+' && v.type == Json.Type.string)
+                                c.tags[k] = v.get!string;
+                        }
+                    }
                     routeCommand(networkId, serverId, c);
                     break;
                 case "editmsg":

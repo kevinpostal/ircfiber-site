@@ -2,12 +2,12 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import type { IRCMessage, Member } from '../types';
-  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel } from '../lib/utils';
+  import { formatTime12Hour, formatDateTimeTitle, getUserModePrefix, stripPrefix, getIrcCloudTypeClass, formatNumericText, escapeHtml, nickColorIndex, generateLabel, escapeTagValue } from '../lib/utils';
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, wrapNicksWithHighlight } from '../lib/autolinker';
   import { modeSentences } from '../lib/modeSentence';
-  import { getActiveBufferObj, getActiveNetwork } from '../stores/ircStore.svelte';
-  import { sendMessage } from '../stores/wsConnection.svelte.ts';
+  import { getActiveBufferObj, getActiveNetwork, findMessage, setReplyTarget, setReactTarget, applyReaction } from '../stores/ircStore.svelte';
+  import { sendMessage, sendRaw } from '../stores/wsConnection.svelte.ts';
   import { globalPrefs, getBufferPrefs, highlightWords } from '../stores/preferences.svelte';
   import { memoRenderText, memoBlockArt } from '../lib/formatCache';
   import LongMessageContent from './LongMessageContent.svelte';
@@ -247,6 +247,71 @@
     if (nick && onNickClick) {
       const member = findMemberForNick(nick);
       onNickClick(nick, e, member);
+    }
+  }
+
+  // ── Replies and reactions (IRCv3 +draft/reply, +draft/react) ──
+  // A chat row with a msgid can be replied to and reacted to. The reply
+  // target lives in the store (the input bar reads it); a reaction is a
+  // TAGMSG on the raw path, exactly as typing is, applied optimistically
+  // and re-applied idempotently by the server echo.
+  const activeBufferName = $derived(getActiveBufferObj()?.name ?? '');
+  const canInteract = $derived(!isSystem && !isJoinPart && !!nick && !!msg.msgid && !msg.redacted && !activeBufferName.startsWith('_'));
+  const replyParent = $derived.by(() => {
+    if (!msg.replyTo || !activeNetwork?.networkId || !activeBufferName) return undefined;
+    return findMessage(activeNetwork.networkId, activeBufferName, msg.replyTo);
+  });
+  const reactionChips = $derived.by(() => {
+    const r = msg.reactions;
+    if (!r) return [] as Array<{ emoji: string; nicks: string[]; own: boolean }>;
+    const me = myNick.toLowerCase();
+    return Object.entries(r).map(([emoji, nicks]) => ({
+      emoji,
+      nicks,
+      own: !!me && nicks.some(n => n.toLowerCase() === me),
+    }));
+  });
+
+  function handleReply(): void {
+    const networkId = activeNetwork?.networkId;
+    if (!canInteract || !networkId || !activeBufferName) return;
+    // The input bar focuses its textarea when the target appears.
+    setReplyTarget(networkId, activeBufferName, msg);
+  }
+
+  function handleReact(): void {
+    const networkId = activeNetwork?.networkId;
+    if (!canInteract || !networkId || !activeBufferName || !msg.msgid) return;
+    setReactTarget(networkId, activeBufferName, msg.msgid);
+  }
+
+  /** Toggle the current user's reaction on this row (chip click). */
+  function toggleOwnReaction(emoji: string, own: boolean): void {
+    const networkId = activeNetwork?.networkId;
+    if (!canInteract || !networkId || !activeBufferName || !msg.msgid || !myNick) return;
+    const tag = own ? '+draft/unreact' : '+draft/react';
+    sendRaw(networkId, `@+draft/reply=${escapeTagValue(msg.msgid)};${tag}=${escapeTagValue(emoji)} TAGMSG ${activeBufferName}`);
+    applyReaction(networkId, activeBufferName, msg.msgid, emoji, myNick, !own);
+  }
+
+  /** Scroll the replied-to row into view and flash it. */
+  function handleQuoteClick(e: MouseEvent): void {
+    e.stopPropagation();
+    if (!msg.replyTo) return;
+    const selector = `[data-msgid="${CSS.escape(msg.replyTo)}"]`;
+    const target = (e.currentTarget as HTMLElement).closest('.row')?.parentElement?.querySelector<HTMLElement>(selector)
+      ?? document.querySelector<HTMLElement>(selector);
+    if (!target) return;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    target.classList.add('flash');
+    setTimeout(() => target.classList.remove('flash'), 1500);
+  }
+
+  function handleRowKey(e: KeyboardEvent): void {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === 'r' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      handleReply();
     }
   }
 
@@ -576,6 +641,8 @@
     data-usermask={usermaskAttr || undefined}
     data-msgid={msg.msgid || undefined}
     data-phase={isServerLog ? phase : undefined}
+    tabindex={canInteract ? -1 : undefined}
+    onkeydown={canInteract ? handleRowKey : undefined}
   >
     {#if !isSystem && !isJoinPart && !isAction && nick}
       {@const colorIndex = nickColorIndex(nick)}
@@ -619,6 +686,18 @@
         </span>
       {/if}
 
+
+      {#if msg.replyTo}
+        <button type="button" class="replyQuote" onclick={handleQuoteClick} title="Jump to the replied-to message">
+          <span class="replyArrow" aria-hidden="true">&#8617;</span>
+          {#if replyParent}
+            <span class="replyNick">{stripPrefix(replyParent.nick ?? '')}:</span>
+            <span class="replyExcerpt">{(replyParent.text ?? '').slice(0, 120)}</span>
+          {:else}
+            <span class="replyExcerpt replyMissing">replying to an earlier message</span>
+          {/if}
+        </button>
+      {/if}
       {#if isAction && nick}
         {@const colorIndex = nickColorIndex(nick)}
         {@const colorCls = `c${colorIndex}`}
@@ -653,6 +732,24 @@
         {/if}
       {/if}
     </span>
+    {#if reactionChips.length > 0}
+      <div class="reactions" aria-label="Reactions">
+        {#each reactionChips as chip (chip.emoji)}
+          <button type="button" class="reaction" class:own={chip.own}
+                  title={chip.nicks.join(', ')}
+                  aria-pressed={chip.own}
+                  onclick={(e) => { e.stopPropagation(); toggleOwnReaction(chip.emoji, chip.own); }}>
+            <span class="reactionEmoji">{chip.emoji}</span> <span class="reactionCount">{chip.nicks.length}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+    {#if canInteract}
+      <span class="rowActions" aria-label="Message actions">
+        <button type="button" class="rowAction reply" title="Reply (r)" aria-label="Reply" onclick={(e) => { e.stopPropagation(); handleReply(); }}>&#8617; Reply</button>
+        <button type="button" class="rowAction react" title="React" aria-label="React" onclick={(e) => { e.stopPropagation(); handleReact(); }}>&#9786; React</button>
+      </span>
+    {/if}
     <span class="date" onmouseenter={() => tsHover = true} onmouseleave={() => tsHover = false}><span class="timestamp" title={fullTitle} role={pendingState === 'failed' ? 'button' : undefined} tabindex={pendingState === 'failed' ? 0 : undefined} onclick={pendingState === 'failed' ? handleFailedRetry : undefined} onkeydown={pendingState === 'failed' ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleFailedRetry(); } } : undefined}>{timeStr}</span></span>
   </div>
 {/if}

@@ -407,6 +407,22 @@ export function prefixRun(nick: string): string {
   return /^[*!~&@%+]+/.exec(nick)?.[0] ?? '';
 }
 
+/** Escapes a value for an outgoing IRCv3 message tag (`;` `\:`, space
+ *  `\s`, `\` `\\`, CR `\r`, LF `\n`). Used on the raw TAGMSG path;
+ *  values sent through the `msg` command are escaped by the engine. */
+export function escapeTagValue(raw: string): string {
+  return raw.replace(/[; \\\r\n]/g, (c) => {
+    switch (c) {
+      case ';': return '\\:';
+      case ' ': return '\\s';
+      case '\\': return '\\\\';
+      case '\r': return '\\r';
+      case '\n': return '\\n';
+      default: return c;
+    }
+  });
+}
+
 /**
  * Split the userhost half of an IRC mask into its `ident` and `host`
  * parts. Accepts any of the forms a member entry can arrive as:

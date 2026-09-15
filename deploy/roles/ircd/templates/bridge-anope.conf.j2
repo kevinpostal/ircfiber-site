@@ -217,6 +217,9 @@ module
 	maxlines = 8
 	floodlines = 6
 	floodsecs = 4s
+	relaytyping = yes
+	relayreactions = yes
+	relayevents = "nick,topic,kick"
 }
 
 /* `permission` stays on every command, mutating ones included: without it
@@ -226,6 +229,7 @@ command { service = "BridgeServ"; name = "ADD";      command = "bridgeserv/add";
 command { service = "BridgeServ"; name = "SET";      command = "bridgeserv/set";      permission = "bridgeserv/set" }
 command { service = "BridgeServ"; name = "DEL";      command = "bridgeserv/del";      permission = "bridgeserv/del" }
 command { service = "BridgeServ"; name = "LIST";     command = "bridgeserv/list";     permission = "bridgeserv/list" }
+command { service = "BridgeServ"; name = "STATUS";   command = "bridgeserv/status";   permission = "bridgeserv/status" }
 command { service = "BridgeServ"; name = "GUILDS";   command = "bridgeserv/guilds";   permission = "bridgeserv/guilds" }
 command { service = "BridgeServ"; name = "CHANNELS"; command = "bridgeserv/channels"; permission = "bridgeserv/channels" }
 {% if ircd_bridge_rpc_enabled %}

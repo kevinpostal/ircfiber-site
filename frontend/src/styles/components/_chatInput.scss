@@ -53,6 +53,56 @@
   backdrop-filter: blur(4px);
 }
 
+/* "Replying to" bar (IRCv3 +draft/reply): same flex-row slot as the
+   typing indicator, laid out above the input so it pushes messages up
+   rather than covering them. */
+.bufferinputcell .replyBar {
+  flex: 0 0 100%;
+  order: -1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  margin: 0 0 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #8b949e;
+  background: rgba(42, 45, 51, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 2px solid var(--link, #1e72ff);
+  border-radius: 6px;
+}
+.bufferinputcell .replyBar b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.bufferinputcell .replyBarLabel {
+  flex: none;
+  white-space: nowrap;
+}
+.bufferinputcell .replyBarExcerpt {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bufferinputcell .replyBarClose {
+  flex: none;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.bufferinputcell .replyBarClose:hover {
+  color: var(--text-primary);
+}
+
 .bufferinputcell .typing-dots {
   display: inline-flex;
   align-items: center;

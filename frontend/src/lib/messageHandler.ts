@@ -3,7 +3,7 @@ import { WHOIS_FAMILY } from './serverLogGroups';
 import { ircState, handleConnect, updateChannelUsers, applyIsupportUpdate, applyRetryStatus, applyFail, applyChannelListChunk,
          updateChannelTopic, appendMessage, prependMessage, setTyping, clearTyping, clearTypingForNick, resetTypingStreak,
          setTempUnavailable, clearTempUnavailable, markNetworkSeen, shouldSuppressNotInChannel,
-         checkHighlight, isMessageUnseen, applySetname, applyAccountChange, markRedacted,
+         checkHighlight, isMessageUnseen, applySetname, applyAccountChange, markRedacted, applyReaction,
          markMemberBot,
          findBufferByName, isSelfMessage, renameQueryBuffer, isSessionFocused } from '../stores/ircStore.svelte';
 import { isIgnored, globalPrefs, getLastSeen, getBottomSeen } from '../stores/preferences.svelte';
@@ -126,6 +126,7 @@ export function unpackEvent(
     label: ((data.label as string) || (data.l as string) || (data.le as string) || '') as string,
     account: (((data.a as string) || tags?.account || '') as string) || undefined,
     editOf: (((data.eo as string) || tags?.edit_of || '') as string) || undefined,
+    replyTo: (((data.rp as string) || tags?.['+draft/reply'] || '') as string) || undefined,
     // IRCCloud `from_mode` — the author's channel status when they spoke.
     // Rendered in preference to the live roster (MessageRow), so the glyph
     // survives the author quitting or losing the mode.
@@ -501,8 +502,22 @@ export function processIrcEvent(
   // clears the indicator immediately so "X is typing" vanishes the
   // moment the other client stops — not 6.5s later.
   if (cmd === 'TAGMSG' && msg.nick && channel !== '_server') {
+    // Reactions: `+draft/react` / `+draft/unreact` (wire `rx` / `ux`) on
+    // the msgid named by `+draft/reply` (wire `rp`). A TAGMSG never
+    // appends a row; the reaction mutates the row it points at, and an
+    // unknown msgid is a no-op.
+    const longTags = data.tags as Record<string, string> | undefined;
+    const reactTag = (data.rx as string | undefined) ?? longTags?.['+draft/react'];
+    const unreactTag = (data.ux as string | undefined) ?? longTags?.['+draft/unreact'];
+    const replyTag = (data.rp as string | undefined) ?? longTags?.['+draft/reply'];
+    if ((reactTag || unreactTag) && replyTag) {
+      if (!isIgnored(msg.nick, messageHostmask(msg))) {
+        applyReaction(networkId, channel, replyTag, (reactTag ?? unreactTag) as string, msg.nick, !!reactTag);
+      }
+      return {};
+    }
     const typingTag = (data.typing as string | undefined)
-      ?? (data.tags as Record<string, string> | undefined)?.['+typing'];
+      ?? longTags?.['+typing'];
     if (typingTag === 'done') {
       clearTyping(networkId, channel, msg.nick);
     } else if (!isIgnored(msg.nick, messageHostmask(msg))) {

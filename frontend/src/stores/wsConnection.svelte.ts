@@ -406,8 +406,14 @@ export function sendRaw(networkId: string, line: string): void {
   doSend(payload);
 }
 
-export function sendMessage(networkId: string, target: string, text: string, label?: string): void {
-  doSend(JSON.stringify({ cmd: 'msg', network: networkId, target, text, label }));
+export function sendMessage(
+  networkId: string,
+  target: string,
+  text: string,
+  label?: string,
+  tags?: Record<string, string>,
+): void {
+  doSend(JSON.stringify({ cmd: 'msg', network: networkId, target, text, label, tags }));
 }
 
 export function sendEditMessage(networkId: string, target: string, text: string, originalLabel: string): void {

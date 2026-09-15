@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage } from '../stores/ircStore.svelte';
+  import { ircState, getActiveNetwork, getActiveBufferObj, setActiveBuffer, getBufferInputText, setBufferInputText, sortBuffers, getTypersForBuffer, lastSentMessageForBuffer, recordSentMessage, requestForceScrollToBottom, archiveBuffer, markUserDisconnected, beginConnectAttempt, getTempUnavailable, initiateRejoin, appendMessage, clearReplyTarget, clearReactTarget, applyReaction, type ReactTarget } from '../stores/ircStore.svelte';
   import { sendMessage, sendRaw, sendEditMessage } from '../stores/wsConnection.svelte.ts';
   import { reconnectNetwork } from '../stores/api';
   import { getSlashHandler } from '../lib/slashCommands';
   import { TabCompletionEngine, recentHighlightersCache } from '../lib/tabCompletion';
   import { InputHistory } from '../lib/inputHistory';
-  import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix } from '../lib/utils';
+  import { generateLabel, getAvatarColor, ensureChannelPrefix, stripPrefix, normalizeChannelName, escapeTagValue } from '../lib/utils';
   import { startUploads, setDeps } from '../stores/uploadFlow.svelte';
   import { uploadState, ringState, aggregateProgress } from '../stores/uploadStore.svelte';
   import { pastebinStore, closeFromFile } from '../stores/pastebinStore.svelte';
@@ -425,6 +425,11 @@
 
   function handleKeyDown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
+      if (activeReply && !tabPopup && !isEmptyTabbing && !isTabbing) {
+        e.preventDefault();
+        cancelReply();
+        return;
+      }
       if (tabPopup) {
         e.preventDefault();
         dismissTabPopup(true);
@@ -858,10 +863,19 @@
     void autoResizeAfterClear();
   }
 
-  /** Sends one PRIVMSG line and inserts its optimistic row. */
+  /** Sends one PRIVMSG line and inserts its optimistic row. A pending
+   *  reply target for this buffer rides along as `+draft/reply` on the
+   *  first line and is cleared once sent. */
   function sendPlainLine(networkId: string, target: string, text: string): void {
     const label = generateLabel();
-    onSendMessage(networkId, target, text, label);
+    const reply = activeReply;
+    const tags = reply ? { '+draft/reply': reply.msgid } : undefined;
+    if (tags) {
+      onSendMessage(networkId, target, text, label, tags);
+      clearReplyTarget();
+    } else {
+      onSendMessage(networkId, target, text, label);
+    }
 
     const optimistic: IRCMessage = {
       timestamp: new Date().toISOString(),
@@ -871,6 +885,7 @@
       command: 'PRIVMSG',
       label,
       pendingState: 'pending',
+      replyTo: reply?.msgid,
     };
     ircState.optimisticMessages.set(label, optimistic);
     const key = `${networkId}:${target}`;
@@ -1028,11 +1043,49 @@
     const detail = (ev as CustomEvent).detail;
     const unicode: string | undefined = detail?.unicode;
     if (unicode) {
-      insertAtCursor(unicode);
-      textarea?.focus();
+      if (ircState.reactTarget) {
+        sendReaction(ircState.reactTarget, unicode);
+      } else {
+        insertAtCursor(unicode);
+        textarea?.focus();
+      }
     }
     // Close the picker after the user picks an emoji
     emojiOpen = false;
+  }
+
+  // ── Replies and reactions ──
+  // The reply target is set by a row's Reply action (MessageRow) and only
+  // applies to the buffer it was set in; switching buffers hides the bar
+  // without dropping it.
+  const activeReply = $derived.by(() => {
+    const r = ircState.replyTarget;
+    if (!r) return null;
+    if (r.networkId !== ircState.activeBuffer.networkId) return null;
+    if (normalizeChannelName(r.bufferName) !== normalizeChannelName(ircState.activeBuffer.bufferName || '')) return null;
+    return r;
+  });
+  $effect(() => {
+    if (activeReply) textarea?.focus();
+  });
+  function cancelReply(): void {
+    clearReplyTarget();
+    textarea?.focus();
+  }
+
+  // A row's React action opens the picker; the next pick becomes a
+  // `+draft/react` TAGMSG on that row (raw path, like typing) applied
+  // optimistically — the server echo re-applies it idempotently.
+  $effect(() => {
+    if (ircState.reactTarget && !emojiOpen) void toggleEmoji();
+  });
+  $effect(() => {
+    if (!emojiOpen && ircState.reactTarget) clearReactTarget();
+  });
+  function sendReaction(target: ReactTarget, emoji: string): void {
+    onSendRaw(target.networkId, `@+draft/reply=${escapeTagValue(target.msgid)};+draft/react=${escapeTagValue(emoji)} TAGMSG ${target.bufferName}`);
+    if (myNick) applyReaction(target.networkId, target.bufferName, target.msgid, emoji, myNick, true);
+    clearReactTarget();
   }
 
   function insertAtCursor(text: string): void {
@@ -1134,6 +1187,14 @@
         <span class="typing-dots"><i></i><i></i><i></i></span>
         <span class="typing-label">{typingText}</span>
       </div>
+    </div>
+  {/if}
+  {#if activeReply}
+    <div class="replyBar" role="status" aria-label="Replying to {activeReply.nick}">
+      <span class="replyBarArrow" aria-hidden="true">&#8617;</span>
+      <span class="replyBarLabel">Replying to <b>{activeReply.nick}</b>:</span>
+      <span class="replyBarExcerpt">{activeReply.excerpt}</span>
+      <button type="button" class="replyBarClose" title="Cancel reply (Esc)" aria-label="Cancel reply" onclick={cancelReply}>&times;</button>
     </div>
   {/if}
   {#if tabPopup}

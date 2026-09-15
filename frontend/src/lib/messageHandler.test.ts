@@ -151,6 +151,63 @@ describe('unpackEvent — account-tag and remote-edit fields', () => {
   });
 });
 
+describe('replies and reactions (draft/reply, draft/react)', () => {
+  beforeEach(() => {
+    ircState.networks.length = 0;
+    ircState.activeBuffer.networkId = null;
+    ircState.activeBuffer.bufferName = null;
+    ircState.messages = {};
+    ircState.processedMessages = {};
+  });
+
+  it('unpacks the compact rp key and the long-form tag into replyTo', () => {
+    expect(unpackEvent({ command: 'PRIVMSG', nick: 'a', rp: 'dc-123' }, { value: 0 }).replyTo)
+      .toBe('dc-123');
+    expect(unpackEvent({ command: 'PRIVMSG', nick: 'a', tags: { '+draft/reply': 'dc-9' } }, { value: 0 }).replyTo)
+      .toBe('dc-9');
+    expect(unpackEvent({ command: 'PRIVMSG', nick: 'a' }, { value: 0 }).replyTo).toBeUndefined();
+  });
+
+  it('applies a reaction TAGMSG to the row it names and appends nothing', () => {
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
+    ircState.networks.push(net);
+    ircState.messages['n1:#chan'] = [createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' })];
+
+    const appended: IRCMessage[] = [];
+    const run = (data: Record<string, unknown>) => processIrcEvent(
+      data, { value: 0 },
+      { whoisAcc: null, whoisAccs: new Map(), banAcc: [], banTargetChannel: '' },
+      { switchToBuffer: () => {} },
+      (_n, _b, m) => { appended.push(m); },
+    );
+
+    run({ command: 'TAGMSG', nick: 'bob', nid: 'n1', ch: '#chan', params: ['#chan'], rp: 'dc-1', rx: '👍' });
+    expect(untrack(() => ircState.messages['n1:#chan'])[0].reactions).toEqual({ '👍': ['bob'] });
+
+    run({ command: 'TAGMSG', nick: 'bob', nid: 'n1', ch: '#chan', params: ['#chan'], rp: 'dc-1', ux: '👍' });
+    expect(untrack(() => ircState.messages['n1:#chan'])[0].reactions).toBeUndefined();
+
+    // A reaction is not a message: nothing is appended to the buffer.
+    expect(appended).toEqual([]);
+  });
+
+  it('still treats a typing TAGMSG as typing', () => {
+    const net = createNetwork({ networkId: 'n1', currentNick: 'me' });
+    net.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
+    ircState.networks.push(net);
+
+    processIrcEvent(
+      { command: 'TAGMSG', nick: 'bob', nid: 'n1', ch: '#chan', params: ['#chan'], typing: 'active' },
+      { value: 0 },
+      { whoisAcc: null, whoisAccs: new Map(), banAcc: [], banTargetChannel: '' },
+      { switchToBuffer: () => {} },
+      () => {},
+    );
+    expect(Object.keys(untrack(() => ircState.typing['n1:#chan'] ?? {}))).toContain('bob');
+  });
+});
+
 describe('query case convergence (nickserv vs NickServ)', () => {
   beforeEach(() => {
     ircState.networks.length = 0;

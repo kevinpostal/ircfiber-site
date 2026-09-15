@@ -46,6 +46,8 @@ import {
 	applyFail,
 	applySetname,
 	markRedacted,
+	applyReaction,
+	findMessage,
 	requestChannelList,
 	applyChannelListChunk,
 	renameQueryBuffer,
@@ -4010,6 +4012,61 @@ describe('markRedacted (draft/message-redaction)', () => {
 
 		expect(markRedacted('net1', '#chan', 'nope', '')).toBe(false);
 		expect(untrack(() => ircState.messages['net1:#chan']).length).toBe(1);
+	});
+});
+
+describe('applyReaction (draft/react)', () => {
+	function setup(): void {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#chan' }));
+		ircState.networks.push(net);
+		ircState.messages['net1:#chan'] = [
+			createMessage({ nick: 'alice', text: 'hello', msgid: 'm1' }),
+			createMessage({ nick: 'bob', text: 'hi', msgid: 'm2' }),
+		];
+	}
+
+	it('adds a nick under the emoji, once', () => {
+		setup();
+		expect(applyReaction('net1', '#chan', 'm1', '👍', 'bob', true)).toBe(true);
+		// The echo of our own reaction must not double-count.
+		expect(applyReaction('net1', '#chan', 'm1', '👍', 'bob', true)).toBe(true);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#chan']);
+		expect(list[0].reactions).toEqual({ '👍': ['bob'] });
+		expect(list[1].reactions).toBeUndefined();
+	});
+
+	it('drops the emoji when its last nick is removed', () => {
+		setup();
+		applyReaction('net1', '#chan', 'm1', '👍', 'bob', true);
+		applyReaction('net1', '#chan', 'm1', '👍', 'carol', true);
+		applyReaction('net1', '#chan', 'm1', '🎉', 'bob', true);
+
+		applyReaction('net1', '#chan', 'm1', '👍', 'bob', false);
+		flushSync();
+		let list = untrack(() => ircState.messages['net1:#chan']);
+		expect(list[0].reactions).toEqual({ '👍': ['carol'], '🎉': ['bob'] });
+
+		applyReaction('net1', '#chan', 'm1', '👍', 'carol', false);
+		applyReaction('net1', '#chan', 'm1', '🎉', 'bob', false);
+		flushSync();
+		list = untrack(() => ircState.messages['net1:#chan']);
+		expect(list[0].reactions).toBeUndefined();
+	});
+
+	it('is a no-op for an unknown msgid', () => {
+		setup();
+		expect(applyReaction('net1', '#chan', 'nope', '👍', 'bob', true)).toBe(false);
+		const list = untrack(() => ircState.messages['net1:#chan']);
+		expect(list.every(m => m.reactions === undefined)).toBe(true);
+	});
+
+	it('finds a message by msgid and misses on an unknown one', () => {
+		setup();
+		expect(findMessage('net1', '#chan', 'm2')?.text).toBe('hi');
+		expect(findMessage('net1', '#chan', 'nope')).toBeUndefined();
 	});
 });
 
