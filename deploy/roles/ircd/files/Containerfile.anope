@@ -29,7 +29,7 @@
 # it is submitted upstream as pull requests from kevinpostal/anope.
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
 ARG ANOPE_BRANCH=bridgeserv-ircv3
-ARG ANOPE_COMMIT=444289ec8cec8bf0eaeb722e0a33f2f6f6cc12bd
+ARG ANOPE_COMMIT=a26f1ab8736010c9d72a400dfbf17f5fe3108166
 
 # Debian, not alpine, and NOT interchangeable: on musl the vendored DPP
 # segfaults the moment Discord sends a guild with members. Its timestamp
