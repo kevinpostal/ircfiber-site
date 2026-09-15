@@ -4,7 +4,7 @@ import { page, userEvent } from 'vitest/browser';
 import { flushSync, untrack } from 'svelte';
 import InputArea from './InputArea.svelte';
 import { createNetwork, createBuffer, createMember, createMessage } from '../test/factories';
-import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText, setTyping, clearTyping, resetTypingState } from '../stores/ircStore.svelte';
+import { ircState, updateChannelUsers, recordSentMessage, lastSentMessages, bufferInputText, setTyping, clearTyping, resetTypingState, setReactTarget } from '../stores/ircStore.svelte';
 import { globalPrefs, DEFAULT_PREFS } from '../stores/preferences.svelte';
 import { recentHighlightersCache } from '../lib/tabCompletion';
 import { bufferNameFromChannelPart } from '../lib/routing';
@@ -44,6 +44,8 @@ function resetState(): void {
 	ircState.messages = {};
 	ircState.processedMessages = {};
 	ircState.editRequest = null;
+	ircState.replyTarget = null;
+	ircState.reactTarget = null;
 	resetTypingState();
 	bufferInputText.clear();
 	// Clear lastSentMessages from previous tests
@@ -430,6 +432,54 @@ describe('InputArea', () => {
 		emojiBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 		await Promise.resolve();
 		expect(document.getElementById('emoji-popover')).toBeNull();
+	});
+
+	it('closes the reaction picker on the emoji button, an outside click and Escape', async () => {
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		const popover = () => document.getElementById('emoji-popover');
+		const openForRow = async () => {
+			setReactTarget('net1', '#general', 'dc-1');
+			flushSync();
+			await vi.waitFor(() => expect(popover()).toBeInTheDocument());
+		};
+
+		// 1. The emoji button closes it (it opened it, so it must also shut it).
+		await openForRow();
+		const emojiBtn = document.querySelector('.emojicell') as HTMLElement;
+		emojiBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		flushSync();
+		expect(popover()).toBeNull();
+		expect(ircState.reactTarget).toBeNull();
+
+		// 2. A click outside the picker closes it (the component watches
+		// mousedown, which is what a real outside click delivers first).
+		await openForRow();
+		document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+		flushSync();
+		expect(popover()).toBeNull();
+		expect(ircState.reactTarget).toBeNull();
+
+		// 3. Escape inside the picker closes it.
+		await openForRow();
+		popover()!.querySelector('emoji-picker')!
+			.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+		flushSync();
+		expect(popover()).toBeNull();
+		expect(ircState.reactTarget).toBeNull();
+
+		// 4. Still reopenable for the same row afterwards.
+		await openForRow();
+		expect(popover()).toBeInTheDocument();
+		emojiBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+		flushSync();
+		expect(popover()).toBeNull();
 	});
 
 	it('adds optimistic message to processedMessages so it renders immediately', async () => {

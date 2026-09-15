@@ -1113,9 +1113,22 @@
   // A row's React action opens the picker; the next pick becomes a
   // `+draft/react` TAGMSG on that row (raw path, like typing) applied
   // optimistically — the server echo re-applies it idempotently.
+  //
+  // Opening is edge-triggered on the target CHANGING, not derived from it
+  // being set: the latter re-opened the popover in the same flush as every
+  // close (the open effect runs before the clear-on-close one and saw the
+  // target still set), so a picker opened for a reaction could not be
+  // dismissed at all — not by the emoji button, an outside click, or Esc.
+  let reactPickerFor: string | null = null;
   $effect(() => {
-    if (ircState.reactTarget && !emojiOpen) void toggleEmoji();
+    const t = ircState.reactTarget;
+    const key = t ? `${t.networkId}:${t.bufferName}:${t.msgid}` : null;
+    if (key === reactPickerFor) return;
+    reactPickerFor = key;
+    if (key && !emojiOpen) void toggleEmoji();
   });
+  // Closing the picker abandons the reaction, which also resets the memo
+  // above so the same row can open it again.
   $effect(() => {
     if (!emojiOpen && ircState.reactTarget) clearReactTarget();
   });
