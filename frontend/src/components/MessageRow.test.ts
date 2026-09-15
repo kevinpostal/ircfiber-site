@@ -456,14 +456,14 @@ describe('MessageRow — replies and reactions', () => {
 
 		(document.querySelector('.rowAction.react') as HTMLButtonElement).click();
 		flushSync();
-		expect(document.querySelector('.reactWrap.open')).toBeInTheDocument();
+		expect(document.querySelector('.rowActions.stripOpen')).toBeInTheDocument();
 
 		(document.querySelector('.quickReaction[aria-label="React 👍"]') as HTMLButtonElement).click();
 		flushSync();
 		expect(sendRaw).toHaveBeenCalledWith('net1', '@+reply=dc-1;+draft/react=👍 TAGMSG #chan');
 		// Applied optimistically to the row in the store; the strip closes.
 		expect(ircState.messages['net1:#chan'][0].reactions).toEqual({ '👍': ['me'] });
-		expect(document.querySelector('.reactWrap.open')).toBeNull();
+		expect(document.querySelector('.rowActions.stripOpen')).toBeNull();
 	});
 
 	it('unreacts from the quick strip when the reaction is already ours', async () => {

@@ -641,6 +641,7 @@
 {#snippet iconReply()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/></svg>{/snippet}
 {#snippet iconReact()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11v1a10 10 0 1 1-9-10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/><path d="M16 5h6"/><path d="M19 2v6"/></svg>{/snippet}
 {#snippet iconMore()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/><circle cx="5" cy="12" r="1.2"/></svg>{/snippet}
+{#snippet iconPlus()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></svg>{/snippet}
 
 {#if isGrouped && msg.events && msg.events.length > 0}
   {@const events = (msg.events as { msg: IRCMessage }[]).map(e => e.msg)}
@@ -817,20 +818,20 @@
       </div>
     {/if}
     {#if canInteract}
-      <span class="rowActions" aria-label="Message actions">
+      <span class="rowActions" class:stripOpen aria-label="Message actions">
+        <span class="reactStrip"><span class="reactStripInner">
+          {#each QUICK_REACTIONS as emoji (emoji)}
+            <button type="button" class="quickReaction" class:own={ownReactions.has(emoji)} aria-label="React {emoji}" aria-pressed={ownReactions.has(emoji)}
+                    onclick={(e) => { e.stopPropagation(); quickReact(emoji); }}>{emoji}</button>
+          {/each}
+          <button type="button" class="quickReaction more" title="More reactions" aria-label="More reactions"
+                  onclick={(e) => { e.stopPropagation(); stripOpen = false; handleReact(); }}>{@render iconPlus()}</button>
+        </span></span>
         <button type="button" class="rowAction reply" title="Reply (r)" aria-label="Reply"
                 onclick={(e) => { e.stopPropagation(); handleReply(); }}>{@render iconReply()}</button>
-        <span class="reactWrap" class:open={stripOpen}>
+        <span class="reactWrap">
           <button type="button" class="rowAction react" title="React" aria-label="React" aria-expanded={stripOpen}
                   onclick={(e) => { e.stopPropagation(); stripOpen = !stripOpen; }}>{@render iconReact()}</button>
-          <span class="reactStrip"><span class="reactStripInner">
-            {#each QUICK_REACTIONS as emoji (emoji)}
-              <button type="button" class="quickReaction" class:own={ownReactions.has(emoji)} aria-label="React {emoji}" aria-pressed={ownReactions.has(emoji)}
-                      onclick={(e) => { e.stopPropagation(); quickReact(emoji); }}>{emoji}</button>
-            {/each}
-            <button type="button" class="quickReaction more" title="More reactions" aria-label="More reactions"
-                    onclick={(e) => { e.stopPropagation(); stripOpen = false; handleReact(); }}>{@render iconReact()}</button>
-          </span></span>
         </span>
         <button type="button" class="rowAction more" title="More" aria-label="More actions" aria-haspopup="menu"
                 onclick={openMenuFromButton}>{@render iconMore()}</button>

@@ -90,7 +90,17 @@
   bottom: 1px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  /* One surface for the whole toolbar — quick reactions AND action icons.
+     They used to be two: a floating reaction panel with its own background
+     plus bare icons on the row, separated by a 6px transparent hover bridge,
+     which read as a toolbar whose background had been cut off short of its
+     last two buttons. */
+  padding: 2px 4px;
+  background: #1a1d21;
+  border: 1px solid #2c2f35;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
   z-index: 2;
   opacity: 0;
   visibility: hidden;
@@ -124,43 +134,50 @@
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.07);
 }
-/* Quick-reaction strip: left of the icons, inside the hovered row. Shown
-   150ms after the pointer settles on React (hover intent), kept 200ms
-   after it leaves so the pointer can cross into it; the strip's
-   padding-right is the transparent bridge that keeps :hover contiguous. */
-.row.messageRow .reactWrap { position: relative; display: inline-flex; }
+/* Quick-reaction strip — the left half of that one toolbar, ahead of the
+   Reply/React/More icons and separated from them by a hairline. It is an
+   inline flex item of the right-anchored .rowActions pill, so opening it
+   grows the pill leftwards with no seam; because .rowActions is absolutely
+   positioned, the row itself never reflows. (As an absolutely positioned
+   panel it also used to cover the Reply button underneath it.) Collapsed
+   state is max-width:0 plus visibility:hidden, so it reserves no width and
+   its buttons stay out of the tab order. Opening waits 150ms on hover
+   (hover intent), is instant on click, and lingers 200ms after the pointer
+   leaves — the strip's own :hover keeps it open once the pointer has
+   travelled into it, which is why the old 6px transparent bridge is gone. */
+.row.messageRow .reactWrap { display: inline-flex; align-items: center; }
 .row.messageRow .reactStrip {
-  position: absolute;
-  right: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  padding-right: 6px;
+  display: inline-flex;
+  max-width: 0;
+  overflow: hidden;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 80ms ease-out 200ms, visibility 0s linear 280ms;
+  transition: max-width 120ms ease 200ms, opacity 80ms ease-out 200ms, visibility 0s linear 280ms;
 }
-.row.messageRow .reactWrap:hover .reactStrip,
-.row.messageRow .reactWrap:has(:focus-visible) .reactStrip {
+.row.messageRow .rowActions:has(.reactWrap:hover) .reactStrip,
+.row.messageRow .rowActions:has(.reactStrip:hover) .reactStrip,
+.row.messageRow .rowActions:has(.reactWrap :focus-visible) .reactStrip,
+.row.messageRow .rowActions:has(.reactStrip :focus-visible) .reactStrip {
+  max-width: 240px;
   opacity: 1;
   visibility: visible;
-  transition-delay: 150ms, 150ms;
+  transition-delay: 150ms, 150ms, 150ms;
 }
-.row.messageRow .reactWrap.open .reactStrip {
+.row.messageRow .rowActions.stripOpen .reactStrip {
+  max-width: 240px;
   opacity: 1;
   visibility: visible;
-  transition-delay: 0s, 0s;
+  transition-delay: 0s, 0s, 0s;
 }
-.row.messageRow .reactStripInner,
-.messageActionMenu .reactRow {
+/* Reaction half and action half of the same bar: a hairline, not a gap. */
+.row.messageRow .reactStripInner {
   display: flex;
   gap: 2px;
-  padding: 4px;
-  border: 1px solid #2c2f35;
-  border-radius: 8px;
-  background: #1a1d21;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding-right: 4px;
+  margin-right: 3px;
+  border-right: 1px solid #2c2f35;
 }
-.messageActionMenu .reactRow { border: 0; box-shadow: none; border-radius: 0; padding: 4px 6px 2px; }
+.messageActionMenu .reactRow { display: flex; gap: 2px; padding: 4px 6px 2px; }
 .quickReaction {
   width: 28px;
   height: 28px;
@@ -177,6 +194,11 @@
 .quickReaction svg { width: 16px; height: 16px; }
 .quickReaction:hover { background: #21252b; }
 .quickReaction.own { background: rgba(30, 114, 255, 0.14); box-shadow: inset 0 0 0 1px var(--accent); }
+/* In-row toolbar items match the 22x20 .rowAction icon buttons so the bar
+   reads as one strip. The More-menu and touch-sheet variants keep their own
+   larger hit targets (rules above and in the sheet block below). */
+.row.messageRow .quickReaction { width: 24px; height: 20px; font-size: 15px; border-radius: 4px; }
+.row.messageRow .quickReaction svg { width: 14px; height: 14px; }
 .contextMenu__item.danger { color: #ff7b72; }
 
 /* Touch: no hover affordance — a long-press opens the sheet. Selection on
