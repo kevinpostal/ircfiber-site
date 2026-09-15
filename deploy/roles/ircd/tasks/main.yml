@@ -58,18 +58,24 @@
     - "{{ ircd_data_volume }}"
     - "{{ ircd_services_data_volume }}"
 
+# docker_image_pull always contacts the registry, which `docker_image` with
+# `state: present` did not: it treated an already-present tag as satisfied.
+# :prod is a MOVING tag, so that meant the host kept whatever :prod pointed
+# at the first time it was ever pulled. The bridge image was not even in the
+# loop, so on 2026-09-15 08:12 `make deploy-ircd` recreated ircfiber-bridge
+# onto a months-stale local :prod and silently rolled the daemon back behind
+# the image `make ship-bridge` had just promoted — reintroducing the deauth
+# bug and taking every Discord user with it. Pull all three, every run: the
+# containers below compare image ids, so a tag that has not actually moved
+# still recreates nothing.
 - name: Pull images (registry-qualified refs only)
-  community.docker.docker_image:
+  community.docker.docker_image_pull:
     name: "{{ item }}"
-    source: pull
-    state: present
-  loop:
-    - "{{ ircd_image }}"
-    - "{{ ircd_services_image }}"
-  # ircd-deploy.yml hands this role a plain local tag (ircfiber-ircd:deploy)
-  # it has already pulled by digest and tagged; a pull of that would go to
-  # Docker Hub and fail.
-  when: "'/' in item"
+  loop: "{{ ircd_pull_images | select('search', '/') | list }}"
+  vars:
+    ircd_pull_images: >-
+      {{ [ircd_image, ircd_services_image]
+         + ([ircd_bridge_image] if (ircd_bridge_enabled | default(false) | bool) else []) }}
 
 # The InspIRCd image runs as uid 10000 and its entrypoint writes the
 # self-signed cert/key/dhparams into the conf dir on first boot.
