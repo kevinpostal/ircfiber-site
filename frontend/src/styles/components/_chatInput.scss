@@ -11,23 +11,25 @@
   flex-wrap: wrap;
 }
 
-/* Typing indicator — flex row above the input that pushes messages up.
-   Previously it was `position: absolute` floating over the messages viewport,
-   so the last message rendered behind the pill and was clipped until a
-   scroll resnap. Now it is a `flex: 0 0 100%` row inside the wrapped
-   .bufferinputcell (order -1) so it occupies layout space directly above
-   the input and shrinks the messages viewport via flex — no overlay, no
-   occlusion. The pill visuals live in .typing-pill inside the row so the
-   row itself can be 100% wide while the pill stays content-sized
-   (max 70%). See InputArea.svelte .typingcell > .typing-pill. */
+/* Typing indicator — a permanently reserved flex row above the input
+   (order -1, full width). It is ALWAYS in the DOM and always the same
+   height: only .typing-pill's opacity and label text change. Mounting it
+   conditionally (the old `{#if typingText}`) changed .bufferinputcell
+   height on every active/done TAGMSG, shrinking the .messages viewport and
+   re-pinning the scroll — the up/down flicker. An earlier fix used
+   `position: absolute` over the viewport instead and clipped the last
+   message; do not go back to either. Height comes from .typing-pill's
+   min-height + the row's bottom padding, so it is independent of the
+   label text (which is empty while idle). */
 .bufferinputcell .typingcell {
   flex: 0 0 100%;
   order: -1;
   width: 100%;
+  box-sizing: border-box;
   display: flex;
   justify-content: flex-start;
   align-items: center;
-  padding: 0 0 6px 0;
+  padding: 0 0 4px 0;
   margin: 0;
   background: transparent;
   border: none;
@@ -36,6 +38,8 @@
   overflow: visible;
 }
 .bufferinputcell .typing-pill {
+  box-sizing: border-box;
+  min-height: 21px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -51,7 +55,10 @@
   white-space: nowrap;
   overflow: hidden;
   backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 140ms ease;
 }
+.bufferinputcell .typingcell.is-typing .typing-pill { opacity: 1; }
 
 /* "Replying to" bar (IRCv3 +draft/reply): same flex-row slot as the
    typing indicator, laid out above the input so it pushes messages up
@@ -121,6 +128,7 @@
 
 .bufferinputcell .typing-dots i:nth-child(2) { animation-delay: 0.15s; }
 .bufferinputcell .typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+.bufferinputcell .typingcell:not(.is-typing) .typing-dots i { animation: none; }
 
 @keyframes typing-bounce {
   0%, 60%, 100% { transform: translateY(0); opacity: .35; }
@@ -129,6 +137,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .bufferinputcell .typing-dots i { animation: none; opacity: .6; }
+  .bufferinputcell .typing-pill { transition: none; }
 }
 
 .bufferinputcell .typing-label {

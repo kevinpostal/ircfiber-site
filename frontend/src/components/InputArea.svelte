@@ -19,7 +19,7 @@
   import { DEFAULT_COMPOSE_STYLE, isComposeStyleActive } from '../lib/composeStyle';
   import type { IRCMessage } from '../types';
   import { updateRoute, navigateComposeStyle } from '../lib/routing';
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   // emoji-picker-element is loaded on demand in toggleEmoji() below so its
   // weight stays out of the initial bundle.
   // (see toggleEmoji).
@@ -211,6 +211,32 @@
     return s + (nicks.length === 1 ? ' is typing' : ' are typing');
   });
 
+  // The strip above the compose box is always mounted at a constant height
+  // (_chatInput.scss .typingcell/.typing-pill), so a typer appearing or
+  // expiring can no longer change .bufferinputcell height — which used to
+  // shrink the .messages viewport and trip MessageList's ResizeObserver
+  // re-pin on every active/done TAGMSG (the up/down "flicker").
+  // typingDisplay also holds the last label for TYPING_LINGER_MS after the
+  // typers vanish so a stop/start flutter fades once instead of blinking.
+  const TYPING_LINGER_MS = 1000;
+  let typingDisplay = $state('');
+  let typingLingerTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const text = typingText;
+    if (text) {
+      if (typingLingerTimer) { clearTimeout(typingLingerTimer); typingLingerTimer = null; }
+      typingDisplay = text;
+      return;
+    }
+    // untrack: typingDisplay is written by this effect; tracking it would
+    // re-queue the effect (frontend/scripts/check-effect-loops.mjs guards this).
+    if (typingLingerTimer || !untrack(() => typingDisplay)) return;
+    typingLingerTimer = setTimeout(() => {
+      typingLingerTimer = null;
+      typingDisplay = '';
+    }, TYPING_LINGER_MS);
+  });
+
   // ── Send typing notifications ──
   // IRCv3 typing spec: `active` on first keystroke, re-sent every ~3s
   // *while the user is making updates*; receivers expire the indicator
@@ -339,6 +365,7 @@
         sendTypingTo(typingTarget, 'done');
         stopTypingTimer();
       }
+      if (typingLingerTimer) { clearTimeout(typingLingerTimer); typingLingerTimer = null; }
     };
   });
 
@@ -370,6 +397,8 @@
     }
     // Save old buffer's text before switching
     if (lastBufferKey && lastBufferKey !== newKey) {
+      if (typingLingerTimer) { clearTimeout(typingLingerTimer); typingLingerTimer = null; }
+      typingDisplay = '';
       const [nid, bname] = lastBufferKey.split(/:(.+)/);
       setBufferInputText(nid, bname, inputValue);
     }
@@ -1181,14 +1210,12 @@
 </script>
 
 <div class="bufferinputcell">
-  {#if typingText}
-    <div class="typingcell">
-      <div class="typing-pill">
-        <span class="typing-dots"><i></i><i></i><i></i></span>
-        <span class="typing-label">{typingText}</span>
-      </div>
+  <div class="typingcell" class:is-typing={!!typingDisplay} role="status" aria-live="polite" aria-atomic="true">
+    <div class="typing-pill">
+      <span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="typing-label">{typingDisplay}</span>
     </div>
-  {/if}
+  </div>
   {#if activeReply}
     <div class="replyBar" role="status" aria-label="Replying to {activeReply.nick}">
       <span class="replyBarArrow" aria-hidden="true">&#8617;</span>

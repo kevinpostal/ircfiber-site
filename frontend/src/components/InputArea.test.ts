@@ -601,12 +601,14 @@ describe('InputArea', () => {
 		expect(result).toBeNull();
 	});
 
-	it('hides the typing indicator immediately when clearTyping fires (done TAGMSG), without waiting for a tick', async () => {
-		// Regression: clearTyping deletes the nick from the store map and
-		// reassigns it, but Svelte 5's proxy tracking does not invalidate
-		// $deriveds on that path — the indicator used to linger until the
-		// next 1s ticker tick (and forever, pre-ticker). The store's
-		// typingVersion counter forces immediate invalidation.
+	it('holds the typing label for the linger window after clearTyping, without ever unmounting the strip', async () => {
+		// Regression (reactivity): clearTyping deletes the nick from the store
+		// map and reassigns it, which Svelte 5 proxy tracking does not
+		// invalidate; ircState.typingVersion forces it. No new store events
+		// and no 1s ticker tick happen below.
+		// Regression (flicker): the strip used to be {#if typingText}, so each
+		// active/done cycle changed .bufferinputcell height and re-pinned the
+		// message viewport. It is now always mounted; only .is-typing toggles.
 		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
 		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
@@ -619,12 +621,50 @@ describe('InputArea', () => {
 		flushSync();
 
 		expect(page.getByText('Alice is typing').query()).not.toBeNull();
+		expect(document.querySelector('.bufferinputcell .typingcell.is-typing')).not.toBeNull();
 
-		clearTyping('net1', '#general', 'Alice');
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		try {
+			clearTyping('net1', '#general', 'Alice');
+			flushSync();
+			// Damped: the label rides out a stop/start flutter instead of blinking.
+			expect(page.getByText('Alice is typing').query()).not.toBeNull();
+
+			vi.advanceTimersByTime(1100);
+			flushSync();
+
+			expect(page.getByText('Alice is typing').query()).toBeNull();
+			// Strip stays in the DOM; only the state class drops.
+			expect(document.querySelector('.bufferinputcell .typingcell')).not.toBeNull();
+			expect(document.querySelector('.bufferinputcell .typingcell.is-typing')).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('drops a lingering typing label immediately on buffer switch', async () => {
+		// The linger keeps the label ~1s after the typers vanish, which must
+		// not follow the user into another buffer: switching has to clear it
+		// synchronously or "Alice is typing" (from #general) shows up over
+		// #other for up to a second.
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		net.buffers.push(createBuffer({ name: '#general' }), createBuffer({ name: '#other' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+		setTyping('net1', '#general', 'Alice');
 		flushSync();
 
-		// No fake timers, no ticker advance — the clear must be reactive.
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		flushSync();
+
+		expect(page.getByText('Alice is typing').query()).not.toBeNull();
+
+		ircState.activeBuffer.bufferName = '#other';
+		flushSync();
+
 		expect(page.getByText('Alice is typing').query()).toBeNull();
+		expect(document.querySelector('.bufferinputcell .typingcell.is-typing')).toBeNull();
 	});
 
 	it('hides the typing indicator on its own after the 6.5s expiry window (no new TAGMSGs)', async () => {
@@ -635,10 +675,10 @@ describe('InputArea', () => {
 		// window) must expire Alice without any new events.
 		//
 		// Fake timers must be installed BEFORE render so the ticker interval
-		// is created faked; leave setTimeout real so the test harness stays
-		// responsive. Date is faked so the store's wall-clock expiry advances
-		// with the fake clock.
-		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+		// is created faked. setTimeout is faked too because the label's
+		// post-expiry linger runs on one. Date is faked so the store's
+		// wall-clock expiry advances with the fake clock.
+		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'Date'] });
 		try {
 			const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
 			net.buffers.push(createBuffer({ name: '#general' }));
@@ -654,6 +694,11 @@ describe('InputArea', () => {
 			expect(page.getByText('Alice is typing').query()).not.toBeNull();
 
 			vi.advanceTimersByTime(7000);
+			flushSync();
+			// Expired, now in the linger window.
+			expect(page.getByText('Alice is typing').query()).not.toBeNull();
+
+			vi.advanceTimersByTime(1100);
 			flushSync();
 
 			expect(page.getByText('Alice is typing').query()).toBeNull();

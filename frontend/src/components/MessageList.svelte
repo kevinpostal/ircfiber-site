@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack, flushSync, tick, onMount, onDestroy } from 'svelte';
-  import { ircState, isMessageUnseen, getActiveBufferObj, getActiveNetwork, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, getTypersForBuffer, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused, getVisitSeen, clearVisitSeen, isMessageUnseenForVisit, getVisitSeenMessage } from '../stores/ircStore.svelte';
+  import { ircState, isMessageUnseen, getActiveBufferObj, getActiveNetwork, countMessagesBetween, countImportantMessagesBetween, clearUnseenHighlightsAfter, unseenHighlightCountAfter, updateBottomSeen, setBacklogDivider, readBuffer, isImportantMessage, isSelfMessage, isSessionFocused, getVisitSeen, clearVisitSeen, isMessageUnseenForVisit, getVisitSeenMessage } from '../stores/ircStore.svelte';
   import { getClearedAt, getBufferPrefs, getBottomSeen, getLastSeen, clearBottomSeen, setBottomSeen, ignoreList } from '../stores/preferences.svelte';
   import { isMessageIgnored } from '../lib/ignorePolicy';
   import { preprocessMessages } from '../lib/messageBuilder';
@@ -928,8 +928,10 @@
     // Window resize (IRCCloud @538661): suppress scroll handling while
     // the browser re-lays out, then re-pin with checkRecent.
     const onWindowResize = () => { const pin = shouldPinBottom(); setResizing(); onChange(pin); };
-    // Container size change (composer autogrow / typing row — IRCCloud
-    // autogrowInput checkPinBottom({checkRecent:true})): re-pin only.
+    // Container size change (composer autogrow — IRCCloud autogrowInput
+    // checkPinBottom({checkRecent:true})): re-pin only. The typing strip
+    // is a constant-height reserved row now (_chatInput.scss), so it no
+    // longer resizes this container at all.
     let lastHeight = el.clientHeight;
     const onContainerResize = () => {
       if (el.clientHeight === lastHeight) return;
@@ -964,21 +966,6 @@
       embedRo.disconnect();
       ro.disconnect();
     };
-  });
-
-  // Typing indicator row shrinks the viewport (it lives outside the
-  // observed container) — same re-pin rule as the composer autogrow.
-  const isTypingActive = $derived.by(() => {
-    void ircState.typingVersion;
-    const netId = ircState.activeBuffer.networkId;
-    const buf = ircState.activeBuffer.bufferName;
-    if (!netId || !buf) return false;
-    return getTypersForBuffer(netId, buf).length > 0;
-  });
-  $effect(() => {
-    void isTypingActive;
-    if (!container) return;
-    untrack(() => { const pin = shouldPinBottom(); tick().then(() => onChange(pin)); });
   });
 
   // ── Windowing effect ──────────────────────────────────────────────────
