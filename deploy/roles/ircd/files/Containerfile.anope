@@ -23,13 +23,13 @@
 #   /anope/data                   the volume (db_json database + backups)
 #   uid/gid 10000
 
-# The fork's branch, not paigeadelethompson/master, until the pull request
-# which carries the live-run fixes (pseudo clients on their own bridge
-# link, the CMake parse fix) is merged upstream:
-# https://github.com/paigeadelethompson/anope/pull/3
+# The fork's branch, not paigeadelethompson/master: the image pins the exact
+# commit that is live, and the clone below only carries the history of the
+# named branch, so the branch must be the one the commit is on. Everything on
+# it is submitted upstream as pull requests from kevinpostal/anope.
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
-ARG ANOPE_BRANCH=bridgeserv-live
-ARG ANOPE_COMMIT=0f964f4417a41ca70b47627f710e4a88faa88300
+ARG ANOPE_BRANCH=bridgeserv-ircv3
+ARG ANOPE_COMMIT=444289ec8cec8bf0eaeb722e0a33f2f6f6cc12bd
 
 # Debian, not alpine, and NOT interchangeable: on musl the vendored DPP
 # segfaults the moment Discord sends a guild with members. Its timestamp
