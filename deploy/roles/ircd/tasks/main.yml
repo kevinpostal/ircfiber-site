@@ -261,6 +261,19 @@
   community.docker.docker_container:
     name: "{{ ircd_container_name }}"
     image: "{{ ircd_image }}"
+    # Recreate on a new image *id*, never on a new tag string for the same
+    # id. community.docker >= 3.5 defaults image_name_mismatch to
+    # `recreate`, and the two deploy paths deliberately name the same image
+    # differently: this role asks for {{ ircd_image_registry }}:{{ docker_image_tag }},
+    # while playbooks/ircd-deploy.yml (what `make ship-ircd` runs) sets
+    # ircd_image to the local `ircfiber-ircd:deploy` tag so docker_container
+    # never has to interpret a digest ref. With the default, the first
+    # `make deploy-ircd` after any `make ship-ircd` saw :prod != :deploy for
+    # one identical digest and recreated the container — dropping every IRC
+    # client during a target whose whole promise is "rehash, sockets stay
+    # up". `comparisons: image` (strict by default) still compares ids, so a
+    # genuinely new image is still rolled out.
+    image_name_mismatch: ignore
     state: started
     restart_policy: "{{ ircd_restart_policy }}"
     networks:

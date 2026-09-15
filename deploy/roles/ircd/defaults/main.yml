@@ -94,6 +94,12 @@ ircd_services_conf_dir: "/etc/ircfiber/services"
 # /anope/conf/anope.conf. It contains the Discord bot token and the link
 # password, so the dir is 0750 and the file 0640, owned by uid 10000.
 ircd_bridge_conf_dir: "/etc/ircfiber/bridge"
+
+# Seconds to wait for BridgeServ to introduce its Discord puppet server
+# after the container is (re)created, before spending one restart on it and
+# failing the deploy. The introduce lands ~20s after the Discord gateway
+# connects (guild member fetch), so this is a ~4x margin.
+ircd_bridge_introduce_timeout: 90
 ircd_container_uid: 10000
 
 # Docker network aliases. The engine dials irc.ircfiber.com; on the host
