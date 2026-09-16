@@ -2743,6 +2743,24 @@ function applyTelemetryFromSync(target: Network, raw: SyncNetwork): void {
       }
     : null;
   if (Array.isArray(raw.caps)) target.capabilities = new Set(raw.caps);
+  // The engine's parsed ISUPPORT map rides every sync payload (and a
+  // dedicated `ISUPPORT` event as the 005 stream completes). Mirror it
+  // here, on the one path a new AND an already-known network both take:
+  // the lightweight `networks` event creates the store entry before the
+  // first full sync arrives, so an existing network used to keep an empty
+  // map until the next live 005 — every ISUPPORT-derived gate
+  // (CLIENTTAGDENY, CHANTYPES) read as unset across a reload.
+  if (typeof raw.isupport === 'object' && raw.isupport !== null) {
+    const next = raw.isupport as Record<string, string>;
+    const old = target.isupport ?? {};
+    const oldKeys = Object.keys(old);
+    const newKeys = Object.keys(next);
+    const same =
+      oldKeys.length === newKeys.length &&
+      newKeys.every(k => old[k] === next[k]) &&
+      oldKeys.every(k => next[k] === old[k]);
+    if (!same) { target.isupport = { ...next }; refreshChanPrefixChars(); }
+  }
 }
 
 /** Sync payload buffer. `lastSeen` (inherited) carries the gateway-persisted
@@ -3541,23 +3559,6 @@ export function updateNetworkFromSync(incoming: SyncNetwork[], prune = false): v
       net.awayNicks = net.awayNicks ?? new Set();
       net.capabilities = net.capabilities ?? new Set();
       net.isupport = net.isupport ?? {};
-      // Mirror the engine's parsed ISUPPORT map (every key=value or
-      // bare flag the server advertised in its 005 stream). The engine
-      // sends this both in the initial WS sync payload AND in a
-      // dedicated `ISUPPORT` event as the 005 stream completes, so the
-      // categorised "Server features" panel can render from structured
-      // data instead of having to re-parse raw 005 message text.
-      if (typeof rawNet.isupport === 'object' && rawNet.isupport !== null) {
-        const raw = rawNet.isupport as Record<string, string>;
-        const old = net.isupport ?? {};
-        const oldKeys = Object.keys(old);
-        const newKeys = Object.keys(raw);
-        const same =
-          oldKeys.length === newKeys.length &&
-          newKeys.every(k => old[k] === raw[k]) &&
-          oldKeys.every(k => raw[k] === old[k]);
-        if (!same) { net.isupport = { ...raw }; refreshChanPrefixChars(); }
-      }
 
       // W2-T02: sync payload ships `retryStatus` only when the engine
       // considers it active (gated by `hasRetryStatus` in protocol.d).

@@ -3888,6 +3888,23 @@ describe('updateNetworkFromSync — connection telemetry mapping', () => {
 		flushSync();
 		expect(live('net1').capabilities.size).toBe(0);
 	});
+
+	it('adopts the ISUPPORT map from every sync, not just the one that created the network', () => {
+		// The lightweight `networks` event creates the store entry before the
+		// first full sync lands, so an already-known network has to pick the
+		// engine's 005 map up from the sync as well — otherwise every
+		// ISUPPORT-derived gate (CLIENTTAGDENY, CHANTYPES) reads as unset
+		// after a reload until the next live 005 event.
+		ircState.networks.push(createNetwork({ networkId: 'net1' }));
+		expect(live('net1').isupport).toEqual({});
+		updateNetworkFromSync([telemetrySync({ isupport: { CLIENTTAGDENY: '*', CHANTYPES: '#&' } })]);
+		flushSync();
+		expect(live('net1').isupport.CLIENTTAGDENY).toBe('*');
+		// Wholesale replacement: a reconnect that lost a token clears it.
+		updateNetworkFromSync([telemetrySync({ isupport: { CHANTYPES: '#' } })]);
+		flushSync();
+		expect(live('net1').isupport).toEqual({ CHANTYPES: '#' });
+	});
 });
 
 describe('applyFail (W2-T02 — engine CONNECTION_FAIL adapter)', () => {
