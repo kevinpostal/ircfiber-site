@@ -939,7 +939,7 @@ describe('InputArea', () => {
 		// switch. Typing sends go through the onSendRaw prop so the mock
 		// observes the exact wire text.
 		function setupTyping() {
-			const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+			const net = createNetwork({ networkId: 'net1', currentNick: 'tester', capabilities: new Set(['message-tags']) });
 			net.buffers.push(createBuffer({ name: '#general' }));
 			net.buffers.push(createBuffer({ name: '#random' }));
 			ircState.networks.push(net);
@@ -1097,7 +1097,7 @@ describe('InputArea — reply compose bar', () => {
 	});
 
 	function activeChannel(): void {
-		const net = createNetwork({ networkId: 'net1', currentNick: 'tester' });
+		const net = createNetwork({ networkId: 'net1', currentNick: 'tester', capabilities: new Set(['message-tags']) });
 		net.buffers.push(createBuffer({ name: '#general' }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
@@ -1177,5 +1177,58 @@ describe('InputArea — reply compose bar', () => {
 
 		expect(ircState.replyTarget).toBeNull();
 		expect(page.getByText(/Replying to/).query()).toBeNull();
+	});
+});
+
+describe('InputArea — a server that blocks client-only tags', () => {
+	let mockSendMessage: Mock;
+	let mockSendRaw: Mock;
+
+	beforeEach(() => {
+		mockSendMessage = vi.fn();
+		mockSendRaw = vi.fn();
+	});
+
+	/** CLIENTTAGDENY=* — InspIRCd's <ctctags clientonlytags="none">. */
+	function blockedChannel(): void {
+		const net = createNetwork({
+			networkId: 'net1', currentNick: 'tester',
+			capabilities: new Set(['message-tags']),
+			isupport: { CLIENTTAGDENY: '*' },
+		});
+		net.buffers.push(createBuffer({ name: '#general' }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#general';
+	}
+
+	it('sends no +typing TAGMSG and starts no heartbeat', async () => {
+		blockedChannel();
+		flushSync();
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		await textarea.fill('hi');
+		flushSync();
+
+		expect(mockSendRaw).not.toHaveBeenCalled();
+	});
+
+	it('hides the reply bar and sends the line untagged', async () => {
+		blockedChannel();
+		ircState.replyTarget = {
+			networkId: 'net1', bufferName: '#general', msgid: 'dc-1',
+			nick: 'alice', excerpt: 'the original',
+		};
+		flushSync();
+
+		render(InputArea, { props: { onSendMessage: mockSendMessage, onSendRaw: mockSendRaw } });
+		expect(page.getByText(/Replying to/).query()).toBeNull();
+
+		const textarea = page.getByRole('textbox', { name: /message input/i });
+		await userEvent.type(textarea, 'agreed');
+		await userEvent.keyboard('{Enter}');
+
+		expect(mockSendMessage).toHaveBeenCalledWith('net1', '#general', 'agreed', expect.any(String));
 	});
 });

@@ -14,6 +14,7 @@
   import { globalPrefs } from '../stores/preferences.svelte';
   import { stripPrefix } from '../lib/utils';
   import { positionMenu } from '../lib/menuPosition';
+  import { clientTagFeatures } from '../lib/clientTags';
 
   interface Props {
     target: MessageActionsTarget;
@@ -43,6 +44,7 @@
   // Every row, not just own: the redaction spec has clients attempt any
   // deletion and the server answer FAIL REDACT REDACT_FORBIDDEN.
   const canDelete = $derived(!!net?.capabilities.has('draft/message-redaction'));
+  const tagFeatures = $derived(clientTagFeatures(net));
   const ownReactions = $derived(new Set(
     Object.entries(target.msg.reactions ?? {})
       .filter(([, nicks]) => nicks.some(n => n.toLowerCase() === myNick.toLowerCase()))
@@ -129,6 +131,7 @@
 {#snippet iconReact()}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11v1a10 10 0 1 1-9-10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" x2="9.01" y1="9" y2="9"/><line x1="15" x2="15.01" y1="9" y2="9"/><path d="M16 5h6"/><path d="M19 2v6"/></svg>{/snippet}
 
 {#snippet items()}
+  {#if tagFeatures.react}
   <div class="reactRow">
     {#each QUICK_REACTIONS as emoji (emoji)}
       <button type="button" class="quickReaction" class:own={ownReactions.has(emoji)} aria-label="React {emoji}" aria-pressed={ownReactions.has(emoji)} onclick={() => react(emoji)}>{emoji}</button>
@@ -136,8 +139,9 @@
     <button type="button" class="quickReaction more" title="More reactions" aria-label="More reactions" onclick={openPicker}>{@render iconReact()}</button>
   </div>
   <hr>
+  {/if}
   <ul class="actions">
-    <li><button type="button" class="contextMenu__item reply" role="menuitem" onclick={reply}>Reply</button></li>
+    {#if tagFeatures.reply}<li><button type="button" class="contextMenu__item reply" role="menuitem" onclick={reply}>Reply</button></li>{/if}
     <li><button type="button" class="contextMenu__item copy" role="menuitem" onclick={copyText}>Copy text</button></li>
     {#if canEdit}<li><button type="button" class="contextMenu__item edit" role="menuitem" onclick={edit}>Edit</button></li>{/if}
     {#if canDelete}<li><button type="button" class="contextMenu__item delete danger" role="menuitem" onclick={del}>{confirmDelete ? 'Confirm delete' : 'Delete…'}</button></li>{/if}

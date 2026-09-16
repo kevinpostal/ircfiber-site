@@ -19,6 +19,7 @@
   import { DEFAULT_COMPOSE_STYLE, isComposeStyleActive } from '../lib/composeStyle';
   import type { IRCMessage } from '../types';
   import { updateRoute, navigateComposeStyle } from '../lib/routing';
+  import { clientTagFeatures } from '../lib/clientTags';
   import { tick, untrack } from 'svelte';
   // emoji-picker-element is loaded on demand in toggleEmoji() below so its
   // weight stays out of the initial bundle.
@@ -160,10 +161,9 @@
     return `You're not in ${chan} — Rejoin to send messages`;
   });
   const inputDisabled = $derived(isChannel && !isJoined && !isJoining);
-  const myNick = $derived.by(() => {
-    const net = ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId);
-    return net?.currentNick || net?.nick || '';
-  });
+  const activeNet = $derived(ircState.networks.find(n => n.networkId === ircState.activeBuffer.networkId));
+  const myNick = $derived(activeNet?.currentNick || activeNet?.nick || '');
+  const tagFeatures = $derived(clientTagFeatures(activeNet));
   const avatarColor = $derived(getAvatarColor(myNick));
   const initial = $derived(myNick ? myNick.charAt(0).toUpperCase() : '?');
   // The store's getTypersForBuffer() expires entries 6.5s after the
@@ -290,7 +290,7 @@
   let wasTyping = $state(false);
 
   function sendTypingTo(target: { netId: string; buf: string } | null, value: 'active' | 'done'): void {
-    if (!target) return;
+    if (!target || !tagFeatures.typing) return;
     onSendRaw(target.netId, `@+typing=${value} TAGMSG ${target.buf}`);
   }
 
@@ -302,7 +302,7 @@
   function sendTypingDone(): void {
     const netId = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
-    if (!netId || !buf || buf.startsWith('_')) return;
+    if (!netId || !buf || buf.startsWith('_') || !tagFeatures.typing) return;
     onSendRaw(netId, `@+typing=done TAGMSG ${buf}`);
   }
 
@@ -315,7 +315,7 @@
   }
 
   function startTypingTimer(): void {
-    if (typingTimer || globalPrefs.typingIndicator === false) return;
+    if (typingTimer || globalPrefs.typingIndicator === false || !tagFeatures.typing) return;
     const netId = ircState.activeBuffer.networkId;
     const buf = ircState.activeBuffer.bufferName;
     if (!netId || !buf || buf.startsWith('_')) return;
@@ -1170,6 +1170,7 @@
   // applies to the buffer it was set in; switching buffers hides the bar
   // without dropping it.
   const activeReply = $derived.by(() => {
+    if (!tagFeatures.reply) return null;
     const r = ircState.replyTarget;
     if (!r) return null;
     if (r.networkId !== ircState.activeBuffer.networkId) return null;

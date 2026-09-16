@@ -25,7 +25,7 @@ vi.mock('/src/stores/wsConnection.svelte.ts', () => ({
 }));
 
 function activeChannel(): void {
-	const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+	const net = createNetwork({ networkId: 'net1', currentNick: 'me', capabilities: new Set(['message-tags']) });
 	net.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
 	ircState.networks.push(net);
 	ircState.activeBuffer.networkId = 'net1';

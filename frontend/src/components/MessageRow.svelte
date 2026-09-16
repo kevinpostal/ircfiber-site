@@ -6,6 +6,7 @@
   import { parseIrcFormatting } from '../lib/ircFormatting';
   import { autolinkHtml, wrapNicksWithHighlight, buildNickMentionPattern } from '../lib/autolinker';
   import { modeSentences } from '../lib/modeSentence';
+  import { clientTagFeatures } from '../lib/clientTags';
   import { getActiveBufferObj, getActiveNetwork, findMessage, setReplyTarget, setReactTarget, toggleReaction, openMessageActions, QUICK_REACTIONS } from '../stores/ircStore.svelte';
   import { sendMessage } from '../stores/wsConnection.svelte.ts';
   import { globalPrefs, getBufferPrefs, highlightWords } from '../stores/preferences.svelte';
@@ -269,6 +270,12 @@
   // and re-applied idempotently by the server echo.
   const activeBufferName = $derived(getActiveBufferObj()?.name ?? '');
   const canInteract = $derived(!isSystem && !isJoinPart && !!nick && !!msg.msgid && !msg.redacted && !activeBufferName.startsWith('_'));
+  // Client-only tags this server carries (CLIENTTAGDENY / message-tags).
+  // Reply and React send tags; Copy and More do not, so only these two are
+  // gated. Received reactions and reply quotes keep rendering.
+  const tagFeatures = $derived(clientTagFeatures(activeNetwork));
+  const canReply = $derived(canInteract && tagFeatures.reply);
+  const canReact = $derived(canInteract && tagFeatures.react);
   const replyParent = $derived.by(() => {
     if (!msg.replyTo || !activeNetwork?.networkId || !activeBufferName) return undefined;
     return findMessage(activeNetwork.networkId, activeBufferName, msg.replyTo);
@@ -286,14 +293,14 @@
 
   function handleReply(): void {
     const networkId = activeNetwork?.networkId;
-    if (!canInteract || !networkId || !activeBufferName) return;
+    if (!canReply || !networkId || !activeBufferName) return;
     // The input bar focuses its textarea when the target appears.
     setReplyTarget(networkId, activeBufferName, msg);
   }
 
   function handleReact(): void {
     const networkId = activeNetwork?.networkId;
-    if (!canInteract || !networkId || !activeBufferName || !msg.msgid) return;
+    if (!canReact || !networkId || !activeBufferName || !msg.msgid) return;
     setReactTarget(networkId, activeBufferName, msg.msgid);
   }
 
@@ -305,7 +312,7 @@
   /** One-click reaction toggle (chip, quick strip). */
   function quickReact(emoji: string): void {
     const networkId = activeNetwork?.networkId;
-    if (!canInteract || !networkId || !activeBufferName) return;
+    if (!canReact || !networkId || !activeBufferName) return;
     toggleReaction(networkId, activeBufferName, msg, emoji);
     stripOpen = false;
   }
@@ -831,6 +838,7 @@
           <button type="button" class="reaction" class:own={chip.own}
                   title={chip.nicks.join(', ')}
                   aria-pressed={chip.own}
+                  disabled={!canReact}
                   onclick={(e) => { e.stopPropagation(); quickReact(chip.emoji); }}>
             <span class="reactionEmoji">{chip.emoji}</span> <span class="reactionCount">{chip.nicks.length}</span>
           </button>
@@ -839,6 +847,7 @@
     {/if}
     {#if canInteract}
       <span class="rowActions" class:stripOpen aria-label="Message actions">
+        {#if canReact}
         <span class="reactStrip"><span class="reactStripInner">
           {#each QUICK_REACTIONS as emoji (emoji)}
             <button type="button" class="quickReaction" class:own={ownReactions.has(emoji)} aria-label="React {emoji}" aria-pressed={ownReactions.has(emoji)}
@@ -847,12 +856,17 @@
           <button type="button" class="quickReaction more" title="More reactions" aria-label="More reactions"
                   onclick={(e) => { e.stopPropagation(); stripOpen = false; handleReact(); }}>{@render iconPlus()}</button>
         </span></span>
+        {/if}
+        {#if canReply}
         <button type="button" class="rowAction reply" title="Reply (r)" aria-label="Reply"
                 onclick={(e) => { e.stopPropagation(); handleReply(); }}>{@render iconReply()}</button>
+        {/if}
+        {#if canReact}
         <span class="reactWrap">
           <button type="button" class="rowAction react" title="React" aria-label="React" aria-expanded={stripOpen}
                   onclick={(e) => { e.stopPropagation(); stripOpen = !stripOpen; }}>{@render iconReact()}</button>
         </span>
+        {/if}
         <button type="button" class="rowAction more" title="More" aria-label="More actions" aria-haspopup="menu"
                 onclick={openMenuFromButton}>{@render iconMore()}</button>
       </span>

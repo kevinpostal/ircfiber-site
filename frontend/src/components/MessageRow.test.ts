@@ -396,7 +396,7 @@ describe('MessageRow', () => {
 
 describe('MessageRow — replies and reactions', () => {
 	function activeChannel(): void {
-		const net = createNetwork({ networkId: 'net1', currentNick: 'me' });
+		const net = createNetwork({ networkId: 'net1', currentNick: 'me', capabilities: new Set(['message-tags']) });
 		net.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
 		ircState.networks.push(net);
 		ircState.activeBuffer.networkId = 'net1';
@@ -580,5 +580,54 @@ describe('MessageRow — replies and reactions', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('MessageRow — a server that blocks client-only tags', () => {
+	/** `deny` is the raw CLIENTTAGDENY 005 token value. */
+	function blockedChannel(deny: string): void {
+		const net = createNetwork({
+			networkId: 'net1', currentNick: 'me',
+			capabilities: new Set(['message-tags']),
+			isupport: { CLIENTTAGDENY: deny },
+		});
+		net.buffers.push(createBuffer({ name: '#chan', isJoined: true }));
+		ircState.networks.push(net);
+		ircState.activeBuffer.networkId = 'net1';
+		ircState.activeBuffer.bufferName = '#chan';
+	}
+
+	it('hides Reply, React and the quick strip, keeps More, and renders chips inert', async () => {
+		blockedChannel('*');
+		const msg = createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1', reactions: { '👍': ['bob'] } });
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.rowAction.reply')).toBeNull();
+		expect(document.querySelector('.rowAction.react')).toBeNull();
+		expect(document.querySelector('.reactStrip')).toBeNull();
+		// Copy/Edit/Delete send no client tag, so More stays.
+		expect(document.querySelector('.rowAction.more')).toBeInTheDocument();
+
+		// A received reaction is information and keeps rendering, but toggling
+		// it would send a TAGMSG this server drops.
+		const chip = document.querySelector('.reaction') as HTMLButtonElement;
+		expect(chip).toBeInTheDocument();
+		expect(chip.disabled).toBe(true);
+		chip.click();
+		flushSync();
+		expect(sendRaw).not.toHaveBeenCalled();
+	});
+
+	it('restores both affordances when the token exempts their tags', async () => {
+		blockedChannel('*,-reply,-draft/react,-draft/unreact');
+		const msg = createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' });
+		ircState.messages['net1:#chan'] = [msg];
+		flushSync();
+		render(MessageRow, { props: { msg } });
+
+		expect(document.querySelector('.rowAction.reply')).toBeInTheDocument();
+		expect(document.querySelector('.rowAction.react')).toBeInTheDocument();
 	});
 });

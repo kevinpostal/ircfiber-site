@@ -65,13 +65,19 @@
   line-height: 1.4;
   cursor: pointer;
 }
-.row.messageRow .reaction:hover {
+.row.messageRow .reaction:not(:disabled):hover {
   border-color: rgba(255, 255, 255, 0.3);
 }
 .row.messageRow .reaction.own {
   border-color: var(--link);
   background: rgba(30, 114, 255, 0.15);
   color: var(--text-primary);
+}
+/* Reactions still render when this server blocks client-only tags
+   (CLIENTTAGDENY / no message-tags) — they are information — but toggling
+   one would send a TAGMSG the server drops, so the chip is inert. */
+.row.messageRow .reaction:disabled {
+  cursor: default;
 }
 .row.messageRow .reaction .reactionCount {
   font-family: var(--font-mono);

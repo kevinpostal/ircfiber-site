@@ -125,7 +125,7 @@ describe('MessageActionMenu — Delete', () => {
 
 describe('MessageActionMenu — Reply and reactions', () => {
 	it('Reply sets the store reply target and closes', async () => {
-		setup([]);
+		setup(['message-tags']);
 		open(createMessage({ nick: 'alice', text: 'the original', msgid: 'dc-1' }));
 		item('reply')!.click();
 		flushSync();
@@ -137,18 +137,28 @@ describe('MessageActionMenu — Reply and reactions', () => {
 	});
 
 	it('a quick reaction sends the TAGMSG and closes', async () => {
-		setup([]);
+		setup(['message-tags']);
 		open(createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' }));
 		(document.querySelector('.messageActionMenu .quickReaction[aria-label="React 👍"]') as HTMLButtonElement).click();
 		flushSync();
 		expect(sendRaw).toHaveBeenCalledWith('net1', '@+reply=dc-1;+draft/react=👍 TAGMSG #chan');
 		expect(ircState.messageActions).toBeNull();
 	});
+
+	it('hides Reply and the reaction row when the server blocks client-only tags', async () => {
+		setup(['message-tags']);
+		ircState.networks[0].isupport = { CLIENTTAGDENY: '*' };
+		open(createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' }));
+
+		expect(item('reply')).toBeNull();
+		expect(document.querySelector('.messageActionMenu .reactRow')).toBeNull();
+		expect(item('copy')).toBeInTheDocument();
+	});
 });
 
 describe('MessageActionMenu — sheet', () => {
 	it('renders the touch sheet instead of the positioned menu and closes from the scrim', async () => {
-		setup([]);
+		setup(['message-tags']);
 		open(createMessage({ nick: 'alice', text: 'hello', msgid: 'dc-1' }), true);
 
 		expect(document.querySelector('.messageActionSheet')).toBeInTheDocument();
