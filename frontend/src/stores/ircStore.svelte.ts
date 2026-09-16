@@ -1102,11 +1102,138 @@ export function findMessage(networkId: string, bufferName: string, msgid: string
   return (ircState.messages[key] ?? []).find((m: IRCMessage) => m.msgid === msgid);
 }
 
+/** One reaction waiting to be folded into the row `msgid` names. `t` is
+ *  the reaction's own timestamp, which orders an add before the unreact
+ *  that cancels it even when the two arrive in different history pages. */
+interface ReactionItem {
+  msgid: string;
+  emoji: string;
+  nick: string;
+  add: boolean;
+  t: number;
+}
+
+/** Reactions whose target row is not loaded. A reaction can name a
+ *  message far older than the window, and history arrives newest-page
+ *  first, so the row it belongs to may only show up several pages of
+ *  scroll-back later — or when the buffer is opened for the first time.
+ *  Bounded and FIFO: one that never finds its row costs a single entry
+ *  until eviction. Keyed `<bufKey>\0<msgid>`. */
+const pendingReactions = new Map<string, ReactionItem[]>();
+const MAX_PENDING_REACTION_ROWS = 256;
+const MAX_PENDING_PER_ROW = 32;
+
+function stashReaction(key: string, item: ReactionItem): void {
+  const k = `${key}\u0000${item.msgid}`;
+  const queued = pendingReactions.get(k);
+  if (queued) {
+    if (queued.length < MAX_PENDING_PER_ROW) queued.push(item);
+    return;
+  }
+  pendingReactions.set(k, [item]);
+  if (pendingReactions.size > MAX_PENDING_REACTION_ROWS) {
+    const oldest = pendingReactions.keys().next().value;
+    if (oldest !== undefined) pendingReactions.delete(oldest);
+  }
+}
+
+/** Reactions stashed for any of `list`'s rows, removed from the stash.
+ *  Returned rather than applied so the caller folds page and stash in
+ *  one pass. */
+function takePendingReactions(key: string, list: IRCMessage[]): ReactionItem[] {
+  if (pendingReactions.size === 0) return [];
+  const drained: ReactionItem[] = [];
+  for (const m of list) {
+    if (!m.msgid) continue;
+    const k = `${key}\u0000${m.msgid}`;
+    const queued = pendingReactions.get(k);
+    if (!queued) continue;
+    drained.push(...queued);
+    pendingReactions.delete(k);
+  }
+  return drained;
+}
+
+/** `msg` with `item` folded into its reactions, or `msg` itself when the
+ *  reaction changes nothing (an add already recorded, a removal by
+ *  someone who never reacted) — which is what makes the echo of our own
+ *  reaction and a replayed page harmless. */
+function withReaction(msg: IRCMessage, item: ReactionItem): IRCMessage {
+  const reactions: Record<string, string[]> = { ...(msg.reactions ?? {}) };
+  const nicks = reactions[item.emoji] ?? [];
+  if (item.add) {
+    if (nicks.includes(item.nick)) return msg;
+    reactions[item.emoji] = [...nicks, item.nick];
+  } else {
+    if (!nicks.includes(item.nick)) return msg;
+    const rest = nicks.filter(n => n !== item.nick);
+    if (rest.length) reactions[item.emoji] = rest;
+    else delete reactions[item.emoji];
+  }
+  return {
+    ...msg,
+    reactions: Object.keys(reactions).length ? reactions : undefined,
+  };
+}
+
+/** Splits the reaction rows out of a history page: they are state for
+ *  the row `replyTo` names, never rows of their own. Returns `msgs`
+ *  itself when the page has none, which is the common case. */
+function takeReactionRows(msgs: IRCMessage[]): { rows: IRCMessage[]; reactions: ReactionItem[] } {
+  let rows: IRCMessage[] | null = null;
+  const reactions: ReactionItem[] = [];
+  for (let i = 0; i < msgs.length; i++) {
+    const m = msgs[i];
+    if (m.reaction && m.replyTo && m.nick) {
+      if (!rows) rows = msgs.slice(0, i);
+      reactions.push({
+        msgid: m.replyTo,
+        emoji: m.reaction.emoji,
+        nick: m.nick,
+        add: m.reaction.add,
+        t: m.t ?? 0,
+      });
+    } else if (rows) {
+      rows.push(m);
+    }
+  }
+  return { rows: rows ?? msgs, reactions };
+}
+
+/** Folds `items` into `list`, oldest reaction first, stashing the ones
+ *  whose target row is not in `list`. Returns `list` itself when nothing
+ *  applied, so callers can keep their incremental processed-buffer path. */
+function foldReactions(key: string, list: IRCMessage[], items: ReactionItem[]): IRCMessage[] {
+  if (items.length === 0) return list;
+  const ordered = items.length > 1 ? [...items].sort((a, b) => a.t - b.t) : items;
+  const idxByMsgid = new Map<string, number>();
+  for (let i = 0; i < list.length; i++) {
+    const id = list[i].msgid;
+    if (id && !idxByMsgid.has(id)) idxByMsgid.set(id, i);
+  }
+  let out: IRCMessage[] | null = null;
+  for (const item of ordered) {
+    const idx = idxByMsgid.get(item.msgid);
+    if (idx === undefined) {
+      stashReaction(key, item);
+      continue;
+    }
+    const target = (out ?? list)[idx];
+    const updated = withReaction(target, item);
+    if (updated === target) continue;
+    if (!out) out = [...list];
+    out[idx] = updated;
+  }
+  return out ?? list;
+}
+
 /**
  * Apply a reaction (IRCv3 `+draft/react` / `+draft/unreact`) to the row
  * whose msgid it names. `add` inserts the nick once under the emoji;
- * removal deletes it and drops the emoji when nobody is left. Unknown
- * msgid → no-op. Idempotent, so the echo-message of our own reaction
+ * removal deletes it and drops the emoji when nobody is left. A msgid
+ * that is not loaded is stashed and applied when the row arrives (a
+ * reaction on a message above the window, or on a buffer the user has
+ * not opened yet). Idempotent, so the echo-message of our own reaction
  * re-applies harmlessly.
  */
 export function applyReaction(networkId: string, bufferName: string, msgid: string, emoji: string, nick: string, add: boolean): boolean {
@@ -1114,23 +1241,13 @@ export function applyReaction(networkId: string, bufferName: string, msgid: stri
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const list = ircState.messages[key] ?? [];
   const idx = list.findIndex((m: IRCMessage) => m.msgid === msgid);
-  if (idx < 0) return false;
-  const original = list[idx];
-  const reactions: Record<string, string[]> = { ...(original.reactions ?? {}) };
-  const nicks = reactions[emoji] ?? [];
-  if (add) {
-    if (nicks.includes(nick)) return true;
-    reactions[emoji] = [...nicks, nick];
-  } else {
-    if (!nicks.includes(nick)) return true;
-    const rest = nicks.filter(n => n !== nick);
-    if (rest.length) reactions[emoji] = rest;
-    else delete reactions[emoji];
+  if (idx < 0) {
+    stashReaction(key, { msgid, emoji, nick, add, t: Date.now() });
+    return false;
   }
-  const updated: IRCMessage = {
-    ...original,
-    reactions: Object.keys(reactions).length ? reactions : undefined,
-  };
+  const original = list[idx];
+  const updated = withReaction(original, { msgid, emoji, nick, add, t: Date.now() });
+  if (updated === original) return true;
   list[idx] = updated;
   ircState.messages[key] = [...list];
   const replaced = ircState.processedMessages[key]
@@ -2206,20 +2323,25 @@ export function loadCachedMessages(networkId: string, bufferName: string): IRCMe
 }
 export function setMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
+  // Reaction rows are state, not timeline entries: pull them out of the
+  // page and fold them into the rows they name, together with any that
+  // were stashed while this buffer had no messages loaded.
+  const { rows, reactions } = takeReactionRows(msgs);
   // Dedup within the incoming batch — history can contain the same
   // msgid twice with different eids (e.g. 65ZsMF… as 225503 and
   // 223472). The old setMessages stored both and rendered twice.
   const seenEids = new Set<number>();
   const seenMsgids = new Set<string>();
   const deduped: IRCMessage[] = [];
-  for (const m of msgs) {
+  for (const m of rows) {
     if ((m.eid != null && seenEids.has(m.eid)) || (m.msgid && seenMsgids.has(m.msgid))) continue;
     if (m.eid != null) seenEids.add(m.eid);
     if (m.msgid) seenMsgids.add(m.msgid);
     deduped.push(m);
   }
   // FIFO cap: keep only the newest MAX_JS_MESSAGES (bounds GC + cold preprocess to ≤1ms for 5k).
-  const capped = deduped.length > MAX_JS_MESSAGES ? deduped.slice(-MAX_JS_MESSAGES) : deduped;
+  const cappedRows = deduped.length > MAX_JS_MESSAGES ? deduped.slice(-MAX_JS_MESSAGES) : deduped;
+  const capped = foldReactions(key, cappedRows, [...reactions, ...takePendingReactions(key, cappedRows)]);
   ircState.messages[key] = capped;
   ircState.processedMessages[key] = buildProcessedBuffer(capped);
   saveMessageCache(key, capped);
@@ -2245,6 +2367,10 @@ export function pruneMessagesBefore(networkId: string, bufferName: string, befor
 export function prependMessages(networkId: string, bufferName: string, msgs: IRCMessage[]): void {
   const key = `${networkId}:${normalizeChannelName(bufferName)}`;
   const existing = ircState.messages[key] ?? [];
+  // Reaction rows never render: they carry the chips of the row their
+  // `replyTo` names, which can be in this page, already loaded, or
+  // still further back (then they wait in the stash).
+  const { rows, reactions } = takeReactionRows(msgs);
 
   // Dedupe against existing messages AND within the new batch. eid is the
   // primary key (IRCCloud-style: every event gets a global sequential
@@ -2268,7 +2394,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   // is already in `existing` — replace it in place instead of appending a
   // second copy. Matches by label (labeled-response echoes the label back)
   // or by text+nick+command within 30s against a pending optimistic.
-  for (const m of msgs) {
+  for (const m of rows) {
     if (m.eid == null && !m.msgid) continue; // only echo-shaped entries replace
     let matchIdx = -1;
     if (m.label) {
@@ -2300,7 +2426,7 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
   }
 
   const filtered: IRCMessage[] = [];
-  for (const m of msgs) {
+  for (const m of rows) {
     if ((m.eid != null && eidSet.has(m.eid)) || (m.msgid && dedupKeys.has(m.msgid))) continue;
     if (m.eid != null) eidSet.add(m.eid);
     if (m.msgid) {
@@ -2333,11 +2459,16 @@ export function prependMessages(networkId: string, bufferName: string, msgs: IRC
     if (a.eid != null && b.eid != null) return a.eid - b.eid;
     return (a.msgid ?? '').localeCompare(b.msgid ?? '');
   });
+  const reacted = foldReactions(key, merged, [...reactions, ...takePendingReactions(key, merged)]);
   // FIFO cap: if prepend pushes over limit, keep newest MAX_JS_MESSAGES. Bounds prependReprocess (≤1ms for 5k).
-  let finalMessages = merged;
+  let finalMessages = reacted;
   let finalProcessed: IRCMessage[];
-  if (merged.length > MAX_JS_MESSAGES) {
-    finalMessages = merged.slice(-MAX_JS_MESSAGES);
+  if (reacted.length > MAX_JS_MESSAGES) {
+    finalMessages = reacted.slice(-MAX_JS_MESSAGES);
+    finalProcessed = buildProcessedBuffer(finalMessages);
+  } else if (reacted !== merged) {
+    // A reaction rewrote row objects, and the incremental path would
+    // reuse the pre-reaction copies held by `existing` / `filtered`.
     finalProcessed = buildProcessedBuffer(finalMessages);
   } else {
     // Prepending changes the head boundary in ways that can't be fixed

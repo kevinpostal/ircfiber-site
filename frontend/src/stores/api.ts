@@ -5,6 +5,21 @@ import { parseChannelList } from '../lib/utils';
 const viteEnv = import.meta.env as { VITE_API_BASE?: string };
 const API_BASE = viteEnv.VITE_API_BASE ?? '/api';
 
+/** The reaction a history row carries, if it is one: `rx` adds the
+ *  emoji, `ux` removes it (long form `+draft/react` / `+draft/unreact`
+ *  for rows delivered with a full tag map). Only reaction TAGMSGs have
+ *  it; every other row returns undefined. */
+function normalizeReaction(
+  raw: Record<string, unknown>,
+  tags: Record<string, string> | undefined,
+): { emoji: string; add: boolean } | undefined {
+  const add = (raw.rx as string | undefined) || tags?.['+draft/react'];
+  if (add) return { emoji: add, add: true };
+  const remove = (raw.ux as string | undefined) || tags?.['+draft/unreact'];
+  if (remove) return { emoji: remove, add: false };
+  return undefined;
+}
+
 /**
  * Unpack a wire-format event (compact JSON keys `i, c, x, n, m, p, hm, px, l, ch, se, phase, ...`)
  * shape used everywhere in the frontend. Idempotent: calling it on a value
@@ -69,6 +84,14 @@ export function normalizeMessage(raw: Record<string, unknown>): IRCMessage {
     account: (raw.account as string) || (raw.a as string) || tags?.account || undefined,
     editOf: (raw.editOf as string) || (raw.eo as string) || tags?.edit_of || undefined,
     selfEcho: !!(raw.se as string | undefined) || !!(raw.selfEcho as boolean | undefined),
+    // Reply and reaction state was dropped on this path, so a reload
+    // erased every reply quote and every reaction chip even though the
+    // engine stores both. `rp` names the row a message answers; a
+    // TAGMSG row carrying `rx`/`ux` is a reaction on the row `rp` names
+    // and the store folds it away.
+    replyTo: (raw.replyTo as string) || (raw.rp as string)
+      || tags?.['+reply'] || tags?.['+draft/reply'] || undefined,
+    reaction: normalizeReaction(raw, tags),
   };
 }
 

@@ -4079,6 +4079,87 @@ describe('applyReaction (draft/react)', () => {
 		expect(findMessage('net1', '#chan', 'm2')?.text).toBe('hi');
 		expect(findMessage('net1', '#chan', 'nope')).toBeUndefined();
 	});
+
+	it('folds a reaction row out of history onto the row it names', () => {
+		// The engine replays the reaction TAGMSG (`rx` + `rp`) in the same
+		// page as its target. It is state for that row, never a row.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#dmz' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#dmz', [
+			createMessage({ nick: 'stanzi', text: 'good evening!', msgid: 'dc-1549598693991383115', t: 1789523519005 }),
+			createMessage({
+				nick: 'digits', command: 'TAGMSG', t: 1789523884487,
+				msgid: 'tag-1', replyTo: 'dc-1549598693991383115',
+				reaction: { emoji: '❤️', add: true },
+			}),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#dmz']);
+		expect(list.length).toBe(1);
+		expect(list[0].text).toBe('good evening!');
+		expect(list[0].reactions).toEqual({ '❤️': ['digits'] });
+	});
+
+	it('applies a reaction whose target row only arrives with an older page', () => {
+		// Reactions can name a message above the window: history pages
+		// arrive newest first, so the row shows up pages later.
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#dmz' }));
+		ircState.networks.push(net);
+
+		setMessages('net1', '#dmz', [
+			createMessage({
+				nick: 'digits', command: 'TAGMSG', t: 2000,
+				msgid: 'tag-1', replyTo: 'old-1',
+				reaction: { emoji: '❤️', add: true },
+			}),
+			createMessage({ nick: 'stanzi', text: 'later', msgid: 'new-1', t: 3000 }),
+		]);
+		flushSync();
+		expect(untrack(() => ircState.messages['net1:#dmz']).length).toBe(1);
+
+		prependMessages('net1', '#dmz', [
+			createMessage({ nick: 'stanzi', text: 'older line', msgid: 'old-1', t: 1000 }),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#dmz']);
+		expect(list.map(m => m.msgid)).toEqual(['old-1', 'new-1']);
+		expect(list[0].reactions).toEqual({ '❤️': ['digits'] });
+		// The processed buffer the timeline renders carries it too.
+		const processed = untrack(() => ircState.processedMessages['net1:#dmz']);
+		expect(processed.find(m => m.msgid === 'old-1')?.reactions).toEqual({ '❤️': ['digits'] });
+	});
+
+	it('replays an unreact after its add, whatever order the pages arrive in', () => {
+		const net = createNetwork({ networkId: 'net1' });
+		net.buffers.push(createBuffer({ name: '#dmz' }));
+		ircState.networks.push(net);
+
+		// Newest page first: the removal (t=3000) is seen before the add
+		// (t=2000) that a later page carries. Timestamps order them.
+		setMessages('net1', '#dmz', [
+			createMessage({
+				nick: 'digits', command: 'TAGMSG', t: 3000, msgid: 'tag-2',
+				replyTo: 'old-1', reaction: { emoji: '❤️', add: false },
+			}),
+		]);
+		prependMessages('net1', '#dmz', [
+			createMessage({ nick: 'stanzi', text: 'older line', msgid: 'old-1', t: 1000 }),
+			createMessage({
+				nick: 'digits', command: 'TAGMSG', t: 2000, msgid: 'tag-1',
+				replyTo: 'old-1', reaction: { emoji: '❤️', add: true },
+			}),
+		]);
+		flushSync();
+
+		const list = untrack(() => ircState.messages['net1:#dmz']);
+		expect(list.map(m => m.msgid)).toEqual(['old-1']);
+		expect(list[0].reactions).toBeUndefined();
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────

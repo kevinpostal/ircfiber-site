@@ -48,6 +48,46 @@ describe('normalizeMessage', () => {
     expect(msg.phase).toBe('queued');
   });
 
+  it('carries reply and reaction state, which a reload used to erase', () => {
+    // Verbatim rows the engine stored for #dmz: stanzi's line, and the
+    // ❤️ a Discord member put on it (relayed as `+reply` + `+draft/react`).
+    const line = normalizeMessage({
+      i: '7c4b364f-1e95-4192-b2b9-f1be87cd0a61',
+      t: 1789523519005,
+      n: 'stanzi',
+      ch: '#dmz',
+      x: 'good evening!',
+      c: 'PRIVMSG',
+      m: 'dc-1549598693991383115',
+      rp: 'dc-1549598693991383000',
+    });
+    expect(line.replyTo).toBe('dc-1549598693991383000');
+    expect(line.reaction).toBeUndefined();
+
+    const react = normalizeMessage({
+      t: 1789523884487,
+      n: 'digits',
+      ch: '#dmz',
+      c: 'TAGMSG',
+      rx: '❤️',
+      rp: 'dc-1549598693991383115',
+    });
+    expect(react.reaction).toEqual({ emoji: '❤️', add: true });
+    expect(react.replyTo).toBe('dc-1549598693991383115');
+
+    const unreact = normalizeMessage({ c: 'TAGMSG', n: 'digits', ux: '❤️', rp: 'dc-1' });
+    expect(unreact.reaction).toEqual({ emoji: '❤️', add: false });
+
+    // Long-form rows carry the tags instead of the compact keys.
+    const longForm = normalizeMessage({
+      command: 'TAGMSG',
+      nick: 'digits',
+      tags: { '+reply': 'dc-2', '+draft/react': '👍' },
+    });
+    expect(longForm.replyTo).toBe('dc-2');
+    expect(longForm.reaction).toEqual({ emoji: '👍', add: true });
+  });
+
   it('is idempotent — calling on an already-normalized IRCMessage yields an equivalent', () => {
     const once = normalizeMessage({
       i: 'id1', t: 100, eid: 1, x: 'body', c: 'NOTICE', phase: 'tcp_open', m: 'msgid1',

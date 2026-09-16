@@ -486,9 +486,14 @@ export interface IRCMessage {
   /** msgid of the message this one answers (IRCv3 `+reply`, wire `data.rp`). */
   replyTo?: string;
   /** Reactions on this row, emoji -> nicks in arrival order (IRCv3
-   *  `+draft/react` / `+draft/unreact` TAGMSGs). Live-only: the engine
-   *  excludes TAGMSG rows from scrollback replay. */
+   *  `+draft/react` / `+draft/unreact` TAGMSGs), folded in from live
+   *  TAGMSGs and from the reaction rows history replays. */
   reactions?: Record<string, string[]>;
+  /** Set only on a reaction TAGMSG row as history delivers it (wire
+   *  `rx` / `ux` with the target msgid in `rp`). The store folds such a
+   *  row into the `reactions` of the row `replyTo` names and drops it,
+   *  so it never reaches the timeline. */
+  reaction?: { emoji: string; add: boolean };
   /** Optimistic message state — mirrors IRCCloud .pending / .pendingOut / .failed */
   pendingState?: 'pending' | 'pendingOut' | 'failed';
   // For grouped messages

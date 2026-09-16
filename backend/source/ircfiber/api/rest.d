@@ -1626,24 +1626,20 @@ final class RESTAPI {
         // alongside the messages. The frontend reads `messages` for the
         // list and `backlog_size` / `earliest_msgid` for pagination.
         //
-        // Strip scrollback noise (WHO 315 / NAMES 353 / TAGMSG / …) that
-        // the chat UI cannot render. The Redis reader already skips it;
-        // this second pass covers the MongoDB fall-through so a
+        // Strip scrollback noise (WHO 315 / NAMES 353 / typing TAGMSG / …)
+        // that the chat UI cannot render. The Redis reader already skips
+        // it; this second pass covers the MongoDB fall-through so a
         // noise-heavy channel's window fills with the real conversation
         // instead of a wall of invisible "End of WHO list" rows that
-        // push PRIVMSGs out of view. The _server log is exempt — its
-        // timeline renders numerics/MOTD.
+        // push PRIVMSGs out of view. Reaction TAGMSGs are kept — they
+        // carry a row's reaction chips, not a timeline event — and the
+        // _server log is exempt, since its timeline renders
+        // numerics/MOTD.
         if (channel != "_server") {
             Json[] clean;
             clean.reserve(messages.length);
             foreach (m; messages) {
-                string cmd = "";
-                if ("c" in m) {
-                    try { cmd = m["c"].get!string; } catch (Exception) {}
-                } else if ("command" in m) {
-                    try { cmd = m["command"].get!string; } catch (Exception) {}
-                }
-                if (!BufferManager.isScrollbackNoiseCommand(cmd))
+                if (!BufferManager.isScrollbackNoiseRow(m))
                     clean ~= m;
             }
             messages = clean;
