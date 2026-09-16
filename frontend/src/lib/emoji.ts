@@ -1,3 +1,5 @@
+import { stripIrcFormatting } from './ircFormatting';
+
 // Common emoji dataset -- top ~500 emoji with colon codes
 const EMOJI_MAP: Record<string, string> = {
   'smile': '\u{1F604}', 'laughing': '\u{1F606}', 'blush': '\u{1F60A}',
@@ -110,4 +112,35 @@ export function searchEmoji(query: string): { name: string; emoji: string }[] {
 /** Get all emoji for the picker */
 export function getAllEmoji(): { name: string; emoji: string }[] {
   return Object.entries(EMOJI_MAP).map(([name, emoji]) => ({ name, emoji }));
+}
+
+// One emoji grapheme: a regional-indicator flag pair, a tag-sequence flag
+// (🏴󠁧󠁢󠁳󠁣󠁴󠁿), a keycap (1️⃣), or a pictograph in *emoji presentation* — either
+// default-emoji (\p{Emoji_Presentation}) or text-default plus U+FE0F — with
+// an optional skin-tone modifier and any number of ZWJ-joined parts.
+//
+// Requiring emoji presentation is what keeps `▪▪▪`, `▶`, `©`, `™` and `☺`
+// out: those code points are Extended_Pictographic but text-default, and
+// they are exactly what IRC ASCII/box art is made of (see containsBlockArt
+// in MessageRow.svelte). The cost is that a bare `❤` (no U+FE0F) is not
+// enlarged while `❤️` is; every emoji picker, ours included, emits U+FE0F.
+const EMOJI_CLUSTER = String.raw`(?:\p{RI}\p{RI}|\u{1F3F4}[\u{E0020}-\u{E007F}]{2,}|[\u0023\u002A\u0030-\u0039]\uFE0F?\u20E3|(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F)\p{Emoji_Modifier}?(?:\u200D(?:\p{Emoji_Presentation}|\p{Extended_Pictographic}\uFE0F?)\p{Emoji_Modifier}?)*)`;
+const EMOJI_ONLY_RE = new RegExp(String.raw`^(?:\s*${EMOJI_CLUSTER})+\s*$`, 'u');
+
+/**
+ * True when a message body is nothing but emoji and whitespace — IRCCloud's
+ * `Message.isOnlyEmoji` (common-5650bddb.js @1021637), which drives their
+ * `only_emoji` row class and `font-size:32px` rule.
+ *
+ * mIRC formatting is stripped first: the compose "text style" feature wraps
+ * outgoing text in \x03 colour codes, so a styled 🤔 must still count.
+ * Colon codes are NOT expanded (unlike IRCCloud, which calls
+ * replace_colons): our render path never expands them either, so `:smile:`
+ * reaches the DOM as literal text and must not be enlarged.
+ */
+export function isEmojiOnly(text: string): boolean {
+  if (!text) return false;
+  const plain = stripIrcFormatting(text);
+  if (!plain.trim()) return false;
+  return EMOJI_ONLY_RE.test(plain);
 }

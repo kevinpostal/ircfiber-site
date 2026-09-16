@@ -245,6 +245,28 @@ body.ascii-compact .row.messageRow {
 .longMessageContent {
   display: inline;
 }
+/* IRCCloud parity: a chat line that is nothing but emoji renders large —
+   `.emoji-big .only_emoji .content .emojinative { font-size: 32px;
+   line-height: 36px }` (common-002a6024.css @751601). IRCCloud scales its
+   per-emoji `.emojinative` spans; we render emoji as raw text, and an
+   emoji-only body has nothing else in it, so scaling the whole body run is
+   equivalent. The target is `.longMessageContent`, NOT `.content`: the
+   ACTION arm (MessageRow.svelte) puts the avatar, me-dash and author link
+   inside `.content`, and scaling that would blow up the nick too.
+   line-height on an inline box grows the line box, so the row grows with
+   it — rows size to content (no fixed/estimated row height anywhere in the
+   chat path) and `contain: layout paint` does not clip in-flow glyphs. */
+.row.messageRow.onlyEmoji .longMessageContent {
+  font-size: 32px;
+  line-height: 36px;
+}
+/* `.messageTruncated` is `font: inherit`, so a >20-line emoji-only body
+   (MAX_PREVIEW_LINES in lib/utils.ts) would render its Show-more button at
+   32px. Pin it back to the row's own type. */
+.row.messageRow.onlyEmoji .messageTruncated {
+  font-size: 14px;
+  line-height: 1.15;
+}
 /* IRCCloud-style inline YouTube previews — sits inside span.content but
    creates its own block so the 416×234 iframe drops to the next line.
    The outer span is display:block so it breaks out of the inline content

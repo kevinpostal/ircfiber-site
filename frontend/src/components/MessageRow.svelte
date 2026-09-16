@@ -18,6 +18,7 @@
   import { extractImageUrlsFromText } from '../lib/imageInline';
   import { extractTextUrlsFromText } from '../lib/textInline';
   import { extractYoutubeIdsFromText } from '../lib/youtube';
+  import { isEmojiOnly } from '../lib/emoji';
   interface Props {
     msg: IRCMessage;
     isHighlight?: boolean;
@@ -443,6 +444,22 @@
     return null;
   });
   const isChat = $derived(cmd === 'PRIVMSG' || cmd === 'NOTICE' || msg.type === 'action' || /^\d{3}$/.test(cmd));
+  // IRCCloud renderChat pushes `only_emoji` for a chat line whose body is
+  // nothing but emoji, and `.emoji-big .only_emoji .content .emojinative`
+  // scales it to 32px/36px; `emoji-big` is their `!emoji-nobig` pref, ours
+  // is globalPrefs.enlargeEmoji. Reading the pref inside the derived is the
+  // same gating pattern as youtubeIds/imageUrls, so toggling
+  // Settings → Messages → "Enlarge emoji-only messages" re-renders rows.
+  // Excluded: system rows (NOTICE without a nick, numerics, TOPIC/MODE —
+  // they render monospace `.status` bodies) and blockArt rows (16px Hack,
+  // `white-space: pre` column alignment).
+  const isEmojiOnlyRow = $derived(
+    globalPrefs.enlargeEmoji
+    && !isSystem
+    && !isBlockArt
+    && (cmd === 'PRIVMSG' || cmd === 'NOTICE' || isAction)
+    && isEmojiOnly(msg.text || ''),
+  );
   // Inline YouTube previews — IRCCloud parity. Gated by inlineVideos (global)
   // and inlineImages (per-buffer, via ChannelContextMenu). IRCCloud's
   // buildYoutubeFrame uses buffer.inlineImagesAllowed() as the gate, so we
@@ -727,7 +744,7 @@
   {@const hasCollapseWidget = ['JOIN','PART','QUIT','NICK','CHGHOST','AWAY'].includes(cmd)}
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
-    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isPlainStatus ? 'status' : ''} {isMonoStatus ? 'status monospace' : ''} {isNoticeRow ? 'notice' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {tsHover ? 'timestampHighlight' : ''} {pendingState ?? ''}"
+    class="row messageRow {isJoinPart ? 'joinPart' : ''} {isPlainStatus ? 'status' : ''} {isMonoStatus ? 'status monospace' : ''} {isNoticeRow ? 'notice' : ''} {isAction ? 'me action' : ''} {isServerLog ? 'serverLog phase-' + phase : ''} {typeClass} userParent {isHighlight ? 'highlight' : ''} {isSameAuthor ? 'sameAuthor' : 'firstAuthor'} {isOwn ? 'own' : ''} {isBot ? 'bot' : ''} {isBlockArt ? 'blockArt' : ''} {isEmojiOnlyRow ? 'onlyEmoji' : ''} {!isSystem && !isJoinPart && !isAction && nick ? 'hasAvatar' : ''} {isEntrance ? 'messageEntrance' : ''} {tsHover ? 'timestampHighlight' : ''} {pendingState ?? ''}"
     data-time={msg.t}
     data-name={nick || undefined}
     data-usermask={usermaskAttr || undefined}
