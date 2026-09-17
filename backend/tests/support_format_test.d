@@ -11,6 +11,10 @@ import ircfiber.db.support_issues : SupportIssueRecord;
 import ircfiber.support.events : SupportEvent;
 import ircfiber.support.format;
 import ircfiber.support.json : sanitizeLine;
+import ircfiber.support.mail : SupportMailNotice, SupportMailRecipient, supportMailRecipients,
+    supportSubject, supportReporterMail, supportStaffMail;
+import ircfiber.models.user : User;
+import std.uuid : UUID, parseUUID;
 
 private int failures;
 
@@ -306,6 +310,108 @@ private void testEventJsonRoundTrip() {
     check(SupportEvent.fromJson(parseJsonString(`[1,2]`)) == SupportEvent.init, "non-object → init");
 }
 
+private User mkUser(string id, string name, string email, bool admin) {
+    User u;
+    u.id = parseUUID(id);
+    u.username = name;
+    u.email = email;
+    if (admin) u.roles = ["admin"];
+    return u;
+}
+
+private enum RID = "11111111-1111-4111-8111-111111111111";
+private enum AID = "22222222-2222-4222-8222-222222222222";
+private enum BID = "33333333-3333-4333-8333-333333333333";
+
+private void testSupportMailRecipients() {
+    auto reporter = mkUser(RID, "rep", "rep@example.org", false);
+    auto alice = mkUser(AID, "alice", "alice@example.org", true);
+    auto bob = mkUser(BID, "bob", "bob@example.org", true);
+    auto plain = mkUser("44444444-4444-4444-8444-444444444444", "plain", "plain@example.org", false);
+
+    // Admin acts → reporter only, admin-facing flag off.
+    SupportMailNotice n;
+    n.type = "comment_added"; n.actorIsAdmin = true; n.actorId = AID; n.reporterId = RID;
+    auto r = supportMailRecipients(n, reporter, [alice, bob]);
+    check(r.length == 1 && r[0].email == "rep@example.org" && !r[0].staff, "admin reply → reporter");
+
+    // Admin acting on their own report mails nobody.
+    auto own = n; own.actorId = RID;
+    check(supportMailRecipients(own, reporter, [alice, bob]).length == 0, "actor never mails themself");
+
+    // Reporter with a malformed / empty address → nothing.
+    auto noMail = reporter; noMail.email = "";
+    check(supportMailRecipients(n, noMail, [alice, bob]).length == 0, "reporter without email skipped");
+    auto badMail = reporter; badMail.email = "not an address";
+    check(supportMailRecipients(n, badMail, [alice, bob]).length == 0, "malformed reporter email skipped");
+
+    // Reporter acts, unassigned → every admin (non-admin rows ignored), staff flag on.
+    SupportMailNotice u;
+    u.type = "comment_added"; u.actorIsAdmin = false; u.actorId = RID; u.reporterId = RID;
+    auto all = supportMailRecipients(u, reporter, [alice, plain, bob]);
+    check(all.length == 2 && all[0].email == "alice@example.org" && all[1].email == "bob@example.org"
+        && all[0].staff && all[1].staff, "unassigned → all admins, staff-facing");
+
+    // Assigned → only the assignee.
+    auto assigned = u; assigned.assigneeId = BID;
+    auto one = supportMailRecipients(assigned, reporter, [alice, bob]);
+    check(one.length == 1 && one[0].username == "bob", "assigned → assignee only");
+
+    // Assignee row gone → back to every admin.
+    auto gone = u; gone.assigneeId = "99999999-9999-4999-8999-999999999999";
+    check(supportMailRecipients(gone, reporter, [alice, bob]).length == 2, "missing assignee → all admins");
+
+    // An admin filing their own report is not mailed about it.
+    auto selfReport = u; selfReport.actorId = AID; selfReport.reporterId = AID;
+    auto others = supportMailRecipients(selfReport, alice, [alice, bob]);
+    check(others.length == 1 && others[0].username == "bob", "admin reporter excluded from staff fan-out");
+
+    // Same address under two admin rows is mailed once.
+    auto bobTwin = mkUser("55555555-5555-4555-8555-555555555555", "bob2", "bob@example.org", true);
+    check(supportMailRecipients(u, reporter, [bob, bobTwin]).length == 1, "duplicate address mailed once");
+}
+
+private void testSupportMailContent() {
+    SupportMailNotice n;
+    n.type = "comment_added"; n.issueId = "abc-123"; n.number = 42; n.kind = "bug";
+    n.title = "Scroll <jumps>"; n.status = "in_progress"; n.priority = "high";
+    n.actor = "alice"; n.actorIsAdmin = true; n.reporter = "rep";
+    n.text = "Fixed in build 7 — please <re>test.\nSecond line.";
+
+    check(supportSubject(n) == "[IRC Fiber support #42] Reply from alice: Scroll <jumps>", "reply subject");
+    auto rm = supportReporterMail(n, "rep@example.org", "https://ircfiber.com/");
+    check(rm.toEmail == "rep@example.org", "reporter mail addressed");
+    check(rm.text.canFind("alice replied to your report #42 \"Scroll <jumps>\":")
+        && rm.text.canFind("    Fixed in build 7 — please <re>test.\n    Second line.\n")
+        && rm.text.canFind("Status: in progress")
+        && rm.text.canFind("https://ircfiber.com/?/feedback"), "reporter text: lead, quoted body, status, feedback link");
+    check(!rm.text.canFind("/admin#/"), "reporter mail never links the admin pane");
+    check(rm.html.canFind("Scroll &lt;jumps&gt;") && rm.html.canFind("&lt;re&gt;test")
+        && !rm.html.canFind("<re>"), "reporter html escapes title and body");
+
+    auto s = n; s.type = "status_changed"; s.previousStatus = "open"; s.status = "resolved"; s.text = "";
+    check(supportSubject(s) == "[IRC Fiber support #42] Status: resolved — Scroll <jumps>", "status subject");
+    auto sm = supportReporterMail(s, "rep@example.org", "https://ircfiber.com");
+    check(sm.text.canFind("alice set your report #42 \"Scroll <jumps>\" to resolved (was open).")
+        && !sm.text.canFind("    "), "status text: transition, no empty quote block");
+
+    SupportMailNotice c;
+    c.type = "issue_created"; c.issueId = "abc-123"; c.number = 43; c.kind = "feature";
+    c.title = "Dark mode"; c.status = "open"; c.priority = "normal";
+    c.actor = "rep"; c.reporter = "rep"; c.text = "Please add it.";
+    check(supportSubject(c) == "[IRC Fiber support #43] New feature from rep: Dark mode", "created subject");
+    auto cm = supportStaffMail(c, "alice@example.org", "https://ircfiber.com/");
+    check(cm.text.canFind("rep filed a new feature report #43 \"Dark mode\":")
+        && cm.text.canFind("    Please add it.")
+        && cm.text.canFind("Triage: https://ircfiber.com/admin#/support/abc-123"), "staff text: lead, body, admin link");
+    check(cm.html.canFind("href=\"https://ircfiber.com/admin#/support/abc-123\""), "staff html admin link");
+
+    auto f = c; f.type = "comment_added"; f.reopened = true; f.text = "Still broken";
+    check(supportSubject(f) == "[IRC Fiber support #43] Follow-up from rep (reopened): Dark mode", "reopened subject");
+    auto fm = supportStaffMail(f, "alice@example.org", "https://ircfiber.com");
+    check(fm.text.canFind("rep followed up on #43 \"Dark mode\" (reopened):"), "reopened staff lead");
+}
+
 void main() {
     testParseBotCommand();
     testParseNewIssue();
@@ -319,6 +425,8 @@ void main() {
     testSummaryAndDetail();
     testSanitizeLine();
     testEventJsonRoundTrip();
+    testSupportMailRecipients();
+    testSupportMailContent();
     if (failures) {
         writefln("support format tests: %d FAILED", failures);
         import core.stdc.stdlib : exit;

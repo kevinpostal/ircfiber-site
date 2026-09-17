@@ -31,6 +31,7 @@ import ircfiber.models.user : User;
 import ircfiber.redis.protocol : RedisKeys;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.support.events : SupportEvent, pushSupportEvent;
+import ircfiber.support.mail : SupportMailNotice, notifySupportByMail;
 import ircfiber.support.json : supportIssueToJson, sanitizeLine, isValidStatus, isValidPriority;
 import ircfiber.tracing : isEnvEnabled;
 import ircfiber.web.admin.helpers : jsonOk, jsonError, readJsonBody;
@@ -181,6 +182,23 @@ package void apiSupportIssueUpdate(HTTPServerRequest req, HTTPServerResponse res
         ev.actorIsAdmin = true;
         ev.ts = now;
         pushSupportEvent(redis, ev);
+
+        SupportMailNotice n;
+        n.type = "status_changed";
+        n.issueId = r.id;
+        n.number = r.number;
+        n.kind = r.kind;
+        n.title = r.title;
+        n.status = status;
+        n.previousStatus = r.status;
+        n.priority = priority;
+        n.actorId = admin.id.toString();
+        n.actor = admin.username;
+        n.actorIsAdmin = true;
+        n.reporterId = r.userId;
+        n.reporter = r.reporterUsername;
+        n.assigneeId = assigneeId;
+        notifySupportByMail(redis, n);
     }
     jsonOk(res, detailJson(repo.getById(r.id)));
 }
@@ -229,6 +247,23 @@ package void apiSupportIssueComment(HTTPServerRequest req, HTTPServerResponse re
         ev.actorIsAdmin = true;
         ev.ts = now;
         pushSupportEvent(redis, ev);
+
+        SupportMailNotice n;
+        n.type = "comment_added";
+        n.issueId = r.id;
+        n.number = r.number;
+        n.kind = r.kind;
+        n.title = r.title;
+        n.status = r.status;
+        n.priority = r.priority;
+        n.actorId = admin.id.toString();
+        n.actor = admin.username;
+        n.actorIsAdmin = true;
+        n.reporterId = r.userId;
+        n.reporter = r.reporterUsername;
+        n.assigneeId = r.assigneeId;
+        n.text = text;
+        notifySupportByMail(redis, n);
     }
     jsonOk(res, detailJson(repo.getById(r.id)));
 }

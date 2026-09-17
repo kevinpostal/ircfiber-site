@@ -152,7 +152,9 @@ configuration "support-format-test" {
     targetName "support-format-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/support/format.d" "source/ircfiber/support/events.d" "source/ircfiber/support/json.d"
+    sourceFiles "source/ircfiber/support/format.d" "source/ircfiber/support/events.d" "source/ircfiber/support/json.d" \
+        "source/ircfiber/support/mail.d" "source/ircfiber/mail.d" "source/ircfiber/mail_events.d" \
+        "source/ircfiber/env.d" "source/ircfiber/logs/events.d"
     mainSourceFile "tests/support_format_test.d"
     versions "VibeUseFibers"
 }

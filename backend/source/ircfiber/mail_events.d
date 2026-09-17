@@ -68,7 +68,8 @@ private long jsonLong(Json j, string key) @safe {
 /// API token never reaches it — ircfiber.mail keeps it out of exceptions).
 /// `kind` is "signup_verification" | "password_reset" | "admin_test" |
 /// "campaign" (one row per mailed recipient) | "campaign_summary" (one
-/// #staff-only line per send).
+/// #staff-only line per send) | "support_notice" (one row per recipient of
+/// a Help & Feedback change, see ircfiber.support.mail).
 struct MailEvent {
     long atMs;          /// unix ms
     string kind;        /// "signup_verification" | "password_reset" | "admin_test" | "campaign"

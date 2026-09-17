@@ -27,6 +27,7 @@ import ircfiber.db.pastebins : PastebinRepository, PasteRecord, countLines;
 import ircfiber.db.img2irc_saves : Img2IrcSaveRecord, Img2IrcSaveRepository;
 import ircfiber.db.support_issues : SupportIssueRepository, SupportIssueRecord, SupportComment, SupportIssueContext;
 import ircfiber.support.events : SupportEvent, pushSupportEvent;
+import ircfiber.support.mail : SupportMailNotice, notifySupportByMail;
 import ircfiber.support.json : supportIssueToJson, isValidKind, sanitizeLine;
 import ircfiber.logs.events : LogEvent, pushLogEvent;
 import ircfiber.env : envSecret;
@@ -3891,6 +3892,21 @@ final class RESTAPI {
         ev.ts = now;
         pushSupportEvent(redis, ev);
 
+        SupportMailNotice n;
+        n.type = "issue_created";
+        n.issueId = rec.id;
+        n.number = rec.number;
+        n.kind = rec.kind;
+        n.title = rec.title;
+        n.status = rec.status;
+        n.priority = rec.priority;
+        n.actorId = uid;
+        n.actor = user.username;
+        n.reporterId = uid;
+        n.reporter = user.username;
+        n.text = rec.body_;
+        notifySupportByMail(redis, n);
+
         res.statusCode = 201;
         res.writeJsonBody(supportIssueToJson(rec, false, false));
     }
@@ -3948,6 +3964,23 @@ final class RESTAPI {
         ev.reopened = newStatus.length > 0;
         ev.ts = now;
         pushSupportEvent(redis, ev);
+
+        SupportMailNotice n;
+        n.type = "comment_added";
+        n.issueId = rec.id;
+        n.number = rec.number;
+        n.kind = rec.kind;
+        n.title = rec.title;
+        n.status = ev.status;
+        n.priority = rec.priority;
+        n.actorId = uid;
+        n.actor = user.username;
+        n.reporterId = uid;
+        n.reporter = rec.reporterUsername;
+        n.assigneeId = rec.assigneeId;
+        n.text = text;
+        n.reopened = ev.reopened;
+        notifySupportByMail(redis, n);
 
         res.writeJsonBody(supportIssueToJson(supportRepo.getById(rec.id), false, false));
     }

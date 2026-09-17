@@ -425,6 +425,8 @@ The gateway image also contains the `#support` services bot; it only runs in a p
 
 The bot is visible from the admin **IRCD** page (Overview → *Services bot* card, and its container logs in the Logs tab): every ≤5 s it publishes a heartbeat to the Redis key `irc:support:bot` (60 s TTL — no heartbeat = **Offline**) with nick, channel, session age, last disconnect reason, announcement/command counters and the outbox depth. The card's **Rejoin** / **Reconnect** buttons push `{cmd, by, ts}` onto `irc:support:bot:control` (consumed by the bot, ignored after 60 s), and **Announce** queues a `Notice from <admin>: …` line through the normal outbox, so it is delivered when the bot is back if it is currently away. All of this works from any gateway replica; only the bot container needs `IRCFIBER_SUPPORT_BOT_ENABLED`.
 
+The same changes also go out by e-mail through the configured mail provider (`ircfiber.support.mail`, see *Outbound mail* above; with no provider nothing is sent). An admin's public reply or status change mails the **reporter** (their account address, linking Help & Feedback); a new report or a reporter follow-up mails the **assignee**, or every admin with a well-formed address when the issue is unassigned. Internal notes never mail, the actor never mails themself, and sends run after the request has answered — a provider failure shows up only as a `support_notice` row on the admin **Emails** page and in the `#staff` feed, never as an error to the person who commented.
+
 `vault_support_bot_nickserv_password` is the NickServ password of the bot nick; the bot sends `IDENTIFY` after 001 when it is set (leave it empty to skip — on a nick collision the bot runs as `FIBERSUPPORT_`). Roll out in this order:
 
 ```bash
