@@ -40,7 +40,8 @@ import ircfiber.models.network : NetworkConfig;
 import ircfiber.models.user : User;
 import ircfiber.redis.protocol : ControlMessage, RedisKeys;
 import ircfiber.services.anope : AnopeSettings, anopeAccessDenied, anopeOperCommand,
-    anopeOperQuery, flattenReplyText, isSafeServicesArg, loadAnopeSettings, parseNickInfo;
+    anopeOperQuery, flattenReplyText, isSafeServicesArg, loadAnopeSettings, nickServDropCommand,
+    parseNickInfo;
 import ircfiber.storage.buffer : BufferManager;
 import ircfiber.storage.redis : RedisStorage;
 import ircfiber.upload.local : uploadDir;
@@ -267,7 +268,7 @@ private void dropOneServicesAccount(AnopeSettings s, User user, string account, 
     import std.uni : toLower;
 
     foreach (attempt; 0 .. 2) {
-        auto r = anopeOperCommand(s, "DROP " ~ account);
+        auto r = anopeOperCommand(s, nickServDropCommand(account));
         if (anopeAccessDenied(r)) {
             logWarn("purge %s: Anope refused to drop %s — the services oper account has "
                     ~ "no privileges", user.username, account);

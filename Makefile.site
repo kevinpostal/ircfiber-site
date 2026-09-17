@@ -1831,9 +1831,13 @@ deploy-signoz-alerts: ## SigNoz > Push alert rules + notification channel (idemp
 deploy-signoz: deploy-signoz-dashboards deploy-signoz-alerts ## SigNoz > Push both dashboards + alerts
 
 # ── IRC daemon (InspIRCd + Anope) deploy ────────────────────────────────────────
-# Deploys InspIRCd 4 + Anope 2 services to OVH (irc.ircfiber.com).
-# Requires vault_ircd_oper_password, vault_ircd_services_link_password and
-# vault_ircd_cloak_key in vault.yml first.
+# Deploys InspIRCd 4 + the Anope 2.1 services instance (accounts, channels
+# and the Discord bridge in one process) to OVH (irc.ircfiber.com).
+# Requires vault_ircd_oper_password, vault_ircd_services_link_password,
+# vault_ircd_cloak_key, vault_ircd_services_rpc_token and
+# vault_bridgeserv_discord_token in vault.yml first. The first run against
+# a 2.0 data volume performs the one-shot anope.db → anope.json migration
+# (see deploy/README.md).
 #
 # Usage:
 #   make deploy-ircd

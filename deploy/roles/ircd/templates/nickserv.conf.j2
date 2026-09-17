@@ -1,171 +1,881 @@
 /*
  * {{ ansible_managed }}
- * NickServ — derived from Anope 2.0 data/nickserv.example.conf with the
- * IRC Fiber deltas: forceemail=no (no mailer), expire={{ ircd_services_nick_expire }}.
+ * NickServ — derived from Anope 2.1 data/nickserv.example.conf with the
+ * IRC Fiber deltas: forceemail=no (no mailer), expire={{ ircd_services_nick_expire }},
+ * ns_register registration="none" (2.1's example ships "code", which would
+ * leave every account the gateway registers over RPC UNCONFIRMED and
+ * expiring after unconfirmedexpire — 2.0 ran "none" for the same reason),
+ * ns_resetpass not loaded (no mailer, as in 2.0),
+ * ns_sasl + ns_sasl_plain loaded (uncommented) for the engine's IRCv3 SASL
+ * PLAIN logins — SASL moved out of modules.example.conf into this file in
+ * 2.1, and the 2.0 template got it from m_sasl there. ns_sasl_anonymous is
+ * dropped (ANONYMOUS only logs out of an account; unauthenticated surface
+ * we do not need); ns_sasl_external stays at its upstream default.
  * Mounted at /anope/conf/nickserv.conf.
  */
 
+/*
+ * Example configuration file for NickServ.
+ */
+
+/*
+ * First, create the service.
+ */
 service
 {
+	/*
+	 * The name of the NickServ client.
+	 * If you change this value, you probably want to change the client directive in the configuration for the nickserv module too.
+	 */
 	nick = "NickServ"
+
+	/*
+	 * The username of the NickServ client.
+	 */
 	user = "services"
-	host = "services.host"
-	gecos = "Nickname Registration Service"
+
+	/*
+	 * The hostname of the NickServ client.
+	 */
+	host = "${services.host}"
+
+	/*
+	 * The realname of the NickServ client.
+	 */
+	real = "Nickname Registration Service"
+
+	/*
+	 * The modes this client should use.
+	 * Do not modify this unless you know what you are doing.
+	 *
+	 * These modes are very IRCd specific. If left commented, sane defaults
+	 * are used based on what protocol module you have loaded.
+	 *
+	 * Note that setting this option incorrectly could potentially BREAK some, if
+	 * not all, usefulness of the client. We will not support you if this client is
+	 * unable to do certain things if this option is enabled.
+	 */
+	#modes = "+o"
+
+	/*
+	 * An optional comma separated list of channels this service should join. Outside
+	 * of log channels this is not very useful, as the service will just idle in the
+	 * specified channels, and will not accept any types of commands.
+	 *
+	 * Prefixes may be given to the channels in the form of mode characters or prefix symbols.
+	 */
+	#channels = "@#services,#mychan"
+
+	/*
+	 * The server alias that can be used to securely message this service. If
+	 * your IRC server does not have an alias for this service you can set this
+	 * to an empty string to tell users to use /msg instead.
+	 *
+	 * This setting is ignored when options:servicealias is disabled.
+	 *
+	 * Defaults to the nick of the service if not set.
+	 */
+	#alias = "NS"
 }
 
+/*
+ * Core NickServ module.
+ *
+ * Provides essential functionality for NickServ.
+ */
 module
 {
 	name = "nickserv"
+
+	/*
+	 * The name of the client that should be NickServ.
+	 */
 	client = "NickServ"
+
+	/*
+	 * Requires users to give an email address when they register a nick.
+	 *
+	 * This directive defaults to "yes" and is recommended to be enabled.
+	 */
 	forceemail = no
-	confirmemailchanges = no
-	defaults = "killprotect ns_secure ns_private hide_email hide_mask memo_signon memo_receive autoop"
-	regdelay = 30s
+
+	/*
+	 * Require users who change their email address to confirm they
+	 * own their new email.
+	 *
+	 * If {ns_register}:registration is set to mail then this defaults
+	 * to yes. Otherwise, it defaults to no.
+	 */
+	#confirmemailchanges = yes
+
+	/*
+	 * A message sent to users on connect if they use an unregistered nick. {nick} will be replaced with the user's nickname.
+	 *
+	 * This directive is optional.
+	 */
+	#unregistered_notice = "Your nickname is not registered. To register it, use: /msg NickServ REGISTER password email"
+
+	/*
+	 * The default options for newly registered nicks. Note that changing these options
+	 * will have no effect on nicks which are already registered. The list must be separated
+	 * by spaces.
+	 *
+	 * The options are:
+	 * -    ns_private: Hide the nick from NickServ's LIST command
+	 * -    hide_email: Hide the nick's email address from NickServ's INFO command
+	 * -     hide_mask: Hide the nick's last or current user@host from NickServ's INFO command
+	 * -   hide_status: Hide the nick's services operator access status from NickServ's INFO command
+	 * -     hide_quit: Hide the nick's last quit message from NickServ's INFO command
+	 * -   memo_signon: Notify user if they have a new memo when they sign into the nick
+	 * -  memo_receive: Notify user if they have a new memo as soon as it's received
+	 * -     memo_mail: Notify user if they have a new memo by mail
+	 * -     autologin: User will be automatically logged in when they connect with a known SSL cert.
+	 * -        autoop: User will be automatically opped in channels they enter and have access to
+	 * -       neverop: User can not be added to access lists
+	 * -           msg: Messages will be sent as PRIVMSGs instead of NOTICEs
+	 * - ns_keep_modes: Enables keepmodes, which retains user modes across sessions
+	 * -       protect: Protects the registered nickname from use by unidentified users.
+	 * -      ns_stats: Enable Chanstats for newly registered nicks
+	 * -   ns_flexible: Set FLEXIBLE as layout for messages from services (can not be set at the same
+	 *                  time as ns_monospace)
+	 * -  ns_monospace: Set MONOSPACE as layout for messages from services (can not be set as the same
+	 *                  time as ns_flexible)
+	 *
+	 * This directive is optional, if left blank, the options will default to memo_signon, and
+	 * memo_receive. If you really want no defaults, use "none" by itself as the option.
+	 */
+	defaults = "autoop hide_email hide_mask memo_receive memo_signon ns_private protect"
+
+	/*
+	 * The minimum length of time between consecutive uses of NickServ's REGISTER command. This
+	 * directive is optional, but recommended. If not set, it defaults to 15 minutes.
+	 */
+	regdelay = 15m
+
+	/*
+	 * The length of time before a nick's registration expires.
+	 *
+	 * This directive is optional, but recommended. If not set, the default is one year.
+	 */
 	expire = {{ ircd_services_nick_expire }}
+
+	/*
+	 * Prevents the use of the ACCESS and CERT (excluding their LIST subcommand), DROP, FORBID, SUSPEND
+	 * and SET PASSWORD commands by services operators on other services operators.
+	 *
+	 * This directive is optional, but recommended.
+	 */
 	secureadmins = yes
+
+	/*
+	 * If set, Anope will set the channel modes a user has access to upon identifying, assuming
+	 * they are not already set.
+	 *
+	 * This directive is optional.
+	 */
 	modeonid = yes
-	hidenetsplitquit = no
-	killquick = 20s
-	kill = 60s
+
+	/*
+	 * If set, Anope will set these user modes on any user who identifies.
+	 *
+	 * This directive is optional.
+	 */
+	#modesonid = "+R"
+
+	/*
+	 * If set, Anope will not show netsplits in the last quit message field
+	 * of NickServ's INFO command.
+	 */
+	hidenetsplitquit = yes
+
+	/*
+	 * The default period to force users to stop using a protected nickname after.
+	 *
+	 * Defaults to 1 minute.
+	 */
+	defaultprotect = 1m
+
+	/*
+	 * The minimum period that a user can have a user forced off their protected nickname after.
+	 *
+	 * Defaults to 10 seconds.
+	 */
+	minprotect = 10s
+
+	/*
+	 * The maximum period that a user can have a user forced off their protected nickname after.
+	 *
+	 * Defaults to 10 minutes.
+	 */
+	maxprotect = 10m
+
+	/*
+	 * If set, forbids the registration of nicks that contain an existing
+	 * nick with services access. For example, if Tester is a Services Oper,
+	 * you can't register NewTester or Tester123 unless you are an IRC
+	 * Operator.
+	 *
+	 * NOTE: If you enable this, you will have to be logged in as an IRC
+	 * operator in order to register a Services Root nick when setting up
+	 * Anope for the first time.
+	 *
+	 * This directive is optional.
+	 */
+	#restrictopernicks = yes
+
+	/*
+	 * The username, hostname, and real name used for pseudoclients created when
+	 * Anope needs to hold a nickname. This is only used if your IRCd does not
+	 * support SVSHOLDs.
+	 */
 	enforceruser = "enforcer"
-	enforcerhost = "services.host"
+	enforcerhost = "${services.host}"
+	enforcerreal = "Services Enforcer"
+
+	/*
+	 * The length of time Anope should hold nicknames for.
+	 *
+	 * This directive is optional, but recommended. If not set it defaults to 1 minute.
+	 */
 	releasetimeout = 1m
-	guestnickprefix = "Guest"
+
+	/*
+	 * When a user's nick is forcibly changed to enforce nickname protection their new
+	 * nick will be based on this value. Any # in the value will be replaced with a random
+	 * number. If your IRCd has support for unique identifiers you can also set this to an
+	 * empty string to change a user's nick to their unique identifier.
+	 *
+	 * Make sure this is a valid nick and that it is is not longer than the maximum nick
+	 * length on your IRCd.
+	 *
+	 * This directive is optional. If not set it defaults to "Guest####"
+	 */
+	guestnick = "Guest####"
+
+	/*
+	 * If set, Anope does not allow ownership of nick names, only ownership of accounts.
+	 */
 	nonicknameownership = no
-	passlen = 32
+
+	/*
+	 * The minimum length of passwords
+	 *
+	 * This directive is optional. If not set it defaults to 10.
+	 */
+	minpasslen = 10
+
+	/*
+	 * The maximum length of passwords
+	 *
+	 * This directive is optional. If not set it defaults to 50.
+	 */
+	maxpasslen = 50
+
+	/*
+	 * Whether all of the secondary nicks of an account have to expire or be
+	 * dropped before the display nick can expire or be dropped.
+	 */
+	preservedisplay = no
 }
 
+/*
+ * Core NickServ commands.
+ *
+ * In Anope modules can provide (multiple) commands, each of which has a unique command name. Once these modules
+ * are loaded you can then configure the commands to be added to any client you like with any name you like.
+ *
+ * Additionally, you may provide a permission name that must be in the opertype of users executing the command.
+ *
+ * Sane defaults are provided below that do not need to be edited unless you wish to change the default behavior.
+ */
+
+/* Command group configuration for NickServ.
+ *
+ * Commands may optionally be placed into groups to make NickServ's HELP output easier to understand.
+ * Remove the following groups to use the old behavior of simply listing all NickServ commands from HELP.
+ */
 command_group
 {
 	name = "nickserv/admin"
 	description = _("Services Operator commands")
 }
 
-command { service = "NickServ"; name = "HELP"; command = "generic/help"; }
+/* Give it a help command. */
+command { service = "NickServ"; name = "HELP"; command = "generic/help" }
 
-module
-{
-	name = "ns_access"
-	accessmax = 32
-	addaccessonreg = no
-}
-command { service = "NickServ"; name = "ACCESS"; command = "nickserv/access"; }
-
+/*
+ * ns_ajoin
+ *
+ * Provides the command nickserv/ajoin.
+ *
+ * Used for configuring channels to join once you identify.
+ */
 module
 {
 	name = "ns_ajoin"
+
+	/*
+	 * The maximum number of channels a user can have on NickServ's AJOIN command.
+	 */
 	ajoinmax = 10
 }
-command { service = "NickServ"; name = "AJOIN"; command = "nickserv/ajoin"; }
+command { service = "NickServ"; name = "AJOIN"; command = "nickserv/ajoin" }
 
+/*
+ * ns_alist
+ *
+ * Provides the command nickserv/alist.
+ *
+ * Used for viewing what channels you have access to.
+ */
 module { name = "ns_alist" }
-command { service = "NickServ"; name = "ALIST"; command = "nickserv/alist"; }
+command { service = "NickServ"; name = "ALIST"; command = "nickserv/alist" }
+command { service = "NickServ"; name = "ACCESS"; command = "nickserv/alist"; hide = yes }
 
+/*
+ * ns_cert
+ *
+ * Provides the command nickserv/cert.
+ *
+ * Used for configuring your SSL certificate list, which can be used to automatically identify you.
+ */
 module
 {
 	name = "ns_cert"
+
+	/*
+	* Should users who are connected with a SSL client certificate have its fingerprint be added to
+	* their account when they register. Defaults to yes.
+	*/
+	automatic = yes
+
+	/*
+	 * The maximum number of entries allowed on a nickname's certificate fingerprint list.
+	 * The default is 5. This number cannot be set to 0.
+	 */
 	max = 5
 }
-command { service = "NickServ"; name = "CERT"; command = "nickserv/cert"; }
+command { service = "NickServ"; name = "CERT"; command = "nickserv/cert" }
+command { service = "NickServ"; name = "SET AUTOLOGIN"; command = "nickserv/set/autologin" }
+command { service = "NickServ"; name = "SASET AUTOLOGIN"; command = "nickserv/saset/autologin"; permission = "nickserv/saset/autologin" }
 
+
+/*
+ * ns_confirm
+ *
+ * Provides the command nickserv/confirm.
+ *
+ * Used for confirming previous account actions.
+ */
+module { name = "ns_confirm" }
+command { service = "NickServ"; name = "CONFIRM"; command = "nickserv/confirm" }
+
+/*
+ * ns_drop
+ *
+ * Provides the command nickserv/drop.
+ *
+ * Used for unregistering names.
+ */
 module { name = "ns_drop" }
-command { service = "NickServ"; name = "DROP"; command = "nickserv/drop"; }
+command { service = "NickServ"; name = "DROP"; command = "nickserv/drop" }
 
-module { name = "ns_getemail" }
-command { service = "NickServ"; name = "GETEMAIL"; command = "nickserv/getemail"; permission = "nickserv/getemail"; group = "nickserv/admin"; }
+/*
+ * ns_email
+ *
+ * Provides various functionality relating to email addresses. This includes the
+ * following commands:
+ *
+ * - nickserv/confirm/email: Used for confirming email changes.
+ * - nickserv/getemail: Used for getting accounts by searching for emails.
+ * - nickserv/set/email, nickserv/saset/email: Used for setting an account's
+ *   emailvaddress.
+ */
+module
+{
+	name = "ns_email"
 
+	/*
+	 * The amount of time a user has after requesting a change of email address
+	 * before it expires. Defaults to 1 day.
+	 */
+	#changeexpire = 1d
+
+	/*
+	 * The limit to how many registered accounts can use the same email address.
+	 * If set to 0 or left commented there will be no limit enforced when
+	 * registering new accounts or using /msg NickServ SET EMAIL.
+	 */
+	#maxemails = 1
+
+	/*
+	 * Whether to attempt to remove aliases when counting email addresses. This
+	 * means removing dots (.) and anything after a plus (+) in the user part of
+	 * the address, e.g. foo.bar+baz@example.com -> foobar@example.com.
+	 */
+	#remove_aliases = yes
+}
+command { service = "NickServ"; name = "CONFIRM EMAIL"; command = "nickserv/confirm/email" }
+command { service = "NickServ"; name = "GETEMAIL"; command = "nickserv/getemail"; permission = "nickserv/getemail"; group = "nickserv/admin" }
+command { service = "NickServ"; name = "SET EMAIL"; command = "nickserv/set/email" }
+command { service = "NickServ"; name = "SASET EMAIL"; command = "nickserv/saset/email"; permission = "nickserv/saset/email" }
+
+/*
+ * ns_group
+ *
+ * Provides the commands:
+ *   nickserv/group
+ *   nickserv/ungroup
+ *   nickserv/glist
+ *   nickserv/saset/display
+ *   nickserv/set/display
+ *
+ * Used for controlling grouped nicknames.
+ */
 module
 {
 	name = "ns_group"
-	maxaliases = 16
+
+	/*
+	 * The minimum length of time between consecutive uses of the GROUP command. This directive is
+	 * optional, but recommended. If not set, it defaults to 5 minutes.
+	 */
+	delay = 5m
+
+	/*
+	 * The maximum number of nicks allowed in a group.
+	 *
+	 * This directive is optional, but recommended. If not set or set to 0, no limits will be applied.
+	 */
+	maxaliases = 10
+
+	/*
+	 * If set, the NickServ GROUP command won't allow any group changes. This is recommended to
+	 * prevent users from accidentally dropping their nicks, as it forces users to explicitly
+	 * drop their nicks before adding it to another group.
+	 *
+	 * This directive is optional, but recommended.
+	 */
 	nogroupchange = yes
 }
-command { service = "NickServ"; name = "GLIST"; command = "nickserv/glist"; }
-command { service = "NickServ"; name = "GROUP"; command = "nickserv/group"; }
-command { service = "NickServ"; name = "UNGROUP"; command = "nickserv/ungroup"; }
+command { service = "NickServ"; name = "GLIST"; command = "nickserv/glist" }
+command { service = "NickServ"; name = "GROUP"; command = "nickserv/group" }
+command { service = "NickServ"; name = "UNGROUP"; command = "nickserv/ungroup" }
+command { service = "NickServ"; name = "SET DISPLAY"; command = "nickserv/set/display" }
+command { service = "NickServ"; name = "SASET DISPLAY"; command = "nickserv/saset/display"; permission = "nickserv/saset/display" }
 
+# For compatibility with Atheme.
+command { service = "NickServ"; name = "SET ACCOUNTNAME"; command = "nickserv/set/display"; hide = yes }
+command { service = "NickServ"; name = "SASET ACCOUNTNAME"; command = "nickserv/saset/display"; permission = "nickserv/saset/display"; hide = yes }
+
+/*
+ * ns_identify
+ *
+ * Provides the command nickserv/identify.
+ *
+ * Used for identifying to accounts.
+ */
 module
 {
 	name = "ns_identify"
+
+	/*
+	 * If set, limits the number of concurrent users that can be logged in as a given account at once.
+	 */
 	maxlogins = 10
 }
-command { service = "NickServ"; name = "ID"; command = "nickserv/identify"; hide = yes; }
-command { service = "NickServ"; name = "IDENTIFY"; command = "nickserv/identify"; }
+command { service = "NickServ"; name = "ID"; command = "nickserv/identify"; hide = yes }
+command { service = "NickServ"; name = "IDENTIFY"; command = "nickserv/identify" }
 
+/*
+ * ns_info
+ *
+ * Provides the commands:
+ * nickserv/info. - Used for gathering information about an account.
+ * nickserv/set/hide, nickserv/saset/hide - Used for configuring which options are publicly shown in nickserv/info.
+ *
+ */
 module { name = "ns_info" }
-command { service = "NickServ"; name = "INFO"; command = "nickserv/info"; }
-command { service = "NickServ"; name = "SET HIDE"; command = "nickserv/set/hide"; }
-command { service = "NickServ"; name = "SASET HIDE"; command = "nickserv/saset/hide"; permission = "nickserv/saset/hide"; }
+command { service = "NickServ"; name = "INFO"; command = "nickserv/info" }
 
+command { service = "NickServ"; name = "SET HIDE"; command = "nickserv/set/hide" }
+command { service = "NickServ"; name = "SASET HIDE"; command = "nickserv/saset/hide"; permission = "nickserv/saset/hide" }
+
+/*
+ * ns_list
+ *
+ * Provides the commands:
+ *   nickserv/list - Used for retrieving and searching the registered account list.
+ *   nickserv/set/private, nickserv/saset/private - Used for configuring whether or a users account shows up in nickserv/list.
+ *
+ */
 module
 {
 	name = "ns_list"
+
+	/*
+	 * The maximum number of nicks to be returned for a NickServ LIST command.
+	 */
 	listmax = 50
 }
-command { service = "NickServ"; name = "LIST"; command = "nickserv/list"; }
-command { service = "NickServ"; name = "SET PRIVATE"; command = "nickserv/set/private"; }
-command { service = "NickServ"; name = "SASET PRIVATE"; command = "nickserv/saset/private"; permission = "nickserv/saset/private"; }
+command { service = "NickServ"; name = "LIST"; command = "nickserv/list" }
+command { service = "NickServ"; name = "SET PRIVATE"; command = "nickserv/set/private" }
+command { service = "NickServ"; name = "SASET PRIVATE"; command = "nickserv/saset/private"; permission = "nickserv/saset/private" }
 
+/*
+ * ns_logout
+ *
+ * Provides the command nickserv/logout.
+ *
+ * Used for logging out of your account.
+ */
 module { name = "ns_logout" }
-command { service = "NickServ"; name = "LOGOUT"; command = "nickserv/logout"; }
+command { service = "NickServ"; name = "LOGOUT"; command = "nickserv/logout" }
 
+/*
+ * ns_recover
+ *
+ * Provides the command nickserv/recover.
+ *
+ * Used for recovering your nick from services or another user.
+ */
 module
 {
 	name = "ns_recover"
+
+	/*
+	 * If set, Anope will svsnick and svsjoin users who use the recover
+	 * command on an identified user to the nick and channels of the recovered user.
+	 *
+	 * This directive is optional.
+	 */
 	restoreonrecover = yes
 }
-command { service = "NickServ"; name = "RECOVER"; command = "nickserv/recover"; }
+command { service = "NickServ"; name = "RECOVER"; command = "nickserv/recover" }
 
+# For compatibility with Anope 1.8 and Atheme.
+command { service = "NickServ"; name = "GHOST"; command = "nickserv/recover"; hide = yes }
+command { service = "NickServ"; name = "RELEASE"; command = "nickserv/recover"; hide = yes }
+
+/*
+ * ns_register
+ *
+ * Provides the commands nickserv/confirm/register, nickserv/register, and nickserv/resend.
+ *
+ * Used for registering accounts.
+ */
 module
 {
 	name = "ns_register"
-	registration = "none"
-	resenddelay = 90s
-}
-command { service = "NickServ"; name = "CONFIRM"; command = "nickserv/confirm"; }
-command { service = "NickServ"; name = "REGISTER"; command = "nickserv/register"; }
-command { service = "NickServ"; name = "RESEND"; command = "nickserv/resend"; }
 
+	/*
+	 * The method for confirming account registrations. Possible values are:
+	 *
+	 * "admin" to require confirmation by a Services Operator.
+	 * "code" to require confirmation with a code provided via IRC.
+	 * "disable" to disable account registration.
+	 * "mail" to require confirmation with a code provided via email.
+	 * "none" to automatically confirm (this is the default).
+	 *
+	 * IRC Fiber: "none". There is no mailer, and the gateway registers a
+	 * website user's nick offline over RPC — nobody is on IRC to type a
+	 * CONFIRM code, and an UNCONFIRMED account is released again after
+	 * unconfirmedexpire. Same value as the 2.0 template.
+	 */
+	registration = "none"
+
+	/*
+	 * The minimum length of time between consecutive uses of NickServ's RESEND command.
+	 *
+	 * This directive is optional, but recommended. If not set, this restriction will be disabled.
+	 */
+	resenddelay = 90s
+
+	/*
+	 * Prevents users from registering their nick if they are not connected
+	 * for at least the given number of seconds.
+	 *
+	 * This directive is optional.
+	 */
+	#nickregdelay = 1m
+
+	/*
+	 * The length of time a user using an unconfirmed account has
+	 * before the account will be released for general use again.
+	 */
+	#unconfirmedexpire = 1d
+}
+command { service = "NickServ"; name = "CONFIRM REGISTER"; command = "nickserv/confirm/register" }
+command { service = "NickServ"; name = "REGISTER"; command = "nickserv/register" }
+command { service = "NickServ"; name = "RESEND"; command = "nickserv/resend" }
+
+/*
+ * ns_resetpass
+ *
+ * Provides the command nickserv/confirm/resetpass and nickserv/resetpass.
+ *
+ * Used for resetting passwords by emailing users a temporary one.
+ *
+ * IRC Fiber: not loaded, as in the 2.0 template. There is no mailer
+ * (mail { usemail = no }), so the module refuses to initialise ("Not
+ * using mail") and the RESETPASS/GETPASS commands could never work;
+ * password resets go through the website account instead.
+ */
+#module
+{
+	name = "ns_resetpass"
+
+	/*
+	 * The amount of time a user has after requesting a password reset before it
+	 * expires. Defaults to 1 day.
+	 */
+	#resetexpire = 1d
+}
+#command { service = "NickServ"; name = "CONFIRM RESETPASS"; command = "nickserv/confirm/resetpass" }
+#command { service = "NickServ"; name = "RESETPASS"; command = "nickserv/resetpass" }
+
+# For compatibility with Anope 2.0.
+#command { service = "NickServ"; name = "GETPASS"; command = "nickserv/resetpass"; hide = yes }
+
+/*
+ * ns_sasl
+ *
+ * Provides support for authentication to services via IRCv3 SASL. This is a standardised
+ * alternative to ns_identify that is supported by several IRCds.
+ *
+ * You will need to configure your IRCd to use SASL. See the following links for details:
+ *
+ * InspIRCd: https://docs.inspircd.org/4/modules/sasl/
+ * UnrealIRCd: https://www.unrealircd.org/docs/SASL#Enabling_SASL_on_the_server
+ */
 module
 {
-	name = "ns_set"
+	name = "ns_sasl"
+
+	/*
+	 * The nick of the client which operates as the SASL agent.
+	 */
+	#agent = "NickServ"
+
+	/*
+	 * Sets the number of invalid SASL authentication attempts before services
+	 * removes a partially-connected user from the network. If not defined then
+	 * the value specified in options:badpasslimit will be used instead.
+	 */
+	#badpasslimit = 1
+
+	/*
+	 * Sets the time after which invalid SASL authentication attempts are
+	 * forgotten about. If a user does not fail to authenticate in this amount
+	 * of time, the incorrect password count will reset to zero. If not defined
+	 * then the value specified in options:badpasstimeout will be used instead.
+	 */
+	#badpasstimeout = 15m
 }
-command { service = "NickServ"; name = "SET"; command = "nickserv/set"; }
-command { service = "NickServ"; name = "SASET"; command = "nickserv/saset"; permission = "nickserv/saset/"; group = "nickserv/admin"; }
-command { service = "NickServ"; name = "SET AUTOOP"; command = "nickserv/set/autoop"; }
-command { service = "NickServ"; name = "SASET AUTOOP"; command = "nickserv/saset/autoop"; permission = "nickserv/saset/autoop"; }
-command { service = "NickServ"; name = "SET DISPLAY"; command = "nickserv/set/display"; }
-command { service = "NickServ"; name = "SASET DISPLAY"; command = "nickserv/saset/display"; permission = "nickserv/saset/display"; }
-command { service = "NickServ"; name = "SET EMAIL"; command = "nickserv/set/email"; }
-command { service = "NickServ"; name = "SASET EMAIL"; command = "nickserv/saset/email"; permission = "nickserv/saset/email"; }
-command { service = "NickServ"; name = "SET KEEPMODES"; command = "nickserv/set/keepmodes"; }
-command { service = "NickServ"; name = "SASET KEEPMODES"; command = "nickserv/saset/keepmodes"; permission = "nickserv/saset/keepmodes"; }
-command { service = "NickServ"; name = "SET KILL"; command = "nickserv/set/kill"; }
-command { service = "NickServ"; name = "SASET KILL"; command = "nickserv/saset/kill"; permission = "nickserv/saset/kill"; }
-command { service = "NickServ"; name = "SET LANGUAGE"; command = "nickserv/set/language"; }
-command { service = "NickServ"; name = "SASET LANGUAGE"; command = "nickserv/saset/language"; permission = "nickserv/saset/language"; }
-command { service = "NickServ"; name = "SET MESSAGE"; command = "nickserv/set/message"; }
-command { service = "NickServ"; name = "SASET MESSAGE"; command = "nickserv/saset/message"; permission = "nickserv/saset/message"; }
-command { service = "NickServ"; name = "SET PASSWORD"; command = "nickserv/set/password"; }
-command { service = "NickServ"; name = "SASET PASSWORD"; command = "nickserv/saset/password"; permission = "nickserv/saset/password"; }
-command { service = "NickServ"; name = "SET SECURE"; command = "nickserv/set/secure"; }
-command { service = "NickServ"; name = "SASET SECURE"; command = "nickserv/saset/secure"; permission = "nickserv/saset/secure"; }
-command { service = "NickServ"; name = "SASET NOEXPIRE"; command = "nickserv/saset/noexpire"; permission = "nickserv/saset/noexpire"; }
 
+/*
+ * ns_sasl_anonymous, ns_sasl_external, ns_sasl_plain
+ *
+ * Provides support for the following SASL mechanisms:
+ *
+ * ns_sasl_anonymous: Adds the ANONYMOUS mechanism which allows logging out of
+ *                    an account. See RFC 4505 for more details.
+ * ns_sasl_external:  Adds the EXTERNAL mechanism which allows logging into an
+                      account using a TLS client certificate. See RFC 4422 for
+                      for more details.
+ * ns_sasl_plain:     Adds the PLAIN mechanism which allows logging in to an
+                      account using a plain text username and password. See RFC
+                      4422 for more details.
+ */
+/* ns_sasl_anonymous dropped: ANONYMOUS only logs out (RFC 4505); PLAIN below is what the engine logs in with. */
+module { name = "ns_sasl_external" }
+module { name = "ns_sasl_plain" }
+
+/*
+ * ns_set
+ *
+ * Provides the commands:
+ *   nickserv/set, nickserv/saset - Dummy help wrappers for the SET and SASET commands.
+ *   nickserv/saset/noexpire - Used for configuring noexpire, which prevents nicks from expiring.
+ *   nickserv/set/password, nickserv/saset/password  - Used for changing a users password.
+ */
+module { name = "ns_set" }
+
+command { service = "NickServ"; name = "SET"; command = "nickserv/set" }
+command { service = "NickServ"; name = "SASET"; command = "nickserv/saset"; permission = "nickserv/saset/"; group = "nickserv/admin" }
+
+command { service = "NickServ"; name = "SET PASSWORD"; command = "nickserv/set/password" }
+command { service = "NickServ"; name = "SASET PASSWORD"; command = "nickserv/saset/password"; permission = "nickserv/saset/password" }
+
+command { service = "NickServ"; name = "SASET NOEXPIRE"; command = "nickserv/saset/noexpire"; permission = "nickserv/saset/noexpire" }
+
+/*
+ * ns_set_keepmodes
+ *
+ * Provides the command nickserv/set/keepmodes and nickserv/saset/keepmodes.
+ *
+ * Allows configuring services to keep user modes across logins.
+ */
+module
+{
+	name = "ns_set_keepmodes"
+
+	/*
+	 * Anope will try to not restore user modes that aren't settable by users. However, if
+	 * you have modes that you don't want to be automatically restored you can list them
+	 * here.
+	 */
+	#norestore = "ABCabc"
+}
+command { service = "NickServ"; name = "SET KEEPMODES"; command = "nickserv/set/keepmodes" }
+command { service = "NickServ"; name = "SASET KEEPMODES"; command = "nickserv/saset/keepmodes"; permission = "nickserv/saset/keepmodes" }
+
+/*
+ * ns_set_language
+ *
+ * Provides the command nickserv/set/language and nickserv/saset/language.
+ *
+ * Allows configuring the language that services uses.
+ */
+module { name = "ns_set_language" }
+command { service = "NickServ"; name = "SET LANGUAGE"; command = "nickserv/set/language" }
+command { service = "NickServ"; name = "SASET LANGUAGE"; command = "nickserv/saset/language"; permission = "nickserv/saset/language" }
+
+/*
+ * ns_set_layout
+ *
+ * Provides the command nickserv/set/layout and nickserv/saset/layout.
+ *
+ * Allows configuring the layout that services uses.
+ */
+module { name = "ns_set_layout" }
+command { service = "NickServ"; name = "SET LAYOUT"; command = "nickserv/set/layout" }
+command { service = "NickServ"; name = "SASET LAYOUT"; command = "nickserv/saset/layout"; permission = "nickserv/saset/layout" }
+
+/*
+ * ns_set_message
+ *
+ * Provides the commands nickserv/set/message and nickserv/saset/message.
+ *
+ * Allows users to let services send them PRIVMSGs instead of NOTICEs.
+ *
+ * This might cause problems with badly written clients as the IRC RFC
+ * requires that automatic responses to a PRIVMSG use a NOTICE to avoid
+ * message loops. Only enable this if you are sure this can not happen.
+ */
+#module { name = "ns_set_message" }
+#command { service = "NickServ"; name = "SET MESSAGE"; command = "nickserv/set/message" }
+#command { service = "NickServ"; name = "SASET MESSAGE"; command = "nickserv/saset/message"; permission = "nickserv/saset/message" }
+
+/*
+ * ns_set_misc
+ *
+ * Provides the command nickserv/set/misc.
+ *
+ * Allows you to create arbitrary commands to set data, and have that data show
+ * up in nickserv/info. You can configure this using the following fields:
+ *
+ *   misc_description: A description of the command to show in the help.
+ *   misc_title: A human-readable description of the stored data.
+ *   misc_priority: Positive integer representing display order in nickserv/info
+ *                  and (if enabled) WHOIS output. Entries with unspecified
+ *                  priority will be prioritized in the order of declaration.
+ *   misc_pattern: If defined then a regex pattern (using the engine specified
+ *                 in <options:regexengine> to validate the data with).
+ *   misc_syntax: If defined then the syntax to show in the help output and, if
+ *                misc_pattern is defined, when a user specifies an invalid
+ *                value.
+ *   misc_swhois: Whether to also show the data in the WHOIS output of logged
+ *                in users. Requires that your IRCd supports multiple swhois
+                  entries.
+ */
 module { name = "ns_set_misc" }
-command { service = "NickServ"; name = "SET URL"; command = "nickserv/set/misc"; misc_description = _("Associate a URL with your account"); }
-command { service = "NickServ"; name = "SASET URL"; command = "nickserv/saset/misc"; misc_description = _("Associate a URL with this account"); permission = "nickserv/saset/url"; group = "nickserv/admin"; }
+command { service = "NickServ"; name = "SET URL"; command = "nickserv/set/misc"; misc_description = _("Associate a URL with your account"); misc_pattern = "^https?:\/\/\S+$"; misc_swhois = yes }
+command { service = "NickServ"; name = "SASET URL"; command = "nickserv/saset/misc"; misc_description = _("Associate a URL with this account"); permission = "nickserv/saset/url"; group = "nickserv/admin" }
+#command { service = "NickServ"; name = "SET MASTODON"; command = "nickserv/set/misc"; misc_description = _("Associate a Mastodon account with your account"); misc_pattern = "^@\S+@\S+\.\S+$"; misc_title = _("Mastodon") }
+#command { service = "NickServ"; name = "SASET MASTODON"; command = "nickserv/saset/misc"; misc_description = _("Associate a Mastodon account with this account"); permission = "nickserv/saset/mastodon"; group = "nickserv/admin" }
+#command { service = "NickServ"; name = "SET LOCATION"; command = "nickserv/set/misc"; misc_description = _("Associate a location with your account"); misc_title = _("Location") }
+#command { service = "NickServ"; name = "SASET LOCATION"; command = "nickserv/saset/misc"; misc_description = _("Associate a location with this account"); permission = "nickserv/saset/location"; group = "nickserv/admin" }
 
-module { name = "ns_status" }
-command { service = "NickServ"; name = "STATUS"; command = "nickserv/status"; }
+/*
+ * ns_set_op
+ *
+ * Provides the commands:
+ *   nickserv/set/autoop, nickserv/saset/autoop - Allows configuring whether status modes are automatically granted when joining a channel.
+ *   nickserv/set/neverop, nickserv/saset/neverop - Allows configuring whether a user can be added to access lists.
+ */
+module { name = "ns_set_op" }
 
+command { service = "NickServ"; name = "SET AUTOOP"; command = "nickserv/set/autoop" }
+command { service = "NickServ"; name = "SASET AUTOOP"; command = "nickserv/saset/autoop"; permission = "nickserv/saset/autoop" }
+
+command { service = "NickServ"; name = "SET NEVEROP"; command = "nickserv/set/neverop" }
+command { service = "NickServ"; name = "SASET NEVEROP"; command = "nickserv/saset/neverop"; permission = "nickserv/saset/neverop" }
+
+# For compatibility with DALnet Services.
+command { service = "NickServ"; name = "SET NOOP"; command = "nickserv/set/neverop"; hide = yes }
+command { service = "NickServ"; name = "SASET NOOP"; command = "nickserv/saset/neverop"; permission = "nickserv/saset/neverop"; hide = yes }
+
+/*
+ * ns_set_protect
+ *
+ * Provides the commands nickserv/set/protect and nickserv/saset/protect.
+ *
+ * Used for configuring nickname protection.
+ */
+module { name = "ns_set_protect" }
+command { service = "NickServ"; name = "SET PROTECT"; command = "nickserv/set/protect" }
+command { service = "NickServ"; name = "SASET PROTECT"; command = "nickserv/saset/protect"; permission = "nickserv/saset/protect" }
+
+# For compatibility with Anope 2.0.
+command { service = "NickServ"; name = "SET KILL"; command = "nickserv/set/protect"; hide = yes }
+command { service = "NickServ"; name = "SASET KILL"; command = "nickserv/saset/protect"; permission = "nickserv/saset/protect"; hide = yes }
+
+/*
+ * ns_set_timezone
+ *
+ * Provides the command nickserv/set/timezone and nickserv/saset/timezone.
+ *
+ * Allows configuring the timezone that services uses.
+ */
+module { name = "ns_set_timezone" }
+command { service = "NickServ"; name = "SET TIMEZONE"; command = "nickserv/set/timezone" }
+command { service = "NickServ"; name = "SASET TIMEZONE"; command = "nickserv/saset/timezone"; permission = "nickserv/saset/timezone" }
+
+/*
+ * ns_suspend
+ *
+ * Provides the commands nickserv/suspend and nickserv/unsuspend.
+ *
+ * Used to suspend and unsuspend nicknames. Suspended nicknames can not be used but their settings are preserved.
+ */
 module
 {
 	name = "ns_suspend"
+
+	/*
+	 * The length of time before a suspended nick becomes unsuspended.
+	 *
+	 * This directive is optional. If not set, the default is never.
+	 */
+	#suspendexpire = 90d
+
+	/*
+	 * Settings to show to non-opers in NickServ's INFO output.
+	 * Comment to completely disable showing any information about
+	 * suspended nicknames to non-opers.
+	 */
 	show = "suspended, by, reason, on, expires"
 }
-command { service = "NickServ"; name = "SUSPEND"; command = "nickserv/suspend"; permission = "nickserv/suspend"; group = "nickserv/admin"; }
-command { service = "NickServ"; name = "UNSUSPEND"; command = "nickserv/unsuspend"; permission = "nickserv/suspend"; group = "nickserv/admin"; }
+command { service = "NickServ"; name = "SUSPEND"; command = "nickserv/suspend"; permission = "nickserv/suspend"; group = "nickserv/admin" }
+command { service = "NickServ"; name = "UNSUSPEND"; command = "nickserv/unsuspend"; permission = "nickserv/suspend"; group = "nickserv/admin" }
 
+/*
+ * ns_update
+ *
+ * Provides the command nickserv/update.
+ *
+ * Used to update your status on all channels, turn on your vhost, etc.
+ */
 module { name = "ns_update" }
-command { service = "NickServ"; name = "UPDATE"; command = "nickserv/update"; }
+command { service = "NickServ"; name = "UPDATE"; command = "nickserv/update" }

@@ -321,9 +321,10 @@ final class AdminController {
         router.post("/api/admin/ircd/chanserv/access", &adminWrap!apiCsAccessAdd);
         router.post("/api/admin/ircd/chanserv/access/delete", &adminWrap!apiCsAccessDelete);
 
-        // BridgeServ (Anope 2.1 sidecar) Discord bridges, on the same IRCD
-        // page. Driven over JSON-RPC against bridge.ircfiber.com, not the
-        // 2.0 XML-RPC listener the two surfaces above use.
+        // BridgeServ (on the merged Anope 2.1 instance) Discord bridges, on
+        // the same IRCD page. Driven over JSON-RPC against
+        // services.ircfiber.com through the shared Anope transport, like the
+        // two surfaces above.
         router.get("/api/admin/ircd/bridge/bridges", &adminWrap!apiBridgeList);
         router.get("/api/admin/ircd/bridge/guilds", &adminWrap!apiBridgeGuilds);
         router.get("/api/admin/ircd/bridge/channels", &adminWrap!apiBridgeChannels);

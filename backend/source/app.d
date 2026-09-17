@@ -210,7 +210,8 @@ void main() {
     import ircfiber.logs.backup_announce : startBackupAnnounceLoop;
     startBackupAnnounceLoop();
     // NickServ → site auto-sync: mint parked site rows for IRC-first users.
-    // Self-gates on the anope.db mount (absent on support-bot/bnc) and the
+    // Reads the live inventory over the Anope JSON-RPC listener and
+    // silently skips when it is unreachable, plus the
     // irc:config:nickservSync kill-switch; single-flight via Redis lock.
     import ircfiber.services.nickserv_sync : startNickservSyncLoop;
     startNickservSyncLoop();

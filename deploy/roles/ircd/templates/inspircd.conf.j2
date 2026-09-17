@@ -47,28 +47,15 @@
       port="{{ ircd_link_port }}"
       sendpass="{{ vault_ircd_services_link_password }}"
       recvpass="{{ vault_ircd_services_link_password }}">
-{% if ircd_bridge_enabled %}
-
-# The bridge-only Anope 2.1 sidecar (bridgeserv). Separate link block and
-# password from the main services link; it introduces one virtual server per
-# bridged Discord guild behind itself.
-<link name="{{ ircd_bridge_services_name }}"
-      ipaddr="{{ ircd_bridge_net_alias }}"
-      port="{{ ircd_link_port }}"
-      sendpass="{{ vault_ircd_bridge_link_password }}"
-      recvpass="{{ vault_ircd_bridge_link_password }}">
-{% endif %}
 {% endif %}
 
 # <uline> must be declared on every server on the network, leaf included:
-# it is what grants Anope SVSJOIN/SASL/kill-shield rights here.
+# it is what grants Anope SVSJOIN/SASL/kill-shield rights here. Only the
+# services server itself is u-lined. The per-guild links BridgeServ
+# introduces behind it (<guild-id>.{{ ircd_bridgeserv_domain }}) deliberately
+# are not, so Discord pseudo clients stay ordinary users subject to channel
+# modes and bans.
 <uline server="{{ ircd_services_name }}">
-{% if ircd_bridge_enabled %}
-# Only the sidecar's own server is u-lined. The per-guild links behind it
-# (<guild-id>.{{ ircd_bridge_domain }}) deliberately are not, so Discord
-# pseudo clients stay ordinary users subject to channel modes and bans.
-<uline server="{{ ircd_bridge_services_name }}">
-{% endif %}
 
 #-#-#-#-#-#-#-#-#-#-  CONNECTIONS CONFIGURATION  -#-#-#-#-#-#-#-#-#-#-#
 #

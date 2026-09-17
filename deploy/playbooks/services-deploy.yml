@@ -1,0 +1,77 @@
+---
+# Merged services image deploy — pull the requested image ref, tag it locally
+# as ircfiber-services:deploy, and run ONLY the services tasks of the ircd
+# role against that tag. The role's community.docker.docker_container compares
+# image ids, not tag strings, so a new id under the same tag recreates the
+# container. Recreating services drops the services link (and with it
+# BridgeServ's Discord relay) for the restart; IRC clients and the ircd are
+# untouched.
+#
+# tasks_from: services.yml is load-bearing. Including the whole ircd role here
+# would re-evaluate ircd_image and could recreate ircfiber-ircd, dropping
+# every IRC client during what is meant to be a services-only deploy.
+#
+# The image is built on the builder host and pushed to GHCR by
+# `make ship-services` (ircfiber-infra/Makefile).
+#
+#   ircd_services_image_ref  anything `docker image inspect` resolves:
+#     ghcr.io/…@sha256:…   make ship-services  (by digest)
+#     ghcr.io/…:prod       default (the promoted tag)
+- name: Deploy the IRC services image from the registry
+  hosts: ircfiber_backend
+  become: true
+  gather_facts: true
+  vars_files:
+    - "{{ playbook_dir }}/../inventories/production/group_vars/vault.yml"
+  vars:
+    ircd_services_image_ref: "{{ ircd_services_image_registry }}:prod"   # overridden by -e
+    # The services tasks only ever see this local tag, so their
+    # docker_container never has to interpret a digest ref.
+    ircd_services_image: "ircfiber-services:deploy"
+  roles:
+    - role: registry_login
+  pre_tasks:
+    - name: Assert services vault secrets are set
+      ansible.builtin.assert:
+        that:
+          - vault_bridgeserv_discord_token is defined
+          - vault_bridgeserv_discord_token | length > 0
+          - vault_ircd_services_link_password is defined
+          - vault_ircd_services_link_password | length > 0
+          - vault_ircd_services_rpc_token is defined
+          - vault_ircd_services_rpc_token | length >= 32
+        fail_msg: "vault_bridgeserv_discord_token, vault_ircd_services_link_password and vault_ircd_services_rpc_token must be set in vault.yml"
+
+    - name: Pull services image (registry refs only)
+      ansible.builtin.command: docker pull {{ ircd_services_image_ref }}
+      when: "'/' in ircd_services_image_ref"
+      changed_when: true
+
+    # A ref that does not resolve fails here with docker's own "No such
+    # image" — before anything is stopped.
+    - name: Resolve requested image id
+      ansible.builtin.command: docker image inspect -f '{{ "{{" }}.Id{{ "}}" }}' {{ ircd_services_image_ref }}
+      check_mode: false
+      register: services_image_id
+      changed_when: false
+
+    - name: Tag requested image as the deploy tag
+      ansible.builtin.command: docker tag {{ services_image_id.stdout }} {{ ircd_services_image }}
+      changed_when: true
+
+  tasks:
+    - name: Run the services tasks of the ircd role
+      ansible.builtin.include_role:
+        name: ircd
+        tasks_from: services.yml
+
+  post_tasks:
+    - name: Assert the running services is the requested image
+      ansible.builtin.command: docker inspect -f '{{ "{{" }}.Image{{ "}}" }}' {{ ircd_services_container_name }}
+      register: running_image_id
+      changed_when: false
+      failed_when: running_image_id.stdout != services_image_id.stdout
+
+    - name: Show result
+      ansible.builtin.debug:
+        msg: "{{ ircd_services_container_name }} runs {{ ircd_services_image_ref }} ({{ services_image_id.stdout[:19] }})"

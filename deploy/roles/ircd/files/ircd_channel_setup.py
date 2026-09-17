@@ -193,10 +193,11 @@ STATUS_PREFIXES = "~&@%+"
 
 
 # Pseudo-clients the voice sweep must never try to voice: they are not
-# NickServ accounts and SAMODE against them would just fail.
+# NickServ accounts and SAMODE against them would just fail. BridgeServ is
+# the merged 2.1 instance's Discord relay client (its pseudo-clients behind
+# <guild-id>.discord.bridge are ordinary users and ARE swept normally).
 SERVICE_NICKS = ("ChanServ", "NickServ", "OperServ", "MemoServ",
-                 "HostServ", "BotServ", "Global", "BridgeServ",
-                 "BridgeAuth")
+                 "HostServ", "BotServ", "Global", "BridgeServ")
 
 
 # Ceiling on one channel's sweep. Each target costs a STATUS command and
@@ -343,21 +344,20 @@ def group_and_display(session: IrcSession, account: str, display: str,
     """
     if not display or display.lower() == account.lower():
         return False
-
     # `GLIST <nick>` headers its list with the group's *current* display
-    # (`List of nicknames in the group of <display>:`) and then prints one
-    # nick per row. The bare `GLIST` answers "List of nicknames in your
-    # group:" instead, naming nothing — which would make every run re-set
-    # the display and report `changed` forever. Passing an alias of our
-    # own account needs no privilege (Anope only checks nickserv/list when
-    # the nick belongs to someone else).
+    # (`List of nicknames belonging to <display>:`) and then prints one
+    # nick per row. The bare `GLIST` answers "List of nicknames belonging
+    # to your account:" instead, naming nothing — which would make every
+    # run re-set the display and report `changed` forever. Passing an alias
+    # of our own account needs no privilege (Anope only checks
+    # nickserv/list when the nick belongs to someone else).
     current = ""
     grouped = False
     for line in service_reply(session, "NickServ", f"GLIST {account}", 4.0):
         text = clean(line).strip()
-        header = re.search(r"group of (\S+?):?$", text, re.I)
-        if header:
-            current = header.group(1)
+        header = re.search(r"nicknames belonging to (.+?):?$", text, re.I)
+        if header and header.group(1).strip().lower() != "your account":
+            current = header.group(1).strip()
             continue
         tokens = text.split()
         if tokens and tokens[0].lower() == display.lower():
@@ -385,8 +385,11 @@ def group_and_display(session: IrcSession, account: str, display: str,
         session.nick = display
         reply = service_reply(session, "NickServ",
                               f"GROUP {account} {password}", 6.0)
-        if not matches(reply, "you are now in the group of",
-                       "you are already a member of the group of"):
+        # Anope 2.1 reworded grouping into account language ("Your nickname
+        # now belongs to the account X." / "You are already a member of the
+        # account of X."); 2.0 said "in the group of".
+        if not matches(reply, "now belongs to the account",
+                       "already a member of the account of"):
             raise IrcError(f"NickServ GROUP {account} failed: {reply}")
         set_display(session, display)
         # session.nick is what setup_channel puts in its SAMODE line, so
@@ -412,14 +415,24 @@ def info_fields(replies: list[str]) -> dict[str, str]:
     Every service prints INFO through the same InfoFormatter — one
     `Label: value` NOTICE per field — so this reads ChanServ's Founder /
     Mode lock / Options and BotServ's Bot nick / Options alike.
+
+    A reply line that carries no `:` is a wrapped continuation of the
+    previous line, not a new field: Anope wraps long NOTICEs at the IRC
+    512-byte line limit (on 2.1 the seven-item `Options:` list wraps after
+    "Topic", which used to make every run re-apply KEEPTOPIC because
+    "retention" never reached the value). Continuations are joined onto
+    the previous field.
     """
     out: dict[str, str] = {}
+    last_key = ""
     for line in replies:
         text = clean(line)
-        if ":" not in text:
-            continue
-        key, _, value = text.partition(":")
-        out[key.strip().lower()] = value.strip()
+        if ":" in text:
+            key, _, value = text.partition(":")
+            last_key = key.strip().lower()
+            out[last_key] = value.strip()
+        elif last_key:
+            out[last_key] += " " + text.strip()
     return out
 
 
@@ -476,17 +489,24 @@ def channel_modes(session: IrcSession, channel: str) -> tuple[str, str]:
 
 
 def access_list(session: IrcSession, channel: str) -> dict[str, str]:
-    """{lower-cased mask: level} from `ChanServ ACCESS {channel} LIST`.
+    """{lower-cased mask: level} from `ChanServ ACCESS {channel} LIST * ALL`.
 
-    Parsed by shape rather than by prose: Anope's ListFormatter prints
-    `Number | Level | Mask | By | Last seen`, where Level is the xop tier
+    Parsed by shape rather than by prose: Anope prints
+    `Number | Level | Mask | Description`, where Level is the xop tier
     (SOP, AOP, ...) for an xop entry and a bare number for a cs_access
     one. Keeping only rows whose first column is a number skips the
     header, the "list is empty" line and any trailing prose without
     depending on translated text.
+
+    The `* ALL` is load-bearing on 2.1: a bare LIST hides every entry
+    that belongs to another access provider and answers `No matching
+    entries on … access list.` plus a prose pointer — whose first token
+    ("2 access entries …") parses as a row. Without it the setup reads
+    every staff channel as empty and re-grants the whole list each run.
     """
     out: dict[str, str] = {}
-    replies = service_reply(session, "ChanServ", f"ACCESS {channel} LIST", 5.0)
+    replies = service_reply(session, "ChanServ",
+                            f"ACCESS {channel} LIST * ALL", 5.0)
     for line in replies:
         tokens = clean(line).split()
         if len(tokens) < 3 or not tokens[0].isdigit():
@@ -903,9 +923,9 @@ def setup_channel(session: IrcSession, spec: dict, account: str,
     if missing:
         # Repairing this needs all three steps, in order.
         #
-        # With <inspircd3:use_server_side_mlock> the ircd enforces a copy
-        # of the lock that Anope pushes it, and for a mode with a
-        # parameter that copy can arrive without one — which InspIRCd
+        # With <inspircd:use_server_side_mlock> (2.1; was inspircd3) the ircd
+        # enforces a copy of the lock that Anope pushes it, and for a mode
+        # with a parameter that copy can arrive without one — which InspIRCd
         # records as "locked OFF". The channel then answers every attempt
         # to set +H with numeric 742 ("Mode cannot be changed as it has
         # been locked off by services"), including ChanServ's own, so the
@@ -927,25 +947,22 @@ def setup_channel(session: IrcSession, spec: dict, account: str,
             raise IrcError(
                 f"{channel} is +{live_modes} {live_params}, still missing "
                 f"{''.join(still)} after relocking {want_lock}")
-        log(f"{channel}: channel modes -> +{live_modes} {live_params}".rstrip())
-        changed = True
-
     # Channel options: (command, name Anope prints in INFO's `Options:`
     # line, whether it should be on, phrase ChanServ confirms with). All
     # three parts vary per option — KEEPTOPIC shows up as "Topic
-    # retention", cs_secure as "Security", and NOEXPIRE answers "will not
-    # expire" rather than "is now on" — and matching the INFO name is what
-    # keeps the run idempotent instead of re-setting on every deploy.
+    # retention", and NOEXPIRE answers "will not expire" rather than "is
+    # now on" — and matching the INFO name is what keeps the run
+    # idempotent instead of re-setting on every deploy.
     #
-    # SECURE is turned off rather than merely left out of the chanserv
-    # module's `defaults`: that directive only applies to channels at
-    # registration time, so it would never reach one already registered.
+    # Anope 2.1 renamed "No expire" to "No expiry" in the INFO line and
+    # removed the SECURE channel option (and `SET SECURE`) entirely — only
+    # SECUREFOUNDER/SECUREOPS remain, and the founder default plus
+    # SECUREOPS ON below cover what SECURE OFF used to assert.
     options = info.get("options", "").lower()
     wanted = [
         ("KEEPTOPIC", "topic retention", True, "is now on"),
         ("SECUREOPS", "secure ops", True, "is now on"),
-        ("NOEXPIRE", "no expire", True, "will not expire"),
-        ("SECURE", "security", False, "is now off"),
+        ("NOEXPIRE", "no expiry", True, "will not expire"),
     ]
     for command, needle, want_on, confirmation in wanted:
         if (needle in options) == want_on:
@@ -1066,10 +1083,11 @@ def main() -> int:
                 log(f"{spec['channel']}: already configured")
 
         if changed:
-            # db_flatfile only writes on <options:updatetimeout> (5m) or a
-            # clean shutdown, so everything above lives in Anope's memory
-            # until then. A container restart inside that window silently
-            # reverts the whole run — force the write instead of hoping.
+            # db_json only writes on <options:updatetimeout> (5m), an
+            # OperServ UPDATE, or a clean shutdown, so everything above
+            # lives in Anope's memory until then. A container restart
+            # inside that window silently reverts the whole run — force
+            # the write instead of hoping.
             reply = service_reply(session, "OperServ", "UPDATE", 6.0)
             if not matches(reply, "updating databases", "databases updated"):
                 raise IrcError(f"OperServ UPDATE failed: {reply}")

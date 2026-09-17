@@ -1,61 +1,109 @@
 /**
- * Anope 2.0 XML-RPC client (`m_httpd` + `m_xmlrpc` + `m_xmlrpc_main`).
+ * Anope 2.1 JSON-RPC client (`httpd` + `jsonrpc` + `rpc_user` + `rpc_data`).
  *
  * Anope cannot be told "register account X" over IRC: `NickServ REGISTER`
  * registers the nick of the *sending* connection, and at signup time the
- * engine already holds the user's nick. `m_xmlrpc_main`'s `command` method
- * runs a services command as an arbitrary nick — online or offline — which
- * is the mechanism `ircfiber.services.accounts` uses.
+ * engine already holds the user's nick. `anope.command` runs a services
+ * command as an account — or as an unregistered nick, thanks to our image's
+ * `rpc_user { allowunregistered = yes }` (`CommandSource(<that nick>,
+ * nullptr, nullptr, ...)`), which is the mechanism
+ * `ircfiber.services.accounts` uses. With a null user `ns_register`
+ * registers `source.GetNick()` and does NOT identify any live session, so
+ * the old 2.0 hijack side effect (`u->Identify(na)` on whoever holds the
+ * nick) is gone; the presence guard in `accounts.d` stays anyway.
  *
- * Transport (see Anope `modules/m_xmlrpc.cpp`): HTTP POST to `/xmlrpc` with
- * `Content-Type: text/xml`. The request parser is naive — it takes
- * `<methodName>` and then every `<string>` element in document order as
- * positional parameters, so every parameter must be XML-escaped. The reply
- * is always a `methodResponse` holding one struct; for `command` its members
- * are `result` (`Success`) and `return` (the services output text).
+ * Transport (Anope `modules/rpc/jsonrpc.cpp`): HTTP POST to `/jsonrpc` with
+ * `Content-Type: application/json`, body
+ * `{"jsonrpc":"2.0","id":"<any>","method":"<m>","params":["<str>",...]}` —
+ * every param MUST be a JSON string (non-strings become ""). The reply is
+ * `{"jsonrpc":"2.0","id":...,"result":<value>}` or
+ * `{"jsonrpc":"2.0","id":...,"error":{"code":<int>,"message":"..."}}`.
+ * Auth is `Authorization: Bearer <base64(token)>` — the listener
+ * base64-DECODES the credential before comparing, so the raw token is
+ * encoded here, never sent verbatim. Sending it raw answers
+ * `-32601 No authorization for method: ...`.
  *
- * Escaping, verified against anope/anope:2.0.20 (probe: `command NickServ
- * <nick> "FOO>Z"` → `Unknown command FOOgt&amp;qt;Z`):
- *   - Request `<string>` values ARE XML-unescaped by Anope, so every
- *     parameter must be escaped on the way out (`anopeXmlEscape`).
- *   - Reply text is escaped TWICE — `Sanitize()` runs on the services reply
- *     and again when m_xmlrpc serializes the struct. So a newline arrives as
- *     `&amp;#xA;` and '>' as `&amp;qt;` (`&qt;` is an upstream typo for
- *     `&gt;`). `decodeAnopeReply` therefore unescapes exactly twice.
+ * For `anope.command` the `result` is an ARRAY of strings, one per reply
+ * line, with IRC formatting already stripped (`Anope::RemoveFormatting`).
+ * Unknown commands (`No such command`) and refusals (`Access denied.`,
+ * `Nick X isn't registered.`) arrive through the two reply shapes exactly
+ * as before: refusals are ordinary result lines, while `No such command` /
+ * `No such account` / `No such service` are JSON-RPC `error` objects — a
+ * refusal by services, never a transport failure, so they land in
+ * `AnopeReply.text` with `errorCode` set instead of failing the call.
  *
- * The listener has no authentication of its own; it is only reachable from
- * the services container's docker network (see
- * `site/deploy/roles/ircd/templates/services.conf.j2`).
+ * One request per connection, forced on the request headers below, with an
+ * explicit Content-Length. `defaultKeepAliveTimeout = 0` was the obvious
+ * knob and it does NOT work: prod kept logging `Connection closed while
+ * writing` and 404s with an 18-byte body ("Unrecognized page") after it was
+ * deployed on the old transport. vibe.d writes `Connection: keep-alive`
+ * itself (client.d:727) and then derives
+ * `close_conn` from whatever the requester left in that header
+ * (client.d:750), so the header is the lever that actually decides.
+ *
+ * Why it matters: Anope's `httpd` is a hand-rolled server that does not
+ * serve a second request on a connection. Reusing one makes it read the
+ * next POST body as a request line — hence "Unrecognized page" rather than
+ * a JSON fault — or, if it closed first, the write fails outright.
+ * Observed 2026-09-06 (same httpd under the old transport): a deletion's
+ * `INFO` answered 200 and the `DROP` behind it 404'd, leaving the account
+ * standing; and every provisioning credential check failed the same way,
+ * which is what produced prod's 10 orphan pending credentials.
+ * No address-family pin: the listener binds `::` (see the httpd block in
+ * services.conf.j2), which on Linux accepts IPv4 too, so either record of
+ * the dual-stack `services` alias works.
+ *
+ * Without an explicit Content-Length vibe.d sends neither Content-Length
+ * nor chunked encoding and lets the body run to connection close; `httpd`'s
+ * naive parser then reads whatever has arrived so far, and when headers and
+ * body land in separate TCP segments it parses an empty body and answers
+ * 404 "Unrecognized query". Observed 2026-09-06/07 on prod: curl (which
+ * always sets Content-Length) never failed while back-to-back gateway calls
+ * failed intermittently. Proven by capturing vibe.d's exact bytes (no
+ * Content-Length present) against a dump server.
  *
  * Env:
- *   IRCFIBER_ANOPE_RPC_URL      full endpoint, e.g. http://services:8080/xmlrpc
- *                               (empty → auto-registration disabled)
+ *   IRCFIBER_ANOPE_RPC_URL      full endpoint, e.g. http://services:8080/jsonrpc
+ *                               (empty → services surface disabled)
+ *   IRCFIBER_ANOPE_RPC_TOKEN    Bearer token, raw (or _FILE indirection via
+ *                               `ircfiber.env.envSecret`); the gateway
+ *                               base64-encodes it into the header itself.
+ *                               Empty → services surface disabled.
  *   IRCFIBER_ANOPE_RPC_TIMEOUT  connect/read timeout in seconds (default 10)
  *   IRCFIBER_ANOPE_OPER_ACCOUNT NickServ account privileged commands run as
  *                               (empty → privileged actions disabled)
  */
 module ircfiber.services.anope;
 
-import std.ascii : isDigit, isHexDigit;
+import std.base64 : Base64;
 import std.conv : to;
 import std.process : environment;
-import std.string : indexOf, strip;
-import std.utf : encode;
+import std.string : indexOf, splitLines, strip;
+import std.array : join;
 import core.time : seconds;
 
 import vibe.core.log;
+import vibe.data.json : Json, parseJsonString;
 import vibe.http.client : requestHTTP, HTTPClientRequest, HTTPClientResponse,
     HTTPClientSettings, HTTPMethod;
 import vibe.stream.operations : readAll;
 
+import ircfiber.env : envSecret;
+
 /// Endpoint configuration read from the environment.
 struct AnopeSettings {
-    string rpcUrl;             /// IRCFIBER_ANOPE_RPC_URL; "" disables provisioning
+    string rpcUrl;             /// IRCFIBER_ANOPE_RPC_URL; "" disables the surface
+    string token;              /// IRCFIBER_ANOPE_RPC_TOKEN, raw (not yet base64)
     int timeoutSeconds = 10;   /// IRCFIBER_ANOPE_RPC_TIMEOUT
     string operAccount;        /// IRCFIBER_ANOPE_OPER_ACCOUNT; "" = no privileged ops
 
-    bool configured() const @safe pure nothrow @nogc { return rpcUrl.length > 0; }
-    /// Whether privileged NickServ commands can be attempted at all. The
+    /// Both RPC inputs are required: the listener rejects a missing or wrong
+    /// token with `No authorization for method`, so a half-configured
+    /// endpoint must read as disabled, not as usable.
+    bool configured() const @safe pure nothrow @nogc {
+        return rpcUrl.length > 0 && token.length > 0;
+    }
+    /// Whether privileged services commands can be attempted at all. The
     /// account must also be tied to an Anope opertype, which only Anope
     /// knows — a misconfiguration there surfaces as `Access denied.`
     bool hasOper() const @safe pure nothrow @nogc { return operAccount.length > 0; }
@@ -65,6 +113,7 @@ AnopeSettings loadAnopeSettings() {
     AnopeSettings s;
     s.rpcUrl = environment.get("IRCFIBER_ANOPE_RPC_URL", "").strip();
     s.operAccount = environment.get("IRCFIBER_ANOPE_OPER_ACCOUNT", "").strip();
+    s.token = envSecret("IRCFIBER_ANOPE_RPC_TOKEN", "").strip();
     const raw = environment.get("IRCFIBER_ANOPE_RPC_TIMEOUT", "").strip();
     if (raw.length) {
         try {
@@ -77,176 +126,91 @@ AnopeSettings loadAnopeSettings() {
     return s;
 }
 
-/// One decoded XML-RPC struct response.
+/// One decoded JSON-RPC reply for an `anope.command` call.
 struct AnopeReply {
-    bool transportOk;       /// HTTP 200 and a parseable methodResponse
-    string result;          /// "result" member ("Success")
-    string error;           /// "error" member ("Invalid parameters"/"Invalid service")
-    string text;            /// "return" member, unescaped
-    /// The `return` member decoded but NOT newline-flattened. `text` stays
-    /// single-line for classification/logging/Redis values; multi-line
-    /// replies (INFO) must be parsed from here.
+    bool transportOk;       /// HTTP answer carrying a JSON-RPC reply (result or error)
+    string text;            /// result lines, flattened — or the error message on refusal
+    /// The result lines joined with `\n`, NOT newline-flattened. `text`
+    /// stays single-line for classification/logging/Redis values; multi-line
+    /// replies (INFO) must be parsed from here. On a JSON-RPC error this
+    /// carries the error message, so `No such command` stays classifiable.
     string rawText;
     string transportError;  /// non-empty when transportOk is false
-    /// Every member of the returned struct, decoded. `command` only ever
-    /// sets result/error/return; `user` returns nick plus, when a live user
-    /// object exists, ident/host/ip/timestamp/signon.
-    string[string] members;
+    long errorCode;         /// JSON-RPC error code, 0 when the call succeeded
+    string error;           /// JSON-RPC error message, "" when the call succeeded
 }
 
-/// XML-escape one parameter value. `&` must be replaced first.
-string anopeXmlEscape(string s) @safe pure {
-    string res;
-    foreach (char c; s) {
-        switch (c) {
-            case '&':  res ~= "&amp;";  break;
-            case '"':  res ~= "&quot;"; break;
-            case '<':  res ~= "&lt;";   break;
-            case '>':  res ~= "&gt;";   break;
-            case '\'': res ~= "&#39;";  break;
-            default:   res ~= c;        break;
-        }
+/// The decoded envelope of any JSON-RPC call: transport outcome, the refusal
+/// when services answered one, and the raw `result` for the caller to map.
+/// Shared with `ircfiber.services.anope_inventory`, which maps the list
+/// methods' results; everything else goes through `AnopeReply`.
+struct AnopeRpcResult {
+    bool transportOk;       /// HTTP answer carrying a JSON-RPC reply (result or error)
+    string transportError;  /// non-empty when transportOk is false
+    long errorCode;         /// JSON-RPC error code, 0 when the call succeeded
+    string error;           /// JSON-RPC error message, "" when the call succeeded
+    Json result;            /// the `result` value; undefined on refusal/transport failure
+}
+
+/// Build the request body. Every parameter is emitted as a JSON string, in
+/// order — anything else becomes "" on the Anope side.
+string buildJsonRpcCall(string method, const string[] params) @safe {
+    auto call = Json.emptyObject;
+    call["jsonrpc"] = Json("2.0");
+    call["id"] = Json("gateway");
+    call["method"] = Json(method);
+    auto list = Json.emptyArray;
+    foreach (p; params)
+        list ~= Json(p);
+    call["params"] = list;
+    return call.toString();
+}
+
+/// The `Authorization` header value for the raw token: the listener runs
+/// `B64Decode` on everything after `Bearer ` before comparing (rpc.h), so
+/// the raw token must never be sent verbatim.
+string anopeBearerHeader(string token) @safe pure {
+    return "Bearer " ~ Base64.encode(cast(const(ubyte)[]) token).idup;
+}
+
+/// Decode one HTTP response body into the envelope. A JSON-RPC `error`
+/// object is a refusal by services, NOT a transport failure: it yields
+/// `transportOk == true` with `errorCode`/`error` set and an undefined
+/// result. Only a body that is not a JSON-RPC reply at all is a transport
+/// failure.
+AnopeRpcResult parseJsonRpcReply(string body_) @safe {
+    AnopeRpcResult r;
+    Json reply;
+    try
+        reply = parseJsonString(body_);
+    catch (Exception e) {
+        r.transportError = "unparseable JSON-RPC body: " ~ e.msg;
+        return r;
     }
-    return res;
-}
-
-/// Decode the entities Anope's `Sanitize()` produces, plus generic numeric
-/// character references. Unknown entities are left verbatim.
-string anopeXmlUnescape(string s) @safe pure {
-    if (s.indexOf('&') < 0) return s;
-    string res;
-    size_t i = 0;
-    while (i < s.length) {
-        if (s[i] != '&') {
-            res ~= s[i];
-            i++;
-            continue;
-        }
-        const semi = s[i .. $].indexOf(';');
-        if (semi <= 0) {
-            res ~= s[i];
-            i++;
-            continue;
-        }
-        const ent = s[i + 1 .. i + semi];
-        const next = i + semi + 1;
-        switch (ent) {
-            case "amp":  res ~= '&';  i = next; continue;
-            case "quot": res ~= '"';  i = next; continue;
-            case "apos": res ~= '\''; i = next; continue;
-            case "lt":   res ~= '<';  i = next; continue;
-            // "qt" is Anope's Sanitize() typo for '>'; both spellings appear.
-            case "gt":
-            case "qt":   res ~= '>';  i = next; continue;
-            default: break;
-        }
-        if (ent.length >= 2 && ent[0] == '#') {
-            uint code = 0;
-            bool ok = true;
-            const hex = ent[1] == 'x' || ent[1] == 'X';
-            const digits = hex ? ent[2 .. $] : ent[1 .. $];
-            if (!digits.length) ok = false;
-            foreach (char d; digits) {
-                if (hex) {
-                    if (!isHexDigit(d)) { ok = false; break; }
-                    code = code * 16 + hexValue(d);
-                } else {
-                    if (!isDigit(d)) { ok = false; break; }
-                    code = code * 10 + cast(uint)(d - '0');
-                }
-                if (code > 0x10FFFF) { ok = false; break; }
-            }
-            if (ok && code != 0 && !(code >= 0xD800 && code <= 0xDFFF)) {
-                char[4] buf;
-                const n = encode(buf, cast(dchar) code);
-                res ~= buf[0 .. n];
-                i = next;
-                continue;
-            }
-        }
-        res ~= s[i];
-        i++;
+    if (reply.type != Json.Type.object) {
+        r.transportError = "unparseable JSON-RPC body";
+        return r;
     }
-    return res;
-}
-
-private uint hexValue(char c) @safe pure nothrow @nogc {
-    if (c >= '0' && c <= '9') return cast(uint)(c - '0');
-    if (c >= 'a' && c <= 'f') return cast(uint)(c - 'a') + 10;
-    return cast(uint)(c - 'A') + 10;
-}
-
-/**
- * Recover the true reply text. m_xmlrpc_main sanitizes the services reply and
- * m_xmlrpc sanitizes again when it serializes the struct, so every value in a
- * `methodResponse` is escaped exactly twice: a newline reaches us as
- * `&amp;#xA;`, '>' as `&amp;qt;`, '&' as `&amp;amp;`. Two passes invert two
- * passes exactly, including for text that legitimately contains entities.
- * Unescaped words like `Success` are unaffected.
- */
-string decodeAnopeReply(string s) @safe pure {
-    return anopeXmlUnescape(anopeXmlUnescape(s));
-}
-
-/// Build the request body. Every parameter is emitted as its own `<string>`
-/// element, in order, which is exactly what m_xmlrpc's parser consumes.
-string buildXmlRpcCall(string method, const string[] params) @safe pure {
-    string res = `<?xml version="1.0"?><methodCall><methodName>`;
-    res ~= anopeXmlEscape(method);
-    res ~= `</methodName><params>`;
-    foreach (p; params) {
-        res ~= `<param><value><string>`;
-        res ~= anopeXmlEscape(p);
-        res ~= `</string></value></param>`;
+    auto err = reply["error"];
+    if (err.type == Json.Type.object) {
+        r.transportOk = true;
+        auto c = err["code"];
+        if (c.type == Json.Type.int_) r.errorCode = c.get!long;
+        auto m = err["message"];
+        if (m.type == Json.Type.string) r.error = m.get!string;
+        if (!r.error.length) r.error = "services refused the command";
+        // An error object without a code is still a refusal, never a
+        // transport failure, so it must not be reported with code 0.
+        if (r.errorCode == 0) r.errorCode = -1;
+        return r;
     }
-    res ~= `</params></methodCall>`;
-    return res;
-}
-
-/// Pull the first `<tag>…</tag>` payload out of `chunk`.
-private string innerText(string chunk, string tag) @safe pure {
-    const open = "<" ~ tag ~ ">";
-    const a = chunk.indexOf(open);
-    if (a < 0) return "";
-    const from = a + open.length;
-    const b = chunk[from .. $].indexOf("</" ~ tag ~ ">");
-    if (b < 0) return "";
-    return chunk[from .. from + b];
-}
-
-/// Decode the flat `<member><name>K</name><value><string>V</string>…` struct
-/// m_xmlrpc always returns. Anything else is a transport failure.
-AnopeReply parseXmlRpcResponse(string body_) @safe pure {
-    AnopeReply r;
-    if (body_.indexOf("<methodResponse") < 0) {
-        r.transportError = "malformed XML-RPC response";
+    auto res = reply["result"];
+    if (res.type == Json.Type.undefined) {
+        r.transportError = "JSON-RPC reply holds no result";
         return r;
     }
     r.transportOk = true;
-
-    enum memberOpen = "<member>";
-    enum memberClose = "</member>";
-    size_t pos = 0;
-    while (pos < body_.length) {
-        const rel = body_[pos .. $].indexOf(memberOpen);
-        if (rel < 0) break;
-        const start = pos + rel + memberOpen.length;
-        const closeRel = body_[start .. $].indexOf(memberClose);
-        const end = closeRel < 0 ? body_.length : start + closeRel;
-        pos = closeRel < 0 ? body_.length : end + memberClose.length;
-
-        const chunk = body_[start .. end];
-        const key = innerText(chunk, "name");
-        if (!key.length) continue;
-        const val = decodeAnopeReply(innerText(chunk, "string"));
-        r.members[key] = val;
-        switch (key) {
-            case "result": r.result = val; break;
-            case "error":  r.error = val;  break;
-            case "return": r.text = val;   break;
-            default: break;
-        }
-    }
+    r.result = res;
     return r;
 }
 
@@ -268,40 +232,22 @@ string flattenReplyText(string text) @safe pure {
 }
 
 /**
- * POST one prebuilt XML-RPC body. `label` is what reaches the log — callers
+ * POST one prebuilt JSON-RPC body. `label` is what reaches the log — callers
  * must keep secrets out of it (`REGISTER <password>` never appears).
  * Fiber-aware; never throws: transport problems land in `transportError`
  * with `transportOk == false`.
  */
-private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
-    AnopeReply r;
+private AnopeRpcResult anopePost(AnopeSettings s, string payload, string label) {
+    AnopeRpcResult r;
     if (!s.configured) {
         r.transportError = "Anope RPC not configured";
         return r;
     }
+    const auth = anopeBearerHeader(s.token);
 
     auto settings = new HTTPClientSettings;
     settings.connectTimeout = s.timeoutSeconds.seconds;
     settings.readTimeout = s.timeoutSeconds.seconds;
-    // One request per connection, forced on the request header below.
-    // `defaultKeepAliveTimeout = 0` was the obvious knob and it does NOT
-    // work: prod kept logging `Connection closed while writing` and 404s
-    // with an 18-byte body ("Unrecognized page") after it was deployed.
-    // vibe.d writes `Connection: keep-alive` itself (client.d:727) and then
-    // derives `close_conn` from whatever the requester left in that header
-    // (client.d:750), so the header is the lever that actually decides.
-    //
-    // Why it matters: m_httpd is a hand-rolled server that does not serve a
-    // second request on a connection. Reusing one makes it read the next
-    // POST body as a request line — hence "Unrecognized page" rather than
-    // an XML fault — or, if it closed first, the write fails outright.
-    // Observed 2026-09-06: a deletion's ownership `INFO` answered 200 and
-    // the `DROP` behind it 404'd, leaving the account standing; and every
-    // provisioning `checkAuthentication` failed the same way, which is what
-    // produced prod's 10 orphan pending credentials.
-    // No address-family pin: the listener binds `::` (see the httpd block in
-    // services.conf.j2), which on Linux accepts IPv4 too, so either record of
-    // the dual-stack `services` alias works.
 
     int status = 0;
     string responseBody;
@@ -310,19 +256,12 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
             (scope HTTPClientRequest req) {
                 req.method = HTTPMethod.POST;
                 req.headers["Connection"] = "close";
-                req.headers["Content-Type"] = "text/xml";
-                // Frame the body explicitly. Without it vibe.d sends
-                // neither Content-Length nor chunked encoding and lets
-                // the body run to connection close; m_httpd's naive
-                // parser then reads whatever has arrived so far, and when
-                // headers and body land in separate TCP segments it parses
-                // an empty body and answers 404 "Unrecognized query".
-                // Observed 2026-09-06/07 on prod: curl (which always sets
-                // Content-Length) never failed while back-to-back gateway
-                // calls failed intermittently — REGISTER would land and the
-                // checkAuthentication right behind it 404, orphaning the
-                // credential. Proven by capturing vibe.d's exact bytes
-                // (no Content-Length present) against a dump server.
+                req.headers["Content-Type"] = "application/json";
+                req.headers["Authorization"] = auth;
+                // Frame the body explicitly — see the module comment. Without
+                // it httpd parses an empty body and answers 404
+                // "Unrecognized query" whenever headers and body land in
+                // separate TCP segments.
                 req.headers["Content-Length"] = payload.length.to!string;
                 req.bodyWriter.write(cast(const(ubyte)[]) payload);
             },
@@ -339,20 +278,18 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
         return r;
     }
 
-    // m_httpd's status code is not a reliable verdict: prod produced an
-    // HTTP 404 for `checkAuthentication` while `command` on the same socket
-    // answered 200, and m_xmlrpc signals its own errors inside the struct
-    // (`error` member). So the body decides — a `methodResponse` is a real
-    // answer whatever the status, and only a body we cannot parse is a
+    // httpd's status code is not a reliable verdict: the old client watched
+    // prod answer 404 with a parseable body on one socket while `command` on
+    // the same socket answered 200, and jsonrpc signals its own errors in
+    // the `error` object. So the body decides — a JSON-RPC reply is a real
+    // answer whatever the status, and only a body that is not one is a
     // transport failure. The status is logged when unexpected so the next
     // occurrence is diagnosable.
-    r = parseXmlRpcResponse(responseBody);
-    r.rawText = r.text;
-    r.text = flattenReplyText(r.text);
+    r = parseJsonRpcReply(responseBody);
     if (!r.transportOk) {
         r.transportError = status == 200
-            ? "unparseable XML-RPC body"
-            : "HTTP " ~ status.to!string;
+            ? r.transportError
+            : "HTTP " ~ status.to!string ~ ": " ~ r.transportError;
         logWarn("anope rpc: %s returned HTTP %s with an unparseable body (%s bytes): %s",
                 label, status, responseBody.length,
                 responseBody.length > 200 ? responseBody[0 .. 200] : responseBody);
@@ -364,48 +301,73 @@ private AnopeReply anopePost(AnopeSettings s, string payload, string label) {
 }
 
 /**
- * `anopePost` plus one retry, for calls that are safe to repeat: a stale
- * pooled connection or a services restart shows up as a transport failure on
- * the write, and losing a read-only probe needlessly defers provisioning.
- * Never used for `REGISTER`, which is not idempotent.
+ * The one generic JSON-RPC call. `label` is what reaches the log — callers
+ * must keep secrets out of it. Retried once, but only when `idempotent`:
+ * a stale connection or a services restart shows up as a transport failure
+ * on the write, and losing a read-only probe needlessly defers
+ * provisioning. Never used for `REGISTER`, which is not idempotent. A
+ * JSON-RPC `error` object is a refusal, not a transport failure, so it is
+ * never retried either way.
  */
-private AnopeReply anopePostIdempotent(AnopeSettings s, string payload, string label) {
+package AnopeRpcResult anopeRpc(AnopeSettings s, string method, string[] params,
+                                string label, bool idempotent) {
+    const payload = buildJsonRpcCall(method, params);
     auto r = anopePost(s, payload, label);
-    if (r.transportOk) return r;
+    if (r.transportOk || !idempotent) return r;
     logDebug("anope rpc: retrying %s after %s", label, r.transportError);
     return anopePost(s, payload, label);
 }
 
-/**
- * Run `command` on `service` as if `asNick` had sent it. The nick may be
- * online or offline.
- *
- * Beware the side effect this exists for and must be guarded against: when
- * `asNick` is online, `ns_register` finishes with `u->Identify(na)`, so the
- * live session on that nick is logged into the new account (observed:
- * `900 … :You are now logged in as <nick>` plus `MODE +r` delivered to that
- * client). Only ever register a nick you know belongs to your own session —
- * see `anopeNickOnline`.
- */
-AnopeReply anopeCommand(AnopeSettings s, string service, string asNick, string command) {
-    return anopePost(s, buildXmlRpcCall("command", [service, asNick, command]),
-                     service ~ " " ~ commandVerb(command) ~ " as " ~ asNick);
+/// Map an `anope.command` envelope onto the command reply: result lines, or
+/// the refusal's message with its code.
+private AnopeReply commandReply(AnopeRpcResult r) @safe {
+    AnopeReply out_;
+    if (!r.transportOk) {
+        out_.transportError = r.transportError;
+        return out_;
+    }
+    out_.transportOk = true;
+    if (r.errorCode != 0) {
+        out_.errorCode = r.errorCode;
+        out_.error = r.error;
+        out_.text = r.error;
+        out_.rawText = r.error;
+        return out_;
+    }
+    if (r.result.type != Json.Type.array) {
+        out_.transportOk = false;
+        out_.transportError = "unexpected anope.command result type";
+        return out_;
+    }
+    string[] lines;
+    foreach (v; r.result.get!(Json[]))
+        if (v.type == Json.Type.string) lines ~= v.get!string;
+    out_.rawText = lines.join("\n");
+    out_.text = flattenReplyText(out_.rawText);
+    return out_;
 }
 
 /**
- * `m_xmlrpc_main`'s `user` method: presence lookup for any nick, registered
- * or not (`NickServ STATUS` cannot do this — it reports identification, so an
- * online unregistered nick answers 0 exactly like an offline one).
+ * Run `command` on `service` as the account `asNick` — or as the
+ * unregistered nick `asNick` when no such account exists
+ * (`rpc_user { allowunregistered = yes }`). Sent exactly once: repeating
+ * `REGISTER` after a transport failure is not free of consequence (the
+ * first attempt may well have landed).
+ *
+ * The single command string is passed as one parameter: Anope joins the
+ * words with spaces on its side. Every value interpolated into it must
+ * still pass `isSafeServicesArg` at the call site.
  */
-AnopeReply anopeUser(AnopeSettings s, string nick) {
-    return anopePostIdempotent(s, buildXmlRpcCall("user", [nick]), "user " ~ nick);
+AnopeReply anopeCommand(AnopeSettings s, string service, string asNick, string command) {
+    return commandReply(anopeRpc(s, "anope.command", [asNick, service, command],
+                                service ~ " " ~ commandVerb(command) ~ " as " ~ asNick, false));
 }
 
 /// Read-only `command` variant, retried once. Only for probes — never for
 /// `REGISTER`, which `anopeCommand` sends exactly once.
 AnopeReply anopeQuery(AnopeSettings s, string service, string asNick, string command) {
-    return anopePostIdempotent(s, buildXmlRpcCall("command", [service, asNick, command]),
-                               service ~ " " ~ commandVerb(command) ~ " as " ~ asNick);
+    return commandReply(anopeRpc(s, "anope.command", [asNick, service, command],
+                                service ~ " " ~ commandVerb(command) ~ " as " ~ asNick, true));
 }
 
 /**
@@ -468,9 +430,9 @@ AnopeReply anopeChanServCommand(AnopeSettings s, string command) {
 /**
  * True when Anope refused the command for lack of privileges. This is NOT a
  * transport error: `Access denied.` (`include/language.h`'s ACCESS_DENIED)
- * arrives as an ordinary HTTP 200 `methodResponse`, so it has to be detected
- * in the reply text. It means the oper account is not tied to an opertype
- * holding the command's priv — Anope attaches `nc->o` only at config load.
+ * arrives as an ordinary result, so it has to be detected in the reply
+ * text. It means the oper account is not tied to an opertype holding the
+ * command's priv — Anope attaches `nc->o` only at config load.
  */
 bool anopeAccessDenied(const AnopeReply r) @safe pure {
     import std.uni : toLower;
@@ -494,8 +456,7 @@ private string asciiLowerStr(string s) @safe pure {
  * Pull the account names out of an `OperServ OPER LIST` reply. Feed it
  * `AnopeReply.rawText`; the reply is line-oriented.
  *
- * Observed shape on anope/anope:2.0.20 (probe: `command OperServ admin
- * "OPER LIST"`):
+ * Observed shape (probe: `command OperServ admin "OPER LIST"`):
  *
  *     Name     Type
  *     sq       Services Root
@@ -515,8 +476,6 @@ private string asciiLowerStr(string s) @safe pure {
  * empty set instead of as an account called "Access" or "There".
  */
 private string[] parseOperListNames(string rawText) @safe pure {
-    import std.string : splitLines;
-
     string[] names;
     bool headerSeen = false;
     foreach (line; rawText.splitLines()) {
@@ -539,13 +498,9 @@ private string[] parseOperListNames(string rawText) @safe pure {
  * The nicks Anope has tied to an opertype, ASCII-lowercased — the "this is
  * staff, never offer to drop it" oracle for the admin inventory.
  *
- * NOT the `opers` XML-RPC method, despite the name: probed against our own
- * 2.0.20 (`<methodName>opers</methodName>`, no params) it answers one struct
- * member per *opertype* — member name `Services Root` / `Services
- * Administrator` / `Services Operator` / `Helper`, value that type's command
- * and priv list. No account appears in that reply at all, so it cannot
- * identify a staff account. `OperServ OPER LIST` (`os_oper.cpp`) does, and
- * covers config-file opers as well as `OPER ADD` ones.
+ * NOT a data RPC: the list methods expose no oper enumeration our token may
+ * call, so `OperServ OPER LIST` (`os_oper.cpp`) does the job, covering
+ * config-file opers as well as `OPER ADD` ones.
  *
  * The names are *nicks*: Anope resolves `oper { name = }` through
  * `NickAlias::Find`, and `OPER LIST` prints the configured name verbatim. On
@@ -578,11 +533,11 @@ bool[string] anopeOperAccounts(AnopeSettings s) {
  * The `SASET PASSWORD` command line for `nick`.
  *
  * `SASET`'s parameters are option-first — `SASET <option> <nickname>
- * <parameters>` — verified against 2.0.20: the reversed form
- * `SASET <nick> PASSWORD <pw>` answers `Syntax: SASET option nickname
- * parameters` and changes nothing. That failure is silent (HTTP 200, no
- * `Access denied`, old password still valid), which is why the order lives
- * here with the evidence instead of inline at the call site.
+ * <parameters>` — the reversed form `SASET <nick> PASSWORD <pw>` answers
+ * `Syntax: SASET option nickname parameters` and changes nothing. That
+ * failure is silent (no `Access denied`, old password still valid), which is
+ * why the order lives here with the evidence instead of inline at the call
+ * site.
  */
 string nickServSetPasswordCommand(string nick, string password) @safe pure {
     return "SASET PASSWORD " ~ nick ~ " " ~ password;
@@ -592,27 +547,86 @@ string nickServSetPasswordCommand(string nick, string password) @safe pure {
  * The `SET FOUNDER` command line for `channel`.
  *
  * `cs_set` is option-first too — `SET <option> <channel> <parameters>` —
- * verified against 2.0.20: the reversed form `SET <#chan> FOUNDER <acct>`
- * answers `Syntax: SET option channel parameters` and transfers nothing.
- * Same silent shape as `SASET` above (HTTP 200, no `Access denied`, the old
- * founder still owns the channel), so the order lives here with its evidence.
+ * the reversed form `SET <#chan> FOUNDER <acct>` answers
+ * `Syntax: SET option channel parameters` and transfers nothing. Same
+ * silent shape as `SASET` above (no `Access denied`, the old founder still
+ * owns the channel), so the order lives here with its evidence.
  */
 string chanServSetFounderCommand(string channel, string founder) @safe pure {
     return "SET FOUNDER " ~ channel ~ " " ~ founder;
 }
 
 /**
- * True when the `user` reply describes a live session. The method echoes the
- * queried nick back in `nick` even when nobody is online, so `nick` is not a
- * presence signal; the fields Anope only adds when it found a `User` object
- * are (see `DoUser` in 2.0.20: ident, vident, host, ip, timestamp, signon).
+ * The `DROP` command line for `nick`, run as the services-oper account.
+ *
+ * 2.1's `ns_drop` confirms with a per-target random code: a bare `DROP
+ * <nick>` answers `Please confirm that you want to drop <nick> with /msg
+ * NickServ DROP <nick> <code>` and drops nothing — 2.0's "name twice"
+ * shape is gone. A source holding `nickserv/drop/override` (Services
+ * Root has every priv) skips the code with the literal `OVERRIDE`, which
+ * answers `Nickname <nick> has been dropped.` — verified on Anope
+ * 2.1.27 over `anope.command`.
  */
-bool anopeUserOnline(const AnopeReply r) @safe pure {
-    if (!r.transportOk) return false;
-    static immutable string[] liveFields = ["ident", "vident", "host", "ip", "timestamp", "signon"];
-    foreach (f; liveFields)
-        if (f in r.members) return true;
-    return false;
+string nickServDropCommand(string nick) @safe pure {
+    return "DROP " ~ nick ~ " OVERRIDE";
+}
+
+/**
+ * The `DROP` command line for `channel`, same contract as
+ * `nickServDropCommand`: `cs_drop`'s confirmation code is skipped with
+ * `OVERRIDE` under `chanserv/drop/override`, answering `Channel <#chan>
+ * has been dropped.` A bare `DROP <#chan>` (or 2.0's `DROP <#chan>
+ * <#chan>`) only prints the confirmation prompt.
+ */
+string chanServDropCommand(string channel) @safe pure {
+    return "DROP " ~ channel ~ " OVERRIDE";
+}
+
+/**
+ * The `ACCESS LIST` command line for `channel`.
+ *
+ * 2.1's `cs_access` hides entries that belong to another access provider:
+ * the XOP tiers the channel setup script grants (`SOP`, `HOP`, `AOP`) come
+ * back as `No matching entries on <#chan> access list.` plus `N access
+ * entries from other access systems not shown; use ACCESS <#chan> LIST *
+ * ALL`. The `* ALL` form lists every provider's rows in the same
+ * `Number  Level  Mask  Description` table `parseChanAccessList` reads
+ * (verified on 2.1.27: `1  SOP  sq`, `2  HOP  FIBEREYE`).
+ */
+string chanServAccessListCommand(string channel) @safe pure {
+    return "ACCESS " ~ channel ~ " LIST * ALL";
+}
+
+/// Whether a nick is currently held by a live IRC session.
+enum AnopePresence {
+    online,    /// Anope knows a `User` object for the nick
+    offline,   /// Anope answered `No such user`
+    unknown,   /// Anope unreachable, misconfigured, or an unrecognised reply
+}
+
+/**
+ * Map an `anope.user` envelope onto presence. `result` present means a live
+ * session; the `No such user` error means nobody holds the nick; anything
+ * else — transport failure, refusal, an empty result — is `unknown`, so
+ * callers decide explicitly whether to fail open or closed.
+ */
+AnopePresence classifyUserPresence(const AnopeRpcResult r) @safe {
+    if (!r.transportOk) return AnopePresence.unknown;
+    if (r.errorCode != 0)
+        return r.error.indexOf("No such user") >= 0
+            ? AnopePresence.offline : AnopePresence.unknown;
+    return (r.result.type != Json.Type.undefined && r.result.type != Json.Type.null_)
+        ? AnopePresence.online : AnopePresence.unknown;
+}
+
+/// Presence lookup for any nick, registered or not (`NickServ STATUS`
+/// cannot do this — it reports identification, so an online unregistered
+/// nick answers 0 exactly like an offline one). `unknown` on any transport
+/// problem, so callers decide explicitly whether to fail open or closed.
+AnopePresence anopeUserPresence(AnopeSettings s, string nick) {
+    if (!isSafeServicesArg(nick)) return AnopePresence.unknown;
+    return classifyUserPresence(
+        anopeRpc(s, "anope.user", [nick], "user " ~ nick, true));
 }
 
 /**
@@ -693,8 +707,6 @@ struct NickInfo {
  * both come back `registered == false` with an empty `account`.
  */
 NickInfo parseNickInfo(string rawText) @safe pure {
-    import std.string : splitLines;
-
     NickInfo info;
     info.registered = classifyNickInfoReply(flattenReplyText(rawText))
         == NickRegistration.registered;
@@ -720,22 +732,36 @@ NickInfo parseNickInfo(string rawText) @safe pure {
 }
 
 /**
+ * True when an `anope.checkCredentials` result object names the
+ * authenticated account. Success is `result.account` present; the
+ * `Invalid password` / `Invalid account` / `Account suspended` refusals
+ * never reach here — they arrive as JSON-RPC errors.
+ */
+bool credentialsAuthenticated(Json result) @safe {
+    if (result.type != Json.Type.object) return false;
+    auto a = result["account"];
+    return a.type == Json.Type.string && a.get!string.length > 0;
+}
+
+/**
  * Verify an account/password pair through the same code path SASL PLAIN uses
- * (`m_xmlrpc_main`'s `checkAuthentication` → `OnCheckAuthentication`). Used to
- * prove a freshly generated credential actually works before it is persisted
- * and shown to the user. `determined` is false when Anope was unreachable.
+ * (`anope.checkCredentials`). Used to prove a freshly generated credential
+ * actually works before it is persisted and shown to the user. `determined`
+ * is false when Anope was unreachable; a refusal (`Invalid password`,
+ * `Invalid account`, `Account suspended`) is a determined false.
  */
 bool anopeCheckAuthentication(AnopeSettings s, string account, string password, out bool determined) {
     determined = false;
     if (!isSafeServicesArg(account) || !isSafeServicesArg(password)) return false;
-    auto r = anopePostIdempotent(s, buildXmlRpcCall("checkAuthentication", [account, password]),
-                                 "checkAuthentication " ~ account);
+    auto r = anopeRpc(s, "anope.checkCredentials", [account, password],
+                      "checkCredentials " ~ account, true);
     if (!r.transportOk) return false;
     determined = true;
-    if (r.result == "Success") return true;
-    if (r.error.length)
-        logWarn("anope rpc: checkAuthentication %s rejected: %s", account, r.error);
-    return false;
+    if (r.errorCode != 0) {
+        logWarn("anope rpc: checkCredentials %s refused: %s", account, r.error);
+        return false;
+    }
+    return credentialsAuthenticated(r.result);
 }
 
 /**
@@ -765,7 +791,7 @@ struct ChanInfo {
  */
 ChanInfo parseChanInfo(string rawText) @safe pure {
     import std.algorithm : canFind;
-    import std.string : splitLines, startsWith;
+    import std.string : startsWith;
     import std.uni : toLower;
 
     ChanInfo info;
@@ -809,7 +835,7 @@ struct ChanAccessEntry {
 ChanAccessEntry[] parseChanAccessList(string rawText) @safe pure {
     import std.algorithm : all, splitter;
     import std.array : array;
-    import std.string : splitLines;
+    import std.ascii : isDigit;
 
     ChanAccessEntry[] rows;
     foreach (line; rawText.splitLines()) {
@@ -824,4 +850,37 @@ ChanAccessEntry[] parseChanAccessList(string rawText) @safe pure {
         rows ~= e;
     }
     return rows;
+}
+
+/// The `anope.command` envelope → reply mapping every command call shares.
+/// In-module because `commandReply` is private; `services-test` covers the
+/// public builders and parsers it is built from.
+unittest {
+    import std.algorithm : canFind;
+
+    // Result lines arrive as an array; rawText keeps them line-oriented for
+    // the INFO/ACCESS parsers while text is flattened for logging.
+    auto ok = parseJsonRpcReply(
+        `{"jsonrpc":"2.0","id":"gateway","result":["alice is alice","          Account: alice"]}`);
+    assert(ok.transportOk && ok.errorCode == 0);
+    auto reply = commandReply(ok);
+    assert(reply.transportOk);
+    assert(reply.rawText == "alice is alice\n          Account: alice");
+    assert(reply.text.indexOf('\n') < 0 && reply.text.canFind("Account: alice"));
+
+    // A refusal is a usable answer, not a transport failure: the message
+    // stays classifiable and the code travels with it.
+    auto refused = parseJsonRpcReply(
+        `{"jsonrpc":"2.0","id":"gateway","error":{"code":-32001,"message":"No such command"}}`);
+    assert(refused.transportOk);
+    auto r2 = commandReply(refused);
+    assert(r2.transportOk && r2.errorCode == -32001);
+    assert(r2.text == "No such command" && r2.rawText == "No such command");
+    assert(anopeAccessDenied(r2) == false);
+
+    // A well-formed reply with a mistyped result is a transport failure —
+    // `anope.command` only ever answers an array of lines.
+    auto weird = parseJsonRpcReply(`{"jsonrpc":"2.0","id":"gateway","result":"oops"}`);
+    assert(weird.transportOk);
+    assert(!commandReply(weird).transportOk);
 }

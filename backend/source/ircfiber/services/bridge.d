@@ -1,49 +1,29 @@
 /**
- * Anope 2.1 JSON-RPC client for the Discord bridge sidecar (`bridgeserv`).
+ * `BridgeServ` commands over the shared Anope 2.1 JSON-RPC transport
+ * (`ircfiber.services.anope`), plus the Discord REST the guild/channel
+ * pickers call directly.
  *
- * The bridge runs as its own Anope instance (`bridge.ircfiber.com`,
- * `deploy/roles/ircd/tasks/bridge.yml`) because `bridgeserv` is 2.1 only
- * while `ircfiber-services` is pinned to 2.0.20 for `db_flatfile` +
- * `m_xmlrpc_main`. `ircfiber.services.anope` is therefore NOT reusable here:
- * it is an XML-RPC transport hard-wired to 2.0's `command`/`user`/
- * `checkAuthentication` methods and to `m_xmlrpc`'s double-escaping. That
- * module stays untouched and still serves the 2.0.20 instance.
- *
- * Transport (Anope `modules/rpc/jsonrpc.cpp`): HTTP POST to `/jsonrpc` with
- * `Content-Type: application/json`, JSON-RPC 2.0. The reply for
- * `anope.command` is `result`, an array with one entry per services reply
- * line (`RPCCommandReply::SendMessage`, `modules/rpc/rpc_user.cpp`).
- *
- * Authentication, verified live against 2.1.27: the Bearer credential is
- * **base64-encoded** in the header — `RPC::Provider::CanExecute`
- * (`include/modules/rpc.h`) runs `B64Decode` on everything after `Bearer `
- * before comparing. Sending the raw token answers
- * `-32601 No authorization for method: anope.command`.
+ * There is no sidecar any more: `BridgeServ` runs on the merged services
+ * instance (`services.ircfiber.com`), and its commands go through
+ * `anope.command` as the oper account (`IRCFIBER_ANOPE_OPER_ACCOUNT`),
+ * which is Services Root and therefore holds `bridgeserv/*`.
  *
  * Why the guild/channel pickers do NOT go through BridgeServ: `GUILDS` and
  * `CHANNELS` answer asynchronously, addressed to the requesting IRC user by
- * UID (`DeliverListing`/`Requester` in `modules/bridgeserv/bridgeserv.cpp`).
- * An RPC caller is not an IRC user, so the synchronous reply is empty and
- * the real answer is discarded — verified live: `anope.command bridge-rpc
- * BridgeServ GUILDS` returns `[]` while `LIST`/`ADD`/`DEL` all answer
+ * UID. An RPC caller is not an IRC user, so the synchronous reply is empty
+ * and the real answer is discarded — while `LIST`/`ADD`/`DEL` all answer
  * normally. The pickers therefore call Discord directly, which is also
- * synchronous and keeps working while the sidecar is down.
+ * synchronous and keeps working while services are down.
  *
  * Env:
- *   IRCFIBER_BRIDGE_RPC_URL      full endpoint, e.g. http://bridge:8080/jsonrpc
- *                                (empty → the bridge surface is disabled)
- *   IRCFIBER_BRIDGE_RPC_TOKEN    Bearer token (or _FILE indirection)
- *   IRCFIBER_BRIDGE_RPC_ACCOUNT  the account BridgeServ commands run as
  *   IRCFIBER_DISCORD_BOT_TOKEN   bot token for the pickers (or _FILE)
- *   IRCFIBER_BRIDGE_RPC_TIMEOUT  connect/read timeout in seconds (default 10)
  */
 module ircfiber.services.bridge;
 
-import std.array : appender;
 import std.algorithm : canFind;
 import std.conv : to;
 import std.process : environment;
-import std.string : indexOf, split, startsWith, strip, toLower;
+import std.string : indexOf, split, splitLines, startsWith, strip, toLower;
 import core.time : seconds;
 
 import vibe.core.log : logWarn;
@@ -53,25 +33,15 @@ import vibe.http.client : requestHTTP, HTTPClientRequest, HTTPClientResponse,
 import vibe.stream.operations : readAll;
 
 import ircfiber.env : envSecret;
+import ircfiber.services.anope : AnopeSettings, anopeCommand, isSafeServicesArg;
 
 /// Endpoint configuration read from the environment.
 struct BridgeSettings {
-    string rpcUrl;             /// IRCFIBER_BRIDGE_RPC_URL; "" disables the surface
-    string token;              /// IRCFIBER_BRIDGE_RPC_TOKEN (raw, not yet base64)
-    string account;            /// IRCFIBER_BRIDGE_RPC_ACCOUNT
     string discordToken;       /// IRCFIBER_DISCORD_BOT_TOKEN
-    int timeoutSeconds = 10;   /// IRCFIBER_BRIDGE_RPC_TIMEOUT
 
-    /// All three RPC inputs are required: the listener rejects a missing or
-    /// wrong token, and `anope.command` errors with `No such account` when
-    /// the account is not registered on the sidecar.
-    bool configured() const @safe pure nothrow @nogc {
-        return rpcUrl.length > 0 && token.length > 0 && account.length > 0;
-    }
-
-    /// Whether the Discord-side pickers can be served. Independent of
-    /// `configured`: the bot token is a separate secret and the pickers keep
-    /// working while the sidecar is down.
+    /// Whether the Discord-side pickers can be served. Independent of the
+    /// Anope surface: the bot token is a separate secret and the pickers
+    /// keep working while services are down.
     bool hasDiscordToken() const @safe pure nothrow @nogc {
         return discordToken.length > 0;
     }
@@ -79,19 +49,7 @@ struct BridgeSettings {
 
 BridgeSettings loadBridgeSettings() {
     BridgeSettings s;
-    s.rpcUrl = environment.get("IRCFIBER_BRIDGE_RPC_URL", "").strip();
-    s.account = environment.get("IRCFIBER_BRIDGE_RPC_ACCOUNT", "").strip();
-    s.token = envSecret("IRCFIBER_BRIDGE_RPC_TOKEN", "").strip();
     s.discordToken = envSecret("IRCFIBER_DISCORD_BOT_TOKEN", "").strip();
-    const raw = environment.get("IRCFIBER_BRIDGE_RPC_TIMEOUT", "").strip();
-    if (raw.length) {
-        try {
-            const v = raw.to!int;
-            if (v > 0 && v <= 120) s.timeoutSeconds = v;
-        } catch (Exception) {
-            // keep the default; a bad env value must not disable the surface
-        }
-    }
     return s;
 }
 
@@ -126,115 +84,37 @@ struct BridgeListing {
     string[] raw;
 }
 
-/// Every argument is reassembled space-delimited on the Anope side
-/// (`rpc_user.cpp` joins `params`), so a value containing whitespace injects
-/// an extra parameter. Same rule `ircfiber.services.anope.isSafeServicesArg`
-/// applies to the XML-RPC surface.
-bool isSafeBridgeArg(string s) @safe pure nothrow @nogc {
-    if (s.length == 0) return false;
-    foreach (char c; s)
-        if (c <= 0x20 || c == 0x7F) return false;
-    return true;
-}
-
 /// Runs one BridgeServ command and returns its reply lines.
 ///
-/// Throws: `BridgeError` on a JSON-RPC error, an unusable body, or a
-/// transport failure (`code == 0`).
-string[] bridgeCommand(BridgeSettings s, string[] args) {
-    import std.base64 : Base64;
+/// The words are reassembled space-delimited on the Anope side, so a value
+/// containing whitespace would inject an extra parameter — every argument
+/// passes `isSafeServicesArg` first.
+///
+/// Throws: `BridgeError` on a JSON-RPC error (its code), on an unusable
+/// body, or on a transport failure (`code == 0`); also `code == 0` when the
+/// Anope surface itself is not configured.
+string[] bridgeCommand(AnopeSettings s, string[] args) {
+    import std.string : join;
 
-    if (!s.configured)
+    if (!s.configured || !s.hasOper)
         throw new BridgeError(0, "the Discord bridge is not configured");
     if (args.length == 0)
         throw new BridgeError(0, "no BridgeServ command given");
     foreach (a; args)
-        if (!isSafeBridgeArg(a))
+        if (!isSafeServicesArg(a))
             throw new BridgeError(0, "unusable BridgeServ argument");
 
-    auto params = appender!(Json[]);
-    params ~= Json(s.account);
-    params ~= Json("BridgeServ");
-    foreach (a; args)
-        params ~= Json(a);
-
-    auto call = Json.emptyObject;
-    call["jsonrpc"] = Json("2.0");
-    call["id"] = Json("gateway");
-    call["method"] = Json("anope.command");
-    call["params"] = Json(params.data);
-    const payload = call.toString();
-    // The Bearer credential is base64 of the token: the listener runs
-    // B64Decode on everything after "Bearer " before comparing (rpc.h).
-    const bearer = "Bearer " ~ Base64.encode(cast(const(ubyte)[]) s.token).idup;
-
-    auto settings = new HTTPClientSettings;
-    settings.connectTimeout = s.timeoutSeconds.seconds;
-    settings.readTimeout = s.timeoutSeconds.seconds;
-
-    int status = 0;
-    string responseBody;
-    try {
-        requestHTTP(s.rpcUrl,
-            (scope HTTPClientRequest req) {
-                req.method = HTTPMethod.POST;
-                // `Connection: close` plus an explicit Content-Length, for
-                // the same reason as the 2.0 XML-RPC client: Anope's httpd
-                // is a hand-rolled server which serves one request per
-                // connection and whose parser reads only what has already
-                // arrived. See the long comment in `services/anope.d`.
-                req.headers["Connection"] = "close";
-                req.headers["Content-Type"] = "application/json";
-                // The Bearer credential is base64 of the token: the
-                // listener B64Decodes it before comparing (rpc.h).
-                req.headers["Authorization"] = bearer;
-                req.headers["Content-Length"] = payload.length.to!string;
-                req.bodyWriter.write(cast(const(ubyte)[]) payload);
-            },
-            (scope HTTPClientResponse res) {
-                status = res.statusCode;
-                try responseBody = cast(string) res.bodyReader.readAll();
-                catch (Exception e)
-                    logWarn("bridge rpc: reading the response failed: %s", e.msg);
-            },
-            settings);
-    } catch (Exception e) {
-        logWarn("bridge rpc: %s failed: %s", args[0], e.msg);
-        throw new BridgeError(0, e.msg);
+    auto r = anopeCommand(s, "BridgeServ", s.operAccount, args.join(" "));
+    if (!r.transportOk)
+        throw new BridgeError(0, r.transportError);
+    if (r.errorCode != 0) {
+        const msg = r.error.length ? r.error : r.text;
+        // A JSON-RPC error is a refusal, never a transport failure, so it
+        // must not be reported with code 0.
+        throw new BridgeError(r.errorCode == 0 ? -1 : cast(int) r.errorCode,
+            msg.length ? msg : "the bridge service refused the command");
     }
-
-    Json reply;
-    try
-        reply = parseJsonString(responseBody);
-    catch (Exception e) {
-        logWarn("bridge rpc: unparseable body (HTTP %s): %s", status, e.msg);
-        throw new BridgeError(0, "the bridge service returned an unreadable reply");
-    }
-
-    if (reply.type == Json.Type.object) {
-        auto err = reply["error"];
-        if (err.type == Json.Type.object) {
-            int code = 0;
-            auto c = err["code"];
-            if (c.type == Json.Type.int_) code = cast(int) c.get!long;
-            string msg;
-            auto m = err["message"];
-            if (m.type == Json.Type.string) msg = m.get!string;
-            // A JSON-RPC error is a refusal, never a transport failure, so
-            // it must not be reported with code 0.
-            throw new BridgeError(code == 0 ? -1 : code,
-                msg.length ? msg : "the bridge service refused the command");
-        }
-    }
-
-    auto result = reply.type == Json.Type.object ? reply["result"] : Json.init;
-    if (result.type != Json.Type.array)
-        throw new BridgeError(0, "the bridge service returned no result");
-
-    string[] lines;
-    foreach (v; result.get!(Json[]))
-        if (v.type == Json.Type.string) lines ~= v.get!string;
-    return lines;
+    return r.rawText.length ? r.rawText.splitLines() : [];
 }
 
 /// Parses the fixed-column table `BridgeServ LIST` prints.
@@ -266,7 +146,7 @@ BridgeListing parseBridgeList(string[] lines) @safe pure {
 }
 
 /// `BridgeServ LIST`, parsed.
-BridgeListing bridgeList(BridgeSettings s) {
+BridgeListing bridgeList(AnopeSettings s) {
     return parseBridgeList(bridgeCommand(s, ["LIST"]));
 }
 
@@ -277,7 +157,7 @@ private bool refused(string[] lines, string success) @safe pure {
 }
 
 /// `ADD <channel> <space> <foreign channel> [suffix]`.
-string[] bridgeAdd(BridgeSettings s, string ircChannel, string space,
+string[] bridgeAdd(AnopeSettings s, string ircChannel, string space,
                    string channel, string suffix = "") {
     string[] args = ["ADD", ircChannel, space, channel];
     if (suffix.length) args ~= suffix;
@@ -289,7 +169,7 @@ string[] bridgeAdd(BridgeSettings s, string ircChannel, string space,
 
 /// `SET <channel> <space> <foreign channel> [suffix]` — repoint, or change
 /// (with no suffix argument, clear) the nick suffix.
-string[] bridgeSet(BridgeSettings s, string ircChannel, string space,
+string[] bridgeSet(AnopeSettings s, string ircChannel, string space,
                    string channel, string suffix = "") {
     string[] args = ["SET", ircChannel, space, channel];
     if (suffix.length) args ~= suffix;
@@ -300,7 +180,7 @@ string[] bridgeSet(BridgeSettings s, string ircChannel, string space,
 }
 
 /// `DEL <channel>`.
-string[] bridgeDel(BridgeSettings s, string ircChannel) {
+string[] bridgeDel(AnopeSettings s, string ircChannel) {
     auto lines = bridgeCommand(s, ["DEL", ircChannel]);
     if (refused(lines, "bridge removed"))
         throw new BridgeError(-1, lines[0].strip());
@@ -321,8 +201,8 @@ private Json discordGet(BridgeSettings s, string path) {
         throw new BridgeError(0, "no Discord bot token is configured");
 
     auto settings = new HTTPClientSettings;
-    settings.connectTimeout = s.timeoutSeconds.seconds;
-    settings.readTimeout = s.timeoutSeconds.seconds;
+    settings.connectTimeout = 10.seconds;
+    settings.readTimeout = 10.seconds;
 
     int status = 0;
     string responseBody;
@@ -405,16 +285,36 @@ bool isValidSnowflake(string s) @safe pure nothrow @nogc {
 }
 
 unittest {
+    import ircfiber.services.anope : isSafeServicesArg;
+
     assert(isValidSnowflake("1085202042806607932"));
     assert(!isValidSnowflake(""));
     assert(!isValidSnowflake("12a"));
     assert(!isValidSnowflake("123456789012345678901"));
 
-    assert(isSafeBridgeArg("#dmz"));
-    assert(!isSafeBridgeArg("#dmz two"));
-    assert(!isSafeBridgeArg(""));
+    // Same rule the command path enforces: a value containing whitespace
+    // would inject an extra parameter on the Anope side.
+    assert(isSafeServicesArg("#dmz"));
+    assert(!isSafeServicesArg("#dmz two"));
+    assert(!isSafeServicesArg(""));
 
-    // The exact shape BridgeServ LIST prints, verified live against 2.1.27.
+    // No I/O happens before the gate: an unconfigured surface and an unsafe
+    // argument both throw without touching the network.
+    try {
+        bridgeCommand(AnopeSettings.init, ["LIST"]);
+        assert(false);
+    } catch (BridgeError e) {
+        assert(e.isTransport);
+    }
+    try {
+        bridgeCommand(AnopeSettings("http://services:8080/jsonrpc", "tok", 10, "admin"),
+                      ["ADD", "#dmz two"]);
+        assert(false);
+    } catch (BridgeError e) {
+        assert(e.msg == "unusable BridgeServ argument");
+    }
+
+    // The exact shape BridgeServ LIST prints, verified live against 2.1.
     auto listing = parseBridgeList([
         "discord: online (clients appear on <space-id>.discord.bridge)",
         "Channel  Network  Space                Remote channel       Suffix  Endpoint  Users  Nicks",

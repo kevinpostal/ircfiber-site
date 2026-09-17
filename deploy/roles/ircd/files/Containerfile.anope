@@ -1,32 +1,40 @@
-# IRC Fiber bridge image: Anope 2.1 with the bridgeserv module (Discord <->
-# IRC relay), run as a bridge-only sidecar next to the anope/anope:2.0.20
-# services container.
+# IRC Fiber services image: Anope 2.1 with the bridgeserv module (Discord <->
+# IRC relay). This is THE services instance of the network — accounts,
+# channels, BotServ, OperServ and BridgeServ all live in the one process.
 #
-# It is deliberately not the services image. bridgeserv is 2.1 only, and 2.1
-# removed db_flatfile and m_xmlrpc_main, both of which the gateway depends on
-# against the 2.0.20 instance. This image carries no account database of the
-# network: the only accounts it knows are the two which authorise BridgeServ.
+# It replaced two containers: anope/anope:2.0.20 (pinned there for
+# db_flatfile + m_xmlrpc_main) and a bridge-only 2.1 sidecar (bridgeserv is
+# 2.1 only). In 2.1 the database is db_json, the gateway drives services over
+# the authenticated jsonrpc listener (rpc_user, rpc_data and our
+# rpc_registered), and db_flatfile survives only as a load-only importer for
+# the one-shot migration of the 2.0 anope.db (deploy/roles/ircd/tasks/
+# services.yml).
 #
-# Both stages pin the same alpine so the daemon is not compiled against one
-# musl/libstdc++ and run against another. The source (including the vendored
-# DPP under vendor/brainboxdotcc) is cloned in the builder stage at
-# ANOPE_COMMIT, exactly as Containerfile.ircd clones InspIRCd.
+# Both stages pin the same debian so the daemon is not compiled against one
+# libstdc++ and run against another. The source (including the vendored DPP
+# under vendor/brainboxdotcc) is cloned in the builder stage at ANOPE_COMMIT,
+# exactly as Containerfile.ircd clones InspIRCd.
 #
 # Build context is the site repo root (what the root Makefile's SHIP_SH
 # passes):
 #   docker build -f deploy/roles/ircd/files/Containerfile.anope --target runtime-anope .
 #
-# Image contract, which deploy/roles/ircd/tasks/bridge.yml relies on:
-#   /anope/bin/anope              the daemon, run with --nofork
-#   /anope/modules/bridgeserv.so  the bridge module
-#   /anope/conf/anope.conf        bind-mounted read-only by the role
-#   /anope/data                   the volume (db_json database + backups)
+# Image contract, which deploy/roles/ircd/tasks/services.yml relies on:
+#   /anope/bin/anope                the daemon, run with --nofork
+#   /anope/modules/*.so             every module services.conf.j2 loads (gated below)
+#   /anope/conf/anope.conf          the rendered services.conf, bind-mounted
+#                                   read-only by the role under the name the
+#                                   2.1 daemon reads, plus nickserv.conf /
+#                                   operserv.conf / global.conf /
+#                                   services.motd next to it; the shipped
+#                                   *.example.conf stay in the image and are
+#                                   included from it
 #   uid/gid 10000
 
-# The fork's branch, not paigeadelethompson/master: the image pins the exact
-# commit that is live, and the clone below only carries the history of the
-# named branch, so the branch must be the one the commit is on. Everything on
-# it is submitted upstream as pull requests from kevinpostal/anope.
+# The fork's branch, not anope/2.1: the image pins the exact commit that is
+# live, and the clone below only carries the history of the named branch, so
+# the branch must be the one the commit is on. Everything on it is submitted
+# upstream as pull requests from kevinpostal/anope.
 ARG ANOPE_REPO=https://github.com/kevinpostal/anope.git
 ARG ANOPE_BRANCH=bridgeserv-mentions
 ARG ANOPE_COMMIT=0864139c9ebd71ac5098c3dc0c695266399dd833
@@ -45,9 +53,7 @@ ARG ANOPE_COMMIT=0864139c9ebd71ac5098c3dc0c695266399dd833
 #
 # The process died with SIGSEGV about a second after every
 # "connected to Discord", so the container crash-looped and flapped the
-# services link on the network. Every other part of the image contract is
-# unchanged: /anope/bin/anope, /anope/modules/bridgeserv.so,
-# /anope/conf/anope.conf, /anope/data, uid/gid 10000.
+# services link on the network.
 
 FROM debian:trixie-slim AS builder-anope
 ARG ANOPE_REPO
@@ -63,29 +69,52 @@ RUN apt-get update \
       build-essential cmake ninja-build git pkg-config gettext \
       libssl-dev zlib1g-dev ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-# anope-bridge-no-deauth.patch gates the upstream "deauth a user whose
-# account this database does not know" paths behind nickserv:deauthunknown,
-# which templates/bridge-anope.conf.j2 sets to no. Without it this
-# bridge-only instance clears the accountname InspIRCd learned from the real
-# services' SASL login for every user on the network.
+# Three patches the migration and the gateway integration depend on:
 #
-# It is applied as the last command of the clone layer so it is a build gate:
-# `git apply` fails the build if the patch stops matching after an
-# ANOPE_COMMIT bump. Never relax it with --3way or `|| true` — a silently
-# unpatched bridge deauths the whole network.
-COPY deploy/roles/ircd/files/anope-bridge-no-deauth.patch /tmp/anope-bridge-no-deauth.patch
+#   anope-rpc-command-unregistered.patch  rpc_user: `allowunregistered = yes`
+#     lets anope.command run as a nick that has no account, exactly like
+#     2.0's XML-RPC `command` did. That is how the gateway registers a
+#     website user's nick offline (`NickServ REGISTER` registers the source
+#     nick); stock 2.1 answers "No such account" instead.
+#   anope-rpc-registered.patch  new module rpc_registered: exposes
+#     ChannelInfo (anope.listRegisteredChannels / anope.registeredChannel)
+#     and account suspensions (anope.listSuspendedAccounts), neither of which
+#     rpc_data has. Pure addition, so it survives ANOPE_COMMIT bumps.
+#   anope-nickcore-registered-backfill.patch  src/nickalias.cpp: a 2.0
+#     NickCore has no registration time, so upstream's "2.0 compatibility"
+#     backfill (older alias wins) never fired against the 0 it loaded as,
+#     and every migrated account reported registered=0 forever. Verified on
+#     a migrated rig database before the patch; correct after it.
+#
+# They are applied as the last command of the clone layer so they are a
+# build gate: `git apply` fails the build if a patch stops matching after an
+# ANOPE_COMMIT bump. Never relax it with --3way or `|| true` — an unpatched
+# image would silently ship a services the gateway cannot provision through.
+COPY deploy/roles/ircd/files/anope-rpc-command-unregistered.patch \
+     deploy/roles/ircd/files/anope-rpc-registered.patch \
+     deploy/roles/ircd/files/anope-nickcore-registered-backfill.patch \
+     /tmp/patches/
 RUN git clone --branch ${ANOPE_BRANCH} ${ANOPE_REPO} /anope-src \
  && git -C /anope-src checkout --detach ${ANOPE_COMMIT} \
- && git -C /anope-src apply --verbose /tmp/anope-bridge-no-deauth.patch
+ && git -C /anope-src apply --verbose \
+      /tmp/patches/anope-rpc-command-unregistered.patch \
+      /tmp/patches/anope-rpc-registered.patch \
+      /tmp/patches/anope-nickcore-registered-backfill.patch
 WORKDIR /anope-src
 # The `test -f` lines are the build gate. CMake skips a module whose
 # dependencies it cannot detect rather than failing the build, so without
 # them an OpenSSL or DPP detection failure would silently ship an Anope with
-# no bridge and only surface as a missing BridgeServ in prod.
+# no bridge and only surface as a missing BridgeServ in prod. Every module
+# services.conf.j2 loads is listed: a missing one aborts the build here
+# instead of aborting services at start on the live network.
 RUN cmake -B build -D CMAKE_BUILD_TYPE=Release -D INSTDIR=/anope -G Ninja \
  && ninja -C build install \
- && test -f /anope/modules/bridgeserv.so \
- && test -f /anope/bin/anope
+ && test -f /anope/bin/anope \
+ && for m in bridgeserv db_json db_flatfile enc_bcrypt enc_sha256 httpd jsonrpc \
+             rpc_user rpc_data rpc_registered inspircd nickserv chanserv botserv \
+             hostserv memoserv operserv global fantasy help; do \
+      test -f /anope/modules/$m.so || { echo "missing module $m.so" >&2; exit 1; }; \
+    done
 
 FROM debian:trixie-slim AS runtime-anope
 # ca-certificates is required: DPP verifies discord.com's chain, and without
@@ -97,8 +126,8 @@ RUN apt-get update \
  && groupadd -g 10000 anope \
  && useradd -u 10000 -g 10000 -d /anope -M -s /usr/sbin/nologin anope
 COPY --from=builder-anope --chown=10000:10000 /anope/ /anope/
-# The rendered config is bind-mounted over conf/anope.conf; the shipped
-# examples stay in the image so an operator can read them in place.
+# The rendered configs are bind-mounted over conf/; the shipped examples
+# stay in the image because services.conf includes them.
 RUN mkdir -p /anope/data && chown 10000:10000 /anope/data
 USER 10000
 WORKDIR /anope

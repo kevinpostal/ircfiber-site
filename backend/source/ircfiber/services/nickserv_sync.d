@@ -4,9 +4,9 @@
  * People register with NickServ over IRC without ever touching the site, so
  * they have no row in Mongo `users` and cannot log in, link, or be managed.
  * This loop reconciles the other direction from `!adduser`: every 10 minutes
- * it reads the Anope flatfile inventory (the gateway mounts it read-only;
- * RPC has no account enumeration) and mints a parked site row for every
- * NickServ account nobody already owns — no site user of that name, no
+ * it reads the live Anope account inventory over JSON-RPC
+ * (`anope.listAccounts`, `ircfiber.services.anope_inventory`) and mints a
+ * parked site row for every NickServ account nobody already owns — no site user of that name, no
  * Fiber network credential link (`saslUsername` — the provisioner's
  * collision-fallback accounts belong to an existing site user under a
  * different name), no site user carrying its email, and not a staff or
@@ -38,7 +38,7 @@
  *   read-back; the site-username unique index is the final backstop
  *   (duplicate key → skip).
  * - Kill-switch `irc:config:nickservSync` (default on), flippable at
- *   GET/POST /api/admin/config/nickserv-sync. No anope.db mount (support-bot
+ *   GET/POST /api/admin/config/nickserv-sync. No services RPC (support-bot
  *   container) → the inventory read reports unavailable and the cycle skips.
  * - Each cycle that processes an inventory records `irc:nickserv-sync:status`
  *   (`NickservSyncStatus`), shown on the admin NickServ tab.
@@ -63,7 +63,8 @@ import ircfiber.logs.events : LogEvent, pushLogEvent;
 import ircfiber.mail : emailWellFormed;
 import ircfiber.models.user : User;
 import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick;
-import ircfiber.services.anope_db : AnopeAccount, AnopeInventory, asciiLowerStr,
+import ircfiber.services.anope : loadAnopeSettings;
+import ircfiber.services.anope_inventory : AnopeAccount, AnopeInventory, asciiLowerStr,
     readAnopeInventory;
 import ircfiber.services.staff : staffAccountsLower;
 import ircfiber.storage.redis : RedisStorage;
@@ -109,9 +110,8 @@ bool isNickservSyncEnabled(RedisStorage redis) @trusted {
 void setNickservSyncEnabled(RedisStorage redis, bool enabled) @trusted {
     redis.getDb().set(NICKSERV_SYNC_CONFIG_KEY, enabled ? "1" : "0");
 }
-
 /// Canonical account name for one inventory row: the owning core's display,
-/// or the alias nick when the core is missing (mid-write file).
+/// or the alias nick when the account object carries no display.
 string syncAccountName(const AnopeAccount a) @safe pure {
     const acct = a.account.strip();
     return acct.length ? acct : a.nick.strip();
@@ -211,7 +211,7 @@ private void nickservSyncLoop() nothrow {
 }
 
 /// What the last inventory-processing cycle did. Written only by a cycle that
-/// held the lock and had an inventory (containers without the anope.db mount
+/// held the lock and had an inventory (containers without the services RPC
 /// never write it, so the admin gateway's record is never clobbered).
 struct NickservSyncStatus {
     long lastRunAt;        /// unix seconds, cycle end
@@ -221,7 +221,7 @@ struct NickservSyncStatus {
     long accounts;         /// distinct NickServ accounts in the inventory
     long created, skipped, failed;
     bool capped;           /// hit NICKSERV_SYNC_MAX_NEW_PER_RUN; the rest is deferred to the next cycle
-    long inventoryMtime;   /// anope.db mtime, unix seconds
+    long inventoryMtime;   /// inventory query time, unix seconds
 }
 
 /// HMSET of every field. A Redis failure is logged, never fatal — the cycle
@@ -285,13 +285,11 @@ private void nickservSyncOnce() {
     db.request!string("SET", NICKSERV_SYNC_LOCK_KEY, token, "NX", "EX", NICKSERV_SYNC_LOCK_TTL_SECS);
     if (db.get(NICKSERV_SYNC_LOCK_KEY) != token) return;
     scope (exit) releaseSyncLock(redis, token);
-
-    auto inv = readAnopeInventory();
-    if (!inv.available) return; // no mount in this container (support-bot, bnc): not an error, not ours to report
-
+    auto inv = readAnopeInventory(loadAnopeSettings());
+    if (!inv.available) return; // no services RPC in this container (support-bot, bnc): not an error, not ours to report
     NickservSyncStatus st;
     st.host = environment.get("HOSTNAME", "");
-    st.inventoryMtime = inv.fileMtime;
+    st.inventoryMtime = inv.asOf;
     try {
         runSyncCycle(inv, redis, st);
         st.result = "ok";

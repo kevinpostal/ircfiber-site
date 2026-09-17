@@ -10,7 +10,7 @@ import std.string : strip;
 
 import ircfiber.bots.nick : FIBEREYE_DEFAULT_NICK, SUPPORT_BOT_DEFAULT_NICK;
 import ircfiber.services.anope : anopeOperAccounts, loadAnopeSettings;
-import ircfiber.services.anope_db : AnopeInventory, asciiLowerStr;
+import ircfiber.services.anope_inventory : AnopeInventory, asciiLowerStr;
 
 /**
  * The accounts that must never read as unowned, ASCII-lowercased.

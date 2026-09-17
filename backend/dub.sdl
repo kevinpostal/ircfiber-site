@@ -226,7 +226,7 @@ configuration "ipintel-test" {
     versions "VibeUseFibers"
 }
 
-// Pure-code unit test for the Anope XML-RPC wire helpers plus the NickServ
+// Pure-code unit test for the Anope JSON-RPC wire helpers plus the NickServ
 // account/nick/password helpers (built with -unittest so the `@("…")`
 // unittest blocks in services/accounts.d run before main; no Anope, Redis
 // or Mongo needed):
@@ -236,7 +236,7 @@ configuration "services-test" {
     targetName "services-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/services/anope.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/services/bridge.d" "source/ircfiber/services/nickserv_sync.d" "source/ircfiber/services/services_backfill.d" "source/ircfiber/services/staff.d" "source/ircfiber/mail.d" "source/ircfiber/env.d"
+    sourceFiles "source/ircfiber/services/anope.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope_inventory.d" "source/ircfiber/services/bridge.d" "source/ircfiber/services/nickserv_sync.d" "source/ircfiber/services/services_backfill.d" "source/ircfiber/services/staff.d" "source/ircfiber/mail.d" "source/ircfiber/env.d"
     mainSourceFile "tests/services_test.d"
     versions "VibeUseFibers"
     buildOptions "unittests"
@@ -251,7 +251,7 @@ configuration "signup-test" {
     targetName "signup-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/mail.d" "source/ircfiber/mail_events.d" "source/ircfiber/mail_campaigns.d" "source/ircfiber/logs/events.d" "source/ircfiber/signup.d" "source/ircfiber/invites.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d" "source/ircfiber/web/admin/emails.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d"
+    sourceFiles "source/ircfiber/mail.d" "source/ircfiber/mail_events.d" "source/ircfiber/mail_campaigns.d" "source/ircfiber/logs/events.d" "source/ircfiber/signup.d" "source/ircfiber/invites.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_inventory.d" "source/ircfiber/env.d" "source/ircfiber/web/admin/emails.d" "source/ircfiber/web/admin/helpers.d" "source/ircfiber/web/common.d"
     mainSourceFile "tests/signup_test.d"
     versions "VibeUseFibers"
     buildOptions "unittests"
@@ -266,7 +266,7 @@ configuration "oauth-test" {
     targetName "oauth-test"
     sourcePaths "tests"
     importPaths "source" "tests"
-    sourceFiles "source/ircfiber/oauth.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_db.d" "source/ircfiber/env.d"
+    sourceFiles "source/ircfiber/oauth.d" "source/ircfiber/services/accounts.d" "source/ircfiber/services/anope.d" "source/ircfiber/services/anope_inventory.d" "source/ircfiber/env.d"
     mainSourceFile "tests/oauth_test.d"
     versions "VibeUseFibers"
     buildOptions "unittests"

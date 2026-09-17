@@ -2,16 +2,14 @@
   /**
    * NickServPanel — Anope/NickServ account management (IRCD page → NickServ).
    *
-   * Two cards, two data paths:
-   *   1. "Accounts" is the whole inventory, read from Anope's flatfile on the
-   *      gateway (`/api/admin/ircd/nickserv/accounts`). It is up to five
-   *      minutes stale — Anope only flushes anope.db every `updatetimeout` —
-   *      so the header states the "as of" time. Filtering and paging are
-   *      client-side: the list is already loaded, so a request per keystroke
-   *      would buy nothing.
-   *   2. "Manage account" is live `NickServ INFO` over XML-RPC and is
-   *      therefore authoritative over the table. Every successful action
-   *      re-runs the lookup and refreshes the table.
+ * Two cards, two data paths:
+ *   1. "Accounts" is the whole inventory, read live from services over
+ *      JSON-RPC (`/api/admin/ircd/nickserv/accounts`). The header states
+ *      the query time. Filtering and paging are client-side: the list is
+ *      already loaded, so a request per keystroke would buy nothing.
+ *   2. "Manage account" is live `NickServ INFO` and is therefore
+ *      authoritative over the table. Every successful action re-runs the
+ *      lookup and refreshes the table.
    *
    * Accounts owned by a website user are annotated with that user, because
    * suspending/dropping/resetting one of those also changes what the engine
@@ -189,8 +187,9 @@
 
   /// `ns_info` emits labels in a fixed order; anything Anope adds later is
   /// appended rather than dropped. The suspension labels are the ones
-  /// 2.0.20 actually renders (`ns_suspend`'s `show` list names options, not
-  /// labels), so they group with `Suspended` instead of trailing the list.
+  /// 2.1 actually renders (verified against 2.1.27; `ns_suspend`'s `show`
+  /// list names options, not labels), so they group with `Suspended`
+  /// instead of trailing the list.
   const fieldOrder = [
     'Account', 'Email address', 'Registered', 'Last seen', 'Last seen address',
     'Online from', 'Suspended', 'Suspended by', 'Suspend reason', 'Suspended on',
@@ -864,8 +863,8 @@
       <h3 class="text-sm font-semibold text-heading">Accounts ({accounts.length})</h3>
       <p class="mt-0.5 text-xs text-muted">
         {asOf
-          ? `inventory as of ${new Date(asOf * 1000).toLocaleTimeString()} — `
-          : ''}Anope flushes anope.db every 5 minutes
+          ? `live inventory, queried ${new Date(asOf * 1000).toLocaleTimeString()}`
+          : 'Anope account database'}
       </p>
     </div>
     <button type="button" onclick={() => void loadAccounts()} class={btn}>

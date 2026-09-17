@@ -29,10 +29,10 @@
  * invisible: a transport failure writes one `logWarn` and no skip key, so it
  * retries on every login forever. The admin NickServ page reads that hash.
  *
- * Anope only flushes `anope.db` every `updatetimeout` (5m), so a services
- * restart right after a signup can lose the registration. Recovery is
- * automatic: the credential guard above is the only state that matters, and
- * losing the account means the next login re-provisions it.
+ * Anope persists its database every `updatetimeout` (5m) and on shutdown,
+ * so a services restart right after a signup can lose the registration.
+ * Recovery is automatic: the credential guard above is the only state that
+ * matters, and losing the account means the next login re-provisions it.
  */
 module ircfiber.services.accounts;
 
@@ -56,8 +56,8 @@ import ircfiber.irc.registry : ServerRegistry;
 import ircfiber.models.network : NetworkConfig, SASLMechanism;
 import ircfiber.models.user : User;
 import ircfiber.redis.protocol : ControlMessage, NetworkStateSnapshot, RedisKeys;
-import ircfiber.services.anope : AnopeSettings, anopeCheckAuthentication, anopeCommand,
-    anopeOperCommand, anopeUser, anopeUserOnline, isSafeServicesArg, loadAnopeSettings;
+import ircfiber.services.anope : AnopePresence, AnopeSettings, anopeCheckAuthentication, anopeCommand,
+    anopeOperCommand, anopeUserPresence, isSafeServicesArg, loadAnopeSettings, nickServDropCommand;
 import ircfiber.storage.redis : RedisStorage;
 
 /// Max nick length accepted by InspIRCd 4 in our config (`<limits maxnick>`).
@@ -546,10 +546,14 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
         return ProvisionOutcome.failed;
     }
 
-    // Hijack guard. `ns_register` finishes with `u->Identify(na)` for whoever
-    // is online as the target nick, so registering a nick a stranger holds
-    // would hand them the brand-new account. The engine's own nick is the
-    // oracle: nicks are unique, so a candidate the engine holds is ours.
+    // Hijack guard. Registering a nick a stranger holds would hand them the
+    // brand-new account, so only ever register a nick you know belongs to
+    // your own session. (On 2.0 `ns_register` finished with `u->Identify(na)`
+    // for whoever held the nick, which made this load-bearing; on 2.1 the
+    // RPC registers with a null user and identifies nobody, but the guard
+    // stays: a foreign session on the nick still means the name is taken.)
+    // The engine's own nick is the oracle: nicks are unique, so a candidate
+    // the engine holds is ours.
     const engineNick = awaitEngineNick(redis, serverRegistry, cfg.id.toString());
     if (!engineNick.length)
         logDebug("services: engine reports no live nick for %s yet", cfg.id.toString());
@@ -561,13 +565,16 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
         defer = false;
         if (candidate == engineNick) return true;
 
-        auto probe = anopeUser(s, candidate);
-        if (!probe.transportOk) {
-            logWarn("services: presence probe for %s failed: %s", candidate, probe.transportError);
+        // Fail closed on `unknown`, exactly as the old probe did on a
+        // transport failure: an unreachable Anope must never look like a
+        // free nick.
+        const presence = anopeUserPresence(s, candidate);
+        if (presence == AnopePresence.unknown) {
+            logWarn("services: presence probe for %s failed", candidate);
             defer = true;
             return false;
         }
-        if (!anopeUserOnline(probe)) return true;  // nobody there → nothing to hijack
+        if (presence == AnopePresence.offline) return true;  // nobody there → nothing to hijack
         if (engineNick.length) {
             // Engine is connected under a different nick, so this live session
             // belongs to somebody else. Never register it.
@@ -661,7 +668,7 @@ private ProvisionOutcome provisionAttempt(User user, NetworkRepository networkRe
                     const o = persistProvisionedAccount(user, cfg, target, upPassword,
                                                         networkRepo, redis, serverRegistry);
                     if (s.hasOper) {
-                        const drop = anopeOperCommand(s, "DROP " ~ oldAccount);
+                        const drop = anopeOperCommand(s, nickServDropCommand(oldAccount));
                         if (!drop.text.toLower().canFind("has been dropped"))
                             logWarn("services: upgraded %s to %s but DROP %s said: %s",
                                     user.username, target, oldAccount, drop.text);

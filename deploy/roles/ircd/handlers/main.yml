@@ -60,14 +60,9 @@
     state: started
     restart: true
 
-# A container restart, not a signal: Anope has no rehash for the module
-# config this instance is made of (the bot token, the bridge domain and the
-# JSON-RPC listener are all read at module load).
-- name: Restart bridge
-  community.docker.docker_container:
-    name: "{{ ircd_bridge_container_name }}"
-    state: started
-    restart: true
+# (No bridge handler: the Discord bridge sidecar is retired — BridgeServ
+# runs on the services instance itself. A leftover ircfiber-bridge
+# container is removed by tasks/services.yml.)
 
   # The gateway reads inspircd.conf / modules.conf / custom.conf / rules.txt
   # through per-file rw bind mounts (roles/gateway/tasks/container.yml). An

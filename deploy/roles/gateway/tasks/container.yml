@@ -72,13 +72,6 @@
       # Read-write mount of the admin backup dir: timestamped pre-save
       # copies (web/admin/ircd.d). The gateway writes as root.
       - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}/admin-bak:/etc/ircfiber/ircd/admin-bak:rw"
-      # Read-only mount of Anope's data volume for the admin NickServ
-      # account inventory. anope.db is mode 0600 owned by uid 10000; the
-      # gateway runs as uid 0, so :ro is sufficient and nothing writes here.
-      # Deliberately NOT on ircfiber-bnc or ircfiber-support-bot: neither
-      # serves admin routes, so the mount would widen their access for
-      # nothing.
-      - "{{ ircd_services_data_volume | default('ircfiber_services_data') }}:/var/lib/ircfiber/anope:ro"
       # Host telemetry and Docker control live ELSEWHERE — nowhere in this
       # file. They run in tasks/sysagent.yml (container ircfiber-sysagent),
       # a sidecar on the same image reached by the gateway over the internal

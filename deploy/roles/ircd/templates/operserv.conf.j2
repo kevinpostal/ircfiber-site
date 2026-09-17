@@ -1,8 +1,8 @@
 /*
  * {{ ansible_managed }}
- * OperServ — derived from Anope 2.0 data/operserv.example.conf with one
- * IRC Fiber delta: channels = "#staff" (line 51 of the upstream file),
- * so the OperServ client actually joins the channel.
+ * OperServ — derived from Anope 2.1 data/operserv.example.conf with one
+ * IRC Fiber delta: channels = "#staff", so the OperServ client actually
+ * joins the channel.
  *
  * Needed for the #staff log{} block (services.conf.j2) to deliver at
  * all: Anope log messages for LOG_ADMIN (operserv/* commands) and
@@ -20,9 +20,9 @@
  * duplicate `service { nick = "OperServ" }` would crash Anope outright
  * (confirmed via the equivalent mistake against Global: SIGSEGV on
  * startup). Every directive below is byte-identical to upstream except
- * the one line noted; this is a full-file replacement specifically to
- * avoid hand-transcribing 698 lines of os_defcon/os_session/os_forbid/
- * os_akill/etc. configuration.
+ * the one line noted; os_defcon stays commented out here because
+ * services.conf.j2 declares the live os_defcon block (first block wins),
+ * with the reducedsessions operation removed (see that file).
  *
  * Mounted at /anope/conf/operserv.conf.
  */
@@ -50,12 +50,12 @@ service
 	/*
 	 * The hostname of the OperServ client.
 	 */
-	host = "services.host"
+	host = "${services.host}"
 
 	/*
 	 * The realname of the OperServ client.
 	 */
-	gecos = "Operator Service"
+	real = "Operator Service"
 
 	/*
 	 * The modes this client should use.
@@ -78,6 +78,17 @@ service
 	 * Prefixes may be given to the channels in the form of mode characters or prefix symbols.
 	 */
 	channels = "#staff"
+
+	/*
+	 * The server alias that can be used to securely message this service. If
+	 * your IRC server does not have an alias for this service you can set this
+	 * to an empty string to tell users to use /msg instead.
+	 *
+	 * This setting is ignored when options:servicealias is disabled.
+	 *
+	 * Defaults to the nick of the service if not set.
+	 */
+	#alias = "OS"
 }
 
 /*
@@ -104,7 +115,7 @@ module
 	sqlineexpiry = 30d
 
 	/*
-	 * If set, this option will make Services send an AKILL command immediately after it has been
+	 * If set, this option will make Anope send an AKILL command immediately after it has been
 	 * added with AKILL ADD. This eliminates the need for killing the user after the AKILL has
 	 * been added.
 	 *
@@ -113,7 +124,7 @@ module
 	akillonadd = yes
 
 	/*
-	 * If set, this option will make Services send an (SVS)KILL command immediately after SNLINE ADD.
+	 * If set, this option will make Anope send an (SVS)KILL command immediately after SNLINE ADD.
 	 * This eliminates the need for killing the user after the SNLINE has been added.
 	 *
 	 * This directive is optional.
@@ -121,7 +132,7 @@ module
 	killonsnline = yes
 
 	/*
-	 * If set, this option will make Services send an (SVS)KILL command immediately after SQLINE ADD.
+	 * If set, this option will make Anope send an (SVS)KILL command immediately after SQLINE ADD.
 	 * This eliminates the need for killing the user after the SQLINE has been added.
 	 *
 	 * This directive is optional.
@@ -161,7 +172,7 @@ module
  */
 
 /* Give it a help command. */
-command { service = "OperServ"; name = "HELP"; command = "generic/help"; }
+command { service = "OperServ"; name = "HELP"; command = "generic/help" }
 
 /*
  * os_akill
@@ -171,7 +182,7 @@ command { service = "OperServ"; name = "HELP"; command = "generic/help"; }
  * Used to ban users from the network.
  */
 module { name = "os_akill" }
-command { service = "OperServ"; name = "AKILL"; command = "operserv/akill"; permission = "operserv/akill"; }
+command { service = "OperServ"; name = "AKILL"; command = "operserv/akill"; permission = "operserv/akill" }
 
 /*
  * os_chankill
@@ -181,7 +192,7 @@ command { service = "OperServ"; name = "AKILL"; command = "operserv/akill"; perm
  * Used to akill users from an entire channel.
  */
 module { name = "os_chankill" }
-command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"; permission = "operserv/chankill"; }
+command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"; permission = "operserv/chankill" }
 
 /*
  * os_defcon
@@ -196,7 +207,7 @@ command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"
 	name = "os_defcon"
 
 	/*
-	 * Default DefCon level (1-5) to use when starting Services up. Level 5 constitutes normal operation
+	 * Default DefCon level (1-5) to use when starting Anope up. Level 5 constitutes normal operation
 	 * while level 1 constitutes the most restrictive operation. If this setting is left out or set to
 	 * 0, DefCon will be disabled and the rest of this block will be ignored.
 	 */
@@ -238,7 +249,7 @@ command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"
 	 * The channel modes to set on all channels when the DefCon channel mode system is in use.
 	 *
 	 * Note 1: Choose these modes carefully, because when DefCon switches to a level which does NOT have
-	 * the mode setting selected, Services will set the reverse on all channels, e.g. if this setting
+	 * the mode setting selected, Anope will set the reverse on all channels, e.g. if this setting
 	 * is +RN when DefCon is used, all channels will be set to +RN, when DefCon is removed, all
 	 * channels will be set to -RN. You don't want to set this to +k for example, because when DefCon
 	 * is removed, all channels are set -k, removing the key from previously keyed channels.
@@ -256,14 +267,14 @@ command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"
 	#timeout = 15m
 
 	/*
-	 * If set, Services will send a global message on DefCon level changes.
+	 * If set, Anope will send a global message on DefCon level changes.
 	 *
 	 * This directive is optional.
 	 */
 	#globalondefcon = yes
 
 	/*
-	 * If set, Services will send the global message defined in the message directive on DefCon level
+	 * If set, Anope will send the global message defined in the message directive on DefCon level
 	 * changes.
 	 *
 	 * This directive is optional.
@@ -289,14 +300,14 @@ command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"
 	 */
 	#akillreason = "This network is currently not accepting connections, please try again later."
 }
-#command { service = "OperServ"; name = "DEFCON"; command = "operserv/defcon"; permission = "operserv/defcon"; }
+#command { service = "OperServ"; name = "DEFCON"; command = "operserv/defcon"; permission = "operserv/defcon" }
 
 /*
  * os_dns
  *
  * Provides the command operserv/dns.
  *
- * This module requires that m_dns is loaded.
+ * This module requires that dns is loaded.
  *
  * This module allows controlling a DNS zone. This is useful for
  * controlling what servers users are placed on for load balancing,
@@ -310,10 +321,10 @@ command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"
  *
  * To do this using BIND, configure similar to:
  *
- * options { max-refresh-time 60; };
+ * options { max-refresh-time 60 };
  * zone "irc.example.com" IN {
  *   type secondary;
- *   primaries { 127.0.0.1 port 5353; };
+ *   primaries { 127.0.0.1 port 5353 };
  * };
  *
  * Where 127.0.0.1:5353 is the IP and port services are listening on.
@@ -350,7 +361,7 @@ command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"
 	 */
 	readd_connected_servers = no
 }
-#command { service = "OperServ"; name = "DNS"; command = "operserv/dns"; permission = "operserv/dns"; }
+#command { service = "OperServ"; name = "DNS"; command = "operserv/dns"; permission = "operserv/dns" }
 
 /*
  * os_config
@@ -360,7 +371,7 @@ command { service = "OperServ"; name = "CHANKILL"; command = "operserv/chankill"
  * Used to view and set configuration options while services are running.
  */
 module { name = "os_config" }
-command { service = "OperServ"; name = "CONFIG"; command = "operserv/config"; permission = "operserv/config"; }
+command { service = "OperServ"; name = "CONFIG"; command = "operserv/config"; permission = "operserv/config" }
 
 /*
  * os_forbid
@@ -369,18 +380,45 @@ command { service = "OperServ"; name = "CONFIG"; command = "operserv/config"; pe
  *
  * Used to forbid specific nicks, channels, emails, etc. from being used.
  */
-module { name = "os_forbid" }
-command { service = "OperServ"; name = "FORBID"; command = "operserv/forbid"; permission = "operserv/forbid"; }
+module
+{
+	name = "os_forbid"
+
+	/*
+	 * Allows loading forbids from a file.
+	 */
+	#file
+	{
+		/*
+		 * The type of forbid to add. Can be set to "chan", "email", "nick",
+		 * "password", or "register".
+		 */
+		type = "email"
+
+		/*
+		 * The file to read forbids from. Each forbid should be placed on a new
+		 * line. Surrounding whitespace will be ignored.
+		 */
+		file = "temp-emails.txt"
+
+		/**
+		 * The reason why entries from this file are forbidden.
+		 */
+		reason = "Temporary email"
+	}
+
+}
+command { service = "OperServ"; name = "FORBID"; command = "operserv/forbid"; permission = "operserv/forbid" }
 
 /*
  * os_ignore
  *
  * Provides the command operserv/ignore.
  *
- * Used to make Services ignore users.
+ * Used to make Anope ignore users.
  */
 module { name = "os_ignore" }
-command { service = "OperServ"; name = "IGNORE"; command = "operserv/ignore"; permission = "operserv/ignore"; }
+command { service = "OperServ"; name = "IGNORE"; command = "operserv/ignore"; permission = "operserv/ignore" }
 
 /*
  * os_info
@@ -390,7 +428,7 @@ command { service = "OperServ"; name = "IGNORE"; command = "operserv/ignore"; pe
  * Used to add oper only notes to users and channels.
  */
 module { name = "os_info" }
-command { service = "OperServ"; name = "INFO"; command = "operserv/info"; permission = "operserv/info"; }
+command { service = "OperServ"; name = "INFO"; command = "operserv/info"; permission = "operserv/info" }
 
 /*
  * os_jupe
@@ -400,7 +438,7 @@ command { service = "OperServ"; name = "INFO"; command = "operserv/info"; permis
  * Used to disconnect servers from the network and prevent them from relinking.
  */
 module { name = "os_jupe" }
-command { service = "OperServ"; name = "JUPE"; command = "operserv/jupe"; permission = "operserv/jupe"; }
+command { service = "OperServ"; name = "JUPE"; command = "operserv/jupe"; permission = "operserv/jupe" }
 
 /*
  * os_kick
@@ -410,7 +448,7 @@ command { service = "OperServ"; name = "JUPE"; command = "operserv/jupe"; permis
  * Used to kick users from channels.
  */
 module { name = "os_kick" }
-command { service = "OperServ"; name = "KICK"; command = "operserv/kick"; permission = "operserv/kick"; }
+command { service = "OperServ"; name = "KICK"; command = "operserv/kick"; permission = "operserv/kick" }
 
 /*
  * os_kill
@@ -420,7 +458,7 @@ command { service = "OperServ"; name = "KICK"; command = "operserv/kick"; permis
  * Used to forcibly disconnect users from the network.
  */
 module { name = "os_kill" }
-command { service = "OperServ"; name = "KILL"; command = "operserv/kill"; permission = "operserv/kill"; }
+command { service = "OperServ"; name = "KILL"; command = "operserv/kill"; permission = "operserv/kill" }
 
 /*
  * os_list
@@ -430,8 +468,8 @@ command { service = "OperServ"; name = "KILL"; command = "operserv/kill"; permis
  * Used to list and search the channels and users currently on the network.
  */
 module { name = "os_list" }
-command { service = "OperServ"; name = "CHANLIST"; command = "operserv/chanlist"; permission = "operserv/chanlist"; }
-command { service = "OperServ"; name = "USERLIST"; command = "operserv/userlist"; permission = "operserv/userlist"; }
+command { service = "OperServ"; name = "CHANLIST"; command = "operserv/chanlist"; permission = "operserv/chanlist" }
+command { service = "OperServ"; name = "USERLIST"; command = "operserv/userlist"; permission = "operserv/userlist" }
 
 /*
  * os_login
@@ -441,8 +479,8 @@ command { service = "OperServ"; name = "USERLIST"; command = "operserv/userlist"
  * Used to login to OperServ, only required if your oper block requires this.
  */
 module { name = "os_login" }
-command { service = "OperServ"; name = "LOGIN"; command = "operserv/login"; }
-command { service = "OperServ"; name = "LOGOUT"; command = "operserv/logout"; }
+command { service = "OperServ"; name = "LOGIN"; command = "operserv/login" }
+command { service = "OperServ"; name = "LOGOUT"; command = "operserv/logout" }
 
 /*
  * os_logsearch
@@ -460,7 +498,7 @@ module
 	 */
 	logname = "services.log"
 }
-command { service = "OperServ"; name = "LOGSEARCH"; command = "operserv/logsearch"; permission = "operserv/logsearch"; }
+command { service = "OperServ"; name = "LOGSEARCH"; command = "operserv/logsearch"; permission = "operserv/logsearch" }
 
 /*
  * os_mode
@@ -470,8 +508,8 @@ command { service = "OperServ"; name = "LOGSEARCH"; command = "operserv/logsearc
  * Used to change user and channel modes.
  */
 module { name = "os_mode" }
-command { service = "OperServ"; name = "UMODE"; command = "operserv/umode"; permission = "operserv/umode"; }
-command { service = "OperServ"; name = "MODE"; command = "operserv/mode"; permission = "operserv/mode"; }
+command { service = "OperServ"; name = "UMODE"; command = "operserv/umode"; permission = "operserv/umode" }
+command { service = "OperServ"; name = "MODE"; command = "operserv/mode"; permission = "operserv/mode" }
 
 /*
  * os_modinfo
@@ -481,8 +519,8 @@ command { service = "OperServ"; name = "MODE"; command = "operserv/mode"; permis
  * Used to show information about loaded modules.
  */
 module { name = "os_modinfo" }
-command { service = "OperServ"; name = "MODINFO"; command = "operserv/modinfo"; permission = "operserv/modinfo"; }
-command { service = "OperServ"; name = "MODLIST"; command = "operserv/modlist"; permission = "operserv/modinfo"; }
+command { service = "OperServ"; name = "MODINFO"; command = "operserv/modinfo"; permission = "operserv/modinfo" }
+command { service = "OperServ"; name = "MODLIST"; command = "operserv/modlist"; permission = "operserv/modinfo" }
 
 /*
  * os_module
@@ -492,9 +530,9 @@ command { service = "OperServ"; name = "MODLIST"; command = "operserv/modlist"; 
  * Used to load, reload, and unload modules.
  */
 module { name = "os_module" }
-command { service = "OperServ"; name = "MODLOAD"; command = "operserv/modload"; permission = "operserv/modload"; }
-command { service = "OperServ"; name = "MODRELOAD"; command = "operserv/modreload"; permission = "operserv/modload"; }
-command { service = "OperServ"; name = "MODUNLOAD"; command = "operserv/modunload"; permission = "operserv/modload"; }
+command { service = "OperServ"; name = "MODLOAD"; command = "operserv/modload"; permission = "operserv/modload" }
+command { service = "OperServ"; name = "MODRELOAD"; command = "operserv/modreload"; permission = "operserv/modload" }
+command { service = "OperServ"; name = "MODUNLOAD"; command = "operserv/modunload"; permission = "operserv/modload" }
 
 /*
  * os_news
@@ -520,10 +558,17 @@ module
 	 * This directive is optional, if not set it will default to 3.
 	 */
 	#newscount = 3
+
+	/*
+	 * Whether to show the datetime at which the news entry was added.
+	 *
+	 * This directive is optional, if not set it will default to yes.
+	 */
+	#showdate = yes
 }
-command { service = "OperServ"; name = "LOGONNEWS"; command = "operserv/logonnews"; permission = "operserv/news"; }
-command { service = "OperServ"; name = "OPERNEWS"; command = "operserv/opernews"; permission = "operserv/news"; }
-command { service = "OperServ"; name = "RANDOMNEWS"; command = "operserv/randomnews"; permission = "operserv/news"; }
+command { service = "OperServ"; name = "LOGONNEWS"; command = "operserv/logonnews"; permission = "operserv/news" }
+command { service = "OperServ"; name = "OPERNEWS"; command = "operserv/opernews"; permission = "operserv/news" }
+command { service = "OperServ"; name = "RANDOMNEWS"; command = "operserv/randomnews"; permission = "operserv/news" }
 
 /*
  * os_noop
@@ -532,19 +577,8 @@ command { service = "OperServ"; name = "RANDOMNEWS"; command = "operserv/randomn
  *
  * Used to NOOP a server, which prevents users from opering on that server.
  */
-module { name = "os_noop" }
-command { service = "OperServ"; name = "NOOP"; command = "operserv/noop"; permission = "operserv/noop"; }
-
-/*
- * [DEPRECATED] os_oline
- *
- * Provides the command operserv/oline.
- *
- * Used to set oper flags on users, and is specific to UnrealIRCd 3.2.
- * See /helpop ?svso on your IRCd for more information.
- */
-#module { name = "os_oline" }
-#command { service = "OperServ"; name = "OLINE"; command = "operserv/oline"; permission = "operserv/oline"; }
+#module { name = "os_noop" }
+command { service = "OperServ"; name = "NOOP"; command = "operserv/noop"; permission = "operserv/noop" }
 
 /*
  * os_oper
@@ -554,17 +588,17 @@ command { service = "OperServ"; name = "NOOP"; command = "operserv/noop"; permis
  * Used to configure opers and show information about opertypes.
  */
 module { name = "os_oper" }
-command { service = "OperServ"; name = "OPER"; command = "operserv/oper"; permission = "operserv/oper"; }
+command { service = "OperServ"; name = "OPER"; command = "operserv/oper"; permission = "operserv/oper" }
 
 /*
  * os_reload
  *
  * Provides the command operserv/reload.
  *
- * Used to reload the services.conf configuration file.
+ * Used to reload the anope.conf configuration file.
  */
 module { name = "os_reload" }
-command { service = "OperServ"; name = "RELOAD"; command = "operserv/reload"; permission = "operserv/reload"; }
+command { service = "OperServ"; name = "RELOAD"; command = "operserv/reload"; permission = "operserv/reload" }
 
 /*
  * os_session
@@ -609,7 +643,7 @@ module
 	 *
 	 * This directive is optional, if not set, nothing will be sent.
 	 */
-	sessionlimitexceeded = "The session limit for your IP %IP% has been exceeded."
+	sessionlimitexceeded = "The session limit for your IP {ip} has been exceeded."
 
 	/*
 	 * Same as above, but should be used to provide a website address where users can find out more
@@ -624,7 +658,7 @@ module
 	#sessionlimitdetailsloc = "Please visit https://your.website.url/ for more information about session limits."
 
 	/*
-	 * If set and is not 0, this directive tells Services to add an AKILL if the number of subsequent kills
+	 * If set and is not 0, this directive tells Anope to add an AKILL if the number of subsequent kills
 	 * for the same host exceeds this value, preventing the network from experiencing KILL floods.
 	 *
 	 * This directive is optional.
@@ -647,8 +681,8 @@ module
 	session_ipv4_cidr = 32
 	session_ipv6_cidr = 128
 }
-command { service = "OperServ"; name = "EXCEPTION"; command = "operserv/exception"; permission = "operserv/exception"; }
-command { service = "OperServ"; name = "SESSION"; command = "operserv/session"; permission = "operserv/session"; }
+command { service = "OperServ"; name = "EXCEPTION"; command = "operserv/exception"; permission = "operserv/exception" }
+command { service = "OperServ"; name = "SESSION"; command = "operserv/session"; permission = "operserv/session" }
 
 /*
  * os_set
@@ -669,7 +703,7 @@ module
 	 */
 	#superadmin = yes
 }
-command { service = "OperServ"; name = "SET"; command = "operserv/set"; permission = "operserv/set"; }
+command { service = "OperServ"; name = "SET"; command = "operserv/set"; permission = "operserv/set" }
 
 /*
  * os_shutdown
@@ -678,10 +712,20 @@ command { service = "OperServ"; name = "SET"; command = "operserv/set"; permissi
  *
  * Used to quit, restart, or shutdown services.
  */
-module { name = "os_shutdown" }
-command { service = "OperServ"; name = "QUIT"; command = "operserv/quit"; permission = "operserv/quit"; }
-command { service = "OperServ"; name = "RESTART"; command = "operserv/restart"; permission = "operserv/restart"; }
-command { service = "OperServ"; name = "SHUTDOWN"; command = "operserv/shutdown"; permission = "operserv/shutdown"; }
+module
+{
+	name = "os_shutdown"
+
+	/*
+	 * If enabled then server operators will be required to provide the network
+	 * name to confirm that they are quitting, restarting, or shutting down the
+	 * right server.
+	 */
+	requirename = yes
+}
+#command { service = "OperServ"; name = "QUIT"; command = "operserv/quit"; permission = "operserv/quit" }
+command { service = "OperServ"; name = "RESTART"; command = "operserv/restart"; permission = "operserv/restart" }
+command { service = "OperServ"; name = "SHUTDOWN"; command = "operserv/shutdown"; permission = "operserv/shutdown" }
 
 /*
  * os_stats
@@ -691,7 +735,7 @@ command { service = "OperServ"; name = "SHUTDOWN"; command = "operserv/shutdown"
  * Used to show statistics about services.
  */
 module { name = "os_stats" }
-command { service = "OperServ"; name = "STATS"; command = "operserv/stats"; permission = "operserv/stats"; }
+command { service = "OperServ"; name = "STATS"; command = "operserv/stats"; permission = "operserv/stats" }
 
 /*
  * os_svs
@@ -701,9 +745,9 @@ command { service = "OperServ"; name = "STATS"; command = "operserv/stats"; perm
  * Used to force users to change nicks, join and part channels.
  */
 module { name = "os_svs" }
-command { service = "OperServ"; name = "SVSNICK"; command = "operserv/svsnick"; permission = "operserv/svs"; }
-command { service = "OperServ"; name = "SVSJOIN"; command = "operserv/svsjoin"; permission = "operserv/svs"; }
-command { service = "OperServ"; name = "SVSPART"; command = "operserv/svspart"; permission = "operserv/svs"; }
+command { service = "OperServ"; name = "SVSNICK"; command = "operserv/svsnick"; permission = "operserv/svs" }
+command { service = "OperServ"; name = "SVSJOIN"; command = "operserv/svsjoin"; permission = "operserv/svs" }
+command { service = "OperServ"; name = "SVSPART"; command = "operserv/svspart"; permission = "operserv/svs" }
 
 /*
  * os_sxline
@@ -713,8 +757,8 @@ command { service = "OperServ"; name = "SVSPART"; command = "operserv/svspart"; 
  * Used to ban real names, nick names, and possibly channels.
  */
 module { name = "os_sxline" }
-command { service = "OperServ"; name = "SNLINE"; command = "operserv/snline"; permission = "operserv/snline"; }
-command { service = "OperServ"; name = "SQLINE"; command = "operserv/sqline"; permission = "operserv/sqline"; }
+command { service = "OperServ"; name = "SNLINE"; command = "operserv/snline"; permission = "operserv/snline" }
+command { service = "OperServ"; name = "SQLINE"; command = "operserv/sqline"; permission = "operserv/sqline" }
 
 /*
  * os_update
@@ -724,4 +768,4 @@ command { service = "OperServ"; name = "SQLINE"; command = "operserv/sqline"; pe
  * Use to immediately update the databases.
  */
 module { name = "os_update" }
-command { service = "OperServ"; name = "UPDATE"; command = "operserv/update"; permission = "operserv/update"; }
+command { service = "OperServ"; name = "UPDATE"; command = "operserv/update"; permission = "operserv/update" }

@@ -1,14 +1,15 @@
 module ircfiber.web.admin.bridge;
 
 ///
-/// Admin surface for the Discord bridge (`BridgeServ` on the Anope 2.1
-/// sidecar, `bridge.ircfiber.com`).
+/// Admin surface for the Discord bridge (`BridgeServ` on the merged Anope
+/// 2.1 instance, `services.ircfiber.com`).
 ///
-/// The transport is `ircfiber.services.bridge` (JSON-RPC), NOT the 2.0
-/// XML-RPC client the NickServ/ChanServ surfaces use — the bridge is a
-/// separate Anope instance. The shape of the handlers is the one those
-/// surfaces established: settings gate, validate, one services call, then a
-/// status code classified from what services actually said.
+/// The transport is `anope.command` over the shared JSON-RPC client
+/// (`ircfiber.services.bridge`, which folds onto
+/// `ircfiber.services.anope`) as the services-oper account. The shape of
+/// the handlers is the one the NickServ/ChanServ surfaces established:
+/// settings gate, validate, one services call, then a status code
+/// classified from what services actually said.
 ///
 /// Validation happens before any RPC call because every argument is
 /// reassembled space-delimited on the Anope side, and because a malformed
@@ -23,6 +24,7 @@ import vibe.core.log : logInfo;
 import vibe.data.json : Json;
 import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 
+import ircfiber.services.anope : AnopeSettings, loadAnopeSettings;
 import ircfiber.services.bridge : BridgeError, BridgeListing, BridgeSettings,
     bridgeAdd, bridgeDel, bridgeList, bridgeSet, discordChannels, discordGuilds,
     isValidSnowflake, loadBridgeSettings;
@@ -34,13 +36,13 @@ import ircfiber.web.admin.helpers : jsonError, jsonOk, queryString, readJsonBody
 
 /// Loads settings and rejects early with copy the SPA special-cases (its
 /// not-configured test matches /not configured/i). 503, not 501: the
-/// surface exists but the sidecar it drives is not deployed here.
-private bool bridgeSettings(HTTPServerResponse res, out BridgeSettings s) {
-    s = loadBridgeSettings();
-    if (!s.configured) {
+/// surface exists but services are not deployed here.
+private bool bridgeSettings(HTTPServerResponse res, out AnopeSettings s) {
+    s = loadAnopeSettings();
+    if (!s.configured || !s.hasOper) {
         jsonError(res, 503, "The Discord bridge is not configured"
-            ~ " (IRCFIBER_BRIDGE_RPC_URL, IRCFIBER_BRIDGE_RPC_TOKEN,"
-            ~ " IRCFIBER_BRIDGE_RPC_ACCOUNT).");
+            ~ " (IRCFIBER_ANOPE_RPC_URL, IRCFIBER_ANOPE_RPC_TOKEN,"
+            ~ " IRCFIBER_ANOPE_OPER_ACCOUNT).");
         return false;
     }
     return true;
@@ -135,10 +137,10 @@ private Json linesJson(string[] lines) {
 /// GET /api/admin/ircd/bridge/bridges
 ///
 /// `connected` is whether `LIST` answered at all, so the panel can tell "no
-/// bridges" from "the sidecar is down"; the raw reply lines travel with the
+/// bridges" from "services are down"; the raw reply lines travel with the
 /// rows so an unparsed table is still visible to the operator.
 package void apiBridgeList(HTTPServerRequest req, HTTPServerResponse res) {
-    BridgeSettings s;
+    AnopeSettings s;
     if (!bridgeSettings(res, s)) return;
 
     BridgeListing listing;
@@ -176,7 +178,7 @@ package void apiBridgeList(HTTPServerRequest req, HTTPServerResponse res) {
 /// Straight to Discord, not through BridgeServ: `GUILDS` answers
 /// asynchronously to the requesting IRC user by UID, so an RPC caller gets
 /// an empty reply (verified live). This also keeps the picker working while
-/// the sidecar is down.
+/// services are down.
 package void apiBridgeGuilds(HTTPServerRequest req, HTTPServerResponse res) {
     auto s = loadBridgeSettings();
     if (!s.hasDiscordToken) {
@@ -238,7 +240,7 @@ package void apiBridgeChannels(HTTPServerRequest req, HTTPServerResponse res) {
 
 /// POST /api/admin/ircd/bridge/add  body {channel, space, foreignChannel, suffix?}
 package void apiBridgeAdd(HTTPServerRequest req, HTTPServerResponse res) {
-    BridgeSettings s;
+    AnopeSettings s;
     if (!bridgeSettings(res, s)) return;
 
     auto payload = readJsonBody(req);
@@ -267,7 +269,7 @@ package void apiBridgeAdd(HTTPServerRequest req, HTTPServerResponse res) {
 /// Repoints an existing bridge, and sets or (with an empty suffix) clears
 /// the nickname suffix of its pseudo clients.
 package void apiBridgeSet(HTTPServerRequest req, HTTPServerResponse res) {
-    BridgeSettings s;
+    AnopeSettings s;
     if (!bridgeSettings(res, s)) return;
 
     auto payload = readJsonBody(req);
@@ -295,7 +297,7 @@ package void apiBridgeSet(HTTPServerRequest req, HTTPServerResponse res) {
 
 /// POST /api/admin/ircd/bridge/del  body {channel}
 package void apiBridgeDel(HTTPServerRequest req, HTTPServerResponse res) {
-    BridgeSettings s;
+    AnopeSettings s;
     if (!bridgeSettings(res, s)) return;
 
     const channel = jsonField(readJsonBody(req), "channel");

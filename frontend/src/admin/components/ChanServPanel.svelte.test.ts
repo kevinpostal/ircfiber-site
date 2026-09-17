@@ -225,7 +225,7 @@ describe('ChanServPanel.svelte — ChanServ channel management', () => {
       if (path === CHANNELS)
         return Promise.resolve({
           available: false,
-          reason: 'anope.db not found at /nonexistent/anope.db',
+          reason: 'Anope RPC not configured',
           asOf: 0,
           suspendedCount: 0,
           channels: [],
@@ -234,7 +234,7 @@ describe('ChanServPanel.svelte — ChanServ channel management', () => {
     });
     render(ChanServPanel);
     await expect
-      .element(page.getByText(/anope\.db not found at \/nonexistent\/anope\.db/))
+      .element(page.getByText(/Anope RPC not configured/))
       .toBeInTheDocument();
   });
 

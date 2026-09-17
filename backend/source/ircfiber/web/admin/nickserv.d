@@ -4,21 +4,18 @@ module ircfiber.web.admin.nickserv;
 /// NickServ account management for the admin dashboard (IRCD page → NickServ).
 ///
 /// Two data paths, deliberately different:
-///   * the **inventory** (`/accounts`) reads Anope's `db_flatfile` directly
-///     (`ircfiber.services.anope_db`), because Anope 2.0 has no enumeration
-///     RPC and `NickServ LIST` is capped by `listmax`. It is up to
-///     `updatetimeout` (5m) stale and says so;
-///   * every **per-account** view and action goes over the existing XML-RPC
-///     client as the services-oper account (`IRCFIBER_ANOPE_OPER_ACCOUNT`),
-///     so it is live and authoritative.
+///   * the **inventory** (`/accounts`) is the live account list over
+///     JSON-RPC (`anope.listAccounts`, `ircfiber.services.anope_inventory`),
+///     because `NickServ LIST` is capped by `listmax` and is a search, never
+///     an inventory. It is live, not stale;
+///   * every **per-account** view and action goes over the JSON-RPC client
+///     as the services-oper account (`IRCFIBER_ANOPE_OPER_ACCOUNT`), so it
+///     is live and authoritative.
 ///
-/// `m_xmlrpc_main` builds a `CommandSource` with a null `User` for an offline
-/// nick, and `CommandSource::HasPriv` then resolves privileges straight from
+/// `anope.command` runs with a null `User` for an offline nick, and
+/// `CommandSource::HasPriv` then resolves privileges straight from
 /// `nc->o->ot`, so `require_oper` on the oper block does not apply and the
 /// oper account need not be online. Anope attaches `nc->o` only at config
-/// load, so an account that is not tied yet answers `Access denied.` with
-/// HTTP 200 — that is what `anopeAccessDenied` detects and reports as 403
-/// with the remediation, instead of a misleading 500.
 ///
 /// Platform coupling: an account whose name matches a `saslUsername` on an
 /// `irc.ircfiber.com` network belongs to a website user, so DROP and
@@ -51,9 +48,9 @@ import ircfiber.services.accounts : generateServicesPassword, isValidIrcNick,
     SERVICES_OUTCOMES_KEY, unprovisionedUsers, UnprovisionedUser;
 import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeAccessDenied,
     anopeCheckAuthentication, anopeNickRegistration, anopeOperCommand,
-    anopeOperQuery, isSafeServicesArg, loadAnopeSettings, nickServSetPasswordCommand,
-    NickRegistration, parseNickInfo;
-import ircfiber.services.anope_db : AnopeAccount, AnopeInventory, asciiLowerStr,
+    anopeOperQuery, isSafeServicesArg, loadAnopeSettings, nickServDropCommand,
+    nickServSetPasswordCommand, NickRegistration, parseNickInfo;
+import ircfiber.services.anope_inventory : AnopeAccount, AnopeInventory, asciiLowerStr,
     classifyAccountOwnership, readAnopeInventory;
 import ircfiber.services.staff : staffAccountsLower;
 import ircfiber.storage.redis : RedisStorage;
@@ -472,8 +469,8 @@ package void apiNsCreate(HTTPServerRequest req, HTTPServerResponse res,
 // existing Drop button, not a verdict.
 
 // `classifyAccountOwnership` and `asciiLowerStr` live in
-// `services.anope_db`: they are pure inventory logic, and only there does a
-// dub configuration (`services-test`) actually compile and run their
+// `services.anope_inventory`: they are pure inventory logic, and only there
+// does a dub configuration (`services-test`) actually compile and run their
 // unittests — in this module the blocks would never execute.
 
 /// lower(email) → username for every website user, from one Mongo query. The
@@ -555,15 +552,15 @@ private bool annotateOwnership(ref Json j, string account, string email,
 /// `unownedCount` roll-up). One `OperServ OPER LIST` and one users query per
 /// request, never per row.
 ///
-/// Degraded mode (no mount, path unset, unreadable file): the Mongo join
+/// Degraded mode (services unreachable, token wrong): the Mongo join
 /// alone still lists every IRC Fiber account, and `reason` tells the admin
 /// what is missing. Accounts registered only on IRC are invisible then —
-/// which is exactly why the flatfile is read in the first place.
+/// which is exactly why the RPC inventory is read in the first place.
 /// The `provisioning` block additionally reports how provisioning itself is
 /// going (see the telemetry section above); it needs Redis, which is why this
 /// handler takes the storage the other read-only admin endpoints take.
 package void apiNsAccounts(HTTPServerRequest, HTTPServerResponse res, RedisStorage redis) {
-    auto inv = readAnopeInventory();
+    auto inv = readAnopeInventory(loadAnopeSettings());
     auto platform = loadPlatformRows();
     auto staff = staffAccountsLower(inv);
     auto userEmails = loadUserEmails();
@@ -574,8 +571,9 @@ package void apiNsAccounts(HTTPServerRequest, HTTPServerResponse res, RedisStora
         auto j = accountJson(a);
         auto p = a.nick.toLower() in platform;
         annotate(j, p ? *p : PlatformRow.init);
-        // An alias whose NickCore is missing has no display; the nick is
-        // then the only name it has (see anopeAccountsFromDb).
+        // An alias whose account object carries no display has no other
+        // name; the nick is then the only name it has (see
+        // buildAccountInventory).
         if (annotateOwnership(j, a.account.length ? a.account : a.nick, a.email,
                               p, staff, userEmails))
             unownedCount++;
@@ -601,7 +599,7 @@ package void apiNsAccounts(HTTPServerRequest, HTTPServerResponse res, RedisStora
     auto data = Json.emptyObject;
     data["available"] = inv.available;
     data["reason"] = inv.reason;
-    data["asOf"] = inv.fileMtime;
+    data["asOf"] = inv.asOf;
     data["accounts"] = arr;
     data["unownedCount"] = unownedCount;
     data["provisioning"] = provisioningJson(redis);
@@ -794,7 +792,7 @@ package void apiNsDrop(HTTPServerRequest req, HTTPServerResponse res,
         return;
     }
 
-    auto r = anopeOperCommand(s, "DROP " ~ nick);
+    auto r = anopeOperCommand(s, nickServDropCommand(nick));
     if (!nsReplyOk(res, s, nick, r)) return;
     if (!r.text.toLower().canFind("has been dropped")) {
         jsonError(res, 502, r.text.length ? r.text : "NickServ did not confirm the drop.");
@@ -821,7 +819,7 @@ package void apiNsDrop(HTTPServerRequest req, HTTPServerResponse res,
 
 /// POST /api/admin/ircd/nickserv/password  body {nick, confirm}
 /// Generates the password, sets it with `SASET`, and **proves** it works via
-/// `checkAuthentication` before showing it — Anope's `SASET` reply is not
+/// `anope.checkCredentials` before showing it — Anope's `SASET` reply is not
 /// evidence that SASL will accept the credential.
 package void apiNsResetPassword(HTTPServerRequest req, HTTPServerResponse res,
                                 RedisStorage redis, ServerRegistry serverRegistry) {
@@ -892,7 +890,7 @@ package void apiNsResetPassword(HTTPServerRequest req, HTTPServerResponse res,
 // `saslUsername`. So linking is not a bookkeeping entry — it means giving the
 // user's network a credential that actually authenticates, which is why both
 // paths below refuse to persist anything they have not proven with
-// `checkAuthentication` first.
+// `anope.checkCredentials` first.
 
 /// Make the engine re-read a network's credential.
 ///

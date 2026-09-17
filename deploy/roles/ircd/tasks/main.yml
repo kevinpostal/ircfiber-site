@@ -1,10 +1,10 @@
 ---
-# IRC Fiber — Deploy InspIRCd 4 + Anope 2 services
+# IRC Fiber — Deploy InspIRCd 4 + Anope 2.1 services
 #
 # Containers (both on {{ docker_ircfiber_network }}):
 #   ircfiber-ircd      inspircd/inspircd-docker  aliases: ircd, irc.ircfiber.com
 #                      ports 6667 (plain) / 6697 (TLS) published; 7000 (links) internal
-#   ircfiber-services  anope/anope               alias: services (links to ircd:7000)
+#   ircfiber-services  irc-fiber-anope (fork)    alias: services (links to ircd:7000)
 
 - name: Preflight — vault secrets must be set
   ansible.builtin.assert:
@@ -28,6 +28,8 @@
       - vault_ircd_fibereye_oper_password is defined
       - vault_ircd_fibereye_oper_password | length > 0
       - vault_ircd_fibereye_oper_password != "REPLACE-WITH-STRONG-PASSWORD"
+      - vault_ircd_services_rpc_token is defined
+      - vault_ircd_services_rpc_token | length >= 32
       - vault_ircd_webirc_password is defined
       - vault_ircd_webirc_password | length >= 16
       - vault_ircd_webirc_password != "REPLACE-WITH-STRONG-PASSWORD"
@@ -36,10 +38,10 @@
       vault_ircd_netcrave_link_password (>=16 chars, not the placeholder),
       vault_ircd_k8s_link_password (>=16 chars, not the placeholder; the
       OVH hub <-> k3s leaf spanningtree link),
-      vault_ircd_cloak_key (>=30 chars), vault_ircd_dashboard_password
-      (admin dashboard oper, used by the gateway IRCFIBER_IRCD_OPER_PASSWORD),
       vault_ircd_fibereye_oper_password (FiberEye connection-watch and
-      #staff announcer oper, used by the ircfiber-fibereye container)
+      #staff announcer oper, used by the ircfiber-fibereye container),
+      vault_ircd_services_rpc_token (>=32 chars; Bearer for the merged
+      jsonrpc listener, used by the gateway IRCFIBER_ANOPE_RPC_TOKEN)
       and vault_ircd_webirc_password (>=16 chars; the WEBIRC password the
       engine presents, IRCFIBER_IRCD_WEBIRC_PASSWORD)
       must be set in inventories/production/group_vars/vault.yml:
@@ -61,11 +63,7 @@
 # docker_image_pull always contacts the registry, which `docker_image` with
 # `state: present` did not: it treated an already-present tag as satisfied.
 # :prod is a MOVING tag, so that meant the host kept whatever :prod pointed
-# at the first time it was ever pulled. The bridge image was not even in the
-# loop, so on 2026-09-15 08:12 `make deploy-ircd` recreated ircfiber-bridge
-# onto a months-stale local :prod and silently rolled the daemon back behind
-# the image `make ship-bridge` had just promoted — reintroducing the deauth
-# bug and taking every Discord user with it. Pull all three, every run: the
+# at the first time it was ever pulled. Pull both images every run: the
 # containers below compare image ids, so a tag that has not actually moved
 # still recreates nothing.
 - name: Pull images (registry-qualified refs only)
@@ -73,9 +71,7 @@
     name: "{{ item }}"
   loop: "{{ ircd_pull_images | select('search', '/') | list }}"
   vars:
-    ircd_pull_images: >-
-      {{ [ircd_image, ircd_services_image]
-         + ([ircd_bridge_image] if (ircd_bridge_enabled | default(false) | bool) else []) }}
+    ircd_pull_images: "{{ [ircd_image, ircd_services_image] }}"
 
 # The InspIRCd image runs as uid 10000 and its entrypoint writes the
 # self-signed cert/key/dhparams into the conf dir on first boot.
@@ -87,13 +83,7 @@
     group: "{{ ircd_container_uid }}"
     mode: "0750"
 
-- name: Ensure Anope config dir exists
-  ansible.builtin.file:
-    path: "{{ ircd_services_conf_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
+# (Anope config dir + render live in tasks/services.yml.)
 
 - name: Remove legacy Ergo config
   ansible.builtin.file:
@@ -175,23 +165,6 @@
     loop_var: conf
     label: "{{ conf.dest }}"
   tags: [ircdconf]
-
-- name: Render Anope config
-  ansible.builtin.template:
-    src: "{{ item.src }}"
-    dest: "{{ ircd_services_conf_dir }}/{{ item.dest }}"
-    owner: "{{ ircd_container_uid }}"
-    group: "{{ ircd_container_uid }}"
-    mode: "0640"
-  loop:
-    - { src: services.conf.j2, dest: services.conf }
-    - { src: nickserv.conf.j2, dest: nickserv.conf }
-    - { src: global.conf.j2, dest: global.conf }
-    - { src: operserv.conf.j2, dest: operserv.conf }
-    - { src: motd.j2, dest: services.motd }
-  loop_control:
-    label: "{{ item.dest }}"
-  notify: Restart services
 
 # Managed TLS: copy the Caddy-issued LE cert/key for {{ ircd_server_name }}
 # into the conf dir owned by the container uid. A direct volume mount is
@@ -373,235 +346,9 @@
       com.ircfiber.version: "{{ ircfiber_version }}"
       com.ircfiber.server_name: "{{ ircd_server_name }}"
 
-# Anope database persistence. The anope image declares VOLUME /data/ and
-# ships /anope/data/anope.db as a symlink to /data/anope.db. db_flatfile
-# saves by writing anope.db.tmp and then rename()-ing it over the target,
-# and rename() REPLACES the symlink with a regular file — so from the very
-# first save onward every NickServ/ChanServ registration is written to the
-# container's writable layer instead of the volume, and is destroyed by the
-# next `docker rm`. The volume is therefore mounted at Anope's real data
-# dir (/anope/data, see below) instead of the image's /data VOLUME; this
-# task first moves whatever state the old layout accumulated inside the
-# container onto the volume, so the remount keeps the existing accounts.
-#
-# Ownership is load-bearing and easy to lose: `docker cp` out of a
-# container writes host files as root, so a plain `cp -a` into the volume
-# hands Anope a database it cannot read or write ("DB_FLATFILE: Unable to
-# open data/anope.db for writing"), and it then runs with an empty
-# in-memory database that silently overwrites nothing. The uid/gid are
-# therefore read from the live container and re-applied, and the check is
-# re-run every deploy so a volume that is already wrong gets repaired.
-- name: Migrate Anope database onto the data volume
-  ansible.builtin.shell:
-    cmd: |
-      set -eu
-      vol="{{ ircd_services_data_volume }}"
-      helper="{{ ircd_cert_sync_image }}"
-      container="{{ ircd_services_container_name }}"
-      uid={{ ircd_services_uid }}
-      gid={{ ircd_services_gid }}
-      changed=0
-
-      volume_ok() {
-        docker run --rm -v "$vol:/v" "$helper" sh -c "
-          test -s /v/anope.db && test ! -L /v/anope.db \
-            && test \"\$(stat -c '%u:%g' /v)\" = '$uid:$gid' \
-            && test \"\$(stat -c '%u:%g' /v/anope.db)\" = '$uid:$gid'"
-      }
-
-      if volume_ok; then
-        echo "UNCHANGED"
-        exit 0
-      fi
-
-      # Everything below mutates the volume, so Anope must not be running.
-      # A live services process that could not read the database is holding
-      # an EMPTY one in memory, and the instant the files become writable
-      # again it commits that emptiness over the real data — which is
-      # exactly how #dmz/sq/FiberSupport were lost once already. Stopping
-      # first both flushes a healthy process and muzzles a broken one; the
-      # next task starts the container again.
-      if docker inspect "$container" >/dev/null 2>&1; then
-        docker stop "$container" >/dev/null
-      fi
-
-      # Salvage state stranded in the container layer by the old /data
-      # mount, if the volume has no usable database of its own.
-      if ! docker run --rm -v "$vol:/v" "$helper" \
-        sh -c 'test -s /v/anope.db && test ! -L /v/anope.db'; then
-        if docker inspect "$container" >/dev/null 2>&1; then
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          docker cp "$container:/anope/data/." "$tmp/"
-          docker run --rm -v "$vol:/v" -v "$tmp:/src" "$helper" \
-            sh -c 'rm -f /v/anope.db; cp -a /src/. /v/'
-        fi
-        # No container yet: fresh host, Docker populates the empty volume
-        # from the image on first start. Nothing to salvage.
-      fi
-
-      # `docker cp` writes host files as root, so ownership has to be put
-      # back explicitly or Anope cannot read or write its own database.
-      docker run --rm -v "$vol:/v" "$helper" sh -c "chown -R $uid:$gid /v"
-      changed=1
-
-      [ "$changed" -eq 1 ] && echo "CHANGED" || echo "UNCHANGED"
-  register: ircd_anope_db_migrate
-  # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".
-  changed_when: "'CHANGED' in ircd_anope_db_migrate.stdout_lines"
-
-- name: Run ircfiber-services (Anope)
-  community.docker.docker_container:
-    name: "{{ ircd_services_container_name }}"
-    image: "{{ ircd_services_image }}"
-    state: started
-    restart_policy: "{{ ircd_restart_policy }}"
-    networks:
-      - name: "{{ docker_ircfiber_network }}"
-        aliases:
-          - "{{ ircd_services_net_alias }}"
-          - "{{ ircd_services_name }}"
-    networks_cli_compatible: true
-    volumes:
-      # Mounted at Anope's real data dir rather than the image's /data
-      # VOLUME: the symlink the image uses to bridge the two does not
-      # survive db_flatfile's first save (see the migration task above).
-      - "{{ ircd_services_data_volume }}:/anope/data"
-      - "{{ ircd_services_conf_dir }}/services.conf:/anope/conf/services.conf:ro"
-      - "{{ ircd_services_conf_dir }}/nickserv.conf:/anope/conf/nickserv.conf:ro"
-      - "{{ ircd_services_conf_dir }}/global.conf:/anope/conf/global.conf:ro"
-      - "{{ ircd_services_conf_dir }}/operserv.conf:/anope/conf/operserv.conf:ro"
-      - "{{ ircd_services_conf_dir }}/services.motd:/anope/conf/services.motd:ro"
-    # Resource limits — see the "Resource limits" block in defaults/main.yml.
-    # Services rank just behind the ircd in OOM protection: users stay
-    # connected without NickServ, but a restart on an unreadable database
-    # has silently destroyed registrations here before.
-    memory: "{{ ircd_services_memory_limit }}"
-    memory_reservation: "{{ ircd_services_memory_reservation }}"
-    cpus: "{{ ircd_services_cpus | float }}"
-    oom_score_adj: "{{ ircd_services_oom_score_adj | int }}"
-    healthcheck:
-      # Process check only, deliberately: Anope has no client listener to
-      # probe (its uplink to ircd:{{ ircd_link_port }} is an *outbound*
-      # connection, and its absence is normal during a netsplit or an ircd
-      # restart, so treating that as unhealthy would flap). The real
-      # database/link assertions live in the "Assert Anope loaded its
-      # database" task below, which greps the log for "Databases loaded".
-      test: ["CMD-SHELL", "pgrep services >/dev/null"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    labels:
-      com.ircfiber.component: "services"
-      com.ircfiber.version: "{{ ircfiber_version }}"
-      com.ircfiber.server_name: "{{ ircd_services_name }}"
-
-# Handlers normally fire at the very end of the play — which would restart
-# Anope *after* the registrations below and throw them away, because
-# db_flatfile only persists on <options:updatetimeout> (5m) or a clean
-# shutdown. Flushing here means the restart happens first and the channels
-# are registered against the services process that will keep running.
-- name: Apply pending ircd/services restarts before touching ChanServ
-  ansible.builtin.meta: flush_handlers
-  tags: [chanserv]
-
-# Hard stop. If Anope could not read its database it is running on an
-# empty one, and the ChanServ registrations below would be flushed over
-# the real file — turning a permissions slip into silent data loss. Only
-# the log since the current container start is inspected, so an old
-# failure that has since been repaired does not block the deploy.
-- name: Assert Anope loaded its database
-  ansible.builtin.shell:
-    cmd: |
-      set -eu
-      started="$(docker inspect -f '{{ "{{" }}.State.StartedAt{{ "}}" }}' \
-        {{ ircd_services_container_name }})"
-      log="$(docker logs --since "$started" {{ ircd_services_container_name }} 2>&1)"
-      if printf '%s' "$log" | grep -q 'Unable to open .*anope.db'; then
-        printf '%s\n' "$log" | grep 'anope.db' | tail -5
-        echo "Anope cannot read/write its database — refusing to register" \
-          "channels on top of an empty in-memory copy."
-        exit 1
-      fi
-      printf '%s' "$log" | grep -q 'Databases loaded' || {
-        echo "Anope has not reported 'Databases loaded' yet."
-        exit 1
-      }
-      echo OK
-  register: ircd_anope_db_ok
-  until: ircd_anope_db_ok.rc == 0
-  retries: 6
-  delay: 10
-  changed_when: false
-  when: ircd_chanserv_setup_enabled | bool
-  tags: [chanserv]
-
-# ChanServ ownership of the staff channels: founder, access list, the
-# +H chat-history mode lock and topic retention. permchannels alone gives
-# none of these, and its modes= attribute cannot change an existing
-# network (permchanneldb's saved copy is included first and wins).
-- name: Install ChanServ channel setup script
-  ansible.builtin.copy:
-    src: ircd_channel_setup.py
-    dest: /usr/local/sbin/ircfiber-ircd-channel-setup
-    owner: root
-    group: root
-    mode: "0750"
-  tags: [chanserv]
-
-# Readiness is the script's job, not a log grep: it WHOISes ChanServ until
-# the pseudo-client answers 311. `docker logs --tail 50` only shows the
-# "is done syncing" line right after a restart — on a host that has been
-# up for days it has long scrolled off, which would have failed every
-# `-t chanserv` run.
-
-# Connects over TLS on the published loopback port because the admin oper
-# block is sslonly (plaintext /OPER is refused). TLS verification is on
-# only in letsencrypt mode: the LE certificate is issued for
-# {{ ircd_server_name }} and TLS validates the SNI hostname, not the peer
-# address, so a loopback connection with that SNI verifies fine — a
-# self-signed cert has no chain to verify against. Passwords are passed in
-# `environment:` only, never on the command line.
-- name: Register staff channels with ChanServ
-  ansible.builtin.command:
-    argv:
-      - /usr/local/sbin/ircfiber-ircd-channel-setup
-  environment:
-    IRCD_HOST: "127.0.0.1"
-    IRCD_PORT: "{{ ircd_port_tls }}"
-    IRCD_TLS: "1"
-    IRCD_TLS_VERIFY: "{{ '1' if ircd_tls_mode == 'letsencrypt' else '0' }}"
-    IRCD_TLS_SNI: "{{ ircd_server_name }}"
-    IRCD_ACCOUNT: "{{ ircd_services_root_account }}"
-    IRCD_ACCOUNT_PASSWORD: "{{ vault_ircd_oper_password }}"
-    IRCD_ACCOUNT_EMAIL: "{{ ircd_services_root_email }}"
-    IRCD_OPER_NAME: "{{ ircd_oper_name }}"
-    IRCD_OPER_PASSWORD: "{{ vault_ircd_oper_password }}"
-    IRCD_CHANNELS: "{{ ircd_permanent_channels | to_json }}"
-    IRCD_TIMEOUT: "{{ ircd_chanserv_setup_timeout }}"
-    IRCD_ACCOUNT_DISPLAY: "{{ ircd_services_root_display }}"
-    IRCD_CHANNEL_ACCESS: "{{ ircd_channel_access | to_json }}"
-    IRCD_CHANNEL_AUTOVOICE: "{{ ircd_channel_autovoice | to_json }}"
-    IRCD_VOICE_SWEEP: "{{ '1' if ircd_channel_voice_sweep else '0' }}"
-    IRCD_SERVICES_BOT: "{{ ircd_services_bot | to_json }}"
-  register: ircd_chanserv_setup
-  # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".
-  changed_when: "'CHANGED' in ircd_chanserv_setup.stdout_lines"
-  when: ircd_chanserv_setup_enabled | bool
-  tags: [chanserv]
-
-# Per-channel results (REGISTERED / mode lock / options / topic).
-- name: ChanServ channel setup result
-  ansible.builtin.debug:
-    var: ircd_chanserv_setup.stdout_lines
-  when: ircd_chanserv_setup_enabled | bool
-  tags: [chanserv]
-
-# The Discord bridge sidecar. Last, so it links to an ircd which already
-# carries its <link>/<uline>. Every task in the file is guarded on
-# ircd_bridge_enabled, and playbooks/bridge-deploy.yml includes the same file
-# on its own to deploy a new image without touching the ircd or services.
-- name: Manage the Discord bridge sidecar
-  ansible.builtin.include_tasks: bridge.yml
-  tags: [bridge]
+# Anope services (merged 2.1 instance: account services + BridgeServ),
+# the one-shot 2.0 -> 2.1 database migration, and the ChanServ channel
+# setup. Last, so services link to an ircd which is already running.
+- name: Manage the Anope services instance
+  ansible.builtin.include_tasks: services.yml
+  tags: [services]

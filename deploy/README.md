@@ -489,6 +489,65 @@ ansible-playbook playbooks/ircd.yml -t chanserv    # BOT ADD + ASSIGN + fantasy;
 
 Renaming the bot (`ircd_services_bot.nick`) is a `BOT ADD` of a new nick, not a rename — Anope keeps the old bot until it is deleted by hand (`/msg BotServ BOT DEL <oldnick>`), and the old `<badnick>` reservation disappears from the rendered config on the next `playbooks/ircd.yml` run. Changing only `ident`/`host`/`realname` converges in place via `BOT CHANGE`. Dropping `bot: true` from a channel unassigns the bot from it; `ircd_services_bot: {}` creates no bot at all.
 
+### Merged services (`ircfiber-services`: Anope 2.1 + BridgeServ, one instance)
+
+One Anope 2.1 container, `services.ircfiber.com`, built from our fork
+(`roles/ircd/files/Containerfile.anope`), carries the whole network state:
+NickServ, ChanServ, BotServ, HostServ, MemoServ, OperServ, Global **and**
+BridgeServ (the Discord relay). The old split — a 2.0.20 account instance
+plus a bridge-only 2.1 sidecar (`ircfiber-bridge`) — is retired: the merged
+instance IS the account authority, so upstream deauth behaviour is correct.
+Database is `db_json` (`anope.json` + `{name}.module.json` on
+`ircfiber_services_data`, with built-in daily/monthly backups under
+`backups/`); `db_flatfile` exists only for the one-shot migration below.
+The gateway reaches it over Bearer-token JSON-RPC on the docker network
+(no published port).
+
+```bash
+# Deploy a new services build (from the ircfiber-infra root)
+make -C ../.. ship-services   # build on builder → push GHCR → recreate ircfiber-services by digest
+# ircfiber-ircd is untouched (no IRC disconnect); the services link and the
+# Discord relay drop for the restart.
+```
+
+#### One-shot 2.0 -> 2.1 database migration
+
+`ansible-playbook playbooks/ircd.yml` migrates automatically when
+`anope.json` is absent on `ircfiber_services_data` AND `anope.db` is
+present; otherwise every step is skipped. What the play does, in order:
+
+1. SIGHUPs the running 2.0 container so `anope.db` is current (only when
+   the container exists), then waits 3 s.
+2. Snapshots the volume to `/var/backups/ircfiber/anope-2.0-<timestamp>.tgz`
+   (never skipped).
+3. Stops and removes the 2.0 `ircfiber-services` container.
+4. Copies `bridgeserv.module.json` — and only that file — from
+   `ircfiber_bridge_data` when present, carrying every `BridgeServ ADD`
+   mapping over. Also removes a leftover `ircfiber-bridge` container (never
+   its volume).
+5. Converts with a one-off 2.1 container on `services.migrate.conf`
+   (`--network none`), waits ≤ 60 s for `Databases loaded`, stops it
+   (SIGTERM writes `anope.json`), removes it, and asserts `anope.json`
+   exists with a non-empty `data.NickCore` — failing the play otherwise.
+6. Starts the normal container on the json-only config.
+
+Operator checks afterwards:
+
+```bash
+docker logs ircfiber-services | grep 'Databases loaded'  # conversion + boot loaded the DB
+# link up: /STATS or the ircd log shows services.ircfiber.com linked
+docker logs ircfiber-services | grep -i 'connected to Discord'  # BridgeServ relaying again
+# only after verification:
+docker volume rm ircfiber_bridge_data   # the retired sidecar's volume
+```
+
+#### Rollback
+
+> `git revert` the merge commit, set `ircd_services_image: anope/anope:2.0.20`
+> (the revert does), restore `/anope/data` from the pre-migration tgz, run
+> `playbooks/ircd.yml`, redeploy the gateway. Registrations made after the
+> cutover are lost (2.0 cannot read `anope.json`).
+
 ## Tailscale ACL recommendation
 
 In the Tailscale admin console → ACLs, restrict the `ircfiber` tag to:

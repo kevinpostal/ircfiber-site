@@ -1,12 +1,31 @@
 /*
  * {{ ansible_managed }}
- * Anope 2.0 services — {{ ircd_services_name }} for {{ ircd_network_name }}
+ * Anope 2.1 services — {{ ircd_services_name }} for {{ ircd_network_name }}
+ *
+ * The one services instance of the network: accounts, channels, BotServ,
+ * OperServ and BridgeServ (the Discord bridge) all live in this process.
+ * The image is our own build of Anope 2.1 with the bridgeserv module
+ * (roles/ircd/files/Containerfile.anope).
  *
  * Mounted at /anope/conf/services.conf. The *.example.conf includes ship
- * with the anope/anope image in the same directory; nickserv.conf is our
- * own (rendered) copy because Anope takes the first module block by
- * name, so example values cannot be overridden after an include.
+ * with the image in the same directory; nickserv.conf, operserv.conf and
+ * global.conf are our own (rendered) copies because Anope takes the first
+ * module block by name, so example values cannot be overridden after an
+ * include, and because duplicate service {} blocks are NOT deduped (a
+ * second `service { nick = "Global" }` crashes Anope with SIGSEGV on start,
+ * confirmed live 2026-09-11).
+ *
+ * Rendered twice by roles/ircd/tasks/services.yml:
+ *   services.conf          the running configuration (ircd_services_db_migrate
+ *                          undefined/false)
+ *   services.migrate.conf  ircd_services_db_migrate = true: the one-shot
+ *                          importer of the 2.0 anope.db. It loads the
+ *                          load-only db_flatfile BEFORE db_json, and carries
+ *                          no listener and no bridge — it exists only to be
+ *                          started, reach "Databases loaded", and be stopped
+ *                          so that db_json writes anope.json on shutdown.
  */
+{% set db_migrate = ircd_services_db_migrate | default(false) | bool %}
 
 define
 {
@@ -20,31 +39,36 @@ define
 	value = "{{ ircd_services_name }}"
 }
 
-/* Uplink: InspIRCd container via its Docker network alias. */
+/* Uplink: InspIRCd container via its Docker network alias. `protocol` is
+ * the 2.1 spelling of 2.0's `ipv6 = no`. */
 uplink
 {
 	host = "{{ ircd_ircfiber_net_alias }}"
-	ipv6 = no
+	protocol = "ipv4"
 	ssl = no
 	port = {{ ircd_link_port }}
 	password = "{{ vault_ircd_services_link_password }}"
 }
 
+/*
+ * The SID is explicit and MUST differ from every other SID on the network
+ * ({{ ircd_server_id }} is the ircd). Anope allocates the SIDs of BridgeServ's
+ * per-guild virtual links by incrementing from this one ({{ ircd_services_server_id }} → next
+ * letters), so leave room after it.
+ */
 serverinfo
 {
-	name = "services.name"
+	/* ${define} is the 2.1 reference syntax; a bare `services.name` is a
+	 * literal server name in 2.1 and the ircd refuses the link. */
+	name = "${services.name}"
 	description = "{{ ircd_services_description }}"
+	id = "{{ ircd_services_server_id }}"
 	pid = "/tmp/services.pid"
 	motd = "conf/services.motd"
 }
 
-/* Protocol: InspIRCd 4 speaks the 1205 (v3) link protocol to Anope 2.0. */
-module
-{
-	name = "inspircd3"
-	use_server_side_mlock = yes
-	use_server_side_topiclock = yes
-}
+/* Protocol: 2.1's native InspIRCd 4 module (2.0's `inspircd3` is gone). */
+module { name = "inspircd" }
 
 networkinfo
 {
@@ -65,14 +89,11 @@ options
 	 * irc.netcrave.chat). ascii here + rfc1459 there = CAPAB "casemapping
 	 * differs" and services flap forever. Anope ships both casemaps. */
 	casemap = "rfc1459"
-	seed = {{ (vault_ircd_cloak_key | hash('sha256'))[:7] | int(base=16) }}
-	strictpasswords = yes
 	badpasslimit = 5
 	badpasstimeout = 1h
 	updatetimeout = 5m
 	expiretimeout = 30m
 	readtimeout = 5s
-	warningtimeout = 4h
 	timeoutcheck = 3s
 	retrywait = 30s
 	hideprivilegedcommands = yes
@@ -80,7 +101,8 @@ options
 	 * currently has access to — a newcomer asking `/msg ChanServ HELP`
 	 * should see what the service can do, not a list trimmed to nothing. */
 	hideregisteredcommands = no
-	languages = "ca_ES.UTF-8 de_DE.UTF-8 el_GR.UTF-8 es_ES.UTF-8 fr_FR.UTF-8 hu_HU.UTF-8 it_IT.UTF-8 nl_NL.UTF-8 pl_PL.UTF-8 pt_PT.UTF-8 ru_RU.UTF-8 tr_TR.UTF-8"
+	/* No `languages`: the image ships no compiled catalogs, so every listed
+	 * locale only logs "Unable to use language" at start. English only. */
 }
 
 /* Pseudo-clients. */
@@ -158,8 +180,8 @@ include { type = "file"; name = "memoserv.example.conf" }
 include { type = "file"; name = "nickserv.conf" }
 
 /*
- * os_session MUST be declared before operserv.example.conf (first block by
- * name wins). Every IRC Fiber user reaches this network through the engine
+ * os_session MUST be declared before operserv.conf (first block by name
+ * wins). Every IRC Fiber user reaches this network through the engine
  * containers, so all of them share one or two source IPs; the example's
  * defaultsessionlimit = 5 made OperServ kill every 6th user right after
  * RPL_WELCOME ("Session limit exceeded", 2026-09-02). 0 = unlimited.
@@ -212,19 +234,78 @@ module
 }
 command { service = "OperServ"; name = "DEFCON"; command = "operserv/defcon"; permission = "operserv/defcon"; }
 include { type = "file"; name = "operserv.conf" }
+{% if ircd_bridgeserv_enabled and not db_migrate %}
+
+/*
+ * BridgeServ — the Discord <-> IRC relay (modules/bridgeserv in our fork).
+ * Every member of a bridged guild is introduced as an IRC pseudo client
+ * under "<guild-id>.{{ ircd_bridgeserv_domain }}", a virtual server linked
+ * behind this one. The stored bridges (`BridgeServ ADD`) live in
+ * bridgeserv.module.json on the data volume (db_json's module_database).
+ */
+service
+{
+	nick = "BridgeServ"
+	user = "services"
+	host = "${services.host}"
+	real = "Bridge Service"
+}
+
+module
+{
+	name = "bridgeserv"
+	client = "BridgeServ"
+	token = "{{ vault_bridgeserv_discord_token }}"
+	protocol = "discord"
+	domain = "{{ ircd_bridgeserv_domain }}"
+	bridgename = "IRC Bridge"
+	webhooksuffix = " (IRC)"
+	/* Keep useridle 0: every guild member is introduced and joined when the
+	 * bridge connects so #dmz shows the same population as Discord; a
+	 * reaper would quit exactly the people that roster is there to show.
+	 * Absence is expressed with IRC AWAY (usepresence), not by quitting. */
+	useridle = {{ ircd_bridgeserv_user_idle }}
+	/* usepresence needs PRESENCE INTENT enabled on the Discord application
+	 * first (Bot -> Privileged Gateway Intents), or Discord closes the
+	 * gateway with 4014 and nothing relays. SERVER MEMBERS INTENT is always
+	 * required for the member roster. */
+	usepresence = {{ ircd_bridgeserv_use_presence | ternary('yes', 'no') }}
+	maxlines = 8
+	floodlines = 6
+	floodsecs = 4s
+	relaytyping = yes
+	relayreactions = yes
+	/* An IRC "@nick" naming one of this bridge's Discord pseudo clients is
+	 * relayed as a real Discord mention. Only the ids actually resolved end
+	 * up in allowed_mentions; @everyone and roles never ping. */
+	relaymentions = yes
+	relayevents = "nick,topic,kick"
+}
+
+/* `permission` stays on every command, mutating ones included: without it
+ * DEL and SET would be reachable by the whole network. Services Root and
+ * Services Administrator hold bridgeserv/* (see the opertypes below); the
+ * gateway's admin panel drives these as the Services Root account over
+ * the JSON-RPC listener. */
+command { service = "BridgeServ"; name = "HELP";     command = "generic/help" }
+command { service = "BridgeServ"; name = "ADD";      command = "bridgeserv/add";      permission = "bridgeserv/add" }
+command { service = "BridgeServ"; name = "SET";      command = "bridgeserv/set";      permission = "bridgeserv/set" }
+command { service = "BridgeServ"; name = "DEL";      command = "bridgeserv/del";      permission = "bridgeserv/del" }
+command { service = "BridgeServ"; name = "LIST";     command = "bridgeserv/list";     permission = "bridgeserv/list" }
+command { service = "BridgeServ"; name = "STATUS";   command = "bridgeserv/status";   permission = "bridgeserv/status" }
+command { service = "BridgeServ"; name = "GUILDS";   command = "bridgeserv/guilds";   permission = "bridgeserv/guilds" }
+command { service = "BridgeServ"; name = "CHANNELS"; command = "bridgeserv/channels"; permission = "bridgeserv/channels" }
+{% endif %}
 
 /* Logging: services.log under /anope/logs plus globops for admin actions.
  * The file target also feeds #staff so opers see the whole services log in
  * the channel without needing +s snomasks, and can answer with `/msg
  * OperServ DEFCON <1-4>` from the same window (Anope splits `target` on
  * whitespace: file names, `globops` and channel names may be mixed in one
- * block). This block REPLACES the former dedicated `target = "#staff"`
- * block, which duplicated every admin line in the channel once this one
- * gained the channel. #staff is oper-only (+O, mode-locked), so per the
- * Anope "secure your log channels" rule no additional securing is needed.
- * Note the channel now also carries users=connect/disconnect, which is
- * chatty: every platform user arrives through a couple of engine
- * container IPs.
+ * block). #staff is oper-only (+O, mode-locked), so per the Anope "secure
+ * your log channels" rule no additional securing is needed. Note the
+ * channel also carries users=connect/disconnect, which is chatty: every
+ * platform user arrives through a couple of engine container IPs.
  * bot = Global matters only as a fallback: Anope's LOG_ADMIN (admin=)
  * and LOG_USER (users=) categories always carry a predefined sender —
  * the command's owning service — which overrides `bot =` entirely
@@ -234,11 +315,8 @@ include { type = "file"; name = "operserv.conf" }
  * is actually a channel member — so BOTH Global (bot fallback) and
  * OperServ (predefined sender for the admin/user categories) need
  * `channels = "#staff"` in their own service {} blocks. See
- * global.conf.j2 and operserv.conf.j2 for why that means replacing their
- * stock includes outright rather than adding override blocks (Anope does
- * not first-block-wins dedupe `service` the way it dedupes `module` by
- * name — confirmed live, 2026-09-11: a duplicate `service { nick =
- * "Global" }` override crashes Anope with SIGSEGV on startup). */
+ * global.conf.j2 and operserv.conf.j2 for why that means owning those
+ * files outright rather than adding override blocks. */
 log
 {
 	target = "services.log #staff"
@@ -278,11 +356,14 @@ opertype
 	privs = "chanserv/auspex chanserv/no-register-limit memoserv/* nickserv/auspex nickserv/confirm"
 }
 
+/* bridgeserv/* sits here and not lower: managing the Discord bridge is a
+ * network-administration act (it introduces and quits pseudo clients),
+ * not something a helper or channel operator does. */
 opertype
 {
 	name = "Services Administrator"
 	inherits = "Services Operator"
-	commands = "botserv/* chanserv/access/list chanserv/drop chanserv/getkey chanserv/saset/noexpire memoserv/sendall nickserv/saset/* nickserv/getemail operserv/news operserv/jupe operserv/svs operserv/stats operserv/oline operserv/noop operserv/forbid global/*"
+	commands = "botserv/* chanserv/access/list chanserv/drop chanserv/getkey chanserv/saset/noexpire memoserv/sendall nickserv/saset/* nickserv/getemail operserv/news operserv/jupe operserv/svs operserv/stats operserv/oline operserv/noop operserv/forbid global/* bridgeserv/*"
 	privs = "*"
 }
 
@@ -327,44 +408,67 @@ mail
 	sendfrom = "{{ ircd_admins[0].email }}"
 	delay = 5m
 }
+{% if db_migrate %}
 
-/* Database: flat file on the data volume, which the role mounts directly at
-   /anope/data (the image's own /data VOLUME + symlink bridge does not
-   survive db_flatfile's first rename()-based save). */
+/*
+ * MIGRATION ONLY. db_flatfile can only load in 2.1, and OnLoadDatabase
+ * stops at the first module that answers — so it must precede db_json
+ * here, and it must be absent from the running services.conf: with both
+ * present every restart would reload the stale 2.0 anope.db over the live
+ * json. Anope refuses to start with only a deprecated database module,
+ * which is why db_json follows.
+ */
 module
 {
 	name = "db_flatfile"
-	/* Relative to /anope/data, which is the mounted volume. */
 	database = "anope.db"
-	keepbackups = 3
-	fork = no
 }
+{% endif %}
 
-/* Password hashing: bcrypt for new passwords, sha256 accepted for legacy. */
-module { name = "enc_bcrypt" }
-module { name = "enc_sha256" }
-
-{% if ircd_services_rpc_enabled | default(true) | bool %}
-/* XML-RPC control surface. Container-internal only: ircfiber-services
-   publishes no ports, so only the docker network can reach it, and
-   m_xmlrpc has no authentication of its own. The gateway uses it to run
-   `NickServ REGISTER` on behalf of a website account whose nick may be
-   online (the engine holds it) or offline — see ircfiber.services.anope. */
+/* Database: db_json on the data volume, which the role mounts directly at
+ * /anope/data. Module-owned data (BridgeServ's bridges) goes to
+ * <module>.module.json next to it. Anope keeps its own rolling backups
+ * under backups/; the one-shot 2.0 snapshot the migration takes lives on
+ * the host under /var/backups/ircfiber. */
 module
 {
-	name = "m_httpd"
+	name = "db_json"
+	database = "anope.json"
+	module_database = "{name}.module.json"
+	daily_backups = 7
+	monthly_backups = 3
+	backup_directory = "backups"
+}
+
+/* Password hashing: bcrypt for new passwords. enc_sha256 is deprecated in
+ * 2.1 but must stay loaded (second, never first): it still verifies the
+ * legacy `sha256:` hashes 2.0 stored, and because it is not the primary
+ * module a successful identify re-hashes the password with bcrypt. */
+module { name = "enc_bcrypt" }
+module { name = "enc_sha256" }
+{% if ircd_services_rpc_enabled | default(true) | bool and not db_migrate %}
+
+/*
+ * JSON-RPC control surface. Container-internal only: ircfiber-services
+ * publishes no ports, so only the docker network can reach it, and on top
+ * of that every request must carry the Bearer token below. The gateway
+ * uses it to run services commands on behalf of website accounts
+ * (`anope.command`, including `NickServ REGISTER` as a nick that is not
+ * yet registered — see rpc_user below), to verify credentials, and to
+ * read the account/channel inventories for the admin dashboard.
+ *
+ * ip = "::" and not "0.0.0.0": Anope picks the socket family purely from
+ * whether the address contains a colon and never sets IPV6_V6ONLY, so a
+ * v4 bind refuses every AAAA-preferring client on a dual-stack docker
+ * network while `::` accepts both (Linux net.ipv6.bindv6only=0).
+ */
+module
+{
+	name = "httpd"
 
 	httpd
 	{
 		name = "httpd/main"
-		/* Dual-stack. `ircfiber_net` is dual-stack, so the `services`
-		   alias resolves to both an A and an AAAA record and a client
-		   may pick either. m_httpd chooses the socket family purely
-		   from whether this value contains a colon
-		   (`Socket(-1, i.find(':') != npos)` in m_httpd.cpp), and
-		   Anope never sets IPV6_V6ONLY, so a `::` bind accepts IPv4
-		   too (Linux net.ipv6.bindv6only=0). Binding 0.0.0.0 instead
-		   makes every IPv6 client get ECONNREFUSED. */
 		ip = "{{ ircd_services_rpc_bind | default('::') }}"
 		port = {{ ircd_services_rpc_port | default(8080) }}
 		timeout = 30
@@ -372,14 +476,46 @@ module
 	}
 }
 
+/*
+ * The token's method list is the whole authorisation surface: exactly the
+ * methods the gateway calls, nothing that identifies a live user
+ * (anope.identify), messages the network (anope.message*) or enumerates
+ * opers/servers. xmlrpc must not be loaded beside jsonrpc.
+ */
 module
 {
-	name = "m_xmlrpc"
+	name = "jsonrpc"
 	server = "httpd/main"
+
+	token
+	{
+		token = "{{ vault_ircd_services_rpc_token }}"
+		methods = "anope.command anope.checkCredentials anope.user anope.account anope.listAccounts anope.listRegisteredChannels anope.registeredChannel anope.listSuspendedAccounts"
+	}
 }
 
-module { name = "m_xmlrpc_main" }
+/*
+ * pretenduser = no keeps anope.command running as the bare account rather
+ * than as the session of an online IRC user. allowunregistered = yes is
+ * our patch (files/anope-rpc-command-unregistered.patch): a command whose
+ * account is an unregistered nick runs as that nick with no account,
+ * which is how the gateway registers a website user's nick offline —
+ * `NickServ REGISTER` registers the nick the command came from.
+ */
+module
+{
+	name = "rpc_user"
+	pretenduser = no
+	allowunregistered = yes
+}
+
+/* anope.user / anope.account / anope.listAccounts. */
+module { name = "rpc_data" }
+
+/* anope.listRegisteredChannels / anope.registeredChannel /
+ * anope.listSuspendedAccounts — files/anope-rpc-registered.patch. */
+module { name = "rpc_registered" }
 {% endif %}
 
-/* Extras: help + m_sasl (IRCv3 SASL PLAIN via InspIRCd's sasl module). */
+/* Extras (help etc.). */
 include { type = "file"; name = "modules.example.conf" }

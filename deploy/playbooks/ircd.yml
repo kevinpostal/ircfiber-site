@@ -1,5 +1,5 @@
 ---
-# IRC Fiber — Deploy IRC daemon (InspIRCd 4) + services (Anope 2)
+# IRC Fiber — Deploy IRC daemon (InspIRCd 4) + services (Anope 2.1)
 #
 # Standalone playbook. Run from the deploy/ directory:
 #
@@ -8,10 +8,15 @@
 # Sets up:
 #   - InspIRCd 4 container (ircfiber-ircd), aliases ircd + irc.ircfiber.com
 #   - Ports 6667 (plain) and 6697 (TLS) exposed; 7000 (server links) internal
-#   - Anope 2 services container (ircfiber-services): NickServ, ChanServ,
-#     HostServ, MemoServ, OperServ, Global + SASL PLAIN
+#   - One Anope 2.1 services container (ircfiber-services): NickServ,
+#     ChanServ, BotServ (FIBERSERV), HostServ, MemoServ, OperServ, Global +
+#     BridgeServ (Discord relay) + SASL PLAIN. JSON database (anope.json)
+#     with daily/monthly backups; Bearer-token JSON-RPC for the gateway.
 #   - Persistent volumes: ircfiber_inspircd_data (xlines, permchannels),
-#     ircfiber_services_data (Anope flatfile DB)
+#     ircfiber_services_data (Anope JSON DB + bridge mappings)
+#   - One-shot 2.0 -> 2.1 database migration when the volume still holds
+#     anope.db (snapshot to /var/backups/ircfiber first; rollback in
+#     README.md "Merged services")
 #   - Admin oper account from vault (IRCd oper + Anope Services Root)
 #   - Cloudflare DNS A record for irc.ircfiber.com
 #   - UFW firewall rules for IRC ports

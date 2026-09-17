@@ -2,16 +2,15 @@
   /**
    * ChanServPanel — Anope/ChanServ channel management (IRCD page → ChanServ).
    *
-   * Three cards, two data paths — the same split NickServPanel uses:
-   *   1. "Channels" is the whole registered-channel inventory, read from
-   *      Anope's flatfile on the gateway
-   *      (`/api/admin/ircd/chanserv/channels`). It is up to five minutes
-   *      stale — Anope only flushes anope.db every `updatetimeout` — so the
-   *      header states the "as of" time. Filtering and paging are
-   *      client-side: the list is already loaded.
-   *   2. "Manage channel" is live `ChanServ INFO` + `ACCESS … LIST` over
-   *      XML-RPC and is therefore authoritative over the table. Every
-   *      successful action re-runs the lookup and refreshes the table.
+ * Three cards, two data paths — the same split NickServPanel uses:
+ *   1. "Channels" is the whole registered-channel inventory, read live from
+ *      services over JSON-RPC
+ *      (`/api/admin/ircd/chanserv/channels`). The header states the
+ *      query time. Filtering and paging are client-side: the list is
+ *      already loaded.
+ *   2. "Manage channel" is live `ChanServ INFO` + `ACCESS … LIST` and is
+ *      therefore authoritative over the table. Every successful action
+ *      re-runs the lookup and refreshes the table.
    *   3. "Register a channel" founds a new registration. `REGISTER` always
    *      founds on the calling account (the services oper), so a named
    *      founder is applied by a following transfer; the gateway reports a
@@ -200,9 +199,9 @@
   let regFounder = $state('');
 
   /// `cs_info` emits labels in a fixed order; anything Anope adds later is
-  /// appended rather than dropped. The suspension labels are the ones 2.0.20
-  /// actually renders (verified against 2.0.20 over XML-RPC) — `cs_suspend`'s
-  /// `show` list names options, not labels — so they group with `Suspended`
+  /// appended rather than dropped. The suspension labels are the ones 2.1
+  /// actually renders (verified against 2.1.27) — `cs_suspend`'s `show`
+  /// list names options, not labels — so they group with `Suspended`
   /// instead of trailing the list.
   const fieldOrder = [
     'Founder', 'Successor', 'Description', 'Registered', 'Last used',
@@ -447,7 +446,7 @@
     <div>
       <h3 class="text-sm font-semibold text-heading">Channels ({channels.length})</h3>
       <p class="mt-0.5 text-xs text-muted">
-        Registered channels as of {fmtTime(asOf)} · up to 5 minutes stale
+        Registered channels as of {fmtTime(asOf)} · live from services
       </p>
     </div>
     <div class="flex items-center gap-2">

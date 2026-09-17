@@ -23,12 +23,17 @@ One page for day-to-day network operation. Canonical config lives in
   accounts materialized yet — add an `<oper>` entry of the right type when
   staff grows, never widen Dashboard.
 
-## Anope XML-RPC (website account registration)
+## Anope JSON-RPC (website account registration)
 
-- `ircfiber-services` loads `m_httpd` + `m_xmlrpc` + `m_xmlrpc_main` and
-  listens on `{{ ircd_services_rpc_port }}` (8080) **inside** the container.
-  The container publishes no ports, so only `ircfiber_net` can reach it.
-  m_xmlrpc has no authentication of its own — never publish this port.
+- `ircfiber-services` runs Anope **2.1** (accounts, channels and the
+  Discord bridge in one process), loading `httpd` + `jsonrpc` + `rpc_user`
+  + `rpc_data` + `rpc_registered`, and listens on
+  `{{ ircd_services_rpc_port }}` (8080) **inside** the container. The
+  container publishes no ports, so only `ircfiber_net` can reach it, and
+  every request must carry
+  `Authorization: Bearer <base64(vault_ircd_services_rpc_token)>` — the
+  listener base64-decodes the credential first, so sending the token raw
+  answers `-32601 No authorization for method`. Never publish this port.
 - The gateway (`ircfiber.services.accounts`) uses it to run
   `NickServ REGISTER <generated-pw> <email>` for every website account on
   signup and on the first login of an existing account, then stores the
@@ -37,19 +42,19 @@ One page for day-to-day network operation. Canonical config lives in
   name is the username, falling back to `<username>_<4 hex>` then
   `<username>_2…_9` when the nick is already registered.
 - Endpoint wiring: `IRCFIBER_ANOPE_RPC_URL` /
-  `IRCFIBER_ANOPE_RPC_TIMEOUT` in the gateway env. Set
-  `ircd_services_rpc_enabled: false` to turn the listener and the
+  `IRCFIBER_ANOPE_RPC_TOKEN` (raw token; the gateway base64-encodes it
+  into the Bearer header) / `IRCFIBER_ANOPE_RPC_TIMEOUT` in the gateway
+  env. Set `ircd_services_rpc_enabled: false` to turn the listener and the
   auto-registration off; the gateway then logs "Anope RPC not configured"
   and skips provisioning. Adding/removing the modules needs a services
   **restart**, not a rehash — the ircd role handler already does that.
-- **Hijack guard (security-critical).** `ns_register` finishes with
-  `u->Identify(na)` for whoever is online as the target nick, so registering
-  a nick a stranger holds logs *them* into the brand-new account. Verified on
-  2.0.20: the squatter's own socket received
-  `900 … :You are now logged in as probesquat` plus `MODE +r`. The gateway
-  therefore registers a nick only when either (a) our engine currently holds
+- **Hijack guard (security-critical).** The RPC registers with no live user
+  attached, so unlike 2.0's XML-RPC (whose `ns_register` finished with
+  `u->Identify(na)` for whoever held the target nick, logging a squatter
+  into the new account) there is no session to hijack. The gateway still
+  registers a nick only when either (a) our engine currently holds
   exactly that nick — nicks are unique, so it must be our session — or
-  (b) Anope's `user` method reports no live session on it. `NickServ STATUS`
+  (b) Anope's `anope.user` reports no live session on it. `NickServ STATUS`
   is **not** usable here: it reports identification, so an online
   *unregistered* nick answers `0` exactly like an offline one. The oracle for
   (a) is the engine's `NetworkStateSnapshot.currentNick`; when the engine has
@@ -81,21 +86,33 @@ One page for day-to-day network operation. Canonical config lives in
   characters, and every value interpolated into a services command passes
   `isSafeServicesArg` first — services commands are space-delimited, so an
   unsanitised argument injects extra parameters into what Anope runs.
-- Every generated credential is proved with `checkAuthentication` (the same
-  path SASL PLAIN takes) **before** it is persisted or shown, and is written
-  to `irc:services:pending:<userId>` (24h) *before* `REGISTER`. If the gateway
-  dies between registering and saving, the next run adopts that record
-  instead of orphaning the user's nick under a password nobody knows; a
-  record that no longer authenticates is discarded.
-- Anope flushes `anope.db` every `updatetimeout` (5m); a services restart
-  within that window can lose a just-created account. No action needed —
-  the user's next login re-provisions it.
+- Every generated credential is proved with `anope.checkCredentials` (the
+  same path SASL PLAIN takes) **before** it is persisted or shown, and is
+  written to `irc:services:pending:<userId>` (24h) *before* `REGISTER`. If
+  the gateway dies between registering and saving, the next run adopts that
+  record instead of orphaning the user's nick under a password nobody knows;
+  a record that no longer authenticates is discarded.
+- Anope writes `anope.json` on `OperServ UPDATE`, every `updatetimeout`
+  (5m) and on shutdown; a services restart outside those windows can lose a
+  just-created account. No action needed — the user's next login
+  re-provisions it. Rolling `backups/` copies are kept on the data volume.
+- The account/channel inventories on the admin IRCD page are read live over
+  the same listener (`anope.listAccounts`, `anope.listRegisteredChannels`,
+  `anope.listSuspendedAccounts`) — no five-minute staleness anymore.
+- `DROP` needs the literal word `OVERRIDE` after the target
+  (`NickServ DROP <nick> OVERRIDE`, `ChanServ DROP <#chan> OVERRIDE`)
+  when run as the Services Root account; a bare `DROP <target>` only
+  answers the confirmation prompt and drops nothing.
 - Manual probe from a container on `ircfiber_net`:
-  `POST http://services:8080/xmlrpc`, `Content-Type: text/xml`, body
-  `<?xml version="1.0"?><methodCall><methodName>command</methodName><params>`
-  `<param><value><string>NickServ</string></value></param>` … one `<string>`
-  per positional argument. Replies are XML-escaped **twice**
-  (`&amp;#xA;` is one newline, `&amp;qt;` is `>`).
+  `POST http://services:8080/jsonrpc`, `Content-Type: application/json`,
+  `Authorization: Bearer <base64(vault_ircd_services_rpc_token)>`,
+  body `{"jsonrpc":"2.0","id":"probe","method":"anope.command",
+  "params":["<account>","NickServ","INFO <nick>"]}`. The `anope.command`
+  reply is `result`, one formatting-stripped line per services reply
+  (`Unknown command BOGUS…`, `Syntax: …`, `Access denied.` all arrive as
+  ordinary lines, not as errors — only a genuinely silent command errors
+  with `-32097 No such command`). Unknown *service* is
+  `-32098 No such service`.
 
 ## Common actions
 

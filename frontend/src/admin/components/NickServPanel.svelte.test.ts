@@ -230,7 +230,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
       if (path === ACCOUNTS)
         return Promise.resolve({
           available: false,
-          reason: 'anope.db not found at /nonexistent/anope.db',
+          reason: 'Anope RPC not configured',
           asOf: 0,
           accounts: [nsAccount({ nick: 'nsplat', account: 'nsplat', username: 'platuser' })],
         });
@@ -240,7 +240,7 @@ describe('NickServPanel.svelte — NickServ account management', () => {
     });
     render(NickServPanel);
     await expect
-      .element(page.getByText(/anope\.db not found at \/nonexistent\/anope\.db/))
+      .element(page.getByText(/Anope RPC not configured/))
       .toBeInTheDocument();
     await expect.element(page.getByText(/Showing IRC Fiber accounts only/)).toBeInTheDocument();
     await vi.waitFor(() => expect(bodyRows().length).toBe(1));

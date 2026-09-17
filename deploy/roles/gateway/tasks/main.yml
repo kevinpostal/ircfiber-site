@@ -181,8 +181,8 @@
       IRCFIBER_BNC_TLS_KEY: "{{ bnc_tls_key_path }}"
     gateway_spec_ports:
       - "{{ bnc_public_port }}:{{ bnc_public_port }}"
-    # Caddy's cert store plus the ircd config; explicitly no Anope data
-    # volume, since bnc serves no admin routes.
+    # Caddy's cert store plus the ircd config viewer mount; nothing else,
+    # since bnc serves no admin routes.
     gateway_spec_volumes_extra:
       - "{{ caddy_data_volume }}:/caddy-data:ro"
       - "{{ ircd_conf_dir | default('/etc/ircfiber/ircd') }}:/etc/ircfiber/ircd:ro"
@@ -218,15 +218,18 @@
       IRCFIBER_SUPPORT_BOT_NICK: "{{ support_bot_nick }}"
       IRCFIBER_SUPPORT_BOT_CHANNEL: "{{ support_bot_channel }}"
       IRCFIBER_SUPPORT_BOT_PUBLIC_URL: "{{ support_bot_public_url }}"
-      # `!adduser`/`!nsinfo` verify via Anope XML-RPC as the oper account
-      # (same listener/account as the gateway — inherited from _gateway_env,
-      # restated here so the dependency is explicit).
+      # `!adduser`/`!nsinfo` verify via Anope JSON-RPC as the oper account
+      # (same listener/account/token as the gateway — inherited from
+      # _gateway_env, restated here so the dependency is explicit). The
+      # token file is visible through the shared read-only secrets-dir bind
+      # in the base mounts (tasks/container.yml), like every other secret.
       IRCFIBER_ANOPE_RPC_URL: "{{ _gateway_env['IRCFIBER_ANOPE_RPC_URL'] | default('') }}"
       IRCFIBER_ANOPE_RPC_TIMEOUT: "{{ _gateway_env['IRCFIBER_ANOPE_RPC_TIMEOUT'] | default('10') }}"
+      IRCFIBER_ANOPE_RPC_TOKEN_FILE: "{{ _gateway_env['IRCFIBER_ANOPE_RPC_TOKEN_FILE'] | default('') }}"
       IRCFIBER_ANOPE_OPER_ACCOUNT: "{{ _gateway_env['IRCFIBER_ANOPE_OPER_ACCOUNT'] | default('') }}"
       # Fallback oper allowlist when the ircd omits 313 (comma nicks, empty = WHOIS only).
       IRCFIBER_SUPPORT_BOT_ADDUSER_ALLOW: "{{ support_bot_adduser_allow | default('') }}"
-    # Base mounts only — no ircd config, no Anope data, no cert store.
+    # Base mounts only — no ircd config, no cert store.
     gateway_spec_volumes_extra: []
     gateway_spec_memory: "{{ support_bot_memory_limit }}"
     gateway_spec_memory_reservation: "{{ support_bot_memory_reservation }}"
@@ -280,7 +283,7 @@
       IRCFIBER_FIBEREYE_CHURN_THRESHOLD: "{{ fibereye_churn_threshold | string }}"
       IRCFIBER_FIBEREYE_SHORT_MS: "{{ fibereye_short_ms | string }}"
       IRCFIBER_FIBEREYE_BAN_SECONDS: "{{ fibereye_ban_seconds | string }}"
-    # Base mounts only — no ircd config, no Anope data, no cert store.
+    # Base mounts only — no ircd config, no cert store.
     gateway_spec_volumes_extra: []
     gateway_spec_memory: "{{ fibereye_memory_limit }}"
     gateway_spec_memory_reservation: "{{ fibereye_memory_reservation }}"

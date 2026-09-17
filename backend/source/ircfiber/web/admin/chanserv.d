@@ -4,28 +4,29 @@ module ircfiber.web.admin.chanserv;
 /// ChanServ channel management for the admin dashboard (IRCD page → ChanServ).
 ///
 /// Two data paths, deliberately different, exactly as the NickServ section:
-///   * the **inventory** (`/channels`) reads Anope's `db_flatfile` directly
-///     (`ircfiber.services.anope_db`), because Anope 2.0 exposes no
-///     enumeration RPC and `ChanServ LIST` is capped by `chanserv.conf`'s
-///     `listmax` (50 here). It is up to `updatetimeout` (5m) stale and says so;
-///   * every **per-channel** view and action goes over XML-RPC as the
+///   * the **inventory** (`/channels`) is the live registered-channel list
+///     over JSON-RPC (`anope.listRegisteredChannels`,
+///     `ircfiber.services.anope_inventory`), because `ChanServ LIST` is
+///     capped by `chanserv.conf`'s `listmax` (50 here) and is a search,
+///     never an inventory. It is live, not stale;
+///   * every **per-channel** view and action goes over JSON-RPC as the
 ///     services-oper account (`IRCFIBER_ANOPE_OPER_ACCOUNT`), so it is live
 ///     and authoritative.
 ///
-/// `m_xmlrpc_main` builds a `CommandSource` with a null `User`, so
-/// `require_oper` never applies and these commands run with the oper account
-/// offline. An account that is not tied to an opertype yet answers
-/// `Access denied.` with HTTP 200 — `anopeAccessDenied` detects that and it
-/// is reported as 403 with the remediation.
+/// `anope.command` runs with a null `User`, so `require_oper` never applies
+/// and these commands run with the oper account offline. An account that is
+/// not tied to an opertype yet answers `Access denied.` — `anopeAccessDenied`
+/// detects that and it is reported as 403 with the remediation.
 ///
-/// Trap worth stating once: `cs_drop` requires the channel name **twice**
-/// for every caller including Services Root. `DROP #x` answers with the
-/// confirmation prompt and HTTP 200, dropping nothing — a silent no-op. The
-/// command sent below is therefore `DROP #x #x`.
+/// Trap worth stating once: 2.1's `cs_drop` confirms with a per-channel
+/// random code — a bare `DROP #x` (or 2.0's `DROP #x #x`) only prints the
+/// confirmation prompt and drops nothing, a silent no-op. The drop below
+/// therefore carries `OVERRIDE` (`chanServDropCommand`), which a source
+/// holding `chanserv/drop/override` uses to skip the code.
 ///
 /// Second trap, same shape: `cs_set` takes the **option before the channel**
-/// (`SET FOUNDER #x acct`, verified against 2.0.20). The reverse order answers
-/// `Syntax: SET option channel parameters` with HTTP 200 and changes nothing,
+/// (`SET FOUNDER #x acct`, verified on Anope 2.1.27). The reverse order answers
+/// `Syntax: SET option channel parameters` and changes nothing,
 /// exactly like `SASET` on the NickServ side.
 ///
 /// Scope: suspend, unsuspend, drop, register, founder transfer and XOP access
@@ -42,9 +43,10 @@ import vibe.http.server : HTTPServerRequest, HTTPServerResponse;
 
 import ircfiber.services.accounts : isValidIrcChannel;
 import ircfiber.services.anope : AnopeReply, AnopeSettings, anopeChanServCommand,
-    anopeChanServQuery, chanServSetFounderCommand, flattenReplyText, isSafeServicesArg,
-    parseChanAccessList, parseChanInfo;
-import ircfiber.services.anope_db : AnopeChannel, asciiLowerStr, readAnopeChannelInventory;
+    anopeChanServQuery, chanServAccessListCommand, chanServDropCommand,
+    chanServSetFounderCommand, flattenReplyText, isSafeServicesArg,
+    loadAnopeSettings, parseChanAccessList, parseChanInfo;
+import ircfiber.services.anope_inventory : AnopeChannel, asciiLowerStr, readAnopeChannelInventory;
 import ircfiber.web.admin.helpers : jsonError, jsonOk, readJsonBody;
 import ircfiber.web.admin.services_common : anopeReplyOk, anopeTransportOk,
     hasControlChars, isValidExpiry, jsonStr, jsonTrue, loadPlatformRows, PlatformRow,
@@ -112,11 +114,12 @@ private enum string[5] XOP_TIERS = ["QOP", "SOP", "AOP", "HOP", "VOP"];
 /// `saslUsername` matches the channel's founder.
 ///
 /// Like `apiNsAccounts` this endpoint never errors, it degrades: when the
-/// flatfile is unavailable the list is empty with `available:false` and a
-/// `reason`. There is no Mongo-side fallback — nothing in Mongo references a
-/// channel — so an empty degraded list is correct by construction.
+/// RPC inventory is unavailable the list is empty with `available:false`
+/// and a `reason`. There is no Mongo-side fallback — nothing in Mongo
+/// references a channel — so an empty degraded list is correct by
+/// construction.
 package void apiCsChannels(HTTPServerRequest, HTTPServerResponse res) {
-    auto inv = readAnopeChannelInventory();
+    auto inv = readAnopeChannelInventory(loadAnopeSettings());
     auto platform = loadPlatformRows();
     long suspendedCount = 0;
 
@@ -157,7 +160,7 @@ package void apiCsChannels(HTTPServerRequest, HTTPServerResponse res) {
     auto data = Json.emptyObject;
     data["available"] = inv.available;
     data["reason"] = inv.reason;
-    data["asOf"] = inv.fileMtime;
+    data["asOf"] = inv.asOf;
     data["channels"] = arr;
     data["suspendedCount"] = suspendedCount;
     jsonOk(res, data);
@@ -201,7 +204,7 @@ package void apiCsChannel(HTTPServerRequest req, HTTPServerResponse res) {
     auto access = Json.emptyArray;
     string accessError;
     if (info.registered) {
-        auto ra = anopeChanServQuery(s, "ACCESS " ~ chan ~ " LIST");
+        auto ra = anopeChanServQuery(s, chanServAccessListCommand(chan));
         if (!ra.transportOk) {
             accessError = "Access list unavailable: " ~ ra.transportError;
         } else {
@@ -319,10 +322,11 @@ package void apiCsUnsuspend(HTTPServerRequest req, HTTPServerResponse res) {
 
 /// POST /api/admin/ircd/chanserv/drop  body {channel, confirm}
 ///
-/// The channel name is sent twice: `cs_drop` treats a single name as a
-/// confirmation request and answers HTTP 200 without dropping anything.
-/// Unlike `apiNsDrop` there is nothing to clean up afterwards — no Mongo
-/// document or Redis key references a channel registration.
+/// `chanServDropCommand` carries the `OVERRIDE` that skips `cs_drop`'s
+/// confirmation code (a bare `DROP <#chan>` only prints the prompt and
+/// drops nothing). Unlike `apiNsDrop` there is nothing to clean up
+/// afterwards — no Mongo document or Redis key references a channel
+/// registration.
 package void apiCsDrop(HTTPServerRequest req, HTTPServerResponse res) {
     AnopeSettings s;
     if (!servicesSettings(res, s)) return;
@@ -334,7 +338,7 @@ package void apiCsDrop(HTTPServerRequest req, HTTPServerResponse res) {
         return;
     }
 
-    auto r = anopeChanServCommand(s, "DROP " ~ chan ~ " " ~ chan);
+    auto r = anopeChanServCommand(s, chanServDropCommand(chan));
     if (!csReplyOk(res, s, chan, r)) return;
     if (!r.text.toLower().canFind("has been dropped")) {
         jsonError(res, 502, "ChanServ did not confirm the drop: " ~ csReply(r));

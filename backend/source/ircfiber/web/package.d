@@ -530,10 +530,10 @@ final class WebController {
     }
 
     /// NickServ-password fallback for `loginPost`: only when the local hash
-    /// check already failed. Verifies via Anope (`checkAuthentication`, the
-    /// SASL PLAIN path), upgrades the local hash to the presented password,
-    /// captures it as the Fiber network SASL credential, then logs in.
-    /// Returns true when it authenticated and already redirected.
+    /// check already failed. Verifies via Anope (`anope.checkCredentials`,
+    /// the SASL PLAIN path), upgrades the local hash to the presented
+    /// password, captures it as the Fiber network SASL credential, then
+    /// logs in. Returns true when it authenticated and already redirected.
     private bool tryNickservLogin(UserRepository repo, string username, string password,
             HTTPServerRequest req, HTTPServerResponse res) {
         import ircfiber.default_network : DEFAULT_FIBER_HOST;

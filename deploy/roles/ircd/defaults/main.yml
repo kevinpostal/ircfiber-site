@@ -1,5 +1,5 @@
 ---
-# IRC Fiber — IRC daemon (InspIRCd 4 + Anope 2 services) defaults
+# IRC Fiber — IRC daemon (InspIRCd 4 + Anope 2.1 services) defaults
 #
 # Images, container names, ports and volumes live in
 # inventories/production/group_vars/all/vars.yml.
@@ -59,14 +59,8 @@ ircd_services_memory_reservation: "64m"
 ircd_services_cpus: 1.0
 ircd_services_oom_score_adj: -300
 
-# The bridge sidecar holds only its stored bridges and the pseudo clients
-# which are currently online, so its footprint is close to the services one.
-# Deliberately less OOM-protected than services: losing the bridge costs the
-# Discord relay, losing services costs NickServ for the whole network.
-ircd_bridge_memory_limit: "256m"
-ircd_bridge_memory_reservation: "64m"
-ircd_bridge_cpus: 1.0
-ircd_bridge_oom_score_adj: -100
+# (No bridge limits: the Discord bridge sidecar is retired — BridgeServ
+# runs on the services instance above.)
 
 # ---------------------------------------------------------------------------
 # Health probes (see the healthcheck comments in tasks/main.yml)
@@ -90,16 +84,6 @@ ircd_healthcheck_socket_every: 20
 # /anope/conf/ (the image ships the *.example.conf includes there).
 ircd_conf_dir: "/etc/ircfiber/ircd"
 ircd_services_conf_dir: "/etc/ircfiber/services"
-# The bridge sidecar's rendered anope.conf, bind-mounted read-only over
-# /anope/conf/anope.conf. It contains the Discord bot token and the link
-# password, so the dir is 0750 and the file 0640, owned by uid 10000.
-ircd_bridge_conf_dir: "/etc/ircfiber/bridge"
-
-# Seconds to wait for BridgeServ to introduce its Discord puppet server
-# after the container is (re)created, before spending one restart on it and
-# failing the deploy. The introduce lands ~20s after the Discord gateway
-# connects (guild member fetch), so this is a ~4x margin.
-ircd_bridge_introduce_timeout: 90
 ircd_container_uid: 10000
 
 # Docker network aliases. The engine dials irc.ircfiber.com; on the host
@@ -223,13 +207,13 @@ ircd_services_root_extra_accounts:
   # oper block naming an account that does not exist is inert.
   - "admin"
 
-# uid:gid the anope/anope image runs its services process as. The gid is
-# `nogroup`, deliberately unrelated to the uid, so it cannot be derived —
-# and it is load-bearing: the data volume must be owned by exactly this
-# pair or Anope logs "DB_FLATFILE: Unable to open data/anope.db for
-# reading" and runs on an empty in-memory database.
+# uid:gid the fork image (files/Containerfile.anope) runs its anope process
+# as. It is load-bearing: the data volume must be owned by exactly this pair
+# or Anope logs "Unable to open data/anope.json for reading" and runs on an
+# empty in-memory database. (The retired 2.0 image ran as 10000:65533, so a
+# volume carried over from it is re-owned by tasks/services.yml.)
 ircd_services_uid: 10000
-ircd_services_gid: 65533
+ircd_services_gid: 10000
 
 # Dashboard oper for the admin web UI (Dashboard class: REHASH + STATS +
 # G/K/Z-LINE only, host-locked to the Docker network). Gateway reads the
@@ -440,8 +424,9 @@ ircd_channel_autovoice:
 # they join and never again. Anyone already in the channel when the entry
 # was added, anyone who identified after joining, and anyone who joined
 # while the ircd held no account for them stays bare forever — which is
-# exactly what #ircfiber looked like after the bridge sidecar started
-# clearing accounts (see files/anope-bridge-no-deauth.patch). With this on,
+# exactly what #ircfiber looked like after the retired bridge sidecar
+# started clearing accounts (its instance was not the account authority,
+# so upstream deauthed every user it could not find). With this on,
 # ircd_channel_setup.py additionally SAMODEs +v onto every member that
 # NickServ STATUS reports as identified and that carries no status prefix
 # at all, so ops are never demoted. Only runs on channels whose
