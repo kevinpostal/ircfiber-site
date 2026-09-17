@@ -103,12 +103,12 @@
   # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".
   changed_when: "'CHANGED' in ircd_services_vol_own.stdout_lines"
 
-# Retired sidecar first: stopping it flushes its bridgeserv.module.json to
-# its volume (which step 4 below may still need), and it must never link
-# again with a server name this instance now owns. The volume is NOT
-# removed here — the operator drops it by hand after verifying the
-# migration (README), because it is the only copy of the bridge mappings
-# until step 4 carries them over.
+# Retired sidecar first: stopping it flushes its anope.json (the `Bridge`
+# records it holds are carried over after the conversion below), and it
+# must never link again with a server name this instance now owns. The
+# volume is NOT removed here — the operator drops it by hand after
+# verifying the migration (README), because it is the only copy of the
+# bridge mappings until the carry step below merges them in.
 - name: Remove any leftover Discord bridge sidecar container
   community.docker.docker_container:
     name: ircfiber-bridge
@@ -189,41 +189,7 @@
     state: absent
   when: ircd_services_db_migrate_needed | bool
 
-# Step 4. Carry the bridge mappings over: bridgeserv.module.json — and only
-# that file — holds every BridgeServ ADD, so copying it preserves the
-# Discord guild links across the sidecar's retirement. Skipped when there
-# is no bridge volume, when it holds no mappings, or when the file is
-# already on the services volume.
-- name: Carry the bridge mappings onto the services volume
-  ansible.builtin.shell:
-    cmd: |
-      set -eu
-      vol="{{ ircd_services_data_volume }}"
-      helper="{{ ircd_cert_sync_image }}"
-      if ! docker volume inspect ircfiber_bridge_data >/dev/null 2>&1; then
-        echo "SKIP (no bridge volume)"
-        exit 0
-      fi
-      if ! docker run --rm -v ircfiber_bridge_data:/b:ro "$helper" \
-        sh -c 'test -s /b/bridgeserv.module.json'; then
-        echo "SKIP (no bridgeserv.module.json)"
-        exit 0
-      fi
-      if docker run --rm -v "$vol:/v:ro" "$helper" \
-        sh -c 'test -e /v/bridgeserv.module.json'; then
-        echo "SKIP (already present)"
-        exit 0
-      fi
-      docker run --rm -v ircfiber_bridge_data:/b:ro -v "$vol:/v" "$helper" \
-        sh -c 'cp -a /b/bridgeserv.module.json /v/bridgeserv.module.json \
-          && chown {{ ircd_services_uid }}:{{ ircd_services_gid }} /v/bridgeserv.module.json'
-      echo "CHANGED"
-  register: ircd_services_bridge_carry
-  # Exact line: "'CHANGED' in .stdout" would also match "UNCHANGED".
-  changed_when: "'CHANGED' in ircd_services_bridge_carry.stdout_lines"
-  when: ircd_services_db_migrate_needed | bool
-
-# Step 5. Convert: a one-off 2.1 container on the migrate config.
+# Step 4. Convert: a one-off 2.1 container on the migrate config.
 # --network none: the DB load precedes the uplink, so the connect just
 # fails and retries. A leftover convert container from a failed run is
 # removed first so its old logs cannot satisfy the wait below.
@@ -313,6 +279,49 @@
       The pre-migration snapshot is at {{ ircd_services_migrate_snapshot }} —
       restore /anope/data on {{ ircd_services_data_volume }} from it before
       retrying (rollback section in site/deploy/README.md).
+  when: ircd_services_db_migrate_needed | bool
+
+# Step 5. The sidecar stored its `BridgeServ ADD`
+# records in its own anope.json (`data.Bridge`), NOT in a
+# bridgeserv.module.json — an earlier version of this step looked for that
+# file, found nothing, and silently dropped the #dmz mapping on the
+# 2026-09-17 cutover. The merge runs once the converted anope.json exists,
+# so the records land in the file the new instance actually loads. Skipped
+# when there is no bridge volume, no records, or the converted DB already
+# carries a `Bridge` array. `updated` stays as the converter wrote it.
+- name: Carry the bridge mappings into the converted JSON database
+  ansible.builtin.shell:
+    cmd: |
+      set -eu
+      if ! docker volume inspect ircfiber_bridge_data >/dev/null 2>&1; then
+        echo "SKIP (no bridge volume)"
+        exit 0
+      fi
+      src="$(docker volume inspect -f '{{ "{{" }} .Mountpoint {{ "}}" }}' ircfiber_bridge_data)/anope.json"
+      dst="$(docker volume inspect -f '{{ "{{" }} .Mountpoint {{ "}}" }}' {{ ircd_services_data_volume }})/anope.json"
+      python3 - "$src" "$dst" <<'PY'
+      import json, os, sys
+      src, dst = sys.argv[1], sys.argv[2]
+      if not os.path.isfile(src):
+          print("SKIP (sidecar has no anope.json)"); sys.exit(0)
+      bridges = json.load(open(src)).get("data", {}).get("Bridge", [])
+      if not bridges:
+          print("SKIP (no bridge records)"); sys.exit(0)
+      doc = json.load(open(dst))
+      if doc.setdefault("data", {}).get("Bridge"):
+          print("SKIP (already present)"); sys.exit(0)
+      doc["data"]["Bridge"] = bridges
+      tmp = dst + ".carry"
+      with open(tmp, "w") as f:
+          json.dump(doc, f, indent=4)
+      os.chmod(tmp, 0o600)
+      os.replace(tmp, dst)
+      print("CHANGED (%d bridge record(s))" % len(bridges))
+      PY
+      chown {{ ircd_services_uid }}:{{ ircd_services_gid }} "$dst"
+  register: ircd_services_bridge_carry
+  # Exact prefix: "'CHANGED' in .stdout" would also match "UNCHANGED".
+  changed_when: ircd_services_bridge_carry.stdout_lines | select('match', '^CHANGED') | list | length > 0
   when: ircd_services_db_migrate_needed | bool
 
 # Step 6. Continue with the normal container creation (json-only config).

@@ -520,15 +520,18 @@ present; otherwise every step is skipped. What the play does, in order:
    the container exists), then waits 3 s.
 2. Snapshots the volume to `/var/backups/ircfiber/anope-2.0-<timestamp>.tgz`
    (never skipped).
-3. Stops and removes the 2.0 `ircfiber-services` container.
-4. Copies `bridgeserv.module.json` — and only that file — from
-   `ircfiber_bridge_data` when present, carrying every `BridgeServ ADD`
-   mapping over. Also removes a leftover `ircfiber-bridge` container (never
-   its volume).
-5. Converts with a one-off 2.1 container on `services.migrate.conf`
+3. Stops and removes the 2.0 `ircfiber-services` container (a leftover
+   `ircfiber-bridge` sidecar container was already removed — never its
+   volume).
+4. Converts with a one-off 2.1 container on `services.migrate.conf`
    (`--network none`), waits ≤ 60 s for `Databases loaded`, stops it
    (SIGTERM writes `anope.json`), removes it, and asserts `anope.json`
    exists with a non-empty `data.NickCore` — failing the play otherwise.
+5. Merges the sidecar's `data.Bridge` records from
+   `ircfiber_bridge_data/anope.json` (the sidecar kept its `BridgeServ ADD`
+   mappings there, not in a `bridgeserv.module.json`) into the converted
+   `anope.json`, skipping when the volume is absent, holds no records, or
+   the converted DB already has a `Bridge` array.
 6. Starts the normal container on the json-only config.
 
 Operator checks afterwards:

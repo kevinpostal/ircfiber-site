@@ -240,8 +240,9 @@ include { type = "file"; name = "operserv.conf" }
  * BridgeServ — the Discord <-> IRC relay (modules/bridgeserv in our fork).
  * Every member of a bridged guild is introduced as an IRC pseudo client
  * under "<guild-id>.{{ ircd_bridgeserv_domain }}", a virtual server linked
- * behind this one. The stored bridges (`BridgeServ ADD`) live in
- * bridgeserv.module.json on the data volume (db_json's module_database).
+ * behind this one. The stored bridges (`BridgeServ ADD`) are `Bridge`
+ * records in anope.json on the data volume (the main db_json database,
+ * not a per-module file).
  */
 service
 {
