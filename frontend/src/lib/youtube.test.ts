@@ -47,5 +47,11 @@ describe('youtubeEmbedUrl', () => {
     expect(url).toContain('/embed/sHuu-kKD0Lc');
     expect(url).toContain('autoplay=0');
     expect(url).toContain('modestbranding=1');
+    expect(url).toContain('enablejsapi=1');
+  });
+  it('autoplay + start', () => {
+    const url = youtubeEmbedUrl('sHuu-kKD0Lc', { start: 42.9, autoplay: true });
+    expect(url).toContain('autoplay=1');
+    expect(url).toContain('start=42');
   });
 });

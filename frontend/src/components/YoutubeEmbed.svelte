@@ -1,5 +1,14 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { youtubeEmbedUrl } from '../lib/youtube';
+  import {
+    attachYoutubeBridge,
+    YT_STATE_PLAYING,
+    YT_STATE_BUFFERING,
+    type YtPlayerInfo,
+  } from '../lib/youtubePlayerBridge';
+  import { mediaDock, dockVideo, closeDock } from '../stores/mediaDock.svelte';
+  import { ircState } from '../stores/ircStore.svelte';
 
   interface Props {
     id: string;
@@ -8,44 +17,95 @@
   let { id }: Props = $props();
 
   let closed = $state(false);
+  let iframeEl = $state<HTMLIFrameElement | undefined>();
+  let resumeAt = $state(0);
+  let autoplay = $state(false);
+  // Last info the embed reported. Read at teardown, when the iframe DOM is
+  // already gone, so it cannot be reactive-derived from the element.
+  let lastInfo: YtPlayerInfo = {};
 
-  const src = $derived(youtubeEmbedUrl(id));
+  // The buffer this row belongs to is the one active at mount. By the time
+  // onDestroy runs during a switch, activeBuffer already points at the new
+  // buffer, so it must be captured here.
+  const originBuffer =
+    ircState.activeBuffer.networkId && ircState.activeBuffer.bufferName
+      ? { networkId: ircState.activeBuffer.networkId, bufferName: ircState.activeBuffer.bufferName }
+      : null;
+
+  const docked = $derived(mediaDock.video?.videoId === id);
+  const src = $derived(youtubeEmbedUrl(id, { start: resumeAt, autoplay }));
+
+  $effect(() => {
+    if (!iframeEl) return;
+    return attachYoutubeBridge(iframeEl, (info) => {
+      lastInfo = { ...lastInfo, ...info };
+    });
+  });
+
+  // Unmount (channel switch or windowing trim) while playing → keep the
+  // video alive in the mini player from its last reported position.
+  onDestroy(() => {
+    if (closed || docked) return;
+    const st = lastInfo.playerState;
+    if (st !== YT_STATE_PLAYING && st !== YT_STATE_BUFFERING) return;
+    dockVideo({
+      videoId: id,
+      startSeconds: Math.floor(lastInfo.currentTime ?? 0),
+      origin: originBuffer,
+    });
+  });
 
   function onClose(e: MouseEvent): void {
     e.preventDefault();
     closed = true;
   }
+
+  function returnHere(): void {
+    // Set src inputs before closing the dock so the iframe mounts with the
+    // resume position on the same flush.
+    resumeAt = Math.floor(mediaDock.video?.positionSeconds ?? 0);
+    autoplay = true;
+    closeDock();
+  }
 </script>
 
 {#if !closed}
   <span class="directEmbedWrap videoWrap" data-youtube-id={id}>
-    <iframe
-      type="text/html"
-      allowfullscreen={true}
-      mozallowfullscreen
-      webkitallowfullscreen
-      sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts allow-presentation"
-      scrolling="no"
-      class="iframeEmbed video"
-      width="416"
-      height="234"
-      src={src}
-      title="YouTube video {id}"
-      style="width: 416px; height: 234px; max-width: 416px"
-      referrerpolicy="strict-origin-when-cross-origin"
-      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
-    ></iframe>
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_consider_explicit_label -->
-    <a
-      href=""
-      class="embedClose"
-      title="Close video"
-      style="left: 416px;"
-      onclick={onClose}
-      role="button"
-      aria-label="Close video"
-    ></a>
+    {#if docked}
+      <span class="youtubeDocked" style="width: 416px; height: 234px; max-width: 416px">
+        <span>Playing in mini player</span>
+        <button type="button" class="youtubeDockedReturn" onclick={returnHere}>Bring back here</button>
+      </span>
+    {:else}
+      <iframe
+        bind:this={iframeEl}
+        type="text/html"
+        allowfullscreen={true}
+        mozallowfullscreen
+        webkitallowfullscreen
+        sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts allow-presentation"
+        scrolling="no"
+        class="iframeEmbed video"
+        width="416"
+        height="234"
+        src={src}
+        title="YouTube video {id}"
+        style="width: 416px; height: 234px; max-width: 416px"
+        referrerpolicy="strict-origin-when-cross-origin"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+      ></iframe>
+      <!-- svelte-ignore a11y_click_events_have_key_events -->
+      <!-- svelte-ignore a11y_consider_explicit_label -->
+      <a
+        href=""
+        class="embedClose"
+        title="Close video"
+        style="left: 416px;"
+        onclick={onClose}
+        role="button"
+        aria-label="Close video"
+      ></a>
+    {/if}
   </span>
 {/if}
 
@@ -95,63 +155,29 @@
   :global(.embedClose:focus) {
     background-position: 0 -25px;
   }
-  /* Thumbnail overlay — in facade mode (iframe not yet created) it's the
-     wrapper's only child so it must be in-flow (relative); after click the
-     iframe replaces it entirely, so no absolute stacking needed. */
-  :global(.youtubeThumbOverlay) {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 416px;
-    height: 234px;
-    max-width: 416px;
+  :global(.youtubeDocked) {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 8px;
     background: #000;
-    overflow: hidden;
-    text-decoration: none;
-    z-index: 1;
+    color: #d1d5db;
+    font-size: 13px;
+    line-height: 1.4;
   }
-  :global(.youtubeThumbOverlay--facade) {
-    position: relative;
-    top: auto;
-    left: auto;
-  }
-  :global(.youtubeThumbOverlay img) {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-    border: 0;
-  }
-  :global(.youtubePlayButton) {
-    position: absolute;
-    width: 68px;
-    height: 48px;
-    background: rgba(0,0,0,0.6);
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  :global(.youtubePlayButton::before) {
-    content: '';
-    width: 0;
-    height: 0;
-    border-left: 18px solid #fff;
-    border-top: 12px solid transparent;
-    border-bottom: 12px solid transparent;
-    margin-left: 4px;
-  }
-  :global(.youtubeThumbOverlay:hover .youtubePlayButton) {
-    background: #ff0000;
+  :global(.youtubeDockedReturn) {
+    background: #1a1d21;
+    color: #d1d5db;
+    border: 1px solid #4a6fa5;
+    border-radius: 6px;
+    padding: 4px 10px;
+    cursor: pointer;
   }
   @media (max-width: 480px) {
     :global(.directEmbedWrap.videoWrap),
     :global(.iframeEmbed.video),
-    :global(.youtubeThumbOverlay),
-    :global(.youtubeThumbOverlay img) {
+    :global(.youtubeDocked) {
       width: 100% !important;
       max-width: 100% !important;
     }

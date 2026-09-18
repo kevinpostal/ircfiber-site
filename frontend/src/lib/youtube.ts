@@ -109,7 +109,15 @@ export function extractYoutubeStart(rawUrl: string): number | undefined {
   return undefined;
 }
 
-export function youtubeEmbedUrl(id: string, startSeconds?: number): string {
+/** Host every YouTube iframe is served from; also the postMessage origin the player bridge trusts. */
+export const YT_EMBED_ORIGIN = 'https://www.youtube.com';
+
+export interface YoutubeEmbedOpts {
+  start?: number;
+  autoplay?: boolean;
+}
+
+export function youtubeEmbedUrl(id: string, opts: YoutubeEmbedOpts = {}): string {
   // IRCCloud uses www.youtube.com with origin=https://www.irccloud.com, but for
   // ircfiber.com the origin triggers "Sign in to confirm you're not a bot" on
   // click for some videos (hyPXF5q_1BA: www.youtube.com+origin ircfiber=FAIL,
@@ -127,12 +135,13 @@ export function youtubeEmbedUrl(id: string, startSeconds?: number): string {
     fs: '1',
     iv_load_policy: '3',
     modestbranding: '1',
-    autoplay: '0',
+    autoplay: opts.autoplay ? '1' : '0',
+    enablejsapi: '1',
   };
-  if (startSeconds !== undefined && startSeconds > 0) {
-    params.start = String(startSeconds);
+  if (opts.start !== undefined && opts.start > 0) {
+    params.start = String(Math.floor(opts.start));
   }
-  return `https://www.youtube.com/embed/${id}?${new URLSearchParams(params).toString()}`;
+  return `${YT_EMBED_ORIGIN}/embed/${id}?${new URLSearchParams(params).toString()}`;
 }
 
 /**

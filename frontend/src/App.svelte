@@ -12,6 +12,7 @@
   import ServerLogContextMenu from './components/ServerLogContextMenu.svelte';
   import Overlay from './components/Overlay.svelte';
   import NoticeOverlay from './components/NoticeOverlay.svelte';
+  import MediaDock from './components/MediaDock.svelte';
   import NotificationBadge from './components/NotificationBadge.svelte';
   import UserPopup from './components/UserPopup.svelte';
   import {
@@ -1714,6 +1715,7 @@ let showEditNetwork: boolean = $state(false);
 </script>
 <NotificationBadge />
 <NoticeOverlay />
+<MediaDock onSwitchBuffer={navigateToBuffer} />
 
 <DropTarget onFilesDropped={(result, opts) => startUploads(result.accepted, { networkId: ircState.activeBuffer.networkId ?? '', buffer: ircState.activeBuffer.bufferName ?? '', immediate: opts.immediate })} />
 
