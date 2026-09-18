@@ -48,7 +48,7 @@ import ircfiber.storage.buffer : BufferManager;
 import ircfiber.models.irc_event : IRCRawEvent;
 import ircfiber.models.network : NetworkConfig, TLSMode;
 import ircfiber.network_lifecycle : normalizeHost, provisionNetwork, updateOwnedNetwork, deleteOwnedNetwork;
-import ircfiber.redis.protocol : RedisKeys, IRCCommand, NetworkStateSnapshot, ControlMessage;
+import ircfiber.redis.protocol : RedisKeys, StateTTL, IRCCommand, NetworkStateSnapshot, ControlMessage;
 import ircfiber.api.websocket : loadNetworkStateSnapshot, routeEngineCommand;
 import ircfiber.ipintel.cidr : cidrContains;
 import ircfiber.bnc.wire;
@@ -471,6 +471,7 @@ final class BncClient {
             auto streamKey = RedisKeys.userStream(userId);
             ctx.redis.getDb().lpush(streamKey, msg);
             ctx.redis.getDb().ltrim(streamKey, 0, 999);
+            ctx.redis.getDb().expire(streamKey, StateTTL.USER_STREAM_TTL);
         } catch (Exception e) {
             logWarn("bnc: status event failed for %s: %s", networkId, e.msg);
         }
